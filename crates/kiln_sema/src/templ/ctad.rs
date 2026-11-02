@@ -279,7 +279,7 @@ impl Sema<'_, '_> {
         let ctx = self.ast.definition(ctx).unwrap_or(ctx);
         let first = self.ast.first(template);
         let name = self.ast.names.deduction_guide(first);
-        let (defaults, _) = self.merge_default_args(None, false, &params);
+        let (defaults, _) = self.merge_default_args(None, false, &params, true);
         let mut h = DeclHead::new(ctx, name, sloc);
         h.lexical = Some(lexical);
         self.mark_pattern_next();

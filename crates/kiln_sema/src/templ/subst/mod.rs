@@ -93,10 +93,13 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// expression being rebuilt: its expression statement ends the
     /// statement expression (`act_on_stmt_expr_result`).
     pub(crate) stmt_expr_result: Option<kiln_ast::ExprId>,
-    /// Block-scope dependent using-declarations of the pattern whose
-    /// instantiation failed (diagnosed): their uses are invalid without
-    /// another diagnostic (clang's invalid `UsingDecl`).
-    pub(crate) failed_usings: Vec<DeclId>,
+    /// Block-scope declarations of the pattern whose instantiation
+    /// failed (diagnosed, or silent under SFINAE), with the rest of their
+    /// declaration statement: their uses are invalid without another
+    /// diagnostic (clang keeps the invalid declaration in the
+    /// instantiation's scope: an invalid `VarDecl`, `TypedefNameDecl`,
+    /// `UsingDecl`, ...).
+    pub(crate) failed_locals: Vec<DeclId>,
     /// The explicitly specified pack deduction may still extend
     /// ([temp.arg.explicit]/9; clang's partially substituted pack), by
     /// (depth, index): its length is a lower bound, checked against the
@@ -147,7 +150,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             stmt_failed: false,
             init_failures: 0,
             stmt_expr_result: None,
-            failed_usings: Vec::new(),
+            failed_locals: Vec::new(),
             partial_pack: None,
             written_locs: true,
             as_callee: false,
@@ -578,6 +581,25 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         Ok(self.sema.ast.types.nns(r))
     }
 
+    /// Where the pattern's dependent qualifier `n` begins (§5.8): the
+    /// written location of its first dependent component (`T` in
+    /// `T::B::`), nearest to `loc`. A declaration keeps no location for
+    /// its qualifier, so a using-declaration reports a qualifier error
+    /// here, at the start of the nested-name-specifier as clang does
+    /// (`QualifierLoc.getBeginLoc()`). A non-dependent leading prefix
+    /// (`N::X<T>::`) is not recorded: the location is that of `X<T>::`.
+    pub(crate) fn qualifier_begin(&self, n: NnsId, loc: Loc) -> Loc {
+        let mut first = n;
+        let mut cur = Some(n);
+        while let Some(c) = cur {
+            if self.sema.ast.types.nns_flags(c).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+                first = c;
+            }
+            cur = self.sema.ast.types.nns_prefix(c);
+        }
+        self.written(WrittenKey::Nns(first), loc)
+    }
+
     /// True if the substituted specifier `n` is still dependent (its
     /// arguments were dependent: an alias or member template named in
     /// another template), so names after it are looked up later.
@@ -671,6 +693,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                     self.sema.ast.lists.at::<DeclId>(l, i as usize).ok_or(SubstFail)
                 }
             };
+        }
+        // A local whose declaration statement failed: an invalid use,
+        // already diagnosed ([temp.inst]/3; §5.6).
+        if self.failed_locals.contains(&d) {
+            return Err(SubstFail);
         }
         let node = *self.sema.ast.decls.get(d);
         if !node.flags().contains(DeclFlags::DEPENDENT_CTX) {

@@ -38,6 +38,7 @@ ExtraQualification = "extra-qualification" [];
 FlexibleArrayExtensions = "flexible-array-extensions" [];
 FormatExtraArgs = "format-extra-args" [];
 FormatInsufficientArgs = "format-insufficient-args" [];
+GnuAlignofExpression = "gnu-alignof-expression" [];
 GnuDesignator = "gnu-designator" [];
 GnuEmptyStruct = "gnu-empty-struct" [];
 GnuFlexibleArrayInitializer = "gnu-flexible-array-initializer" [];
@@ -73,6 +74,7 @@ PotentiallyEvaluatedExpression = "potentially-evaluated-expression" [];
 PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
 // ----- WP-191 (vexing parse, null dereference, empty body)
 RedundantParens = "redundant-parens" [];
+Register = "register" [];
 ReorderCtor = "reorder-ctor" [];
 ReorderInitList = "reorder-init-list" [];
 ReturnStackAddress = "return-stack-address" [];

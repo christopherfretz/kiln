@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::util::process::{self, MemLimit, RssProbe};
-use crate::util::{build_kiln, repo_root, target_dir};
+use crate::util::{Profile, build_kiln_with, repo_root, target_dir};
 use directives::{Kind, LocalCfg};
 use run::{Config, Job, Outcome, TestResult};
 
@@ -36,12 +36,16 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
   --libcxx-tests <dir>   the llvm-project checkout (default: .toolchain/libcxx-<tag>,
                          `scripts/fetch-libcxx-tests.sh <tag>`; for llvmorg-19.1.7
                          also the older .toolchain/llvm-project)
-  --compiler <path>      kiln++ binary (default: cargo build -p kiln_driver)
+  --profile <p>          the cargo profile to build kiln++ with: debug, harness
+                         (default) or release (spec/libcxx.md \"Build profiles\")
+  --compiler <path>      kiln++ binary (default: cargo build --profile <p> -p kiln_driver)
   --filter <substring>   only tests whose path contains <substring>
   --list                 list the selected tests and their pre-run verdict
   -j, --jobs <n>         tests in parallel (default 2; an upper bound under a
                          MAKEFLAGS jobserver, see spec/harness.md)
-  --timeout <secs>       test binary timeout (default 30; compiles: 120)
+  --timeout <secs>       test binary timeout (default 30)
+  --compile-timeout <secs>
+                         compile/link step timeout (default 120; --profile debug: 300)
   --mem-limit <MiB>      address-space cap per process (default 8192; 0: none)
   --report <file.md>     write the status page's generated region to <file.md>
   --keep                 keep the scratch directories
@@ -96,12 +100,17 @@ pub struct Options {
     /// `--tag`; `None` is `$KILN_LIBCXX_TAG`, else [`TESTS_TAG`].
     pub tag: Option<String>,
     pub compiler: Option<PathBuf>,
+    /// `--profile`: what the implicit build makes (ignored with `--compiler`
+    /// except in the report, which then says the profile is unknown).
+    pub profile: Profile,
     pub gate: Option<String>,
     pub dirs: Vec<String>,
     pub filter: Option<String>,
     pub list: bool,
     pub jobs: usize,
     pub run_timeout: Duration,
+    /// `--compile-timeout`; `None` is [`Profile::compile_timeout`].
+    pub compile_timeout: Option<Duration>,
     pub mem_limit_mib: u64,
     pub report: Option<PathBuf>,
     pub keep: bool,
@@ -115,12 +124,14 @@ impl Default for Options {
             tests: None,
             tag: None,
             compiler: None,
+            profile: Profile::Harness,
             gate: None,
             dirs: Vec::new(),
             filter: None,
             list: false,
             jobs: 2,
             run_timeout: Duration::from_secs(30),
+            compile_timeout: None,
             mem_limit_mib: process::DEFAULT_MEM_LIMIT_MIB,
             report: None,
             keep: false,
@@ -130,7 +141,21 @@ impl Default for Options {
     }
 }
 
-const COMPILE_TIMEOUT: Duration = Duration::from_secs(120);
+impl Options {
+    /// The compile/link step limit: `--compile-timeout`, else the profile's.
+    pub fn compile_timeout(&self) -> Duration {
+        self.compile_timeout.unwrap_or_else(|| self.profile.compile_timeout())
+    }
+}
+
+/// A positive, finite number of seconds.
+fn parse_secs(flag: &str, v: &str) -> Result<Duration, String> {
+    v.parse()
+        .ok()
+        .filter(|s: &f64| s.is_finite() && *s > 0.0)
+        .map(Duration::from_secs_f64)
+        .ok_or_else(|| format!("bad {flag} `{v}`"))
+}
 
 /// `Ok(None)` means `--help`.
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Options>, String> {
@@ -153,6 +178,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             }
             "--libcxx-tests" => o.tests = Some(PathBuf::from(value("--libcxx-tests")?)),
             "--compiler" => o.compiler = Some(PathBuf::from(value("--compiler")?)),
+            "--profile" => o.profile = Profile::parse(&value("--profile")?)?,
             "--gate" => {
                 let g = value("--gate")?;
                 if g != "m3" {
@@ -167,14 +193,10 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                 o.jobs =
                     v.parse().ok().filter(|&n| n > 0).ok_or_else(|| format!("bad --jobs `{v}`"))?;
             }
-            "--timeout" => {
-                let v = value("--timeout")?;
-                let secs: f64 = v
-                    .parse()
-                    .ok()
-                    .filter(|s: &f64| s.is_finite() && *s > 0.0)
-                    .ok_or_else(|| format!("bad --timeout `{v}`"))?;
-                o.run_timeout = Duration::from_secs_f64(secs);
+            "--timeout" => o.run_timeout = parse_secs("--timeout", &value("--timeout")?)?,
+            "--compile-timeout" => {
+                o.compile_timeout =
+                    Some(parse_secs("--compile-timeout", &value("--compile-timeout")?)?);
             }
             "--mem-limit" => {
                 let v = value("--mem-limit")?;
@@ -413,7 +435,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
     let target = target_dir(&root)?;
     let kiln = match &opts.compiler {
         Some(c) => c.clone(),
-        None => build_kiln(&root, &target, "libcxx", false)?,
+        None => build_kiln_with(&root, &target, "libcxx", opts.profile)?,
     };
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
     let scratch = target.join("xtask-libcxx").join(format!("run-{}-{nanos}", std::process::id()));
@@ -427,7 +449,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
         llvm_dir: toolchain.llvm_dir(),
         resource_dir: root.join("resource"),
         features: features.clone(),
-        compile_timeout: COMPILE_TIMEOUT,
+        compile_timeout: opts.compile_timeout(),
         run_timeout: opts.run_timeout,
         mem: MemLimit::from_mib(opts.mem_limit_mib),
         probe,
@@ -445,10 +467,12 @@ fn execute(opts: &Options) -> Result<bool, String> {
         })
         .collect();
     println!(
-        "xtask libcxx: {} tests from {} with {} (-j {}{})",
+        "xtask libcxx: {} tests from {} with {} ({}, compile timeout {} s, -j {}{})",
         jobs.len(),
         test_root.display(),
         kiln.display(),
+        profile_text(opts),
+        cfg.compile_timeout.as_secs_f64(),
         opts.jobs,
         crate::jobs::global().describe().map_or_else(String::new, |d| format!(", jobserver {d}")),
     );
@@ -467,7 +491,12 @@ fn execute(opts: &Options) -> Result<bool, String> {
     for r in &results {
         total.add(&r.outcome);
     }
-    println!("\n{}; wall {:.1} s", total.summary_line(), wall.as_secs_f64());
+    println!(
+        "\n{}; wall {:.1} s; {} kiln",
+        total.summary_line(),
+        wall.as_secs_f64(),
+        profile_text(opts)
+    );
 
     if let Some(path) = &opts.report {
         let info = run_info(opts, &cfg, &root, wall);
@@ -521,6 +550,18 @@ fn indent(s: &str) -> String {
     s.lines().map(|l| format!("    {l}")).collect::<Vec<_>>().join("\n")
 }
 
+/// The profile as the status rows name it: `harness`; for a `--compiler`
+/// binary the profile directory it sits in (`release (--compiler)` for
+/// `target/release/kiln++`), else just `--compiler`.
+fn profile_text(opts: &Options) -> String {
+    let Some(c) = &opts.compiler else { return opts.profile.label().to_owned() };
+    c.parent()
+        .and_then(Path::file_name)
+        .and_then(|d| d.to_str())
+        .and_then(|d| Profile::parse(d).ok().filter(|p| p.dir() == d))
+        .map_or_else(|| "--compiler".to_owned(), |p| format!("{} (--compiler)", p.label()))
+}
+
 fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report::RunInfo {
     let git = |dir: &Path, args: &[&str]| {
         Command::new("git")
@@ -551,6 +592,12 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
     if let Some(f) = &opts.filter {
         let _ = write!(command, " --filter {f}");
     }
+    if opts.compiler.is_none() && opts.profile != Profile::Harness {
+        let _ = write!(command, " --profile {}", opts.profile.label());
+    }
+    if let Some(t) = opts.compile_timeout {
+        let _ = write!(command, " --compile-timeout {}", t.as_secs_f64());
+    }
     let _ = write!(command, " -j {}", opts.jobs);
     let mut flags = cfg.base_compile_flags();
     for f in &mut flags {
@@ -562,6 +609,7 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
     }
     report::RunInfo {
         kiln_version,
+        profile: profile_text(opts),
         kiln_commit: git(root, &["rev-parse", "--short", "HEAD"]),
         tests_tag: match git(&cfg.checkout, &["describe", "--tags", "--always"]) {
             t if t == cfg.tag => t,
@@ -602,7 +650,7 @@ fn libcpp_version(cfg: &Config) -> String {
         .arg(&src)
         .env("TMPDIR", &dir)
         .env("KILN_LLVM_DIR", &cfg.llvm_dir);
-    let out = process::run(&mut process::limited(&cmd, cfg.mem), COMPILE_TIMEOUT);
+    let out = process::run(&mut process::limited(&cmd, cfg.mem), cfg.compile_timeout);
     let _ = std::fs::remove_file(&src);
     let _ = std::fs::remove_dir(&dir);
     out.ok()
@@ -687,6 +735,34 @@ mod tests {
         assert_eq!(local_cfgs(&cache, &root, &tests[0].0).len(), 0);
         assert_eq!(local_cfgs(&cache, &root, &tests[2].0).len(), 1);
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// `--profile` picks the implicit build and the default compile limit;
+    /// `--compile-timeout` overrides it (spec/libcxx.md "Build profiles").
+    #[test]
+    fn profiles_and_compile_timeouts() {
+        let d = parse(&[]).unwrap().unwrap();
+        assert_eq!(d.profile, Profile::Harness);
+        assert_eq!(d.compile_timeout(), Duration::from_secs(120));
+        assert_eq!(profile_text(&d), "harness");
+        let dbg = parse(&["--profile", "debug"]).unwrap().unwrap();
+        assert_eq!(dbg.profile, Profile::Debug);
+        assert_eq!(dbg.profile.cargo_name(), "dev");
+        assert_eq!(dbg.profile.dir(), "debug");
+        assert_eq!(dbg.compile_timeout(), Duration::from_secs(300));
+        let rel = parse(&["--profile=release", "--compile-timeout", "45"]).unwrap().unwrap();
+        assert_eq!(rel.profile, Profile::Release);
+        assert_eq!(rel.compile_timeout(), Duration::from_secs(45));
+        assert!(parse(&["--profile", "bench"]).is_err());
+        assert!(parse(&["--compile-timeout", "0"]).is_err());
+        assert!(parse(&["--compile-timeout", "x"]).is_err());
+        let given = |p: &str| {
+            profile_text(&Options { compiler: Some(PathBuf::from(p)), ..Options::default() })
+        };
+        assert_eq!(given("/t/release/kiln++"), "release (--compiler)");
+        assert_eq!(given("/t/debug/kiln++"), "debug (--compiler)");
+        assert_eq!(given("/usr/bin/kiln++"), "--compiler");
+        assert_eq!(given("/t/dev/kiln++"), "--compiler");
     }
 
     /// `--tag`/`KILN_LIBCXX_TAG` pick the checkout (spec/libcxx.md "Setup").

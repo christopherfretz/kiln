@@ -183,7 +183,26 @@ impl Sema<'_, '_> {
             // [dcl.init.general]/16.6.2.2: no constructor is viable, so
             // the aggregate is initialized from the parenthesized list.
             let rparen = site.rparen.or(site.temp_end).or(site.agg_end).unwrap_or(loc);
-            return Some(self.paren_aggregate_init(ty, args, loc, rparen));
+            if !matches!(site.sites.deleted_as, DeletedAs::Cast(..)) || args.len() != 1 {
+                return Some(self.paren_aggregate_init(ty, args, loc, rparen));
+            }
+            // A cast `T(x)`, `(T)x`, `static_cast<T>(x)`: a failed
+            // aggregate initialization (a fallback after the
+            // constructors) is reported as the constructor overload
+            // failure (clang `tryDiagnoseOverloadedCast`,
+            // `FK_ParenthesizedListInitFailed`), its own errors dropped
+            // and, being verify-only, its side effects never made.
+            let failed = self.ovl.failed.take();
+            let ok = self.verify_paren_aggregate_init(ty, args, loc, rparen);
+            if let Some(old) = std::mem::replace(&mut self.ovl.failed, failed) {
+                self.end_set(old);
+            }
+            if ok {
+                if let Some(set) = self.ovl.failed.take() {
+                    self.end_set(set);
+                }
+                return Some(self.paren_aggregate_init(ty, args, loc, rparen));
+            }
         }
         if let Selected::Found(f) | Selected::Deleted(f) = sel
             && let [arg] = args

@@ -420,6 +420,23 @@ pub fn is_valid_register_name(arch: Arch, name: &str) -> bool {
     }
 }
 
+/// clang 19's `validateGlobalRegisterVariable` for a GNU global register
+/// variable named `name` (as written, after [`is_valid_register_name`]
+/// accepted it) of `size_bits` bits: `None` when the target cannot hold a
+/// global variable in that register, else whether the sizes differ.
+/// `AArch64`: `sp` and the `x` registers are 64 bits, the `w` registers 32;
+/// `x86_64`: `rsp`/`rbp` are 64 bits, `esp`/`ebp` 32; nothing else.
+pub fn global_register_size_mismatch(arch: Arch, name: &str, size_bits: u64) -> Option<bool> {
+    let reg_bits = match arch {
+        Arch::AArch64 if name == "sp" || name.starts_with('x') => 64,
+        Arch::AArch64 if name.starts_with('w') => 32,
+        Arch::X86_64 if name == "rsp" || name == "rbp" => 64,
+        Arch::X86_64 if name == "esp" || name == "ebp" => 32,
+        _ => return None,
+    };
+    Some(size_bits != reg_bits)
+}
+
 /// `StringRef::getAsInteger(0, n)`: decimal, `0x` hex, `0b` binary or a
 /// leading `0` octal.
 fn parse_c_integer(s: &str) -> Option<u64> {
@@ -800,6 +817,19 @@ mod tests {
         assert!(!validate_input_constraint(Arch::AArch64, &mut outs, &mut k));
         let mut e = ConstraintInfo::new("", "");
         assert!(!validate_input_constraint(Arch::AArch64, &mut outs, &mut e));
+    }
+
+    #[test]
+    fn global_register_variables() {
+        let f = global_register_size_mismatch;
+        assert_eq!(f(Arch::AArch64, "x0", 64), Some(false));
+        assert_eq!(f(Arch::AArch64, "w8", 64), Some(true));
+        assert_eq!(f(Arch::AArch64, "sp", 32), Some(true));
+        assert_eq!(f(Arch::AArch64, "lr", 64), None);
+        assert_eq!(f(Arch::X86_64, "rsp", 64), Some(false));
+        assert_eq!(f(Arch::X86_64, "ebp", 64), Some(true));
+        assert_eq!(f(Arch::X86_64, "%rsp", 64), None);
+        assert_eq!(f(Arch::X86_64, "rax", 64), None);
     }
 
     #[test]

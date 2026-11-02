@@ -417,6 +417,108 @@ Redeclaration and linkage rules:
   argument saved for the complete-class context is `DefaultArg::Unparsed`
   and replayed through `act_on_param_default_arg`, sema-class.md §2.7.)
   Calls fill omitted trailing arguments with `CXXDefaultArgExpr`.
+- **Erroneous default arguments** (WP-293; clang's
+  `ActOnParamDefaultArgumentError`). A default argument parsed in place
+  whose expression is erroneous — including an explicit cast that fails
+  after its diagnostic (`(int)"s"`: a pointer to a smaller integer, a
+  vector size mismatch; `reinterpret` returns `Err(())` for these
+  instead of a cast kind) — makes the parameter and the function invalid
+  (see *Invalid function declarations*, §4.7). Uses are not diagnosed
+  again: a call to a non-template function that would use it, a
+  constant-evaluated call, and a member function's delayed default
+  argument (replayed in the complete-class context, which leaves the
+  member valid) are all silent. A function template that is invalid
+  fails deduction with `Tdk::Invalid` (WP-308's `deduce_spec` check;
+  clang's `TemplateDeductionResult::Invalid`) for every call, so the call is `no
+  matching function for call to 'f'` and the template is not listed as a
+  candidate. A redeclaration of an invalid function adds no `missing
+  default argument on parameter` error (`merge_default_args` with
+  `trailing == false`); a call that would need the invalid default
+  argument is then measured against the redeclaration's arity. Test:
+  `dcl.fct.default/invalid-cast-default-arg.cpp`.
+- **`register`** ([dcl.stc]/1; removed in C++17 by P0001R1, clang's
+  `ext_register_storage_class`). `register` is `ISO C++17 does not allow
+  'register' storage class specifier` (`sema_register_storage_class`,
+  -Wregister, an error by default) at the specifier on a parameter
+  (`act_on_param_declarator`, before the type is checked; lambda and
+  function template parameters too) and on a variable or structured
+  binding at block scope, in a for-init-statement and as a range-for
+  variable (after `loop variable 'x' may not be declared 'register'`;
+  after `decomposition declaration cannot be declared 'register'` for a
+  binding), and the declaration continues. A variable with an asm label
+  (`register int r asm("x1")`) is exempt (its register is checked under
+  *GNU register variables*). At namespace scope a variable,
+  structured binding or variable template additionally gets `illegal
+  storage class on file-scoped variable` (`sema_illegal_storage_class_on_var`)
+  at its name and is invalid (`register_at_file_scope`); its initializer
+  is discarded unchecked. Another storage class on a parameter is
+  `invalid storage class specifier in function declarator`. A condition
+  declaration gets the parser's storage-class error instead (spec/parse.md
+  §4) and a member `storage class specified for a member declaration`.
+  Tests: `dcl.stc/register-storage-class.cpp`,
+  `dcl.stc/register-storage-class-namespace.cpp`.
+- **Where a storage class is rejected** ([dcl.stc], WP-327). Every
+  context, with its diagnostic:
+  - a type-specifier-seq (type-id, new-type-id, conversion-type-id,
+    functional cast, condition, exception-declaration): the parser's
+    `type name does not allow storage class to be specified`
+    (`parse_typename_storage_class`; spec/parse.md §4). Test:
+    `dcl.stc/storage-class-type-id.cpp`;
+  - a friend declaration: `'…' is invalid in friend declarations`
+    (below);
+  - a parameter: `invalid storage class specifier in function
+    declarator` (`register` instead gets -Wregister, above);
+  - a member declaration: `storage class specified for a member
+    declaration` (`register`, `extern`), `'mutable' cannot be applied to
+    functions` / `references`, `'mutable' and 'const' cannot be mixed`;
+  - a function outside a member declaration with `mutable` or
+    `register`: `illegal storage class on function` (§4.7);
+  - `register` on a variable at namespace scope: `illegal storage class
+    on file-scoped variable` (above);
+  - **`mutable`** ([dcl.stc]/9) on a variable that is not a non-static
+    data member — namespace or block scope, a for/range-for variable, a
+    structured binding (after `decomposition declaration cannot be
+    declared 'mutable'`), a variable template, an out-of-class static
+    data member definition: `'mutable' can only be applied to member
+    variables` (`sema_mutable_nonmember`, clang `err_mutable_nonmember`)
+    at the name (a binding's `[`), from `var_spec`; the variable is
+    invalid (`storage_invalidates_var`; the static member in
+    `act_on_static_member`), so its initializer is not checked. Test:
+    `dcl.stc/mutable-nonmember.cpp`;
+  - an **out-of-class static data member definition**
+    ([class.static.data]/2-3, `act_on_static_member`): `static` is
+    `'static' can only be specified inside the class definition`;
+    `extern` and `register` (after -Wregister) are `static data member
+    definition cannot specify a storage class`
+    (`sema_storage_class_for_static_member`, clang
+    `err_storage_class_for_static_member`), at the specifier; the storage
+    class is dropped and the definition stays valid. Test:
+    `class.static.data/out-of-class-storage-class.cpp`.
+- **GNU register variables** (`register T v asm("reg")`, [dcl.asm];
+  clang `ActOnVariableDeclarator`; `check_register_variable`, WP-327).
+  At block scope the name must be one the target knows
+  (`kiln_abi::asm::is_valid_register_name`): else `unknown register name
+  '…' in asm` at the label. At namespace scope, in order: an unknown
+  name is that error; a name the target cannot hold a global variable
+  in (`global_register_size_mismatch` returns `None`: AArch64 accepts
+  `sp` and names starting `x` (64 bits) or `w` (32 bits); x86_64 `rsp`,
+  `rbp` (64) and `esp`, `ebp` (32), as written, so `%rsp` is
+  unsuitable) is `register '…' unsuitable for global register variables
+  on this target`; a variable whose size differs is `size of register
+  '…' does not match variable size` (clang 19 checks sizes only for
+  globals; a dependent type's size is not checked). Then a type that is
+  neither integral (enums are not) nor a pointer is `bad type for named
+  register variable` at the decl-specifiers, and the variable is
+  invalid. Tests (pinned targets): `dcl.asm/global-register-variable-aarch64.cpp`,
+  `dcl.asm/global-register-variable-x86_64.cpp`.
+- **Storage classes in friend declarations** ([class.friend]/6, WP-293):
+  diagnosed by the parser as `'mutable' is invalid in friend
+  declarations` (likewise `static`, `extern`, `register`, `typedef`,
+  `thread_local`, `__thread`, `'static thread_local'`) and dropped
+  before Sema sees the DeclSpec (spec/parse.md §4), so the friend
+  function is declared as without it; a friend `typedef` or variable is
+  then `friends can only be classes or functions`. Test:
+  `class.friend/friend-storage-class.cpp`.
 - **Trailing return types** (`Chunk::Function::trailing`,
   [dcl.fct]/2): the function's return type, and an error
   (`function with trailing return type must specify return type 'auto'`)
@@ -456,8 +558,14 @@ Redeclaration and linkage rules:
   `definition of 'S' is not complete until the closing '}'` (clang's
   `isThisOutsideMemberFunctionBody`; `Sema::this_outside_member_body`;
   WP-280; test `expr.ref/member-access-class-being-defined.cpp`).
-  Divergence: clang reports nothing further in a class after its first
-  error there, kiln keeps diagnosing (e.g. a later `S s;` member).
+  A member of incomplete type (`field has incomplete type`, the class
+  itself or another incomplete class) makes the class invalid
+  (`Sema::invalid_defining`, clang's `CheckFieldDecl` marking the record
+  invalid); until its `}` a later use that needs it complete (member
+  access, another such member, `sizeof`) fails without a diagnostic
+  (`incomplete_note` suppresses it), as in clang. Unrelated errors in the
+  class are still reported (WP-290,
+  `expr.ref/member-access-invalid-class-quiet.cpp`).
 - **`-Wvexing-parse`**: a function declarator the parser chose over a
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses
@@ -1137,14 +1245,87 @@ and returns the scope it names:
     `instantiateDependentAlignedAttr`), so the strictest wins and an empty
     pack leaves the natural alignment; each element is re-checked at the
     attribute token (spec/sema-templates.md §2.7). On variables the
-    attributes are copied too (`var_align_attrs`), but variable alignment
-    is not yet consumed by `alignof` or codegen (xfail
-    `tests/conformance/dcl.align/variable-alignas.cpp`).
+    attributes are copied too (`var_align_attrs`), and a variable
+    template specialization copies the pattern's alignment-specifiers
+    with a dependent operand substituted (`templ/var.rs`, clang
+    `InstantiateAttrs`).
+  - Variable alignment ([dcl.align]/5, WP-312): an `alignas`/`aligned`
+    attribute on a variable or data member sets the alignment of its
+    storage and of `alignof` applied to an expression naming it (clang
+    `getDeclAlign`; `kiln_abi::layout::decl_align`, spec/abi.md §3.2).
+    Constant evaluation reads it through `SemaBridge::alignof_decl`;
+    codegen through `var_align` (spec/codegen.md §3). Tests:
+    `tests/conformance/dcl.align/{variable,member}-alignas.cpp`,
+    `tests/codegen/alignas_variable.cpp`.
+  - `alignas` subjects ([dcl.align]/1, `check_alignas_subject`):
+    allowed on a variable, a non-bit-field data member and a class. On
+    a function parameter, a `register` variable, a `catch` variable, a
+    bit-field or an enumeration it is `'alignas' attribute cannot be
+    applied to {a function parameter|...}`; on any other declaration
+    `'alignas' attribute only applies to variables, data members and
+    tag types`; in an attribute-declaration (`alignas(8);`) it
+    appertains to nothing. The specifier is dropped. Written where only
+    type attributes may appear (the end of a decl-specifier-seq,
+    `char alignas(8) c;`, after a ptr-operator or array declarator) it
+    is `'alignas' attribute cannot be applied to types`
+    (`act_on_type_position_attrs`; clang `err_attribute_not_type_attr`).
+    Before a namespace-definition, a static_assert-declaration, a
+    using-declaration or an alias-declaration, a leading
+    attribute-specifier-seq containing `alignas` is `an attribute list
+    cannot appear here` (parser `discard_attrs_before_unattributed_decl`;
+    file scope only). Tests: `tests/conformance/dcl.align/alignas-*.cpp`.
+  - `alignof` of an expression ([expr.alignof]/1 takes a type-id) is
+    the GNU extension `'alignof' applied to an expression is a GNU
+    extension` (`-Wgnu-alignof-expression`, in `-Wgnu`, at the keyword;
+    not for `__alignof`/`__alignof__`). `alignof` of a data member
+    (named ignoring parentheses) of a class still being defined is
+    `invalid application of 'alignof' to a field of a class still being
+    defined` at the operand's own location (clang `CheckAlignOfExpr`;
+    [class.mem.general]/8). Test:
+    `tests/conformance/dcl.align/alignof-expression-diag.cpp`.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
 
 ### 4.6 Namespaces, linkage specifications, static_assert
 - **Namespaces:**
   - Named namespaces are reopened ([namespace.def]).
+  - **Reopening through the inline namespace set**
+    ([namespace.def.general]/3, WP-309): the identifier of a named
+    namespace definition is looked up in the enclosing namespace and in
+    every element of its inline namespace set. If it finds a namespace
+    `A::I::R` (with `I` inline in `A`), `namespace A { namespace R {` extends
+    that namespace. The reopening `NamespaceDecl` has semantic ctx `A::I`
+    and lexical ctx `A`. Test:
+    tests/conformance/namespace.def/reopen-through-inline.cpp.
+  - **Mangling and printing an entity of such a reopening** (clang, our
+    ABI target; GCC mangles through the semantic path, and GCC
+    compatibility is not a goal here). A reopening namespace mangles and
+    prints under its lexical ctx, not its semantic one. This is clang's
+    `getEffectiveDeclContext` / `printQualifiedName` walk over the
+    reopening `NamespaceDecl`, implemented in `kiln_abi::mangle::effective_ctx` and
+    `kiln_codegen` `qualified_name`. For the code above, `int y;` declared in the
+    reopened `R` is `_ZN1A1R1yE`, and a class `U` there is LLVM type
+    `%"struct.A::R::U"`. `int x;` from the original definition stays
+    `_ZN1A1I1R1xE`. The namespace part comes from the namespace
+    definition that holds the entity's **first declaration** (codegen
+    mangles the first declaration):
+    - A function or static member declared in `A::I::R` and defined in
+      the reopening keeps `_ZN1A1I1R…`.
+    - A member of a class keeps its class's path.
+    - An explicit specialization mangles in its template's namespace.
+    - Known clang divergence: clang mangles whichever redeclaration it
+      reaches first. Take an entity declared in `A::I::R` and defined in
+      the reopening before any use. Clang uses the reopening's `A::R`
+      path and kiln uses `A::I::R`. clang 22 behaves the same. This
+      deviation is kept (WP-325): mangling one fixed declaration keeps
+      the symbol independent of declaration and use order. It is pinned
+      to that case only. An entity redeclared or defined in another
+      definition of the same namespace (`namespace A { inline namespace
+      I { namespace R {` again, or `namespace A::inline I::R {`) mangles
+      identically under both compilers (differential run test
+      tests/conformance/namespace.def/redeclaration-mangling.cpp, which
+      links only if kiln emits clang's symbols).
+    - Test: tests/codegen/namespace_reopen_inline.cpp (IR diff against
+      clang++-19 on both triples).
   - An unnamed namespace is created once per scope and gets an
     implicit `UsingDirectiveDecl` ([namespace.unnamed]).
 - **Using-directives:** the payload is `Payload::None(nominated.raw())`.
@@ -1269,9 +1450,18 @@ specification as written (`TypeNames` prints ` noexcept`,
   operand: `'this' cannot be [implicitly] used in a static member
   function declaration` (`sema_this_static_member_func`,
   [expr.prim.this]/3; clang `checkThisInStaticMemberFunctionExceptionSpec`;
-  WP-280, `class.mem.general/static-member-noexcept-this.cpp`). Clang
-  diagnoses it again when a class template's static member is
-  instantiated; kiln diagnoses only the pattern (a follow-up).
+  WP-280, `class.mem.general/static-member-noexcept-this.cpp`). In a
+  class template it is reported at the definition and again in each
+  instantiation of the class (`subst::function_decl` reruns the check
+  on the pattern's operand; the diagnostic is `per_instantiation`, so
+  the definition's report does not swallow it, spec/diag.md §7.4), the
+  first per instantiation carrying the `in instantiation of template
+  class` note. The specifier itself, instantiated when needed, gets no
+  `this` scope for a static member (`instantiate_exception_spec`), so
+  its implicit `this` is `invalid use of 'this' outside of a non-static
+  member function` under the `in instantiation of exception
+  specification` note, as in clang (WP-290,
+  `class.mem.general/static-member-noexcept-this-instantiation.cpp`).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as
@@ -1336,7 +1526,27 @@ specification as written (`TypeNames` prints ` noexcept`,
   address that reaches it fails deduction with `Tdk::Invalid`, so it is
   no candidate and gets no note (spec/sema-templates.md §5.7). An
   explicit specialization declarator with an invalid parameter matches
-  no template and reports nothing more (WP-308).
+  no template and reports nothing more (WP-308). An explicit
+  specialization `template <> void f(int);` with nothing named `f`
+  visible reports "no function template matches" and declares a plain,
+  invalid function `f` (clang, WP-318; spec/sema-templates.md §6.9), so
+  a later `f(1)` is quiet.
+  A constructor or constructor template with an invalid parameter type
+  (`S(u1)`) is invalid (`declare.rs`, `fparams` validity) and, as
+  clang's `addedMember`, LookupSpecialMember and
+  `ResolveConstructorOverload` ignore invalid constructors, it is not
+  user-declared (the class stays an aggregate and keeps its implicit
+  default constructor, `implicit.rs` `scan_declared`) and is no
+  candidate (`ctor_select.rs` `usable_ctors`, used by constructor
+  overload resolution, the implicit conversion sequences and special
+  member deletion): `S s{1, 2};` is "excess elements in struct
+  initializer" and "no matching constructor" lists no invalid
+  constructor. An implicit class template specialization whose pattern
+  has an invalid member (a field, variable, function, or a member
+  template whose pattern is invalid) is itself invalid, as clang's
+  `InstantiateClass` (`templ/class.rs`); its initializations are not
+  checked (WP-318,
+  `tests/conformance/dcl.init.aggr/invalid-constructor-keeps-aggregate.cpp`).
   Tests: `dcl.stc/function-storage-class.cpp`,
   `dcl.fct.default/invalid-default-arg.cpp`,
   `except.spec/redecl-invalid-decl.cpp`,
@@ -1417,10 +1627,25 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   later friend is not measured against an earlier friend that was
   already diagnosed as mismatched. Test:
   `temp.friend/friend-redecl-exception-spec-at-instantiation.cpp`.
-  Divergences (follow-ups): clang also checks at template definition
-  time a friend whose type is not dependent; kiln checks only at
-  instantiation. Kiln also matches a later namespace-scope declaration
-  against the pattern friend, where clang waits for the instantiation.
+  At the template definition a non-dependent unqualified friend (no
+  template head) is checked too, as clang's `MergeFunctionDecl` does
+  for a friend of a dependent context: `pattern_friend_prev` finds the
+  namespace function it would redeclare (as for a friend of a
+  non-templated class, ignoring other pattern friends) and queues the
+  pair on `delayed_exc_equiv`, compared at once or after the replay.
+  The friend is not linked into that function's chain. A dependent
+  `noexcept(expr)` matches no other specification (clang's
+  `CT_Dependent`), so it is a mismatch at the definition and is
+  checked again per instantiation. The instantiation's check repeats
+  a definition-time report for a `noexcept(expr)` friend
+  (`per_instantiation_exc`; clang substitutes and compares it every
+  time) and drops it otherwise (diagnostic deduplication, spec/diag.md
+  §7.4), as clang does not re-diagnose `noexcept` or a missing
+  specification. A pattern friend is invisible to redeclaration
+  lookup (`find_prev_function` filters `is_dependent_friend_fn`): a
+  later namespace-scope declaration declares the function anew, and
+  each instantiated friend then redeclares it and is checked against
+  it (WP-290, `temp.friend/friend-exception-spec-pattern-time.cpp`).
 - *Unparsed through the redeclaration chain*: `exc_unparsed(f)` is true
   when `f`, its first declaration, or the pattern it waits on is in
   `unparsed_exc`. Both `resolve_exc_for_type` and
@@ -1534,7 +1759,13 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
       declarator (`subst/stmts.rs` `local_using_decl`), so a
       non-enumerator target is diagnosed then, with its note at the
       `using`, and a use (`local_using_ref`) is looked up again in the
-      instantiated block. The uses of a declarator that failed
+      instantiated block. A qualifier error (`T` not a class, or not
+      a base class) is reported at the start of the
+      nested-name-specifier, as clang does (`Substituter::qualifier_begin`,
+      sema-templates.md §5.8); the class-member `using T::member;` and
+      `using typename T::type;` (`templ/class.rs`) do the same
+      (tests/conformance/namespace.udecl/dependent-qualifier-location.cpp).
+      The uses of a declarator that failed
       (`Substituter::failed_usings`) are errors without another
       diagnostic (clang's invalid `UsingDecl`; WP-197).
     - A qualifier that is still dependent after substitution (a
@@ -1795,16 +2026,18 @@ diagnostics and IR.
   - **member calls:** `CXXMemberCallExpr` for a single candidate
     (sema-class.md §8.3, "Landed (WP-066b)"); overloaded member
     functions wait for WP-068a
+  - **ext-vector element access:** §5.19
   - **subscripts:** either operand order
   - **`sizeof`/`alignof`:** of types and expressions, using
-    `kiln_abi` layout. An invalid operand (function type, incomplete
-    type, sizeless type, bit-field) is diagnosed as clang
-    `CheckUnaryExprOrTypeTraitOperand`: a type operand at the keyword
-    with the `( type-id )` range (the whole expression when rebuilt by
-    an instantiation), an expression operand at its expression location
-    (`getExprLoc`: its begin, a member call's member name) with its range
-    (the bit-field error without one; WP-320, test
-    `expr.sizeof/incomplete-operand-location.cpp`)
+    `kiln_abi` layout; `alignof` of an expression naming a variable or
+    data member uses its declared alignment (§4.5). An invalid operand
+    (function type, incomplete type, sizeless type, bit-field) is
+    diagnosed as clang `CheckUnaryExprOrTypeTraitOperand`: a type
+    operand at the keyword with the `( type-id )` range (the whole
+    expression when rebuilt by an instantiation), an expression operand
+    at its expression location (`getExprLoc`: its begin, a member call's
+    member name) with its range (the bit-field error without one;
+    WP-320, test `expr.sizeof/incomplete-operand-location.cpp`)
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
     `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
@@ -1826,7 +2059,14 @@ diagnostics and IR.
     converts to an integral type (not an enumeration) as `(void*)0`
     does (`PointerToIntegral`, with the pointer path's
     `cast from pointer to smaller type` error, [expr.reinterpret.cast]/4,
-    WP-296).
+    WP-296). A cast to a non-reference, non-class type that no rule
+    allows is `{static_cast|…} from 'F' to 'T' is not allowed` (clang
+    `err_bad_cxx_cast_generic`, `bad_cast`), where `F` is the operand's
+    type after the array-to-pointer and function-to-pointer conversions
+    (`'int *'` for an `int[3]`, `'void (*)(int)'` for a function), and
+    `const_cast<void>` is `const_cast to 'void', which is not a
+    reference, pointer-to-object, or pointer-to-data-member` (WP-327;
+    test `expr.static.cast/bad-cast-decayed-operand.cpp`).
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold. They are run-time
   behavior diagnostics anchored at the right operand (clang's
@@ -2138,7 +2378,11 @@ for them.
   cast written `(void*)` (exactly, not through a typedef) warns
   `expression result unused; should this cast be to 'void'?`
   (-Wunused-value, clang `warn_unused_voidptr`) with only the fix-it
-  removing the `*` as its range (WP-203).
+  removing the `*` as its range (WP-203). The warning's location is the
+  expression's begin location, so an unused qualified name (`N::x;`,
+  `::N::x;`, `N::v<int>;`) points at the start of its
+  nested-name-specifier, as clang's `DeclRefExpr::getBeginLoc` (WP-318,
+  `tests/conformance/expr.prim.id.qual/unused-value-qualified-name-column.cpp`).
   - `emit_unused` (WP-182) follows clang's order: a comparison is
     `-Wunused-comparison` only when it is the unused expression itself
     (`top_comparison`: not parenthesized, not a comma's right operand or
@@ -2310,7 +2554,14 @@ for them.
   cast at the `(`. clang's diagnostics follow from that:
   - a reference type cannot bind to an initializer list;
   - more than one element for a scalar is a function-style cast
-    error;
+    error, except for a `_Complex` type, whose list takes the real and
+    imaginary parts (`(_Complex float){x, 2}`; a third element is
+    `excess elements in scalar initializer`; WP-312,
+    `tests/conformance/ext.gnu.compound.literal/complex-diagnostics.cpp`);
+  - a scalar list narrows as any list-initialization does
+    ([dcl.init.list]/7): `(bool){i}` for an `int`, floating or pointer
+    `i`, or a constant other than 0 and 1, is the narrowing error
+    (`tests/conformance/ext.gnu.compound.literal/bool-narrowing-diagnostics.cpp`);
   - an incomplete type is diagnosed with the forward-declaration note.
 
   - a class literal (WP-191) is list-initialized as a direct-list
@@ -3011,16 +3262,25 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `expression is not assignable`; a const base is the usual
   const-variable diagnostic. `&v.x` and binding a non-const reference
   are rejected as for any vector element (§5.13).
-- Constant evaluation does not evaluate the access (clang 19 does not
-  either): a constexpr use is "must be initialized by a constant
-  expression".
+- A GNU `vector_size` vector has no components (`member reference base
+  type ... is not a structure or union`). An unused access (`v.x;`) is
+  `expression result unused` at the base's begin (clang's `getExprLoc`).
+- Constant evaluation (oven.md "Vectors", WP-312): an access on a
+  prvalue vector (a compound literal, `(v + v)`, a `bit_cast`) folds, as
+  in clang 19; one on a vector object is not a constant expression
+  (clang 19 rejects it too), reported at the expression's begin.
 - Codegen (codegen.md "Vectors"): a glvalue access is an `LV` whose
-  `vidx` is `VecLane::Index` (one lane) or `VecLane::Swizzle` (several;
-  a swizzle of a swizzle lvalue composes onto the innermost vector);
-  a load is `extractelement`/`shufflevector`, a store inserts each
-  source element at its lane. A prvalue base is swizzled as a value.
+  `vidx` is `VecLane::Index` (one lane, an `i64` index) or
+  `VecLane::Swizzle` (several; a swizzle of a swizzle lvalue composes
+  onto the innermost vector); a load is `extractelement`/
+  `shufflevector`; a store of several lanes shuffles the value into the
+  loaded vector (`store_swizzle`). A prvalue base is stored to a
+  temporary first (WP-312, clang `EmitExtVectorElementExpr`).
 - Tests: `ext.vector/ext-vector-access.cpp` (run, including templates),
-  `ext.vector/ext-vector-access-diagnostics.cpp` (strict-diags).
+  `ext.vector/ext-vector-access-diagnostics.cpp`,
+  `ext.vector/element-access-diagnostics.cpp`,
+  `ext.vector/element-access-constexpr-diagnostics.cpp` (strict-diags),
+  `tests/codegen/ext_vector_element.cpp`.
 
 ### 5.20 Variadic arguments (`expr.rs`, WP-311)
 - An argument for the ellipsis gets the default argument promotions
@@ -3095,6 +3355,20 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived
     class type is initialized from that element ([dcl.init.list]/3.2)
+  - brace elision never enters an aggregate with no elements
+    ([dcl.init.aggr]/2: no direct bases and no members but unnamed
+    bit-fields, or an array of bound 0; `aggregate_has_no_elements`).
+    [dcl.init.aggr]/16 takes no clause for such a subaggregate; clang and
+    GCC reject the unbraced clause instead, and kiln follows them:
+    `initializer for aggregate with no elements requires explicit braces`
+    (`sema_implicit_empty_initializer`) at the clause, which is consumed
+    (the next clause initializes the next element) while the element
+    recovers. With `struct E {};`, `struct D2 { E e; int i; }; D2 d{1, 2};`
+    has one error (at `1`), `struct F { E e[2]; int x; }; F f{1, 2};` has
+    two (one per array element) and `D2 d{{}, 2};` none. The overload
+    viability walk (`aggregate_list_walk`, spec/sema-overload.md) uses
+    the same predicate. Test:
+    tests/conformance/dcl.init.aggr/brace-elision-empty-aggregate.cpp
   - vector members (WP-173, clang `CheckSubElementType`): a GNU vector
     member cannot be initialized from a scalar, so a scalar starts a
     brace-elided list of up to N elements (`elided_vector_init`). A
@@ -3273,7 +3547,13 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   invalid variable whose type is a non-dependent reference (`S::c &r;`
   with no `S::c`, its type recovered to `int &`, spec/parse.md §2.1)
   still reports `declaration of reference variable 'r' requires an
-  initializer`; no other check runs for an invalid variable.
+  initializer`; no other check runs for an invalid variable. A
+  dependent reference type (`T &r;` in a template) is reported at the
+  template definition, with no note, as clang checks a reference type
+  before it stops at a dependent one, and again with the instantiation
+  note for each instantiation (`per_instantiation`, WP-318); a dependent
+  type that is not syntactically a reference waits for instantiation
+  (`tests/conformance/dcl.ref/dependent-uninitialized-reference.cpp`).
 - **Initializer of an invalid variable** (clang `AddInitializerToDecl`,
   WP-308): `act_on_init` discards it unchecked, so `S::c &r = 1;`
   reports only the decl-specifier
@@ -3303,6 +3583,27 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   variables in a linkage specification (clang checks the declaration
   context) are not diagnosed. Other locals are left to a CFG
   uninitialized-values analysis kiln does not have.
+- **Verify-only initialization** (WP-328; clang's `VerifyOnly` in
+  `TryOrBuildParenListInitialization`): an attempt that only asks
+  "would this initialization succeed" must leave no trace when it
+  fails. `verify_paren_aggregate_init(ty, args, at, rparen)` runs
+  `paren_aggregate_init` inside `enter_unevaluated`/`exit_unevaluated`
+  (nothing is odr-used, so no function template specialization is
+  instantiated and no implicit member is defined; the cleanups it
+  pushes are popped), under `Sema::capturing` (its diagnostics,
+  deferred ones included, are dropped), and restores `braced_args`
+  (the braced-argument placeholders it consumed). It returns whether
+  the result is valid; the throwaway expression is never used. On
+  success the caller builds the initialization again for real, so its
+  warnings and instantiations happen once ([temp.inst]/5: a
+  specialization is instantiated only when needed). Used by the
+  single-operand cast to an aggregate class with no viable
+  constructor (`class/construct.rs` `construct_class`,
+  spec/sema-class.md §5.6). Tests:
+  `tests/conformance/dcl.init.general/paren-aggregate-cast-verify-only.cpp`
+  (a converting constructor template whose `static_assert` would fire
+  if the failed attempt instantiated it),
+  `tests/conformance/dcl.init.general/paren-aggregate-cast-run.cpp`.
 
 ### 6.1 Braced lists in expressions and explicit type conversions (`forms.rs`)
 - **Call arguments** `f({...})` ([expr.call]/7):
@@ -3311,10 +3612,10 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   - `act_on_call` replaces it by the list-initialization of the
     parameter.
   - Viability follows [over.ics.list]: a scalar takes at most one
-    unbraced, convertible element; an aggregate at most as many
-    elements as brace elision reaches (bases count; a non-aggregate
-    class member takes one, a subaggregate at least one;
-    spec/sema-overload.md [over.ics.list]). A non-viable list is clang's
+    unbraced, convertible element. For an aggregate, the list is walked
+    under brace elision and each element's conversion is checked; a
+    designated list instead takes at most as many elements as brace
+    elision reaches (spec/sema-overload.md [over.ics.list]). A non-viable list is clang's
     `cannot convert initializer list argument to 'T'` candidate note,
     except that a single class-type element for a non-class parameter
     notes the element's own conversion ([over.ics.list]/10: `no known

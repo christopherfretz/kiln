@@ -213,6 +213,7 @@ no category).
 | `NoInitExpr` | `NoInitExpr 'type'` (an updater slot or filler that keeps the base's value) |
 | `DesignatedInitExpr` | `DesignatedInitExpr 'void' [lvalue\|xvalue]` (a designated clause of a dependent `InitListExpr`, in template patterns only; WP-192); children: the initializer, then the array designators' index expressions. The designators are not printed (clang 19 prints none) |
 | WP-064 forms | `CXXScalarValueInitExpr`, `CXXDefaultArgExpr`, `CXXThrowExpr`, `StmtExpr`, `CompoundLiteralExpr`, `OpaqueValueExpr`, `BinaryConditionalOperator`, `OffsetOfExpr`, `CXXTypeidExpr`: class, type, category only. Children: a `CXXDefaultArgExpr` the parameter's default argument; a `CXXThrowExpr` its operand, if any; a `StmtExpr` its `CompoundStmt`; a `CompoundLiteralExpr` its `InitListExpr`; an `OpaqueValueExpr` its source expression; a `BinaryConditionalOperator` the common expression, condition, true arm and false arm; an `OffsetOfExpr` its array index expressions; a `CXXTypeidExpr` its expression operand (a type operand is not printed) |
+| `__builtin_choose_expr` (WP-316) | `ChooseExpr`: class, type, category only (the chosen operand's; `<dependent type>` prvalue while the condition is dependent). Children: the condition (a `ConstantExpr` once evaluated), then both operands as written (`tests/conformance/ast/ext.gnu.choose.expr/`) |
 | `ConstantExpr` | `ConstantExpr 'type' value=V` (M2: integral, `bool` and enumeration values; WP-133: aggregates of those, `{1, {2, 3}}`); no `value=` on an immediate invocation not evaluated in place (nested in another, or in a constant initializer; WP-133) |
 | `CXXNewExpr` | `CXXNewExpr 'T *' [global] [array] Function 'operator new' 'type'` (clang's `operatorNewDecl` printed as a decl reference, kind, name and type; `array` for an array new; no placement, init-style or alignment flags, as clang 19). Children in clang's order: the array size (the first bound converted to `unsigned long`, an `IntegralCast` or a synthesized `IntegerLiteral` for `new T[]{...}`), the initializer (`InitListExpr`, `ImplicitValueInitExpr` for `()`, or the converted expression), then the placement arguments (WP-061a) |
 | `CXXDeleteExpr` | `CXXDeleteExpr 'void' [global] [array] Function 'operator delete' 'type'` (`array` when written `delete[]`; clang's `isArrayForm`); one child, the operand converted to a pointer prvalue (WP-061a) |
@@ -496,12 +497,20 @@ type>'`:
     dependent `N::v<T>` carries it over (WP-300).
   - `T(a, b)` for an unresolved construct, `sizeof...(Ts)`, and folds as
     `(... + xs)`.
+  - `sizeof e` / `alignof e` with an expression operand print the
+    keyword, a space and the operand as written, adding no parentheses
+    (`alignof((g))` stays `alignof((g))`, `sizeof x` stays `sizeof x`;
+    WP-312, `tests/conformance/dcl.pre/static-assert-alignof-operand.cpp`).
+  - `v.xy` for an ext-vector element access.
+- **Trailing return types survive substitution** (WP-318): a member
+  function or member function template of an implicit class
+  instantiation declared `auto f(U) -> T` prints as written with the
+  substituted type (`auto (U) -> int`, `auto (U, int) -> int *`), as
+  clang; the substituted declarator keeps the trailing-return bit and a
+  plain `auto` base (`templ/subst/decls.rs` `function_decl`)
+  (`tests/conformance/temp.inst/member-trailing-return-ast.cpp`).
 
 Known gaps:
-- A member function template of an implicit class instantiation
-  declared with a trailing return type prints its leading form
-  (`decltype(e) (U)`; clang: `auto (U) -> decltype(e)`): the
-  substituted declarator does not keep the trailing-return bit.
 - A function parameter named inside its own declarator's trailing
   return type (`auto f(T t) -> decltype(t.x)`) is unsupported, so the
   type prints with `...` for the expression.

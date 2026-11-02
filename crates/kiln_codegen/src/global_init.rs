@@ -88,7 +88,7 @@ impl Cg<'_> {
     pub(crate) fn var_must_emit(&self, d: DeclId) -> bool {
         let ast = self.ast;
         let Some(ty) = ast.decls.get(d).ty() else { return false };
-        if !ast.types.is_reference(ty) && self.destructed_class(ty).is_some() {
+        if !ast.types.is_reference(ty) && self.var_destructed_class(d, ty).is_some() {
             return true;
         }
         let Some(init) = ast.decls.var(d).and_then(|v| v.init) else { return false };
@@ -284,7 +284,7 @@ impl Cg<'_> {
             .and_then(|v| v.init)
             .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)))
             .filter(|&i| !ast.is_trivial_default_construction(i));
-        let align = self.global_align(ty);
+        let align = self.var_align(d);
         let mt = self.mty(ty);
         let addr = Addr { v: V::C(gval(g)), ty: mt, align };
         if ast.types.is_reference(ty) {
@@ -295,7 +295,7 @@ impl Cg<'_> {
             self.emit_var_init(d, ty, addr, init)?;
         }
         // EmitDeclDestroy.
-        if let Some(rd) = self.destructed_class(ty) {
+        if let Some(rd) = self.var_destructed_class(d, ty) {
             if self.array_elem(ty).is_some() {
                 let helper = self.global_array_dtor(d, addr, rd)?;
                 let null = V::C(self.m.const_null(LTy::PTR));
@@ -375,7 +375,7 @@ impl Cg<'_> {
         let ty = ast.decls.get(d).ty().expect("var type");
         let init = v.init.filter(|&i| !ast.is_trivial_default_construction(i));
         let perform = init.is_some_and(|e| self.folds.get(e).is_none());
-        let dtor = !ast.types.is_reference(ty) && self.destructed_class(ty).is_some();
+        let dtor = !ast.types.is_reference(ty) && self.var_destructed_class(d, ty).is_some();
         if perform || dtor { self.guarded_init(d, g, perform) } else { Ok(()) }
     }
 
@@ -386,7 +386,7 @@ impl Cg<'_> {
         let ty = ast.decls.get(d).ty().expect("var type");
         let init = init.filter(|&i| !ast.is_trivial_default_construction(i));
         init.is_some_and(|e| self.folds.get(e).is_none())
-            || (!ast.types.is_reference(ty) && self.destructed_class(ty).is_some())
+            || (!ast.types.is_reference(ty) && self.var_destructed_class(d, ty).is_some())
     }
 
     /// The `_ZGV` guard variable of `d` with global `g` (clang

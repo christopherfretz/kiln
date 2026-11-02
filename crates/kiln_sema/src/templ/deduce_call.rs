@@ -427,7 +427,7 @@ impl Sema<'_, '_> {
         }
         // [temp.deduct.funcaddr]: the function type against the target.
         if let DeduceTarget::FuncAddr(a) = target {
-            let r = self.deduce(pfn, a, TdfFlags::NONE, &mut d);
+            let r = self.deduce(pfn, a, TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT, &mut d);
             if r != Tdk::Success {
                 self.resugar_fn_mismatch(pfn, &mut d);
                 return Err(DeductionFailure::new(r, d));
@@ -836,11 +836,21 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        // A function lvalue binds a reference to the function type without
+        // `noexcept` ([dcl.init.ref]/4, reference-compatible).
+        if self.ast.types.is_function(ca) {
+            let (pa, pd) = (self.ast.types.pointer_to(ca), self.ast.types.pointer_to(cd));
+            if crate::conv::is_function_pointer_conversion(self, pa, pd) {
+                return None;
+            }
+        }
         // /4.3: a derived class (or pointer to one) of a simple-template-id.
         if let TypeView::Pointer(pp) = self.ast.types.canonical_view(op) {
             op = self.ast.types.canonical(pp);
+            // clang strips the pointers only to a class (`A`'s pointee).
             if let (TypeView::Pointer(x), TypeView::Pointer(y)) =
                 (self.ast.types.canonical_view(ca), self.ast.types.canonical_view(cd))
+                && self.ast.types.as_record(x).is_some()
             {
                 ca = self.ast.types.canonical(x);
                 cd = self.ast.types.canonical(y);
@@ -1013,7 +1023,12 @@ impl Sema<'_, '_> {
         if matches!(t.canonical_view(at), TypeView::Pointer(_) | TypeView::MemberPointer { .. }) {
             flags = flags.union(TdfFlags::IGNORE_QUALIFIERS);
         }
-        flags = flags.union(TdfFlags::DERIVED_CLASS);
+        // /4.2: a (pointer to a, reference to a) function type deduces
+        // regardless of `noexcept`, as clang's type match does; the
+        // function pointer conversion is checked on the deduced `A`
+        // (`deduced_a_mismatch`).
+        flags =
+            flags.union(TdfFlags::DERIVED_CLASS).union(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE);
         self.deduce(p, at, flags, d)
     }
 

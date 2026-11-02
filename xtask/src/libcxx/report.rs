@@ -92,6 +92,9 @@ pub fn group_of<'a>(rel: &str, roots: &'a [String]) -> &'a str {
 /// Facts about the run for the page header.
 pub struct RunInfo {
     pub kiln_version: String,
+    /// The cargo profile kiln++ was built with (`--profile`), or what is
+    /// known of a `--compiler` binary's.
+    pub profile: String,
     pub kiln_commit: String,
     pub tests_tag: String,
     pub libcpp_version: String,
@@ -139,6 +142,7 @@ pub fn render(
         });
     for (k, v) in [
         ("kiln", format!("`{}` at commit `{}`", info.kiln_version, info.kiln_commit)),
+        ("kiln build profile", format!("`{}`", info.profile)),
         ("libc++ tests", format!("`{}` (`libcxx/test`)", info.tests_tag)),
         ("libc++ headers", format!("`_LIBCPP_VERSION` {}", info.libcpp_version)),
         ("target", format!("`{}`", info.target)),
@@ -390,6 +394,7 @@ mod tests {
     fn page() {
         let info = RunInfo {
             kiln_version: "kiln version 0.1.0".into(),
+            profile: "harness".into(),
             kiln_commit: "abc1234".into(),
             tests_tag: "llvmorg-19.1.7".into(),
             libcpp_version: "190107".into(),
@@ -422,6 +427,7 @@ mod tests {
         );
         assert!(page.contains("- `std/a/3.pass.cpp` — KILLED (compile)"), "{page}");
         assert!(page.contains("### Crashes\n\nNone."), "{page}");
+        assert!(page.contains("| kiln build profile | `harness` |"), "{page}");
         assert!(page.contains("2 MiB (largest single process"), "{page}");
         assert!(page.contains("| `std/a` | `compile: x '…'` (1) |"), "{page}");
     }

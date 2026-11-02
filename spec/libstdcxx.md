@@ -20,13 +20,14 @@ cargo xtask libstdcxx [options]
 |---|---|
 | `--std <std>` | `c++26` (default), `c++23`, `c++20` or `c++17`. Each standard has its own region of the report. |
 | `--headers <dir>` | The libstdc++ include directory to enumerate. Default: the newest `/usr/include/c++/<version>` whose name is dot-separated numbers, compared numerically (Debian's `libstdc++-N-dev` layout; `v1`, libc++'s, never matches). Both compilers still find their headers through their own `-stdlib=libstdc++` search (`spec/driver.md` "Header search"); the option only chooses what to enumerate. |
-| `--compiler <path>` | kiln binary. Default: `cargo build -p kiln_driver` (debug), then `kiln++`. |
+| `--profile <p>` | The cargo profile the implicit build uses: `debug`, `harness` (default) or `release` (`spec/libcxx.md` "Build profiles"). |
+| `--compiler <path>` | kiln binary. Default: `cargo build --profile <p> -p kiln_driver`, then `kiln++`. The report's command names `--profile <p>`, or `--compiler <kiln++>` when this is given. |
 | `--clang <path>` | The reference compiler. Default `clang++-19`. If it cannot report a version, a warning is printed and the run continues without a reference column. |
 | `--no-clang` | Skip the reference compiler. |
 | `--filter <glob>` | Keep only headers whose name matches the glob in full (`*` any run, `?` one character, everything else literally). |
 | `--list` | Print the selected headers and exit. Nothing is compiled. |
 | `-j, --jobs <n>` | Headers in parallel. Default 2. Each compile holds a jobserver token (`spec/harness.md` "Jobserver"), so the shared pool can lower it. |
-| `--timeout <secs>` | Per-compile limit. Default 120. |
+| `--timeout <secs>` | Per-compile limit. Default 120, or 300 with `--profile debug`. |
 | `--mem-limit <MiB>` | Address-space cap per compile (`spec/harness.md` "Resource limits"). kiln gets its stack reservation on top. Default 8192. `0` means no cap. |
 | `--report <file.md>` | Write this standard's generated region of the status page (see "Report"). |
 | `-v` | Print every header's result, not only kiln's non-ok ones. |

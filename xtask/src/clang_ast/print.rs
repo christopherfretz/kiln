@@ -1671,6 +1671,7 @@ impl<'a> Printer<'a, '_> {
             | "CompoundLiteralExpr"
             | "BinaryConditionalOperator"
             | "OffsetOfExpr"
+            | "ChooseExpr"
             | "DependentScopeDeclRefExpr"
             | "SubstNonTypeTemplateParmExpr"
             | "PackExpansionExpr"

@@ -154,10 +154,16 @@ impl Sema<'_, '_> {
     /// The satisfaction of the trailing requires-clause of non-template
     /// function `f` ([over.match.viable]/3), when `f` is a member of a
     /// class template specialization redeclared from a constrained
-    /// member of the pattern (else `None`: nothing to check, or the
+    /// member of the pattern, or a non-templated function whose clause
+    /// was diagnosed but is still checked with no arguments, as in clang
+    /// ([dcl.decl.general]/5; else `None`: nothing to check, or the
     /// arguments are dependent).
     pub(crate) fn check_function_constraints(&mut self, f: DeclId, loc: Loc) -> Option<SatId> {
         let &r = self.ast.templates.trailing_requires.get(f)?;
+        if self.inst.concepts.untemplated_requires.contains(&f) {
+            let none = MultiLevelArgs::new();
+            return Some(self.check_constraints(f, &[r], &none, ArgListId::EMPTY, loc));
+        }
         let (_, outer) = self.inst.concepts.member_constraints.get(&f)?;
         if self.levels_dependent(outer) {
             return None;

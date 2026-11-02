@@ -1,12 +1,16 @@
-//! Where a placeholder for a deduced class type may appear
-//! ([dcl.type.class.deduct]/2): clang's `err_auto_not_allowed` (with a
+//! Where a placeholder may appear: for a deduced class type
+//! ([dcl.type.class.deduct]/2) clang's `err_auto_not_allowed` (with a
 //! deduced class template), `err_template_missing_args` where its parser
-//! forms no placeholder, and `err_deduced_class_template_compound_type`
-//! (`GetDeclSpecTypeForDeclarator` and `GetFullTypeForDeclarator`).
+//! forms no placeholder, and `err_deduced_class_template_compound_type`;
+//! for `auto` and `decltype(auto)` ([dcl.spec.auto.general]/2-5,
+//! [dcl.type.auto.deduct]) clang's `err_auto_not_allowed` with its
+//! position wording (`GetDeclSpecTypeForDeclarator` and
+//! `GetFullTypeForDeclarator`). Spec: sema-templates.md §6.3.
 
 use kiln_ast::QualType;
 use kiln_ast::decl::{DeclKind, TagKind};
 use kiln_ast::ids::TemplateNameId;
+use kiln_ast::types::{AutoKeyword, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -16,20 +20,22 @@ use crate::declspec::{
 };
 
 /// clang's `err_auto_not_allowed` context selectors used here.
-mod site {
-    pub(super) const PROTOTYPE: u8 = 0;
-    pub(super) const STRUCT_MEMBER: u8 = 1;
-    pub(super) const UNION_MEMBER: u8 = 3;
-    pub(super) const CLASS_MEMBER: u8 = 5;
-    pub(super) const CATCH: u8 = 7;
-    pub(super) const TEMPLATE_ARG: u8 = 10;
-    pub(super) const TYPEDEF: u8 = 11;
-    pub(super) const RETURN_TYPE: u8 = 13;
-    pub(super) const CONVERSION_ID: u8 = 14;
-    pub(super) const HERE: u8 = 15;
-    pub(super) const LAMBDA_PARAM: u8 = 16;
-    pub(super) const FRIEND: u8 = 20;
-    pub(super) const REQUIRES_PARAM: u8 = 22;
+pub(crate) mod site {
+    pub(crate) const PROTOTYPE: u8 = 0;
+    pub(crate) const STRUCT_MEMBER: u8 = 1;
+    pub(crate) const UNION_MEMBER: u8 = 3;
+    pub(crate) const CLASS_MEMBER: u8 = 5;
+    pub(crate) const CATCH: u8 = 7;
+    pub(crate) const TEMPLATE_ARG: u8 = 10;
+    pub(crate) const TYPEDEF: u8 = 11;
+    pub(crate) const ALIAS: u8 = 12;
+    pub(crate) const RETURN_TYPE: u8 = 13;
+    pub(crate) const CONVERSION_ID: u8 = 14;
+    pub(crate) const HERE: u8 = 15;
+    pub(crate) const LAMBDA_PARAM: u8 = 16;
+    pub(crate) const FRIEND: u8 = 20;
+    pub(crate) const NOT_FUNCTION_DECLARATION: u8 = 21;
+    pub(crate) const REQUIRES_PARAM: u8 = 22;
 }
 
 /// The verdict on a placeholder in a declarator's context.
@@ -71,7 +77,9 @@ impl Sema<'_, '_> {
     fn ctad_declarator_site(d: &Declarator) -> Option<Misplaced> {
         match d.site {
             DeclSite::Subst | DeclSite::New | DeclSite::TemplateParam => return None,
-            DeclSite::NoDeduction => return Some(Misplaced::MissingArgs),
+            DeclSite::NoDeduction | DeclSite::Alias | DeclSite::TypeParamDefault => {
+                return Some(Misplaced::MissingArgs);
+            }
             _ => {}
         }
         // A function declarator: the placeholder is its return type
@@ -213,9 +221,134 @@ impl Sema<'_, '_> {
         true
     }
 
-    /// The exception-declaration of a handler naming a placeholder
-    /// (clang's `err_auto_not_allowed`, "in exception declaration").
-    pub(crate) fn ctad_catch_check(&mut self, base: QualType, spec_loc: Loc) -> QualType {
+    /// The exception-declaration `d` of a handler naming a placeholder
+    /// (clang's `err_auto_not_allowed`, "in exception declaration"): the
+    /// error type after a diagnostic, else `base`.
+    pub(crate) fn catch_placeholder_check(
+        &mut self,
+        base: QualType,
+        spec_loc: Loc,
+        d: &Declarator,
+    ) -> QualType {
+        if let Some(kw) = self.declarator_placeholder(base, d) {
+            self.auto_not_allowed(spec_loc, kw, site::CATCH);
+            return QualType::ERROR;
+        }
         self.ctad_misplaced(base, spec_loc, Misplaced::NotAllowed(site::CATCH))
+    }
+
+    // -- `auto` and `decltype(auto)` ---------------------------------------------------
+
+    /// "'auto' not allowed <position>" at `loc` (clang's
+    /// `err_auto_not_allowed`; `site` is its position selector).
+    pub(crate) fn auto_not_allowed(&mut self, loc: Loc, kw: AutoKeyword, site: u8) {
+        let msg = self
+            .diag(DiagId::sema_auto_not_allowed, loc)
+            .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+            .arg(site);
+        self.emit(msg);
+    }
+
+    /// The `auto`/`decltype(auto)` whose position declarator `d` with
+    /// decl-specifier type `base` decides (clang
+    /// `GetDeclSpecTypeForDeclarator`): `base`'s own, or, when `d` has a
+    /// trailing return type, the one contained in the trailing return
+    /// type of its outermost function declarator (`using F =
+    /// auto (*)(int) -> int;` names none). GNU `__auto_type` is not
+    /// checked here.
+    pub(crate) fn declarator_placeholder(
+        &self,
+        base: QualType,
+        d: &Declarator,
+    ) -> Option<AutoKeyword> {
+        let TypeView::Auto { keyword, deduced: None, .. } = self.ast.types.canonical_view(base)
+        else {
+            return None;
+        };
+        let trailing = d.chunks.iter().find_map(|c| match c {
+            Chunk::Function { trailing: Some((t, _)), .. } => Some(*t),
+            _ => None,
+        });
+        let kw = match trailing {
+            Some(t) => self.placeholder_keyword(t)?,
+            None => keyword,
+        };
+        (kw != AutoKeyword::GnuAutoType).then_some(kw)
+    }
+
+    /// The position selector of a placeholder `auto` that declarator `d`
+    /// does not allow, from its context alone (clang's `DeclaratorContext`
+    /// switch, with `typedef` overriding it). A parameter of a function
+    /// or lambda declarator is decided by the parser as it invents
+    /// template parameters ([`Sema::param_placeholder_site`]); a
+    /// non-static data member, a catch handler and an enum-base by their
+    /// own checks.
+    fn auto_declarator_site(d: &Declarator) -> Option<u8> {
+        // A structured binding declaration (also a `typedef` one, which
+        // gets only the decomposition error, as in clang) is checked by its own rules.
+        if d.decomp.is_some() {
+            return None;
+        }
+        if d.typedef {
+            return Some(site::TYPEDEF);
+        }
+        Some(match d.site {
+            DeclSite::Alias => site::ALIAS,
+            DeclSite::TemplateArg | DeclSite::TypeParamDefault => site::TEMPLATE_ARG,
+            DeclSite::RequiresParam => site::REQUIRES_PARAM,
+            DeclSite::Plain if d.ctx == DeclaratorContext::TypeName => site::HERE,
+            _ => return None,
+        })
+    }
+
+    /// [dcl.spec.auto.general]/2-5 for the decl-specifier type `base` of
+    /// declarator `d` whose type-specifier is at `spec_loc`: a placeholder
+    /// where `d`'s position allows none is reported there, and the
+    /// declarator's type is then the error type. Called by
+    /// [`Sema::type_for_declarator_at`] after the deduced class type
+    /// check.
+    pub(crate) fn auto_declarator_check(
+        &mut self,
+        base: QualType,
+        spec_loc: Loc,
+        d: &Declarator,
+    ) -> QualType {
+        let Some(s) = Self::auto_declarator_site(d) else { return base };
+        let Some(kw) = self.declarator_placeholder(base, d) else { return base };
+        self.auto_not_allowed(spec_loc, kw, s);
+        QualType::ERROR
+    }
+
+    /// A type-id's type `ty` formed without a declarator (an enum-base)
+    /// that is a placeholder: "'auto' not allowed here" at `loc`, and the
+    /// error type.
+    pub fn type_specifier_placeholder_check(&mut self, ty: QualType, loc: Loc) -> QualType {
+        match self.ast.types.canonical_view(ty) {
+            TypeView::Auto { keyword, deduced: None, .. }
+                if keyword != AutoKeyword::GnuAutoType =>
+            {
+                self.auto_not_allowed(loc, keyword, site::HERE);
+                QualType::ERROR
+            }
+            _ => ty,
+        }
+    }
+
+    /// Why a parameter's placeholder `auto` (`decltype(auto)` when
+    /// `decltype_auto`) is ill-formed, as clang's position selector:
+    /// `decltype(auto)` is never a parameter's type
+    /// ([dcl.spec.auto.general]/2-3: "in function prototype", "in lambda
+    /// parameter"), and `auto` invents a template parameter only in the
+    /// clause of a function declaration or a lambda (`fn_decl`,
+    /// [dcl.fct]/22: else "in function prototype that is not a function
+    /// declaration"). `None` when it invents one.
+    pub fn param_placeholder_site(decltype_auto: bool, fn_decl: bool, s: DeclSite) -> Option<u8> {
+        if decltype_auto {
+            Some(if s == DeclSite::LambdaParam { site::LAMBDA_PARAM } else { site::PROTOTYPE })
+        } else if !fn_decl {
+            Some(site::NOT_FUNCTION_DECLARATION)
+        } else {
+            None
+        }
     }
 }

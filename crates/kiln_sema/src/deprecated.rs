@@ -86,10 +86,10 @@ impl Sema<'_, '_> {
         false
     }
 
-    /// How a deprecated declaration names itself (clang
+    /// How a declaration names itself in a diagnostic (clang
     /// `getNameForDiagnostic`): a template specialization prints its
     /// template arguments, `f<int>`, `X<int *, int>`.
-    fn deprecation_name(&self, d: DeclId) -> String {
+    pub(crate) fn name_for_diagnostic(&self, d: DeclId) -> String {
         let mut name = self.decl_name(d);
         if let Some((_, i)) = self.ast.spec_info(d) {
             let names = crate::names::SemaNames::new(self);
@@ -121,14 +121,15 @@ impl Sema<'_, '_> {
     pub(crate) fn diagnose_deprecated(&mut self, d: DeclId, loc: Loc) {
         let Some((a, owner)) = self.deprecation_of(d) else { return };
         let attr = *self.ast.attrs.get(a);
-        let name = self.deprecation_name(d);
+        let name = self.name_for_diagnostic(d);
         let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
         let msg = match text {
             Some(t) => self.diag(DiagId::sema_deprecated_msg, loc).arg(name).arg(t),
             None => self.diag(DiagId::sema_deprecated, loc).arg(name),
         };
-        let note =
-            self.diag(DiagId::note_marked_deprecated, attr.loc).arg(self.deprecation_name(owner));
+        let note = self
+            .diag(DiagId::note_marked_deprecated, attr.loc)
+            .arg(self.name_for_diagnostic(owner));
         let msg = msg.with_note(note);
         if self.inst.stack.is_empty() && self.depr_points.last() == Some(&self.ctx) {
             let level = self.depr_points.len();

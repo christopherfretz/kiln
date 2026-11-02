@@ -38,8 +38,15 @@ impl TdfFlags {
     pub const IN_OVERLOAD_RESOLUTION: TdfFlags = TdfFlags(32);
     /// `A` came from a reference type.
     pub const ARG_WITH_REFERENCE_TYPE: TdfFlags = TdfFlags(64);
-    /// A function type `A` may differ in `noexcept` ([temp.deduct.call]/4.2).
+    /// A function type `A` may differ in `noexcept` ([temp.deduct.call]/4.2;
+    /// set for every call argument, kept through pointers and member
+    /// pointers).
     pub const ALLOW_COMPATIBLE_FUNCTION_TYPE: TdfFlags = TdfFlags(128);
+    /// A function type `A` may differ in a non-deduced `noexcept`
+    /// (the address of a function template, [temp.deduct.funcaddr]:
+    /// clang's `isSameOrCompatibleFunctionType` ignores the exception
+    /// specification; the conversion that follows checks it).
+    pub const IGNORE_NONDEDUCED_NOEXCEPT: TdfFlags = TdfFlags(256);
 
     /// Whether every flag of `o` is set.
     pub const fn contains(self, o: TdfFlags) -> bool {
@@ -834,8 +841,11 @@ impl Sema<'_, '_> {
         match pv {
             TypeView::Pointer(pp) => {
                 let TypeView::Pointer(ap) = av else { return mismatch(d) };
-                let sub =
-                    flags.intersect(TdfFlags::IGNORE_QUALIFIERS.union(TdfFlags::DERIVED_CLASS));
+                let sub = flags.intersect(
+                    TdfFlags::IGNORE_QUALIFIERS
+                        .union(TdfFlags::DERIVED_CLASS)
+                        .union(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE),
+                );
                 self.deduce_ty(pp, ap, sub, d, next)
             }
             TypeView::LValueRef(pp) => {
@@ -850,7 +860,9 @@ impl Sema<'_, '_> {
                 let TypeView::MemberPointer { pointee: ap, class: ac } = av else {
                     return mismatch(d);
                 };
-                let sub = flags.intersect(TdfFlags::IGNORE_QUALIFIERS);
+                let sub = flags.intersect(
+                    TdfFlags::IGNORE_QUALIFIERS.union(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE),
+                );
                 let r = self.deduce_ty(pp, ap, sub, d, next);
                 if r != Tdk::Success {
                     return r;
@@ -1081,8 +1093,11 @@ impl Sema<'_, '_> {
         if matches!(pexc, ExcSpec::Deferred(_)) {
             return Tdk::Success;
         }
+        // A call argument's (clang ignores a non-deduced mismatch there and
+        // checks the deduced `A`, [temp.deduct.call]/4.2).
         if pexc.is_nothrow() == a_nothrow
-            || (flags.contains(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE) && a_nothrow)
+            || flags.contains(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE)
+            || flags.contains(TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT)
         {
             Tdk::Success
         } else {

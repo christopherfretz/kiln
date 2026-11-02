@@ -368,7 +368,9 @@ impl Parser<'_, '_> {
             return self.parse_expression().map(|e| (None, e));
         }
         let ctx = DeclaratorContext::Condition;
-        let ds = self.parse_decl_specifiers(ctx);
+        let mut ds = self.parse_decl_specifiers(ctx);
+        // [stmt.pre]/1: a type-specifier-seq, so no storage class.
+        self.reject_type_name_storage(&mut ds);
         if ds.is_empty() {
             self.error_here(DiagId::parse_expected_expression);
             return None;
@@ -472,7 +474,9 @@ impl Parser<'_, '_> {
             // ([except.pre]/1, [dcl.pre]/5).
             self.lead_decl_attrs = attrs;
             let ctx = DeclaratorContext::Block;
-            let ds = self.parse_decl_specifiers(ctx);
+            let mut ds = self.parse_decl_specifiers(ctx);
+            // A type-specifier-seq: no storage class.
+            self.reject_type_name_storage(&mut ds);
             let mut d = Declarator::new(ctx, self.loc());
             self.parse_declarator(&mut d);
             self.set_abstract_loc(&mut d);

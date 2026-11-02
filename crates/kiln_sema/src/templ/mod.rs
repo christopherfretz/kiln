@@ -17,7 +17,7 @@ pub mod builtins;
 pub mod class;
 pub mod concepts;
 pub mod ctad;
-mod ctad_site;
+pub(crate) mod ctad_site;
 pub mod deduce;
 pub mod deduce_call;
 mod default_args;
@@ -1216,49 +1216,39 @@ impl Sema<'_, '_> {
         ty
     }
 
-    /// clang's `err_auto_not_allowed` for a parameter's placeholder:
-    /// `decltype(auto)` in any parameter, `auto` in a parameter of a
-    /// function declarator that declares no function ([dcl.fct]/22,
-    /// [dcl.spec.auto.general]/2-3). `site`: 0 a function prototype, 1
-    /// one that is not a function declaration, 2 a lambda parameter.
-    /// Returns `int`, the type clang recovers with.
+    /// clang's `err_auto_not_allowed` for a parameter's placeholder at
+    /// `loc`, with the position selector `site` that
+    /// [`Sema::param_placeholder_site`] gave ([dcl.fct]/22,
+    /// [dcl.spec.auto.general]/2-3). Returns `int`, the type clang
+    /// recovers with.
     pub fn act_on_misplaced_param_placeholder(
         &mut self,
         loc: Loc,
         decltype_auto: bool,
         site: u8,
     ) -> QualType {
-        let msg = self
-            .diag(DiagId::sema_auto_not_allowed_prototype, loc)
-            .arg(u8::from(decltype_auto))
-            .arg(site);
-        self.emit(msg);
+        use kiln_ast::types::AutoKeyword;
+        let kw = if decltype_auto { AutoKeyword::DecltypeAuto } else { AutoKeyword::Auto };
+        self.auto_not_allowed(loc, kw, site);
         QualType::INT
     }
 
     /// The undeduced placeholder of `t`, a parameter's trailing return
-    /// type (under pointer and reference declarators, as
+    /// type (under pointer and reference declarators and further function
+    /// return types, `auto (*)(int) -> auto`, as
     /// [`Sema::replace_placeholder`] rewrites it): whether it is
     /// `decltype(auto)`, and its type-constraint with the extra arguments.
     pub fn trailing_return_placeholder(
         &self,
         t: QualType,
     ) -> Option<(bool, Option<TypeConstraint>)> {
-        let mut cur = t;
-        for _ in 0..256 {
-            match self.ast.types.canonical_view(cur) {
-                TypeView::Auto { keyword, deduced: None, concept, args, .. } => {
-                    let extra = args.map(|a| self.ast.types.args(a).to_vec()).unwrap_or_default();
-                    return Some((
-                        keyword == kiln_ast::types::AutoKeyword::DecltypeAuto,
-                        concept.map(|c| (c, extra)),
-                    ));
-                }
-                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
-                _ => return None,
-            }
-        }
-        None
+        let leaf = self.contained_placeholder(t)?;
+        let TypeView::Auto { keyword, concept, args, .. } = self.ast.types.canonical_view(leaf)
+        else {
+            return None;
+        };
+        let extra = args.map(|a| self.ast.types.args(a).to_vec()).unwrap_or_default();
+        Some((keyword == kiln_ast::types::AutoKeyword::DecltypeAuto, concept.map(|c| (c, extra))))
     }
 
     /// `t` with its trailing-return placeholder replaced by the invented
@@ -1312,7 +1302,10 @@ impl Sema<'_, '_> {
 
     /// Attaches the trailing requires-clause `r` to function `f`
     /// ([dcl.decl.general]/4); only a templated function may have one
-    /// ([dcl.decl.general]/5).
+    /// ([dcl.decl.general]/5), and a virtual function may not
+    /// ([class.virtual]/6). Both errors point at the clause's first
+    /// token; the clause is attached anyway and still checked, as in
+    /// clang.
     pub fn act_on_trailing_requires(&mut self, f: DeclId, r: ExprId) {
         if self.kind_of(f).payload() != kiln_ast::decl::PayloadClass::Function {
             let loc = self.ast.exprs.get(r).loc();
@@ -1322,8 +1315,17 @@ impl Sema<'_, '_> {
         // An instantiated member keeps its pattern's clause; an invalid
         // clause was diagnosed already (clang drops it in the parser).
         if !self.in_template() && self.inst.stack.is_empty() && !self.is_err_expr(r) {
-            let loc = self.ast.exprs.get(r).loc();
+            let loc = self.begin_loc(r);
             self.error(DiagId::sema_trailing_requires_non_template, loc);
+            let _ = self.inst.concepts.untemplated_requires.insert(f);
+        }
+        // clang `CheckFunctionDeclaration` (`err_constrained_virtual_method`):
+        // declared `virtual`, overriding a virtual function, or redeclaring
+        // a virtual function; again in each instantiation.
+        if crate::class::is_virtual(&self.ast, f) && !self.is_err_expr(r) {
+            let loc = self.begin_loc(r);
+            let d = self.diag(DiagId::sema_virtual_requires_clause, loc).per_instantiation();
+            self.emit(d);
         }
         let _ = self.ast.templates.trailing_requires.insert(f, r);
     }

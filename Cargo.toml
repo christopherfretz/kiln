@@ -67,3 +67,19 @@ codegen-units = 1
 
 [profile.bench]
 inherits = "release"
+
+# What `cargo xtask libcxx` / `libstdcxx` build by default (WP-319,
+# spec/libcxx.md "Build profiles"): optimized like `release`, but without LTO
+# and with more codegen units so a clean build stays cheap, line tables so a
+# panic backtrace stays readable, and incremental rebuilds. Debug assertions
+# and overflow checks are off, as in `release`: the suite measures the
+# compiler users run.
+[profile.harness]
+inherits = "release"
+opt-level = 3
+debug = 1
+lto = false
+codegen-units = 16
+incremental = true
+debug-assertions = false
+overflow-checks = false

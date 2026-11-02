@@ -1128,9 +1128,19 @@ impl Sema<'_, '_> {
                 })
             }
             ExprKind::StmtExpr => self.unused_stmt_expr(x, loc),
+            // clang's default case, at `getExprLoc` (the base's begin:
+            // `ExtVectorElementExpr` has no location of its own there).
+            ExprKind::ExtVectorElementExpr => {
+                Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
+            }
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
                     None
+                } else if n.kind() == ExprKind::DeclRefExpr {
+                    // clang's `Expr::getExprLoc` of a DeclRefExpr is its
+                    // begin: a qualified name (`N::x;`) is reported at
+                    // its nested-name-specifier (WP-318).
+                    Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
                 } else {
                     Some((DiagId::sema_unused_expr, loc, Vec::new()))
                 }
@@ -3704,7 +3714,7 @@ impl Sema<'_, '_> {
         let ics =
             self.try_implicit_conversion(&info, pt, crate::overload::IcsOptions::CANDIDATE_ARG);
         let detail = if ics.is_bad() {
-            self.bad_conversion_detail(&ics, Some(i))
+            self.bad_conversion_detail(&ics, Some(i), Some(a))
         } else {
             format!(
                 "no known conversion from {} to {} for {} argument",
@@ -4672,6 +4682,11 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[e], loc);
         }
+        if matches!(kind, TraitKind::AlignOf | TraitKind::PreferredAlignOf)
+            && self.alignof_member_of_incomplete_class(e)
+        {
+            return self.recover_err(&[e], loc);
+        }
         if self.check_overload_use(e) {
             return self.recover_err(&[e], loc);
         }
@@ -4689,6 +4704,37 @@ impl Sema<'_, '_> {
         }
         let st = self.size_type();
         self.builder().trait_of_expr(kind, e, st, loc)
+    }
+
+    /// clang `CheckAlignOfExpr`: `alignof` of a data member (named,
+    /// ignoring parentheses) needs its class's layout, so the class must
+    /// be complete (`struct U { int i; static_assert(alignof(i) == 4); }`
+    /// is an error at the operand; [class.mem.general]/8: a
+    /// `static_assert` is not a complete-class context).
+    fn alignof_member_of_incomplete_class(&mut self, e: ExprId) -> bool {
+        // clang reports at the operand's own exprLoc (a ParenExpr: its `(`).
+        let inner = self.ignore_parens(e);
+        let n = *self.ast.exprs.get(inner);
+        if n.is_type_dependent()
+            || !matches!(n.kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+        {
+            return false;
+        }
+        let d = self.ast.exprs.decl(inner);
+        if self.ast.decls.get(d).kind() != DeclKind::Field {
+            return false;
+        }
+        let Some(parent) = self.ast.decls.get(d).ctx() else { return false };
+        let incomplete = self
+            .ast
+            .decls
+            .record(parent)
+            .is_some_and(|r| !r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE));
+        if incomplete {
+            let msg = self.diag(DiagId::sema_alignof_member_of_incomplete_class, self.eloc(e));
+            self.emit(msg);
+        }
+        incomplete
     }
 
     // -- casts -------------------------------------------------------------------
@@ -4822,6 +4868,15 @@ impl Sema<'_, '_> {
                 self.discard_assignment_ref(e);
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
+            if style == CastStyle::Const {
+                // clang `err_bad_const_cast_dest`: `void` is not a pointer.
+                let msg = self
+                    .diag(DiagId::sema_bad_const_cast_dest, loc)
+                    .arg(style.select())
+                    .arg(self.ty_arg(ty));
+                self.emit(msg);
+                return self.recover(ty, &[e], loc);
+            }
             return self.bad_cast(style, e, ty, loc);
         }
         // [expr.static.cast]/4 with a class target: direct-initialization
@@ -4840,7 +4895,7 @@ impl Sema<'_, '_> {
                     ty,
                     ConvCtx::Cast,
                     loc,
-                    crate::class::DeletedAs::Cast(d),
+                    crate::class::DeletedAs::Cast(d, style.select()),
                 )
             }
         {
@@ -4876,7 +4931,7 @@ impl Sema<'_, '_> {
                 sites: crate::class::DiagSites {
                     access: loc,
                     deleted: loc,
-                    deleted_as: crate::class::DeletedAs::Cast(d),
+                    deleted_as: crate::class::DeletedAs::Cast(d, style.select()),
                 },
             };
             // The temporary has the written type, qualifiers and sugar
@@ -4979,10 +5034,15 @@ impl Sema<'_, '_> {
             return c;
         }
         // reinterpret_cast ([expr.reinterpret.cast]).
-        if style.allows_reinterpret()
-            && let Some(ck) = self.reinterpret(xt, to, style, loc)
-        {
-            return self.explicit_cast(style, ck, x, to, loc, rparen);
+        if style.allows_reinterpret() {
+            match self.reinterpret(xt, to, style, loc) {
+                Ok(Some(ck)) => return self.explicit_cast(style, ck, x, to, loc, rparen),
+                // Diagnosed (clang's `TC_Failed` with its own message): the
+                // cast is erroneous, so a default argument or initializer
+                // it appears in is invalid, with no follow-on diagnostic.
+                Err(()) => return self.recover(ty, &[e], loc),
+                Ok(None) => {}
+            }
         }
         self.bad_cast(style, e, ty, loc)
     }
@@ -5078,8 +5138,19 @@ impl Sema<'_, '_> {
         self.recover(ty, &[e], loc)
     }
 
+    /// clang `err_bad_cxx_cast_generic`. The target is not a reference, so
+    /// the operand went through `DefaultFunctionArrayLvalueConversion`
+    /// first and the message names the decayed type (`'int *'` for an
+    /// `int[3]` lvalue, `'void (*)(int)'` for a function; [expr.cast]/4).
     fn bad_cast(&mut self, style: CastStyle, e: ExprId, ty: QualType, loc: Loc) -> ExprId {
         let from = self.ety(e);
+        let from = if self.ast.types.is_array(from) {
+            conv::array_decayed(self, from)
+        } else if self.ast.types.is_function(from) {
+            self.ast.types.pointer_to(from)
+        } else {
+            from
+        };
         let msg = self
             .diag(DiagId::sema_bad_cxx_cast, loc)
             .arg(style.select())
@@ -5165,13 +5236,19 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// The `reinterpret_cast` part of cast `style` from `from` to `to`
+    /// ([expr.reinterpret.cast]; clang `TryReinterpretCast`): the cast
+    /// kind, `Ok(None)` when it does not apply (the caller reports the
+    /// generic bad cast), or `Err(())` after a specific error (a pointer
+    /// to a smaller integer, a vector of a different size: clang's
+    /// `TC_Failed`), when the cast is erroneous.
     fn reinterpret(
         &mut self,
         from: QualType,
         to: QualType,
         style: CastStyle,
         loc: Loc,
-    ) -> Option<CastKind> {
+    ) -> Result<Option<CastKind>, ()> {
         // clang `TryReinterpretCast`: a vector and a vector or integer of
         // the same data size (`areLaxCompatibleVectorTypes`) bit-cast.
         let (fv, tv) = (self.is_vector_type(from), self.is_vector_type(to));
@@ -5179,7 +5256,7 @@ impl Sema<'_, '_> {
             if (!tv && !self.ast.types.is_integral(to))
                 || (!fv && !self.ast.types.is_integral(from))
             {
-                return None;
+                return Ok(None);
             }
             // `areLaxCompatibleVectorTypes`: never between a scalar and an
             // ext vector.
@@ -5189,7 +5266,7 @@ impl Sema<'_, '_> {
                 && self.lax_size(from).is_some()
                 && self.lax_size(from) == self.lax_size(to)
             {
-                return Some(CastKind::BitCast);
+                return Ok(Some(CastKind::BitCast));
             }
             let id = if !tv {
                 DiagId::sema_bad_cxx_cast_vector_to_scalar_different_size
@@ -5201,17 +5278,17 @@ impl Sema<'_, '_> {
             let msg =
                 self.diag(id, loc).arg(style.select()).arg(self.ty_arg(from)).arg(self.ty_arg(to));
             self.emit(msg);
-            return Some(CastKind::BitCast);
+            return Err(());
         }
         let (fp, tp) = (self.ast.types.is_pointer(from), self.ast.types.is_pointer(to));
         if fp && tp {
             if style == CastStyle::Reinterpret && self.casts_away_quals(from, to) {
-                return None;
+                return Ok(None);
             }
-            return Some(CastKind::BitCast);
+            return Ok(Some(CastKind::BitCast));
         }
         if tp && self.is_integral_or_enum(from) {
-            return Some(CastKind::IntegralToPointer);
+            return Ok(Some(CastKind::IntegralToPointer));
         }
         if fp && self.is_integral_or_enum(to) {
             let pw = u32::try_from(self.abi.pointer_size * 8).unwrap_or(64);
@@ -5219,8 +5296,9 @@ impl Sema<'_, '_> {
                 let msg =
                     self.diag(DiagId::sema_reinterpret_cast_small_int, loc).arg(self.ty_arg(to));
                 self.emit(msg);
+                return Err(());
             }
-            return Some(CastKind::PointerToIntegral);
+            return Ok(Some(CastKind::PointerToIntegral));
         }
         // [expr.reinterpret.cast]/4: a value of type `std::nullptr_t`
         // converts to an integral type (not an enumeration) with the
@@ -5232,16 +5310,17 @@ impl Sema<'_, '_> {
                 let msg =
                     self.diag(DiagId::sema_reinterpret_cast_small_int, loc).arg(self.ty_arg(to));
                 self.emit(msg);
+                return Err(());
             }
-            return Some(CastKind::PointerToIntegral);
+            return Ok(Some(CastKind::PointerToIntegral));
         }
         if style == CastStyle::Reinterpret
             && self.is_integral_or_enum(from)
             && self.ast.types.same_unqualified(from, to)
         {
-            return Some(CastKind::NoOp);
+            return Ok(Some(CastKind::NoOp));
         }
-        None
+        Ok(None)
     }
 }
 

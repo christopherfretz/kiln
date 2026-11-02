@@ -412,7 +412,7 @@ error by default).
 | `std::initializer_list<X>` (or ref) | worst element ICS to `X`; identity if empty; any Bad → `Bad(InitList)` |
 | array `X[N]`/`X[]` | worst element ICS; too many elements → Bad |
 | non-aggregate class | `UserDefined` from [over.match.list] (`list_ctor` if phase 1 won) |
-| aggregate class | `UserDefined{via: Aggregate}` if aggregate init is well-formed: no subobject designated twice, and no more elements than brace elision reaches ([dcl.init.aggr]/16, `aggregate_list_capacity`): each base and field (a union's first) takes one clause if it is a scalar or non-aggregate class, else its own capacity but at least one, so an empty class, an empty base or libc++'s `std::array<T, 0>` member takes `{}` (WP-304, `tests/conformance/over.ics.list/aggregate-elision-capacity*.cpp`) |
+| aggregate class | `UserDefined{via: Aggregate}` if aggregate init is well-formed. An undesignated list is walked like clang's verify-only aggregate initialization (`aggregate_list_walk`, WP-315). The walk covers each base and then each field (a union's first field; array elements one by one), consuming clauses with brace elision ([dcl.init.aggr]/16) as `init_element` decides it. A braced clause must have a viable list ICS to its element. An unbraced clause either starts an elided subaggregate (an array not initialized by a string literal; an aggregate class when the clause is not of that class or a derived class and does not convert to it) or must implicitly convert to the element. It is not viable when: clauses are left over; an elision reaches an aggregate with no elements (`aggregate_has_no_elements`, the rule `init_element` diagnoses, spec/sema.md §6); an element left over is a reference; or an element left over is a class with no viable `{}`. An element left over does not count if it has a default member initializer or is an anonymous member. Tests: `tests/conformance/over.ics.list/aggregate-brace-elision-viability*.cpp`. A designated list, or one the walk cannot decide (an incomplete or unbounded element, an error-typed clause, a GNU vector element), is bounded from above instead. It must designate no subobject twice and have no more elements than brace elision reaches (`aggregate_list_capacity`): each base and field takes one clause if it is a scalar or non-aggregate class, else its own capacity but at least one, so an empty class, an empty base or libc++'s `std::array<T, 0>` member takes `{}` (WP-304, `tests/conformance/over.ics.list/aggregate-elision-capacity*.cpp`) |
 | reference | as the referenced type, bound to the temporary |
 | non-class, one element / empty | element's ICS (narrowing → `Bad(Narrowing)`) / identity |
 
@@ -1147,11 +1147,40 @@ Where the code differs from (or details) the design above:
     (WP-280, `over.over/template-address-overloaded-callee.cpp`). Clang 19
     rejects some of these calls where the targets differ only in
     noexcept (`o(&u)` with `o(void(*)(int) noexcept)` /
-    `o(void(*)(int))`); clang 22 accepts them, and so does kiln. Open
-    divergence: for `int (*)(long) noexcept = &t` with a potentially
-    throwing `t<long>`, clang selects the specialization and reports
-    `different exception specifications`. Kiln reports `address of
-    overloaded function 't' does not match required type`.
+    `o(void(*)(int))`); clang 22 accepts them, and so does kiln
+    (deliberately kept: the clang 19 behaviour is a bug fixed upstream).
+  - Deduction for the address ignores a non-deduced exception
+    specification (`TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT` at the top
+    level of `deduce_spec`'s `FuncAddr` step; clang's
+    `isSameOrCompatibleFunctionType`), and
+    `address_matches_ignoring_exc` accepts the specialization whose type
+    equals the target but for the exception specification (WP-290,
+    `over.over/template-address-noexcept-mismatch.cpp`). The conversion
+    that follows checks it, as clang does:
+    - initialization: `int (*p)(long) noexcept = &t;` with a potentially
+      throwing `t<long>` is "cannot initialize a variable of type 'int
+      (*)(long) noexcept' with an rvalue of type 'int (*)(long)':
+      different exception specifications" (an lvalue of the function
+      type without `&`; a written dependent specifier prints as
+      instantiated text, `noexcept(sizeof(int) > 4)`);
+    - simple assignment (`conv::implicit_convert`, `ConvCtx::Assignment`):
+      the overload set is resolved silently and a selection that does
+      not convert is `diagnose_overload_assign`'s "assigning to 'T' from
+      incompatible type '<overloaded function type>'" at the operand,
+      with every candidate noted (`overload_assign_notes`: a
+      non-template's type mismatch note against a function target,
+      otherwise "candidate function" / "candidate function template";
+      a template-id notes only the templates);
+    - call argument: `overload_set_ics` keeps the argument an overload
+      set when the selection does not convert, and the candidate note is
+      clang's "no overload of 't' matching 'T' for 1st argument"
+      (`bad_conversion_detail` with the argument expression).
+  - A function template-id resolved early to its one specialization
+    (`resolve_single_template_id`, the parser's template-id not followed
+    by `(`) is recorded in `ovl.template_id_refs` (the `DeclRefExpr` to
+    its `UnresolvedLookupExpr`); `overload_set_of` sees through it, so
+    `o(&t<int>)` and `p = t<long>` read as overload sets in those two
+    diagnostics, as in clang.
 
 ### 10.8 Landed (WP-106): the rest of the template candidates
 - Conversion-function templates: `build_conversion_set` /

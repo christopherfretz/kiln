@@ -642,13 +642,24 @@ impl Parser<'_, '_> {
     /// `sizeof`/`alignof`/`__alignof`/`__datasizeof` ([expr.sizeof],
     /// [expr.alignof]; `__datasizeof` is clang's size without tail padding).
     fn parse_sizeof_alignof(&mut self, kind: TraitKind) -> PExpr {
+        let spelling = (kind == TraitKind::AlignOf).then(|| self.spelling_of(&self.tok()));
         let loc = self.bump().span.lo;
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
             return self.parse_sizeof_pack(loc);
         }
         match self.parse_trait_operand()? {
             TraitOperand::Type(ty, rparen) => Some(self.s.act_on_trait_type(kind, ty, loc, rparen)),
-            TraitOperand::Expr(e) => Some(self.s.act_on_trait_expr(kind, e, loc)),
+            TraitOperand::Expr(e) => {
+                // [expr.alignof]/1 takes a type-id; `alignof e` is a GNU
+                // extension (clang `ext_alignof_expr`, at the keyword,
+                // before the operand is checked). Not `__alignof`.
+                if let Some(sp) = spelling {
+                    let d =
+                        self.s.diag(DiagId::sema_alignof_expression, loc).arg(format!("'{sp}'"));
+                    self.emit(d);
+                }
+                Some(self.s.act_on_trait_expr(kind, e, loc))
+            }
         }
     }
 
@@ -792,7 +803,10 @@ impl Parser<'_, '_> {
             // clang matches the `)` before looking at the type.
             let ty = self.parse_type_id();
             let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-            return Some(self.s.act_on_typeid(Err(ty?), loc, rparen));
+            // An invalid type-id (`typeid(auto)`) ends it (clang
+            // `ParseCXXTypeid`), before the `<typeinfo>` check.
+            let ty = ty.filter(|&t| !self.s.is_error_type(t))?;
+            return Some(self.s.act_on_typeid(Err(ty), loc, rparen));
         }
         self.s.enter_unevaluated();
         let e = self.parse_expression();
@@ -1055,8 +1069,19 @@ impl Parser<'_, '_> {
                 }
                 Some(Punct::LParen) => {
                     self.bump();
+                    let typos = self.s.typo_count();
                     let args = self.with_greater_op(true, Self::parse_call_args)?;
-                    let rparen = self.expect_closing(Punct::RParen, Punct::LParen, loc);
+                    let rparen = if !self.at(Punct::RParen) && self.s.typo_count() != typos {
+                        // clang's `ParsePostfixExpressionSuffix`: arguments
+                        // that held a delayed typo (`f(S::nom x)`) skip to
+                        // the `)` (stopping at a `;`) with no "expected ')'"
+                        // for the unmatched `(` (WP-318).
+                        let at = self.loc();
+                        self.skip_until(&[Punct::RParen], true, false);
+                        self.eat(Punct::RParen).unwrap_or(at)
+                    } else {
+                        self.expect_closing(Punct::RParen, Punct::LParen, loc)
+                    };
                     e = self.s.act_on_call(e, &args, loc, rparen);
                 }
                 Some(p @ (Punct::Period | Punct::Arrow)) => {

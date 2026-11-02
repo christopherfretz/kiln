@@ -262,6 +262,15 @@ pub trait SemaBridge {
         let _ = d;
         0
     }
+    /// `alignof` of an expression naming declaration `d` (a variable or
+    /// data member: [expr.alignof] as clang's `GetAlignOfExpr`, which is
+    /// `ASTContext::getDeclAlign(d, /*ForAlignof=*/true)`, so `alignas`
+    /// on the declaration counts). The default 0 means the type's
+    /// alignment.
+    fn alignof_decl(&mut self, d: DeclId) -> u64 {
+        let _ = d;
+        0
+    }
     /// The final overrider of virtual function `method` called on the
     /// subobject `at` of an object whose most-derived class is
     /// `most_derived`, with the subobject the overrider is a member of
@@ -590,6 +599,36 @@ impl Oven {
         self.eval_ctx(bridge, init, Some(var), true, false, true).0.is_ok()
     }
 
+    /// Whether variable `var` has constant destruction ([expr.const]/7):
+    /// destroying it at the end of its lifetime is a constant expression
+    /// (clang `VarDecl::evaluateDestruction`, which
+    /// `Sema::FinalizeVarWithDestructor` runs for every variable whose
+    /// destructor is non-trivial and `constexpr`; such a variable needs no
+    /// destructor call, spec/codegen.md). `value` is its initializer's
+    /// value, if that is constant; `const_context` whether it is
+    /// constant-initialized (the destruction is then manifestly
+    /// constant-evaluated). Only the object of a `const` variable is
+    /// readable and writable, holding `value` or indeterminate; its
+    /// `mutable` members, and every subobject of any other variable, are
+    /// outside their lifetime ([expr.const]/5.9, /5.16). Silent and not
+    /// recorded in the statistics; `false` inside a running evaluation.
+    pub fn has_constant_destruction(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        var: DeclId,
+        value: Option<ConstValueId>,
+        const_context: bool,
+    ) -> bool {
+        if self.ctx_depth != 0 {
+            return false;
+        }
+        self.types.refresh(bridge);
+        self.begin_outermost(true, false, const_context);
+        let r = self.destroy_var(bridge, var, value);
+        self.end_outermost();
+        r
+    }
+
     /// Per-evaluation records and totals.
     pub fn stats(&self) -> &EvalStats {
         &self.stats
@@ -693,6 +732,15 @@ impl Oven {
         enum_check: bool,
         const_context: bool,
     ) -> (Result<ConstValueId, EvalFailure>, vm::Counters) {
+        self.begin_outermost(silent, enum_check, const_context);
+        let r = self.eval_inner(bridge, e, object, 0);
+        let c = self.end_outermost();
+        (r, c)
+    }
+
+    /// Starts the outermost context: globals resolved provisionally (or
+    /// for the other strictness) are forgotten, the counters reset.
+    fn begin_outermost(&mut self, silent: bool, enum_check: bool, const_context: bool) {
         for g in self.provisional.drain(..) {
             self.globals[g as usize].state = compile::GState::Unresolved;
         }
@@ -714,7 +762,11 @@ impl Oven {
         self.mem.heap_allocs = 0;
         self.mem.ctx = 0;
         self.ctx_depth = 1;
-        let r = self.eval_inner(bridge, e, object, 0);
+    }
+
+    /// Ends the outermost context: its cost; the frame and heap spaces
+    /// are reset.
+    fn end_outermost(&mut self) -> vm::Counters {
         self.ctx_depth = 0;
         let mut c = self.run.counters;
         c.bytes = self.mem.allocated;
@@ -724,7 +776,7 @@ impl Oven {
         self.mem.reset();
         self.stack.clear();
         self.cleanups.clear();
-        (r, c)
+        c
     }
 
     /// A context nested in a bridge callback of the running one: runs on

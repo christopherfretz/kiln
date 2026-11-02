@@ -1,0 +1,30 @@
+TranslationUnitDecl
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct A definition
+| | |-FunctionTemplateDecl f
+| | | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+| | | `-CXXMethodDecl f 'auto (U) -> T'
+| | |   `-ParmVarDecl 'U'
+| | |-CXXMethodDecl g 'auto (int) -> T'
+| | | `-ParmVarDecl 'int'
+| | `-FunctionTemplateDecl h
+| |   |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+| |   `-CXXMethodDecl h 'auto (U, T) -> T *'
+| |     |-ParmVarDecl 'U'
+| |     `-ParmVarDecl 'T'
+| `-ClassTemplateSpecializationDecl struct A definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-FunctionTemplateDecl f
+|   | |-TemplateTypeParmDecl class depth 0 index 0 U
+|   | `-CXXMethodDecl f 'auto (U) -> int'
+|   |   `-ParmVarDecl 'U'
+|   |-CXXMethodDecl g 'auto (int) -> int'
+|   | `-ParmVarDecl 'int'
+|   `-FunctionTemplateDecl h
+|     |-TemplateTypeParmDecl class depth 0 index 0 U
+|     `-CXXMethodDecl h 'auto (U, int) -> int *'
+|       |-ParmVarDecl 'U'
+|       `-ParmVarDecl 'int'
+`-VarDecl a 'A<int>' callinit
+  `-CXXConstructExpr 'A<int>' 'void () noexcept'

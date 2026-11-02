@@ -70,23 +70,16 @@ impl SemaBridge for Bridge<'_, '_, '_> {
             .map_or((0, 1), |(size, align)| (size, u32::try_from(align).unwrap_or(1)))
     }
 
-    // clang `getDeclAlign(D, /*ForAlignof=*/false)`: an alignment
-    // attribute alone, else the type's (a reference's as a pointer),
-    // raised to 16 for an x86-64 array of at least 16 bytes
-    // (`LargeArrayMinWidth`); no minimum global alignment on Linux.
+    // clang `getDeclAlign(D, /*ForAlignof=*/false)` (spec/abi.md §3.2).
     fn decl_align(&mut self, d: DeclId) -> u64 {
         let s = &*self.sema;
-        let attr = kiln_abi::layout::decl_max_align(&s.ast, d, &s.abi) / 8;
-        if attr != 0 {
-            return attr;
-        }
-        let Some(ty) = s.ast.decls.get(d).ty() else { return 0 };
-        if s.ast.types.is_reference(ty) {
-            return s.abi.pointer_size;
-        }
-        let Some((size, align)) = crate::target::size_align(&s.ast, ty, &s.abi) else { return 0 };
-        let x86 = s.abi.triple.arch == kiln_abi::target::Arch::X86_64;
-        if x86 && s.ast.types.is_array(ty) && size >= 16 { align.max(16) } else { align }
+        kiln_abi::layout::decl_align(&s.ast, d, &s.abi, false)
+    }
+
+    // clang `getDeclAlign(D, /*ForAlignof=*/true)`.
+    fn alignof_decl(&mut self, d: DeclId) -> u64 {
+        let s = &*self.sema;
+        kiln_abi::layout::decl_align(&s.ast, d, &s.abi, true)
     }
 
     // Final overriders and subobject graphs are computed on demand and

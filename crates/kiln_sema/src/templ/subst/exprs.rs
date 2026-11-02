@@ -1251,7 +1251,7 @@ impl Substituter<'_, '_, '_> {
             return None;
         }
         let loc = self.sema.ast.exprs.get(e).loc();
-        if self.failed_usings.contains(&d) {
+        if self.failed_locals.contains(&d) {
             return Some(self.sema.recover_err(&[], loc));
         }
         let name = self.sema.ast.unresolved_name(e);

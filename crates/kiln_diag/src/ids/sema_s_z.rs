@@ -58,6 +58,8 @@ sema_std_source_location_impl_not_found = Error (0) "'std::source_location::__im
 sema_stmt_attribute_on_decl = Error (1) "'{0}' attribute cannot be applied to a declaration";
 sema_stmtexpr_file_scope = Error (0) "statement expression not allowed at file scope";
 sema_storage_class_for_member = Error (0) "storage class specified for a member declaration";
+// [class.static.data]/2 (WP-327)
+sema_storage_class_for_static_member = Error (0) "static data member definition cannot specify a storage class";
 sema_storage_class_on_typedef = Error (0) "'typedef' cannot be combined with a storage class";
 sema_string_literal_operator_template = ExtWarn [GnuStringLiteralOperatorTemplate] (0) "string literal operator templates are a GNU extension";
 sema_sub_ptr_compatible = Error (2) "{0} and {1} are not pointers to compatible types";
@@ -210,8 +212,12 @@ sema_vector_size_too_large = Error (0) "vector size too large";
 sema_vector_zero_size = Error (0) "zero vector size";
 sema_virt_spec_hides_virtual = Error (2) "non-virtual member function marked '{0}' hides virtual member {1:function|functions}";
 sema_virt_spec_not_virtual = Error (1) "only virtual member functions can be marked '{0}'";
+// [temp.mem]/3 (WP-294)
+sema_virtual_member_function_template = Error (0) "'virtual' cannot be specified on member function templates";
 sema_virtual_not_member_fn = Error (0) "'virtual' can only appear on non-static member functions";
 sema_virtual_out_of_class = Error (0) "'virtual' can only be specified inside the class definition";
+// [class.virtual]/6 (WP-294)
+sema_virtual_requires_clause = Error (0) "virtual function cannot have a requires clause";
 sema_visibility_pop_mismatch = Error (0) "#pragma visibility pop with no matching #pragma visibility push";
 sema_vla_cxx_extension = Warning [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
 sema_vla_cxx_extension_gnu = Extension [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";

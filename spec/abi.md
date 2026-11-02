@@ -153,6 +153,24 @@ The maximum over all redeclarations wins. A value of 0 is ignored
 ([dcl.align]/4). Packing is `PACKED` (66); `[[no_unique_address]]` is
 `FieldData::NO_UNIQUE_ADDRESS`.
 
+### 3.2 Declaration alignment (`layout::decl_align`, WP-312)
+`decl_align(ast, d, target, for_alignof)` is clang's
+`ASTContext::getDeclAlign(d, ForAlignof)`, in bytes, at least 1:
+- a variable with an alignment attribute: the attribute's alignment
+  alone ([dcl.align]/5; a GNU `aligned` may lower it);
+- otherwise its type's; a reference is its referee for `alignof`
+  (`for_alignof`) and a pointer for storage; for storage an x86-64 array
+  of at least 16 bytes is raised to 16 (`LargeArrayMinWidth`);
+- a data member: the strictest of its attribute and type, capped by
+  what its offset guarantees in the class (the class alignment, or the
+  lowest set bit of a non-zero offset); in a packed class, or when
+  packed itself, its attribute's alignment only.
+
+No minimum global alignment applies on the M2 targets. Users: codegen
+`var_align` (global, `alloca`, `catch` and static-local storage), the
+Oven's `SemaBridge::decl_align` (`__builtin_assume_aligned`) and
+`SemaBridge::alignof_decl` (`alignof` of an expression naming `d`).
+
 ## 4. Class properties
 - **POD for the purpose of layout** (Itanium §1.1: the C++03 POD
   definition, clang `isPOD`). A class is *not* POD if any of these holds:
@@ -595,7 +613,19 @@ points, thunks and method indices are clang's.
     data size (clang 19 `lowerUnion(isNonVirtualBaseType)`), which a
     potentially-overlapping member of that union type uses (WP-289);
   - `IrRecord::base_index` and `vbase_index` map each base to its
-    element.
+    element;
+  - padding (clang `insertPadding`) fills the gap before each member
+    with storage. Those members are disjoint and sorted by offset: an
+    empty `[[no_unique_address]]` member has no storage (several may
+    share an offset, with each other and with the next member), a
+    potentially-overlapping one is stored as its base-subobject type,
+    and a bit-field run as its access units. That is an internal
+    invariant (clang's `assert(Offset >= Size)`): the gap is a
+    `checked_sub`, debug-asserted, and a violation drops the padding
+    rather than wrapping. No diagnostic, since no input reaches it
+    (WP-294; `tests/layout/nua_overlap_bitfields.cpp` and
+    `tests/codegen/record_type_nua_bitfields.cpp` cover both shapes on
+    both triples).
 - **Argument passing** (`call.rs`): `can_pass_in_registers` follows
   clang's `canPassInRegisters`. A class with a non-trivial copy or move
   constructor or destructor, or with all of them deleted, is passed
@@ -715,7 +745,10 @@ asm hooks, shared by sema and codegen: `ConstraintInfo` and
 `+`/`=`/`&`, tied numbers and `[name]`s, immediate classes),
 `validate_constraint_modifier` (the aarch64 `w`/`x` width warning),
 register and clobber names (`is_valid_register_name`, `is_valid_clobber`,
-`normalized_register_name`), `machine_clobbers`, `simplify_constraint`
+`normalized_register_name`), `global_register_size_mismatch` (clang's
+`validateGlobalRegisterVariable` for GNU global register variables:
+`None` when unsuitable, else whether the size differs; WP-327, spec/sema.md
+[dcl.stc]), `machine_clobbers`, `simplify_constraint`
 (clang's `SimplifyConstraint`), and the template parser
 `analyze_asm_string` (pieces: text, operand with modifier; clang's
 errors) with `generate_asm_string` producing LLVM's `$`-syntax as bytes.
@@ -899,7 +932,18 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   the bare function type (from the pattern of a specialization, or from
   the uninstantiated member of an instantiated class template).
   Template parameters inside a constraint keep their depth
-  (`TL<d-1>_<i-1>_`, `Mangler::real_depth`).
+  (`TL<d-1>_<i-1>_`, `Mangler::real_depth`). That includes the clause of
+  a template template parameter's head (`Tt ... Q <constraint> E`,
+  `template_param_list`): the head's own parameters are one level below
+  the template declaring the `Tt` parameter (`TL1__` for a member
+  template of a class template), an earlier parameter of the declaring
+  head and an enclosing class template's parameters keep their own
+  depth (`TL0__T_`), and a `Tt` nested in that head goes one level
+  deeper again; no depth is rebased to the encoding being mangled, as
+  in clang (checked against clang 19 by `tests/mangle/tt_requires_depth.cpp`,
+  WP-314). A generic lambda's explicit template-head
+  (`Ul <template-param-decl>* <lambda-sig> E`) is not yet mangled
+  (§8.16 "Not implemented").
 - **Constraint expressions** (`dep.rs`): a concept-id is an unresolved
   name (`[sr <nns> E] <source-name> I <args> E`, packs flattened, the
   written qualifier kept by `Sema::set_template_id_qualifier`); folds are
@@ -924,7 +968,10 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   il ... E` without the bound, as clang 19. A constraint expression kiln
   still cannot mangle falls back to `Qu7unknown`, so the symbol stays
   unique but differs from clang.
-- **Not implemented:** clang 19's member-like friend *template* mangling
+- **Not implemented:** a generic lambda's explicit template-head in its
+  closure type name (`[]<class T>(){}` is clang's `UlTyvE_`, kiln's
+  `UlvE_`, which also shifts later discriminators); clang 19's
+  member-like friend *template* mangling
   (`F` before the name when a friend template's constraint names an
   enclosing template parameter, and a nested name with no class prefix
   for a specialization whose friend declaration has a trailing

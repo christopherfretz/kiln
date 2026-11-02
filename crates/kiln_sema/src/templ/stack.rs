@@ -532,6 +532,11 @@ impl Sema<'_, '_> {
             }
             // clang names the function unqualified here.
             FrameKind::BindingInit => self.decl_name(f.entity),
+            // A local class (or a class nested in one) is named as a
+            // declaration, through its function (`f()::L::N`).
+            FrameKind::MemberClass => crate::names::SemaNames::new(self)
+                .local_class_decl_name(f.entity)
+                .unwrap_or_else(|| self.qualified_decl_name(f.entity)),
             _ => self.qualified_decl_name(f.entity),
         }
     }
