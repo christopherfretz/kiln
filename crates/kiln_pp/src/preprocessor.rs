@@ -71,6 +71,25 @@ pub enum Marker {
         export: bool,
         /// An `import` (else a `module`) directive.
         import: bool,
+        /// With modules enabled ([`crate::ModuleOptions`]): the directive,
+        /// whose tokens were consumed (spec/modules.md §3). `None`: its
+        /// tokens follow as text.
+        directive: Option<crate::ModuleDirective>,
+    },
+    /// The tokens of imported unit `key` follow (spec/modules.md §3),
+    /// up to the matching [`Marker::UnitEnd`].
+    UnitBegin {
+        /// The unit's key ([`crate::DirectiveKind::Import`]).
+        key: String,
+        /// A header unit.
+        header: bool,
+        /// The import's module or header name.
+        span: Span,
+    },
+    /// The tokens of imported unit `key` ended.
+    UnitEnd {
+        /// The unit's key.
+        key: String,
     },
     /// An `#embed` directive ([cpp.embed]) produced the tokens that follow:
     /// its `prefix`, the bytes (see [`Preprocessor::is_embed_byte`]) and its
@@ -167,6 +186,8 @@ pub(crate) struct FileFrame<'a> {
     pub(crate) marker_depth: u32,
     /// Include-guard detection.
     pub(crate) mi: MiOpt,
+    /// The file of an imported unit: the importer's saved state.
+    pub(crate) unit: Option<Box<crate::modules::UnitSave>>,
 }
 
 /// A macro expansion or a token stream being read.
@@ -278,6 +299,11 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) attr_macro_gen: u32,
     /// clang's `CommentHandler` ([`Preprocessor::set_comment_handler`]).
     pub(crate) comment_handler: Option<Box<dyn FnMut(Span) + 'd>>,
+    /// Modules enabled ([`PpOptions::modules`]).
+    pub(crate) modules: Option<Box<crate::modules::ModState>>,
+    /// The main file has a line starting with `module`, `import` or
+    /// `export` ([`Preprocessor::module_lines`]).
+    pub(crate) module_lines: bool,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -351,7 +377,10 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             attr_macros: Vec::new(),
             attr_macro_gen: 0,
             comment_handler: None,
+            modules: None,
+            module_lines: false,
         };
+        pp.modules = pp.opts.modules.clone().map(|o| Box::new(crate::modules::ModState::new(o)));
         pp.define_builtins();
         pp
     }
@@ -448,7 +477,20 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
         if let Ok(b) = self.sm.add_virtual("<built-in>", text) {
             self.push_file(b, None, None, None, false, false);
+            if let Some(m) = &mut self.modules {
+                m.builtin_file = Some(b);
+            }
         }
+        if self.modules.is_some() {
+            self.module_lines = crate::modules::has_module_lines(self.sm.text(file));
+        }
+    }
+
+    /// Modules are enabled and the main file has a line starting with
+    /// `module`, `import` or `export` (an upper bound for "contains a
+    /// module or import directive"; spec/modules.md §2).
+    pub fn module_lines(&self) -> bool {
+        self.module_lines
     }
 
     /// Pushes a file frame for `file` (reporting its invalid UTF-8 once).
@@ -501,6 +543,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             extern_c,
             marker_depth: 0,
             mi: MiOpt::default(),
+            unit: None,
         })));
         self.file_change(FileChange::Enter { file, from, system, extern_c });
     }
@@ -776,7 +819,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                                     || s == self.syms.export)
                                 && !self.disable_expand
                             {
-                                self.maybe_module_directive(t, s);
+                                if self.maybe_module_directive(t, s) {
+                                    continue;
+                                }
                             }
                             if !self.disable_expand && self.macros.is_defined(s) {
                                 match self.handle_identifier(PpTok::new(t)) {
@@ -914,8 +959,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             let _ = t;
             return true;
         }
-        let Some(Frame::File(f)) = self.frames.pop() else { unreachable!() };
+        let Some(Frame::File(mut f)) = self.frames.pop() else { unreachable!() };
         let exited = f.file;
+        if let Some(save) = f.unit.take() {
+            self.end_unit(save);
+        }
         if conds.is_empty()
             && let Some(m) = f.mi.controlling_macro()
         {

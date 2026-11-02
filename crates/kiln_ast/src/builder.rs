@@ -419,6 +419,9 @@ impl<'a> AstBuilder<'a> {
                 let group = self.ast.decls.redecl(p).expect("prev is not redeclarable").group;
                 let latest = self.ast.redecls.get(group).latest;
                 self.ast.redecls.push_redecl(group, d);
+                if self.ast.modules.active {
+                    self.ast.modules.links.push((d, latest));
+                }
                 Redecl { prev: Some(latest), group }
             }
             None => Redecl { prev: None, group: self.ast.redecls.new_group(d) },
