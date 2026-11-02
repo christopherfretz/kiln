@@ -388,6 +388,17 @@ impl Tool {
 }
 
 impl Toolchain {
+    /// The major version of the LLVM installation (`KILN_LLVM_DIR`) that
+    /// consumes kiln's IR: the `N` of a directory named `llvm-N` (after
+    /// resolving symlinks), else 19, the version of the unversioned
+    /// default and of the `-19` tool names.
+    pub fn llvm_major(&self) -> u32 {
+        let dir = Path::new(&self.llvm_dir);
+        llvm_dir_major(dir)
+            .or_else(|| std::fs::canonicalize(dir).ok().and_then(|d| llvm_dir_major(&d)))
+            .unwrap_or(19)
+    }
+
     /// Where `tool` is: `<llvm_dir>/bin/<tool>` (`KILN_LLVM_DIR`, default
     /// `/usr/lib/llvm-19`), else the versioned name (`llc-19`) on `PATH`.
     /// `None` if neither exists.
@@ -423,6 +434,12 @@ fn detect_gcc(sysroot: &str, target: &Target) -> Option<GccInstall> {
     best.map(|(_, g)| g)
 }
 
+/// `/usr/lib/llvm-22` -> `22`; `None` unless the last component is
+/// `llvm-N`.
+fn llvm_dir_major(dir: &Path) -> Option<u32> {
+    dir.file_name()?.to_str()?.strip_prefix("llvm-")?.parse().ok()
+}
+
 /// `14`, `13.2.0` -> `[14]`, `[13, 2, 0]`; `None` if not a version.
 fn gcc_version_key(s: &str) -> Option<Vec<u32>> {
     s.split('.').map(|p| p.parse::<u32>().ok()).collect()
@@ -456,6 +473,14 @@ mod tests {
         for bad in ["c++27", "gnu", "c", "gnuc11", "99", "gnu++", "c++"] {
             assert_eq!(LangStd::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn llvm_dir_majors() {
+        assert_eq!(llvm_dir_major(Path::new("/usr/lib/llvm-22")), Some(22));
+        assert_eq!(llvm_dir_major(Path::new("/usr/lib/llvm-19/")), Some(19));
+        assert_eq!(llvm_dir_major(Path::new("/opt/llvm")), None);
+        assert_eq!(llvm_dir_major(Path::new("/opt/llvm-main")), None);
     }
 
     #[test]

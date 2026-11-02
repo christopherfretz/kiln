@@ -37,6 +37,11 @@ const IDENT: &str = "kiln";
 
 /// Lowers `src` with kiln.
 fn kiln_ir(src: &str) -> Result<String, String> {
+    kiln_ir_for(src, CodegenOptions::default().llvm_major)
+}
+
+/// Lowers `src` with kiln for the IR of LLVM `llvm_major`.
+fn kiln_ir_for(src: &str, llvm_major: u32) -> Result<String, String> {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
@@ -61,6 +66,7 @@ fn kiln_ir(src: &str) -> Result<String, String> {
         source_filename: "t.cpp".to_owned(),
         exceptions: true,
         ident: IDENT.to_owned(),
+        llvm_major,
         ..CodegenOptions::default()
     };
     let m = emit(&mut tu.ast, &mut tu.oven, &target, &opts).map_err(|e| format!("codegen: {e}"))?;
@@ -92,6 +98,32 @@ fn pipe(prog: &str, args: &[&str], input: &str) -> Option<Result<String, String>
 
 fn opt(ir: &str) -> Option<Result<String, String>> {
     pipe("opt-19", &["-S", "-passes=verify", "-o", "-"], ir)
+}
+
+/// [dcl.fct.def.coroutine]: `__builtin_coro_end` (clang
+/// `EmitCoroutineIntrinsic`) uses LLVM 19's `i1 @llvm.coro.end` and LLVM
+/// 22's `void` one plus `llvm.coro.is_in_ramp()` for its result
+/// (spec/codegen.md "LLVM 22 `coro.end`"); each verifies with its own
+/// `opt` when that is installed.
+#[test]
+fn coro_end_follows_llvm_major() {
+    let src = "bool f(void* p) { return __builtin_coro_end(p, false); }";
+    for (major, want, unwanted) in [
+        (19, "call i1 @llvm.coro.end(ptr", "llvm.coro.is_in_ramp"),
+        (22, "call void @llvm.coro.end(ptr", "call i1 @llvm.coro.end"),
+    ] {
+        let ir = kiln_ir_for(src, major).expect("lowers");
+        assert!(ir.contains(want), "LLVM {major}: {ir}");
+        assert!(!ir.contains(unwanted), "LLVM {major}: {ir}");
+        if major == 22 {
+            assert!(ir.contains("call i1 @llvm.coro.is_in_ramp()"), "{ir}");
+            assert!(ir.contains("declare i1 @llvm.coro.is_in_ramp() #"), "{ir}");
+        }
+        let verify = ["-S", "-passes=verify", "-o", "-"];
+        if let Some(r) = pipe(&format!("opt-{major}"), &verify, &ir) {
+            r.unwrap_or_else(|e| panic!("opt-{major}: {e}\n{ir}"));
+        }
+    }
 }
 
 /// `-moutline-atomics`: clang 19 enables the feature by default only when

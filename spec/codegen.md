@@ -2007,9 +2007,21 @@ reloaded after the cleanups (clang `RunCleanupsScope::ForceCleanup(
 ValuesToReload)`; `end_scope_reload` / `pop_cleanup_blocks_reload`).
 
 **`CoroEnd` cleanup (EH only, clang `CallCoroEnd`).** On unwinding,
-`llvm.coro.end(ptr null, i1 true, token none)`: when it returns true
-(the ramp function) the exception is resumed at once; otherwise (the
-resume clone) unwinding continues through the cleanups.
+`llvm.coro.end(ptr null, i1 true, token none)`. For LLVM 19 it returns
+`i1`: true (the ramp function) resumes the exception at once; otherwise
+(the resume clone) unwinding continues through the cleanups.
+
+**LLVM 22 `coro.end` (WP-355).** LLVM 22's `llvm.coro.end` returns
+`void`; whether code runs in the ramp function is
+`i1 @llvm.coro.is_in_ramp()`. The IR follows the backend's version
+(`CodegenOptions::llvm_major`, the driver's `KILN_LLVM_DIR`, not
+`-fclang-compat`), since each LLVM rejects the other's signature. With
+LLVM 22 the `CoroEnd` cleanup is `call void @llvm.coro.end(...)`, then
+`%r = call i1 @llvm.coro.is_in_ramp()`, and the branch is inverted as
+clang 22's: the ramp function continues through the cleanups (freeing
+the frame) and a clone resumes the exception. `__builtin_coro_end`'s
+`bool` result is `is_in_ramp()` there. clang 22 stores the `void` call's
+missing value instead, which is invalid IR.
 
 **Builtins (`emit_coro_builtin`, clang `EmitCoroutineIntrinsic`).**
 `__builtin_coro_resume/destroy/done/promise/noop/size/align/alloc/
