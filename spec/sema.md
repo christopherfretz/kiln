@@ -405,7 +405,20 @@ f(int* _Nullable);`), the `-Wnullability-completeness` family, and the
      constant array, `-Wvla-cxx-extension` at the bound (with the strict
      evaluation's notes) and the ExtWarn "variable length array folded
      to constant array as an extension" [-Wgnu-folding-constant] at the
-     declarator name (WP-165)
+     declarator name (WP-165). One that does not fold there (WP-407,
+     `vla_at_file_scope`) is `-Wvla-cxx-extension` at the bound with the
+     notes, then an error at the declarator name as clang's declaration
+     checks give it: "function declaration cannot have variably modified
+     type" when the declarator's outermost chunk is a function; "fields
+     must have a constant size: ..." for a non-static data member
+     (`Sema::declarator_field`); "variable length array declaration not
+     allowed at file scope" when every chunk outside the bound is an
+     array (variables, static data members, typedefs); "variably
+     modified type declaration not allowed at file scope" otherwise
+     (`int (*p)[n]`). Not yet modelled: an alias-declaration or a
+     namespace-scope type-id (`using V = int[n];`, a cast) still says
+     `sema_vla_unsupported`, and `int z[2][n]` lacks clang's second
+     warning at the outer `[`
    - variable length arrays in a function (WP-183, clang `BuildArrayType`):
      a non-constant bound of a block-scope declarator (variable, typedef,
      alias, type-id) makes a `VariableArray` even when it would fold.
