@@ -1064,7 +1064,7 @@ impl Parser<'_, '_> {
                     ty
                 };
                 // `T...[index]` (C++26 [dcl.type.pack.index]).
-                let ty = match self.parse_pack_index() {
+                let ty = match self.parse_pack_index(loc) {
                     Ok(Some((ellipsis, index, _))) => {
                         self.s.act_pack_indexing_type(ty, ellipsis, index)
                     }

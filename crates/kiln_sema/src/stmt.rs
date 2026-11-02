@@ -256,7 +256,7 @@ impl Sema<'_, '_> {
     /// An expression statement ([stmt.expr]): `e` is a discarded-value
     /// full-expression.
     pub fn act_on_expr_stmt(&mut self, e: ExprId) -> StmtId {
-        let e = if self.diagnose_unexpanded_written(e, "expression") {
+        let e = if self.diagnose_unexpanded_written(e, "expression", None) {
             let at = self.begin_loc(e);
             self.recover_err(&[], at)
         } else {
@@ -272,7 +272,7 @@ impl Sema<'_, '_> {
 
     /// A condition ([stmt.pre]/4): contextually converted to `bool`.
     pub fn act_on_condition(&mut self, e: ExprId) -> ExprId {
-        if self.diagnose_unexpanded_written(e, "expression") {
+        if self.diagnose_unexpanded_written(e, "expression", None) {
             let at = self.begin_loc(e);
             return self.recover_err(&[], at);
         }
@@ -1003,7 +1003,7 @@ impl Sema<'_, '_> {
     /// `return e;` ([stmt.return]).
     pub fn act_on_return(&mut self, value: Option<ExprId>, loc: Loc) -> StmtId {
         let value = match value {
-            Some(e) if self.diagnose_unexpanded_written(e, "expression") => {
+            Some(e) if self.diagnose_unexpanded_written(e, "expression", None) => {
                 let at = self.begin_loc(e);
                 Some(self.recover_err(&[], at))
             }

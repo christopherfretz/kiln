@@ -1676,7 +1676,7 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_call_name(name, nl));
         }
         let e = self.s.act_on_id_expression(name, nl, qual);
-        self.parse_pack_index_suffix(e)
+        self.parse_pack_index_suffix(e, nl)
     }
 
     /// `N::operator@` / `X<T>::operator T` after the nested-name-specifier
@@ -1697,21 +1697,28 @@ impl Parser<'_, '_> {
     }
 
     /// `pack...[index]` after an id-expression (C++26
-    /// [expr.prim.pack.index]); `e` unchanged without `...[`.
-    fn parse_pack_index_suffix(&mut self, e: ExprId) -> PExpr {
-        let Some((ellipsis, index, rsquare)) = self.parse_pack_index().ok()? else {
+    /// [expr.prim.pack.index]) whose name begins at `begin`; `e`
+    /// unchanged without `...[`.
+    fn parse_pack_index_suffix(&mut self, e: ExprId, begin: Loc) -> PExpr {
+        let Some((ellipsis, index, rsquare)) = self.parse_pack_index(begin).ok()? else {
             return Some(e);
         };
         Some(self.s.act_pack_indexing(e, ellipsis, index, rsquare))
     }
 
     /// `...[ constant-expression ]` (shared by the expression and type
-    /// forms): `Err` on a parse error, `Ok(None)` without `...[`.
-    pub(crate) fn parse_pack_index(&mut self) -> Result<Option<(Loc, ExprId, Loc)>, ()> {
+    /// forms) after a pack name beginning at `begin`: `Err` on a parse
+    /// error, `Ok(None)` without `...[`.
+    pub(crate) fn parse_pack_index(&mut self, begin: Loc) -> Result<Option<(Loc, ExprId, Loc)>, ()> {
         if !(self.at(Punct::Ellipsis) && self.peek_is(1, Punct::LSquare)) {
             return Ok(None);
         }
         let ellipsis = self.bump().span.lo;
+        if self.std < kiln_lex::Std::Cxx26 {
+            // P2662: clang `ext_pack_indexing`, at the pack name.
+            let w = self.s.diag(DiagId::parse_ext_pack_indexing, begin);
+            self.emit(w);
+        }
         let lsquare = self.bump().span.lo;
         let index = self.with_greater_op(true, Self::parse_constant_expr).ok_or(())?;
         let rsquare = self.expect_closing(Punct::RSquare, Punct::LSquare, lsquare);

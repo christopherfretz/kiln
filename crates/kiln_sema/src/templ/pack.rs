@@ -759,11 +759,16 @@ impl Sema<'_, '_> {
     /// ([`Sema::note_unexpanded_in_lambda`]); a substituted expression is
     /// not checked (a pack it keeps belongs to an enclosing expansion
     /// being rebuilt, §7.2). True after the diagnostic.
-    pub(crate) fn diagnose_unexpanded_written(&mut self, e: ExprId, what: &'static str) -> bool {
+    pub(crate) fn diagnose_unexpanded_written(
+        &mut self,
+        e: ExprId,
+        what: &'static str,
+        at: Option<Loc>,
+    ) -> bool {
         if !self.in_template() || !self.lambdas.is_empty() || !self.inst.stack.is_empty() {
             return false;
         }
-        let at = self.begin_loc(e);
+        let at = at.unwrap_or_else(|| self.begin_loc(e));
         self.diagnose_unexpanded_pack(PackOperand::Expr(e), what, at)
     }
 

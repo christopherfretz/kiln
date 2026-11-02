@@ -2983,13 +2983,18 @@ introduces `n - (bindings - 1)` implicit bindings of the pack's name and
 the count check treats the pack as that many names
 (`wrong_number_of_bindings` when there are fewer elements than non-pack
 names; its text is clang 19's "decomposes into N elements", where clang 22
-says "binds to": a wording follow-up). The
+says "binds to"/"cannot bind" and quotes the pack in "invalid index N for
+pack 'xs' of size M": these wording changes follow the oracle switch,
+WP-355). The
 substituter then maps the pattern pack to that list (`remap_binding_pack`
 after the declaration statement, `DeclOrPack::Pack`), so later expansions
 expand over the new bindings. If the decomposition failed, the pack goes
 into `failed_locals` and its uses fail silently (already diagnosed). A
-pack in a generic lambda whose levels are retained stays a pack. Tests
-`tests/conformance/dcl.struct.bind/pack*.cpp`, `run-pack-fold.cpp`.
+pack in a generic lambda whose levels are retained stays a pack, and
+`xs...[I]` indexed by the lambda's own parameter keeps its pattern (§7.4).
+A binding pack named outside an expansion is diagnosed in the definition
+like any pack (below). Tests `tests/conformance/dcl.struct.bind/pack*.cpp`,
+`run-pack-fold.cpp`.
 
 **Friend packs** ([class.friend]/3, [temp.variadic]/5.9, P2893, WP-359):
 `friend Ts...;` is a `Friend` of type `PackExpansion(Ts)`
@@ -3007,6 +3012,20 @@ template argument outside an expansion context is checked. A violation is
 "expression contains unexpanded parameter pack 'T'" (or "declaration
 type …", or "base type …"). The check walks the node, pruning on the
 flag, to name the first pack.
+
+In a template definition outside any lambda (WP-367),
+`Sema::diagnose_unexpanded_written` checks an expression statement, a
+`return` operand and a condition ("expression contains …", at the
+expression's start; the expression becomes a `RecoveryExpr`), and a
+variable's initializer ("initializer contains …", at the `(`/`{` of a
+parenthesized or braced initializer, else the expression's start; the
+variable becomes invalid and its initializer is dropped). Inside a lambda
+body the check is deferred to the enclosing expansion (below), as clang's
+`LambdaScopeInfo::ContainsUnexpandedParameterPack` does. An implicit
+capture never makes the `LambdaExpr` unexpanded: a pack the body names
+inside an expansion or a pack index is captured as a whole. Test
+`tests/conformance/temp.variadic/p12-unexpanded-full-expr.cpp`,
+`dcl.struct.bind/pack-unexpanded.cpp`.
 
 A lambda whose body names an enclosing template's pack in a
 full-expression or a declaration (`[] { A x{}; return sizeof(x); }()...`)
@@ -3040,14 +3059,14 @@ takes its initializer's dependence without `UNEXPANDED_PACK`
     `LambdaCaptureSpec::var` and skip the duplicate-name check (the
     pattern was checked; an expanded pack's elements share a name). Each
     pattern init-capture maps positionally to its new variables.
-  - Gap: an init-capture `[x = ts]` whose initializer names an
-    unexpanded pack outside an expansion is not diagnosed ("initializer
-    contains unexpanded parameter pack"). Nor is any other site except
-    an `alignas` operand: the general unexpanded-pack check described
-    above is not implemented (`T x;`, `ts;` in a variadic template are
-    accepted). `Sema::diagnose_unexpanded_pack` (`templ/pack.rs`, emits
-    `sema_unexpanded_pack`; WP-302) is the reusable collector and
-    diagnostic for the remaining sites.
+  - An init-capture `[x = ts]` naming an unexpanded pack outside an
+    expansion makes its lambda unexpanded, so the enclosing statement is
+    diagnosed ("expression contains unexpanded parameter pack 'ts'", as
+    clang). Gap: a declarator type (`Ts x;`, clang "declaration type
+    contains …") is not diagnosed. The sites checked are an `alignas`
+    operand and the statements and initializers above. `Sema::diagnose_unexpanded_pack`
+    (`templ/pack.rs`, emits `sema_unexpanded_pack`; WP-302) is the
+    reusable collector and diagnostic for the remaining sites.
 
 **By-copy captures of template-local classes** ([expr.prim.lambda.capture]/10,
 /15, [temp.dep.type]/7, WP-332). In a template definition, a local class
@@ -3200,6 +3219,22 @@ cost is small.
 - An index out of range: "invalid index 5 for pack 'T' of size 2". This
   is SFINAE-able.
 - A pack-index is a non-deduced context.
+- Before C++26 a pack index warns `parse_ext_pack_indexing` ("pack
+  indexing is a C++2c extension", `-Wc++26-extensions`) at the pack's
+  name (clang `ext_pack_indexing`).
+- An index that is neither value-dependent nor constant is diagnosed in
+  the definition (`pack_index_may_be_constant`): "array size is not a
+  constant expression" with the evaluator's notes, clang's wording. The
+  expression recovers without its pattern. Clang does not check the type
+  form there, nor does kiln.
+- An index that is still value-dependent after substitution (a generic
+  lambda's or member template's own parameter, `[&]<int I> { return
+  ts...[I]; }`) keeps its pattern: the substituter rebuilds the pattern in
+  keep mode (`kept_pack_pattern`, `templ/pack.rs`), so a known pack becomes
+  `FunctionParmPackExpr` / `SubstNonTypeTemplateParmPackExpr` /
+  `SubstTemplateTypeParmPackType` and the inner instantiation selects the
+  element. Tests `templates/packs/temp.variadic-pack-index-dependent.cpp`,
+  `-not-constant.cpp`, `-ext.cpp`, `dcl.struct.bind/pack-index-generic-lambda.cpp`.
 
 `__type_pack_element` (§9.3) shares its implementation.
 
@@ -5219,10 +5254,6 @@ explicit specialization errors remain. The blockers are:
     not a `SizeOfPackExpr` with the length (dump gap; WP-072 follow-up).
   - A substituted `PackIndexingExpr`/`PackIndexingType` is replaced by
     its element; clang keeps the node as sugar (dump gap).
-  - A pack index that stays dependent while its pack is known (a
-    member alias template `template <int I> using at = Ts...[I];`)
-    needs a pack-indexing type over the expanded elements:
-    unimplemented ("pack index that stays dependent").
   - Partially substituted pack expansions (`tl<tl<Ts, Us>...>` with
     only `Ts` known) need clang's `SubstTemplateTypeParmPackType`:
     unimplemented ("partially substituted pack expansion").
