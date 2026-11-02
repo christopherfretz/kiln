@@ -663,21 +663,20 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// special member definition the `in implicit ... first required
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
+    ///
+    /// A range-based `for` step holding its diagnostics back
+    /// (`diag_capture`) still lets a SFINAE context deeper in the
+    /// instantiation stack capture its errors, and a held diagnostic
+    /// takes its context notes now, at the depth it was raised
+    /// (§5.7; a requires-expression in a member instantiated by
+    /// `__begin != __end`, libc++ `sentinel_wrapper::operator==`).
     pub fn emit(&self, mut d: Diag) {
-        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
-            held.push(d);
-            return;
-        }
-        if self.inst.suppress_next_error.replace(false) {
-            return;
-        }
-        if !self.trailing_notes.borrow().is_empty()
-            && d.id()
-                .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
-        {
-            for n in self.trailing_notes.take() {
-                d = d.with_note(n);
+        let capturing = self.diag_capture.borrow().is_some();
+        if !capturing {
+            if self.inst.suppress_next_error.replace(false) {
+                return;
             }
+            d = self.with_trailing_notes(d);
         }
         let mut inst_notes = Vec::new();
         if !self.inst.stack.is_empty()
@@ -715,7 +714,37 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         inst_notes.extend(synth_notes);
         inst_notes.extend(outer);
         d.prepend_notes(inst_notes);
+        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
+            held.push(d);
+            return;
+        }
         d.emit(self.diags);
+    }
+
+    /// Emits `d`, held back by a range-based `for` step and already
+    /// carrying its context notes (`emit`).
+    pub(crate) fn emit_held(&self, d: Diag) {
+        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
+            held.push(d);
+            return;
+        }
+        if self.inst.suppress_next_error.replace(false) {
+            return;
+        }
+        self.with_trailing_notes(d).emit(self.diags);
+    }
+
+    /// `d` with the pending trailing notes when it is an error.
+    fn with_trailing_notes(&self, mut d: Diag) -> Diag {
+        if !self.trailing_notes.borrow().is_empty()
+            && d.id()
+                .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
+        {
+            for n in self.trailing_notes.take() {
+                d = d.with_note(n);
+            }
+        }
+        d
     }
 
     /// Emits a diagnostic with no arguments at `loc`.

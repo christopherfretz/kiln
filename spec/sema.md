@@ -2915,7 +2915,14 @@ template saved in `range_for_outer_depth` for instantiations).
   (`rebuild_with_dereference`); an iterator or loop-variable failure gets
   `selected 'begin' function with iterator type T` (the candidate notes
   are captured through `diag_capture` while each attempt runs and
-  released on success of the diagnosis).
+  released on success of the diagnosis). The capture holds only what
+  would print: an error raised under a SFINAE context deeper in the
+  instantiation stack (a requires-expression in a member instantiated
+  by `__begin != __end`, libc++ `sentinel_wrapper::operator==`) still
+  goes to that context (§5.7 of sema-templates.md), and a held
+  diagnostic takes its "in instantiation of" notes when it is raised,
+  not when it is released (WP-280;
+  `temp.inst/range-for-member-substitution-context.cpp`).
 - **Templates.** A type-dependent range (or loop-variable type) keeps
   only `__range` and the loop variable in the pattern; instantiation
   (`templ/subst/stmts.rs` `range_for`) substitutes the range under a new

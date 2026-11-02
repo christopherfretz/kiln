@@ -142,7 +142,7 @@ impl Sema<'_, '_> {
             stash.push(last);
         }
         for d in stash {
-            self.emit(d);
+            self.emit_held(d);
         }
     }
 
