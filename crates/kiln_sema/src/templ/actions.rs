@@ -79,19 +79,31 @@ impl Sema<'_, '_> {
         kw: TagKeyword,
         loc: Loc,
     ) -> Option<QualType> {
-        let nns = if self.is_dependent_ctx(q.ctx) {
-            q.nns
+        let nns = self.unknown_specialization_nns(q)?;
+        Some(self.act_dependent_name_at(nns, name, None, kw, loc))
+    }
+
+    /// The specifier under which `q::name` names a member of an unknown
+    /// specialization when lookup found nothing in `q` ([temp.dep.type]/6):
+    /// `q`'s own when it is dependent, the injected-class-name type's when
+    /// `q` is the current instantiation with a dependent base; `None`
+    /// otherwise.
+    pub(crate) fn unknown_specialization_nns(
+        &mut self,
+        q: crate::using::Qualifier,
+    ) -> Option<NnsId> {
+        if self.is_dependent_ctx(q.ctx) {
+            Some(q.nns)
         } else if self.kind_of(q.ctx) == DeclKind::CXXRecord && self.has_dependent_bases(q.ctx) {
             let prefix = match self.ast.types.nns_view(q.nns) {
                 Nns::Type { prefix, .. } => prefix,
                 _ => None,
             };
             let ty = self.this_class_type(q.ctx);
-            self.ast.types.nns(Nns::Type { prefix, ty, template_kw: false })
+            Some(self.ast.types.nns(Nns::Type { prefix, ty, template_kw: false }))
         } else {
-            return None;
-        };
-        Some(self.act_dependent_name_at(nns, name, None, kw, loc))
+            None
+        }
     }
 
     /// True if `t` is a dependent type ([temp.dep.type]/7).
@@ -823,6 +835,18 @@ impl Sema<'_, '_> {
         body
     }
 
+    /// The `(` of a requires-expression's parameter-declaration-clause:
+    /// until [`Sema::act_on_end_requires_params`], a function type in a
+    /// parameter is one prototype scope deeper (`ParamData::scope_depth`).
+    pub fn act_on_start_requires_params(&mut self) {
+        self.requires_param_scopes += 1;
+    }
+
+    /// The `)` closing what [`Sema::act_on_start_requires_params`] opened.
+    pub fn act_on_end_requires_params(&mut self) {
+        self.requires_param_scopes = self.requires_param_scopes.saturating_sub(1);
+    }
+
     /// `}` of a requires-expression: closes the scope opened by
     /// [`Sema::act_on_requires_expr_start`].
     pub fn act_requires_expr(
@@ -1397,7 +1421,13 @@ impl Sema<'_, '_> {
         let name = p.name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         // A parameter pack ([temp.variadic]/5), expanded on substitution.
         let pack = matches!(self.ast.types.view(p.ty.ty()), TypeView::PackExpansion { .. });
-        let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+        let mut flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+        // The prototype scopes enclosing the requires-expression's own
+        // (`ParamData::scope_depth`): a trailing requires-clause's function
+        // parameters count, an enclosing requires-expression body does not
+        // (clang's `getFunctionScopeDepth`).
+        let depth = self.prototype_params.len() + self.requires_param_scopes.saturating_sub(1);
+        flags |= kiln_ast::decl::ParamData::scope_depth_flags(depth);
         let d = self.builder().param(body, name, p.loc, p.ty, idx, flags);
         if p.invalid {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);

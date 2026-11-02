@@ -124,6 +124,7 @@ sema_auto_inconsistent_deduction = Error (2) "deduced conflicting types ({0} vs 
 sema_auto_init_list_deduction = Error (0) "cannot deduce type of initializer list because std::initializer_list was not found; include <initializer_list>";
 sema_auto_non_deduced_not_alone = Error (1) "{0:function with deduced return type|declaration with trailing return type} must be the only declaration in its group";
 sema_auto_not_allowed_field = Error (2) "'{0:auto|decltype(auto)}' not allowed in non-static {1:struct|class|union} member";
+sema_auto_not_allowed_prototype = Error (2) "'{0:auto|decltype(auto)}' not allowed in {1:function prototype|function prototype that is not a function declaration|lambda parameter}";
 sema_auto_var_deduction_failure = Error (3) "variable '{0}' with type {1} has incompatible initializer of type {2}";
 sema_auto_var_deduction_failure_from_init_list = Error (2) "cannot deduce actual type for variable '{0}' with type {1} from initializer list";
 sema_auto_var_different_deductions = Error (5) "'{0:auto|decltype(auto)}' deduced as {1} in declaration of '{2}' and deduced as {3} in declaration of '{4}'";
