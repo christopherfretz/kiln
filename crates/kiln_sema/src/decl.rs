@@ -5276,6 +5276,10 @@ impl Sema<'_, '_> {
                     // instantiates a member class ([temp.explicit]/3).
                     if qualifier.is_none() || !self.act_on_explicit_member_class_inst(p, nloc) {
                         self.check_redeclared_class_head(p);
+                        if head.is_some() {
+                            let latest = self.ast.latest(p);
+                            let _ = self.templ.class_redecl_loc.insert(latest, nloc);
+                        }
                     }
                     return p;
                 }
