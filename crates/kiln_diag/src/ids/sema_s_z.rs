@@ -111,6 +111,7 @@ sema_template_params_for_non_template = Error (1) "template parameter list match
 sema_template_recursion_depth = Fatal (1) "recursive template instantiation exceeded maximum depth of {0}";
 sema_template_requires_args = Error (2) "use of {0} {1} requires template arguments";
 sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
+sema_template_template_param_not_at_least_as_constrained = Error (2) "template template argument {0} is more constrained than template template parameter {1}";
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
 sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
 sema_this_static_member_func = Error (1) "'this' cannot be{0:| implicitly} used in a static member function declaration";

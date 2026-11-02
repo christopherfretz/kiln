@@ -338,7 +338,18 @@ impl Sema<'_, '_> {
                         && self.ast.described_template(x).is_some()
                 })
             })
-            .map_or_else(|| self.ast.decls.get(tmpl).loc(), |p| self.ast.decls.get(p).loc());
+            // An alias template is located at its `using` (clang's
+            // `TypeAliasTemplateDecl` location).
+            .map_or_else(
+                || self.ast.decls.get(tmpl).loc(),
+                |p| {
+                    self.templ
+                        .alias_using_loc
+                        .get(&p)
+                        .copied()
+                        .unwrap_or_else(|| self.ast.decls.get(p).loc())
+                },
+            );
         let d = self
             .diag(DiagId::sema_template_arg_list_different_arity, loc)
             .arg(u32::from(too_many))
