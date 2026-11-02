@@ -199,11 +199,7 @@ impl Parser<'_, '_> {
             let sub = self.parse_labeled_sub(in_stmt_expr);
             return Some(self.s.act_on_label_stmt(l, sub, loc));
         }
-        if self.skip_ambiguous_name_stmt(loc) {
-            return None;
-        }
-        if self.at_failed_scope_declaration() {
-            self.skip_to_semi();
+        if self.skip_ambiguous_name_stmt(loc) || self.skip_failed_scope_stmt() {
             return None;
         }
         if self.is_cxx_declaration_statement(false) {
@@ -224,6 +220,17 @@ impl Parser<'_, '_> {
     fn skip_ambiguous_name_stmt(&mut self, loc: Loc) -> bool {
         let Some(name) = self.ident() else { return false };
         if self.peek_is(1, Punct::ColonColon) || !self.s.diagnose_ambiguous_name(name, None, loc) {
+            return false;
+        }
+        self.skip_to_semi();
+        true
+    }
+
+    /// A statement `Q::name ident` whose qualifier failed
+    /// ([`Parser::at_failed_scope_declaration`]) is skipped silently.
+    /// True when skipped.
+    fn skip_failed_scope_stmt(&mut self) -> bool {
+        if !self.at_failed_scope_declaration() {
             return false;
         }
         self.skip_to_semi();
