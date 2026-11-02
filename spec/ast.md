@@ -1102,6 +1102,11 @@ These refine or replace the text above where they differ; each says why.
     u16}`. Parameters are created after their function (their `ctx` is the
     function), so `FunctionData::params` is attached once afterwards with
     `AstBuilder::set_params` (write-once while the list is `EMPTY`).
+    The high byte of `flags` (`ParamData::SCOPE_DEPTH_MASK`) is the
+    parameter's function-scope depth, the number of prototype scopes
+    enclosing its own (clang's `getFunctionScopeDepth`; `scope_depth()`,
+    `scope_depth_flags(depth)`; WP-305, used by the `fL` mangling and the
+    canonical profile of a parameter reference, spec/abi.md §8.15).
 11. **`DeclRefExpr`/`MemberExpr` `aux` = `NonOdrUse`** ([basic.def.odr]/5
     classification, filled by sema).
 12. **String literals:** `AstBuilder::string_literal` takes an already
