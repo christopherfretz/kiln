@@ -368,12 +368,21 @@ impl Parser<'_, '_> {
                 return Vec::new();
             }
             let tl = self.loc();
+            self.typename_pack_index = None;
             let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::Alias) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
             let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, tl);
             self.s.note_alias_decl_loc(d, loc);
+            // clang reports a `typename T...[i]` type-id as unterminated
+            // (spec/parse.md, typename-specifiers).
+            if let Some((_, end)) = self.typename_pack_index.take()
+                && end == self.expected_loc()
+            {
+                let e = self.s.diag(DiagId::parse_expected_after, end);
+                self.emit(e.arg("alias declaration").arg("';'"));
+            }
             self.expect_semi_after("alias declaration");
             return vec![d];
         }
@@ -736,7 +745,8 @@ impl Parser<'_, '_> {
                     continue;
                 }
                 Kw::Typename => {
-                    let ty = self.parse_typename_specifier();
+                    self.typename_pack_index = None;
+                    let ty = self.parse_typename_specifier_in(Some(ctx));
                     if ty.is_none() {
                         ds.invalid = true;
                     }
@@ -745,6 +755,22 @@ impl Parser<'_, '_> {
                     {
                         ds.invalid = true;
                         self.spec_error(&e, loc);
+                    }
+                    if self.param_abort {
+                        break;
+                    }
+                    // clang ends a namespace-scope or member declaration
+                    // at `typename T...[i]` (spec/parse.md).
+                    let id = match ctx {
+                        DeclaratorContext::File => Some(DiagId::parse_expected_unqualified_id),
+                        DeclaratorContext::Member => Some(DiagId::parse_expected_member_name),
+                        _ => None,
+                    };
+                    if let Some(id) = id
+                        && let Some((at, _)) = self.typename_pack_index.take()
+                    {
+                        self.s.error(id, at);
+                        self.skip_until(&[Punct::Semi], false, false);
                     }
                     continue;
                 }
@@ -2235,11 +2261,20 @@ impl Parser<'_, '_> {
             let mode =
                 if needs_typename { ParamTypename::Required } else { ParamTypename::Implicit };
             let saved = std::mem::replace(&mut self.param_typename, mode);
+            // clang disambiguates the first parameter of a non-member
+            // declarator tentatively ([dcl.ambig.res]/1).
+            let first = Some(needs_typename && params.is_empty());
+            let saved_recovery = std::mem::replace(&mut self.param_recovery, first);
             let mut ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
+            self.param_recovery = saved_recovery;
             if self.param_typename == ParamTypename::Missing {
                 d.missing_typename = true;
             }
             self.param_typename = saved;
+            if std::mem::take(&mut self.param_abort) {
+                d.invalid = true;
+                break;
+            }
             if ds.is_empty() {
                 let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("parameter declarator");
                 self.emit(e);

@@ -209,6 +209,22 @@ clang's `Parser` over `Preprocessor::Lex`.
   dropped silently (clang's `TST_error`; `DeclSpec::set_base`,
   `set_width`, `set_sign`; WP-371,
   `class.friend/restrict-atomic-decl-specifiers.cpp`).
+  An unqualified typename-specifier (`typename T`, `typename Ts...[0]`;
+  [temp.res.general]/3) is "expected a qualified name after 'typename'"
+  and recovers as clang does, by context (`parse_typename_specifier_in`,
+  WP-371): a block declaration or a type-id consumes the name and its
+  pack-index-specifier as an erroneous type; a namespace-scope or member
+  declaration with a pack index ends there ("expected unqualified-id" /
+  "expected member name or ';' after declaration specifiers" at the name,
+  skipped to the `;`); an alias-declaration whose type-id ends with the
+  pack index is "expected ';' after alias declaration" at its end
+  (`typename_pack_index`); in a parameter with a pack index, or in the
+  first parameter of a namespace- or block-scope declarator (which clang
+  parses tentatively first, so it reports the name twice), the
+  parameter list ends at the name (`param_abort`: "expected ')'", the
+  declarator invalid). A type-requirement `typename Ts...[0];` is not a
+  type-name and takes the same diagnostic
+  (`temp.res.general/typename-unqualified-pack-index.cpp`).
   Once a decl-specifier names no type (`DeclSpec::type_error`), the
   later declarators of the group are skipped up to the `;`, as clang's
   `ParseDeclGroup`, so `u5 &x1, &x2;` and `S::c &x3, &x4;` report once
