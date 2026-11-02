@@ -88,7 +88,7 @@ public.
 | member | decl kind | notes |
 |---|---|---|
 | non-static data member | `Field` | access from `ClassBuild`; `mutable` → `FieldData::MUTABLE`, `HAS_MUTABLE_FIELDS`; `[[no_unique_address]]` (M2); NSDMI style bits set now, `init` written at replay (§2.7) |
-| static data member | `Var`, `VarStorage::Static`, ctx = class | in-class: a declaration unless `inline` or `constexpr` (implicitly inline, [dcl.constexpr]/1); a `static const` integral/enum member with an initializer is usable in constant expressions; `int S::s = 1;` is a redeclaration (lexical ctx = namespace, `HAS_LEXICAL_CTX`) |
+| static data member | `Var`, `VarStorage::Static`, ctx = class | in-class: a declaration unless `inline` or `constexpr` (implicitly inline, [dcl.constexpr]/1); a `static const` integral/enum member with an initializer is usable in constant expressions ([class.static.data]/4: the initializer must be a constant expression of any value of the member's type, `unsigned __int128` above `INT128_MAX` included, WP-275, else `in-class initializer for static data member is not a constant expression`); `int S::s = 1;` is a redeclaration (lexical ctx = namespace, `HAS_LEXICAL_CTX`) |
 | member function | `CXXMethod` | in-class definition implicitly inline; `static` → `FnStorage::Static`; cv/ref-qualifiers into `FuncProto.this_quals`/`ref_qual` (types.md §5.4); `virtual`, `= 0`, `override`, `final` (§3.4) |
 | constructor / destructor / conversion | `CXXConstructor` / `CXXDestructor` / `CXXConversion` | `DeclName` tag 2/3/4 keyed by the canonical class `TypeId` / target `QualType` (ast.md §3) |
 | nested class / enum / typedef / alias | M2 kinds, ctx = class | access applies to the name; nested class is a member ([class.access.nest]) |
@@ -132,7 +132,7 @@ accessible at `R` named in `B`. "As a member of `N`" follows each base path
 with [class.access.base]/1 (private members of a base are inaccessible; a
 protected base demotes public to protected; a private base demotes to private);
 the most permissive path wins. Members of `X` include nested and local classes
-of `X` and their members ([class.local]/2). [class.protected]: for a non-static
+of `X` and their members ([class.local]/2). A friend function defined in a class `C` is in `C`'s scope ([class.friend]/7): its effective context continues from `C` outward, so it shares the access of `C` and of every enclosing class, including friendship granted to them; this holds for each specialization of a friend function template (the template's in-class declaration, not the namespace-scope specialization, names the lexical class). A friend defined outside the class gets none of this (WP-278; libc++ `join_view::__sentinel`'s `operator==` calling `__iterator::__get_outer()`; `tests/conformance/class.friend/friend-template-in-nested-class-access.cpp`). [class.protected]: for a non-static
 protected member named through an object expression or `&P::m`, when only (c)
 via `P` grants access the object's class must be `P` or derived from `P` (`'p'
 is a protected member of 'S'` + note `can only access this member on an object
@@ -692,6 +692,15 @@ Constructor: no return type (`constructor cannot have a return type`), not
 `static`/`virtual`/cv-/ref-qualified, copy ctor by reference (`copy constructor
 must pass its first argument by reference`), `explicit` / `explicit(bool)`
 (cold map). A non-explicit constructor is converting ([class.conv.ctor]).
+The operand of `explicit(expr)` is a contextually converted constant
+expression of type `bool` ([dcl.fct.spec]/4; `Sema::resolve_explicit`, the
+`Sema::bool_cce` shared with the *noexcept-specifier*, WP-275): a class type
+converts through a constexpr conversion function; a type with no conversion,
+a disallowed conversion, a narrowing and a non-constant operand get clang's
+converted-constant-expression errors at the operand (`explicit specifier
+argument ...`), after which the declaration is not explicit. A value-dependent
+operand waits for instantiation; an instantiated member whose operand is then
+invalid is dropped (clang `InstantiateExplicitSpecifier`).
 Destructor: name matches the class, no parameters (`destructor cannot have any
 parameters`), no return type; implicitly `noexcept` unless a subobject's isn't
 ([except.spec]/9). Conversion function ([class.conv.fct]): no return type

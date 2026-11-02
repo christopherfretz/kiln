@@ -125,6 +125,7 @@ impl Parser<'_, '_> {
                 Some(
                     Kw::Decltype
                     | Kw::Typeof
+                    | Kw::TypeofUnqual
                     | Kw::Typename
                     | Kw::Struct
                     | Kw::Class

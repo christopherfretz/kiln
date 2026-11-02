@@ -2115,6 +2115,23 @@ impl ExprArena {
         n.b != 0
     }
 
+    /// The operand of a `CXXReflectExpr` (spec/sema.md "Reflection").
+    pub fn reflect_operand(&self, e: ExprId) -> crate::reflect::Reflectee {
+        use crate::reflect::Reflectee;
+        let n = self.expect_kind(e, ExprKind::CXXReflectExpr);
+        match n.aux {
+            0 => Reflectee::Type(QualType::from_raw(n.a).unwrap_or(QualType::ERROR)),
+            1 => Reflectee::Decl(DeclId::new(n.a)),
+            _ => Reflectee::Null,
+        }
+    }
+
+    /// The value of a `CXXReflectExpr`: `None` while dependent.
+    pub fn reflect_value(&self, e: ExprId) -> Option<crate::ids::ReflectionId> {
+        let n = self.expect_kind(e, ExprKind::CXXReflectExpr);
+        crate::ids::ReflectionId::try_new(n.b)
+    }
+
     /// The queried type of an `ArrayTypeTraitExpr`.
     pub fn array_trait_type(&self, e: ExprId) -> QualType {
         QualType::from_raw(self.expect_kind(e, ExprKind::ArrayTypeTraitExpr).a)

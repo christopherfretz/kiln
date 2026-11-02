@@ -288,6 +288,17 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The type a non-static data member of type `q` requires complete
+    /// (clang `CheckFieldDecl`): the element type of a bounded array, and
+    /// of an array of unknown bound, which is a flexible array member
+    /// (spec/sema.md §5.8, checked when the class is complete).
+    pub(crate) fn field_complete_type(&self, q: QualType) -> QualType {
+        match self.ast.types.canonical_view(q) {
+            TypeView::IncompleteArray(e) => self.bounded_array_element(e),
+            _ => self.bounded_array_element(q),
+        }
+    }
+
     /// True if `q` is a complete object type here (a class is incomplete
     /// until its closing brace).
     pub fn is_complete(&self, q: QualType) -> bool {
@@ -813,6 +824,14 @@ impl Sema<'_, '_> {
                     if self.require_non_abstract_element(*loc, ty) {
                         return QualType::ERROR;
                     }
+                    // §5.8 (clang `BuildArrayType`): an element class with a
+                    // flexible array member is a GNU extension.
+                    if self.has_flexible_array_member(ty) {
+                        let msg = self
+                            .diag(DiagId::sema_flexible_array_in_array, *loc)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                    }
                     ty = match size {
                         None => self.ast.types.incomplete_array(ty),
                         Some(e) if self.expr_is_value_dependent(*e) => {
@@ -840,6 +859,12 @@ impl Sema<'_, '_> {
                             {
                                 self.error(self.vla_ext_id(), *loc);
                                 self.ast.types.variable_array(ty, *e)
+                            }
+                            Some(Ok(0)) => {
+                                let l = self.begin_loc(*e);
+                                let msg = self.diag(DiagId::sema_zero_length_array, l);
+                                self.emit(msg.per_instantiation());
+                                self.ast.types.constant_array(ty, 0, None)
                             }
                             Some(Ok(n)) => self.ast.types.constant_array(ty, n, None),
                             Some(Err(size)) => self.ast.types.variable_array(ty, size),
@@ -3284,10 +3309,11 @@ impl Sema<'_, '_> {
             QualType::ERROR
         } else if !invalid
             && !self.ast.types.is_reference(ty)
-            && !self.require_complete(self.bounded_array_element(ty), d.name_loc())
+            && !self.require_complete(self.field_complete_type(ty), d.name_loc())
         {
-            // clang checks (and names) the element type of a bounded array.
-            let elem = self.bounded_array_element(ty);
+            // clang checks (and names) the element type of a bounded array
+            // (and of a flexible array member, §5.8).
+            let elem = self.field_complete_type(ty);
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
             // clang marks the field invalid: initialization never
@@ -3822,6 +3848,26 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Initializes variable `v` of type `ty` from `init`. A variable
+    /// names itself, even when declared inside the initializer of another
+    /// entity (a lambda body); `init_var` is the variable being
+    /// initialized (WP-271 `diag_capture`).
+    fn perform_var_init(
+        &mut self,
+        v: DeclId,
+        ty: QualType,
+        init: Initializer,
+        loc: Loc,
+        direct: bool,
+    ) -> ExprId {
+        let entity = self.init_entity.take();
+        let var = self.init_var.replace(v);
+        let e = self.perform_init(ty, init, loc, direct);
+        self.init_entity = entity;
+        self.init_var = var;
+        e
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -3903,12 +3949,8 @@ impl Sema<'_, '_> {
             self.discard_initializer(&init);
             return;
         }
-        // A variable names itself, even when declared inside the
-        // initializer of another entity (a lambda body).
-        let entity = self.init_entity.take();
         let braced = matches!(init, Initializer::List(_));
-        let e = self.perform_init(ty, init, loc, direct);
-        self.init_entity = entity;
+        let e = self.perform_var_init(v, ty, init, loc, direct);
         if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
             // P0960 (clang's `parenlistinit`).
             let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);
@@ -5117,6 +5159,32 @@ impl Sema<'_, '_> {
         ns: DeclId,
     ) -> DeclId {
         let head = self.take_template_head(None);
+        // [namespace.memdef]/3 stops the search at the innermost enclosing
+        // namespace, so a member class template of an enclosing class
+        // (or its injected-class-name) is found by ordinary lookup and
+        // befriended as `friend class C::X;` would be (clang
+        // `CheckClassTemplate`; libc++ `elements_view::__iterator`'s
+        // `template <bool> friend class __sentinel;`).
+        let member = self.lookup_name(n, LookupKind::All).decls.last().and_then(|&d| {
+            let t = if self.kind_of(d) == DeclKind::ClassTemplate {
+                d
+            } else {
+                self.injected_template_of(d)?
+            };
+            let c = self.ast.decls.get(t).ctx()?;
+            (self.kind_of(c) == DeclKind::CXXRecord).then_some(t)
+        });
+        if let Some((t, p)) = member.and_then(|t| self.pattern_of(t).map(|p| (t, p))) {
+            self.templ.cur = None;
+            if !self.tag_matches(p, keyword) {
+                let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
+                let msg = self.note_prev(msg, p, false);
+                self.emit(msg);
+            }
+            self.mark_type_referenced(p);
+            self.friend_class_template = Some(t);
+            return p;
+        }
         let prev = self
             .ast
             .lookup_local(ns, DeclName::ident(n))
@@ -5349,6 +5417,10 @@ impl Sema<'_, '_> {
         }
         if !any_named {
             bits = bits.with(DefinitionBits::EMPTY);
+        }
+        // §5.8: flexible array members.
+        if self.check_flexible_array_members(r) {
+            bits = bits.with(DefinitionBits::HAS_FLEXIBLE_ARRAY_MEMBER);
         }
         if self.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Union) {
             bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
@@ -5865,12 +5937,7 @@ impl Sema<'_, '_> {
                             None => self.diag(DiagId::sema_static_assert_failed, cloc),
                         }
                     } else {
-                        let mut req = String::new();
-                        kiln_ast::types::TypeNames::write_expr(
-                            &kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types(),
-                            inner,
-                            &mut req,
-                        );
+                        let req = self.requirement_text(inner);
                         let at = self.begin_loc(inner);
                         match text {
                             Some(t) => self
@@ -5903,7 +5970,7 @@ impl Sema<'_, '_> {
     /// The conjunct of the failed condition `c` that evaluates to false
     /// (clang's `findFailedBooleanCondition`), without parentheses and
     /// implicit conversions. Literal conjuncts are skipped.
-    fn failed_condition(&mut self, c: ExprId) -> ExprId {
+    pub(crate) fn failed_condition(&mut self, c: ExprId) -> ExprId {
         let mut terms = Vec::new();
         self.conjunction_terms(c, &mut terms);
         for &t in &terms {
@@ -5918,6 +5985,18 @@ impl Sema<'_, '_> {
             }
         }
         self.ignore_paren_imp_casts(c)
+    }
+
+    /// A failed condition as clang's `findFailedBooleanCondition`
+    /// describes it (`is_ptr<int>::value`).
+    pub(crate) fn requirement_text(&self, c: ExprId) -> String {
+        let mut req = String::new();
+        kiln_ast::types::TypeNames::write_expr(
+            &kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types(),
+            c,
+            &mut req,
+        );
+        req
     }
 
     fn conjunction_terms(&self, e: ExprId, out: &mut Vec<ExprId>) {
@@ -6093,6 +6172,38 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `A<args>::name` with `A` an alias template, for the lookahead: the
+    /// alias's pattern names a class (template) specialization, whose
+    /// primary pattern's member is classified as for `X<args>::name`
+    /// (WP-278; libc++ `ElementsIter<R>::iterator_concept` as a template
+    /// argument). `None` when the pattern names no class template.
+    fn classify_alias_template_member(&self, tmpl: DeclId, name: Symbol) -> Option<NameClass> {
+        let mut tmpl = tmpl;
+        for _ in 0..64 {
+            let p = self.ast.template_info(tmpl).and_then(|i| i.pattern)?;
+            let mut ty = self.ast.decls.get(p).ty()?;
+            // The pattern's type is its own typedef sugar over what it names.
+            for _ in 0..64 {
+                ty = match self.ast.types.view(ty.ty()) {
+                    TypeView::Typedef { underlying, .. } => underlying,
+                    TypeView::Elaborated { named, .. } => named,
+                    _ => break,
+                };
+            }
+            let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty())
+            else {
+                return None;
+            };
+            let t = self.ast.types.template_decl(tn)?;
+            match self.kind_of(t) {
+                DeclKind::ClassTemplate => return Some(self.classify_template_member(t, name)),
+                DeclKind::TypeAliasTemplate => tmpl = t,
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// The first member named `name` of an explicit or partial
     /// specialization of `tmpl` (the lookahead fallback of
     /// [`Sema::classify_template_member`]).
@@ -6133,6 +6244,12 @@ impl Sema<'_, '_> {
             && self.kind_of(q) == DeclKind::ClassTemplate
         {
             return self.classify_template_member(q, name);
+        }
+        if let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::TypeAliasTemplate
+            && let Some(c) = self.classify_alias_template_member(q, name)
+        {
+            return c;
         }
         if let Some(q) = qualifier
             && self.is_dependent_ctx(q)

@@ -75,6 +75,7 @@ parse_friend_decl_defines_type = Error (0) "cannot define a type in a friend dec
 parse_friend_decl_spec = Error (1) "'{0}' is invalid in friend declarations";
 parse_function_definition_not_allowed = Error (0) "function definition is not allowed here";
 parse_gnu_case_range = Extension [GnuCaseRange] (0) "use of GNU case range extension";
+parse_incomplete_array_member_init = Error (0) "array bound cannot be deduced from a default member initializer";
 parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";
 parse_invalid_decl_spec_combination = Error (1) "cannot combine with previous '{0}' declaration specifier";
 parse_lambda_decl_specifier_repeated = Error (1) "{0} cannot appear multiple times in a lambda declarator";

@@ -298,6 +298,12 @@ pub(crate) mod bi {
     /// not a failure) << 9.
     pub const LOCK_FREE: u32 = 12;
 
+    /// A reflection intrinsic (WP-267 spike): sub = `MetaOp::code`; the
+    /// operands are the call's arguments (`a`, `b`, `c`); `t1` the
+    /// character type of a name argument, `t2` the result's pointer type
+    /// (`name_of`).
+    pub const META: u32 = 30;
+
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
     pub const WIDE: u32 = 1;

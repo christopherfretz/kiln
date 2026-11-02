@@ -210,7 +210,7 @@ fn lex_fuzz_random_bytes() {
         std(Std::Cxx98),
         std(Std::Cxx17),
         LexOptions { trigraphs: true, keep_comments: true, ..std(Std::Cxx11) },
-        LexOptions { dollar_in_identifiers: false, ..cxx26() },
+        LexOptions { dollar_in_identifiers: false, reflection: true, ..cxx26() },
     ];
     // `KILN_LEX_FUZZ_ITERS` raises the bound for longer local runs.
     let iters =

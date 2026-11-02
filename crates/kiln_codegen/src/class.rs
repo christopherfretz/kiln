@@ -800,7 +800,11 @@ impl Cg<'_> {
     }
 
     /// The byte range `[first, last)` of field `field` of `rd` if clang's
-    /// `ConstructorMemcpyizer` may copy it with a memcpy.
+    /// `ConstructorMemcpyizer` may copy it with a memcpy. A field that is
+    /// empty for layout has an empty range: clang `addMemcpyableField`
+    /// joins it to the run but copies none of its bytes (an empty
+    /// `[[no_unique_address]]` member shares its offset with a non-empty
+    /// one).
     fn memcpyable_field(&mut self, rd: DeclId, field: DeclId, init: ExprId) -> Option<(u64, u64)> {
         let ast = self.ast;
         let q = ast.decls.get(field).ty()?;
@@ -830,12 +834,15 @@ impl Cg<'_> {
         if self.tys.record(def).bitfields.contains_key(&field) {
             return None;
         }
+        let start = bit / 8;
+        if self.tys.is_empty_record_for_layout(q) {
+            return Some((start, start));
+        }
         let (s, _) = self.size_align(q);
         let size = match ast.types.as_record(q).and_then(|r| self.class_def(r)) {
             Some(r) if self.array_elem(q).is_none() => self.tys.layouter().record(r).data_size,
             _ => s,
         };
-        let start = bit / 8;
         Some((start, start + size))
     }
 
@@ -863,7 +870,9 @@ impl Cg<'_> {
 
     /// clang `ConstructorMemcpyizer::emitMemcpy`: a run of two or more
     /// memcpyable fields is one memcpy; a single one is initialized
-    /// normally.
+    /// normally. The memcpy spans from the lowest-offset non-empty field
+    /// to the end of the highest-offset one (`addNextField`), and a run of
+    /// only empty fields copies nothing.
     fn flush_memcpy_run(&mut self, ctor: DeclId, run: &mut Vec<(DeclId, u64, u64)>) -> R<()> {
         let ast = self.ast;
         if run.is_empty() {
@@ -879,8 +888,21 @@ impl Cg<'_> {
                 .expect("field initializer");
             return self.emit_field_init(ci.kind, field, ci.init);
         }
-        let start = items[0].1;
-        let end = items.last().expect("run").2;
+        // clang `addInitialField` / `addNextField`.
+        let mut first: Option<(DeclId, u64)> = None;
+        let mut last: Option<(u64, u64)> = None;
+        for &(f, s, e) in items.iter().filter(|&&(_, s, e)| e > s) {
+            if let (Some((_, fs)), Some((ls, _))) = (first, last) {
+                if s < fs {
+                    first = Some((f, s));
+                } else if s >= ls {
+                    last = Some((s, e));
+                }
+            } else {
+                first = Some((f, s));
+                last = Some((s, e));
+            }
+        }
         // clang `ConstructorMemcpyizer::pushEHDestructors`, before the
         // memcpy.
         if self.opts.exceptions {
@@ -893,7 +915,9 @@ impl Cg<'_> {
                 }
             }
         }
-        let first = items[0].0;
+        let (Some((first, start)), Some((_, end))) = (first, last) else {
+            return Ok(());
+        };
         let fq = ast.decls.get(first).ty().expect("field type");
         // clang `emitMemcpy`: the destination and the source are the first
         // field's lvalues (struct GEPs), destination first.

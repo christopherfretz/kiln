@@ -70,6 +70,7 @@ starting with `-` are inputs.
 | `-fkiln-reproducible-time` | see "Reproducible time" |
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration" |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
+| `-f[no-]reflection` | kiln: the P2996 reflection spike (WP-267; default off; the last one wins): `^^`, `[:`, `:]` are lexed (C++26 only), and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
 | `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` and every codegen job |
 | `-ftemplate-depth=N`, `-ftemplate-backtrace-limit=N`, `-fkiln-instantiation-report[=all\|json\|text]` | template limits and the instantiation report (spec/sema-templates.md §10.3, §11.3) |
 | `-fkiln-stack-size=N[k\|m\|g]` | kiln: the stack reserved for the compiling thread (default 1 GiB; at least 4 MiB; the last valid value wins). Running out is the fatal "kiln: stack exhausted during …" (spec/sema-templates.md §10.3), never a crash |

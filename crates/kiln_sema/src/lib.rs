@@ -30,10 +30,13 @@ pub mod except;
 pub mod expr;
 mod extern_c;
 mod fallthrough;
+mod flex_array;
 mod for_loop_analysis;
 mod format_string;
 mod forms;
 mod gnu;
+mod gnu_null;
+mod gnu_typeof;
 mod impcast;
 mod implicit_fallthrough;
 pub mod init;
@@ -52,6 +55,7 @@ mod packed;
 mod predefined;
 mod qualified_decl;
 mod range_for;
+mod reflect;
 mod rtti;
 pub mod scope;
 mod self_ref;
@@ -119,6 +123,10 @@ pub struct Sema<'a, 'sm> {
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
     /// `typeid` is an error otherwise.
     pub rtti: bool,
+    /// `-freflection` (P2996 spike, WP-267; default off): `^^`, type
+    /// splices and the kiln reflection intrinsics (spec/sema.md
+    /// "Reflection (spike, -freflection)").
+    pub reflection: bool,
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
@@ -337,6 +345,10 @@ pub struct Sema<'a, 'sm> {
     /// (clang `InitializedEntity::EK_Temporary` "a value" for `T{x}`,
     /// `EK_New` "a new value"): a `sema_init_conversion_failed` select.
     pub(crate) init_entity: Option<&'static str>,
+    /// The variable whose initializer is being analysed (the entity of a
+    /// top-level initializer list while [`Sema::init_entity`] is `None`;
+    /// a flexible array member's initialization, §5.8).
+    pub(crate) init_var: Option<DeclId>,
     /// The context access is checked from while a namespace-scope alias
     /// template is substituted in its own context: the use's
     /// (spec/sema-class.md §2.4, clang's `CheckTemplateIdType`).
@@ -391,8 +403,14 @@ pub struct Sema<'a, 'sm> {
     pub(crate) extend_collector: Option<Vec<ExprId>>,
     /// Diagnostics held back while a range-based `for` step runs, so
     /// clang's trailing notes (`when looking up 'begin' function...`)
-    /// can be attached to the last of them (`range_for.rs`).
-    pub(crate) diag_capture: std::cell::RefCell<Option<Vec<Diag>>>,
+    /// can be attached to the last of them (`range_for.rs`). The `usize`
+    /// is the instantiation-stack length when the capture began: only
+    /// diagnostics of the step itself are held, never one from an
+    /// instantiation the step started (a SFINAE context traps those,
+    /// [temp.deduct.general]/8, also WP-271's converting-constructor
+    /// deduction for a rewritten `operator==`; a hard error keeps its
+    /// context notes).
+    pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>)>>,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -509,6 +527,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             pragma_packs: Vec::new(),
             exceptions: true,
             rtti: true,
+            reflection: false,
             range_lifetime_extension: false,
             gnu: false,
             pack: (0, Vec::new()),
@@ -572,6 +591,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
             init_entity: None,
+            init_var: None,
             access_ctx: None,
             access_checks: 0,
             cleanup: class::CleanupState::default(),
@@ -665,13 +685,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
-        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
-            held.push(d);
-            return;
-        }
-        if self.inst.suppress_next_error.replace(false) {
-            return;
-        }
+        // The overload candidates' notes go with the error they explain,
+        // also when a range-based `for` holds it back.
         if !self.trailing_notes.borrow().is_empty()
             && d.id()
                 .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
@@ -679,6 +694,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             for n in self.trailing_notes.take() {
                 d = d.with_note(n);
             }
+        }
+        if let Some((depth, held)) = self.diag_capture.borrow_mut().as_mut()
+            && *depth == self.inst.stack.len()
+        {
+            held.push(d);
+            return;
+        }
+        if self.inst.suppress_next_error.replace(false) {
+            return;
         }
         let mut inst_notes = Vec::new();
         if !self.inst.stack.is_empty()

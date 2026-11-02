@@ -414,7 +414,10 @@ impl Sema<'_, '_> {
             }
             let loc = self.begin_loc(e);
             let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, loc);
-            if self.eval_int(e, ctx).is_err() {
+            // Any constant value of the member's type will do: not
+            // `eval_int`, whose `i128` cannot hold every `unsigned
+            // __int128` (`~(unsigned __int128)0`, WP-275).
+            if self.eval_const(e, ctx).is_err() {
                 // clang reports at the initializer's `getExprLoc`.
                 let at = self.culprit_loc(e);
                 self.error(DiagId::sema_static_member_init_not_ice, at);

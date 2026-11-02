@@ -1159,6 +1159,10 @@ impl DefinitionBits {
     /// copy assignment operator and no implicit move assignment; clang
     /// `!lambdaIsDefaultConstructibleAndAssignable`).
     pub const LAMBDA_CAPTURES: DefinitionBits = DefinitionBits(1 << 51);
+    /// The class ends with a flexible array member, or with a member of
+    /// a class that does (a GNU/C99 extension; clang
+    /// `RecordDecl::hasFlexibleArrayMember`).
+    pub const HAS_FLEXIBLE_ARRAY_MEMBER: DefinitionBits = DefinitionBits(1 << 52);
 
     /// No bits.
     pub const fn empty() -> Self {

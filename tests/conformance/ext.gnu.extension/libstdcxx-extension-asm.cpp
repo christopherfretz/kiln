@@ -5,7 +5,6 @@
 // `__extension__ template` work (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): `__extension__` is not accepted before an asm-declaration (expected unqualified-id)
 namespace std {
   __extension__ __asm (".globl _ZSt21ios_base_library_initv");
 }
