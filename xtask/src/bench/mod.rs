@@ -637,12 +637,33 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
     let mut flags = vec![format!("-std={}", spec.std)];
     flags.extend(spec.mode.flags().iter().map(|f| (*f).to_owned()));
     flags.extend(spec.args.iter().cloned());
+    let run = spec.mode == entry::Mode::Run;
     let mut cmd = Command::new(&s.path);
     cmd.args(&flags);
+    if run {
+        // Built once, unmeasured; the program is what each run measures.
+        let exe = cx.layout.scratch.join("bench-run.out");
+        let _ = std::fs::remove_file(&exe);
+        cmd.arg("-o").arg(&exe).arg(&e.arg).current_dir(&cx.layout.root);
+        if cx.verbose {
+            eprintln!("  $ {}", Shown(&cmd));
+        }
+        match cmd.output() {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                let head: Vec<&str> = stderr.lines().take(5).collect();
+                return Outcome::Failed(format!("build failed: {}\n{}", o.status, head.join("\n")));
+            }
+            Err(err) => return Outcome::Failed(format!("cannot run {}: {err}", s.path.display())),
+        }
+        cmd = Command::new(&exe);
+    }
     // kiln reports its constexpr counters; the flag is not part of the
     // recorded `flags`, so it never makes a baseline advisory.
-    let report = (s.id.kind == CompilerKind::Kiln && spec.mode != entry::Mode::Pp)
-        .then(|| cx.layout.scratch.join("constexpr-report.jsonl"));
+    let report = (s.id.kind == CompilerKind::Kiln
+        && !matches!(spec.mode, entry::Mode::Pp | entry::Mode::Run))
+    .then(|| cx.layout.scratch.join("constexpr-report.jsonl"));
     if let Some(r) = &report {
         let mut flag = std::ffi::OsString::from(oven_report::FLAG);
         flag.push(r);
@@ -654,13 +675,16 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
     if inst_report {
         cmd.arg(INST_FLAG);
     }
-    cmd.arg(&e.arg).current_dir(&cx.layout.root);
+    if !run {
+        cmd.arg(&e.arg);
+    }
+    cmd.current_dir(&cx.layout.root);
     if cx.verbose {
         eprintln!("  $ {}", Shown(&cmd));
     }
     // kiln reserves its compiling thread's stack up front; the cap is on top.
     let cap = cx.mem_limit.map(|l| {
-        if s.id.kind == CompilerKind::Kiln {
+        if s.id.kind == CompilerKind::Kiln && !run {
             l.plus(process::kiln_stack_reservation_mib(&flags))
         } else {
             l
