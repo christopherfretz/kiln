@@ -1144,9 +1144,13 @@ impl Sema<'_, '_> {
         if self.kind_of(t) != DeclKind::ClassTemplate || ps.iter().any(|a| self.is_pack_arg(*a)) {
             return;
         }
+        // The parameters of the declaration that stands for the template
+        // (not a deeper friend redeclaration nested in a class template,
+        // whose inherited defaults name the outer-depth parameters).
+        let head = self.head_template(t);
         let t = self.ast.first(t);
-        let params = self.template_params(t);
-        let depth = self.template_param_depth(t);
+        let params = self.template_params(head);
+        let depth = self.template_param_depth(head);
         for &p in params.iter().skip(ps.len()) {
             if self.ast.template_parm(p).is_none_or(|x| x.pack) {
                 return;
