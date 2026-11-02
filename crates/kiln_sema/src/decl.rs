@@ -4464,6 +4464,10 @@ impl Sema<'_, '_> {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
         let mut prev_ok = None;
+        // A redefinition (or a redeclaration with another type) is invalid
+        // (clang `setInvalidDecl`), so a later lookup that also finds the
+        // earlier declaration names that one, not an ambiguous set.
+        let mut redefined = false;
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
         let (independent, local) = self.var_prev_local(spec, d, name);
         let mut prev = match local {
@@ -4509,11 +4513,13 @@ impl Sema<'_, '_> {
                         .diff_args(self, ty, pty);
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
+                    redefined = true;
                 } else if !ext && self.is_var_definition(p) {
                     let msg =
                         self.diag(DiagId::sema_redefinition, d.name_loc()).arg(sym_str(self, name));
                     let msg = self.note_prev(msg, p, true);
                     self.emit(msg);
+                    redefined = true;
                 } else {
                     prev_ok = Some(p);
                 }
@@ -4536,7 +4542,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || self.storage_invalidates_var(ds, d) {
+        if ambiguous || redefined || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
@@ -7786,11 +7792,15 @@ impl Sema<'_, '_> {
         }
         // Declarations of one entity, and type names of one type, are
         // not ambiguous ([basic.lookup.general]/1, [dcl.typedef]/3;
-        // clang `resolveKind`'s `UniqueTypes`).
+        // clang `resolveKind`'s `UniqueTypes`). An invalid declaration (a
+        // redefinition) is ignored, as `resolveKind` does.
         let mut types: Vec<QualType> = Vec::new();
         let mut decls: Vec<DeclId> = Vec::new();
         for &x in &found.decls {
             let d = self.ast.strip_shadow(x);
+            if self.ast.decls.get(d).has(DeclFlags::INVALID) {
+                continue;
+            }
             if let Some(c) = self.designated_type(d) {
                 if !types.contains(&c) {
                     types.push(c);
