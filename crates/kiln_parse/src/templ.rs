@@ -145,11 +145,12 @@ impl Parser<'_, '_> {
             self.bump();
             // `template<> template<> R C<args>::f<args>(...)`: a member
             // template of a class template specialization.
+            let mut empty_heads = vec![loc];
             while self.at_kw(Kw::Template)
                 && self.peek_is(1, Punct::Less)
                 && self.peek_is(2, Punct::Greater)
             {
-                self.bump();
+                empty_heads.push(self.bump().span.lo);
                 self.bump();
                 self.bump();
             }
@@ -158,6 +159,7 @@ impl Parser<'_, '_> {
                 // member template of an implicitly instantiated class
                 // specialized as a template ([temp.expl.spec]/16).
                 self.s.act_member_template_spec_start(loc);
+                self.s.act_explicit_spec_headers(&empty_heads);
                 self.parse_template_declaration(ctx);
                 self.s.act_member_template_spec_end();
                 return;
@@ -174,6 +176,7 @@ impl Parser<'_, '_> {
                 || !self.at_spec_tag_or_template()
             {
                 self.s.act_explicit_spec_start(loc);
+                self.s.act_explicit_spec_headers(&empty_heads);
                 self.template_decl_kind = Some(TemplateDeclKind::ExplicitSpecialization);
                 self.parse_spec_declaration(ctx);
                 self.template_decl_kind = None;

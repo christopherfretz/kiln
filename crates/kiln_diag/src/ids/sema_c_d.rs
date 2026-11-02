@@ -122,6 +122,7 @@ sema_ctor_dtor_qualifier = Error (2) "'{0}' qualifier is not allowed on a {1:con
 sema_ctor_dtor_ref_qualifier = Error (2) "ref-qualifier '{0}' is not allowed on a {1:constructor|destructor}";
 sema_ctor_explicit_copy_list = Error (0) "chosen constructor is explicit in copy-initialization";
 sema_ctor_return_type = Error (0) "constructor cannot have a return type";
+sema_cxx17_compat_adl_only_template_id = WarningOff [CxxPre20Compat] (0) "use of function template name with no prior declaration in function call with explicit template arguments is incompatible with C++ standards before C++20";
 sema_dangling_field_param = Warning [DanglingField] (2) "binding reference member {0} to stack allocated parameter {1}";
 sema_dangling_field_param_addr = Warning [DanglingField] (2) "initializing pointer member {0} with the stack address of parameter {1}";
 sema_dangling_variable = Warning [Dangling] (2) "temporary {0:whose address is used as value of|bound to} local {0:variable|reference} {1} will be destroyed at the end of the full-expression";

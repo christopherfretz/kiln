@@ -112,6 +112,7 @@ note_explicit_instantiation_definition_here = Note (0) "explicit instantiation d
 note_explicit_instantiation_here = Note (0) "explicit instantiation refers here";
 note_explicit_spec_template_declared = Note (0) "explicitly specialized declaration is here";
 note_explicit_template_arg_substitution_here = Note (1) "while substituting explicitly-specified template arguments into function template {0}";
+note_explicit_template_spec_does_not_need_header = Note (1) "'template<>' header not required for explicitly-specialized class {0} declared here";
 note_explicitly_deleted_here = Note (1) "{0} has been explicitly marked deleted here";
 note_expr_divide_by_zero = Note (0) "division by zero";
 note_expr_evaluates_to = Note (3) "expression evaluates to '{0} {1} {2}'";

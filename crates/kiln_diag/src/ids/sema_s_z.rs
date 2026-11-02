@@ -111,6 +111,9 @@ sema_template_parameter_pack_non_pack = Error (2) "{0:template type|non-type tem
 sema_template_params_for_non_template = Error (1) "template parameter list matching the non-templated nested type {0} should be empty ('template<>')";
 sema_template_recursion_depth = Fatal (1) "recursive template instantiation exceeded maximum depth of {0}";
 sema_template_requires_args = Error (2) "use of {0} {1} requires template arguments";
+sema_template_spec_extra_headers = WarningError [ExtraneousTemplateHead] (0) "extraneous template parameter list in template specialization";
+// clang 19's `warn_template_spec_extra_headers`: a plain warning in no group (clang 22 made it the default-error `-Wextraneous-template-head`); chosen by sema from its compat level, not a `_19` mirror (the kind and group differ).
+sema_template_spec_extra_headers_clang19 = Warning (0) "extraneous template parameter list in template specialization";
 sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
 sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
