@@ -132,9 +132,10 @@ These are owned elsewhere:
 | D4 | rebuilds every pattern subtree | can share non-dependent, non-local expression subtrees (§3.3, Q3) | memory; dumps stay byte-identical |
 | D5 | no limit on subsumption | more than 65,536 DNF/CNF clauses is the error `constraints too complex to compare` (Q14) | bounded time |
 | D6 | partial ordering reuses the argument template's own parameters as opaque types | synthesizes unique types at a reserved depth (§6.7) | standard wording; no depth aliasing |
+| D7 | rejects an out-of-line member of a member partial specialization of an implicit specialization (`template<> template<class T, char c> void O<int,char>::A<T*,c>::f() {}`) with "nested name specifier 'O<int, char>::A<T *, c>' for declaration does not refer into a class, class template or class template partial specialization" (clang 19 and 22) | accepts it as the member of that partial specialization (§4.5) | [temp.spec.partial.member]/1, [temp.mem]/1; clang fails to match the qualifier against the partial specialization's own head (WP-401 decision) |
 
-None of these changes the accept/reject result of a program that clang 19
-compiles within its own limits.
+Apart from D7, none of these changes the accept/reject result of a program
+that clang 19 compiles within its own limits.
 
 ## 2. Parsing templates
 
@@ -188,6 +189,43 @@ template-template-param := template-head ('class'|'typename') '...'? identifier?
   `Outer<int>` written with `template<class T> template<class U>` gets
   the second error, and its declaration is then dropped
   (`take_template_head` reports `head_mismatch`).
+- **Headers for an explicitly specialized class** ([temp.expl.spec]/17,
+  WP-401). A member of an explicit specialization `O<int, char>` is
+  defined with only its own head: `template<char c> int O<int,
+  char>::f()`. The parser hands sema the locations of the leading
+  `template<>` headers (`act_explicit_spec_headers`, namespace scope
+  only), and `check_extra_spec_headers` (`templ/mod.rs`, clang
+  `MatchTemplateParametersToScopeSpecifier`) consumes one header per
+  enclosing implicit-specialization or class-template slot of the
+  qualifier and stops at the first explicit specialization. If more than
+  one header is left (the last belongs to the declaration itself):
+  - all left-over headers empty: "extraneous template parameter list in
+    template specialization" at the first extraneous `template`. At
+    compat 22 it is a default-error extension in group
+    `extraneous-template-head` (`sema_template_spec_extra_headers`); at
+    compat 19 a plain warning with no group
+    (`sema_template_spec_extra_headers_clang19`, chosen by sema: kind and
+    group differ, so it is not a `_19` mirror). The declaration is kept.
+  - some left-over header non-empty: the error "extraneous template
+    parameter list in template specialization or out-of-line template
+    definition" and the declaration is dropped (`head_mismatch`).
+  Either adds the note "'template<>' header not required for
+  explicitly-specialized class 'O<int, char>' declared here" at the
+  innermost explicit specialization enclosing the qualifier (only when one
+  exists; a free function gets no note). Tests:
+  `temp.expl.spec/extraneous-template-head{,-clang19,-warning,-silenced}.cpp`.
+- **Empty `template<>` before a non-template** (clang
+  `err_template_tag_noparams` / `err_template_variable_noparams`,
+  WP-401). `template<> struct D {};` (with `D` not a template) and
+  `template<> int v = 0;` (with `v` not a variable template) error
+  "extraneous 'template<>' in declaration of struct 'D'" /
+  "... of variable 'v'" (`sema_template_tag_noparams`,
+  `sema_template_variable_noparams`), and the entity is declared as a
+  plain non-template so later uses resolve. The parser detects the tag
+  shape (`at_plain_tag_decl` in `kiln_parse/src/templ.rs`); the variable
+  shape is caught in `act_declarator` when an explicit-spec head meets a
+  non-template, non-function name. Test:
+  `temp.expl.spec/extraneous-empty-template-head.cpp`.
 
 **Defaults** are kept unparsed only where [temp.param]/15 requires
 delayed meaning; in practice they are always parsed immediately.
@@ -209,7 +247,38 @@ delayed meaning; in practice they are always parsed immediately.
   `virtual` or `explicit` is "invalid declaration specifier in template
   non-type parameter" once per specifier, at it, instead of the
   function-parameter diagnostics (`template<static int a...>` reports the
-  misplaced `...` first). Test: `temp.param/nttp-invalid-decl-specifier.cpp`.
+  misplaced `...` first). C11 `_Noreturn` is one more such specifier,
+  last in that order. `friend` is not: outside a class it is "'friend'
+  used outside of class", reported by the parser while reading the
+  decl-specifiers and dropped (any parameter, namespace or block scope
+  declaration), so the parameter stays usable. Tests:
+  `temp.param/nttp-invalid-decl-specifier.cpp`,
+  `temp.param/nttp-friend-noreturn-specifiers.cpp`,
+  `class.friend/friend-outside-class.cpp`,
+  `dcl.attr.noreturn/c11-noreturn-keyword.cpp` (`_Noreturn` elsewhere: the
+  function's `[[noreturn]]`, "'_Noreturn' can only appear on functions"
+  on anything else, "'_Noreturn' is a C11 extension" under `-pedantic`).
+- A non-type parameter of class type needs a complete type ([temp.param]/6,
+  clang's `RequireStructuralType`): "non-type template parameter has
+  incomplete type 'S'" with the forward-declaration note, also when the
+  type comes from a prior argument (`template<class T, T t>` with
+  `T = S`, under the "while substituting prior template arguments" note).
+  `template<static class T>` declares such a parameter of the incomplete
+  class `T`. Test: `temp.param/nttp-incomplete-class-type.cpp`.
+- A template template parameter's template-head is followed by `class` or
+  `typename` ([temp.param]/1). Without one, clang 19 always reports
+  "template template parameter requires 'class' or 'typename' after the
+  parameter list" ("requires 'class'" before C++17); clang 22 only before a
+  name, `,`, `>`, `>>` or `...`, or at `struct` (consumed). Then a token that
+  cannot be the parameter's name (`static`, `int`, `union`) is "expected
+  identifier" and the parameter is dropped; the list goes on after a `,`
+  (`ParseTemplateParameterList`). A list left empty by dropped parameters
+  makes a following plain class declaration a non-template with
+  "extraneous 'template<>' in declaration of struct 'D'". Where a
+  parameter does recover without its key, kiln makes it a type template
+  template parameter (clang 19's recovery; clang 22's differs, see the
+  WP-401 follow-ups). Tests:
+  `temp.param/template-template-param-missing-key{,-clang19,-cxx14}.cpp`.
 - Defaults are stored in the cold "template default args" map
   (ast.md §8.1).
 
@@ -306,7 +375,14 @@ fails (clang's `ActOnCallExpr` check of the callee). A dependent call
 warns at the definition and again per instantiation (`per_instantiation`,
 spec/diag.md §7.4); a non-dependent one in a template once. A call where
 ADL finds no template is an undeclared identifier with no warning.
+From C++20 the same points get the off-by-default compatibility warning
+"... is incompatible with C++ standards before C++20"
+(`sema_cxx17_compat_adl_only_template_id`, group `pre-c++20-compat`, also
+enabled by `pre-c++20-compat-pedantic`; clang 19 says "no prior function
+template declaration", its `_19` row; WP-401).
 Tests: `temp.names/adl-only-template-id-cxx17.cpp`,
+`temp.arg.explicit/pre-cxx20-compat-adl-only-template-id{,-clang19}.cpp`,
+`temp.arg.explicit/adl-only-template-id-cxx20-silent.cpp`,
 `temp.names/non-template-followed-by-args-recovery.cpp`,
 `temp.names/non-template-followed-by-args-cxx17.cpp`,
 `temp.names/non-template-followed-by-args.cpp`.
@@ -1284,6 +1360,18 @@ declaration-only `template<> struct A<int>::N;`:
    E ...`, gives "enumeration cannot be a template" at the token after
    the name or base, plus "declaration does not declare anything" at
    `enum` (clang's parser).
+
+**Out-of-line members of such a partial specialization** (deviation D7,
+§1.5): `template<> template<class U, char d> int O<int,
+char>::A<U*, d>::f() {}` after the partial specialization above is a
+member definition of that partial specialization. The qualifier
+`O<int, char>::A<U*, d>` is matched against the partial specializations
+of the redeclared member template (parameter names may differ; the
+deduced `U` and `d` reach the body), not merely accepted: a qualifier that
+names no partial specialization (`A<T&, c>`), or a member the partial
+specialization does not declare, is "out-of-line definition of 'f' does
+not match any declaration". clang 19 and 22 reject the valid form, so the
+test is `skip(clang)`: `temp.expl.spec/member-partial-spec-out-of-line-member-run.cpp`.
 
 Not done: when the inner head does not match the member template's head
 (for example, different parameter count), clang drops the declaration.

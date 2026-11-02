@@ -1376,11 +1376,27 @@ destroyed: `life_ended` ignores dead bytes that belong to an
 unconstructed base of the object (`Memory::holds_unconstructed`), so a
 class whose only data is that base is destroyed silently, as by clang
 (`tests/conformance/class.base.init/unconstructed-base-constexpr.cpp`,
-`base-initialized-by-some-constructors-run.cpp`). Not yet: an empty
-base (no bytes to mark) is not noted at freeze; a trivial copy of the
-object reports the lifetime read where clang notes the base (needs a
-fault kind in `notes.rs`); the destruction note of a heap object is
-located at the implicit destructor where clang uses the `delete`.
+`base-initialized-by-some-constructors-run.cpp`). An empty base
+(`Types::empty_bases`, not in `fields`) has no bytes to mark: the
+prologue emits `EndLife` aux 8|16 and `set_unconstructed` records it by
+identity (slot, generation, offset, type; `Memory::empty_unconstructed`)
+and tracks its allocation, so a member call on it is "member call on
+object outside its lifetime", `life_ended` reports its destruction (a
+constexpr destructor of the base), and the freeze notes the first
+unconstructed base in base-specifier order, empty or not (WP-401;
+`tests/conformance/expr.const/unconstructed-empty-base.cpp`). Such a
+destruction names the derived object (the running destructor's `this`),
+as clang prints the base's lvalue. A fault found while a destructor's
+epilogue destroys a subobject (`PushCleanup` aux 2) is reported at the
+outermost such destructor's call (`Oven::cleanup_fault_pc`): the
+`delete`, the variable or the temporary, as clang's
+`HandleDestructionImpl` passes its call range down
+(`expr.const/unconstructed-base-destroy-location.cpp`). Not yet: a
+trivial copy of the object reports the lifetime read where clang notes
+the base (needs a fault kind in `notes.rs`); clang also reports
+destroying a derived object (with a non-trivial destructor) whose
+trivially destructible base was never constructed, which kiln does
+not check.
 
 *Deviations from clang 19.* A class
 whose subobjects' lifetimes all ended one by one is diagnosed at its

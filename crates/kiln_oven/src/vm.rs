@@ -1428,7 +1428,7 @@ impl Oven {
                 None => return Ok(None),
             }
         } else {
-            self.cleanup_life(&c).map_err(|f| (f, pc))?;
+            self.cleanup_life(&c, fb).map_err(|f| (f, self.cleanup_fault_pc(&c, pc)))?;
         }
         // A const object is modifiable during its destruction
         // ([class.dtor]/5).
@@ -2590,7 +2590,8 @@ impl Oven {
     /// (aux 1: check that its lifetime has not ended; aux 2: end it).
     fn end_life(&mut self, raw: u64, ty: OTy, aux: u32) -> Result<(), Fault> {
         if aux & 8 != 0 {
-            let n = self.types.copy_size(ty);
+            // aux 16: an empty base, recorded by identity (WP-401).
+            let n = if aux & 16 != 0 { 0 } else { self.types.copy_size(ty) };
             return self.mem.set_unconstructed(raw, n, ty).map_err(|f| Fault::Mem {
                 f,
                 ak: ak::INIT,
