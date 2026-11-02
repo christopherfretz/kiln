@@ -162,7 +162,7 @@ transition.
   `xfail(kiln)` where kiln lacks the feature); docs/status/cxx-features.md.
 
 ### Residuals (follow-ups)
-**Diagnostic wording kiln has not followed**: 159 tests pinned with
+**Diagnostic wording kiln has not followed**: 152 tests pinned with
 `//@ requires: clang<22` and `// clang 22 emits <text>; WP-355 residual`
 (list: `git grep -l "WP-355 residual" tests`). They still run kiln at
 level 19 under either oracle. Buckets (approximate counts):
@@ -186,12 +186,6 @@ level 19 under either oracle. Buckets (approximate counts):
 `ast/expr.ref/qualified-member.cpp`, `temp.class/redeclaration-ast.cpp`,
 `templates/alias/temp.alias-dependent-template-template-arg-ast.cpp`,
 `templates/ctad/temp.deduct.guide-ast-dump.cpp`.
-
-**Sibling-owned probes** (WP-357) that XPASS under `--compiler clang++-22`
-(their `xfail(clang)` is a clang-19 reason) or fail there:
-`expr.const/p2280-probe.cpp`, `expr.new/p2747-probe.cpp`,
-`expr.new/constexpr-placement.cpp`; their owner moves them to `requires:
-clang>=22` (WP-355 did not edit them).
 
 **Other**: kiln++'s own `-fclang-compat` default is still 19 (only the
 harness passes 22); flipping it is a driver decision. Codegen at level 22
