@@ -1121,7 +1121,7 @@ impl Substituter<'_, '_, '_> {
                 else {
                     return Err(SubstFail);
                 };
-                // `ns::v<T>` keeps its written qualifier (printed).
+                // `N::v<T>` keeps its qualifier (WP-300).
                 if let Some(q) = self.sema.ast.templates.expr_nns.get(c).copied() {
                     let q = self.nns(q, n.loc())?;
                     self.sema.set_template_id_qualifier(e, q);

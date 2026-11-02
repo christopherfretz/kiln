@@ -862,9 +862,10 @@ impl Sema<'_, '_> {
     }
 
     /// The most elements a braced-init-list for aggregate `to` can have
-    /// (brace elision counts scalar leaves).
+    /// (brace elision reaches subaggregate elements, each taking at
+    /// least one).
     fn aggregate_capacity(&self, to: QualType) -> u64 {
-        self.scalar_leaves(to).unwrap_or(u64::MAX)
+        self.aggregate_list_capacity(to).unwrap_or(u64::MAX)
     }
 
     /// [over.match.list] phase 2 as an ICS: the constructors of `c` with
