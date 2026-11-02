@@ -610,6 +610,26 @@ impl Sema<'_, '_> {
         Ok(())
     }
 
+    /// [temp.arg.general]/9 with [temp.over.link]/5: the canonical form
+    /// of the dependent specialization `name<args>` of class template
+    /// `tmpl` carries the default arguments of the parameters not
+    /// written, so `enable_if<B>` and `enable_if<B, void>` (an alias
+    /// template's expansion) are the same type; the written arguments
+    /// stay as sugar (clang's converted arguments). `None` when nothing
+    /// is defaulted.
+    fn dependent_spec_canon(
+        &mut self,
+        name: TemplateNameId,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        l: Loc,
+    ) -> Option<QualType> {
+        let full = self.dependent_spec_full_args(tmpl, args, l)?;
+        let full = self.ast.types.arg_list(&full);
+        let full = self.profile_value_args(full);
+        Some(self.ast.types.template_specialization(name, full, None, false))
+    }
+
     /// The arguments of the dependent specialization `tmpl<args>` of class
     /// template `tmpl` completed with the default arguments of the
     /// parameters not written ([temp.arg.general]/9), each substituted
@@ -733,18 +753,7 @@ impl Sema<'_, '_> {
                     return Ok(TemplateIdRef::Type(t));
                 }
                 let list = if ttp { list } else { self.profile_value_args(list) };
-                // [temp.arg.general]/9 with [temp.over.link]/5: the
-                // specialization's canonical form carries the default
-                // arguments of the parameters not written, so
-                // `enable_if<B>` and `enable_if<B, void>` (an alias
-                // template's expansion) are the same type; the written
-                // arguments stay as sugar (clang's converted arguments).
-                let canon = if ttp { None } else { self.dependent_spec_full_args(d, args, l) };
-                let canon = canon.map(|full| {
-                    let full = self.ast.types.arg_list(&full);
-                    let full = self.profile_value_args(full);
-                    self.ast.types.template_specialization(name, full, None, false)
-                });
+                let canon = if ttp { None } else { self.dependent_spec_canon(name, d, args, l) };
                 Ok(TemplateIdRef::Type(
                     self.ast.types.template_specialization(name, list, canon, false),
                 ))

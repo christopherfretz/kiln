@@ -1066,11 +1066,7 @@ impl Sema<'_, '_> {
     /// The dependent member access `e` (see
     /// [`Self::dependent_member_names_template`]) with the template
     /// arguments `targs`: formed again, lookup and all, at instantiation.
-    pub fn act_on_dependent_member_template_args(
-        &mut self,
-        e: ExprId,
-        targs: ArgListId,
-    ) -> ExprId {
+    pub fn act_on_dependent_member_template_args(&mut self, e: ExprId, targs: ArgListId) -> ExprId {
         let n = self.ast.exprs.get(e);
         let (base, arrow, loc) = (ExprId::from_raw(n.a()), n.aux() & 1 != 0, n.loc());
         let name = self.ast.dependent_member_name(e);

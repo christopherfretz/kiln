@@ -310,7 +310,11 @@ impl Sema<'_, '_> {
         let Some(def) = self.ast.definition(c) else { return false };
         self.ast.decls.bases(def, &self.ast.lists).any(|b| {
             self.is_dependent_type(b.ty)
-                || self.ast.types.as_record(b.ty).is_some_and(|r| self.has_dependent_bases_in(r, depth + 1))
+                || self
+                    .ast
+                    .types
+                    .as_record(b.ty)
+                    .is_some_and(|r| self.has_dependent_bases_in(r, depth + 1))
         })
     }
 
