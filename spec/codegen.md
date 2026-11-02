@@ -179,6 +179,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
 - Values:
   - an lvalue-to-rvalue conversion of a glvalue `?:` is emitted as a
     scalar `?:`: each arm loads in its own block and the result is a phi;
+  - an lvalue-to-rvalue conversion of a reference-returning call, also
+    through the lvalue `CK_UserDefinedConversion` of a conversion
+    function returning a reference (`operator bool&()`), loads from the
+    returned address (clang `EmitLoadOfLValue`);
   - `&&`/`||` produce an `i1` phi; `EmitBranchOnBoolExpr` splits
     `&&`/`||`/`!`/`?:` conditions into branches and folds constants;
   - bit-fields load the storage unit, then `shl`/`ashr` (signed) or

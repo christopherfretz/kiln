@@ -717,8 +717,16 @@ impl Cg<'_> {
         }
         // A call returning a reference yields the referee's address
         // (clang `ScalarExprEmitter::VisitCallExpr`: a reference
-        // result is `EmitLoadOfLValue`).
-        let inner = self.skip_parens(s);
+        // result is `EmitLoadOfLValue`), also through the lvalue
+        // `CK_UserDefinedConversion` of a reference-returning conversion
+        // function (`operator bool&()`).
+        let mut inner = self.skip_parens(s);
+        while self.ast.exprs.get(inner).kind() == ExprKind::ImplicitCastExpr
+            && self.ast.exprs.cast_kind(inner) == CastKind::UserDefinedConversion
+            && self.is_glvalue(inner)
+        {
+            inner = self.skip_parens(self.ast.exprs.operand(inner));
+        }
         if matches!(
             self.ast.exprs.get(inner).kind(),
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
