@@ -4981,7 +4981,7 @@ impl Sema<'_, '_> {
         None
     }
 
-    /// The reinterpret_cast part of cast `style` from `from` to `to`
+    /// The `reinterpret_cast` part of cast `style` from `from` to `to`
     /// ([expr.reinterpret.cast]; clang `TryReinterpretCast`): the cast
     /// kind, `Ok(None)` when it does not apply (the caller reports the
     /// generic bad cast), or `Err(())` after a specific error (a pointer
