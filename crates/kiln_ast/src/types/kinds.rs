@@ -453,7 +453,7 @@ impl TypeKind {
 
 macro_rules! builtins {
     ($($(#[$doc:meta])* $konst:ident = $id:literal, $variant:ident, $name:literal;)*) => {
-        /// The builtin types, pre-interned at fixed ids 1..=50 in this
+        /// The builtin types, pre-interned at fixed ids 1..=52 in this
         /// order (spec/types.md §5.1). The discriminant is the `TypeId`
         /// index.
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
@@ -464,7 +464,7 @@ macro_rules! builtins {
 
         impl BuiltinType {
             /// All builtins in id order.
-            pub const ALL: [BuiltinType; 50] = [$(BuiltinType::$variant,)*];
+            pub const ALL: [BuiltinType; 52] = [$(BuiltinType::$variant,)*];
 
             /// The builtin with type id index `id`, if it is one.
             pub fn from_index(id: u32) -> Option<BuiltinType> {
@@ -614,6 +614,13 @@ builtins! {
     /// `_Float128` (`std::float128_t`, P1467): binary128, distinct from
     /// `long double` and from `__float128`.
     STD_FLOAT128 = 50, StdFloat128, "_Float128";
+    /// GCC's `_Float32x` (ISO/IEC TS 18661-3): binary64, distinct from
+    /// `double` and `_Float64` (WP-380; clang has no such type).
+    FLOAT32X = 51, Float32x, "_Float32x";
+    /// GCC's `_Float64x` (ISO/IEC TS 18661-3): `long double`'s format
+    /// (x87 extended on x86-64, binary128 on `AArch64`), distinct from it
+    /// (WP-380; clang has no such type).
+    FLOAT64X = 52, Float64x, "_Float64x";
 }
 
 impl BuiltinType {
@@ -653,12 +660,14 @@ impl BuiltinType {
 
     /// True for the floating-point types.
     pub const fn is_floating(self) -> bool {
-        ((self as u8) >= 20 && (self as u8) <= 26) || ((self as u8) >= 48 && (self as u8) <= 50)
+        ((self as u8) >= 20 && (self as u8) <= 26) || ((self as u8) >= 48 && (self as u8) <= 52)
     }
 
     /// True for the C++23 extended floating-point types of P1467
     /// [basic.extended.fp]: `_Float16`, `_Float32`, `_Float64`,
-    /// `_Float128` and `__bf16` (`std::bfloat16_t`).
+    /// `_Float128` and `__bf16` (`std::bfloat16_t`), plus GCC's
+    /// `_Float32x` and `_Float64x`, which GCC 13+ treats under the same
+    /// conversion-rank rules (WP-380).
     pub const fn is_std_extended_floating(self) -> bool {
         matches!(
             self,
@@ -667,18 +676,22 @@ impl BuiltinType {
                 | BuiltinType::Float32
                 | BuiltinType::Float64
                 | BuiltinType::StdFloat128
+                | BuiltinType::Float32x
+                | BuiltinType::Float64x
         )
     }
 
     /// The builtin with the same representation and calling convention:
-    /// `_Float32` → `float`, `_Float64` → `double`, `_Float128` →
-    /// `__float128` (clang/GCC lower and pass them identically,
-    /// spec/abi.md §2); every other builtin is its own twin.
+    /// `_Float32` → `float`, `_Float64` and `_Float32x` → `double`,
+    /// `_Float128` → `__float128`, `_Float64x` → `long double`
+    /// (clang/GCC lower and pass them identically, spec/abi.md §2); every
+    /// other builtin is its own twin.
     #[must_use]
     pub const fn abi_twin(self) -> BuiltinType {
         match self {
             BuiltinType::Float32 => BuiltinType::Float,
-            BuiltinType::Float64 => BuiltinType::Double,
+            BuiltinType::Float64 | BuiltinType::Float32x => BuiltinType::Double,
+            BuiltinType::Float64x => BuiltinType::LongDouble,
             BuiltinType::StdFloat128 => BuiltinType::Float128,
             b => b,
         }

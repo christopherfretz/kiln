@@ -269,8 +269,8 @@ impl<'a> IrTypes<'a> {
             BuiltinType::Float16 | BuiltinType::Half => IrType::Half,
             BuiltinType::BFloat16 => IrType::BFloat,
             BuiltinType::Float | BuiltinType::Float32 => IrType::Float,
-            BuiltinType::Double | BuiltinType::Float64 => IrType::Double,
-            BuiltinType::LongDouble => match t.arch() {
+            BuiltinType::Double | BuiltinType::Float64 | BuiltinType::Float32x => IrType::Double,
+            BuiltinType::LongDouble | BuiltinType::Float64x => match t.arch() {
                 Arch::X86_64 => IrType::X86Fp80,
                 Arch::AArch64 => IrType::Fp128,
             },

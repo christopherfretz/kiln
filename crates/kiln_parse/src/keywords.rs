@@ -75,6 +75,8 @@ keywords! {
     Float32 = "_Float32";
     Float64 = "_Float64";
     StdFloat128 = "_Float128";
+    Float32x = "_Float32x";
+    Float64x = "_Float64x";
     Bf16 = "__bf16";
     Fp16 = "__fp16";
     For = "for";

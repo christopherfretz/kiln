@@ -2700,6 +2700,9 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         B::Float32 => "DF32_",
         B::Float64 => "DF64_",
         B::StdFloat128 => "DF128_",
+        // GCC's `_FloatNx` (Itanium `DF <number> x`).
+        B::Float32x => "DF32x",
+        B::Float64x => "DF64x",
         B::Half => "Dh",
         B::NullPtr => "Dn",
         B::SvInt8 => "u10__SVInt8_t",

@@ -137,10 +137,13 @@ compares floating-point conversion ranks ([conv.rank]/2) through the
 target's formats (`format_subset`). bf16 and f16 are unordered. For equal
 value sets a standard type has the greater subrank ([conv.rank]/2.4:
 `float` over `_Float32`, `double` over `_Float64`, and `long double` over
-`_Float64` where it is IEEE double), and `extended_subrank` puts
-`_Float128` above the vendor `__float128` (kiln's choice; GCC 14 has both
-only on x86-64 and gives them distinct ranks; clang 22 has no
-`_Float128`). `__fp16` and `_Float16` stay equal, as in clang, so
+`_Float64` where it is IEEE double), and `extended_subrank` orders the
+extended types of equal value sets `__float128` (0) < GCC's `_Float32x`
+/ `_Float64x` (1) < `_Float32`/`_Float64`/`_Float128` (2): `_Float128`
+above the vendor `__float128` is kiln's choice (GCC 14 has both only on
+x86-64 and gives them distinct ranks; clang 22 has no `_Float128`), and
+`_FloatN` above `_FloatNx` is GCC 14's (`_Float32x + _Float64` is
+`_Float64`; on AArch64 `_Float64x + _Float128` is `_Float128`; WP-380). `__fp16` and `_Float16` stay equal, as in clang, so
 `h += f16` still computes in `half`.
 
 **P1467 rank rule** (`rank::fp_rank_violation(s, from, to) ->
