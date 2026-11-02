@@ -4060,7 +4060,16 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   a member (`DP<V, IP>` in `Outer<int>`) is reported at the template-id,
   not at the argument, since substituted types keep no argument
   locations.
-- P0846 (ADL for an unknown name followed by `<`) is not implemented.
+- P0846 ([temp.names]/3, WP-336): an unqualified name that ordinary
+  lookup finds nothing (no builtin) or only non-member functions for,
+  followed by a template-argument-list closed by `>(`, is assumed a
+  template-name (`Sema::is_assumed_template_name`). It becomes an ADL
+  `UnresolvedLookupExpr` carrying the explicit arguments
+  (`act_on_assumed_template_id`); substitution keeps the arguments when
+  the definition-context set is empty, so ADL at instantiation deduces
+  with them (`get<0>(c)` for `std::complex`). Without the `>(` lookahead
+  `<` stays less-than (clang also assumes a template there and
+  diagnoses).
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is
   unsupported.

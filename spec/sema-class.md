@@ -2028,6 +2028,17 @@ access, out-of-line declarator scope.**
   type's destructor as a qualified member of that class (non-virtual,
   and a base class's destructor is allowed: `this->B::~B()`). A
   qualified destructor template-id (`p->N::~X<T>()`) is a gap.
+  Inside a class template (its pattern, a partial specialization, or an
+  out-of-line member), a destructor name found as the pattern's
+  injected-class-name names the injected-class-name type
+  (`Sema::injected_named`, [temp.local]/1), so `this->~S()` matches the
+  current instantiation's object type at the type check of
+  [expr.prim.id.dtor]/2 (WP-336). A non-dependent destructor
+  `MemberExpr` in a template (`p->~P()`, `b->B::~B()` with
+  non-dependent `p`, `b`) is formed again at instantiation through
+  `rebuild_member_destructor` with the destructor's (instantiated)
+  class, qualified as written; access is then checked in the
+  instantiated member (WP-336).
   A pseudo-destructor on a scalar or dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
