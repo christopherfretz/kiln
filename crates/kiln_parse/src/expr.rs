@@ -1474,7 +1474,8 @@ impl Parser<'_, '_> {
     fn parse_id_expression_rest(&mut self) -> PExpr {
         let begin = self.name_begin();
         let qual = self.parse_nested_name_nns().ok()?;
-        let template_kw = qual.is_some() && self.eat_kw(Kw::Template).is_some();
+        let template_loc = if qual.is_some() { self.eat_kw(Kw::Template) } else { None };
+        let template_kw = template_loc.is_some();
         if let Some(q) = qual
             && !template_kw
             && self.at_kw(Kw::Operator)
@@ -1495,13 +1496,9 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            return Some(self.s.act_dependent_scope_ref(
-                q.nns,
-                DeclName::ident(name),
-                targs,
-                begin,
-                nl,
-            ));
+            let e = self.s.act_dependent_scope_ref(q.nns, DeclName::ident(name), targs, begin, nl);
+            self.s.set_template_kw(e, template_loc);
+            return Some(e);
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
@@ -1511,6 +1508,7 @@ impl Parser<'_, '_> {
                     if let Some(q) = qual {
                         self.s.set_template_id_begin(e, begin, nl);
                         self.s.set_template_id_qualifier(e, q.nns);
+                        self.s.set_template_kw(e, template_loc);
                     }
                     if !self.at(Punct::LParen) {
                         return Some(self.s.resolve_single_template_id(e));
@@ -1523,6 +1521,7 @@ impl Parser<'_, '_> {
                 Ok(TemplateIdRef::Value(e)) => {
                     if let Some(q) = qual {
                         self.s.set_template_id_qualifier(e, q.nns);
+                        self.s.set_template_kw(e, template_loc);
                     }
                     Some(e)
                 }

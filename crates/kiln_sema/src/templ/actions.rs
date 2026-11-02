@@ -518,6 +518,22 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records the `template` keyword at `kw` (if written) after the
+    /// qualifier of the name `e` (`N::template v<T>`), which the AST
+    /// printer writes back as clang's `hasTemplateKeyword` (WP-308).
+    pub fn set_template_kw(&mut self, e: ExprId, kw: Option<Loc>) {
+        if let Some(kw) = kw
+            && matches!(
+                self.ast.exprs.get(e).kind(),
+                ExprKind::DeclRefExpr
+                    | ExprKind::UnresolvedLookupExpr
+                    | ExprKind::DependentScopeDeclRefExpr
+            )
+        {
+            let _ = self.ast.templates.template_kw.insert(e, kw);
+        }
+    }
+
     /// The template name of template (or template template parameter)
     /// `d` as written.
     pub fn template_name_for(&mut self, d: DeclId) -> TemplateNameId {

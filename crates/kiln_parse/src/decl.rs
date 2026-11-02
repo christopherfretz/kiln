@@ -986,7 +986,7 @@ impl Parser<'_, '_> {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
                 }
                 ds.invalid = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
+                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
                 true
             }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
@@ -998,7 +998,7 @@ impl Parser<'_, '_> {
                 self.emit(d);
                 self.bump();
                 ds.invalid = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
+                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
                 true
             }
             _ => false,

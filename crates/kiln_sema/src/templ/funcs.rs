@@ -394,6 +394,9 @@ impl Sema<'_, '_> {
                         failures.push(n);
                     }
                 }
+                // An invalid template is not noted (clang
+                // `TemplateDeductionResult::Invalid`).
+                Err(f) if f.tdk == crate::templ::deduce::Tdk::Invalid => {}
                 Err(f) => failures.push(self.deduction_note(ft, &f, self.loc_of(ft))),
             }
         }

@@ -717,6 +717,9 @@ impl<'a> AstNames<'a> {
                 if let Some(q) = exprs.decl_ref_extra(e).and_then(|x| x.qualifier) {
                     write_nns(&ast.types, self, q, out);
                 }
+                if ast.templates.template_kw.contains(e) {
+                    out.push_str("template ");
+                }
                 self.write_name(exprs.decl(e), out);
                 // clang `VisitDeclRefExpr`: explicit template arguments as
                 // written (`n::same<n::A, n::A>`).
@@ -1174,11 +1177,17 @@ impl<'a> AstNames<'a> {
             // `VisitUnresolvedLookupExpr`: `N::name<args>`.
             ExprKind::DependentScopeDeclRefExpr => {
                 write_nns(&ast.types, self, crate::ids::NnsId::new(n.a()), out);
+                if ast.templates.template_kw.contains(e) {
+                    out.push_str("template ");
+                }
                 self.dependent_name(e, ast.dependent_scope_ref_name(e), out);
             }
             ExprKind::UnresolvedLookupExpr => {
                 if let Some(&nns) = ast.templates.expr_nns.get(e) {
                     write_nns(&ast.types, self, nns, out);
+                }
+                if ast.templates.template_kw.contains(e) {
+                    out.push_str("template ");
                 }
                 self.dependent_name(e, ast.unresolved_name(e), out);
             }

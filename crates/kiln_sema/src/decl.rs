@@ -4054,6 +4054,13 @@ impl Sema<'_, '_> {
             }
             return;
         }
+        // clang `AddInitializerToDecl`: the initializer of an invalid
+        // variable is not checked against its type (`S::name &r = 1;`
+        // with no `S::name`: the type recovered to `int`, WP-308).
+        if vn.has(DeclFlags::INVALID) {
+            self.discard_initializer(&init);
+            return;
+        }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
         if self.extern_init_redefines(v, spec, loc) {
@@ -4509,7 +4516,11 @@ impl Sema<'_, '_> {
             return;
         }
         let vn = *self.ast.decls.get(v);
-        if vn.kind() != DeclKind::Var || vn.has(DeclFlags::INVALID) {
+        if vn.kind() != DeclKind::Var {
+            return;
+        }
+        if vn.has(DeclFlags::INVALID) {
+            self.invalid_reference_uninit(v);
             return;
         }
         // An in-class static data member declaration is not a definition
@@ -4610,6 +4621,30 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_default_init_const, loc).arg(self.ty_arg(ty));
             self.emit(msg);
         }
+    }
+
+    /// An invalid variable definition without an initializer: clang's
+    /// `ActOnUninitializedDecl` still reports a reference type before it
+    /// stops at the invalid declaration, so `S::name &r;` with no
+    /// `S::name` (whose type recovers to `int`, [dcl.type.simple]) reports
+    /// "declaration of reference variable 'r' requires an initializer"
+    /// after "no type named 'name' in 'S'" (WP-308).
+    fn invalid_reference_uninit(&mut self, v: DeclId) {
+        let vn = *self.ast.decls.get(v);
+        let Some(ty) = vn.ty() else { return };
+        let extern_ = self.ast.decls.var(v).is_some_and(|x| x.spec.storage() == VarStorage::Extern);
+        if extern_
+            || !self.is_var_definition(v)
+            || self.is_error_type(ty)
+            || self.ast.types.is_dependent(ty)
+            || !self.ast.types.is_reference(ty)
+            || self.contains_undeduced_auto(ty)
+        {
+            return;
+        }
+        let name = self.decl_name(v);
+        let msg = self.diag(DiagId::sema_reference_var_requires_init, vn.loc()).arg(name);
+        self.emit(msg);
     }
 
     // -- function definitions ----------------------------------------------------

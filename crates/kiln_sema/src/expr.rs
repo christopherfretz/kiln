@@ -1342,13 +1342,21 @@ impl Sema<'_, '_> {
                 return self.act_on_undeclared_call_name_dn(name, loc);
             }
             let text = self.decl_name_str(name);
-            let msg = match qualifier {
+            match qualifier {
+                // clang reports it through delayed typo correction, at the
+                // end of the full-expression.
                 Some(q) => {
-                    self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q))
+                    let msg = self
+                        .diag(DiagId::sema_no_member, loc)
+                        .arg(text)
+                        .arg(self.qualifier_desc(q));
+                    self.emit_delayed_typo(msg);
                 }
-                None => self.diag(Self::undeclared_use_id(name), loc).arg(text),
-            };
-            self.emit(msg);
+                None => {
+                    let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
+                    self.emit(msg);
+                }
+            }
             return self.recover_err(&[], loc);
         };
         if found.decls.len() > 1
