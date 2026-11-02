@@ -2,11 +2,13 @@
 // constant evaluation runs the compound statement and never a handler
 // ([expr.const]/10: a throw-expression, even one a handler would catch, is
 // not a core constant expression). Matches clang 19 EvaluateStmt.
+// Pinned to C++23: in C++26 a caught or uncaught throw is evaluated (P3068).
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 43:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 36:12 note "subexpression not valid in a constant expression"
-//@ diag: 43:15 note "in call to 'c(2)'"
+//@ diag: 45:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 38:12 note "subexpression not valid in a constant expression"
+//@ diag: 45:15 note "in call to 'c(2)'"
 constexpr int a(int x) {
   try {
     int y = x * 2;

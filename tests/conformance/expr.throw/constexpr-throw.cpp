@@ -1,5 +1,5 @@
-// [expr.const]/10: evaluating a throw-expression is not a core constant
-// expression (clang 19 predates P3068); an unevaluated arm is fine.
+// [expr.const]/10 before C++26 (P3068): a throw-expression is not constant.
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 10:15 error "constexpr variable 'bad' must be initialized by a constant expression"

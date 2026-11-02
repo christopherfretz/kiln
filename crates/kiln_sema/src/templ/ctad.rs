@@ -57,6 +57,22 @@ pub(crate) enum GuideOrigin {
     Aggregate,
 }
 
+/// A guide formed from a guide of a base class template whose
+/// constructors a class template inherits ([over.match.class.deduct]/1,
+/// P2582; spec/sema-templates.md §6.6.1).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InheritedGuide {
+    /// The inheriting class template.
+    pub(crate) class: DeclId,
+    /// The base as written in its base-specifier (`B`).
+    pub(crate) base: QualType,
+    /// `Some(R)`: the guide's return type is already `CC<R>::type`, and
+    /// `R` (the source guide's return type, transformed) is what its
+    /// deducibility constraint names. `None`: the return type is `R`,
+    /// mapped to `CC<R>::type` when the guide is selected.
+    pub(crate) source_ret: Option<QualType>,
+}
+
 /// The signature of an implicit guide being formed.
 struct GuideShape<'p> {
     ret: QualType,
@@ -1066,12 +1082,22 @@ impl Sema<'_, '_> {
                 return Some(Vec::new());
             }
             let mut inner = self.ctad_guides(target, init, level + 1, name_loc)?;
-            // An inherited constructor's guide returns a specialization of
-            // a base, not of `target` (follow-up).
-            inner.retain(|&g| !self.is_inherited_guide(g));
-            return Some(
-                inner.into_iter().filter_map(|g| self.alias_guide(tmpl, rhs, g)).collect(),
-            );
+            // An inherited constructor's guide whose return type is still
+            // the base's specialization (§6.6.1) cannot be transformed.
+            inner.retain(|&g| !self.is_late_inherited_guide(g));
+            let mut out = Vec::with_capacity(inner.len());
+            for g in inner {
+                let Some(ng) = self.alias_guide(tmpl, rhs, g) else { continue };
+                // P2582: a guide formed from an inherited constructor's
+                // stays one ([over.match.best.general]/2.10).
+                if ng != g
+                    && let Some(&ig) = self.templ.ctad_inherited.get(&g)
+                {
+                    let _ = self.templ.ctad_inherited.insert(ng, ig);
+                }
+                out.push(ng);
+            }
+            return Some(out);
         }
         let mut guides = self.implicit_guides(tmpl, name_loc);
         let user = self.user_guides(tmpl);
@@ -1137,7 +1163,7 @@ impl Sema<'_, '_> {
             return r;
         }
         let r = if self.kind_of(g) == DeclKind::FunctionTemplate {
-            self.build_alias_guide(alias, rhs, g)
+            self.build_alias_guide(alias, rhs, g, false).map(|r| r.0)
         } else {
             // A non-template guide: its return type is not dependent, so
             // its deducibility constraint is decided here.
@@ -1156,8 +1182,21 @@ impl Sema<'_, '_> {
     /// constraints are `g`'s with the deductions substituted. Its
     /// deducibility constraint is checked by
     /// [`Sema::deduce_call`](crate::Sema) through `templ.ctad_alias`.
+    ///
+    /// `inherited`: `alias` is a class template inheriting constructors
+    /// from base `rhs` (P2582, §6.6.1). The new guide's return type `R`
+    /// is then replaced by `CC<R>::type` when the class template's
+    /// arguments deduce from `R` here: that implies the deducibility
+    /// constraint, which is not recorded, and `R` is returned beside the
+    /// guide for its notes. Otherwise the return type stays `R`.
     #[allow(clippy::too_many_lines, reason = "the [over.match.class.deduct]/3 steps in order")]
-    fn build_alias_guide(&mut self, alias: DeclId, rhs: QualType, g: DeclId) -> Option<DeclId> {
+    pub(super) fn build_alias_guide(
+        &mut self,
+        alias: DeclId,
+        rhs: QualType,
+        g: DeclId,
+        inherited: bool,
+    ) -> Option<(DeclId, Option<QualType>)> {
         use crate::templ::deduce::{DeducedArgs, TdfFlags};
         let f = self.pattern_of(g)?;
         let gl = *self.ast.templates.param_list(self.ast.template_info(g)?.params);
@@ -1346,12 +1385,17 @@ impl Sema<'_, '_> {
                 }
             }
             let nret = s.ty(ret, loc)?;
+            let cc = if inherited {
+                s.sema.inherited_guide_result(alias, rhs, nret, gl.depth, &new_ps)
+            } else {
+                None
+            };
             let cparams: Vec<DeclId> = match s.sema.ast.decls.function(f) {
                 Some(fd) if aligned => s.sema.ast.lists.iter::<DeclId>(fd.params).collect(),
                 _ => Vec::new(),
             };
             let shape = GuideShape {
-                ret: nret,
+                ret: cc.unwrap_or(nret),
                 cparams: &cparams,
                 ptys: &nptys,
                 variadic,
@@ -1372,10 +1416,10 @@ impl Sema<'_, '_> {
             }
             let trailing = s.sema.ast.templates.trailing_requires.get(f).copied();
             let req = ctad_guide_requires(&mut s, [gl.requires, trailing], loc)?;
-            Ok::<_, SubstFail>((nf, req))
+            Ok::<_, SubstFail>((nf, req, cc.map(|_| nret)))
         })();
         self.ast.templates.dependent_depth = saved;
-        let (nf, requires) = built.ok()?;
+        let (nf, requires, source_ret) = built.ok()?;
         if let Some(r) = requires {
             let _ = self.ast.templates.trailing_requires.insert(nf, r);
         }
@@ -1391,8 +1435,10 @@ impl Sema<'_, '_> {
         if let Some(&o) = self.templ.ctad_origin.get(&g) {
             let _ = self.templ.ctad_origin.insert(ng, o);
         }
-        let _ = self.templ.ctad_alias.insert(ng, (alias, rhs));
-        Some(ng)
+        if source_ret.is_none() {
+            let _ = self.templ.ctad_alias.insert(ng, (alias, rhs));
+        }
+        Some((ng, source_ret))
     }
 
     /// Which of the `n` template parameters of depth `depth` the deduced
@@ -1897,12 +1943,22 @@ impl Sema<'_, '_> {
             }
         }
         out.push_str("> ");
-        if let Some(&(alias, _)) = self.templ.ctad_alias.get(&g) {
+        let deducible = match self.templ.ctad_alias.get(&g) {
             // clang names the guide's return type, which is the alias's
             // defining-type-id only when all of it was deduced.
+            Some(&(alias, _)) => {
+                let ty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
+                Some((
+                    alias,
+                    self.ast.types.proto_of(ty.ty()).map_or(QualType::ERROR, FuncProto::ret),
+                ))
+            }
+            // A guide from an inherited constructor returns `CC<R>::type`
+            // (§6.6.1); its constraint names `R`.
+            None => self.templ.ctad_inherited.get(&g).and_then(|i| Some((i.class, i.source_ret?))),
+        };
+        if let Some((alias, ret)) = deducible {
             let n = self.decl_name_str(self.ast.decls.get(alias).name());
-            let ty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
-            let ret = self.ast.types.proto_of(ty.ty()).map_or(QualType::ERROR, FuncProto::ret);
             let r = self.ty_str(ret);
             let _ = std::fmt::Write::write_fmt(
                 &mut out,

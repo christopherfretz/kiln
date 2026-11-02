@@ -419,7 +419,8 @@ fn execute(opts: &Options) -> Result<bool, String> {
         return Err("no tests selected".into());
     }
     let cfg_cache = load_local_cfgs(&test_root, &tests);
-    let features = features::detect();
+    let features = features::detect(&toolchain.libcxx_include());
+    let libcxx_version = features::libcxx_version(&toolchain.libcxx_include());
     let feature_refs: Vec<&str> = features.iter().map(String::as_str).collect();
 
     if opts.list {
@@ -428,7 +429,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
             let kind =
                 p.file_name().and_then(|n| n.to_str()).and_then(Kind::of).unwrap_or(Kind::Pass);
             let text = std::fs::read_to_string(p).unwrap_or_default();
-            let verdict = match run::env_unsupported(rel, &target).map_or_else(
+            let verdict = match run::env_unsupported(rel, &target, libcxx_version).map_or_else(
                 || run::prepare(kind, &text, &local_cfgs(&cfg_cache, &test_root, p), &feature_refs),
                 |r| Err(Outcome::Unsupported(r)),
             ) {
@@ -470,6 +471,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
         llvm_dir: toolchain.llvm_dir(),
         resource_dir: root.join("resource"),
         features: features.clone(),
+        libcxx_version,
         compile_timeout: opts.compile_timeout(),
         run_timeout: opts.run_timeout,
         long_run_timeout: opts.long_run_timeout,
