@@ -278,6 +278,15 @@ impl Sema<'_, '_> {
         }
         let base = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
         let mut ty = self.type_for_declarator_at(base, lbracket, &d);
+        // [temp.variadic]/5: a parameter or return type naming a pack it
+        // does not expand (`[](Ts a) {}`, also after the varargs `...` of
+        // `[](Ts a...)`) makes the lambda-expression contain an
+        // unexpanded pack (clang `ActOnStartOfLambdaDefinition`).
+        if self.has_unexpanded_pack(ty)
+            && let Some(top) = self.lambdas.last_mut()
+        {
+            top.has_packs = true;
+        }
         // clang `getDummyLambdaType`: with no parameter-declaration-clause
         // the call operator's type is `auto () const -> R`.
         if !specs.explicit_params

@@ -1158,13 +1158,17 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The template name of the first template-id in `a`'s sugar (clang's
-    /// `getAs<TemplateSpecializationType>`), as written.
+    /// The template name of the first class template-id in `a`'s sugar
+    /// (clang's `getAs<TemplateSpecializationType>`), as written. An alias
+    /// template-id is looked through to the type it names
+    /// ([temp.alias]/2; clang's `getLastTemplateSpecType`): `A<int>` for
+    /// `template<class T> using A = S<T>` is a template-id of `S`, so a
+    /// base written `A<T>` deduces against `S` ([temp.deduct.call]/4.3).
     fn written_template_name(&self, a: QualType) -> Option<kiln_ast::ids::TemplateNameId> {
         let t = &self.ast.types;
         let mut q = a;
         loop {
-            if let TypeView::TemplateSpecialization { name, .. } = t.view(q.ty()) {
+            if let TypeView::TemplateSpecialization { name, alias: false, .. } = t.view(q.ty()) {
                 return Some(name);
             }
             let n = t.desugar_once(q);
@@ -1336,6 +1340,21 @@ impl Sema<'_, '_> {
             Tdk::Incomplete => {
                 let i = d.info.param.or_else(|| d.first_undeduced())?;
                 Some(self.diag(DiagId::note_deduction_incomplete, loc).arg(param_name(i)))
+            }
+            // An expanded parameter pack deduced short ([temp.variadic]/5;
+            // clang's `TDK_IncompletePack`): `first` is the deduced pack.
+            Tdk::IncompletePack => {
+                let pack = d.info.first?;
+                let n = match pack.view() {
+                    ArgView::Pack(l) => self.ast.types.args(l).len(),
+                    _ => 0,
+                };
+                Some(
+                    self.diag(DiagId::note_deduction_incomplete_pack, loc)
+                        .arg(param_name(d.info.param?))
+                        .arg(crate::expr::ordinal(n + 1))
+                        .arg(self.deduced_arg_str(pack)),
+                )
             }
             Tdk::Underqualified => {
                 let (ArgView::Type(p), ArgView::Type(a)) =

@@ -768,10 +768,30 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   parameter (no varargs there) every such `...` is the error, unexpanded
   pack or not (`template<int a...>`); `Ts......a` then fails at `a`
   (`expected ')'` / `expected ',' or '>' in template-parameter-list`).
-  clang emits the error inside the declarator, kiln right after the
-  parameter's Sema action (any type diagnostic of the parameter comes
-  first). Tests: `dcl.fct/misplaced-pack-ellipsis.cpp` (function,
-  member, friend and lambda parameters), `temp.param/misplaced-pack-ellipsis.cpp`.
+  As in clang, which emits the error inside the declarator, the check is
+  syntactic and runs before the parameter's Sema action
+  (`Sema::declarator_has_unexpanded_pack(ds, d)`, clang's
+  `containsUnexpandedParameterPacks(Declarator&)`: the named type, an
+  array bound, a function chunk's parameter types, `noexcept` operand or
+  trailing return type), so the error precedes any diagnostic of the
+  parameter's type or specifiers (WP-385), and the `...` is the
+  declarator's own from then on. Known gap: when that type diagnostic
+  makes the type invalid (`Ts a[-1]...`), clang's recovered type is `int`
+  and it adds `type 'int' of function parameter pack does not contain any
+  unexpanded parameter packs`; kiln's error type suppresses that
+  follow-on. Tests: `dcl.fct/misplaced-pack-ellipsis.cpp` (function,
+  member, friend and lambda parameters), `temp.param/misplaced-pack-ellipsis.cpp`,
+  `dcl.fct/misplaced-pack-ellipsis-order.cpp` (the order with a second
+  error).
+  In a lambda, `[](Ts a...)` keeps the varargs reading, so the lambda's
+  call operator names the unexpanded `Ts`: the enclosing initializer is
+  then "initializer contains unexpanded parameter pack 'Ts'" ("expression
+  contains ..." for an expression statement; spec/sema-templates.md §2.7; `temp.variadic/p5-lambda-param-unexpanded.cpp`).
+  An abstract declarator's location (`Declarator::abstract_at`, used by
+  the -Wambiguous-ellipsis "place '...' here" note) is where its identifier would go
+  at the innermost position, as clang's identifier location: set by
+  `parse_direct_declarator` when nothing names it, else the first array
+  bound or the next token (WP-385).
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
@@ -873,8 +893,16 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   one is resolved at instantiation, and a type that is not a class is
   `constructor initializer ... does not name a class` in sema;
   `decltype(auto)` is `'decltype(auto)' not allowed here` and counts as
-  a failed initializer, `QualType::ERROR`); qualified non-types are
-  unsupported. All initializers go to
+  a failed initializer, `QualType::ERROR`, so no implicit base or member
+  initializers are added — a constant evaluation of that constructor
+  sees the bases it does not initialize as never constructed); qualified
+  non-types are unsupported. Known Oven gap (WP-385, same for
+  `decltype(t)(t)` naming a non-class in a non-template): clang reports
+  `constructor of base class 'B' is not called` at the base-specifier and
+  a later read of a base member as `read of object outside its
+  lifetime`; the Oven models the unconstructed base's fields as
+  uninitialized instead (`subobject 'v' is not initialized`, `read of
+  uninitialized object`). The parse and Sema sides match clang. All initializers go to
   one `act_on_mem_initializers(ctor, inits, colon)`; a constructor
   without a ctor-initializer gets an empty slice at its `{`. A
   ctor-initializer on a non-constructor is `only constructors take base
@@ -1266,7 +1294,19 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     each run of `[[...]]`/`alignas` specifiers is parsed, dropped and
     reported once as `an attribute list cannot appear here` at its
     start (clang `DiagnoseAndSkipCXX11Attributes`); GNU attributes
-    between them are kept (`parse_member_tail_attrs`; WP-324)
+    between them are kept (`parse_member_tail_attrs`; WP-324). The
+    same holds after a member function declarator's GNU attributes
+    (`void f() __attribute__((cold)) [[nodiscard]];`): only the
+    `[[...]]`/`alignas` run right after the parameter clause is the
+    function type's (WP-381). Outside a class, after a declarator's asm
+    label only GNU attributes follow (clang `ParseDeclGroup`,
+    `ParseAsmAttributesAfterDeclarator`): a C++11 run there ends the
+    declarator, so at namespace scope a first function declarator gets
+    `expected function body after function declarator` and the
+    declaration is skipped through its `;`, and any other declarator
+    `expected ';' after top level declarator` (`expected ';' at end of
+    declaration` at block scope)
+    (`tests/conformance/dcl.attr.grammar/attribute-list-after-gnu-attributes.cpp`)
   - between decl-specifiers (clang `ProhibitAttributes` in
     `ParseDeclarationSpecifiers`), at the end of the decl-specifier-seq
     ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1), after

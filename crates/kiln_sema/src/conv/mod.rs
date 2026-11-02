@@ -694,7 +694,16 @@ fn bind_reference(
         || (rq.contains(fq) && s.unknown_bound_of(r_un, f_un))
         || function_ref_compatible(s, r_un, f_un);
     let base = match (s.ast.types.as_record(f_un), s.ast.types.as_record(r_un)) {
-        (Some(d), Some(b)) if !same => find_base(s, d, b),
+        (Some(d), Some(b)) if !same => {
+            // The relation needs the initializer's class complete: a class
+            // template specialization is instantiated here ([temp.inst]/2;
+            // clang `isCompleteType(Loc, T2)` in
+            // `CompareReferenceRelationship`), so `S<int>& r = d;` binds a
+            // `D<int>` nothing else has completed.
+            let at = s.begin_loc(e);
+            let _ = s.require_complete_silent(f_un, at);
+            find_base(s, d, b)
+        }
         _ => BaseSearch::NotDerived,
     };
     let related = same || base.is_derived();
