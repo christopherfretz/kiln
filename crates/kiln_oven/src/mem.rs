@@ -11,8 +11,10 @@
 //!
 //! Each space keeps, per 8-byte granule, a byte-granular initialization
 //! mask (bit `i` = byte `i` of the granule holds a value) and a pointer
-//! mark (the granule holds a pointer, whose bytes are an encoded
-//! [`Ptr`]). Allocations start on a granule boundary.
+//! mark (nonzero: the granule holds a pointer, whose bytes are an encoded
+//! [`Ptr`]; 2 and up: a `void *` whose designated type is
+//! [`Memory::void_tag`] of the mark, spec/oven.md "Construction").
+//! Allocations start on a granule boundary.
 //!
 //! A pointer is a `u64`: `offset (32) | past-end (1) | slot (22) | gen (9)`.
 //! Null is 0 (frame slot 0 is never used). Slot numbers with bit 21 set
@@ -44,6 +46,8 @@ pub(crate) const FN_SLOT: u32 = (1 << 22) - 1;
 /// [`Alloc::base`] of a static allocation that holds no bytes
 /// ([`Memory::alloc_unbacked`]).
 pub(crate) const UNBACKED: u32 = u32::MAX;
+/// The first pointer mark of a tagged `void *` ([`Memory::void_mark`]).
+pub(crate) const PTR_TAGGED: u8 = 2;
 
 /// A decoded pointer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -255,7 +259,8 @@ pub(crate) struct Space {
     pub bytes: Vec<u8>,
     /// Per granule: bit i = byte i is initialized.
     pub init: Vec<u8>,
-    /// Per granule: holds a pointer.
+    /// Per granule: holds a pointer (nonzero; [`PTR_TAGGED`] and up: a
+    /// tagged `void *`, [`Memory::void_tag`]).
     pub ptr: Vec<u8>,
     /// Per granule: bit i = byte i is within the lifetime of an object.
     /// Meaningful for [`flags::TRACKED`] allocations only, and empty
@@ -353,6 +358,18 @@ impl Space {
         let g0 = abs / GRAN;
         let g1 = (abs + len.max(1) - 1) / GRAN;
         self.ptr[g0 as usize..=g1 as usize].fill(u8::from(v));
+    }
+
+    /// The pointer mark of the granule holding `abs`.
+    pub fn ptr_mark(&self, abs: u64) -> u8 {
+        self.ptr[(abs / GRAN) as usize]
+    }
+
+    /// Sets the pointer mark of the granules overlapping the range.
+    pub fn set_ptr_mark(&mut self, abs: u64, len: u64, m: u8) {
+        let g0 = abs / GRAN;
+        let g1 = (abs + len.max(1) - 1) / GRAN;
+        self.ptr[g0 as usize..=g1 as usize].fill(m);
     }
 
     pub fn read(&self, abs: u64, len: u64) -> u128 {
@@ -479,6 +496,12 @@ pub(crate) struct Memory {
     /// or assignment naming another is accepted (WP-233). Cleared with the
     /// entry by [`Memory::union_put`].
     pub union_alts: FxHashMap<UKey, u64>,
+    /// The designated types of the `void *` values stored to memory
+    /// (`kbc::VOID_TAG`), interned: pointer mark `PTR_TAGGED + i` is
+    /// `vtags[i]`. Append-only for the translation unit (a rolled-back or
+    /// copied mark stays valid) and at most `256 - PTR_TAGGED` long.
+    vtags: Vec<OTy>,
+    vtag_ix: FxHashMap<OTy, u8>,
     /// Bytes allocated (cumulative, granule-rounded; frame and heap).
     pub allocated: u64,
     /// Peak live bytes: `frame.top + heap_live`.
@@ -531,6 +554,8 @@ impl Memory {
             ctx: 0,
             unions: FxHashMap::default(),
             union_alts: FxHashMap::default(),
+            vtags: Vec::new(),
+            vtag_ix: FxHashMap::default(),
             allocated: 0,
             peak: 0,
             arena_peak: 0,
@@ -539,6 +564,29 @@ impl Memory {
             serial: 0,
             life_frame: false,
             trial: Trial::default(),
+        }
+    }
+
+    /// The pointer mark for a pointer register's tag bits (`v >> 64`,
+    /// `kbc::VOID_TAG`: a type + 1, or 0): 1 when untagged, else the
+    /// tag's interned mark, or 1 once every mark is taken (the `void *`
+    /// then falls back as an untagged one does).
+    pub fn void_mark(&mut self, tag: u32) -> u8 {
+        let Some(t) = tag.checked_sub(1).map(OTy) else { return 1 };
+        if let Some(&m) = self.vtag_ix.get(&t) {
+            return m;
+        }
+        let Ok(m) = u8::try_from(self.vtags.len() + usize::from(PTR_TAGGED)) else { return 1 };
+        self.vtags.push(t);
+        self.vtag_ix.insert(t, m);
+        m
+    }
+
+    /// The register tag bits (a type + 1, or 0) of pointer mark `m`.
+    pub fn void_tag(&self, m: u8) -> u32 {
+        match m.checked_sub(PTR_TAGGED) {
+            Some(i) => self.vtags[usize::from(i)].0 + 1,
+            None => 0,
         }
     }
 
@@ -559,6 +607,8 @@ impl Memory {
             + self.bins.footprint()
             + self.unions.capacity() * (size_of::<(UKey, u32)>() + 1)
             + self.union_alts.capacity() * (size_of::<(UKey, u64)>() + 1)
+            + self.vtags.capacity() * size_of::<OTy>()
+            + self.vtag_ix.capacity() * (size_of::<(OTy, u8)>() + 1)
             + self.trial.footprint()
     }
 
