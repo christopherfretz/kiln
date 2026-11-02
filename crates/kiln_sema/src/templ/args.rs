@@ -410,6 +410,54 @@ impl Sema<'_, '_> {
         Ok(())
     }
 
+    /// The definition-time part of the argument check for a template-id
+    /// whose arguments are dependent (spec/sema-templates.md §4.7): an
+    /// argument for a template template parameter must name a template
+    /// whatever the dependence ([temp.arg.template]/1). clang runs
+    /// `CheckTemplateArgumentList` on dependent arguments too, so `H<T>`,
+    /// `H<N>` and `H<Y<T>>` are rejected at the argument when the
+    /// enclosing template is defined. Alignment stops at the first pack
+    /// expansion (it may cover any number of parameters).
+    pub(crate) fn check_dependent_template_template_args(
+        &self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        arg_locs: &[Loc],
+        loc: Loc,
+    ) -> Result<(), ()> {
+        let params = self.template_params(self.head_template(tmpl));
+        let mut wi = 0usize;
+        for &p in &params {
+            if self.templ.expanded_packs.contains_key(&p) {
+                return Ok(());
+            }
+            let pack = self.ast.template_parm(p).is_some_and(|x| x.pack);
+            let ttp = self.kind_of(p) == DeclKind::TemplateTemplateParm;
+            while wi < args.len() {
+                let a = args[wi];
+                if self.is_pack_expansion_arg(a) {
+                    return Ok(());
+                }
+                let named = match a.view() {
+                    ArgView::Template(_) | ArgView::Null => true,
+                    // Diagnosed when it was formed.
+                    ArgView::Expr { expr, .. } => self.is_err_expr(expr),
+                    _ => false,
+                };
+                if ttp && !named {
+                    let at = arg_locs.get(wi).copied().unwrap_or(loc);
+                    self.error(DiagId::sema_template_arg_must_be_template, at);
+                    return Err(());
+                }
+                wi += 1;
+                if !pack {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
         // clang prints the `TemplateDecl` unqualified: `A`, also for a
         // member template of a specialization (`O<int, char>::A`).

@@ -1539,9 +1539,15 @@ class name" at `B`
   the injected type there (libc++ `__split_buffer:160`
   `__split_buffer_pointer_layout<__split_buffer<…>, …>`, WP-398). Test:
   `tests/conformance/temp.local/injected-class-name-template-template-arg.cpp`.
-  Gap: `H<Y<T>>` (a specialization, not a template) for a template
-  template parameter is diagnosed only at instantiation, clang at the
-  definition.
+  An argument that does not name a template for a template template
+  parameter — `H<Y<T>>` (a specialization), `H<T>`, `H<N>`,
+  `H<T::X>` without `template` — is rejected when the enclosing template
+  is defined, at the argument, even though the arguments are dependent
+  (`check_dependent_template_template_args`, run by `template_id` before
+  it forms the dependent specialization; clang's
+  `CheckTemplateArgumentList` runs on dependent arguments too, WP-404).
+  Alignment stops at the first pack expansion. Test:
+  `tests/conformance/temp.arg.template/dependent-non-template-argument.cpp`.
 - A template argument `ns::A` or `C::A` whose qualifier is a namespace
   or the class `A` is a member of finds the template itself, never an
   injected-class-name, so inside `A`'s own definition it is a template
