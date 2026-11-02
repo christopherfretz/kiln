@@ -2093,10 +2093,29 @@ formed it:
      WP-161). Each element of the trailing function parameter pack is
      such a pair with the pattern as P, except the explicit elements
      of a pack the pattern alone names (§6.4). The note prints the
-     reference/pointer-stripped deduced type, as clang does, as a
-     template type diff pair (`'pr<[...], char>'`, `Sema::ty_diff`).
-     This check follows the constraint check, as clang's
-     `CheckOriginalCallArgDeduction` follows it.
+     reference-stripped deduced type, and pointer-stripped only when A
+     points to a class (/4.3), as clang does, as a template type diff
+     pair (`'pr<[...], char>'`, `Sema::ty_diff`). This check follows the
+     constraint check, as clang's `CheckOriginalCallArgDeduction`
+     follows it.
+   - /4.2 (WP-294): every call argument deduces with
+     `TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE`, kept through pointers
+     and member pointers (not into a function type's return or
+     parameter types). A function type `P` then matches `A` regardless
+     of a non-deduced `noexcept` (clang's type match ignores it;
+     `noexcept(b)` with a deducible `b` is still deduced), and the
+     deduced A check accepts a function pointer conversion of a pointer
+     or member pointer, or a function lvalue whose type differs only by
+     `noexcept`. Adding `noexcept`, or a mismatch below a second pointer,
+     fails that check ("deduced type 'void (**)(int)' of 1st parameter
+     does not match adjusted type 'void (**)(int) noexcept' of
+     argument"). libstdc++'s `__gnu_cxx::__stoa(&std::wcstol, ...)`
+     relies on it
+     (`tests/conformance/temp.deduct.call/noexcept-function-pointer-argument.cpp`,
+     `libstdcxx-deduce-noexcept-fnptr.cpp`).
+     Deviation: binding `void (&)(int)` to a `noexcept` function is not
+     yet reference-compatible in kiln ([dcl.init.ref]/4, `ics.rs`
+     `ref_related`), so such a call is "not viable" after deduction.
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
    the `FunctionTemplateSpecialization` decl. It has the substituted
    type and is a declaration only.
@@ -2440,6 +2459,19 @@ For `template<> R f<args>(params)` or `template<> R f(params)`, and for
 `template R f(params);`:
 1. Collect the function templates named `f` in the scope.
 2. Deduce each one from the declared function type ([temp.deduct.decl]).
+   An explicit instantiation that writes no exception specification
+   takes each template's non-dependent nothrow one first ([temp.explicit]/9,
+   [except.spec]/2; clang `adjustCCAndNoReturn(..., AdjustExceptionSpec)`;
+   WP-294, libstdc++'s `extern template bool has_facet<...>(const
+   locale&)` of a `throw()` template,
+   `tests/conformance/temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp`).
+   Deviations: a written mismatching specification is "does not refer
+   to a function template" where clang says "exception specification in
+   explicit instantiation does not match instantiated one"; an explicit
+   specialization differing only in its exception specification is "no
+   function template matches" where clang matches it and reports the
+   redeclaration mismatch; a template with a dependent `noexcept(expr)`
+   does not match an instantiation without one.
 3. Take the most specialized of those that succeed (§6.7).
 4. If none or several remain, the errors are clang's: "no function
    template matches function template specialization 'f'" and

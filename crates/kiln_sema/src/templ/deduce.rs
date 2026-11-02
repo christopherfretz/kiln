@@ -1071,7 +1071,8 @@ impl Sema<'_, '_> {
         }
         // A call argument's (clang ignores a non-deduced mismatch there and
         // checks the deduced `A`, [temp.deduct.call]/4.2).
-        if pexc.is_nothrow() == a_nothrow || flags.contains(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE)
+        if pexc.is_nothrow() == a_nothrow
+            || flags.contains(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE)
         {
             Tdk::Success
         } else {

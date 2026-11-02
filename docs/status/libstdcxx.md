@@ -17,11 +17,11 @@ absolute numbers.
 
 ### `-std=c++26`
 
-**c++26: 64 of 109 headers ok with kiln (45 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.65 s / p95 6.89 s, peak RSS p50 19 MiB / p95 50 MiB; clang++-19 wall p50 0.10 s / p95 0.61 s, peak RSS p50 97 MiB / p95 146 MiB**
+**c++26: 68 of 109 headers ok with kiln (41 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.72 s / p95 7.01 s, peak RSS p50 20 MiB / p95 50 MiB; clang++-19 wall p50 0.10 s / p95 0.54 s, peak RSS p50 97 MiB / p95 147 MiB**
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `0a10ff9a` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `14493398` |
 | reference | `Debian clang version 19.1.7 (3+b1)` |
 | libstdc++ | `_GLIBCXX_RELEASE` 14, `__GLIBCXX__` 20250315 (`/usr/include/c++/14`) |
 | headers | extension-less files directly in the include directory; not compiled: subdirectories (`backward/`, `bits/`, `debug/`, `decimal/`, `experimental/`, `ext/`, `parallel/`, `pstl/`, `tr1/`, `tr2/`) and `.h`/`.tcc` files |
@@ -29,7 +29,7 @@ absolute numbers.
 | flags (both compilers) | `-std=c++26 -stdlib=libstdc++ -fsyntax-only -ferror-limit=0 t.cpp` (`t.cpp`: `#include <h>`) |
 | limits | 8192 MiB address space per compile (kiln: plus its stack reservation); timeout 120 s; -j 2 |
 | RSS source | `gnu-time` |
-| wall time | 114.6 s |
+| wall time | 114.0 s |
 
 #### Headers (`-std=c++26`)
 
@@ -37,148 +37,149 @@ absolute numbers.
 
 | header | kiln | errors | first error | clang++-19 | kiln wall | kiln RSS | clang wall | clang RSS |
 |---|---|---:|---|---|---:|---:|---:|---:|
-| `<algorithm>` | ok |  |  | ok | 1.20 s | 20 MiB | 0.14 s | 101 MiB |
-| `<any>` | ok |  |  | ok | 0.20 s | 16 MiB | 0.05 s | 89 MiB |
-| `<array>` | ok |  |  | ok | 0.50 s | 18 MiB | 0.09 s | 93 MiB |
-| `<atomic>` | ok |  |  | ok | 0.49 s | 19 MiB | 0.08 s | 93 MiB |
-| `<barrier>` | fail | 56 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.82 s | 44 MiB | 0.50 s | 140 MiB |
-| `<bit>` | ok |  |  | ok | 0.19 s | 16 MiB | 0.03 s | 88 MiB |
-| `<bitset>` | fail | 17 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.75 s | 28 MiB | 0.21 s | 109 MiB |
-| `<cassert>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.03 s | 83 MiB |
-| `<ccomplex>` | fail | 57 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 6.70 s | 50 MiB | 0.61 s | 145 MiB |
-| `<cctype>` | ok |  |  | ok | 0.04 s | 15 MiB | 0.03 s | 84 MiB |
+| `<algorithm>` | ok |  |  | ok | 1.18 s | 21 MiB | 0.14 s | 101 MiB |
+| `<any>` | ok |  |  | ok | 0.20 s | 16 MiB | 0.04 s | 89 MiB |
+| `<array>` | ok |  |  | ok | 0.50 s | 18 MiB | 0.07 s | 93 MiB |
+| `<atomic>` | ok |  |  | ok | 0.45 s | 19 MiB | 0.07 s | 93 MiB |
+| `<barrier>` | fail | 40 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.97 s | 46 MiB | 0.50 s | 140 MiB |
+| `<bit>` | ok |  |  | ok | 0.18 s | 16 MiB | 0.04 s | 88 MiB |
+| `<bitset>` | fail | 1 | `bitset:1358:9: error: no matching function for call to 'to_string'` | ok | 1.85 s | 28 MiB | 0.19 s | 109 MiB |
+| `<cassert>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<ccomplex>` | fail | 41 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 6.57 s | 50 MiB | 0.52 s | 145 MiB |
+| `<cctype>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.03 s | 84 MiB |
 | `<cerrno>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.03 s | 83 MiB |
-| `<cfenv>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.04 s | 83 MiB |
-| `<cfloat>` | ok |  |  | ok | 0.05 s | 13 MiB | 0.04 s | 83 MiB |
-| `<charconv>` | ok |  |  | ok | 0.29 s | 17 MiB | 0.07 s | 90 MiB |
-| `<chrono>` | fail | 61 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 8.51 s | 50 MiB | 0.72 s | 154 MiB |
-| `<cinttypes>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.04 s | 83 MiB |
-| `<ciso646>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.04 s | 83 MiB |
-| `<climits>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.03 s | 82 MiB |
-| `<clocale>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.04 s | 83 MiB |
-| `<cmath>` | ok |  |  | ok | 1.17 s | 24 MiB | 0.14 s | 100 MiB |
-| `<codecvt>` | fail | 20 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.29 s | 31 MiB | 0.24 s | 114 MiB |
-| `<compare>` | ok |  |  | ok | 0.21 s | 15 MiB | 0.04 s | 88 MiB |
-| `<complex>` | fail | 57 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 6.82 s | 50 MiB | 0.57 s | 145 MiB |
-| `<concepts>` | ok |  |  | ok | 0.17 s | 16 MiB | 0.05 s | 87 MiB |
-| `<condition_variable>` | fail | 62 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 7.91 s | 44 MiB | 0.64 s | 147 MiB |
-| `<coroutine>` | ok |  |  | ok | 0.24 s | 16 MiB | 0.10 s | 89 MiB |
-| `<csetjmp>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.05 s | 84 MiB |
-| `<csignal>` | ok |  |  | ok | 0.17 s | 14 MiB | 0.06 s | 85 MiB |
-| `<cstdalign>` | ok |  |  | ok | 0.07 s | 13 MiB | 0.05 s | 82 MiB |
-| `<cstdarg>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.04 s | 83 MiB |
-| `<cstdbool>` | ok |  |  | ok | 0.08 s | 13 MiB | 0.04 s | 83 MiB |
-| `<cstddef>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.04 s | 85 MiB |
-| `<cstdint>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.03 s | 83 MiB |
-| `<cstdio>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.04 s | 84 MiB |
-| `<cstdlib>` | ok |  |  | ok | 0.08 s | 15 MiB | 0.04 s | 85 MiB |
-| `<cstring>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.05 s | 83 MiB |
-| `<ctgmath>` | fail | 57 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 6.89 s | 51 MiB | 0.58 s | 145 MiB |
-| `<ctime>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.05 s | 84 MiB |
-| `<cuchar>` | ok |  |  | ok | 0.08 s | 14 MiB | 0.05 s | 84 MiB |
-| `<cwchar>` | ok |  |  | ok | 0.10 s | 14 MiB | 0.05 s | 84 MiB |
-| `<cwctype>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.05 s | 83 MiB |
-| `<deque>` | ok |  |  | ok | 1.03 s | 21 MiB | 0.13 s | 99 MiB |
-| `<exception>` | ok |  |  | ok | 0.19 s | 16 MiB | 0.05 s | 88 MiB |
-| `<execution>` | fail | 70 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 8.36 s | 51 MiB | 0.67 s | 158 MiB |
-| `<expected>` | ok |  |  | ok | 0.33 s | 17 MiB | 0.06 s | 91 MiB |
-| `<filesystem>` | fail | 60 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 7.21 s | 47 MiB | 0.63 s | 146 MiB |
-| `<format>` | fail | 54 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.48 s | 40 MiB | 0.59 s | 136 MiB |
-| `<forward_list>` | ok |  |  | ok | 0.99 s | 20 MiB | 0.17 s | 97 MiB |
-| `<fstream>` | fail | 69 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.93 s | 44 MiB | 0.46 s | 139 MiB |
-| `<functional>` | fail | 5 | `bits/std_function.h:558:2: error: call to 'swap' is ambiguous` | ok | 1.60 s | 23 MiB | 0.17 s | 107 MiB |
-| `<future>` | fail | 82 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 7.89 s | 50 MiB | 0.64 s | 154 MiB |
-| `<generator>` | fail | 100 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 3.02 s | 35 MiB | 0.39 s | 134 MiB |
-| `<initializer_list>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.03 s | 84 MiB |
-| `<iomanip>` | fail | 57 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.47 s | 44 MiB | 0.44 s | 138 MiB |
-| `<ios>` | fail | 28 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.43 s | 32 MiB | 0.25 s | 116 MiB |
-| `<iosfwd>` | ok |  |  | ok | 0.08 s | 15 MiB | 0.03 s | 85 MiB |
-| `<iostream>` | fail | 56 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.12 s | 43 MiB | 0.44 s | 138 MiB |
-| `<istream>` | fail | 56 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.07 s | 42 MiB | 0.45 s | 138 MiB |
-| `<iterator>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.20 s | 31 MiB | 0.24 s | 115 MiB |
-| `<latch>` | ok |  |  | ok | 0.38 s | 19 MiB | 0.07 s | 92 MiB |
+| `<cfenv>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.06 s | 83 MiB |
+| `<cfloat>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.03 s | 83 MiB |
+| `<charconv>` | ok |  |  | ok | 0.27 s | 17 MiB | 0.06 s | 89 MiB |
+| `<chrono>` | fail | 45 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 8.03 s | 51 MiB | 0.66 s | 154 MiB |
+| `<cinttypes>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 83 MiB |
+| `<ciso646>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 81 MiB |
+| `<climits>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.03 s | 83 MiB |
+| `<clocale>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.03 s | 83 MiB |
+| `<cmath>` | ok |  |  | ok | 1.06 s | 24 MiB | 0.12 s | 100 MiB |
+| `<codecvt>` | fail | 4 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.26 s | 32 MiB | 0.23 s | 114 MiB |
+| `<compare>` | ok |  |  | ok | 0.18 s | 16 MiB | 0.05 s | 88 MiB |
+| `<complex>` | fail | 41 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 6.29 s | 51 MiB | 0.53 s | 144 MiB |
+| `<concepts>` | ok |  |  | ok | 0.14 s | 16 MiB | 0.04 s | 87 MiB |
+| `<condition_variable>` | fail | 43 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 6.97 s | 48 MiB | 0.54 s | 147 MiB |
+| `<coroutine>` | ok |  |  | ok | 0.20 s | 16 MiB | 0.05 s | 89 MiB |
+| `<csetjmp>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.03 s | 83 MiB |
+| `<csignal>` | ok |  |  | ok | 0.09 s | 15 MiB | 0.03 s | 85 MiB |
+| `<cstdalign>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cstdarg>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cstdbool>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 83 MiB |
+| `<cstddef>` | ok |  |  | ok | 0.05 s | 15 MiB | 0.03 s | 85 MiB |
+| `<cstdint>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cstdio>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.03 s | 84 MiB |
+| `<cstdlib>` | ok |  |  | ok | 0.08 s | 14 MiB | 0.03 s | 85 MiB |
+| `<cstring>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.03 s | 84 MiB |
+| `<ctgmath>` | fail | 41 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 6.47 s | 50 MiB | 0.52 s | 145 MiB |
+| `<ctime>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cuchar>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.03 s | 84 MiB |
+| `<cwchar>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.03 s | 84 MiB |
+| `<cwctype>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.03 s | 83 MiB |
+| `<deque>` | ok |  |  | ok | 0.93 s | 21 MiB | 0.12 s | 99 MiB |
+| `<exception>` | ok |  |  | ok | 0.16 s | 16 MiB | 0.03 s | 88 MiB |
+| `<execution>` | fail | 54 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 7.91 s | 52 MiB | 0.62 s | 157 MiB |
+| `<expected>` | ok |  |  | ok | 0.29 s | 17 MiB | 0.05 s | 90 MiB |
+| `<filesystem>` | fail | 44 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 7.03 s | 48 MiB | 0.54 s | 147 MiB |
+| `<format>` | fail | 38 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.17 s | 42 MiB | 0.44 s | 136 MiB |
+| `<forward_list>` | ok |  |  | ok | 0.85 s | 21 MiB | 0.10 s | 98 MiB |
+| `<fstream>` | fail | 53 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.51 s | 44 MiB | 0.47 s | 138 MiB |
+| `<functional>` | fail | 5 | `bits/std_function.h:558:2: error: call to 'swap' is ambiguous` | ok | 1.43 s | 24 MiB | 0.17 s | 107 MiB |
+| `<future>` | fail | 60 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 7.90 s | 50 MiB | 0.60 s | 153 MiB |
+| `<generator>` | fail | 89 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 3.07 s | 36 MiB | 0.35 s | 134 MiB |
+| `<initializer_list>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.04 s | 83 MiB |
+| `<iomanip>` | fail | 41 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.54 s | 43 MiB | 0.46 s | 139 MiB |
+| `<ios>` | fail | 12 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.50 s | 33 MiB | 0.24 s | 116 MiB |
+| `<iosfwd>` | ok |  |  | ok | 0.06 s | 15 MiB | 0.02 s | 85 MiB |
+| `<iostream>` | fail | 40 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.27 s | 45 MiB | 0.43 s | 137 MiB |
+| `<istream>` | fail | 40 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.27 s | 44 MiB | 0.46 s | 137 MiB |
+| `<iterator>` | fail | 3 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.31 s | 30 MiB | 0.22 s | 115 MiB |
+| `<latch>` | ok |  |  | ok | 0.37 s | 18 MiB | 0.05 s | 92 MiB |
 | `<limits>` | ok |  |  | ok | 0.09 s | 15 MiB | 0.03 s | 85 MiB |
-| `<list>` | fail | 2 | `bits/stl_list.h:189:14: error: use of undeclared identifier '_Iter'` | ok | 0.84 s | 19 MiB | 0.10 s | 97 MiB |
-| `<locale>` | fail | 46 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.64 s | 33 MiB | 0.30 s | 118 MiB |
-| `<map>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 0.94 s | 21 MiB | 0.11 s | 99 MiB |
-| `<memory>` | fail | 61 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.67 s | 47 MiB | 0.44 s | 142 MiB |
-| `<memory_resource>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 1.34 s | 24 MiB | 0.18 s | 105 MiB |
-| `<mutex>` | fail | 3 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 0.83 s | 22 MiB | 0.10 s | 100 MiB |
-| `<new>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 85 MiB |
-| `<numbers>` | ok |  |  | ok | 0.12 s | 16 MiB | 0.03 s | 87 MiB |
-| `<numeric>` | ok |  |  | ok | 0.34 s | 18 MiB | 0.06 s | 91 MiB |
-| `<optional>` | ok |  |  | ok | 0.33 s | 17 MiB | 0.05 s | 92 MiB |
-| `<ostream>` | fail | 55 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 4.64 s | 45 MiB | 0.47 s | 137 MiB |
-| `<print>` | fail | 54 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 4.67 s | 42 MiB | 0.46 s | 137 MiB |
-| `<queue>` | ok |  |  | ok | 1.04 s | 22 MiB | 0.13 s | 103 MiB |
-| `<random>` | fail | 16 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.69 s | 35 MiB | 0.27 s | 123 MiB |
-| `<ranges>` | fail | 97 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.84 s | 35 MiB | 0.31 s | 133 MiB |
-| `<ratio>` | ok |  |  | ok | 0.15 s | 16 MiB | 0.04 s | 88 MiB |
-| `<regex>` | fail | 67 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 6.48 s | 48 MiB | 0.56 s | 151 MiB |
-| `<scoped_allocator>` | ok |  |  | ok | 0.61 s | 19 MiB | 0.08 s | 96 MiB |
-| `<semaphore>` | ok |  |  | ok | 0.65 s | 21 MiB | 0.11 s | 97 MiB |
-| `<set>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 0.89 s | 21 MiB | 0.11 s | 99 MiB |
-| `<shared_mutex>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 0.47 s | 19 MiB | 0.07 s | 94 MiB |
-| `<source_location>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 84 MiB |
-| `<span>` | ok |  |  | ok | 0.57 s | 19 MiB | 0.08 s | 95 MiB |
-| `<spanstream>` | fail | 57 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.00 s | 44 MiB | 0.45 s | 138 MiB |
-| `<sstream>` | fail | 57 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.05 s | 43 MiB | 0.44 s | 138 MiB |
-| `<stack>` | ok |  |  | ok | 0.88 s | 21 MiB | 0.11 s | 99 MiB |
-| `<stacktrace>` | fail | 58 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.07 s | 43 MiB | 0.42 s | 139 MiB |
-| `<stdexcept>` | fail | 16 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.58 s | 28 MiB | 0.16 s | 109 MiB |
-| `<stdfloat>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
-| `<stop_token>` | fail | 57 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 6.24 s | 46 MiB | 0.59 s | 145 MiB |
-| `<streambuf>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.05 s | 32 MiB | 0.25 s | 114 MiB |
-| `<string>` | fail | 16 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.65 s | 28 MiB | 0.18 s | 109 MiB |
-| `<string_view>` | ok |  |  | ok | 0.80 s | 21 MiB | 0.12 s | 99 MiB |
-| `<syncstream>` | fail | 58 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.47 s | 44 MiB | 0.47 s | 139 MiB |
-| `<system_error>` | fail | 16 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.90 s | 28 MiB | 0.20 s | 110 MiB |
-| `<text_encoding>` | ok |  |  | ok | 1.30 s | 26 MiB | 0.16 s | 105 MiB |
-| `<thread>` | fail | 58 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 6.88 s | 47 MiB | 0.57 s | 145 MiB |
-| `<tuple>` | ok |  |  | ok | 0.58 s | 19 MiB | 0.08 s | 95 MiB |
-| `<type_traits>` | ok |  |  | ok | 0.12 s | 16 MiB | 0.03 s | 87 MiB |
-| `<typeindex>` | ok |  |  | ok | 0.18 s | 16 MiB | 0.04 s | 89 MiB |
+| `<list>` | fail | 2 | `bits/stl_list.h:189:14: error: use of undeclared identifier '_Iter'` | ok | 0.80 s | 20 MiB | 0.10 s | 97 MiB |
+| `<locale>` | fail | 30 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.63 s | 32 MiB | 0.25 s | 117 MiB |
+| `<map>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 0.93 s | 21 MiB | 0.11 s | 99 MiB |
+| `<memory>` | fail | 45 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.83 s | 45 MiB | 0.46 s | 142 MiB |
+| `<memory_resource>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 1.26 s | 24 MiB | 0.16 s | 106 MiB |
+| `<mutex>` | fail | 3 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 0.88 s | 22 MiB | 0.13 s | 100 MiB |
+| `<new>` | ok |  |  | ok | 0.04 s | 15 MiB | 0.03 s | 84 MiB |
+| `<numbers>` | ok |  |  | ok | 0.13 s | 16 MiB | 0.04 s | 87 MiB |
+| `<numeric>` | ok |  |  | ok | 0.36 s | 18 MiB | 0.06 s | 91 MiB |
+| `<optional>` | ok |  |  | ok | 0.38 s | 17 MiB | 0.06 s | 92 MiB |
+| `<ostream>` | fail | 39 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.21 s | 45 MiB | 0.47 s | 137 MiB |
+| `<print>` | fail | 38 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.29 s | 44 MiB | 0.48 s | 137 MiB |
+| `<queue>` | ok |  |  | ok | 1.16 s | 22 MiB | 0.14 s | 103 MiB |
+| `<random>` | ok |  |  | ok | 2.94 s | 35 MiB | 0.28 s | 123 MiB |
+| `<ranges>` | fail | 86 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 3.05 s | 35 MiB | 0.32 s | 134 MiB |
+| `<ratio>` | ok |  |  | ok | 0.17 s | 16 MiB | 0.05 s | 88 MiB |
+| `<regex>` | fail | 51 | `bitset:1358:9: error: no matching function for call to 'to_string'` | ok | 7.01 s | 49 MiB | 0.57 s | 150 MiB |
+| `<scoped_allocator>` | ok |  |  | ok | 0.72 s | 20 MiB | 0.08 s | 96 MiB |
+| `<semaphore>` | ok |  |  | ok | 0.70 s | 21 MiB | 0.10 s | 97 MiB |
+| `<set>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 0.95 s | 21 MiB | 0.11 s | 99 MiB |
+| `<shared_mutex>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 0.50 s | 19 MiB | 0.07 s | 94 MiB |
+| `<source_location>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 84 MiB |
+| `<span>` | ok |  |  | ok | 0.62 s | 19 MiB | 0.09 s | 95 MiB |
+| `<spanstream>` | fail | 41 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.29 s | 44 MiB | 0.46 s | 138 MiB |
+| `<sstream>` | fail | 41 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.43 s | 46 MiB | 0.48 s | 138 MiB |
+| `<stack>` | ok |  |  | ok | 0.91 s | 21 MiB | 0.10 s | 99 MiB |
+| `<stacktrace>` | fail | 41 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.66 s | 44 MiB | 0.48 s | 139 MiB |
+| `<stdexcept>` | ok |  |  | ok | 1.75 s | 28 MiB | 0.17 s | 109 MiB |
+| `<stdfloat>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.03 s | 83 MiB |
+| `<stop_token>` | fail | 41 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 6.99 s | 47 MiB | 0.51 s | 145 MiB |
+| `<streambuf>` | fail | 3 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.32 s | 32 MiB | 0.22 s | 115 MiB |
+| `<string>` | ok |  |  | ok | 1.79 s | 28 MiB | 0.18 s | 109 MiB |
+| `<string_view>` | ok |  |  | ok | 0.84 s | 21 MiB | 0.11 s | 99 MiB |
+| `<syncstream>` | fail | 42 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 5.69 s | 44 MiB | 0.46 s | 139 MiB |
+| `<system_error>` | ok |  |  | ok | 1.81 s | 28 MiB | 0.19 s | 110 MiB |
+| `<text_encoding>` | ok |  |  | ok | 1.37 s | 26 MiB | 0.15 s | 104 MiB |
+| `<thread>` | fail | 42 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 7.06 s | 46 MiB | 0.51 s | 145 MiB |
+| `<tuple>` | ok |  |  | ok | 0.60 s | 19 MiB | 0.10 s | 95 MiB |
+| `<type_traits>` | ok |  |  | ok | 0.13 s | 16 MiB | 0.04 s | 87 MiB |
+| `<typeindex>` | ok |  |  | ok | 0.20 s | 16 MiB | 0.04 s | 88 MiB |
 | `<typeinfo>` | ok |  |  | ok | 0.04 s | 15 MiB | 0.02 s | 84 MiB |
-| `<unordered_map>` | ok |  |  | ok | 1.10 s | 23 MiB | 0.13 s | 102 MiB |
-| `<unordered_set>` | ok |  |  | ok | 1.16 s | 23 MiB | 0.17 s | 101 MiB |
-| `<utility>` | ok |  |  | ok | 0.27 s | 17 MiB | 0.08 s | 90 MiB |
-| `<valarray>` | fail | 16 | `bits/valarray_after.h:179:35: error: expected a type` | ok | 2.37 s | 29 MiB | 0.25 s | 112 MiB |
-| `<variant>` | fail | 2 | `variant:1526:61: error: expected ')'` | ok | 0.43 s | 18 MiB | 0.07 s | 92 MiB |
-| `<vector>` | ok |  |  | ok | 1.19 s | 20 MiB | 0.13 s | 101 MiB |
-| `<version>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.03 s | 83 MiB |
+| `<unordered_map>` | ok |  |  | ok | 1.06 s | 22 MiB | 0.15 s | 102 MiB |
+| `<unordered_set>` | ok |  |  | ok | 1.06 s | 22 MiB | 0.12 s | 101 MiB |
+| `<utility>` | ok |  |  | ok | 0.25 s | 17 MiB | 0.06 s | 90 MiB |
+| `<valarray>` | fail | 16 | `bits/valarray_after.h:179:35: error: expected a type` | ok | 1.98 s | 28 MiB | 0.22 s | 112 MiB |
+| `<variant>` | fail | 2 | `variant:1526:61: error: expected ')'` | ok | 0.38 s | 17 MiB | 0.06 s | 92 MiB |
+| `<vector>` | ok |  |  | ok | 0.92 s | 20 MiB | 0.14 s | 101 MiB |
+| `<version>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 83 MiB |
 
 #### Error clusters (`-std=c++26`, generated)
 
-26 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 26; the hand-written triage is in "Clusters" below.
+27 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 27; the hand-written triage is in "Clusters" below.
 
 | # | first | any | cluster | headers (first) |
 |---:|---:|---:|---|---|
-| 1 | 34 | 36 | `no matching function for call to '…'` | `<barrier>` `<bitset>` `<ccomplex>` `<chrono>` `<codecvt>` `<complex>` `<ctgmath>` `<execution>` `<filesystem>` `<format>` `<fstream>` `<generator>` `<iomanip>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<locale>` `<memory>` `<ostream>` `<print>` `<random>` `<ranges>` `<regex>` `<spanstream>` `<sstream>` `<stacktrace>` `<stdexcept>` `<stop_token>` `<streambuf>` `<string>` `<syncstream>` `<system_error>` `<thread>` |
+| 1 | 28 | 31 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | `<barrier>` `<ccomplex>` `<chrono>` `<codecvt>` `<complex>` `<ctgmath>` `<execution>` `<filesystem>` `<format>` `<fstream>` `<generator>` `<iomanip>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<locale>` `<memory>` `<ostream>` `<print>` `<ranges>` `<spanstream>` `<sstream>` `<stacktrace>` `<stop_token>` `<streambuf>` `<syncstream>` `<thread>` |
 | 2 | 6 | 34 | `call to '…' is ambiguous` | `<condition_variable>` `<functional>` `<future>` `<memory_resource>` `<mutex>` `<shared_mutex>` |
-| 3 | 2 | 6 | `out-of-line definition of '…' does not match any declaration in '…'` | `<map>` `<set>` |
-| 4 | 1 | 27 | `expected '…'` | `<variant>` |
-| 5 | 1 | 6 | `use of undeclared identifier '…'` | `<list>` |
-| 6 | 1 | 3 | `expected a type` | `<valarray>` |
-| 7 | 0 | 31 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | (e.g. `<barrier>`) |
+| 3 | 2 | 6 | `no matching function for call to '…'` | `<bitset>` `<regex>` |
+| 4 | 2 | 6 | `out-of-line definition of '…' does not match any declaration in '…'` | `<map>` `<set>` |
+| 5 | 1 | 27 | `expected '…'` | `<variant>` |
+| 6 | 1 | 6 | `use of undeclared identifier '…'` | `<list>` |
+| 7 | 1 | 3 | `expected a type` | `<valarray>` |
 | 8 | 0 | 25 | `'…' is a protected member of '…'` | (e.g. `<barrier>`) |
 | 9 | 0 | 24 | `kiln: not yet implemented: local UsingEnum declarations in templates` | (e.g. `<barrier>`) |
 | 10 | 0 | 24 | `no matching constructor for initialization of '…' (aka '…')` | (e.g. `<barrier>`) |
-| 11 | 0 | 2 | `call to deleted constructor of '…'` | (e.g. `<condition_variable>`) |
-| 12 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
-| 13 | 0 | 2 | `destructor type '…' in object destruction expression does not match the type '…' of the object being destroyed` | (e.g. `<condition_variable>`) |
-| 14 | 0 | 2 | `expected '…' after alias declaration` | (e.g. `<generator>`) |
-| 15 | 0 | 2 | `no matching constructor for initialization of '…'` | (e.g. `<execution>`) |
-| 16 | 0 | 2 | `no type named '…' in '…'` | (e.g. `<generator>`) |
-| 17 | 0 | 2 | `pack expansion does not contain any unexpanded parameter packs` | (e.g. `<generator>`) |
-| 18 | 0 | 2 | `pack expansions of braced lists is not supported yet` | (e.g. `<future>`) |
-| 19 | 0 | 2 | `requires clause differs in template redeclaration` | (e.g. `<generator>`) |
-| 20 | 0 | 2 | `static assertion failed` | (e.g. `<generator>`) |
-| 21 | 0 | 2 | `static assertion failed due to requirement '…': result type must be constructible from input type` | (e.g. `<condition_variable>`) |
-| 22 | 0 | 2 | `use '…' keyword to treat '…' as a dependent template name` | (e.g. `<execution>`) |
-| 23 | 0 | 1 | `'…' expressions is not supported yet` | (e.g. `<generator>`) |
-| 24 | 0 | 1 | `no struct named '…' in '…'` | (e.g. `<generator>`) |
-| 25 | 0 | 1 | `non-const lvalue reference to type '…' cannot bind to a temporary of type '…'` | (e.g. `<stacktrace>`) |
-| 26 | 0 | 1 | `static assertion failed due to requirement '…': deleter must be swappable` | (e.g. `<future>`) |
+| 11 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
+| 12 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Range = <error type>]` | (e.g. `<generator>`) |
+| 13 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Range = _Base]` | (e.g. `<generator>`) |
+| 14 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Tp = _InnerIter]` | (e.g. `<generator>`) |
+| 15 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Tp = _PatternIter]` | (e.g. `<generator>`) |
+| 16 | 0 | 2 | `destructor type '…' in object destruction expression does not match the type '…' of the object being destroyed` | (e.g. `<condition_variable>`) |
+| 17 | 0 | 2 | `expected '…' after alias declaration` | (e.g. `<generator>`) |
+| 18 | 0 | 2 | `no matching constructor for initialization of '…'` | (e.g. `<execution>`) |
+| 19 | 0 | 2 | `no type named '…' in '…'` | (e.g. `<generator>`) |
+| 20 | 0 | 2 | `pack expansion does not contain any unexpanded parameter packs` | (e.g. `<generator>`) |
+| 21 | 0 | 2 | `pack expansions of braced lists is not supported yet` | (e.g. `<future>`) |
+| 22 | 0 | 2 | `requires clause differs in template redeclaration` | (e.g. `<generator>`) |
+| 23 | 0 | 2 | `static assertion failed` | (e.g. `<generator>`) |
+| 24 | 0 | 2 | `use '…' keyword to treat '…' as a dependent template name` | (e.g. `<execution>`) |
+| 25 | 0 | 1 | `'…' expressions is not supported yet` | (e.g. `<generator>`) |
+| 26 | 0 | 1 | `no struct named '…' in '…'` | (e.g. `<generator>`) |
+| 27 | 0 | 1 | `static assertion failed due to requirement '…': deleter must be swappable` | (e.g. `<future>`) |
 
 <!-- libstdcxx:c++26:end -->
 
@@ -187,11 +188,11 @@ absolute numbers.
 
 ### `-std=c++20`
 
-**c++20: 67 of 109 headers ok with kiln (42 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.63 s / p95 4.42 s, peak RSS p50 18 MiB / p95 34 MiB; clang++-19 wall p50 0.09 s / p95 0.48 s, peak RSS p50 94 MiB / p95 124 MiB**
+**c++20: 71 of 109 headers ok with kiln (38 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.48 s / p95 3.05 s, peak RSS p50 18 MiB / p95 34 MiB; clang++-19 wall p50 0.07 s / p95 0.31 s, peak RSS p50 94 MiB / p95 123 MiB**
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `9ca8e9cc` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `14493398` |
 | reference | `Debian clang version 19.1.7 (3+b1)` |
 | libstdc++ | `_GLIBCXX_RELEASE` 14, `__GLIBCXX__` 20250315 (`/usr/include/c++/14`) |
 | headers | extension-less files directly in the include directory; not compiled: subdirectories (`backward/`, `bits/`, `debug/`, `decimal/`, `experimental/`, `ext/`, `parallel/`, `pstl/`, `tr1/`, `tr2/`) and `.h`/`.tcc` files |
@@ -199,7 +200,7 @@ absolute numbers.
 | flags (both compilers) | `-std=c++20 -stdlib=libstdc++ -fsyntax-only -ferror-limit=0 t.cpp` (`t.cpp`: `#include <h>`) |
 | limits | 8192 MiB address space per compile (kiln: plus its stack reservation); timeout 120 s; -j 2 |
 | RSS source | `gnu-time` |
-| wall time | 114.8 s |
+| wall time | 57.8 s |
 
 #### Headers (`-std=c++20`)
 
@@ -207,115 +208,115 @@ absolute numbers.
 
 | header | kiln | errors | first error | clang++-19 | kiln wall | kiln RSS | clang wall | clang RSS |
 |---|---|---:|---|---|---:|---:|---:|---:|
-| `<algorithm>` | ok |  |  | ok | 1.03 s | 21 MiB | 0.10 s | 99 MiB |
-| `<any>` | ok |  |  | ok | 0.19 s | 16 MiB | 0.04 s | 88 MiB |
-| `<array>` | ok |  |  | ok | 0.50 s | 18 MiB | 0.06 s | 93 MiB |
-| `<atomic>` | ok |  |  | ok | 0.43 s | 18 MiB | 0.07 s | 93 MiB |
-| `<barrier>` | fail | 32 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.12 s | 28 MiB | 0.24 s | 115 MiB |
-| `<bit>` | ok |  |  | ok | 0.16 s | 16 MiB | 0.03 s | 88 MiB |
-| `<bitset>` | fail | 20 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.46 s | 25 MiB | 0.16 s | 108 MiB |
-| `<cassert>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
-| `<ccomplex>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.48 s | 34 MiB | 0.26 s | 120 MiB |
-| `<cctype>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 84 MiB |
-| `<cerrno>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
+| `<algorithm>` | ok |  |  | ok | 0.94 s | 20 MiB | 0.10 s | 99 MiB |
+| `<any>` | ok |  |  | ok | 0.18 s | 16 MiB | 0.05 s | 88 MiB |
+| `<array>` | ok |  |  | ok | 0.43 s | 18 MiB | 0.06 s | 93 MiB |
+| `<atomic>` | ok |  |  | ok | 0.43 s | 18 MiB | 0.06 s | 93 MiB |
+| `<barrier>` | fail | 13 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.04 s | 27 MiB | 0.21 s | 115 MiB |
+| `<bit>` | ok |  |  | ok | 0.16 s | 16 MiB | 0.04 s | 88 MiB |
+| `<bitset>` | fail | 1 | `bitset:1358:9: error: no matching function for call to 'to_string'` | ok | 1.39 s | 26 MiB | 0.15 s | 108 MiB |
+| `<cassert>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.03 s | 83 MiB |
+| `<ccomplex>` | fail | 14 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.57 s | 34 MiB | 0.26 s | 119 MiB |
+| `<cctype>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 84 MiB |
+| `<cerrno>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
 | `<cfenv>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
-| `<cfloat>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
-| `<charconv>` | ok |  |  | ok | 0.24 s | 17 MiB | 0.05 s | 90 MiB |
-| `<chrono>` | fail | 64 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 6.39 s | 48 MiB | 0.57 s | 151 MiB |
-| `<cinttypes>` | ok |  |  | ok | 0.03 s | 15 MiB | 0.02 s | 83 MiB |
+| `<cfloat>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<charconv>` | ok |  |  | ok | 0.23 s | 17 MiB | 0.05 s | 90 MiB |
+| `<chrono>` | fail | 45 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 6.73 s | 48 MiB | 0.61 s | 151 MiB |
+| `<cinttypes>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 83 MiB |
 | `<ciso646>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
-| `<climits>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
-| `<clocale>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
-| `<cmath>` | ok |  |  | ok | 0.97 s | 25 MiB | 0.11 s | 100 MiB |
-| `<codecvt>` | fail | 23 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.41 s | 25 MiB | 0.16 s | 109 MiB |
-| `<compare>` | ok |  |  | ok | 0.17 s | 16 MiB | 0.04 s | 88 MiB |
-| `<complex>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.50 s | 33 MiB | 0.26 s | 119 MiB |
-| `<concepts>` | ok |  |  | ok | 0.13 s | 16 MiB | 0.03 s | 88 MiB |
-| `<condition_variable>` | fail | 38 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 3.10 s | 33 MiB | 0.35 s | 123 MiB |
-| `<coroutine>` | ok |  |  | ok | 0.18 s | 17 MiB | 0.05 s | 89 MiB |
+| `<climits>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<clocale>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cmath>` | ok |  |  | ok | 1.02 s | 24 MiB | 0.11 s | 100 MiB |
+| `<codecvt>` | fail | 4 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.42 s | 26 MiB | 0.16 s | 109 MiB |
+| `<compare>` | ok |  |  | ok | 0.17 s | 16 MiB | 0.05 s | 88 MiB |
+| `<complex>` | fail | 14 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.59 s | 33 MiB | 0.25 s | 120 MiB |
+| `<concepts>` | ok |  |  | ok | 0.15 s | 16 MiB | 0.04 s | 87 MiB |
+| `<condition_variable>` | fail | 16 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 2.88 s | 33 MiB | 0.29 s | 122 MiB |
+| `<coroutine>` | ok |  |  | ok | 0.20 s | 16 MiB | 0.04 s | 89 MiB |
 | `<csetjmp>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 84 MiB |
-| `<csignal>` | ok |  |  | ok | 0.07 s | 15 MiB | 0.03 s | 85 MiB |
-| `<cstdalign>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 83 MiB |
-| `<cstdarg>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 83 MiB |
-| `<cstdbool>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 83 MiB |
+| `<csignal>` | ok |  |  | ok | 0.08 s | 15 MiB | 0.03 s | 85 MiB |
+| `<cstdalign>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cstdarg>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cstdbool>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.03 s | 83 MiB |
 | `<cstddef>` | ok |  |  | ok | 0.04 s | 15 MiB | 0.02 s | 85 MiB |
 | `<cstdint>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
-| `<cstdio>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.03 s | 84 MiB |
-| `<cstdlib>` | ok |  |  | ok | 0.08 s | 15 MiB | 0.07 s | 85 MiB |
-| `<cstring>` | ok |  |  | ok | 0.13 s | 14 MiB | 0.08 s | 84 MiB |
-| `<ctgmath>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 3.23 s | 34 MiB | 0.41 s | 119 MiB |
-| `<ctime>` | ok |  |  | ok | 0.13 s | 14 MiB | 0.06 s | 84 MiB |
-| `<cuchar>` | ok |  |  | ok | 0.15 s | 14 MiB | 0.06 s | 84 MiB |
-| `<cwchar>` | ok |  |  | ok | 0.12 s | 14 MiB | 0.06 s | 84 MiB |
-| `<cwctype>` | ok |  |  | ok | 0.13 s | 13 MiB | 0.06 s | 83 MiB |
-| `<deque>` | ok |  |  | ok | 1.06 s | 20 MiB | 0.14 s | 98 MiB |
-| `<exception>` | ok |  |  | ok | 0.21 s | 16 MiB | 0.07 s | 88 MiB |
-| `<execution>` | fail | 39 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 4.42 s | 38 MiB | 0.71 s | 134 MiB |
-| `<expected>` | ok |  |  | ok | 0.14 s | 13 MiB | 0.07 s | 83 MiB |
-| `<filesystem>` | fail | 55 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 7.95 s | 30 MiB | 0.57 s | 124 MiB |
-| `<format>` | fail | 57 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 13.07 s | 39 MiB | 0.58 s | 134 MiB |
-| `<forward_list>` | ok |  |  | ok | 1.51 s | 19 MiB | 0.19 s | 97 MiB |
-| `<fstream>` | fail | 46 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.84 s | 27 MiB | 0.35 s | 113 MiB |
-| `<functional>` | fail | 4 | `bits/std_function.h:558:2: error: call to 'swap' is ambiguous` | ok | 1.78 s | 24 MiB | 0.30 s | 105 MiB |
-| `<future>` | fail | 58 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 4.75 s | 35 MiB | 0.59 s | 128 MiB |
-| `<generator>` | fail | 34 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.62 s | 27 MiB | 0.41 s | 124 MiB |
-| `<initializer_list>` | ok |  |  | ok | 0.15 s | 13 MiB | 0.07 s | 84 MiB |
-| `<iomanip>` | fail | 52 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.86 s | 29 MiB | 0.48 s | 114 MiB |
-| `<ios>` | fail | 31 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.42 s | 27 MiB | 0.35 s | 111 MiB |
-| `<iosfwd>` | ok |  |  | ok | 0.14 s | 14 MiB | 0.07 s | 85 MiB |
-| `<iostream>` | fail | 32 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.40 s | 27 MiB | 0.31 s | 112 MiB |
-| `<istream>` | fail | 32 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.44 s | 28 MiB | 0.33 s | 112 MiB |
-| `<iterator>` | fail | 22 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.05 s | 27 MiB | 0.31 s | 110 MiB |
-| `<latch>` | ok |  |  | ok | 0.63 s | 18 MiB | 0.12 s | 92 MiB |
-| `<limits>` | ok |  |  | ok | 0.20 s | 15 MiB | 0.06 s | 85 MiB |
-| `<list>` | fail | 2 | `bits/stl_list.h:189:14: error: use of undeclared identifier '_Iter'` | ok | 1.05 s | 20 MiB | 0.18 s | 96 MiB |
-| `<locale>` | fail | 49 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.98 s | 28 MiB | 0.35 s | 112 MiB |
-| `<map>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 1.17 s | 19 MiB | 0.15 s | 98 MiB |
-| `<memory>` | fail | 31 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.78 s | 29 MiB | 0.28 s | 116 MiB |
-| `<memory_resource>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 1.57 s | 24 MiB | 0.20 s | 105 MiB |
-| `<mutex>` | fail | 3 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 1.02 s | 21 MiB | 0.16 s | 99 MiB |
-| `<new>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.03 s | 85 MiB |
-| `<numbers>` | ok |  |  | ok | 0.14 s | 16 MiB | 0.04 s | 87 MiB |
-| `<numeric>` | ok |  |  | ok | 0.40 s | 18 MiB | 0.08 s | 91 MiB |
-| `<optional>` | ok |  |  | ok | 0.45 s | 15 MiB | 0.10 s | 90 MiB |
-| `<ostream>` | fail | 31 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.10 s | 26 MiB | 0.25 s | 111 MiB |
-| `<print>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.04 s | 82 MiB |
-| `<queue>` | ok |  |  | ok | 1.14 s | 22 MiB | 0.16 s | 102 MiB |
-| `<random>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.70 s | 33 MiB | 0.31 s | 121 MiB |
-| `<ranges>` | fail | 34 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.94 s | 28 MiB | 0.28 s | 124 MiB |
-| `<ratio>` | ok |  |  | ok | 0.18 s | 16 MiB | 0.04 s | 88 MiB |
-| `<regex>` | fail | 62 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 3.76 s | 34 MiB | 0.43 s | 127 MiB |
-| `<scoped_allocator>` | ok |  |  | ok | 0.65 s | 19 MiB | 0.09 s | 95 MiB |
-| `<semaphore>` | ok |  |  | ok | 0.73 s | 21 MiB | 0.12 s | 97 MiB |
-| `<set>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 0.99 s | 21 MiB | 0.13 s | 98 MiB |
-| `<shared_mutex>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 0.64 s | 19 MiB | 0.09 s | 94 MiB |
-| `<source_location>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.03 s | 84 MiB |
-| `<span>` | ok |  |  | ok | 0.70 s | 18 MiB | 0.11 s | 94 MiB |
-| `<spanstream>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.05 s | 83 MiB |
-| `<sstream>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.07 s | 27 MiB | 0.24 s | 113 MiB |
-| `<stack>` | ok |  |  | ok | 0.94 s | 21 MiB | 0.16 s | 97 MiB |
+| `<cstdio>` | ok |  |  | ok | 0.04 s | 15 MiB | 0.02 s | 84 MiB |
+| `<cstdlib>` | ok |  |  | ok | 0.06 s | 15 MiB | 0.02 s | 85 MiB |
+| `<cstring>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 84 MiB |
+| `<ctgmath>` | fail | 14 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.58 s | 34 MiB | 0.28 s | 119 MiB |
+| `<ctime>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 84 MiB |
+| `<cuchar>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.02 s | 84 MiB |
+| `<cwchar>` | ok |  |  | ok | 0.04 s | 15 MiB | 0.02 s | 84 MiB |
+| `<cwctype>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 84 MiB |
+| `<deque>` | ok |  |  | ok | 0.82 s | 20 MiB | 0.10 s | 98 MiB |
+| `<exception>` | ok |  |  | ok | 0.18 s | 15 MiB | 0.04 s | 88 MiB |
+| `<execution>` | fail | 20 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 3.52 s | 37 MiB | 0.37 s | 133 MiB |
+| `<expected>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 83 MiB |
+| `<filesystem>` | fail | 36 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 3.05 s | 34 MiB | 0.31 s | 123 MiB |
+| `<format>` | fail | 38 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 4.40 s | 39 MiB | 0.40 s | 134 MiB |
+| `<forward_list>` | ok |  |  | ok | 0.75 s | 20 MiB | 0.09 s | 98 MiB |
+| `<fstream>` | fail | 27 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.89 s | 29 MiB | 0.21 s | 114 MiB |
+| `<functional>` | fail | 4 | `bits/std_function.h:558:2: error: call to 'swap' is ambiguous` | ok | 1.27 s | 24 MiB | 0.15 s | 106 MiB |
+| `<future>` | fail | 33 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 3.40 s | 35 MiB | 0.32 s | 127 MiB |
+| `<generator>` | fail | 17 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.81 s | 28 MiB | 0.24 s | 123 MiB |
+| `<initializer_list>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 84 MiB |
+| `<iomanip>` | fail | 33 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.06 s | 29 MiB | 0.22 s | 115 MiB |
+| `<ios>` | fail | 12 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.69 s | 26 MiB | 0.18 s | 111 MiB |
+| `<iosfwd>` | ok |  |  | ok | 0.05 s | 15 MiB | 0.02 s | 85 MiB |
+| `<iostream>` | fail | 13 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.78 s | 27 MiB | 0.20 s | 112 MiB |
+| `<istream>` | fail | 13 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.78 s | 26 MiB | 0.20 s | 111 MiB |
+| `<iterator>` | fail | 3 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.60 s | 26 MiB | 0.18 s | 110 MiB |
+| `<latch>` | ok |  |  | ok | 0.36 s | 18 MiB | 0.05 s | 92 MiB |
+| `<limits>` | ok |  |  | ok | 0.09 s | 15 MiB | 0.05 s | 85 MiB |
+| `<list>` | fail | 2 | `bits/stl_list.h:189:14: error: use of undeclared identifier '_Iter'` | ok | 0.79 s | 19 MiB | 0.11 s | 96 MiB |
+| `<locale>` | fail | 30 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.89 s | 27 MiB | 0.21 s | 112 MiB |
+| `<map>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 0.84 s | 21 MiB | 0.11 s | 98 MiB |
+| `<memory>` | fail | 12 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.25 s | 29 MiB | 0.24 s | 116 MiB |
+| `<memory_resource>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 1.25 s | 24 MiB | 0.16 s | 105 MiB |
+| `<mutex>` | fail | 3 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 0.85 s | 21 MiB | 0.10 s | 99 MiB |
+| `<new>` | ok |  |  | ok | 0.04 s | 15 MiB | 0.02 s | 84 MiB |
+| `<numbers>` | ok |  |  | ok | 0.12 s | 16 MiB | 0.03 s | 87 MiB |
+| `<numeric>` | ok |  |  | ok | 0.34 s | 17 MiB | 0.05 s | 91 MiB |
+| `<optional>` | ok |  |  | ok | 0.34 s | 16 MiB | 0.05 s | 91 MiB |
+| `<ostream>` | fail | 12 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.74 s | 27 MiB | 0.19 s | 111 MiB |
+| `<print>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<queue>` | ok |  |  | ok | 0.97 s | 22 MiB | 0.12 s | 102 MiB |
+| `<random>` | ok |  |  | ok | 2.43 s | 32 MiB | 0.27 s | 121 MiB |
+| `<ranges>` | fail | 17 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.81 s | 28 MiB | 0.24 s | 123 MiB |
+| `<ratio>` | ok |  |  | ok | 0.18 s | 15 MiB | 0.03 s | 88 MiB |
+| `<regex>` | fail | 43 | `bitset:1358:9: error: no matching function for call to 'to_string'` | ok | 3.25 s | 34 MiB | 0.33 s | 128 MiB |
+| `<scoped_allocator>` | ok |  |  | ok | 0.56 s | 19 MiB | 0.09 s | 95 MiB |
+| `<semaphore>` | ok |  |  | ok | 0.69 s | 21 MiB | 0.09 s | 97 MiB |
+| `<set>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 0.83 s | 21 MiB | 0.10 s | 98 MiB |
+| `<shared_mutex>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 0.48 s | 19 MiB | 0.07 s | 94 MiB |
+| `<source_location>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.03 s | 84 MiB |
+| `<span>` | ok |  |  | ok | 0.58 s | 18 MiB | 0.09 s | 94 MiB |
+| `<spanstream>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<sstream>` | fail | 14 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.87 s | 27 MiB | 0.21 s | 112 MiB |
+| `<stack>` | ok |  |  | ok | 0.82 s | 20 MiB | 0.10 s | 98 MiB |
 | `<stacktrace>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
-| `<stdexcept>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.45 s | 23 MiB | 0.18 s | 108 MiB |
-| `<stdfloat>` | ok |  |  | ok | 0.04 s | 12 MiB | 0.03 s | 78 MiB |
-| `<stop_token>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.94 s | 32 MiB | 0.30 s | 120 MiB |
-| `<streambuf>` | fail | 22 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.64 s | 26 MiB | 0.23 s | 110 MiB |
-| `<string>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.56 s | 24 MiB | 0.22 s | 107 MiB |
-| `<string_view>` | ok |  |  | ok | 0.91 s | 22 MiB | 0.13 s | 99 MiB |
-| `<syncstream>` | fail | 34 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.88 s | 27 MiB | 0.24 s | 113 MiB |
-| `<system_error>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.91 s | 25 MiB | 0.24 s | 108 MiB |
-| `<text_encoding>` | ok |  |  | ok | 0.09 s | 14 MiB | 0.06 s | 83 MiB |
-| `<thread>` | fail | 34 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 3.16 s | 32 MiB | 0.27 s | 120 MiB |
-| `<tuple>` | ok |  |  | ok | 0.57 s | 19 MiB | 0.09 s | 94 MiB |
-| `<type_traits>` | ok |  |  | ok | 0.14 s | 16 MiB | 0.03 s | 87 MiB |
-| `<typeindex>` | ok |  |  | ok | 0.19 s | 16 MiB | 0.04 s | 89 MiB |
-| `<typeinfo>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 84 MiB |
-| `<unordered_map>` | ok |  |  | ok | 1.03 s | 22 MiB | 0.12 s | 101 MiB |
-| `<unordered_set>` | ok |  |  | ok | 1.05 s | 21 MiB | 0.14 s | 101 MiB |
-| `<utility>` | ok |  |  | ok | 0.23 s | 17 MiB | 0.04 s | 90 MiB |
-| `<valarray>` | fail | 16 | `bits/valarray_after.h:179:35: error: expected a type` | ok | 1.99 s | 28 MiB | 0.18 s | 110 MiB |
-| `<variant>` | fail | 2 | `variant:1526:61: error: expected ')'` | ok | 0.39 s | 18 MiB | 0.07 s | 92 MiB |
-| `<vector>` | ok |  |  | ok | 0.94 s | 21 MiB | 0.12 s | 101 MiB |
-| `<version>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 83 MiB |
+| `<stdexcept>` | ok |  |  | ok | 1.39 s | 24 MiB | 0.16 s | 108 MiB |
+| `<stdfloat>` | ok |  |  | ok | 0.02 s | 12 MiB | 0.02 s | 78 MiB |
+| `<stop_token>` | fail | 14 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.67 s | 32 MiB | 0.25 s | 120 MiB |
+| `<streambuf>` | fail | 3 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.49 s | 27 MiB | 0.17 s | 110 MiB |
+| `<string>` | ok |  |  | ok | 1.33 s | 24 MiB | 0.15 s | 107 MiB |
+| `<string_view>` | ok |  |  | ok | 0.80 s | 21 MiB | 0.10 s | 99 MiB |
+| `<syncstream>` | fail | 15 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 1.93 s | 27 MiB | 0.21 s | 113 MiB |
+| `<system_error>` | ok |  |  | ok | 1.41 s | 25 MiB | 0.16 s | 108 MiB |
+| `<text_encoding>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 83 MiB |
+| `<thread>` | fail | 15 | `bits/locale_classes.tcc:349:5: error: explicit instantiation of 'has_facet' does not refer to a function template, variable template, member function, member cl…` | ok | 2.76 s | 32 MiB | 0.26 s | 120 MiB |
+| `<tuple>` | ok |  |  | ok | 0.52 s | 19 MiB | 0.07 s | 94 MiB |
+| `<type_traits>` | ok |  |  | ok | 0.13 s | 16 MiB | 0.04 s | 87 MiB |
+| `<typeindex>` | ok |  |  | ok | 0.18 s | 16 MiB | 0.04 s | 88 MiB |
+| `<typeinfo>` | ok |  |  | ok | 0.03 s | 15 MiB | 0.02 s | 84 MiB |
+| `<unordered_map>` | ok |  |  | ok | 0.97 s | 22 MiB | 0.11 s | 101 MiB |
+| `<unordered_set>` | ok |  |  | ok | 0.99 s | 21 MiB | 0.11 s | 101 MiB |
+| `<utility>` | ok |  |  | ok | 0.22 s | 17 MiB | 0.04 s | 90 MiB |
+| `<valarray>` | fail | 16 | `bits/valarray_after.h:179:35: error: expected a type` | ok | 1.85 s | 28 MiB | 0.19 s | 110 MiB |
+| `<variant>` | fail | 2 | `variant:1526:61: error: expected ')'` | ok | 0.36 s | 18 MiB | 0.06 s | 92 MiB |
+| `<vector>` | ok |  |  | ok | 0.88 s | 20 MiB | 0.15 s | 100 MiB |
+| `<version>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.03 s | 83 MiB |
 
 #### Error clusters (`-std=c++20`, generated)
 
@@ -323,24 +324,24 @@ absolute numbers.
 
 | # | first | any | cluster | headers (first) |
 |---:|---:|---:|---|---|
-| 1 | 31 | 33 | `no matching function for call to '…'` | `<barrier>` `<bitset>` `<ccomplex>` `<chrono>` `<codecvt>` `<complex>` `<ctgmath>` `<execution>` `<filesystem>` `<format>` `<fstream>` `<generator>` `<iomanip>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<locale>` `<memory>` `<ostream>` `<random>` `<ranges>` `<regex>` `<sstream>` `<stdexcept>` `<stop_token>` `<streambuf>` `<string>` `<syncstream>` `<system_error>` `<thread>` |
+| 1 | 25 | 28 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | `<barrier>` `<ccomplex>` `<chrono>` `<codecvt>` `<complex>` `<ctgmath>` `<execution>` `<filesystem>` `<format>` `<fstream>` `<generator>` `<iomanip>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<locale>` `<memory>` `<ostream>` `<ranges>` `<sstream>` `<stop_token>` `<streambuf>` `<syncstream>` `<thread>` |
 | 2 | 6 | 31 | `call to '…' is ambiguous` | `<condition_variable>` `<functional>` `<future>` `<memory_resource>` `<mutex>` `<shared_mutex>` |
-| 3 | 2 | 4 | `out-of-line definition of '…' does not match any declaration in '…'` | `<map>` `<set>` |
-| 4 | 1 | 4 | `use of undeclared identifier '…'` | `<list>` |
-| 5 | 1 | 3 | `expected '…'` | `<variant>` |
-| 6 | 1 | 1 | `expected a type` | `<valarray>` |
-| 7 | 0 | 28 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | (e.g. `<barrier>`) |
+| 3 | 2 | 6 | `no matching function for call to '…'` | `<bitset>` `<regex>` |
+| 4 | 2 | 4 | `out-of-line definition of '…' does not match any declaration in '…'` | `<map>` `<set>` |
+| 5 | 1 | 4 | `use of undeclared identifier '…'` | `<list>` |
+| 6 | 1 | 3 | `expected '…'` | `<variant>` |
+| 7 | 1 | 1 | `expected a type` | `<valarray>` |
 | 8 | 0 | 6 | `'…' is a protected member of '…'` | (e.g. `<chrono>`) |
-| 9 | 0 | 2 | `call to deleted constructor of '…'` | (e.g. `<condition_variable>`) |
-| 10 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
-| 11 | 0 | 2 | `destructor type '…' in object destruction expression does not match the type '…' of the object being destroyed` | (e.g. `<condition_variable>`) |
-| 12 | 0 | 2 | `expected '…' after alias declaration` | (e.g. `<generator>`) |
-| 13 | 0 | 2 | `kiln: not yet implemented: local UsingEnum declarations in templates` | (e.g. `<chrono>`) |
-| 14 | 0 | 2 | `no matching constructor for initialization of '…'` | (e.g. `<execution>`) |
-| 15 | 0 | 2 | `no matching constructor for initialization of '…' (aka '…')` | (e.g. `<chrono>`) |
-| 16 | 0 | 2 | `no type named '…' in '…'` | (e.g. `<generator>`) |
-| 17 | 0 | 2 | `pack expansions of braced lists is not supported yet` | (e.g. `<future>`) |
-| 18 | 0 | 2 | `static assertion failed due to requirement '…': result type must be constructible from input type` | (e.g. `<condition_variable>`) |
+| 9 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
+| 10 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Range = <error type>]` | (e.g. `<generator>`) |
+| 11 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Range = _Base]` | (e.g. `<generator>`) |
+| 12 | 0 | 2 | `destructor type '…' in object destruction expression does not match the type '…' of the object being destroyed` | (e.g. `<condition_variable>`) |
+| 13 | 0 | 2 | `expected '…' after alias declaration` | (e.g. `<generator>`) |
+| 14 | 0 | 2 | `kiln: not yet implemented: local UsingEnum declarations in templates` | (e.g. `<chrono>`) |
+| 15 | 0 | 2 | `no matching constructor for initialization of '…'` | (e.g. `<execution>`) |
+| 16 | 0 | 2 | `no matching constructor for initialization of '…' (aka '…')` | (e.g. `<chrono>`) |
+| 17 | 0 | 2 | `no type named '…' in '…'` | (e.g. `<generator>`) |
+| 18 | 0 | 2 | `pack expansions of braced lists is not supported yet` | (e.g. `<future>`) |
 | 19 | 0 | 2 | `use '…' keyword to treat '…' as a dependent template name` | (e.g. `<execution>`) |
 | 20 | 0 | 1 | `static assertion failed due to requirement '…': deleter must be swappable` | (e.g. `<future>`) |
 

@@ -1001,7 +1001,8 @@ impl Sema<'_, '_> {
         // regardless of `noexcept`, as clang's type match does; the
         // function pointer conversion is checked on the deduced `A`
         // (`deduced_a_mismatch`).
-        flags = flags.union(TdfFlags::DERIVED_CLASS).union(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE);
+        flags =
+            flags.union(TdfFlags::DERIVED_CLASS).union(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE);
         self.deduce(p, at, flags, d)
     }
 
