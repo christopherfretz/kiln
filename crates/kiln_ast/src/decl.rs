@@ -2236,6 +2236,28 @@ impl DeclArena {
         Ok(())
     }
 
+    /// Replaces decomposition `v`'s binding list with `list` once its
+    /// structured binding pack has been expanded ([dcl.struct.bind]/1,
+    /// P1061): `elems` are the bindings the pack introduced, linked back
+    /// to `v` here; the others keep their link.
+    ///
+    /// # Errors
+    /// If `v` has no bindings yet, or an element is already linked.
+    pub fn expand_decomp_bindings(
+        &mut self,
+        v: DeclId,
+        list: ListId,
+        elems: &[DeclId],
+    ) -> Result<(), AlreadySet> {
+        if !self.cold.decomp_bindings.refine(v, list) {
+            return Err(AlreadySet { slot: "decomp_bindings", existing: 0 });
+        }
+        for &b in elems {
+            self.cold.binding_decomp.insert(b, v)?;
+        }
+        Ok(())
+    }
+
     /// Records binding `b`'s expression and, for a tuple-like type, its
     /// holding variable. Write-once.
     ///

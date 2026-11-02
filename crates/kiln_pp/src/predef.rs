@@ -296,6 +296,14 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
+        // Features kiln implements beyond clang 19, at clang 22's values
+        // in the same modes (docs/status/cxx-features.md): P1061
+        // structured binding packs (C++17 on) and P2893 variadic friends
+        // (every C++ mode). P2747 and P3068: `KILN_FEATURES`, above.
+        if m.contains_key("__cpp_structured_bindings") {
+            set(m, "__cpp_structured_bindings", "202411L");
+        }
+        set(m, "__cpp_variadic_friend", "202403L");
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {
         m.remove(n);
@@ -380,6 +388,23 @@ mod tests {
         assert!(s.contains("#define __STRICT_ANSI__ 1\n"));
     }
 
+    /// [cpp.predefined]/1 (`__cpp_*`, [tab:cpp.predefined.ft]): the
+    /// macros of features kiln implements beyond clang 19 take clang
+    /// 22's values in its modes (P1061 from C++17, P2893 always).
+    #[test]
+    fn kiln_feature_macros() {
+        let cfg = PredefConfig::new(true);
+        let cxx17 = format!("{BASE}#define __cpp_structured_bindings 202403L\n");
+        let s = build_predefines(&cxx17, &cfg, &[]);
+        assert!(s.contains("#define __cpp_structured_bindings 202411L\n"), "{s}");
+        assert!(s.contains("#define __cpp_variadic_friend 202403L\n"), "{s}");
+        let s = build_predefines(BASE, &cfg, &[]);
+        assert!(!s.contains("__cpp_structured_bindings"), "{s}");
+        assert!(s.contains("#define __cpp_variadic_friend 202403L\n"), "{s}");
+        let s = build_predefines(&cxx17, &PredefConfig::new(false), &[]);
+        assert!(!s.contains("__cpp_variadic_friend"), "{s}");
+    }
+
     #[test]
     fn flag_deltas() {
         let mut cfg = PredefConfig::new(true);
@@ -404,12 +429,10 @@ mod tests {
         }
     }
 
-    /// `-fsigned-char` removes `__CHAR_UNSIGNED__` (the `AArch64` default),
-    /// `-funsigned-char` adds it (x86-64), as clang 19's driver does.
     /// kiln's own feature-test macros (P2747, P3068) at C++26, at every
     /// compatibility level, and not before C++26 or without exceptions.
     #[test]
-    fn kiln_feature_macros() {
+    fn kiln_constexpr_feature_macros() {
         let b26 = "#define __cplusplus 202400L\n#define __cpp_constexpr 202306L\n";
         let b23 = "#define __cplusplus 202302L\n#define __cpp_constexpr 202211L\n";
         let mut cfg = PredefConfig::new(true);
@@ -428,6 +451,8 @@ mod tests {
         assert!(s.contains("#define __cpp_constexpr 202406L\n"), "{s}");
     }
 
+    /// `-fsigned-char` removes `__CHAR_UNSIGNED__` (the `AArch64` default),
+    /// `-funsigned-char` adds it (x86-64), as clang 19's driver does.
     #[test]
     fn char_signedness() {
         let unsigned_base = format!("{BASE}#define __CHAR_UNSIGNED__ 1\n");

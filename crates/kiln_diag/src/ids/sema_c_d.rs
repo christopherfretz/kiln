@@ -124,6 +124,7 @@ sema_decomp_decl_inaccessible_base = Error (2) "cannot decompose members of inac
 sema_decomp_decl_inaccessible_field = Error (3) "cannot decompose {0:private|protected} member '{1}' of {2}";
 sema_decomp_decl_lambda = Error (1) "cannot decompose lambda closure type {0}";
 sema_decomp_decl_multiple_bases_with_members = Error (3) "cannot decompose class type {0}: {1} {2} have non-static data members";
+sema_decomp_decl_multiple_packs = Error (0) "multiple packs in structured binding declaration";
 sema_decomp_decl_not_alone = Error (0) "decomposition declaration must be the only declaration in its group";
 sema_decomp_decl_parens = Error (0) "decomposition declaration cannot be declared with parentheses";
 sema_decomp_decl_requires_init = Error (1) "decomposition declaration '{0}' requires an initializer";
