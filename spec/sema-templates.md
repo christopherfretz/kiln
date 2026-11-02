@@ -4399,6 +4399,23 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   with them (`get<0>(c)` for `std::complex`). Without the `>(` lookahead
   `<` stays less-than (clang also assumes a template there and
   diagnoses).
+- Operator-function-id template-ids ([temp.names]/1,3, WP-364): after
+  `operator@`, unqualified or behind a non-dependent qualifier, `<`
+  starts a template argument list when `Sema::operator_names_template`
+  says the name is a template-name: lookup finds a function template,
+  or, unqualified, nothing or only non-member functions (P0846, without
+  the `>(` lookahead, as clang); after `template` always; behind a
+  dependent qualifier never (`Q<T>::template operator()<char>` becomes
+  a `DependentScopeDeclRefExpr` with the arguments). Otherwise `<` is
+  less-than. `Sema::act_on_operator_template_id` builds the
+  `UnresolvedLookupExpr` with the explicit arguments, completed by the
+  call or, without one, by `resolve_single_template_id`
+  (`&S::operator()<int>`); unqualified and called with only non-member
+  functions found it is an ADL lookup (`operator+<7>(a, b)`), uncalled
+  with nothing found it is `use of undeclared 'operator-'`, and a name
+  that finds no function template is `no template named 'operator()'`
+  (`temp.names/operator-template-id{,-errors}.cpp`). The member-access
+  form `x.template operator()<N>()` goes through the member path.
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is
   unsupported.

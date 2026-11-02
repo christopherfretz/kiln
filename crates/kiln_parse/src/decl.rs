@@ -2276,6 +2276,7 @@ impl Parser<'_, '_> {
                 }
             }
             p.range = (start, self.prev_end());
+            let pack_like = pd.ellipsis.is_some() || self.s.has_unexpanded_pack(p.ty);
             params.push(p);
             if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
                 // [dcl.fct]/3, [depr.ellipsis.comma] (C++26, P3176): a
@@ -2287,6 +2288,9 @@ impl Parser<'_, '_> {
                         .diag(DiagId::parse_deprecated_missing_comma_before_ellipsis, ellipsis);
                     self.emit(w);
                 }
+                if pack_like {
+                    self.misplaced_ellipsis_vararg(&pd, ellipsis);
+                }
                 variadic = true;
                 break;
             }
@@ -2295,6 +2299,28 @@ impl Parser<'_, '_> {
             }
         }
         (params, variadic)
+    }
+
+    /// [dcl.fct]/3 (P3176): the varargs `...` at `ellipsis` follows a
+    /// parameter that declares, or looks like it was meant to declare, a
+    /// function parameter pack (`Ts......`): clang's
+    /// `-Wambiguous-ellipsis` with a note at the pack's own `...` (or
+    /// where it would go) and the insert-a-comma note.
+    fn misplaced_ellipsis_vararg(&mut self, pd: &Declarator, ellipsis: Loc) {
+        let mut w = self
+            .s
+            .diag(DiagId::parse_misplaced_ellipsis_vararg, ellipsis)
+            .arg(if pd.ellipsis.is_some() { "1" } else { "0" });
+        let note = if let Some(at) = pd.ellipsis {
+            self.s.diag(DiagId::note_misplaced_ellipsis_vararg_existing_ellipsis, at)
+        } else {
+            let (sel, at) = pd.name.map_or(("1", pd.loc), |(_, at)| ("0", at));
+            self.s.diag(DiagId::note_misplaced_ellipsis_vararg_add_ellipsis, at).arg(sel)
+        };
+        w = w.with_note(note);
+        let w =
+            w.with_note(self.s.diag(DiagId::note_misplaced_ellipsis_vararg_add_comma, ellipsis));
+        self.emit(w);
     }
 
     /// The placeholders of parameter `ds pd` (which started at `start`):

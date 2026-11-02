@@ -2101,10 +2101,12 @@ diagnostics and IR.
     condition, then `emit_binding_vars`, clang
     `MaybeEmitDeferredVarDeclInit`) and the Oven (`cond_bindings`) emit
     a tuple-like binding's holding variable (its `get` call) after the
-    test, for `if`, `while` and `for`, whatever the outcome. A `switch`
-    condition of class type is not supported (no class-to-integral
-    conversion in `act_on_start_switch`). Tests:
-    `dcl.struct.bind/p0963-binding-condition*.cpp`.
+    test, for `if`, `while`, `for` and `switch`, whatever the outcome.
+    A `switch` condition is `e` converted to an integral or enumeration
+    type by its conversion function (the class-type rule under
+    `switch` in §7, WP-364), likewise before the bindings. Tests:
+    `dcl.struct.bind/p0963-binding-condition*.cpp`,
+    `dcl.struct.bind/p0963-switch-condition.cpp`.
   - Only `static`, `thread_local`, `auto` and cv are allowed
     ([dcl.pre]/6). Another storage class, `constexpr`, `consteval`,
     `constinit` or `inline` is `decomposition declaration cannot be
@@ -4282,6 +4284,38 @@ Each rule names the libc++ test it fixed and its corpus test.
     are substituted the same way at instantiation.
 - **`switch`:**
   - integral promotion of the condition
+  - a condition of class type ([stmt.switch]/2, [conv.general]/5;
+    `switch_conv.rs`, clang `PerformContextualImplicitConversion`
+    with the C++14 rules, WP-364) is contextually implicitly converted
+    before promotion. All diagnostics are at the `switch` keyword:
+    1. An incomplete class (after instantiating a specialization) is
+       `switch condition has incomplete class type 'T'` with the
+       `forward declaration` note.
+    2. The visible conversion functions (`conversion_functions_all`)
+       whose non-reference result type is integral or enumeration
+       (scoped included) are collected; a conversion function template
+       is kept but contributes no target type. Explicit ones are set
+       aside.
+    3. The non-explicit, non-template ones must agree on one
+       cv-unqualified target `T`; otherwise `multiple conversions from
+       switch condition type 'C' to an integral or enumeration type`
+       with one `conversion to {integral|enumeration} type 'U'` note per
+       conversion function (at its name).
+    4. Overload resolution ([over.match.conv]) among the non-explicit
+       matching ones (templates deduced against `T`) picks the function
+       called (`call_conversion_function`), then a standard conversion
+       to `T` (so a `const int&` result is read). An ambiguity is the
+       same `multiple conversions` error.
+    5. With none viable (none, deleted, only templates, a non-viable
+       object qualifier) and exactly one explicit matching non-template
+       conversion function: `switch condition type 'C' requires
+       explicit conversion to 'U'` plus the note, and that function is
+       called (recovery). Otherwise the generic `statement requires
+       expression of integer type ('C' invalid)`.
+    The converted condition then gets `-Wswitch-bool` and promotion
+    like any other, and `-Wswitch` sees an enumeration result. Codegen
+    and the Oven evaluate it once. Tests:
+    `stmt.switch/class-condition-{diags,run}.cpp`.
   - duplicate `case` values (with a note)
   - multiple `default` labels
   - `case` values converted to the promoted type
