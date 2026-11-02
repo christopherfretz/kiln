@@ -266,6 +266,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CharacterLiteral
                 | ExprKind::CXXBoolLiteralExpr
                 | ExprKind::CXXNullPtrLiteralExpr
+                | ExprKind::GNUNullExpr
                 | ExprKind::StringLiteral => return true,
                 ExprKind::UnaryOperator => e = ast.exprs.operand(e),
                 ExprKind::BinaryOperator => {
@@ -1085,6 +1086,7 @@ impl Sema<'_, '_> {
             | ExprKind::StringLiteral
             | ExprKind::CXXBoolLiteralExpr
             | ExprKind::CXXNullPtrLiteralExpr
+            | ExprKind::GNUNullExpr
             | ExprKind::UnaryExprOrTypeTraitExpr
             | ExprKind::CXXNoexceptExpr
             | ExprKind::TypeTraitExpr
@@ -1222,6 +1224,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The empty-lookup error for the unqualified `name`: `use of
+    /// undeclared 'operator+'` for an operator-, conversion- or
+    /// literal-operator-id, `use of undeclared identifier 'f'` otherwise
+    /// (clang's `DiagnoseEmptyLookup`).
+    pub(crate) fn undeclared_use_id(name: DeclName) -> DiagId {
+        use kiln_ast::names::DeclNameKind as K;
+        match name.kind() {
+            K::Operator | K::Conversion | K::LiteralOperator => DiagId::sema_undeclared_use,
+            _ => DiagId::sema_undeclared_var_use,
+        }
+    }
+
     /// The replaceable global allocation functions are visible to lookup
     /// without `<new>` ([basic.stc.dynamic.general]/2): declares them
     /// before an unqualified or `::`-qualified lookup of their names.
@@ -1268,12 +1282,22 @@ impl Sema<'_, '_> {
             {
                 return self.build_decl_ref(b, loc);
             }
+            if qualifier.is_none()
+                && self.deferring_call_ref
+                && Self::undeclared_use_id(name) == DiagId::sema_undeclared_use
+            {
+                // `operator<=>(a, b)` with nothing visible: argument-
+                // dependent lookup at the call, or at instantiation when
+                // an argument is dependent ([basic.lookup.argdep]/1,
+                // [temp.dep.candidate]), like an undeclared identifier.
+                return self.act_on_undeclared_call_name_dn(name, loc);
+            }
             let text = self.decl_name_str(name);
             let msg = match qualifier {
                 Some(q) => {
                     self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q))
                 }
-                None => self.diag(DiagId::sema_undeclared_var_use, loc).arg(text),
+                None => self.diag(Self::undeclared_use_id(name), loc).arg(text),
             };
             self.emit(msg);
             return self.recover_err(&[], loc);
@@ -2535,6 +2559,7 @@ impl Sema<'_, '_> {
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_arithmetic_null(op, l, r, loc);
         if !matches!(op, BinaryOp::Assign | BinaryOp::Comma | BinaryOp::PtrMemD | BinaryOp::PtrMemI)
             && (self.is_vector_type(self.ety(l)) || self.is_vector_type(self.ety(r)))
         {

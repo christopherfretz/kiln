@@ -12,6 +12,7 @@ note_member_fn_declared_const = Note (1) "member function '{0}' is declared cons
 note_member_reference_arrow_from_operator_arrow = Note (0) "'->' applied to return value of the operator->() declared here";
 note_member_synthesized_at = Note (3) "in {0:implicit|defaulted} {1:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} for {2} first required here";
 note_namespace_using_decl = Note (0) "did you mean 'using namespace'?";
+note_next_field_declaration = Note (0) "next field declaration is here";
 note_non_deducible_parameter = Note (1) "non-deducible template parameter '{0}'";
 note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
 note_non_literal_field = Note (4) "{0} is not literal because it has data member {1} of {3:non-literal|volatile} type {2}";

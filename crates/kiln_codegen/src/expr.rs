@@ -249,6 +249,10 @@ impl Cg<'_> {
                 V::C(self.m.const_int(t, i128::from(ast.exprs.array_trait(e).value)))
             }
             ExprKind::CXXNullPtrLiteralExpr => V::C(self.m.const_null(LTy::PTR)),
+            ExprKind::GNUNullExpr => {
+                let t = self.lty(q);
+                V::C(self.m.const_int(t, 0))
+            }
             ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr => {
                 if ast.types.is_void(q) {
                     return Ok(None);

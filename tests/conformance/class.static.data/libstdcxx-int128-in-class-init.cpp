@@ -6,6 +6,5 @@
 // 56 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): in-class initializer of __int128 type rejected as not a constant expression
 struct T { static const unsigned __int128 m = ~(unsigned __int128)0; static const unsigned __int128 n = (unsigned __int128)1 << 100; static const __int128 k = -(__int128)1;};
 static_assert(T::m > 0);

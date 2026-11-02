@@ -55,6 +55,7 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Typename
             | Kw::Decltype
             | Kw::Typeof
+            | Kw::TypeofUnqual
             | Kw::Atomic
     )
 }
@@ -118,11 +119,17 @@ impl Parser<'_, '_> {
     /// `ParseCompoundStatementBody`). Elsewhere it stays a decl-specifier
     /// or the unary operator.
     pub(crate) fn skip_extension_before_using(&mut self) {
+        self.skip_extension_before(&[Kw::Using, Kw::Template]);
+    }
+
+    /// Drops the `__extension__` keywords before a declaration starting
+    /// with one of `kws`.
+    fn skip_extension_before(&mut self, kws: &[Kw]) {
         let mut n = 0;
         while self.kw_of(self.peek(n)) == Some(Kw::Extension) {
             n += 1;
         }
-        if n > 0 && matches!(self.kw_of(self.peek(n)), Some(Kw::Using | Kw::Template)) {
+        if n > 0 && self.kw_of(self.peek(n)).is_some_and(|k| kws.contains(&k)) {
             for _ in 0..n {
                 self.bump();
             }
@@ -133,7 +140,9 @@ impl Parser<'_, '_> {
         if !self.stack_ok() {
             return;
         }
-        self.skip_extension_before_using();
+        // At namespace scope also before an asm-declaration (libstdc++
+        // `__extension__ asm(...)`); not in a class or block, as clang.
+        self.skip_extension_before(&[Kw::Using, Kw::Template, Kw::Asm]);
         let loc = self.loc();
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
@@ -622,19 +631,19 @@ impl Parser<'_, '_> {
                     }
                     continue;
                 }
-                Kw::Typeof => {
-                    self.unsupported(&format!("'{}'", k.spelling()), loc);
-                    self.bump();
-                    if self.eat(Punct::LParen).is_some() {
-                        self.skip_until(&[Punct::RParen], false, true);
-                    } else if k == Kw::Typename {
-                        let _ = self.scan_name(self.pos()).map(|(end, ..)| end);
-                        while self.ident().is_some() || self.at(Punct::ColonColon) {
-                            self.bump();
+                Kw::Typeof | Kw::TypeofUnqual => {
+                    // GNU `typeof` (spec/sema.md §5.8). An erroneous one
+                    // is an error type specifier that combines with
+                    // nothing (clang `SetTypeSpecError`).
+                    let Some(ty) = self.parse_typeof_specifier(k == Kw::TypeofUnqual) else {
+                        ds.invalid = true;
+                        if ds.base == TypeSpecKind::None {
+                            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
                         }
-                    }
-                    ds.invalid = true;
-                    if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc) {
+                        continue;
+                    };
+                    if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                        ds.invalid = true;
                         self.spec_error(&e, loc);
                     }
                     continue;
@@ -768,6 +777,18 @@ impl Parser<'_, '_> {
         };
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         (TypeSpecKind::Named, self.s.act_on_decltype(e, loc, rparen))
+    }
+
+    /// GNU `typeof` specifier (spec/sema.md §5.8): `__typeof ( type-id )`
+    /// or `__typeof` and an unevaluated unary-expression, as clang;
+    /// `unqual` for `__typeof_unqual`. At the keyword; `None` after an
+    /// error.
+    pub(crate) fn parse_typeof_specifier(&mut self, unqual: bool) -> Option<QualType> {
+        let loc = self.bump().span.lo;
+        match self.parse_trait_operand()? {
+            crate::expr::TraitOperand::Type(ty, _) => Some(self.s.act_on_typeof_type(ty, unqual)),
+            crate::expr::TraitOperand::Expr(e) => self.s.act_on_typeof_expr(e, loc, unqual),
+        }
     }
 
     fn spec_error(&self, e: &SpecError, loc: Loc) {
@@ -1529,9 +1550,7 @@ impl Parser<'_, '_> {
                 self.error_here(DiagId::parse_expected_unqualified_id);
                 d.invalid = true;
             }
-            if self.at_cxx11_attr() {
-                self.parse_attributes(&mut d.attrs);
-            }
+            self.parse_declarator_id_attrs(d);
         } else if self.at(Punct::LParen) && !(abstract_ok && self.is_param_list_start(1)) {
             // Like clang's ParseParenDeclarator: grouping is in effect
             // only for the inner declarator, then restored.
@@ -1551,13 +1570,25 @@ impl Parser<'_, '_> {
         {
             // WP-061a's operator-function-ids for allocation functions.
             self.parse_new_delete_operator_id(d);
+            self.parse_declarator_id_attrs(d);
         } else if (self.at(Punct::Tilde) || self.at_kw(Kw::Operator))
             && d.ctx != DeclaratorContext::TypeName
         {
             self.parse_special_declarator_id(d);
+            self.parse_declarator_id_attrs(d);
         }
         self.parse_declarator_suffixes(d, abstract_ok);
         self.s.act_on_exit_declarator_scope(entered);
+    }
+
+    /// `declarator-id attribute-specifier-seq(opt)` ([dcl.decl.general]/4):
+    /// the attributes appertain to the declared entity, for every kind of
+    /// declarator-id (`f [[a]] (int)`, `operator() [[a]] (int)`,
+    /// `~S [[a]] ()`).
+    fn parse_declarator_id_attrs(&mut self, d: &mut Declarator) {
+        if self.at_cxx11_attr() {
+            self.parse_attributes(&mut d.attrs);
+        }
     }
 
     /// The array and function declarator suffixes after a declarator-id

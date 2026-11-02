@@ -7,7 +7,6 @@
 // that includes <compare> (docs/status/libstdcxx.md, WP-188). Verified
 // against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): an unqualified dependent call to an operator-function-id is looked up at definition time (use of undeclared identifier 'operator<=>')
 namespace N {
 struct A { int v; };
 constexpr int operator<=>(A x, A y) { return x.v - y.v; }

@@ -6,7 +6,6 @@
 // the ranges function objects (docs/status/libstdcxx.md, WP-188). Verified
 // against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): an attribute after an operator-function-id declarator-id is parsed as a data member ('operator()' cannot be the name of a variable or data member)
 struct S {
   constexpr int operator() [[nodiscard]] (int x) const { return x; }
   template<typename T>

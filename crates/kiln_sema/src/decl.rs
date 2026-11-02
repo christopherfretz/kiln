@@ -288,6 +288,17 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The type a non-static data member of type `q` requires complete
+    /// (clang `CheckFieldDecl`): the element type of a bounded array, and
+    /// of an array of unknown bound, which is a flexible array member
+    /// (spec/sema.md §5.8, checked when the class is complete).
+    pub(crate) fn field_complete_type(&self, q: QualType) -> QualType {
+        match self.ast.types.canonical_view(q) {
+            TypeView::IncompleteArray(e) => self.bounded_array_element(e),
+            _ => self.bounded_array_element(q),
+        }
+    }
+
     /// True if `q` is a complete object type here (a class is incomplete
     /// until its closing brace).
     pub fn is_complete(&self, q: QualType) -> bool {
@@ -813,6 +824,14 @@ impl Sema<'_, '_> {
                     if self.require_non_abstract_element(*loc, ty) {
                         return QualType::ERROR;
                     }
+                    // §5.8 (clang `BuildArrayType`): an element class with a
+                    // flexible array member is a GNU extension.
+                    if self.has_flexible_array_member(ty) {
+                        let msg = self
+                            .diag(DiagId::sema_flexible_array_in_array, *loc)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                    }
                     ty = match size {
                         None => self.ast.types.incomplete_array(ty),
                         Some(e) if self.expr_is_value_dependent(*e) => {
@@ -840,6 +859,12 @@ impl Sema<'_, '_> {
                             {
                                 self.error(self.vla_ext_id(), *loc);
                                 self.ast.types.variable_array(ty, *e)
+                            }
+                            Some(Ok(0)) => {
+                                let l = self.begin_loc(*e);
+                                let msg = self.diag(DiagId::sema_zero_length_array, l);
+                                self.emit(msg.per_instantiation());
+                                self.ast.types.constant_array(ty, 0, None)
                             }
                             Some(Ok(n)) => self.ast.types.constant_array(ty, n, None),
                             Some(Err(size)) => self.ast.types.variable_array(ty, size),
@@ -3284,10 +3309,11 @@ impl Sema<'_, '_> {
             QualType::ERROR
         } else if !invalid
             && !self.ast.types.is_reference(ty)
-            && !self.require_complete(self.bounded_array_element(ty), d.name_loc())
+            && !self.require_complete(self.field_complete_type(ty), d.name_loc())
         {
-            // clang checks (and names) the element type of a bounded array.
-            let elem = self.bounded_array_element(ty);
+            // clang checks (and names) the element type of a bounded array
+            // (and of a flexible array member, §5.8).
+            let elem = self.field_complete_type(ty);
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
             // clang marks the field invalid: initialization never
@@ -3822,6 +3848,26 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Initializes variable `v` of type `ty` from `init`. A variable
+    /// names itself, even when declared inside the initializer of another
+    /// entity (a lambda body); `init_var` is the variable being
+    /// initialized (WP-271 `diag_capture`).
+    fn perform_var_init(
+        &mut self,
+        v: DeclId,
+        ty: QualType,
+        init: Initializer,
+        loc: Loc,
+        direct: bool,
+    ) -> ExprId {
+        let entity = self.init_entity.take();
+        let var = self.init_var.replace(v);
+        let e = self.perform_init(ty, init, loc, direct);
+        self.init_entity = entity;
+        self.init_var = var;
+        e
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -3903,12 +3949,8 @@ impl Sema<'_, '_> {
             self.discard_initializer(&init);
             return;
         }
-        // A variable names itself, even when declared inside the
-        // initializer of another entity (a lambda body).
-        let entity = self.init_entity.take();
         let braced = matches!(init, Initializer::List(_));
-        let e = self.perform_init(ty, init, loc, direct);
-        self.init_entity = entity;
+        let e = self.perform_var_init(v, ty, init, loc, direct);
         if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
             // P0960 (clang's `parenlistinit`).
             let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);
@@ -5349,6 +5391,10 @@ impl Sema<'_, '_> {
         }
         if !any_named {
             bits = bits.with(DefinitionBits::EMPTY);
+        }
+        // §5.8: flexible array members.
+        if self.check_flexible_array_members(r) {
+            bits = bits.with(DefinitionBits::HAS_FLEXIBLE_ARRAY_MEMBER);
         }
         if self.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Union) {
             bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);

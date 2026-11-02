@@ -88,7 +88,7 @@ public.
 | member | decl kind | notes |
 |---|---|---|
 | non-static data member | `Field` | access from `ClassBuild`; `mutable` → `FieldData::MUTABLE`, `HAS_MUTABLE_FIELDS`; `[[no_unique_address]]` (M2); NSDMI style bits set now, `init` written at replay (§2.7) |
-| static data member | `Var`, `VarStorage::Static`, ctx = class | in-class: a declaration unless `inline` or `constexpr` (implicitly inline, [dcl.constexpr]/1); a `static const` integral/enum member with an initializer is usable in constant expressions; `int S::s = 1;` is a redeclaration (lexical ctx = namespace, `HAS_LEXICAL_CTX`) |
+| static data member | `Var`, `VarStorage::Static`, ctx = class | in-class: a declaration unless `inline` or `constexpr` (implicitly inline, [dcl.constexpr]/1); a `static const` integral/enum member with an initializer is usable in constant expressions ([class.static.data]/4: the initializer must be a constant expression of any value of the member's type, `unsigned __int128` above `INT128_MAX` included, WP-275, else `in-class initializer for static data member is not a constant expression`); `int S::s = 1;` is a redeclaration (lexical ctx = namespace, `HAS_LEXICAL_CTX`) |
 | member function | `CXXMethod` | in-class definition implicitly inline; `static` → `FnStorage::Static`; cv/ref-qualifiers into `FuncProto.this_quals`/`ref_qual` (types.md §5.4); `virtual`, `= 0`, `override`, `final` (§3.4) |
 | constructor / destructor / conversion | `CXXConstructor` / `CXXDestructor` / `CXXConversion` | `DeclName` tag 2/3/4 keyed by the canonical class `TypeId` / target `QualType` (ast.md §3) |
 | nested class / enum / typedef / alias | M2 kinds, ctx = class | access applies to the name; nested class is a member ([class.access.nest]) |
@@ -692,6 +692,15 @@ Constructor: no return type (`constructor cannot have a return type`), not
 `static`/`virtual`/cv-/ref-qualified, copy ctor by reference (`copy constructor
 must pass its first argument by reference`), `explicit` / `explicit(bool)`
 (cold map). A non-explicit constructor is converting ([class.conv.ctor]).
+The operand of `explicit(expr)` is a contextually converted constant
+expression of type `bool` ([dcl.fct.spec]/4; `Sema::resolve_explicit`, the
+`Sema::bool_cce` shared with the *noexcept-specifier*, WP-275): a class type
+converts through a constexpr conversion function; a type with no conversion,
+a disallowed conversion, a narrowing and a non-constant operand get clang's
+converted-constant-expression errors at the operand (`explicit specifier
+argument ...`), after which the declaration is not explicit. A value-dependent
+operand waits for instantiation; an instantiated member whose operand is then
+invalid is dropped (clang `InstantiateExplicitSpecifier`).
 Destructor: name matches the class, no parameters (`destructor cannot have any
 parameters`), no return type; implicitly `noexcept` unless a subobject's isn't
 ([except.spec]/9). Conversion function ([class.conv.fct]): no return type
