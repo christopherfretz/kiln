@@ -417,6 +417,53 @@ Redeclaration and linkage rules:
   argument saved for the complete-class context is `DefaultArg::Unparsed`
   and replayed through `act_on_param_default_arg`, sema-class.md §2.7.)
   Calls fill omitted trailing arguments with `CXXDefaultArgExpr`.
+- **Erroneous default arguments** (WP-293; clang's
+  `ActOnParamDefaultArgumentError`). A default argument parsed in place
+  whose expression is erroneous — including an explicit cast that fails
+  after its diagnostic (`(int)"s"`: a pointer to a smaller integer, a
+  vector size mismatch; `reinterpret` returns `Err(())` for these
+  instead of a cast kind) — makes the parameter and the function invalid
+  (see *Invalid function declarations*, §4.7). Uses are not diagnosed
+  again: a call to a non-template function that would use it, a
+  constant-evaluated call, and a member function's delayed default
+  argument (replayed in the complete-class context, which leaves the
+  member valid) are all silent. A function template that is invalid
+  fails deduction with `Tdk::Invalid` (WP-308's `deduce_spec` check;
+  clang's `TemplateDeductionResult::Invalid`) for every call, so the call is `no
+  matching function for call to 'f'` and the template is not listed as a
+  candidate. A redeclaration of an invalid function adds no `missing
+  default argument on parameter` error (`merge_default_args` with
+  `trailing == false`); a call that would need the invalid default
+  argument is then measured against the redeclaration's arity. Test:
+  `dcl.fct.default/invalid-cast-default-arg.cpp`.
+- **`register`** ([dcl.stc]/1; removed in C++17 by P0001R1, clang's
+  `ext_register_storage_class`). `register` is `ISO C++17 does not allow
+  'register' storage class specifier` (`sema_register_storage_class`,
+  -Wregister, an error by default) at the specifier on a parameter
+  (`act_on_param_declarator`, before the type is checked; lambda and
+  function template parameters too) and on a variable or structured
+  binding at block scope, in a for-init-statement and as a range-for
+  variable (after `loop variable 'x' may not be declared 'register'`;
+  after `decomposition declaration cannot be declared 'register'` for a
+  binding), and the declaration continues. A variable with an asm label
+  (`register int r asm("x1")`) is exempt. At namespace scope a variable,
+  structured binding or variable template additionally gets `illegal
+  storage class on file-scoped variable` (`sema_illegal_storage_class_on_var`)
+  at its name and is invalid (`register_at_file_scope`); its initializer
+  is discarded unchecked. Another storage class on a parameter is
+  `invalid storage class specifier in function declarator`. A condition
+  declaration gets the parser's storage-class error instead (spec/parse.md
+  §4) and a member `storage class specified for a member declaration`.
+  Tests: `dcl.stc/register-storage-class.cpp`,
+  `dcl.stc/register-storage-class-namespace.cpp`.
+- **Storage classes in friend declarations** ([class.friend]/6, WP-293):
+  diagnosed by the parser as `'mutable' is invalid in friend
+  declarations` (likewise `static`, `extern`, `register`, `typedef`,
+  `thread_local`, `__thread`, `'static thread_local'`) and dropped
+  before Sema sees the DeclSpec (spec/parse.md §4), so the friend
+  function is declared as without it; a friend `typedef` or variable is
+  then `friends can only be classes or functions`. Test:
+  `class.friend/friend-storage-class.cpp`.
 - **Trailing return types** (`Chunk::Function::trailing`,
   [dcl.fct]/2): the function's return type, and an error
   (`function with trailing return type must specify return type 'auto'`)
@@ -456,8 +503,14 @@ Redeclaration and linkage rules:
   `definition of 'S' is not complete until the closing '}'` (clang's
   `isThisOutsideMemberFunctionBody`; `Sema::this_outside_member_body`;
   WP-280; test `expr.ref/member-access-class-being-defined.cpp`).
-  Divergence: clang reports nothing further in a class after its first
-  error there, kiln keeps diagnosing (e.g. a later `S s;` member).
+  A member of incomplete type (`field has incomplete type`, the class
+  itself or another incomplete class) makes the class invalid
+  (`Sema::invalid_defining`, clang's `CheckFieldDecl` marking the record
+  invalid); until its `}` a later use that needs it complete (member
+  access, another such member, `sizeof`) fails without a diagnostic
+  (`incomplete_note` suppresses it), as in clang. Unrelated errors in the
+  class are still reported (WP-290,
+  `expr.ref/member-access-invalid-class-quiet.cpp`).
 - **`-Wvexing-parse`**: a function declarator the parser chose over a
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses
@@ -1278,9 +1331,18 @@ specification as written (`TypeNames` prints ` noexcept`,
   operand: `'this' cannot be [implicitly] used in a static member
   function declaration` (`sema_this_static_member_func`,
   [expr.prim.this]/3; clang `checkThisInStaticMemberFunctionExceptionSpec`;
-  WP-280, `class.mem.general/static-member-noexcept-this.cpp`). Clang
-  diagnoses it again when a class template's static member is
-  instantiated; kiln diagnoses only the pattern (a follow-up).
+  WP-280, `class.mem.general/static-member-noexcept-this.cpp`). In a
+  class template it is reported at the definition and again in each
+  instantiation of the class (`subst::function_decl` reruns the check
+  on the pattern's operand; the diagnostic is `per_instantiation`, so
+  the definition's report does not swallow it, spec/diag.md §7.4), the
+  first per instantiation carrying the `in instantiation of template
+  class` note. The specifier itself, instantiated when needed, gets no
+  `this` scope for a static member (`instantiate_exception_spec`), so
+  its implicit `this` is `invalid use of 'this' outside of a non-static
+  member function` under the `in instantiation of exception
+  specification` note, as in clang (WP-290,
+  `class.mem.general/static-member-noexcept-this-instantiation.cpp`).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as
@@ -1426,10 +1488,25 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   later friend is not measured against an earlier friend that was
   already diagnosed as mismatched. Test:
   `temp.friend/friend-redecl-exception-spec-at-instantiation.cpp`.
-  Divergences (follow-ups): clang also checks at template definition
-  time a friend whose type is not dependent; kiln checks only at
-  instantiation. Kiln also matches a later namespace-scope declaration
-  against the pattern friend, where clang waits for the instantiation.
+  At the template definition a non-dependent unqualified friend (no
+  template head) is checked too, as clang's `MergeFunctionDecl` does
+  for a friend of a dependent context: `pattern_friend_prev` finds the
+  namespace function it would redeclare (as for a friend of a
+  non-templated class, ignoring other pattern friends) and queues the
+  pair on `delayed_exc_equiv`, compared at once or after the replay.
+  The friend is not linked into that function's chain. A dependent
+  `noexcept(expr)` matches no other specification (clang's
+  `CT_Dependent`), so it is a mismatch at the definition and is
+  checked again per instantiation. The instantiation's check repeats
+  a definition-time report for a `noexcept(expr)` friend
+  (`per_instantiation_exc`; clang substitutes and compares it every
+  time) and drops it otherwise (diagnostic deduplication, spec/diag.md
+  §7.4), as clang does not re-diagnose `noexcept` or a missing
+  specification. A pattern friend is invisible to redeclaration
+  lookup (`find_prev_function` filters `is_dependent_friend_fn`): a
+  later namespace-scope declaration declares the function anew, and
+  each instantiated friend then redeclares it and is checked against
+  it (WP-290, `temp.friend/friend-exception-spec-pattern-time.cpp`).
 - *Unparsed through the redeclaration chain*: `exc_unparsed(f)` is true
   when `f`, its first declaration, or the pattern it waits on is in
   `unparsed_exc`. Both `resolve_exc_for_type` and

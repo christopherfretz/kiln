@@ -477,7 +477,7 @@ impl Sema<'_, '_> {
         }
         let fparams: Vec<ParamInfo> =
             if shape == Shape::Dtor { Vec::new() } else { params.clone() };
-        let (defaults, redefined) = self.merge_default_args(prev_ok, false, &fparams);
+        let (defaults, redefined) = self.merge_default_args(prev_ok, false, &fparams, true);
         if redefined {
             prev_ok = None;
             redecl_invalid = true;

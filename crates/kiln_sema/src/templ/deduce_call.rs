@@ -424,7 +424,7 @@ impl Sema<'_, '_> {
         }
         // [temp.deduct.funcaddr]: the function type against the target.
         if let DeduceTarget::FuncAddr(a) = target {
-            let r = self.deduce(pfn, a, TdfFlags::NONE, &mut d);
+            let r = self.deduce(pfn, a, TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT, &mut d);
             if r != Tdk::Success {
                 self.resugar_fn_mismatch(pfn, &mut d);
                 return Err(DeductionFailure::new(r, d));

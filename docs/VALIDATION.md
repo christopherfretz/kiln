@@ -136,6 +136,13 @@ included). The defects found so far, each with the test that records it:
   specialization has a default member initializer, and crashes when that
   initializer is dependent. kiln is not changed to match.
   `temp.expl.spec/member-class-template-spec-nsdmi.cpp`.
+- clang 19 rejects a parenthesized aggregate initialization `B(1)` of
+  `struct B { int i; S arr[2]; }` (`S` with a default constructor) when it
+  is instantiated in a template (`array initializer must be an initializer
+  list`), though it accepts the same code outside a template, as clang 22
+  does in both ([dcl.init.general]/16.6.2.2 value-initializes `arr`). kiln
+  accepts it. `dcl.init.general/paren-aggregate-array-of-class.cpp`
+  carries `requires: clang>=22` (WP-316).
 
 `cargo xtask libcxx` is deliberately outside `ci`. It runs libc++'s own
 tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)
