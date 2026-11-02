@@ -71,6 +71,12 @@ impl IcsOptions {
     /// constructors of the /5.4.1 temporary (clang
     /// `allowExplicitConversionFunctionsInRefBinding`).
     pub const EXPLICIT_REF_CONV: IcsOptions = IcsOptions(16);
+    /// The constructor candidates of a direct-initialization with one
+    /// argument: a copy or move constructor's first parameter gets
+    /// [`Self::EXPLICIT_REF_CONV`] ([over.match.copy]/1.2,
+    /// [over.match.ref]/1.1; clang `hasCopyOrMoveCtorParam`). Consumed by
+    /// [`Sema::add_found_candidates`], never seen by a sequence.
+    pub const DIRECT_COPY_CTOR: IcsOptions = IcsOptions(32);
 
     /// The raw bits.
     pub(crate) fn bits(self) -> u8 {
@@ -1004,6 +1010,7 @@ impl Sema<'_, '_> {
             }
             let k = self.kind_of(f);
             let n = set.cands.len();
+            let first_opts = self.direct_copy_ctor_opts(fd, f, first_opts);
             if k == DeclKind::FunctionTemplate {
                 self.add_found_template(set, f, fd, want, kind, first_opts, list_only, &mut seen);
                 if fd != f {
@@ -1029,6 +1036,40 @@ impl Sema<'_, '_> {
             if fd != f {
                 self.exclude_inhctor_slice(set, n, fd);
             }
+        }
+    }
+
+    /// The first-parameter options of constructor (or constructor
+    /// template) `f`, found as `fd`, under `opts`: with
+    /// [`IcsOptions::DIRECT_COPY_CTOR`], a first parameter of type
+    /// (reference to) cv `C`, the class `fd` is a member of, also allows
+    /// explicit conversion functions: the temporary bound to it in a
+    /// direct-initialization of a `C` with one argument
+    /// ([over.match.copy]/1.2, [over.match.ref]/1.1; clang
+    /// `ResolveConstructorOverload` `AllowExplicitConv`). An inherited
+    /// constructor's first parameter names its base, never `C`.
+    fn direct_copy_ctor_opts(&self, fd: DeclId, f: DeclId, opts: IcsOptions) -> IcsOptions {
+        if !opts.contains(IcsOptions::DIRECT_COPY_CTOR) {
+            return opts;
+        }
+        let opts = IcsOptions(opts.0 & !IcsOptions::DIRECT_COPY_CTOR.0);
+        let ctor = if self.kind_of(f) == DeclKind::FunctionTemplate {
+            let Some(p) = self.pattern_of(f) else { return opts };
+            p
+        } else {
+            f
+        };
+        let mut params = Vec::new();
+        self.fn_param_types(ctor, &mut params);
+        let (Some(&p), Some(class)) = (params.first(), self.ast.decls.get(fd).ctx()) else {
+            return opts;
+        };
+        let p = self.ast.types.canonical(self.non_reference(p));
+        match self.ast.types.as_record(p) {
+            Some(r) if self.ast.first(r) == self.ast.first(class) => {
+                opts.with(IcsOptions::EXPLICIT_REF_CONV)
+            }
+            _ => opts,
         }
     }
 

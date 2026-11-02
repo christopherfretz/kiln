@@ -88,6 +88,15 @@ impl Sema<'_, '_> {
         {
             self.add_converting_ctor_candidates(&mut set, c, opts);
         } else {
+            // [over.match.copy]/1.2, [over.match.ref]/1.1: one argument
+            // of a direct-initialization may reach a copy or move
+            // constructor through an explicit conversion function.
+            let opts = if args.len() == 1 && matches!(style, InitStyle::Direct | InitStyle::DirectList)
+            {
+                opts.with(IcsOptions::DIRECT_COPY_CTOR)
+            } else {
+                opts
+            };
             self.add_ctor_candidates(&mut set, c, opts, false);
         }
         if let [arg] = args
