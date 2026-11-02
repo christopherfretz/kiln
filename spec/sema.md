@@ -1761,7 +1761,14 @@ diagnostics and IR.
     functions wait for WP-068a
   - **subscripts:** either operand order
   - **`sizeof`/`alignof`:** of types and expressions, using
-    `kiln_abi` layout
+    `kiln_abi` layout. An invalid operand (function type, incomplete
+    type, sizeless type, bit-field) is diagnosed as clang
+    `CheckUnaryExprOrTypeTraitOperand`: a type operand at the keyword
+    with the `( type-id )` range (the whole expression when rebuilt by
+    an instantiation), an expression operand at its expression location
+    (`getExprLoc`: its begin, a member call's member name) with its range
+    (the bit-field error without one; WP-320, test
+    `expr.sizeof/incomplete-operand-location.cpp`)
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
     `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
@@ -3011,8 +3018,14 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   walk over a shared expression (§5.10's `mark_shared_expr_referenced`)
   checks those arguments of the calls in it again, under the
   instantiation's context notes.
+- In constant evaluation an argument of non-literal class type, for the
+  ellipsis or a declared by-value parameter, stops the evaluation at the
+  argument with clang's `CheckLiteralType` note "non-literal type 'T'
+  cannot be used in a constant expression" (spec/oven.md, call frames;
+  WP-320), before any constructor or destructor of it runs.
 - Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
-  `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`.
+  `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`,
+  `tests/conformance/expr.const/non-literal-argument.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
