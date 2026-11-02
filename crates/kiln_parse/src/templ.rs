@@ -494,8 +494,16 @@ impl Parser<'_, '_> {
         self.parse_type_param_default(p)
     }
 
-    /// `= type-id` of a type parameter `p` ([temp.param]/10).
+    /// `= type-id` of a type parameter `p` ([temp.param]/10), then the
+    /// end of `p` (its name is not in scope in its own default,
+    /// [basic.scope.pdecl]/9).
     fn parse_type_param_default(&mut self, p: DeclId) -> bool {
+        let ok = self.parse_type_param_default_arg(p);
+        self.s.act_on_template_param_end(p);
+        ok
+    }
+
+    fn parse_type_param_default_arg(&mut self, p: DeclId) -> bool {
         if self.eat(Punct::Equal).is_none() {
             return true;
         }
@@ -563,6 +571,16 @@ impl Parser<'_, '_> {
         self.bump();
         let (pack, name, at) = self.parse_param_pack_and_name();
         let p = self.s.act_on_template_template_param(params, typename_kw, pack, name, at);
+        // Its name is not in scope in its own default
+        // ([basic.scope.pdecl]/9).
+        let ok = self.parse_template_template_param_default(p);
+        self.s.act_on_template_param_end(p);
+        ok
+    }
+
+    /// `= id-expression` of template template parameter `p`
+    /// ([temp.param]/10).
+    fn parse_template_template_param_default(&mut self, p: DeclId) -> bool {
         if self.eat(Punct::Equal).is_none() {
             return true;
         }
@@ -623,15 +641,21 @@ impl Parser<'_, '_> {
             info.loc = self.loc();
         }
         let p = self.s.act_on_non_type_template_param(&info, pack);
+        let mut ok = true;
         if self.eat(Punct::Equal).is_some() {
             let eq = self.loc();
-            let Some(e) = self.with_greater_op(false, Self::parse_constant_expr) else {
-                return false;
-            };
-            let a = self.s.builder().template_arg_expr(e);
-            self.s.act_on_template_param_default(p, a, eq);
+            match self.with_greater_op(false, Self::parse_constant_expr) {
+                Some(e) => {
+                    let a = self.s.builder().template_arg_expr(e);
+                    self.s.act_on_template_param_default(p, a, eq);
+                }
+                None => ok = false,
+            }
         }
-        true
+        // Its name is not in scope in its own default
+        // ([basic.scope.pdecl]/9).
+        self.s.act_on_template_param_end(p);
+        ok
     }
 
     // -- template argument lists -------------------------------------------------------
