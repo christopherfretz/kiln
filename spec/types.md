@@ -525,7 +525,21 @@ canonical type (`full_scope`), differs textually from `T` (clang's
 `desugarForDiagnostic`; deviations, if any, are recorded in spec/diag.md
 §11). A dependent type whose canonical form would name
 `type-parameter-D-I` gets no `aka` (clang's `Desugar` keeps the
-parameter's name, which the canonical printer cannot). A pair of class
+parameter's name, which the canonical printer cannot). The `aka` is
+also given only when desugaring meets sugar that asks for one
+(`should_aka`, clang's `ShouldAKA`): a typedef, alias template,
+`decltype`, `typeof` or similar, at the top or inside a pointer or
+reference pointee, an array element, a function's return or parameter
+type, or a class template specialization's type argument. Elaborated,
+`using`, parenthesized, attributed and deduced types, template
+parameter substitutions and a non-alias specialization's own name do
+not count, so a nested class written unqualified inside its class
+(`'plain'` for `view<int>::plain`) has no `aka` (WP-287). A
+`SubstTemplateTypeParm` with a non-dependent replacement prints the
+canonical replacement scoped, as clang prints the bare `RecordType` of
+a canonical template argument: `'view<int>::iterator<false>'`, not
+`'iterator<false>'`; a dependent replacement (partial substitution)
+prints as is. A pair of class
 template specializations in a `%diff` argument prints the template diff
 instead (spec/diag.md §6.1). An implicitly instantiated class template
 specialization (the `Record` behind the sugar) prints its canonical

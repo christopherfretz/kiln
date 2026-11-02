@@ -1187,11 +1187,16 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   complete gives the error once (clang 19 gives it twice for a friend
   template, and leaves the specialization unresolved afterwards).
 - *Member and friend templates of class template specializations*: the
-  redeclared pattern keeps `Deferred` (`lazy_exc_spec(d, p, friend)`:
-  the spec is dependent at no more than the template's own level; a
-  friend template that is declared but not defined in the class is
-  substituted at once). Its specializations wait on the original pattern
-  (`defer_spec_exception_spec`).
+  redeclared pattern keeps `Deferred` (`lazy_exc_spec(d, p)`: the spec
+  is dependent at no more than the template's own level). A friend
+  template waits whether it is defined in the class or only declared
+  there (WP-287): the class is still incomplete when its friends are
+  instantiated, so substituting at once would look up members declared
+  after the friend (`no member named '__current_'` for libc++
+  `counted_iterator`'s `iter_swap` inside `counted_iterator<counted_iterator<I>>`).
+  Its specializations wait on the original pattern
+  (`defer_spec_exception_spec`). A specialization of a namespace-scope
+  template the friend redeclares keeps that template's spec.
 - *Function template specializations* (DR1330, clang
   `InitFunctionInstantiation`): `function_spec_signature` does not
   substitute a dependent `noexcept(expr)` during deduction. Unless the

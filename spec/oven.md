@@ -1267,7 +1267,13 @@ reverse construction order; array elements from the last. An anonymous
 union member is not destroyed: its members are variant members
 ([class.dtor]/13, WP-276). A class
 without a user-provided destructor and with trivially destructible
-members registers nothing.
+members registers nothing. An anonymous union member is never destroyed
+(`dtor_of` is `None` for it; WP-287): a class that would destroy one
+with a non-trivial variant member has a user-provided destructor that
+destroys the active member itself, and the union's own implicit
+destructor is deleted ([class.dtor]/7, [class.union.anon]; clang
+`HandleDestructionImpl`; libc++ `__optional_destruct_base`;
+`tests/conformance/class.union.anon/anonymous-union-destruction-constexpr.cpp`).
 
 **Temporaries.** `MaterializeTemporaryExpr` by storage duration:
 full-expression temporaries are frame allocations released at the end of
