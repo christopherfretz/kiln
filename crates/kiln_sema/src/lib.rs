@@ -145,6 +145,11 @@ pub struct Sema<'a, 'sm> {
     /// splices and the kiln reflection intrinsics (spec/sema.md
     /// "Reflection (spike, -freflection)").
     pub reflection: bool,
+    /// `-fcoro-aligned-allocation` (default off): a coroutine frame is
+    /// allocated and freed with the `std::align_val_t` forms of
+    /// `operator new`/`operator delete` when available (P2014R0 option 2,
+    /// as clang; spec/sema.md "Coroutines").
+    pub coro_aligned_allocation: bool,
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
@@ -658,6 +663,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             exceptions: true,
             rtti: true,
             reflection: false,
+            coro_aligned_allocation: false,
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 19,

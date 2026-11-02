@@ -133,7 +133,9 @@ impl Sema<'_, '_> {
         let mut prev_ok = None;
         let mut invalid = false;
         if d.qualifier.is_none() {
-            if self.is_local_class(ctx) {
+            if self.templ.local_template {
+                invalid = true;
+            } else if self.is_local_class(ctx) {
                 let msg = self
                     .diag(DiagId::sema_static_member_local_class, loc)
                     .arg(sym_str(self, name))
