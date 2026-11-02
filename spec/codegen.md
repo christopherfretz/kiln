@@ -274,7 +274,11 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
       `f`/`l` forms) call the function of the unprefixed name, declared
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
-      call site too).
+      call site too). The C function's own declaration, used afterwards,
+      reuses that LLVM function (clang `GetOrCreateLLVMFunction` returns
+      an existing declaration of the same name and type) rather than
+      declaring a uniqued `strlen.1` that no library defines (WP-286;
+      `tests/codegen/builtins_lib_redecl.cpp`).
     - checked arithmetic (WP-270, clang `EmitBuiltinExpr`;
       `checked.rs`): the typed forms call `llvm.{s,u}{op}.with.overflow`
       at the parameter type and store the value at the result pointer's
