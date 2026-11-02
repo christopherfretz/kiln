@@ -4621,9 +4621,34 @@ impl Sema<'_, '_> {
 
     /// The type an elaborated-type-specifier or class-specifier names:
     /// `struct S` is `'struct S':'S'` ([dcl.type.elab]).
+    /// Inside the pattern (or a partial specialization) of a class
+    /// template, `class X` naming its injected-class-name is `X<P...>`
+    /// ([temp.local]/1), substituted with the class.
     pub fn elaborated_tag_type(&mut self, d: DeclId, keyword: TagKeyword) -> QualType {
-        let t = self.tag_type(d);
+        let t = self.injected_tag_type(d).unwrap_or_else(|| self.tag_type(d));
         self.ast.types.elaborated(keyword, None, t)
+    }
+
+    /// The injected-class-name type `X<P...>` when tag `d` is the pattern
+    /// or a partial specialization of class template `X` and the current
+    /// context is inside it ([temp.local]/1); `None` otherwise (a
+    /// `template<class U> friend class X;` names the template itself).
+    fn injected_tag_type(&mut self, d: DeclId) -> Option<QualType> {
+        if self.kind_of(d) != DeclKind::CXXRecord || self.friend_class_template.is_some() {
+            return None;
+        }
+        let first = self.ast.first(d);
+        if self.ast.described_template(first).is_none()
+            && self.ast.partial_spec_info(first).is_none()
+        {
+            return None;
+        }
+        let tmpl = self.injected_template_of(d)?;
+        let c = self.injected_class_decl(tmpl)?;
+        if self.ast.first(c) != first {
+            return None;
+        }
+        self.injected_class_type(tmpl)
     }
 
     /// Marks a type-name's declaration referenced ([basic.def.odr]: clang's
@@ -5159,6 +5184,32 @@ impl Sema<'_, '_> {
         ns: DeclId,
     ) -> DeclId {
         let head = self.take_template_head(None);
+        // [namespace.memdef]/3 stops the search at the innermost enclosing
+        // namespace, so a member class template of an enclosing class
+        // (or its injected-class-name) is found by ordinary lookup and
+        // befriended as `friend class C::X;` would be (clang
+        // `CheckClassTemplate`; libc++ `elements_view::__iterator`'s
+        // `template <bool> friend class __sentinel;`).
+        let member = self.lookup_name(n, LookupKind::All).decls.last().and_then(|&d| {
+            let t = if self.kind_of(d) == DeclKind::ClassTemplate {
+                d
+            } else {
+                self.injected_template_of(d)?
+            };
+            let c = self.ast.decls.get(t).ctx()?;
+            (self.kind_of(c) == DeclKind::CXXRecord).then_some(t)
+        });
+        if let Some((t, p)) = member.and_then(|t| self.pattern_of(t).map(|p| (t, p))) {
+            self.templ.cur = None;
+            if !self.tag_matches(p, keyword) {
+                let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
+                let msg = self.note_prev(msg, p, false);
+                self.emit(msg);
+            }
+            self.mark_type_referenced(p);
+            self.friend_class_template = Some(t);
+            return p;
+        }
         let prev = self
             .ast
             .lookup_local(ns, DeclName::ident(n))
@@ -5911,12 +5962,7 @@ impl Sema<'_, '_> {
                             None => self.diag(DiagId::sema_static_assert_failed, cloc),
                         }
                     } else {
-                        let mut req = String::new();
-                        kiln_ast::types::TypeNames::write_expr(
-                            &kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types(),
-                            inner,
-                            &mut req,
-                        );
+                        let req = self.requirement_text(inner);
                         let at = self.begin_loc(inner);
                         match text {
                             Some(t) => self
@@ -5949,7 +5995,7 @@ impl Sema<'_, '_> {
     /// The conjunct of the failed condition `c` that evaluates to false
     /// (clang's `findFailedBooleanCondition`), without parentheses and
     /// implicit conversions. Literal conjuncts are skipped.
-    fn failed_condition(&mut self, c: ExprId) -> ExprId {
+    pub(crate) fn failed_condition(&mut self, c: ExprId) -> ExprId {
         let mut terms = Vec::new();
         self.conjunction_terms(c, &mut terms);
         for &t in &terms {
@@ -5964,6 +6010,18 @@ impl Sema<'_, '_> {
             }
         }
         self.ignore_paren_imp_casts(c)
+    }
+
+    /// A failed condition as clang's `findFailedBooleanCondition`
+    /// describes it (`is_ptr<int>::value`).
+    pub(crate) fn requirement_text(&self, c: ExprId) -> String {
+        let mut req = String::new();
+        kiln_ast::types::TypeNames::write_expr(
+            &kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types(),
+            c,
+            &mut req,
+        );
+        req
     }
 
     fn conjunction_terms(&self, e: ExprId, out: &mut Vec<ExprId>) {
@@ -6139,6 +6197,38 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `A<args>::name` with `A` an alias template, for the lookahead: the
+    /// alias's pattern names a class (template) specialization, whose
+    /// primary pattern's member is classified as for `X<args>::name`
+    /// (WP-278; libc++ `ElementsIter<R>::iterator_concept` as a template
+    /// argument). `None` when the pattern names no class template.
+    fn classify_alias_template_member(&self, tmpl: DeclId, name: Symbol) -> Option<NameClass> {
+        let mut tmpl = tmpl;
+        for _ in 0..64 {
+            let p = self.ast.template_info(tmpl).and_then(|i| i.pattern)?;
+            let mut ty = self.ast.decls.get(p).ty()?;
+            // The pattern's type is its own typedef sugar over what it names.
+            for _ in 0..64 {
+                ty = match self.ast.types.view(ty.ty()) {
+                    TypeView::Typedef { underlying, .. } => underlying,
+                    TypeView::Elaborated { named, .. } => named,
+                    _ => break,
+                };
+            }
+            let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty())
+            else {
+                return None;
+            };
+            let t = self.ast.types.template_decl(tn)?;
+            match self.kind_of(t) {
+                DeclKind::ClassTemplate => return Some(self.classify_template_member(t, name)),
+                DeclKind::TypeAliasTemplate => tmpl = t,
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// The first member named `name` of an explicit or partial
     /// specialization of `tmpl` (the lookahead fallback of
     /// [`Sema::classify_template_member`]).
@@ -6179,6 +6269,12 @@ impl Sema<'_, '_> {
             && self.kind_of(q) == DeclKind::ClassTemplate
         {
             return self.classify_template_member(q, name);
+        }
+        if let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::TypeAliasTemplate
+            && let Some(c) = self.classify_alias_template_member(q, name)
+        {
+            return c;
         }
         if let Some(q) = qualifier
             && self.is_dependent_ctx(q)

@@ -1159,6 +1159,16 @@ class name" at `B`
 - Alias substitution is in the immediate context: a failure inside a
   deduction is SFINAE, including for args the alias does not use
   (CWG1558, the `void_t` idiom).
+- Which alias failures are SFINAE (WP-274, clang 19): everything found
+  while substituting the alias's arguments into its aliased type under a
+  `Some(true)` frame — a missing member type (`enable_if<false>::type`,
+  `T::type`), an invalid type, a failed nested alias. A failure inside a
+  class *definition* the alias instantiates (a member of `enable_if<..>`
+  whose body is ill-formed) is a hard error under that class's
+  `Some(false)` frame. Outside deduction (a class member's type, a
+  non-template) the alias's failure is a hard error with the "in
+  instantiation of template type alias" note. The enable_if diagnostics
+  are §5.7.1.
 - A pack expansion as the argument for a non-pack parameter is
   diagnosed when the alias is dependent: "pack expansion used as argument
   for non-pack parameter of alias template" (clang, CWG1430).
@@ -1506,7 +1516,11 @@ recomputed exactly as for non-template code (clang's
   declaration's parameter name.
 - **Variables** keep the pattern's form of initialization (`cinit`,
   `callinit`, `listinit`): `T v{a, b}` stays direct-list-initialization,
-  which may choose an explicit constructor.
+  which may choose an explicit constructor. A braced list is redone as a
+  list even when the pattern's full-expression (`ExprWithCleanups`) wraps
+  it, as when its elements' constructors bind temporaries: `T a[] = {{1}}`
+  with `T(const int&)` (WP-278;
+  `tests/conformance/dcl.init.aggr/array-of-class-from-list-in-template.cpp`).
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
@@ -1584,6 +1598,47 @@ pub enum Tdk { Invalid, InstantiationDepth, Incomplete, IncompletePack, Inconsis
 **Memory.** Types and nodes that a failed substitution created are
 retained, since the AST is append-only. They are metered as
 `templ.sfinae_discarded` (§11.3).
+
+#### 5.7.1 `enable_if` failures (clang 19, WP-274)
+
+clang words a missing `type` in `enable_if` specially. This changes the
+text and location only, never whether the failure is SFINAE; the
+mechanism above is the same for every name. kiln matches clang:
+
+- **Recognition** (`Substituter::enable_if_failure`, clang `isEnableIf`):
+  the name is `type` and its qualifier substitutes to a specialization
+  of a class template named `enable_if`. The *condition* is its first
+  argument when that is still an expression which, after parens and
+  casts, is not a `bool` literal.
+- **With a condition**: `failed requirement 'C'; 'enable_if' cannot be
+  used to disable this declaration` at the failed conjunct (`C` is the
+  first false operand of a `&&` chain, `failed_condition`, printed as in
+  `static_assert`).
+- **Without one** (the argument is already a value, as through an alias,
+  or a literal): `no type named 'type' in 'enable_if<false, int>';
+  'enable_if' cannot be used to disable this declaration` at the written
+  first argument (in an alias: the alias pattern's argument, since alias
+  substitution does not carry written locations, §4.10).
+- **`enable_if_t` rewrite** (`alias_template_type`, clang
+  `CheckTemplateIdType`): when substituting an alias named `enable_if_t`
+  or `__enable_if_t` fails in a SFINAE context and the captured first
+  error is the "without a condition" form, it is replaced by the "with a
+  condition" form for the alias's own first argument, kept at the old
+  location. Here a literal is not skipped (`requirement 'false'`).
+- **Notes** (`deduction_note`, clang `DiagnoseBadDeduction`): the "with a
+  condition" error gives `candidate template ignored: requirement 'C'
+  was not satisfied [with ...]` at the template; the "without" error
+  gives `candidate template ignored: disabled by 'enable_if' [with ...]`
+  at the error's location. Every other substitution failure keeps
+  `candidate template ignored: substitution failure [with ...]: <error>`.
+
+| Form (P = int) | Note |
+| --- | --- |
+| `typename enable_if<is_ptr<P>::value && B, int>::type` | requirement 'is_ptr<int>::value' |
+| `enable_if_t<is_ptr<P>::value, int>`, also via another alias | requirement 'is_ptr<int>::value' |
+| `enable_if_t<false, T>` | requirement 'false' |
+| `my_t<is_ptr<P>::value, int>` (alias not named `enable_if_t`) | disabled by 'enable_if', at `my_t`'s pattern |
+| `typename enable_if<B, int>::type` with NTTP `B` | disabled by 'enable_if', at `B` |
 
 ### 5.8 Written locations of dependent names
 
@@ -4224,6 +4279,30 @@ explicit specialization errors remain. The blockers are:
     yet implemented: reference to a member of a dependent context"),
     including when the friend is found only by argument-dependent lookup
     inside a concept's requires-expression (WP-272);
+  - *Audit (WP-278): this matches the standard.* A friend defined in a
+    class is in that class's scope ([class.friend]/7), so its
+    requires-clause binds names where it is written: the enclosing
+    classes' parameters, member typedefs, static members and member
+    class templates' parameters. Those names bind in the pattern, so a
+    class-scope `test` hides a namespace-scope `test` even though the
+    atom is then substituted in the friend's namespace
+    (`in_inst_context`, which only re-runs dependent ADL). The
+    constraint is not instantiated with the class
+    ([temp.inst]/17). Instead each atom is substituted when satisfaction
+    is checked ([temp.constr.atomic]/3), using the arguments of the
+    specialization that instantiated the friend, i.e. `levels` plus the
+    lexical class's `inst_context_pairs`. Every such specialization
+    declares a distinct function ([temp.friend]/9 last sentence:
+    a constrained friend declares no function of any other scope), so
+    the per-specialization mapping is the whole story. No other
+    declaration's arguments need merging, and [temp.constr.decl]/3's
+    associated constraints are only that clause (a non-template
+    friend has no template-head). `inst_lexical_class` falls back to the
+    semantic context for members, so a member function keeps its own
+    class mapping. Probed against clang 19 for `requires C<T> && B`
+    (outer and member-template parameters), a member typedef, a static
+    data member, and a class-scope static member template shadowing a
+    namespace function.
   - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate
@@ -4377,7 +4456,13 @@ requires-clause scope.**
   (`act_on_qualified_friend_class_template`; a member template is found
   again in the instantiated class; another kind of entity is
   `sema_redefinition_different_kind`, nothing found in a namespace
-  `sema_friend_def_no_match`),
+  `sema_friend_def_no_match`); an unqualified name that ordinary
+  lookup finds as a member class template of an enclosing class (the
+  search stops at the innermost enclosing namespace, [namespace.memdef]/3,
+  so class scopes are searched) is befriended the same way, as if
+  qualified (WP-278; libc++ `elements_view::__iterator`'s
+  `template <bool> friend class __sentinel;`;
+  `tests/conformance/temp.friend/friend-member-class-template-of-enclosing-class.cpp`),
   `template<class U> friend R f(U);` (`friend_function_template`), and
   friend specializations `friend R f<>(...)` / `friend R N::g<T>(...)`
   (`Declarator::friend`, `friend_spec_template`,

@@ -168,7 +168,11 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
     pointers); pointer difference: `ptrtoint`, `sub`, then `sdiv exact`;
   - floating add/sub (also compound) contract a single-use `fmul`
     operand (looking through a single-use `fneg`) into
-    `llvm.fmuladd.*`, as `tryEmitFMulAdd` does under `-ffp-contract=on`.
+    `llvm.fmuladd.*`, as `tryEmitFMulAdd` does under `-ffp-contract=on`:
+    `b*c + a` / `b*c - a` are `fmuladd(b, c, a)` / `fmuladd(b, c, -a)`,
+    `a + b*c` / `a - b*c` are `fmuladd(b, c, a)` / `fmuladd(-b, c, a)`
+    (the addend of a right product is never negated), and a looked-through
+    fneg flips the sign of `b` (tests/codegen/fmuladd_operand_order.cpp).
 - Values:
   - an lvalue-to-rvalue conversion of a glvalue `?:` is emitted as a
     scalar `?:`: each arm loads in its own block and the result is a phi;
@@ -664,7 +668,12 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   then member initializers in declaration order. Delegating constructors
   are supported. Defaulted copy and move constructors use clang's
   `ConstructorMemcpyizer`, which merges runs of trivially copyable fields
-  into one `llvm.memcpy`.
+  into one `llvm.memcpy`. A field that is empty for layout
+  (`isEmptyFieldForLayout`, e.g. an empty `[[no_unique_address]]` member
+  sharing offset 0 with a non-empty one) joins the run but copies no
+  bytes. The memcpy starts at the lowest-offset non-empty field and ends
+  at the end of the highest-offset one, and a run of only empty fields
+  emits nothing.
 - **Destructor bodies and cleanups** (`EmitDestructorBody`, `cleanup.rs`):
   a cleanup stack modeled on clang's `EHScopeStack` normal cleanups, with
   branch fixups, the `cleanup.dest.slot` switch, and the single-exit

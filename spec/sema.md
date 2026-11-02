@@ -1065,6 +1065,17 @@ specification as written (`TypeNames` prints ` noexcept`,
   instantiation of exception specification for 'f' requested here`
   (`note_template_exception_spec_here`). A failed substitution leaves
   the member potentially throwing (`ExcSpec::None`), as clang does.
+  A function whose constraints are not satisfied is never needed
+  ([temp.inst]/17, WP-278): the one candidate
+  of a call has its constraints checked before its reference is built
+  (`finish_overload_ref`, clang's `DiagnoseUseOfDecl` before
+  `BuildDeclRefExpr`), and a constrained function found by
+  argument-dependent lookup always goes through overload resolution, so
+  an unsatisfied one is a non-viable candidate (`no matching function
+  for call to 'f'` + `candidate function not viable: constraints not
+  satisfied`, as clang's `BuildOverloadedCallExpr`). libc++
+  `filter_view`/`join_view`'s hidden `iter_swap` relies on this. Test:
+  `tests/conformance/temp.inst/hidden-friend-noexcept-unsatisfied.cpp`.
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
@@ -1085,9 +1096,17 @@ specification as written (`TypeNames` prints ` noexcept`,
   `S` is `p`'s specification as written (`noexcept`, `throw()`,
   `noexcept(<expr>)` printed as clang prints it). Both diagnostics take
   a `previous declaration is here` note and clang's fix-it inserting
-  ` S` just past the declarator's `)` (none with a trailing return
-  type, and, as kiln does not record where a cv- or ref-qualifier ends,
-  none after either). "`p`'s" specification is inherited as clang does:
+  ` S` just past the end of the declarator's `)` or, when present, its
+  last cv- or ref-qualifier (`Declarator::fn_qual_locs`; none with a
+  trailing return type or for a `)` or qualifier from a macro).
+  An invalid `p` (WP-279; clang compares only valid declarations) is
+  replaced by the latest valid declaration on its redeclaration chain,
+  or, for an invalid member redeclaration that is not on the chain
+  (`struct S { void f() noexcept; void f() noexcept; };`), by the
+  latest valid same-kind function of that name in `p`'s context
+  corresponding to the redeclaration; with neither, the redeclaration
+  inherits `p`'s specification silently (`void e() noexcept = 0;
+  void e();`). "`p`'s" specification is inherited as clang does:
   `noexcept(true)` becomes `noexcept`, `noexcept(false)` none, others
   as written. Only `p`'s location counts, not the redeclaration's: a
   second redeclaration in user code follows the first (now `throw()`,
@@ -3035,12 +3054,16 @@ template saved in `range_for_outer_depth` for instantiations).
   (`rebuild_with_dereference`); an iterator or loop-variable failure gets
   `selected 'begin' function with iterator type T` (the candidate notes
   are captured through `diag_capture` while each attempt runs and
-  released on success of the diagnosis). A SFINAE context entered
-  inside a capture (deeper on the instantiation stack than where the
-  capture began, such as deducing a converting constructor template
-  for a rewritten `operator==` candidate of `__begin != __end`) takes
-  its errors as substitution failures, not captured diagnostics
-  (WP-271).
+  released on success of the diagnosis). The capture holds only the
+  step's own diagnostics: it records the instantiation-stack depth it
+  started at, so an error raised in a deeper frame (a candidate's
+  deduction substituting an alias or a default template argument) still
+  reaches that frame's SFINAE trap (sema-templates.md §5.7) instead of
+  being held and released as a hard error. Overload-candidate notes
+  (`trailing_notes`) attach to the held error before it is held.
+  One such deeper SFINAE context is deducing a converting constructor
+  template for a rewritten `operator==` candidate of `__begin != __end`
+  (WP-271). (WP-274.)
 - **Templates.** A type-dependent range (or loop-variable type) keeps
   only `__range` and the loop variable in the pattern; instantiation
   (`templ/subst/stmts.rs` `range_for`) substitutes the range under a new

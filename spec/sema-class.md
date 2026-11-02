@@ -121,6 +121,17 @@ namespace of the definition.
 `private` for `class`, else `public`); cold map `friends: record → ListId`
 (befriended functions' first decls and classes), built at `}`, used only by
 access checks — friend name lookup goes through the namespace table (§2.3).
+In a class nested in a class template (or a partial specialization),
+`friend class X;`, `friend X;` and `friend class X<P...>;` naming the
+enclosing template's injected-class-name or its own parameters befriend the
+current instantiation ([temp.local]/1, [temp.dep.type]/1): the pattern is
+in the list (so the pattern's members check against it), and each
+instantiation befriends its own specialization only, whose members,
+out-of-line member templates instantiated later included, get access
+(libc++ `binomial_distribution::param_type`; tests/conformance/class.friend/
+nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
+`class X` naming the injected-class-name is the injected type `X<P...>`
+anywhere inside the template, not only in a friend declaration.
 
 **Rule** (`class/access.rs`, clang `SemaAccess`). Member `m` found in naming
 class `N` ([class.access.base]/5) is accessible at context `R` iff: (a) `m` as
@@ -132,7 +143,7 @@ accessible at `R` named in `B`. "As a member of `N`" follows each base path
 with [class.access.base]/1 (private members of a base are inaccessible; a
 protected base demotes public to protected; a private base demotes to private);
 the most permissive path wins. Members of `X` include nested and local classes
-of `X` and their members ([class.local]/2). [class.protected]: for a non-static
+of `X` and their members ([class.local]/2). A friend function defined in a class `C` is in `C`'s scope ([class.friend]/7): its effective context continues from `C` outward, so it shares the access of `C` and of every enclosing class, including friendship granted to them; this holds for each specialization of a friend function template (the template's in-class declaration, not the namespace-scope specialization, names the lexical class). A friend defined outside the class gets none of this (WP-278; libc++ `join_view::__sentinel`'s `operator==` calling `__iterator::__get_outer()`; `tests/conformance/class.friend/friend-template-in-nested-class-access.cpp`). [class.protected]: for a non-static
 protected member named through an object expression or `&P::m`, when only (c)
 via `P` grants access the object's class must be `P` or derived from `P` (`'p'
 is a protected member of 'S'` + note `can only access this member on an object
