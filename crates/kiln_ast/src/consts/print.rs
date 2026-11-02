@@ -322,7 +322,7 @@ impl Printer<'_> {
             Scalar::Bool { value, .. } => out.push_str(if value { "true" } else { "false" }),
             Scalar::Float { kind, bits, .. } => format_float(kind, bits, out),
             Scalar::Null { .. } => out.push_str("nullptr"),
-            Scalar::Pointer { ty, base, offset } => self.pointer(ty, base, offset, out),
+            Scalar::Pointer { ty, base, offset, .. } => self.pointer(ty, base, offset, out),
             Scalar::MemberPtr { member, .. } => {
                 out.push('&');
                 self.env.decl_name(member, out);

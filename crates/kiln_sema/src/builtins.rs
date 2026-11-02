@@ -1931,7 +1931,7 @@ impl Sema<'_, '_> {
         let ty = self.const_char_ptr(QualType::CHAR);
         let ty = self.ast.types.canonical(ty);
         let base = PtrBase::StringLit { lit, origin };
-        self.ast.consts.push_scalar(Scalar::Pointer { ty, base, offset: 0 }).ok()
+        self.ast.consts.push_scalar(Scalar::Pointer { ty, base, offset: 0, designated: None }).ok()
     }
 
     /// The `const std::source_location::__impl *` value pointing to the
@@ -2006,7 +2006,12 @@ impl Sema<'_, '_> {
         let pty = self.ast.types.canonical(pty);
         self.ast
             .consts
-            .push_scalar(Scalar::Pointer { ty: pty, base: PtrBase::Const(obj), offset: 0 })
+            .push_scalar(Scalar::Pointer {
+                ty: pty,
+                base: PtrBase::Const(obj),
+                offset: 0,
+                designated: None,
+            })
             .ok()
     }
 

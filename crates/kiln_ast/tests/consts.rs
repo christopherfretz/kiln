@@ -347,12 +347,21 @@ fn every_scalar_kind_roundtrips() {
         PtrBase::Const(c),
         PtrBase::TypeInfo(ty(INT)),
     ] {
-        let id = roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 0 });
+        let id = roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 0, designated: None });
         assert_eq!(st.kind(id), ValueKind::Pointer);
         if !matches!(base, PtrBase::Function(_)) {
-            roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 12 });
+            roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 12, designated: None });
             // Offsets beyond 32 bits go to the word pool.
-            roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 1 << 40 });
+            roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 1 << 40, designated: None });
+            // A `void *`'s designated type is part of its identity: the
+            // same address naming a different subobject is a different
+            // value ([temp.type]/2.4).
+            let plain = st.push_scalar(Scalar::Pointer { ty: ty(INT_PTR), base, offset: 4, designated: None });
+            for (off, d) in [(4, INT), (4, PAIR), (1 << 40, INT)] {
+                let at = Scalar::Pointer { ty: ty(INT_PTR), base, offset: off, designated: Some(ty(d)) };
+                let id = roundtrip(&mut st, at);
+                assert_ne!(Ok(id), plain);
+            }
         }
     }
     // A string literal object is identified by the expression that
@@ -361,6 +370,7 @@ fn every_scalar_kind_roundtrips() {
         ty: ty(INT_PTR),
         base: PtrBase::StringLit { lit: StringLitId::new(1), origin: ExprId::new(origin) },
         offset: 1,
+        designated: None,
     };
     let (p9, p10) = (roundtrip(&mut st, at(9)), roundtrip(&mut st, at(10)));
     assert_ne!(p9, p10);
@@ -410,6 +420,7 @@ fn reloc_widths() {
             ty: ty(INT_PTR),
             base: PtrBase::Decl(DeclId::new(1)),
             offset: 0,
+            designated: None,
         })
         .unwrap();
     let n = st.push_scalar(Scalar::Null { ty: ty(INT_PTR), kind: NullKind::Pointer }).unwrap();
@@ -451,6 +462,7 @@ fn aggregate_with_nested_relocations() {
             ty: ty(INT_PTR),
             base: PtrBase::Decl(DeclId::new(1)),
             offset: 0,
+            designated: None,
         })
         .unwrap();
     let bytes = le(&[7, 0, 0, 0]);
@@ -463,7 +475,7 @@ fn aggregate_with_nested_relocations() {
     assert_eq!(st.get(inner), ConstValue::Aggregate(inner_img));
     // outer: P{9, &inner.a} — a pointer into another frozen value.
     let pin = st
-        .push_scalar(Scalar::Pointer { ty: ty(INT_PTR), base: PtrBase::Const(inner), offset: 0 })
+        .push_scalar(Scalar::Pointer { ty: ty(INT_PTR), base: PtrBase::Const(inner), offset: 0, designated: None })
         .unwrap();
     let bytes2 = le(&[9, 0, 0, 0]);
     let relocs2 = [Reloc { at: 8, value: pin }];
@@ -688,11 +700,11 @@ fn malformed_scalars_are_rejected() {
     bad(&mut st, Scalar::Float { ty: ty(DOUBLE), kind: FloatKind::X87Extended, bits: 1 << 80 });
     bad(
         &mut st,
-        Scalar::Pointer { ty: ty(FN_PTR), base: PtrBase::Function(DeclId::new(4)), offset: 1 },
+        Scalar::Pointer { ty: ty(FN_PTR), base: PtrBase::Function(DeclId::new(4)), offset: 1, designated: None },
     );
     bad(
         &mut st,
-        Scalar::Pointer { ty: ty(INT_PTR), base: PtrBase::Const(ConstValueId::new(99)), offset: 0 },
+        Scalar::Pointer { ty: ty(INT_PTR), base: PtrBase::Const(ConstValueId::new(99)), offset: 0, designated: None },
     );
     assert!(st.is_empty());
     let e = ConstError::Malformed("x");
@@ -819,6 +831,7 @@ fn print_scalars() {
                 ty: ty(INT_PTR),
                 base: PtrBase::Decl(DeclId::new(1)),
                 offset: 0,
+                designated: None,
             }),
             "&x",
             "&x",
@@ -828,6 +841,7 @@ fn print_scalars() {
                 ty: ty(INT_REF),
                 base: PtrBase::Decl(DeclId::new(1)),
                 offset: 0,
+                designated: None,
             }),
             "&x",
             "x",
@@ -837,6 +851,7 @@ fn print_scalars() {
                 ty: ty(INT_REF),
                 base: PtrBase::Temporary(DeclId::new(7)),
                 offset: 0,
+                designated: None,
             }),
             "&ref_tmp",
             "ref_tmp",
@@ -846,6 +861,7 @@ fn print_scalars() {
                 ty: ty(INT_PTR),
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 8,
+                designated: None,
             }),
             "&arr[2]",
             "&arr[2]",
@@ -855,6 +871,7 @@ fn print_scalars() {
                 ty: ty(INT_PTR),
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 0,
+                designated: None,
             }),
             "&arr[0]",
             "&arr[0]",
@@ -864,6 +881,7 @@ fn print_scalars() {
                 ty: ty(INT_PTR),
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 12,
+                designated: None,
             }),
             "&arr[3]",
             "&arr[3]",
@@ -873,6 +891,7 @@ fn print_scalars() {
                 ty: ty(FN_PTR),
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 0,
+                designated: None,
             }),
             "&arr",
             "&arr",
@@ -882,6 +901,7 @@ fn print_scalars() {
                 ty: ty(FN_PTR),
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 6,
+                designated: None,
             }),
             "&arr+6",
             "&arr+6",
@@ -891,6 +911,7 @@ fn print_scalars() {
                 ty: ty(INT_PTR),
                 base: PtrBase::Decl(DeclId::new(2)),
                 offset: 16,
+                designated: None,
             }),
             "&arr+16",
             "&arr+16",
@@ -900,6 +921,7 @@ fn print_scalars() {
                 ty: ty(INT_PTR),
                 base: PtrBase::Decl(DeclId::new(3)),
                 offset: 4,
+                designated: None,
             }),
             "&s.in.y",
             "&s.in.y",
@@ -909,6 +931,7 @@ fn print_scalars() {
                 ty: ty(INT_PTR),
                 base: PtrBase::Decl(DeclId::new(3)),
                 offset: 12,
+                designated: None,
             }),
             "&s.arr[1]",
             "&s.arr[1]",
@@ -918,18 +941,19 @@ fn print_scalars() {
                 ty: ty(INT_PTR),
                 base: PtrBase::Decl(DeclId::new(3)),
                 offset: 0,
+                designated: None,
             }),
             "&s.x",
             "&s.x",
         ),
-        (push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 0 }), "\"hi\"", "\"hi\""),
+        (push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 0, designated: None }), "\"hi\"", "\"hi\""),
         (
-            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 1 }),
+            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 1, designated: None }),
             "&\"hi\"[1]",
             "&\"hi\"[1]",
         ),
         (
-            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(wide), offset: 2 }),
+            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(wide), offset: 2, designated: None }),
             "&u\"ab\"[1]",
             "&u\"ab\"[1]",
         ),
@@ -938,12 +962,13 @@ fn print_scalars() {
                 ty: ty(FN_PTR),
                 base: PtrBase::Function(DeclId::new(4)),
                 offset: 0,
+                designated: None,
             }),
             "&f",
             "&f",
         ),
         (
-            push(Scalar::Pointer { ty: ty(FN_PTR), base: PtrBase::TypeInfo(ty(SHORT)), offset: 0 }),
+            push(Scalar::Pointer { ty: ty(FN_PTR), base: PtrBase::TypeInfo(ty(SHORT)), offset: 0, designated: None }),
             "&typeid(short)",
             "&typeid(short)",
         ),
@@ -970,6 +995,7 @@ fn print_scalars() {
             ty: ty(INT_PTR),
             base: PtrBase::Decl(DeclId::new(9)),
             offset: 4,
+            designated: None,
         })
         .unwrap();
     assert_eq!(st.display(p, &strings, &NoEnv, &PrintOptions::DEFAULT), "&#d9+4");

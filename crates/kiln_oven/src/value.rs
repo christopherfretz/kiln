@@ -491,7 +491,7 @@ impl Oven {
                 Some(d) => {
                     let r = b.ast().types.is_reference(q);
                     self.check_not_immediate(b, d, r, loc)?;
-                    Ok(Scalar::Pointer { ty: q, base: PtrBase::Function(d), offset: 0 })
+                    Ok(Scalar::Pointer { ty: q, base: PtrBase::Function(d), offset: 0, designated: None })
                 }
                 None => Err(Freeze::Fault(FailKind::NotConstant)),
             };
@@ -545,7 +545,7 @@ impl Oven {
                 Origin::TypeInfo(t) => PtrBase::TypeInfo(t),
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
-            return Ok(Scalar::Pointer { ty: q, base, offset });
+            return Ok(Scalar::Pointer { ty: q, base, offset, designated: None });
         }
         // A temporary extended by the variable being initialized
         // ([class.temporary]/6): its value is frozen with the result.
@@ -561,14 +561,14 @@ impl Oven {
             if !self.let_pending.iter().any(|&(x, _)| x == t) {
                 self.let_pending.push((t, Ptr::with_off(raw, 0, false)));
             }
-            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Temporary(t), offset });
+            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Temporary(t), offset, designated: None });
         }
         if let (Origin::Var(d), Some(o)) = (a.origin, self.run.object)
             && d == o
             && a.live
         {
             let ast = b.ast();
-            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Decl(ast.first(d)), offset });
+            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Decl(ast.first(d)), offset, designated: None });
         }
         if self.run.silent {
             return Err(Freeze::Fault(FailKind::NotConstant));

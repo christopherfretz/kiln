@@ -373,6 +373,15 @@ pub enum Scalar<'a> {
         base: PtrBase,
         /// Byte offset from the start of `base` (0 for functions).
         offset: u64,
+        /// For a `cv void *`: the type of the object it designates, the
+        /// subobject its conversion from `T *` named (`T`, canonical and
+        /// cv-unqualified), which a cast back to `U *` checks
+        /// ([expr.static.cast]/14). `None` for every other pointer, whose
+        /// designated object follows from its type and offset, and for a
+        /// `void *` whose designator is unknown. Part of the value's
+        /// identity: `(void *)&s` and `(void *)&s.first` are different
+        /// pointer values ([temp.type]/2.4).
+        designated: Option<QualType>,
     },
     /// A non-null pointer to member.
     MemberPtr {

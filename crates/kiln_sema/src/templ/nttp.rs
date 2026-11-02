@@ -310,10 +310,10 @@ impl Sema<'_, '_> {
                 }
                 // Re-keyed at the reference type: printed without `&`
                 // (`T<gi>`), as clang.
-                Some(Scalar::Pointer { base, offset, .. }) => Ok(self
+                Some(Scalar::Pointer { base, offset, designated, .. }) => Ok(self
                     .ast
                     .consts
-                    .push_scalar(Scalar::Pointer { ty: canon, base, offset })
+                    .push_scalar(Scalar::Pointer { ty: canon, base, offset, designated })
                     .unwrap_or(v)),
                 _ => Ok(v),
             }
