@@ -5,21 +5,22 @@
 // constructor of a derived class it makes the constructor immediate.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 35:19 error "call to consteval function 'B2::B2' is not a constant expression"
-//@ diag: 35:22 note "function parameter 'q' with unknown value cannot be used in a constant expression"
-//@ diag: 35:11 note "declared here"
-//@ diag: 43:16 error "call to consteval function 'B4::B4' is not a constant expression"
-//@ diag: 43:22 note "function parameter 'q' with unknown value cannot be used in a constant expression"
-//@ diag: 43:11 note "declared here"
-//@ diag: 48:31 error "call to consteval function 'B4::B4' is not a constant expression"
-//@ diag: 48:38 note "function parameter 'q' with unknown value cannot be used in a constant expression"
-//@ diag: 48:26 note "declared here"
-//@ diag: 49:20 error "call to immediate function 'D4::D4' is not a constant expression"
-//@ diag: 42:8 note "'D4' is an immediate constructor because its body contains a call to a consteval constructor 'B4' and that call is not a constant expression"
-//@ diag: 49:41 note "function parameter 'd' with unknown value cannot be used in a constant expression"
-//@ diag: 49:12 note "declared here"
-//@ requires: clang<22
-// clang 22 emits error: call to immediate function 'D4::D4' is not a constant expression; WP-355 residual
+//@ requires: clang>=22
+//@ diag: 36:19 error "call to consteval function 'B2::B2' is not a constant expression"
+//@ diag: 36:22 note "function parameter 'q' with unknown value cannot be used in a constant expression"
+//@ diag: 36:11 note "declared here"
+//@ diag: 44:16 error "call to consteval function 'B4::B4' is not a constant expression"
+//@ diag: 44:22 note "function parameter 'q' with unknown value cannot be used in a constant expression"
+//@ diag: 44:11 note "declared here"
+//@ diag: 49:31 error "call to consteval function 'B4::B4' is not a constant expression"
+//@ diag: 49:38 note "function parameter 'q' with unknown value cannot be used in a constant expression"
+//@ diag: 49:26 note "declared here"
+//@ diag: 50:20 error "call to immediate function 'D4::D4' is not a constant expression"
+//@ diag: 43:8 note "'D4' is an immediate constructor because its body contains a call to a consteval constructor 'B4' and that call is not a constant expression"
+//@ diag: 41:28 note "read of variable 'd' whose value is not known"
+//@ diag: 43:8 note "in call to 'B4(d)'"
+//@ diag: 50:20 note "in call to 'D4(d)'"
+//@ diag: 50:12 note "declared here"
 struct B {
   int a;
   constexpr B(int x) : a(x) {}

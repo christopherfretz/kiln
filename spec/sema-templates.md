@@ -1689,6 +1689,21 @@ recomputed exactly as for non-template code (clang's
   - `CXXDependentScopeMemberExpr` becomes member lookup;
   - `CXXUnresolvedConstructExpr` becomes [expr.type.conv];
   - `ParenListExpr` becomes the initialization of its variable.
+- **A resolved `MemberExpr` naming a member function template
+  specialization** is rebuilt from the member name and the template
+  arguments *as written* ([temp.arg.explicit]/4; clang
+  `TreeTransform::TransformMemberExpr` passes only the written
+  `TemplateArgs`), never from the arguments deduction chose: overload
+  resolution runs again in the instantiation, so `s.str("")` with a
+  `template <class A> void str(const basic_string<C, T, A>&)` overload
+  deduces again and fails quietly instead of naming
+  `basic_string<char, char_traits<char>, char[1]>`, which a deduced
+  argument list replayed as explicit would instantiate (libc++
+  `ostream.formatted.print/locale-specific_form.pass.cpp`, WP-358). An
+  implicit member access (`f<X>()` inside a member, an implicit `this->`)
+  keeps the written arguments on the `MemberExpr` it forms
+  (`finish_overload_ref`, `set_member_template_args`). Test:
+  `tests/conformance/temp.arg.explicit/deduced-member-template-args-not-rewritten.cpp`.
 - **An NTTP reference** becomes `SubstNonTypeTemplateParmExpr {param,
   pack_index, replacement}`. The replacement is:
   - an `IntegerLiteral` (or the matching literal) built from the
@@ -2500,9 +2515,18 @@ immediate context: errors are hard.
   `getMinRequiredArguments`), wherever it is.
 - **The explicit-specifier** ([temp.deduct.general]/7, [dcl.fct.spec]/3).
   A value-dependent `explicit(expr)` (kept in `decls.cold.explicit_expr`)
-  is substituted together with the signature when a specialization is
-  formed. `explicit(false)` makes the specialization non-explicit, and a
-  substitution failure is a deduction failure. A member of a class
+  is substituted once the specialization's signature is formed and, in
+  call deduction, only after its associated constraints are satisfied
+  ([temp.deduct.general]/5; clang `instantiateExplicitSpecifierDeferred`):
+  `get_function_spec_signature` leaves it pending
+  (`templ.explicit_pending`) and `finish_function_spec_explicit`
+  substitutes it, so a candidate whose constraint fails never forms an
+  `explicit(expr)` ill-formed for its arguments (libstdc++ `tuple`'s
+  `explicit(!__convertible_from_tuple_like<_UTuple>())`; test
+  `temp.deduct.general/constraints-before-explicit-specifier.cpp`).
+  `get_function_spec` does both. `explicit(false)` makes the
+  specialization non-explicit, and a substitution failure is a deduction
+  failure. A member of a class
   template substitutes it when the class is instantiated. A template is
   "not a candidate" before deduction only when it is explicit
   non-dependently (clang `isNonDependentlyExplicit`;
@@ -4375,6 +4399,23 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   with them (`get<0>(c)` for `std::complex`). Without the `>(` lookahead
   `<` stays less-than (clang also assumes a template there and
   diagnoses).
+- Operator-function-id template-ids ([temp.names]/1,3, WP-364): after
+  `operator@`, unqualified or behind a non-dependent qualifier, `<`
+  starts a template argument list when `Sema::operator_names_template`
+  says the name is a template-name: lookup finds a function template,
+  or, unqualified, nothing or only non-member functions (P0846, without
+  the `>(` lookahead, as clang); after `template` always; behind a
+  dependent qualifier never (`Q<T>::template operator()<char>` becomes
+  a `DependentScopeDeclRefExpr` with the arguments). Otherwise `<` is
+  less-than. `Sema::act_on_operator_template_id` builds the
+  `UnresolvedLookupExpr` with the explicit arguments, completed by the
+  call or, without one, by `resolve_single_template_id`
+  (`&S::operator()<int>`); unqualified and called with only non-member
+  functions found it is an ADL lookup (`operator+<7>(a, b)`), uncalled
+  with nothing found it is `use of undeclared 'operator-'`, and a name
+  that finds no function template is `no template named 'operator()'`
+  (`temp.names/operator-template-id{,-errors}.cpp`). The member-access
+  form `x.template operator()<N>()` goes through the member path.
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is
   unsupported.
@@ -5010,6 +5051,17 @@ explicit specialization errors remain. The blockers are:
   pack is `TooManyArguments`, so `f<void>()` of `f(T &)` is "requires 1
   argument" rather than a substitution failure (WP-300). The check after
   substitution stays for expanded non-trailing packs.
+  The explicit substitution is clang's `Final` one
+  (`SubstituteExplicitTemplateArguments`): each type argument is
+  substituted as written (`Substituter::final_subst`, no
+  `SubstTemplateTypeParm` sugar), so a parameter it makes
+  non-dependent keeps the sugar in its CWG1391 note: `f<s::pl>(1, 2)`
+  of `f(W<T>, int)` notes "no known conversion from 'int' to
+  'W<s::pl>' (aka 'W<s::plain>')". Every other substitution records
+  the canonical argument under `SubstTemplateTypeParm`, which is not
+  `aka`-worthy (`print.rs::should_aka`), so a member of `V<s::pl>`
+  takes 'W<plain>' with no `aka` (WP-366). Test:
+  `tests/conformance/temp.arg.explicit/explicit-arg-sugar-nondependent-param.cpp`.
   `deduce_explicit_only` is the same pipeline with no call: it is used
   for a function template-id that is not called ([over.over]/3,
   `Sema::resolve_single_template_id`). Mismatch notes print P as

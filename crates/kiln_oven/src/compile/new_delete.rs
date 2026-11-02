@@ -13,6 +13,7 @@ use kiln_ast::expr::{CastKind, ExprFlags, ExprKind};
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::types::ArgView;
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
+use kiln_source::Loc;
 
 use super::class::Callee;
 use super::{Access, Compiler, skip_parens};
@@ -21,23 +22,63 @@ use crate::mem::Origin;
 use crate::ty::{OTy, TyKind};
 
 impl Compiler<'_> {
-    /// `::new (p) T(init)` in a std function: begins the lifetime of the
-    /// `T` subobject `p` designates (spec/oven.md "Transient allocation").
-    fn placement_new(&mut self, e: ExprId, dst: u32) {
+    /// The static type of the object a placement argument designates:
+    /// the pointee of the argument before its conversions to `void *`
+    /// (`kbc::bi::DYN` when it is `void *` itself, unknown statically).
+    fn placement_target(&mut self, arg: ExprId) -> u32 {
+        let ast = self.ast();
+        let mut a = arg;
+        loop {
+            let n = ast.exprs.get(a);
+            match n.kind() {
+                ExprKind::ParenExpr => a = ast.exprs.operand(a),
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+                    if matches!(ast.exprs.cast_kind(a), CastKind::BitCast | CastKind::NoOp) =>
+                {
+                    a = ast.exprs.operand(a);
+                }
+                _ => break,
+            }
+        }
+        let t = ast.exprs.get(a).ty();
+        match ast.types.pointee(t) {
+            Some(p) if !ast.types.is_void(p) => self.ty(p).0,
+            _ => crate::kbc::bi::DYN,
+        }
+    }
+
+    /// `::new (p) T(init)` / `::new (p) T[n]{...}` (P2747; within
+    /// namespace std before C++26, `std::construct_at`): checks the
+    /// storage `p` designates and begins the lifetime of the new object
+    /// there (spec/oven.md "Transient allocation"). The array forms share
+    /// [`Compiler::new_expr`]'s initialization; this emits the placement
+    /// itself, leaving `p` in `dst`.
+    #[allow(clippy::too_many_arguments)]
+    fn placement_new(
+        &mut self,
+        e: ExprId,
+        arg: ExprId,
+        dst: u32,
+        aux: u32,
+        cnt: u32,
+        k: u64,
+        size_loc: Loc,
+    ) {
         let ast = self.ast();
         let x = *ast.exprs.new_extra(e);
-        let Some(arg) = x.placement.and_then(|l| ast.lists.iter::<ExprId>(l).next()) else {
-            self.unsupported(e);
-            return;
-        };
         let loc = ast.exprs.get(e).loc();
         let elem = self.ty(x.allocated_ty);
+        let stat = self.placement_target(arg);
         let p = self.rv(arg);
-        self.emit_site(Op::Placement, 0, &[p, elem.0], e, loc);
         self.emit(Op::Mov, 0, &[dst, p]);
-        if let Some(i) = x.init {
-            self.init(i, dst, elem);
+        let ops = [dst, elem.0, stat, cnt, k as u32];
+        if aux & new_aux::ARRAY != 0 {
+            self.emit_site(Op::Placement, aux | new_aux::BOUND, &ops, e, size_loc);
         }
+        self.emit_site(Op::Placement, aux, &ops, e, loc);
     }
 
     /// A direct call of `::operator new(n)` (`alloc`) or `::operator
@@ -79,39 +120,36 @@ impl Compiler<'_> {
             self.unsupported(e);
             return;
         };
-        // `::new (p) T(...)` inside namespace std (clang 19's
-        // `isStdFunction` placement path, used by `std::construct_at`).
-        if x.array_size.is_none()
-            && is_reserved_placement_new(ast, op_new)
-            && self.cur_fn.is_some_and(|f| is_std_function(ast, f))
-        {
-            self.placement_new(e, dst);
-            return;
-        }
-        // [expr.const]/5.20: only a replaceable global allocation function
-        // may be called (clang: `note_constexpr_new_non_replaceable`).
-        if !is_replaceable_global_alloc(ast, op_new) {
-            let msg = non_replaceable_note(ast, op_new);
-            self.trap(e, &msg);
-            return;
-        }
+        // clang 22's `VisitCXXNewExpr` order: `new (std::nothrow)`, the
+        // reserved placement form (P2747: in C++26, or within namespace
+        // std), any other placement form, a non-replaceable function.
         let mut aux = 0;
-        if let Some(list) = x.placement {
-            let args: Vec<ExprId> = ast.lists.iter::<ExprId>(list).collect();
-            // clang supports exactly `new (std::nothrow) T`.
-            let nothrow = args.len() == 1 && {
-                let t = ast.exprs.get(args[0]).ty();
-                is_std_record(ast, t, "nothrow_t")
-            };
-            if !nothrow {
+        let mut place = None;
+        let args: Vec<ExprId> =
+            x.placement.map(|l| ast.lists.iter::<ExprId>(l).collect()).unwrap_or_default();
+        let nothrow =
+            args.len() == 1 && is_std_record(ast, ast.exprs.get(args[0]).ty(), "nothrow_t");
+        if nothrow {
+            let _ = self.lv(args[0], Access::Addr);
+            aux |= new_aux::NOTHROW;
+        } else if is_reserved_placement_new(ast, op_new) {
+            if !(self.b.cxx26() || self.cur_fn.is_some_and(|f| is_std_function(ast, f))) {
                 self.trap(
                     e,
-                    "this placement new expression is not yet supported in constant expressions",
+                    "this placement new expression is not supported in constant expressions before C++2c",
                 );
                 return;
             }
-            let _ = self.lv(args[0], Access::Addr);
-            aux |= new_aux::NOTHROW;
+            place = Some(args[0]);
+        } else if !args.is_empty() {
+            self.trap(e, "this placement new expression is not supported in constant expressions ");
+            return;
+        } else if !is_replaceable_global_alloc(ast, op_new) {
+            // [expr.const]/5.20: only a replaceable global allocation
+            // function may be called (`note_constexpr_new_non_replaceable`).
+            let msg = non_replaceable_note(ast, op_new);
+            self.trap(e, &msg);
+            return;
         }
         let elem = self.ty(x.allocated_ty);
         let init = x.init;
@@ -120,7 +158,11 @@ impl Compiler<'_> {
         let Some(size_e) = x.array_size else {
             // A single object (a class object is initialized by its
             // constructor, a `CXXConstructExpr`).
-            self.emit_site(Op::New, aux, &[dst, elem.0, dst, oi, 0], e, loc_new);
+            if let Some(arg) = place {
+                self.placement_new(e, arg, dst, 0, 0, 0, loc_new);
+            } else {
+                self.emit_site(Op::New, aux, &[dst, elem.0, dst, oi, 0], e, loc_new);
+            }
             if let Some(i) = init {
                 self.init(i, dst, elem);
             }
@@ -186,7 +228,11 @@ impl Compiler<'_> {
             aux |= new_aux::ZERO;
         }
         let cnt = self.rv_copy(stripped);
-        self.emit_site(Op::New, aux, &[dst, elem.0, cnt, oi, k as u32], e, size_loc);
+        if let Some(arg) = place {
+            self.placement_new(e, arg, dst, aux, cnt, k, size_loc);
+        } else {
+            self.emit_site(Op::New, aux, &[dst, elem.0, cnt, oi, k as u32], e, size_loc);
+        }
         if let ArrInit::Each(i) = ai {
             // A null result (`std::nothrow`) has no elements: the loop
             // bound is checked against the count, which the VM leaves as
@@ -412,7 +458,7 @@ pub(crate) fn is_std_named(ast: &Ast, d: DeclId, name: &str) -> bool {
     is_named(ast, d, name) && in_std(ast, d)
 }
 
-fn is_named(ast: &Ast, d: DeclId, name: &str) -> bool {
+pub(crate) fn is_named(ast: &Ast, d: DeclId, name: &str) -> bool {
     ast.decls.get(d).name().as_ident().is_some_and(|s| ast.symbols().as_str(s) == name)
 }
 

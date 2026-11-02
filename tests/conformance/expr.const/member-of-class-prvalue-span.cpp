@@ -2,12 +2,14 @@
 // from span/at.pass.cpp): a member function of a class template prvalue
 // returned by a function, called in a constant expression, reading a member
 // of another prvalue; the out-of-range path throws, which is not constant.
+// Pinned to C++23: in C++26 a caught or uncaught throw is evaluated (P3068).
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 39:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 24:7 note "subexpression not valid in a constant expression"
-//@ diag: 34:10 note "in call to 's.subspan(1).at(4)'"
-//@ diag: 39:15 note "in call to 'test_at(4)'"
+//@ diag: 41:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 26:7 note "subexpression not valid in a constant expression"
+//@ diag: 36:10 note "in call to 's.subspan(1).at(4)'"
+//@ diag: 41:15 note "in call to 'test_at(4)'"
 using size_t = decltype(sizeof 0);
 struct out_of_range { const char *what; };
 template <class T, size_t Extent = size_t(-1)>

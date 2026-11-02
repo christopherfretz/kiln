@@ -29,6 +29,8 @@ pub struct Config {
     pub libcxx: Option<LibcxxTree>,
     pub resource_dir: PathBuf,
     pub features: Vec<String>,
+    /// `_LIBCPP_VERSION` of the libc++ headers (`features::libcxx_version`).
+    pub libcxx_version: Option<u32>,
     pub compile_timeout: Duration,
     pub run_timeout: Duration,
     /// The run limit of a long test ([`is_long`]): `--run-timeout-long`.
@@ -262,19 +264,16 @@ const HOST_FS_UNSUPPORTED: &[&str] = &[
     "std/input.output/filesystems/fs.op.funcs/fs.op.hard_lk_ct/hard_link_count.pass.cpp",
 ];
 
-/// On aarch64, LLVM lowers a signed 128-bit overflow multiply
-/// (`llvm.smul.with.overflow.i128`, from `__builtin_mul_overflow`) to a
-/// `__muloti4` libcall that only compiler-rt's builtins provide; the
-/// GNU toolchain's link line (clang's and kiln's) links libgcc, which has
-/// no `__muloti4`. (`x86_64` expands it inline.)
-const COMPILER_RT_UNSUPPORTED: &[&str] =
-    &["std/numerics/numeric.ops/numeric.ops.sat/mul_sat.pass.cpp"];
-
 /// With the system tzdata at 2024b or later, `tzdata.zi` spells numeric
 /// abbreviations as `%z`, which libc++ 19's tzdb parser keeps verbatim
-/// (`sys_info::abbrev` is `"%z"` where `zdump` prints `"+03"`).
+/// (`sys_info::abbrev` is `"%z"` where `zdump` prints `"+03"`). libc++ 20
+/// parses `%z` ([`TZDATA_Z_FIXED_IN`]), so the exclusion applies only below
+/// that release.
 const TZDATA_Z_UNSUPPORTED: &[&str] =
     &["std/time/time.zone/time.zone.timezone/time.zone.members/sys_info.zdump.pass.cpp"];
+
+/// The first libc++ major release whose tzdb parser expands `%z`.
+const TZDATA_Z_FIXED_IN: u32 = 20;
 
 /// The system tzdata database `TZDATA_Z_UNSUPPORTED` depends on.
 const TZDATA_ZI: &str = "/usr/share/zoneinfo/tzdata.zi";
@@ -294,8 +293,9 @@ pub const GROUPING_REASON: &str = "env: glibc en_US.UTF-8 grouping is 3, the tes
 const HOST_FS_TYPES: &[&str] = &["fakeowner", "fuse.grpcfuse", "virtiofs"];
 
 /// Why `rel` is UNSUPPORTED on this host, if it is; `scratch` is where its
-/// scratch directory lives.
-pub fn env_unsupported(rel: &str, scratch: &Path) -> Option<String> {
+/// scratch directory lives, `libcxx` the `_LIBCPP_VERSION` of the headers
+/// the run uses (`features::libcxx_version`; unknown counts as affected).
+pub fn env_unsupported(rel: &str, scratch: &Path, libcxx: Option<u32>) -> Option<String> {
     if ROOT_UNSUPPORTED.contains(&rel) && running_as_root() {
         return Some(ROOT_REASON.to_owned());
     }
@@ -307,13 +307,11 @@ pub fn env_unsupported(rel: &str, scratch: &Path) -> Option<String> {
     {
         return Some(format!("env: TMPDIR is on a host-shared {fs} mount"));
     }
-    if COMPILER_RT_UNSUPPORTED.contains(&rel) && cfg!(target_arch = "aarch64") {
-        return Some("env: aarch64 needs __muloti4 from compiler-rt; libgcc is linked".to_owned());
-    }
     if TZDATA_Z_UNSUPPORTED.contains(&rel)
+        && libcxx.is_none_or(|v| features::libcxx_major(v) < TZDATA_Z_FIXED_IN)
         && let Some(v) = tzdata_version(TZDATA_ZI).filter(|v| tzdata_uses_percent_z(v))
     {
-        return Some(format!("env: tzdata {v} uses %z, which libc++ 19 does not parse"));
+        return Some(format!("env: tzdata {v} uses %z, which libc++ < 20 does not parse"));
     }
     None
 }
@@ -464,7 +462,7 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
         wall: Duration::ZERO,
         max_rss_kb: None,
     };
-    if let Some(reason) = env_unsupported(&job.rel, &cfg.scratch) {
+    if let Some(reason) = env_unsupported(&job.rel, &cfg.scratch, cfg.libcxx_version) {
         r.outcome = Outcome::Unsupported(reason);
         return r;
     }
@@ -808,28 +806,33 @@ mod tests {
 
     #[test]
     fn env_exclusions() {
-        for list in [
-            ROOT_UNSUPPORTED,
-            HOST_FS_UNSUPPORTED,
-            COMPILER_RT_UNSUPPORTED,
-            TZDATA_Z_UNSUPPORTED,
-            GROUPING_UNSUPPORTED,
-        ] {
+        for list in
+            [ROOT_UNSUPPORTED, HOST_FS_UNSUPPORTED, TZDATA_Z_UNSUPPORTED, GROUPING_UNSUPPORTED]
+        {
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
             assert_eq!(sorted, list);
         }
         let tmp = std::env::temp_dir();
-        assert_eq!(env_unsupported("std/utilities/any/any.class/nothing.pass.cpp", &tmp), None);
-        let listed = env_unsupported(ROOT_UNSUPPORTED[0], &tmp);
+        let v19 = Some(190_107);
+        assert_eq!(
+            env_unsupported("std/utilities/any/any.class/nothing.pass.cpp", &tmp, v19),
+            None
+        );
+        let listed = env_unsupported(ROOT_UNSUPPORTED[0], &tmp, v19);
         assert_eq!(listed.is_some(), running_as_root());
         assert!(listed.is_none_or(|r| r == ROOT_REASON));
-        let listed = env_unsupported(GROUPING_UNSUPPORTED[0], &tmp);
+        let listed = env_unsupported(GROUPING_UNSUPPORTED[0], &tmp, v19);
         assert_eq!(listed.is_some(), en_us_grouping_is_3());
         assert!(listed.is_none_or(|r| r == GROUPING_REASON));
-        let mul = env_unsupported(COMPILER_RT_UNSUPPORTED[0], &tmp);
-        assert_eq!(mul.is_some(), cfg!(target_arch = "aarch64"));
+        // The `%z` exclusion follows the host tzdata below libc++ 20 and
+        // never applies from 20 on.
+        let z = tzdata_version(TZDATA_ZI).is_some_and(|v| tzdata_uses_percent_z(&v));
+        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, v19).is_some(), z);
+        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, None).is_some(), z);
+        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, Some(200_100)), None);
+        assert_eq!(env_unsupported(TZDATA_Z_UNSUPPORTED[0], &tmp, Some(220_000)), None);
         assert!(tzdata_uses_percent_z("2024b") && tzdata_uses_percent_z("2026b"));
         assert!(!tzdata_uses_percent_z("2024a") && !tzdata_uses_percent_z("2019c"));
         assert!(!tzdata_uses_percent_z("garbage"));
@@ -895,6 +898,7 @@ mod tests {
             libcxx: None,
             resource_dir: base.clone(),
             features: Vec::new(),
+            libcxx_version: None,
             compile_timeout: Duration::from_secs(20),
             run_timeout: run.timeout,
             long_run_timeout: run.timeout,

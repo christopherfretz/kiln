@@ -21,6 +21,7 @@ use crate::{Oven, SemaBridge};
 
 mod bitcast;
 mod builtins;
+pub(crate) mod exc;
 mod life;
 mod meta;
 mod virt;
@@ -188,6 +189,13 @@ pub(crate) enum Fault {
         pointee: OTy,
     },
     LiteralCmp,
+    /// `==`/`!=` of pointers to different objects one of which is of
+    /// unknown identity ([`Origin::Unknown`], P2280).
+    PtrCmpUnknown {
+        p: u64,
+        q: u64,
+        pointee: OTy,
+    },
     NullField,
     /// A base-class step of a member pointer access through a null
     /// object pointer.
@@ -286,6 +294,23 @@ pub(crate) enum Fault {
     DestroyEnded {
         p: u64,
         ty: OTy,
+    },
+    /// An exception no handler of the evaluation catches (P3068): the
+    /// exception object (of type `ty`) and its `what()` string when its
+    /// class derives from `std::exception`. Rendered at its throw.
+    Uncaught {
+        obj: u64,
+        ty: OTy,
+        what: Option<Box<str>>,
+    },
+    /// An exception leaving a non-throwing function ([except.spec]/5).
+    NoexceptExit,
+    /// `throw;` with no handled exception ([expr.throw]/4).
+    RethrowNone,
+    /// An exception leaving a destructor run by unwinding
+    /// ([except.terminate]/1.4); `prev` the active exception's throw.
+    ThrowWhileActive {
+        prev: u32,
     },
 }
 
@@ -395,9 +420,11 @@ impl Oven {
         self.run.entry = entry;
         let pend = self.run.pending.len();
         let clean = self.cleanups.len();
+        let excs = self.exc.lens();
         let entry_pc = self.funcs[func as usize].entry as usize;
         let r = self.run_loop(b, func, entry_pc, fb);
         self.cleanups.truncate(clean);
+        self.exc.truncate(excs);
         let out = match r {
             Ok(()) => Ok(()),
             Err((fault, pc)) => {
@@ -490,6 +517,7 @@ impl Oven {
         let saved_entry = self.run.entry;
         let pend = self.run.pending.len();
         let clean = self.cleanups.len();
+        let excs = self.exc.lens();
         let mark = self.mem.mark();
         // The region's `Ret` writes the frame's result slot.
         let slot = self.regs[fb];
@@ -525,6 +553,7 @@ impl Oven {
             }
         };
         self.cleanups.truncate(clean);
+        self.exc.truncate(excs);
         self.stack.truncate(entry);
         self.mem.release(mark, &self.types);
         self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
@@ -954,10 +983,23 @@ impl Oven {
                     pc += 3;
                 }
                 Op::Placement => {
-                    if let Err(f) = self.placement(reg!(0) as u64, OTy(arg!(1) as u32)) {
+                    let elem = OTy(arg!(1) as u32);
+                    let ty = if aux & new_aux::ARRAY != 0 {
+                        match self.new_bound(reg!(3), aux, elem, arg!(4) as u64) {
+                            Ok(n) => self.types.array_of(elem, n),
+                            Err(f) => fail!(f),
+                        }
+                    } else {
+                        elem
+                    };
+                    let stat = arg!(2) as u32;
+                    let stat = (stat != crate::kbc::bi::DYN).then_some(OTy(stat));
+                    if aux & new_aux::BOUND == 0
+                        && let Err(f) = self.placement(reg!(0) as u64, ty, stat, aux)
+                    {
                         fail!(f);
                     }
-                    pc += 3;
+                    pc += 6;
                 }
                 Op::EndLife => {
                     if let Err(f) = self.end_life(reg!(0) as u64, OTy(arg!(1) as u32), aux) {
@@ -981,7 +1023,7 @@ impl Oven {
                     if self.cleanups.len() > (m >> 64) as usize {
                         // Destroy the innermost registered object, then
                         // execute this `ScopeExit` again.
-                        match self.run_cleanup(b, pc, fb) {
+                        match self.run_cleanup(b, pc, pc, fb) {
                             Ok(Some((npc, nfb))) => {
                                 pc = npc;
                                 fb = nfb;
@@ -1211,7 +1253,7 @@ impl Oven {
                     if self.cleanups.last().is_some_and(|c| c.depth as usize == self.stack.len()) {
                         // The frame's objects are destroyed after the
                         // result is initialized ([stmt.return]/3).
-                        match self.run_cleanup(b, pc, fb) {
+                        match self.run_cleanup(b, pc, pc, fb) {
                             Ok(Some((npc, nfb))) => {
                                 pc = npc;
                                 fb = nfb;
@@ -1271,22 +1313,54 @@ impl Oven {
                     }
                     pc += 4;
                 }
+                Op::TryEnter => {
+                    let depth = self.stack.len() as u32;
+                    let (this, at) = (arg!(0) as u64, pc as u32);
+                    let c = Cleanup { this, ty: OTy(0), func: exc::TRY_MARK, pc: at, depth };
+                    self.cleanups.push(c);
+                    pc += 2;
+                }
+                Op::Throw | Op::Unwind => (pc, fb) = self.throw_op(b, op, pc, fb, aux)?,
+                Op::Catch => match self.catch_match(b, aux, OTy(arg!(1) as u32)) {
+                    Ok(Some(v)) => {
+                        reg!(0) = v;
+                        pc += 4;
+                    }
+                    Ok(None) => pc = arg!(2),
+                    Err(f) => fail!(f),
+                },
+                Op::CatchBegin => {
+                    if let Err(f) = self.catch_begin(pc) {
+                        fail!(f);
+                    }
+                    pc += 1;
+                }
             }
         }
     }
 
     /// Pops the innermost registered destruction and enters its
     /// destructor from the instruction at `pc` (which executes again on
-    /// return); the frame of the running function is at `fb`.
+    /// return, or `ret` when unwinding); the frame of the running function
+    /// is at `fb`.
     #[inline(never)]
     fn run_cleanup(
         &mut self,
         b: &mut dyn SemaBridge,
         pc: usize,
+        ret: usize,
         fb: usize,
     ) -> Result<Option<(usize, usize)>, (Fault, usize)> {
-        let Some(c) = self.cleanups.pop() else { return Ok(None) };
-        self.cleanup_life(&c).map_err(|f| (f, pc))?;
+        let Some(mut c) = self.cleanups.pop() else { return Ok(None) };
+        if c.func >= exc::SENTINEL {
+            // A try-block's marker or an exception's end (`vm/exc.rs`).
+            match self.exc_cleanup(c).map_err(|f| (f, pc))? {
+                Some(d) => c = d,
+                None => return Ok(None),
+            }
+        } else {
+            self.cleanup_life(&c).map_err(|f| (f, pc))?;
+        }
         // A const object is modifiable during its destruction
         // ([class.dtor]/5).
         let p = Ptr::decode(c.this);
@@ -1300,7 +1374,7 @@ impl Oven {
         let base = self.funcs[cur as usize].nregs as usize;
         self.grow_regs(fb + base + 2);
         self.regs[fb + base] = u128::from(c.this);
-        self.enter(b, c.func, c.pc as usize, pc, fb, base).map_err(|f| (f, c.pc as usize))
+        self.enter(b, c.func, c.pc as usize, ret, fb, base).map_err(|f| (f, c.pc as usize))
     }
 
     /// `Op::PushCleanup`: registers the destruction of the object (or
@@ -1591,6 +1665,14 @@ impl Oven {
         self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(..)))
     }
 
+    /// A pointer into an object of unknown identity (P2280).
+    fn is_unknown(&self, raw: u64) -> bool {
+        raw != 0
+            && self
+                .alloc_any(Ptr::decode(raw))
+                .is_some_and(|a| matches!(a.origin, Origin::Unknown(_)))
+    }
+
     /// One past the end of a complete object.
     fn past_complete(&self, raw: u64) -> bool {
         let p = Ptr::decode(raw);
@@ -1618,6 +1700,10 @@ impl Oven {
             if Ptr::decode(q).off == 0 && !Ptr::decode(q).is_fn() && self.past_complete(p) {
                 return Err(Fault::PtrPastCmp { p, pointee });
             }
+        }
+        // clang: an object of unknown identity may be any other object.
+        if self.is_unknown(p) || self.is_unknown(q) {
+            return Err(Fault::PtrCmpUnknown { p, q, pointee });
         }
         Ok(c == cmp::NE)
     }
@@ -2217,18 +2303,82 @@ impl Oven {
     /// `Op::Placement`: a placement new of a `ty` at `raw` (clang's
     /// `VisitCXXNewExpr` placement path: `findCompleteObject` for
     /// construction, then the type of the designated subobject).
-    fn placement(&mut self, raw: u64, ty: OTy) -> Result<(), Fault> {
+    fn placement(&mut self, raw: u64, ty: OTy, stat: Option<OTy>, aux: u32) -> Result<(), Fault> {
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
-        let a = *self.mem.check_storage(raw, 0, true).map_err(fault)?.2;
+        let (sp, _, a) = self.mem.check_storage(raw, 0, true).map_err(fault)?;
+        let (sp, a) = (sp, *a);
         let off = u64::from(Ptr::decode(raw).off);
-        if !self.types.has_subobject(a.ty, off, ty) {
-            let from = self.dynamic_type(a.ty, off);
-            return Err(Fault::PlacementType { from, to: ty });
+        // The designated object: of the argument's static type, or (a
+        // `void *` argument, whose designator the Oven does not keep) the
+        // outermost object at `off`.
+        let target = match stat {
+            Some(s) if self.types.has_subobject(a.ty, off, s) => s,
+            _ => self.outermost_at(a.ty, off).unwrap_or_else(|| self.dynamic_type(a.ty, off)),
+        };
+        if !self.placement_fits(target, ty) {
+            return Err(Fault::PlacementType { from: target, to: ty });
         }
+        if let Some(f) = write_fault(sp, &a, target) {
+            return Err(Fault::Mem { f, ak: ak::INIT, ty: target, p: raw });
+        }
+        if self.types.size(target) < self.types.size(ty) {
+            return Err(Fault::PlacementType { from: target, to: ty });
+        }
+        let size = self.types.size(ty);
         if a.flags & flags::HAS_UNION != 0 {
             self.place_in_unions(raw, a.ty, ty)?;
         }
-        self.mem.set_lifetime(raw, self.types.size(ty), true).map_err(fault)
+        self.mem.set_lifetime(raw, size, true).map_err(fault)?;
+        if aux & new_aux::ZERO != 0 && size > 0 {
+            let (st, abs, _) = self.mem.check(raw, size, true).map_err(fault)?;
+            self.mem.zero(st, abs, size);
+            if self.types.info(ty).has_union {
+                self.zero_unions(raw, 0, ty);
+            }
+        }
+        Ok(())
+    }
+
+    /// clang 22's `HandlePlacementNew` rule: an object of type `s` may
+    /// hold a new `t` when its array extent is at least `t`'s and their
+    /// element types are similar.
+    fn placement_fits(&self, s: OTy, t: OTy) -> bool {
+        let extent = |t: OTy| match self.types.kind(t) {
+            TyKind::Array { n, .. } => n,
+            _ => 1,
+        };
+        let base = |mut t: OTy| {
+            while let TyKind::Array { elem, .. } = self.types.kind(t) {
+                t = elem;
+            }
+            t
+        };
+        extent(s) >= extent(t) && base(s) == base(t)
+    }
+
+    /// The outermost object at offset `off` of a `root`.
+    fn outermost_at(&self, mut t: OTy, mut off: u64) -> Option<OTy> {
+        while off != 0 {
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem);
+                    if es == 0 || off / es >= n {
+                        return None;
+                    }
+                    off %= es;
+                    t = elem;
+                }
+                TyKind::Record { .. } => match self.types.field_at(t, off) {
+                    Some(f) if f.width.is_none() => {
+                        off -= f.offset;
+                        t = f.ty;
+                    }
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        }
+        Some(t)
     }
 
     /// The unions on the path to a placement new of a `ty` at `raw` (in an

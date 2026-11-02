@@ -893,16 +893,24 @@ impl Parser<'_, '_> {
         };
         let q = qual.map(|q| q.ctx);
         let loc = self.loc();
-        if self.at_kw(Kw::Decltype) {
-            self.unsupported("'decltype'", loc);
-            self.bump();
-            if self.at(Punct::LParen) {
-                self.bump();
-                self.skip_until(&[Punct::RParen], false, true);
+        // class-or-decltype ([class.base.init]/1): `decltype(e)` names
+        // the base by type (a dependent one is resolved at instantiation).
+        if qual.is_none() && self.at_kw(Kw::Decltype) {
+            let (kind, ty) = self.parse_decltype_specifier();
+            let Some(init) = self.parse_mem_init_args() else {
+                return (None, false);
+            };
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            if kind == TypeSpecKind::DecltypeAuto {
+                self.s.error(DiagId::parse_decltype_auto_invalid, loc);
             }
-            let ok = self.parse_mem_init_args().is_some();
-            self.eat(Punct::Ellipsis);
-            return (None, ok);
+            // After an error the initializer is still counted, as failed
+            // (no implicit base or member initializers are added).
+            let ty = ty.filter(|_| kind != TypeSpecKind::DecltypeAuto).unwrap_or(QualType::ERROR);
+            return (
+                Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }),
+                true,
+            );
         }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_member_or_base_name);

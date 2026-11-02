@@ -273,6 +273,17 @@ impl Sema<'_, '_> {
     ) -> Result<QualType, ()> {
         let spec = self.get_class_spec(tmpl, written, arg_locs, loc)?;
         self.diagnose_template_id_use(spec, loc);
+        // A template-id naming a still-undeclared specialization after
+        // the template's `preferred_name` attribute gives it the
+        // attribute (clang `CheckTemplateIdType` `InstantiateAttrsForDecl`);
+        // a typedef written before the attribute does not.
+        let first = self.ast.first(spec);
+        if self.ast.spec_info(spec).is_some_and(|(_, s)| s.kind == SpecKind::Undeclared)
+            && !self.ast.templates.is_preferred_named(first)
+            && self.ast.has_preferred_name_attr(tmpl)
+        {
+            self.ast.templates.mark_preferred_named(first);
+        }
         let list = self.ast.types.arg_list(written);
         let rec = self.tag_type(spec);
         Ok(self.ast.types.template_specialization(name, list, Some(rec), false))
@@ -663,6 +674,19 @@ impl Sema<'_, '_> {
     /// point of instantiation. False when the specialization cannot be
     /// defined (diagnosed if `diagnose`).
     pub fn instantiate_class(&mut self, spec: DeclId, poi: Loc, diagnose: bool) -> bool {
+        self.instantiate_class_as(spec, poi, diagnose, true)
+    }
+
+    /// [`Sema::instantiate_class`]; `implicit` relocates an implicit
+    /// instantiation at its pattern's definition (false for an explicit
+    /// instantiation, already located at its template-name).
+    pub(crate) fn instantiate_class_as(
+        &mut self,
+        spec: DeclId,
+        poi: Loc,
+        diagnose: bool,
+        implicit: bool,
+    ) -> bool {
         if self.ast.definition(spec).is_some() {
             return true;
         }
@@ -749,6 +773,28 @@ impl Sema<'_, '_> {
                     s.point_of_instantiation = poi;
                 }
             });
+            // clang `InstantiateClass` locates an implicit instantiation at
+            // its pattern's definition (the primary's or the partial
+            // specialization's name), so the implicit special members
+            // declared in it point there too; an explicit instantiation
+            // stays at its own template-name.
+            if implicit
+                && self
+                    .ast
+                    .templates
+                    .spec(i)
+                    .is_some_and(|s| s.kind == SpecKind::ImplicitInstantiation)
+            {
+                let at = self.ast.decls.get(def).loc();
+                self.builder().relocate_spec(spec, at);
+            }
+        }
+        // The primary's attributes are instantiated onto the
+        // specialization (clang `InstantiateClass` `InstantiateAttrs`):
+        // from here it prints by its `preferred_name` typedef.
+        if matched.is_none() && self.ast.has_preferred_name_attr(tmpl) {
+            let first = self.ast.first(spec);
+            self.ast.templates.mark_preferred_named(first);
         }
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let outer = self.inst_context_pairs(parent);

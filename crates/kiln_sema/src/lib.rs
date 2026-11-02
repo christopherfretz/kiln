@@ -70,6 +70,7 @@ pub mod stack_guard;
 pub mod stmt;
 mod struct_bind;
 mod sve;
+mod switch_conv;
 mod switch_enum;
 pub mod target;
 pub mod templ;
@@ -466,6 +467,11 @@ pub struct Sema<'a, 'sm> {
     /// the reference a list-initialized temporary binds to (`'const E &'`,
     /// clang's entity type). Set around that construction only.
     pub(crate) ctor_diag_ty: Option<QualType>,
+    /// The "passing argument to parameter here" note of a non-aggregate
+    /// class parameter list-initialized from a braced argument (`f({1})`):
+    /// taken by the outermost list constructor call, whose explicit or
+    /// deleted constructor error carries it (clang `PrintInitLocationNote`).
+    pub(crate) list_param_note: Option<Diag>,
     /// The aggregate temporary (and the reference's location) being
     /// list-initialized for a reference: the first `excess elements`
     /// error inside it takes clang's reference note (spec/sema.md).
@@ -728,6 +734,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delegating: Vec::new(),
             ctor_entity: None,
             ctor_diag_ty: None,
+            list_param_note: None,
             ref_temp_note: std::cell::Cell::new(None),
             mem_inits: class::MemInitState::default(),
             extend_collector: None,

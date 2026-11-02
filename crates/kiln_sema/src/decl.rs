@@ -5273,12 +5273,21 @@ impl Sema<'_, '_> {
     }
 
     /// True if lexical context `cur` is, or is nested in, a class template
-    /// or partial specialization before any namespace scope.
+    /// or partial specialization before any namespace scope. (A partial
+    /// specialization is a `CXXRecord` with partial-specialization info:
+    /// libstdc++'s `_Node_handle<_Value, _Value, _NodeAlloc>` befriends
+    /// `_Rb_tree` before its definition, and that friend must not spell
+    /// the injected-class-name, WP-366.)
     pub(crate) fn in_templated_class(&self, mut cur: Option<DeclId>) -> bool {
         while let Some(c) = cur {
             match self.kind_of(c) {
                 DeclKind::ClassTemplatePartialSpecialization => return true,
-                DeclKind::CXXRecord if self.ast.described_template(c).is_some() => return true,
+                DeclKind::CXXRecord
+                    if self.ast.described_template(c).is_some()
+                        || self.ast.partial_spec_info(c).is_some() =>
+                {
+                    return true;
+                }
                 DeclKind::TranslationUnit | DeclKind::Namespace => return false,
                 _ => {}
             }

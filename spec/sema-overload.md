@@ -105,7 +105,13 @@ more than one decl or any template, or (b) the name is unqualified, followed
 by `(`, and ADL is not suppressed (§2.2). Otherwise it builds the M2
 `DeclRefExpr`. The ULE carries `requires_adl` (`ExprFlags`), the qualifier,
 explicit template arguments and the found decls (an `IdList` in candidate
-order).
+order). A ULE naming a function of dependent type (a static member
+`key(const node<K>*)` of a class template beside `key(const nb*)`) is
+type-dependent ([temp.dep.expr]/3, clang's `OverloadExpr` of decls in a
+dependent context): its call is resolved at instantiation, not at the
+definition, where the dependent parameter's conversion is unknown
+(libstdc++ `_Rb_tree::_S_key`; test
+`temp.dep.expr/static-member-overload-dependent-type.cpp`).
 
 `act_on_call` resolves a ULE/UME callee. Every other callee — `(g)(x)`,
 `N::f(x)` with one `f`, a single member `h.g(x)`, function pointers — takes
@@ -819,7 +825,13 @@ Verified: deleted best, distance 1, two distance-3 (scope order), distance 4.
 **Locations**: the primary diagnostic is at the callee name (member name
 for member calls), the operator token, the declarator / `T(` for
 constructors, the expression for conversions; notes are at each candidate's
-name; implicit special members at the class name.
+name; implicit special members at the class name. An implicitly
+instantiated class template specialization is located at its pattern's
+definition (the primary template's or the matched partial specialization's
+name, clang `InstantiateClass`), not at the first declaration of the
+template, so its implicit members' notes point there; an explicit
+specialization or explicit instantiation keeps its own template-name
+(WP-366).
 
 **Parameter sugar** (WP-227): a bad-conversion note names the parameter
 type as declared, sugar and top-level `const` kept (`no known conversion

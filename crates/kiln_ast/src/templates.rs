@@ -328,6 +328,12 @@ pub struct TemplateTables {
     /// not at the explicit instantiation.
     late_explicit_insts: Vec<DeclId>,
     late_explicit_set: FxHashSet<DeclId>,
+    /// Class template specializations (first decls) that carry their
+    /// template's `preferred_name` attributes: instantiated from the
+    /// primary, or named by a template-id while still undeclared after
+    /// the attribute (clang `InstantiateClass` / `CheckTemplateIdType`
+    /// `InstantiateAttrsForDecl`; spec/sema.md §5.22).
+    preferred_named: FxHashSet<DeclId>,
     /// `(first decl of template, canonical args) -> specialization`
     /// (spec/ast.md §8.3).
     specializations: FxHashMap<(DeclId, ArgListId), DeclId>,
@@ -398,6 +404,7 @@ impl Default for TemplateTables {
             moved_class_insts: FxHashSet::default(),
             late_explicit_insts: Vec::new(),
             late_explicit_set: FxHashSet::default(),
+            preferred_named: FxHashSet::default(),
             specializations: FxHashMap::default(),
             spec_order: FxHashMap::default(),
             instantiated_from: FxHashMap::default(),
@@ -442,6 +449,17 @@ impl TemplateTables {
     /// Updates specialization record `i` after instantiation (`kind`,
     /// `from`, `from_args`, point of instantiation). The template and
     /// arguments never change.
+    /// Records that specialization `spec` (its first decl) carries its
+    /// template's `preferred_name` attributes.
+    pub fn mark_preferred_named(&mut self, spec: DeclId) {
+        let _ = self.preferred_named.insert(spec);
+    }
+
+    /// Whether [`TemplateTables::mark_preferred_named`] recorded `spec`.
+    pub fn is_preferred_named(&self, spec: DeclId) -> bool {
+        self.preferred_named.contains(&spec)
+    }
+
     pub fn update_spec(&mut self, i: u32, f: impl FnOnce(&mut SpecInfo)) {
         if let Some(s) = self.specs.get_mut(i as usize) {
             let (t, a) = (s.template, s.args);
@@ -633,6 +651,7 @@ impl HeapSize for TemplateTables {
         r.push(MemRow::of_vec("templ.specs", &self.specs));
         r.push(MemRow::of_vec("templ.member_specs", &self.member_specs));
         r.push(MemRow::of_vec("templ.end_of_tu_defs", &self.end_of_tu_defs));
+        r.push(MemRow::of_set("templ.preferred_named", &self.preferred_named));
         r.push(MemRow::of_map("templ.specializations", &self.specializations));
         let order = self.spec_order.values().map(|v| v.capacity() * 4).sum::<usize>() as u64;
         let mut row = MemRow::of_map("templ.spec_order", &self.spec_order);
@@ -721,8 +740,11 @@ impl Ast {
     /// `decl` (clang `printRecordBefore`'s `UsePreferredNames`).
     pub fn preferred_name_of(&self, decl: DeclId) -> Option<QualType> {
         let (_, info) = self.spec_info(decl)?;
-        let pattern = self.template_info(info.template)?.pattern?;
         let me = self.first(decl);
+        if !self.templates.is_preferred_named(me) {
+            return None;
+        }
+        let pattern = self.template_info(info.template)?.pattern?;
         self.redecls_of(pattern).find_map(|r| {
             self.lists.iter::<crate::AttrId>(self.attrs.of_decl(r)).find_map(|a| {
                 let n = self.attrs.get(a);
@@ -732,6 +754,21 @@ impl Ast {
                 let r = self.types.as_record(t)?;
                 (self.first(r) == me).then_some(t)
             })
+        })
+    }
+
+    /// Whether a declaration of class template `tmpl`'s pattern carries a
+    /// `preferred_name` attribute.
+    pub fn has_preferred_name_attr(&self, tmpl: DeclId) -> bool {
+        let Some(pattern) = self.template_info(tmpl).and_then(|i| i.pattern) else {
+            return false;
+        };
+        self.redecls_of(pattern).any(|r| {
+            self.decls.get(r).has(DeclFlags::HAS_ATTRS)
+                && self
+                    .lists
+                    .iter::<crate::AttrId>(self.attrs.of_decl(r))
+                    .any(|a| self.attrs.get(a).kind == crate::attr::AttrKind::PREFERRED_NAME)
         })
     }
 

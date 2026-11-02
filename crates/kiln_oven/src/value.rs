@@ -514,8 +514,25 @@ impl Oven {
         // A variable with automatic storage duration reached through the
         // globals path (outside its frame, or read by a lax fold) has no
         // constant address ([expr.const]/14).
-        let automatic = matches!(a.origin, Origin::Global(d) | Origin::External(d)
+        let automatic = matches!(a.origin, Origin::Global(d) | Origin::External(d) | Origin::Unknown(d)
             if is_local_var(b.ast(), d));
+        // The object of unknown value of a namespace-scope reference
+        // (P2280; clang `CheckLValueConstantExpression`
+        // `allowConstexprUnknown`).
+        if let Origin::Unknown(d) = a.origin
+            && !automatic
+        {
+            if self.run.silent {
+                return Err(Freeze::Fault(FailKind::NotConstant));
+            }
+            let ast = b.ast();
+            let mut name = String::new();
+            kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
+            return Err(Freeze::Notes(vec![
+                Note::new(loc, format!("initializer of '{name}' is not a constant expression")),
+                Note::new(ast.decls.get(d).loc(), "declared here"),
+            ]));
+        }
         if p.is_static() && !automatic {
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
@@ -562,7 +579,7 @@ impl Oven {
         let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };
         let mut notes = Vec::with_capacity(2);
         match a.origin {
-            Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
+            Origin::Var(d) | Origin::Global(d) | Origin::External(d) | Origin::Unknown(d) => {
                 let mut name = String::new();
                 kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
                 // clang `note_constexpr_non_global`.
@@ -820,7 +837,10 @@ impl Oven {
         let p = match self.globals[g as usize].kind {
             GKind::Str(s, ty, e) => self.alloc_string(b, s, ty, e),
             GKind::Var(d) => {
-                let p = self.resolve_var(b, g, d, top);
+                let mut p = self.resolve_var(b, g, d, top);
+                if b.cxx23() {
+                    p = self.bind_unknown(b, d, p);
+                }
                 // A variable with no initializer yet (`extern const int
                 // n;` before its definition) may get one later in the
                 // translation unit: its unknown value is kept for this
@@ -889,6 +909,58 @@ impl Oven {
             _ => self.mem.alloc_static(ty, size, flags::EXTERNAL | flags::CONST, Origin::Let(t)),
         };
         self.lets.insert(t, p);
+        p
+    }
+
+    /// P2280 (C++23 [expr.const]/10): a variable of reference type not
+    /// usable in constant expressions (a parameter outside its call, an
+    /// `extern` reference, one whose initializer is not constant) is
+    /// "treated as binding to an unspecified object of the referenced
+    /// type whose lifetime ... includes the entire constant evaluation".
+    /// Its external object `p` becomes a reference to that object, of
+    /// origin [`Origin::Unknown`] (one per variable): naming the
+    /// reference succeeds and only an access of the object is diagnosed
+    /// (clang `evaluateVarDeclInit` `AllowConstexprUnknown`).
+    fn bind_unknown(&mut self, b: &mut dyn SemaBridge, d: DeclId, p: u64) -> u64 {
+        let pp = Ptr::decode(p);
+        let Some(a) = self.mem.alloc_any(pp) else { return p };
+        if !matches!(a.origin, Origin::External(x) if x == d) {
+            return p;
+        }
+        let slot_ty = a.ty;
+        let ast = b.ast();
+        let Some(q) = ast.decls.get(d).ty() else { return p };
+        if !ast.types.is_reference(q) {
+            return p;
+        }
+        let Some(rq) = ast.types.pointee(q) else { return p };
+        if ast.types.is_function(rq) {
+            return p;
+        }
+        let u = if let Some(&u) = self.unknowns.get(&d) {
+            u
+        } else {
+            let ty = self.types.intern(b, rq);
+            let size = self.types.size(ty);
+            let hu = self.static_flags(ty) & flags::HAS_UNION;
+            let u = self.mem.alloc_static(
+                ty,
+                size,
+                flags::EXTERNAL | flags::CONST | hu,
+                Origin::Unknown(d),
+            );
+            self.unknowns.insert(d, u);
+            u
+        };
+        let slot = (pp.slot & !crate::mem::STATIC_BIT) as usize;
+        let base = u64::from(self.mem.statics[slot].base) + u64::from(pp.off);
+        let len = self.types.size(slot_ty).min(8);
+        let a = self.mem.alloc_of_mut(pp);
+        a.flags = flags::CONST;
+        a.origin = Origin::Global(d);
+        self.mem.stat.write(base, len, u128::from(u));
+        self.mem.stat.set_init(base, len, true);
+        self.mem.stat.set_ptr(base, len, true);
         p
     }
 
