@@ -138,6 +138,16 @@ are stable (serialization, `const` comparisons). 48..=63 are reserved.
 | 16 | LongLong | `long long` | 33 | Error | `<error type>` (recovery; suppresses cascades) |
 | 17 | ULongLong | `unsigned long long` | | | |
 
+`_Float16` and `__fp16` are keywords (kiln_parse `Kw::Float16`/`Kw::Fp16`,
+`TypeSpecKind::Float16`/`Fp16`) on every target, as in clang 19; both are
+IEEE binary16 with size and alignment 2 and lower to `half`. `_Complex
+_Float16` is accepted, `_Complex __fp16` is an error
+(`err_invalid_complex_spec`, spelled `'_Complex half'` as in clang).
+`__fp16` is storage-only: the usual unary conversions promote it to `float`
+(spec/sema-conv.md), and codegen converts it through `float`
+(spec/codegen.md). Not diagnosed: clang's x86 errors for an `__fp16`
+parameter or return type.
+
 Ids 34..=47 are the AArch64 SVE ACLE builtins (WP-155), in this order:
 `__SVInt8_t`, `__SVInt16_t`, `__SVInt32_t`, `__SVInt64_t`, `__SVUint8_t`,
 `__SVUint16_t`, `__SVUint32_t`, `__SVUint64_t`, `__SVFloat16_t`,

@@ -12,6 +12,7 @@ use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate, FuncId,
     GepFlags, IntPredicate, IntValue, MemOpts, MetadataId, TypeId as LTy, Value,
 };
+use kiln_oven::apfloat::{self, FloatKind};
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
@@ -1341,6 +1342,74 @@ impl Cg<'_> {
         }
     }
 
+    /// A floating constant of any format as `(type, format, encoding)`.
+    fn cfloat_bits(&self, v: V) -> Option<(LTy, FloatKind, u128)> {
+        let V::C(c) = v else { return None };
+        match self.m.const_of(c)? {
+            ConstData::Float { ty, bits } => Some((*ty, float_kind(*ty)?, *bits)),
+            _ => None,
+        }
+    }
+
+    /// LLVM `ConstantFolder` for the formats `cfloat` does not read
+    /// (`half`, `bfloat`, `fp128`, `x86_fp80`; WP-292): `APFloat`
+    /// arithmetic via the Oven's `apfloat`. A NaN result is left unfolded
+    /// (its payload rules are `APFloat`'s).
+    fn fold_wide_bin(&mut self, op: BinOp, l: V, r: V) -> Option<V> {
+        let (ty, k, a) = self.cfloat_bits(l)?;
+        let (_, _, b) = self.cfloat_bits(r)?;
+        if matches!(k, FloatKind::Single | FloatKind::Double) {
+            return None;
+        }
+        let op = match op {
+            BinOp::FAdd => apfloat::BinOp::Add,
+            BinOp::FSub => apfloat::BinOp::Sub,
+            BinOp::FMul => apfloat::BinOp::Mul,
+            BinOp::FDiv => apfloat::BinOp::Div,
+            _ => return None,
+        };
+        let x = apfloat::bin(op, k, a, b).filter(|&x| !apfloat::is_nan(k, x))?;
+        Some(V::C(self.m.const_float_bits(ty, x)))
+    }
+
+    /// The `ConstantFolder` casts involving a format `cfloat` does not
+    /// read: `fpext`/`fptrunc`, `[su]itofp` to `half`/`bfloat`, and
+    /// `fpto[su]i` from them.
+    fn fold_wide_cast(&mut self, op: CastOp, v: V, to: LTy) -> Option<V> {
+        let soft = |k: FloatKind| !matches!(k, FloatKind::Single | FloatKind::Double);
+        if let Some((_, a, w)) = self.cint(v) {
+            let tk =
+                float_kind(to).filter(|&k| matches!(k, FloatKind::Half | FloatKind::BFloat16))?;
+            let x = match op {
+                CastOp::SIToFP => apfloat::from_int(tk, sext(a, w) as u128, true),
+                CastOp::UIToFP => apfloat::from_int(tk, a, false),
+                _ => return None,
+            };
+            return Some(V::C(self.m.const_float_bits(to, x)));
+        }
+        let (_, fk, a) = self.cfloat_bits(v)?;
+        if apfloat::is_nan(fk, a) {
+            return None;
+        }
+        match op {
+            CastOp::FPExt | CastOp::FPTrunc => {
+                let tk = float_kind(to)?;
+                if !soft(fk) && !soft(tk) {
+                    return None;
+                }
+                Some(V::C(self.m.const_float_bits(to, apfloat::cast(fk, tk, a))))
+            }
+            CastOp::FPToSI | CastOp::FPToUI
+                if matches!(fk, FloatKind::Half | FloatKind::BFloat16) =>
+            {
+                let d = apfloat::cast(fk, FloatKind::Double, a);
+                let d = V::C(self.m.const_float_bits(LTy::DOUBLE, d));
+                Some(self.cast(op, d, to))
+            }
+            _ => None,
+        }
+    }
+
     fn mk_float(&mut self, ty: LTy, x: f64) -> V {
         let bits = if ty == LTy::FLOAT {
             u128::from((x as f32).to_bits())
@@ -1355,6 +1424,9 @@ impl Cg<'_> {
             && let Some(x) = fold_int_bin(op, a, b, w)
         {
             return V::C(self.m.const_int(ty, x as i128));
+        }
+        if let Some(v) = self.fold_wide_bin(op, l, r) {
+            return v;
         }
         if let (Some((ty, a)), Some((_, b))) = (self.cfloat(l), self.cfloat(r)) {
             let single = ty == LTy::FLOAT;
@@ -1619,6 +1691,9 @@ impl Cg<'_> {
         {
             return v;
         }
+        if let Some(r) = self.fold_wide_cast(op, v, to) {
+            return r;
+        }
         if let Some((_, a, w)) = self.cint(v) {
             let tw = self.m.types.int_width(to);
             let r = match (op, tw) {
@@ -1810,4 +1885,17 @@ pub(crate) fn sext(a: u128, w: u32) -> i128 {
 /// The alignment of `align`-aligned memory at byte offset `off`.
 pub(crate) fn min_align(align: u64, off: u64) -> u64 {
     if off == 0 { align } else { align.min(1u64 << off.trailing_zeros()) }
+}
+
+/// The format of the LLVM floating type `ty`.
+fn float_kind(ty: LTy) -> Option<FloatKind> {
+    Some(match ty {
+        LTy::HALF => FloatKind::Half,
+        LTy::BFLOAT => FloatKind::BFloat16,
+        LTy::FLOAT => FloatKind::Single,
+        LTy::DOUBLE => FloatKind::Double,
+        LTy::FP128 => FloatKind::Quad,
+        LTy::X86_FP80 => FloatKind::X87Extended,
+        _ => return None,
+    })
 }

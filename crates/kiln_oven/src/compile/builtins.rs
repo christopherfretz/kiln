@@ -44,8 +44,7 @@ fn strip_pointer_casts(ast: &Ast, e: ExprId) -> ExprId {
     use kiln_ast::expr::{CastKind, ValueCategory};
     let e = skip_parens(ast, e);
     let n = ast.exprs.get(e);
-    if !n.kind().is_cast()
-        || !matches!(ast.exprs.cast_kind(e), CastKind::NoOp | CastKind::BitCast)
+    if !n.kind().is_cast() || !matches!(ast.exprs.cast_kind(e), CastKind::NoOp | CastKind::BitCast)
     {
         return e;
     }

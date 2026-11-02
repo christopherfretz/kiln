@@ -564,7 +564,9 @@ impl Oven {
                         "offset of the aligned pointer from the base pointee object ({v} {}) is not a multiple of the asserted {a}",
                         bytes(v)
                     ),
-                    _ => format!("value of the aligned pointer ({v}) is not a multiple of the asserted {a}"),
+                    _ => format!(
+                        "value of the aligned pointer ({v}) is not a multiple of the asserted {a}"
+                    ),
                 };
             }
             _ => {}
@@ -622,9 +624,7 @@ impl Oven {
             BiFault::CastBitfield
             | BiFault::CastIndet { .. }
             | BiFault::CastUnrep { .. }
-            | BiFault::Align { .. } => {
-                String::new()
-            }
+            | BiFault::Align { .. } => String::new(),
         }
     }
 

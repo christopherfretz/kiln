@@ -14,12 +14,12 @@ use kiln_ast::decl::DefinitionBits;
 use kiln_ast::types::BuiltinType;
 
 use super::{Fault, write_fault};
-use crate::{Oven, SemaBridge};
 use crate::compile::float_of;
 use crate::kbc::{ak, bi};
 use crate::mem::{MemFault, Origin, Ptr, flags};
 use crate::softfloat::{self, Class};
 use crate::ty::{OTy, TyKind};
+use crate::{Oven, SemaBridge};
 
 /// A builtin-specific failure (rendered by `notes`; the types are the
 /// designated objects', re-read from the call's arguments when static).

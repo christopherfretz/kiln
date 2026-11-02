@@ -268,7 +268,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Float
                 | Kw::Double
                 | Kw::Int128
-                | Kw::Float128 => self.after_simple_type(self.i + 1, braced),
+                | Kw::Float128
+                | Kw::Float16
+                | Kw::Fp16 => self.after_simple_type(self.i + 1, braced),
                 // [dcl.type.auto.deduct]: `auto(x)` and `auto{x}` are
                 // expressions in C++23.
                 Kw::Auto => match self.punct_at(self.i + 1) {

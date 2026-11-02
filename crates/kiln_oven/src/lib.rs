@@ -32,6 +32,7 @@
     reason = "an interpreter: wide matches over opcodes and kinds, bit-level arithmetic"
 )]
 
+pub mod apfloat;
 mod arith;
 mod compile;
 mod complex;

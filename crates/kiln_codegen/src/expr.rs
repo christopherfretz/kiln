@@ -97,28 +97,7 @@ impl Cg<'_> {
             let V::C(c) = self.fconst(et, x) else { unreachable!("constant") };
             return V::C(self.m.const_vector(&vec![c; n as usize]).expect("float vector"));
         }
-        let bits: u128 = match self.m.types.float_width(ty) {
-            Some(32) => u128::from((x as f32).to_bits()),
-            Some(64) => u128::from(x.to_bits()),
-            Some(128) => {
-                if x == 0.0 {
-                    0
-                } else {
-                    let s: u128 = if x < 0.0 { 1 << 127 } else { 0 };
-                    s | (0x3fffu128 << 112)
-                }
-            }
-            Some(80) => {
-                if x == 0.0 {
-                    0
-                } else {
-                    let s: u128 = if x < 0.0 { 1 << 79 } else { 0 };
-                    s | (0x3fffu128 << 64) | (1u128 << 63)
-                }
-            }
-            _ => u128::from(x.to_bits()),
-        };
-        V::C(self.m.const_float_bits(ty, bits))
+        V::C(self.m.const_float(ty, x))
     }
 
     pub(crate) fn is_float_ty(&self, t: LTy) -> bool {
@@ -557,9 +536,16 @@ impl Cg<'_> {
             if ti {
                 return self.int_cast(v, tt, signed);
             }
-            return self.cast(if signed { CastOp::SIToFP } else { CastOp::UIToFP }, v, tt);
+            let op = if signed { CastOp::SIToFP } else { CastOp::UIToFP };
+            if self.is_fp16(to) {
+                // clang: integer to non-native `__fp16` goes through float.
+                let f = self.cast(op, v, LTy::FLOAT);
+                return self.cast(CastOp::FPTrunc, f, tt);
+            }
+            return self.cast(op, v, tt);
         }
         if ti {
+            let v = if self.is_fp16(from) { self.cast(CastOp::FPExt, v, LTy::FLOAT) } else { v };
             return self.cast(
                 if self.is_signed(to) { CastOp::FPToSI } else { CastOp::FPToUI },
                 v,
@@ -868,6 +854,10 @@ impl Cg<'_> {
         let q = n.ty();
         let s = ast.exprs.operand(e);
         match ast.exprs.unary_op(e) {
+            UnaryOp::Minus | UnaryOp::Plus if self.f16_excess(q) => {
+                let v = self.emit_promoted(e)?;
+                Ok(self.cast(CastOp::FPTrunc, v, LTy::HALF))
+            }
             UnaryOp::Plus | UnaryOp::Extension => self.emit_scalar(s),
             UnaryOp::Minus => {
                 let v = self.emit_scalar(s)?;
@@ -969,7 +959,13 @@ impl Cg<'_> {
             self.gep(et, old, vec![c], true)
         } else {
             let t = self.f.fir.ty(&self.m, old);
-            if self.is_float_ty(t) {
+            if self.is_float_ty(t) && self.is_fp16(q) {
+                // clang: non-native `__fp16` increments in float.
+                let w = self.cast(CastOp::FPExt, old, LTy::FLOAT);
+                let c = self.fconst(LTy::FLOAT, if inc { 1.0 } else { -1.0 });
+                let r = self.bin(BinOp::FAdd, Flags::NONE, w, c);
+                self.cast(CastOp::FPTrunc, r, t)
+            } else if self.is_float_ty(t) {
                 let c = self.fconst(t, if inc { 1.0 } else { -1.0 });
                 self.bin(BinOp::FAdd, Flags::NONE, old, c)
             } else {
@@ -1019,6 +1015,10 @@ impl Cg<'_> {
                 let lq = ast.exprs.get(l).ty();
                 self.mp_compare(lv, rv, lq, op == BinaryOp::NE)
             }
+            _ if self.f16_excess(ast.exprs.get(e).ty()) && is_promotable_op(op) => {
+                let v = self.emit_promoted(e)?;
+                self.cast(CastOp::FPTrunc, v, LTy::HALF)
+            }
             _ => {
                 let lv = self.emit_scalar(l)?;
                 let rv = self.emit_scalar(r)?;
@@ -1028,6 +1028,54 @@ impl Cg<'_> {
                 self.arith(e, op, lv, rv, lq, rq, q)?
             }
         }))
+    }
+
+    /// clang `TargetInfo::shouldEmitFloat16WithExcessPrecision` and
+    /// `ScalarExprEmitter::getPromotionType`: on x86-64 `_Float16`
+    /// arithmetic is evaluated in `float` (`-ffloat16-excess-precision=
+    /// standard`); AArch64 operates on `half`. `__fp16` is promoted by
+    /// sema.
+    /// Whether `q` is the storage-only `__fp16` (clang `isHalfType`; kiln
+    /// never enables a native half type, so it converts through float).
+    pub(crate) fn is_fp16(&self, q: QualType) -> bool {
+        self.ast.types.builtin(self.ast.types.canonical(q))
+            == Some(kiln_ast::types::BuiltinType::Half)
+    }
+
+    pub(crate) fn f16_excess(&self, q: QualType) -> bool {
+        self.is_x86()
+            && self.ast.types.builtin(self.ast.types.canonical(q))
+                == Some(kiln_ast::types::BuiltinType::Float16)
+    }
+
+    /// clang `ScalarExprEmitter::EmitPromoted` to `float`: `+ - * /` and
+    /// unary `-`/`+` of an excess-precision `_Float16` keep their operands
+    /// in `float`; anything else is emitted and extended.
+    fn emit_promoted(&mut self, e: ExprId) -> R<V> {
+        let ast = self.ast;
+        let e = self.skip_parens(e);
+        let n = *ast.exprs.get(e);
+        if self.f16_excess(n.ty()) {
+            match n.kind() {
+                ExprKind::BinaryOperator if is_promotable_op(ast.exprs.binary_op(e)) => {
+                    let [l, r] = ast.exprs.operands(e);
+                    let lv = self.emit_promoted(l)?;
+                    let rv = self.emit_promoted(r)?;
+                    let f = QualType::FLOAT;
+                    return self.arith(e, ast.exprs.binary_op(e), lv, rv, f, f, f);
+                }
+                ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Minus => {
+                    let v = self.emit_promoted(ast.exprs.operand(e))?;
+                    return Ok(self.fneg(v));
+                }
+                ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Plus => {
+                    return self.emit_promoted(ast.exprs.operand(e));
+                }
+                _ => {}
+            }
+        }
+        let v = self.emit_scalar(e)?;
+        Ok(self.cast(CastOp::FPExt, v, LTy::FLOAT))
     }
 
     /// Binary arithmetic, comparison and pointer arithmetic on emitted
@@ -1537,7 +1585,13 @@ impl Cg<'_> {
             _ => BinaryOp::Or,
         };
         let rq = ast.exprs.get(ca.rhs).ty();
-        let rv = self.emit_scalar(ca.rhs)?;
+        // clang `EmitCompoundAssignLValue`: an excess-precision operand or
+        // computation is promoted to `float`.
+        let (rv, rq) = if self.f16_excess(rq) {
+            (self.emit_promoted(ca.rhs)?, QualType::FLOAT)
+        } else {
+            (self.emit_scalar(ca.rhs)?, rq)
+        };
         let lv = self.emit_lvalue(l)?;
         let lq = lv.q;
         if lv.bf.is_none()
@@ -1547,9 +1601,11 @@ impl Cg<'_> {
             return Ok((lv, v));
         }
         let old = self.load_lv(lv);
-        let lhs = if ast.types.is_pointer(lq) { old } else { self.conv(old, lq, ca.lhs_ty) };
-        let res = self.arith(e, op, lhs, rv, ca.lhs_ty, rq, ca.result_ty)?;
-        let res = if ast.types.is_pointer(lq) { res } else { self.conv(res, ca.result_ty, lq) };
+        let promote = |c: &Self, q: QualType| if c.f16_excess(q) { QualType::FLOAT } else { q };
+        let (lhs_ty, result_ty) = (promote(self, ca.lhs_ty), promote(self, ca.result_ty));
+        let lhs = if ast.types.is_pointer(lq) { old } else { self.conv(old, lq, lhs_ty) };
+        let res = self.arith(e, op, lhs, rv, lhs_ty, rq, result_ty)?;
+        let res = if ast.types.is_pointer(lq) { res } else { self.conv(res, result_ty, lq) };
         let v = self.store_lv(res, lv, true);
         Ok((lv, v))
     }
@@ -4158,4 +4214,9 @@ pub(crate) fn agg_init_parts(
     let inits = ast.lists.iter(ast.exprs.init_list_inits(e)).collect();
     let l = ast.exprs.init_list(e);
     (inits, l.array_filler, l.union_field)
+}
+
+/// The operators clang's `EmitPromoted` keeps in the promoted type.
+fn is_promotable_op(op: BinaryOp) -> bool {
+    matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div)
 }

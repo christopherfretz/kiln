@@ -192,6 +192,8 @@ impl Sema<'_, '_> {
                 }
             }
             TypeSpecKind::Float128 => QualType::FLOAT128,
+            TypeSpecKind::Float16 => QualType::FLOAT16,
+            TypeSpecKind::Fp16 => QualType::HALF,
             // [dcl.type.auto.deduct]/4 (clang
             // `err_decltype_auto_cannot_be_combined`).
             TypeSpecKind::DecltypeAuto if !ds.cv.is_empty() => {
@@ -249,12 +251,14 @@ impl Sema<'_, '_> {
                 | TypeSpecKind::Float
                 | TypeSpecKind::Double
                 | TypeSpecKind::Float128
+                | TypeSpecKind::Float16
         );
         if !ok {
             if !ds.invalid && !self.is_error_type(base) {
                 // clang `DeclSpec::getSpecifierName(TST_typename)`.
                 let name = match ds.base {
                     TypeSpecKind::Named => "type-name",
+                    TypeSpecKind::Fp16 => "half",
                     b => b.spelling(),
                 };
                 let msg = self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(name);

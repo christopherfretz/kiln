@@ -168,7 +168,27 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   - float to float: `fptrunc` or `fpext`, chosen by rank;
   - pointer to and from integer: through `i64`;
   - casts of constants fold as LLVM's constant folder does, including
-    integer to `fp128` (round to nearest even).
+    integer to `fp128` (round to nearest even);
+  - `__fp16` (clang `isHalfType`, never native in kiln) converts to and
+    from integers through `float` (`fpext` then `fpto[su]i`; `[su]itofp`
+    to `float` then `fptrunc`), and `++`/`--` on it extend to `float`,
+    add ±1.0 and truncate; sema already promotes it to `float` in
+    arithmetic (spec/sema-conv.md), `_Float16` increments stay in `half`.
+- Half precision (`_Float16` and `__fp16` are `half`;
+  `float16_arith.cpp`, `fp16_storage.cpp`):
+  - x86_64 evaluates `_Float16` with excess precision (clang
+    `ScalarExprEmitter::EmitPromoted`): `+ - * /` and unary `-`/`+`
+    keep their `_Float16` operands in `float` through a whole expression
+    tree and `fptrunc` the result once; a compound assignment computes in
+    `float`. AArch64 operates on `half` directly. Complex `_Float16` is
+    not promoted.
+  - Constant operands of `half`, `bfloat`, `fp128` and `x86_fp80`
+    arithmetic and casts fold as LLVM's `ConstantFolder` does, through
+    `kiln_oven::apfloat` (the Oven's correctly rounded soft-float):
+    `fadd/fsub/fmul/fdiv`, `fpext`/`fptrunc` with either side outside
+    `float`/`double`, `[su]itofp` to `half`/`bfloat`, `fpto[su]i` from
+    `half`. A NaN result is left unfolded (its payload would have to
+    match APFloat's).
 - Arithmetic:
   - signed add, sub and mul get `nsw`; shifts mask nothing at -O0;
   - pointer arithmetic: `gep inbounds` (`gep i8` for void and function
@@ -347,11 +367,7 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       double` twin (`builtin::f128_twin`) is lowered as the twin on its
       `fp128` operands (intrinsic or constant); `roundevenf128` is
       `llvm.roundeven`; the others call the function of the builtin's
-      own name (`builtins_f128.cpp`). Not folded: `fp128` constant
-      arithmetic (`__builtin_huge_valf128() + 1` stays an `fadd`, clang
-      folds it) and the object size of a runtime local (clang's
-      `tryEvaluateObjectSize` gives the constant; kiln emits
-      `llvm.objectsize`, which `opt` folds).
+      own name (`builtins_f128.cpp`).
   - a call of one of the standard functions clang treats as builtins
     (clang `isStdBuiltin`: `std::move`, `move_if_noexcept`, `forward`,
     `forward_like`, `as_const`, `addressof`, `__addressof`, declared in
@@ -1790,7 +1806,7 @@ full complex range (`CX_Full`; `CodegenOptions::complex_range`, below).
   imaginary,limited_range,improved_range}.cpp` and `va_arg_complex.cpp`
   are exact on aarch64 and x86_64; `tests/conformance/ext.complex/
   {limited,improved,full}-range.cpp` (run) observe each range.
-- **Not implemented:** `_Complex _Float16` (kiln has no `_Float16`),
+- **Not implemented:** `_Complex _Float16` (parsed; not checked against clang),
   `-fcomplex-arithmetic=promoted`, and `#pragma STDC CX_LIMITED_RANGE`
   (spec/abi.md §8.17 "Deviations").
 
