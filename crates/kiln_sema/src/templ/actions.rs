@@ -589,6 +589,42 @@ impl Sema<'_, '_> {
         found.decls.iter().all(|&d| self.is_assumable_function(self.ast.strip_shadow(d)))
     }
 
+    /// The declaration an unqualified `name` followed by `<` refers to
+    /// when it might have been intended as a template-name (clang's
+    /// `mightBeIntendedToBeTemplateName`): ordinary lookup found exactly
+    /// one declaration (a `DeclRefExpr` or implicit member access, not
+    /// an overload set) and it is no template.
+    pub fn potential_template_name(&self, name: Symbol) -> Option<DeclId> {
+        let found = self.lookup_name(name, LookupKind::Ordinary);
+        let [d] = found.decls[..] else { return None };
+        let d = self.ast.strip_shadow(d);
+        (!matches!(
+            self.kind_of(d),
+            DeclKind::FunctionTemplate | DeclKind::VarTemplate | DeclKind::ClassTemplate
+        ))
+        .then_some(d)
+    }
+
+    /// clang's `diagnoseExprIntendedAsTemplateName` for the name `name`
+    /// at `loc`, found as the non-template `found`, followed by a
+    /// template argument list ([temp.names]/3): "'f' does not name a
+    /// template but is followed by template arguments", with a note at
+    /// the declaration.
+    pub fn diagnose_expr_intended_as_template_name(
+        &mut self,
+        name: Symbol,
+        found: DeclId,
+        loc: Loc,
+    ) {
+        let text = self.decl_name_str(DeclName::ident(name));
+        let at = self.ast.decls.get(found).loc();
+        let msg = self
+            .diag(DiagId::sema_non_template_in_template_id, loc)
+            .arg(text)
+            .with_note(self.diag(DiagId::note_non_template_in_template_id_found, at));
+        self.emit(msg);
+    }
+
     /// A function lookup may find for a name followed by `<` to be
     /// assumed a template ([temp.names]/3): a non-member function, or
     /// from C++20 a member function too (clang 22; the template-id is then

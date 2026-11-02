@@ -15,7 +15,7 @@ use kiln_lex::literal::{
     CodeUnits, NumberClass, StringLiteral, classify_number, decode_char, decode_string,
     decode_unevaluated_string,
 };
-use kiln_lex::{Punct, TokKind, Token};
+use kiln_lex::{Punct, Std, TokKind, Token};
 use kiln_sema::expr::CastStyle;
 use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent, SpecialName};
 use kiln_source::Loc;
@@ -1675,16 +1675,38 @@ impl Parser<'_, '_> {
         // nothing or only functions for, followed by `<`, is a
         // template-name; ADL finds the template at the call
         // (`get<0>(c)` for `std::complex`). Only taken when a
-        // template-argument-list closed by `>(` follows.
+        // template-argument-list closed by `>(` follows. Before C++20
+        // only a name lookup finds nothing for (clang's
+        // `TNK_Undeclared_template`).
         if qual.is_none()
             && self.at(Punct::Less)
-            && matches!(class, NameClass::Undeclared | NameClass::Value(_))
+            && (class == NameClass::Undeclared
+                || (self.std >= Std::Cxx20 && matches!(class, NameClass::Value(_))))
             && let Some((close, false)) = self.skip_template_args(self.pos())
             && self.tok_at(close + 1).kind == TokKind::Punct(Punct::LParen)
             && self.s.is_assumed_template_name(name)
         {
             let (args, _, _) = self.parse_template_arg_list()?;
             return Some(self.s.act_on_assumed_template_id(name, &args, nl));
+        }
+        // A name lookup found a single non-template for, followed by what
+        // can only be a template argument list: `<>`, or `<` type-id ...
+        // `>` (clang's `checkPotentialAngleBracket`; before C++20 also
+        // for functions, which [temp.names]/3 does not yet assume to be
+        // templates). The list is skipped and the name is an error.
+        if qual.is_none()
+            && self.at(Punct::Less)
+            && let NameClass::Value(_) = class
+            && !(self.std >= Std::Cxx20 && self.s.is_assumed_template_name(name))
+            && let Some(found) = self.s.potential_template_name(name)
+            && let Some(close) = self.potential_angle_close()
+        {
+            while self.pos() < close {
+                let _ = self.bump();
+            }
+            let _ = self.split_greater();
+            self.s.diagnose_expr_intended_as_template_name(name, found, nl);
+            return Some(self.s.act_on_error_expr(&[], nl));
         }
         if qual.is_none()
             && class == NameClass::Undeclared
@@ -1698,6 +1720,36 @@ impl Parser<'_, '_> {
         }
         let e = self.s.act_on_id_expression(name, nl, qual);
         self.parse_pack_index_suffix(e, nl)
+    }
+
+    /// The index of the `>` closing what follows the current `<` as a
+    /// template argument list intended for a non-template name (clang's
+    /// `checkPotentialAngleBracket`): `<>` (or `<>>` from C++11), or `<`
+    /// followed by an unambiguous type-id and a later `>` -- brackets
+    /// balanced, not past a `;` or an unmatched closer.
+    fn potential_angle_close(&self) -> Option<usize> {
+        let less = self.pos();
+        let next = self.tok_at(less + 1).kind;
+        if next == TokKind::Punct(Punct::Greater)
+            || (self.std >= Std::Cxx11 && next == TokKind::Punct(Punct::GreaterGreater))
+        {
+            return Some(less + 1);
+        }
+        if !self.is_cxx_type_id_at(less + 1, TypeIdContext::Unambiguous).0 {
+            return None;
+        }
+        let mut j = less + 1;
+        loop {
+            match self.tok_at(j).kind {
+                TokKind::Eof | TokKind::Punct(Punct::Semi) => return None,
+                TokKind::Punct(Punct::Greater | Punct::GreaterGreater) => return Some(j),
+                TokKind::Punct(Punct::LParen | Punct::LSquare | Punct::LBrace) => {
+                    j = self.skip_balanced(j)?;
+                }
+                TokKind::Punct(Punct::RParen | Punct::RSquare | Punct::RBrace) => return None,
+                _ => j += 1,
+            }
+        }
     }
 
     /// `N::operator@` / `X<T>::operator T` after the nested-name-specifier
@@ -1800,7 +1852,7 @@ impl Parser<'_, '_> {
             return Ok(None);
         }
         let ellipsis = self.bump().span.lo;
-        if self.std < kiln_lex::Std::Cxx26 {
+        if self.std < Std::Cxx26 {
             // P2662: clang `ext_pack_indexing`, at the pack name.
             let w = self.s.diag(DiagId::parse_ext_pack_indexing, begin);
             self.emit(w);
