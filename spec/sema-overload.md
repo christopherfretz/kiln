@@ -230,6 +230,14 @@ copy-list-init explicit ctors stay viable and choosing one is "chosen
 constructor is explicit in copy-initialization" + "explicit constructor
 declared here".
 
+A conversion function (or conversion function template specialization)
+whose trailing requires-clause is not satisfied is not viable
+([over.match.viable]/3), checked after the object argument as clang's
+`AddConversionCandidate` does. So `operator int() requires false` on a
+non-const object does not hide a satisfied `operator int() const`, and
+"no viable conversion" notes it as "candidate function not viable:
+constraints not satisfied" with the satisfaction notes (WP-302).
+
 **Reference direct-initialization** (`int&& r(Ex{})`, `static_cast<T&&>`;
 clang `allowExplicitConversionFunctionsInRefBinding`): `bind_reference`
 passes `IcsOptions::EXPLICIT_REF_CONV` when its `ConvCtx` is direct. The
