@@ -1791,16 +1791,43 @@ impl Sema<'_, '_> {
             let pname = self.decl_name_str(self.ast.decls.get(p).name());
             match self.kind_of(p) {
                 DeclKind::TemplateTypeParm => {
-                    // clang prints a re-depthed type-constraint `C<>`.
+                    // clang prints a re-depthed type-constraint with its
+                    // written arguments substituted, `<>` when there are
+                    // none (`One<> R`, `Compat<T> R`). The concept's
+                    // written qualifier is not kept on the expression.
                     let concept = pi.and_then(|x| x.constraint).and_then(|c| {
-                        let n = self.ast.exprs.get(c);
+                        let mut n = self.ast.exprs.get(c);
+                        // A constrained pack's constraint is the fold
+                        // `(C<Q> && ...)`.
+                        if n.kind() == kiln_ast::expr::ExprKind::CXXFoldExpr {
+                            n = self.ast.exprs.get(<ExprId as kiln_ast::ids::RawId>::from_raw(n.a())?);
+                        }
                         (n.kind() == kiln_ast::expr::ExprKind::ConceptSpecializationExpr)
-                            .then(|| <DeclId as kiln_ast::ids::RawId>::from_raw(n.a()))
+                            .then(|| {
+                                let d = <DeclId as kiln_ast::ids::RawId>::from_raw(n.a())?;
+                                Some((d, <ArgListId as kiln_ast::ids::RawId>::from_raw(n.b())))
+                            })
                             .flatten()
                     });
-                    if let Some(c) = concept {
+                    if let Some((c, args)) = concept {
                         out.push_str(&self.decl_name_str(self.ast.decls.get(c).name()));
-                        out.push_str("<>");
+                        out.push('<');
+                        let mut written = Vec::new();
+                        for &a in args.map_or(&[][..], |l| self.ast.types.args(l)).iter().skip(1) {
+                            match a.view() {
+                                ArgView::Pack(l) => {
+                                    written.extend(self.ast.types.args(l).iter().copied());
+                                }
+                                _ => written.push(a),
+                            }
+                        }
+                        for (k, &a) in written.iter().enumerate() {
+                            if k > 0 {
+                                out.push_str(", ");
+                            }
+                            out.push_str(&self.arg_str(a));
+                        }
+                        out.push('>');
                     } else {
                         out.push_str(if pi.is_some_and(|x| x.typename_kw) {
                             "typename"
