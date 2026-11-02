@@ -219,6 +219,10 @@ pub struct Sema<'a, 'sm> {
     /// Parameters created by [`Sema::act_on_prototype_param`] that no
     /// function has adopted yet ([`Sema::create_params`]).
     pub(crate) unowned_params: std::collections::HashSet<DeclId>,
+    /// The requires-expression parameter-declaration-clauses being parsed
+    /// ([`Sema::act_on_start_requires_params`]), prototype scopes for
+    /// `ParamData::scope_depth` alongside `prototype_params`.
+    pub(crate) requires_param_scopes: usize,
     /// The declared type (`cv auto`, `auto &`, `auto &&`) of each
     /// decomposition declared in a template, which instantiation
     /// deduces anew (the pattern's own may be deduced, spec/sema.md).
@@ -592,6 +596,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             prototype_params: Vec::new(),
             declarator_records: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
+            requires_param_scopes: 0,
             decomp_written: std::collections::HashMap::new(),
             refs_minus_assign: std::collections::HashMap::new(),
             attr_macros: (0, Vec::new()),

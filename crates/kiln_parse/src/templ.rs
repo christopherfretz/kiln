@@ -1213,6 +1213,7 @@ impl Parser<'_, '_> {
         let body = self.s.act_on_requires_expr_start(loc);
         let mut params = Vec::new();
         if let Some(open) = self.eat(Punct::LParen) {
+            self.s.act_on_start_requires_params();
             while !self.at(Punct::RParen) && !self.at_eof() {
                 let start = self.loc();
                 let ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
@@ -1233,6 +1234,7 @@ impl Parser<'_, '_> {
                     break;
                 }
             }
+            self.s.act_on_end_requires_params();
             self.expect_closing(Punct::RParen, Punct::LParen, open);
         }
         let mut reqs = Vec::new();

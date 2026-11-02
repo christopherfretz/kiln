@@ -441,6 +441,31 @@ type parameter named `auto:N`, as in clang's dump.
   `sized_sentinel_for` with range.iter.ops `distance_apriori_sentinel`;
   `temp.constr.atomic/abbreviated-friend-template.cpp`).
 - Generic lambdas use the same routine (WP-075).
+- Placement (WP-305, clang's `FunctionDeclarationScope` and
+  `err_auto_not_allowed`; `Parser::parse_param_clause`). Only the clause
+  of a function declaration invents: a declarator in a `File`, `Member`,
+  `Block` or `ForInit` context, not of a `typedef`
+  (`Declarator::typedef`), whose function declarator applies directly to
+  the declarator-id (no chunk before it, grouping parentheses aside;
+  `isFunctionDeclaratorAFunctionDeclaration`), or a lambda's clause. An
+  `auto` in any other clause (a nested function declarator, a function
+  type in a type-id, alias, typedef, variable or template parameter) is
+  "'auto' not allowed in function prototype that is not a function
+  declaration" at the `auto` (`sema_auto_not_allowed_prototype`), and the
+  parameter's type becomes `int`. `decltype(auto)` is never a parameter's
+  placeholder ("... in function prototype", "... in lambda parameter").
+- A parameter declarator with a trailing return type
+  (`auto (*cb)(int) -> int`) keeps its decl-specifier `auto`: it is the
+  function type's `auto` ([dcl.fct]/2; a `C auto` or `const auto` there is
+  `sema_trailing_return_without_auto`). A placeholder in that trailing
+  return type (under pointer and reference declarators) is checked as
+  above, reported at the decl-specifier, and otherwise invents a
+  parameter (`void f(auto (*p)() -> C auto)` is a template; clang's
+  `GetFullTypeForDeclarator`). Tests: `dcl.fct/p22-auto-nested-prototype*.cpp`,
+  `dcl.fct/p22-auto-trailing-return-run.cpp`,
+  `dcl.fct/p2-trailing-param-auto-diags.cpp`,
+  `dcl.spec.auto/p2-decltype-auto-param.cpp`,
+  `tests/mangle/abbreviated_trailing_auto.cpp`.
 
 ### 2.7 Pack expansions by context ([temp.variadic]/5)
 

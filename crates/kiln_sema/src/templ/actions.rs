@@ -829,6 +829,18 @@ impl Sema<'_, '_> {
         body
     }
 
+    /// The `(` of a requires-expression's parameter-declaration-clause:
+    /// until [`Sema::act_on_end_requires_params`], a function type in a
+    /// parameter is one prototype scope deeper (`ParamData::scope_depth`).
+    pub fn act_on_start_requires_params(&mut self) {
+        self.requires_param_scopes += 1;
+    }
+
+    /// The `)` closing what [`Sema::act_on_start_requires_params`] opened.
+    pub fn act_on_end_requires_params(&mut self) {
+        self.requires_param_scopes = self.requires_param_scopes.saturating_sub(1);
+    }
+
     /// `}` of a requires-expression: closes the scope opened by
     /// [`Sema::act_on_requires_expr_start`].
     pub fn act_requires_expr(
@@ -1403,7 +1415,13 @@ impl Sema<'_, '_> {
         let name = p.name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         // A parameter pack ([temp.variadic]/5), expanded on substitution.
         let pack = matches!(self.ast.types.view(p.ty.ty()), TypeView::PackExpansion { .. });
-        let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+        let mut flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+        // The prototype scopes enclosing the requires-expression's own
+        // (`ParamData::scope_depth`): a trailing requires-clause's function
+        // parameters count, an enclosing requires-expression body does not
+        // (clang's `getFunctionScopeDepth`).
+        let depth = self.prototype_params.len() + self.requires_param_scopes.saturating_sub(1);
+        flags |= kiln_ast::decl::ParamData::scope_depth_flags(depth);
         let d = self.builder().param(body, name, p.loc, p.ty, idx, flags);
         if p.invalid {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
