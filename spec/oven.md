@@ -467,7 +467,12 @@ literal is one instruction and one step, not an interpreted loop.
   lock-free for the c11 form, a null object, a single byte, or an object
   whose pointee alignment is at least the size; otherwise
   `always_lock_free` is false and `is_lock_free` is not a constant.
-  `NonAtomicToAtomic`/`AtomicToNonAtomic` casts are no-ops. Every other
+  `NonAtomicToAtomic`/`AtomicToNonAtomic` casts are no-ops, also when
+  they initialize an object in place: `_Atomic(S)` of class type `S` is
+  initialized as its `S` operand (libc++'s `__cxx_atomic_base_impl(T v)
+  : __a_value(v)`, so `constexpr std::atomic<S> a(s)`); a size-promoted
+  `_Atomic(S)` keeps its tail as padding (WP-334,
+  `tests/conformance/ext.c11.atomic/constexpr-class-init.cpp`). Every other
   `AtomicExpr` is not a constant (clang's generic note).
 - **`__builtin_va_arg` (WP-171):** a `VAArgExpr` is never a constant: the
   generic "subexpression not valid in a constant expression" note at the
@@ -1036,15 +1041,32 @@ destructors and the deallocation. Arrays are checked element by element
 from the last, so the note names `a[1]` or `{*new S[2]#0}[0]`. A
 variable's note is at its declaration, others' at the destroying
 expression. A class containing a union is never diagnosed as destroyed
-(ending its active member's lifetime, as `std::optional::reset` does,
-leaves the union without an active member, which the bytes cannot tell
-from a destroyed object), and assigning a union member (`SetActive`)
-re-begins the lifetime of the whole union in tracked storage
-([class.union.general]/6)
+at its implicit destruction (ending its active member's lifetime, as
+`std::optional::reset` does, leaves the union without an active member,
+which the bytes cannot tell from a destroyed object)
 (`tests/conformance/basic.life/constexpr-lifetime-local.cpp`).
+The union's side-map entry tells the two apart for the union itself
+(WP-334): destroying the active member (`u.t.~T()`, `std::destroy_at`)
+ends the member's bytes but keeps the union's entry, so the union is
+still within its lifetime ([class.union.general]/6) and may be destroyed
+explicitly (`EndLife` aux 1 accepts dead bytes of a union with an entry;
+libc++'s `expected::__destroy_union` destroys the member, then the union,
+then constructs it anew); destroying a union, or an object containing
+unions (`EndLife` aux 2, one `has_union` test per destruction plus a
+walk of `upos` when set), drops their entries, so a member access of a
+destroyed union reports the lifetime fault, not "no active member"
+(`active_check`), a second destruction is "destruction of object outside
+its lifetime", and assigning a member (`SetActive`, `revive_union`)
+re-begins the union's lifetime in tracked storage only while the entry
+exists; otherwise the assignment is "assignment to object outside its
+lifetime" ([basic.life]/7)
+(`tests/conformance/class.union/constexpr-destroy-member-then-union.cpp`,
+`tests/conformance/basic.life/constexpr-lifetime-union-ended.cpp`).
+No new memory state: the entry already existed and is removed with the
+destruction. Clang 19 accepts destroying a union with a user-provided
+destructor twice and reading a member after it; kiln rejects both.
 
-*Deviations from clang 19.* A union whose own lifetime ended (`v.~V();
-v.b = 2;`) accepts the member assignment, which clang rejects. A class
+*Deviations from clang 19.* A class
 whose subobjects' lifetimes all ended one by one is diagnosed at its
 implicit destruction as if destroyed itself. An explicit call of a virtual destructor ends only the lifetime of
 the static type's bytes. A placement new of the wrong type names the
@@ -1309,7 +1331,15 @@ Looking a member up by offset (`Types::field_at`, `subobject_at`,
 shares its offset with the next member). Outside a union, of two members
 holding the byte the one at the greater offset wins: it lives in the
 other's tail padding (a `[[no_unique_address]]` member or a non-POD base,
-Itanium dsize), where the other holds no object (WP-289). Within a union, extents are
+Itanium dsize), where the other holds no object (WP-289). Walking the
+path to an object (`union_path`, `place_in_unions`) instead takes the
+member that holds the object (`Types::member_toward`: the greater-offset
+member if it does, else the first that does): a zero-dsize union of
+`[[no_unique_address]]` empty members shares offset 0 with a
+`[[no_unique_address]] bool` in libc++'s `expected<void, E>`, and a write
+to the bool is not an access to the union ([intro.object]/9, WP-334,
+`tests/conformance/dcl.attr/no-unique-address-union-overlap-constexpr.cpp`).
+Within a union, extents are
 computed per member, so a path through a bit-field member of a union
 resolves (WP-201). A class's members may overlap too: an empty
 `[[no_unique_address]]` member shares its offset with the next one
