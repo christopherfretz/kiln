@@ -273,6 +273,17 @@ impl Sema<'_, '_> {
     ) -> Result<QualType, ()> {
         let spec = self.get_class_spec(tmpl, written, arg_locs, loc)?;
         self.diagnose_template_id_use(spec, loc);
+        // A template-id naming a still-undeclared specialization after
+        // the template's `preferred_name` attribute gives it the
+        // attribute (clang `CheckTemplateIdType` `InstantiateAttrsForDecl`);
+        // a typedef written before the attribute does not.
+        let first = self.ast.first(spec);
+        if self.ast.spec_info(spec).is_some_and(|(_, s)| s.kind == SpecKind::Undeclared)
+            && !self.ast.templates.is_preferred_named(first)
+            && self.ast.has_preferred_name_attr(tmpl)
+        {
+            self.ast.templates.mark_preferred_named(first);
+        }
         let list = self.ast.types.arg_list(written);
         let rec = self.tag_type(spec);
         Ok(self.ast.types.template_specialization(name, list, Some(rec), false))
@@ -773,6 +784,13 @@ impl Sema<'_, '_> {
                 let at = self.ast.decls.get(def).loc();
                 self.builder().relocate_spec(spec, at);
             }
+        }
+        // The primary's attributes are instantiated onto the
+        // specialization (clang `InstantiateClass` `InstantiateAttrs`):
+        // from here it prints by its `preferred_name` typedef.
+        if matched.is_none() && self.ast.has_preferred_name_attr(tmpl) {
+            let first = self.ast.first(spec);
+            self.ast.templates.mark_preferred_named(first);
         }
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let outer = self.inst_context_pairs(parent);

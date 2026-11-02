@@ -3801,6 +3801,16 @@ Each rule names the libc++ test it fixed and its corpus test.
     (`TypeNames::preferred_name`, `Ast::preferred_name_of`), with scope
     unless printed among a written template-id's arguments. This applies
     in C++ printing only.
+  - Attachment (clang): a specialization takes the attribute only when
+    it is instantiated from a primary template that has it
+    (`instantiate_class`), or when a template-id names it while it is
+    still undeclared after the attribute exists (`class_template_type`).
+    Until then it prints as the template-id: a typedef written before
+    the attribute does not attach it, so an uninstantiated
+    `basic_string<char>` prints `s::basic_string<char>`.
+    `TemplateTables::mark_preferred_named` records the attachment;
+    `Ast::preferred_name_of` reads it (WP-366). Test:
+    `tests/conformance/dcl.attr/preferred-name-attach-rule.cpp`.
   
   The pair/array NTTP tests print `std::string`. Test:
   `tests/conformance/dcl.attr/preferred-name.cpp`.

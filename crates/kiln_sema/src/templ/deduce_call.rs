@@ -377,8 +377,23 @@ impl Sema<'_, '_> {
                 tys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
             let whole =
                 matches!(target, DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_)) && !fn_has_pack;
+            // clang substitutes the explicit arguments as written
+            // (`SubstituteExplicitTemplateArguments` is `Final`): a
+            // parameter they make non-dependent keeps their sugar, so
+            // `f<s::string>(1, 2)` of `f(W<T>, int)` notes
+            // `'W<s::string>' (aka 'W<basic_string<char>>')`.
+            let mut sugared = d.args.clone();
+            for (a, &w) in sugared.iter_mut().zip(&written) {
+                if let (ArgView::Type(c), ArgView::Type(wt)) = (a.view(), w.view()) {
+                    if self.ast.types.canonical(c) == self.ast.types.canonical(wt) {
+                        *a = TemplateArg::ty(wt);
+                    }
+                }
+            }
+            let sugared_levels = self.prior_levels(ft, depth, &sugared);
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
-                let mut sub = Substituter::new(s, &levels);
+                let mut sub = Substituter::new(s, &sugared_levels);
+                sub.final_subst = true;
                 // A function parameter pack keeps its pattern: the
                 // explicitly given prefix may be extended by deduction.
                 // A non-trailing one is a non-deduced context

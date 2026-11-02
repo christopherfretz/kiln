@@ -4961,6 +4961,17 @@ explicit specialization errors remain. The blockers are:
   pack is `TooManyArguments`, so `f<void>()` of `f(T &)` is "requires 1
   argument" rather than a substitution failure (WP-300). The check after
   substitution stays for expanded non-trailing packs.
+  The explicit substitution is clang's `Final` one
+  (`SubstituteExplicitTemplateArguments`): each type argument is
+  substituted as written (`Substituter::final_subst`, no
+  `SubstTemplateTypeParm` sugar), so a parameter it makes
+  non-dependent keeps the sugar in its CWG1391 note: `f<s::pl>(1, 2)`
+  of `f(W<T>, int)` notes "no known conversion from 'int' to
+  'W<s::pl>' (aka 'W<s::plain>')". Every other substitution records
+  the canonical argument under `SubstTemplateTypeParm`, which is not
+  `aka`-worthy (`print.rs::should_aka`), so a member of `V<s::pl>`
+  takes 'W<plain>' with no `aka` (WP-366). Test:
+  `tests/conformance/temp.arg.explicit/explicit-arg-sugar-nondependent-param.cpp`.
   `deduce_explicit_only` is the same pipeline with no call: it is used
   for a function template-id that is not called ([over.over]/3,
   `Sema::resolve_single_template_id`). Mismatch notes print P as
