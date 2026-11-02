@@ -651,7 +651,7 @@ mod tests {
                 assert_eq!(sqrt_fin(S, e, m), s(f.sqrt()), "sqrtf({f:e})");
             }
         }
-        assert_eq!(sqrt(D, d(2.0)), Some(d(1.4142135623730951)));
+        assert_eq!(sqrt(D, d(2.0)), Some(d(std::f64::consts::SQRT_2)));
         assert_eq!(sqrt(D, d(-0.0)), Some(d(-0.0)));
         assert_eq!(sqrt(D, d(f64::INFINITY)), Some(d(f64::INFINITY)));
         assert_eq!(sqrt(D, d(-1.0)), None);
