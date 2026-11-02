@@ -58,10 +58,7 @@ impl Sema<'_, '_> {
             return;
         }
         let at = self.begin_loc(callee);
-        let note = self
-            .diag(DiagId::note_remove_abs, at)
-            .arg(name)
-            .range(self.expr_range(callee));
+        let note = self.diag(DiagId::note_remove_abs, at).arg(name).range(self.expr_range(callee));
         let msg = self.diag(DiagId::sema_unsigned_abs, at).arg(self.ty_arg(aty));
         self.emit(msg.with_note(note));
     }
