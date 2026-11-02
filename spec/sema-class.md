@@ -20,7 +20,7 @@ C++26 draft; "clang" means clang 19 with `-std=c++26` on the container target
 | construction | ctor-initializers, delegating ctors, NSDMI, temporaries, cleanups, lifetime extension incl. P2718 range-for, guaranteed elision, NRVO marking, aggregates with bases, paren-aggregate init | function-try-blocks and EH cleanups (exceptions milestone) |
 | layout | full Itanium: bases, vptr, vbases, primary base, EBO, tail padding, bit-fields across bases, `#pragma pack`, `alignas`; vtable layout and VTT | MS ABI, `#pragma ms_struct`, `-fclang-abi-compat` |
 | RTTI | `dynamic_cast`/`typeid` sema; final overriders for the Oven | |
-| other | explicit object parameters (P0847): declarations, calls, `&C::f` (§2.5) | explicit object parameters of lambdas (Q4) |
+| other | explicit object parameters (P0847): declarations, calls, `&C::f` (§2.5), lambdas (spec/sema-lambda.md §3.1, WP-356) | |
 
 Principles:
 1. **clang's model where the standard leaves a choice** (node kinds,
@@ -99,7 +99,10 @@ public.
 
 Per-declaration checks: redeclaration of a member (`class
 member cannot be redeclared`, `constructor cannot be redeclared`, `duplicate
-member 'a'`); `mutable` with `const` or a reference; `constexpr` non-static
+member 'a'`), except that non-static data members named `_` are
+name-independent ([basic.scope.scope]/5, P2169, WP-356; spec/sema.md
+§5.24): several may be declared, a use through member access that finds
+more than one is `sema_placeholder_ambiguous`; `mutable` with `const` or a reference; `constexpr` non-static
 data member; incomplete or abstract field type (`field has incomplete type
 'In'` + note `definition of 'In' is not complete until the closing '}'`);
 a union member of reference type (`union member 'r' has reference type 'int
@@ -335,8 +338,9 @@ SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
   `&C::f` is an ordinary pointer to function ([expr.unary.op]/3.1), and
   `is_implicit_object_member` excludes such members from pointer-to-member
   matching ([over.over]). Codegen calls them directly
-  (`is_explicit_object_method`). Lambdas with an explicit object parameter
-  are `sema_unsupported` (Q4).
+  (`is_explicit_object_method`). Lambdas with an explicit object
+  parameter (the closure type as `Self`) follow spec/sema-lambda.md §3.1
+  (WP-356): `param_nonmember` and `param_not_first` select "lambda".
 
 ### 2.6 Pointers to members
 `&C::m` forms `MemberPointer` (types.md §5.2) for non-static members (`&(C::m)`
@@ -2244,8 +2248,8 @@ polymorphic classes) for `final_overrider`/vtable cache size.
   immediate invocations are evaluated against the nearest enclosing
   default-arg/default-init node's location and context (the Oven tracks it).
 - **Q4 Explicit object parameters (P0847).** *Resolved* (WP-149) for
-  member functions (§2.5); a lambda's explicit object parameter (the
-  closure type as `Self`) is still unsupported.
+  member functions (§2.5), and (WP-356) for lambdas, spec/sema-lambda.md
+  §3.1.
 - **Q5 Name clash.** `kiln_sema::declspec::BaseSpec` (type-specifier enum,
   re-exported) vs `kiln_ast::BaseSpec` (base-specifier). *Recommend*
   renaming the former to `TypeSpecKind` in WP-066a.

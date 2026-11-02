@@ -672,6 +672,20 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `expected namespace name`; a missing `;` is `expected ';' after
     namespace name`.
 - **`static_assert(cond[, msg])`:** the message is optional (C++17).
+  The message is an unevaluated string literal when every token up to
+  the `)` is a string literal without a ud-suffix (clang 22's
+  lookahead); otherwise it is a constant-expression handed to Sema
+  (P2741, [dcl.pre]/10), and before C++26 that is
+  `parse_ext_static_assert_user_message` (`-Wc++26-extensions`).
+- **Varargs ellipsis without a comma** ([dcl.fct]/3,
+  [depr.ellipsis.comma], C++26 P3176): in C++26, `(int...)` or
+  `(int n...)` — a `...` that follows a parameter-declaration without a
+  comma and does not make that parameter a pack — warns
+  `parse_deprecated_missing_comma_before_ellipsis`
+  (`-Wdeprecated-missing-comma-variadic-parameter`, in `-Wdeprecated`)
+  at the `...`. A lone `(...)`, `(int, ...)` and a function parameter
+  pack are not deprecated. Before C++26, nothing. clang's separate
+  `-Wambiguous-ellipsis` (`(Ts......)`) is not implemented.
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
@@ -1043,6 +1057,14 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     scope, which lets Sema forbid redeclaring condition names there.
 - **Conditions:**
   - `parse_paren_condition` handles `( [init-statement] condition )`.
+  - An init-statement may be an alias-declaration (`using T = int;`,
+    [stmt.pre]/1, C++23 P2360) in `if`, `switch`, `for` and, since
+    WP-356, range-based `for`; before C++23 it is
+    `parse_ext_alias_in_init_statement` (`-Wc++23-extensions`) at
+    `using`, once the declaration has parsed (clang
+    `ParseAliasDeclarationInInitStatement`).
+  - A structured binding declaration may be the condition
+    ([stmt.pre]/4, C++26 P0963); Sema owns its rules (spec/sema.md §4.9).
   - A condition declaration is `decl-specifiers declarator = expr` or
     `{ … }` (`act_on_condition_var`). Without an initializer the error
     is `variable declaration in condition must have an initializer`.
