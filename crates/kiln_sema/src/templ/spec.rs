@@ -381,8 +381,10 @@ impl Sema<'_, '_> {
             !c.is_empty()
         };
         // [temp.spec.partial.general]/9.3: the arguments are not the
-        // primary template's own parameters in order.
-        let params = self.template_params(tmpl);
+        // primary template's own parameters in order. They are the head
+        // declaration's: a friend first declaration inside a class
+        // template has deeper parameters, which no argument names.
+        let params = self.template_params(self.head_template(tmpl));
         let conv_args: Vec<TemplateArg> = self.ast.types.args(conv.sugared).to_vec();
         if !constrained
             && params.len() == conv_args.len()

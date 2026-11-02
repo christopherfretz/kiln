@@ -165,12 +165,15 @@ impl CodegenJob<'_> {
     ) -> Option<String> {
         let job = &self.0;
         let a = job.args;
-        let Ok(target) = Target::from_triple(job.toolchain.target.triple) else {
+        let Ok(mut target) = Target::from_triple(job.toolchain.target.triple) else {
             Diag::new(DiagId::drv_unsupported_target, Span::INVALID)
                 .arg(job.toolchain.target.triple)
                 .emit(engine);
             return None;
         };
+        if let Some(signed) = a.predef.char_signed {
+            target.types.char_signed = signed;
+        }
         let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let popts = ParseOptions {
             std: job.std.lex,

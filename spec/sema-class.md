@@ -149,6 +149,18 @@ nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
 `class X` naming the injected-class-name is the injected type `X<P...>`
 anywhere inside the template, not only in a friend declaration.
 
+A class first declared inside a template by an elaborated-type-specifier
+that is a plain reference (a parameter or template-argument type `struct P*`,
+`_If<C, struct __private_nat, It>`) or by `friend struct F;` is a member of
+the nearest enclosing namespace ([basic.scope.pdecl]/7, [class.friend]/11),
+so its type is not dependent ([temp.dep.type]/9): it is built with
+`dependent_depth` cleared (`decl.rs` `namespace_tag_record`), overload
+resolution and later definitions see one ordinary class, and an atomic
+constraint naming it is a constant after substitution ([temp.constr.atomic]/3;
+libc++ `__bit_iterator::operator=`, probed by `std::formattable<vector<bool>>`;
+tests/conformance/temp.constr.atomic/elaborated-tag-in-template.cpp, WP-298).
+A local class (an enclosing block) keeps the template's dependence.
+
 **Rule** (`class/access.rs`, clang `SemaAccess`). Member `m` found in naming
 class `N` ([class.access.base]/5) is accessible at context `R` iff: (a) `m` as
 a member of `N` is public; (b) it is private and `R` is a member or friend of
