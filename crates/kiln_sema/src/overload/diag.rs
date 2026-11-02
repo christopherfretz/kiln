@@ -583,7 +583,8 @@ fn deduction_rank(c: &Candidate) -> u8 {
             | Tdk::DeducedMismatch
             | Tdk::ConstraintsNotSatisfied
             | Tdk::NonDeducedMismatch
-            | Tdk::MiscellaneousDeductionFailure,
+            | Tdk::MiscellaneousDeductionFailure
+            | Tdk::Invalid,
         ) => 3,
         Some(Tdk::InstantiationDepth) => 4,
         Some(Tdk::InvalidExplicitArguments) => 5,

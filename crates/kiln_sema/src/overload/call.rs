@@ -197,6 +197,12 @@ impl Sema<'_, '_> {
             }
             Err(fail) => {
                 use crate::templ::deduce::Tdk;
+                if fail.tdk == Tdk::Invalid {
+                    // An invalid template is no candidate at all: the
+                    // call finds no match and the template is not noted
+                    // (clang `TemplateDeductionResult::Invalid`).
+                    return;
+                }
                 if let Some((i, x)) = fail.bad {
                     // A non-dependent parameter's bad conversion, found
                     // before the specialization was formed: reported as
