@@ -252,6 +252,13 @@ SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
   const member function 'f'` + `member function 'K::f' is declared const here`.
 - `implicit_object_type(method)` gives `cv C&` / `cv C&&`
   ([over.match.funcs.general]/4) for S3O's ranking.
+- A destructor is invokable on a `const`, `volatile` or `const volatile`
+  object ([class.dtor]/5): binding the object argument of an explicit
+  destructor call (`p->~T()` with `p` a `const T*`, libc++
+  `std::destroy_at` on a const element) adds the object's cv to the
+  destructor's, as clang's `TryObjectArgumentInitialization` does
+  (`bind_object_argument`, WP-295;
+  `tests/conformance/class.dtor/cv-object-explicit-call.cpp`).
 - Explicit object parameters (P0847, WP-149): `ParamInfo::explicit_object`
   carries the `this` location; `act_on_function` sets FnSpec
   `explicit_object` (also on instantiation, via `ParamData::EXPLICIT_OBJECT`)
