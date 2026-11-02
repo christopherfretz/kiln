@@ -664,6 +664,12 @@ pub struct Declarator {
     /// `isFunctionDeclarationContext` is false then: its function
     /// declarator declares no function, [dcl.fct]/22). Set by the parser.
     pub typedef: bool,
+    /// The type-constraint of a constrained placeholder in one of the
+    /// declarator's trailing return types (`auto (*v)() -> C auto`,
+    /// nested ones included), where its "does not satisfy" diagnostics
+    /// point (clang's `AutoTypeLoc`); invalid when there is none. Set by
+    /// the parser.
+    pub trailing_constraint: Loc,
     /// What the declarator declares, beyond `ctx`, where that decides
     /// whether a placeholder for a deduced class type may appear
     /// ([dcl.type.class.deduct]/2; clang's finer `DeclaratorContext`s).
@@ -703,10 +709,17 @@ pub enum DeclSite {
     /// A type-id template argument (a class template name alone is a
     /// template template argument, parsed apart).
     TemplateArg,
-    /// A type-id in which clang's parser forms no placeholder (an
-    /// alias-declaration, a trailing return type): the template name
-    /// lacks its arguments.
+    /// A trailing return type: clang's parser forms no placeholder for a
+    /// deduced class type there (the template name lacks its arguments);
+    /// `auto` and `decltype(auto)` are allowed.
     NoDeduction,
+    /// The type-id of an alias-declaration: as [`DeclSite::NoDeduction`]
+    /// for a deduced class type; `auto` is "not allowed in type alias".
+    Alias,
+    /// The default argument of a type template parameter: as
+    /// [`DeclSite::NoDeduction`] for a deduced class type; `auto` is "not
+    /// allowed in template argument" (clang's `TemplateTypeArg`).
+    TypeParamDefault,
     /// A declarator rebuilt by template substitution (already checked).
     Subst,
 }
@@ -796,6 +809,7 @@ impl Declarator {
             decomp: None,
             friend: false,
             typedef: false,
+            trailing_constraint: Loc::INVALID,
         }
     }
 
