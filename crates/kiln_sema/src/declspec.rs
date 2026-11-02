@@ -427,8 +427,13 @@ pub enum DeclaratorContext {
 pub struct ParamInfo {
     /// The name, when written.
     pub name: Option<(Symbol, Loc)>,
-    /// The type as declared (before [dcl.fct]/5 adjustment).
+    /// The type after [dcl.fct]/5 adjustment (arrays and functions
+    /// become pointers).
     pub ty: QualType,
+    /// The type as declared, when [dcl.fct]/5 adjusted it: what a template
+    /// substitution substitutes into ([temp.deduct.general]/11.1: `T[3]`
+    /// with `T = void` fails although `void*` would not).
+    pub original_ty: Option<QualType>,
     /// Where the parameter-declaration starts (unnamed parameters).
     pub loc: Loc,
     /// Attributes.

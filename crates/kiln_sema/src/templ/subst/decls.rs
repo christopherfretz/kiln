@@ -350,6 +350,18 @@ impl Substituter<'_, '_, '_> {
         Ok(())
     }
 
+    /// A substituted function parameter type: `void` fails
+    /// ([temp.deduct.general]/11.10, clang `SubstParmVarDecl`'s
+    /// `err_param_with_void_type`), any other type is adjusted
+    /// ([dcl.fct]/5).
+    pub(crate) fn param_type(&mut self, ty: QualType, loc: Loc) -> SubstResult<QualType> {
+        if self.sema.ast.types.is_void(ty) {
+            self.sema.error(kiln_diag::DiagId::sema_param_with_void_type, loc);
+            return Err(SubstFail);
+        }
+        Ok(self.sema.adjust_param_type(ty))
+    }
+
     /// The parameters of pattern function `f` with substituted types.
     pub(crate) fn param_infos(&mut self, f: DeclId) -> SubstResult<Vec<ParamInfo>> {
         let params: Vec<DeclId> = self
@@ -393,6 +405,7 @@ impl Substituter<'_, '_, '_> {
                         out.push(ParamInfo {
                             name,
                             ty,
+                            original_ty: None,
                             loc,
                             attrs: Vec::new(),
                             invalid: false,
@@ -407,6 +420,7 @@ impl Substituter<'_, '_, '_> {
                 };
                 let mut decls = Vec::with_capacity(tys.len());
                 for ty in tys {
+                    let ty = self.param_type(ty, loc)?;
                     let ctx = self.sema.ctx;
                     let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
                     let np = self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, 0);
@@ -418,6 +432,7 @@ impl Substituter<'_, '_, '_> {
                         name: None,
                         ty,
                         loc,
+                        original_ty: None,
                         attrs: Vec::new(),
                         invalid: false,
                         default_arg: DefaultArg::None,
@@ -436,7 +451,8 @@ impl Substituter<'_, '_, '_> {
             let outer = self.type_begin.replace(begin);
             let ty = self.with_written_scope(scope, |s| s.ty(t, n.loc()));
             self.type_begin = outer;
-            let ty = ty?;
+            let declared = ty?;
+            let ty = self.param_type(declared, n.loc())?;
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
             // ([basic.scope.param]); the function adopts it.
@@ -444,11 +460,15 @@ impl Substituter<'_, '_, '_> {
             let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
             let eo = pd.map_or(0, |x| x.flags & ParamData::EXPLICIT_OBJECT);
             let np = self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo);
+            if declared != ty {
+                self.sema.ast.decls.set_param_original_ty(np, declared);
+            }
             self.sema.unowned_params.insert(np);
             self.locals.insert(p, DeclOrPack::Decl(np));
             out.push(ParamInfo {
                 name,
                 ty,
+                original_ty: (declared != ty).then_some(declared),
                 loc: n.loc(),
                 attrs: Vec::new(),
                 invalid: false,

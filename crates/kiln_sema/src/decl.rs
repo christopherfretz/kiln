@@ -1084,6 +1084,19 @@ impl Sema<'_, '_> {
         self.ast.decls.enumeration(def).is_some_and(EnumData::is_scoped)
     }
 
+    /// [dcl.fct]/5: a parameter of array type "array of T" becomes
+    /// "pointer to T"; of function type, "pointer to" that type.
+    pub(crate) fn adjust_param_type(&mut self, ty: QualType) -> QualType {
+        if self.ast.types.is_array(ty) {
+            let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
+            self.ast.types.pointer_to(elem)
+        } else if self.ast.types.is_function(ty) {
+            self.ast.types.pointer_to(ty)
+        } else {
+            ty
+        }
+    }
+
     /// A parameter-declaration ([dcl.fct]/3): its type, adjusted
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
@@ -1107,12 +1120,9 @@ impl Sema<'_, '_> {
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
-        if self.ast.types.is_array(ty) {
-            let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
-            ty = self.ast.types.pointer_to(elem);
-        } else if self.ast.types.is_function(ty) {
-            ty = self.ast.types.pointer_to(ty);
-        }
+        let declared = ty;
+        ty = self.adjust_param_type(ty);
+        let original_ty = (ty != declared).then_some(declared);
         if let Some(l) = d.ellipsis {
             // [dcl.fct]/16: a function parameter pack `T... x`.
             ty = self.act_pack_expansion_type(ty, l);
@@ -1120,6 +1130,7 @@ impl Sema<'_, '_> {
         ParamInfo {
             name: d.name,
             ty,
+            original_ty,
             loc: d.name_loc(),
             attrs,
             invalid: ds.invalid || d.invalid,
@@ -3156,6 +3167,9 @@ impl Sema<'_, '_> {
                 }
                 None => self.builder().param(f, pname, p.loc, p.ty, idx, flags),
             };
+            if let Some(o) = p.original_ty {
+                self.ast.decls.set_param_original_ty(pd, o);
+            }
             if p.range.0.is_valid() && p.range.0 != p.loc {
                 let _ = self.ast.decls.cold.begin_loc.insert(pd, p.range.0);
                 if p.type_loc.is_valid() && p.type_loc != p.loc && self.is_dependent_type(p.ty) {
