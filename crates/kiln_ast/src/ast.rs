@@ -388,6 +388,51 @@ impl Ast {
 
     // -- classes (spec/sema-class.md §8.1) ------------------------------
 
+    /// Whether `d` is a destroying operator delete
+    /// ([basic.stc.dynamic.deallocation]/5, clang
+    /// `FunctionDecl::isDestroyingOperatorDelete`): a class member
+    /// `operator delete` whose second parameter is
+    /// `std::destroying_delete_t`.
+    pub fn is_destroying_operator_delete(&self, d: DeclId) -> bool {
+        let decl = self.decls.get(d);
+        if decl.kind() != DeclKind::CXXMethod
+            || decl.name().as_operator() != Some(crate::names::OverloadedOperator::Delete)
+        {
+            return false;
+        }
+        let Some(proto) = decl.ty().and_then(|t| self.types.proto(t)) else { return false };
+        let Some(&p1) = self.types.params(proto).get(1) else { return false };
+        self.types.as_record(p1).is_some_and(|r| self.is_std_named(r, "destroying_delete_t"))
+    }
+
+    /// Whether `d` is named `name` and declared in namespace `::std`,
+    /// through inline namespaces (clang `isInStdNamespace`).
+    pub fn is_std_named(&self, d: DeclId, name: &str) -> bool {
+        let named = |x: DeclId, n: &str| {
+            self.decls.get(x).name().as_ident().is_some_and(|s| self.symbols().as_str(s) == n)
+        };
+        if !named(d, name) {
+            return false;
+        }
+        let mut ns = self.decls.get(d).ctx();
+        for _ in 0..64 {
+            let Some(n) = ns else { return false };
+            let Some(data) = self.decls.namespace(n) else { return false };
+            if !data.is_inline() {
+                break;
+            }
+            ns = self.decls.get(n).ctx();
+        }
+        ns.is_some_and(|n| {
+            self.decls.get(n).kind() == DeclKind::Namespace
+                && named(n, "std")
+                && self.decls.get(n).ctx().is_some_and(|c| {
+                    let c = self.redecl_context(c);
+                    self.decls.get(c).kind() == DeclKind::TranslationUnit
+                })
+        })
+    }
+
     /// The destructor of class `record`, if one has been declared (a table
     /// read: never declares the implicit destructor, which is sema's job).
     /// Of several prospective destructors ([class.dtor]/4), the one

@@ -109,6 +109,13 @@ Constructors:
   using-directives.
 - **Qualified lookup** ([basic.lookup.qual]) searches one context's
   table, plus that namespace's using-directives.
+- **The name before `::`** ([basic.lookup.qual]/1) is looked up for
+  namespaces, types and type templates only (`LookupKind::Nested`). The
+  parser's lookahead classifies such a component with
+  `Sema::classify_nested_name` (in `scan_name_qual_at` and the
+  member-pointer scan), so a variable does not hide the namespace or
+  class: `std::ifstream fs(fs::path("x"))` with a namespace alias `fs`
+  is a functional cast (WP-336).
 - **Argument-dependent lookup** ([basic.lookup.argdep]; WP-068a,
   `overload/adl.rs`, spec/sema-overload.md §2.2): a call's unqualified,
   unparenthesized callee whose ordinary lookup found only namespace-scope
@@ -2047,6 +2054,9 @@ diagnostics and IR.
     `ArrayInitLoopExpr` (`decomp_array_type`, `init_decomposition_array`,
     clang's `TryArrayCopy`).
   - Otherwise `e` is deduced and initialized as an ordinary variable.
+    `auto [a, b]{x}` is direct-list-initialization, so `e` deduces the
+    type of `x`; instantiation (`decomp_declare`) keeps the pattern's
+    initialization style for that (WP-336).
 
   `complete_decomposition` (clang's
   `CheckCompleteDecompositionDeclaration`) then gives every binding a
@@ -2298,6 +2308,13 @@ Names there are not odr-used.
   - Every other queued variable is marked `used`.
 - Names inside unevaluated operands are marked
   `non_odr_use_unevaluated`.
+- A default template argument substituted during deduction
+  ([temp.param]/14) is its own full-expression: `default_template_arg`
+  sets the caller's queue aside and appends its own leftovers back, so
+  its `act_on_full_expr` cannot resolve the enclosing call's pending
+  uses early (a constexpr local `Size` passed from a lambda,
+  `h<T, N = sizeof(T)>(1, Size)`, stays a non-odr-use and needs no
+  capture; WP-336).
 - The dump reads `used` and `referenced` from the first declaration.
 
 ### 5.3 The `noexcept` operator (`except.rs`)
@@ -2919,6 +2936,12 @@ and aggregate element types.
   scalar (more than one argument is clang's `excess elements in scalar
   initializer`); `{...}` is list-initialization (§6) of
   `T` or of the array `T[n]`, with an `array_filler` for the tail.
+  A `const` class array is fine when the element class is
+  const-default-constructible ([dcl.init.general]/7: a user-provided
+  default constructor, or every member initialized;
+  `CAN_CONST_DEFAULT_INIT` once the class is complete), so `new const
+  A[n]` with `A() {}` is accepted and `new const P[n]` for an aggregate
+  `P { int x; }` is the error above (WP-336).
   Class element types report "not supported yet" for default- and
   parenthesized initialization (they need `CXXConstructExpr`,
   WP-067b); braced aggregate initialization works.
@@ -2933,6 +2956,19 @@ and aggregate element types.
   without destructors), aligned when over-aligned. Class element types
   with a non-trivial destructor are unsupported (WP-067b / WP-076);
   class-scope `operator delete` is `todo(WP-068b)`.
+- **Destroying operator delete** ([expr.delete]/7, /10,
+  [basic.stc.dynamic.deallocation]/5; WP-336): for a single-object
+  `delete p` on a class `C`, a member `operator delete(C*,
+  std::destroying_delete_t[, size_t][, std::align_val_t])`
+  (`Ast::is_destroying_operator_delete`: a member named `operator
+  delete` whose second parameter is the class `std::destroying_delete_t`)
+  is preferred: once one is viable only destroying candidates are kept
+  (`usual_delete(.., destroying)`; the new-expression's matching
+  deallocation never takes one). Without a virtual destructor the operand
+  is converted to the first parameter's type. Codegen calls it with an
+  empty tag temporary and runs no destructor; the destructor is still
+  selected (and access-checked) as clang does. A destroying delete through
+  a virtual destructor is a codegen "not supported yet" error.
 - The element class's destructor ([expr.delete]/6, and for `new T[n]`
   [expr.new]/27) is selected (`mark_element_dtor_referenced`, skipped
   for an invalid or dependent class): a deleted one (such as a union's

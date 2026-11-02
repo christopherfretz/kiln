@@ -597,7 +597,13 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             if !matches!(self.punct_at(i + 1), Some(Punct::Less | Punct::ColonColon)) {
                 return None;
             }
-            let class = ctx.map(|q| self.p.s.classify_name(name, q));
+            let class = ctx.map(|q| {
+                if self.punct_at(i + 1) == Some(Punct::ColonColon) {
+                    self.p.s.classify_nested_name(name, q)
+                } else {
+                    self.p.s.classify_name(name, q)
+                }
+            });
             let mut end = i + 1;
             if self.punct_at(end) == Some(Punct::Less)
                 && (template_kw || class.is_some_and(is_template_class))

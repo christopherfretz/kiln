@@ -812,7 +812,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 i += 1;
             }
             let name = self.ident_of(self.tok_at(i))?;
-            let mut class = self.s.classify_name(name, qual);
+            // A name before `::` is looked up for a scope only
+            // ([basic.lookup.qual]/1).
+            let mut class = if self.tok_at(i + 1).kind == TokKind::Punct(Punct::ColonColon) {
+                self.s.classify_nested_name(name, qual)
+            } else {
+                self.s.classify_name(name, qual)
+            };
             if dep_tid && matches!(class, NameClass::Type(..)) {
                 class = NameClass::Dependent;
             }
