@@ -1399,7 +1399,27 @@ specification as written (`TypeNames` prints ` noexcept`,
   address that reaches it fails deduction with `Tdk::Invalid`, so it is
   no candidate and gets no note (spec/sema-templates.md §5.7). An
   explicit specialization declarator with an invalid parameter matches
-  no template and reports nothing more (WP-308).
+  no template and reports nothing more (WP-308). An explicit
+  specialization `template <> void f(int);` with nothing named `f`
+  visible reports "no function template matches" and declares a plain,
+  invalid function `f` (clang, WP-318; spec/sema-templates.md §6.9), so
+  a later `f(1)` is quiet.
+  A constructor or constructor template with an invalid parameter type
+  (`S(u1)`) is invalid (`declare.rs`, `fparams` validity) and, as
+  clang's `addedMember`, LookupSpecialMember and
+  `ResolveConstructorOverload` ignore invalid constructors, it is not
+  user-declared (the class stays an aggregate and keeps its implicit
+  default constructor, `implicit.rs` `scan_declared`) and is no
+  candidate (`ctor_select.rs` `usable_ctors`, used by constructor
+  overload resolution, the implicit conversion sequences and special
+  member deletion): `S s{1, 2};` is "excess elements in struct
+  initializer" and "no matching constructor" lists no invalid
+  constructor. An implicit class template specialization whose pattern
+  has an invalid member (a field, variable, function, or a member
+  template whose pattern is invalid) is itself invalid, as clang's
+  `InstantiateClass` (`templ/class.rs`); its initializations are not
+  checked (WP-318,
+  `tests/conformance/dcl.init.aggr/invalid-constructor-keeps-aggregate.cpp`).
   Tests: `dcl.stc/function-storage-class.cpp`,
   `dcl.fct.default/invalid-default-arg.cpp`,
   `except.spec/redecl-invalid-decl.cpp`,
@@ -2211,7 +2231,11 @@ for them.
   cast written `(void*)` (exactly, not through a typedef) warns
   `expression result unused; should this cast be to 'void'?`
   (-Wunused-value, clang `warn_unused_voidptr`) with only the fix-it
-  removing the `*` as its range (WP-203).
+  removing the `*` as its range (WP-203). The warning's location is the
+  expression's begin location, so an unused qualified name (`N::x;`,
+  `::N::x;`, `N::v<int>;`) points at the start of its
+  nested-name-specifier, as clang's `DeclRefExpr::getBeginLoc` (WP-318,
+  `tests/conformance/expr.prim.id.qual/unused-value-qualified-name-column.cpp`).
   - `emit_unused` (WP-182) follows clang's order: a comparison is
     `-Wunused-comparison` only when it is the unused expression itself
     (`top_comparison`: not parenthesized, not a comma's right operand or
@@ -3356,7 +3380,13 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   invalid variable whose type is a non-dependent reference (`S::c &r;`
   with no `S::c`, its type recovered to `int &`, spec/parse.md §2.1)
   still reports `declaration of reference variable 'r' requires an
-  initializer`; no other check runs for an invalid variable.
+  initializer`; no other check runs for an invalid variable. A
+  dependent reference type (`T &r;` in a template) is reported at the
+  template definition, with no note, as clang checks a reference type
+  before it stops at a dependent one, and again with the instantiation
+  note for each instantiation (`per_instantiation`, WP-318); a dependent
+  type that is not syntactically a reference waits for instantiation
+  (`tests/conformance/dcl.ref/dependent-uninitialized-reference.cpp`).
 - **Initializer of an invalid variable** (clang `AddInitializerToDecl`,
   WP-308): `act_on_init` discards it unchecked, so `S::c &r = 1;`
   reports only the decl-specifier

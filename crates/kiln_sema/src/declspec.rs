@@ -205,6 +205,11 @@ pub struct DeclSpec {
     pub loc: Loc,
     /// An error was already reported.
     pub invalid: bool,
+    /// The type specifier named no type and was reported ("unknown type
+    /// name", "no type named"): the type recovered to `int` (clang's
+    /// `TST_error`), and declarators after the first are parsed but not
+    /// declared (clang's `ParseDeclGroup`, WP-318).
+    pub type_error: bool,
     /// The type-constraint `C<args>` of a placeholder `C auto`
     /// ([dcl.spec.auto.general]/1).
     pub auto_constraint: Option<(DeclId, Vec<kiln_ast::types::TemplateArg>)>,

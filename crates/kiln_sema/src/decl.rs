@@ -1911,7 +1911,7 @@ impl Sema<'_, '_> {
                 self.templ.cur = None;
             }
         }
-        let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
@@ -1919,7 +1919,11 @@ impl Sema<'_, '_> {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
-            return self.act_on_function_spec_declarator(ds, ty, d, invalid);
+            match self.act_on_function_spec_declarator(ds, ty, d, invalid) {
+                Ok(r) => return r,
+                // No template to specialize: a plain, invalid function.
+                Err(()) => invalid = true,
+            }
         }
         if let Some((ext, _)) = self.templ.explicit_inst.filter(|_| self.at_explicit_head()) {
             self.templ.explicit_inst = None;
@@ -4729,8 +4733,9 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_reference(ty) {
             if spec.storage() != VarStorage::Extern {
+                // Repeats the template definition's report (WP-318).
                 let msg = self.diag(DiagId::sema_reference_var_requires_init, loc).arg(name);
-                self.emit(msg);
+                self.emit(msg.per_instantiation());
             }
             return;
         }
@@ -4780,7 +4785,11 @@ impl Sema<'_, '_> {
     /// variable, a reference type, so `S::name &r;` with no `S::name`
     /// (whose type recovers to `int`, [dcl.type.simple]) reports
     /// "declaration of reference variable 'r' requires an initializer"
-    /// after "no type named 'name' in 'S'" (WP-308). True if it reported.
+    /// after "no type named 'name' in 'S'" (WP-308); and, for a dependent
+    /// reference type, `T &r;` in a template pattern reports at the
+    /// definition (clang checks the reference before it stops at a
+    /// dependent type) and again, with the instantiation note, for each
+    /// instantiation (WP-318). True if it reported.
     fn uninit_array_or_reference(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
         let Some(ty) = vn.ty() else { return false };
@@ -4803,9 +4812,8 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return true;
         }
-        if !vn.has(DeclFlags::INVALID)
-            || self.ast.types.is_dependent(ty)
-            || !self.ast.types.is_reference(ty)
+        if !self.ast.types.is_reference(ty)
+            || !(vn.has(DeclFlags::INVALID) || self.ast.types.is_dependent(ty))
         {
             return false;
         }

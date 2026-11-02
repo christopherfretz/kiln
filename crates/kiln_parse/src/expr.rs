@@ -1066,8 +1066,19 @@ impl Parser<'_, '_> {
                 }
                 Some(Punct::LParen) => {
                     self.bump();
+                    let typos = self.s.typo_count();
                     let args = self.with_greater_op(true, Self::parse_call_args)?;
-                    let rparen = self.expect_closing(Punct::RParen, Punct::LParen, loc);
+                    let rparen = if !self.at(Punct::RParen) && self.s.typo_count() != typos {
+                        // clang's `ParsePostfixExpressionSuffix`: arguments
+                        // that held a delayed typo (`f(S::nom x)`) skip to
+                        // the `)` (stopping at a `;`) with no "expected ')'"
+                        // for the unmatched `(` (WP-318).
+                        let at = self.loc();
+                        self.skip_until(&[Punct::RParen], true, false);
+                        self.eat(Punct::RParen).unwrap_or(at)
+                    } else {
+                        self.expect_closing(Punct::RParen, Punct::LParen, loc)
+                    };
                     e = self.s.act_on_call(e, &args, loc, rparen);
                 }
                 Some(p @ (Punct::Period | Punct::Arrow)) => {

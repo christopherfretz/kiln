@@ -208,3 +208,28 @@ fn delayed_no_member_after_missing_semi() {
         p.diags
     );
 }
+
+/// WP-318: a delayed typo in a full-expression nested inside a larger
+/// expression statement. Inside call arguments clang skips to the `)`
+/// without "expected ')'"; in parentheses "expected ')'" comes first and
+/// `(S::nom x)` is not a cast.
+#[test]
+fn delayed_no_member_nested_in_expression_statement() {
+    let p = parse(
+        "struct S {};\nvoid f(int);\nvoid g(int a) {\n  f(S::nom x);\n  (S::nom x);\n  a = (S::nom x);\n}\n",
+    );
+    let errs: Vec<&str> =
+        p.diags.iter().map(String::as_str).filter(|d| d.contains("error")).collect();
+    assert_eq!(
+        errs,
+        [
+            "4:8 error: no member named 'nom' in 'S'",
+            "5:11 error: expected ')'",
+            "5:7 error: no member named 'nom' in 'S'",
+            "6:15 error: expected ')'",
+            "6:11 error: no member named 'nom' in 'S'",
+        ],
+        "{:?}",
+        p.diags
+    );
+}
