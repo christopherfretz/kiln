@@ -854,9 +854,10 @@ impl Oven {
                 let reusable = provisional
                     && matches!(info.state, VarEvalState::NotEvaluated | VarEvalState::NotConstant);
                 let ty = reusable.then(|| self.types.intern(b, info.ty));
-                let reuse = self.provisional_objs.get(&g).copied().filter(|&(t, p)| {
-                    Some(t) == ty && self.mem.alloc_of(Ptr::decode(p)).is_ok()
-                });
+                let reuse =
+                    self.provisional_objs.get(&g).copied().filter(|&(t, p)| {
+                        Some(t) == ty && self.mem.alloc_of(Ptr::decode(p)).is_ok()
+                    });
                 let p = if let Some((_, p)) = reuse {
                     p
                 } else {
