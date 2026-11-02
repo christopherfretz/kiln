@@ -306,7 +306,13 @@ impl Parser<'_, '_> {
             return None;
         };
         let result = in_stmt_expr && self.ends_stmt_expr();
-        if self.eat(Punct::Semi).is_none() {
+        if self.at(Punct::RParen) && self.peek_is(1, Punct::Semi) {
+            // clang's `ExpectAndConsumeSemi`: a stray `)` before the `;`
+            // is reported and taken with it (`f(u<int> 7; x);`, WP-399).
+            self.error_here(DiagId::parse_extraneous_rparen);
+            self.bump();
+            self.bump();
+        } else if self.eat(Punct::Semi).is_none() {
             // clang's `ExpectAndConsumeSemi`: nothing is skipped; the next
             // statement starts at the current token (`X<T>::m b;` goes on
             // with `b;`).
