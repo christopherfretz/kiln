@@ -584,9 +584,14 @@ literal is one instruction and one step, not an interpreted loop.
   constant (clang 19's `ConstantExpression` mode). WP-292: the operand
   is looked through parentheses and no-op / bit casts of pointer
   prvalues (clang `ignorePointerCastsAndParens`, so `(const char *)&s`
-  designates `s`) and evaluated speculatively (`Op::Speculate`): the
-  left operands of top-level commas, also under an array decay, are
-  skipped (clang ignores a failing comma operand); an operand with a
+  designates `s`) and evaluated speculatively (`Op::Speculate`). clang
+  evaluates it ignoring side effects: a comma's left operand is an
+  ignored value whose failure is noted, after which any lvalue-to-rvalue
+  read fails (and a call with arguments). So the left operands of commas at any depth (WP-302:
+  `(x, (y, arr))`, `&a[(f(), 1)]`, `b + (f(), 2)`) with no read after
+  them in evaluation order (reads in skipped left operands not counted)
+  are skipped (`skipped_comma_lhs`; the compiler's `skip_effects`), and
+  the others are evaluated with the operand; an operand with a
   remaining side effect gives the unknown value (-1 for types 0/1, 0 for
   2/3) without being evaluated, as clang fails the modification of an
   object from before the trial (register-promoted locals are not rolled
@@ -615,9 +620,9 @@ literal is one instruction and one step, not an interpreted loop.
   a constant (generic note; clang 19 crashes on it). The `*f128` builtins with a `long double` twin
   evaluate as the twin (quad-precision `softfloat` arithmetic);
   `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
-  trap "subexpression not valid", as clang 19. **Divergences:** only
-  top-level commas of an object-size operand are skipped (clang ignores
-  a failing comma operand at any depth, e.g. `&a[(f(), 1)]`).
+  trap "subexpression not valid", as clang 19. **Divergences:** for the
+  object-size comma rule a call with arguments counts as a read (its
+  callee reads them) and one without as none, whatever the callee reads.
 
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,

@@ -358,15 +358,20 @@ impl Parser<'_, '_> {
     fn parse_alignas(&mut self, out: &mut Vec<AttrId>) {
         let loc = self.bump().span.lo;
         let Some(open) = self.expect(Punct::LParen) else { return };
+        let begin = self.tok().span.lo;
         let arg = if self.is_type_id_start(self.pos()) {
             self.parse_type_id().map(AttrArg::Type)
         } else {
             self.parse_constant_expr().map(AttrArg::Expr)
         };
-        if let Some(l) = self.eat(Punct::Ellipsis) {
-            self.unsupported("'alignas' pack expansions", l);
+        // `alignas(Ts...)` ([dcl.align]/1, [temp.variadic]/5).
+        let ellipsis = self.eat(Punct::Ellipsis);
+        let arg = arg.map(|a| self.s.act_on_alignas_operand(a, ellipsis, begin));
+        if let Some(None) = arg {
+            self.expect_closing(Punct::RParen, Punct::LParen, open);
+            return;
         }
-        let Some(arg) = arg else {
+        let Some(arg) = arg.flatten() else {
             self.skip_until(&[Punct::RParen], false, true);
             return;
         };

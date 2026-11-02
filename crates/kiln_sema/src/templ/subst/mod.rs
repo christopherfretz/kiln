@@ -527,6 +527,17 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     pub fn nns(&mut self, n: NnsId, loc: Loc) -> SubstResult<NnsId> {
         let flags = self.sema.ast.types.nns_flags(n);
         if !flags.intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK) {
+            // `A::y` in the pattern of `A` names the specialization being
+            // instantiated: `A<int>::` (clang's `TransformNestedNameSpecifierLoc`
+            // over the injected-class-name; printed).
+            if let Nns::Type { prefix, ty, template_kw } = self.sema.ast.types.nns_view(n)
+                && let kiln_ast::types::TypeView::InjectedClassName { pattern, .. }
+                | kiln_ast::types::TypeView::Record(pattern) = self.sema.ast.types.view(ty.ty())
+                && let Some(&(_, i)) = self.pairs.iter().rev().find(|p| p.0 == pattern)
+            {
+                let ty = self.sema.tag_type(i);
+                return Ok(self.sema.ast.types.nns(Nns::Type { prefix, ty, template_kw }));
+            }
             return Ok(n);
         }
         let v = self.sema.ast.types.nns_view(n);
@@ -616,6 +627,27 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         Ok(inst_parent == parent && !self.levels_retained(self.sema.ctx_template_levels(parent)))
     }
 
+    /// A parameter of a function type written inside the pattern
+    /// (`void (*)(T a, decltype(a))`, never adopted by a function), named
+    /// in a later part of that function type: a parameter with the
+    /// substituted type, made once per substitution (clang
+    /// `TransformFunctionTypeParams` instantiating the `ParmVarDecl`s).
+    /// It keeps its index and function-scope depth for the mangling of
+    /// a still-dependent reference.
+    fn nested_prototype_param(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
+        let node = *self.sema.ast.decls.get(d);
+        let Some(pd) = self.sema.ast.decls.param(d).copied() else { return Ok(d) };
+        let t = pd.original_ty.unwrap_or_else(|| self.decl_ty(d));
+        let ty = self.ty(t, loc)?;
+        let ctx = self.sema.ctx;
+        let flags = pd.flags & !kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING;
+        let np =
+            self.sema.builder().prototype_param(ctx, node.name(), node.loc(), ty, pd.index, flags);
+        self.sema.unowned_params.insert(np);
+        self.locals.insert(d, DeclOrPack::Decl(np));
+        Ok(np)
+    }
+
     /// The declaration of the instantiation that pattern declaration `d`
     /// became (clang's `FindInstantiatedDecl`, §5.6): a local of the
     /// pattern, a member of an instantiated class, or `d` itself when it
@@ -647,6 +679,9 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         if let Some(&(_, i)) = self.pairs.iter().rev().find(|p| p.0 == d) {
             return Ok(i);
         }
+        if node.kind() == DeclKind::ParmVar && self.sema.unowned_params.contains(&d) {
+            return self.nested_prototype_param(d, loc);
+        }
         if matches!(
             node.kind(),
             DeclKind::TemplateTypeParm
@@ -676,6 +711,14 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             // `FindInstantiatedDecl`, `ParentDependsOnArgs`).
             if self.levels_retained(self.sema.ctx_template_levels(parent)) {
                 return Ok(d);
+            }
+            // A parameter of the pattern named in its own signature
+            // (`decltype(t)`) while only the function type is substituted
+            // (deduction against a target type, [temp.deduct.funcaddr]):
+            // a substituted parameter, as clang's
+            // `TransformFunctionTypeParams` makes.
+            if node.kind() == DeclKind::ParmVar {
+                return self.nested_prototype_param(d, loc);
             }
             // A member of a class template pattern this substitution does
             // not instantiate (named in the deduction guide of one of its

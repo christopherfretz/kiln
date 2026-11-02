@@ -187,8 +187,17 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `kiln_oven::apfloat` (the Oven's correctly rounded soft-float):
     `fadd/fsub/fmul/fdiv`, `fpext`/`fptrunc` with either side outside
     `float`/`double`, `[su]itofp` to `half`/`bfloat`, `fpto[su]i` from
-    `half`. A NaN result is left unfolded (its payload would have to
-    match APFloat's).
+    `half`, and unary `-` (a sign-bit flip). NaN results fold as APFloat
+    computes them (WP-302, `tests/codegen/float_nan_fold.cpp`): a NaN
+    operand is the result, quieted, sign and payload kept (the left one
+    when both are NaN, signaling or not; `fsub` does not flip its sign);
+    an invalid operation gives the positive default quiet NaN; a NaN
+    `fpext`/`fptrunc` keeps its sign, shifts the significand by the
+    precision difference (truncating) and sets the quiet bit (and x87's
+    integer bit).
+  - `fptosi`/`fptoui` of a constant (any format) fold toward zero; a NaN,
+    an infinity or a value outside the destination's range is `poison`
+    (`APFloat::convertToInteger` reporting `opInvalidOp`).
 - Arithmetic:
   - signed add, sub and mul get `nsw`; shifts mask nothing at -O0;
   - pointer arithmetic: `gep inbounds` (`gep i8` for void and function
@@ -1615,6 +1624,15 @@ extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
   `ArrayToPointerDecay`, clang `DefaultFunctionArrayConversion`). The
   aggregate emitter emits the literal as `EmitAggExpr` of its initializer
   (clang `VisitCompoundLiteralExpr`; C++ literals are not destroyed there).
+- **Scalar, vector and complex compound literals** (`compound_literal_lvalue`,
+  WP-302): in a function, `(int){x}`, `(v4){x, 2}` and `(_Complex double){x}`
+  are clang's `EmitCompoundLiteralLValue`: the initializer is stored into a
+  fresh `alloca` of the literal's type, which the scalar and complex
+  emitters load (`VisitCompoundLiteralExpr` → `EmitLoadOfLValue`) and the
+  lvalue emitter returns, so a materialized or subscripted literal gets a
+  second temporary as in clang (`tests/codegen/compound_literal_scalar.cpp`).
+  A non-constant file-scope literal is rejected by sema (`initializer
+  element is not a compile-time constant`), so none reaches codegen.
 - Oven fixes found on the way: constant array types of differently
   qualified elements (`const E[3]`, `E[3]`) share one `OTy`
   (`Types::const_arrays`, clang `getUnqualifiedArrayType`), and a pointer
