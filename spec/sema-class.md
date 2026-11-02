@@ -1960,6 +1960,11 @@ access, out-of-line declarator scope.**
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
   expression only, and the Oven does not end the object's lifetime (as
   for an explicit destructor call; a gap).
+- *Member not found* ([expr.ref]/7.4, [class.member.lookup]/1): "no
+  member named 'm' in 'C'" names the object's class without its
+  cv-qualifiers (`member_access`; clang prints the record, so a
+  `const It&` object is `in 'It'`; WP-290,
+  `expr.ref/no-member-cv-qualified-object.cpp`).
 - *Qualified member access* ([expr.ref]/5, [class.member.lookup]):
   `e.N::m`, `p->B::f()`, `this->Base::x`, dependent qualifiers.
   `begin_member_qualifier`/`end_member_qualifier` bracket the qualifier
