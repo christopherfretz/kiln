@@ -385,6 +385,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - a type name (`NameClass::Type`) or tag specifier
   - attributes
 
+  With `friend`, a storage class or `thread_local` (clang's
+  `DeclSpec::Finish`, [class.friend]/6) is `'X' is invalid in friend
+  declarations` (`parse_friend_decl_spec`) at the specifier (at
+  `thread_local` with the combined name when both appear: `'static
+  thread_local'`), and both are dropped, so the friend declaration goes
+  on (`reject_friend_storage`, WP-293;
+  `class.friend/friend-storage-class.cpp`). A condition declaration
+  (`parse_condition`) is a type name for this purpose: a storage class or
+  `thread_local` there is `type name does not allow storage class to be
+  specified` at the specifier and is dropped (WP-293).
+
   Sema checks the combination when it converts the DeclSpec to a type
   (`[dcl.type.simple]`, `type_from_declspec_at`).
 - **`parse_declarator`** fills a `Declarator`:

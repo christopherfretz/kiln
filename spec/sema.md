@@ -417,6 +417,53 @@ Redeclaration and linkage rules:
   argument saved for the complete-class context is `DefaultArg::Unparsed`
   and replayed through `act_on_param_default_arg`, sema-class.md §2.7.)
   Calls fill omitted trailing arguments with `CXXDefaultArgExpr`.
+- **Erroneous default arguments** (WP-293; clang's
+  `ActOnParamDefaultArgumentError`). A default argument parsed in place
+  whose expression is erroneous — including an explicit cast that fails
+  after its diagnostic (`(int)"s"`: a pointer to a smaller integer, a
+  vector size mismatch; `reinterpret` returns `Err(())` for these
+  instead of a cast kind) — makes the parameter and the function invalid
+  (see *Invalid function declarations*, §4.7). Uses are not diagnosed
+  again: a call to a non-template function that would use it, a
+  constant-evaluated call, and a member function's delayed default
+  argument (replayed in the complete-class context, which leaves the
+  member valid) are all silent. A function template that is invalid
+  fails deduction with `Tdk::Invalid` (clang's
+  `TemplateDeductionResult::Invalid`) for every call, so the call is `no
+  matching function for call to 'f'` and the template is not listed as a
+  candidate. A redeclaration of an invalid function adds no `missing
+  default argument on parameter` error (`merge_default_args` with
+  `trailing == false`); a call that would need the invalid default
+  argument is then measured against the redeclaration's arity. Test:
+  `dcl.fct.default/invalid-cast-default-arg.cpp`.
+- **`register`** ([dcl.stc]/1; removed in C++17 by P0001R1, clang's
+  `ext_register_storage_class`). `register` is `ISO C++17 does not allow
+  'register' storage class specifier` (`sema_register_storage_class`,
+  -Wregister, an error by default) at the specifier on a parameter
+  (`act_on_param_declarator`, before the type is checked; lambda and
+  function template parameters too) and on a variable or structured
+  binding at block scope, in a for-init-statement and as a range-for
+  variable (after `loop variable 'x' may not be declared 'register'`;
+  after `decomposition declaration cannot be declared 'register'` for a
+  binding), and the declaration continues. A variable with an asm label
+  (`register int r asm("x1")`) is exempt. At namespace scope a variable,
+  structured binding or variable template additionally gets `illegal
+  storage class on file-scoped variable` (`sema_illegal_storage_class_on_var`)
+  at its name and is invalid (`register_at_file_scope`); its initializer
+  is discarded unchecked. Another storage class on a parameter is
+  `invalid storage class specifier in function declarator`. A condition
+  declaration gets the parser's storage-class error instead (spec/parse.md
+  §4) and a member `storage class specified for a member declaration`.
+  Tests: `dcl.stc/register-storage-class.cpp`,
+  `dcl.stc/register-storage-class-namespace.cpp`.
+- **Storage classes in friend declarations** ([class.friend]/6, WP-293):
+  diagnosed by the parser as `'mutable' is invalid in friend
+  declarations` (likewise `static`, `extern`, `register`, `typedef`,
+  `thread_local`, `__thread`, `'static thread_local'`) and dropped
+  before Sema sees the DeclSpec (spec/parse.md §4), so the friend
+  function is declared as without it; a friend `typedef` or variable is
+  then `friends can only be classes or functions`. Test:
+  `class.friend/friend-storage-class.cpp`.
 - **Trailing return types** (`Chunk::Function::trailing`,
   [dcl.fct]/2): the function's return type, and an error
   (`function with trailing return type must specify return type 'auto'`)
