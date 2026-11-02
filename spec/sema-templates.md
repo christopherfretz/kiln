@@ -266,6 +266,19 @@ If `typename` is missing outside these contexts, clang's error and fix-it
 apply: "missing 'typename' prior to dependent type name 'T::type'". The
 parser then recovers as if `typename` had been written.
 
+A parameter-declaration of a function declared at namespace or block
+scope with an unqualified declarator-id (`template <class T> void
+f(X<T>::m x);`) is such a context (WP-287): the parser sets
+`param_needs_typename` while parsing that parameter's
+decl-specifier-seq (`parse_param_clause`, `DeclSite::Plain`, not a
+deduction guide, whose parameters clang treats as implicit), and the
+error is at the first token of the name. Gap: kiln's tentative parse
+classifies `X<T>::m` by the primary template's member, so `void
+g(X<T>::m);` (a lone, unnamed parameter) is a function declarator with
+this error, where clang's `InvalidAsDeclSpec` tie-breaker makes it a
+variable (`variable has incomplete type 'void'`)
+(`tests/conformance/temp.res.general/missing-typename-parameter.cpp`).
+
 **`template`** is needed after `::`, `.` or `->` when the qualifier or
 object is dependent and not the current instantiation, as in
 `x.template f<int>()` and `T::template X<U>`. Without it, `<` is

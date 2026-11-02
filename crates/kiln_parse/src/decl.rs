@@ -1859,7 +1859,17 @@ impl Parser<'_, '_> {
             let start = self.loc();
             // explicit-object-parameter-declaration ([dcl.fct]/3, P0847).
             let this_loc = self.eat_kw(Kw::This);
+            // [temp.res.general]/4.2: only a member-declaration's, a
+            // qualified declarator-id's, a lambda's or a requires-
+            // expression's parameters take `X<T>::m` as a type (and a
+            // deduction guide's, as clang).
+            let needs_typename = site == DeclSite::Plain
+                && matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Block)
+                && d.qualifier.is_none()
+                && !matches!(d.special, Some((SpecialName::DeductionGuide(_), _)));
+            let saved = std::mem::replace(&mut self.param_needs_typename, needs_typename);
             let mut ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
+            self.param_needs_typename = saved;
             if ds.is_empty() {
                 let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("parameter declarator");
                 self.emit(e);
