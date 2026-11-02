@@ -30,10 +30,6 @@ pub(crate) const BACKTRACE_LIMIT: usize = 10;
 /// `APValue::printPretty`).
 const MAX_ELEMS: u64 = 10;
 
-pub(crate) fn notes_name(ast: &Ast, d: DeclId) -> String {
-    name_of(ast, d)
-}
-
 fn name_of(ast: &Ast, d: DeclId) -> String {
     let mut s = String::new();
     write_name_for_diag(ast, d, &mut s);

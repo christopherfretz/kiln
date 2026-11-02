@@ -322,7 +322,8 @@ impl Sema<'_, '_> {
         // clang streams the `CXXRecordDecl` (`getNameForDiagnostic`), not its type.
         let rd = format!("'{}'", self.name_for_diagnostic(def));
         let def_loc = self.ast.decls.get(def).loc();
-        if bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+        // Not a reason in C++26 (P3533R2).
+        if self.vbases_forbid_constexpr(bits) {
             let vbases = self.virtual_bases(def);
             let tag = 2 * u8::from(rec.tag == TagKind::Class);
             msg = msg.with_note(
