@@ -117,6 +117,10 @@ pub(crate) struct Types {
     /// The `dsize` of each class whose data ends before its size (its
     /// tail padding may hold a derived class's members).
     data_sizes: FxHashMap<OTy, u64>,
+    /// The direct non-virtual empty bases (type, offset) of each class
+    /// with one: not in [`Types::fields`] (they hold no storage), but
+    /// subobjects a pointer may designate ([`Types::has_subobject`]).
+    empty_bases: FxHashMap<OTy, Vec<(OTy, u64)>>,
     /// Class slots interned while the class had no definition or was
     /// still being defined (`S*` in a constant expression inside `S`'s
     /// member-specification): kept `Opaque` and rebuilt in place once
@@ -334,6 +338,24 @@ impl Types {
                 return true;
             }
             match (self.kind(a), self.kind(b)) {
+                (TyKind::Array { elem: x, n }, TyKind::Array { elem: y, n: m }) if n == m => {
+                    (a, b) = (x, y);
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// [conv.qual]/2: whether `a` and `b` are similar types (alike but
+    /// for the cv-qualifiers at each level; [`Types::intern`] drops the
+    /// top-level ones).
+    pub fn similar(&self, mut a: OTy, mut b: OTy) -> bool {
+        loop {
+            if a == b {
+                return true;
+            }
+            match (self.kind(a), self.kind(b)) {
+                (TyKind::Ptr(x), TyKind::Ptr(y)) => (a, b) = (x, y),
                 (TyKind::Array { elem: x, n }, TyKind::Array { elem: y, n: m }) if n == m => {
                     (a, b) = (x, y);
                 }
@@ -615,7 +637,9 @@ impl Types {
             .record(def)
             .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::POLYMORPHIC));
         // Direct non-virtual bases as written; empty bases have no storage
-        // the evaluator touches (they would shadow the member at offset 0).
+        // the evaluator touches (they would shadow the member at offset 0)
+        // and are kept apart (`empty_bases`).
+        let mut ebases: Vec<(QualType, DeclId)> = Vec::new();
         let bdecls: Vec<(DeclId, QualType, DeclId)> = ast
             .decls
             .bases(def, &ast.lists)
@@ -627,6 +651,9 @@ impl Types {
                     .decls
                     .record(rdef)
                     .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::EMPTY));
+                if empty {
+                    ebases.push((b.ty, ast.first(rd)));
+                }
                 (!empty).then_some((rdef, b.ty, ast.first(rd)))
             })
             .collect();
@@ -653,6 +680,12 @@ impl Types {
                 layout.bases.iter().find(|&&(b, _)| b == first).map_or(0, |&(_, o)| o)
             })
             .collect();
+        let eoffs: Vec<(QualType, u64)> = ebases
+            .iter()
+            .map(|&(bq, first)| {
+                (bq, layout.bases.iter().find(|&&(b, _)| b == first).map_or(0, |&(_, o)| o))
+            })
+            .collect();
         // Reserve the slot first so self-referential pointers terminate.
         let me = match slot {
             Some(t) => {
@@ -665,6 +698,10 @@ impl Types {
         self.map.insert(c, me);
         if dsize < size && !union {
             let _ = self.data_sizes.insert(me, dsize);
+        }
+        if !eoffs.is_empty() {
+            let eb = eoffs.iter().map(|&(bq, off)| (self.intern(bridge, bq), off)).collect();
+            let _ = self.empty_bases.insert(me, eb);
         }
         let mut fields = Vec::with_capacity(fdecls.len());
         let (mut has_union, mut has_ptr) = (union, false);
@@ -832,12 +869,16 @@ impl Types {
                 let es = self.size(elem);
                 es != 0 && off / es < n && self.has_subobject(elem, off % es, p)
             }
-            TyKind::Record { .. } => self.fields(root).iter().any(|f| {
-                f.width.is_none()
-                    && off >= f.offset
-                    && off < f.offset + self.size(f.ty).max(1)
-                    && self.has_subobject(f.ty, off - f.offset, p)
-            }),
+            TyKind::Record { .. } => {
+                self.fields(root).iter().any(|f| {
+                    f.width.is_none()
+                        && off >= f.offset
+                        && off < f.offset + self.size(f.ty).max(1)
+                        && self.has_subobject(f.ty, off - f.offset, p)
+                }) || self.empty_bases.get(&root).is_some_and(|v| {
+                    v.iter().any(|&(b, o)| o == off && self.has_subobject(b, 0, p))
+                })
+            }
             _ => false,
         }
     }
