@@ -4440,6 +4440,22 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   that finds no function template is `no template named 'operator()'`
   (`temp.names/operator-template-id{,-errors}.cpp`). The member-access
   form `x.template operator()<N>()` goes through the member path.
+- From C++20 lookup finding only member functions also makes an
+  unqualified name or operator-function-id followed by `<` an assumed
+  template-name (clang 22; `Sema::is_assumable_function`). A template-id
+  whose lookup and argument-dependent lookup find no function template
+  is diagnosed by `Sema::diagnose_args_for_non_template`: lexically
+  inside a class (a member function body, also through a lambda or an
+  out-of-line definition, a default member initializer; the walk skips
+  functions and closure types) with a non-empty lookup result "'f' does
+  not refer to a template" plus "declared as a non-template here" at the
+  first declaration found, elsewhere as an undeclared name. A class member
+  found suppresses ADL ([basic.lookup.argdep]/3), so a members-only set
+  is diagnosed when the template-id is formed. clang 19 says "member 'f'
+  used before its declaration"; C++17's "does not name a template but is
+  followed by template arguments" is not implemented (`<` stays
+  less-than there). Tests: `temp.names/args-for-non-template-member.cpp`,
+  `temp.names/operator-call-template-member-run.cpp` (WP-374).
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is
   unsupported.

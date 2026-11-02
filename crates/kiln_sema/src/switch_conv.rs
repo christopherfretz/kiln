@@ -1,35 +1,91 @@
-//! The contextual implicit conversion of a `switch` condition of class
-//! type ([stmt.switch]/2, [conv.general]/5; clang
-//! `PerformContextualImplicitConversion` with the C++14 rules).
+//! The contextual implicit conversion of an operand of class type to a
+//! type of a required kind ([conv.general]/5; clang
+//! `PerformContextualImplicitConversion` with the C++14 rules): a
+//! `switch` condition ([stmt.switch]/2, integral or enumeration), a
+//! pre-C++14 new-expression array bound ([expr.new]/6 in C++11, integral
+//! or unscoped enumeration) and a `delete` operand ([expr.delete]/2,
+//! pointer to object type). One helper serves all three, so their
+//! diagnostics differ only in wording ([`ContextualConv`]).
 //!
-//! The class's conversion functions whose (non-reference) result type is
-//! integral or enumeration are collected. The non-explicit, non-template
-//! ones must agree on one target type `T` (otherwise "multiple
-//! conversions", one note per conversion); overload resolution among the
-//! matching non-explicit conversion functions (templates deduced against
-//! `T`) then picks the one called. With none usable and exactly one
-//! explicit matching conversion function, clang's "requires explicit
-//! conversion" error is reported and that function is called anyway.
+//! The class's conversion functions whose (non-reference) result type
+//! matches are collected. The non-explicit, non-template ones must agree
+//! on one target type `T` (otherwise clang's "multiple"/"ambiguous
+//! conversions" error, one note per conversion function); overload
+//! resolution among the matching non-explicit conversion functions
+//! (templates deduced against `T`) then picks the one called. With none
+//! usable and exactly one explicit matching conversion function, clang's
+//! "requires explicit conversion" error is reported and that function is
+//! called anyway.
+//!
+//! A conversion function template among the conversions of an ambiguity
+//! is noted "candidate function [with T = int]" (its specialization
+//! deduced against `T`), or "candidate function template" when it was not
+//! deduced. clang 19-22 crash there (`diagnoseAmbiguousConversion` casts
+//! the template to a conversion function), so this wording is kiln's.
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::{DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
 use crate::overload::{IcsOptions, OvlOutcome, SetKind};
 
+/// The operand a contextual implicit conversion applies to; it selects
+/// the target types and clang's diagnostic wording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContextualConv {
+    /// A `switch` condition: integral or enumeration type.
+    Switch,
+    /// A pre-C++14 new-expression array bound: integral or unscoped
+    /// enumeration type.
+    ArraySize,
+    /// A `delete` operand: pointer to object (or incomplete) type.
+    Delete,
+}
+
+impl ContextualConv {
+    fn incomplete(self) -> DiagId {
+        match self {
+            ContextualConv::Switch => DiagId::sema_switch_incomplete_class_type,
+            ContextualConv::ArraySize => DiagId::sema_array_size_incomplete_type,
+            ContextualConv::Delete => DiagId::sema_delete_incomplete_class,
+        }
+    }
+
+    fn explicit(self) -> DiagId {
+        match self {
+            ContextualConv::Switch => DiagId::sema_switch_explicit_conversion,
+            ContextualConv::ArraySize => DiagId::sema_array_size_explicit_conversion,
+            ContextualConv::Delete => DiagId::sema_delete_explicit_conversion,
+        }
+    }
+
+    fn ambiguous(self) -> DiagId {
+        match self {
+            ContextualConv::Switch => DiagId::sema_switch_multiple_conversions,
+            ContextualConv::ArraySize => DiagId::sema_array_size_ambiguous_conversion,
+            ContextualConv::Delete => DiagId::sema_delete_ambiguous_conversion,
+        }
+    }
+}
+
 impl Sema<'_, '_> {
-    /// Converts the class-type `switch` condition `cond` (`switch` keyword
-    /// at `loc`) to an integral or enumeration type. `None` when no
-    /// conversion function applies (the caller reports clang's "statement
-    /// requires expression of integer type"); a reported error yields an
-    /// error expression.
-    pub(crate) fn switch_class_condition(&mut self, cond: ExprId, loc: Loc) -> Option<ExprId> {
+    /// Contextually implicitly converts the class-type operand `cond` for
+    /// `kind` (diagnostics at `loc`: the `switch`, `new` or `delete`
+    /// keyword). `None` when no conversion function applies (the caller
+    /// reports its "no match" error); a reported error yields an error
+    /// expression.
+    pub(crate) fn contextual_class_conversion(
+        &mut self,
+        kind: ContextualConv,
+        cond: ExprId,
+        loc: Loc,
+    ) -> Option<ExprId> {
         let ty = self.ety(cond);
         if !self.require_complete(ty, loc) {
-            let d = self.diag(DiagId::sema_switch_incomplete_class_type, loc).arg(self.ty_arg(ty));
+            let d = self.diag(kind.incomplete(), loc).arg(self.ty_arg(ty));
             let d = self.incomplete_note(d, ty);
             self.emit(d);
             return Some(self.recover_err(&[cond], loc));
@@ -48,12 +104,15 @@ impl Sema<'_, '_> {
             } else {
                 m
             };
-            let to = self.switch_conversion_type(f);
-            if !tmpl && !self.integral_or_enum(to) {
+            let to = self.contextual_conversion_type(f);
+            if !tmpl && !self.contextual_target_matches(kind, to) {
                 continue;
             }
             if self.fn_spec(f).is_explicit() {
-                explicit.push((found, m));
+                // clang counts only the non-template explicit ones.
+                if !tmpl {
+                    explicit.push((found, m));
+                }
                 continue;
             }
             if !tmpl {
@@ -68,28 +127,25 @@ impl Sema<'_, '_> {
         }
         if let Some(t) = target {
             if !unique {
-                self.report_multiple_conversions(cond, &viable, loc);
-                return Some(self.recover_err(&[cond], loc));
+                let notes = self.contextual_conversion_notes(kind, &viable, None);
+                return Some(self.report_ambiguous_conversion(kind, cond, notes, loc));
             }
-            if let Some(e) = self.switch_resolve_conversion(cond, &viable, t, loc) {
+            if let Some(e) = self.contextual_resolve_conversion(kind, cond, &viable, t, loc) {
                 return Some(e);
             }
         }
         // clang `diagnoseNoViableConversion`: a single explicit candidate
         // is reported and called (recovery).
-        if let [(found, m)] = explicit[..] {
-            let f = self.templated_function(m).unwrap_or(m);
-            if self.kind_of(m) != DeclKind::FunctionTemplate {
-                let to = self.switch_conversion_type(f);
-                let d = self
-                    .diag(DiagId::sema_switch_explicit_conversion, loc)
-                    .arg(self.ty_arg(ty))
-                    .arg(self.ty_arg(to))
-                    .with_note(self.note_switch_conversion(f));
-                self.emit(d);
-                let call = self.call_conversion_function(cond, f, found, loc);
-                return Some(self.switch_finish_conversion(call, to));
-            }
+        if let [(found, f)] = explicit[..] {
+            let to = self.contextual_conversion_type(f);
+            let d = self
+                .diag(kind.explicit(), loc)
+                .arg(self.ty_arg(ty))
+                .arg(self.ty_arg(to))
+                .with_note(self.note_contextual_conversion(kind, f));
+            self.emit(d);
+            let call = self.call_conversion_function(cond, f, found, loc);
+            return Some(self.contextual_finish_conversion(call, to));
         }
         None
     }
@@ -97,8 +153,9 @@ impl Sema<'_, '_> {
     /// Overload resolution among the non-explicit matching conversion
     /// functions `viable` for the target `t` ([over.match.conv]);
     /// `None` when none is viable or the best is deleted.
-    fn switch_resolve_conversion(
+    fn contextual_resolve_conversion(
         &mut self,
+        kind: ContextualConv,
         cond: ExprId,
         viable: &[(DeclId, DeclId)],
         t: QualType,
@@ -118,21 +175,21 @@ impl Sema<'_, '_> {
             OvlOutcome::Ambiguous => {
                 // Distinct functions yielding the same `T` (clang
                 // `diagnoseAmbiguousConversion`).
-                self.report_multiple_conversions(cond, viable, loc);
+                let notes = self.contextual_conversion_notes(kind, viable, Some(&set));
                 self.end_set(set);
-                return Some(self.recover_err(&[cond], loc));
+                return Some(self.report_ambiguous_conversion(kind, cond, notes, loc));
             }
             OvlOutcome::NoViable | OvlOutcome::Deleted(_) => None,
         };
         self.end_set(set);
         let (f, found) = best?;
         let call = self.call_conversion_function(cond, f, found, loc);
-        Some(self.switch_finish_conversion(call, t))
+        Some(self.contextual_finish_conversion(call, t))
     }
 
     /// The result of the conversion function call `call` as a prvalue of
     /// type `to` (an lvalue-to-rvalue conversion for a reference result).
-    fn switch_finish_conversion(&mut self, call: ExprId, to: QualType) -> ExprId {
+    fn contextual_finish_conversion(&mut self, call: ExprId, to: QualType) -> ExprId {
         if self.is_err_expr(call) {
             return call;
         }
@@ -146,39 +203,97 @@ impl Sema<'_, '_> {
     }
 
     /// The non-reference result type of conversion function `f`.
-    fn switch_conversion_type(&self, f: DeclId) -> QualType {
+    fn contextual_conversion_type(&self, f: DeclId) -> QualType {
         let r = self.conversion_result_type(f);
         self.non_reference(r)
     }
 
-    /// Whether `t` is an integral or enumeration type (clang
-    /// `isIntegralOrEnumerationType`, scoped enumerations included).
-    fn integral_or_enum(&self, t: QualType) -> bool {
-        let t = self.ast.types.canonical(t);
-        self.ast.types.is_integral(t) || self.ast.types.as_enum(t).is_some()
-    }
-
-    /// clang's "multiple conversions" error at `loc`, one note per
-    /// non-template conversion function of `viable`.
-    fn report_multiple_conversions(&mut self, cond: ExprId, viable: &[(DeclId, DeclId)], loc: Loc) {
-        let ty = self.ety(cond);
-        let mut d = self.diag(DiagId::sema_switch_multiple_conversions, loc).arg(self.ty_arg(ty));
-        for &(_, m) in viable {
-            if self.kind_of(m) != DeclKind::FunctionTemplate {
-                d = d.with_note(self.note_switch_conversion(m));
+    /// Whether `to` is a target `kind` accepts (clang's converter
+    /// `match`).
+    pub(crate) fn contextual_target_matches(&self, kind: ContextualConv, to: QualType) -> bool {
+        let types = &self.ast.types;
+        let t = types.canonical(to);
+        match kind {
+            ContextualConv::Switch => types.is_integral(t) || types.as_enum(t).is_some(),
+            ContextualConv::ArraySize => {
+                types.is_integral(t) || types.as_enum(t).is_some_and(|en| !self.is_scoped_enum(en))
+            }
+            // A pointer to an object or incomplete type (`void *`
+            // included), not to a function.
+            ContextualConv::Delete => {
+                types.is_pointer(t) && types.pointee(t).is_some_and(|p| !types.is_function(p))
             }
         }
-        self.emit(d);
     }
 
-    /// clang's "conversion to integral type 'T'" note at conversion
-    /// function `f`.
-    fn note_switch_conversion(&self, f: DeclId) -> kiln_diag::Diag {
-        let to = self.switch_conversion_type(f);
-        let is_enum = self.ast.types.as_enum(self.ast.types.canonical(to)).is_some();
+    /// The notes of an ambiguity among `viable`: clang's per-context note
+    /// for a non-template conversion function; for a template, the
+    /// candidate note of its specialization in `set` ("candidate
+    /// function [with T = int]"), or "candidate function template" when
+    /// it was not deduced (see the module docs).
+    fn contextual_conversion_notes(
+        &mut self,
+        kind: ContextualConv,
+        viable: &[(DeclId, DeclId)],
+        set: Option<&crate::overload::OverloadCandidateSet>,
+    ) -> Vec<Diag> {
+        let mut notes = Vec::with_capacity(viable.len());
+        for &(_, m) in viable {
+            if self.kind_of(m) != DeclKind::FunctionTemplate {
+                notes.push(self.note_contextual_conversion(kind, m));
+                continue;
+            }
+            let cand = set.and_then(|set| {
+                (0..u32::try_from(set.cands.len()).unwrap_or(u32::MAX))
+                    .find(|&c| set.cand(c).template == Some(m) && set.cand(c).viable)
+                    .map(|c| (set, c))
+            });
+            if let Some((set, c)) = cand {
+                notes.push(self.ovl_note(set, c));
+            } else {
+                let at = self.ast.decls.get(m).loc();
+                notes.push(self.diag(DiagId::note_ovl_candidate, at).arg("function template"));
+            }
+        }
+        notes
+    }
+
+    /// clang's ambiguous-conversion error for `kind` at `loc` with
+    /// `notes`; the error expression.
+    fn report_ambiguous_conversion(
+        &mut self,
+        kind: ContextualConv,
+        cond: ExprId,
+        notes: Vec<Diag>,
+        loc: Loc,
+    ) -> ExprId {
+        let ty = self.ety(cond);
+        let mut d = self.diag(kind.ambiguous(), loc).arg(self.ty_arg(ty));
+        for n in notes {
+            d = d.with_note(n);
+        }
+        self.emit(d);
+        self.recover_err(&[cond], loc)
+    }
+
+    /// clang's note at conversion function `f` for `kind`: "conversion to
+    /// integral type 'T'" (`switch`), "... declared here" (array bound),
+    /// "conversion to pointer type 'T'" (`delete`).
+    fn note_contextual_conversion(&self, kind: ContextualConv, f: DeclId) -> Diag {
+        let to = self.contextual_conversion_type(f);
         let at = self.ast.decls.get(f).loc();
-        self.diag(DiagId::note_switch_conversion, at)
-            .arg(if is_enum { "1" } else { "0" })
-            .arg(self.ty_arg(to))
+        let is_enum = self.ast.types.as_enum(self.ast.types.canonical(to)).is_some();
+        let which = if is_enum { "1" } else { "0" };
+        match kind {
+            ContextualConv::Switch => {
+                self.diag(DiagId::note_switch_conversion, at).arg(which).arg(self.ty_arg(to))
+            }
+            ContextualConv::ArraySize => {
+                self.diag(DiagId::note_array_size_conversion, at).arg(which).arg(self.ty_arg(to))
+            }
+            ContextualConv::Delete => {
+                self.diag(DiagId::note_delete_conversion, at).arg(self.ty_arg(to))
+            }
+        }
     }
 }
