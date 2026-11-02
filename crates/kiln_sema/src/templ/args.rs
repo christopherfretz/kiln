@@ -181,6 +181,19 @@ impl Sema<'_, '_> {
         arg_locs: &[Loc],
         loc: Loc,
     ) -> Result<ConvertedArgs, ()> {
+        let saved = self.inst.template_id_loc.replace(loc);
+        let r = self.check_template_args_at(tmpl, written, arg_locs, loc);
+        self.inst.template_id_loc = saved;
+        r
+    }
+
+    fn check_template_args_at(
+        &mut self,
+        tmpl: DeclId,
+        written: &[TemplateArg],
+        arg_locs: &[Loc],
+        loc: Loc,
+    ) -> Result<ConvertedArgs, ()> {
         let head = self.head_template(tmpl);
         let tmpl = self.ast.first(tmpl);
         let params = self.template_params(head);
@@ -353,6 +366,7 @@ impl Sema<'_, '_> {
         }
         let args = self.prior_levels(tmpl, depth, prior);
         let mut s = Substituter::new(self, &args);
+        s.final_subst = true;
         s.ty(ty, at).map_err(|_| ())
     }
 
@@ -406,7 +420,33 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return Err(());
         }
-        let mut pty = self.nttp_type(tmpl, depth, p, prior, at)?;
+        // A type substituted from prior arguments is substituted under a
+        // frame and checked at the parameter (clang `CheckTemplateArgument`:
+        // `CheckNonTypeTemplateParameterType(NTTPType, NTTP->getLocation())`).
+        let declared = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        let substituted = self.ast.types.is_dependent(declared);
+        if substituted {
+            let poi = self.inst.template_id_loc.unwrap_or(at);
+            if !self.push_inst_frame(FrameKind::PriorArgSubstitution, p, tmpl, poi) {
+                return Err(());
+            }
+            let l = self.ast.types.arg_list(prior);
+            self.set_frame_args(l);
+        }
+        let r = self.nttp_type(tmpl, depth, p, prior, at).and_then(|t| {
+            if substituted && !self.is_error_type(t) && !self.ast.types.is_dependent(t) {
+                let ploc = self.ast.decls.get(p).loc();
+                let _ = self.require_complete_silent(t, ploc);
+                if !self.check_nttp_type(t, ploc) {
+                    return Err(());
+                }
+            }
+            Ok(t)
+        });
+        if substituted {
+            self.pop_inst_frame();
+        }
+        let mut pty = r?;
         if self.is_error_type(pty) {
             return Err(());
         }
@@ -416,6 +456,7 @@ impl Sema<'_, '_> {
             return Ok(self.builder().template_arg_expr(e));
         }
         let ety = self.ast.exprs.get(e).ty();
+        let placeholder = pty;
         if matches!(
             self.ast.types.canonical_view(pty),
             TypeView::Auto { keyword: kiln_ast::types::AutoKeyword::Auto, .. }
@@ -449,6 +490,13 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 return Err(());
             }
+        }
+        // A deduced type is checked at the argument ([temp.param]/6.3),
+        // naming the parameter (clang `CheckTemplateArgument`).
+        if pty != placeholder
+            && !self.check_nttp_type_noting(pty, at, Some(self.ast.decls.get(p).loc()))
+        {
+            return Err(());
         }
         let t = &self.ast.types;
         if t.as_record(pty).is_some() {

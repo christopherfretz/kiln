@@ -319,8 +319,8 @@ impl Sema<'_, '_> {
         };
         let Some(rec) = self.ast.decls.record(def) else { return msg };
         let bits = rec.defn;
-        let rd = self.ast.types.canonical(elem);
-        let rd = self.ty_arg(crate::conv::strip_cv(self, rd));
+        // clang streams the `CXXRecordDecl` (`getNameForDiagnostic`), not its type.
+        let rd = format!("'{}'", self.name_for_diagnostic(def));
         let def_loc = self.ast.decls.get(def).loc();
         if bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
             let vbases = self.virtual_bases(def);

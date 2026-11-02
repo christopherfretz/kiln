@@ -28,13 +28,29 @@ impl Sema<'_, '_> {
     /// ([temp.param]/7). Dependent and placeholder types are checked
     /// when substituted or deduced. False after a diagnostic.
     pub(crate) fn check_nttp_type(&mut self, ty: QualType, loc: Loc) -> bool {
+        self.check_nttp_type_noting(ty, loc, None)
+    }
+
+    /// [`Self::check_nttp_type`] whose diagnostic ends with "template
+    /// parameter is declared here" at `param` (clang
+    /// `NoteTemplateParameterLocation` after checking a deduced type).
+    pub(crate) fn check_nttp_type_noting(
+        &mut self,
+        ty: QualType,
+        loc: Loc,
+        param: Option<Loc>,
+    ) -> bool {
+        let here = |d: Diag| match param {
+            Some(l) => d.note(DiagId::note_template_param_here, kiln_source::Span::empty(l)),
+            None => d,
+        };
         if self.is_error_type(ty) || self.is_dependent_type(ty) {
             return true;
         }
         let t = &self.ast.types;
         if matches!(t.canonical_view(ty), TypeView::RValueRef(_)) {
             let d = self.diag(DiagId::sema_nttp_rvalue_ref, loc).arg(self.ty_arg(ty));
-            self.emit(d);
+            self.emit(here(d));
             return false;
         }
         let Some(r) = t.as_record(ty) else { return true };
@@ -46,7 +62,7 @@ impl Sema<'_, '_> {
         if !bits.contains(DefinitionBits::LITERAL) {
             let d = self.diag(DiagId::sema_nttp_non_literal, loc).arg(self.ty_arg(ty));
             let d = self.with_non_literal_notes(d, ty);
-            self.emit(d);
+            self.emit(here(d));
             return false;
         }
         if self.is_structural(ty) {
@@ -56,7 +72,7 @@ impl Sema<'_, '_> {
         for n in self.not_structural_notes(ty) {
             d = d.with_note(n);
         }
-        self.emit(d);
+        self.emit(here(d));
         false
     }
 

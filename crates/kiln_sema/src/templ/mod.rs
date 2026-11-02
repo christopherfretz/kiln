@@ -292,6 +292,9 @@ pub struct InstState {
     pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
     /// Drop the next error passed to `emit` (set by `incomplete_note`).
     pub(crate) suppress_next_error: std::cell::Cell<bool>,
+    /// The template-id whose arguments `check_template_args` converts:
+    /// its template name, the point of a `PriorArgSubstitution` frame.
+    pub(crate) template_id_loc: Option<Loc>,
     /// The mem-initializers of constructor definitions in a template, as
     /// parsed, and their `:` (clang keeps the pattern's unresolved
     /// `CXXCtorInitializer`s for `InstantiateMemInitializers`).

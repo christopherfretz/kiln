@@ -625,7 +625,9 @@ impl Substituter<'_, '_, '_> {
                 }
                 let a = self.element(a, decl, loc)?;
                 let ArgView::Type(t) = a.view() else { return Err(SubstFail) };
-                let Some(assoc) = self.assoc(depth) else { return Ok(t) };
+                let Some(assoc) = self.assoc(depth).filter(|_| !self.final_subst) else {
+                    return Ok(t);
+                };
                 // A pack element that is itself an expansion (`Ts` = <`Us...`>,
                 // an alias template guide's) stays visibly one (WP-134).
                 if self.pack_index.is_some()

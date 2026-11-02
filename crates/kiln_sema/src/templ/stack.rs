@@ -74,6 +74,11 @@ pub enum FrameKind {
     /// ([dcl.struct.bind]/4; clang `InitializingStructuredBinding`). Not
     /// an instantiation; the entity is the binding.
     BindingInit,
+    /// Substituting the prior arguments into a non-type parameter's type
+    /// while checking its argument ([temp.arg.general]; clang
+    /// `PriorTemplateArgumentSubstitution`). The entity is the
+    /// parameter; the frame's `args` are the prior arguments.
+    PriorArgSubstitution,
 }
 
 impl FrameKind {
@@ -87,6 +92,7 @@ impl FrameKind {
                 | FrameKind::ConceptCheck
                 | FrameKind::ConstraintSubstitution
                 | FrameKind::BindingInit
+                | FrameKind::PriorArgSubstitution
         )
     }
 
@@ -105,6 +111,7 @@ impl FrameKind {
             FrameKind::DefaultTemplateArg => DiagId::note_default_arg_instantiation_here,
             FrameKind::DefaultFunctionArg => DiagId::note_default_function_arg_instantiation_here,
             FrameKind::DefaultArgChecking => DiagId::note_template_default_arg_checking,
+            FrameKind::PriorArgSubstitution => DiagId::note_prior_template_arg_substitution,
             FrameKind::PartialSpecDeduction => DiagId::note_partial_spec_deduct_here,
             FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => {
                 DiagId::note_var_template_spec_here
@@ -137,6 +144,7 @@ impl FrameKind {
             FrameKind::DefaultTemplateArg => "default-template-arg",
             FrameKind::DefaultFunctionArg => "default-arg",
             FrameKind::DefaultArgChecking => "checking",
+            FrameKind::PriorArgSubstitution => "prior-arg-substitution",
             FrameKind::PartialSpecDeduction => "partial-deduction",
             FrameKind::VarTemplateInstantiation => "var",
             FrameKind::VarTemplateInit => "var-init",
@@ -498,6 +506,14 @@ impl Sema<'_, '_> {
                 s
             }
             FrameKind::PartialSpecDeduction => self.partial_spec_desc(f.entity, f.args),
+            FrameKind::PriorArgSubstitution => {
+                // clang: `%select{non-type|template}0 template
+                // parameter%1 %2`, the name as ` 'V'` when there is one.
+                let name = self.decl_name(f.entity);
+                let name = if name.is_empty() { String::new() } else { format!(" '{name}'") };
+                let with = f.args.map(|l| self.template_args_desc(f.template, l));
+                format!("non-type template parameter{name} {}", with.unwrap_or_default())
+            }
             FrameKind::ConstraintsCheck | FrameKind::ConceptCheck => match f.args {
                 Some(l) => self.spec_name(f.template, l),
                 None => self.qualified_decl_name(f.template),
