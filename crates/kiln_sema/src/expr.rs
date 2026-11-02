@@ -2928,6 +2928,17 @@ impl Sema<'_, '_> {
         if self.is_member_pointer(lt) || self.is_member_pointer(rt) {
             return self.member_pointer_comparison(op, l2, r2, loc);
         }
+        // [expr.eq]/7 (P2996): two `std::meta::info` operands compare
+        // equal when they reflect the same entity; nothing converts.
+        if self.is_meta_info(lt) || self.is_meta_info(rt) {
+            if self.is_meta_info(lt)
+                && self.is_meta_info(rt)
+                && matches!(op, BinaryOp::EQ | BinaryOp::NE)
+            {
+                return self.builder().binary(op, l2, r2, QualType::BOOL, loc);
+            }
+            return self.invalid_operands(l, r, loc);
+        }
         let ptr_like = |s: &Self, t: QualType| s.ast.types.is_pointer(t) || s.is_nullptr_type(t);
         if ptr_like(self, lt) || ptr_like(self, rt) {
             if let Some((l3, r3, _)) = self.composite_pointer(l2, r2) {
@@ -3262,7 +3273,11 @@ impl Sema<'_, '_> {
         if let Some((t3, f3, ty)) = self.composite_pointer(t2, f2) {
             return self.builder().conditional(c2, t3, f3, ty, loc);
         }
-        if self.ast.types.as_record(tt).is_some() && self.ast.types.same_unqualified(tt, ft) {
+        // [expr.cond]/7.2 (P2996): two `std::meta::info` arms.
+        let same_info = self.is_meta_info(tt) && self.is_meta_info(ft);
+        if (same_info || self.ast.types.as_record(tt).is_some())
+            && self.ast.types.same_unqualified(tt, ft)
+        {
             let ty = conv::strip_cv(self, tt);
             return self.builder().conditional(c2, t2, f2, ty, loc);
         }

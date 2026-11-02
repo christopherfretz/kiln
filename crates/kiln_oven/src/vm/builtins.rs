@@ -323,7 +323,7 @@ impl Oven {
 
     /// `strlen`/`wcslen`: reads elements of type `ct` up to the first
     /// zero.
-    fn bi_strlen(&self, mut p: u64, ct: OTy) -> Result<u64, Fault> {
+    pub(super) fn bi_strlen(&self, mut p: u64, ct: OTy) -> Result<u64, Fault> {
         let mut n = 0u64;
         if self.types.size(ct) == 1
             && let Some(run) = self.byte_run(p, ct, u64::MAX)
