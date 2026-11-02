@@ -3,20 +3,22 @@
 // the `auto` type-specifier of the declarator that owns the trailing return
 // (the inner `auto` of a nested `auto (*)() -> F`), also when the type comes
 // from substitution; without one, at the function declarator's '('.
+// A lambda has no `auto` to point at: its '(' (clang).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 22:5 error "function cannot return function type 'F' (aka 'int ()')"
-//@ diag: 23:5 error "function cannot return array type 'A' (aka 'int[2]')"
-//@ diag: 24:8 error "function cannot return function type 'int ()'"
-//@ diag: 25:8 error "function cannot return function type 'F' (aka 'int ()')"
-//@ diag: 26:1 error "function cannot return array type 'A' (aka 'int[2]')"
-//@ diag: 28:10 error "function cannot return function type 'F' (aka 'int ()')"
-//@ diag: 29:3 error "function cannot return array type 'A' (aka 'int[2]')"
-//@ diag: 31:1 error "function cannot return function type 'F' (aka 'int ()')"
-//@ diag: 32:8 error "function cannot return function type 'int ()'"
-//@ diag: 33:14 error "function cannot return function type 'F' (aka 'int ()')"
-//@ diag: 35:38 error "function cannot return function type 'int ()'"
-//@ diag: 36:6 note "in instantiation of template class 'X<int ()>' requested here"
+//@ diag: 24:5 error "function cannot return function type 'F' (aka 'int ()')"
+//@ diag: 25:5 error "function cannot return array type 'A' (aka 'int[2]')"
+//@ diag: 26:8 error "function cannot return function type 'int ()'"
+//@ diag: 27:8 error "function cannot return function type 'F' (aka 'int ()')"
+//@ diag: 28:1 error "function cannot return array type 'A' (aka 'int[2]')"
+//@ diag: 30:10 error "function cannot return function type 'F' (aka 'int ()')"
+//@ diag: 31:3 error "function cannot return array type 'A' (aka 'int[2]')"
+//@ diag: 33:1 error "function cannot return function type 'F' (aka 'int ()')"
+//@ diag: 34:8 error "function cannot return function type 'int ()'"
+//@ diag: 35:14 error "function cannot return function type 'F' (aka 'int ()')"
+//@ diag: 37:38 error "function cannot return function type 'int ()'"
+//@ diag: 38:6 note "in instantiation of template class 'X<int ()>' requested here"
+//@ diag: 39:14 error "function cannot return array type 'A' (aka 'int[2]')"
 typedef int F();
 typedef int A[2];
 F g1();
@@ -34,3 +36,4 @@ auto f4() -> auto (*)() -> F;
 template <class T> auto f5() -> T;
 template <class T> struct X { static auto m() -> T; };
 X<F> x;
+auto lam = []() -> A { return {}; };

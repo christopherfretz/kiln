@@ -183,6 +183,15 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (clang's `MergeVarDecl` returns at an invalid new declaration), so
     it reports no redefinition and `c` still names the valid `c`.
     `dcl.type/missing-type-specifier-implicit-int.cpp`.
+    A function whose declaration is invalid (an unknown return or
+    parameter type) is erroneous when named outside a call (clang's
+    `BuildDeclarationNameExpr` makes such a name an error; a call
+    resolves it through its overload set and is still checked, so
+    `k()` reports "no matching function"): `&A::f` and `&k`
+    (`Sema::address_of`) and an implicit conversion of `k`
+    (`conv::implicit_convert`, `Sema::names_invalid_function`) recover
+    silently, with no "cannot initialize" after the first error
+    (WP-379, `expr.unary.op/address-of-invalid-member-function.cpp`).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
@@ -660,7 +669,18 @@ Redeclaration and linkage rules:
   is diagnosed at that `auto` type-specifier when the return type is
   trailing (the inner `auto` of a nested `auto (*)() -> F`; also after
   substitution), otherwise at the function declarator's `(`, as clang
-  (`dcl.fct/return-function-type-trailing.cpp`).
+  (`dcl.fct/return-function-type-trailing.cpp`). A lambda has no
+  `auto` to point at: its trailing-return checks use the lambda
+  declarator's `(`.
+- **Volatile return types** ([depr.volatile.type]/2, C++20 and later):
+  a function declarator whose return type is volatile-qualified (also
+  through a typedef; not a pointer to volatile) warns
+  `volatile-qualified return type T is deprecated`
+  [-Wdeprecated-volatile] (`sema_deprecated_volatile_return`, in
+  `-Wdeprecated`), at the same location as the array/function return
+  check. Not re-checked after template substitution (clang warns for
+  `T f()` with `T = volatile int`). Tests:
+  `depr.volatile.type/volatile-return{,-cxx17}.cpp`.
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.
@@ -711,9 +731,15 @@ Redeclaration and linkage rules:
   placeholder or an error) is "restrict requires a pointer or reference
   ('int' is invalid)" at the qualifier, which is dropped
   (`type_from_declspec_at`, so `__restrict int *p;` qualifies `int` and
-  is diagnosed). It is reported once per declaration group where clang
-  reports it per declarator. `_Atomic int g();` (friend or not) is
-  accepted, as clang 19 and 22 do;
+  is diagnosed). As clang forms each declarator's type anew
+  ([dcl.decl.general]/3), it is reported once per declarator: the
+  group's type is formed once, and the parser repeats the error for each
+  later declarator (`take_declspec_restrict_error`,
+  `report_restrict_not_pointer`; `__restrict int e, *f;` reports it
+  twice). A `__restrict` ptr-operator qualifies its own declarator only
+  (`int *__restrict a, *b;`: `b` is `int *`; WP-379,
+  `dcl.decl/restrict-per-declarator.cpp`). `_Atomic int g();` (friend or
+  not) is accepted, as clang 19 and 22 do;
   `class.friend/restrict-atomic-decl-specifiers.cpp`.
 - `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
   over the declared type of an unparenthesized id-expression or member

@@ -428,6 +428,22 @@ class-head-name (or variable declarator-id) is a template-id:
   `template int A<int>::s;`.
 - A declaration: `extern template …`.
 
+**One declarator.** [temp.pre]/5: the declaration of a template head,
+`template<>` or an explicit instantiation has at most one declarator.
+The parser (`Parser::template_decl_kind`, taken by the next simple or
+member declaration) reports clang's `err_multiple_template_declarators`
+at the `,` after the first declarator ("a template declaration can only
+declare a single entity", "an explicit template specialization can only
+declare a single entity", "an explicit template instantiation can only
+instantiate a single entity") and skips the rest of the group; the first
+declarator is declared. clang 19 and 22 declare the later declarators
+too (with the same head), so a later use of `b` after
+`template<class T> int a, b;` is "use of undeclared identifier" in kiln
+only; and clang also reports "explicit template instantiation cannot
+have a definition" at the first declarator of an explicit-instantiation
+group, which kiln does not (WP-379,
+`tests/conformance/temp.pre/multiple-declarators.cpp`).
+
 **Friends.** `template<class U> friend struct B;`,
 `friend void f<>(T);` (a friend specialization), and
 `template<class U> friend void g(U);`.
@@ -3205,7 +3221,26 @@ takes its initializer's dependence without `UNEXPANDED_PACK`
   - An init-capture `[x = ts]` naming an unexpanded pack outside an
     expansion makes its lambda unexpanded, so the enclosing statement is
     diagnosed ("expression contains unexpanded parameter pack 'ts'", as
-    clang). Declarator types are checked as above. The sites checked
+    clang).
+  - Lambda-local packs (WP-379, clang's `LambdaScopeInfo::LocalPacks`):
+    in a lambda body, the packs a full-expression, initializer or
+    declarator type names outside an expansion
+    (`Sema::lambda_unexpanded`) are split by where they are declared. A
+    pack declared in one of the innermost lambda's own scopes (an
+    init-capture pack, a parameter pack, a template parameter pack of a
+    generic lambda) is diagnosed at that site, as outside a lambda, even
+    in a non-template function (`[](auto... as) { int x = as; }`); the
+    others are recorded on the lambda scope (`LambdaScope::packs`), which
+    makes the lambda-expression unexpanded. A finished lambda's recorded
+    packs (`Sema::lambda_packs`), its call operator's type and its
+    non-pack captures are what `expr_packs` reports for the
+    lambda-expression, so a nested lambda naming an enclosing lambda's
+    pack (`[...xs = ts] { [y = xs] {}; }`) is diagnosed in the enclosing
+    body with that pack's name. A use of an init-capture pack in the body
+    has a dependent type (the pattern's `auto` is deduced at
+    instantiation; `capture.rs`), so an init-capture initialized from it
+    is not itself a pack. Not checked during instantiation. Test:
+    `expr.prim.lambda/errors-init-capture-unexpanded-pack.cpp`. Declarator types are checked as above. The sites checked
     are an `alignas` operand and the statements and initializers above. `Sema::diagnose_unexpanded_pack`
     (`templ/pack.rs`, emits `sema_unexpanded_pack`; WP-302) is the
     reusable collector and diagnostic for the remaining sites.
