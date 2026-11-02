@@ -183,6 +183,13 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (clang's `MergeVarDecl` returns at an invalid new declaration), so
     it reports no redefinition and `c` still names the valid `c`.
     `dcl.type/missing-type-specifier-implicit-int.cpp`.
+    Block scope follows the same rule (`prefer_valid_local`, WP-396). An
+    invalid local gives way to the latest valid declaration of its name
+    in the same scope. So in `R::X x; R::f(x);`, the unknown type `R::f`
+    makes the second `x` an invalid redeclaration, and later uses still
+    name the first `x` with its errors reported, as in clang 19 and 22.
+    `basic.lookup/invalid-redecl-recovery.cpp`,
+    `basic.lookup.argdep/module-example.cpp`.
     A function whose declaration is invalid (an unknown return or
     parameter type) is erroneous when named outside a call (clang's
     `BuildDeclarationNameExpr` makes such a name an error; a call

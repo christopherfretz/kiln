@@ -197,7 +197,11 @@ clang 22 considers classes only, a deviation in kiln's favour of the
 standard); hidden friends of associated classes are always visible. The
 standard's /5 example: `f(x)` finds `R::f` through `R::X`, `f(x, S::Z())`
 does not consider `S::f` although `S` is associated
-(`basic.lookup.argdep/module-example.cpp`, `module-enum.cpp`). A
+(`basic.lookup.argdep/module-example.cpp`, `module-enum.cpp`). `R::f(x)`
+is `no type named 'f' in namespace 'R'` (`R::f` is not visible to
+qualified lookup). Its invalid declaration of `x` does not hide the valid
+`x`, so the example's later errors follow, in the standard's order (spec/sema.md
+§3, "Invalid declarations"). A
 non-exported function of the module's interface is not found by an
 importer's ADL: clang 22 reads "in the interface of M" as "exported", and
 kiln follows it (`module.interface/visibility.cpp`). Inside an
