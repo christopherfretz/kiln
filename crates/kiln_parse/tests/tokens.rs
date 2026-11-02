@@ -95,22 +95,21 @@ fn cpp_pragma_op_pack() {
     p.assert_clean();
 }
 
-/// [cpp.import], [module.import]: an import is reported as unsupported and
-/// its tokens through `;` are not parsed.
+/// [cpp.import], [module.import]: importing a module whose source cannot
+/// be found is a fatal error at the module name (spec/modules.md §3).
 #[test]
-fn module_import_unsupported() {
+fn module_import_not_found() {
     let p = parse("import foo.bar;\nint x;");
-    p.assert_diag("1:1 error: a module import is not supported yet");
+    p.assert_diag("1:8 fatal: module 'foo.bar' not found");
     assert_eq!(p.problems().len(), 1, "{:?}", p.diags);
-    p.assert_dump("VarDecl x 'int'");
 }
 
-/// [cpp.module], [module.unit]: a module declaration is reported as
-/// unsupported.
+/// [cpp.module], [module.unit]: a primary module interface unit parses
+/// and its declarations are kept (spec/modules.md §2).
 #[test]
-fn module_declaration_unsupported() {
+fn module_declaration_parses() {
     let p = parse("export module m;\nint x;");
-    p.assert_diag("error: a module declaration is not supported yet");
+    p.assert_clean();
     p.assert_dump("VarDecl x 'int'");
 }
 
