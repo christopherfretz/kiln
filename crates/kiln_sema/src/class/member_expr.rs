@@ -1288,6 +1288,11 @@ impl Sema<'_, '_> {
                 (p.info().this_quals(), p.info().ref_qual())
             });
         let oq = self.ast.types.effective_quals(obj_ty);
+        // [class.dtor]/5: a destructor can be invoked for a const,
+        // volatile or const volatile object; its implicit object
+        // parameter takes the object's cv-qualifiers (clang
+        // `TryObjectArgumentInitialization`).
+        let mq = if self.kind_of(m) == DeclKind::CXXDestructor { mq | (oq & CV) } else { mq };
         let at = self.begin_loc(base);
         let name = self.decl_name(m);
         let declared_here = |s: &Self| {
