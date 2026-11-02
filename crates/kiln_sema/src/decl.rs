@@ -2155,6 +2155,12 @@ impl Sema<'_, '_> {
             // [temp.explicit]/3: of a variable template or static data
             // member.
             let type_loc = ds.type_loc.unwrap_or(ds.loc);
+            // [dcl.constexpr]/9: `constexpr` makes the declared type const.
+            let ty = if ds.constexpr.is_some() {
+                self.ast.types.qualify(ty, Quals::CONST)
+            } else {
+                ty
+            };
             self.act_on_explicit_var_inst(d, (ty, type_loc), ext.is_some(), invalid);
             return None;
         }

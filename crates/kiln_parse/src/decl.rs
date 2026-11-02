@@ -22,6 +22,7 @@ use kiln_source::{Loc, Span};
 
 use crate::keywords::Kw;
 use crate::parser::{ParamTypename, Parser};
+use crate::templ::TemplateDeclKind;
 
 /// True for a keyword that can begin a type-specifier-seq ([dcl.type]).
 pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
@@ -2956,6 +2957,7 @@ impl Parser<'_, '_> {
     ) -> Vec<DeclId> {
         let tmpl_kind = self.template_decl_kind.take();
         let mut ds = self.parse_decl_specifiers(ctx);
+        let mut tmpl_group = self.template_group(tmpl_kind);
         let mut decls = Vec::new();
         if ds.tag_declares
             && let Some(t) = ds.tag
@@ -3006,6 +3008,9 @@ impl Parser<'_, '_> {
             // `isDeclarationAfterDeclarator`, `isStartOfFunctionDefinition`).
             if declarators == 0 && d.is_function_declarator() && d.asm_label.is_none() {
                 if allow_fn_def && self.at_function_definition_start() {
+                    if tmpl_kind == Some(TemplateDeclKind::ExplicitInstantiation) {
+                        self.s.act_explicit_inst_with_definition(&d, self.loc(), true);
+                    }
                     self.parse_function_definition_after_declarator(
                         &ds, base, &d, &mut decls, level,
                     );
@@ -3033,6 +3038,9 @@ impl Parser<'_, '_> {
             }
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
+            if tmpl_kind == Some(TemplateDeclKind::ExplicitInstantiation) && !self.at(Punct::Semi) {
+                self.s.act_explicit_inst_with_definition(&d, self.loc(), false);
+            }
             let v = self.s.act_on_declarator(&ds, base, &d);
             self.record_declarator_end(v, &d);
             // A declarator without a type is invalid too (`static y, z;`).
@@ -3054,7 +3062,7 @@ impl Parser<'_, '_> {
                 return decls;
             }
             decls.extend(v);
-            if !self.next_declarator(tmpl_kind) {
+            if !self.next_declarator(&mut tmpl_group) {
                 break;
             }
         }

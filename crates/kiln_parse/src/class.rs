@@ -1390,6 +1390,7 @@ impl Parser<'_, '_> {
             self.parse_friend_type_list(ds, fl);
             return;
         }
+        let mut tmpl_group = self.template_group(tmpl_kind);
         if self.at(Punct::Semi) {
             self.prohibit_friend_lead_attrs(&mut ds);
             self.bump();
@@ -1468,7 +1469,7 @@ impl Parser<'_, '_> {
             {
                 self.push_late(LateItem::Method { f, parts });
             }
-            if !self.next_declarator(tmpl_kind) {
+            if !self.next_declarator(&mut tmpl_group) {
                 break;
             }
             first = false;

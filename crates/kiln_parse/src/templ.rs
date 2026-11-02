@@ -30,6 +30,16 @@ use crate::keywords::Kw;
 use crate::parser::{ParamTypename, Parser, is_template_class};
 use crate::tentative::TypeIdContext;
 
+/// The template-declaration state of one declarator group
+/// ([`Parser::template_group`], [`Parser::next_declarator`]).
+pub(crate) struct TemplateGroup {
+    /// What heads the declaration; `None` once its multiple declarators
+    /// were reported (or for a plain declaration).
+    kind: Option<TemplateDeclKind>,
+    /// What each later declarator gets back.
+    saved: Option<kiln_sema::templ::TemplateDeclState>,
+}
+
 /// The kind of declaration a template head, `template<>` or an
 /// explicit-instantiation `template` introduces (clang's
 /// `ParsedTemplateKind`), for "can only declare a single entity".
@@ -267,30 +277,36 @@ impl Parser<'_, '_> {
         self.template_decl_kind = None;
     }
 
-    /// After a declarator of a group: true if a `,` follows and the
-    /// group goes on ([`Parser::diagnose_multiple_template_declarators`]
-    /// ends a template declaration's group first).
-    pub(crate) fn next_declarator(&mut self, tmpl_kind: Option<TemplateDeclKind>) -> bool {
-        !self.diagnose_multiple_template_declarators(tmpl_kind) && self.eat(Punct::Comma).is_some()
+    /// The template-declaration state of a declarator group whose
+    /// declaration is headed by `kind` (see [`Parser::next_declarator`]),
+    /// taken after the decl-specifiers.
+    pub(crate) fn template_group(&self, kind: Option<TemplateDeclKind>) -> TemplateGroup {
+        TemplateGroup { kind, saved: kind.map(|_| self.s.save_template_decl_state()) }
     }
 
-    /// [temp.pre]/5, [temp.expl.spec], [temp.explicit]: a template
-    /// declaration, explicit specialization or explicit instantiation
-    /// declares one entity. At the `,` after its first declarator, clang's
-    /// `err_multiple_template_declarators`; the rest of the group is
-    /// skipped to its `;` (left for the caller). True if reported.
-    pub(crate) fn diagnose_multiple_template_declarators(
-        &mut self,
-        kind: Option<TemplateDeclKind>,
-    ) -> bool {
-        let Some(kind) = kind else { return false };
+    /// After a declarator of a group: true if a `,` follows and the
+    /// group goes on. [temp.pre]/5, [temp.expl.spec], [temp.explicit]: a
+    /// template declaration, explicit specialization or explicit
+    /// instantiation declares one entity; at the first `,` of such a
+    /// group, clang's `err_multiple_template_declarators`. As in clang's
+    /// `ParseDeclGroup`, the later declarators are still declared, each
+    /// as the first one was (a template with the same heads, or the same
+    /// kind of specialization or instantiation).
+    pub(crate) fn next_declarator(&mut self, g: &mut TemplateGroup) -> bool {
         if !self.at(Punct::Comma) {
             return false;
         }
-        let d =
-            self.s.diag(DiagId::parse_multiple_template_declarators, self.loc()).arg(kind as u8);
-        self.emit(d);
-        self.skip_until(&[Punct::RBrace], true, false);
+        if let Some(kind) = g.kind.take() {
+            let d = self
+                .s
+                .diag(DiagId::parse_multiple_template_declarators, self.loc())
+                .arg(kind as u8);
+            self.emit(d);
+        }
+        self.bump();
+        if let Some(saved) = &g.saved {
+            self.s.restore_template_decl_state(saved);
+        }
         true
     }
 

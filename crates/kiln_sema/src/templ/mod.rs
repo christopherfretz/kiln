@@ -93,6 +93,48 @@ impl Sema<'_, '_> {
     }
 }
 
+/// The template-declaration state the first declarator of a group
+/// consumes: which heads it took and the pending `template<>` /
+/// `[extern] template` / `template<> template<...>` markers
+/// ([`Sema::save_template_decl_state`]).
+#[derive(Clone, Debug, Default)]
+pub struct TemplateDeclState {
+    taken: Vec<bool>,
+    explicit_spec: Option<Loc>,
+    explicit_inst: Option<(Option<Loc>, Loc)>,
+    member_spec: Option<Loc>,
+}
+
+impl Sema<'_, '_> {
+    /// Before the first declarator of a template declaration, explicit
+    /// specialization or explicit instantiation: the state its later
+    /// declarators get back ([`Sema::restore_template_decl_state`]).
+    pub fn save_template_decl_state(&self) -> TemplateDeclState {
+        TemplateDeclState {
+            taken: self.templ.heads.iter().map(|h| h.taken).collect(),
+            explicit_spec: self.templ.explicit_spec,
+            explicit_inst: self.templ.explicit_inst,
+            member_spec: self.templ.member_spec,
+        }
+    }
+
+    /// [temp.pre]/5: after "a template declaration can only declare a
+    /// single entity", clang (`ParseDeclGroup`) still declares each later
+    /// declarator of the group with the same template parameter lists
+    /// (or as the same kind of specialization or instantiation): the
+    /// heads the previous declarator took are open again.
+    pub fn restore_template_decl_state(&mut self, s: &TemplateDeclState) {
+        for (h, &t) in self.templ.heads.iter_mut().zip(&s.taken) {
+            h.taken = t;
+        }
+        self.templ.explicit_spec = s.explicit_spec;
+        self.templ.explicit_inst = s.explicit_inst;
+        self.templ.member_spec = s.member_spec;
+        self.templ.cur = None;
+        self.templ.head_mismatch = false;
+    }
+}
+
 impl HeadBuild {
     /// A written head whose list starts at `l_angle` (a lambda's
     /// *template-parameter-list*, which has no `template` keyword).
