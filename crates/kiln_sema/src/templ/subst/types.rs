@@ -5,7 +5,9 @@
 //! written).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeFlags, TypeOfOperand, TypeView};
+use kiln_ast::types::{
+    ArgView, ExcSpec, ExprOperand, TemplateArg, TemplateName, TypeFlags, TypeOfOperand, TypeView,
+};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -15,7 +17,7 @@ use crate::Sema;
 use crate::declspec::{Chunk, Declarator, DeclaratorContext};
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
-use crate::templ::args::ArgLookup;
+use crate::templ::args::{ArgLookup, LevelMode};
 use crate::templ::written::WrittenKey;
 
 impl Substituter<'_, '_, '_> {
@@ -54,6 +56,54 @@ impl Substituter<'_, '_, '_> {
             .arg(self.sema.ty_arg(ret));
         self.sema.emit(d);
         Err(SubstFail)
+    }
+
+    /// `TT<args>` for template template parameter `TT`, substituted with a
+    /// template `name`: the arguments `TT`'s own default template
+    /// arguments supply ([temp.param]/14, [temp.arg.template]/3: the
+    /// template-id is checked against `TT`'s parameters, so a default
+    /// argument of `TT`'s parameter is used even when the argument
+    /// template has none). Each default is substituted with the
+    /// enclosing levels and the arguments before it.
+    fn ttp_default_args(
+        &mut self,
+        ttp: DeclId,
+        name: kiln_ast::ids::TemplateNameId,
+        v: &mut Vec<TemplateArg>,
+        loc: Loc,
+    ) -> SubstResult<()> {
+        // Still a template template parameter (an outer one): its own
+        // parameters are checked when it is substituted.
+        if self.sema.ast.types.template_decl(name).is_none_or(|d| {
+            self.sema.kind_of(d) == DeclKind::TemplateTemplateParm
+        }) {
+            return Ok(());
+        }
+        let Some(list) = self.sema.ast.template_parm(ttp).and_then(|x| x.params) else {
+            return Ok(());
+        };
+        let pl = *self.sema.ast.templates.param_list(list);
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(pl.params).collect();
+        if v.len() >= params.len()
+            || params.iter().any(|&p| self.sema.ast.template_parm(p).is_some_and(|x| x.pack))
+            || v.iter().any(|&a| self.sema.is_pack_expansion_arg(a))
+        {
+            return Ok(());
+        }
+        let depth = usize::from(pl.depth);
+        for &p in &params[v.len()..] {
+            let Some(def) = self.sema.template_default(p) else { break };
+            let mut levels = self.args.clone();
+            levels.levels.truncate(depth);
+            while levels.depth() < depth {
+                levels.push(kiln_ast::ids::ArgListId::EMPTY, ttp, LevelMode::Retain);
+            }
+            let prior = self.sema.ast.types.arg_list(v);
+            levels.push(prior, ttp, LevelMode::Substitute);
+            let a = Substituter::new(self.sema, &levels).template_arg(def, loc)?;
+            v.push(a);
+        }
+        Ok(())
     }
 
     fn chunk(&mut self, base: QualType, chunk: Chunk, loc: Loc) -> SubstResult<QualType> {
@@ -269,9 +319,16 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::TemplateSpecialization { name, args, underlying, alias } => {
                 let _ = (underlying, alias);
+                let ttp = match self.sema.ast.types.template_name_view(name) {
+                    TemplateName::TemplateTemplateParm { decl, .. } => Some(decl),
+                    _ => None,
+                };
                 let name = self.template_name(name, loc)?;
                 let args = self.args(args, loc)?;
-                let v = self.sema.ast.types.args(args).to_vec();
+                let mut v = self.sema.ast.types.args(args).to_vec();
+                if let Some(ttp) = ttp {
+                    self.ttp_default_args(ttp, name, &mut v, loc)?;
+                }
                 let l = self.written(WrittenKey::Type(q), loc);
                 match self.sema.act_template_id(name, &v, l, l) {
                     Ok(TemplateIdRef::Type(t)) => Ok(t),
@@ -457,7 +514,7 @@ impl Substituter<'_, '_, '_> {
                 let d = self.member_template_named(n, name, loc)?;
                 let underlying = self.sema.template_name_for(d);
                 let tn =
-                    self.sema.ast.types.template_name(kiln_ast::types::TemplateName::Qualified {
+                    self.sema.ast.types.template_name(TemplateName::Qualified {
                         nns: n,
                         template_kw: true,
                         underlying,
