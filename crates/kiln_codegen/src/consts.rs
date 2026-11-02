@@ -14,7 +14,7 @@ use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_llvm::{ConstData, GepFlags, IntValue, TypeId as LTy, Value};
 
-use crate::fold::is_local;
+use crate::fold::{is_local, is_static_local};
 use crate::module::{Cg, R, err, gval};
 
 impl Cg<'_> {
@@ -222,7 +222,7 @@ impl Cg<'_> {
             DeclKind::TemplateParamObject => Ok(gval(self.param_object_global(d)?)),
             DeclKind::Var => {
                 let st = ast.decls.var(d).map(|v| v.spec.storage());
-                if is_local(ast, d) && st == Some(VarStorage::Static) {
+                if is_static_local(ast, d) {
                     Ok(gval(self.static_local(d)?))
                 } else if is_local(ast, d) && st != Some(VarStorage::Extern) {
                     err(Some(ast.decls.get(d).loc()), "constant address of a local variable")

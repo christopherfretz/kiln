@@ -1444,6 +1444,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         qualifier: Option<crate::using::Qualifier>,
     ) -> ExprId {
+        let written = qualifier;
         let nns = qualifier.map(|q| q.nns);
         let begin = qualifier.map(|q| q.loc);
         let qualifier = qualifier.map(|q| q.ctx);
@@ -1490,6 +1491,16 @@ impl Sema<'_, '_> {
                     self.unknown_specialization_nns(crate::using::Qualifier { ctx, nns, loc: b })
             {
                 return self.act_dependent_scope_ref(n, name, None, b, loc);
+            }
+            // A declaration that is reachable but not visible: clang's
+            // missing-import error, then the name is used as found
+            // ([module.reach], spec/modules.md §5).
+            if let Some(f) = self.module_hidden_lookup(name, qualifier, LookupKind::Ordinary) {
+                self.module_diagnose_hidden(&f, name, loc);
+                self.modules_see_hidden(true);
+                let e = self.act_on_id_expression_dn(name, loc, written);
+                self.modules_see_hidden(false);
+                return e;
             }
             let text = self.decl_name_str(name);
             if let Some(q) = qualifier {

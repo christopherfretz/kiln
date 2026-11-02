@@ -24,6 +24,17 @@
 //! texts for each triple. A `//@ args: <opts>` line in a case adds
 //! `<opts>` (whitespace-separated) to both command lines, after the
 //! [`pinned_flags`].
+//!
+//! A `//@ module: <name>=<path>` line (path relative to the case) names a
+//! module interface unit the case imports: kiln builds it in-process from
+//! `-fmodule-file=<name>=<path>`; clang first precompiles it
+//! (`--precompile`, same flags, with the earlier lines' modules) into a
+//! scratch BMI and gets `-fmodule-file=<name>=<bmi>`. List the lines in
+//! dependency order (spec/codegen.md §6, "IR-diff corpus").
+//!
+//! A `//@ min-oracle: <N>` line compares the case only under oracle
+//! release N or later; under an older oracle kiln's IR must still verify
+//! (the case follows a newer clang where the older one differs).
 
 mod ir_norm;
 
@@ -191,6 +202,24 @@ fn extra_flags(file: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The case's `//@ module: <name>=<path>` lines, paths resolved against
+/// the case's directory, in order.
+fn module_inputs(file: &Path) -> Vec<(String, PathBuf)> {
+    let src = std::fs::read_to_string(file).unwrap_or_default();
+    let dir = file.parent().unwrap_or(Path::new("."));
+    src.lines()
+        .filter_map(|l| l.strip_prefix("//@ module:"))
+        .filter_map(|m| m.trim().split_once('='))
+        .map(|(n, p)| (n.trim().to_owned(), dir.join(p.trim())))
+        .collect()
+}
+
+/// The case's `//@ min-oracle: <N>` release, if any.
+fn min_oracle(file: &Path) -> Option<u32> {
+    let src = std::fs::read_to_string(file).unwrap_or_default();
+    src.lines().find_map(|l| l.strip_prefix("//@ min-oracle:")).and_then(|v| v.trim().parse().ok())
+}
+
 /// Compiles `file` for `triple` with the in-process driver.
 fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     let out = SharedBuffer::new();
@@ -206,6 +235,11 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
             .chain(pinned_flags(triple))
             .map(|s| (*s).to_owned())
             .chain(extra_flags(file))
+            .chain(
+                module_inputs(file)
+                    .into_iter()
+                    .map(|(n, p)| format!("-fmodule-file={n}={}", p.display())),
+            )
             .chain(std::iter::once(file.display().to_string()))
             .collect();
     let code = run(&args, io);
@@ -265,11 +299,41 @@ fn clang_ir(file: &Path, triple: &str) -> Option<Result<String, String>> {
     let target = format!("--target={triple}");
     let path = file.display().to_string();
     let extra = extra_flags(file);
-    let mut args = vec!["-S", "-emit-llvm", "-O0", "-std=c++26", target.as_str(), "-o", "-"];
-    args.extend(pinned_flags(triple));
-    args.extend(extra.iter().map(String::as_str));
-    args.push(path.as_str());
-    pipe(&clang_tool(), &args, "")
+    let mut base = vec!["-O0", "-std=c++26", target.as_str()];
+    base.extend(pinned_flags(triple));
+    base.extend(extra.iter().map(String::as_str));
+    let modules = module_inputs(file);
+    let scratch = std::env::temp_dir().join(format!(
+        "kiln-ir-vs-clang-{}-{}-{triple}",
+        std::process::id(),
+        file.file_stem().and_then(|s| s.to_str()).unwrap_or("case")
+    ));
+    let mut mflags: Vec<String> = Vec::new();
+    let r = (|| {
+        if !modules.is_empty() && std::fs::create_dir_all(&scratch).is_err() {
+            return Some(Err(format!("cannot create {}", scratch.display())));
+        }
+        for (name, src) in &modules {
+            let bmi = scratch.join(format!("{name}.pcm")).display().to_string();
+            let src = src.display().to_string();
+            let mut args = base.clone();
+            args.extend(mflags.iter().map(String::as_str));
+            args.extend(["--precompile", "-x", "c++-module", src.as_str(), "-o", bmi.as_str()]);
+            match pipe(&clang_tool(), &args, "")? {
+                Ok(_) => mflags.push(format!("-fmodule-file={name}={bmi}")),
+                Err(e) => return Some(Err(format!("precompiling {src}: {e}"))),
+            }
+        }
+        let mut args = vec!["-S", "-emit-llvm", "-o", "-"];
+        args.extend(base.iter().copied());
+        args.extend(mflags.iter().map(String::as_str));
+        args.push(path.as_str());
+        pipe(&clang_tool(), &args, "")
+    })();
+    if !modules.is_empty() {
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+    r
 }
 
 /// How a pair is compared under an oracle (spec/codegen.md §6).
@@ -320,6 +384,9 @@ fn run_case(name: &str, file: &Path, triple: &str) -> Result<Option<Outcome>, St
     let Some(checked) = opt(&ir) else { return Ok(None) };
     let (opt_name, clang_name) = (opt_tool(), clang_tool());
     let ours = checked.map_err(|e| format!("{opt_name} rejects kiln IR:\n{e}\n{ir}"))?;
+    if min_oracle(file).is_some_and(|n| oracle_version().parse::<u32>().is_ok_and(|o| o < n)) {
+        return Ok(None);
+    }
     let Some(clang) = clang_ir(file, triple) else { return Ok(None) };
     let clang = clang.map_err(|e| format!("{clang_name} failed: {e}"))?;
     let theirs = opt(&clang)
@@ -416,7 +483,8 @@ fn ir_matches_clang() {
     }
     eprintln!(
         "ir_vs_clang: oracle {oracle}, {:?} mode: {exact}/{total} exact, {structural}/{total} \
-         structural, {abi_ok}/{total} ABI slices equal, {skipped} skipped (no {}/{})",
+         structural, {abi_ok}/{total} ABI slices equal, {skipped} skipped (no {}/{}, or \
+         min-oracle)",
         mode(),
         opt_tool(),
         clang_tool(),

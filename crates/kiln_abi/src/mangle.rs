@@ -784,9 +784,22 @@ pub fn mangle_guard(ast: &Ast, anon: &mut AnonIds, d: DeclId, index: u32) -> Str
     }
 }
 
+/// The thread-local wrapper (`_ZTW`) or initialization function
+/// (`_ZTH`) of `thread_local` variable `d`: `prefix <name>` (clang
+/// `mangleItaniumThreadLocalWrapper` / `mangleItaniumThreadLocalInit`;
+/// Itanium ABI §3.4.3, [abi:mangling] <special-name>).
+pub fn mangle_thread_local(ast: &Ast, anon: &mut AnonIds, d: DeclId, prefix: &str) -> String {
+    let name = mangle_decl(ast, anon, d);
+    match name.strip_prefix("_Z") {
+        Some(rest) => format!("{prefix}{rest}"),
+        None => format!("{prefix}{}{name}", name.len()),
+    }
+}
+
 /// The initializer function of module `name` (partition `partition`):
 /// `_ZGI <module-name>` (clang `mangleModuleInitializer`; a partition
-/// adds `WP <source-name>`). Not emitted in part A (spec/modules.md §7).
+/// adds `WP <source-name>`); defined by an interface or partition unit
+/// and called by its importers (spec/modules.md §7).
 pub fn mangle_module_initializer(ast: &Ast, name: &str, partition: Option<&str>) -> String {
     let mut anon = AnonIds::new();
     let mut m = Mangler::new(ast, &mut anon, "_ZGI");

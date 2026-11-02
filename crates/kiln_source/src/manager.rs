@@ -307,6 +307,9 @@ pub struct SourceManager {
     prev_file: AtomicU32,
     /// Index of the expansion entry found by the last lookup.
     last_expansion: AtomicU32,
+    /// Include-guarded files and the `#include` spelling suggested for
+    /// each, set by the preprocessor.
+    guarded: Mutex<HashMap<FileId, Box<str>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -343,6 +346,7 @@ impl SourceManager {
             last_file: AtomicU32::new(0),
             prev_file: AtomicU32::new(0),
             last_expansion: AtomicU32::new(0),
+            guarded: Mutex::new(HashMap::new()),
         }
     }
 
@@ -479,6 +483,21 @@ impl SourceManager {
             Some((l, k)) if l >= r.start => k,
             _ => FileKind::User,
         }
+    }
+
+    /// Records that `file` is include-guarded (the preprocessor found a
+    /// controlling macro, clang `isFileMultipleIncludeGuarded`) and the
+    /// header name to suggest for it in diagnostics, `<a/b.h>` or `"a.h"`
+    /// (clang `suggestPathToFileForDiagnostics`).
+    pub fn mark_include_guarded(&self, file: FileId, suggestion: Box<str>) {
+        lock(&self.guarded).insert(file, suggestion);
+    }
+
+    /// The suggestion recorded by
+    /// [`mark_include_guarded`](Self::mark_include_guarded), if `file` is
+    /// include-guarded.
+    pub fn include_guarded_suggestion(&self, file: FileId) -> Option<Box<str>> {
+        lock(&self.guarded).get(&file).cloned()
     }
 
     /// Whether `loc` (its expansion location) is in a system header

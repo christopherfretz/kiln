@@ -15,6 +15,7 @@ use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
 use crate::Sema;
+use crate::lookup::{Found, LookupKind};
 use crate::scope::{Scope, ScopeKind};
 
 /// A module or import directive, as the preprocessor parsed it
@@ -92,6 +93,9 @@ pub(crate) struct ModSema {
     /// The `{` of each unnamed namespace opened while modules are active
     /// (clang reports unnamed-namespace export errors there).
     anon_braces: FxHashMap<DeclId, Loc>,
+    /// Set while a failed lookup is redone ignoring visibility, to
+    /// diagnose a missing import ([`Sema::module_hidden_lookup`]).
+    see_hidden: std::cell::Cell<bool>,
 }
 
 impl ModSema {
@@ -542,11 +546,167 @@ impl Sema<'_, '_> {
     /// shadows) is visible from the current unit (spec/modules.md §5).
     pub(crate) fn module_visible(&self, raw: DeclId) -> bool {
         let mt = &self.ast.modules;
-        if !mt.active || !self.inst.stack.is_empty() {
+        if !mt.active || !self.inst.stack.is_empty() || self.modules.see_hidden.get() {
             return true;
         }
         let Some(d) = self.module_scope_decl(raw) else { return true };
         self.module_visible_owner(d, mt.owner(d))
+    }
+
+    /// The declarations a lookup of `name` that found nothing would find
+    /// if every reachable declaration were visible: the
+    /// non-visible declarations clang's typo correction offers as the
+    /// same name and diagnoses as a missing import
+    /// (`Sema::diagnoseMissingImport`, [module.reach]/1). `qualifier`
+    /// is the namespace of a qualified lookup. An unqualified lookup
+    /// does not offer a declaration with module linkage of another
+    /// module (clang 22 reports `use of undeclared identifier`), and a
+    /// class scope never hides anything. `None` when nothing is found.
+    pub(crate) fn module_hidden_lookup(
+        &self,
+        name: DeclName,
+        qualifier: Option<DeclId>,
+        kind: LookupKind,
+    ) -> Option<Found> {
+        if !self.ast.modules.active || !self.inst.stack.is_empty() {
+            return None;
+        }
+        if let Some(q) = qualifier
+            && !matches!(self.kind_of(q), DeclKind::Namespace | DeclKind::TranslationUnit)
+        {
+            return None;
+        }
+        self.modules.see_hidden.set(true);
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified_dn(q, name, kind),
+            None => self.lookup_name_dn(name, kind),
+        };
+        self.modules.see_hidden.set(false);
+        let raw = *found.found.first()?;
+        if qualifier.is_none() && !self.module_hidden_unqualified(raw) {
+            return None;
+        }
+        Some(found)
+    }
+
+    /// A type-name `name` (qualified by the namespace `qualifier`) that
+    /// names nothing visible but a reachable type: diagnosed as a missing
+    /// import ([`Sema::module_diagnose_hidden`]) and classified as that
+    /// type for recovery. `None` (nothing reported) otherwise.
+    pub fn module_hidden_type(
+        &mut self,
+        name: kiln_source::symbol::Symbol,
+        qualifier: Option<DeclId>,
+        loc: Loc,
+    ) -> Option<crate::decl::NameClass> {
+        let dn = DeclName::ident(name);
+        let found = self.module_hidden_lookup(dn, qualifier, LookupKind::Ordinary)?;
+        let class = self.classify_found(&found);
+        if !matches!(class, crate::decl::NameClass::Type(..)) {
+            return None;
+        }
+        self.module_diagnose_hidden(&found, dn, loc);
+        Some(class)
+    }
+
+    /// Lets lookup find non-visible declarations while a use already
+    /// diagnosed by [`Sema::module_diagnose_hidden`] is rebuilt.
+    pub(crate) fn modules_see_hidden(&self, on: bool) {
+        self.modules.see_hidden.set(on);
+    }
+
+    /// True if an unqualified lookup offers the non-visible `raw` as a
+    /// missing import: a global-module or an exported declaration, not
+    /// one with module linkage of another module.
+    fn module_hidden_unqualified(&self, raw: DeclId) -> bool {
+        let mt = &self.ast.modules;
+        let Some(d) = self.module_scope_decl(raw) else { return false };
+        let o = mt.owner(d);
+        !o.purview || o.exported || mt.owner(self.ast.first(d)).exported
+    }
+
+    /// Reports the use at `loc` of the non-visible declaration `found`
+    /// (from [`Sema::module_hidden_lookup`]) as clang 22 does: "declaration
+    /// of 'x' must be imported from module 'M' before it is required" for a
+    /// declaration in M's purview, "missing '#include'; 'x' must be
+    /// declared before it is used" for a global-module one, with a note at
+    /// the declaration. Recovery uses the declaration; an exported one
+    /// makes its unit visible from now on (clang's
+    /// `createImplicitModuleImportForErrorRecovery`), so it is reported
+    /// once.
+    pub(crate) fn module_diagnose_hidden(&mut self, found: &Found, name: DeclName, loc: Loc) {
+        let (Some(&raw), Some(&d)) = (found.found.first(), found.decls.first()) else { return };
+        let text = self.decl_name_str(name);
+        let note = self.diag(DiagId::note_module_decl_not_visible, self.ast.decls.get(d).loc());
+        let mt = &self.ast.modules;
+        let scope = self.module_scope_decl(raw);
+        let o = scope.map(|s| mt.owner(s)).unwrap_or_default();
+        // A partition's declarations name the module (clang 22).
+        let module = o
+            .purview
+            .then(|| mt.units.get(usize::from(o.unit)))
+            .flatten()
+            .and_then(|u| u.module.clone());
+        let exported = scope.is_some_and(|s| o.exported || mt.owner(self.ast.first(s)).exported);
+        let msg = match module {
+            Some(m) => self.diag(DiagId::sema_module_unimported_use, loc).arg(text).arg(m),
+            None => match self.module_header_hint(self.ast.decls.get(d).loc()) {
+                Some(h) => {
+                    self.diag(DiagId::sema_module_unimported_use_header_name, loc).arg(text).arg(h)
+                }
+                None => self.diag(DiagId::sema_module_unimported_use_header, loc).arg(text),
+            },
+        };
+        self.emit(msg.with_note(note));
+        if o.purview && exported {
+            self.module_make_visible(usize::from(o.unit));
+        }
+    }
+
+    /// The header to suggest including for a declaration at `decl` (clang
+    /// `Preprocessor::getHeaderToIncludeForDiagnostics`): walking out from
+    /// the file holding `decl` along its `#include`s, the first
+    /// include-guarded file, named as the preprocessor suggested
+    /// ([`SourceManager::include_guarded_suggestion`]). The walk stops at
+    /// the module unit (its "include location" is the `import`).
+    ///
+    /// [`SourceManager::include_guarded_suggestion`]:
+    ///     kiln_source::SourceManager::include_guarded_suggestion
+    fn module_header_hint(&self, decl: Loc) -> Option<Box<str>> {
+        let sm = self.diags.sm();
+        let mut loc = sm.expansion_loc(decl);
+        loop {
+            let inc = sm.include_loc(loc);
+            let (f, off) = sm.offset_of(inc)?;
+            if !sm.text(f).get(off as usize..)?.starts_with(['<', '"']) {
+                return None;
+            }
+            let (file, _) = sm.offset_of(loc)?;
+            if let Some(h) = sm.include_guarded_suggestion(file) {
+                return Some(h);
+            }
+            loc = inc;
+        }
+    }
+
+    /// Makes unit `u` and the units it re-exports visible from the current
+    /// unit ([module.import]/7), for error recovery.
+    fn module_make_visible(&mut self, u: usize) {
+        let units = &self.ast.modules.units;
+        let mut stack = vec![u];
+        while let Some(u) = stack.pop() {
+            let Some(v) = self.modules.visible.get_mut(u) else { continue };
+            if *v {
+                continue;
+            }
+            *v = true;
+            let Some(info) = units.get(u) else { continue };
+            for (key, exported) in &info.imports {
+                if *exported && let Some(&w) = self.modules.keys.get(key) {
+                    stack.push(usize::from(w));
+                }
+            }
+        }
     }
 
     fn module_visible_owner(&self, d: DeclId, o: Owner) -> bool {
@@ -578,17 +738,38 @@ impl Sema<'_, '_> {
             || mt.owner(self.ast.first(d)).exported
     }
 
-    /// ADL ([basic.lookup.argdep]/4): `raw` is visible, or it is an
-    /// exported declaration in the purview of a named module some class
-    /// of `classes` is attached to (reachable through an import the
-    /// current unit does not see). As clang 22, "in the interface of M"
-    /// means exported: a non-exported function of M's interface is not
-    /// found by an importer's ADL.
-    pub(crate) fn module_adl_visible(&self, raw: DeclId, classes: &[DeclId]) -> bool {
+    /// ADL ([basic.lookup.argdep]/4): `raw` is found when it is visible,
+    /// or when it is exported, attached to a named module `M`, and has the
+    /// same innermost enclosing non-inline namespace as an associated
+    /// entity (class or enumeration of `assoc`) attached to `M` (reachable
+    /// through an import the current unit does not see). As clang 22, a
+    /// non-exported function of M's interface is not found by an
+    /// importer's ADL.
+    ///
+    /// During an instantiation everything reachable is visible (the
+    /// instantiation context, [module.context]), except a TU-local
+    /// (internal-linkage) declaration of another module unit (not a header
+    /// unit): naming it would be ill-formed ([basic.link]/14), and clang 22
+    /// does not find it.
+    pub(crate) fn module_adl_visible(
+        &self,
+        raw: DeclId,
+        assoc: &crate::overload::adl::AssocSet,
+    ) -> bool {
+        let mt = &self.ast.modules;
+        if mt.active
+            && !self.inst.stack.is_empty()
+            && let Some(d) = self.module_scope_decl(raw)
+            && let o = mt.owner(d)
+            && o.unit != self.modules.cur()
+            && mt.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
+            && internal(self, self.ast.strip_shadow(d))
+        {
+            return false;
+        }
         if self.module_visible(raw) {
             return true;
         }
-        let mt = &self.ast.modules;
         let exported = self
             .module_scope_decl(raw)
             .is_some_and(|d| mt.owner(d).exported || mt.owner(self.ast.first(d)).exported);
@@ -596,7 +777,27 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some(m) = mt.purview_module(raw) else { return false };
-        classes.iter().any(|&c| mt.purview_module(self.ast.first(c)) == Some(m))
+        let ns = self.innermost_non_inline_namespace(self.ast.strip_shadow(raw));
+        assoc.classes.iter().chain(&assoc.enums).any(|&e| {
+            mt.purview_module(e) == Some(m) && self.innermost_non_inline_namespace(e) == ns
+        })
+    }
+
+    /// The innermost enclosing namespace of `d` that is not inline (its
+    /// primary context; the translation unit for the global namespace).
+    fn innermost_non_inline_namespace(&self, d: DeclId) -> Option<DeclId> {
+        let mut ns = self.innermost_namespace(d)?;
+        while self.kind_of(ns) == DeclKind::Namespace
+            && self
+                .ast
+                .decls
+                .namespace(self.ast.first(ns))
+                .is_some_and(kiln_ast::decl::NamespaceData::is_inline)
+        {
+            let p = self.ast.decls.get(ns).ctx()?;
+            ns = self.ast.primary_context(p);
+        }
+        Some(ns)
     }
 
     /// Redeclaration lookup ([basic.link]/8): drops the declarations of

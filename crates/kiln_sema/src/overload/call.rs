@@ -81,6 +81,16 @@ impl Sema<'_, '_> {
         let only_invalid = cands.is_empty() && last.is_some();
         cands.extend(last.filter(|_| only_invalid));
         let at = self.begin_loc(callee);
+        if cands.is_empty()
+            && adl
+            && let Some(f) =
+                self.module_hidden_lookup(name, None, crate::lookup::LookupKind::Ordinary)
+        {
+            // A reachable but not visible function: clang's missing-import
+            // error, and the call goes on with it ([module.reach]).
+            self.module_diagnose_hidden(&f, name, n.loc());
+            cands.extend(f.decls.iter().copied().zip(f.found.iter().copied()));
+        }
         if cands.is_empty() {
             let text = self.decl_name_str(name);
             let msg = self.diag(Self::undeclared_use_id(name), n.loc()).arg(text);

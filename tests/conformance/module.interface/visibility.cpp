@@ -2,18 +2,18 @@
 // non-exported declarations of m (module linkage), m's global module
 // fragment, and names only reachable through m are not visible to an
 // importer, and ADL does not find a non-exported function of m's
-// interface (as clang 22). clang 22 words the second and third errors
-// "declaration of 'Hidden' must be imported from module 'm' before it is
-// required" / "missing '#include'; 'gmf_helper' must be declared before
-// it is used"; kiln reports plain lookup failures (follow-up).
+// interface (as clang 22). A qualified name of a non-exported declaration
+// and a name of a global module fragment declaration are reported as
+// missing imports, with a note at the declaration
+// (module.reach/missing-import.cpp).
 //@ expect: compile-fail
 //@ std: c++20
 //@ args: -fmodule-file=m=%{test_dir}/Inputs/m.cppm
 //@ skip(clang): clang needs a two-step --precompile build of Inputs/m.cppm that the harness cannot drive
 //@ strict-diags
 //@ diag: 22:9 error "use of undeclared identifier 'secret'"
-//@ diag: 23:9 error "no type named 'Hidden' in namespace 'detail'"
-//@ diag: 25:9 error "use of undeclared identifier 'gmf_helper'"
+//@ diag: 23:9 error "declaration of 'Hidden' must be imported from module 'm' before it is required"
+//@ diag: 25:9 error "missing '#include'; 'gmf_helper' must be declared before it is used"
 //@ diag: 26:9 error "use of undeclared identifier 'frob'"
 import m;
 auto ok = make_hidden();

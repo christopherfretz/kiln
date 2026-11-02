@@ -6,6 +6,7 @@ use kiln_abi::call::{ArgKind, CallInfo, classify_call};
 use kiln_abi::irtype::{IrType, IrTypes, record_kind_prefix};
 use kiln_abi::mangle;
 use kiln_abi::{Arch, Target};
+use kiln_ast::decl::FriendTarget;
 use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TemplLinkKind, VarStorage,
 };
@@ -337,6 +338,9 @@ impl<'a> Cg<'a> {
                     if !ast.templates.is_moved_class_inst(ast.first(d)) {
                         self.emit_class_members(d)?;
                     }
+                    if ast.modules.active && ast.decls.get(d).kind() == DeclKind::CXXRecord {
+                        self.emit_module_class_defs(d, 0)?;
+                    }
                 }
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
                 DeclKind::FileScopeAsm => self.emit_file_scope_asm(d),
@@ -361,9 +365,10 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         if !self.discardable_fn(d) {
-            // A definition from an imported module's purview belongs to
-            // that module's object file (spec/modules.md §7).
-            if ast.modules.is_imported_module_decl(d) {
+            // A definition owned by an imported named-module unit (its
+            // purview or its global module fragment) belongs to that
+            // unit's object file (spec/modules.md §7).
+            if ast.modules.is_imported_named_unit_decl(d) {
                 return Ok(());
             }
             return self.emit_fn_def(d);
@@ -436,6 +441,60 @@ impl<'a> Cg<'a> {
         Ok(())
     }
 
+    /// The in-class function definitions of namespace-scope class `d`
+    /// (and of its nested classes, in member order) that are not inline
+    /// because the class is attached to a named module ([class.mfct]/1,
+    /// [class.friend]/7; spec/modules.md §7): emitted (strong) whether
+    /// used or not, right after the class, as clang's
+    /// `HandleInlineFunctionDefinition` / `EmitDeferredDecls` do.
+    fn emit_module_class_defs(&mut self, d: DeclId, depth: usize) -> R<()> {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        if depth > 256
+            || n.has(DeclFlags::INVALID)
+            || n.has(DeclFlags::DEPENDENT_CTX)
+            || ast.templ_link(d).get().is_some()
+            || ast.definition(d) != Some(d)
+        {
+            return Ok(());
+        }
+        let members: Vec<DeclId> = ast.decls.members(d).collect();
+        for m in members {
+            match ast.decls.get(m).kind() {
+                DeclKind::CXXMethod | DeclKind::CXXConversion if self.module_non_inline_def(m) => {
+                    self.emit_global_fn(m)?;
+                }
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor
+                    if self.module_non_inline_def(m) =>
+                {
+                    self.emit_global_structor(m)?;
+                }
+                DeclKind::Friend => {
+                    if let FriendTarget::Decl(f) = ast.decls.friend_target(m)
+                        && ast.decls.get(f).kind() == DeclKind::Function
+                        && self.module_non_inline_def(f)
+                    {
+                        self.emit_global_fn(f)?;
+                    }
+                }
+                DeclKind::CXXRecord => self.emit_module_class_defs(m, depth + 1)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `m` is an in-class function definition that is not inline
+    /// because its class is attached to a named module ([class.mfct]/1).
+    fn module_non_inline_def(&self, m: DeclId) -> bool {
+        let ast = self.ast;
+        ast.modules.active
+            && ast.decls.function(m).is_some_and(|f| f.body.is_some() && f.templ.get().is_none())
+            && !ast.decls.get(m).has(DeclFlags::IMPLICIT)
+            && ast.module_attachment(m).is_some()
+            && !self.discardable_fn(m)
+    }
+
     /// clang `EmitGlobal` for a variable.
     fn emit_global_var(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
@@ -456,7 +515,7 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         if !self.discardable_var(d) || self.var_must_emit(d) {
-            if !self.discardable_var(d) && ast.modules.is_imported_module_decl(d) {
+            if !self.discardable_var(d) && ast.modules.is_imported_named_unit_decl(d) {
                 return Ok(());
             }
             return self.emit_var_def(d);
@@ -647,7 +706,12 @@ impl<'a> Cg<'a> {
                     DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
                 )
             });
-            in_class || self.is_implicit_instantiation(r)
+            if self.is_implicit_instantiation(r) {
+                return true;
+            }
+            // An in-class definition attached to a named module is not
+            // inline ([class.mfct]/1): an importer only declares it.
+            in_class && (self.fn_is_inline(r) || !ast.modules.is_imported_named_unit_decl(r))
         })
     }
 
@@ -709,7 +773,7 @@ impl<'a> Cg<'a> {
         ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|v| v.spec.is_inline()))
     }
 
-    fn discardable_var(&self, d: DeclId) -> bool {
+    pub(crate) fn discardable_var(&self, d: DeclId) -> bool {
         if mangle::is_internal_symbol(self.ast, d) {
             return true;
         }
@@ -1603,6 +1667,7 @@ impl<'a> Cg<'a> {
         gv.linkage = Linkage::External;
         gv.align = Some(align);
         self.gvars.insert(first, g);
+        self.mark_tls(first, g, false);
         self.available_externally(first, g, ty)?;
         Ok(g)
     }
@@ -1704,6 +1769,7 @@ impl<'a> Cg<'a> {
             let name = mangle::mangle_decl(ast, &mut self.anon, first);
             let g = self.m.add_global(&name, ity);
             self.gvars.insert(first, g);
+            self.mark_tls(first, g, false);
             g
         };
         let internal = mangle::is_internal_symbol(ast, d);
@@ -1818,6 +1884,7 @@ impl<'a> Cg<'a> {
         } else {
             gv.linkage = Linkage::Internal;
         }
+        self.mark_tls(first, g, true);
         self.static_locals.insert(first, g);
         // clang `AddInitializerToStaticVarDecl`.
         // A dynamic initializer runs, guarded, at the declaration
