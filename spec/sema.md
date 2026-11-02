@@ -1782,7 +1782,9 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   - `__builtin_object_size` / `__builtin_dynamic_object_size`: the type
     argument (an `I` constant) must be in [0, 3] (`argument value V is
     outside the valid range [0, 3]` at the callee), checked after
-    instantiation when value-dependent.
+    instantiation when value-dependent. Constant evaluation of both
+    builtins (assume_aligned's alignment check, object_size's cast and
+    side-effect rules, WP-292) is spec/oven.md "library builtins".
   - `__builtin_verbose_trap(category, reason)` (`check_verbose_trap`):
     each argument must be a pointer to a constant string: a string
     literal (no `$`: `argument to __builtin_verbose_trap must not contain

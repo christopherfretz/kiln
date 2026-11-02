@@ -328,8 +328,11 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `__builtin_object_size` / `__builtin_dynamic_object_size` of an
       object the frontend does not know is `llvm.objectsize(p, min =
       type & 2, nullunknown = true, dynamic)`, type 3 the constant 0;
-      a constant-foldable call is its folded value
-      (`builtins_object_size.cpp`). `__builtin_powi*` is
+      a constant-foldable call is its folded value (the Oven's
+      speculative evaluation, spec/oven.md, so a local array folds), and
+      an operand with side effects (a call included) that does not fold
+      is the default (-1 for types 0/1, 0 for 2/3) without being emitted
+      (clang `emitBuiltinObjectSize`; `builtins_object_size.cpp`). `__builtin_powi*` is
       `llvm.powi.fT.i32`; `__builtin_copysignf16` truncates to `half`,
       calls `llvm.copysign.f16` and extends back;
       `__builtin_verbose_trap` is `llvm.trap` (clang uses the strings
