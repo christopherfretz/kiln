@@ -320,7 +320,7 @@ All of these are built by sema actions, which compute dependence as in
 
 | Syntax (in a dependent context) | Node |
 |---|---|
-| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
+| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
 | `e.m` or `p->m` with a type-dependent object, or a member of the current instantiation that is not found when it has dependent bases | `CXXDependentScopeMemberExpr {base, arrow, nns?, name, targs?}` |
 | unqualified `f(args)` with type-dependent args, where lookup finds functions or templates (or nothing) | `UnresolvedLookupExpr {requires_adl, overloaded, decls, targs?}`, plus `CallExpr` of dependent type |
 | unqualified `operator@(args)` / `operator T(args)` (an operator- or conversion-function-id as the callee) whose lookup finds nothing ([temp.dep.general]/2, [basic.lookup.argdep]/1) | an empty `UnresolvedLookupExpr` with `requires_adl`, as for an undeclared `f(args)` (`Sema::act_on_id_expression_dn` while `deferring_call_ref`); ADL at the call or at instantiation, and no candidate is clang's `use of undeclared 'operator@'` (`sema_undeclared_use`) |
@@ -3904,7 +3904,12 @@ answers yes for every table name.
 - Abominable function types (`void() const`) are not diagnosed as
   trait operands.
 - `ExcSpec::Deferred` is not resolved. `dtor_nothrow` computes the
-  implicit destructor's exception specification itself.
+  implicit destructor's exception specification itself
+  ([except.spec]/8): from each subobject's selected destructor whatever
+  its access (a protected base destructor leaves the derived class
+  nothrow-destructible, libc++'s `std::list` over `__list_imp`); a
+  deleted or ambiguous subobject destructor does not make it throwing
+  (tests/conformance/except.spec/implicit-dtor-protected-base.cpp).
 - `x.f()` with `f` an undeduced member goes through
   `class/member_expr.rs` (WP-067b). That path has no
   `check_undeduced_use` and does not instantiate on use; its return
