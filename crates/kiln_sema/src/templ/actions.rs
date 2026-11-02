@@ -308,9 +308,11 @@ impl Sema<'_, '_> {
         let n = self.ast.types.nns(Nns::Type { prefix, ty, template_kw });
         // A dependent `X<args>::` is completed at instantiation; its point
         // of instantiation is where the template-id was written (§5.8,
-        // clang `RequireCompleteDeclContext`'s last qualifier name).
+        // clang `RequireCompleteDeclContext`'s last qualifier name; clang
+        // 22: the whole specifier's begin, as `nns_poi`).
         if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
-            self.note_written_loc(WrittenKey::Nns(n), loc);
+            let at = if self.clang_compat >= 22 { self.nns_start.unwrap_or(loc) } else { loc };
+            self.note_written_loc(WrittenKey::Nns(n), at);
         }
         if let Some(p) = self.current_instantiation(tmpl, ty) {
             return Some((p, n));
