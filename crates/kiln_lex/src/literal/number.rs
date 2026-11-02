@@ -490,7 +490,9 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
     }
     // WP-380: GCC's `_FloatNx` suffixes, in every mode, with GCC's
     // pedantic warning at the literal.
-    if floating && ud_suffix.is_none() && matches!(sx.fsuffix, FloatSuffix::F32x | FloatSuffix::F64x)
+    if floating
+        && ud_suffix.is_none()
+        && matches!(sx.fsuffix, FloatSuffix::F32x | FloatSuffix::F64x)
     {
         p.diags.push(LexDiagKind::FloatSuffixGnu, suffix_begin, b.len());
     }

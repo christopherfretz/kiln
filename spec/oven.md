@@ -484,6 +484,13 @@ literal is one instruction and one step, not an interpreted loop.
   parsed as clang's `StringRef::getAsInteger(0)`: decimal, `0` octal,
   `0x` hex, `0b` binary, `0o` octal; an empty string is payload 0; any
   other argument is not a constant), and the source-location builtins (below).
+- **GCC's implicit library builtins (WP-380):** a direct call of a
+  function with no builtin id but a `gnu_lib_twin` (spec/sema.md §5.4:
+  the C library `ceil`/`floor`/`trunc`/`round`/`fabs`/`fmin`/`fmax`/
+  `copysign` and their `f`/`l` variants under `-stdlib=libstdc++`) is
+  lowered as a call of the twin `__builtin_` function, so it folds with
+  the twin's rules; under `-stdlib=libc++` such a call is a call of a
+  non-constexpr function, as in clang.
 - **Atomics (WP-154):** `__atomic_always_lock_free`, `__atomic_is_lock_free`
   and `__c11_atomic_is_lock_free` fold through `bi::LOCK_FREE` as clang
   19's `IntExprEvaluator`: a power-of-two size within the target's inline

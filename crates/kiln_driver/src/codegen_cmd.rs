@@ -184,6 +184,7 @@ impl CodegenJob<'_> {
             inst_report: a.templ.report,
             reflection: a.predef.reflection,
             clang_compat: a.predef.clang_compat.major(),
+            gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();

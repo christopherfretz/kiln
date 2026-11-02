@@ -115,7 +115,8 @@ impl Sema<'_, '_> {
             _ => None,
         };
         if let Some(name) = spelled {
-            let msg = self.diag(DiagId::sema_invalid_complex_spec, self.begin_loc(callee)).arg(name);
+            let msg =
+                self.diag(DiagId::sema_invalid_complex_spec, self.begin_loc(callee)).arg(name);
             self.emit(msg);
             return None;
         }

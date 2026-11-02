@@ -19,9 +19,9 @@
 
 use kiln_ast::consts::FloatKind;
 
-use kiln_ast::{ExprId, QualType};
 use kiln_ast::decl::builtin;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
+use kiln_ast::{ExprId, QualType};
 
 use super::{Access, Compiler, Place, cmp_of, float_code, int_of, skip_parens};
 use crate::complex::cx;
@@ -557,7 +557,13 @@ impl Compiler<'_> {
 
     /// Operand parts `x` of type `xt` (complex, or real when `x.1`)
     /// converted to element type `elem`.
-    fn cx_coerce(&mut self, x: ([u32; 2], bool), xt: OTy, elem: OTy, e: ExprId) -> ([u32; 2], bool) {
+    fn cx_coerce(
+        &mut self,
+        x: ([u32; 2], bool),
+        xt: OTy,
+        elem: OTy,
+        e: ExprId,
+    ) -> ([u32; 2], bool) {
         let ([re, im], real) = x;
         let from = self.cx_elem(xt).unwrap_or(xt);
         let re = self.cx_convert(re, from, elem, e);
