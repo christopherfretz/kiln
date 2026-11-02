@@ -4560,6 +4560,12 @@ requires-clause scope.**
   `Sema.inherited_defaults`, filled by `merge_template_defaults`; they
   are not dumped (a gap). Deduction completes a dependent `P` with its
   defaulted arguments (`complete_dependent_args`, [temp.deduct.type]).
+  The defaults and the depth they are substituted at come from the
+  head template (`head_template`: the definition, else the last
+  non-friend redeclaration), never from a friend redeclaration inside a
+  class template that happened to come first and whose parameters are
+  one level deeper (libc++ `__wrap_iter`'s `friend class
+  basic_string_view`; WP-296).
 - *Trailing requires-clause* ([basic.scope.param]/1, [expr.prim.this]/2):
   the function parameters (and `this` in a member) are in scope.
   Satisfaction substitutes the pattern's parameters into fresh ones
