@@ -1635,8 +1635,15 @@ recomputed exactly as for non-template code (clang's
     value-initialization is an empty initializer of the written style
     ([expr.new]/24).
 
-  A non-list `CXXConstructExpr` operand with zero or two or more
-  arguments outside an initializer still gives the NYI diagnostic.
+  (WP-307) A non-list `CXXConstructExpr` operand with zero or two or
+  more written arguments outside an initializer is direct-initialization
+  done again ([dcl.init.general]/16.6.2; clang
+  `TransformCXXConstructExpr`). Its arguments are substituted by
+  `call_arg_list`, and `construct_class` of the substituted class runs
+  with them. A zeroing construct with no arguments is
+  value-initialization again (`value_init_class`,
+  [dcl.init.general]/9). Test:
+  `tests/conformance/temp.res/subst-construct-multi-arg.cpp`.
 - (WP-301) GNU forms ([sema] §5.8):
   - a binary conditional `a ?: b` substitutes its common operand once
     and its false operand, then runs `act_on_binary_conditional` again

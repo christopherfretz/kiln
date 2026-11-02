@@ -1871,7 +1871,27 @@ impl Substituter<'_, '_, '_> {
         if let [a] = args.as_slice() {
             return self.expr(*a);
         }
-        self.unimplemented("substitution into this CXXConstructExpr", loc)
+        // No or several written arguments: the constructor call is
+        // direct-initialization of the (substituted) class from the
+        // substituted arguments, redone ([dcl.init.general]/16.6.2; clang
+        // `TransformCXXConstructExpr` rebuilds the call). With none, a
+        // zero-initializing one is value-initialization
+        // ([dcl.init.general]/9), else default-initialization.
+        let (pty, zeroing, end) = (ex.get(e).ty(), ex.construct_info(e).zeroing, ex.end_loc(e));
+        let ty = self.ty(pty, loc)?;
+        let args = self.call_arg_list(self.sema.ast.exprs.construct_args(e))?;
+        if args.is_empty() && zeroing {
+            return Ok(self
+                .sema
+                .value_init_class(ty, loc)
+                .unwrap_or_else(|| self.sema.recover(ty, &[], loc)));
+        }
+        let mut site = crate::class::ConstructSite::at(loc);
+        site.rparen = end;
+        Ok(self
+            .sema
+            .construct_class(ty, &args, crate::class::InitStyle::Direct, site)
+            .unwrap_or_else(|| self.sema.recover(ty, &args, loc)))
     }
 
     /// Whether construct expression `e` has a written argument (one that
