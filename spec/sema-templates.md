@@ -4393,7 +4393,14 @@ explicit specialization errors remain. The blockers are:
   - naming a function whose constraints fail is
     `sema_reference_to_unsatisfied_function` ("invalid reference to
     function 'f': constraints not satisfied",
-    `Sema::diagnose_unsatisfied_use`);
+    `Sema::diagnose_unsatisfied_use`). A member access naming such a
+    member (`x.f`, `x.operator->`, the only candidate) is then an error
+    expression, as clang's failed `DiagnoseUseOfDecl` is `ExprError`:
+    the call never deduces the member's placeholder return type, so its
+    definition is not instantiated ([temp.inst]/5), and inside a
+    requires-expression the requirement is just unsatisfied (WP-298;
+    libc++ `counted_iterator::operator->` probed by `iterator_traits`;
+    `tests/conformance/over.match.viable/unsatisfied-member-auto-return.cpp`);
   - special-member redeclaration matching also compares the trailing
     requires-clauses, so constrained copy constructors overload;
   - friends attach their trailing requires-clause; hidden friends

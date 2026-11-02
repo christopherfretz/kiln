@@ -932,6 +932,9 @@ impl Sema<'_, '_> {
                     self.note_var_referenced(m, loc);
                 }
                 if kind == DeclKind::CXXMethod {
+                    if self.diagnose_unsatisfied_use(m, loc) {
+                        return self.recover_err(&[b], loc);
+                    }
                     self.diagnose_deleted_use(m, loc);
                 }
                 let ty = self.non_reference(self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR));
@@ -947,6 +950,15 @@ impl Sema<'_, '_> {
             }
             k if k.is_function() && k != DeclKind::Function => {
                 self.ast.decls.set_flags(m, DeclFlags::REFERENCED);
+                // A member whose constraints are not satisfied names
+                // nothing ([expr.prim.id.general]/4; clang's failed
+                // `DiagnoseUseOfDecl` yields `ExprError`): the call never
+                // deduces its placeholder return type, so the definition
+                // is not instantiated ([temp.inst]/5), and in a
+                // requires-expression the requirement is just unsatisfied.
+                if self.diagnose_unsatisfied_use(m, loc) {
+                    return self.recover_err(&[b], loc);
+                }
                 self.diagnose_deleted_use(m, loc);
                 self.build_member_expr(b, m, QualType::BOUND_MEMBER, arrow, loc, extra)
             }
