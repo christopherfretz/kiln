@@ -328,12 +328,11 @@ impl Sema<'_, '_> {
         let Some(&m) = found.decls.first() else {
             // The class is named without the object's cv-qualifiers
             // (clang prints the record, `in 'It'` for a `const It&`).
-            let desc = match qual {
-                Some(q) => self.qualifier_desc(q.ctx),
-                None => {
-                    let t = self.ast.types.unqualified(obj_ty);
-                    self.ty_arg(t)
-                }
+            let desc = if let Some(q) = qual {
+                self.qualifier_desc(q.ctx)
+            } else {
+                let t = self.ast.types.unqualified(obj_ty);
+                self.ty_arg(t)
             };
             let msg =
                 self.diag(DiagId::sema_no_member, loc).arg(self.decl_name_str(name)).arg(desc);

@@ -30,6 +30,17 @@ pub(crate) enum LocalFriend {
     Invalid,
 }
 
+/// How a function's parameters compare with the friend's (clang
+/// `hasSimilarParameters`).
+#[derive(Clone, Copy)]
+enum Similar {
+    /// All the same.
+    Same,
+    /// The first that differs: its index, its type in the function and
+    /// in the friend.
+    Differs(usize, QualType, QualType),
+}
+
 /// A function found by typo correction for a local friend: its name and
 /// namespace, the qualifier it is suggested with, clang's normalized edit distance
 /// (characters weighted 100, qualifier components 110), and the
@@ -101,16 +112,32 @@ impl Sema<'_, '_> {
         if innermost && let Some(p) = self.pick_prev_function(&fns, new) {
             return LocalFriend::Redeclares(p);
         }
-        let msg = if !found.is_empty() {
+        let msg = if found.is_empty() {
+            match self.local_friend_correction(name, new) {
+                Some(c) => {
+                    let qual = format!("{}{}", c.qual, sym_str(self, c.name));
+                    let note = self
+                        .diag(DiagId::note_entity_declared_here, self.decl_loc(c.decl))
+                        .arg(format!("'{qual}'"));
+                    self.diag(DiagId::sema_no_matching_local_friend_suggest, loc)
+                        .arg(sym_str(self, name))
+                        .arg(qual)
+                        .with_note(note)
+                }
+                None => self.diag(DiagId::sema_no_matching_local_friend, loc),
+            }
+        } else {
             let mut msg = self.diag(DiagId::sema_no_matching_local_friend, loc);
             for f in fns {
                 if self.kind_of(f) == DeclKind::FunctionTemplate {
                     continue;
                 }
-                let Some(mismatch) = self.similar_params(f, new.ty) else { continue };
-                let note = match mismatch {
-                    None => self.diag(DiagId::note_local_decl_close_match, self.decl_loc(f)),
-                    Some((i, local, friend)) => {
+                let Some(similar) = self.similar_params(f, new.ty) else { continue };
+                let note = match similar {
+                    Similar::Same => {
+                        self.diag(DiagId::note_local_decl_close_match, self.decl_loc(f))
+                    }
+                    Similar::Differs(i, local, friend) => {
                         let params: Vec<DeclId> = self
                             .ast
                             .decls
@@ -135,20 +162,6 @@ impl Sema<'_, '_> {
                 msg = msg.with_note(note);
             }
             msg
-        } else {
-            match self.local_friend_correction(name, new) {
-                Some(c) => {
-                    let qual = format!("{}{}", c.qual, sym_str(self, c.name));
-                    let note = self
-                        .diag(DiagId::note_entity_declared_here, self.decl_loc(c.decl))
-                        .arg(format!("'{qual}'"));
-                    self.diag(DiagId::sema_no_matching_local_friend_suggest, loc)
-                        .arg(sym_str(self, name))
-                        .arg(qual)
-                        .with_note(note)
-                }
-                None => self.diag(DiagId::sema_no_matching_local_friend, loc),
-            }
         };
         self.emit(msg);
         LocalFriend::Invalid
@@ -158,13 +171,8 @@ impl Sema<'_, '_> {
     /// parameters as function type `ty`, each of the same type ignoring
     /// top-level cv-qualifiers, or of the same type once pointers and
     /// references are stripped from both, or naming classes or
-    /// enumerations of the same name. `Some(None)` when all are the
-    /// same; `Some(Some((i, f's, ty's)))` for the first that differs.
-    fn similar_params(
-        &self,
-        f: DeclId,
-        ty: QualType,
-    ) -> Option<Option<(usize, QualType, QualType)>> {
+    /// enumerations of the same name.
+    fn similar_params(&self, f: DeclId, ty: QualType) -> Option<Similar> {
         let t = &self.ast.types;
         let fty = self.ast.decls.get(f).ty()?;
         // The types as written, which the note prints.
@@ -199,9 +207,9 @@ impl Sema<'_, '_> {
             {
                 return None;
             }
-            first.get_or_insert((i, x, y));
+            first.get_or_insert(Similar::Differs(i, x, y));
         }
-        Some(first)
+        Some(first.unwrap_or(Similar::Same))
     }
 
     /// clang's typo correction for an invalid local friend `name`
@@ -241,7 +249,7 @@ impl Sema<'_, '_> {
             let Some(cname) = self.ast.decls.get(f).name().as_ident() else { continue };
             let spelled = sym_str(self, cname);
             let ed = edit_distance(&typo, &spelled);
-            if ed > (len + 2) / 3 || (len < 3 && cname != name) || (ed > 0 && len / ed < 3) {
+            if ed > len.div_ceil(3) || (len < 3 && cname != name) || (ed > 0 && len / ed < 3) {
                 continue;
             }
             if self.ast.definition(f).is_some() || self.similar_params(f, new.ty).is_none() {
@@ -314,7 +322,12 @@ impl Sema<'_, '_> {
         let chain = self.named_ns_chain(ns);
         let common = chain.iter().zip(cur).take_while(|(a, b)| a == b).count();
         let spell = |s: &Self, part: &[DeclId]| {
-            part.iter().map(|&n| format!("{}::", s.decl_name(n))).collect::<String>()
+            let mut out = String::new();
+            for &n in part {
+                out.push_str(&s.decl_name(n));
+                out.push_str("::");
+            }
+            out
         };
         if chain.is_empty() {
             return ("::".to_owned(), 1);

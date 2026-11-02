@@ -5757,11 +5757,7 @@ impl Sema<'_, '_> {
 
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
-        let mut build = if self.classes.last().is_some_and(|c| c.record == r) {
-            self.classes.pop()
-        } else {
-            None
-        };
+        let mut build = self.classes.pop_if(|c| c.record == r);
         self.defining.retain(|&d| d != r);
         let _ = self.invalid_defining.remove(&r);
         self.ctx = build.as_ref().map_or_else(
