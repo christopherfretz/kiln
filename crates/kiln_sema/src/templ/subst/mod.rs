@@ -20,7 +20,7 @@ mod types;
 
 pub(crate) use local::LocalMethod;
 
-use kiln_ast::DeclId;
+use kiln_ast::{DeclId, ExprId};
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, ListId, NnsId, QualType};
 use kiln_ast::types::{ArgView, Nns, TemplateArg, TemplateName, TypeFlags};
@@ -78,6 +78,9 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// How many lambda bodies are being rebuilt (a shared expression in
     /// one still captures `this`).
     pub(crate) lambda_bodies: u32,
+    /// The `T::template f<args>` being substituted as a call's callee:
+    /// left an overload set for the call to resolve.
+    pub(crate) callee_ref: Option<ExprId>,
     /// A statement of the body failed to substitute after an error
     /// (clang's `TransformCompoundStmt` `SubStmtInvalid`: the body, and
     /// so the function template specialization, is invalid; WP-145).
@@ -131,6 +134,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             declarator_name: None,
             type_begin: None,
             lambda_bodies: 0,
+            callee_ref: None,
             stmt_failed: false,
             init_failures: 0,
             failed_usings: Vec::new(),

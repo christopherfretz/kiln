@@ -1069,7 +1069,11 @@ Where the code differs from (or details) the design above:
     template accepts the explicit args. The parser calls it for a
     template-id not followed by `(`; template instantiation calls it again
     for an uncalled template-id whose arguments were dependent
-    (`auto *p = &f<T>;`, [over.over]/3, [temp.arg.explicit]/4; WP-276).
+    (`auto *p = &f<T>;`, [over.over]/3, [temp.arg.explicit]/4; WP-276),
+    and for a qualified one in a dependent scope
+    (`return X<I>::template f<T>;`, a `DependentScopeDeclRefExpr`)
+    unless it is a call's callee, which the call resolves (WP-297;
+    libc++ variant visitation's `__make_dispatch`).
   - When no non-template matches the target, `address_template_candidates`
     deduces P (the template's function type) from A (the target type)
     through `deduce_spec(.., target)`. It keeps the specializations that

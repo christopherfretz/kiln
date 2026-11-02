@@ -408,10 +408,17 @@ impl Substituter<'_, '_, '_> {
                     let args = self.sema.ast.types.args(l).to_vec();
                     let tn = self.sema.template_name_for(t);
                     return match self.sema.act_template_id(tn, &args, loc, loc) {
-                        Ok(
-                            crate::templ::actions::TemplateIdRef::Value(x)
-                            | crate::templ::actions::TemplateIdRef::Overload(x),
-                        ) => Ok(x),
+                        Ok(crate::templ::actions::TemplateIdRef::Value(x)) => Ok(x),
+                        // Not called (`return X<I>::template f<T>;`): the
+                        // one specialization it names, as for an
+                        // unqualified function template-id ([over.over]/3).
+                        Ok(crate::templ::actions::TemplateIdRef::Overload(x)) => {
+                            if self.callee_ref == Some(e) {
+                                Ok(x)
+                            } else {
+                                Ok(self.sema.resolve_single_template_id(x))
+                            }
+                        }
                         Ok(crate::templ::actions::TemplateIdRef::Type(_)) => {
                             self.unimplemented("a type template-id as an expression", loc)
                         }
@@ -970,6 +977,12 @@ impl Substituter<'_, '_, '_> {
             {
                 let o = ex.operand(c);
                 return self.expr(o);
+            }
+            if n.kind() == ExprKind::DependentScopeDeclRefExpr {
+                let saved = self.callee_ref.replace(c);
+                let r = self.expr(c);
+                self.callee_ref = saved;
+                return r;
             }
             return self.expr(c);
         }
