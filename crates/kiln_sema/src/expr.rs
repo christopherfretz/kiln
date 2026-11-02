@@ -308,10 +308,15 @@ impl Sema<'_, '_> {
     pub(crate) fn ignore_parens(&self, e: ExprId) -> ExprId {
         let mut e = e;
         for _ in 0..256 {
-            if self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-                e = self.ast.exprs.operand(e);
-            } else {
-                break;
+            // clang `IgnoreParensSingleStep` also looks through a
+            // `__builtin_choose_expr` to its chosen operand.
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                ExprKind::ChooseExpr => match self.ast.exprs.choose_chosen(e) {
+                    Some(c) => e = c,
+                    None => break,
+                },
+                _ => break,
             }
         }
         e
@@ -360,6 +365,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXMemberCallExpr
                 | ExprKind::CXXPseudoDestructorExpr
                 | ExprKind::DesignatedInitUpdateExpr
+                | ExprKind::ExtVectorElementExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
                 ExprKind::CXXRewrittenBinaryOperator => {
@@ -2192,11 +2198,21 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_not_assignable, loc);
             return false;
         }
+        if self.has_duplicate_vector_lanes(e) {
+            self.error(DiagId::sema_duplicate_vector_components_not_mlvalue, loc);
+            return false;
+        }
         if self.ast.types.effective_quals(t).is_const() {
             let mut base = self.ignore_parens(e);
             // clang classifies a vector element through its vector.
             while self.ast.exprs.get(base).object_kind() == ObjectKind::VectorComponent
-                && self.ast.exprs.get(base).kind() == ExprKind::ArraySubscriptExpr
+                && match self.ast.exprs.get(base).kind() {
+                    ExprKind::ArraySubscriptExpr => true,
+                    ExprKind::ExtVectorElementExpr => {
+                        !self.ast.exprs.get(base).has(ExprFlags::ARROW)
+                    }
+                    _ => false,
+                }
             {
                 let v = ExprId::new(self.ast.exprs.get(base).a());
                 base = self.ignore_parens(v);
@@ -4281,6 +4297,13 @@ impl Sema<'_, '_> {
         } else {
             (base, arrow)
         };
+        // clang `LookupMemberExpr`: `v.xy` / `p->xy` on an ext vector.
+        if qual.is_none()
+            && let Some(id) = name.as_ident()
+            && let Some(vt) = self.ext_vector_base(base, arrow)
+        {
+            return self.ext_vector_member(base, vt, id, loc, op_loc, arrow);
+        }
         let (b, obj_ty) = if arrow {
             // clang `LookupMemberExpr`: the pointee or element type, or a
             // function type as written.

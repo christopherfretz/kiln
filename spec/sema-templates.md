@@ -432,6 +432,14 @@ type parameter named `auto:N`, as in clang's dump.
   the specialization's parameters ([temp.inst]/3; WP-298, libc++
   formatter.handle.pass.cpp; `dcl.fct/abbreviated-leading-param-run.cpp`,
   `tests/codegen/abbreviated_template_leading_param.cpp`).
+- A friend function declarator finishes its invented head like any
+  other declarator: `friend R f(S, C auto)` (defined in the class or not)
+  declares an abbreviated friend function *template* ([dcl.fct]/22,
+  [temp.friend]/1), not a function with a dependent parameter type. A
+  call found by ADL then deduces it, so an atomic constraint calling it
+  is non-dependent after substitution (WP-307, libc++
+  `sized_sentinel_for` with range.iter.ops `distance_apriori_sentinel`;
+  `temp.constr.atomic/abbreviated-friend-template.cpp`).
 - Generic lambdas use the same routine (WP-075).
 - Placement (WP-305, clang's `FunctionDeclarationScope` and
   `err_auto_not_allowed`; `Parser::parse_param_clause`). Only the clause
@@ -1664,8 +1672,15 @@ recomputed exactly as for non-template code (clang's
     value-initialization is an empty initializer of the written style
     ([expr.new]/24).
 
-  A non-list `CXXConstructExpr` operand with zero or two or more
-  arguments outside an initializer still gives the NYI diagnostic.
+  (WP-307) A non-list `CXXConstructExpr` operand with zero or two or
+  more written arguments outside an initializer is direct-initialization
+  done again ([dcl.init.general]/16.6.2; clang
+  `TransformCXXConstructExpr`). Its arguments are substituted by
+  `call_arg_list`, and `construct_class` of the substituted class runs
+  with them. A zeroing construct with no arguments is
+  value-initialization again (`value_init_class`,
+  [dcl.init.general]/9). Test:
+  `tests/conformance/temp.res/subst-construct-multi-arg.cpp`.
 - (WP-301) GNU forms ([sema] §5.8):
   - a binary conditional `a ?: b` substitutes its common operand once
     and its false operand, then runs `act_on_binary_conditional` again
@@ -1684,9 +1699,19 @@ recomputed exactly as for non-template code (clang's
   (790 tests, `-fsyntax-only`) found no kind reaching it; the kinds left
   are unreachable today because their construct is rejected or
   unimplemented before substitution: coroutine expressions and
-  statements, `template for`, computed `goto`, `contract_assert`,
-  `__builtin_choose_expr`, a dependent `__builtin_offsetof` and
-  ext-vector element access.
+  statements, `template for`, computed `goto` and `contract_assert`.
+- **`ChooseExpr`** (WP-307; clang `TransformChooseExpr`): the condition
+  (unwrapped from its `ConstantExpr`) and both operands are substituted
+  and `act_on_choose_expr` runs again.
+- **Dependent `OffsetOfExpr`** (WP-307; clang `TransformOffsetOfExpr`):
+  the stored operand type and the index expressions are substituted and
+  `act_on_builtin_offsetof` runs again with the stored components, so
+  every check of sema.md §5.8 happens at instantiation. A
+  non-dependent `OffsetOfExpr` (no pattern) is kept as is.
+- **`ExtVectorElementExpr`** (WP-307; clang
+  `TransformExtVectorElementExpr`): the base is substituted and
+  `act_on_member` runs again with the stored accessor, so the lanes and
+  the result type are recomputed (sema.md §5.19).
 
 ### 5.5 Statements
 
@@ -1954,6 +1979,15 @@ formed it:
   `typename`), `act_on_nested_name_component` (a dependent `T::`/`T::N::`
   prefix) and `act_template_id` (a dependent template-id) record the name's
   location.
+- `act_on_nested_name_template_id` records a dependent `X<args>::`
+  component (`WrittenKey::Nns`) at its start: the `template` keyword when
+  one is written (`O<T>::template I<T>::`), else the template name (the
+  last qualifier name, so `::N::H<T>::` records the `H`). Substituting
+  the qualifier of `typename H<T>::type` completes `H<int>` with that
+  location as the point of instantiation, so the "in instantiation of
+  template class" note points there, as clang's
+  `RequireCompleteDeclContext` does, not at the declarator (WP-307;
+  `temp.inst/instantiation-note-template-id-column.cpp`).
 - Recording happens only while parsing (the instantiation stack is
   empty), so instantiation never grows the table.
 - `Substituter::written(key, loc)` returns the recorded location nearest

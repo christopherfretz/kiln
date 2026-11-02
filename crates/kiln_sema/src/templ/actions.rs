@@ -273,6 +273,12 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<(DeclId, NnsId)> {
         let n = self.ast.types.nns(Nns::Type { prefix, ty, template_kw });
+        // A dependent `X<args>::` is completed at instantiation; its point
+        // of instantiation is where the template-id was written (§5.8,
+        // clang `RequireCompleteDeclContext`'s last qualifier name).
+        if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+            self.note_written_loc(WrittenKey::Nns(n), loc);
+        }
         if let Some(p) = self.current_instantiation(tmpl, ty) {
             return Some((p, n));
         }

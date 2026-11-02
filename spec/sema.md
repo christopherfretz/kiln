@@ -2174,6 +2174,26 @@ for them.
     `-Winvalid-offsetof`. Standard-layout is computed from members
     and bases (`is_standard_layout`) until the definition bits track
     it.
+  - (WP-307) When `T` is dependent or an array index is type-, value-
+    or instantiation-dependent, nothing is checked: the result is a
+    value- and instantiation-dependent `OffsetOfExpr`
+    (`Builder::dependent_offsetof`) whose children are the index
+    expressions and whose type and components are kept in
+    `ColdExprData::offsetof_pattern`; substitution rebuilds it
+    (sema-templates.md §5.4; `ext.gnu.offsetof/dependent*.cpp`).
+- **`__builtin_choose_expr(c, a, b)`** (`act_on_choose_expr`, clang
+  `ActOnChooseExpr`; WP-307): `c` must be an integral (or unscoped
+  enumeration) constant expression, else `'__builtin_choose_expr'
+  requires a constant expression` at `c` with the evaluation's notes
+  (no class-type contextual conversion yet). It is wrapped in a
+  `ConstantExpr`; nonzero picks `a`. The `ChooseExpr` takes the chosen
+  operand's type, value category and object kind with no conversion,
+  and its type/value dependence (other dependence bits from all three).
+  A type- or value-dependent `c` gives a `<dependent type>` prvalue
+  until substitution. `ignore_parens` looks through it to the chosen
+  operand, as clang's `IgnoreParens`; codegen and the Oven emit and
+  evaluate only the chosen operand
+  (`ext.gnu.builtins/choose-expr*.cpp`).
 - **Binary conditional** `x ?: y` (`act_on_binary_conditional`, in
   `forms.rs`): a `BinaryConditionalOperator` with `x` shared through an
   `OpaqueValueExpr`. Unless both operands are glvalues of the same
@@ -2858,6 +2878,44 @@ for the `std` function, else the builtin's spelling (libc++'s
 implemented: clang's pointer-argument, wrong-function-kind and too-small
 warnings of the same group. Test:
 `tests/conformance/c.math.abs/absolute-value-unsigned.cpp`.
+
+### 5.19 Ext-vector element access (`vector_ops.rs`, WP-307)
+clang's `ext_vector_type` element access (`v.x`, `v.xy`, `p->zw`;
+clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
+- `act_on_member_q` routes an unqualified identifier member of an ext
+  vector (through a pointer for `->`) to `ext_vector_member` before
+  class member lookup, so it is never "not a structure or union".
+  A dependent base stays a `CXXDependentScopeMemberExpr` and comes back
+  here on substitution; a non-dependent `ExtVectorElementExpr` is formed
+  again by its substitution arm (sema-templates.md §5.4).
+- The accessor (`kiln_ast::expr::ext_vector_access`) is one of: letters
+  of the point set `xyzw` or the color set `rgba`, not mixed; `s`/`S`
+  followed by hex lane digits; or `hi`/`lo`/`even`/`odd`, selecting
+  halves of `ceil(N/2)` lanes (a lane past an odd-sized vector reads
+  poison). A bad letter is `illegal vector component name 'c'`, a lane
+  past N `vector component access exceeds type 'T'`, both at the
+  member name.
+- One lane is the element type as written; several are an ext vector of
+  that many lanes, sugared with the first file-scope `ext_vector_type`
+  typedef of that exact type (`Sema::ext_vector_typedefs`, recorded by
+  `act_on_typedef`), as clang's `ExtVectorDecls`. The result carries the
+  base's cv-qualifiers; its value category is the base's for `.`
+  (`ObjectKind::VectorComponent` for a glvalue), an lvalue for `->`.
+- Assignment (`check_modifiable`): a repeated lane is `vector is not
+  assignable (contains duplicate components)`; a prvalue base is
+  `expression is not assignable`; a const base is the usual
+  const-variable diagnostic. `&v.x` and binding a non-const reference
+  are rejected as for any vector element (§5.13).
+- Constant evaluation does not evaluate the access (clang 19 does not
+  either): a constexpr use is "must be initialized by a constant
+  expression".
+- Codegen (codegen.md "Vectors"): a glvalue access is an `LV` whose
+  `vidx` is `VecLane::Index` (one lane) or `VecLane::Swizzle` (several;
+  a swizzle of a swizzle lvalue composes onto the innermost vector);
+  a load is `extractelement`/`shufflevector`, a store inserts each
+  source element at its lane. A prvalue base is swizzled as a value.
+- Tests: `ext.vector/ext-vector-access.cpp` (run, including templates),
+  `ext.vector/ext-vector-access-diagnostics.cpp` (strict-diags).
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

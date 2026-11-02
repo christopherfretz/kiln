@@ -811,6 +811,17 @@ impl<'a> AstNames<'a> {
                 out.push(' ');
                 self.expr(exprs.compound_assign(e).rhs, d, out);
             }
+            // clang `StmtPrinter::VisitChooseExpr`.
+            ExprKind::ChooseExpr => {
+                out.push_str("__builtin_choose_expr(");
+                for (i, c) in exprs.choose_operands(e).into_iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    self.expr(c, d, out);
+                }
+                out.push(')');
+            }
             ExprKind::ConditionalOperator => {
                 let [t, f] = exprs.cond_arms(e);
                 self.expr(ExprId::new(n.a()), d, out);
@@ -979,6 +990,12 @@ impl<'a> AstNames<'a> {
                     self.expr(c, d, out);
                 }
                 out.push(')');
+            }
+            // clang `StmtPrinter::VisitExtVectorElementExpr`: always `.`.
+            ExprKind::ExtVectorElementExpr => {
+                self.expr(exprs.operand(e), d, out);
+                out.push('.');
+                out.push_str(ast.symbols().as_str(exprs.ext_vector_accessor(e)));
             }
             ExprKind::ConvertVectorExpr => {
                 out.push_str("__builtin_convertvector(");

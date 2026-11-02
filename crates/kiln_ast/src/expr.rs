@@ -1083,6 +1083,126 @@ pub enum Designator {
     },
 }
 
+/// One part of a `__builtin_offsetof` designator (clang
+/// `Sema::OffsetOfComponent`). A value-dependent `OffsetOfExpr` keeps
+/// its operand type and designator as written for instantiation
+/// ([`ColdExprData::offsetof_pattern`]).
+#[derive(Clone, Copy, Debug)]
+pub enum OffsetofComponent {
+    /// A member name: the leading identifier (`start` = `end` = its
+    /// location) or `.identifier` (`start` is the `.`).
+    Field {
+        /// The member name.
+        name: Symbol,
+        /// The `.`, or the name for the leading identifier.
+        start: Loc,
+        /// The name.
+        end: Loc,
+    },
+    /// `[ index ]`.
+    Index {
+        /// The index expression.
+        index: ExprId,
+        /// The `[`.
+        start: Loc,
+        /// The `]`.
+        end: Loc,
+    },
+}
+
+/// The meaning of the accessor of an ext-vector element access `v.xyzw`
+/// (clang `CheckExtVectorComponent` and
+/// `ExtVectorElementExpr::getEncodedElementAccess`; spec/sema.md §5.8).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ExtVectorAccess {
+    /// A valid accessor: the selected lanes in order (a lane of `hi` or
+    /// `odd` on an odd-sized vector may be past its end and is then
+    /// undefined), and whether a lane repeats (the result cannot be
+    /// assigned to).
+    Lanes {
+        /// The selected lane indices.
+        lanes: Vec<u32>,
+        /// Whether some lane is selected twice.
+        repeated: bool,
+    },
+    /// `illegal vector component name '{c}'`: the first character that
+    /// is not from the set the accessor started with.
+    Illegal(char),
+    /// `vector component access exceeds type`.
+    Exceeds,
+}
+
+/// Checks accessor `name` against an ext vector of `count` lanes: the
+/// point set `xyzw`, the color set `rgba`, `s`/`S` followed by hex
+/// digits, or one of `hi`, `lo`, `even`, `odd` (clang 19).
+pub fn ext_vector_access(name: &str, count: u32) -> ExtVectorAccess {
+    fn point(c: u8) -> Option<u32> {
+        match c {
+            b'x' | b'r' => Some(0),
+            b'y' | b'g' => Some(1),
+            b'z' | b'b' => Some(2),
+            b'w' | b'a' => Some(3),
+            _ => None,
+        }
+    }
+    fn numeric(c: u8) -> Option<u32> {
+        match c {
+            b'0'..=b'9' => Some(u32::from(c - b'0')),
+            b'a'..=b'f' => Some(u32::from(c - b'a') + 10),
+            b'A'..=b'F' => Some(u32::from(c - b'A') + 10),
+            _ => None,
+        }
+    }
+    let rgba = |c: u8| matches!(c, b'r' | b'g' | b'b' | b'a');
+    let b = name.as_bytes();
+    let half = matches!(name, "hi" | "lo" | "even" | "odd");
+    let hex = b.len() > 1 && matches!(b[0], b's' | b'S');
+    let mut seen = [false; 16];
+    let mut repeated = false;
+    let mut i = 0;
+    if half {
+    } else if !hex && b.first().copied().and_then(point).is_some() {
+        let has_rgba = rgba(b[0]);
+        while let Some(idx) = b.get(i).copied().and_then(point) {
+            if rgba(b[i]) != has_rgba {
+                break;
+            }
+            repeated |= seen[idx as usize];
+            seen[idx as usize] = true;
+            i += 1;
+        }
+    } else {
+        i = usize::from(hex);
+        while let Some(idx) = b.get(i).copied().and_then(numeric) {
+            repeated |= seen[idx as usize];
+            seen[idx as usize] = true;
+            i += 1;
+        }
+    }
+    if !half && i < b.len() {
+        return ExtVectorAccess::Illegal(name[i..].chars().next().unwrap_or('?'));
+    }
+    let idx = |c: u8| if hex { numeric(c) } else { point(c) };
+    let comps = &b[usize::from(hex)..];
+    if !half && comps.iter().any(|&c| idx(c).is_none_or(|x| x >= count)) {
+        return ExtVectorAccess::Exceeds;
+    }
+    let lanes = if half {
+        let size = count.div_ceil(2);
+        (0..size)
+            .map(|i| match name {
+                "hi" => size + i,
+                "lo" => i,
+                "even" => 2 * i,
+                _ => 2 * i + 1,
+            })
+            .collect()
+    } else {
+        comps.iter().filter_map(|&c| idx(c)).collect()
+    };
+    ExtVectorAccess::Lanes { lanes, repeated }
+}
+
 /// Side record of an `InitListExpr` (semantic form, §5.6).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct InitListExtra {
@@ -1183,6 +1303,10 @@ pub struct ColdExprData {
     /// non-class `CI{1}` / `static_cast<CI>(x)` whose prvalue drops the
     /// qualifiers and sugar of `CI`, a reference named by an alias.
     pub cast_written: ColdMap<ExprId, QualType>,
+    /// A value-dependent `OffsetOfExpr`: the operand type and the
+    /// designator as written, rebuilt at instantiation (clang keeps its
+    /// `OffsetOfNode`s; spec/sema.md §5.8).
+    pub offsetof_pattern: ColdMap<ExprId, (QualType, Box<[OffsetofComponent]>)>,
 }
 
 /// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
@@ -1306,6 +1430,7 @@ impl Default for ColdExprData {
             source_loc: ColdMap::new("source_loc"),
             union_field: ColdMap::new("union_field"),
             cast_written: ColdMap::new("cast_written"),
+            offsetof_pattern: ColdMap::new("offsetof_pattern"),
         }
     }
 }
@@ -1509,6 +1634,25 @@ impl ExprArena {
     /// The then/else arms of a `ConditionalOperator`.
     pub fn cond_arms(&self, e: ExprId) -> [ExprId; 2] {
         self.cond_arms[self.expect_kind(e, ExprKind::ConditionalOperator).b as usize]
+    }
+
+    /// The condition and the two operands of a `ChooseExpr`.
+    pub fn choose_operands(&self, e: ExprId) -> [ExprId; 3] {
+        let n = self.expect_kind(e, ExprKind::ChooseExpr);
+        let [l, r] = self.cond_arms[n.b as usize];
+        [ExprId::new(n.a), l, r]
+    }
+
+    /// The operand a `ChooseExpr`'s constant condition selected; `None`
+    /// while the condition is dependent.
+    pub fn choose_chosen(&self, e: ExprId) -> Option<ExprId> {
+        let n = self.expect_kind(e, ExprKind::ChooseExpr);
+        let [l, r] = self.cond_arms[n.b as usize];
+        match n.aux {
+            1 => Some(l),
+            2 => Some(r),
+            _ => None,
+        }
     }
 
     /// The side record of an `InitListExpr`.
@@ -2214,6 +2358,7 @@ impl ExprArena {
                         | ExprKind::CXXStdInitializerListExpr
                         | ExprKind::ExprWithCleanups
                         | ExprKind::ConvertVectorExpr
+                        | ExprKind::ExtVectorElementExpr
                         | ExprKind::PackExpansionExpr
                         | ExprKind::ImaginaryLiteral
                 ),
@@ -2437,6 +2582,7 @@ impl ExprArena {
             | ExprKind::CXXStdInitializerListExpr
             | ExprKind::ExprWithCleanups
             | ExprKind::ConvertVectorExpr
+            | ExprKind::ExtVectorElementExpr
             | ExprKind::ImaginaryLiteral
             | ExprKind::PredefinedExpr => v.extend(id(n.a)),
             ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
@@ -2476,7 +2622,7 @@ impl ExprArena {
                 v.extend(id(n.a));
                 v.push(self.compound_assigns[n.b as usize].rhs);
             }
-            ExprKind::ConditionalOperator => {
+            ExprKind::ConditionalOperator | ExprKind::ChooseExpr => {
                 v.extend(id(n.a));
                 v.extend(self.cond_arms[n.b as usize]);
             }
@@ -2553,6 +2699,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.source_loc.mem_row().prefixed("cold"));
         r.push(self.cold.union_field.mem_row().prefixed("cold"));
         r.push(self.cold.cast_written.mem_row().prefixed("cold"));
+        r.push(self.cold.offsetof_pattern.mem_row().prefixed("cold"));
         r
     }
 }
@@ -2588,6 +2735,17 @@ impl ExprArena {
     /// The compound statement of a `StmtExpr`.
     pub fn stmt_expr_body(&self, e: ExprId) -> StmtId {
         StmtId::new(self.expect_kind(e, ExprKind::StmtExpr).a)
+    }
+
+    /// The operand type and designator as written of a value-dependent
+    /// `OffsetOfExpr` ([`ColdExprData::offsetof_pattern`]).
+    pub fn offsetof_pattern(&self, e: ExprId) -> Option<(QualType, &[OffsetofComponent])> {
+        self.cold.offsetof_pattern.get(e).map(|(t, c)| (*t, &**c))
+    }
+
+    /// The accessor of an `ExtVectorElementExpr` (`xy` in `v.xy`).
+    pub fn ext_vector_accessor(&self, e: ExprId) -> Symbol {
+        Symbol::from_index(self.expect_kind(e, ExprKind::ExtVectorElementExpr).b)
     }
 
     /// The byte offset an `OffsetOfExpr` evaluates to.
