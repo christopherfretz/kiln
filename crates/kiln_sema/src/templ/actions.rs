@@ -88,7 +88,10 @@ impl Sema<'_, '_> {
     /// `q`'s own when it is dependent, the injected-class-name type's when
     /// `q` is the current instantiation with a dependent base; `None`
     /// otherwise.
-    pub(crate) fn unknown_specialization_nns(&mut self, q: crate::using::Qualifier) -> Option<NnsId> {
+    pub(crate) fn unknown_specialization_nns(
+        &mut self,
+        q: crate::using::Qualifier,
+    ) -> Option<NnsId> {
         if self.is_dependent_ctx(q.ctx) {
             Some(q.nns)
         } else if self.kind_of(q.ctx) == DeclKind::CXXRecord && self.has_dependent_bases(q.ctx) {

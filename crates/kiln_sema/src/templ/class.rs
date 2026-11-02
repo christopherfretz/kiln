@@ -1475,12 +1475,7 @@ impl Substituter<'_, '_, '_> {
             }
             _ => (DeclName::ident(self.sema.nns_last_name(pnns).ok_or(SubstFail)?), true),
         };
-        let packed = self
-            .sema
-            .ast
-            .types
-            .nns_flags(pnns)
-            .contains(TypeFlags::UNEXPANDED_PACK);
+        let packed = self.sema.ast.types.nns_flags(pnns).contains(TypeFlags::UNEXPANDED_PACK);
         let nnss = if packed {
             // `using Bases::operator()...;` ([temp.variadic]/5): one
             // using-declarator per element.
