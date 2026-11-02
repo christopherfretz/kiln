@@ -240,6 +240,27 @@ passes `IcsOptions::EXPLICIT_REF_CONV` when its `ConvCtx` is direct. The
 from it fails). A class temporary's constructors stay non-explicit-only
 ([dcl.init.ref]/5.4.1 copy-initializes it). Copy-initialization keeps "no
 viable conversion" + "explicit conversion function is not a candidate".
+The same-type filter (clang `isAllowableExplicitConversion`) applies to the
+[over.match.ref] sets too whenever explicit functions are admitted: an
+explicit conversion function yielding a derived class (`explicit operator
+D()`, `explicit operator D&()`) binds no `const B&`/`B&&` and is dropped
+without a note (tests `over.match.ref/explicit-direct-same-type-only.cpp`).
+
+**Copy or move constructor of a direct-initialization** ([over.match.copy]/1.2,
+[over.match.ref]/1.1; clang `ResolveConstructorOverload` `AllowExplicitConv`,
+`hasCopyOrMoveCtorParam`): `resolve_ctor_ex` with one argument and a direct
+style (`Direct`, `DirectList`) passes `IcsOptions::DIRECT_COPY_CTOR`, which
+`add_found_candidates` turns into `EXPLICIT_REF_CONV` for each non-template,
+non-inherited constructor whose first parameter is (a reference to) cv `T`
+(`copy_or_move_ctor_param`; as clang, not for a constructor template). So
+`R r(G{})` with `explicit operator R&()` (or `template <class T> explicit
+operator T&()`) copies through `R(const R&)`, and so do `R(G{})`, `R{G{}}`,
+`static_cast<R>(G{})`, `new R(G{})` and a mem-initializer. The selected
+constructor's argument is then converted with `ConvCtx::DirectInitialization`
+(`CtorCall::direct` → `ctor_args(.., explicit_first)`), the same options the
+sequence was formed with. Tests
+`over.match.copy/direct-init-explicit-conversion-to-copy-ctor.cpp`.
+
 When the /5.4.1 source is not a class (`const B& b = 1`), clang's
 reference-init texts apply instead (WP-161): no usable constructor is
 "reference to type 'const B' could not bind to an rvalue of type 'int'"
@@ -347,7 +368,9 @@ by value or reference; Conversion rank, [over.best.ics]/6).
 `try_implicit_conversion(arg: ArgInfo, to, opts: IcsOptions) -> Ics` is
 pure. `IcsOptions`: `SUPPRESS_UDC`, `NO_UDC`, `NO_TEMPORARY`,
 `ALLOW_EXPLICIT` (direct-init, contextual bool), `CANDIDATE_ARG`,
-`EXPLICIT_REF_CONV` (reference direct-init, §2.6).
+`EXPLICIT_REF_CONV` (reference direct-init, §2.6), `DIRECT_COPY_CTOR`
+(the constructor set of a one-argument direct-initialization, consumed by
+`add_found_candidates`, §2.6).
 
 **[over.ics.ref]** (target `cv1 T1&`/`&&`): (1) direct binding
 (reference-compatible with the right value category) → identity,
@@ -907,6 +930,18 @@ Where the code differs from (or details) the design above:
   target, cv kept). clang's CWG2327 workaround is kept: in an
   initialization by constructor, a conversion function yielding the class
   itself initializes the object directly (`best.rs`, `construct.rs`).
+  `add_elision_candidates` (`class/ctor_select.rs`) adds the source's
+  conversion functions *and conversion function templates*
+  (`conversion_functions_all`; clang `AddTemplateConversionCandidate` with
+  `AllowResultConversion` false): a template is deduced for `cv T` and its
+  specialization kept only when it yields exactly `cv T` (not a reference);
+  explicit ones only in a direct-initialization. Its object argument is an
+  exact match, so it beats a converting constructor template that binds
+  the source's base by derived-to-base conversion (libc++ tuple
+  PR31384.pass.cpp; `over.match.best/conversion-template-elision-beats-converting-ctor.cpp`),
+  and a deleted explicit template makes `T x(s)` ill-formed while `T x = s`
+  is fine (`is_constructible` false, `is_convertible` true: libc++ tuple
+  convert_move.pass.cpp `BonkersBananas`).
 - **`IcsOptions::CANDIDATE_ARG`**: an argument of a candidate. In a
   reference binding, a deleted best [over.match.ref] conversion is no
   conversion (clang `FindConversionForRefInit`), so the candidate is not
