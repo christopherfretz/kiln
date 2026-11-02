@@ -4623,6 +4623,25 @@ impl Compiler<'_> {
             self.uses_cc = true;
             return r;
         }
+        // `std::uncaught_exceptions()` declared `constexpr` (P3068R6, a
+        // library predating its rollback by P3842R2): the count of this
+        // evaluation's uncaught exceptions ([except.uncaught]/1). C++26
+        // as published has it non-`constexpr` (libc++ 19 and 22,
+        // libstdc++ 14), so such a call is not constant (spec/oven.md
+        // "Exceptions").
+        if let Some(d) = direct
+            && args.is_empty()
+            && is_std_function(ast, d, "uncaught_exceptions")
+            && ast
+                .decls
+                .function(ast.latest(d))
+                .is_some_and(|f| f.spec.constexpr_kind() != ConstexprKind::None)
+        {
+            let r = self.reg();
+            let loc = self.begin(e);
+            self.emit_site(Op::Builtin, crate::kbc::bi::UNCAUGHT, &[r, r, r, r, 0, 0], e, loc);
+            return r;
+        }
         // `__builtin_addressof(x)`: the address of the lvalue `x`, as
         // `&x` without a user `operator&` ([specialized.addressof]).
         if let Some(d) = direct
@@ -4706,11 +4725,18 @@ impl Compiler<'_> {
 /// `isInStdNamespace`: a function of that name in namespace `std` at
 /// translation-unit scope, possibly through inline namespaces).
 fn is_std_is_constant_evaluated(ast: &kiln_ast::Ast, d: DeclId) -> bool {
+    is_std_function(ast, d, "is_constant_evaluated")
+}
+
+/// Whether function `d` is named `name` in namespace `std` at
+/// translation-unit scope, possibly through inline namespaces (clang's
+/// `isInStdNamespace`).
+fn is_std_function(ast: &kiln_ast::Ast, d: DeclId, name: &str) -> bool {
     let decls = &ast.decls;
     let named = |d: DeclId, n: &str| {
         decls.get(d).name().as_ident().is_some_and(|s| ast.symbols().as_str(s) == n)
     };
-    if !named(d, "is_constant_evaluated") {
+    if !named(d, name) {
         return false;
     }
     let mut ns = decls.get(d).ctx();

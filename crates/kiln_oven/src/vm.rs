@@ -495,6 +495,8 @@ impl Oven {
             self.bi_assume_aligned(b, aux >> 8 != 0, a as u64, bb, c).map(|()| a)
         } else if aux & 0xff == crate::kbc::bi::MSG_CHARS {
             self.bi_msg_chars(a, bb as u64, OTy(t1)).map(|()| a)
+        } else if aux & 0xff == crate::kbc::bi::UNCAUGHT {
+            Ok(self.exc.uncaught() as u128)
         } else if aux & 0xff == crate::kbc::bi::META {
             self.exec_meta(b, pc, fb, aux >> 8, (a, bb, c), (t1, t2))
         } else {

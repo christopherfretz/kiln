@@ -402,6 +402,11 @@ pub(crate) mod bi {
     /// `Oven::evaluate_chars`): the `a` elements of character type `t1`
     /// that `b` points to, read into the Oven's message buffer.
     pub const MSG_CHARS: u32 = 24;
+    /// `std::uncaught_exceptions()` / `__builtin_uncaught_exceptions()`
+    /// ([except.uncaught]/1, P3068): the number of exceptions thrown and
+    /// not yet caught in this evaluation (a nested evaluation counts its
+    /// own, spec/oven.md "Exceptions").
+    pub const UNCAUGHT: u32 = 29;
     /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
     /// bytes.
     pub const WCHAR: u32 = 2;
