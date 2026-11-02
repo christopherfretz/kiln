@@ -1830,12 +1830,17 @@ argument substitution in `deduce_call`):
 
 After the checks the parameter type is adjusted ([dcl.fct]/5: array to
 pointer, function to pointer, `Sema::adjust_param_type`); the declared
-type is kept as `ParmVar::original_ty` (and `ParamInfo::original_ty`) for
-both written and substituted parameters, as clang's `getOriginalType`
-(a range-`for` over an array parameter reads it).
+type is kept as `ParmVar::original_ty` (and `ParamInfo::original_ty`), as
+clang's `getOriginalType`, for a written parameter and for a substituted
+one whose declared type is still dependent (a member template of an
+instantiated class template, so that `T a[3]` with `T = void` still fails
+at its own deduction). A fully substituted parameter has none: a
+range-`for` over it in an instantiation is clang's plain invalid-range
+error, not the array-parameter diagnostic of the definition.
 `tests/conformance/temp.deduct.general/invalid-parameter-type-sfinae.cpp`
-(the libc++ `MoveOnly` deleted `operator,` shape) and
-`.../invalid-parameter-type-notes.cpp` (strict notes).
+(the libc++ `MoveOnly` deleted `operator,` shape),
+`.../invalid-parameter-type-notes.cpp` (strict notes) and
+`.../invalid-parameter-type-member-template.cpp`.
 
 ### 5.8 Written locations of dependent names
 
