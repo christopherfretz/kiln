@@ -314,7 +314,27 @@ the evaluator's flattened type table.
   to the global taken in one mode still designates it in the other
   (test `limits.rs::lax_globals_do_not_grow`). The slot is reused only
   when the object is live, of the same type and not mid-resolution;
-  otherwise a fresh one is allocated and recorded. Codegen
+  otherwise a fresh one is allocated and recorded. **Lax folds** through
+  a usable variable (WP-395): a constexpr pointer, reference or class
+  member pointing at a lax global (`constexpr const double *p = &d;
+  int a[(int)*p];`) is resolved strictly, before or outside any lax fold,
+  so the pointer it holds must designate an object a later lax fold can
+  read. A lax global whose initializer evaluates as a strict constant
+  (or whose value sema already froze) therefore gets one static object
+  for both modes, holding that value but flagged external
+  (`Origin::External`, `Alloc::frame == LAX_READ`): a strict read still
+  faults "read of non-constexpr variable" exactly as before, and only a
+  lax fold (`Memory::lax`, set by `fold_rvalue` for its outermost run)
+  may read it; writes fault in either mode. Such a global is resolved
+  once per translation unit (one strict evaluation of its initializer,
+  memoized like any variable) and is not recorded in `lax_globals`. A lax
+  global whose initializer is not a strict constant (it reads another
+  lax global) keeps the mode-dependent object above, so a usable
+  pointer to it taken strictly still does not fold (open limitation).
+  A genuinely non-constant bound (a pointer to a non-`const` variable, or
+  any function-scope bound, which clang does not fold) stays a variable
+  length array (tests `expr.const/lax-fold-through-pointer.cpp`,
+  `dcl.array/vla-through-constexpr-pointer.cpp`). Codegen
   uses it for its non-initializer fold candidates; sema uses it
   (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
   (spec/sema.md §4.2).

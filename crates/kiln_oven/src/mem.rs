@@ -259,9 +259,15 @@ pub(crate) struct Alloc {
     /// Frame objects: serial of the call frame that created it (0: none);
     /// tells a dead local of a live frame (scope ended) from one of a
     /// returned call. Heap objects: the evaluation context
-    /// ([`Memory::ctx`]) that allocated it.
+    /// ([`Memory::ctx`]) that allocated it. Static objects: [`LAX_READ`]
+    /// for the value of a variable only a lax fold may read, else 0.
     pub frame: u32,
 }
+
+/// [`Alloc::frame`] of a static [`flags::EXTERNAL`] object that holds the
+/// value of a variable not usable in constant expressions but readable by
+/// a lax fold ([`Memory::lax`]; spec/oven.md "Lax folds").
+pub(crate) const LAX_READ: u32 = 1;
 
 #[derive(Debug, Default)]
 pub(crate) struct Space {
@@ -533,6 +539,9 @@ pub(crate) struct Memory {
     /// A frame object has been [`flags::LIFE`]-tracked in this evaluation:
     /// leaving a scope checks the objects it releases (`Oven::scope_life`).
     pub life_frame: bool,
+    /// A lax fold is running (`Oven::fold_rvalue`): a [`LAX_READ`] object
+    /// may be read.
+    pub lax: bool,
     /// Open checkpoints and their undo log (spec/oven.md "Trial
     /// evaluation").
     trial: Trial,
@@ -582,6 +591,7 @@ impl Memory {
             cur_frame: 0,
             serial: 0,
             life_frame: false,
+            lax: false,
             trial: Trial::default(),
         }
     }
@@ -790,6 +800,18 @@ impl Memory {
     /// static object made since the checkpoint is fresh (its base is at
     /// or above the checkpoint's static top).
     pub fn alloc_static(&mut self, ty: OTy, size: u64, fl: u8, origin: Origin) -> u64 {
+        self.alloc_static_in(ty, size, fl, origin, 0)
+    }
+
+    /// [`Memory::alloc_static`] with [`Alloc::frame`] `frame` ([`LAX_READ`]).
+    pub fn alloc_static_in(
+        &mut self,
+        ty: OTy,
+        size: u64,
+        fl: u8,
+        origin: Origin,
+        frame: u32,
+    ) -> u64 {
         let reuse = !self.in_trial();
         let base = self.static_range(size);
         let a = Alloc {
@@ -800,7 +822,7 @@ impl Memory {
             flags: fl,
             ty,
             origin,
-            frame: 0,
+            frame,
         };
         self.push_static(a, reuse)
     }
@@ -1072,6 +1094,7 @@ impl Memory {
         }
         if a.flags & flags::EXTERNAL != 0 {
             match a.origin {
+                Origin::External(_) if self.lax && !write && a.frame == LAX_READ => {}
                 Origin::External(d) => return Err(MemFault::External(d, write)),
                 Origin::Unknown(d) => return Err(MemFault::Unknown(d)),
                 Origin::Let(t) => return Err(MemFault::Temporary(t)),

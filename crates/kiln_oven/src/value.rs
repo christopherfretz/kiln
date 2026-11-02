@@ -1039,21 +1039,42 @@ impl Oven {
     fn resolve_var(&mut self, b: &mut dyn SemaBridge, g: u32, d: DeclId, top: u32) -> u64 {
         let info = var_info(b.ast(), d);
         if !info.lax {
-            return self.resolve_var_in(b, g, d, top, None);
+            return self.resolve_var_in(b, g, d, top, None, false);
         }
-        // Resolved differently by strict and lax evaluations: reset when
-        // the mode changes (`Oven::begin_outermost`), and then remade in
-        // the object it resolved to before (`lax_objs`), so alternating
-        // modes costs no static space and the variable keeps one address.
-        self.lax_globals.push(g);
+        // A lax variable with a constant value (stored, or its initializer
+        // evaluated strictly): one object in both modes, holding the value,
+        // which only a lax fold may read (`mem::LAX_READ`), so a pointer to
+        // it held by a usable variable (`constexpr const double *p = &d;`,
+        // resolved strictly) reads it in a lax fold (spec/oven.md "Lax
+        // folds").
+        if let VarEvalState::Value(cv) = info.state {
+            let ty = self.types.intern(b, info.ty);
+            let size = self.types.size(ty);
+            let fl = flags::EXTERNAL | flags::CONST | self.static_flags(ty);
+            let p =
+                self.mem.alloc_static_in(ty, size, fl, Origin::External(d), crate::mem::LAX_READ);
+            self.globals[g as usize].state = GState::Resolved(p);
+            self.thaw_into(b, cv, p, top);
+            return p;
+        }
+        // Otherwise resolved differently by strict and lax evaluations:
+        // reset when the mode changes (`Oven::begin_outermost`), and then
+        // remade in the object it resolved to before (`lax_objs`), so
+        // alternating modes costs no static space and the variable keeps
+        // one address.
         let ty = self.types.intern(b, info.ty);
         let old = self.lax_objs.get(&g).copied().filter(|&p| {
             self.mem
                 .alloc_of(Ptr::decode(p))
                 .is_ok_and(|a| a.ty == ty && a.flags & flags::RESOLVING == 0)
         });
-        let p = self.resolve_var_in(b, g, d, top, old);
-        self.lax_objs.insert(g, p);
+        let p = self.resolve_var_in(b, g, d, top, old, !self.run.lax);
+        if self.mem.alloc_of(Ptr::decode(p)).is_ok_and(|a| a.frame == crate::mem::LAX_READ) {
+            self.lax_objs.remove(&g);
+        } else {
+            self.lax_globals.push(g);
+            self.lax_objs.insert(g, p);
+        }
         p
     }
 
@@ -1087,7 +1108,9 @@ impl Oven {
     }
 
     /// [`Oven::resolve_var`]; `old` is the object a lax global resolved to
-    /// before, remade rather than allocating another.
+    /// before, remade rather than allocating another. `lax_read`: a lax
+    /// global resolved strictly, whose initializer still runs (strictly);
+    /// a value makes a [`crate::mem::LAX_READ`] object.
     fn resolve_var_in(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -1095,10 +1118,11 @@ impl Oven {
         d: DeclId,
         top: u32,
         old: Option<u64>,
+        lax_read: bool,
     ) -> u64 {
         let info = var_info(b.ast(), d);
         let ty = self.types.intern(b, info.ty);
-        if !(info.usable || info.lax && self.run.lax) {
+        if !(info.usable || info.lax && (self.run.lax || lax_read)) {
             return self.external_obj(b, old, ty, d);
         }
         let hu = self.static_flags(ty);
@@ -1172,8 +1196,14 @@ impl Oven {
                 // The placeholder's storage now belongs to the variable.
                 self.globals[g as usize].slot = 0;
                 let a = self.mem.alloc_of_mut(Ptr::decode(p));
+                a.frame = 0;
                 if let Ok(cv) = r {
                     a.flags = a.flags & !flags::RESOLVING | hu;
+                    if lax_read {
+                        a.flags |= flags::EXTERNAL;
+                        a.origin = Origin::External(d);
+                        a.frame = crate::mem::LAX_READ;
+                    }
                     self.thaw_into(b, cv, p, top);
                 } else {
                     a.flags = flags::EXTERNAL | flags::CONST;
