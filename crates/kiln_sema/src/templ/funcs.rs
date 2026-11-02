@@ -18,7 +18,7 @@ use kiln_ast::names::DeclName;
 use kiln_diag::DiagId;
 
 use crate::Sema;
-use crate::declspec::{DeclSpec, Declarator};
+use crate::declspec::{DeclSpec, Declarator, DeclaratorContext};
 use crate::templ::args::ConvertedArgs;
 use crate::templ::subst::Substituter;
 use crate::type_diff::DiffArgs as _;
@@ -320,6 +320,26 @@ impl Sema<'_, '_> {
             return Ok(None);
         }
         let name_loc = d.name_loc();
+        // [temp.expl.spec]/2, [temp.dep.general]: a class-scope explicit
+        // specialization in a dependent class with no member function
+        // template of the name (clang's
+        // `CheckDependentFunctionTemplateSpecialization`; WP-330). The
+        // declaration is dropped.
+        if inst.is_none()
+            && d.ctx == DeclaratorContext::Member
+            && d.qualifier.is_none()
+            && self.in_template()
+        {
+            let found = self.current_scope_with_inline_dn(dname);
+            if self.function_templates_in(&found).is_empty() {
+                self.dependent_spec_no_candidate(
+                    DiagId::sema_dependent_member_spec_no_candidate,
+                    &found,
+                    name_loc,
+                );
+                return Ok(None);
+            }
+        }
         if inst.is_none()
             && d.qualifier.is_none()
             && d.spec_id.is_none()

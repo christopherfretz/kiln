@@ -182,7 +182,11 @@ impl Sema<'_, '_> {
         let templates = self.function_templates_in(&found);
         if self.in_template() {
             if templates.is_empty() {
-                self.friend_spec_no_candidate(&found, loc);
+                self.dependent_spec_no_candidate(
+                    DiagId::sema_dependent_friend_spec_no_candidate,
+                    &found,
+                    loc,
+                );
                 return None;
             }
             let target = FriendTarget::Type { ty, owned_tag: None };
@@ -260,7 +264,11 @@ impl Sema<'_, '_> {
     ) {
         if self.in_template() {
             let found = self.friend_spec_lookup(name, qualifier);
-            self.friend_spec_no_candidate(&found, loc);
+            self.dependent_spec_no_candidate(
+                DiagId::sema_dependent_friend_spec_no_candidate,
+                &found,
+                loc,
+            );
         } else {
             let n = self.decl_name_str(name);
             let e = self.diag(DiagId::sema_fn_template_spec_no_match, loc).arg(n);
@@ -268,8 +276,11 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn friend_spec_no_candidate(&mut self, found: &[DeclId], loc: Loc) {
-        let mut e = self.diag(DiagId::sema_dependent_friend_spec_no_candidate, loc);
+    /// clang's `err_dependent_function_template_spec_no_match` (`id`: the
+    /// friend or member form) at `loc`, with "candidate ignored: not a
+    /// function template" at each declaration `found`.
+    pub(crate) fn dependent_spec_no_candidate(&mut self, id: DiagId, found: &[DeclId], loc: Loc) {
+        let mut e = self.diag(id, loc);
         for &f in found {
             let n =
                 self.diag(DiagId::note_dependent_spec_not_template, self.ast.decls.get(f).loc());
