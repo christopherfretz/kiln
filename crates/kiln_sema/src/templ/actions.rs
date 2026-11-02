@@ -586,7 +586,19 @@ impl Sema<'_, '_> {
         if found.decls.is_empty() {
             return !self.is_builtin_name(name);
         }
-        found.decls.iter().all(|&d| self.kind_of(self.ast.strip_shadow(d)) == DeclKind::Function)
+        found.decls.iter().all(|&d| self.is_assumable_function(self.ast.strip_shadow(d)))
+    }
+
+    /// A function lookup may find for a name followed by `<` to be
+    /// assumed a template ([temp.names]/3): a non-member function, or
+    /// from C++20 a member function too (clang 22; the template-id is then
+    /// diagnosed as not referring to a template).
+    fn is_assumable_function(&self, d: DeclId) -> bool {
+        match self.kind_of(d) {
+            DeclKind::Function => true,
+            DeclKind::CXXMethod => self.std >= kiln_lex::Std::Cxx20,
+            _ => false,
+        }
     }
 
     /// The template-id `name<args>` for a name assumed to be a template
@@ -602,8 +614,67 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         let found = self.lookup_name(name, LookupKind::Ordinary);
         let decls: Vec<DeclId> = found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
+        if decls.iter().any(|&d| self.kind_of(d) == DeclKind::CXXMethod) {
+            // A class member was found: no argument-dependent lookup
+            // ([basic.lookup.argdep]/3), so no template can be found.
+            self.diagnose_args_for_non_template(DeclName::ident(name), &decls, loc);
+            return self.act_on_error_expr(&[], loc);
+        }
         let list = self.ast.types.arg_list(args);
         self.builder().unresolved_lookup(DeclName::ident(name), &decls, true, None, Some(list), loc)
+    }
+
+    /// The template-id `name<args>` assumed to name a template
+    /// ([temp.names]/3) whose lookup found no function template
+    /// (`ordinary`, the ordinary-lookup result; argument-dependent lookup
+    /// found none either), diagnosed at `loc` as clang 22 does: lexically
+    /// inside a class (a member function body, also through a lambda, a
+    /// default member initializer) with a non-empty `ordinary` "'f' does
+    /// not refer to a template" with a note at its first declaration;
+    /// otherwise as an undeclared name.
+    pub(crate) fn diagnose_args_for_non_template(
+        &mut self,
+        name: DeclName,
+        ordinary: &[DeclId],
+        loc: Loc,
+    ) {
+        let text = self.decl_name_str(name);
+        match ordinary.first() {
+            Some(&d) if self.in_class_context() => {
+                let at = self.ast.decls.get(d).loc();
+                let msg = self
+                    .diag(DiagId::sema_does_not_refer_to_template, loc)
+                    .arg(text)
+                    .with_note(self.diag(DiagId::note_declared_non_template, at));
+                self.emit(msg);
+            }
+            _ => {
+                let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
+                self.emit(msg);
+            }
+        }
+    }
+
+    /// Whether the current context is lexically inside a class: the
+    /// innermost enclosing context that is neither a function nor a
+    /// lambda's closure type is a class (clang's `getCurLambda`-skipping
+    /// `CurContext` walk for [temp.names]/3 recovery).
+    fn in_class_context(&self) -> bool {
+        let mut cur = Some(self.ctx);
+        for _ in 0..1024 {
+            let Some(d) = cur else { return false };
+            let decl = self.ast.decls.get(d);
+            if decl.kind().is_function() {
+                cur = decl.ctx();
+                continue;
+            }
+            match self.ast.decls.record(d) {
+                Some(r) if r.lambda.is_some() => cur = decl.ctx(),
+                Some(_) => return true,
+                None => return false,
+            }
+        }
+        false
     }
 
     /// Whether the operator-function-id `name`, optionally qualified by
@@ -622,7 +693,11 @@ impl Sema<'_, '_> {
         let kinds: Vec<DeclKind> =
             found.decls.iter().map(|&d| self.kind_of(self.ast.strip_shadow(d))).collect();
         kinds.contains(&DeclKind::FunctionTemplate)
-            || (qualifier.is_none() && kinds.iter().all(|&k| k == DeclKind::Function))
+            || (qualifier.is_none()
+                && found
+                    .decls
+                    .iter()
+                    .all(|&d| self.is_assumable_function(self.ast.strip_shadow(d))))
     }
 
     /// `operator@ < args >`, optionally qualified by the non-dependent
@@ -659,10 +734,13 @@ impl Sema<'_, '_> {
             )
         });
         let list = self.ast.types.arg_list(args);
-        if qualifier.is_none()
-            && call
-            && decls.iter().all(|&d| self.kind_of(d) == DeclKind::Function)
-        {
+        if qualifier.is_none() && call && decls.iter().all(|&d| self.is_assumable_function(d)) {
+            if decls.iter().any(|&d| self.kind_of(d) == DeclKind::CXXMethod) {
+                // `operator()<int>(1)` naming only non-template members:
+                // no argument-dependent lookup ([basic.lookup.argdep]/3).
+                self.diagnose_args_for_non_template(name, &decls, loc);
+                return self.act_on_error_expr(&[], loc);
+            }
             return self.builder().unresolved_lookup(name, &decls, true, None, Some(list), loc);
         }
         if decls.is_empty() && qualifier.is_none() {
@@ -1752,6 +1830,26 @@ impl Sema<'_, '_> {
     /// ([temp.variadic]/7; clang's `containsUnexpandedParameterPack`).
     pub fn has_unexpanded_pack(&self, t: QualType) -> bool {
         self.ast.types.flags(t.ty()).contains(TypeFlags::UNEXPANDED_PACK)
+    }
+
+    /// Whether the parameter type `t` of a declarator, looking through
+    /// its own pack expansion (`Ts... a`), names an unexpanded pack (clang's
+    /// `containsUnexpandedParameterPacks(Declarator&)`).
+    pub fn declarator_has_unexpanded_pack(&self, t: QualType) -> bool {
+        match self.ast.types.view(t.ty()) {
+            TypeView::PackExpansion { pattern, .. } => self.has_unexpanded_pack(pattern),
+            _ => self.has_unexpanded_pack(t),
+        }
+    }
+
+    /// The function parameter `p` made a pack by a misplaced `...` at
+    /// `ellipsis` after its declarator (`Ts a...`, clang's
+    /// `DiagnoseMisplacedEllipsisInDeclarator` recovery).
+    pub fn make_param_pack(&mut self, p: &mut crate::declspec::ParamInfo, ellipsis: Loc) {
+        if self.has_unexpanded_pack(p.ty) {
+            p.ty = self.act_pack_expansion_type(p.ty, ellipsis);
+            p.ref_loc = Loc::INVALID;
+        }
     }
 
     /// The profile of a value-dependent expression `e` (for dependent

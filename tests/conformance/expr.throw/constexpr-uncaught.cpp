@@ -1,17 +1,17 @@
 // [expr.const]/10.? (C++26, P3068R6), [except.terminate]: an exception
 // that leaves the constant evaluation, leaves a noexcept function, is
 // rethrown with none handled, or is thrown while another is being unwound
-// makes the expression non-constant (clang trunk's wording; the uncaught
-// exception's what() is shown for a std::exception).
+// makes the expression non-constant (the uncaught exception note is worded
+// as clang's P3068 implementation: what(), else the value at the operand).
 //@ skip(clang): neither clang 19 nor clang 22 implements P3068
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 41:15 error "constexpr variable 'a' must be initialized by a constant expression"
-//@ diag: 40:32 note "uncaught exception of type 'int': '12'"
+//@ diag: 40:38 note "unhandled exception of type 'int' with content 12 thrown from here"
 //@ diag: 44:15 error "constexpr variable 'b' must be initialized by a constant expression"
-//@ diag: 43:25 note "uncaught exception of type 'my_error': 'boom'"
+//@ diag: 43:25 note "unhandled exception: boom"
 //@ diag: 47:15 error "constexpr variable 'c' must be initialized by a constant expression"
-//@ diag: 46:25 note "uncaught exception of type 'S'"
+//@ diag: 46:31 note "unhandled exception of type 'S' with content {4} thrown from here"
 //@ diag: 50:15 error "constexpr variable 'd' must be initialized by a constant expression"
 //@ diag: 49:45 note "uncaught exception in noexcept function"
 //@ diag: 50:19 note "in call to 'unwrapped()'"
@@ -24,7 +24,7 @@
 //@ diag: 66:19 note "in call to 'while_active()'"
 //@ diag: 61:5 note "currently active exception thrown here"
 //@ diag: 76:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 71:5 note "uncaught exception of type 'double'"
+//@ diag: 71:11 note "unhandled exception of type 'double' with content 1.500000e+00 thrown from here"
 namespace std {
 struct exception {
   constexpr exception() noexcept {}

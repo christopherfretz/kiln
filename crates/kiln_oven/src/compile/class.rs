@@ -362,18 +362,35 @@ impl Compiler<'_> {
         let poly = record_bits(self.ast(), rdef).contains(DefinitionBits::POLYMORPHIC);
         if kind == DeclKind::CXXConstructor {
             let inits: Vec<CtorInit> = self.ast().ctor_inits(def).copied().collect();
-            let mut vptr = poly && !inits.iter().any(|c| c.kind == CtorInitKind::Delegating);
+            let delegating = inits.iter().any(|c| c.kind == CtorInitKind::Delegating);
+            let mut vptr = poly && !delegating;
+            let loc = self.ast().decls.get(def).loc();
+            // The subobjects completed so far: `done` entries of `fields`.
+            let mut done = 0;
             for ci in inits {
                 if vptr && !matches!(ci.kind, CtorInitKind::Base | CtorInitKind::VirtualBase) {
                     self.emit(Op::SetVptr, 0, &[this, cls.0]);
                     vptr = false;
                 }
+                if let Some(at) = self.init_index(&ci, cls) {
+                    self.unwind_subobjects(this, cls, union, done..at, loc);
+                    done = done.max(at);
+                }
                 let m = self.next;
                 self.ctor_init(&ci, this, cls, union);
                 self.next = m;
+                if ci.kind == CtorInitKind::Delegating {
+                    // [except.ctor]/4: the object is constructed; an
+                    // exception from this body destroys it.
+                    self.push_cleanup(this, cls, 4, loc);
+                }
             }
             if vptr {
                 self.emit(Op::SetVptr, 0, &[this, cls.0]);
+            }
+            if !delegating {
+                let n = self.o.types.fields(cls).len();
+                self.unwind_subobjects(this, cls, union, done..n, loc);
             }
             return;
         }
@@ -418,6 +435,63 @@ impl Compiler<'_> {
             let m = self.next;
             let q = self.elem_ptr_loc(this, fi.offset, loc);
             self.push_cleanup(q, fi.ty, 2, loc);
+            self.next = m;
+        }
+    }
+
+    /// The index in `fields(cls)` of the subobject ctor-initializer `ci`
+    /// initializes (for a member of an anonymous member, that member).
+    fn init_index(&mut self, ci: &CtorInit, cls: OTy) -> Option<usize> {
+        let fd = match ci.kind {
+            CtorInitKind::Base => {
+                let bty = self.ty(QualType::unqual(TypeId::new(ci.target)));
+                return self.o.types.fields(cls).iter().position(|f| f.base && f.ty == bty);
+            }
+            CtorInitKind::Field => DeclId::new(ci.target),
+            CtorInitKind::IndirectField => {
+                let ast = self.ast();
+                let chain = ast.indirect_field_chain(DeclId::new(ci.target));
+                DeclId::new(*ast.lists.get(chain).first()?)
+            }
+            CtorInitKind::VirtualBase | CtorInitKind::Delegating => return None,
+        };
+        self.o.types.fields(cls).iter().position(|f| !f.base && f.decl == fd)
+    }
+
+    /// Registers, as destructions run only by unwinding, the completed
+    /// subobjects `range` of `fields(cls)` of the object under
+    /// construction at `this` ([except.ctor]/3: an exception from a later
+    /// initializer or the constructor's body destroys them, in reverse
+    /// order, before a handler of its function-try-block is entered).
+    /// The members of a union, and anonymous unions, are not destroyed
+    /// (as by the destructor).
+    fn unwind_subobjects(
+        &mut self,
+        this: u32,
+        cls: OTy,
+        union: bool,
+        range: std::ops::Range<usize>,
+        loc: Loc,
+    ) {
+        if union || range.is_empty() {
+            return;
+        }
+        let fields = self.o.types.fields(cls)[range].to_vec();
+        for fi in fields {
+            if fi.width.is_some() || !fi.base && super::is_reference_decl(self.ast(), fi.decl) {
+                continue;
+            }
+            if let TyKind::Record { decl, union: true, .. } = self.kind(fi.ty)
+                && record_bits(self.b.ast(), decl).contains(DefinitionBits::ANONYMOUS)
+            {
+                continue;
+            }
+            if self.dtor_of(fi.ty).is_none() {
+                continue;
+            }
+            let m = self.next;
+            let q = self.elem_ptr_loc(this, fi.offset, loc);
+            self.push_cleanup(q, fi.ty, 2 | 4, loc);
             self.next = m;
         }
     }

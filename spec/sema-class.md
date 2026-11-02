@@ -967,7 +967,14 @@ current instantiation with a dependent base, `D::B(1)` / `D<T>::B(1)`) is a
 up in the instantiation (`no type named 'Foo' in 'D7<int>'`). The same
 function makes `typename D::X` dependent for such a qualifier
 ([temp.res.general]/5). A qualified id naming no type in a non-dependent
-qualifier is still `qualified member initializers` unsupported.
+qualifier is still `qualified member initializers` unsupported. A
+mem-initializer that fails in an instantiation (its substitution, or its
+initialization: `decltype(t)(t)` naming a reference type) makes the
+constructor specialization invalid, as clang's `InstantiateMemInitializers`
+does: it is not a candidate afterwards and a constant evaluation already
+calling it fails with no evaluation note (WP-374; test
+`class.base.init/failed-initializer-constexpr.cpp`). A failure in the
+definition-time check above does not.
 
 **Completion** (clang `SetCtorInitializers`): stored in initialization order
 ([class.base.init]/13): virtual bases (inheritance-graph order, complete-object

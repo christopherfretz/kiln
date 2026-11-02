@@ -173,8 +173,10 @@ ops! {
     // (spec/oven.md "Destruction"): the innermost `ScopeExit` or `Ret`
     // whose mark is below it calls the destructor, last registered first.
     // aux = 1: `p` is the first element of a heap array of `type`
-    // (`delete[]`), its count is the allocation's. A null `p` registers
-    // nothing.
+    // (`delete[]`), its count is the allocation's; aux 2 = a subobject
+    // destroyed by a destructor (notes); aux 4 = run only by unwinding
+    // (a subobject of an object under construction, [except.ctor]/3-4),
+    // dropped by any other exit. A null `p` registers nothing.
     PushCleanup = 3,
     // [p]: the complete object at `p` is const from now on (a const
     // object is modifiable during its construction, [class.ctor.general]/5).
@@ -400,6 +402,11 @@ pub(crate) mod bi {
     /// `Oven::evaluate_chars`): the `a` elements of character type `t1`
     /// that `b` points to, read into the Oven's message buffer.
     pub const MSG_CHARS: u32 = 24;
+    /// `std::uncaught_exceptions()` / `__builtin_uncaught_exceptions()`
+    /// ([except.uncaught]/1, P3068): the number of exceptions thrown and
+    /// not yet caught in this evaluation (a nested evaluation counts its
+    /// own, spec/oven.md "Exceptions").
+    pub const UNCAUGHT: u32 = 29;
     /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
     /// bytes.
     pub const WCHAR: u32 = 2;
