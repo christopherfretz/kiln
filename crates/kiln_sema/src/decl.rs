@@ -4078,9 +4078,21 @@ impl Sema<'_, '_> {
             self.set_dependent_var_init(v, *e);
             return true;
         }
+        // `T x({a, b})`: a braced-init-list argument is kept for
+        // instantiation with a dependent `T` too (it has no type of its
+        // own), and with a dependent element it is a type-dependent
+        // argument ([temp.dep.expr]/3).
+        let (braced, braced_dep) = match init {
+            Initializer::Paren(es, ..) => (
+                es.iter().any(|&a| self.is_braced_arg(a)),
+                es.iter().any(|&a| self.braced_arg_type_dependent(a)),
+            ),
+            _ => (false, false),
+        };
         if let Initializer::Paren(es, l, r) = init
-            && (es.len() > 1 || (dependent_class && !es.is_empty()))
+            && (es.len() > 1 || (dependent_class && !es.is_empty()) || braced)
             && (self.ast.types.is_dependent(ty)
+                || braced_dep
                 || es.iter().any(|&a| self.expr_is_type_dependent(a)))
         {
             // `T x(a, b)` with a dependent `T` or argument: initialized at

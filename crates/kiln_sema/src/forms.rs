@@ -42,6 +42,12 @@ impl Sema<'_, '_> {
         self.braced_args.iter().any(|(x, _)| *x == e)
     }
 
+    /// Whether `e` is a braced-init-list placeholder whose list is
+    /// type-dependent ([temp.dep.expr]/3).
+    pub(crate) fn braced_arg_type_dependent(&self, e: ExprId) -> bool {
+        self.braced_args.iter().any(|(x, l)| *x == e && self.init_list_type_dependent(l))
+    }
+
     /// The braced-init-list behind placeholder `e`, if `e` is one.
     pub(crate) fn take_braced_arg(&mut self, e: ExprId) -> Option<InitList> {
         let i = self.braced_args.iter().position(|(x, _)| *x == e)?;
@@ -432,9 +438,7 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return self.recover_dropping_braced(ty, args, loc);
         }
-        let braced_dep = args.iter().any(|&a| {
-            self.braced_args.iter().any(|(x, l)| *x == a && self.init_list_type_dependent(l))
-        });
+        let braced_dep = args.iter().any(|&a| self.braced_arg_type_dependent(a));
         if braced_dep
             || self.ast.types.is_dependent(ty)
             || args.iter().any(|&a| self.expr_is_type_dependent(a))
