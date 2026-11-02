@@ -912,7 +912,29 @@ impl Sema<'_, '_> {
     /// braced scalar warns `-Wbraced-scalar-init` ([dcl.init.list]/3.9).
     /// `ctx` is the entity's conversion context and `param` the
     /// "passing argument" note of a failure.
+    ///
+    /// A by-value class parameter is a temporary destroyed by the caller
+    /// at the end of the full-expression ([expr.call]/7, the Itanium ABI;
+    /// clang `shouldBindAsTemporary` of a parameter entity), so its
+    /// prvalue is bound like the non-list argument path
+    /// (`convert_to_class`).
     pub(crate) fn init_list_entity(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        entity: Loc,
+        ctx: ConvCtx,
+        param: Option<Diag>,
+    ) -> ExprId {
+        let e = self.init_list_entity_unbound(ty, l, entity, ctx, param);
+        if ctx == ConvCtx::Argument && !self.is_err_expr(e) {
+            self.maybe_bind_temporary(e)
+        } else {
+            e
+        }
+    }
+
+    fn init_list_entity_unbound(
         &mut self,
         ty: QualType,
         l: &InitList,

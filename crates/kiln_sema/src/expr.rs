@@ -3853,6 +3853,7 @@ impl Sema<'_, '_> {
         }
         if let Some(d) = named {
             self.check_format_attr(d, &conv_args);
+            self.check_absolute_value(d, callee, &conv_args);
         }
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
