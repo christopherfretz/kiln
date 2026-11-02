@@ -1060,6 +1060,7 @@ impl Parser<'_, '_> {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
                 }
                 ds.invalid = true;
+                ds.type_error = true;
                 let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
                 true
             }
@@ -1072,6 +1073,7 @@ impl Parser<'_, '_> {
                 self.emit(d);
                 self.bump();
                 ds.invalid = true;
+                ds.type_error = true;
                 let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
                 true
             }
@@ -1081,11 +1083,25 @@ impl Parser<'_, '_> {
 
     /// True if token `end`, after an unknown name in a decl-specifier,
     /// shows the name was meant as a type (a declarator follows).
+    ///
+    /// A ptr-operator counts in every declaration context (clang's
+    /// `ParseImplicitInt`: `*`, `&` and `&&` are not valid after a
+    /// declarator-id): at block scope the statement disambiguation chose
+    /// a declaration for `u5 &r;` already
+    /// ([`Scan::is_simple_declaration`](crate::tentative)), and after
+    /// another decl-specifier (`const u7 &c;`) only a declaration is
+    /// possible (WP-318).
     fn unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
         let next = self.tok_at(end);
         self.ident_of(next).is_some()
-            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
-                && matches!(Self::punct_of(next), Some(Punct::Star | Punct::Amp | Punct::AmpAmp)))
+            || (matches!(
+                ctx,
+                DeclaratorContext::File
+                    | DeclaratorContext::Member
+                    | DeclaratorContext::Block
+                    | DeclaratorContext::Condition
+                    | DeclaratorContext::ForInit
+            ) && matches!(Self::punct_of(next), Some(Punct::Star | Punct::Amp | Punct::AmpAmp)))
             // A parameter: clang's `ParseImplicitInt` diagnoses any
             // undeclared name where a decl-specifier is required in C++
             // (`void a(u1);`, `int e(u4 *p);`); `(`, `::` and `<` are
@@ -2473,24 +2489,7 @@ impl Parser<'_, '_> {
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
-            // The declspec's type is formed once the first declarator is
-            // known: clang reports a missing type specifier at its name.
-            // Constructors, destructors and conversion functions have
-            // none ([class.ctor.general]/1, [class.dtor]/1,
-            // [class.conv.fct]/1).
-            let untyped = !ds.has_type_specifier() && is_untyped_special(&d);
-            let base = *base_ty.get_or_insert_with(|| {
-                if untyped && is_deduction_guide(&d) {
-                    self.s.plain_auto_type()
-                } else if untyped {
-                    QualType::VOID
-                } else if d.invalid && !ds.has_type_specifier() {
-                    QualType::ERROR
-                } else {
-                    let t = self.s.type_from_declspec_at(&ds, d.name_loc());
-                    self.s.rebuild_in_current_instantiation(t, &d)
-                }
-            });
+            let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
             // a malformed one drops the declarator.
             let Ok(label) = self.parse_asm_label() else {
@@ -2524,6 +2523,15 @@ impl Parser<'_, '_> {
                     return decls;
                 }
             }
+            // clang's `ParseDeclGroup`: a later declarator of a
+            // decl-specifier that named no type is parsed, not declared,
+            // and takes no initializer (`u1 &a, &b;` reports `a` only).
+            if declarators > 0 && ds.type_error {
+                if self.eat(Punct::Comma).is_none() {
+                    break;
+                }
+                continue;
+            }
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
@@ -2555,6 +2563,25 @@ impl Parser<'_, '_> {
         }
         self.expect_declaration_semi(ctx);
         decls
+    }
+
+    /// The type of decl-specifier-seq `ds`, formed once the first
+    /// declarator `d` of its group is known: clang reports a missing type
+    /// specifier at its name. Constructors, destructors and conversion
+    /// functions have none ([class.ctor.general]/1, [class.dtor]/1,
+    /// [class.conv.fct]/1).
+    fn group_base_type(&mut self, ds: &DeclSpec, d: &Declarator) -> QualType {
+        let untyped = !ds.has_type_specifier() && is_untyped_special(d);
+        if untyped && is_deduction_guide(d) {
+            self.s.plain_auto_type()
+        } else if untyped {
+            QualType::VOID
+        } else if d.invalid && !ds.has_type_specifier() {
+            QualType::ERROR
+        } else {
+            let t = self.s.type_from_declspec_at(ds, d.name_loc());
+            self.s.rebuild_in_current_instantiation(t, d)
+        }
     }
 
     /// A virt-specifier-seq after function declarator `d` outside a

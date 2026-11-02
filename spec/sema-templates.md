@@ -2601,6 +2601,12 @@ For `template<> R f<args>(params)` or `template<> R f(params)`, and for
    template matches function template specialization 'f'" and
    "function template specialization 'f' ambiguously refers to more than
    one function template".
+5. When nothing named `f` is visible (an unqualified declarator-id
+   without template arguments), clang declares a plain, invalid function
+   after the error, and so does kiln (`act_on_function_spec_declarator`
+   returns `Err(())`, WP-318): a later call resolves to it and reports
+   nothing more
+   (`tests/conformance/temp.expl.spec/no-matching-template-declares-function.cpp`).
 
 The `SpecKind` transitions are those of §4.5.
 

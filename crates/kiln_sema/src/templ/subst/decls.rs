@@ -611,6 +611,17 @@ impl Substituter<'_, '_, '_> {
             ds.base = TypeSpecKind::None;
             ds.named = None;
         }
+        // A trailing return type is declared again as written, `auto`
+        // then `-> R` ([dcl.fct]/2), so the instantiation's type keeps the
+        // trailing form (`auto (int) -> int`, clang's
+        // `TransformFunctionProtoType`; WP-318).
+        let trailing = (info.trailing_return() && ds.base != TypeSpecKind::None).then(|| {
+            let arrow = self.sema.templ.trailing_arrow.get(&d).copied().unwrap_or(loc);
+            (ret, arrow)
+        });
+        if trailing.is_some() {
+            ds.named = Some(self.sema.plain_auto_type());
+        }
         dr.chunks.push(Chunk::Function {
             params,
             variadic: info.variadic(),
@@ -619,7 +630,7 @@ impl Substituter<'_, '_, '_> {
             exc,
             quals: info.this_quals(),
             ref_qual: info.ref_qual(),
-            trailing: None,
+            trailing,
             ambiguous: false,
         });
         let fs = self.sema.ast.decls.function(d).map(|x| x.spec);
@@ -641,7 +652,11 @@ impl Substituter<'_, '_, '_> {
         // `InstantiateFunctionDeclaration` keeps it).
         let requires = self.sema.ast.templates.trailing_requires.get(d).copied();
         dr.trailing_requires = requires;
-        let base = if ds.base == TypeSpecKind::None { QualType::VOID } else { ret };
+        let base = match ds.named {
+            _ if ds.base == TypeSpecKind::None => QualType::VOID,
+            Some(auto) if trailing.is_some() => auto,
+            _ => ret,
+        };
         let r = match friend {
             Some(fl) => self.sema.act_on_friend(&ds, base, Some(&dr), fl),
             None => self.sema.act_on_declarator(&ds, base, &dr),

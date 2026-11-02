@@ -288,14 +288,18 @@ impl Sema<'_, '_> {
     /// most specialized of several kept, then the specialization's
     /// [`SpecKind`] moves as in §4.5. An explicit specialization is a new
     /// declaration of the specialization (returned; its body follows); an
-    /// explicit instantiation returns `None`.
+    /// explicit instantiation returns `None`. `Err` when no declaration
+    /// of the name precedes an explicit specialization of an unqualified
+    /// name: after "no function template matches", the caller declares
+    /// it as a plain, invalid function, as clang does, so a later call
+    /// resolves to it (WP-318).
     pub(crate) fn act_on_function_spec_declarator(
         &mut self,
         ds: &DeclSpec,
         ty: QualType,
         d: &Declarator,
         invalid: bool,
-    ) -> Option<DeclId> {
+    ) -> Result<Option<DeclId>, ()> {
         let head = self.at_explicit_head();
         let spec_head = if head { self.templ.explicit_spec.take() } else { None };
         let inst = if head { self.templ.explicit_inst.take() } else { None };
@@ -305,7 +309,7 @@ impl Sema<'_, '_> {
             (None, Some((n, _))) => d.fn_decl_name(n),
             _ => {
                 self.error(DiagId::parse_expected_unqualified_id, d.loc);
-                return None;
+                return Ok(None);
             }
         };
         // A parameter that names no type makes the declaration invalid,
@@ -313,30 +317,42 @@ impl Sema<'_, '_> {
         // (`CheckFunctionTemplateSpecialization` runs only for a valid
         // declaration; WP-308).
         if invalid || d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid)) {
-            return None;
+            return Ok(None);
         }
         let name_loc = d.name_loc();
+        if inst.is_none()
+            && d.qualifier.is_none()
+            && d.spec_id.is_none()
+            && self.current_scope_with_inline_dn(dname).is_empty()
+        {
+            let fname = self.decl_name_str(dname);
+            let msg = self.diag(DiagId::sema_fn_template_spec_no_match, name_loc).arg(fname);
+            self.emit(msg);
+            return Err(());
+        }
         if d.spec_id.is_none()
             && let Some(m) = self.member_of_spec_candidate(d, dname, ty, inst.is_some())
         {
-            let m = m?;
+            let Some(m) = m else { return Ok(None) };
             // [temp.expl.spec]/1, [temp.explicit]/3: a member function
             // of an implicit class template specialization.
-            return match inst {
+            return Ok(match inst {
                 Some((ext, _)) => {
                     self.act_on_explicit_member_inst(m, ext.is_some(), name_loc);
                     None
                 }
                 None => self.act_on_explicit_member_spec(ds, ty, d, m, name_loc),
-            };
+            });
         }
-        let m = self.match_function_spec(d, dname, ty, inst.is_some(), name_loc)?;
+        let Some(m) = self.match_function_spec(d, dname, ty, inst.is_some(), name_loc) else {
+            return Ok(None);
+        };
         let _ = spec_head;
         if let Some((ext, _)) = inst {
             self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
-            return None;
+            return Ok(None);
         }
-        self.act_on_explicit_function_spec(ds, ty, d, m, name_loc)
+        Ok(self.act_on_explicit_function_spec(ds, ty, d, m, name_loc))
     }
 
     /// The function template specialization declarator `d` names
