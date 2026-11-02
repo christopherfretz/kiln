@@ -377,7 +377,8 @@ impl Sema<'_, '_> {
                             cx.notes.push(d);
                         }
                         let here = self.ast.decls.get(fd).loc();
-                        cx.notes.push(self.diag(DiagId::note_defaulted_cmp_not_constexpr_here, here));
+                        cx.notes
+                            .push(self.diag(DiagId::note_defaulted_cmp_not_constexpr_here, here));
                         // Explained: no further notes.
                         self.end_set(set);
                         return CmpAnalysis::DELETED;

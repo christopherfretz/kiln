@@ -407,10 +407,10 @@ impl Cg<'_> {
         }
         // The virtual bases are members of the complete object only
         // (P3533: kiln's constant evaluation makes such objects).
-        let mut by_vbase: Vec<Option<DeclId>> = vec![None; members.len()];
+        let mut virt_slot: Vec<Option<DeclId>> = vec![None; members.len()];
         if !as_base {
             for (&b, &i) in &rec.vbase_index {
-                if let Some(s) = by_vbase.get_mut(i as usize) {
+                if let Some(s) = virt_slot.get_mut(i as usize) {
                     *s = Some(b);
                 }
             }
@@ -454,7 +454,7 @@ impl Cg<'_> {
             } else if let Some(b) = by_base[i] {
                 let sub = bases.iter().position(|&x| x == b).and_then(|p| inits.get(p).copied());
                 self.record_elems(img, off, at, b, Some(vt_class), sub, out)?;
-            } else if let Some(b) = by_vbase[i] {
+            } else if let Some(b) = virt_slot[i] {
                 self.record_elems(img, off, at, b, Some(vt_class), None, out)?;
             } else if i == 0 && matches!(m, IrType::Ptr) && self.is_dynamic(first) {
                 out.push((at, self.vtable_address_point(vt_class, first, rel)?));

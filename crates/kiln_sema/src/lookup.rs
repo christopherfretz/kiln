@@ -659,7 +659,8 @@ impl Sema<'_, '_> {
         kind: LookupKind,
         depth: usize,
     ) -> Option<ClassHit> {
-        let mut leaves = self.class_leaves(def, name, kind, depth, &mut (FxHashSet::default(), false));
+        let mut leaves =
+            self.class_leaves(def, name, kind, depth, &mut (FxHashSet::default(), false));
         self.remove_dominated(&mut leaves);
         let mut it = leaves.into_iter();
         let (found, path, _) = it.next()?;

@@ -52,7 +52,9 @@ impl Sema<'_, '_> {
             let mut vars: Vec<DeclId> = Vec::new();
             let mut subs: Vec<StmtId> = Vec::new();
             match st.get(s).kind() {
-                StmtKind::DeclStmt => vars.extend(self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s))),
+                StmtKind::DeclStmt => {
+                    vars.extend(self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)));
+                }
                 StmtKind::IfStmt => {
                     let d = st.if_data(s);
                     subs.extend(d.init);

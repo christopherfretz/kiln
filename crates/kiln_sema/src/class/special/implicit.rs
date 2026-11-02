@@ -339,7 +339,9 @@ impl Sema<'_, '_> {
         let c = self.class_def(class);
         let bits = self.defn_bits(c);
         match k {
-            K::DefaultCtor => return bits.contains(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR),
+            K::DefaultCtor => {
+                return bits.contains(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR);
+            }
             K::Dtor => {
                 return !self.vbases_forbid_constexpr(bits)
                     || self.special.vbase_dtor_constexpr.contains(&c);
@@ -1235,7 +1237,8 @@ impl Sema<'_, '_> {
         let mut spec = FnSpec::new().with_inline(true).with_defaulted(Defaulted::Implicit);
         let const_arg = k == K::CopyCtor
             && bits.contains(DefinitionBits::IMPLICIT_COPY_CTOR_CONST_PARAM)
-            || k == K::CopyAssign && bits.contains(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM);
+            || k == K::CopyAssign
+                && bits.contains(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM);
         if self.defaulted_is_constexpr(d, k, const_arg) {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr);
         }
