@@ -6,7 +6,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, UnaryOp};
-use kiln_ast::types::TypeView;
+use kiln_ast::types::{ExcSpec, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -99,6 +99,35 @@ impl Sema<'_, '_> {
         crate::conv::drop_noexcept(self, t).is_some_and(|x| self.ast.types.same_type(x, fnty))
     }
 
+    /// Whether the specialization `d` matches the function type `fnty`
+    /// ignoring the exception specifications: deduction from the
+    /// address of a function template selects it, and the conversion
+    /// that follows checks the exception specification
+    /// ([temp.deduct.funcaddr]; clang's `isSameOrCompatibleFunctionType`).
+    fn address_matches_ignoring_exc(
+        &mut self,
+        d: DeclId,
+        (fnty, member): (QualType, bool),
+    ) -> bool {
+        if self.address_matches(d, (fnty, member)) {
+            return true;
+        }
+        if self.is_implicit_object_member(d) != member || !self.ast.types.is_function(fnty) {
+            return false;
+        }
+        let Some(t) = self.ast.decls.get(d).ty() else { return false };
+        let t = self.ast.types.canonical(t);
+        let (a, b) = (self.without_exc_spec(t), self.without_exc_spec(fnty));
+        self.ast.types.same_type(a, b)
+    }
+
+    /// The function type `f` with no exception specification.
+    fn without_exc_spec(&mut self, f: QualType) -> QualType {
+        let Some(p) = self.ast.types.proto(f).copied() else { return f };
+        let params = self.ast.types.params(&p).to_vec();
+        self.ast.types.function(p.ret(), &params, p.info(), ExcSpec::None)
+    }
+
     /// The matching non-template candidates of `ule` for `target`.
     fn address_candidates(&mut self, ule: ExprId, target: QualType) -> Vec<(DeclId, DeclId)> {
         let fnty = self.address_target(target);
@@ -129,7 +158,7 @@ impl Sema<'_, '_> {
             // A dependent noexcept-specifier left uninstantiated by the
             // deduction (DR1330) is part of the type compared now.
             self.resolve_exc_for_type(spec, loc);
-            if self.address_matches(spec, (fnty, member)) {
+            if self.address_matches_ignoring_exc(spec, (fnty, member)) {
                 out.push((spec, f, d));
             }
         }
@@ -211,7 +240,31 @@ impl Sema<'_, '_> {
         let loc = self.ast.exprs.get(e).loc();
         let r = self.finish_overload_ref(d, f, naming, loc, nns, e, false);
         self.note_function_name_use(d, r, loc, nns.is_none());
+        let _ = self.ovl.template_id_refs.insert(r, e);
         r
+    }
+
+    /// The overload set (its `UnresolvedLookupExpr`) the operand `e`
+    /// is, possibly parenthesized and under `&`, a function template-id
+    /// resolved early included (clang keeps it an overload set).
+    pub(crate) fn overload_set_of(&self, e: ExprId) -> Option<ExprId> {
+        if let Some((u, _)) = self.overload_operand(e) {
+            return Some(u);
+        }
+        let mut x = self.ignore_parens(e);
+        if self.ast.exprs.get(x).kind() == ExprKind::UnaryOperator
+            && self.ast.exprs.unary_op(x) == UnaryOp::AddrOf
+        {
+            x = self.ignore_parens(self.ast.exprs.operand(x));
+        }
+        self.ovl.template_id_refs.get(&x).copied()
+    }
+
+    /// The name of the overload set an argument `e` is
+    /// ([`Sema::overload_set_of`]): clang's
+    /// `note_ovl_candidate_bad_overload`.
+    pub(crate) fn overload_arg_name(&self, e: ExprId) -> Option<String> {
+        self.overload_set_of(e).map(|u| self.decl_name_str(self.ast.unresolved_name(u)))
     }
 
     /// [over.over]: resolves the overload set `e` (a ULE, possibly in
@@ -314,6 +367,43 @@ impl Sema<'_, '_> {
         notes.extend(failed.into_iter().map(|(_, n)| n));
         self.emit(notes.into_iter().fold(msg, Diag::with_note));
         None
+    }
+
+    /// A simple assignment from the overload set `e` to `to` whose
+    /// selection does not convert (none, several, or a specialization
+    /// deduced ignoring its exception specification): clang's
+    /// "assigning to 'T' from incompatible type '<overloaded function
+    /// type>'" with every candidate noted (`NoteAllOverloadCandidates`:
+    /// a non-template's type mismatch, a template plainly).
+    pub(crate) fn diagnose_overload_assign(&mut self, e: ExprId, to: QualType) {
+        let Some(ule) = self.overload_set_of(e) else { return };
+        let loc = self.begin_loc(e);
+        let msg = self
+            .diag(DiagId::sema_assign_incompatible, loc)
+            .arg(self.ty_arg(to))
+            .arg(self.ty_arg(QualType::OVERLOAD));
+        let notes = self.overload_assign_notes(ule, to);
+        self.emit(notes.into_iter().fold(msg, Diag::with_note));
+    }
+
+    /// The candidate notes of an assignment from the overload set `ule`
+    /// to `to` ([`Sema::diagnose_overload_assign`]).
+    pub(crate) fn overload_assign_notes(&mut self, ule: ExprId, to: QualType) -> Vec<Diag> {
+        let (fnty, _) = self.address_target(to);
+        let fn_target = self.ast.types.is_function(fnty);
+        // A template-id names only the templates.
+        let tid = self.ast.templates.expr_targs.get(ule).is_some();
+        self.ule_candidates(ule)
+            .into_iter()
+            .filter(|&(d, _)| !tid || self.kind_of(d) == DeclKind::FunctionTemplate)
+            .map(|(d, _)| {
+                if fn_target && self.kind_of(d) != DeclKind::FunctionTemplate {
+                    self.mismatch_note(d, fnty)
+                } else {
+                    self.plain_candidate_note(d)
+                }
+            })
+            .collect()
     }
 
     /// `e` with its overload set `ule` replaced by `r` (parentheses and

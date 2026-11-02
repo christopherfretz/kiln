@@ -106,14 +106,26 @@ impl Sema<'_, '_> {
     }
 
     /// The detail of candidate `c`'s bad conversion (`slot` in its
-    /// sequences; `arg` the argument index, `None` for the object).
-    pub(crate) fn bad_conversion_detail(&self, x: &Ics, arg: Option<usize>) -> String {
+    /// sequences; `arg` the argument index, `None` for the object;
+    /// `expr` the argument expression when known).
+    pub(crate) fn bad_conversion_detail(
+        &self,
+        x: &Ics,
+        arg: Option<usize>,
+        expr: Option<kiln_ast::ExprId>,
+    ) -> String {
         let Ics::Bad(b) = x else { return String::new() };
         let which = match arg {
             Some(i) => format!("{} argument", ordinal(i + 1)),
             None => "object argument".to_owned(),
         };
         match b.kind {
+            BadKind::NoConversion if let Some(n) = expr.and_then(|e| self.overload_arg_name(e)) => {
+                // clang `note_ovl_candidate_bad_overload`: an overload set
+                // argument (a template-id or `&` included) with no
+                // selection that converts ([over.over]).
+                format!("no overload of '{n}' matching {} for {which}", self.ty_arg(b.to))
+            }
             BadKind::NoConversion => {
                 if let Some(s) = self.base_to_derived_pointer(b.from, b.to) {
                     return format!("{s} for {which}");
@@ -258,7 +270,7 @@ impl Sema<'_, '_> {
                 let slot = if arg == u16::MAX { 0 } else { usize::from(arg) + 1 };
                 let x = set.ics_of(c).get(slot).copied().unwrap_or(Ics::Ellipsis);
                 let x = self.sugared_bad_param(f, x, Some(slot));
-                self.bad_conversion_detail(&x, Some(slot))
+                self.bad_conversion_detail(&x, Some(slot), None)
             }
             CandidateFailure::BadConversion { arg } => {
                 let (slot, which) = if arg == u16::MAX {
@@ -276,7 +288,8 @@ impl Sema<'_, '_> {
                     which
                 };
                 let x = self.sugared_bad_param(f, x, param);
-                self.bad_conversion_detail(&x, which)
+                let e = which.and_then(|i| set.args.get(i)).and_then(|a| a.expr);
+                self.bad_conversion_detail(&x, which, e)
             }
             CandidateFailure::ConstraintsNotSatisfied { sat } => {
                 let d = self

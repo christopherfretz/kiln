@@ -3662,7 +3662,7 @@ impl Sema<'_, '_> {
         let ics =
             self.try_implicit_conversion(&info, pt, crate::overload::IcsOptions::CANDIDATE_ARG);
         let detail = if ics.is_bad() {
-            self.bad_conversion_detail(&ics, Some(i))
+            self.bad_conversion_detail(&ics, Some(i), Some(a))
         } else {
             format!(
                 "no known conversion from {} to {} for {} argument",

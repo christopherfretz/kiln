@@ -40,6 +40,11 @@ impl TdfFlags {
     pub const ARG_WITH_REFERENCE_TYPE: TdfFlags = TdfFlags(64);
     /// A function type `A` may differ in `noexcept` ([temp.deduct.call]/4.2).
     pub const ALLOW_COMPATIBLE_FUNCTION_TYPE: TdfFlags = TdfFlags(128);
+    /// A function type `A` may differ in a non-deduced `noexcept`
+    /// (the address of a function template, [temp.deduct.funcaddr]:
+    /// clang's `isSameOrCompatibleFunctionType` ignores the exception
+    /// specification; the conversion that follows checks it).
+    pub const IGNORE_NONDEDUCED_NOEXCEPT: TdfFlags = TdfFlags(256);
 
     /// Whether every flag of `o` is set.
     pub const fn contains(self, o: TdfFlags) -> bool {
@@ -1064,6 +1069,7 @@ impl Sema<'_, '_> {
         }
         if pexc.is_nothrow() == a_nothrow
             || (flags.contains(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE) && a_nothrow)
+            || flags.contains(TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT)
         {
             Tdk::Success
         } else {
