@@ -180,7 +180,7 @@ impl Oven {
     }
 
     /// `'T'`, or `'T' (aka 'U')` when `q` is sugar clang desugars.
-    fn quoted_aka(ast: &Ast, q: QualType) -> String {
+    pub(crate) fn quoted_aka(ast: &Ast, q: QualType) -> String {
         let s = Self::type_name(ast, q);
         match kiln_ast::types::aka(&ast.types, ast, q) {
             Some(a) => format!("'{s}' (aka '{a}')"),
@@ -898,6 +898,14 @@ impl Oven {
                     let _ = write!(s, "^^#{v}");
                 }
             },
+            // A `void *` prints the subobject its tag designates, an
+            // untagged one the whole object (spec/oven.md "Construction").
+            TyKind::Ptr(pt) if self.types.kind(pt) == TyKind::Void => {
+                let to = (v >> 64) as u32;
+                let to = to.checked_sub(1).map(OTy).or_else(|| self.void_whole(v as u64));
+                let to = to.unwrap_or(pt);
+                s.push_str(&self.ptr_string(ast, v as u64, to));
+            }
             TyKind::Ptr(pt) => s.push_str(&self.ptr_string(ast, v as u64, pt)),
             TyKind::Array { .. } | TyKind::Record { .. } => {
                 self.write_object(ast, s, t, v as u64, depth);
@@ -1058,6 +1066,16 @@ impl Oven {
             }
             None => s.push_str("<uninitialized>"),
         }
+    }
+
+    /// The type of the whole object an untagged `void *` points into
+    /// (none for a null or function pointer).
+    fn void_whole(&self, raw: u64) -> Option<OTy> {
+        let p = Ptr::decode(raw);
+        if raw == 0 || p.is_fn() {
+            return None;
+        }
+        self.alloc_any(p).map(|a| a.ty)
     }
 
     /// clang's printing of a pointer value: `&x`, `&a[1]`, `&s.f`,

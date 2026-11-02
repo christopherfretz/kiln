@@ -1154,6 +1154,20 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   Within `std::allocator<T>::allocate` a cast from `void*` to `T*` (as
   libc++ writes `static_cast<T*>(__builtin_operator_new(...))`) is a plain
   move, not the C++26 `void*` cast check.
+  Before C++26 ([expr.const]/5.14 of C++11 to C++23) every other cast
+  from `cv void *` to an object pointer (`static_cast`, C-style,
+  functional, in any function including a template instantiation) is
+  not a core constant expression: the cast compiles to a null test and
+  two traps at its begin location, "cast from 'void *' is not allowed in
+  a constant expression in C++ standards before C++2c" for a non-null
+  operand and "cast from 'void *' is not allowed in a constant
+  expression" for null (the operand type as written, with its aka), as
+  clang 19 and 22 in every mode. clang reports this as a CCE note and
+  keeps evaluating; kiln stops at it, which gives the same diagnostics
+  wherever clang needs a constant (`expr.const/p2738-void-cast-pre26-cxx*.cpp`).
+  A `void *` argument in an "in call to" note prints the subobject its
+  tag designates (`f(&s)`, not the first member at its address), an
+  untagged one the whole object.
 - *Destruction.* An explicit destructor call `p->~T()` (including the one
   in `std::destroy_at`) lowers to `EndLife [p, T]` aux 1 before the call
   (the object must be within its lifetime: "destruction of object outside
