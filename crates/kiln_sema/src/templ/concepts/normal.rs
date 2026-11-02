@@ -71,7 +71,10 @@ use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::ids::RawId;
 use kiln_ast::types::{ArgView, TemplateArg};
 
+use kiln_source::Loc;
+
 use crate::Sema;
+use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
 /// Deepest concept expansion normalized (the rest are atoms).
@@ -158,6 +161,7 @@ impl Sema<'_, '_> {
                 s.args(l, n.loc()).ok()?
             }
         };
+        let args = self.concept_default_args(c, args, n.loc());
         let args = self.concept_mapping_args(c, args);
         let canonical = self.ast.types.canonical_args(args);
         if self.inst.concepts.checking.contains(&(c, canonical)) {
@@ -168,6 +172,39 @@ impl Sema<'_, '_> {
         let r = self.normalize(ce, Some((c, canonical)), depth + 1);
         self.inst.concepts.checking.pop();
         Some(r)
+    }
+
+    /// The arguments `args` of a concept-id of `c` completed with the
+    /// concept's default template arguments ([temp.arg.general]/9): the
+    /// parameter mapping is formed from the converted arguments, so
+    /// `K<F, char*>` and `K<F, char*, int>` name the same atomic
+    /// constraints when `int` is the third parameter's default
+    /// ([temp.constr.normal]/1.4, [temp.constr.atomic]/2). The defaults
+    /// are substituted in a SFINAE context; on failure the written
+    /// arguments are kept (the concept-id is then an atom of its own).
+    fn concept_default_args(&mut self, c: DeclId, args: ArgListId, loc: Loc) -> ArgListId {
+        let params = self.template_params(c);
+        let written: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
+        if written.len() >= params.len() || written.iter().any(|&a| self.is_pack_expansion_arg(a))
+        {
+            return args;
+        }
+        let depth = self.template_param_depth(c);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, c, None, loc, |s| {
+            let mut out = written.clone();
+            for &p in &params[written.len()..] {
+                if s.ast.template_parm(p).is_some_and(|x| x.pack) {
+                    break;
+                }
+                let def = s.template_default(p)?;
+                out.push(s.default_template_arg(c, depth, p, def, loc, &out).ok()?);
+            }
+            Some(out)
+        });
+        match r {
+            Some((Some(out), Ok(()))) => self.ast.types.arg_list(&out),
+            _ => args,
+        }
     }
 
     /// The written arguments `args` of a concept-id of `c`, shaped as its
