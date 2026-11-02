@@ -276,7 +276,11 @@ impl Oven {
                     bi::FMAX_22 | bi::FMIN_22 if snan(a) => quiet(a),
                     bi::FMAX_22 | bi::FMIN_22 if snan(b) => quiet(b),
                     bi::FMAXIMUM_NUM | bi::FMINIMUM_NUM if nan(a) => {
-                        if nan(b) { quiet(b) } else { b }
+                        if nan(b) {
+                            quiet(b)
+                        } else {
+                            b
+                        }
                     }
                     bi::FMAXIMUM_NUM | bi::FMINIMUM_NUM if nan(b) => a,
                     bi::FMAX | bi::FMAX_22 | bi::FMAXIMUM_NUM => {

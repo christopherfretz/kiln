@@ -257,7 +257,10 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(name) = self.ast.decls.get(f).name().as_ident() else { return };
-        let Some(id) = builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat) else { return };
+        let Some(id) = builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)
+        else {
+            return;
+        };
         let Some(info) = builtin::info(id).copied() else { return };
         if !self.c_linkage_file_scope_fn_of_type(f, info.sig) {
             return;

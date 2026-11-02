@@ -2948,7 +2948,8 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(v) = self.fold_rvalue_int(r) else { return };
-        if (self.ast.types.builtin(rt) == Some(BuiltinType::Bool) || self.diags.sm().is_macro_loc(self.eloc(r)))
+        if (self.ast.types.builtin(rt) == Some(BuiltinType::Bool)
+            || self.diags.sm().is_macro_loc(self.eloc(r)))
             && (v == 0 || v == 1)
         {
             return;

@@ -4637,7 +4637,7 @@ pub mod builtin {
     /// clang 19 lacks) that lower to an LLVM intrinsic: the ones with a
     /// `float` twin go down its path ([`f16_twin`]; the `__fp16` operand
     /// type picks the `half` overload and the Oven format), the others
-    /// are lowered by id (kiln_codegen `fp_intrinsic`). `sqrtf16` is in [`LIBM`] and
+    /// are lowered by id (`kiln_codegen` `fp_intrinsic`). `sqrtf16` is in [`LIBM`] and
     /// `copysignf16` in [`EXTRA`].
     pub const F16_INTR: &[Info] = &[
         row(CANONICALIZEF16, "__builtin_canonicalizef16", "hh", N | C),
