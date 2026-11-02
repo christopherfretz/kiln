@@ -396,12 +396,24 @@ impl Sema<'_, '_> {
         DeclHead::new(self.ctx, dname, name.map_or(loc, |n| n.1))
     }
 
-    /// Records parameter `p` of the innermost head and makes its name
-    /// visible; diagnoses a name declared twice in one list.
-    fn push_template_param(&mut self, p: DeclId, name: Option<(Symbol, Loc)>) {
+    /// Records parameter `p` of the innermost head. Its name becomes
+    /// visible at [`Sema::act_on_template_param_end`], after its default
+    /// argument.
+    fn push_template_param(&mut self, p: DeclId) {
         let Some(h) = self.templ.heads.last_mut() else { return };
         h.params.push(p);
-        let Some((n, loc)) = name else { return };
+    }
+
+    /// The end of template parameter `p`, after its default argument if
+    /// any: [basic.scope.pdecl]/9, the locus of a template parameter is
+    /// immediately after its complete template-parameter, so its own
+    /// default argument (`template<class...> class _And = _And`, libc++
+    /// `tuple`) names the enclosing scope's entity, not the parameter.
+    /// Makes its name visible; diagnoses a name declared twice in one
+    /// list ([temp.local]/6).
+    pub fn act_on_template_param_end(&mut self, p: DeclId) {
+        let d = *self.ast.decls.get(p);
+        let (Some(n), loc) = (d.name().as_ident(), d.loc()) else { return };
         let Some(s) = self.scopes.iter_mut().rev().find(|s| s.kind == ScopeKind::TemplateParams)
         else {
             return;
@@ -468,7 +480,7 @@ impl Sema<'_, '_> {
         if kw_loc != h.loc {
             let _ = self.ast.decls.cold.begin_loc.insert(p, kw_loc);
         }
-        self.push_template_param(p, name);
+        self.push_template_param(p);
         p
     }
 
@@ -533,7 +545,7 @@ impl Sema<'_, '_> {
         if !self.check_nttp_type(ty, p.loc) {
             self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
         }
-        self.push_template_param(d, p.name);
+        self.push_template_param(d);
         d
     }
 
@@ -570,7 +582,7 @@ impl Sema<'_, '_> {
         let h = self.param_head(name, at);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_template_parm(h, params, depth, index, pack, typename_kw);
-        self.push_template_param(p, name);
+        self.push_template_param(p);
         p
     }
 
