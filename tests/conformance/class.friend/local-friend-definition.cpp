@@ -9,11 +9,11 @@
 //@ diag: 22:17 error "friend function cannot be defined in a local class"
 //@ diag: 23:17 error "'h' is missing exception specification 'noexcept'"
 //@ diag: 19:8 note "previous declaration is here"
-//@ diag: 24:17 error "no matching function found in local scope"
+//@ diag: 24:17 error "cannot define friend function in a local class definition"
 //@ diag: 27:19 error "friend function cannot be defined in a local class"
 //@ diag: 34:17 error "friend function cannot be defined in a local class"
-//@ requires: clang<22
-// clang 22 emits error: cannot define friend function in a local class definition; WP-355 residual
+//@ requires: clang>=22
+// kiln at -fclang-compat=22 (WP-377); clang 19 wording: "no matching function found in local scope"
 void f() {
   void g();
   void h(int) noexcept;

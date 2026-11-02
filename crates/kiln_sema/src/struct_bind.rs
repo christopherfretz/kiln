@@ -899,8 +899,11 @@ impl Sema<'_, '_> {
             let bloc = self.ast.decls.get(b).loc();
             let fname = self.decl_name(f);
             let rdef_ty = dty;
+            // clang 22 reports an inaccessible member at the declaration's
+            // `[`, clang 19 at the binding naming it.
+            let aloc = if self.clang_compat >= 22 { loc } else { bloc };
             if let Some(msg) = self.special_member_access(f, rdef, |s, protected| {
-                s.diag(DiagId::sema_decomp_decl_inaccessible_field, bloc)
+                s.diag(DiagId::sema_decomp_decl_inaccessible_field, aloc)
                     .arg(u8::from(protected))
                     .arg(&fname)
                     .arg(s.ty_arg(rdef_ty))

@@ -76,6 +76,7 @@ mod switch_conv;
 mod switch_enum;
 pub mod target;
 pub mod templ;
+mod template_id_typo;
 mod try_stmt;
 mod type_diff;
 mod unreachable_code;
@@ -137,6 +138,13 @@ pub struct Sema<'a, 'sm> {
     /// The `#pragma pack` directives seen, in order (location and the
     /// spelling of the argument list).
     pub pragma_packs: Vec<(Loc, String)>,
+    /// The attribute-token as written (scope, name) of each attribute
+    /// spelled with a scope or a `__`-affixed name, by its location; how
+    /// diagnostics name it ([`Sema::attr_shown`]).
+    pub(crate) attr_spellings: kiln_source::fx::FxHashMap<
+        Loc,
+        (Option<kiln_source::symbol::Symbol>, kiln_source::symbol::Symbol),
+    >,
     /// C++ exceptions are enabled (`-f[no-]exceptions`; default on).
     pub exceptions: bool,
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
@@ -162,6 +170,12 @@ pub struct Sema<'a, 'sm> {
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
     pub clang_compat: u32,
+    /// GCC's implicit library builtins (`-stdlib=libstdc++`, WP-380): a
+    /// call of a recognized C library `ceil` / `floor` / `trunc` /
+    /// `round` / `fabs` / `fmin` / `fmax` / `copysign` function folds in
+    /// constant evaluation as its `__builtin_` twin, as GCC folds
+    /// `::ceil` (spec/sema.md §5.4).
+    pub gnu_lib_builtins: bool,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -659,6 +673,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             target,
             abi,
             pragma_packs: Vec::new(),
+            attr_spellings: kiln_source::fx::FxHashMap::default(),
             exceptions: true,
             rtti: true,
             reflection: false,
@@ -666,6 +681,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 19,
+            gnu_lib_builtins: false,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,

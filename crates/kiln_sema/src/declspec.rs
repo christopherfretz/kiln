@@ -105,6 +105,10 @@ pub enum TypeSpecKind {
     Float64,
     /// `_Float128` (`std::float128_t`, P1467).
     StdFloat128,
+    /// GCC's `_Float32x` (binary64; WP-380).
+    Float32x,
+    /// GCC's `_Float64x` (`long double`'s format; WP-380).
+    Float64x,
     /// `__bf16` (`std::bfloat16_t`, P1467).
     BFloat16,
     /// `__fp16` (ARM half: arithmetic promotes it to `float`).
@@ -141,6 +145,8 @@ impl TypeSpecKind {
             TypeSpecKind::Float32 => "_Float32",
             TypeSpecKind::Float64 => "_Float64",
             TypeSpecKind::StdFloat128 => "_Float128",
+            TypeSpecKind::Float32x => "_Float32x",
+            TypeSpecKind::Float64x => "_Float64x",
             TypeSpecKind::BFloat16 => "__bf16",
             TypeSpecKind::Fp16 => "__fp16",
             TypeSpecKind::Auto => "auto",

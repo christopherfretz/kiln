@@ -100,7 +100,10 @@ impl Compiler<'_> {
         let r = self.reg();
         // clang reports a bad member pointer at the operand.
         let loc = self.node(b).loc();
-        self.emit_site(Op::MpAddr, 0, &[r, obj, mp], b, loc);
+        // clang 22 fails a data member access through a null object at
+        // the member pointer (aux 1).
+        let aux = u32::from(self.o.clang_compat >= 22);
+        self.emit_site(Op::MpAddr, aux, &[r, obj, mp], b, loc);
         // A union member is checked where it is used.
         let check = match (acc, self.rmw_loc) {
             (Access::Read, _) => Some((ak::READ, self.begin(e))),

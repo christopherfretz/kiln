@@ -138,6 +138,23 @@ git add crates/kiln_diag && git commit
 To add ids by hand, append rows to the tail block (or `_pending.rs`) and
 run `cargo xtask diag-split`, or write them straight into the area file.
 
+### 2.5 Wording by clang compatibility level (WP-377)
+
+An id's template is clang 22's wording. Where clang 19 worded the same
+diagnostic differently, the table also has a row `<name>_19` with clang
+19's template and the same kind, group and argument count
+(`tests/ids.rs` checks the mirror). `DiagId::for_compat(level)` maps an id
+to the one that reports it at `-fclang-compat=<level>`: below 22, `<name>`
+becomes `<name>_19`; otherwise the id is itself. The engine applies it to
+every diagnostic and note it emits (`DiagOptions::clang_compat`, set by
+the driver from `-fclang-compat=`; default 19), and to its dedup key, so
+code emits `<name>` and never picks a `_19` row itself. A message
+embedded in another diagnostic (sema's "substitution failure ...: <msg>")
+is rendered with `Diag::message_at(engine.clang_compat())`. Differences
+that are not a template (an argument printed differently, a note clang 22
+adds or drops) are chosen by the emitting crate from its own level
+(`Sema::clang_compat`, `Oven::set_clang_compat`).
+
 ## 3. Warning groups
 
 `Group` is generated from the table in `src/groups/*.rs` (§2.4):

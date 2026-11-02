@@ -234,6 +234,10 @@ pub struct TypeContext {
     /// uniques `DeducedTemplateSpecializationType` on the canonical
     /// template, so later undeduced spellings print as the first one.
     pub(crate) first_dtst_names: kiln_source::fx::FxHashMap<u32, TemplateNameId>,
+    /// clang 19's first-spelling rule for undeduced placeholders
+    /// ([`TypeContext::dtst_display_name`]); clang 22 prints each one as
+    /// written (`-fclang-compat=22` clears it, WP-377).
+    pub dtst_first_spelling: bool,
     pub(crate) nns: KeyedTable,
     pub(crate) args: ArgTable,
     pub(crate) profiles: ProfileTable,
@@ -270,7 +274,7 @@ fn q_opt(raw: u32) -> Option<QualType> {
 
 impl TypeContext {
     /// A context for `target` with default (C++17+) options, with the
-    /// builtins at ids 1..=50 (§5.1).
+    /// builtins at ids 1..=52 (§5.1).
     pub fn new(target: TargetTypes) -> Self {
         Self::with_options(target, TypeOptions::default())
     }
@@ -284,6 +288,7 @@ impl TypeContext {
             name_decls: Vec::new(),
             dependent_templates: kiln_source::fx::FxHashSet::default(),
             first_dtst_names: kiln_source::fx::FxHashMap::default(),
+            dtst_first_spelling: true,
             nns: KeyedTable::new(),
             args: ArgTable::new(),
             profiles: ProfileTable::new(),

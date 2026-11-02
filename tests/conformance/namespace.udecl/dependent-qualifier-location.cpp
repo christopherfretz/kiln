@@ -15,13 +15,13 @@
 //@ diag: 40:8 note "in instantiation of template class 'C<int>' requested here"
 //@ diag: 37:9 error "type 'int' cannot be used prior to '::' because it has no members"
 //@ diag: 38:18 error "type 'int' cannot be used prior to '::' because it has no members"
-//@ diag: 42:37 error "using declaration refers into 'X::', which is not a base class of 'D<X>'"
+//@ diag: 42:37 error "', which is not a base class of 'D<X>'"
 //@ diag: 44:6 note "in instantiation of template class 'D<X>' requested here"
 //@ diag: 45:34 error "base specifier must name a class"
 //@ diag: 48:8 note "in instantiation of template class 'G<int>' requested here"
 //@ diag: 46:9 error "type 'int' cannot be used prior to '::' because it has no members"
-//@ requires: clang<22
-// clang 22 emits error: using declaration refers into 'X', which is not a base class of 'D<X>'; WP-355 residual
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 template <class T> int f() {
   using T::member;
   return 0;

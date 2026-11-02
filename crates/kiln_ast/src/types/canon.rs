@@ -1040,7 +1040,10 @@ impl TypeContext {
     /// with: the first one formed for its template
     /// ([`Self::deduced_template_specialization`]), else `name`.
     pub fn dtst_display_name(&self, name: TemplateNameId) -> TemplateNameId {
-        if self.template_decl(name).is_none() || !self.template_name_flags(name).is_empty() {
+        if !self.dtst_first_spelling
+            || self.template_decl(name).is_none()
+            || !self.template_name_flags(name).is_empty()
+        {
             return name;
         }
         let key = self.canonical_template_name(name).raw();

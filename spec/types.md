@@ -141,7 +141,8 @@ are stable (serialization, `const` comparisons). 51..=63 are reserved.
 Ids 48..=50 are the C++23 extended floating-point types of P1467
 (WP-361): 48 Float32 `_Float32` (= `std::float32_t`), 49 Float64
 `_Float64` (= `std::float64_t`), 50 StdFloat128 `_Float128`
-(= `std::float128_t`).
+(= `std::float128_t`). Ids 51 Float32x `_Float32x` and 52 Float64x
+`_Float64x` are GCC's ISO/IEC TS 18661-3 types (WP-380, below).
 
 `_Float16` and `__fp16` are keywords (kiln_parse `Kw::Float16`/`Kw::Fp16`,
 `TypeSpecKind::Float16`/`Fp16`) on every target, as in clang 19; both are
@@ -206,12 +207,34 @@ not diagnosed on AArch64 (spec/abi.md). clang 19 and clang 22 have none of
 `bf16`/`f32`/`f64`/`f128` suffixes, so the reference behaviour is GCC 14's
 (checked with `clang++-22 -std=c++23 -fsyntax-only`, 2026-11-02).
 
+**GCC's `_Float32x` and `_Float64x` (WP-380).** Keywords on every target
+and in every mode (`Kw::Float32x`/`Float64x`), each a distinct type that
+`is_std_extended_floating` counts, because GCC 13+ applies the P1467 rank
+rules to them. `_Float32x` has `double`'s format, size and alignment;
+`_Float64x` has `long double`'s: x87 extended on x86-64, binary128 on
+AArch64 (GCC defines it on both). Their `abi_twin` is `double` /
+`long double`: they lower, pass and lay out as the twin and mangle `DF32x`
+/ `DF64x` (spec/abi.md §8.18). Their conversion ranks follow GCC 14:
+equal value sets rank a standard type lowest, then `__float128`, then
+`_FloatNx`, then `_FloatN` (`extended_subrank`, spec/sema-conv.md §6), so
+`_Float32x + double` is `_Float32x` and `_Float32x + _Float64` is
+`_Float64`. The literal suffixes `f32x`/`F32x`/`f64x`/`F64x` (lower-case
+`x` only, as GCC) type a literal `_Float32x`/`_Float64x` in every mode
+with GCC's pedantic `lit_float_suffix_gnu` ("non-standard suffix on
+floating constant", off unless `-pedantic`). `_Complex _Float32x` and
+`_Complex _Float64x` are accepted. The `__builtin_*f32x`/`*f64x` builtins
+are not provided (glibc maps them to the `double`/`long double` builtins
+when `__GNUC__` < 7, which kiln reports). Tests:
+`tests/conformance/basic.extended.fp/float-nx*.cpp`.
+
 glibc's `<bits/floatn.h>` and `<bits/floatn-common.h>` declare
 `typedef float _Float32;`, `typedef double _Float64;` and
-`typedef long double _Float128;` for C++ compilers that are not GCC >= 13
-(kiln reports `__GNUC__` 4). In a system header, a `typedef` whose
-declarator-id is one of the keywords `_Float32`, `_Float64` or
-`_Float128` declares nothing: the parser consumes the declaration and the
+`typedef long double _Float128;` (and `typedef double _Float32x;`,
+`typedef long double _Float64x;`) for C++ compilers that are not GCC >= 13
+(kiln reports `__GNUC__` 4; the decision is in spec/pp.md "Predefined
+macros"). In a system header, a `typedef` whose declarator-id is one of
+the keywords `_Float32`, `_Float64`, `_Float128`, `_Float32x` or
+`_Float64x` declares nothing: the parser consumes the declaration and the
 built-in type stays (`kiln_parse/src/decl.rs`). The same declaration in
 user code is the usual error.
 

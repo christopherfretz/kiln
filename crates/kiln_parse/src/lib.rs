@@ -70,6 +70,9 @@ pub struct ParseOptions {
     /// reproduces where they differ (spec/pp.md "clang compatibility
     /// level"; [`kiln_sema::Sema::clang_compat`]).
     pub clang_compat: u32,
+    /// GCC's implicit library builtins (`-stdlib=libstdc++`;
+    /// [`kiln_sema::Sema::gnu_lib_builtins`]).
+    pub gnu_lib_builtins: bool,
 }
 
 impl Default for ParseOptions {
@@ -85,6 +88,7 @@ impl Default for ParseOptions {
             reflection: false,
             coro_aligned_allocation: false,
             clang_compat: 19,
+            gnu_lib_builtins: false,
         }
     }
 }
@@ -207,6 +211,8 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.coro_aligned_allocation = opts.coro_aligned_allocation;
     s.gnu = opts.gnu;
     s.clang_compat = opts.clang_compat;
+    s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
+    s.gnu_lib_builtins = opts.gnu_lib_builtins;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;

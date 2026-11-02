@@ -11,7 +11,7 @@
 //@ diag: 22:34 error "1st argument must be an unsigned integer (was 'int')"
 //@ diag: 23:24 error "1st argument must be an unsigned integer (was 'double')"
 //@ requires: clang<22
-// clang 22 emits error: size of '__builtin_bit_cast' source type 'double' does not match destinatio...; WP-355 residual
+// clang 19 spelling; builtins-sema-errors-clang22.cpp has clang 22's (WP-377).
 bool g = __builtin_isless(1, 2);
 bool g2 = __builtin_isunordered(1.0, 2);
 void *h(void *p) { return __builtin_launder(p); }

@@ -47,6 +47,8 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Float32
             | Kw::Float64
             | Kw::StdFloat128
+            | Kw::Float32x
+            | Kw::Float64x
             | Kw::Bf16
             | Kw::Fp16
             | Kw::Complex
@@ -748,11 +750,12 @@ impl Parser<'_, '_> {
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
                 Kw::Float16 => ds.set_base(TypeSpecKind::Float16, None, loc),
                 // glibc's <bits/floatn*.h> declare `typedef float _Float32;`
-                // (and `_Float64`, `_Float128`) for C++ compilers that are
-                // not GCC >= 13; kiln reports itself as clang. In a system
-                // header such a typedef of a P1467 keyword declares
-                // nothing (spec/types.md §5.1).
-                Kw::Float32 | Kw::Float64 | Kw::StdFloat128
+                // (and `_Float64`, `_Float128`, `_Float32x`, `_Float64x`)
+                // for C++ compilers that are not GCC >= 13; kiln reports
+                // itself as clang. In a system header such a typedef of a
+                // P1467 keyword or GCC `_FloatNx` keyword declares nothing
+                // (spec/types.md §5.1).
+                Kw::Float32 | Kw::Float64 | Kw::StdFloat128 | Kw::Float32x | Kw::Float64x
                     if matches!(ds.storage, Some((StorageSpec::Typedef, _)))
                         && ds.has_type_specifier()
                         && self.peek_is(1, Punct::Semi)
@@ -764,6 +767,8 @@ impl Parser<'_, '_> {
                 Kw::Float32 => ds.set_base(TypeSpecKind::Float32, None, loc),
                 Kw::Float64 => ds.set_base(TypeSpecKind::Float64, None, loc),
                 Kw::StdFloat128 => ds.set_base(TypeSpecKind::StdFloat128, None, loc),
+                Kw::Float32x => ds.set_base(TypeSpecKind::Float32x, None, loc),
+                Kw::Float64x => ds.set_base(TypeSpecKind::Float64x, None, loc),
                 Kw::Bf16 => ds.set_base(TypeSpecKind::BFloat16, None, loc),
                 Kw::Fp16 => ds.set_base(TypeSpecKind::Fp16, None, loc),
                 Kw::Complex => {
@@ -1134,7 +1139,9 @@ impl Parser<'_, '_> {
         }
     }
 
-    #[allow(clippy::too_many_lines)] // one arm per name class; the arms delegate
+    /// A type-name decl-specifier at the current token: the name class
+    /// picks the arm, and each arm is a named helper. False if the name
+    /// is no type-name here (the caller tries the other specifiers).
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
@@ -1144,65 +1151,17 @@ impl Parser<'_, '_> {
         }
         match self.scan_name(start) {
             Some((end, NameClass::Type(..), _)) if end > start + 1 => {
-                // A qualified name: the qualifier is formed (and kept as
-                // sugar) by the parse proper.
-                let ty = match self.parse_nested_name_nns() {
-                    Ok(Some(q)) => {
-                        self.check_missing_typename_in_class(q, ctx, loc);
-                        self.parse_qualified_type_rest(q, TagKeyword::None)
-                    }
-                    _ => None,
-                };
-                if ty.is_none() {
-                    ds.invalid = true;
-                }
-                if let Err(e) =
-                    ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc)
-                {
-                    ds.invalid = true;
-                    self.spec_error(&e, loc);
-                }
+                self.qualified_type_name_spec(ds, ctx, loc);
                 true
             }
             Some((end, NameClass::Type(ty, d), name)) => {
-                while self.pos() < end {
-                    self.bump();
-                }
-                // An ambiguous name recovers as the type `d` classified
-                // as ([basic.lookup.general]/1, clang's `getTypeName`).
-                self.s.diagnose_ambiguous_name(name, None, loc);
-                self.s.mark_type_referenced(d);
-                self.s.check_type_name_access(name, None, d, loc);
-                let kind = self.s.ast.decls.get(d).kind();
-                let ty = if kiln_sema::lookup::is_tag_kind(kind) {
-                    self.s.elaborated_tag_type(d, TagKeyword::None)
-                } else {
-                    ty
-                };
-                // `T...[index]` (C++26 [dcl.type.pack.index]).
-                let ty = match self.parse_pack_index(loc) {
-                    Ok(Some((ellipsis, index, _))) => {
-                        self.s.act_pack_indexing_type(ty, ellipsis, index)
-                    }
-                    Ok(None) => ty,
-                    Err(()) => QualType::ERROR,
-                };
-                if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
-                    ds.invalid = true;
-                    self.spec_error(&e, loc);
-                }
+                self.simple_type_name_spec(ds, end, (ty, d, name), loc);
                 true
             }
             Some((end, NameClass::TypeTemplate(d), _))
                 if end == start + 1 && self.s.names_injected_class(d) =>
             {
-                // The injected-class-name ([temp.local]/1).
-                self.bump();
-                let ty = self.s.injected_class_type(d);
-                if let Err(e) = ds.set_base(TypeSpecKind::Named, ty, loc) {
-                    ds.invalid = true;
-                    self.spec_error(&e, loc);
-                }
+                self.injected_class_name_spec(ds, d, loc);
                 true
             }
             // A placeholder for a deduced class type ([dcl.type.class.deduct]).
@@ -1226,12 +1185,7 @@ impl Parser<'_, '_> {
                         && self.unresolved_scope_name(start)
                         && self.qualified_unknown_type_follows(end, ctx)) =>
             {
-                if let Ok(Some(q)) = self.parse_nested_name_nns() {
-                    let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
-                }
-                ds.invalid = true;
-                ds.type_error = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
+                self.unknown_qualified_type_spec(ds, loc);
                 true
             }
             Some((end, NameClass::Undeclared, name))
@@ -1240,20 +1194,110 @@ impl Parser<'_, '_> {
                 self.undeclared_template_spec(ds, name, loc)
             }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
-                if !self.unknown_type_follows(end, ctx) {
-                    return false;
-                }
-                let text = self.s.ast.symbols().as_str(name).to_owned();
-                let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
-                self.emit(d);
-                self.bump();
-                ds.invalid = true;
-                ds.type_error = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
-                true
+                self.unknown_type_name_spec(ds, end, ctx, name, loc)
             }
             _ => false,
         }
+    }
+
+    /// Sets the decl-spec's named base type `ty` (`None` when the name
+    /// names no type), reporting a conflicting specifier.
+    fn set_named_base(&mut self, ds: &mut DeclSpec, ty: Option<QualType>, loc: Loc) {
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, ty, loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
+    }
+
+    /// A qualified type-name (`N::T`, `X<A>::type`): the qualifier is
+    /// formed (and kept as sugar) by the parse proper.
+    fn qualified_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext, loc: Loc) {
+        let ty = match self.parse_nested_name_nns() {
+            Ok(Some(q)) => {
+                self.check_missing_typename_in_class(q, ctx, loc);
+                self.parse_qualified_type_rest(q, TagKeyword::None)
+            }
+            _ => None,
+        };
+        if ty.is_none() {
+            ds.invalid = true;
+        }
+        self.set_named_base(ds, Some(ty.unwrap_or(QualType::ERROR)), loc);
+    }
+
+    /// An unqualified type-name ending before token `end`, classified as
+    /// the type `ty` declared by `d` under the name `name`, with an
+    /// optional pack index (`T...[index]`, C++26 [dcl.type.pack.index]).
+    fn simple_type_name_spec(
+        &mut self,
+        ds: &mut DeclSpec,
+        end: usize,
+        (ty, d, name): (QualType, DeclId, Symbol),
+        loc: Loc,
+    ) {
+        while self.pos() < end {
+            self.bump();
+        }
+        // An ambiguous name recovers as the type `d` classified
+        // as ([basic.lookup.general]/1, clang's `getTypeName`).
+        self.s.diagnose_ambiguous_name(name, None, loc);
+        self.s.mark_type_referenced(d);
+        self.s.check_type_name_access(name, None, d, loc);
+        let kind = self.s.ast.decls.get(d).kind();
+        let ty = if kiln_sema::lookup::is_tag_kind(kind) {
+            self.s.elaborated_tag_type(d, TagKeyword::None)
+        } else {
+            ty
+        };
+        let ty = match self.parse_pack_index(loc) {
+            Ok(Some((ellipsis, index, _))) => self.s.act_pack_indexing_type(ty, ellipsis, index),
+            Ok(None) => ty,
+            Err(()) => QualType::ERROR,
+        };
+        self.set_named_base(ds, Some(ty), loc);
+    }
+
+    /// The injected-class-name of the class template `d` ([temp.local]/1).
+    fn injected_class_name_spec(&mut self, ds: &mut DeclSpec, d: DeclId, loc: Loc) {
+        self.bump();
+        let ty = self.s.injected_class_type(d);
+        self.set_named_base(ds, ty, loc);
+    }
+
+    /// A qualified name that names no type where only a type can be
+    /// ([`Parser::parse_type_name_spec`]): the parse proper reports it,
+    /// and the decl-spec recovers to an invalid `int`.
+    fn unknown_qualified_type_spec(&mut self, ds: &mut DeclSpec, loc: Loc) {
+        if let Ok(Some(q)) = self.parse_nested_name_nns() {
+            let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
+        }
+        ds.invalid = true;
+        ds.type_error = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
+    }
+
+    /// An undeclared unqualified name ending before token `end`: "unknown
+    /// type name" and an invalid `int` when a declarator follows
+    /// ([`Parser::unknown_type_follows`]), else false.
+    fn unknown_type_name_spec(
+        &mut self,
+        ds: &mut DeclSpec,
+        end: usize,
+        ctx: DeclaratorContext,
+        name: Symbol,
+        loc: Loc,
+    ) -> bool {
+        if !self.unknown_type_follows(end, ctx) {
+            return false;
+        }
+        let text = self.s.ast.symbols().as_str(name).to_owned();
+        let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
+        self.emit(d);
+        self.bump();
+        ds.invalid = true;
+        ds.type_error = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
+        true
     }
 
     /// True if token `end`, after an unknown name in a decl-specifier,
@@ -2985,7 +3029,7 @@ impl Parser<'_, '_> {
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
-            if self.parse_asm_label_and_gnu_attrs(&mut d).is_err() {
+            if self.parse_asm_label_and_gnu_attrs(&mut d, declarators == 0).is_err() {
                 self.skip_until(&[], true, false);
                 break;
             }
@@ -3091,13 +3135,17 @@ impl Parser<'_, '_> {
     /// `ParseDeclGroup`): a C++11 attribute-specifier-seq here ends the
     /// declarator, and the `;` (or function body) expected there is
     /// reported by the caller.
-    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator) -> Result<(), ()> {
+    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator, first: bool) -> Result<(), ()> {
+        self.gnu_attr_end = Loc::INVALID;
+        if first && d.is_function_declarator() {
+            self.parse_gnu_attr_seq(&mut d.attrs);
+        }
         let label = self.parse_asm_label()?;
         if label.is_some() {
             d.end = self.prev_lo();
+            self.gnu_attr_end = Loc::INVALID;
         }
         d.asm_label = label;
-        self.gnu_attr_end = Loc::INVALID;
         self.parse_gnu_attr_seq(&mut d.attrs);
         if self.gnu_attr_end != Loc::INVALID {
             d.end = self.gnu_attr_end;

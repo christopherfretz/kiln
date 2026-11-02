@@ -214,7 +214,7 @@ no category).
 | `BinaryOperator` | `BinaryOperator 'type' [lvalue [bitfield]] 'op'` |
 | `CompoundAssignOperator` | `CompoundAssignOperator 'type' lvalue [bitfield] 'op' ComputeLHSTy='T' ComputeResultTy='T'` |
 | `ConditionalOperator`, `ParenExpr`, `ArraySubscriptExpr` | class, type, category; children in source order |
-| `CallExpr` | `CallExpr 'type' [lvalue\|xvalue] [adl]` (`adl`: the callee was found by argument-dependent lookup, clang's `usesADL`; WP-122); children: callee, arguments |
+| `CallExpr` | `CallExpr 'type' [lvalue\|xvalue] [adl]` (`adl`: the callee was found by argument-dependent lookup, clang's `usesADL`; WP-122); children: callee, arguments. A type-dependent pseudo-destructor call, which kiln types dependent (spec/sema-class.md, "Dependent pseudo-destructor calls"), prints `'void'` as clang's, and so does a `ParenExpr` around one (WP-372) |
 | `UnaryExprOrTypeTraitExpr` | `UnaryExprOrTypeTraitExpr 'type' sizeof\|alignof 'operand-type'` (or expression child) |
 | `CXXNoexceptExpr` | `CXXNoexceptExpr 'bool'`; one child, the unevaluated operand. The value is not printed (clang prints none) |
 | `VAArgExpr` | `VAArgExpr 'T'` (the written type; a prvalue); one child, the `va_list` operand |

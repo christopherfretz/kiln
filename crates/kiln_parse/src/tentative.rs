@@ -279,6 +279,8 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Float32
                 | Kw::Float64
                 | Kw::StdFloat128
+                | Kw::Float32x
+                | Kw::Float64x
                 | Kw::Bf16
                 | Kw::Fp16 => self.after_simple_type(self.i + 1, braced),
                 // [dcl.type.auto.deduct]: `auto(x)` and `auto{x}` are
@@ -546,6 +548,16 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             }
             Some(_) => self.i += 1,
             None => match self.p.scan_name(self.i) {
+                // An undeclared template-id taken as a type
+                // ([`Scan::undeclared_template_id_before_ptr_operator`]).
+                Some((end, NameClass::Undeclared, _))
+                    if end == self.i + 1 && self.punct_at(end) == Some(Punct::Less) =>
+                {
+                    match self.p.skip_template_args(end) {
+                        Some((close, false)) => self.i = close + 1,
+                        _ => return Tpr::Error,
+                    }
+                }
                 Some((end, _, _)) => self.i = end,
                 None => return Tpr::Error,
             },
@@ -1133,6 +1145,23 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             && matches!(self.punct_at(self.i + 1), Some(Punct::Star | Punct::Amp | Punct::AmpAmp))
     }
 
+    /// An undeclared unqualified template-id followed by a ptr-operator or
+    /// a cv-qualifier (`w<int> *p;`, `w<int> const *q;`): clang's
+    /// `TNK_Undeclared_template`, `Ambiguous` in `isCXXDeclarationSpecifier`
+    /// until the declarator decides (`w<int> & i + 1;` is an expression).
+    /// WP-372.
+    fn undeclared_template_id_before_ptr_operator(&self) -> bool {
+        if self.ident_at(self.i).is_none()
+            || !matches!(self.name_here(), Some((end, NameClass::Undeclared)) if end == self.i + 1)
+            || self.punct_at(self.i + 1) != Some(Punct::Less)
+        {
+            return false;
+        }
+        let Some((close, false)) = self.p.skip_template_args(self.i + 1) else { return false };
+        matches!(self.punct_at(close + 1), Some(Punct::Star | Punct::Amp | Punct::AmpAmp))
+            || matches!(self.kw_at(close + 1), Some(Kw::Const | Kw::Volatile))
+    }
+
     /// An undeclared unqualified name followed by a type-specifier keyword.
     fn undeclared_before_type_keyword(&self) -> bool {
         self.ident_at(self.i).is_some()
@@ -1181,6 +1210,10 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             // here; the declarator decides (`u5 & r + 1;` is an
             // expression), and the declaration parser reports "unknown
             // type name" (WP-318).
+            Tpr::Ambiguous
+        } else if self.undeclared_template_id_before_ptr_operator() {
+            // The same for an undeclared template-id; the declaration
+            // parser reports "no template named" (WP-372).
             Tpr::Ambiguous
         } else {
             self.decl_specifier(Tpr::False)

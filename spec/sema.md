@@ -78,6 +78,39 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   `__is_trivially_relocatable` warns `-Wdeprecated-builtins` with the
   replacement `__builtin_is_cpp_trivially_relocatable`
   (spec/sema-templates.md §9.1).
+- **Flow and counts** (WP-377). `-Wswitch` counts a deprecated
+  enumerator as one a switch must handle (only `[[maybe_unused]]` ones
+  may be omitted; `switch_enum.rs`), which also decides whether the
+  switch covers every value for `-Wreturn-type`. An `if consteval` is a
+  branch on an unknown condition in the reachability walk (clang 22
+  builds its CFG; clang 19 builds none and checks nothing;
+  `try_stmt/reach.rs`). `array is too large (N elements)` groups N's
+  digits with `'` (`18'446'744'073'709'551'615`;
+  `element_count_text`). Wording-only changes are `_19` diag rows
+  (spec/diag.md §2.5), e.g. `case ranges are a GNU extension`, `you need
+  to include <typeinfo> or import std before using the 'typeid'
+  operator`.
+- **Attributes and `nodiscard`** (WP-377). A `[[scope::name]]`
+  attribute is named in diagnostics as written, with its scope
+  normalized and `__x__` stripped (`'gnu::aligned'`, `'clang::x'`;
+  `attr_shown`, `decl_attrs.rs`); clang 19 prints the bare name. An
+  unused call whose *type* (not the callee) is `[[nodiscard]]`, or an
+  unused temporary of such a type built by a constructor without its own
+  attribute, warns `ignoring {return value|temporary} of type 'T'
+  declared with 'nodiscard' attribute` under `-Wunused-value`
+  (`unused_type_warning`, `expr.rs`), at the operator call's first token
+  for an overloaded operator. Attributes on a block-scope
+  using-declaration or using-directive are diagnosed as statement
+  attributes (`act_on_decl_stmt_attrs`).
+- **Template notes** (WP-377). A conversion error in a non-type template
+  argument (`not implicitly convertible`, `conversion ... is not allowed
+  in a converted constant expression`, `would bind reference to a
+  temporary`; [temp.arg.nontype]/2) is followed by `template parameter
+  is declared here` (`note_nttp_param`, `templ/nttp.rs`). A conversion
+  function template's deduction mismatch ([temp.deduct.conv]) notes the
+  written P (`'T *'`, not `'type-parameter-0-0 *'`). A pack-index
+  expression's pack name is quoted (`for pack 'Ts'`), and a single-argument
+  concept note quotes a non-type argument too.
 - Codegen's `-Watomic-alignment` text follows the level
   (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
 
@@ -1134,6 +1167,21 @@ and returns the scope it names:
     `implicit-guide-locations-init-list.cpp`.
   - Gap: a qualified concept name in a type-constraint loses its
     qualifier (`template <NC R>` where clang prints `N::NC R`).
+  - At `-fclang-compat=22` (WP-377, clang 22): the guide's class type
+    is the injected specialization named by its scope (`-> N::S<T>`,
+    `-> Outer<int>::Q<U>`; inline and anonymous namespaces elided;
+    `guide_class_type`); a default argument the constructor's class
+    template inherits from an earlier declaration is cloned as
+    inherited, so the guide's printed head omits it (`class _Alloc`,
+    only the parameter's own default prints); and a
+    deduced-template-specialization placeholder prints the template
+    name as written at that use, not its first spelling
+    (`TypeContext::dtst_first_spelling`). Tests: the `-clang22.cpp`
+    copies of `building-guides-note`,
+    `implicit-guide-first-declaration-params`,
+    `implicit-guide-locations-init-list`,
+    `dcl.type.class.deduct/placeholder-spelling{,-first-use}` and
+    `templates/ctad/over.match.class.deduct-{member-template-diag,member-template-qualified-diag,no-viable-diag}`.
 - **Building the implicit guides** runs under a
   `FrameKind::BuildingDeductionGuides` frame (not an instantiation;
   clang `BuildingDeductionGuides`), so an error forming them (the
@@ -1638,6 +1686,22 @@ and returns the scope it names:
       clang++-19 on both triples).
   - An unnamed namespace is created once per scope and gets an
     implicit `UsingDirectiveDecl` ([namespace.unnamed]).
+  - **Inline mismatch on reopening** ([namespace.def.general]/3,
+    WP-389; clang `DiagnoseNamespaceInlineMismatch`,
+    `Sema::check_namespace_inline_mismatch`): when a namespace
+    definition extends one whose first definition differs in
+    `inline`, the extension takes the first definition's inlineness.
+    Reopening an inline namespace without `inline` is the warning
+    `sema_inline_namespace_reopened_noninline` ("inline namespace
+    reopened as a non-inline namespace",
+    `-Winline-namespace-reopened-noninline`); reopening a non-inline
+    one with `inline` is the error `sema_inline_namespace_mismatch`
+    ("non-inline namespace cannot be reopened as inline"). Both carry
+    "previous definition is here" at the first definition and are
+    reported at the name (for an unnamed namespace at the `namespace`
+    keyword; clang uses the `{`, a known column difference). Tests:
+    tests/conformance/namespace.def/inline-namespace-reopened-noninline.cpp,
+    tests/conformance/namespace.def/inline-namespace-mismatch.cpp.
 - **Using-directives:** the payload is `Payload::None(nominated.raw())`.
 - **`extern "C"`/`"C++"`** creates a `LinkageSpecDecl`.
   - Without braces (`extern "C" int x;`) the parser calls
@@ -1707,6 +1771,14 @@ and returns the scope it names:
     prints its explicit arguments canonical (`ok<n::A>(0)`,
     `write_arg_list_canonical`). A call to a function template-id keeps
     the explicit arguments on the resolved `DeclRefExpr`.
+    At `-fclang-compat=22` (clang 22, WP-377) the qualifier's class is
+    printed fully scoped: every enclosing namespace (`(anonymous
+    namespace)::`, inline ones skipped) and class, each class template
+    specialization with all its converted arguments, canonical
+    (`n::tr<n::A, int>::In::w` for `Y::In::w`;
+    `TypeNames::write_converted_scope`, `AstNames::scoped_nns`). Test:
+    `dcl.pre/static-assert-substituted-names-clang22.cpp`,
+    `static-assert-variable-template-clang22.cpp`.
   - Evaluation notes follow (§8).
   - **User-generated messages** ([dcl.pre]/10-12, P2741, WP-356). A
     message that is not a string literal (spec/parse.md §4) must be an
@@ -2636,6 +2708,25 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   calls to intrinsics and its implicit `format` / `alloc_size`
   attributes on the library names (`-Wformat*` on `sprintf`) are not
   modelled; only the `__builtin_` printf rows carry `format` (below).
+- **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
+  `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
+  the default): libstdc++'s `<cmath>` double overloads are `using
+  ::ceil;` etc., so its C++23 constexpr `std::ceil(double)` (P0533)
+  relies on GCC folding the C library function as a builtin. A first
+  declaration recognized as a library function above whose name is
+  `ceil`, `floor`, `trunc`, `round`, `fabs`, `fmin`, `fmax` or
+  `copysign` (or the `f`/`l` variant) records its `__builtin_` twin
+  (`builtin::gnu_lib_twin`; the `gnu_lib_twin` cold data);
+  redeclarations inherit it. Only the Oven reads it: a call folds as the
+  twin (spec/oven.md "Builtins"); every other rule (attributes, codegen,
+  diagnostics) treats the call as ordinary. GCC 14 is the reference:
+  `rint`/`nearbyint` are not folded (GCC leaves them to the rounding
+  mode at run time) and `sqrt`, which GCC folds, is not (the Oven has no
+  `__builtin_sqrt`; clang folds neither). Under `-stdlib=libc++` nothing
+  is recorded, as clang (libc++'s `constexpr-cxx23-clang.pass.cpp`
+  requires `::ceil` to stay non-constant). A C++-linkage or class-scope
+  `ceil`, or one with another type, is an ordinary function
+  (`tests/conformance/c.math/gnu-lib-builtins*.cpp`).
 - **Custom-checked builtins** (WP-270): the generic
   `__builtin_{add,sub,mul}_overflow` (`builtin_overflow`) and the
   alignment of `__builtin_alloca_with_align` (`check_alloca_align`) are
@@ -3655,8 +3746,12 @@ clang 19's C99/GNU complex support in C++:
   `__real` keeps the operand's value category. `__imag` does for a
   complex operand, and is a zero prvalue otherwise.
 - **`__builtin_complex(re, im)`**: two operands of the same real floating
-  type `T` give `_Complex T`. Other operand types are diagnosed as clang
-  does.
+  type `T` give `_Complex T`, including `__bf16` (`_Complex __bf16`,
+  which clang 19/22 also give though they reject the spelled type).
+  `_Float16` and `__fp16` are rejected at the callee ("'_Complex
+  _Float16' is invalid", "'_Complex half' is invalid") below
+  `-fclang-compat=22` and accepted from 22, as the matching clang does
+  (WP-380). Other operand types are diagnosed as clang does.
 - **List initialization** (clang `CheckComplexType`): `{re, im}`
   initializes the parts, each converted as a list element with narrowing
   checked. A third clause is excess. One clause initializes from a
@@ -3946,6 +4041,65 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `undeclared_template_id_before_ident`; libc++
   `locale.stdcvt/remove.verify.cpp`, WP-358). Test:
   `tests/conformance/temp.names/undeclared-template-id-type.cpp`.
+  At block scope `X<...>` before a ptr-operator or a cv-qualifier
+  (`undeclared<int> *p;`) is ambiguous and the declarator decides, as for
+  an undeclared name before a ptr-operator (spec/parse.md; `kiln_parse`
+  `undeclared_template_id_before_ptr_operator`; `w<int> & i + 1;` stays
+  an expression). Test:
+  `tests/conformance/temp.names/undeclared-template-id-stmt.cpp` (WP-372).
+- **Undeclared template-id in an expression** ([temp.names]/3.3,
+  WP-372): an undeclared unqualified `X<...>` that is not called
+  (`(undeclared<int> * 2)`, `undeclared<int>[3]`, `&undeclared<1>`) still
+  takes the list as template arguments and reports only "use of
+  undeclared identifier 'X'" (clang 22 returns `ExprError` for the
+  annotated template-id). Before a binary operator or a closing token
+  (`)`, `]`, `}`, `,`, `;`, `:`) the result is an error expression, so
+  the enclosing expression and declaration go on and diagnose their other
+  operands and declarators; before anything else (`(undeclared<int> 5)`)
+  it is a parse error the enclosing construct skips. Followed by `::` it
+  is "no template named 'X'" (clang's `ActOnCXXNestedNameSpecifier`).
+  Under `-fclang-compat=19` the name is a delayed typo
+  (`act_on_undeclared_template_id_typo`, clang 19's `TypoExpr`): an
+  error expression parsing goes on around whatever follows, so clang
+  19's "expected ')'" (`(v<int> 5)`) and "expected ';' after return
+  statement" (`return v<int>{};`) follow, and the typo is reported at the
+  end of the full-expression (WP-391).
+  `kiln_parse` `parse_id_expression_rest`. Tests:
+  `tests/conformance/temp.names/undeclared-template-id-expr.cpp`,
+  `undeclared-template-id-expr-22.cpp` (`requires: clang>=22`),
+  `undeclared-template-id-expr-19.cpp` (`requires: clang<22`).
+- **Template-id of a function that is not called** ([temp.names]/3,
+  WP-391): from C++20 an unqualified `f<...>` that ordinary lookup finds
+  only non-member functions for, not followed by `(`, names nothing
+  either. Clang 22 typo-corrects `f` to itself qualified from its
+  namespace (`template_id_typo.rs`, `correct_function_template_id`):
+  "use of undeclared identifier 'f'; did you mean '::f'?" (the qualifier
+  as for a local friend, `correction_qualifier`), with "'::f' declared
+  here" at the latest declaration of the first function declared, or at
+  the using-declaration that is the only one found. The expression is an
+  overload set of that one function without template arguments: a
+  built-in operator resolves it to the function
+  (`resolve_single_overload_candidate`, clang's
+  `resolveAndFixAddressOfSingleOverloadCandidate`; `f<int> + 1` is
+  "arithmetic on a pointer to the function type"), a conversion
+  diagnoses it as an overload set ("address of overloaded function 'f'
+  does not match required type"), and with a dependent template argument
+  it is an error expression. There is no correction, only "use of
+  undeclared identifier", when the functions belong to several
+  namespaces, or are found both directly and through a using-declaration
+  (several using-declarations included). There is none either when a
+  keyword or another visible name is no more distant (clang's
+  `CorrectTypo` limits: `(len+2)/3` edits, `len/edits >= 3`;
+  `closer_typo_candidate` scans the interner). Clang suggests that other
+  name; kiln does not yet. A qualified `N::f<int>` (or `::f<int>`) for a
+  single non-template `f` is "'f' does not name a template but is
+  followed by template arguments", as unqualified before C++20
+  (`potential_template_name_in`). Clang 19 reports the name as
+  undeclared (the delayed typo above). Clang 19 does correct to `::f`
+  when the expression it rebuilds is valid (`return f<int>;`,
+  `(f<int> 5)`), and kiln does not model that. Tests:
+  `tests/conformance/temp.names/undeclared-template-id-function-22.cpp`,
+  `undeclared-template-id-function-19.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.

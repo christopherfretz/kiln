@@ -28,7 +28,8 @@ cargo xtask libcxx --gate m3 -j 4 --report docs/status/libcxx-m3.md
 **Overall: 636 pass, 0 fail, 6 unsupported of 642** (100.0%). Every test that runs passes
 (585/585 closed M3 on main `4c3e8be9`; the gate grew to 642 tests when WP-143 started running
 `.verify.cpp`). The six `.verify.cpp` diagnostic gaps tracked as WP-253 (`to_array`, the two
-`nttp` tests, span `initializer_list`, `underlying_type`, pair `get_const`) pass since WP-367.
+`nttp` tests, span `initializer_list`, `underlying_type`, pair `get_const`) pass since WP-367;
+WP-253 is closed (re-checked by WP-391: 636 pass + 6 unsupported, exit 0).
 
 **Caveats.**
 - XFAILs written against compiler identity (`clang-*`, `gcc-*`) evaluate to false, because the

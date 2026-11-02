@@ -104,7 +104,8 @@ note_remove_parens_for_variable_declaration = Note (0) "remove parentheses to si
 note_reorder_ctor = Note (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 note_replace_default_with_delete = Note (0) "replace 'default' with 'delete'";
 note_requirement_may_throw = Note (2) "{0:and|because} '{1}' may throw an exception";
-note_requirement_type_constraint = Note (2) "{0:and|because} type constraint '{1}' was not satisfied:";
+note_requirement_type_constraint = Note (2) "{0:and|because} '{1}' evaluated to false";
+note_requirement_type_constraint_19 = Note (2) "{0:and|because} type constraint '{1}' was not satisfied:";
 note_requirement_would_be_invalid = Note (3) "{0:and|because} '{1}' would be invalid: {2}";
 note_rewriting_operator_as_spaceship = Note (0) "while rewriting comparison as call to 'operator<=>' declared here";
 note_single_arg_concept_false = Note (3) "{0:and|because} {1} does not satisfy '{2}'";

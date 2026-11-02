@@ -269,6 +269,9 @@ pub enum LexDiagKind {
     /// An `f32`/`f64`/`f128`/`bf16` suffix (any case) before C++23 (GCC's
     /// pedantic warning; kiln `lit_float_suffix_ext`).
     FloatSuffixExtension,
+    /// GCC's `f32x`/`f64x` suffix (any mode; GCC's pedantic "non-standard
+    /// suffix on floating constant", kiln `lit_float_suffix_gnu`).
+    FloatSuffixGnu,
     /// An integer literal whose value does not fit any integer type
     /// (`err_integer_literal_too_large`); recorded by callers of
     /// [`crate::literal::IntegerLiteral::value`].
@@ -353,7 +356,8 @@ impl LexDiagKind {
             | K::BinaryLiteralExtension
             | K::HexFloatExtension
             | K::SizeSuffixExtension
-            | K::FloatSuffixExtension => LexSeverity::Extension,
+            | K::FloatSuffixExtension
+            | K::FloatSuffixGnu => LexSeverity::Extension,
         }
     }
 }

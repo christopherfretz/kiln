@@ -13,12 +13,15 @@
 //! it gets a `+0` imaginary part for the Annex G multiplication and
 //! division, and the other forms compute only the parts it affects, with
 //! the `float` operators that fault on a NaN result or a division by
-//! zero (`handleFloatFloatBinOp`). A compound assignment to a complex
-//! object is not folded by clang 19: the generic note.
+//! zero (`handleFloatFloatBinOp`). A compound assignment with a complex
+//! operand, which clang 19 and 22 do not fold, is folded as GCC does
+//! (WP-380): `a = a op b` on the parts.
 
-use kiln_ast::ExprId;
+use kiln_ast::consts::FloatKind;
+
 use kiln_ast::decl::builtin;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
+use kiln_ast::{ExprId, QualType};
 
 use super::{Access, Compiler, Place, cmp_of, float_code, int_of, skip_parens};
 use crate::complex::cx;
@@ -304,14 +307,38 @@ impl Compiler<'_> {
     fn cx_binary(&mut self, e: ExprId, elem: OTy) -> [u32; 2] {
         let op = self.ast().exprs.binary_op(e);
         let [a, b] = self.ast().exprs.operands(e);
-        let ([ra, ia], lreal) = self.cx_operand(a);
-        let ([rc, id], rreal) = self.cx_operand(b);
+        let l = self.cx_operand(a);
+        let r = self.cx_operand(b);
         let sub = match op {
             BinaryOp::Add => cx::ADD,
             BinaryOp::Sub => cx::SUB,
             BinaryOp::Mul => cx::MUL,
             _ => cx::DIV,
         };
+        self.cx_arith(e, elem, sub, l, r)
+    }
+
+    /// Operation `sub` (`cx`) on parts `l` and `r` of element type `elem`,
+    /// each with whether it is a real operand (`cx_operand`).
+    fn cx_arith(
+        &mut self,
+        e: ExprId,
+        elem: OTy,
+        sub: u32,
+        ([ra, ia], lreal): ([u32; 2], bool),
+        ([rc, id], rreal): ([u32; 2], bool),
+    ) -> [u32; 2] {
+        if self.kind(elem) == TyKind::Float(FloatKind::BFloat16) {
+            // `_Complex __bf16` as GCC computes it: in `_Complex float`
+            // (`__mulsc3`/`__divsc3` at run time), each part rounded to
+            // bf16 once per operation (spec/oven.md "Complex values").
+            let f = self.ty(QualType::FLOAT);
+            let up = |c: &mut Self, r: u32| c.cx_convert(r, elem, f, e);
+            let l = ([up(self, ra), up(self, ia)], lreal);
+            let r = ([up(self, rc), up(self, id)], rreal);
+            let out = self.cx_arith(e, f, sub, l, r);
+            return out.map(|r| self.cx_convert(r, f, elem, e));
+        }
         let (dr, di) = (self.reg(), self.reg());
         let aux = match self.kind(elem) {
             TyKind::Float(k) => {
@@ -468,19 +495,90 @@ impl Compiler<'_> {
         Place::Mem(p)
     }
 
-    /// Compound assignment `e` with a complex operand: both operands are
-    /// evaluated, then clang 19 fails with the generic note
-    /// (`CompoundAssignSubobjectHandler`).
+    /// Compound assignment `e` with a complex operand, as GCC folds it
+    /// (spec/oven.md "Complex values"; clang 19 and 22 fail with the
+    /// generic note): the right operand first (C++17 [expr.assign]/1),
+    /// then `lhs = lhs op rhs` computed in `ComputeResultTy` like the
+    /// binary operator and converted back to the left operand's type (its
+    /// real part when the left operand is real).
     pub(super) fn cx_compound_assign(&mut self, e: ExprId) -> Place {
         let x = *self.ast().exprs.compound_assign(e);
         let lhs = ExprId::new(self.node(e).a());
+        let lty = self.ety(lhs);
+        let ct = self.ty(x.result_ty);
+        let sub = match self.ast().exprs.binary_op(e) {
+            BinaryOp::AddAssign => Some(cx::ADD),
+            BinaryOp::SubAssign => Some(cx::SUB),
+            BinaryOp::MulAssign => Some(cx::MUL),
+            BinaryOp::DivAssign => Some(cx::DIV),
+            _ => None,
+        };
+        let (Some(sub), Some(celem)) = (sub, self.cx_elem(ct)) else {
+            let place = self.lv_rmw(lhs, e);
+            self.trap(e, INVALID);
+            return place;
+        };
+        let rhs = self.cx_operand(x.rhs);
+        let rty = self.ety(x.rhs);
+        let rhs = self.cx_coerce(rhs, rty, celem, e);
         let place = self.lv_rmw(lhs, e);
-        if self.is_complex_expr(x.rhs) {
-            let _ = self.cx_regs(x.rhs);
-        } else {
-            let _ = self.rv_copy(x.rhs);
+        let lelem = self.cx_elem(lty);
+        let old = match (lelem, place) {
+            (Some(le), Place::Mem(p)) => (self.cx_load(p, le, ak::COMPOUND, e), false),
+            (Some(_), _) => {
+                self.unsupported(e);
+                return place;
+            }
+            (None, _) => {
+                let re = self.reg();
+                self.load(place, lty, ak::COMPOUND, e, re);
+                let im = self.reg();
+                self.konst(im, 0);
+                ([re, im], true)
+            }
+        };
+        let old = self.cx_coerce(old, lty, celem, e);
+        let [re, im] = self.cx_arith(e, celem, sub, old, rhs);
+        match (lelem, place) {
+            (Some(le), Place::Mem(p)) => {
+                let parts = [re, im].map(|r| self.cx_convert(r, celem, le, e));
+                self.store(Place::Mem(p), parts[0], le, ak::COMPOUND, e);
+                let es = self.o.types.size(le);
+                let q = self.elem_ptr(p, es, e);
+                self.store(Place::Mem(q), parts[1], le, ak::COMPOUND, e);
+            }
+            _ => {
+                let v = self.cx_convert(re, celem, lty, e);
+                self.store(place, v, lty, ak::COMPOUND, e);
+            }
         }
-        self.trap(e, INVALID);
         place
+    }
+
+    /// Operand parts `x` of type `xt` (complex, or real when `x.1`)
+    /// converted to element type `elem`.
+    fn cx_coerce(
+        &mut self,
+        x: ([u32; 2], bool),
+        xt: OTy,
+        elem: OTy,
+        e: ExprId,
+    ) -> ([u32; 2], bool) {
+        let ([re, im], real) = x;
+        let from = self.cx_elem(xt).unwrap_or(xt);
+        let re = self.cx_convert(re, from, elem, e);
+        let im = if real { im } else { self.cx_convert(im, from, elem, e) };
+        ([re, im], real)
+    }
+
+    /// Register `r` of type `from` converted to `to` (itself when the
+    /// kinds agree).
+    fn cx_convert(&mut self, r: u32, from: OTy, to: OTy, e: ExprId) -> u32 {
+        if self.kind(from) == self.kind(to) {
+            return r;
+        }
+        let d = self.reg();
+        self.convert(r, from, to, d, e);
+        d
     }
 }

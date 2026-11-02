@@ -25,7 +25,7 @@
 //@ diag: 61:27 note "expression evaluates to '4 == 0'"
 //@ diag: 69:9 error "'m' declared as an array with a negative size"
 //@ requires: clang<22
-// clang 22 emits error: array is too large (18'446'744'073'709'551'614 elements); WP-355 residual
+// clang 19 spelling; repeat-across-instantiations-clang22.cpp has clang 22's (WP-377).
 
 // An error inside a template is reported once per instantiation that hits
 // it, with that instantiation's context notes, even where the two

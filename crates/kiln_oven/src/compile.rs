@@ -2769,7 +2769,9 @@ impl Compiler<'_> {
                 }
             }
             UnaryOp::Deref => {
-                let p = self.lv(e, Access::Read);
+                // The read itself reports a null pointer (as "dereferencing"
+                // at clang 22: `notes.rs`), so no separate check.
+                let p = Place::Mem(self.rv(x));
                 self.load(p, ty, ak::READ, e, dst);
             }
             UnaryOp::PostInc | UnaryOp::PostDec | UnaryOp::PreInc | UnaryOp::PreDec => {
@@ -3676,7 +3678,18 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.unary_op(e);
                 let x = self.ast().exprs.operand(e);
                 match op {
-                    UnaryOp::Deref => Place::Mem(self.rv(x)),
+                    UnaryOp::Deref => {
+                        let p = self.rv(x);
+                        // clang 22 diagnoses `*null` at the `*`, even when
+                        // the lvalue is not accessed (`&*p`).
+                        if self.o.clang_compat >= 22 {
+                            let r = self.reg();
+                            self.emit_at(Op::Field, 2, &[r, p, 0], e);
+                            Place::Mem(r)
+                        } else {
+                            Place::Mem(p)
+                        }
+                    }
                     UnaryOp::Real | UnaryOp::Imag => self.real_imag_lv(e, acc),
                     UnaryOp::PreInc | UnaryOp::PreDec => {
                         let place = self.lv_rmw(x, e);
@@ -3895,7 +3908,10 @@ impl Compiler<'_> {
             p
         } else {
             let r = self.reg();
-            self.emit_at(Op::Field, u32::from(!arrow), &[r, p, fi.offset as u32], e);
+            // At clang 22 `*null` already failed at the `*`, so a null
+            // lvalue here (`p[0].m`) fails as `->` does.
+            let pass_null = !arrow && self.o.clang_compat < 22;
+            self.emit_at(Op::Field, u32::from(pass_null), &[r, p, fi.offset as u32], e);
             r
         };
         if union {
@@ -4671,7 +4687,7 @@ impl Compiler<'_> {
         }
         // Library builtins (spec/oven.md "Builtins").
         if let Some(d) = direct
-            && let Some(bid) = ast.decls.builtin_id(d)
+            && let Some(bid) = ast.decls.builtin_id(d).or_else(|| ast.decls.gnu_lib_twin(d))
             && let Some(r) = self.builtin_call(e, bid, &args)
         {
             return r;

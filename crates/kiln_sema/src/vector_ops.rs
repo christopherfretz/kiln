@@ -841,7 +841,11 @@ impl Sema<'_, '_> {
         let ok =
             elem.is_some_and(|el| !ints_only || conv::rank::is_integral_or_unscoped_enum(self, el));
         let Some(elem) = elem.filter(|_| ok) else {
-            let what = if ints_only { "vector of integers" } else { "vector type" };
+            let what = match (ints_only, self.clang_compat >= 22) {
+                (true, true) => "vector of integer types",
+                (true, false) => "vector of integers",
+                (false, _) => "vector type",
+            };
             let msg = self
                 .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
                 .arg(0)

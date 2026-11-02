@@ -212,6 +212,29 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// GCC's implicit library builtins (WP-380, spec/sema.md §5.4): under
+    /// [`Sema::gnu_lib_builtins`] the first declaration of a
+    /// [`builtin::LIB`] function recognized as clang's library builtin
+    /// whose `__builtin_` twin GCC and the Oven fold
+    /// ([`builtin::gnu_lib_twin`]) records that twin; redeclarations
+    /// inherit it. A call stays an ordinary call everywhere but in the
+    /// Oven, which evaluates it as the twin.
+    pub(crate) fn record_gnu_lib_twin(&mut self, f: DeclId) {
+        if !self.gnu_lib_builtins || self.kind_of(f) != DeclKind::Function {
+            return;
+        }
+        let twin = match self.ast.prev(f) {
+            Some(p) => self.ast.decls.gnu_lib_twin(p),
+            None => match self.lib_builtin_info(f) {
+                Some(info) => builtin::gnu_lib_twin(info.name),
+                None => None,
+            },
+        };
+        if let Some(id) = twin {
+            let _ = self.ast.decls.cold.gnu_lib_twin.insert(f, id);
+        }
+    }
+
     /// clang's `BuiltinAttr` on a written declaration (spec/sema.md §5.4,
     /// "One declaration per builtin"): a redeclaration of a builtin is
     /// the builtin (its id is inherited along the redeclaration chain,
@@ -511,7 +534,7 @@ impl Sema<'_, '_> {
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
-            builtin::COMPLEX => self.builtin_complex(args, rparen),
+            builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
             builtin::VA_START => self.builtin_va_start(callee, args, rparen),
             // WP-156: the vector reductions (vector_ops.rs).
@@ -1644,7 +1667,16 @@ impl Sema<'_, '_> {
         };
         let (ss, ds) = (size_of(self, src), size_of(self, ty));
         if ss != ds {
-            let msg = self.diag(DiagId::sema_bit_cast_size_mismatch, loc).arg(ss).arg(ds);
+            // clang 22 names both types; clang 19 only the sizes.
+            let msg = if self.clang_compat >= 22 {
+                self.diag(DiagId::sema_bit_cast_size_mismatch_types, loc)
+                    .arg(self.ty_arg(src))
+                    .arg(self.ty_arg(ty))
+            } else {
+                self.diag(DiagId::sema_bit_cast_size_mismatch, loc)
+            }
+            .arg(ss)
+            .arg(ds);
             self.emit(msg);
             return self.recover_err(&[sub], loc);
         }

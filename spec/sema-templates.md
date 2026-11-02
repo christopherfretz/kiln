@@ -886,7 +886,11 @@ the running `Substituter` instead.
      ([temp.dep.candidate]/1; WP-378,
      `tests/conformance/temp.param/default-argument-lookup-context.cpp`).
      A template in a local scope keeps the use's scopes (its function's
-     names live only there);
+     names live only there). The same rule (`Sema::in_template_context`)
+     covers the type of a non-type parameter substituted with the
+     arguments before it (`template <class T, decltype(mk<T>()) N>`) and,
+     for a function template, the explicit arguments' substitution into
+     the function parameter types (§ "Landed (WP-071)"; WP-387);
    - converts NTTP args (converted constant expressions, evaluated by the
      Oven with `EvalKind::TemplateArg`);
    - packs the trailing args into a `Pack`.
@@ -5182,7 +5186,12 @@ explicit specialization errors remain. The blockers are:
 **Landed (WP-071): function templates.**
 - `deduce_call` (`templ/deduce_call.rs`, §6.1) builds each candidate's
   specialization. Explicit arguments are checked and then substituted
-  into P under an `ExplicitArgSubstitution` SFINAE frame. Too many of
+  into P under an `ExplicitArgSubstitution` SFINAE frame, with the
+  template's declaration context current (`in_template_context`, as for
+  a default template argument, §4.2): `n::h<int>()` of `template <class
+  T> void h(decltype(mk<T>()) * = nullptr)` in namespace `n` finds `mk`
+  from `n` ([temp.dep.candidate]; WP-387,
+  `temp.arg.explicit/substitution-in-template-context.cpp`). Too many of
   them is a `SubstitutionFailure` that carries clang's arity message.
   Before them, as in clang's `DeduceTemplateArguments`, the call's arity
   is checked against the written parameters ([temp.deduct.call]/1):

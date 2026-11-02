@@ -415,6 +415,13 @@ impl Sema<'_, '_> {
             | (TypeView::RValueRef(a), TypeView::RValueRef(b)) => Some((a, b)),
             _ => None,
         };
+        // clang 22: only a pointer or reference to a class (not a union
+        // or a non-class type) can be covariant; anything else simply
+        // differs.
+        let classes = classes.filter(|&(nc, _)| {
+            self.clang_compat < 22
+                || self.ast.types.as_record(nc).is_some_and(|r| !self.is_union(r))
+        });
         let Some((nc, oc)) = classes else {
             let msg = self
                 .diag(DiagId::sema_override_return_differs, at)

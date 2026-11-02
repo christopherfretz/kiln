@@ -76,6 +76,10 @@ pub enum FloatSuffix {
     F128,
     /// `bf16` / `BF16` (C++23; earlier as an extension): `std::bfloat16_t`.
     BF16,
+    /// `f32x` / `F32x` (GCC extension, lower-case `x` only): `_Float32x`.
+    F32x,
+    /// `f64x` / `F64x` (GCC extension, lower-case `x` only): `_Float64x`.
+    F64x,
 }
 
 /// An integer literal.
@@ -484,6 +488,14 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
     {
         p.diags.push(LexDiagKind::FloatSuffixExtension, suffix_begin, b.len());
     }
+    // WP-380: GCC's `_FloatNx` suffixes, in every mode, with GCC's
+    // pedantic warning at the literal.
+    if floating
+        && ud_suffix.is_none()
+        && matches!(sx.fsuffix, FloatSuffix::F32x | FloatSuffix::F64x)
+    {
+        p.diags.push(LexDiagKind::FloatSuffixGnu, suffix_begin, b.len());
+    }
     let class = if floating {
         NumberClass::Floating(FloatLiteral {
             radix: body.radix,
@@ -671,7 +683,8 @@ impl Parser<'_> {
 
     /// The standard suffix pieces from `i` (clang's `NumericLiteralParser`
     /// suffix loop): `u`, `l`/`ll`, `z`, `f`/`f16`/`f32`/`f64`/`f128`,
-    /// `bf16` and the GNU imaginary `i`/`j`, each at most once.
+    /// GCC's `f32x`/`f64x`, `bf16` and the GNU imaginary `i`/`j`, each at
+    /// most once.
     fn suffixes(&self, mut i: usize, floating: bool) -> Suffixes {
         let b = self.b;
         let mut sx = Suffixes::default();
@@ -683,6 +696,8 @@ impl Parser<'_> {
                     has_size = true;
                     let (s, n) = match &rest[1..] {
                         [b'1', b'6', ..] => (FloatSuffix::F16, 3),
+                        [b'3', b'2', b'x', ..] => (FloatSuffix::F32x, 4),
+                        [b'6', b'4', b'x', ..] => (FloatSuffix::F64x, 4),
                         [b'3', b'2', ..] => (FloatSuffix::F32, 3),
                         [b'6', b'4', ..] => (FloatSuffix::F64, 3),
                         [b'1', b'2', b'8', ..] => (FloatSuffix::F128, 4),
