@@ -939,7 +939,7 @@ impl Sema<'_, '_> {
         braced: bool,
     ) -> Option<bool> {
         let elems = self.aggregate_elements(to)?;
-        if !braced && elems.is_empty() {
+        if !braced && self.aggregate_has_no_elements(to) {
             return Some(false);
         }
         let opts = IcsOptions::NONE;
