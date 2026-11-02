@@ -154,9 +154,9 @@ impl Oven {
         }
         if let Fault::Uncaught { obj, ty, what } = &fault {
             // At the exception's throw, without a call stack (clang's
-            // `note_constexpr_uncaught_exception`; P3068).
-            let note = self.uncaught_note(ast, site.e, *obj, *ty, what.as_deref());
-            return vec![Note::new(site.loc, note)];
+            // P3068 `note_constexpr_unhandled_exception*`).
+            let (loc, note) = self.uncaught_note(ast, site, *obj, *ty, what.as_deref());
+            return vec![Note::new(loc, note)];
         }
         let mut extra = Vec::new();
         let mut frame = None;
@@ -821,37 +821,47 @@ impl Oven {
         }
     }
 
-    /// "uncaught exception of type 'T': 'V'": `V` the `what()` string of
-    /// a class derived from `std::exception`, else the exception
-    /// object's value.
-    /// The type is named as the throw-expression's operand's (as written,
-    /// `e` the throw-expression).
+    /// The note on an exception leaving the evaluation, worded as clang's
+    /// P3068 implementation: "unhandled exception: W" at the
+    /// throw-expression (`W` the `what()` string of a class derived from
+    /// `std::exception`), else "unhandled exception of type 'T' with
+    /// content V thrown from here" at its operand (`V` the object's value
+    /// as clang's `APValue` prints it), without the content for a class
+    /// holding no data. The type is named as the throw-expression's
+    /// operand's (as written, `site.e` the throw-expression).
     fn uncaught_note(
         &self,
         ast: &Ast,
-        e: Option<ExprId>,
+        site: Site,
         obj: u64,
         ty: OTy,
         what: Option<&str>,
-    ) -> String {
-        let mut v = String::new();
-        match what {
-            Some(w) => v.push_str(w),
-            None if self.types.is_aggregate(ty) => {
-                self.write_value(ast, &mut v, ty, u128::from(obj), 0);
-            }
-            None => match self.load(obj, ty, ak::READ) {
-                Ok(x) => self.write_value(ast, &mut v, ty, x, 0),
-                Err(_) => v.push_str("<unknown>"),
-            },
+    ) -> (Loc, String) {
+        if let Some(w) = what {
+            return (site.loc, format!("unhandled exception: {w}"));
         }
-        let name = e
+        let operand = site
+            .e
             .filter(|&e| ast.exprs.get(e).kind() == ExprKind::CXXThrowExpr)
-            .and_then(|e| ast.exprs.throw_operand(e))
+            .and_then(|e| ast.exprs.throw_operand(e));
+        let loc = operand.map_or(site.loc, |x| ast.exprs.get(x).loc());
+        let name = operand
             .map(|x| ast.exprs.get(x).ty())
             .filter(|&q| ast.types.canonical(q).without_quals() == self.types.info(ty).q)
             .map_or_else(|| self.tname(ast, ty), |q| Self::qname(ast, q.without_quals()));
-        format!("uncaught exception of type '{name}': '{v}'")
+        if self.types.holds_no_data(ty) {
+            return (loc, format!("unhandled exception of type '{name}' thrown from here"));
+        }
+        let mut v = String::new();
+        if self.types.is_aggregate(ty) {
+            self.write_value(ast, &mut v, ty, u128::from(obj), 0);
+        } else {
+            match self.load(obj, ty, ak::READ) {
+                Ok(x) => self.write_value(ast, &mut v, ty, x, 0),
+                Err(_) => v.push_str("<unknown>"),
+            }
+        }
+        (loc, format!("unhandled exception of type '{name}' with content {v} thrown from here"))
     }
 
     fn write_object(&self, ast: &Ast, s: &mut String, t: OTy, raw: u64, depth: u32) {
