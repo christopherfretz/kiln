@@ -1080,9 +1080,9 @@ impl Parser<'_, '_> {
     /// unqualified declarator-id at namespace or block scope).
     fn typename_required(&self, ctx: DeclaratorContext) -> bool {
         match ctx {
-            DeclaratorContext::Block | DeclaratorContext::Condition | DeclaratorContext::ForInit => {
-                true
-            }
+            DeclaratorContext::Block
+            | DeclaratorContext::Condition
+            | DeclaratorContext::ForInit => true,
             DeclaratorContext::Prototype => self.param_typename == ParamTypename::Required,
             _ => false,
         }

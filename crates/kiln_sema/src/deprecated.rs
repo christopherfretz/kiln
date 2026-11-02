@@ -123,8 +123,9 @@ impl Sema<'_, '_> {
             Some(t) => self.diag(DiagId::sema_deprecated_msg, loc).arg(name).arg(t),
             None => self.diag(DiagId::sema_deprecated, loc).arg(name),
         };
-        let note =
-            self.diag(DiagId::note_marked_deprecated, attr.loc).arg(self.name_for_diagnostic(owner));
+        let note = self
+            .diag(DiagId::note_marked_deprecated, attr.loc)
+            .arg(self.name_for_diagnostic(owner));
         let msg = msg.with_note(note);
         if self.inst.stack.is_empty() && self.depr_points.last() == Some(&self.ctx) {
             let level = self.depr_points.len();
