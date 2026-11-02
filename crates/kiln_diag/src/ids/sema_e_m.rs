@@ -211,4 +211,6 @@ sema_multiple_default_labels = Error (0) "multiple default labels in one switch"
 sema_multiple_final_overriders = Error (2) "virtual function '{0}' has more than one final overrider in {1}";
 sema_mutable_const = Error (0) "'mutable' and 'const' cannot be mixed";
 sema_mutable_function = Error (0) "'mutable' cannot be applied to functions";
+// [dcl.stc]/9 (WP-327)
+sema_mutable_nonmember = Error (0) "'mutable' can only be applied to member variables";
 sema_mutable_reference = Error (0) "'mutable' cannot be applied to references";

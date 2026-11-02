@@ -15,7 +15,7 @@ use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{
     AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeView,
 };
-use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
+use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId, StringLitId};
 use kiln_diag::{DiagId, FixIt};
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
@@ -2129,6 +2129,9 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_asm_label_on_auto_decl, loc).arg(text);
             self.emit(msg);
         }
+        if kind == DeclKind::Var && matches!(ds.storage, Some((StorageSpec::Register, _))) {
+            self.check_register_variable(ds, decl, lit, loc);
+        }
         let node = AttrNode {
             kind: AttrKind::ASM_LABEL,
             syntax: AttrSyntax::Keyword,
@@ -2141,6 +2144,44 @@ impl Sema<'_, '_> {
         attrs.insert(0, id);
         let first = self.ast.first(decl);
         let _ = self.ast.decls.cold.asm_label.insert(first, lit);
+    }
+
+    /// A GNU register variable `register T v asm("reg")` ([dcl.asm]; clang
+    /// `ActOnVariableDeclarator`). At block scope the register name must be
+    /// one the target knows; at file scope also one the target can hold a
+    /// global variable in, of the variable's size, and the type must be
+    /// integral or a pointer (else the variable is invalid). A dependent
+    /// type's size is not checked.
+    fn check_register_variable(&mut self, ds: &DeclSpec, v: DeclId, lit: StringLitId, loc: Loc) {
+        let arch = self.abi.triple.arch;
+        let name = String::from_utf8_lossy(self.ast.strings.bytes(lit)).into_owned();
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        if !kiln_abi::asm::is_valid_register_name(arch, &name) {
+            self.emit(self.diag(DiagId::sema_asm_unknown_register_name, loc).arg(name));
+        } else if !self.in_local_scope() && !self.is_dependent_type(ty) {
+            let bits = target::size_align(&self.ast, ty, self.abi()).map(|(s, _)| s * 8);
+            match bits.map(|b| kiln_abi::asm::global_register_size_mismatch(arch, &name, b)) {
+                Some(None) => {
+                    let msg = self.diag(DiagId::sema_asm_invalid_global_var_reg, loc).arg(name);
+                    self.emit(msg);
+                }
+                Some(Some(true)) => {
+                    let msg = self.diag(DiagId::sema_asm_register_size_mismatch, loc).arg(name);
+                    self.emit(msg);
+                }
+                _ => {}
+            }
+        }
+        // A dependent type is neither integral nor a pointer (clang 19
+        // diagnoses it on x86_64 and crashes on AArch64).
+        if self.in_local_scope() || self.is_error_type(ty) {
+            return;
+        }
+        let t = &self.ast.types;
+        if !t.is_integral(ty) && !t.is_pointer(ty) {
+            self.error(DiagId::sema_asm_bad_register_type, ds.loc);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
     }
 
     /// Reports an unsupported construct (`{what} is not supported yet`).
@@ -3682,6 +3723,14 @@ impl Sema<'_, '_> {
             && !self.in_local_scope()
     }
 
+    /// The variable's storage class makes it invalid: `register` at file
+    /// scope ([`Sema::register_at_file_scope`]) or `mutable` on anything
+    /// but a non-static data member ([dcl.stc]/9, clang
+    /// `err_mutable_nonmember`, which `var_spec` reports).
+    pub(crate) fn storage_invalidates_var(&self, ds: &DeclSpec, d: &Declarator) -> bool {
+        matches!(ds.storage, Some((StorageSpec::Mutable, _))) || self.register_at_file_scope(ds, d)
+    }
+
     pub(crate) fn var_spec(&mut self, ds: &DeclSpec, d: &Declarator) -> VarSpec {
         let mut spec = VarSpec::new();
         if let Some(style) = d.init_style {
@@ -3702,8 +3751,11 @@ impl Sema<'_, '_> {
                     }
                 }
             }
-            Some((StorageSpec::Mutable, loc)) => {
-                self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
+            Some((StorageSpec::Mutable, _)) => {
+                // [dcl.stc]/9: only a non-static data member (a field never
+                // gets here); at the name, and the variable is invalid
+                // (`storage_invalidates_var`).
+                self.error(DiagId::sema_mutable_nonmember, d.name_loc());
             }
             _ => {}
         }
@@ -3937,7 +3989,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || self.register_at_file_scope(ds, d) {
+        if ambiguous || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
