@@ -150,6 +150,23 @@ impl Sema<'_, '_> {
         {
             return r.ok();
         }
+        // `D::X::` with `D` the current instantiation, a dependent base
+        // and nothing named `X` found in it: a member of an unknown
+        // specialization ([temp.dep.type]/6), looked up again at
+        // instantiation (`using G::F::F;`, [over.match.class.deduct]/1's
+        // example).
+        if let Some((p, pn)) = prefix
+            && self.kind_of(p) == DeclKind::CXXRecord
+            && self.has_dependent_bases(p)
+            && self.lookup_qualified(p, name, LookupKind::Nested).decls.is_empty()
+            && self.lookup_qualified(p, name, LookupKind::Ordinary).decls.is_empty()
+            && let Some(un) =
+                self.unknown_specialization_nns(crate::using::Qualifier { ctx: p, nns: pn, loc })
+        {
+            let n = self.ast.types.nns(Nns::Identifier { prefix: Some(un), name });
+            self.note_written_loc(WrittenKey::Nns(n), loc);
+            return Some((self.decltype_scope_marker(), n));
+        }
         let (ctx, spelled) = self.act_on_nested_name_spelled(prefix.map(|p| p.0), name, loc)?;
         let n = self.nns_component(prefix.map(|p| p.1), ctx, spelled);
         if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {

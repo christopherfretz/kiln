@@ -213,8 +213,8 @@ pub struct TemplState {
     pub(crate) ctad_alias: kiln_source::fx::FxHashMap<DeclId, (DeclId, QualType)>,
     /// Each guide formed from a guide of a base class template whose
     /// constructors the class template inherits ([over.match.class.deduct]/1,
-    /// P2582): that class template and the base as written.
-    pub(crate) ctad_inherited: kiln_source::fx::FxHashMap<DeclId, (DeclId, QualType)>,
+    /// P2582), and each alias template guide formed from one.
+    pub(crate) ctad_inherited: kiln_source::fx::FxHashMap<DeclId, ctad::InheritedGuide>,
     /// The guide formed for (alias template or inheriting class template,
     /// source guide), if any.
     pub(crate) ctad_alias_cache: kiln_source::fx::FxHashMap<(DeclId, DeclId), Option<DeclId>>,

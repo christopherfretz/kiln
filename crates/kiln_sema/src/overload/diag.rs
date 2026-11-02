@@ -387,7 +387,9 @@ impl Sema<'_, '_> {
                 let synthesized = match self.ctad_guide_kind(cand.func(), cand.template) {
                     Some(Some(_)) => true,
                     Some(None) => {
-                        cand.template.is_some_and(|t| self.templ.ctad_alias.contains_key(&t))
+                        cand.template.is_some_and(|t| {
+                            self.templ.ctad_alias.contains_key(&t) || self.is_inherited_guide(t)
+                        })
                     }
                     None => false,
                 };
