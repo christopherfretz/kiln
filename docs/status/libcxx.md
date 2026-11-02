@@ -41,6 +41,37 @@ Only failures are printed; cluster them with
 The log elides symbols as `…`; reproduce a cluster with `kiln++ -fsyntax-only`
 and the harness flags (`spec/libcxx.md`).
 
+## Environment
+
+What `cargo xtask libcxx` detects about the host, and what stays
+UNSUPPORTED because of it (WP-340; contract: `spec/libcxx.md` "Feature
+set", "Environment exclusions", "Timeouts and retries"):
+- **Locales.** The `locale.*` features come from `locale -a`; run
+  `scripts/provision-locales.sh` (as root, idempotent) once per container to
+  generate the seven libc++ asks for. With them, `std/localization`,
+  `std/utilities/format`, `std/re` and `std/input.output` are 1268 tests:
+  1199 pass, 2 fail, 11 xfail, 56 unsupported (98.9%; harness kiln on
+  71f03f99, -j 3, 315 s). Without them about 150 of those tests are
+  UNSUPPORTED. The 2 failures are kiln bugs: `locale-specific_form.pass.cpp`
+  (`basic_string<char, char_traits<char>, char[1]>` instantiated while
+  resolving the `test` overload set) and `locale.stdcvt/remove.verify.cpp`
+  (`std::codecvt_utf8<wchar_t>` for an absent member template gives
+  `expected unqualified-id`, not `no template named …`).
+- **Root.** The agent containers run as root, so 23 filesystem tests that
+  expect `perms::none` to deny access stay UNSUPPORTED (`env: running as
+  root: perms::none does not deny access`).
+- **Host-shared scratch.** 2 filesystem tests stay UNSUPPORTED while the
+  scratch directory is on a `fakeowner`/`virtiofs` bind mount.
+- **glibc locale data.** glibc 2.41's `en_US.UTF-8` groups digits by `3`,
+  not `3;3`: the 2 byname `grouping.pass.cpp` tests are UNSUPPORTED (clang
+  19 fails them the same way).
+- **Long tests.** `REQUIRES: long_tests` tests and those in
+  `xtask/src/libcxx/slow_tests.txt` run under `--run-timeout-long` (240 s):
+  the three `rand.dist` `eval.pass.cpp`, `lost_wakeup.pass.cpp`,
+  `charconv.msvc/test.pass.cpp` and `buffered_writes.pass.cpp` (slow on the
+  host-shared scratch mount) all pass in a harness run.
+  `ALLOW_RETRIES: N` reruns a failing binary.
+
 ## Failure clusters, 2026-11-02 stratum-B sample on a812270a (25 failures)
 
 Of the 25, 13 were already covered by open work at the time: tuple convert_move
