@@ -159,6 +159,7 @@ impl Sema<'_, '_> {
         owned: Option<DeclId>,
         friend_loc: Loc,
     ) -> Option<DeclId> {
+        self.reject_friend_type_quals(ds);
         // `template<class U> friend class X;` ([temp.friend]/1): the
         // befriended class template (declared, hidden, by
         // `act_on_friend_tag`).
@@ -188,6 +189,23 @@ impl Sema<'_, '_> {
             self.push_friend(c);
         }
         Some(fd)
+    }
+
+    /// [class.friend]/3: a friend-type-specifier is a simple-, elaborated-
+    /// or typename-specifier, so no cv-qualifier may be written in a
+    /// friend type declaration (`friend const T;`): clang reports each
+    /// (`err_friend_decl_spec`, in the order const, volatile, restrict,
+    /// _Atomic, at the qualifier) and declares the friend without it. A
+    /// cv-qualified typedef is fine.
+    fn reject_friend_type_quals(&mut self, ds: &DeclSpec) {
+        let [c, v, r] = ds.cv_locs;
+        let quals = [(c, "const"), (v, "volatile"), (r, "restrict"), (ds.atomic_qual, "_Atomic")];
+        for (at, name) in quals {
+            if let Some(at) = at {
+                let d = self.diag(DiagId::parse_friend_decl_spec, at).arg(name);
+                self.emit(d);
+            }
+        }
     }
 
     /// `friend R f<args>(params);` ([temp.friend]/1.3): befriends the

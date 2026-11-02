@@ -114,7 +114,9 @@ impl TypeSpecKind {
     /// The keyword (for "cannot combine" diagnostics).
     pub fn spelling(self) -> &'static str {
         match self {
-            TypeSpecKind::None | TypeSpecKind::Named => "type name",
+            TypeSpecKind::None => "type name",
+            // clang `DeclSpec::getSpecifierName(TST_typename)`.
+            TypeSpecKind::Named => "type-name",
             TypeSpecKind::Void => "void",
             TypeSpecKind::Bool => "bool",
             TypeSpecKind::Char => "char",
@@ -176,6 +178,9 @@ pub struct DeclSpec {
     pub friend: Option<Loc>,
     /// cv-qualifiers.
     pub cv: Quals,
+    /// Where `const`, `volatile` and `restrict` were first written (in
+    /// that order; [`DeclSpec::add_cv`]).
+    pub cv_locs: [Option<Loc>; 3],
     /// The C11 `_Atomic` type qualifier (no parenthesis; a clang
     /// extension in C++) written at.
     pub atomic_qual: Option<Loc>,
@@ -274,13 +279,18 @@ impl DeclSpec {
         }
     }
 
-    /// Records a cv-qualifier (duplicates are an extension warning).
+    /// Records a cv-qualifier written at `loc` (duplicates are an
+    /// extension warning).
     ///
     /// # Errors
     /// A duplicate qualifier.
-    pub fn add_cv(&mut self, q: Quals, spelling: &str) -> Result<(), SpecError> {
+    pub fn add_cv(&mut self, q: Quals, spelling: &str, loc: Loc) -> Result<(), SpecError> {
         let dup = self.cv.contains(q);
         self.cv |= q;
+        let slot = [Quals::CONST, Quals::VOLATILE, Quals::RESTRICT].iter().position(|&k| k == q);
+        if let Some(i) = slot {
+            self.cv_locs[i].get_or_insert(loc);
+        }
         if dup {
             Err(SpecError::new(DiagId::parse_duplicate_decl_spec, &[spelling]))
         } else {

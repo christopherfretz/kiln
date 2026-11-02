@@ -5857,6 +5857,11 @@ impl Sema<'_, '_> {
         if self.has_pending_head() {
             return self.act_on_friend_class_template(keyword, n, nloc, ns);
         }
+        // [temp.local]/6: `friend class T;` naming a template parameter
+        // redeclares it (clang's `DiagnoseTemplateParameterShadow` in
+        // `ActOnTag`); the friend then declares a new class `T`, so
+        // `friend class Ts...;` expands no pack.
+        self.check_template_param_shadow(n, nloc);
         let found = self.lookup_name(n, LookupKind::Tag).decls;
         let hidden = || {
             self.ast

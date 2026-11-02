@@ -647,9 +647,9 @@ impl Parser<'_, '_> {
                     }
                     r
                 }
-                Kw::Const => ds.add_cv(Quals::CONST, "const"),
-                Kw::Volatile => ds.add_cv(Quals::VOLATILE, "volatile"),
-                Kw::Restrict => ds.add_cv(Quals::RESTRICT, "restrict"),
+                Kw::Const => ds.add_cv(Quals::CONST, "const", loc),
+                Kw::Volatile => ds.add_cv(Quals::VOLATILE, "volatile", loc),
+                Kw::Restrict => ds.add_cv(Quals::RESTRICT, "restrict", loc),
                 Kw::Short => ds.set_width(Width::Short, loc),
                 Kw::Long => ds.set_width(Width::Long, loc),
                 Kw::Signed => ds.set_sign(Sign::Signed, loc),
