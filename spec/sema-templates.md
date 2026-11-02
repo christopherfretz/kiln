@@ -1563,8 +1563,8 @@ recomputed exactly as for non-template code (clang's
   nested `ExprWithCleanups`, lambdas and unevaluated operands. The rebuilt
   full-expression therefore gets its `ExprWithCleanups`, and the
   temporaries die at its end ([class.temporary]/4). Before WP-310 they
-  died at scope exit, which was clang's `MaybeBindToTemporary` side
-  effect lost;
+  died at scope exit, because the cleanup flag that clang's rebuild sets
+  (`MaybeBindToTemporary`) was never raised;
   `tests/conformance/class.temporary/run-template-shared-operand-temporary-destroyed.cpp`.
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
