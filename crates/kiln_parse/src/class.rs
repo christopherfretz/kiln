@@ -1258,6 +1258,30 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// A member declaration with no decl-specifiers that is not a special
+    /// member, skipped to its `;` ([dcl.spec.general]/3; also how a
+    /// friend-type-specifier-list that lacks its `;` recovers, since
+    /// nothing is skipped after it). A name that does not name a type and
+    /// is followed by `;`, `=`, `,` or `[` is a declarator without a type:
+    /// clang's "a type specifier is required for all declarations"
+    /// (`ParseImplicitInt`, `err_missing_type_specifier`), at the name.
+    /// `()` is clang's parenthesized declarator wanting a name, reported at
+    /// the `)`. Anything else is "expected member name or ';'".
+    fn member_without_type(&mut self) {
+        let next = Self::punct_of(self.peek(1));
+        if self.ident_of(self.tok()).is_some()
+            && matches!(next, Some(Punct::Semi | Punct::Equal | Punct::Comma | Punct::LSquare))
+        {
+            self.error_here(DiagId::parse_missing_type_specifier);
+        } else {
+            if self.at(Punct::LParen) && next == Some(Punct::RParen) {
+                self.bump();
+            }
+            self.error_here(DiagId::parse_expected_member_name);
+        }
+        self.skip_to_semi();
+    }
+
     /// The default member initializer of `decl`, saved for the complete
     /// class. [dcl.array]/3: for an array of unknown bound (`unbounded`)
     /// it is not an initializer that can deduce a bound (clang
@@ -1319,8 +1343,7 @@ impl Parser<'_, '_> {
             return;
         }
         if ds.is_empty() && !self.at_special_declarator(DeclaratorContext::Member) {
-            self.error_here(DiagId::parse_expected_member_name);
-            self.skip_to_semi();
+            self.member_without_type();
             return;
         }
         let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
@@ -2129,6 +2152,10 @@ impl Parser<'_, '_> {
                         | Kw::Double
                         | Kw::Float128
                         | Kw::Float16
+                        | Kw::Float32
+                        | Kw::Float64
+                        | Kw::StdFloat128
+                        | Kw::Bf16
                         | Kw::Fp16
                         | Kw::Bool
                         | Kw::Class

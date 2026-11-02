@@ -44,6 +44,10 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Int128
             | Kw::Float128
             | Kw::Float16
+            | Kw::Float32
+            | Kw::Float64
+            | Kw::StdFloat128
+            | Kw::Bf16
             | Kw::Fp16
             | Kw::Complex
             | Kw::Auto
@@ -674,9 +678,9 @@ impl Parser<'_, '_> {
                     }
                     r
                 }
-                Kw::Const => ds.add_cv(Quals::CONST, "const"),
-                Kw::Volatile => ds.add_cv(Quals::VOLATILE, "volatile"),
-                Kw::Restrict => ds.add_cv(Quals::RESTRICT, "restrict"),
+                Kw::Const => ds.add_cv(Quals::CONST, "const", loc),
+                Kw::Volatile => ds.add_cv(Quals::VOLATILE, "volatile", loc),
+                Kw::Restrict => ds.add_cv(Quals::RESTRICT, "restrict", loc),
                 Kw::Short => ds.set_width(Width::Short, loc),
                 Kw::Long => ds.set_width(Width::Long, loc),
                 Kw::Signed => ds.set_sign(Sign::Signed, loc),
@@ -694,6 +698,24 @@ impl Parser<'_, '_> {
                 Kw::Double => ds.set_base(TypeSpecKind::Double, None, loc),
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
                 Kw::Float16 => ds.set_base(TypeSpecKind::Float16, None, loc),
+                // glibc's <bits/floatn*.h> declare `typedef float _Float32;`
+                // (and `_Float64`, `_Float128`) for C++ compilers that are
+                // not GCC >= 13; kiln reports itself as clang. In a system
+                // header such a typedef of a P1467 keyword declares
+                // nothing (spec/types.md §5.1).
+                Kw::Float32 | Kw::Float64 | Kw::StdFloat128
+                    if matches!(ds.storage, Some((StorageSpec::Typedef, _)))
+                        && ds.has_type_specifier()
+                        && self.peek_is(1, Punct::Semi)
+                        && self.s.diags.sm().is_in_system_header(loc) =>
+                {
+                    self.bump();
+                    break;
+                }
+                Kw::Float32 => ds.set_base(TypeSpecKind::Float32, None, loc),
+                Kw::Float64 => ds.set_base(TypeSpecKind::Float64, None, loc),
+                Kw::StdFloat128 => ds.set_base(TypeSpecKind::StdFloat128, None, loc),
+                Kw::Bf16 => ds.set_base(TypeSpecKind::BFloat16, None, loc),
                 Kw::Fp16 => ds.set_base(TypeSpecKind::Fp16, None, loc),
                 Kw::Complex => {
                     // clang `ext_c99_feature` on the keyword.
@@ -1091,7 +1113,7 @@ impl Parser<'_, '_> {
                     ty
                 };
                 // `T...[index]` (C++26 [dcl.type.pack.index]).
-                let ty = match self.parse_pack_index() {
+                let ty = match self.parse_pack_index(loc) {
                     Ok(Some((ellipsis, index, _))) => {
                         self.s.act_pack_indexing_type(ty, ellipsis, index)
                     }

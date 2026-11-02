@@ -561,8 +561,8 @@ impl<'a> AstNames<'a> {
         Some(match b as u8 {
             20 | 26 => FloatKind::Half,
             21 => FloatKind::BFloat16,
-            22 => FloatKind::Single,
-            23 => FloatKind::Double,
+            22 | 48 => FloatKind::Single,
+            23 | 49 => FloatKind::Double,
             24 => match self.ast.types.target().long_double {
                 FloatFormat::IeeeHalf => FloatKind::Half,
                 FloatFormat::BFloat => FloatKind::BFloat16,
@@ -572,7 +572,7 @@ impl<'a> AstNames<'a> {
                 FloatFormat::IeeeQuad => FloatKind::Quad,
                 FloatFormat::PpcDoubleDouble => return None,
             },
-            25 => FloatKind::Quad,
+            25 | 50 => FloatKind::Quad,
             _ => return None,
         })
     }

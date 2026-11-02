@@ -264,6 +264,12 @@ impl Sema<'_, '_> {
     /// An expression statement ([stmt.expr]): `e` is a discarded-value
     /// full-expression.
     pub fn act_on_expr_stmt(&mut self, e: ExprId) -> StmtId {
+        let e = if self.diagnose_unexpanded_written(e, "expression", None) {
+            let at = self.begin_loc(e);
+            self.recover_err(&[], at)
+        } else {
+            e
+        };
         if !self.check_builtin_fn_use(e) && !self.check_overload_use(e) {
             self.diagnose_unused(e);
         }
@@ -274,6 +280,10 @@ impl Sema<'_, '_> {
 
     /// A condition ([stmt.pre]/4): contextually converted to `bool`.
     pub fn act_on_condition(&mut self, e: ExprId) -> ExprId {
+        if self.diagnose_unexpanded_written(e, "expression", None) {
+            let at = self.begin_loc(e);
+            return self.recover_err(&[], at);
+        }
         let e = match conv::contextually_convert_to_bool(self, e) {
             Ok(c) => c,
             Err(err) => {
@@ -1000,6 +1010,13 @@ impl Sema<'_, '_> {
 
     /// `return e;` ([stmt.return]).
     pub fn act_on_return(&mut self, value: Option<ExprId>, loc: Loc) -> StmtId {
+        let value = match value {
+            Some(e) if self.diagnose_unexpanded_written(e, "expression", None) => {
+                let at = self.begin_loc(e);
+                Some(self.recover_err(&[], at))
+            }
+            v => v,
+        };
         self.note_return_stmt(loc);
         let Some((fdecl, mut ret)) = self.func.as_ref().map(|f| (f.decl, f.ret)) else {
             return self.builder().return_stmt(value, None, loc);

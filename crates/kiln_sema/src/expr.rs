@@ -3010,6 +3010,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[l, r], loc);
         }
+        // P1467 [conv.double]/1: the result converts back to `E1`'s type
+        // (GCC: diagnosed at `E2`).
+        conv::fp_rank_check(self, r, res_ty, conv::strip_cv(self, lt));
         let res = self.builder().compound_assign(op, l, r2, target_t, lhs_ty, res_ty, loc);
         self.mark_bitfield_if(res, l);
         res

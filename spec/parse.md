@@ -421,7 +421,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `thread_local` with the combined name when both appear: `'static
   thread_local'`), and both are dropped, so the friend declaration goes
   on (`reject_friend_storage`, WP-293;
-  `class.friend/friend-storage-class.cpp`). A type-specifier-seq takes
+  `class.friend/friend-storage-class.cpp`). The parser records where each
+  cv-qualifier was first written (`DeclSpec::cv_locs`); a friend type
+  declaration (no declarator: `friend const T;`, or an element of a
+  friend-type-specifier-list) reports each of `const`, `volatile`,
+  `restrict`, `_Atomic` as `'const' is invalid in friend declarations` at
+  the qualifier, in that order, and is still declared
+  (`reject_friend_type_quals`, [class.friend]/3, WP-367;
+  `class.friend/friend-type-cv.cpp`). A type-specifier-seq takes
   no storage class ([dcl.type.general]/1; clang
   `ParseSpecifierQualifierList`): in `DeclaratorContext::TypeName` (every
   type-id — casts, `sizeof`, `alignof`, `typeid`, template arguments,
@@ -628,7 +635,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     'final'`. `friend class X;` (or `friend class X` followed by `,` or `...`
     in a friend-type-specifier-list) is `TagUse::Friend`; a friend that
     would define a class is `cannot define a type in a friend
-    declaration` and is skipped.
+    declaration` and is skipped. An unqualified `friend class T;` whose
+    name is a template parameter is `declaration of 'T' shadows template
+    parameter` ([temp.local]/6, `check_template_param_shadow` in
+    `act_on_friend_tag`, WP-367) and declares a new class `T`, so
+    `friend class Ts...;` then expands no pack
+    (`temp.local/p6-friend-class-shadow.cpp`).
   - Then `act_on_tag_attrs` for the class-head or enum-head attributes.
   - Then the body:
     - `parse_record_body` (§4.1) holds the base clause, member
@@ -712,6 +724,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `template` (unsupported).
   - `decl-specifier-seq ;`: `act_on_friend(ds, base, None, loc)` for
     `friend class X;`, else `act_on_decl_spec_only`.
+  - No decl-specifiers and no special declarator (`member_without_type`,
+    WP-367): a non-type name followed by `;`, `=`, `,` or `[` is `a type
+    specifier is required for all declarations` at the name (clang's
+    implicit-int recovery, `err_missing_type_specifier`); `()` is
+    `expected member name or ';' after declaration specifiers` at the
+    `)` (clang's parenthesized declarator), anything else at the token.
+    The declaration is skipped to its `;` (clang declares an invalid
+    `int` member: later uses of the name differ).
+    `class.mem/member-without-type.cpp`.
   - A friend-type-specifier-list ([class.friend]/3, P2893, WP-359): with
     `friend` and the next token `...` or `,`, `parse_friend_type_list`
     takes each friend-type-specifier, an optional `...`, and calls
@@ -720,7 +741,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     Some(friend_loc))`, so `friend` applies to them and an elaborated
     `struct A` before `,` or `...` is `TagUse::Friend`. A specifier with no
     type is `a type specifier is required for all declarations` (skipped
-    to `;`); a missing `;` is `expected ';' after friend declaration`.
+    to `;`); a missing `;` is `expected ';' after friend declaration`,
+    with nothing skipped: the rest is parsed as the next member
+    declaration (clang's `ExpectAndConsume`; `friend A, B int y;` goes on
+    with `y;`, `class.friend/p2893-recovery.cpp`).
     Before C++26 the list warns `parse_ext_variadic_friend` ("variadic
     'friend' declarations are a C++2c extension", `-Wc++26-extensions`)
     at its first `...` or `,`.

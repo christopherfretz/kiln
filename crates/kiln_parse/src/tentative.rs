@@ -226,6 +226,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         self.p.splice_end(self.i + 1).or_else(|| self.p.scan_name(self.i + 1).map(|n| n.0))
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per decl-specifier keyword")]
     fn decl_specifier(&self, braced: Tpr) -> Tpr {
         if let Some(k) = self.kw() {
             return match k {
@@ -271,6 +272,10 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Int128
                 | Kw::Float128
                 | Kw::Float16
+                | Kw::Float32
+                | Kw::Float64
+                | Kw::StdFloat128
+                | Kw::Bf16
                 | Kw::Fp16 => self.after_simple_type(self.i + 1, braced),
                 // [dcl.type.auto.deduct]: `auto(x)` and `auto{x}` are
                 // expressions in C++23.

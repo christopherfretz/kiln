@@ -11,6 +11,7 @@ lit_digit_separator = Error (1) "digit separator cannot appear at {0:start|end} 
 lit_escape_missing_brace = Error (1) "expected '{{' after '\\{0}' escape sequence";
 lit_escape_no_digits = Error (1) "\\{0} used with no following hex digits";
 lit_exponent_no_digits = Error (0) "exponent has no digits";
+lit_float_suffix_ext = Extension [Cxx23Extensions] (1) "'{0}' suffix on a floating literal is a C++23 extension";
 lit_four_char = WarningOff [FourByteMultiChar] (0) "multi-character character constant";
 lit_hex_escape_too_large = Error (0) "hex escape sequence out of range";
 lit_hex_float_ext = Extension [Cxx17Extensions] (0) "hexadecimal floating literals are a C++17 feature";

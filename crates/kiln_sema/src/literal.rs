@@ -260,15 +260,17 @@ fn round_literal(kind: FloatKind, lit: &FloatLiteral<'_>) -> soft::Rounded {
 }
 
 /// Types a floating literal ([lex.fcon]/2): `double` unsuffixed,
-/// `float` for `f`, `long double` for `l`, `_Float16` for `f16`; the
-/// value is the literal's exact value rounded to nearest.
+/// `float` for `f`, `long double` for `l`, and the extended types of
+/// [basic.extended.fp] for `f16` (`_Float16`), `f32` (`_Float32`), `f64`
+/// (`_Float64`), `f128` (`_Float128`) and `bf16` (`__bf16`); the value is
+/// the literal's exact value rounded to nearest-even in the type's format
+/// (no double rounding: `bf16` rounds from the decimal value).
 ///
 /// A value that overflows to infinity or underflows to zero comes back
 /// with clang's `-Wliteral-range` warning.
 ///
 /// # Errors
-/// `sema_invalid_float_suffix` for the suffixes of the extended types
-/// the target does not provide here (`f32`, `f64`, `f128`, `bf16`).
+/// None today; the `Result` is kept for target-gated suffixes.
 pub fn classify_float_literal(
     s: &Sema<'_, '_>,
     lit: &FloatLiteral<'_>,
@@ -278,15 +280,10 @@ pub fn classify_float_literal(
         FloatSuffix::F => QualType::FLOAT,
         FloatSuffix::L => QualType::LONGDOUBLE,
         FloatSuffix::F16 => QualType::FLOAT16,
-        FloatSuffix::F32 | FloatSuffix::F64 | FloatSuffix::F128 | FloatSuffix::BF16 => {
-            let spelled = match lit.suffix {
-                FloatSuffix::F32 => "f32",
-                FloatSuffix::F64 => "f64",
-                FloatSuffix::F128 => "f128",
-                _ => "bf16",
-            };
-            return Err(LiteralError::new(DiagId::sema_invalid_float_suffix, vec![spelled.into()]));
-        }
+        FloatSuffix::F32 => QualType::FLOAT32,
+        FloatSuffix::F64 => QualType::FLOAT64,
+        FloatSuffix::F128 => QualType::STD_FLOAT128,
+        FloatSuffix::BF16 => QualType::BFLOAT16,
     };
     let b = s.ast.types.builtin(ty).unwrap_or(BuiltinType::Double);
     let kind = float_kind(s, b).unwrap_or(FloatKind::Double);
