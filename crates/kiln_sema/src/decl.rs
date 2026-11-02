@@ -863,7 +863,13 @@ impl Sema<'_, '_> {
                     prev_ref = false;
                     let Some(qual) = qual else { return QualType::ERROR };
                     let Some(class) = self.member_pointer_class(qual) else {
-                        let msg = self.diag(DiagId::sema_mptr_in_nonclass, *loc).arg(&name);
+                        // clang 22 says "member pointer" for an abstract declarator
+                        // (clang 19 "'type name'"; no identifier has a space).
+                        let msg = if self.clang_compat >= 22 && name == "type name" {
+                            self.diag(DiagId::sema_mptr_in_nonclass_22, *loc)
+                        } else {
+                            self.diag(DiagId::sema_mptr_in_nonclass, *loc).arg(&name)
+                        };
                         self.emit(msg);
                         return QualType::ERROR;
                     };
@@ -2361,7 +2367,14 @@ impl Sema<'_, '_> {
             self.emit(self.diag(DiagId::sema_asm_unknown_register_name, loc).arg(name));
         } else if !self.in_local_scope() && !self.is_dependent_type(ty) {
             let bits = target::size_align(&self.ast, ty, self.abi()).map(|(s, _)| s * 8);
-            match bits.map(|b| kiln_abi::asm::global_register_size_mismatch(arch, &name, b)) {
+            let size = bits.map(|b| kiln_abi::asm::global_register_size_mismatch(arch, &name, b));
+            let unreserved = self.clang_compat >= 22
+                && !kiln_abi::asm::global_register_reserved_22(arch, &name);
+            match size {
+                Some(Some(_)) if unreserved => {
+                    let msg = self.diag(DiagId::sema_asm_invalid_global_var_reg, loc).arg(name);
+                    self.emit(msg);
+                }
                 Some(None) => {
                     let msg = self.diag(DiagId::sema_asm_invalid_global_var_reg, loc).arg(name);
                     self.emit(msg);
@@ -2380,7 +2393,10 @@ impl Sema<'_, '_> {
         }
         let t = &self.ast.types;
         if !t.is_integral(ty) && !t.is_pointer(ty) {
-            self.error(DiagId::sema_asm_bad_register_type, ds.loc);
+            // clang 22 reports at the type specifier, clang 19 at the
+            // decl-specifier-seq.
+            let at = if self.clang_compat >= 22 { ds.type_loc.unwrap_or(ds.loc) } else { ds.loc };
+            self.error(DiagId::sema_asm_bad_register_type, at);
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
     }

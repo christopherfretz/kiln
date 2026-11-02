@@ -26,10 +26,10 @@
 //@ diag: 48:22 error "unknown register name 'w0' in asm"
 //@ diag: 49:23 error "unknown register name 'x0' in asm"
 //@ diag: 51:21 error "size of register 'rsp' does not match variable size"
-//@ diag: 51:1 error "bad type for named register variable"
+//@ diag: 51 error "type for named register variable"
 //@ diag: 52:23 error "unknown register name 'x0' in asm"
-//@ requires: clang<22
-// clang 22 emits error: unsupported type for named register variable; WP-355 residual
+// clang 19 says "bad type" at the decl-specifiers, clang 22 "unsupported
+// type" at the type specifier; kiln follows -fclang-compat (WP-377).
 register long a1 asm("x0");
 register int a2 asm("x0");
 register int a3 asm("w0");

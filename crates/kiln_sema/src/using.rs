@@ -262,6 +262,16 @@ impl Sema<'_, '_> {
         self.act_on_using_declarator(using_loc, qual, name, name_loc, if_exists, ellipsis)
     }
 
+    /// The qualifier a "using declaration refers into" diagnostic names:
+    /// clang 19 prints the specifier (`C::`), clang 22 the scope (`C`).
+    fn refers_into_str(&self, nns: NnsId) -> String {
+        let s = self.nns_str(nns);
+        match s.strip_suffix("::") {
+            Some(scope) if self.clang_compat >= 22 && !scope.is_empty() => scope.to_owned(),
+            _ => s,
+        }
+    }
+
     fn new_using_decl(&mut self, name: DeclName, name_loc: Loc, nns: NnsId) -> DeclId {
         let h = DeclHead::new(self.ctx, name, name_loc);
         self.builder().using_decl(h, Some(nns))
@@ -285,7 +295,7 @@ impl Sema<'_, '_> {
         if matches!(qk, DeclKind::Namespace | DeclKind::TranslationUnit) {
             let msg = self
                 .diag(DiagId::sema_using_decl_nested_name_specifier_is_not_class, q.loc)
-                .arg(self.nns_str(q.nns));
+                .arg(self.refers_into_str(q.nns));
             self.emit(msg);
             return None;
         }
@@ -303,7 +313,8 @@ impl Sema<'_, '_> {
         }
         if self.ast.first(q.ctx) == self.ast.first(class) {
             self.error(DiagId::sema_using_decl_refers_to_own_class, q.loc);
-            if self.lookup_in_dn(q.ctx, name, LookupKind::All).is_empty() {
+            // clang 22 stops there; clang 19 also looks the name up.
+            if self.clang_compat < 22 && self.lookup_in_dn(q.ctx, name, LookupKind::All).is_empty() {
                 let msg = self
                     .diag(DiagId::sema_no_member, name_loc)
                     .arg(self.decl_name_str(name))
@@ -336,7 +347,7 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(self.class_type(class)))
             } else {
                 self.diag(DiagId::sema_using_decl_not_base_class, q.loc)
-                    .arg(self.nns_str(q.nns))
+                    .arg(self.refers_into_str(q.nns))
                     // A `NamedDecl` argument: `C<X>` for a specialization.
                     .arg(self.name_for_diagnostic(class))
             };

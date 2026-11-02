@@ -6,14 +6,14 @@
 // instantiation.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 28:17 error "no matching function found in local scope"
-//@ diag: 29:17 error "no matching function found in local scope"
-//@ diag: 30:17 error "no matching function found in local scope"
+//@ diag: 28:17 error "cannot define friend function in a local class definition"
+//@ diag: 29:17 error "cannot define friend function in a local class definition"
+//@ diag: 30:17 error "cannot define friend function in a local class definition"
 //@ diag: 23:7 error "functions that differ only in their return type cannot be overloaded"
 //@ diag: 34:15 note "in instantiation of function template specialization 't<long>' requested here"
 //@ diag: 18:6 note "previous declaration is here"
-//@ requires: clang<22
-// clang 22 emits error: cannot define friend function in a local class definition; WP-355 residual
+//@ requires: clang>=22
+// kiln at -fclang-compat=22 (WP-377); clang 19 wording: "no matching function found in local scope"
 struct A {};
 long g(long);
 template <class T> void t() {

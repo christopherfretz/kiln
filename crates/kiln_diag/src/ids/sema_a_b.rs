@@ -68,7 +68,8 @@ sema_array_size_non_int = Error (1) "size of array has non-integer type {0}";
 sema_array_sizeless_element = Error (1) "array has sizeless element type {0}";
 sema_array_too_large = Error (1) "array is too large ({0} elements)";
 // [dcl.asm] GNU global register variables (WP-327)
-sema_asm_bad_register_type = Error (0) "bad type for named register variable";
+sema_asm_bad_register_type = Error (0) "unsupported type for named register variable";
+sema_asm_bad_register_type_19 = Error (0) "bad type for named register variable";
 sema_asm_empty_symbolic_operand_name = Error (0) "empty symbolic operand name in inline assembly string";
 sema_asm_input_duplicate_match = Error (1) "more than one input constraint matches the same output '{0}'";
 sema_asm_invalid_escape = Error (0) "invalid % escape in inline assembly string";

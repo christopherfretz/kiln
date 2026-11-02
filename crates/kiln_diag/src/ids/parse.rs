@@ -4,6 +4,8 @@
 
 parse_anon_bitfield_member_init = Error (0) "anonymous bit-field cannot have a default member initializer";
 parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
+parse_asm_expected_string = Error (0) "expected string literal or parenthesized constant expression in 'asm'";
+parse_asm_expected_string_19 = Error (0) "expected string literal in 'asm'";
 parse_asm_qualifier_ignored = Error (0) "expected 'volatile', 'inline', 'goto', or '('";
 parse_asm_string_kind = Error (1) "cannot use {0:unicode|wide|an empty} string literal in 'asm'";
 parse_assume_attr_expects_cond_expr = Error (1) "use of this expression in an '{0}' attribute requires parentheses";
