@@ -5,7 +5,7 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::ArgListId;
-use kiln_ast::types::{ArgView, TemplateArg, TypeView};
+use kiln_ast::types::{ArgView, TemplateArg, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::EvalContext;
@@ -153,6 +153,38 @@ fn template_kind_select(k: DeclKind) -> u32 {
 }
 
 impl Sema<'_, '_> {
+    /// `args` with each merely instantiation-dependent argument (not
+    /// dependent: `TC<N>` with `N` a constant local of a function
+    /// template) replaced by its canonical form: a specialization is
+    /// shared by every use with the same canonical arguments (§3.1), so
+    /// sugar naming one function template's locals must not reach the
+    /// declaration another use finds (clang builds a specialization from
+    /// its canonical converted arguments).
+    pub(crate) fn settle_inst_sugar(&mut self, args: ArgListId) -> ArgListId {
+        let only_inst = |f: TypeFlags| {
+            f.intersects(TypeFlags::INSTANTIATION_DEPENDENT) && !f.intersects(TypeFlags::DEPENDENT)
+        };
+        if !only_inst(self.ast.types.arg_list_flags(args))
+            && !self.ast.types.args(args).iter().any(|&a| only_inst(self.ast.types.arg_flags(a)))
+        {
+            return args;
+        }
+        let out: Vec<TemplateArg> = self
+            .ast
+            .types
+            .args(args)
+            .iter()
+            .map(|&a| {
+                if only_inst(self.ast.types.arg_flags(a)) {
+                    self.ast.types.canonical_arg(a)
+                } else {
+                    a
+                }
+            })
+            .collect();
+        self.ast.types.arg_list(&out)
+    }
+
     /// The parameters of template `tmpl`, in order.
     pub(crate) fn template_params(&self, tmpl: DeclId) -> Vec<DeclId> {
         let Some(info) = self.ast.template_info(tmpl).copied() else { return Vec::new() };
@@ -795,8 +827,8 @@ impl Sema<'_, '_> {
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
         let dependent = self.ast.types.arg_flags(def).intersects(
-            kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION
-                | kiln_ast::types::TypeFlags::UNEXPANDED_PACK,
+            TypeFlags::DEPENDENT_INSTANTIATION
+                | TypeFlags::UNEXPANDED_PACK,
         );
         if !dependent {
             let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
