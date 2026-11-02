@@ -179,10 +179,18 @@ clang's `Parser` over `Preprocessor::Lex`.
   declaration, is ambiguous without the flag (clang's `ANK_Unresolved`),
   so `void a(u1);` and `int e(u4 *p);` are function declarations (WP-300).
   The parameter's decl-specifier parse then reports "unknown type name
-  'u1'" (`unknown_type_follows`, clang `ParseImplicitInt`), the type is
-  the error type and the function is still declared; once a parameter is
-  invalid, `merge_default_args` skips "missing default argument"
-  (`tests/conformance/dcl.ambig.res/undeclared-parameter-type.cpp`).
+  'u1'" (`unknown_type_follows`, clang `ParseImplicitInt`), the
+  declaration is invalid and the function is still declared; once a
+  parameter is invalid, `merge_default_args` skips "missing default
+  argument" (`tests/conformance/dcl.ambig.res/undeclared-parameter-type.cpp`).
+  Any decl-specifier that names no type, unqualified (`u1`) or qualified
+  (`S::c`, `N::t`: "no type named 'c' in 'S'"), recovers to `int` with
+  the decl-spec invalid (clang `ParseImplicitInt` / `TST_error`, WP-308),
+  so the declarator keeps its shape: `S::c &r;` is an invalid `int &`
+  that still reports a missing initializer (spec/sema.md "Invalid
+  declarations"), and a parameter `S::c &p` takes part in overload
+  resolution as `int &` ("expects an lvalue for 1st argument")
+  (`tests/conformance/dcl.type.simple/unknown-type-recovers-to-int.cpp`).
   A member-pointer ptr-operator (`member_pointer_end`) is scanned as
   `::`? (`template`? name (`<args>`)? `::`)+ `*`: each component is
   classified in the context of the previous one; template arguments
@@ -921,14 +929,26 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   `parse_type_name_spec`), and `S::name = 1;` is an expression (`no
   member named`). An identifier after the name that is a non-type, or
   undeclared before `(`, makes it an expression (clang annotates it,
-  and no declarator accepts the annotation): `S::pn y(e);`. Deviation:
-  clang delays the `no member named` of such an expression to the end
-  of the full-expression (typo correction), so it follows the `expected
-  ';'`; kiln reports it first. The same decl-specifier rule applies at
+  and no declarator accepts the annotation): `S::pn y(e);`. The same
+  decl-specifier rule applies at
   namespace scope (`N::gt gv;`) and in a parameter clause, where the
   name is ambiguous (`param_decl_specifier`: `void a1(S::pn);` declares
   a function)
   (`tests/conformance/stmt.ambig/qualified-unresolved-name.cpp`).
+- **Delayed `no member named`** ([stmt.expr]/1, WP-308): an
+  expression statement brackets its expression and its `;` with
+  `Sema::begin_delayed_typos` / `end_delayed_typos`. In between, a
+  qualified name lookup does not find (`S::nom`, `N::nom`;
+  `act_on_id_expression_dn` through `Sema::emit_delayed_typo`) is held,
+  and emitted after the `expected ';' after expression`, in source order,
+  as clang's delayed typo correction reports it at the end of the
+  full-expression. Elsewhere (a declaration's initializer, a condition, a
+  `return`, a template instantiation) and for an unqualified name or a
+  member access (`s.nomember`) it is reported where it is written. A
+  full-expression nested in an expression statement (a declaration in a
+  lambda body) is held until the outer statement ends (clang ends it
+  sooner) (`tests/conformance/stmt.expr/delayed-no-member-after-missing-semi.cpp`,
+  kiln_parse `delayed_no_member_after_missing_semi`).
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed

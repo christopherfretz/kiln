@@ -1807,7 +1807,12 @@ pub enum Tdk { Invalid, InstantiationDepth, Incomplete, IncompletePack, Inconsis
     NonDependentConversionFailure, ConstraintsNotSatisfied, MiscellaneousDeductionFailure, AlreadyDiagnosed }
 ```
 
-`Tdk` mirrors clang's `TemplateDeductionResult`.
+`Tdk` mirrors clang's `TemplateDeductionResult`. `Tdk::Invalid` is
+deduction against an invalid function template (`deduce_spec`, WP-308):
+the template is no candidate of a call (`add_template_candidate`), of
+an address (`overload/address.rs`) or of an explicit specialization
+(`match_function_spec_in`), and is never noted, as clang skips
+`TemplateDeductionResult::Invalid` candidates.
 
 **Memory.** Types and nodes that a failed substitution created are
 retained, since the AST is append-only. They are metered as

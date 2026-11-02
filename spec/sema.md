@@ -1167,9 +1167,18 @@ specification as written (`TypeNames` prints ` noexcept`,
   functions resolves a call against the last one found (so an
   inviable call is still `no matching function`); a reference to an
   invalid function is an erroneous expression without a diagnostic.
+  A function template whose function is invalid (a parameter type that
+  names no type) is invalid too (`finish_template_pattern`); an id-expression
+  whose lookup finds it beside other declarations ignores it
+  (`act_on_id_expression_dn`, clang `resolveKind`), and a call or
+  address that reaches it fails deduction with `Tdk::Invalid`, so it is
+  no candidate and gets no note (spec/sema-templates.md §5.7). An
+  explicit specialization declarator with an invalid parameter matches
+  no template and reports nothing more (WP-308).
   Tests: `dcl.stc/function-storage-class.cpp`,
   `dcl.fct.default/invalid-default-arg.cpp`,
-  `except.spec/redecl-invalid-decl.cpp`.
+  `except.spec/redecl-invalid-decl.cpp`,
+  `temp.deduct.general/invalid-template-not-viable.cpp`.
 - **Exception specifications on redeclarations** (WP-268,
   `merge_missing_exc_spec`; clang 19's missing-specification path of
   `Sema::CheckEquivalentExceptionSpec`). A function redeclaration
@@ -2959,6 +2968,22 @@ clang 19's C99/GNU complex support in C++:
 - **Results** are attached with `act_on_init`. `act_on_uninit` handles
   default-initialization: const objects without an initializer are an
   error, and incomplete types are diagnosed.
+- **Uninitialized definitions before the validity check**
+  (`uninit_array_or_reference`, clang `ActOnUninitializedDecl`, WP-308).
+  A non-`extern` variable definition without an initializer whose type
+  is an array of unknown bound is `definition of variable with array
+  type needs an explicit size or an initializer` (a `constexpr` one is
+  `constexpr variable 'c' must be initialized by a constant
+  expression`), even when the element type is dependent or the
+  declaration is already invalid, and the variable becomes invalid. An
+  invalid variable whose type is a non-dependent reference (`S::c &r;`
+  with no `S::c`, its type recovered to `int &`, spec/parse.md §2.1)
+  still reports `declaration of reference variable 'r' requires an
+  initializer`; no other check runs for an invalid variable.
+- **Initializer of an invalid variable** (clang `AddInitializerToDecl`,
+  WP-308): `act_on_init` discards it unchecked, so `S::c &r = 1;`
+  reports only the decl-specifier
+  (`tests/conformance/dcl.type.simple/unknown-type-recovers-to-int.cpp`).
 - **Constexpr variables:** `check_constexpr_init` evaluates the
   initializer of a `constexpr` variable, and of a const integral
   variable, which is usable in constant expressions. The value is
