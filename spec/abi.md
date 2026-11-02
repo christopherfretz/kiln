@@ -1215,11 +1215,25 @@ std_substitutions.cpp`, `std_cxx11_abi_tag.cpp`, `std_libcxx_spelling.cpp`,
   variable) is also internal when one of its template arguments is not
   externally visible: a type, a template whose template has internal
   linkage, or a pointer / member-pointer value naming an internal
-  entity (packs recurse; aggregate class-type values are not walked
-  yet). A class specialization that is internal this way makes its
+  entity (packs recurse). A class-type value is walked at any depth
+  (WP-397, `value_externally_visible`, clang `getLVForValue`): every
+  pointer, reference and member-pointer subobject of its frozen
+  `ByteImage` (its `relocs`, which cover nested members, array
+  elements, base subobjects and a union's active member) must be
+  externally visible. A pointer's base is visible when it is a
+  declaration or function that is not internal, a lifetime-extended
+  temporary whose extending declaration is not internal, or the
+  `type_info` of an externally visible type; a string literal or a
+  constant-evaluation object is not. A pointer to a template parameter
+  object follows that object's linkage. A template parameter object
+  (`_ZTAX...`) is itself internal when its type or its value is not
+  externally visible (`param_object_externally_visible`); codegen then
+  emits it `internal` (clang 19 keeps its comdat, clang 22 drops it).
+  A class specialization that is internal this way makes its
   members, vtable and RTTI internal too. The mangled name is unchanged
-  (no `L` prefix: that follows the storage class only). Test:
-  `tests/codegen/linkage_internal_types.cpp` (IR diff against clang 19
+  (no `L` prefix: that follows the storage class only). Tests:
+  `tests/codegen/linkage_internal_types.cpp`,
+  `tests/codegen/linkage_internal_nttp.cpp` (IR diff against clang 19
   and 22).
 
 ## 9. Open questions (with recommendation)

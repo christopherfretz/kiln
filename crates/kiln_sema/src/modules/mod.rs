@@ -498,13 +498,19 @@ impl Sema<'_, '_> {
     /// True if `d` is directly in export `e`, possibly through namespaces
     /// and linkage specifications.
     fn exported_by(&self, d: DeclId, e: DeclId) -> bool {
-        let mut c = self.ast.decls.get(d).ctx();
+        // A namespace through its lexical context: a reopened namespace's
+        // semantic context is its first declaration's (an unnamed
+        // namespace reopened inside `export`). Anything else through its
+        // semantic one (an out-of-line member is in its class).
+        let n = self.ast.decls.get(d);
+        let mut c =
+            if n.kind() == DeclKind::Namespace { self.ast.decls.lexical_ctx(d) } else { n.ctx() };
         while let Some(x) = c {
             if x == e {
                 return true;
             }
             match self.ast.decls.get(x).kind() {
-                DeclKind::Namespace | DeclKind::LinkageSpec => c = self.ast.decls.get(x).ctx(),
+                DeclKind::Namespace | DeclKind::LinkageSpec => c = self.ast.decls.lexical_ctx(x),
                 _ => return false,
             }
         }
