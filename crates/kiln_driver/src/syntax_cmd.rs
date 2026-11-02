@@ -143,12 +143,15 @@ impl SyntaxJob<'_> {
             },
             None => None,
         };
-        let Ok(target) = Target::from_triple(job.toolchain.target.triple) else {
+        let Ok(mut target) = Target::from_triple(job.toolchain.target.triple) else {
             Diag::new(DiagId::drv_unsupported_target, Span::INVALID)
                 .arg(job.toolchain.target.triple)
                 .emit(engine);
             return;
         };
+        if let Some(signed) = a.predef.char_signed {
+            target.types.char_signed = signed;
+        }
         // `-MD` with `-fsyntax-only` is rejected before this (no deps).
         let Some((mut pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs, true)
         else {

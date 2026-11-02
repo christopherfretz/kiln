@@ -53,6 +53,9 @@ pub struct PredefConfig {
     pub rtti: bool,
     /// `-fchar8_t` / `-fno-char8_t` if given (default: on from C++20).
     pub char8_t: Option<bool>,
+    /// `-fsigned-char` / `-funsigned-char` if given: adds or removes
+    /// `__CHAR_UNSIGNED__` (default: the target's, as in the base file).
+    pub char_signed: Option<bool>,
     /// PIC / PIE.
     pub pic: PicModel,
     /// `-ffast-math`.
@@ -84,6 +87,7 @@ impl PredefConfig {
             exceptions: cplusplus,
             rtti: cplusplus,
             char8_t: None,
+            char_signed: None,
             pic: PicModel::Pie(2),
             fast_math: false,
             freestanding: false,
@@ -221,6 +225,13 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
             set(m, "__GLIBCXX_TYPE_INT_N_0", "__int128");
             set(m, "__GLIBCXX_BITSIZE_INT_N_0", "128");
         }
+    }
+    match cfg.char_signed {
+        Some(true) => {
+            m.remove("__CHAR_UNSIGNED__");
+        }
+        Some(false) => set(m, "__CHAR_UNSIGNED__", "1"),
+        None => {}
     }
     match cfg.opt {
         OptLevel::None => {}
@@ -370,6 +381,21 @@ mod tests {
         ] {
             assert!(s.contains(&format!("#define {here}\n")), "{here}");
         }
+    }
+
+    /// `-fsigned-char` removes `__CHAR_UNSIGNED__` (the `AArch64` default),
+    /// `-funsigned-char` adds it (x86-64), as clang 19's driver does.
+    #[test]
+    fn char_signedness() {
+        let unsigned_base = format!("{BASE}#define __CHAR_UNSIGNED__ 1\n");
+        let mut cfg = PredefConfig::new(true);
+        assert!(
+            build_predefines(&unsigned_base, &cfg, &[]).contains("#define __CHAR_UNSIGNED__ 1\n")
+        );
+        cfg.char_signed = Some(true);
+        assert!(!build_predefines(&unsigned_base, &cfg, &[]).contains("__CHAR_UNSIGNED__"));
+        cfg.char_signed = Some(false);
+        assert!(build_predefines(BASE, &cfg, &[]).contains("#define __CHAR_UNSIGNED__ 1\n"));
     }
 
     /// spec/pp.md "clang compatibility level": compat 19 leaves the base

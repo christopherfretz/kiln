@@ -831,10 +831,19 @@ the written qualifier of a qualified function template-id,
 an id-expression or member access, else `DT <expr> E`. The arguments of
 a dependent specialization of a known template group those of its
 parameter pack into one `J ... E` (clang's converted list:
-`NS_3tupIJDpT_EE`). An unsupported expression (member access, function
-parameters, non-dependent `sizeof` whose value would be needed, ...)
-mangles as `XLi0EE` in a template argument and `u7unknown` as a
-`decltype` operand. The
+`NS_3tupIJDpT_EE`). A function parameter named in a `decltype` of the
+signature is `fp [cv] [n-1] _` / `fL <L-1> p [cv] [n-1] _` (WP-298):
+`Mangler::fn_depth` is clang's `FunctionTypeDepth`, one level for the
+encoded function's bare function type and one per nested function type,
+less one while that type's result is mangled, so `-> decltype(x + y)` is
+`DTplfp_fp0_E`, `f(T x, decltype(x))` is `DtfL0p_E` and a parameter type
+`void (*)(decltype(x))` gives `fL1p_` (`tests/mangle/decltype_function_param.cpp`).
+The parameter is taken to be the encoded function's own (function-scope
+depth 0): a parameter of a nested function declarator named in its own
+`decltype` would mangle one level too deep. An unsupported expression
+(non-dependent `sizeof` whose value would be needed, ...) mangles as
+`XLi0EE` in a template argument and `u7unknown` as a `decltype`
+operand. The
 template-parameter-declaration prefixes `Tn`/`Tp` are §8.14's (WP-117);
 the dependent template-specialization types there are the ones above
 (`dependent_tst`, with a pack's arguments grouped by `converted_args`).
