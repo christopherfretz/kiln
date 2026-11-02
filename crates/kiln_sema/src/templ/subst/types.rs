@@ -328,7 +328,10 @@ impl Substituter<'_, '_, '_> {
                     let u = self.ty(underlying, loc)?;
                     return Ok(self.sema.ast.types.typedef_type(decl, u).into());
                 }
-                if ctx_is_record || self.locals.contains_key(&decl) {
+                if ctx_is_record
+                    || self.locals.contains_key(&decl)
+                    || self.failed_locals.contains(&decl)
+                {
                     let d = self.find_instantiated_decl(decl, loc)?;
                     if d != decl {
                         // Naming it in the instantiation is a use.
