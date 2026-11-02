@@ -8,15 +8,15 @@ TranslationUnitDecl
 |   `-FieldDecl value 'int'
 |-StaticAssertDecl
 | `-BinaryOperator 'bool' '=='
-|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Box<int>'
-|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|   |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Box<int>'
+|   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'int'
 |-StaticAssertDecl
 | `-BinaryOperator 'bool' '=='
-|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Box<int>'
-|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|   |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Box<int>'
+|   `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
 |     `-IntegerLiteral 'int' 4
 `-StaticAssertDecl
   `-BinaryOperator 'bool' '=='
-    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Box<int>'
-    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Box<int>'
+    `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
       `-IntegerLiteral 'int' 4

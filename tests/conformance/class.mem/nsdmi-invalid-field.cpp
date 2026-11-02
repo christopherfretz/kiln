@@ -3,14 +3,16 @@
 // initializations and constant evaluations using it do not repeat the error.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 14:20 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
-//@ diag: 15:13 error "constexpr variable 'ca' must be initialized by a constant expression"
-//@ diag: 15:13 note "subobject 'a' is not initialized"
-//@ diag: 14:16 note "subobject declared here"
 //@ diag: 16:20 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
+//@ diag: 17:13 error "constexpr variable 'ca' must be initialized by a constant expression"
+//@ diag: 17:13 note "subobject 'a' is not initialized"
+//@ diag: 16:16 note "subobject declared here"
 //@ diag: 18:20 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
-//@ diag: 20:21 error "cannot initialize a member subobject of type 'int *' with an rvalue of type 'int'"
-//@ diag: 22:38 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
+//@ diag: 20:20 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
+//@ diag: 22:21 error "cannot initialize a member subobject of type 'int *' with an rvalue of type 'int'"
+//@ diag: 24:38 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
+//@ requires: clang<22
+// clang 22 emits error: default member initializer for 'a' needed within definition of enclosing cl...; WP-355 residual
 struct A { int a = "s"; int b; constexpr A() : b(1) {} };
 constexpr A ca;
 struct B { int a = "s"; };

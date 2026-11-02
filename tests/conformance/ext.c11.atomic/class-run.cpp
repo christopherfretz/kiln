@@ -1,15 +1,17 @@
 // Clang extension: padded _Atomic objects of class type at run time:
 // initialization from the value type, assignment from T and _Atomic(T),
 // and the __c11_atomic builtins on them (the value is copied through an
-// atomic-width temporary; the padding stays zero). The cmpxchg is one
-// that must fail: a successful compare of a padded value depends on the
-// expected temporary's padding bytes, which clang leaves uninitialized
-// (it succeeds by luck on aarch64 and not on x86-64; WP-228). clang 19
-// writes the failed compare's old value only into that temporary, not
-// back into `e`, so `e` keeps its value.
+// atomic-width temporary whose padding is zeroed). The cmpxchg is one that
+// must fail. Not an evaluation-order question: C11 7.17.7.4p2 (which the
+// __c11_atomic builtins implement) says a failed compare-exchange loads the
+// atomic object's value into *expected, so `e` becomes "xyz". clang 22 does
+// that (it copies the old value back out of the temporary); clang 19 wrote it
+// only into the temporary and `e` kept "abc", which was a clang bug. kiln
+// follows C11 and clang 22, hence clang>=22.
+//@ requires: clang>=22
 //@ expect: run
 //@ stdout: abc abc xyz
-//@ stdout: xyz 0 abc abc
+//@ stdout: xyz 0 xyz abc
 //@ stdout: 4 0
 extern "C" int printf(const char *, ...);
 struct S3 { char c[3]; };

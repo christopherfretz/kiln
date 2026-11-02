@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.alias]/2: the alias names the substituted type; the argument is
 // written through a typedef.
 typedef int I;

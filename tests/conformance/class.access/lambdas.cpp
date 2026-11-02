@@ -3,11 +3,12 @@
 // operator() instantiation is checked in that context.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 34:21 error "'y' is a private member of 'B'"
-//@ diag: 13:7 note "implicitly declared private here"
-//@ diag: 35:24 error "'y' is a private member of 'B'"
-//@ diag: 35:28 note "in instantiation of function template specialization 'outside()::(anonymous class)::operator()<B>' requested here"
-//@ diag: 13:7 note "implicitly declared private here"
+//@ diag: 35:21 error "'y' is a private member of 'B'"
+//@ diag: 14:7 note "implicitly declared private here"
+//@ diag: 36:24 error "'y' is a private member of 'B'"
+//@ diag: 36:28 note "in instantiation of function template specialization 'outside()::(lambda)::operator()<B>' requested here"
+//@ diag: 14:7 note "implicitly declared private here"
+//@ requires: clang>=22
 class B {
   struct P { int v; };
   int y;

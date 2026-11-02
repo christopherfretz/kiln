@@ -22,7 +22,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::util::process::{self, MemLimit, RssProbe};
 use crate::util::{Profile, build_kiln_with, repo_root, target_dir};
 use directives::{Kind, LocalCfg};
-use run::{Config, Job, Outcome, TestResult};
+use run::{Config, Job, LibcxxTree, Outcome, TestResult};
 
 const USAGE: &str = "\
 usage: cargo xtask libcxx [options] [<dir>...]
@@ -30,9 +30,11 @@ usage: cargo xtask libcxx [options] [<dir>...]
 Runs libc++'s test suite (llvmorg-19.1.7 `libcxx/test`) with kiln. <dir>s are
 relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
 
-  --gate m3              the M3 gate directories (spec/libcxx.md \"Gates\")
-  --tag <llvmorg-X.Y.Z>  the release whose checkout to use (default: $KILN_LIBCXX_TAG,
-                         else llvmorg-19.1.7)
+  --gate m3|m4           a gate's directories (spec/libcxx.md \"Gates\"); m3 runs
+                         llvmorg-19.1.7, m4 llvmorg-22.1.8 unless --tag says otherwise
+  --tag <llvmorg-X.Y.Z>  the release whose checkout to use (default: the gate's,
+                         else $KILN_LIBCXX_TAG, else llvmorg-19.1.7); its major
+                         version picks the clang/libc++ release kiln++ runs with
   --libcxx-tests <dir>   the llvm-project checkout (default: .toolchain/libcxx-<tag>,
                          `scripts/fetch-libcxx-tests.sh <tag>`; for llvmorg-19.1.7
                          also the older .toolchain/llvm-project)
@@ -57,9 +59,9 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
 
 environment:
   KILN_LIBCXX_TAG        the default --tag
-  KILN_ORACLE            19 (default) or 22: kiln++ runs with
-                         KILN_LLVM_DIR=/usr/lib/llvm-N, whose libc++ headers must match
-                         the tests' tag (spec/harness.md \"Oracle toolchain\")
+  KILN_ORACLE            only for a tag whose major is not 19 or 22: kiln++ runs with
+                         KILN_LLVM_DIR=/usr/lib/llvm-N of the tag's major (19 or 22),
+                         else of KILN_ORACLE (spec/libcxx.md \"Toolchain\")
 ";
 
 /// The directories of the M3 gate, relative to `libcxx/test`.
@@ -74,8 +76,45 @@ pub const GATE_M3: &[&str] = &[
     "std/language.support/support.initlist",
 ];
 
-/// The release whose tests the driver targets by default.
+/// The directories of the M4 libc++ exit (docs/ROADMAP.md M4: `<vector>`,
+/// `<string>`, `<memory>`, `<optional>`, `<variant>`, `<tuple>`,
+/// `<algorithm>`, `<ranges>`, `<format>`, `<expected>`, `<mdspan>`,
+/// `<print>`, `<flat_map>`), run after [`GATE_M3`]'s.
+pub const GATE_M4_EXTRA: &[&str] = &[
+    "std/containers/sequences/vector",
+    "std/strings/basic.string",
+    "std/utilities/memory",
+    "std/utilities/optional",
+    "std/utilities/variant",
+    "std/utilities/tuple",
+    "std/algorithms",
+    "std/ranges",
+    "std/utilities/format",
+    "std/utilities/expected",
+    "std/containers/views/mdspan",
+    "std/input.output/iostream.format/print.fun",
+    "std/containers/container.adaptors/flat.map",
+];
+
+/// The release whose tests the driver targets by default (and the M3 gate's).
 pub const TESTS_TAG: &str = "llvmorg-19.1.7";
+
+/// The release of the M4 gate's tests.
+pub const M4_TAG: &str = "llvmorg-22.1.8";
+
+/// The gate's directories, relative to `libcxx/test`.
+fn gate_dirs(gate: &str) -> Vec<String> {
+    let mut v: Vec<String> = GATE_M3.iter().map(|s| (*s).to_owned()).collect();
+    if gate == "m4" {
+        v.extend(GATE_M4_EXTRA.iter().map(|s| (*s).to_owned()));
+    }
+    v
+}
+
+/// The tests release of a gate.
+fn gate_tag(gate: &str) -> &'static str {
+    if gate == "m4" { M4_TAG } else { TESTS_TAG }
+}
 
 /// The environment variable naming the default `--tag`.
 pub const TAG_ENV: &str = "KILN_LIBCXX_TAG";
@@ -89,9 +128,14 @@ fn check_tag(tag: &str) -> Result<(), String> {
     if ok { Ok(()) } else { Err(format!("bad libc++ tests tag `{tag}` (want llvmorg-<version>)")) }
 }
 
-/// The tag to use: `--tag`, else `$KILN_LIBCXX_TAG`, else [`TESTS_TAG`].
-fn resolve_tag(flag: Option<&str>, env: Option<&str>) -> Result<String, String> {
-    let tag = flag.or(env.filter(|v| !v.is_empty())).unwrap_or(TESTS_TAG);
+/// The tag to use: `--tag`, else the `--gate`'s, else `$KILN_LIBCXX_TAG`,
+/// else [`TESTS_TAG`].
+fn resolve_tag(
+    flag: Option<&str>,
+    gate: Option<&str>,
+    env: Option<&str>,
+) -> Result<String, String> {
+    let tag = flag.or(gate.map(gate_tag)).or(env.filter(|v| !v.is_empty())).unwrap_or(TESTS_TAG);
     check_tag(tag)?;
     Ok(tag.to_owned())
 }
@@ -100,7 +144,7 @@ fn resolve_tag(flag: Option<&str>, env: Option<&str>) -> Result<String, String> 
 #[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct Options {
     pub tests: Option<PathBuf>,
-    /// `--tag`; `None` is `$KILN_LIBCXX_TAG`, else [`TESTS_TAG`].
+    /// `--tag`; `None` is the gate's, else `$KILN_LIBCXX_TAG`, else [`TESTS_TAG`].
     pub tag: Option<String>,
     pub compiler: Option<PathBuf>,
     /// `--profile`: what the implicit build makes (ignored with `--compiler`
@@ -187,8 +231,8 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--profile" => o.profile = Profile::parse(&value("--profile")?)?,
             "--gate" => {
                 let g = value("--gate")?;
-                if g != "m3" {
-                    return Err(format!("unknown --gate `{g}` (known: m3)"));
+                if g != "m3" && g != "m4" {
+                    return Err(format!("unknown --gate `{g}` (known: m3, m4)"));
                 }
                 o.gate = Some(g);
             }
@@ -272,6 +316,45 @@ fn default_checkout(root: &Path, tag: &str) -> PathBuf {
         let base = bases.last().map_or(root, PathBuf::as_path);
         base.join(".toolchain").join(format!("libcxx-{tag}"))
     })
+}
+
+/// The major version of an `llvmorg-<major>.…` tag.
+fn tag_major(tag: &str) -> Option<u32> {
+    tag.strip_prefix("llvmorg-")?.split(['.', '-']).next()?.parse().ok()
+}
+
+/// Where the libc++ of `toolchain` is: `None` for the system install
+/// (`/usr/lib/llvm-N/include/c++/v1`, which `-stdlib=libc++` finds by
+/// itself), else an extracted Debian package tree
+/// `.toolchain/libcxx-N-root` of this or the main checkout (spec/libcxx.md
+/// "Toolchain": `libc++-N-dev` cannot be installed beside `libc++-19-dev`).
+fn libcxx_install(
+    root: &Path,
+    toolchain: crate::oracle::Oracle,
+) -> Result<Option<LibcxxTree>, String> {
+    if toolchain.libcxx_include().is_dir() {
+        return Ok(None);
+    }
+    let n = toolchain.version;
+    let mut bases = vec![root.to_path_buf()];
+    if let Some(main) = main_checkout(root) {
+        bases.push(main);
+    }
+    let arch = format!("{}-linux-gnu", std::env::consts::ARCH);
+    for b in &bases {
+        let tree = b.join(".toolchain").join(format!("libcxx-{n}-root"));
+        let include = tree.join(format!("usr/lib/llvm-{n}/include/c++/v1"));
+        let lib = tree.join("usr/lib").join(&arch);
+        if include.is_dir() && lib.join("libc++.a").is_file() {
+            return Ok(Some(LibcxxTree { include, lib }));
+        }
+    }
+    Err(format!(
+        "no libc++ {n} headers at {} or in .toolchain/libcxx-{n}-root; install \
+         libc++-{n}-dev, or extract libc++-{n}-dev, libc++abi-{n}-dev and libunwind-{n}-dev \
+         there (spec/libcxx.md \"Toolchain\")",
+        toolchain.libcxx_include().display()
+    ))
 }
 
 /// The main checkout when `root` is a worktree of it: the common git dir's
@@ -388,8 +471,15 @@ fn load_local_cfgs(test_root: &Path, tests: &[(PathBuf, String)]) -> HashMap<Pat
 fn execute(opts: &Options) -> Result<bool, String> {
     let start = Instant::now();
     let root = repo_root();
-    let toolchain = crate::oracle::Oracle::from_env()?;
-    let tag = resolve_tag(opts.tag.as_deref(), std::env::var(TAG_ENV).ok().as_deref())?;
+    let tag = resolve_tag(
+        opts.tag.as_deref(),
+        opts.gate.as_deref(),
+        std::env::var(TAG_ENV).ok().as_deref(),
+    )?;
+    let toolchain = match tag_major(&tag).filter(|m| crate::oracle::SUPPORTED.contains(m)) {
+        Some(m) => crate::oracle::Oracle::parse(Some(&m.to_string()))?,
+        None => crate::oracle::Oracle::from_env()?,
+    };
     let checkout = opts.tests.clone().unwrap_or_else(|| default_checkout(&root, &tag));
     let test_root = checkout.join("libcxx").join("test");
     if !test_root.join("support").join("test_macros.h").is_file() {
@@ -398,17 +488,9 @@ fn execute(opts: &Options) -> Result<bool, String> {
             checkout.display()
         ));
     }
-    if !opts.list && !toolchain.libcxx_include().is_dir() {
-        return Err(format!(
-            "no libc++ headers at {} (KILN_ORACLE={}); install libc++-{}-dev or pick \
-             another KILN_ORACLE",
-            toolchain.libcxx_include().display(),
-            toolchain.version,
-            toolchain.version
-        ));
-    }
+    let libcxx = if opts.list { None } else { libcxx_install(&root, toolchain)? };
     let roots: Vec<String> = if opts.dirs.is_empty() || opts.gate.is_some() {
-        let mut r: Vec<String> = GATE_M3.iter().map(|s| (*s).to_owned()).collect();
+        let mut r = gate_dirs(opts.gate.as_deref().unwrap_or("m3"));
         r.extend(opts.dirs.iter().cloned());
         r
     } else {
@@ -469,6 +551,8 @@ fn execute(opts: &Options) -> Result<bool, String> {
         checkout: checkout.clone(),
         tag,
         llvm_dir: toolchain.llvm_dir(),
+        clang_compat: toolchain.version,
+        libcxx,
         resource_dir: root.join("resource"),
         features: features.clone(),
         libcxx_version,
@@ -603,11 +687,12 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
     let kiln_version =
         crate::util::identify(&cfg.kiln).map_or_else(|_| "unknown".to_owned(), |id| id.version);
     let mut command = "cargo xtask libcxx".to_owned();
-    if cfg.tag != TESTS_TAG {
+    let gate = opts.gate.as_deref().unwrap_or("m3");
+    if cfg.tag != gate_tag(gate) {
         let _ = write!(command, " --tag {}", cfg.tag);
     }
     if opts.gate.is_some() || opts.dirs.is_empty() {
-        command.push_str(" --gate m3");
+        let _ = write!(command, " --gate {gate}");
     }
     for d in &opts.dirs {
         command.push(' ');
@@ -630,14 +715,29 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
         let _ = write!(command, " --run-timeout-long {}", opts.long_run_timeout.as_secs_f64());
     }
     let _ = write!(command, " -j {}", opts.jobs);
-    let mut flags = cfg.base_compile_flags();
-    for f in &mut flags {
-        if let Some(r) = f.strip_prefix(&root.display().to_string()) {
-            *f = format!("<repo>{r}");
-        } else if let Some(r) = f.strip_prefix(&cfg.checkout.display().to_string()) {
-            *f = format!("<llvm-project>{r}");
+    // Paths are written relative to the checkouts, so the page does not
+    // name the machine: the tests checkout, its `.toolchain` directory
+    // (which holds an extracted libc++ tree), then the repo.
+    let shorten = |f: &str| {
+        let toolchain_dir = cfg.checkout.parent().map(Path::to_path_buf).unwrap_or_default();
+        let subst = [
+            (&cfg.checkout, "<llvm-project>"),
+            (&toolchain_dir, "<toolchain>"),
+            (&root.to_path_buf(), "<repo>"),
+        ];
+        for (base, name) in subst {
+            if base.as_os_str().is_empty() {
+                continue;
+            }
+            if let Some(i) = f.find(&base.display().to_string()) {
+                let rest = &f[i + base.display().to_string().len()..];
+                return format!("{}{name}{rest}", &f[..i]);
+            }
         }
-    }
+        f.to_owned()
+    };
+    let flags: Vec<String> = cfg.base_compile_flags().iter().map(|f| shorten(f)).collect();
+    let link: Vec<String> = cfg.link_flags().iter().map(|f| shorten(f)).collect();
     report::RunInfo {
         kiln_version,
         profile: profile_text(opts),
@@ -650,7 +750,7 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
         target: features::TARGET.to_owned(),
         command,
         compile_flags: format!("{} <ADDITIONAL_COMPILE_FLAGS> <test>", flags.join(" ")),
-        link_flags: format!("t.o -o t.exe {}", Config::link_flags().join(" ")),
+        link_flags: format!("t.o -o t.exe {}", link.join(" ")),
         features: cfg.features.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", "),
         limits: format!(
             "{} per process (kiln: plus its stack reservation); compile/link timeout {} s; run timeout {} s ({} s for long tests); -j {}",
@@ -808,14 +908,40 @@ mod tests {
         for bad in ["22.1.8", "llvmorg-", "llvmorg-../x", "llvmorg-1 2"] {
             assert!(parse(&["--tag", bad]).is_err(), "{bad}");
         }
-        assert_eq!(resolve_tag(None, None).unwrap(), TESTS_TAG);
-        assert_eq!(resolve_tag(None, Some("")).unwrap(), TESTS_TAG);
-        assert_eq!(resolve_tag(None, Some("llvmorg-22.1.8")).unwrap(), "llvmorg-22.1.8");
+        assert_eq!(resolve_tag(None, None, None).unwrap(), TESTS_TAG);
+        assert_eq!(resolve_tag(None, None, Some("")).unwrap(), TESTS_TAG);
+        assert_eq!(resolve_tag(None, None, Some("llvmorg-22.1.8")).unwrap(), "llvmorg-22.1.8");
         assert_eq!(
-            resolve_tag(Some("llvmorg-20.1.0"), Some("llvmorg-22.1.8")).unwrap(),
+            resolve_tag(Some("llvmorg-20.1.0"), None, Some("llvmorg-22.1.8")).unwrap(),
             "llvmorg-20.1.0"
         );
-        assert!(resolve_tag(None, Some("banana")).is_err());
+        assert!(resolve_tag(None, None, Some("banana")).is_err());
+        // A gate pins its release over the environment; --tag beats both.
+        assert_eq!(resolve_tag(None, Some("m3"), Some("llvmorg-22.1.8")).unwrap(), TESTS_TAG);
+        assert_eq!(resolve_tag(None, Some("m4"), None).unwrap(), M4_TAG);
+        assert_eq!(
+            resolve_tag(Some("llvmorg-22.1.0"), Some("m4"), None).unwrap(),
+            "llvmorg-22.1.0"
+        );
+        assert_eq!(tag_major(TESTS_TAG), Some(19));
+        assert_eq!(tag_major(M4_TAG), Some(22));
+        assert_eq!(tag_major("llvmorg-23-init"), Some(23));
+        assert_eq!(tag_major("llvmorg-x"), None);
+    }
+
+    /// The M4 gate is the M3 gate plus the M4 exit headers' directories,
+    /// none of them twice (docs/ROADMAP.md M4).
+    #[test]
+    fn gates() {
+        assert_eq!(gate_dirs("m3"), GATE_M3);
+        let m4 = gate_dirs("m4");
+        assert_eq!(&m4[..GATE_M3.len()], GATE_M3);
+        assert_eq!(m4.len(), GATE_M3.len() + GATE_M4_EXTRA.len());
+        let mut sorted = m4.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), m4.len());
+        assert_eq!(parse(&["--gate", "m4"]).unwrap().unwrap().gate.as_deref(), Some("m4"));
     }
 
     /// Two tags' checkouts coexist under `.toolchain/libcxx-<tag>`; the

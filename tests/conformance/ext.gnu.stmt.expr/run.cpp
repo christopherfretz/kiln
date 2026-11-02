@@ -26,7 +26,7 @@ int main() {
   });
   int d = ({ int t = c; ({ t + 1; }); });
   ({ g = 10; (void)0; });
-  int e = ({ bump(); ; });
+  int e = ({ bump(); });
   int *p = ({ static int s[2] = {4, 5}; s; });
   bool f = ({ g > 0; });
   printf("%d %d %d %d %d %d %d\n", a, b, c, d, e, *p, f);

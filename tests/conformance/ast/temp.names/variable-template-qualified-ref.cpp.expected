@@ -4,15 +4,15 @@ TranslationUnitDecl
 | | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
 | | |-VarDecl v 'const int' constexpr cinit
 | | | `-ImplicitCastExpr 'const int' <IntegralCast>
-| | |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+| | |   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'T'
 | | `-VarTemplateSpecializationDecl referenced v 'const int' implicit_instantiation constexpr cinit value=4
 | |   |-TemplateArgument type 'int'
 | |   `-ImplicitCastExpr 'const int' <IntegralCast>
-| |     `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+| |     `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'int'
 | `-VarTemplateSpecializationDecl referenced v 'const int' implicit_instantiation constexpr cinit value=4
 |   |-TemplateArgument type 'int'
 |   `-ImplicitCastExpr 'const int' <IntegralCast>
-|     `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|     `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'int'
 |-CXXRecordDecl struct S definition
 | |-VarTemplateDecl w
 | | |-TemplateTypeParmDecl class depth 0 index 0 T

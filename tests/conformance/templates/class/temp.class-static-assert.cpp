@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.inst]/3, [dcl.pre]/10: a static_assert member is instantiated (and
 // evaluated) with the class; a dependent one is checked per specialization.
 template <class T, int N> struct Arr {

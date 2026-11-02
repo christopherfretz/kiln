@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 int *a() { return new int; }
 int *b() { return new int(3); }
 int *c() { return new int{4}; }

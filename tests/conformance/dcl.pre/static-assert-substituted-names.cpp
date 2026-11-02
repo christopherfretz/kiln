@@ -1,18 +1,20 @@
 // [dcl.pre]/12, [temp.res]: a failed requirement prints a qualified name's qualifier with its template arguments resolved and canonical, and explicit template arguments canonical, as clang does (WP-303)
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 29:15 error "static assertion failed due to requirement 'n::tr<int, int>::value'"
-//@ diag: 30:15 error "static assertion failed due to requirement 'tr<n::A, int>::value'"
-//@ diag: 31:15 error "static assertion failed due to requirement 'tr<A, int>::In::w'"
-//@ diag: 32:15 error "static assertion failed due to requirement 'n::vt<n::tr<n::A, int>>'"
-//@ diag: 33:15 error "static assertion failed due to requirement 'n::V<3>::value'"
-//@ diag: 34:15 error "static assertion failed due to requirement 'n::tr<int, long>::value'"
-//@ diag: 35:15 error "static assertion failed due to requirement 'ok<int>(0)'"
-//@ diag: 36:15 error "static assertion failed due to requirement 'tr<n::A, int>::ok(0)'"
-//@ diag: 37:15 error "static assertion failed due to requirement 'tr<n::A, int>::ok(0)'"
-//@ diag: 39:17 error "static assertion failed due to requirement 'n::tr<n::A, int>::value || n::vt<n::A *>': f"
-//@ diag: 42:15 note "in instantiation of function template specialization 'f<n::A>' requested here"
-//@ diag: 40:17 error "static assertion failed due to requirement 'ok<n::A>(0)': g"
+//@ diag: 31:15 error "static assertion failed due to requirement 'n::tr<int, int>::value'"
+//@ diag: 32:15 error "static assertion failed due to requirement 'tr<n::A, int>::value'"
+//@ diag: 33:15 error "static assertion failed due to requirement 'tr<A, int>::In::w'"
+//@ diag: 34:15 error "static assertion failed due to requirement 'n::vt<n::tr<n::A, int>>'"
+//@ diag: 35:15 error "static assertion failed due to requirement 'n::V<3>::value'"
+//@ diag: 36:15 error "static assertion failed due to requirement 'n::tr<int, long>::value'"
+//@ diag: 37:15 error "static assertion failed due to requirement 'ok<int>(0)'"
+//@ diag: 38:15 error "static assertion failed due to requirement 'tr<n::A, int>::ok(0)'"
+//@ diag: 39:15 error "static assertion failed due to requirement 'tr<n::A, int>::ok(0)'"
+//@ diag: 41:17 error "static assertion failed due to requirement 'n::tr<n::A, int>::value || n::vt<n::A *>': f"
+//@ diag: 44:15 note "in instantiation of function template specialization 'f<n::A>' requested here"
+//@ diag: 42:17 error "static assertion failed due to requirement 'ok<n::A>(0)': g"
+//@ requires: clang<22
+// clang 22 emits error: static assertion failed due to requirement 'n::tr<n::A, int>::value'; WP-355 residual
 namespace n {
 struct A {};
 template <class T, class U = int> struct tr {

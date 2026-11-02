@@ -4,9 +4,10 @@
 // mismatch is diagnosed when the call operator is instantiated.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 12:63 error "pack expansion contains parameter pack 'P' that has a different length (3 vs. 2) from outer parameter packs"
-//@ diag: 12:10 note "in instantiation of function template specialization 'f(int, int, int)::(anonymous class)::operator()<0, 1>' requested here"
-//@ diag: 14:10 note "in instantiation of function template specialization 'f<int, int, int>' requested here"
+//@ diag: 13:63 error "pack expansion contains parameter pack 'P' that has a different length (3 vs. 2) from outer parameter packs"
+//@ diag: 13:10 note "in instantiation of function template specialization 'f(int, int, int)::(lambda)::operator()<0, 1>' requested here"
+//@ diag: 15:10 note "in instantiation of function template specialization 'f<int, int, int>' requested here"
+//@ requires: clang>=22
 template <int... I> struct seq {};
 template <class... Idx> long f(Idx... idx) {
   return [&]<int... P>(seq<P...>) { return ((idx * long(P)) + ... + 0L); }(seq<0, 1>());

@@ -6,16 +6,18 @@
 // instantiated; a default member initializer is at class scope.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 24:14 error "initializer element is not a compile-time constant"
-//@ diag: 25:14 error "initializer element is not a compile-time constant"
-//@ diag: 28:12 error "initializer element is not a compile-time constant"
-//@ diag: 31:25 error "initializer element is not a compile-time constant"
-//@ diag: 34:8 error "initializer element is not a compile-time constant"
-//@ diag: 35:18 error "initializer element is not a compile-time constant"
-//@ diag: 36:16 error "initializer element is not a compile-time constant"
-//@ diag: 37:11 error "initializer element is not a compile-time constant"
-//@ diag: 29:29 error "initializer element is not a compile-time constant"
-//@ diag: 30:11 note "in instantiation of variable template specialization 'vt<int>' requested here"
+//@ diag: 26:14 error "initializer element is not a compile-time constant"
+//@ diag: 27:14 error "initializer element is not a compile-time constant"
+//@ diag: 30:12 error "initializer element is not a compile-time constant"
+//@ diag: 33:25 error "initializer element is not a compile-time constant"
+//@ diag: 36:8 error "initializer element is not a compile-time constant"
+//@ diag: 37:18 error "initializer element is not a compile-time constant"
+//@ diag: 38:16 error "initializer element is not a compile-time constant"
+//@ diag: 39:11 error "initializer element is not a compile-time constant"
+//@ diag: 31:29 error "initializer element is not a compile-time constant"
+//@ diag: 32:11 note "in instantiation of variable template specialization 'vt<int>' requested here"
+//@ requires: clang<22
+// clang 22 emits error: initializer element is not a compile-time constant; WP-355 residual
 struct P { int a, b; };
 int g();
 int x = (int){5};

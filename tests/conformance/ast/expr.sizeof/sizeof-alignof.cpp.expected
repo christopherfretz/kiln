@@ -8,21 +8,21 @@ TranslationUnitDecl
 |   |-DeclStmt
 |   | `-VarDecl referenced arr 'int[7]'
 |   `-ReturnStmt
-|     `-BinaryOperator 'unsigned long' '+'
-|       |-BinaryOperator 'unsigned long' '+'
-|       | |-BinaryOperator 'unsigned long' '+'
-|       | | |-BinaryOperator 'unsigned long' '+'
-|       | | | |-BinaryOperator 'unsigned long' '+'
-|       | | | | |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|     `-BinaryOperator '__size_t':'unsigned long' '+'
+|       |-BinaryOperator '__size_t':'unsigned long' '+'
+|       | |-BinaryOperator '__size_t':'unsigned long' '+'
+|       | | |-BinaryOperator '__size_t':'unsigned long' '+'
+|       | | | |-BinaryOperator '__size_t':'unsigned long' '+'
+|       | | | | |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof
 |       | | | | | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int' non_odr_use_unevaluated
-|       | | | | `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'S'
-|       | | | `-UnaryExprOrTypeTraitExpr 'unsigned long' alignof 'S'
-|       | | `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|       | | | | `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'S'
+|       | | | `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' alignof 'S'
+|       | | `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof
 |       | |   `-DeclRefExpr 'int[7]' lvalue Var 'arr' 'int[7]' non_odr_use_unevaluated
-|       | `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int[3]'
-|       `-UnaryExprOrTypeTraitExpr 'unsigned long' alignof 'double'
+|       | `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'int[3]'
+|       `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' alignof 'double'
 `-StaticAssertDecl
   `-BinaryOperator 'bool' '=='
-    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'S'
-    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'S'
+    `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
       `-IntegerLiteral 'int' 16

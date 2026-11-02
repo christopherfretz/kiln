@@ -40,12 +40,12 @@ TranslationUnitDecl
 |   `-FieldDecl b 'EnableIfT<(1 > 0), char>':'char'
 |-StaticAssertDecl
 | `-BinaryOperator 'bool' '=='
-|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'ByType<char>'
-|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|   |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'ByType<char>'
+|   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'int'
 `-StaticAssertDecl
   `-BinaryOperator 'bool' '=='
-    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'ByParam<1>'
-    `-BinaryOperator 'unsigned long' '*'
-      |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'ByParam<1>'
+    `-BinaryOperator '__size_t':'unsigned long' '*'
+      |-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
       | `-IntegerLiteral 'int' 2
-      `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'long'
+      `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'long'

@@ -2,6 +2,8 @@
 // nested-name-specifier; on a dependent object or qualifier it is a
 // CXXDependentScopeMemberExpr.
 //@ expect: ast
+//@ requires: clang>=22
+//@ xfail(kiln): clang 22 types the base cast of `d.::B::m` as written, '::B' (WP-355 residual)
 struct B {
   int m;
   virtual int f() { return 1; }

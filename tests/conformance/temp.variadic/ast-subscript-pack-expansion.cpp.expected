@@ -10,7 +10,7 @@ TranslationUnitDecl
 |       `-CXXOperatorCallExpr '<dependent type>' '[]'
 |         |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'operator[]' empty
 |         |-DeclRefExpr 'T' lvalue ParmVar 'm' 'T'
-|         `-PackExpansionExpr '<dependent type>' lvalue
+|         `-PackExpansionExpr 'I' lvalue
 |           `-DeclRefExpr 'I' lvalue ParmVar 'is' 'I...'
 |-FunctionTemplateDecl two
 | |-TemplateTypeParmDecl referenced class depth 0 index 0 T

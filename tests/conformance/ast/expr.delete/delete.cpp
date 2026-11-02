@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 struct S { int a; };
 void a(int *p) { delete p; }
 void b(int *p) { delete[] p; }

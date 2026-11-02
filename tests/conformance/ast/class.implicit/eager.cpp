@@ -2,6 +2,7 @@
 //@ ast-implicit
 //@ ast-filter: eager
 //@ xfail(kiln): injected-class-names are not declared yet (spec/sema-class.md §2.2); the special members match
+//@ requires: clang>=22
 // [class.default.ctor]/1, [class.copy.ctor]/6, [class.copy.assign]/2,
 // [class.dtor]/2: which implicit special members are declared at the end of
 // an unreferenced class definition. Most are declared lazily on first lookup

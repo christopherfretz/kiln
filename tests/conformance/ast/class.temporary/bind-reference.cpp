@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: f
+//@ requires: clang>=22
 // [dcl.init.ref]/5.3.1, 5.4.2, [class.temporary]/4, /6, [conv.rval]:
 // references bound to temporaries. A reference-compatible prvalue is
 // adjusted to the reference's cv-qualification, materialized and extended

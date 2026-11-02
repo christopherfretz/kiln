@@ -8,6 +8,6 @@ TranslationUnitDecl
 |-VarDecl u 'const char[7]' cinit
 | `-StringLiteral 'const char[7]' "onetwo"
 `-VarDecl n 'unsigned long' cinit
-  `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+  `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof
     `-ParenExpr 'const char[5]' lvalue
       `-StringLiteral 'const char[5]' lvalue "abcd"

@@ -3,21 +3,22 @@
 // template-id names no non-template member function.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 27:51 error "'h' following the 'template' keyword does not refer to a template"
-//@ diag: 25:17 note "declared as a non-template here"
-//@ diag: 34:13 error "no matching member function for call to 'f'"
-//@ diag: 24:45 note "candidate function template not viable: requires single argument 'u', but 2 arguments were provided"
-//@ diag: 22:36 note "candidate function template not viable: requires 0 arguments, but 2 were provided"
-//@ diag: 28:42 error "no matching member function for call to 'f'"
-//@ diag: 29:10 note "in instantiation of function template specialization 'c<int>' requested here"
-//@ diag: 24:45 note "candidate function template not viable: requires single argument 'u', but 2 arguments were provided"
-//@ diag: 22:36 note "candidate function template not viable: requires 0 arguments, but 2 were provided"
-//@ diag: 30:51 error "'h' following the 'template' keyword does not refer to a template"
-//@ diag: 31:10 note "in instantiation of function template specialization 'd<X>' requested here"
-//@ diag: 25:17 note "declared as a non-template here"
-//@ diag: 24:77 error "invalid operands to binary expression ('unsigned long' and 'std::nullptr_t')"
-//@ diag: 32:42 note "in instantiation of function template specialization 'X::f<int, std::nullptr_t>' requested here"
-//@ diag: 33:10 note "in instantiation of function template specialization 'e<int>' requested here"
+//@ diag: 28:51 error "'h' following the 'template' keyword does not refer to a template"
+//@ diag: 26:17 note "declared as a non-template here"
+//@ diag: 35:13 error "no matching member function for call to 'f'"
+//@ diag: 25:45 note "candidate function template not viable: requires single argument 'u', but 2 arguments were provided"
+//@ diag: 23:36 note "candidate function template not viable: requires 0 arguments, but 2 were provided"
+//@ diag: 29:42 error "no matching member function for call to 'f'"
+//@ diag: 30:10 note "in instantiation of function template specialization 'c<int>' requested here"
+//@ diag: 25:45 note "candidate function template not viable: requires single argument 'u', but 2 arguments were provided"
+//@ diag: 23:36 note "candidate function template not viable: requires 0 arguments, but 2 were provided"
+//@ diag: 31:51 error "'h' following the 'template' keyword does not refer to a template"
+//@ diag: 32:10 note "in instantiation of function template specialization 'd<X>' requested here"
+//@ diag: 26:17 note "declared as a non-template here"
+//@ diag: 25:77 error "invalid operands to binary expression ('__size_t' (aka 'unsigned long') and 'std::nullptr_t')"
+//@ diag: 33:42 note "in instantiation of function template specialization 'X::f<int, std::nullptr_t>' requested here"
+//@ diag: 34:10 note "in instantiation of function template specialization 'e<int>' requested here"
+//@ requires: clang>=22
 struct X {
   template <class T> constexpr int f() const { return sizeof(T); }
   constexpr int f(int) const { return -1; }

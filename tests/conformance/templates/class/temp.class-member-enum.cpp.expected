@@ -9,7 +9,7 @@ TranslationUnitDecl
 | | |   `-BinaryOperator 'int' '+'
 | | |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
 | | |     `-IntegerLiteral 'int' 1
-| | `-FieldDecl k 'Kind':'Flags::Kind'
+| | `-FieldDecl k 'Kind'
 | `-ClassTemplateSpecializationDecl struct Flags definition implicit_instantiation
 |   |-TemplateArgument value 'int' 4
 |   |-EnumDecl Kind
@@ -27,7 +27,7 @@ TranslationUnitDecl
 |   |         | |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
 |   |         | `-IntegerLiteral 'int' 4
 |   |         `-IntegerLiteral 'int' 1
-|   `-FieldDecl k 'Kind':'Flags<4>::Kind'
+|   `-FieldDecl k 'Kind'
 `-VarDecl v 'int' cinit
   `-ImplicitCastExpr 'int' <IntegralCast>
     `-DeclRefExpr 'Flags<4>::Kind' EnumConstant 'B' 'Flags<4>::Kind'

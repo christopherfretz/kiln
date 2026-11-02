@@ -100,9 +100,9 @@ contract is spec/harness.md "Resource limits".
 crate artifact that vanished mid-build) it runs the corpus twice, and fails
 on any FAIL, XPASS, ERROR or KILLED in either run:
 
-- `cargo xtask test --compiler clang++-19`: the corpus validates itself, so a
-  test that clang 19 does not pass is caught before it is used to judge kiln
-  (skipped with a note when clang 19 is absent, and under `--quick`; GitHub
+- `cargo xtask test --compiler clang++-22`: the corpus validates itself, so a
+  test that clang 22 does not pass is caught before it is used to judge kiln
+  (skipped with a note when clang 22 is absent, and under `--quick`; GitHub
   CI installs it);
 - `cargo xtask test` with the kiln just built: kiln must pass everything it
   is not marked `xfail(kiln)`/`skip(kiln)` for, so a kiln regression in the
@@ -202,21 +202,30 @@ a query, not a guess.
 
 ## GitHub Actions
 
+Both oracles are gates (the two-oracle policy, below): `KILN_ORACLE=19
+cargo xtask ci --quick` must be green too, and before a merge that touches
+an expectation `cargo xtask test --compiler clang++-19 <dirs>` checks the
+corpus against clang 19 as well.
+
 `.github/workflows/ci.yml` runs the same `cargo xtask ci` (full form, clang
-self-check included) on every push to `main`, on every pull request and every
+self-check included) and then `KILN_ORACLE=19 cargo xtask ci --quick` on every push to `main`, on every pull request and every
 merge-queue group (`merge_group`). A newer push to the same ref cancels the
 older run (`concurrency: ci-<ref>`).
 
 The job runs in a `debian:trixie` container on the `ubuntu-24.04-arm`
-runner: the same aarch64 Debian 13 with Debian's clang 19.1.7, GCC 14 and
-libc++ 19 as the development container. The packages are installed in the
-first step (`clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev`,
-plus `build-essential procps time`). The environment is pinned because the
+runner: the same aarch64 Debian 13 with Debian's clang 22.1.8 and 19.1.7,
+GCC 14 and libc++ 19 as the development container. The packages are
+installed in the first step (`clang-19 llvm-19 lld-19 libc++-19-dev
+libc++abi-19-dev clang-22 llvm-22 lld-22`, plus `build-essential procps
+time`). `libc++-22-dev` conflicts with `libc++-19-dev`, so libc++ 22 is
+an extracted package tree under `.toolchain/libcxx-22-root` that only the
+M4 libc++ gate uses (spec/libcxx.md "Toolchain"); the corpus does not
+need it. The environment is pinned because the
 differential tests depend on the host as well as on clang. They check
 search paths, `__has_builtin`/feature tables, target defaults and the
 host's `va_list` against goldens recorded with that clang on that host.
-**Oracle-version assumption:** the reference oracle is Debian's clang
-19.1.7, and kiln models clang 19.1.3 and later. An older 19.1 (Ubuntu
+**Oracle-version assumption:** the reference oracles are Debian's clang
+22.1.8 and 19.1.7, and kiln models clang 22.1 and clang 19.1.3 and later. An older 19.1 (Ubuntu
 24.04 ships 19.1.1) is tolerated only through the oracle defects listed
 above ("The defects found so far"): the corpus self-check and the kiln run pass
 with it (the GH111477 probes skip), but it is not what CI runs.
@@ -249,31 +258,44 @@ the local run is still the merge gate (docs/AGENTS.md rule 3).
 
 ## Differential testing against clang
 
-`clang-19` is the oracle for everything that is not a kiln-specific feature.
+`clang-22` is the oracle for everything that is not a kiln-specific feature,
+and `clang-19` is the second oracle.
 
-The oracle release is selected by `KILN_ORACLE` (`19`, the default and the
-release the M3 gate and its numbers stay on, or `22` for the M4+ switch,
-WP-184). It names `clang++-N`, `opt-N`, `llc-N`, `FileCheck-N` and
+The oracle release is selected by `KILN_ORACLE` (`22`, the default since
+WP-355, or `19`, the release the M3 gate and its numbers stay on). It names `clang++-N`, `opt-N`, `llc-N`, `FileCheck-N` and
 `/usr/lib/llvm-N` in one place (`xtask/src/oracle.rs`); `xtask test` and
 `ci` use `clang++-N` as the oracle and self-check compiler and run kiln++
 with `KILN_LLVM_DIR=/usr/lib/llvm-N`, `ir_vs_clang` runs `clang++-N`/`opt-N`,
 and `xtask libcxx --tag` picks a libc++ test checkout
-(`.toolchain/libcxx-<tag>`, one per release). Until steps B–E of
-docs/status/wp-184-oracle-switch.md land, the corpus is baselined on 19 and
-`KILN_ORACLE=22` runs report FAILs (never mapping-table ERRORs). Contract:
-spec/harness.md "Oracle toolchain".
+(`.toolchain/libcxx-<tag>`, one per release). Contract: spec/harness.md
+"Oracle toolchain".
+
+**Two-oracle policy (WP-355).** The corpus is green under both releases.
+Goldens, `//@ diag:` wording and the IR-diff baseline are clang 22's. An
+expectation the two releases disagree on is pinned with `requires:`:
+`clang>=22` when clang 22 is the contract (a C++26 feature clang 19 lacks,
+reworded diagnostics such as `'__size_t' (aka 'unsigned long')` or
+`(lambda)` in instantiation notes, re-sugared AST dumps), with `xfail(kiln)`
+and a reason where kiln lacks the feature; `clang<22` when kiln has not
+followed clang 22 yet (the residual list in
+docs/status/wp-184-oracle-switch.md, each a follow-up). A kiln-only test
+pinned to one release runs kiln at that release's compatibility level under
+either oracle, so kiln's clang-22 behaviour stays tested in the 19 run and
+vice versa. Behaviour changes between the releases (not wording) cite the
+standard in the test header. The M3 libc++ gate stays on 19; M4+ gates run
+on libc++ 22.
 
 **Clang compatibility level.** kiln reproduces one clang release's
 predefined macros and `__has_builtin`/`__has_feature`/`__has_extension`/
 `__has_attribute`/`__has_cpp_attribute` answers, chosen by
-`-fclang-compat=<major>`: 19 (the default) or 22 (spec/pp.md "clang
+`-fclang-compat=<major>`: 19 (kiln++'s own default) or 22 (spec/pp.md "clang
 compatibility level"; WP-263). The test runner passes the oracle's major
 version, so `KILN_ORACLE=22` (or `--oracle clang++-22`) compares kiln at
 level 22 with clang 22 and headers take the same `#if` branches under both. The
 `__cpp_*` feature-test macros are not part of the level: they follow what
 kiln implements (docs/status/cxx-features.md). Builtins that only clang 22
-has are tested by `skip(clang)` tests that were checked by hand against
-clang++-22.
+has are tested by `requires: clang>=22` tests (WP-355), checked against
+clang++-22 by the self-check.
 - `-E`: token-wise comparison after both outputs are re-lexed with
   `kiln_lex`. Identifiers and literals compare by spelling, punctuators by
   kind (a digraph equals its primary spelling), and whitespace is ignored.
