@@ -1305,10 +1305,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             if !template_kw && next == TokKind::Punct(Punct::ColonColon) {
                 let stop = limit == Some(self.pos + 1);
                 let loc = self.bump().span.lo;
+                let cc = self.tok().span.lo;
                 if !stop {
                     self.bump();
                 }
-                qual = Some(self.s.act_on_nested_name_component(qual, name, loc).ok_or(())?);
+                let q = self.s.act_on_nested_name_component(qual, name, loc).ok_or(())?;
+                self.s.act_on_nns_component_use(q.1, cc);
+                qual = Some(q);
                 if stop {
                     break;
                 }

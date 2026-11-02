@@ -50,6 +50,15 @@ impl Sema<'_, '_> {
     /// template pattern's: clang's `CheckTemplateIdType` instantiates the
     /// pattern's attributes onto it before diagnosing the use.
     fn own_deprecation(&self, d: DeclId) -> Option<AttrId> {
+        if self.kind_of(d) == DeclKind::Namespace {
+            // Not inherited by a reopening (`act_on_namespace_attrs`).
+            let l = self.ast.latest(d);
+            return self
+                .ast
+                .lists
+                .iter::<AttrId>(self.ast.attrs.of_decl(l))
+                .find(|&a| self.ast.attrs.get(a).kind == AttrKind::DEPRECATED);
+        }
         if let Some(a) = self.find_attr(self.ast.latest(d), AttrKind::DEPRECATED) {
             return Some(a);
         }
@@ -122,6 +131,51 @@ impl Sema<'_, '_> {
             return;
         }
         self.emit(msg);
+    }
+
+    /// The attribute-specifier-seq of namespace definition `ns`
+    /// ([namespace.def]/1, [dcl.attr.grammar]/5). It belongs to this
+    /// definition only: a reopening neither inherits nor adds to it, and a
+    /// name lookup finding the namespace names its latest definition
+    /// (clang merges no namespace attributes), so `[[deprecated]]` warns
+    /// only while that definition is the latest. On an unnamed namespace
+    /// `[[deprecated]]` is ignored with a warning, as clang does.
+    pub fn act_on_namespace_attrs(&mut self, ns: DeclId, attrs: &[AttrId]) {
+        if attrs.is_empty() {
+            return;
+        }
+        let mut kept = Vec::with_capacity(attrs.len());
+        for &a in attrs {
+            let attr = *self.ast.attrs.get(a);
+            if attr.kind == AttrKind::DEPRECATED && self.ast.decls.get(ns).name().is_empty() {
+                let d = self.diag(DiagId::sema_deprecated_anonymous_namespace, attr.loc);
+                self.emit(d);
+                continue;
+            }
+            kept.push(a);
+        }
+        if !kept.is_empty() {
+            let _ = self.builder().attach_attrs(ns, &kept);
+        }
+    }
+
+    /// Namespace `ns` named at `loc` by a nested-name-specifier, a
+    /// using-directive or a namespace-alias-definition: a use
+    /// ([dcl.attr.deprecated]/4). A namespace alias is not: clang warns
+    /// only where the alias is defined.
+    pub fn act_on_namespace_name_use(&mut self, ns: DeclId, loc: Loc) {
+        if self.kind_of(ns) == DeclKind::Namespace {
+            self.diagnose_deprecated(ns, loc);
+        }
+    }
+
+    /// The nested-name-specifier component `n` just formed, its `::` at
+    /// `cc`: a namespace it names is used there (clang's
+    /// `BuildCXXNestedNameSpecifier` diagnoses at the `::`).
+    pub fn act_on_nns_component_use(&mut self, n: kiln_ast::ids::NnsId, cc: Loc) {
+        if let kiln_ast::types::Nns::Namespace { ns, .. } = self.ast.types.nns_view(n) {
+            self.act_on_namespace_name_use(ns, cc);
+        }
     }
 
     /// A type-name or elaborated-type-specifier naming `d` at `loc`: a
