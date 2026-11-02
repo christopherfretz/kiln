@@ -2232,6 +2232,37 @@ expansion probes for packs (§7.2), the first pack found ends the
 substitution of the lambda's body (no statement error is reported
 for the probe).
 
+**Capture packs** ([expr.prim.lambda.capture]/17, WP-292). A capture
+pack expands the packs of its own initializer, so the `LambdaExpr`
+takes its initializer's dependence without `UNEXPANDED_PACK`
+(`AstBuilder::lambda_expr`).
+  - A simple-capture pack `[ts...]` / `[&ts...]` instantiates to one
+    capture per element of the instantiated function parameter pack. In
+    keep mode (its pack is a generic lambda's, retained while the
+    enclosing template is instantiated) it stays a capture pack of the
+    rebuilt parameter pack (`templ/subst/lambda.rs` `lambda_captures`).
+  - An init-capture pack `[...xs = init]` / `[&...xs = init]` checks that
+    `init` names an unexpanded pack ("pack expansion does not contain any
+    unexpanded parameter packs" at the `...`) and declares a `Var` of
+    type `PackExpansion(auto)` / `PackExpansion(auto &)`; its
+    initializer stays the pattern, undeduced (clang's init-capture pack
+    `VarDecl`). `is_pack_decl` counts it as a pack, so `sizeof...(xs)`
+    and `xs...` in the body work. Instantiation expands the pattern
+    (`expand_pattern_at` at the `...`): each element becomes an ordinary
+    init-capture named `xs`, deduced and initialized as one, and the
+    pattern's variable maps to `DeclOrPack::Pack` of the new variables.
+    An unexpanded result (keep mode) rebuilds the init-capture pack.
+  - Instantiated init-captures carry the pattern's variable in
+    `LambdaCaptureSpec::var` and skip the duplicate-name check (the
+    pattern was checked; an expanded pack's elements share a name). Each
+    pattern init-capture maps positionally to its new variables.
+  - Gap: an init-capture `[x = ts]` whose initializer names an
+    unexpanded pack outside an expansion is not diagnosed ("initializer
+    contains unexpanded parameter pack"). Nor is any other site: the
+    unexpanded-pack check described above is not implemented
+    (`sema_unexpanded_pack` has no emitter; `T x;`, `ts;` in a variadic
+    template are accepted).
+
 ### 7.2 Expansion: `expand(pattern, site) -> Result<Expansion, SubstFail>`
 
 1. **Collect the unexpanded packs** in `pattern`, pruning on
@@ -4256,7 +4287,7 @@ explicit specialization errors remain. The blockers are:
   - Partially substituted pack expansions (`tl<tl<Ts, Us>...>` with
     only `Ts` known) need clang's `SubstTemplateTypeParmPackType`:
     unimplemented ("partially substituted pack expansion").
-  - Lambda init-capture packs: WP-075. Fold-expanded constraints: Q17.
+  - Lambda init-capture packs: §7.1 (WP-292). Fold-expanded constraints: Q17.
   - Pre-existing, seen while testing: `int a[] = {sizeof(Ts)...};`
     reports "sizeof incomplete type" (a reference to an incomplete
     array with a dependent initializer should be type-dependent);
