@@ -674,7 +674,7 @@ impl Parser<'_, '_> {
     /// §9.1, §9.4): a type-id list (each possibly a pack expansion), the
     /// type and dimension of `__array_extent`, or the unevaluated operand
     /// of `__is_lvalue_expr` / `__is_rvalue_expr`.
-    fn parse_type_trait(&mut self, t: TypeTrait) -> ExprId {
+    pub(crate) fn parse_type_trait(&mut self, t: TypeTrait) -> ExprId {
         let loc = self.bump().span.lo;
         let open = self.bump().span.lo;
         match t {

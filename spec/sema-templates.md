@@ -350,6 +350,10 @@ concept-definition   := 'template' template-head 'concept' identifier attribute*
 - One may follow a template-head, or follow a function declarator (a
   trailing clause, stored in the cold map, ast.md §8.1).
 - Operands of `&&` and `||` must be primary expressions.
+- A builtin type-trait call (`__is_trivially_destructible(T)`, any
+  `BuiltinKw::Trait`) is such a primary expression, as in clang's
+  `ParseCastExpression(PrimaryExprOnly)`; libc++'s `<expected>` relies on
+  it (WP-276).
 - For anything else clang's error applies ("parentheses are required
   around this expression in a requires clause", with a fix-it), and the
   parser recovers by parsing a full unary expression.
