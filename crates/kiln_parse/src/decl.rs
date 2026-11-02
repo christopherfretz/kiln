@@ -509,6 +509,8 @@ impl Parser<'_, '_> {
     pub(crate) fn parse_decl_specifiers(&mut self, ctx: DeclaratorContext) -> DeclSpec {
         let mut ds = DeclSpec::new(self.name_begin());
         ds.attrs = std::mem::take(&mut self.lead_decl_attrs);
+        // The spelling of the thread storage class (`_Thread_local`).
+        let mut thread_spelling: Option<String> = None;
         // The end of the leading attribute-specifier-seq: attributes there
         // appertain to the declaration ([dcl.pre]/5).
         let mut lead_end = self.pos();
@@ -598,7 +600,10 @@ impl Parser<'_, '_> {
                 Kw::Extern => ds.set_storage(StorageSpec::Extern, loc),
                 Kw::Register => ds.set_storage(StorageSpec::Register, loc),
                 Kw::Mutable => ds.set_storage(StorageSpec::Mutable, loc),
-                Kw::ThreadLocal => set_flag(&mut ds.thread_local, loc, "thread_local"),
+                Kw::ThreadLocal => {
+                    thread_spelling = Some(self.spelling_of(&self.tok()));
+                    set_flag(&mut ds.thread_local, loc, "thread_local")
+                }
                 Kw::Constexpr | Kw::Consteval | Kw::Constinit => {
                     set_constexpr_kind(&mut ds, k, loc)
                 }
@@ -704,7 +709,32 @@ impl Parser<'_, '_> {
                 self.s.error(DiagId::parse_attributes_not_allowed, at);
             }
         }
+        self.reject_friend_storage(&mut ds, thread_spelling.as_deref().unwrap_or("thread_local"));
         ds
+    }
+
+    /// [class.friend]/6: no storage class in a friend declaration (clang
+    /// `DeclSpec::Finish`, `err_friend_decl_spec`): reported at the
+    /// storage class, or `thread_local` after it (`'static thread_local'
+    /// is invalid in friend declarations`), and dropped, the declaration
+    /// otherwise proceeding as written.
+    fn reject_friend_storage(&mut self, ds: &mut DeclSpec, thread: &str) {
+        if ds.friend.is_none() || ds.storage.is_none() && ds.thread_local.is_none() {
+            return;
+        }
+        let mut name = ds.storage.map(|(s, _)| s.spelling().to_owned()).unwrap_or_default();
+        let mut at = ds.storage.map_or(Loc::INVALID, |(_, l)| l);
+        if let Some(l) = ds.thread_local {
+            if !name.is_empty() {
+                name.push(' ');
+            }
+            name.push_str(thread);
+            at = l;
+        }
+        let d = self.s.diag(DiagId::parse_friend_decl_spec, at).arg(name);
+        self.emit(d);
+        ds.storage = None;
+        ds.thread_local = None;
     }
 
     /// The C11 atomic-type-specifier `_Atomic ( type-id )` (a clang

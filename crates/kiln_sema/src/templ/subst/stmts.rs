@@ -139,8 +139,16 @@ impl Substituter<'_, '_, '_> {
                     .iter::<DeclId>(self.sema.ast.stmts.decl_stmt_decls(s))
                     .collect();
                 let mut out = Vec::with_capacity(ds.len());
-                for &d in &ds {
-                    out.push(self.local_decl(d)?);
+                for (i, &d) in ds.iter().enumerate() {
+                    match self.local_decl(d) {
+                        Ok(x) => out.push(x),
+                        Err(f) => {
+                            // This declaration and the ones after it are
+                            // invalid; a later use is no new error.
+                            self.failed_locals.extend_from_slice(&ds[i..]);
+                            return Err(f);
+                        }
+                    }
                 }
                 if out.len() > 1 {
                     // [dcl.spec.auto.general]/8 with the substituted
@@ -584,9 +592,6 @@ impl Substituter<'_, '_, '_> {
             && self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
         let q = crate::using::Qualifier { ctx, nns, loc };
         let r = self.sema.act_on_using_declarator(using_loc, Some(q), dname, loc, if_exists, None);
-        if r.is_none() && self.sema.kind_of(d) == DeclKind::UnresolvedUsingValue {
-            self.failed_usings.push(d);
-        }
         r.ok_or(SubstFail)
     }
 

@@ -168,6 +168,22 @@ pub(crate) fn drop_noexcept(s: &mut Sema<'_, '_>, f: QualType) -> Option<QualTyp
     Some(s.ast.types.function(p.ret(), &params, p.info(), ExcSpec::None))
 }
 
+/// True if function type `referee` is reference-compatible with
+/// function type `from` only through a function pointer conversion
+/// ([dcl.init.ref]/4: "pointer to `void (int) noexcept`" converts to
+/// "pointer to `void (int)`"), both canonical and unqualified. Such a
+/// reference binds directly, and its conversion sequence is the
+/// identity ([over.ics.ref]/1), like that of an exact match (clang
+/// `ReferenceConversions::Function`).
+pub(crate) fn function_ref_compatible(
+    s: &mut Sema<'_, '_>,
+    referee: QualType,
+    from: QualType,
+) -> bool {
+    s.ast.types.is_function(referee)
+        && drop_noexcept(s, from).is_some_and(|f| s.ast.types.same_type(f, referee))
+}
+
 /// True if a prvalue of `from` converts to `to` by a function pointer
 /// conversion ([conv.fctptr]): "pointer to `noexcept` function" to
 /// "pointer to function", and likewise for pointers to member

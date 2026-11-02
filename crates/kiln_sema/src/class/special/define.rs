@@ -118,8 +118,10 @@ pub(crate) enum DeletedAs {
     /// As `Call`, plus a note on the parameter an argument initializes.
     Param(Diag),
     /// The error of an explicit cast ("... uses deleted function"),
-    /// with the candidate note.
-    Cast(Diag),
+    /// with the candidate note; the cast's `%select` index (no viable
+    /// or an ambiguous constructor: clang's "no matching conversion for
+    /// ..." / "ambiguous conversion for ...", `tryDiagnoseOverloadedCast`).
+    Cast(Diag, &'static str),
     /// An implicit conversion by a deleted converting constructor
     /// ("conversion function from ... invokes a deleted function"), with
     /// the note on the parameter the argument initializes, if any.
@@ -1118,7 +1120,7 @@ impl Sema<'_, '_> {
                 let (deleted_as, param_note, conversion) = match sites.deleted_as {
                     DeletedAs::Call | DeletedAs::Use => (None, None, false),
                     DeletedAs::Param(n) => (None, Some(n), false),
-                    DeletedAs::Cast(d) => (Some(d), None, false),
+                    DeletedAs::Cast(d, _) => (Some(d), None, false),
                     DeletedAs::Conversion(n) => (None, n, true),
                     DeletedAs::Return => (None, None, true),
                 };
@@ -1180,12 +1182,23 @@ impl Sema<'_, '_> {
             Selected::Missing | Selected::Ambiguous => {
                 let ambiguous = matches!(sel, Selected::Ambiguous);
                 let ret = matches!(sites.deleted_as, DeletedAs::Return);
-                let (conversion, param_note) = match sites.deleted_as {
-                    DeletedAs::Conversion(n) => (true, n),
-                    DeletedAs::Return => (true, None),
-                    _ => (false, None),
+                let (conversion, param_note, cast) = match sites.deleted_as {
+                    DeletedAs::Conversion(n) => (true, n, None),
+                    DeletedAs::Return => (true, None, None),
+                    DeletedAs::Cast(_, c) => (false, None, Some(c)),
+                    _ => (false, None, None),
                 };
-                let msg = if conversion {
+                let msg = if let Some(c) = cast
+                    && let [arg] = call.args
+                {
+                    let id = if ambiguous {
+                        DiagId::sema_ovl_ambiguous_conversion_in_cast
+                    } else {
+                        DiagId::sema_ovl_no_conversion_in_cast
+                    };
+                    let from = self.ety(*arg);
+                    self.diag(id, sites.deleted).arg(c).arg(self.ty_arg(from)).arg(self.ty_arg(ty))
+                } else if conversion {
                     let from = call.args.first().map_or(QualType::ERROR, |&a| self.ety(a));
                     let id = if ambiguous {
                         DiagId::sema_ovl_ambiguous_conversion

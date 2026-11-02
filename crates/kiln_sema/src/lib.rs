@@ -47,6 +47,7 @@ mod jump_scope;
 pub mod lambda;
 pub mod literal;
 mod literal_op;
+mod local_friend;
 pub mod lookup;
 pub mod names;
 pub mod new_delete;
@@ -177,6 +178,10 @@ pub struct Sema<'a, 'sm> {
     /// Classes whose definitions are being processed (incomplete until
     /// their closing brace).
     pub(crate) defining: Vec<DeclId>,
+    /// Of those, the ones made invalid by a member of incomplete type
+    /// (clang's `Record->setInvalidDecl()` in `CheckFieldDecl`): a later
+    /// use that needs them complete fails quietly (spec/sema.md §4.3).
+    pub(crate) invalid_defining: kiln_source::fx::FxHashSet<DeclId>,
     /// Enumerations whose definitions are being processed.
     pub(crate) enums: Vec<decl::EnumBuild>,
     /// Block-scope function and `extern` variable declarations, by
@@ -597,6 +602,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
             defining: Vec::new(),
+            invalid_defining: kiln_source::fx::FxHashSet::default(),
             enums: Vec::new(),
             local_externs: Vec::new(),
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),

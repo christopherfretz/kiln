@@ -1577,7 +1577,7 @@ like clang's.
 | `UnaryTransform` | substitute the operand, then apply the builtin (§9.2) |
 | `PackExpansion`, `PackIndexing` | §7 |
 | `InjectedClassName` | §4.7 |
-| `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`; a member goes through `member_map` of the enclosing specialization, and the member class is instantiated if completeness is needed |
+| `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`, and a local in `failed_locals` (its declaration statement failed: the declarator and the rest of its statement) is a silent substitution failure, already diagnosed ([temp.inst]/3; WP-316); a member goes through `member_map` of the enclosing specialization, and the member class is instantiated if completeness is needed |
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
 | `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
 
@@ -1824,6 +1824,24 @@ recomputed exactly as for non-template code (clang's
   names a member as `obj.member`, so only the object is linked (WP-311,
   `tests/conformance/class.union.anon/function-template-locals.cpp`,
   `template-unnamed-members-ast.cpp`).
+  The class body is instantiated under a `MemberClass` frame and each
+  member function body under a `MemberFunction` frame at the outermost
+  local class (clang `InstantiateClass` / `InstantiateClassMembers`,
+  DR1484), so an error inside gets "in instantiation of member class 'L'
+  requested here" / "member function 'L::m' ..."; a nested local class is
+  named through its function (`f()::L::N`, `local_class_decl_name`). A
+  local declaration whose statement failed (a typedef or using of a
+  failed type, a variable, a local class made invalid by a member) stays
+  invalid in `failed_locals`: its later uses fail silently instead of
+  reporting a second error (WP-316; was "not yet implemented: reference
+  to a member of a dependent context"). A local (or member) class
+  instantiated from a template keeps its implicit special members when a
+  member made it invalid, as a specialization does (`ensure_implicit`,
+  clang `CanDeclareSpecialMemberFunction`), so `L()` adds no "no
+  matching constructor".
+  Tests: `temp.inst/failed-local-declaration-uses.cpp`,
+  `temp.deduct/failed-local-parameter-sfinae.cpp` (a failed parameter of
+  a requires-expression or of a deduced function is SFINAE-silent).
 - **Member templates** are created as in §4.6.
 - **`static_assert`** is evaluated with the substituted condition.
 - **`using` declarations** with packs give a `UsingPack` decl.

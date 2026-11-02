@@ -703,7 +703,8 @@ impl Sema<'_, '_> {
         Some(s)
     }
 
-    fn decl_loc(&self, d: DeclId) -> Loc {
+    /// Where declaration `d` was declared (its name).
+    pub(crate) fn decl_loc(&self, d: DeclId) -> Loc {
         self.ast.decls.get(d).loc()
     }
 

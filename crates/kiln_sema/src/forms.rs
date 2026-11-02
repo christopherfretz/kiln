@@ -86,7 +86,7 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name(d))
                 .range(self.expr_range(callee));
             let ics = self.list_arg_ics(to, l);
-            let detail = self.bad_conversion_detail(&ics, Some(i));
+            let detail = self.bad_conversion_detail(&ics, Some(i), None);
             let fl = self.ast.decls.get(d).loc();
             let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);
             self.emit(msg.with_note(note));

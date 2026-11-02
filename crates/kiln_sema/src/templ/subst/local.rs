@@ -13,6 +13,7 @@ use kiln_ast::{DeclId, StmtId};
 
 use super::{DeclOrPack, Substituter};
 use crate::decl::TagUse;
+use crate::templ::stack::FrameKind;
 
 /// A member function defined in a local class, defined once the
 /// outermost local class is complete (the parser replays these bodies
@@ -53,7 +54,11 @@ impl Substituter<'_, '_, '_> {
         let x = self.sema.act_on_tag(kw, name, None, use_, 0, None, loc);
         self.sema.ast.templates.set_instantiated_from(x, d);
         self.locals.insert(d, DeclOrPack::Decl(x));
-        if defined {
+        // The body is instantiated with the function, under its own
+        // context frame (clang `InstantiateClass` from
+        // `VisitCXXRecordDecl` for a local class: "in instantiation of
+        // member class 'L' requested here", at the class name).
+        if defined && self.sema.push_inst_frame(FrameKind::MemberClass, x, d, loc) {
             // A block-scope anonymous union ([class.union.anon]): its
             // object is the declaration statement's next declaration.
             let anon = self.is_anonymous_record(d);
@@ -62,8 +67,11 @@ impl Substituter<'_, '_, '_> {
             } else {
                 let mut v = Vec::new();
                 self.class_body_with(x, d, Some(&mut v), anon);
+                self.sema.pop_inst_frame();
                 self.local_methods(x, &v);
+                return x;
             }
+            self.sema.pop_inst_frame();
         }
         x
     }
@@ -101,6 +109,7 @@ impl Substituter<'_, '_, '_> {
     /// of its member classes), each in its re-entered class scope, then
     /// finishes `outer`'s class contexts.
     fn local_methods(&mut self, outer: DeclId, methods: &[LocalMethod]) {
+        let poi = self.sema.ast.decls.get(outer).loc();
         self.sema.act_on_start_delayed_class(outer);
         for m in methods {
             // The member classes between `outer` and the method's class,
@@ -117,8 +126,14 @@ impl Substituter<'_, '_, '_> {
             for &r in chain.iter().rev() {
                 self.sema.act_on_start_delayed_class(r);
             }
-            if self.sema.ast.definition(m.f).is_none() {
+            // Under its own frame, requested at the outermost local
+            // class (clang `InstantiateClassMembers` from
+            // `VisitCXXRecordDecl`, DR1484).
+            if self.sema.ast.definition(m.f).is_none()
+                && self.sema.push_inst_frame(FrameKind::MemberFunction, m.f, m.pdef, poi)
+            {
                 self.function_def(m.f, m.pdef, m.body);
+                self.sema.pop_inst_frame();
             }
             for &r in &chain {
                 self.sema.act_on_finish_delayed_class(r);

@@ -16,7 +16,7 @@ use crate::Sema;
 use crate::conv::bases::{complete_class, is_derived_from, same_class};
 use crate::conv::{
     self, ConvCtx, IcsCompare, ListArray, RefBinding, SecondStep, StandardConversion,
-    compare_standard_conversions, standard_conversion_from,
+    compare_standard_conversions, function_ref_compatible, standard_conversion_from,
 };
 use crate::init::{InitItem, InitList, InitValue};
 
@@ -373,7 +373,14 @@ impl Sema<'_, '_> {
         } else {
             ArgInfo::of_type(ft, ValueCategory::LValue)
         };
-        self.try_implicit_conversion(&f, to, opts)
+        match self.try_implicit_conversion(&f, to, opts) {
+            // The selection does not convert (a specialization deduced
+            // ignoring its exception specification, [temp.deduct.funcaddr]):
+            // the argument is still the overload set (clang reports it
+            // as `no overload of 'f' matching`).
+            Ics::Bad(_) => Ics::bad(BadKind::NoConversion, a.ty, to),
+            x => x,
+        }
     }
 
     /// Reference-relatedness of `t1` (the referee) and `t2`, both
@@ -444,6 +451,14 @@ impl Sema<'_, '_> {
         let class_src = types.as_record(u2).is_some();
         let class_or_array = class_src || types.is_array(u2);
         let (mut related, derived) = self.ref_related(u1, u2);
+        // A function lvalue binds a reference to the same function type
+        // without `noexcept` directly, as an identity ([dcl.init.ref]/4,
+        // [over.ics.ref]/1): it ranks like the exact match, so
+        // `n(void (&)(int) noexcept)` and `n(void (&)(int))` are
+        // ambiguous for a `noexcept` function (clang).
+        if is_fn && !related {
+            related = function_ref_compatible(self, u1, u2);
+        }
         if related && !q1.contains(q2) && self.unknown_bound_of(u1, u2) {
             related = false;
         }
