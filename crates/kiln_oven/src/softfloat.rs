@@ -9,6 +9,8 @@ use kiln_ast::consts::FloatKind;
 
 use crate::kbc::Op;
 
+pub(crate) mod math;
+
 #[derive(Clone, Copy)]
 struct Fmt {
     /// Precision (significand bits including the leading one).

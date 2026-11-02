@@ -514,12 +514,48 @@ literal is one instruction and one step, not an interpreted loop.
   ill-formed (spec/sema.md §6). Its `NoInitExpr` slots are reached only
   through it.
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
-  constant expression", as clang 19): `__builtin_signbit`, the six
-  ordered comparisons, the math functions; `__builtin_unreachable` when
+  constant expression", as clang 19): the math functions outside the
+  P0533 set below (`sqrt`, `sin`, `exp`, `pow`, ...: `builtin::is_libm`
+  minus `p0533_base`); `__builtin_unreachable` when
   reached; `__builtin_operator_new`/`_delete` outside
   `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
   untyped-memory note; inside them they allocate, "Transient
   allocation", WP-212).
+- **Floating-point math, P0533** (WP-365; `bi::FP_MATH`, sub = float
+  code | op << 4 | `SECOND` for the pointer output; `softfloat::math`):
+  `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`,
+  `lround`/`llround`/`lrint`/`llrint`, `fmod`/`remainder`/`remquo`,
+  `fdim`, `fma`, `frexp`/`ldexp`/`scalbn`/`scalbln`/`ilogb`/`logb`/`modf`,
+  `nextafter`/`nexttoward`, `nextafterf16`/`f16b`, `signbit`, the six
+  comparison macros (`isgreater` ... `isunordered`, quiet: false on NaN)
+  and integer `abs`/`labs`/`llabs` (`bi::IABS`), each in its plain, `f`,
+  `l` and `f128` spellings (`kiln_ast` `builtin::p0533_base`), evaluate
+  exactly in the operand's format: binary16, bfloat16, binary32,
+  binary64, x87 80-bit and binary128 all go through the integer
+  significand code in `softfloat` (no host libm, no host float
+  arithmetic; one rounding, nearest-even, the only mode a constant
+  expression sees). `_Float16`/`__bf16`/`_Float32`/`_Float64` reach the
+  `float`/`double` forms by conversion, as libstdc++'s overloads do.
+  Policy (C23 Annex F, as GCC folds): a call is not a constant
+  (`Fault::Invalid`; "subexpression not valid in a constant expression"
+  inside a function, the bare initializer error at top level) when it
+  raises an IEEE exception other than inexact: invalid (a signaling NaN
+  operand, an out-of-range or NaN `lround`/`lrint` source, `fmod`/
+  `remainder`/`remquo` by zero or of an infinity, inf * 0 or inf - inf in
+  `fma`, `ilogb` of zero/NaN/infinity), overflow (a finite result
+  rounding to infinity in `fma`, `fdim`, `ldexp`, `nextafter`),
+  divide-by-zero (`logb(0)`), or underflow (an inexact subnormal `ldexp`/
+  `fma` result, and every subnormal or zero `nextafter` result, F.10.8.3);
+  `abs` of the most negative value is undefined (a note-less failure,
+  `Fault::Quiet`, so the error lands at the declaration as clang 22's). Exact infinite and NaN
+  results from infinite or quiet-NaN operands are constants. They are
+  evaluated whatever `-fclang-compat` says; codegen's constant-folding
+  prepass leaves them as calls (`clang19_unevaluated`) so the IR still
+  matches clang 19, which evaluates none of them. **Divergences:** GCC
+  14 folds no form of `rint`/`nearbyint`/`lrint` (kiln rounds
+  nearest-even), rejects `fmod(x, inf)` (= x here) and any infinite
+  operand to its MPFR folders (`fma`, `fdim`, `ldexp`), and does not fold
+  the pointer-output `*f128` calls.
 - **Bits** (`bi::CLZ`/`CTZ`/`POPCOUNT`/`BSWAP`): any width up to 128; a
   zero operand to `clz`/`ctz` without the `g` forms' fallback is not a
   constant (no note, as clang).
@@ -676,10 +712,10 @@ literal is one instruction and one step, not an interpreted loop.
   do the GCC `_FloatN` constants libstdc++ `<limits>` names
   (`__builtin_{huge_val,inf,nan,nans}f{16,32,64}`, `__builtin_nansf16b`;
   WP-361, `kiln_ast` `builtin_ids::FLOATN`), converted to the result
-  type; `__builtin_nextafterf16`/`f16b` are declared only and are not
-  constant expressions (nor lowered);
-  `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
-  trap "subexpression not valid", as clang 19. **Divergences:** for the
+  type; `__builtin_nextafterf16`/`f16b` evaluate as the P0533 set above
+  (and lower to an inline bit-level sequence, spec/types.md);
+  `powi`, `verbose_trap` and the non-P0533 `*f128` names trap
+  "subexpression not valid", as clang 19. **Divergences:** for the
   object-size comma rule a call with arguments counts as a read (its
   callee reads them) and one without as none, whatever the callee reads.
 
@@ -983,7 +1019,8 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   is the static pointee type of the placement argument before its
   conversion to `void *` (`bi::DYN` when it was `void *` already). As in
   clang 22's `HandlePlacementNew`, the designated object is the `stat`
-  subobject at `p` (for `bi::DYN`, the outermost object there; inside
+  subobject at `p` (for `bi::DYN`, the subobject the `void *` was made
+  from, below, else the outermost object there; inside
   `std::construct_at` and libc++'s `std::__construct_at` the compiler
   passes `T` instead of `bi::DYN`, since [specialized.construct]/2
   constructs `*location` and libc++ hands the placement a `void *` from
@@ -999,6 +1036,23 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   (`new_aux::BOUND`). It then
   begins the lifetime of `sizeof(T)` bytes, marks them uninitialized, and
   the initializer runs as for any `new` (a constructor call for a class).
+  The designator survives a `void *` that a user function returns
+  (WP-378): a conversion of a non-null `T *` (`T` not `void`) to `void
+  *` lowers to `VoidCast [dst, p, T]` aux `kbc::VOID_TAG`, which records
+  `T` (+ 1) in bits 64..96 of the pointer register, and `Placement`
+  with `bi::DYN` designates the `T` subobject at `p` when there is one.
+  `constexpr void *f(S &s) { return &s.first; }` then makes `new (f(s))
+  int(5)` construct `s.first`, a base `static_cast<B *>(&d)` a `B`, and
+  `new (f(s)) S{}` is "... from 'int' to 'S'", as in clang 22, whose
+  `void *` keeps the full lvalue designator; a `void *` made from `&s`
+  designates `s` (`expr.new/p2747-placement-voidified-subobject*.cpp`).
+  The tag rides registers only: copies, calls, returns and register
+  locals keep it; every pointer operation reads the low 64 bits; a
+  store to memory (a `void *` member, a `void *` local whose address is
+  taken) and a cast back to `T *` drop it, so such a `void *` falls back
+  to the outermost object. Deviation: the tag is a type, not a path, so
+  two subobjects of one type at one offset (empty bases,
+  `[[no_unique_address]]`) are not told apart.
   A placement new allocates nothing: constructing and destroying objects
   in one storage in a loop holds that storage only
   (`expr.new/p2747-placement-churn.cpp`, 100000 objects, one heap
@@ -1305,7 +1359,8 @@ it yet; the unit tests exercise it.
 **Not rolled back.** These effects are all either independent of the trial
 or idempotent:
 - thawed globals and the provisional-resolution cache, which are reverted at
-  the next outermost evaluation;
+  the next outermost evaluation (the provisional objects themselves are
+  kept and reused, "Unknown references");
 - the memo cache, which holds only pure calls with scalar parameters and no
   heap operations, so its entries do not depend on context;
 - constants interned into the AST store, which are deduplicated by content;
@@ -1778,7 +1833,7 @@ follow clang trunk's P3068 branch.
   (`expr.throw/constexpr-throw-ctor-throws.cpp`, a 10000-round loop
   under `oven:` budgets).
   `throw;` is `Throw` aux 1 (the innermost handled exception; none:
-  "rethrow with no active exception").
+  "there is no active exception to rethrow").
 - A try-block executes `TryEnter [handler]`, which pushes a handler
   marker onto the cleanup stack (`Cleanup::func == TRY_MARK`, `this` =
   the handler pc), and pops it with the destructions registered inside
@@ -1792,9 +1847,9 @@ follow clang trunk's P3068 branch.
   `Excs::base` for its duration, so a nested evaluation (a
   `static_assert` in a member instantiated by `ensure_body` while the
   outer evaluation unwinds or is in a handler) has nothing to rethrow
-  ("rethrow with no active exception"), counts no uncaught exception,
-  and may throw without "throw while another exception is already
-  active"; an exception escaping it is uncaught in it
+  ("there is no active exception to rethrow"), counts no uncaught
+  exception, and may throw without "exception thrown out of an object
+  destructor while unrolling another exception"; an exception escaping it is uncaught in it
   (`except.handle/constexpr-nested-evaluation.cpp`). Every frame it leaves is checked first: a
   non-throwing function ([except.spec], `SemaBridge::is_nothrow`,
   resolving a deferred specification) ends the evaluation with
@@ -1816,12 +1871,18 @@ follow clang trunk's P3068 branch.
   public base (`dst` = the (sub)object's address; a by-value handler
   copies it); aux 2 a pointer handler: `nullptr_t` to any pointer, the
   same type, a qualification conversion, a conversion to `void *`
-  (object pointers only), or to an unambiguous public base. A virtual
-  base is reached through the thrown pointer's complete object
-  (`Types::has_complete_object`); a pointer to a base-class subobject
-  whose most derived object holds the virtual base is not yet evaluated
-  ("subexpression not valid in a constant expression"; follow-up)
-  (`except.handle/constexpr-catch-virtual-base-ptr.cpp`).
+  (object pointers only), or to an unambiguous public base. A base
+  that is (in) a virtual base is reached through the most derived object
+  of the thrown pointer's (sub)object ([class.mi]/4, `Oven::vbase_ptr`):
+  the object model locates it (`base_owner`: the complete object, member
+  or array element one of whose subobjects of the pointer's class the
+  pointer designates), and the base's offset is that object's virtual
+  base's plus the base's non-virtual offset in it
+  (`except.handle/constexpr-catch-virtual-base-ptr.cpp`,
+  `constexpr-catch-virtual-base-ptr-subobject.cpp`). A pointer the model
+  cannot place (a subobject of a virtual base of an enclosing object,
+  which no constant evaluation creates before P3533) is "subexpression
+  not valid in a constant expression".
   A `const T&` handler
   with `T` a pointer type matches as aux 2 and binds to a temporary
   holding the converted pointer; any other reference handler of pointer
@@ -1836,16 +1897,18 @@ follow clang trunk's P3068 branch.
   leak and a loop that throws and catches keeps a flat heap (the WP-060
   reclaim rule; `expr.throw/constexpr-throw-churn.cpp` runs a throwing
   loop under the harness `mem<=512` limit).
-- An exception escaping a destructor run by unwinding is "throw while
-  another exception is already active", with "currently active exception
-  thrown here" at the first throw.
+- An exception escaping a destructor run by unwinding is "exception
+  thrown out of an object destructor while unrolling another exception"
+  (the P3068 branch's wording), with "currently active exception thrown
+  here" at the first throw (kiln's addition).
 - An exception that leaves the evaluation (no marker of this evaluation)
   fails it, worded as clang's P3068 branch (`notes::uncaught_note`):
   "unhandled exception: W" at the throw-expression, `W` the `what()`
   string of a class derived from `std::exception` (evaluated silently
   through a virtual call); else, or when that call is not constant,
-  "unhandled exception of type 'T' thrown from here" at the operand for
-  a type holding no data, and "unhandled exception of type 'T' with
+  "unhandled exception of type 'T' thrown from here" at the operand when
+  `T` has size 1 (an empty class, a `char`, a class of one `char`: the
+  branch's `getTypeSizeInChars(T).isOne()`), and "unhandled exception of type 'T' with
   content V thrown from here" otherwise, `V` the value as every other
   note prints it (`12`, `{4}`, `1.500000e+00`). The libc++ 22 `std::exception` constructors and `what()` are not
   `constexpr`, so with the library headers only user exception classes
@@ -1884,9 +1947,7 @@ reference handler of pointer type requires the same type, [except.handle]/3.1);
 a function pointer is not caught by `void *` ([conv.ptr]/2 converts
 object pointers only); a constructor's handler rethrows at its end;
 an uncaught exception's content is printed as every Oven note prints a
-value (a class as `{4}`); the branch's "thrown from here" form without
-content is used for a type that holds no data, where the branch uses it
-for a type of size 1.
+value (a class as `{4}`).
 
 ### Unknown references — Landed (WP-357)
 P2280 (C++23 [expr.const]/10, a DR applied from C++23 on, as clang 20+;
@@ -1929,6 +1990,26 @@ the object's own address is constant and with null is not
 (`expr.const/p2280-ok.cpp`, `p2280-errors.cpp`). *Deviation:* a
 reference to an object of 4 GiB or more stays external (naming it is
 diagnosed as before C++23); clang accepts it.
+
+**Provisional globals (WP-378).** A variable with no initializer yet
+(`extern const int &r;` before its definition, `extern const int n;`)
+may get one later in the translation unit, so its resolution
+(`GState::Resolved`) holds for one outermost evaluation only: it is
+listed in `Oven::provisional` and reset to `Unresolved` by the next
+`begin_outermost`. Its *object* is owned by the translation unit:
+`Oven::provisional_objs` keeps, per global, the object it resolved to and
+its `OTy`, and the next resolution reuses that object while the variable
+still has no initializer, is `NotEvaluated` or `NotConstant`, its type
+interns to the same `OTy` and the object is live. So a provisional global
+costs one static slot (an unbacked one, or a reference's pointer slot
+bound to its `Origin::Unknown` object) per translation unit however many
+evaluations name it, and its address is the same in each
+(`tests/stress/p2280-provisional-globals.cpp`: 20 000 evaluations,
+`static_bytes<=16`; `kiln_oven` test `provisional_globals_do_not_grow`:
+footprint flat over 10 000 evaluations). Once a definition gives it an
+initializer, the next resolution is a fresh one (the old object stays, at
+most one per variable, since a frozen result may still point to it)
+(`expr.const/p2280-provisional-global.cpp`).
 
 ### Reflection runtime (M6; WP-267 spike behind `-freflection`)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's

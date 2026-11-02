@@ -1046,9 +1046,31 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   division's operands to the next type with twice the exponent range,
   warning when none exists) is rejected with "unsupported argument";
   clang's `-Woverriding-option` warnings between complex-range flags are
-  not issued. `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`);
-  `_Complex __bf16` is rejected as clang rejects it, and `_Complex` of
-  `_Float32`, `_Float64` or `_Float128` is not tested (GCC 14 accepts it). `__float128` is not diagnosed on
+  not issued. `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`).
+  `_Complex __bf16` (spelled directly or through a type-name, as
+  libstdc++ `<complex>` writes `__complex__ decltype(0.0bf16)` under
+  `__STDCPP_BFLOAT16_T__`) is accepted as GCC 14 accepts it, where clang
+  rejects it ("'_Complex type-name' is invalid"; WP-365): a pair of
+  `__bf16` (`{ bfloat, bfloat }`, size 4, align 2), passed like
+  `_Complex _Float16` (AArch64 an HFA of two `bfloat`, x86-64
+  `<2 x bfloat>` in one SSE register), mangled `Cu6__bf16` / `CDF16b`.
+  Its `+ - * /` and compound assignments, like `_Complex _Float16`'s on
+  x86-64 (clang `EmitPromotedComplexBinaryOperator`, the element types
+  `f16_excess` names), are computed in `_Complex float` (`__mulsc3`,
+  `__divsc3`; nested operands stay in `float`) and truncated once, which
+  is what GCC 14 emits for `_Complex __bf16`
+  (`ext.complex/complex-bf16.cpp`, `libstdcxx-complex-bf16.cpp`).
+  `_Complex` of `_Float32`, `_Float64` or `_Float128` (GCC 14 accepts
+  them; clang 19 has no `_FloatN` in C++; WP-365) is laid out, passed,
+  computed and mangled as its ABI twin's `_Complex float` / `double` /
+  `__float128` (x86-64: `<2 x float>`, two SSE eightbytes, memory for the
+  32-byte pair; AArch64: an HFA of two; `__mulsc3`/`__muldc3`/`__multc3`
+  and the `__div?c3` forms) with the mangling `CDF32_`/`CDF64_`/`CDF128_`;
+  constant evaluation is that of the element type, and conversions follow
+  the extended types' ranks (`ext.complex/complex-floatn.cpp`,
+  `complex-floatn-run.cpp`, whose calls go through asm labels naming the
+  GCC symbols; on AArch64 kiln and g++ 14 objects were also linked
+  against each other in both directions). `__float128` is not diagnosed on
   AArch64, where clang 19 rejects it ("__float128 is not supported on
   this target"; `Target::has_float128` is false there but unread): kiln
   accepts it as binary128.
@@ -1072,12 +1094,27 @@ AArch64 HFA as its twin's is.
 | `_Float64` | SSE (`double`) | V reg / HFA | `DF64_` |
 | `_Float128` | SSE+SSEUP (`fp128`) | Q reg / HFA | `DF128_` |
 
-Deviation: on x86-64 a struct holding one `__float128` or `_Float128` is
-passed as the first-class aggregate `%struct.Q` where clang coerces it to
-`fp128`; the machine-level passing is the same. Tests:
+On x86-64 an SSE+SSEUP pair is coerced as clang's `GetByteVectorType`
+(WP-365, `call.rs` `byte_vector`): a record that wraps a single element
+(`isSingleElementStruct`, `single_element`: through one-element arrays,
+nested records and empty bases, with no padding beyond the element) is
+passed and returned as that element's type when it is `fp128` or a
+vector, so `struct Q { _Float128 x; }` is `fp128` and `struct V { v4 v; }`
+`<4 x float>`; any other SSE+SSEUP type as `<N x double>`. Tests:
+`tests/codegen/fp128_wrapper_abi.cpp`,
+`tests/conformance/basic.extended.fp/f128-wrapper-args-run.cpp`, and
 `tests/mangle/extended_fp.cpp`, `tests/codegen/bfloat16_arith.cpp`,
 `tests/conformance/basic.extended.fp/p1467-run.cpp` (calls on both CI
 targets).
+
+**Known backend defect (x86-64, LLVM 19):** `llc-19` (kiln's backend, and
+clang 19's) widens `bfloat` to `float` and, at `-O0`, takes a `bfloat`
+call result passed straight on as another call's argument (`g(f())`) as
+already widened: it runs `__truncsfbf2` on the raw bf16 bits, so the
+callee receives garbage. The IR is clang 19's and correct; LLVM 22
+compiles it correctly (the clang 22 switch, WP-355, removes it). kiln
+does not work around it; `nextafterf16-run.cpp` stores each `__bf16`
+call result to a local before passing it.
 
 ### 8.19 Landed (WP-363): module names
 

@@ -205,6 +205,35 @@ delayed meaning; in practice they are always parsed immediately.
 - Defaults are stored in the cold "template default args" map
   (ast.md §8.1).
 
+**Non-type parameters that are pack expansions** ([temp.param]/17,
+[temp.variadic]/5, WP-385). In a member template of `O<Ts...>`,
+`template<Ts... a>` declares one non-type parameter whose type is the
+expansion `Ts...`. Substituting the enclosing arguments
+(`TemplState::expanded_packs`, `member.rs` `nttp_param_ty`) makes it one
+parameter per element of `Ts`: `O<int, char>::A` takes `<int, char>`,
+`O<>::A` takes none. Argument checking (`args.rs`
+`check_expanded_pack_arg`, `nttp_elem`) converts each argument to its
+element type, and wrong arity is clang's "too few/too many template
+arguments". Deducing a member function template whose explicit
+arguments leave such an expanded pack incomplete is
+`Tdk::IncompletePack`, clang's note "deduced too few arguments for
+expanded pack 'a'; no argument for 2nd expanded parameter in deduced
+argument pack <1>". Partial specializations over it work
+(`template<Ts... a> struct Is<A<a...>>`). Such a parameter is not itself
+a parameter pack ([temp.param]/14), so "template parameter pack must be
+the last template parameter" does not apply to it: `template<Ts... a,
+int n>` is valid. Tests: `temp.variadic/p5-member-nttp-pack-expansion.cpp`,
+`temp.variadic/p5-member-nttp-pack-arity.cpp`.
+
+**Local classes** ([temp.mem]/2, WP-385). A local class, or a class
+nested in one, has no member templates. A member function, class,
+variable or alias template there is "templates cannot be declared
+inside of a local class" (`sema_template_decl_in_local`) at the
+`template` keyword (`check_template_in_local_class`). A friend function
+template is "templates can only be declared in namespace or class
+scope". A generic lambda in a member function is not a member template
+and is accepted. Test: `temp.mem/p2-local-class-member-template.cpp`.
+
 ### 2.2 Template-ids and the `<` rule
 
 [temp.names]/3 says `<` starts a template-argument-list when it follows:
@@ -219,6 +248,28 @@ delayed meaning; in practice they are always parsed immediately.
 - an injected-class-name used as a template-name ([temp.local]/1).
 
 In every other case `<` is less-than.
+
+**Before C++20: a non-template followed by template arguments**
+(clang's `checkPotentialAngleBracket` /
+`diagnoseExprIntendedAsTemplateName`, WP-385). Before C++20 an
+unqualified name whose lookup finds functions is not assumed to be a
+template; one whose lookup finds nothing still is, in every mode
+(clang's `TNK_Undeclared_template`). When lookup finds exactly one
+declaration that is not a template (a variable, enumerator, parameter,
+non-template function, or member), and `<` is followed by `>` or by an
+unambiguous type-id and then a closing `>` before `;`
+(`Parser::potential_angle_close`), the list is skipped and the error is
+"'f' does not name a template but is followed by template arguments"
+(`sema_non_template_in_template_id`) at the name, with the note
+"non-template declaration found by name lookup" at the declaration
+(`Sema::potential_template_name`,
+`Sema::diagnose_expr_intended_as_template_name`). The expression becomes
+an error, and a following `(args)` is still parsed. In C++20 the same
+spelling on an overload set of functions is the P0846 reading above.
+Clang's C++17 `ext_adl_only_template_id` warning (a template found only
+by ADL) is not implemented. Tests:
+`temp.names/non-template-followed-by-args-cxx17.cpp`,
+`temp.names/non-template-followed-by-args.cpp`.
 
 **Closing the list.**
 - The first top-level `>` closes the list. `(`, `[` and `{` nest and hide
@@ -519,6 +570,21 @@ parameter is kept as a plain parameter. A misplaced `auto` in its clause
 has already become `int` (§2.6), so `void f(auto (*...x)(C auto...))`
 reports both. Test: `temp.variadic/p5-param-pack-without-packs.cpp`.
 
+A function parameter pack whose array bound alone names the pack
+(`int ...a[Ns]`, or `int a[Ns]...` after the misplaced-ellipsis
+recovery, spec/parse.md) expands the unadjusted array type; each element
+decays when the pack is substituted, as in clang (WP-385; test
+`temp.variadic/p5-array-bound-param-pack.cpp`).
+
+A lambda whose call operator's type names an unexpanded pack (a
+parameter `Ts a` whose `...` was misplaced or omitted) contains that
+pack. Its enclosing initializer then gets "initializer contains
+unexpanded parameter pack 'Ts'" ("expression contains ..." for an
+expression statement; a pack expansion around the lambda expands it;
+`act_on_lambda_declarator` marks the
+lambda; `expr_packs` reads the call operator's type). Test:
+`temp.variadic/p5-lambda-param-unexpanded.cpp` (WP-385).
+
 **Fold expressions** ([expr.prim.fold]) take the 32 fold-operators.
 After `(`:
 1. If the next token is `...`, it is a left fold: `( ... op cast-expr )`.
@@ -810,7 +876,17 @@ the running `Substituter` instead.
    declaration's parameters (§4.8.1):
    - matches kinds and arity;
    - fills missing args from defaults, substituting the earlier args into
-     them (frame `DefaultTemplateArgumentInstantiation`);
+     them (frame `DefaultTemplateArgumentInstantiation`). A dependent
+     default is substituted in the template's semantic context
+     (`in_inst_context(ctx of tmpl)`, as clang's
+     `SubstDefaultTemplateArgument` enters `Template->getDeclContext()`),
+     not the scopes of the use: a name the substitution looks up again
+     (an unqualified call with explicit template arguments,
+     `declval<Ts>()`) resolves from the template's namespace or class
+     ([temp.dep.candidate]/1; WP-378,
+     `tests/conformance/temp.param/default-argument-lookup-context.cpp`).
+     A template in a local scope keeps the use's scopes (its function's
+     names live only there);
    - converts NTTP args (converted constant expressions, evaluated by the
      Oven with `EvalKind::TemplateArg`);
    - packs the trailing args into a `Pack`.
@@ -1891,6 +1967,13 @@ recomputed exactly as for non-template code (clang's
   the list is substituted, so the constructor's parameter is
   initialized from it by [over.ics.list] (`call_arg_list`; WP-295,
   `tests/conformance/over.ics.list/dependent-paren-init-braced-arg.cpp`).
+- **Block-scope namespace aliases** ([namespace.alias]; clang
+  `VisitNamespaceAliasDecl`): the target is never dependent, so the
+  alias is declared again in the instantiation's block scope with the
+  same target, or the instantiation's alias when the target is an
+  earlier local alias (`subst/stmts.rs` `local_decl`; WP-370, libstdc++
+  variant:1546,
+  `tests/conformance/namespace.alias/local-alias-in-function-template.cpp`).
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
@@ -2341,7 +2424,14 @@ This is [temp.deduct.type]. It is a structural recursion over canonical
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the
-result is `MiscellaneousDeductionFailure` (clang).
+result is `MiscellaneousDeductionFailure` (clang). The template of `A` (or
+of a base) is the class template it is a specialization of: alias
+template sugar is looked through ([temp.alias]/2; clang's
+`getLastTemplateSpecType`), so a base written `A<T>` with
+`template<class T> using A = S<T>` deduces against `S<T>`
+(`written_template_name`; WP-381,
+`tests/conformance/temp.deduct.call/base-alias-template-sugar.cpp`;
+libstdc++ `variant::operator=`/`emplace`).
 A non-type argument of `P` that is not a deduced parameter but a value
 already (a written constant, or an explicitly given parameter substituted
 into `P`, [temp.deduct]/2) is compared with `A`'s value during the match:
@@ -3747,26 +3837,26 @@ records it in `TABLE`.
 | allocation | `__builtin_operator_new`, `__builtin_operator_delete` | yes in clang 19; the Oven side is WP-061b's (transient allocation) | `operator new`/`delete` call |
 | bits | `__builtin_clz`/`l`/`ll`, `__builtin_ctz`/`l`/`ll`, `__builtin_popcount`/`l`/`ll`, `__builtin_clzg`†/`ctzg`†/`popcountg`† (type-generic, with an optional fallback argument), `__builtin_bswap16`/`32`/`64` | yes | `llvm.ctlz`/`cttz`/`ctpop`/`bswap` |
 | memory and strings | `__builtin_memcmp`, `__builtin_memcpy`, `__builtin_memmove`, `__builtin_memchr`, `__builtin_char_memchr`, `__builtin_strlen`, `__builtin_wcslen`, `__builtin_wmemchr`, `__builtin_wmemcmp`, `__builtin_strcmp`, `__builtin_strncmp`, `__builtin_strchr`, `__builtin_wcscmp`, `__builtin_wcsncmp`, `__builtin_wcschr`; `__builtin_strrchr`, `__builtin_strpbrk`, `__builtin_strstr` | yes (for trivially copyable element types); no for `strrchr`/`strpbrk`/`strstr` (clang 19) | libcall or `llvm.mem*` |
-| float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes for `isfinite`/`isinf`/`isnan`/`isnormal`; no for `signbit` and the six comparisons (the clang 19 probe rejects them) | `fcmp` / `llvm.is.fpclass` |
+| float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes (`signbit` and the six comparisons since WP-365, P0533; clang 19 rejects them) | `fcmp` / `llvm.is.fpclass` |
 | atomics (WP-154) | `__c11_atomic_*`†, `__atomic_*`† (an `AtomicExpr`, spec/sema.md §5.11) | only `__atomic_always_lock_free`/`__atomic_is_lock_free`/`__c11_atomic_is_lock_free` (spec/oven.md) | `load atomic`/`store atomic`/`atomicrmw`/`cmpxchg`/`fence` (spec/codegen.md §7d) |
 | coroutines (WP-171) | `__builtin_coro_resume`/`destroy`/`done`/`promise`/`noop`/`size`/`align`/`frame`/`free`/`id`/`alloc`/`begin`/`end`/`suspend` (`builtin::CORO`, clang 19's types and `noexcept`; an `I` signature argument must be an integer constant expression, `sema_constant_integer_arg_type` at the call, through `check_builtin_ice_args`) | no (the generic note) | not implemented (a codegen error) |
 | float constants | `__builtin_huge_val`/`f`/`l`, `__builtin_nan`/`f`/`l`, `__builtin_nans`/`f`/`l` | yes | constants |
-| math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
+| math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | the P0533 set yes (WP-365: `frexp`/`ldexp`/`scalbn`/`scalbln` here, and `ceil`, `fmod`, `fma`, `nextafter`, ... of the other libm rows, spec/oven.md "Floating-point math, P0533"); the rest no (clang 19 evaluates none) | libcall / LLVM intrinsic |
 | complex math (WP-237) | `__builtin_cabs`/`carg`/`cacos`/`cacosh`/`casin`/`casinh`/`catan`/`catanh`/`ccos`/`ccosh`/`cexp`/`clog`/`cpow`/`cproj`/`csin`/`csinh`/`csqrt`/`ctan`/`ctanh`, each with the `f` and `l` forms (`builtin::LIBM`; the signature prefix `X` is `_Complex` of the type after it; `cproj` is `const`) | no (clang 19) | libcall through the complex call ABI (spec/abi.md §8.17) |
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
 | checked arithmetic (WP-270) | `__builtin_add_overflow`†, `__builtin_sub_overflow`†, `__builtin_mul_overflow`† (generic: two integer operands of any types, a pointer to a non-const integer result); the typed `__builtin_{s,u}{add,sub,mul}_overflow` with `l`/`ll` forms (fixed `int`/`long`/`long long` parameters, signed or unsigned) | yes | `llvm.{s,u}{add,sub,mul}.with.overflow` in clang's encompassing width (spec/codegen.md §3) |
 | stack allocation (WP-270) | `__builtin_alloca`, `__builtin_alloca_with_align` (the alignment an `I` argument in bits: a power of two, at least 8, at most `INT_MAX`) | no ("subexpression not valid") | dynamic `alloca i8` where the call is |
 | printf family (WP-270) | `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf` (signature letter `R`: `restrict`; implicit `format(printf, F, A)`, WP-282) | no | libcall |
 | library builtins (WP-282) | `__builtin_assume_aligned`†, `__builtin_object_size`, `__builtin_dynamic_object_size` (the type an `I` argument in [0, 3]) | yes | the pointer plus an `align` assumption bundle; `llvm.objectsize` or a folded constant |
-| library builtins (WP-282) | `__builtin_powi`/`f`/`l`, `__builtin_shufflevector`† (a `ShuffleVectorExpr`), `__builtin_verbose_trap`, `__builtin_copysignf16` | no (`shufflevector` yes; the others are "subexpression not valid") | `llvm.powi`, `shufflevector`, `llvm.trap`, `llvm.copysign.f16` |
-| `*f128` math (WP-282) | the `__builtin_*f128` forms of the `math` libm rows (`fabsf128`, `copysignf128`, `ceilf128`, ..., `huge_valf128`, `inff128`, `nanf128`, `nansf128`), typed `_Float128` (signature `LLd`) as GCC, whose libstdc++ x86-64 `<cmath>` passes `_Float128*` to `modff128`/`frexpf128`/`remquof128` (clang 19 types them `__float128` on x86-64 and `long double` on AArch64; values convert either way, pointers do not) (WP-361) | as clang 19: `fabs`/`copysign`/`fmax`/`fmin` and the constants yes, through the `l` twin (`f128_twin`) | the twin's path at `fp128` (intrinsic or constant); `roundevenf128` `llvm.roundeven`; the rest a libcall of the builtin's own name (`acosf128`) |
-| `_FloatN` constants (WP-361) | GCC's `__builtin_huge_valf16`/`f32`/`f64`, `__builtin_inff16`/`f32`/`f64`, `__builtin_nanf16`/`f32`/`f64`, `__builtin_nansf16`/`f32`/`f64`, `__builtin_nansf16b` (kiln ids 2000–2012, `builtin_ids::FLOATN`; signature letters `x` `_Float16`, `k` `_Float32`, `K` `_Float64`, `y` `__bf16`), and `__builtin_nextafterf16`/`f16b` (2013, 2014), which libstdc++ `<limits>`/`<cmath>` name; clang 19 has only some `f16` forms | the constants yes, through their `float`/`double` twin (`f128_twin`) converted to the result type; `nextafterf16`/`f16b` no | constants; `nextafterf16`/`f16b` a codegen error ("not supported yet") |
+| library builtins (WP-282) | `__builtin_powi`/`f`/`l`, `__builtin_shufflevector`† (a `ShuffleVectorExpr`), `__builtin_verbose_trap`, `__builtin_copysignf16` | `shufflevector` and `copysignf16` (WP-365) yes; the others are "subexpression not valid" | `llvm.powi`, `shufflevector`, `llvm.trap`, `llvm.copysign.f16` |
+| `*f128` math (WP-282) | the `__builtin_*f128` forms of the `math` libm rows (`fabsf128`, `copysignf128`, `ceilf128`, ..., `huge_valf128`, `inff128`, `nanf128`, `nansf128`), typed `_Float128` (signature `LLd`) as GCC, whose libstdc++ x86-64 `<cmath>` passes `_Float128*` to `modff128`/`frexpf128`/`remquof128` (clang 19 types them `__float128` on x86-64 and `long double` on AArch64; values convert either way, pointers do not) (WP-361) | `fabs`/`copysign`/`fmax`/`fmin` and the constants yes, through the `l` twin (`f128_twin`), as clang 19; the P0533 forms (`ceilf128`, `fmodf128`, `nextafterf128`, ...) in binary128 (WP-365) | the twin's path at `fp128` (intrinsic or constant); `roundevenf128` `llvm.roundeven`; the rest a libcall of the builtin's own name (`acosf128`) |
+| `_FloatN` constants (WP-361) | GCC's `__builtin_huge_valf16`/`f32`/`f64`, `__builtin_inff16`/`f32`/`f64`, `__builtin_nanf16`/`f32`/`f64`, `__builtin_nansf16`/`f32`/`f64`, `__builtin_nansf16b` (kiln ids 2000–2012, `builtin_ids::FLOATN`; signature letters `x` `_Float16`, `k` `_Float32`, `K` `_Float64`, `y` `__bf16`), and `__builtin_nextafterf16`/`f16b` (2013, 2014), which libstdc++ `<limits>`/`<cmath>` name; clang 19 has only some `f16` forms | the constants yes, through their `float`/`double` twin (`f128_twin`) converted to the result type; `nextafterf16`/`f16b` yes (WP-365, spec/oven.md P0533) | constants; `nextafterf16`/`f16b` an inline `i16` select sequence (spec/types.md) |
 
 **Landed (WP-088).** Every row above is implemented in sema, the Oven
 and codegen, with these exceptions, each matching clang 19:
-`__builtin_signbit` and the six ordered comparisons are not
-constant-evaluated (the probe says clang 19 rejects them), and the math
-row is sema and codegen only. `__builtin_operator_new`/`_delete` are
+the math rows are sema and codegen only outside the P0533 set, which
+the Oven evaluates since WP-365 (as do `__builtin_signbit` and the six
+ordered comparisons, which clang 19 rejects; spec/oven.md). `__builtin_operator_new`/`_delete` are
 implemented in sema and codegen; their Oven side stays with WP-061b
 (`__has_constexpr_builtin` answers 0). Probes:
 `tests/conformance/expr.const/builtins-*.cpp` (constant evaluation,

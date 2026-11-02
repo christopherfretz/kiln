@@ -56,9 +56,31 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId) -> bool {
     // `__builtin_is_constant_evaluated()` is false outside a manifestly
     // constant-evaluated context, which a fold is not.
     // A checked arithmetic builtin stores its result, so it is emitted.
-    builtin_callee(ast, e)
-        .is_some_and(|(_, b)| b != id::IS_CONSTANT_EVALUATED && id::checked_op(b).is_none())
-        && (ast.types.is_integral(q) || ast.types.is_floating(q))
+    // WP-365: the `<cmath>` builtins the Oven evaluates and clang 19 does
+    // not are emitted as clang emits them.
+    builtin_callee(ast, e).is_some_and(|(_, b)| {
+        b != id::IS_CONSTANT_EVALUATED && id::checked_op(b).is_none() && !clang19_unevaluated(b)
+    }) && (ast.types.is_integral(q) || ast.types.is_floating(q))
+}
+
+/// The builtins kiln constant-evaluates (WP-365, spec/oven.md
+/// "Floating-point math builtins") that clang 19 does not.
+fn clang19_unevaluated(b: u32) -> bool {
+    id::p0533_base(b).is_some()
+        || matches!(
+            b,
+            id::SIGNBIT
+                | id::ISGREATER
+                | id::ISGREATEREQUAL
+                | id::ISLESS
+                | id::ISLESSEQUAL
+                | id::ISLESSGREATER
+                | id::ISUNORDERED
+                | id::ABS
+                | id::LABS
+                | id::LLABS
+                | id::COPYSIGNF16
+        )
 }
 
 /// The argument of the builtin call `e` codegen folds rather than emits
@@ -521,6 +543,14 @@ impl Cg<'_> {
                 self.store_scalar(exp, Addr { v: p, ty: mt, align }, iq);
                 self.f.fir.push(Op::ExtractValue { agg: call, idx: 0 }, ty)
             }
+            id::NEXTAFTERF16 | id::NEXTAFTERF16B => {
+                let Some(a1) = arg(1) else {
+                    return err(self.loc_of(e), "nextafter without two arguments");
+                };
+                let x = self.emit_scalar(a0)?;
+                let y = self.emit_scalar(a1)?;
+                self.nextafter16(x, y)
+            }
             _ if fp_intrinsic(b).is_some() => {
                 let (name, n) = fp_intrinsic(b).unwrap_or(("llvm.fabs", 1));
                 let mut vs = Vec::with_capacity(n);
@@ -812,6 +842,68 @@ impl Cg<'_> {
             }
         };
         Ok(BuiltinCall::Emitted(Some(v)))
+    }
+
+    /// `__builtin_nextafterf16`/`f16b` (WP-365): there is no library entry
+    /// point (clang 19 has neither builtin; GCC calls an undefined
+    /// `nextafterf16`), so the step is inline on the 16 bits, as
+    /// libstdc++'s run-time `nextafter(_Float16, _Float16)`: a NaN operand
+    /// gives that NaN quieted (`x`'s first), equal operands (or two zeros)
+    /// `y`, a zero `x` the smallest subnormal with `y`'s sign, else the
+    /// bits of `x` plus one when moving away from zero and minus one
+    /// toward it. After one bitcast of each operand everything is integer
+    /// arithmetic: LLVM 19's x86-64 backend, which promotes `bfloat` to
+    /// `float`, miscompiles a `bitcast bfloat to i16` whose operand also
+    /// feeds an `fpext`/`fcmp` (it loses the sign bit at -O2), so no
+    /// floating-point operation touches the operands.
+    fn nextafter16(&mut self, x: V, y: V) -> V {
+        let ty = self.f.fir.ty(&self.m, x);
+        let (inf, quiet) = if ty == LTy::BFLOAT { (0x7f80, 0x40) } else { (0x7c00, 0x200) };
+        let i16 = LTy::I16;
+        let (hx, hy) = (self.cast(CastOp::BitCast, x, i16), self.cast(CastOp::BitCast, y, i16));
+        let c = |s: &mut Self, v: i128| V::C(s.m.const_int(i16, v));
+        let (abs_mask, sign_mask, one, m1, zero, inf, quiet) = (
+            c(self, 0x7fff),
+            c(self, -0x8000),
+            c(self, 1),
+            c(self, -1),
+            c(self, 0),
+            c(self, inf),
+            c(self, quiet),
+        );
+        let ax = self.bin(BinOp::And, Flags::NONE, hx, abs_mask);
+        let ay = self.bin(BinOp::And, Flags::NONE, hy, abs_mask);
+        // Sign-magnitude to two's-complement order: a negative encoding
+        // has its magnitude bits flipped, so `kx < ky` iff `x < y`.
+        let key = |s: &mut Self, h: V, neg: V| {
+            let flip = s.bin(BinOp::Xor, Flags::NONE, h, abs_mask);
+            s.select(neg, flip, h)
+        };
+        let neg_x = self.icmp(IntPredicate::Slt, hx, zero);
+        let neg_y = self.icmp(IntPredicate::Slt, hy, zero);
+        let kx = key(self, hx, neg_x);
+        let ky = key(self, hy, neg_y);
+        let lt = self.icmp(IntPredicate::Slt, kx, ky);
+        let away = self.bin(BinOp::Xor, Flags::NONE, lt, neg_x);
+        let d = self.select(away, one, m1);
+        let step = self.bin(BinOp::Add, Flags::NONE, hx, d);
+        let x_zero = self.icmp(IntPredicate::Eq, ax, zero);
+        let sy = self.bin(BinOp::And, Flags::NONE, hy, sign_mask);
+        let tiny = self.bin(BinOp::Or, Flags::NONE, sy, one);
+        let bits = self.select(x_zero, tiny, step);
+        let same = self.icmp(IntPredicate::Eq, hx, hy);
+        let both = self.bin(BinOp::Or, Flags::NONE, ax, ay);
+        let zeros = self.icmp(IntPredicate::Eq, both, zero);
+        let eq = self.bin(BinOp::Or, Flags::NONE, same, zeros);
+        let bits = self.select(eq, hy, bits);
+        let nan_x = self.icmp(IntPredicate::Ugt, ax, inf);
+        let nan_y = self.icmp(IntPredicate::Ugt, ay, inf);
+        let qx = self.bin(BinOp::Or, Flags::NONE, hx, quiet);
+        let qy = self.bin(BinOp::Or, Flags::NONE, hy, quiet);
+        let qn = self.select(nan_x, qx, qy);
+        let nan = self.bin(BinOp::Or, Flags::NONE, nan_x, nan_y);
+        let bits = self.select(nan, qn, bits);
+        self.cast(CastOp::BitCast, bits, ty)
     }
 
     /// clang `emitBuiltinObjectSize` for a pointer the fold prepass could

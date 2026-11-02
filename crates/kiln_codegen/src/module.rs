@@ -1520,7 +1520,7 @@ impl<'a> Cg<'a> {
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
         }
-        if inline != DefInline::Always {
+        if inline == DefInline::NoInline || (inline == DefInline::OptNone && !self.opts.optimize) {
             a.push(Attr::Flag(AttrKind::NoInline));
         }
         if is_main {
@@ -1532,7 +1532,7 @@ impl<'a> Cg<'a> {
         if nounwind {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
-        if inline == DefInline::OptNone {
+        if inline == DefInline::OptNone && !self.opts.optimize {
             a.push(Attr::Flag(AttrKind::OptimizeNone));
         }
         a.extend(extra);

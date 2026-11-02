@@ -102,6 +102,10 @@ pub(crate) enum Cleanup {
     /// run only once `flag` (`gro.active`) is set (clang's active flag
     /// on the `__coro_gro` cleanups).
     FlaggedDtor { addr: V, record: DeclId, flag: V },
+    /// `llvm.lifetime.end` of the `size`-byte alloca `addr` (clang
+    /// `CallLifetimeEnd`, pushed as `NormalEHLifetimeMarker`;
+    /// spec/codegen.md §7p).
+    LifetimeEnd { addr: V, size: u64 },
 }
 
 /// A value a cleanup uses: directly, or reloaded from the
@@ -226,6 +230,10 @@ impl Scope {
     pub fn is_normal_cleanup(&self) -> bool {
         matches!(self.kind, Kind::Cleanup(_)) && self.normal
     }
+    /// `EHCleanupScope::isLifetimeMarker`.
+    pub fn is_lifetime_marker(&self) -> bool {
+        matches!(self.kind, Kind::Cleanup(Cleanup::LifetimeEnd { .. }))
+    }
     /// An EH scope (`!isNonEHScope`): catch, terminate or an EH cleanup.
     pub fn is_eh_scope(&self) -> bool {
         !matches!(self.kind, Kind::Cleanup(_)) || self.eh
@@ -275,7 +283,7 @@ pub(crate) struct Cleanups {
     pub stack: Vec<Scope>,
     fixups: Vec<Fixup>,
     /// `NormalCleanupDest`.
-    dest_slot: Option<V>,
+    pub dest_slot: Option<V>,
     /// `UnreachableBlock`.
     pub unreachable: Option<Blk>,
     /// `NextCleanupDestIndex`.
@@ -340,6 +348,19 @@ impl Cleanups {
             .rev()
             .find(|&i| self.stack[i - 1].is_normal_cleanup() && self.stack[i - 1].active)
             .unwrap_or(0)
+    }
+
+    /// `EHScopeStack::requiresLandingPad`: an EH scope other than a
+    /// lifetime marker encloses the current point.
+    pub fn requires_landing_pad(&self) -> bool {
+        let mut d = self.innermost_eh();
+        while d != 0 {
+            if !self.stack[d - 1].is_lifetime_marker() {
+                return true;
+            }
+            d = self.enclosing_eh(d);
+        }
+        false
     }
 
     /// `hasNormalCleanups`.
@@ -1199,6 +1220,7 @@ impl Cg<'_> {
                 self.call_dtor(record, addr, false);
                 self.emit_block(skip, false);
             }
+            Cleanup::LifetimeEnd { addr, size } => self.emit_lifetime_end(addr, size),
         }
     }
 

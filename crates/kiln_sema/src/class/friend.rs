@@ -62,6 +62,9 @@ impl Sema<'_, '_> {
         // template ([dcl.fct]/22): its invented head is the friend's.
         self.finish_invented_head();
         let head = self.take_template_head(d.qualifier);
+        if self.check_template_in_local_class(true) {
+            return None;
+        }
         let op_d = self.operator_declarator(d);
         let d = op_d.as_ref().unwrap_or(d);
         if self.unsupported_declarator(ds, d) {

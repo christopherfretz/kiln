@@ -19,6 +19,7 @@ C2yExtensions = "c2y-extensions" [];
 C99Designator = "c99-designator" [];
 CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
 ClassConversion = "class-conversion" [];
+CoroNonAlignedAllocationFunction = "coro-non-aligned-allocation-function" [];
 CoveredSwitchDefault = "covered-switch-default" [];
 Cxx11Narrowing = "c++11-narrowing" [];
 DanglingField = "dangling-field" [];
