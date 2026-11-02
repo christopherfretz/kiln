@@ -719,6 +719,12 @@ impl Types {
                 layout.bases.iter().find(|&&(b, _)| b == first).map_or(0, |&(_, o)| o)
             })
             .collect();
+        let eoffs: Vec<(QualType, u64)> = ebases
+            .iter()
+            .map(|&(bq, first)| {
+                (bq, layout.bases.iter().find(|&&(b, _)| b == first).map_or(0, |&(_, o)| o))
+            })
+            .collect();
         let (nv_size, nv_align) = (layout.nv_size, layout.nv_align);
         let vlist: Vec<(DeclId, u64)> = layout.vbases.to_vec();
         // Every virtual base (direct or indirect) at its offset in the
@@ -734,12 +740,6 @@ impl Types {
                     return None;
                 }
                 Some((vdef, ast.decls.get(vdef).ty()?, off))
-            })
-            .collect();
-        let eoffs: Vec<(QualType, u64)> = ebases
-            .iter()
-            .map(|&(bq, first)| {
-                (bq, layout.bases.iter().find(|&&(b, _)| b == first).map_or(0, |&(_, o)| o))
             })
             .collect();
         // Reserve the slot first so self-referential pointers terminate.
