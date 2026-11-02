@@ -1131,6 +1131,11 @@ impl Sema<'_, '_> {
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
                     None
+                } else if n.kind() == ExprKind::DeclRefExpr {
+                    // clang's `Expr::getExprLoc` of a DeclRefExpr is its
+                    // begin: a qualified name (`N::x;`) is reported at
+                    // its nested-name-specifier (WP-318).
+                    Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
                 } else {
                     Some((DiagId::sema_unused_expr, loc, Vec::new()))
                 }

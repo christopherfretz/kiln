@@ -1064,6 +1064,13 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         Tpr::Ambiguous
     }
 
+    /// An undeclared unqualified name followed by `*`, `&` or `&&`.
+    fn undeclared_before_ptr_operator(&self) -> bool {
+        self.ident_at(self.i).is_some()
+            && matches!(self.name_here(), Some((end, NameClass::Undeclared)) if end == self.i + 1)
+            && matches!(self.punct_at(self.i + 1), Some(Punct::Star | Punct::Amp | Punct::AmpAmp))
+    }
+
     /// clang's `isCXXSimpleDeclaration`.
     fn is_simple_declaration(&mut self, allow_for_range: bool) -> bool {
         if self.dependent_template_id_name() {
@@ -1093,6 +1100,13 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             if non_type {
                 return false;
             }
+            Tpr::Ambiguous
+        } else if self.undeclared_before_ptr_operator() {
+            // An undeclared unqualified name followed by a ptr-operator
+            // (`u5 &r;`, `u5 *p;`): clang's `ANK_Unresolved`, ambiguous
+            // here; the declarator decides (`u5 & r + 1;` is an
+            // expression), and the declaration parser reports "unknown
+            // type name" (WP-318).
             Tpr::Ambiguous
         } else {
             self.decl_specifier(Tpr::False)
