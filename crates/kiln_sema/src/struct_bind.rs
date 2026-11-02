@@ -65,8 +65,10 @@ impl Sema<'_, '_> {
             self.templ.cur = None;
             return None;
         }
-        if d.ctx == DeclaratorContext::Condition {
-            // clang `ext_decomp_decl_cond`, even in C++26 (P0963 not yet).
+        if d.ctx == DeclaratorContext::Condition && self.std < kiln_lex::Std::Cxx26 {
+            // [stmt.pre]/4 (C++26, P0963): a structured binding declaration
+            // may be a condition; before C++26 clang's
+            // `ext_decomp_decl_cond` (clang 19's wording).
             self.error(DiagId::sema_decomp_decl_cond, dc.lbracket);
         }
         // [dcl.pre]/6: only static, thread_local, auto and cv.

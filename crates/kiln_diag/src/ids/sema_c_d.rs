@@ -39,6 +39,7 @@ sema_choose_expr_requires_constant = Error (0) "'__builtin_choose_expr' requires
 sema_circular_arrow = Error (0) "circular pointer delegation detected";
 sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_cmp_category_not_found = Error (2) "cannot {1:use builtin operator '<=>'|default 'operator<=>'} because type '{0}' was not found; include <compare>";
+sema_comparison_always = Warning [TautologicalCompare] (2) "{0:self-|array }comparison always evaluates to {1:a constant|true|false|'std::strong_ordering::equal'}";
 sema_comparison_distinct_pointers = Error (2) "comparison of distinct pointer types ({0} and {1})";
 sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";
 sema_complex_to_real_cxx = Error (2) "implicit conversion from {0} to {1} is not permitted in C++";
@@ -173,6 +174,7 @@ sema_deleted_not_first = Error (0) "deleted definition must be first declaration
 sema_deleted_overrides = Error (2) "{0:deleted|non-deleted} function '{1}' cannot override a {0:non-deleted|deleted} function";
 sema_dependent_friend_spec_no_candidate = Error (0) "no candidate function template was found for dependent friend function template specialization";
 sema_dependent_member_spec_no_candidate = Error (0) "no candidate function template was found for dependent member function template specialization";
+sema_depr_array_comparison = Warning [DeprecatedArrayCompare] (0) "comparison between two arrays is deprecated; to compare array addresses, use unary '+' to decay operands to pointers";
 sema_deprecated = Warning [DeprecatedDeclarations] (1) "'{0}' is deprecated";
 sema_deprecated_anonymous_namespace = Warning [IgnoredAttributes] (0) "'deprecated' attribute on anonymous namespace ignored";
 sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is deprecated; use {1} instead";

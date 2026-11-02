@@ -8,7 +8,7 @@ use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_lex::{Punct, TokKind};
+use kiln_lex::{Punct, Std, TokKind};
 use kiln_sema::DeclSite;
 use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
@@ -2118,7 +2118,15 @@ impl Parser<'_, '_> {
             }
             p.range = (start, self.prev_end());
             params.push(p);
-            if self.eat(Punct::Ellipsis).is_some() {
+            if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
+                // [dcl.fct]/3, [depr.ellipsis.comma] (C++26, P3176): a
+                // varargs ellipsis without a preceding comma (clang
+                // `warn_deprecated_missing_comma_before_ellipsis`).
+                if self.std >= Std::Cxx26 {
+                    let w =
+                        self.s.diag(DiagId::parse_deprecated_missing_comma_before_ellipsis, ellipsis);
+                    self.emit(w);
+                }
                 variadic = true;
                 break;
             }

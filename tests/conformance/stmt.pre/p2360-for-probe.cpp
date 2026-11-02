@@ -3,7 +3,6 @@
 //@ expect: compile-ok
 //@ std: c++23
 //@ strict-diags
-//@ xfail(kiln): alias-declaration not accepted as a range-based for init-statement
 constexpr int f() {
   int s = 0, arr[] = {1, 2, 3};
   for (using T = int; T i : arr) s += i;

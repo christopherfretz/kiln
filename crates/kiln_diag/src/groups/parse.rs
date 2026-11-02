@@ -4,6 +4,7 @@
 
 Cxx20Extensions = "c++20-extensions" [];
 CxxAttributeExtension = "cxx-attribute-extension" [];
+DeprecatedMissingCommaVariadicParameter = "deprecated-missing-comma-variadic-parameter" [];
 DuplicateDeclSpecifier = "duplicate-decl-specifier" [];
 EmptyDecomposition = "empty-decomposition" [];
 GnuCaseRange = "gnu-case-range" [];

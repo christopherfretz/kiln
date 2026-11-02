@@ -3039,7 +3039,61 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// An equality or relational comparison of two arrays (clang's
+    /// `diagnoseTautologicalComparison`, array part): ill-formed in C++26
+    /// ([expr.eq]/2, [expr.rel]/2, P2865; clang's `DefaultError`
+    /// `-Warray-compare-cxx26`), deprecated in C++20 and C++23
+    /// ([depr.array.comp]; `-Warray-compare` when that warning is off),
+    /// `-Warray-compare` before. Then, where run-time behavior is
+    /// diagnosed, clang's `warn_comparison_always` when both operands name
+    /// variables: distinct ones never compare equal, one is a
+    /// self-comparison. Not in a template instantiation (clang checks the
+    /// definition only).
+    fn diagnose_array_comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) {
+        if self.inst.stack.depth() > 0 {
+            return;
+        }
+        let (ls, rs) = (self.ignore_paren_imp_casts(l), self.ignore_paren_imp_casts(r));
+        if !self.ast.types.is_array(self.ety(ls)) || !self.ast.types.is_array(self.ety(rs)) {
+            return;
+        }
+        let id = if self.std >= kiln_lex::Std::Cxx26 {
+            DiagId::sema_array_comparison_cxx26
+        } else if self.std >= kiln_lex::Std::Cxx20
+            && self.diags.is_enabled_at(DiagId::sema_depr_array_comparison, loc)
+        {
+            DiagId::sema_depr_array_comparison
+        } else {
+            DiagId::sema_array_comparison
+        };
+        let msg = self.diag(id, loc).range(self.expr_range(l)).range(self.expr_range(r));
+        self.emit(msg);
+        let var = |s: &Self, e: ExprId| {
+            (s.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr)
+                .then(|| s.ast.exprs.decl(e))
+                .filter(|&d| {
+                    s.kind_of(d) == DeclKind::Var
+                        && s.ast.decls.get(d).ty().is_some_and(|t| !s.ast.types.is_reference(t))
+                })
+        };
+        let (Some(ld), Some(rd)) = (var(self, ls), var(self, rs)) else { return };
+        // clang's `%select`s: self-|array, a constant|true|false.
+        let (what, result) = if ld == rd {
+            (0, if matches!(op, BinaryOp::EQ | BinaryOp::LE | BinaryOp::GE) { 1 } else { 2 })
+        } else {
+            let result = match op {
+                BinaryOp::EQ => 2,
+                BinaryOp::NE => 1,
+                _ => 0,
+            };
+            (1, result)
+        };
+        let msg = self.diag(DiagId::sema_comparison_always, loc).arg(what).arg(result);
+        self.diag_runtime_behavior_now(msg);
+    }
+
     fn comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+        self.diagnose_array_comparison(op, l, r, loc);
         let l2 = conv::decay(self, l);
         let r2 = conv::decay(self, r);
         let (lt, rt) = (self.ety(l2), self.ety(r2));
