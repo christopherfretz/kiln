@@ -39,6 +39,9 @@ pub(crate) struct Sub {
     pub parent: u16,
     /// That base-specifier grants public access ([class.access.base]/1).
     pub public: bool,
+    /// With `virt`: the virtual base it is (in), its nearest virtual base
+    /// ancestor or itself.
+    pub top: u16,
 }
 
 /// The subobject graph of a class with offsets.
@@ -55,6 +58,10 @@ pub(crate) struct PolyInfo {
     /// distinct vptr slot (indices into `subs`): their slots are at the
     /// complete object's offsets only in a complete object.
     pub vvptrs: Vec<u16>,
+    /// The offset of each virtual base (by class) in a complete object.
+    pub vbase_at: FxHashMap<DeclId, u64>,
+    /// The (offset, class) of each subobject, for [`Oven::base_owner`].
+    pub at: kiln_source::fx::FxHashSet<(u64, OTy)>,
 }
 
 /// A resolved virtual call.
@@ -99,7 +106,11 @@ impl Virt {
                 .infos
                 .iter()
                 .map(|i| {
-                    i.subs.capacity() * 40 + i.vptrs.capacity() * 8 + i.vvptrs.capacity() * 2
+                    i.subs.capacity() * 48
+                        + i.vptrs.capacity() * 8
+                        + i.vvptrs.capacity() * 2
+                        + i.vbase_at.capacity() * 16
+                        + i.at.capacity() * 16
                 })
                 .sum::<usize>()
             + self.dispatch.capacity() * 48
@@ -156,6 +167,8 @@ impl Oven {
                 subs: Vec::new(),
                 vptrs: Vec::new(),
                 vvptrs: Vec::new(),
+                vbase_at: FxHashMap::default(),
+                at: Default::default(),
             });
             self.virt.map.insert(cls, i);
             return i;
@@ -199,6 +212,13 @@ impl Oven {
                     _ => false,
                 }
             };
+            let top = if s.is_virtual {
+                i as u16
+            } else if virt {
+                subs[s.parent.index()].top
+            } else {
+                0
+            };
             subs.push(Sub {
                 off,
                 cls: cty,
@@ -208,6 +228,7 @@ impl Oven {
                 poly,
                 parent: s.parent.index() as u16,
                 public,
+                top,
             });
         }
         let mut vptrs: Vec<u64> =
@@ -220,8 +241,10 @@ impl Oven {
                 vvptrs.push(k as u16);
             }
         }
+        let vbase_at = subs.iter().filter(|s| s.vbase).map(|s| (s.decl, s.off)).collect();
         let i = self.virt.infos.len() as u32;
-        self.virt.infos.push(PolyInfo { decl: Some(first), subs, vptrs, vvptrs });
+        let at = subs.iter().map(|s| (s.off, s.cls)).collect();
+        self.virt.infos.push(PolyInfo { decl: Some(first), subs, vptrs, vvptrs, vbase_at, at });
         self.virt.map.insert(cls, i);
         i
     }
@@ -248,15 +271,19 @@ impl Oven {
             self.write_vptr(p, word(cls, off)).map_err(fault)?;
         }
         let n = self.virt.infos[i as usize].vvptrs.len();
+        if n == 0 {
+            return Ok(());
+        }
+        let owner = if base_obj { Some(self.owner(b, raw, cls).ok_or(Fault::Invalid)?) } else { None };
         for k in 0..n {
             let j = self.virt.infos[i as usize].vvptrs[k];
             let off = self.virt.infos[i as usize].subs[usize::from(j)].off;
-            if !base_obj {
+            let Some((m, at)) = owner else {
                 let p = Ptr::with_off(raw, start + off, false);
                 self.write_vptr(p, word(cls, off)).map_err(fault)?;
                 continue;
-            }
-            let p = self.sub_addr(b, raw, cls, j).ok_or(Fault::Invalid)?;
+            };
+            let p = self.sub_in(raw, i as usize, j, m, at).ok_or(Fault::Invalid)?;
             let delta = i64::from(Ptr::decode(p).off) - start as i64;
             self.write_vptr(p, rel_word(cls, delta)).map_err(fault)?;
         }
@@ -429,29 +456,35 @@ impl Oven {
         cls: OTy,
         k: u16,
     ) -> Option<u64> {
-        let p = Ptr::decode(raw);
         let i = self.poly_info(b, cls) as usize;
         let s = *self.virt.infos[i].subs.get(usize::from(k))?;
         if !s.virt {
-            return Some(Ptr::with_off(raw, u64::from(p.off) + s.off, false));
+            return Some(Ptr::with_off(raw, u64::from(Ptr::decode(raw).off) + s.off, false));
         }
+        let (m, at) = self.owner(b, raw, cls)?;
+        self.sub_in(raw, i, k, m, at)
+    }
+
+    /// The most derived object of the `cls` object at `raw`: its
+    /// [`PolyInfo`] index and offset in the allocation.
+    fn owner(&mut self, b: &mut dyn SemaBridge, raw: u64, cls: OTy) -> Option<(usize, u64)> {
+        let p = Ptr::decode(raw);
         if p.past {
             return None;
         }
         let root = self.alloc_any(p)?.ty;
         let (md, at) = self.base_owner(b, root, u64::from(p.off), 0, true, cls)?;
+        Some((self.poly_info(b, md) as usize, at))
+    }
+
+    /// The address of the virtual subobject `k` of the class with info
+    /// `i` whose most derived object has info `m` and is at `at`.
+    fn sub_in(&self, raw: u64, i: usize, k: u16, m: usize, at: u64) -> Option<u64> {
         let subs = &self.virt.infos[i].subs;
-        let mut w = usize::from(k);
-        while !subs[w].vbase {
-            if w == 0 {
-                return None;
-            }
-            w = usize::from(subs[w].parent);
-        }
-        let (within, wdecl) = (s.off - subs[w].off, subs[w].decl);
-        let m = self.poly_info(b, md) as usize;
-        let wo = self.virt.infos[m].subs.iter().find(|s| s.vbase && s.decl == wdecl)?.off;
-        Some(Ptr::with_off(raw, at + wo + within, false))
+        let s = subs[usize::from(k)];
+        let w = subs[usize::from(s.top)];
+        let wo = *self.virt.infos[m].vbase_at.get(&w.decl)?;
+        Some(Ptr::with_off(raw, at + wo + (s.off - w.off), false))
     }
 
     /// `Op::VCall`: the function and adjusted `this` of a virtual call of
@@ -697,7 +730,7 @@ impl Oven {
             TyKind::Record { union, .. } => {
                 if cand && !union {
                     let i = self.poly_info(b, t) as usize;
-                    if self.virt.infos[i].subs.iter().any(|s| s.off == rel && s.cls == cls) {
+                    if self.virt.infos[i].at.contains(&(rel, cls)) {
                         return Some((t, abs));
                     }
                 }
