@@ -840,16 +840,38 @@ impl Oven {
         let p = match self.globals[g as usize].kind {
             GKind::Str(s, ty, e) => self.alloc_string(b, s, ty, e),
             GKind::Var(d) => {
-                let mut p = self.resolve_var(b, g, d, top);
-                if b.cxx23() {
-                    p = self.bind_unknown(b, d, p);
-                }
                 // A variable with no initializer yet (`extern const int
                 // n;` before its definition) may get one later in the
-                // translation unit: its unknown value is kept for this
-                // evaluation only.
+                // translation unit: its resolution is kept for this
+                // evaluation only. While it still has none, the next
+                // evaluation resolves it to the same object again, so the
+                // object is made once and reused: re-making it would cost a
+                // static slot per evaluation (spec/oven.md "Unknown
+                // references").
                 let info = var_info(b.ast(), d);
-                if info.init.is_none() && !matches!(info.state, VarEvalState::Value(_)) {
+                let provisional =
+                    info.init.is_none() && !matches!(info.state, VarEvalState::Value(_));
+                let reusable = provisional
+                    && matches!(info.state, VarEvalState::NotEvaluated | VarEvalState::NotConstant);
+                let ty = reusable.then(|| self.types.intern(b, info.ty));
+                let reuse =
+                    self.provisional_objs.get(&g).copied().filter(|&(t, p)| {
+                        Some(t) == ty && self.mem.alloc_of(Ptr::decode(p)).is_ok()
+                    });
+                let p = if let Some((_, p)) = reuse {
+                    p
+                } else {
+                    let mut p = self.resolve_var(b, g, d, top);
+                    if b.cxx23() {
+                        p = self.bind_unknown(b, d, p);
+                    }
+                    match ty {
+                        Some(t) => _ = self.provisional_objs.insert(g, (t, p)),
+                        None => _ = self.provisional_objs.remove(&g),
+                    }
+                    p
+                };
+                if provisional {
                     self.provisional.push(g);
                 }
                 p

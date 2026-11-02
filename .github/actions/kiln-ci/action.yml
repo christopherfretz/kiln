@@ -21,8 +21,13 @@ runs:
           clang-22 llvm-22 lld-22 >/dev/null
         clang++-19 --version | head -1
         clang++-22 --version | head -1
+    # The job runs as root in a container whose $HOME is /github/home while
+    # root's passwd home is /root; rustup-init's anti-sudo check refuses that
+    # mismatch (nondeterministically across runners). Skip the check: there is
+    # no sudo here, and CARGO_HOME/RUSTUP_HOME are set explicitly by the action.
     - uses: dtolnay/rust-toolchain@stable
       with: { toolchain: "1.99.1", components: "rustfmt, clippy" }
+      env: { RUSTUP_INIT_SKIP_SUDO_CHECK: "yes" }
     # Saved even when `ci` fails, so the next run starts warm.
     - uses: Swatinem/rust-cache@v2
       with: { cache-on-failure: true }
