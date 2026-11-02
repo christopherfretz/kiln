@@ -952,10 +952,23 @@ impl Oven {
                     pc += 3;
                 }
                 Op::Placement => {
-                    if let Err(f) = self.placement(reg!(0) as u64, OTy(arg!(1) as u32)) {
+                    let elem = OTy(arg!(1) as u32);
+                    let ty = if aux & new_aux::ARRAY != 0 {
+                        match self.new_bound(reg!(3), aux, elem, arg!(4) as u64) {
+                            Ok(n) => self.types.array_of(elem, n),
+                            Err(f) => fail!(f),
+                        }
+                    } else {
+                        elem
+                    };
+                    let stat = arg!(2) as u32;
+                    let stat = (stat != crate::kbc::bi::DYN).then_some(OTy(stat));
+                    if aux & new_aux::BOUND == 0
+                        && let Err(f) = self.placement(reg!(0) as u64, ty, stat, aux)
+                    {
                         fail!(f);
                     }
-                    pc += 3;
+                    pc += 6;
                 }
                 Op::EndLife => {
                     if let Err(f) = self.end_life(reg!(0) as u64, OTy(arg!(1) as u32), aux) {
@@ -2215,19 +2228,90 @@ impl Oven {
     /// `Op::Placement`: a placement new of a `ty` at `raw` (clang's
     /// `VisitCXXNewExpr` placement path: `findCompleteObject` for
     /// construction, then the type of the designated subobject).
-    fn placement(&mut self, raw: u64, ty: OTy) -> Result<(), Fault> {
+    fn placement(
+        &mut self,
+        raw: u64,
+        ty: OTy,
+        stat: Option<OTy>,
+        aux: u32,
+    ) -> Result<(), Fault> {
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
-        let a = *self.mem.check_storage(raw, 0, true).map_err(fault)?.2;
+        let (sp, _, a) = self.mem.check_storage(raw, 0, true).map_err(fault)?;
+        let (sp, a) = (sp, *a);
         let off = u64::from(Ptr::decode(raw).off);
-        if !self.types.has_subobject(a.ty, off, ty) {
-            let from = self.dynamic_type(a.ty, off);
-            return Err(Fault::PlacementType { from, to: ty });
+        // The designated object: of the argument's static type, or (a
+        // `void *` argument, whose designator the Oven does not keep) the
+        // outermost object at `off`.
+        let target = match stat {
+            Some(s) if self.types.has_subobject(a.ty, off, s) => s,
+            _ => self.outermost_at(a.ty, off).unwrap_or_else(|| self.dynamic_type(a.ty, off)),
+        };
+        if !self.placement_fits(target, ty) {
+            return Err(Fault::PlacementType { from: target, to: ty });
         }
+        if let Some(f) = write_fault(sp, &a, target) {
+            return Err(Fault::Mem { f, ak: ak::INIT, ty: target, p: raw });
+        }
+        if self.types.size(target) < self.types.size(ty) {
+            return Err(Fault::PlacementType { from: target, to: ty });
+        }
+        let size = self.types.size(ty);
         if a.flags & flags::HAS_UNION != 0 {
             self.place_in_unions(raw, a.ty, ty)?;
         }
-        self.mem.set_lifetime(raw, self.types.size(ty), true).map_err(fault)
+        self.mem.set_lifetime(raw, size, true).map_err(fault)?;
+        if aux & new_aux::ZERO != 0 && size > 0 {
+            let (st, abs, _) = self.mem.check(raw, size, true).map_err(fault)?;
+            self.mem.zero(st, abs, size);
+            if self.types.info(ty).has_union {
+                self.zero_unions(raw, 0, ty);
+            }
+        }
+        Ok(())
     }
+
+    /// clang 22's `HandlePlacementNew` rule: an object of type `s` may
+    /// hold a new `t` when its array extent is at least `t`'s and their
+    /// element types are similar.
+    fn placement_fits(&self, s: OTy, t: OTy) -> bool {
+        let extent = |t: OTy| match self.types.kind(t) {
+            TyKind::Array { n, .. } => n,
+            _ => 1,
+        };
+        let base = |mut t: OTy| {
+            while let TyKind::Array { elem, .. } = self.types.kind(t) {
+                t = elem;
+            }
+            t
+        };
+        extent(s) >= extent(t) && base(s) == base(t)
+    }
+
+    /// The outermost object at offset `off` of a `root`.
+    fn outermost_at(&self, mut t: OTy, mut off: u64) -> Option<OTy> {
+        while off != 0 {
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem);
+                    if es == 0 || off / es >= n {
+                        return None;
+                    }
+                    off %= es;
+                    t = elem;
+                }
+                TyKind::Record { .. } => match self.types.field_at(t, off) {
+                    Some(f) if f.width.is_none() => {
+                        off -= f.offset;
+                        t = f.ty;
+                    }
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        }
+        Some(t)
+    }
+
 
     /// The unions on the path to a placement new of a `ty` at `raw` (in an
     /// allocation of type `root`): clang's `findSubobject` with

@@ -243,6 +243,12 @@ pub trait SemaBridge {
     /// evaluate nested constant expressions with `oven` meanwhile
     /// (R-OVEN-1: spec/oven.md "Nested evaluation").
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>;
+    /// Whether the translation unit is C++26 or later (the rules that
+    /// depend on the language mode: P2747 placement new outside namespace
+    /// std). The default is C++26.
+    fn cxx26(&self) -> bool {
+        true
+    }
     /// The layout of a complete record (via `kiln_abi`).
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout;
     /// `(size, align)` in bytes of a type the Oven has no value model

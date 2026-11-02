@@ -238,12 +238,16 @@ ops! {
     // values"); aux = op (`complex::cx`) | float kind << 2, or for an
     // integer element 1 << 6 | width << 7 | signed << 15
     Cx = 6,
-    // [p, type]: a placement new of `type` at `p` in a function of
-    // namespace std ([expr.const]/5.18, `std::construct_at`): checks the
-    // storage (null, deleted, bounds, a subobject of `type` there) and
-    // begins the object's lifetime, its bytes uninitialized for the
-    // initialization that follows (spec/oven.md "Transient allocation").
-    Placement = 2,
+    // [p, type, stat, n, k]: a placement new of `type` (aux
+    // `new_aux::ARRAY`: of `type[n]`, register `n` checked as an array
+    // new's bound against `k` explicit initializers; `new_aux::ZERO`:
+    // zero-filled) at `p` (P2747, [expr.const]/5.18, `std::construct_at`):
+    // checks the storage (null, deleted, bounds, const, the designated
+    // object of static type `stat` — `bi::DYN` when unknown — must be at
+    // least as large an array of a similar element type) and begins the
+    // object's lifetime, its bytes uninitialized for the initialization
+    // that follows (spec/oven.md "Transient allocation").
+    Placement = 5,
     // [p, type]: an explicit destructor call (or pseudo-destructor call)
     // of the `type` object at `p`; aux 1 = check that its lifetime has
     // not ended, aux 2 = end it (`std::allocator` storage only); aux 4 =
@@ -407,6 +411,9 @@ pub(crate) mod new_aux {
     /// `ARRAY`, the count register holds a byte count, a multiple of
     /// `sizeof(T)`; the elements are outside their lifetime.
     pub const STD: u32 = 16;
+    /// `Op::Placement` with `ARRAY`: only check the bound (an instruction
+    /// at the bound's location, so its notes point there).
+    pub const BOUND: u32 = 32;
 }
 
 impl Op {

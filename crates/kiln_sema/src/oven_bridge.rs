@@ -32,6 +32,10 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         &self.sema.ast
     }
 
+    fn cxx26(&self) -> bool {
+        self.sema.std >= kiln_lex::Std::Cxx26
+    }
+
     fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
         // Write-once: a re-evaluation of the same initializer (a fold,
         // then the check) computes the same value.
