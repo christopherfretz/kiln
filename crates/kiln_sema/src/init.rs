@@ -758,7 +758,8 @@ impl Sema<'_, '_> {
         match r {
             Ok(x) => x,
             Err(err) => {
-                self.emit(err.diag_at(self, at));
+                let d = self.init_failure_diag(&err, at, e);
+                self.emit(d);
                 let loc = self.ast.exprs.get(e).loc();
                 self.recover(ty, &[e], loc)
             }
@@ -868,7 +869,7 @@ impl Sema<'_, '_> {
                 x
             }
             Err(err) => {
-                let mut d = err.diag_at(self, at);
+                let mut d = self.init_failure_diag(&err, at, e);
                 if let Some(n) = param {
                     d = d.with_note(n);
                 }
@@ -878,6 +879,21 @@ impl Sema<'_, '_> {
             }
         };
         Some(self.builder().init_list(ty, &[x], None, None, l.lbrace, l.rbrace))
+    }
+
+    /// A failed copy-initialization from `e` at `at`: clang's
+    /// `FK_ConversionFailed` / `FK_ReferenceInitFailed` also underline
+    /// the initializer (`Args[0]->getSourceRange()`).
+    fn init_failure_diag(&self, err: &conv::ConvError, at: Loc, e: ExprId) -> Diag {
+        let d = err.diag_at(self, at);
+        if matches!(
+            err.id,
+            DiagId::sema_init_conversion_failed | DiagId::sema_reference_bind_failed
+        ) {
+            d.range(self.expr_range(e))
+        } else {
+            d
+        }
     }
 
     /// List-initialization of a parameter (`f({1})`, `int x = {1}` as a

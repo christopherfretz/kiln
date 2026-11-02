@@ -1099,9 +1099,17 @@ specification as written (`TypeNames` prints ` noexcept`,
   `S` is `p`'s specification as written (`noexcept`, `throw()`,
   `noexcept(<expr>)` printed as clang prints it). Both diagnostics take
   a `previous declaration is here` note and clang's fix-it inserting
-  ` S` just past the declarator's `)` (none with a trailing return
-  type, and, as kiln does not record where a cv- or ref-qualifier ends,
-  none after either). "`p`'s" specification is inherited as clang does:
+  ` S` just past the end of the declarator's `)` or, when present, its
+  last cv- or ref-qualifier (`Declarator::fn_qual_locs`; none with a
+  trailing return type or for a `)` or qualifier from a macro).
+  An invalid `p` (WP-279; clang compares only valid declarations) is
+  replaced by the latest valid declaration on its redeclaration chain,
+  or, for an invalid member redeclaration that is not on the chain
+  (`struct S { void f() noexcept; void f() noexcept; };`), by the
+  latest valid same-kind function of that name in `p`'s context
+  corresponding to the redeclaration; with neither, the redeclaration
+  inherits `p`'s specification silently (`void e() noexcept = 0;
+  void e();`). "`p`'s" specification is inherited as clang does:
   `noexcept(true)` becomes `noexcept`, `noexcept(false)` none, others
   as written. Only `p`'s location counts, not the redeclaration's: a
   second redeclaration in user code follows the first (now `throw()`,
