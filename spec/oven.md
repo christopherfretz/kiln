@@ -1216,7 +1216,10 @@ union (tracked) or an explicit destructor call (tracked per byte,
 "Transient allocation", WP-212, WP-222).
 Looking a member up by offset (`Types::field_at`, `subobject_at`,
 `has_member_at`) skips zero-size members (libc++'s `char __padding_[0]`
-shares its offset with the next member). Within a union, extents are
+shares its offset with the next member). Outside a union, of two members
+holding the byte the one at the greater offset wins: it lives in the
+other's tail padding (a `[[no_unique_address]]` member or a non-POD base,
+Itanium dsize), where the other holds no object (WP-289). Within a union, extents are
 computed per member, so a path through a bit-field member of a union
 resolves (WP-201). Extents compare element types up to array-element
 qualifiers (`Types::same_unqualified`): `p[1][2]` through a `const S&`

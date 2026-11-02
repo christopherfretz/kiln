@@ -1,4 +1,4 @@
-//! Prospective destructors ([class.dtor]/4; spec/sema-class.md §4.9).
+//! Prospective destructors ([class.dtor]/4; spec/sema-class.md §4.7.1).
 //!
 //! A class may declare several destructors that differ in their trailing
 //! requires-clauses. At the end of the definition of a non-dependent

@@ -5469,7 +5469,7 @@ impl Sema<'_, '_> {
         let bits = self.class_bits(r, build.as_ref(), bits);
         let bits = self.virtual_class_bits(r, bits);
         // Special members (spec/sema-class.md §4.1, §4.2, §4.4), after
-        // selecting the destructor among prospective ones (§4.9).
+        // selecting the destructor among prospective ones (sema-class.md §4.7.1).
         self.select_destructor(r);
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
