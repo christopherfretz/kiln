@@ -2152,6 +2152,16 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   consteval|immediate function 'f' is not a constant expression` with
   the Oven's notes. Default arguments and default member initializers
   are not checked at their definition (`note_default_init_full_expr`).
+  A constant-expression finished as a full-expression of its own while
+  an enclosing one is being built (`act_on_constant_full_expr`: a
+  default template argument substituted during that full-expression's
+  overload resolution, e.g. `enable_if<...>::type = 0` of a converting
+  constructor template, libc++ `error_code`) finishes only the
+  candidates, references and default uses inside it; the others stay
+  pending for the enclosing full-expression
+  (`set_aside_outer_immediates`; clang pushes a `ConstantEvaluated`
+  context in `SubstDefaultTemplateArgument`). WP-286;
+  `tests/conformance/expr.const/immediate-invocation-default-template-arg-*.cpp`.
 - **Default-argument temporaries** ([class.temporary]/6, WP-216): a
   default argument is its own full-expression at the definition
   (`ExprWithCleanups`), but each use takes over its cleanups: the
