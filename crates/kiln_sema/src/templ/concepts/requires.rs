@@ -184,14 +184,19 @@ impl Substituter<'_, '_, '_> {
                 rbrace,
             ));
         }
-        let x = self.sema.builder().requires_expr(
-            rq.body,
-            &new_params,
-            &[],
-            QualType::BOOL,
-            at,
-            rbrace,
-        );
+        // An unsatisfied requirement settles the value even when a local
+        // parameter's type still names a retained level
+        // (`requires(T... t, decltype(u)... v)` in a generic lambda): the
+        // result keeps no such parameter, which would make it dependent
+        // and re-substituted to `true` with no requirement left.
+        let dep_param = |s: &Self, p: DeclId| {
+            s.sema.ast.decls.get(p).ty().is_some_and(|t| {
+                s.sema.ast.types.qflags(t).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
+            })
+        };
+        let kept: &[DeclId] =
+            if !ok && new_params.iter().any(|&p| dep_param(self, p)) { &[] } else { &new_params };
+        let x = self.sema.builder().requires_expr(rq.body, kept, &[], QualType::BOOL, at, rbrace);
         let _ = self.sema.ast.exprs.set_satisfied(x, ok);
         if !ok {
             let id = self.sema.inst.concepts.push(Satisfaction { ok, records: recs });
