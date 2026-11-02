@@ -1,14 +1,17 @@
 // [support.srcloc.cons]/2, [temp.inst]: in a function template the
 // function name a source-location value holds is the specialization's,
-// with clang 19's template-argument suffix: `__builtin_FUNCTION`,
+// with clang's template-argument suffix: `__builtin_FUNCTION`,
 // `__builtin_source_location` and a default argument that evaluates them
-// are recomputed when the template is instantiated.
+// are recomputed when the template is instantiated. A closure type is
+// `(lambda)` as clang 22 spells it (19: `(anonymous class)`; kiln follows
+// `-fclang-compat`, and runs as 22 here under a clang 19 oracle).
 //@ expect: run
+//@ requires: clang>=22
 //@ stdout: g|const char *g(T) [T = int]
 //@ stdout: g|const char *g(T) [T = char]
 //@ stdout: m|void A<long>::m(U) [T = long, U = bool]
 //@ stdout: cur|const char *cur(T) [T = int]
-//@ stdout: auto main()::(anonymous class)::operator()(auto) const [x:auto = int]
+//@ stdout: auto main()::(lambda)::operator()(auto) const [x:auto = int]
 namespace std {
 struct source_location {
   struct __impl { const char *_M_file_name; const char *_M_function_name; unsigned _M_line; unsigned _M_column; };

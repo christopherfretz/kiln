@@ -148,6 +148,11 @@ pub struct Sema<'a, 'sm> {
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
+    /// The clang major `-fclang-compat` names (19 or 22; default 19): the
+    /// few spellings that differ between the two releases follow it, e.g.
+    /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
+    /// "Predefined identifiers").
+    pub clang_compat: u32,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -618,6 +623,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             reflection: false,
             range_lifetime_extension: false,
             gnu: false,
+            clang_compat: 19,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,

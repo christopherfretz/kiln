@@ -169,6 +169,7 @@ impl SyntaxJob<'_> {
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection,
+            clang_compat: a.predef.clang_compat.major(),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();

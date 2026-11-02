@@ -1,12 +1,14 @@
 // [dcl.fct.def.general]/8 (and the GNU `__FUNCTION__` and
 // `__PRETTY_FUNCTION__`): the predefined identifiers name the enclosing
-// function as clang 19 spells them: the template argument suffix of
+// function as clang 22 spells them (a closure type is `(lambda)`; clang 19
+// and `-fclang-compat=19` say `(anonymous class)`, so the test requires 22): the template argument suffix of
 // function and class template specializations (outermost first, function
 // template arguments printed with their types), the instantiation pattern's
 // parameter types, lambdas (`auto`), constructors and destructors (no return
 // type), operators, conversion functions, deduced and trailing return types,
 // local classes, and "top level" outside a function.
 //@ expect: run
+//@ requires: clang>=22
 //@ args: -Wno-predefined-identifier-outside-function
 //@ stdout: void h() [N = 1, U = 2U, C = 'a', B = true, L = 5L, Ts = <int, char *>]
 //@ stdout: void A<int>::f(T) [T = int, N = 3]
@@ -18,15 +20,15 @@
 //@ stdout: void k(T) [T = double]
 //@ stdout: void k(int)
 //@ stdout: top level||top level
-//@ stdout: auto main()::(anonymous class)::operator()(auto) const [x:auto = int]
+//@ stdout: auto main()::(lambda)::operator()(auto) const [x:auto = int]
 //@ stdout: void main()::Loc::m()
 //@ stdout: const TypeID &makeTypeIDImp() [T = int]
 //@ stdout: S S S::S()
 //@ stdout: int S::operator+(int)
 //@ stdout: auto g(T) [T = double]
-//@ stdout: auto g(double)::(anonymous class)::operator()(int) const|operator()
+//@ stdout: auto g(double)::(lambda)::operator()(int) const|operator()
 //@ stdout: auto g(T) [T = char]
-//@ stdout: auto g(char)::(anonymous class)::operator()(int) const|operator()
+//@ stdout: auto g(char)::(lambda)::operator()(int) const|operator()
 //@ stdout: int main()
 //@ stdout: S::~S()
 //@ stdout: virtual A<int>::~A() [T = int, N = 3]

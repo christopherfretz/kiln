@@ -208,7 +208,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     fn new(ast: &'a Ast, opts: &'a DumpOptions<'a>, out: W) -> Self {
         Dumper {
             ast,
-            names: AstNames { ast, sources: opts.sources, expr_types: PrintOptions::SUGARED },
+            names: AstNames {
+                ast,
+                sources: opts.sources,
+                expr_types: PrintOptions::SUGARED,
+                closure_as_lambda: false,
+            },
             opts,
             out,
             line: String::with_capacity(128),

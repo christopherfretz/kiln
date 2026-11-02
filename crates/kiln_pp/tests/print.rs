@@ -11,7 +11,7 @@ use kiln_lex::{Interner, Std};
 use kiln_pp::{MemoryResolver, PpOptions, Preprocessor, PrintOptions, print_macros};
 use kiln_source::SourceManager;
 
-const MARKERS: PrintOptions = PrintOptions { line_markers: true, line_directives: false };
+const MARKERS: PrintOptions = PrintOptions { line_markers: true, line_directives: false, ucn_as_utf8: false };
 
 fn headers() -> MemoryResolver {
     MemoryResolver::new()
@@ -82,7 +82,7 @@ fn line_directives() {
     let o = common::run_with(
         "a\n#include \"b.h\"\nc\n",
         headers(),
-        PrintOptions { line_markers: true, line_directives: true },
+        PrintOptions { line_markers: true, line_directives: true, ucn_as_utf8: false },
         |_| {},
     );
     common::expect(

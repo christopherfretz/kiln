@@ -22,6 +22,11 @@ pub struct PrintOptions {
     /// Spell line markers as `#line 12 "file.h"` (clang
     /// `-fuse-line-directives`).
     pub line_directives: bool,
+    /// An identifier spelled with universal-character-names prints as its
+    /// UTF-8 name, as clang 22 prints every identifier token (also one
+    /// formed by `##`); clang 19 kept a pasted identifier's spelling
+    /// (`-fclang-compat=22`; spec/pp.md "Preprocessed output").
+    pub ucn_as_utf8: bool,
 }
 
 /// What the printer remembers of a printed token (clang keeps the whole
@@ -296,7 +301,13 @@ impl Printer<'_, '_, '_, '_> {
     fn token(&mut self, t: &Token, sol: &mut bool, in_bytes: &mut bool) {
         crate::profile::count!(tokens_out);
         crate::profile::time!(t_print_ns);
-        let sp = self.pp.spelling(t);
+        let mut sp = self.pp.spelling(t);
+        if self.opts.ucn_as_utf8
+            && let TokKind::Identifier(sym) = t.kind
+            && sp.contains('\\')
+        {
+            sp = self.pp.interner().as_str(sym).to_owned().into();
+        }
         let mut same_line = false;
         if let Some(e) = self.embed {
             if self.pp.is_embed_byte(t) {

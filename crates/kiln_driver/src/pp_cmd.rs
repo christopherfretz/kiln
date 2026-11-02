@@ -305,8 +305,11 @@ impl Job<'_> {
         } else if a.print.macros_only {
             print_macros(&mut pp, &mut result.output);
         } else {
-            let opts =
-                PrintOptions { line_markers: !a.print.no_line_markers, line_directives: false };
+            let opts = PrintOptions {
+                line_markers: !a.print.no_line_markers,
+                line_directives: false,
+                ucn_as_utf8: a.predef.clang_compat.major() >= 22,
+            };
             print_preprocessed(&mut pp, opts, &mut result.output);
         }
         drop(pp);

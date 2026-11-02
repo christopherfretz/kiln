@@ -39,6 +39,10 @@ pub struct AstNames<'a> {
     /// type traits): as written, or canonical for a failed
     /// `static_assert` requirement (clang's `PrintCanonicalTypes`).
     pub expr_types: PrintOptions,
+    /// A closure type prints as `(lambda)` rather than `(anonymous class)`
+    /// (clang 22's `NamedDecl::printNestedNameSpecifier`; set under
+    /// `-fclang-compat=22`).
+    pub closure_as_lambda: bool,
 }
 
 impl std::fmt::Debug for AstNames<'_> {
@@ -50,12 +54,17 @@ impl std::fmt::Debug for AstNames<'_> {
 impl<'a> AstNames<'a> {
     /// Names over `ast` without locations.
     pub fn new(ast: &'a Ast) -> Self {
-        AstNames { ast, sources: None, expr_types: PrintOptions::SUGARED }
+        AstNames { ast, sources: None, expr_types: PrintOptions::SUGARED, closure_as_lambda: false }
     }
 
     /// Names over `ast` printing unnamed tags with their location.
     pub fn with_sources(ast: &'a Ast, sources: &'a SourceManager) -> Self {
-        AstNames { ast, sources: Some(sources), expr_types: PrintOptions::SUGARED }
+        AstNames {
+            ast,
+            sources: Some(sources),
+            expr_types: PrintOptions::SUGARED,
+            closure_as_lambda: false,
+        }
     }
 
     /// These names, printing the types written in expressions canonical
@@ -337,6 +346,10 @@ impl<'a> AstNames<'a> {
                 DeclKind::CXXRecord
                 | DeclKind::ClassTemplateSpecialization
                 | DeclKind::ClassTemplatePartialSpecialization => {
+                    if self.closure_as_lambda && self.ast.closure_lambda(d).is_some() {
+                        out.push_str("(lambda)");
+                        return;
+                    }
                     let tag = self.ast.decls.record(d).map_or(TagKind::Struct, |r| r.tag);
                     out.push_str("(anonymous ");
                     out.push_str(tag.keyword());
