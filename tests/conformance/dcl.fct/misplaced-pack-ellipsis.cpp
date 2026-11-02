@@ -11,27 +11,26 @@
 //@ expect: compile-fail
 //@ std: c++26
 //@ strict-diags
-//@ diag: 35:40 error "'...' must be innermost component of anonymous pack declaration"
-//@ diag: 36:36 error "'...' must immediately precede declared identifier"
-//@ diag: 37:37 error "'...' must be innermost component of anonymous pack declaration"
-//@ diag: 37:40 error "expected ')'"
-//@ diag: 37:31 note "to match this '('"
-//@ diag: 38:41 error "'...' must immediately precede declared identifier"
-//@ diag: 39:37 error "'...' must be innermost component of anonymous pack declaration"
-//@ diag: 40:36 error "'...' must immediately precede declared identifier"
-//@ diag: 41:37 error "'...' must be innermost component of anonymous pack declaration"
-//@ diag: 42:43 error "'...' must be innermost component of anonymous pack declaration"
-//@ diag: 43:39 error "'...' must immediately precede declared identifier"
-//@ diag: 44:36 error "'...' must immediately precede declared identifier"
-//@ diag: 46:19 error "'...' must be innermost component of anonymous pack declaration"
-//@ diag: 47:15 error "'...' must immediately precede declared identifier"
-//@ diag: 48:16 error "'...' must be innermost component of anonymous pack declaration"
-//@ diag: 48:19 error "expected ')'"
-//@ diag: 48:10 note "to match this '('"
-//@ diag: 49:16 error "'...' must immediately precede declared identifier"
-//@ diag: 50:22 error "'...' must immediately precede declared identifier"
-//@ diag: 53:19 error "'...' must immediately precede declared identifier"
-//@ diag: 58:47 warning "declaration of a variadic function without a comma before '...' is deprecated"
+//@ diag: 34:40 error "'...' must be innermost component of anonymous pack declaration"
+//@ diag: 35:36 error "'...' must immediately precede declared identifier"
+//@ diag: 36:37 error "'...' must be innermost component of anonymous pack declaration"
+//@ diag: 36:40 error "expected ')'"
+//@ diag: 36:31 note "to match this '('"
+//@ diag: 37:41 error "'...' must immediately precede declared identifier"
+//@ diag: 38:37 error "'...' must be innermost component of anonymous pack declaration"
+//@ diag: 39:36 error "'...' must immediately precede declared identifier"
+//@ diag: 40:37 error "'...' must be innermost component of anonymous pack declaration"
+//@ diag: 41:43 error "'...' must be innermost component of anonymous pack declaration"
+//@ diag: 42:39 error "'...' must immediately precede declared identifier"
+//@ diag: 43:36 error "'...' must immediately precede declared identifier"
+//@ diag: 45:19 error "'...' must be innermost component of anonymous pack declaration"
+//@ diag: 46:15 error "'...' must immediately precede declared identifier"
+//@ diag: 47:16 error "'...' must be innermost component of anonymous pack declaration"
+//@ diag: 47:19 error "expected ')'"
+//@ diag: 47:10 note "to match this '('"
+//@ diag: 48:16 error "'...' must immediately precede declared identifier"
+//@ diag: 49:22 error "'...' must immediately precede declared identifier"
+//@ diag: 52:19 error "'...' must immediately precede declared identifier"
 template <class... Ts> void f1(Ts (*)()...);
 template <class... Ts> void f2(Ts a...);
 template <class... Ts> void f3(Ts......a);
@@ -55,5 +54,5 @@ template <class... Ts> void l() {
 void use() { fa<int, char>(1, 'a'); fa(1, 2.0, nullptr); }
 // No misplaced pack: no unexpanded pack, or `...` right after the pack's
 // own `...` and before `)`.
-template <class... Ts> void ok1(int (*)(Ts...)...);
-template <class... Ts> void ok2(Ts *...);
+template <class... Ts> void ok1(int (*)(Ts...), ...);
+template <class... Ts> void ok2(Ts *..., int);

@@ -1830,6 +1830,26 @@ impl Sema<'_, '_> {
         self.ast.types.flags(t.ty()).contains(TypeFlags::UNEXPANDED_PACK)
     }
 
+    /// Whether the parameter type `t` of a declarator, looking through
+    /// its own pack expansion (`Ts... a`), names an unexpanded pack (clang's
+    /// `containsUnexpandedParameterPacks(Declarator&)`).
+    pub fn declarator_has_unexpanded_pack(&self, t: QualType) -> bool {
+        match self.ast.types.view(t.ty()) {
+            TypeView::PackExpansion { pattern, .. } => self.has_unexpanded_pack(pattern),
+            _ => self.has_unexpanded_pack(t),
+        }
+    }
+
+    /// The function parameter `p` made a pack by a misplaced `...` at
+    /// `ellipsis` after its declarator (`Ts a...`, clang's
+    /// `DiagnoseMisplacedEllipsisInDeclarator` recovery).
+    pub fn make_param_pack(&mut self, p: &mut crate::declspec::ParamInfo, ellipsis: Loc) {
+        if self.has_unexpanded_pack(p.ty) {
+            p.ty = self.act_pack_expansion_type(p.ty, ellipsis);
+            p.ref_loc = Loc::INVALID;
+        }
+    }
+
     /// The profile of a value-dependent expression `e` (for dependent
     /// array bounds and `noexcept` operands).
     pub(crate) fn dependent_profile(&mut self, e: ExprId) -> kiln_ast::ProfileId {
