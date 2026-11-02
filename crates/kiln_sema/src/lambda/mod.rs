@@ -211,6 +211,33 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The default arguments of lambda parameters `params`, checking
+    /// that every parameter after one with a default argument has one
+    /// too ([dcl.fct.default]/4).
+    fn lambda_default_args(&mut self, params: &[ParamInfo]) -> Vec<Option<ExprId>> {
+        if let Some(first) = params.iter().position(|p| p.default_arg != DefaultArg::None) {
+            for p in params.iter().skip(first + 1) {
+                if p.default_arg != DefaultArg::None || p.invalid {
+                    continue;
+                }
+                let msg = match p.name {
+                    Some((n, _)) => self
+                        .diag(DiagId::sema_missing_default_arg, p.loc)
+                        .arg(self.ast.symbols().as_str(n).to_string()),
+                    None => self.diag(DiagId::sema_missing_default_arg_unnamed, p.loc),
+                };
+                self.emit(msg);
+            }
+        }
+        params
+            .iter()
+            .map(|p| match p.default_arg {
+                DefaultArg::Parsed(e) => Some(e),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The *lambda-declarator* `d` (a member declarator whose single
     /// function chunk holds the parameters, the *noexcept-specifier* and
     /// the trailing return type) with specifiers `specs`: declares the
@@ -289,29 +316,7 @@ impl Sema<'_, '_> {
         if let Some(top) = self.lambdas.last_mut() {
             top.call_template = call_template;
         }
-        let defaults: Vec<Option<ExprId>> = params
-            .iter()
-            .map(|p| match p.default_arg {
-                DefaultArg::Parsed(e) => Some(e),
-                _ => None,
-            })
-            .collect();
-        // [dcl.fct.default]/4: every parameter after one with a default
-        // argument has one too.
-        if let Some(first) = params.iter().position(|p| p.default_arg != DefaultArg::None) {
-            for p in params.iter().skip(first + 1) {
-                if p.default_arg != DefaultArg::None || p.invalid {
-                    continue;
-                }
-                let msg = match p.name {
-                    Some((n, _)) => self
-                        .diag(DiagId::sema_missing_default_arg, p.loc)
-                        .arg(self.ast.symbols().as_str(n).to_string()),
-                    None => self.diag(DiagId::sema_missing_default_arg_unnamed, p.loc),
-                };
-                self.emit(msg);
-            }
-        }
+        let defaults = self.lambda_default_args(&params);
         self.create_params(f, &params, &defaults);
         let mut attrs = specs.attrs.clone();
         attrs.extend(d.attrs.iter().copied());

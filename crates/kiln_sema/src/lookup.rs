@@ -352,6 +352,33 @@ impl Sema<'_, '_> {
             .collect()
     }
 
+    /// The declarations of `name` that block scope `s` makes visible to a
+    /// lookup of `kind`, or `None` when there are none.
+    fn lookup_in_block_scope(
+        &self,
+        s: &crate::scope::Scope,
+        name: Symbol,
+        kind: LookupKind,
+    ) -> Option<Found> {
+        let hit = match kind {
+            LookupKind::Tag => s.find(name, Ns::Tag),
+            LookupKind::Ordinary => s.find(name, Ns::Ordinary).or_else(|| s.find(name, Ns::Tag)),
+            LookupKind::All => {
+                let v: Vec<DeclId> = s.locals.iter().filter(|e| e.0 == name).map(|e| e.1).collect();
+                let found = self.filter(v, kind);
+                return (!found.is_empty()).then_some(found);
+            }
+            LookupKind::Nested => s
+                .locals
+                .iter()
+                .rev()
+                .find(|(n, d, _)| *n == name && self.accept(self.ast.strip_shadow(*d), kind))
+                .map(|e| e.1),
+        };
+        let found = self.filter(self.block_scope_set(s, name, hit?, kind), kind);
+        (!found.is_empty()).then_some(found)
+    }
+
     fn lookup_name_scoped(&self, dname: DeclName, kind: LookupKind, skip_records: bool) -> Found {
         let ident = dname.as_ident();
         let name = ident.unwrap_or(Symbol::from_index(0));
@@ -397,37 +424,10 @@ impl Sema<'_, '_> {
                 continue;
             }
             if s.is_local() {
-                if ident.is_none() {
-                    continue;
-                }
-                let hit = match kind {
-                    LookupKind::Tag => s.find(name, Ns::Tag),
-                    LookupKind::Ordinary => {
-                        s.find(name, Ns::Ordinary).or_else(|| s.find(name, Ns::Tag))
-                    }
-                    LookupKind::All => {
-                        let v: Vec<DeclId> =
-                            s.locals.iter().filter(|e| e.0 == name).map(|e| e.1).collect();
-                        let found = self.filter(v, kind);
-                        if !found.is_empty() {
-                            return found;
-                        }
-                        continue;
-                    }
-                    LookupKind::Nested => s
-                        .locals
-                        .iter()
-                        .rev()
-                        .find(|(n, d, _)| {
-                            *n == name && self.accept(self.ast.strip_shadow(*d), kind)
-                        })
-                        .map(|e| e.1),
-                };
-                if let Some(raw) = hit {
-                    let found = self.filter(self.block_scope_set(s, name, raw, kind), kind);
-                    if !found.is_empty() {
-                        return found;
-                    }
+                if ident.is_some()
+                    && let Some(found) = self.lookup_in_block_scope(s, name, kind)
+                {
+                    return found;
                 }
                 continue;
             }

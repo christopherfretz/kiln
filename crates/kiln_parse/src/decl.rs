@@ -1992,7 +1992,7 @@ impl Parser<'_, '_> {
             }
             let ellipsis = self.eat(Punct::Ellipsis);
             if let Some(e) = ellipsis
-                && self.std < kiln_lex::Std::Cxx26
+                && self.std < Std::Cxx26
             {
                 // P1061: clang `ext_cxx_binding_pack`.
                 let w = self.s.diag(DiagId::parse_ext_binding_pack, e);

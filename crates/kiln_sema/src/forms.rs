@@ -686,16 +686,14 @@ impl Sema<'_, '_> {
         } else {
             self.deduce_auto(ty, &[Some(e)], crate::templ::auto::AutoInit::Expr).ok()
         };
-        match deduced {
-            Some(t) => t,
-            None => {
-                let msg = self
-                    .diag(DiagId::sema_auto_expr_deduction_failure, loc)
-                    .arg(name)
-                    .arg(self.ty_arg(self.ast.exprs.get(e).ty()));
-                self.emit(msg);
-                QualType::ERROR
-            }
+        if let Some(t) = deduced {
+            return t;
         }
+        let msg = self
+            .diag(DiagId::sema_auto_expr_deduction_failure, loc)
+            .arg(name)
+            .arg(self.ty_arg(self.ast.exprs.get(e).ty()));
+        self.emit(msg);
+        QualType::ERROR
     }
 }

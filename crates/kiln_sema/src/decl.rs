@@ -4167,6 +4167,32 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// Whether variable `name` declared by `d` with `spec` is
+    /// name-independent, and its earlier declaration in its scope: a
+    /// block-scope variable `_` of automatic storage duration
+    /// ([basic.scope.scope]/5, P2169) conflicts with no earlier variable
+    /// or binding of its scope.
+    fn var_prev_local(
+        &mut self,
+        spec: VarSpec,
+        d: &Declarator,
+        name: Symbol,
+    ) -> (bool, Option<DeclId>) {
+        let independent = d.qualifier.is_none()
+            && self.in_local_scope()
+            && matches!(spec.storage(), VarStorage::None | VarStorage::Register)
+            && spec.tls() == TlsKind::None
+            && self.is_placeholder_name(name);
+        let local = self.find_prev(name, d.qualifier);
+        if independent
+            && local.is_some_and(|p| matches!(self.kind_of(p), DeclKind::Var | DeclKind::Binding))
+        {
+            self.diagnose_placeholder_redecl(d.name_loc());
+            return (true, None);
+        }
+        (independent, local)
+    }
+
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
@@ -4176,21 +4202,7 @@ impl Sema<'_, '_> {
         }
         let mut prev_ok = None;
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
-        // [basic.scope.scope]/5 (P2169): a block-scope variable `_` of
-        // automatic storage duration is name-independent and conflicts
-        // with no earlier variable of its scope.
-        let independent = d.qualifier.is_none()
-            && self.in_local_scope()
-            && matches!(spec.storage(), VarStorage::None | VarStorage::Register)
-            && spec.tls() == TlsKind::None
-            && self.is_placeholder_name(name);
-        let mut local = self.find_prev(name, d.qualifier);
-        if independent
-            && local.is_some_and(|p| matches!(self.kind_of(p), DeclKind::Var | DeclKind::Binding))
-        {
-            self.diagnose_placeholder_redecl(d.name_loc());
-            local = None;
-        }
+        let (independent, local) = self.var_prev_local(spec, d, name);
         let mut prev = match local {
             None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
@@ -6885,18 +6897,17 @@ impl Sema<'_, '_> {
         to_text: &str,
         at: Loc,
     ) -> Option<ExprId> {
-        let converted =
-            e.and_then(|e| match conv::implicit_convert(self, e, to, ConvCtx::Initialization) {
-                Ok(c) => Some(c),
-                Err(_) => {
-                    let d = self
-                        .diag(DiagId::sema_cce_not_implicitly_convertible, at)
-                        .arg(self.ty_arg(self.ety(e)))
-                        .arg(self.ty_arg(to));
-                    self.emit(d);
-                    None
-                }
-            });
+        let converted = e.and_then(|e| {
+            if let Ok(c) = conv::implicit_convert(self, e, to, ConvCtx::Initialization) {
+                return Some(c);
+            }
+            let d = self
+                .diag(DiagId::sema_cce_not_implicitly_convertible, at)
+                .arg(self.ty_arg(self.ety(e)))
+                .arg(self.ty_arg(to));
+            self.emit(d);
+            None
+        });
         if converted.is_none() {
             let d = self
                 .diag(DiagId::sema_static_assert_invalid_mem_fn_ret_ty, at)
@@ -8446,17 +8457,18 @@ impl Sema<'_, '_> {
 /// code point other than a tab or newline prints as `<U+XXXX>`; a byte
 /// that is not valid UTF-8 prints as `<XX>`.
 fn escape_diag_text(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
         for c in chunk.valid().chars() {
             if c.is_control() && c != '\t' && c != '\n' {
-                out.push_str(&format!("<U+{:04X}>", u32::from(c)));
+                let _ = write!(out, "<U+{:04X}>", u32::from(c));
             } else {
                 out.push(c);
             }
         }
         for b in chunk.invalid() {
-            out.push_str(&format!("<{b:02X}>"));
+            let _ = write!(out, "<{b:02X}>");
         }
     }
     out
