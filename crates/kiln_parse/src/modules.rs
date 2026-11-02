@@ -84,10 +84,10 @@ impl Parser<'_, '_> {
                     let dir = match &d.kind {
                         DirectiveKind::Invalid => continue,
                         DirectiveKind::GlobalFragment => Directive::GlobalFragment,
-                        DirectiveKind::Module { name, partition, name_span } => Directive::Module {
+                        DirectiveKind::Module { name, partition, .. } => Directive::Module {
                             name,
                             partition: partition.as_deref(),
-                            name_loc: name_span.lo,
+                            kw_loc: d.kw.lo,
                         },
                         DirectiveKind::Private { span } => Directive::Private(span.lo),
                         DirectiveKind::Import { key, display, .. } => {
@@ -186,14 +186,16 @@ impl Parser<'_, '_> {
         self.module_activate();
         let loc = self.bump().span.lo;
         let e = self.s.act_on_start_export(loc);
-        if let Some(open) = self.eat(Punct::LBrace) {
+        let block = if let Some(open) = self.eat(Punct::LBrace) {
             while !self.at(Punct::RBrace) && !self.at_eof() {
                 self.parse_external_declaration();
             }
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
+            true
         } else {
             self.parse_external_declaration();
-        }
-        self.s.act_on_finish_export(e);
+            false
+        };
+        self.s.act_on_finish_export(e, block);
     }
 }

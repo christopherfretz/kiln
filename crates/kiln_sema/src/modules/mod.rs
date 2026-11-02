@@ -29,8 +29,9 @@ pub enum Directive<'s> {
         name: &'s str,
         /// The partition.
         partition: Option<&'s str>,
-        /// The name's location.
-        name_loc: Loc,
+        /// The `module` keyword's location (clang reports preamble
+        /// errors there).
+        kw_loc: Loc,
     },
     /// `module :private;`, with the `private` token's location.
     Private(Loc),
@@ -62,9 +63,9 @@ enum Phase {
 struct Frame {
     unit: u16,
     phase: Phase,
-    /// The `module` keyword of the module declaration.
+    /// The first token (`export` / `module`) of the module declaration.
     module_kw: Loc,
-    /// The module declaration's name.
+    /// The module declaration's `module` keyword.
     module_loc: Loc,
     /// The `private` of the private module fragment.
     private_loc: Loc,
@@ -88,6 +89,9 @@ pub(crate) struct ModSema {
     visible: Vec<bool>,
     /// Per unit: a unit of the current unit's named module.
     same: Vec<bool>,
+    /// The `{` of each unnamed namespace opened while modules are active
+    /// (clang reports unnamed-namespace export errors there).
+    anon_braces: FxHashMap<DeclId, Loc>,
 }
 
 impl ModSema {
@@ -242,16 +246,16 @@ impl Sema<'_, '_> {
                     f.phase = Phase::Gmf;
                 }
             }
-            Directive::Module { name, partition, name_loc } => {
+            Directive::Module { name, partition, kw_loc } => {
                 if f.module_loc.is_valid() {
                     let note = self.diag(DiagId::note_module_previous_decl, f.module_loc);
-                    let m = self.diag(DiagId::sema_module_multiple_decls, name_loc);
+                    let m = self.diag(DiagId::sema_module_multiple_decls, kw_loc);
                     self.emit(m.with_note(note));
                     return;
                 }
                 if f.phase == Phase::Start && f.first_decl.is_valid() {
                     let note = self.diag(DiagId::note_module_add_gmf, f.first_decl);
-                    let m = self.diag(DiagId::sema_module_decl_not_first, name_loc);
+                    let m = self.diag(DiagId::sema_module_decl_not_first, kw_loc);
                     self.emit(m.with_note(note));
                 }
                 let kind = match (export, partition.is_some()) {
@@ -273,7 +277,7 @@ impl Sema<'_, '_> {
                 if let Some(f) = self.modules.frames.last_mut() {
                     f.phase = Phase::Purview;
                     f.module_kw = loc;
-                    f.module_loc = name_loc;
+                    f.module_loc = kw_loc;
                     f.decl_seen = false;
                 }
                 self.module_owner_changed();
@@ -368,7 +372,7 @@ impl Sema<'_, '_> {
             }
             self.emit(m);
         } else if let Some(ns) = self.module_enclosing_anon_ns() {
-            let note = self.diag(DiagId::note_module_anon_ns_begins, self.ast.decls.get(ns).loc());
+            let note = self.diag(DiagId::note_module_anon_ns_begins, self.module_anon_loc(ns));
             let m = self.diag(DiagId::sema_module_export_in_anon_ns, loc);
             self.emit(m.with_note(note));
         }
@@ -383,9 +387,20 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// Records the `{` of the unnamed namespace `ns`.
+    pub fn module_note_anon_namespace(&mut self, ns: DeclId, lbrace: Loc) {
+        self.modules.anon_braces.insert(ns, lbrace);
+    }
+
+    /// Where unnamed namespace `ns` is reported: its `{` if known.
+    fn module_anon_loc(&self, ns: DeclId) -> Loc {
+        self.modules.anon_braces.get(&ns).copied().unwrap_or_else(|| self.ast.decls.get(ns).loc())
+    }
+
     /// The end of the export declaration `e`: checks what it exported
-    /// ([module.interface]/3, /2).
-    pub fn act_on_finish_export(&mut self, e: DeclId) {
+    /// ([module.interface]/3, /2). `block` is true for `export { ... }`
+    /// (clang adds the "export block begins here" note only then).
+    pub fn act_on_finish_export(&mut self, e: DeclId, block: bool) {
         self.scopes.pop();
         self.ctx = self.ast.decls.get(e).ctx().unwrap_or(self.ast.tu);
         let mut loc = self.ast.decls.get(e).loc();
@@ -395,7 +410,7 @@ impl Sema<'_, '_> {
             loc = l;
         }
         self.module_owner_changed();
-        self.module_check_exported(e, loc);
+        self.module_check_exported(e, block.then_some(loc));
     }
 
     /// The innermost unnamed namespace the current context is in.
@@ -410,36 +425,56 @@ impl Sema<'_, '_> {
     /// [module.interface]/3 (C++20 wording, as clang 22): an exported
     /// declaration shall not have internal linkage; [module.interface]/2:
     /// no unnamed namespace is exported.
-    fn module_check_exported(&mut self, e: DeclId, export_loc: Loc) {
+    fn module_check_exported(&mut self, e: DeclId, block_loc: Option<Loc>) {
         let lo = e.index() + 1;
         let hi = self.ast.decls.next_id().index();
         for i in lo..hi {
             let d = DeclId::new(i);
             let n = self.ast.decls.get(d);
-            if n.has(DeclFlags::IMPLICIT) || !self.exported_by(d, e) {
+            // Using-declarations are checked through their (implicit) shadows.
+            let implicit = n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow;
+            if implicit || !self.exported_by(d, e) {
                 continue;
             }
             match n.kind() {
                 DeclKind::Namespace if n.name() == DeclName::EMPTY => {
-                    let m = self.diag(DiagId::sema_module_export_anon_ns, n.loc());
+                    let m = self.diag(DiagId::sema_module_export_anon_ns, self.module_anon_loc(d));
                     self.emit(m);
                 }
                 DeclKind::UsingShadow => {
                     let t = self.ast.strip_shadow(d);
-                    if t != d && internal(self, t) {
+                    let mt = &self.ast.modules;
+                    // Module linkage: owned by a named module's purview and
+                    // never exported.
+                    let module_linkage = || {
+                        let o = mt.owner(t);
+                        o.purview && !o.exported && !mt.owner(self.ast.first(t)).exported
+                    };
+                    let linkage = if t == d {
+                        None
+                    } else if internal(self, t) {
+                        Some(0u8)
+                    } else if module_linkage() {
+                        Some(1)
+                    } else {
+                        None
+                    };
+                    if let Some(k) = linkage {
                         let note = self.diag(DiagId::note_module_using_target, self.ast.decls.get(t).loc());
                         let name = self.decl_name_str(self.ast.decls.get(t).name());
-                        let m = self.diag(DiagId::sema_module_export_using_internal, n.loc()).arg(name);
+                        let m = self.diag(DiagId::sema_module_export_using_internal, n.loc()).arg(name).arg(k);
                         self.emit(m.with_note(note));
                     }
                 }
                 DeclKind::Function | DeclKind::Var | DeclKind::FunctionTemplate | DeclKind::VarTemplate
                     if internal(self, d) && anon_ns_of(self, d).is_none() =>
                 {
-                    let note = self.diag(DiagId::note_module_export_block_begins, export_loc);
                     let name = self.decl_name_str(n.name());
-                    let m = self.diag(DiagId::sema_module_export_internal, n.loc()).arg(name);
-                    self.emit(m.with_note(note));
+                    let mut m = self.diag(DiagId::sema_module_export_internal, n.loc()).arg(name);
+                    if let Some(l) = block_loc {
+                        m = m.with_note(self.diag(DiagId::note_module_export_block_begins, l));
+                    }
+                    self.emit(m);
                 }
                 _ => {}
             }
@@ -527,14 +562,23 @@ impl Sema<'_, '_> {
             || mt.owner(self.ast.first(d)).exported
     }
 
-    /// ADL ([basic.lookup.argdep]/4): `raw` is visible, or it is declared
-    /// in the purview of a named module some class of `classes` is
-    /// attached to.
+    /// ADL ([basic.lookup.argdep]/4): `raw` is visible, or it is an
+    /// exported declaration in the purview of a named module some class
+    /// of `classes` is attached to (reachable through an import the
+    /// current unit does not see). As clang 22, "in the interface of M"
+    /// means exported: a non-exported function of M's interface is not
+    /// found by an importer's ADL.
     pub(crate) fn module_adl_visible(&self, raw: DeclId, classes: &[DeclId]) -> bool {
         if self.module_visible(raw) {
             return true;
         }
         let mt = &self.ast.modules;
+        let exported = self.module_scope_decl(raw).is_some_and(|d| {
+            mt.owner(d).exported || mt.owner(self.ast.first(d)).exported
+        });
+        if !exported {
+            return false;
+        }
         let Some(m) = mt.purview_module(raw) else { return false };
         classes.iter().any(|&c| mt.purview_module(self.ast.first(c)) == Some(m))
     }

@@ -276,7 +276,11 @@ impl Parser<'_, '_> {
         };
         let mut opened = Vec::new();
         if names.is_empty() {
-            opened.push(self.s.act_on_start_namespace(None, inline, ns_loc));
+            let ns = self.s.act_on_start_namespace(None, inline, ns_loc);
+            if self.mods.is_some() {
+                self.s.module_note_anon_namespace(ns, open);
+            }
+            opened.push(ns);
         }
         for (n, l, inl) in names {
             opened.push(self.s.act_on_start_namespace(Some((n, l)), inl, ns_loc));

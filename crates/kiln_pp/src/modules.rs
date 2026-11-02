@@ -38,6 +38,8 @@ pub struct ModuleDirective {
     pub span: Span,
     /// Starts with `export`.
     pub export: bool,
+    /// The `module` / `import` keyword (`span` unless `export`).
+    pub kw: Span,
     /// What it declares.
     pub kind: DirectiveKind,
 }
@@ -143,21 +145,19 @@ impl Preprocessor<'_, '_> {
     /// queues its marker and performs the import.
     pub(crate) fn module_directive(&mut self, t: Token, export: bool, import: bool) {
         self.start_directive();
-        if export {
-            let _ = self.lex_unexpanded();
-        }
+        let kw_span = if export { self.lex_unexpanded().tok.span } else { t.span };
         let kw = if import { "import" } else { "module" };
         let kind = self.read_directive_body(import, kw);
-        let d = ModuleDirective { span: t.span, export, kind };
+        let d = ModuleDirective { span: t.span, export, kw: kw_span, kind };
         self.finish_directive();
         let perform = match &d.kind {
-            DirectiveKind::Module { name, partition, .. } => {
+            DirectiveKind::Module { name, partition, name_span } => {
                 if let Some(m) = &mut self.modules {
                     m.module = Some(name.clone());
                 }
                 // [module.unit]/8: an implementation unit implicitly
                 // imports its primary interface.
-                (!export && partition.is_none()).then(|| (name.clone(), d.span))
+                (!export && partition.is_none()).then(|| (name.clone(), *name_span))
             }
             DirectiveKind::Import { key, header: false, name_span, .. } if !key.starts_with(':') => {
                 Some((key.clone(), *name_span))
@@ -205,6 +205,7 @@ impl Preprocessor<'_, '_> {
                     let Some((p, _)) = self.read_module_name(&mut t, kw) else {
                         return DirectiveKind::Invalid;
                     };
+                    self.unlex_file_tok(t);
                     match self.modules.as_ref().and_then(|m| m.module.clone()) {
                         Some(m) if import => DirectiveKind::Import {
                             key: format!("{m}:{p}"),
