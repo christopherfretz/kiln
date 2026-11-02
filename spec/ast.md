@@ -1171,3 +1171,7 @@ Built by `AstBuilder::predefined_expr(kind, ty, name, loc)`.
 `ExprArena::mark_instantiation_dependent(e)` sets
 `ExprDeps::INSTANTIATION` on a `SourceLocExpr` or `CXXDefaultArgExpr`
 whose function name changes per specialization (sema, §5.8).
+`ExprArena::mark_type_dependent(e)` sets `ExprDeps::TYPE_VALUE_INST` on
+a `DeclRefExpr` to a variable captured by copy in a lambda whose
+explicit object parameter has a dependent type ([temp.dep.expr]/3;
+sema-lambda.md §4.4).

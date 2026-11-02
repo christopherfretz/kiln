@@ -2169,11 +2169,11 @@ in `closure_reg`, and captures are read through it while `this` in the
 body is the captured one. An overloaded operator call whose callee is an
 explicit object member function passes the converted object as the
 first argument, as a plain call does ([over.call.func]/3). A structured
-binding declared as the condition of `if`, `while` or `for`
+binding declared as the condition of `if`, `while`, `for` or `switch`
 ([stmt.pre]/4, P0963) initializes its tuple-like bindings (the `get`
 calls) after the condition is evaluated (`cond_bindings`); in a loop
 their registers are kept to the end of the loop statement
-(`tests/conformance/dcl.struct.bind/p0963-binding-condition.cpp`,
+(`tests/conformance/dcl.struct.bind/p0963-{binding,switch}-condition.cpp`,
 `tests/conformance/dcl.fct/p0847-lambda-explicit-object*.cpp`).
 
 ## Tests

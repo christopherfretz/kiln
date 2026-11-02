@@ -697,8 +697,25 @@ impl Sema<'_, '_> {
         // [temp.res.general]/6: a condition of dependent type is checked
         // (converted, promoted) when the template is instantiated; the
         // case values are left unevaluated until then.
+        // [stmt.switch]/2: a condition of class type is contextually
+        // implicitly converted to an integral or enumeration type
+        // ([conv.general]/5, `switch_conv.rs`).
+        let class = if ok || self.is_dependent_type(ty0) || t.as_record(ty0).is_none() {
+            None
+        } else {
+            self.switch_class_condition(cond, loc)
+        };
         let (cond, cond_ty, invalid) = if self.is_dependent_type(ty0) {
             (cond, ty0, false)
+        } else if let Some(c) = class {
+            if self.is_err_expr(c) {
+                (c, QualType::INT, true)
+            } else {
+                self.check_switch_bool(c, loc);
+                let c = conv::integral_promotion(self, c);
+                let ty = self.ast.exprs.get(c).ty();
+                (c, ty, false)
+            }
         } else if ok {
             self.check_switch_bool(cond, loc);
             let c = conv::integral_promotion(self, cond);

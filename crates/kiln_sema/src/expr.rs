@@ -1885,6 +1885,12 @@ impl Sema<'_, '_> {
             _ => (ty, ExprFlags::NONE),
         };
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, flags);
+        if flags == ExprFlags::REFERS_TO_ENCLOSING
+            && matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar)
+            && self.captured_by_copy_in_dependent_object_lambda(d)
+        {
+            self.ast.exprs.mark_type_dependent(e);
+        }
         // A binding to a bit-field designates it (clang `BuildDeclRefExpr`).
         if n.kind() == DeclKind::Binding
             && let Some(b) = self.ast.decls.binding_expr(d)

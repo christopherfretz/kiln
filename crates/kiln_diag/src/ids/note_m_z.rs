@@ -12,6 +12,9 @@ note_member_first_declared_here = Note (1) "member {0} first declared here";
 note_member_fn_declared_const = Note (1) "member function '{0}' is declared const here";
 note_member_reference_arrow_from_operator_arrow = Note (0) "'->' applied to return value of the operator->() declared here";
 note_member_synthesized_at = Note (3) "in {0:implicit|defaulted} {1:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} for {2} first required here";
+note_misplaced_ellipsis_vararg_add_comma = Note (0) "insert ',' before '...' to silence this warning";
+note_misplaced_ellipsis_vararg_add_ellipsis = Note (1) "place '...' {0:immediately before declared identifier|here} to declare a function parameter pack";
+note_misplaced_ellipsis_vararg_existing_ellipsis = Note (0) "preceding '...' declares a function parameter pack";
 note_module_add_export = Note (0) "add 'export' here if this is intended to be a module interface unit";
 note_module_add_gmf = Note (0) "add 'module;' to the start of the file to introduce a global module fragment";
 note_module_anon_ns_begins = Note (0) "anonymous namespace begins here";
@@ -104,6 +107,7 @@ note_requirement_would_be_invalid = Note (3) "{0:and|because} '{1}' would be inv
 note_rewriting_operator_as_spaceship = Note (0) "while rewriting comparison as call to 'operator<=>' declared here";
 note_single_arg_concept_false = Note (3) "{0:and|because} {1} does not satisfy '{2}'";
 note_substituted_constraint_ill_formed = Note (1) "because substituted constraint expression is ill-formed{0}";
+note_switch_conversion = Note (2) "conversion to {0:integral|enumeration} type {1}";
 note_temp_member_ref_here = Note (0) "reference member declared here";
 note_template_class_instantiation_here = Note (1) "in instantiation of template class '{0}' requested here";
 note_template_decl_here = Note (0) "template is declared here";
