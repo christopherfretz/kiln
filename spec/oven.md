@@ -60,8 +60,13 @@ the evaluator's flattened type table.
   overflow, division by zero, `INT_MIN / -1`, out-of-range shifts, negative
   shifts and float results that are NaN fault; unsigned arithmetic wraps.
   binary32/binary64 use the host's IEEE arithmetic (round to nearest even);
-  x87 `long double` and `__float128` use the bit-exact soft-float in
-  `softfloat.rs`.
+  x87 `long double`, `__float128` / `_Float128`, `_Float16` and `__bf16`
+  use the bit-exact soft-float in `softfloat.rs` (each operation rounded
+  once, never through `double`). The P1467 types (WP-361) map to the
+  `FloatKind` of their format in `ty.rs`: `_Float32` Single, `_Float64`
+  Double, `_Float128` Quad, so they evaluate exactly as `float`,
+  `double` and `__float128` (test:
+  `tests/conformance/basic.extended.fp/p1467-constexpr.cpp`).
 - Compilation is lazy, per function, on first call. A function that cannot
   be called in a constant expression (not constexpr, or no body) compiles
   to a one-instruction stub that traps with clang's note on call, so sema
@@ -218,6 +223,18 @@ the evaluator's flattened type table.
   initializer (its object is under construction, `RESOLVING`).
 - `Oven::try_fold(bridge, e) -> Option<ConstValueId>`: silent, not
   recorded.
+- `Oven::evaluate_chars(bridge, size, data, EvalContext) -> (Vec<u8>,
+  Result<(), EvalFailure>)` (WP-356, [dcl.pre]/11-12, P2741; clang
+  `Expr::EvaluateCharRangeAsString`): the characters of a `static_assert`
+  message that is not a string literal. `size` (converted to
+  `std::size_t`) and `data` (converted to `const char *`) are evaluated
+  in that order in one manifestly constant-evaluated context, then the
+  builtin `bi::MSG_CHARS` reads the `size` characters `data` points to
+  into the Oven's message buffer; temporaries of both calls live until
+  the last read. Recorded in the stats like `evaluate`, never memoized.
+  On failure the characters read before the failing one are returned
+  with the failure and its notes (clang prints them). spec/sema.md §4.6
+  renders the text.
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.
@@ -644,7 +661,12 @@ literal is one instruction and one step, not an interpreted loop.
   a constexpr context`, which clang emits as an error-level note
   (`Note::is_error`, spec/diag.md §6). The two-argument mask form is not
   a constant (generic note; clang 19 crashes on it). The `*f128` builtins with a `long double` twin
-  evaluate as the twin (quad-precision `softfloat` arithmetic);
+  evaluate as the twin (quad-precision `softfloat` arithmetic), and so
+  do the GCC `_FloatN` constants libstdc++ `<limits>` names
+  (`__builtin_{huge_val,inf,nan,nans}f{16,32,64}`, `__builtin_nansf16b`;
+  WP-361, `kiln_ast` `builtin_ids::FLOATN`), converted to the result
+  type; `__builtin_nextafterf16`/`f16b` are declared only and are not
+  constant expressions (nor lowered);
   `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
   trap "subexpression not valid", as clang 19. **Divergences:** for the
   object-size comma rule a call with arguments counts as a read (its
@@ -1901,6 +1923,21 @@ sema.
     `-fconstexpr-steps`, pinned with `oven:` budgets, plus one-step-short
     twins with clang's notes.
 
+### Coroutines — rejected (WP-351)
+A coroutine is never a constexpr function ([dcl.constexpr]/3; Sema
+rejects `constexpr`/`consteval` coroutines and drops the implicit
+constexpr of a coroutine lambda, sema.md §7.13), so a constant
+evaluation reaches one only through a call Sema already reports as
+"non-constexpr function ... cannot be used in a constant expression",
+or through a `__builtin_coro_*` builtin, which is not a constexpr
+builtin (no note, as clang). Defensively, the compiler lowers a
+`CoawaitExpr`, `CoyieldExpr` or `DependentCoawaitExpr` and a
+`CoroutineBodyStmt` or `CoreturnStmt` to a trap reporting clang's
+generic "subexpression not valid in a constant expression" at the
+expression or statement; no coroutine frame is ever built at compile
+time. Test: `tests/conformance/dcl.fct.def.coroutine/
+constant_evaluation.cpp`.
+
 ## Status and what remains
 Implemented (M2): integers of every width incl. `__int128`, `bool`,
 character types, binary32/64, x87 `long double`, binary128, enums;
@@ -1980,6 +2017,24 @@ temporaries scope. If it is false, evaluation fails with clang's
 location ([dcl.attr.assume]/1, [expr.const]/5.8). An assumption that has
 possible side effects is never evaluated, as in clang's `EvaluateStmt`
 (`tests/conformance/expr.const/assume-false.cpp`).
+
+**Landed (WP-356): lambdas with an explicit object parameter, condition
+bindings.** In a lambda call operator the closure object is the implicit
+object parameter or, with an explicit object parameter
+([expr.prim.lambda.closure]/5, P0847), that parameter (or its referent)
+converted to its closure-type base when its type is derived from the
+closure type (non-virtual bases only, as sema requires; clang
+`EmitLValueForLambdaField`); the prologue (`compile/lambda.rs`) keeps it
+in `closure_reg`, and captures are read through it while `this` in the
+body is the captured one. An overloaded operator call whose callee is an
+explicit object member function passes the converted object as the
+first argument, as a plain call does ([over.call.func]/3). A structured
+binding declared as the condition of `if`, `while` or `for`
+([stmt.pre]/4, P0963) initializes its tuple-like bindings (the `get`
+calls) after the condition is evaluated (`cond_bindings`); in a loop
+their registers are kept to the end of the loop statement
+(`tests/conformance/dcl.struct.bind/p0963-binding-condition.cpp`,
+`tests/conformance/dcl.fct/p0847-lambda-explicit-object*.cpp`).
 
 ## Tests
 `crates/kiln_oven/tests/`, each test naming its section:

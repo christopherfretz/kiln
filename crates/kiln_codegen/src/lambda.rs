@@ -13,11 +13,11 @@ use crate::module::{Cg, R};
 
 impl Cg<'_> {
     /// clang `StartFunction` in a lambda's function call operator `l`:
-    /// remembers the closure object, and points `this` at the captured
-    /// object (the copy for `*this`, the pointer held for `this`).
-    pub(crate) fn lambda_prolog(&mut self, l: LambdaId) -> R<()> {
+    /// remembers the closure object `closure`, and points `this` at the
+    /// captured object (the copy for `*this`, the pointer held for
+    /// `this`).
+    pub(crate) fn lambda_prolog(&mut self, l: LambdaId, closure: V) -> R<()> {
         let ast = self.ast;
-        let closure = self.this_value();
         self.f.closure = Some((closure, l));
         let data = ast.exprs.lambdas.get(l);
         let Some(c) = data.this_capture() else { return Ok(()) };
@@ -36,6 +36,49 @@ impl Cg<'_> {
             self.f.this_class = Some(rd);
         }
         Ok(())
+    }
+
+    /// The closure object of call operator of lambda `l` with explicit
+    /// object parameter `obj` ([expr.prim.lambda.closure]/5; clang
+    /// `EmitLValueForLambdaField`): the parameter, or its referent, as
+    /// its closure-type base when it is of a class derived from it.
+    pub(crate) fn explicit_object_closure(&mut self, l: LambdaId, obj: DeclId) -> R<V> {
+        let ast = self.ast;
+        let pq = ast.decls.get(obj).ty().expect("param type");
+        let a = self.f.locals[&obj];
+        let (p, cls) = if ast.types.is_reference(pq) {
+            let t = ast.types.pointee(pq).unwrap_or(pq);
+            (self.load(LTy::PTR, a.v, a.align, false), t)
+        } else {
+            (a.v, pq)
+        };
+        let closure = ast.exprs.lambdas.get(l).closure;
+        let Some(rd) = ast.types.as_record(cls) else { return Ok(p) };
+        if ast.first(rd) == ast.first(closure) {
+            return Ok(p);
+        }
+        match self.nv_base_offset(rd, closure, 0) {
+            Some(off) => Ok(self.byte_offset(p, off)),
+            None => crate::module::err(
+                Some(ast.decls.get(obj).loc()),
+                "explicit object parameter of a class not derived non-virtually from the closure",
+            ),
+        }
+    }
+
+    /// The offset of `base`, reached through non-virtual bases only, in
+    /// class `rd` (depth-first in declaration order).
+    fn nv_base_offset(&mut self, rd: DeclId, base: DeclId, depth: u32) -> Option<u64> {
+        let ast = self.ast;
+        if ast.first(rd) == ast.first(base) {
+            return Some(0);
+        }
+        if depth > 64 {
+            return None;
+        }
+        let def = self.class_def(rd)?;
+        let bases = self.tys.layouter().record(def).bases.clone();
+        bases.into_iter().find_map(|(b, o)| self.nv_base_offset(b, base, depth + 1).map(|x| x + o))
     }
 
     /// clang `EmitLValueForLambdaField`: capture member `field` of the

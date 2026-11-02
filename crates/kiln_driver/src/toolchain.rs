@@ -350,6 +350,9 @@ pub enum Tool {
     Llc,
     /// `llvm-as`: IR to bitcode (`-c -emit-llvm`).
     LlvmAs,
+    /// `opt`: the coroutine lowering before `llc` (only for a module
+    /// that declares an `llvm.coro.*` intrinsic).
+    Opt,
     /// `clang++`: the link step.
     Linker,
 }
@@ -360,6 +363,7 @@ impl Tool {
         match self {
             Tool::Llc => "llc-19",
             Tool::LlvmAs => "llvm-as-19",
+            Tool::Opt => "opt-19",
             Tool::Linker => "clang++-19",
         }
     }
@@ -369,6 +373,7 @@ impl Tool {
         match self {
             Tool::Llc => "llc",
             Tool::LlvmAs => "llvm-as",
+            Tool::Opt => "opt",
             Tool::Linker => "clang++",
         }
     }
@@ -376,7 +381,7 @@ impl Tool {
     /// The failure wording's stage: `<stage> command failed ...`.
     pub fn stage(self) -> &'static str {
         match self {
-            Tool::Llc | Tool::LlvmAs => "backend",
+            Tool::Llc | Tool::LlvmAs | Tool::Opt => "backend",
             Tool::Linker => "linker",
         }
     }

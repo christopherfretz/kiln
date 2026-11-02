@@ -31,13 +31,18 @@ pub(crate) fn builtin_width(s: &Sema<'_, '_>, b: BuiltinType) -> u32 {
         | BuiltinType::UInt
         | BuiltinType::WChar
         | BuiltinType::Char32
-        | BuiltinType::Float => 32,
-        BuiltinType::Int128 | BuiltinType::UInt128 | BuiltinType::Float128 => 128,
+        | BuiltinType::Float
+        | BuiltinType::Float32 => 32,
+        BuiltinType::Int128
+        | BuiltinType::UInt128
+        | BuiltinType::Float128
+        | BuiltinType::StdFloat128 => 128,
         BuiltinType::LongDouble => match s.target.long_double {
             FloatFormat::IeeeDouble => 64,
             FloatFormat::X87Extended => 80,
             _ => 128,
         },
+        // `Long`, `ULong`, `LongLong`, `ULongLong`, `Double`, `Float64`.
         _ => 64,
     }
 }
@@ -272,10 +277,10 @@ pub(crate) fn float_format(s: &Sema<'_, '_>, b: BuiltinType) -> Option<FloatForm
     Some(match b {
         BuiltinType::Half | BuiltinType::Float16 => FloatFormat::IeeeHalf,
         BuiltinType::BFloat16 => FloatFormat::BFloat,
-        BuiltinType::Float => FloatFormat::IeeeSingle,
-        BuiltinType::Double => FloatFormat::IeeeDouble,
+        BuiltinType::Float | BuiltinType::Float32 => FloatFormat::IeeeSingle,
+        BuiltinType::Double | BuiltinType::Float64 => FloatFormat::IeeeDouble,
         BuiltinType::LongDouble => s.target.long_double,
-        BuiltinType::Float128 => FloatFormat::IeeeQuad,
+        BuiltinType::Float128 | BuiltinType::StdFloat128 => FloatFormat::IeeeQuad,
         _ => return None,
     })
 }
@@ -301,6 +306,28 @@ pub(crate) fn format_subset(a: FloatFormat, b: FloatFormat) -> bool {
     let (pb, xb, nb) = format_params(b);
     // Subnormals: the smallest positive value is 2^(emin - p + 1).
     pa <= pb && xa <= xb && na - (pa as i32) >= nb - (pb as i32) && na >= nb
+}
+
+/// [conv.double]/1 (C++23, P1467): an implicit conversion between
+/// floating-point types where one is a C++23 extended floating-point type
+/// (`_Float16`, `_Float32`, `_Float64`, `_Float128`, `__bf16`) requires
+/// the destination's conversion rank to be greater than or equal to the
+/// source's. `Some(unordered)` when `from` → `to` breaks that rule
+/// (`unordered`: neither value set contains the other). Explicit casts
+/// may convert between any floating-point types ([expr.static.cast]/11).
+pub(crate) fn fp_rank_violation(
+    s: &Sema<'_, '_>,
+    from: BuiltinType,
+    to: BuiltinType,
+) -> Option<bool> {
+    if from == to || !(from.is_std_extended_floating() || to.is_std_extended_floating()) {
+        return None;
+    }
+    let (ff, tf) = (float_format(s, from)?, float_format(s, to)?);
+    if format_subset(ff, tf) {
+        return None;
+    }
+    Some(!format_subset(tf, ff))
 }
 
 /// How two floating-point types' conversion ranks compare
@@ -329,6 +356,16 @@ fn standard_float_index(b: BuiltinType) -> u8 {
     }
 }
 
+/// The subrank among extended types of equal value sets: the vendor
+/// `__float128` sits below the C++23 `_Float128` (kiln's choice; GCC has
+/// both only on x86-64, clang 22 has no `_Float128`), so mixing them
+/// yields `_Float128` whichever operand comes first. Only that pair is
+/// ordered here: `__fp16` vs `_Float16` keeps clang's handling (the
+/// operation computes in `_Float16`'s `half`).
+fn extended_subrank(b: BuiltinType) -> u8 {
+    u8::from(b == BuiltinType::StdFloat128)
+}
+
 /// Compares the floating-point conversion ranks, then subranks, of
 /// floating builtins `a` and `b` ([conv.rank]/2): by value set; for
 /// equal value sets the standard types keep their order (`float` <
@@ -355,7 +392,11 @@ pub fn float_order(s: &Sema<'_, '_>, a: BuiltinType, b: BuiltinType) -> FloatOrd
             }
             (true, false) => FloatOrder::Less,
             (false, true) => FloatOrder::Greater,
-            (false, false) => FloatOrder::Equal,
+            (false, false) => match extended_subrank(a).cmp(&extended_subrank(b)) {
+                std::cmp::Ordering::Less => FloatOrder::Less,
+                std::cmp::Ordering::Equal => FloatOrder::Equal,
+                std::cmp::Ordering::Greater => FloatOrder::Greater,
+            },
         },
     }
 }

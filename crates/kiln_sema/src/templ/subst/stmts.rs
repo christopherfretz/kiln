@@ -297,6 +297,24 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.builder().attributed_stmt(&kept, sub, loc))
             }
             StmtKind::CXXTryStmt => self.try_stmt(s),
+            // [stmt.return.coroutine] (clang `TransformCoreturnStmt`).
+            StmtKind::CoreturnStmt => {
+                let v = self.sema.ast.stmts.coreturn_operand(s);
+                let v = match v.and_then(|v| self.braced_source(v)) {
+                    Some(b) => {
+                        let l = self.braced_list(b)?;
+                        Some(self.sema.act_on_braced_arg(l))
+                    }
+                    None => self.opt_expr(v)?,
+                };
+                Ok(self.sema.build_coreturn(v, loc))
+            }
+            // The user's body again: the instantiation builds its own
+            // coroutine parts at its end.
+            StmtKind::CoroutineBodyStmt => {
+                let b = self.sema.ast.stmts.coroutine_body(s).body;
+                Ok(self.stmt(b))
+            }
             k => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
     }

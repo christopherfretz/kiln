@@ -795,6 +795,19 @@ struct Mangler<'a, 'b> {
 }
 
 impl<'a, 'b> Mangler<'a, 'b> {
+    /// A builtin's code. `__bf16` is the vendor type `u6__bf16` on
+    /// `AArch64` (clang and GCC; not a substitution candidate there, unlike
+    /// the SVE types) and `DF16b` on x86-64.
+    fn builtin_str(&self, b: BuiltinType) -> &'static str {
+        if b == BuiltinType::BFloat16
+            && self.ast.types.target().long_double == kiln_ast::types::FloatFormat::IeeeQuad
+        {
+            "u6__bf16"
+        } else {
+            builtin_code(b)
+        }
+    }
+
     fn new(ast: &'a Ast, anon: &'b mut AnonIds, prefix: &str) -> Self {
         Mangler {
             ast,
@@ -2025,7 +2038,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         match view {
             // A vendor extended type (`u <source-name>`) is substitutable.
             TypeView::Builtin(b) if !b.is_sizeless() => {
-                self.out.push_str(builtin_code(b));
+                self.out.push_str(self.builtin_str(b));
                 return;
             }
             TypeView::Record(d) | TypeView::Enum(d) => {
@@ -2243,6 +2256,9 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         B::Double => "d",
         B::LongDouble => "e",
         B::Float128 => "g",
+        B::Float32 => "DF32_",
+        B::Float64 => "DF64_",
+        B::StdFloat128 => "DF128_",
         B::Half => "Dh",
         B::NullPtr => "Dn",
         B::SvInt8 => "u10__SVInt8_t",

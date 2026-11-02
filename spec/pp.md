@@ -386,7 +386,9 @@ at either level. Where kiln implements a feature that clang 19 lacks,
 `build_predefines` raises the macro to clang 22's value in the same modes:
 `__cpp_structured_bindings` is `202411L` wherever it is defined (C++17
 on; P1061 structured binding packs) and `__cpp_variadic_friend` is
-`202403L` in every C++ mode (P2893). `predef.rs` unit tests check both.
+`202403L` in every C++ mode (P2893), and `__cpp_explicit_this_parameter`
+is `202110L` from C++23 (P0847 with lambdas, WP-356). `predef.rs` unit
+tests check all three.
 
 **`-dM` differences, clang 19.1.7 to 22.1.8** (`-std=c++26 -dM -E -x c++
 /dev/null`; identical for every standard and flag probed; applied by
@@ -622,7 +624,10 @@ belong to WP-017, which builds them on `macro_defined` and
   - `# 1 "<built-in>" 3`;
   - the sorted base macros, adjusted for the dialect and the
     macro-changing flags (`PredefConfig`; the effects are measured in
-    `resource/README.md`);
+    `resource/README.md`), and the feature-test macros kiln implements
+    beyond the clang 19 base, at clang 22's values and at every
+    compatibility level (see above; `__cpp_explicit_this_parameter`
+    needs `__cplusplus >= 202302L`);
   - clang 19's `#pragma push_macro("__GCC_DESTRUCTIVE_SIZE")` and
     `push_macro("__GCC_CONSTRUCTIVE_SIZE")`, so that `-D` may redefine
     them without a warning;
@@ -641,6 +646,24 @@ belong to WP-017, which builds them on `macro_defined` and
   `MacroDef::is_builtin` set, so `#ifdef __has_include` is true.
   `__DATE__`, `__TIME__` and `__TIMESTAMP__` can be fixed through
   `reproducible_time` and `timestamp`.
+
+  **P1467 macros (WP-361, [cpp.predefined]/2).** The base files come
+  from clang, which lacks P1467, so `apply_flags` adds GCC 14's set in
+  C++ (not in C): `__STDCPP_FLOAT16_T__`, `__STDCPP_FLOAT32_T__`,
+  `__STDCPP_FLOAT64_T__`, `__STDCPP_FLOAT128_T__` and
+  `__STDCPP_BFLOAT16_T__`, each `1`, when `__cplusplus >= 202302L`; and in
+  every C++ mode, as GCC does, the 64 limit macros `__FLT32_*__`,
+  `__FLT64_*__`, `__FLT128_*__` and `__BFLT16_*__` (`DIG`, `MANT_DIG`,
+  `MIN_EXP`, `MAX_EXP`, `MIN_10_EXP`, `MAX_10_EXP`, `DECIMAL_DIG`, `MAX`,
+  `NORM_MAX`, `MIN`, `EPSILON`, `DENORM_MIN`, `HAS_DENORM`,
+  `HAS_INFINITY`, `HAS_QUIET_NAN`, `IS_IEC_60559`; values copied from
+  `g++-14 -dM -E`, identical on x86-64 and AArch64, `predef.rs`
+  `P1467_LIMITS`) plus `__FLT16_IS_IEC_60559__`. libstdc++ keys
+  `<stdfloat>`, `numeric_limits` and the `<cmath>` overloads on them. The
+  other `__FLT16_*__` macros stay clang's (same values, clang's shorter
+  digit strings); GCC's `__FLT32X_*__`/`__FLT64X_*__` are not defined
+  (kiln has no `_Float32x`/`_Float64x`). Test:
+  `conformance/basic.extended.fp/p1467-macros.cpp`, `-cxx17.cpp`.
 - **Diagnostics.** Every [cpp] diagnostic has a `pp_*` id in
   `kiln_diag/src/ids/pp.rs`, with clang 19's wording, level and group. After
   an error in a directive, the rest of the line is skipped.
@@ -722,6 +745,10 @@ belong to WP-017, which builds them on `macro_defined` and
 21. **`defined` anywhere in an `#embed` parameter is an error.** clang 19
     only rejects it when it leads the expression (its `DefinedTracker`);
     kiln follows [cpp.embed.param.limit]/1.
+22. **GCC 14's P1467 macros are predefined** (`__STDCPP_FLOAT32_T__`,
+    `__FLT32_*__`, `__BFLT16_*__`, ...; "Predefined macros"). clang 19
+    and 22 define none of them, so `-dM -E` output has them in addition
+    to clang's.
 
 ## Error recovery
 

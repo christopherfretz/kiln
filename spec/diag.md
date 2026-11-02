@@ -170,7 +170,7 @@ umbrella yet.
 | Umbrella | Kiln's subgroups (clang order) | Tests |
 |---|---|---|
 | `all` | `most`, `switch`, `switch-bool`, `vla-cxx-extension` | `intro.compliance/wall-*.cpp`, `dcl.array/vla-gnu-mode-wall.cpp` |
-| `most` | `comment`, `multichar`, `range-loop-construct`, `reorder`, `return-type`, `trigraphs`, `uninitialized`, `unknown-pragmas`, `unused`, `overloaded-virtual` | `intro.compliance/wmost-members.cpp` |
+| `most` | `comment`, `format`, `multichar`, `range-loop-construct`, `reorder`, `return-type`, `tautological-compare`, `trigraphs`, `uninitialized`, `unknown-pragmas`, `unused`, `overloaded-virtual` | `intro.compliance/wmost-members.cpp`, `intro.compliance/wmost-tautological-compare.cpp` |
 | `unused-value` | `unused-comparison`, `unused-result`, `unevaluated-expression` | `intro.compliance/wunused-value-unevaluated.cpp` |
 | `gnu` | `gnu-case-range`, `gnu-designator`, `vla-extension`, `gnu-folding-constant`, `gnu-imaginary-constant`, `gnu-include-next`, `gnu-line-marker`, `gnu-pointer-arith`, `gnu-string-literal-operator-template`, `gnu-zero-line-directive`, `gnu-zero-variadic-macro-arguments` | `ext.gnu.extension/wgnu-*.cpp` |
 
@@ -179,16 +179,28 @@ umbrella yet.
 `vla-cxx-extension` being in `all` matters in a GNU dialect only, where
 its diagnostic is an off-by-default Extension.
 
+`deprecated` holds `deprecated-array-compare`, `deprecated-declarations`,
+`deprecated-missing-comma-variadic-parameter`,
+`deprecated-redundant-constexpr-static-def` and `deprecated-this-capture`
+(clang order). The WP-356 groups follow clang 22: `array-compare-cxx26`
+(its one id is `WarningError`; `-Wno-array-compare-cxx26` silences the
+C++26 array comparison, as in clang),
+`array-compare`, `deprecated-array-compare`, `tautological-compare` (in
+`most`), `invalid-static-assert-message` (`WarningError`, spec/sema.md
+§4.6) and `c++26-extensions` (the `ExtWarn`s for C++26 features used
+earlier: placeholder variables, user-generated `static_assert`
+messages).
+
 Clang subgroups kiln does not have yet (add them, in place, when their
 diagnostics land):
 
 - `all`: `parentheses`, `misleading-indentation`, `packed-non-pod`.
 - `most`: `array-bounds`, `bool-operation`, `char-subscript`,
   `delete-non-virtual-dtor`, `extern-c-compat`, `for-loop-analysis`,
-  `format`, `frame-address`, `implicit`, `infinite-recursion`,
+  `frame-address`, `implicit`, `infinite-recursion`,
   `int-in-bool-context`, `mismatched-tags`, `missing-braces`, `move`,
   `private-extern`, `self-assign`, `self-move`, `sizeof-array-argument`,
-  `sizeof-array-decay`, `string-plus-int`, `tautological-compare`,
+  `sizeof-array-decay`, `string-plus-int`,
   `user-defined-warnings`, `volatile-register-var`; under `unused`:
   `unused-argument`, `unused-function`, `unused-label`,
   `unused-lambda-capture`, `unused-local-typedef`, `unused-private-field`;
@@ -926,6 +938,7 @@ those diagnostics were errors.
 | D13 | *(Resolved by WP-183: `#pragma clang diagnostic` state, §5.5.)* | |
 | D14 | `-verify` sees identical diagnostics at one location once (§7.4), so a test needing two of them with two directives fails under kiln (harness tests encode the known cases with `dup(clang)`, §7.4.1). | Engine deduplication; no libc++ test is known to depend on it. |
 | D15 | A `-verify` report lists at most 10000 missing occurrences per level (§11.5). | Bounds the output of a count like `4000000000`. |
+| D16 | P1467 extended floating-point diagnostics (WP-361) have no clang 19/22 counterpart; their texts follow GCC 14, adapted to kiln's style. `sema_fp_conversion_rank` (ExtWarn, group `float-conversion-rank`, a kiln-only name inside the `narrowing` umbrella; GCC: `-Wnarrowing`/`-Wpedantic`): "ISO C++ does not allow converting to {0} from {1} with {2:greater\|unordered} conversion rank", GCC's words, both types unqualified. `sema_arith_float_unordered` (Error): "invalid {arithmetic between\|bitwise operation between\|comparison of\|conditional expression between\|compound assignment to} floating-point types {1} and {2} with unordered conversion ranks", where GCC 14 says "invalid operands to binary + (have 'float' and 'float')" (its excess-precision types), "invalid operands to binary < (have '_Float16' and '__bf16')" and, for `?:`, "operands to '?:' of types '_Float16' and '__bf16' have unordered conversion rank". `lit_float_suffix_ext` (Extension, `c++23-extensions`): "'{0}' suffix on a floating literal is a C++23 extension"; GCC 14 accepts the suffixes silently before C++23. Tests: `tests/conformance/basic.extended.fp/p1467-conversions.cpp`, `p1467-suffix-ext.cpp`. | GCC 14 is the only reference implementation; spec/sema-conv.md §4, §9.13. |
 
 ## 13. Integration notes and open questions
 

@@ -182,6 +182,18 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     tree and `fptrunc` the result once; a compound assignment computes in
     `float`. AArch64 operates on `half` directly. Complex `_Float16` is
     not promoted.
+  - `__bf16` (`bfloat`; P1467 `std::bfloat16_t`, WP-361) is evaluated
+    with excess precision on **both** targets, as clang 19/22
+    `shouldEmitBFloat16WithExcessPrecision` with the default
+    `-fbfloat16-excess-precision=standard`: the same `EmitPromoted`
+    shape as x86_64 `_Float16` (`Cg::f16_excess`), with one `fptrunc`
+    to `bfloat` at the end; comparisons compare `bfloat` operands
+    directly. An explicit `__bf16` ↔ `_Float16` conversion (P1467
+    [expr.static.cast]/11; clang has none) goes through `float`
+    (`fpext` then `fptrunc`), exact one way and singly rounded the
+    other. `_Float32`, `_Float64` and `_Float128` lower exactly as
+    `float`, `double` and `fp128` (`__float128`). Test:
+    `tests/codegen/bfloat16_arith.cpp`.
   - Constant operands of `half`, `bfloat`, `fp128` and `x86_fp80`
     arithmetic and casts fold as LLVM's `ConstantFolder` does, through
     `kiln_oven::apfloat` (the Oven's correctly rounded soft-float):
@@ -1877,6 +1889,98 @@ full complex range (`CX_Full`; `CodegenOptions::complex_range`, below).
 - **Not implemented:** `_Complex _Float16` (parsed; not checked against clang),
   `-fcomplex-arithmetic=promoted`, and `#pragma STDC CX_LIMITED_RANGE`
   (spec/abi.md §8.17 "Deviations").
+
+## 7o. Landed (WP-351): coroutines (`coro.rs`)
+
+A port of clang's `CGCoroutine.cpp` (switched-resume ABI). The function
+whose body is a `CoroutineBodyStmt` (sema.md §7.13) is emitted
+**pre-split**: it carries the `presplitcoroutine` attribute and the
+`llvm.coro.*` intrinsics, and the driver's coroutine lowering
+(driver.md "Coroutine lowering") builds the frame and the `.resume`,
+`.destroy` and `.cleanup` clones. `-emit-llvm` prints the pre-split
+form, as clang's `-emit-llvm -O0` does (`-disable-llvm-passes`).
+
+**Body layout (`emit_coroutine_body`, clang `EmitCoroutineBody`).**
+
+1. `%id = llvm.coro.id(i32 <default new align>, ptr null, ptr null,
+   ptr null)`; the promise's address is patched into the second
+   argument once the promise is emitted.
+2. `coro.alloc`: `llvm.coro.alloc(%id)` chooses between the allocation
+   call (`operator new(llvm.coro.size.i64(), ...)`) and no allocation;
+   with `get_return_object_on_allocation_failure` a null result
+   branches to `coro.ret.on.failure`, which returns that object.
+   `coro.init`: `%frame = llvm.coro.begin(%id, phi(null, mem))`.
+3. With a `__coro_gro` variable: its alloca (marked
+   `!coro.outside.frame`), an `i1 gro.active` flag (false until the
+   variable is initialized) guarding its destructor cleanup.
+4. A `CoroDelete` cleanup: `if (llvm.coro.free(%id, %frame)) operator
+   delete(<that pointer>[, llvm.coro.size])`; `__builtin_coro_free`
+   inside the deallocation call is that `llvm.coro.free` result.
+5. The parameter copies are emitted, and every use of a copied
+   parameter in the body resolves to its copy (clang
+   `ParamReferenceReplacerRAII`); then the promise.
+6. The return object: initialized into the return slot (same type),
+   into `__coro_gro` (then `gro.active = true`), or evaluated and
+   discarded (`void`). Then a `CoroEnd` cleanup (below).
+7. The initial suspend, then the body inside an implicit
+   `try { body } catch (...) { __promise.unhandled_exception(); }` (the
+   WP-100 lowering, `enter_catch_all`/`exit_catch_all`), flowing off the
+   end into the implicit `co_return;`. When the initial `await_resume`
+   can throw, it is emitted inside the same catch-all with an `i1
+   resume.eh` flag set before it and cleared after; a set flag skips the
+   body ([dcl.fct.def.coroutine]/5, CWG2451).
+8. `coro.final`, reached by `co_return` (each `co_return` evaluates its
+   promise call, then branches to it through the body's cleanups) or by
+   falling off the end: the final suspend.
+9. The scope's cleanups (`CoroEnd`, the promise, the copies,
+   `CoroDelete`), then `coro.ret`: `llvm.coro.end(ptr null, i1 false,
+   token none)` and the return to the caller: `return __coro_gro;`
+   converted, the return slot, or `ret void`.
+
+**Suspend points (`emit_suspend`, clang `emitSuspendExpression`).**
+`await_ready()` branches to `<kind>.ready` when true, else to
+`<kind>.suspend`, which does `%save = llvm.coro.save(ptr null)`, then
+the suspend call: `void` falls through; `bool` branches back to
+`.ready` on `false`; `Handle` calls `llvm.coro.resume` on the returned
+address (symmetric transfer, a plain call: see follow-ups). Then
+`%s = llvm.coro.suspend(token %save, i1 <final>)` and `switch i8 %s,
+label %coro.ret [i8 0, label %<kind>.ready; i8 1, label
+%<kind>.cleanup]`. `.cleanup` leaves through the coroutine's cleanups
+to `coro.ret` (a destroyed coroutine runs the destructors of the
+suspended scope). `.ready` evaluates `await_resume()` in the wanted
+form: ignored, scalar, lvalue, or into an aggregate slot. `<kind>` is
+`init`, `await`, `yield` or `final`.
+
+**Full-expression temporaries across a suspension.** A temporary of the
+full-expression holding a `co_await` lives until the full-expression
+ends, after resumption ([class.temporary]/4). Since the cleanup blocks
+of the full-expression are shared by the normal and the `.cleanup`
+path, a value computed before the cleanups and used after them is
+spilled to a `tmp.exprcleanup` alloca right after its definition and
+reloaded after the cleanups (clang `RunCleanupsScope::ForceCleanup(
+ValuesToReload)`; `end_scope_reload` / `pop_cleanup_blocks_reload`).
+
+**`CoroEnd` cleanup (EH only, clang `CallCoroEnd`).** On unwinding,
+`llvm.coro.end(ptr null, i1 true, token none)`: when it returns true
+(the ramp function) the exception is resumed at once; otherwise (the
+resume clone) unwinding continues through the cleanups.
+
+**Builtins (`emit_coro_builtin`, clang `EmitCoroutineIntrinsic`).**
+`__builtin_coro_resume/destroy/done/promise/noop/size/align/alloc/
+begin/end/suspend/free/id` become the matching `llvm.coro.*` call;
+`alloc`, `begin` and `free` take the function's `%id` first, `suspend`
+a leading `token none`, `end` a trailing `token none`;
+`__builtin_coro_frame` is the `llvm.coro.begin` value. Outside a
+coroutine, `frame`/`alloc`/`begin`/`free` are a codegen error with
+clang's wording ("this builtin expect that __builtin_coro_begin/id has
+been used earlier in this function").
+
+**Not done (follow-ups).** CoroElide and the coroutine passes' `-O2`
+pipeline; `musttail` symmetric transfer and clang 19's
+`llvm.coro.await.suspend.{void,bool,handle}` wrappers (clang 19 outlines
+`await_suspend` so the frame is not live across it); aligned frame
+allocation (`llvm.coro.align`, `align_val_t` `operator new`); clang's
+`coro_only_destroy_when_complete` attribute.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

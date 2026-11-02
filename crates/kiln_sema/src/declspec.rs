@@ -99,6 +99,14 @@ pub enum TypeSpecKind {
     Float128,
     /// `_Float16` (`std::float16_t`, an arithmetic type).
     Float16,
+    /// `_Float32` (`std::float32_t`, P1467).
+    Float32,
+    /// `_Float64` (`std::float64_t`, P1467).
+    Float64,
+    /// `_Float128` (`std::float128_t`, P1467).
+    StdFloat128,
+    /// `__bf16` (`std::bfloat16_t`, P1467).
+    BFloat16,
     /// `__fp16` (ARM half: arithmetic promotes it to `float`).
     Fp16,
     /// `auto` (a placeholder deduced from the initializer, [dcl.spec.auto]).
@@ -128,6 +136,10 @@ impl TypeSpecKind {
             TypeSpecKind::Double => "double",
             TypeSpecKind::Float128 => "__float128",
             TypeSpecKind::Float16 => "_Float16",
+            TypeSpecKind::Float32 => "_Float32",
+            TypeSpecKind::Float64 => "_Float64",
+            TypeSpecKind::StdFloat128 => "_Float128",
+            TypeSpecKind::BFloat16 => "__bf16",
             TypeSpecKind::Fp16 => "__fp16",
             TypeSpecKind::Auto => "auto",
             TypeSpecKind::DecltypeAuto => "decltype(auto)",
@@ -459,6 +471,9 @@ pub struct ParamInfo {
     /// in place is already converted to the parameter's type by
     /// [`crate::Sema::act_on_param_default_init`]).
     pub default_arg: DefaultArg,
+    /// The `=` of a default argument written in place (invalid when
+    /// none is, or for a delayed one: [`DefaultArg::Unparsed`] holds it).
+    pub default_loc: Loc,
     /// Where the parameter-declaration starts and ends (just past its
     /// last token, default argument included; the `-Wvexing-parse`
     /// fix-its, [dcl.ambig.res]).
