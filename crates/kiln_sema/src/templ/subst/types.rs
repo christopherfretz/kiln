@@ -516,6 +516,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.ast.types.paren_type(i))
             }
             TypeView::Attributed { kind, modified, equivalent } => {
+                let at = self.sema.nullability_loc(t, loc);
                 let m = self.ty(modified, loc)?;
                 let e = self.ty(equivalent, loc)?;
                 // A nullability qualifier on a type that became a
@@ -523,7 +524,7 @@ impl Substituter<'_, '_, '_> {
                 if crate::nullability::is_nullability(kind) && !self.sema.can_have_nullability(m) {
                     let d = self
                         .sema
-                        .diag(DiagId::sema_nullability_nonpointer, loc)
+                        .diag(DiagId::sema_nullability_nonpointer, at)
                         .arg(crate::nullability::spelling(kind))
                         .arg(self.sema.ty_arg(m));
                     self.sema.emit(d);

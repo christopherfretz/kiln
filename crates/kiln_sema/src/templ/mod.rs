@@ -356,6 +356,11 @@ pub struct InstState {
     /// dependent vector type, by its size operand: clang diagnoses a
     /// substitution at the attribute, which the type does not keep.
     pub(crate) vector_attr_locs: kiln_source::fx::FxHashMap<ExprId, Loc>,
+    /// The qualifier locations of each nullability-attributed dependent
+    /// type, in parse order: clang diagnoses one that substitution makes
+    /// a non-pointer at the qualifier, which the interned type does not
+    /// keep (`subst/types.rs` picks the one nearest the declaration).
+    pub(crate) nullability_locs: kiln_source::fx::FxHashMap<QualType, Vec<Loc>>,
 }
 
 impl Sema<'_, '_> {

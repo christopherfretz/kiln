@@ -169,7 +169,22 @@ impl Sema<'_, '_> {
             self.emit(d);
             return ty;
         }
-        self.ast.types.attributed(n.kind, ty, ty)
+        let r = self.ast.types.attributed(n.kind, ty, ty);
+        if self.is_dependent_type(ty) && n.loc.is_valid() {
+            self.inst.nullability_locs.entry(r).or_default().push(n.loc);
+        }
+        r
+    }
+
+    /// The location of the nullability qualifier of the dependent type
+    /// `t` written nearest `near` (a substituted declaration's), else
+    /// `near` (see `InstState::nullability_locs`).
+    pub(crate) fn nullability_loc(&self, t: QualType, near: Loc) -> Loc {
+        self.inst
+            .nullability_locs
+            .get(&t)
+            .and_then(|v| v.iter().copied().min_by_key(|l| l.to_raw().abs_diff(near.to_raw())))
+            .unwrap_or(near)
     }
 
     /// The decl-specifier nullability qualifiers of `ds` applied to its
