@@ -6,7 +6,6 @@
 //@ expect: compile-ok
 //@ std: c++23
 //@ strict-diags
-//@ xfail(kiln): init-capture not in scope in the trailing return type / noexcept
 template <class T, class U> constexpr bool same = false;
 template <class T> constexpr bool same<T, T> = true;
 void f() {

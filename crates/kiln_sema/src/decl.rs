@@ -5,8 +5,8 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, DefinitionBits, EnumData, FieldData, FnSpec, FnStorage,
-    FriendKind, LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
+    ConstexprKind, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, FieldData, FnSpec,
+    FnStorage, FriendKind, LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
 };
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::ids::RawId;
@@ -1276,6 +1276,7 @@ impl Sema<'_, '_> {
             attrs,
             invalid: ds.invalid || d.invalid,
             default_arg: DefaultArg::None,
+            default_loc: Loc::INVALID,
             range: (ds.loc, d.name_loc()),
             type_loc: ds.type_loc.unwrap_or(ds.loc),
             ref_loc: if d.ellipsis.is_none() { Self::outer_ref_loc(d) } else { Loc::INVALID },
@@ -1298,7 +1299,8 @@ impl Sema<'_, '_> {
     ) -> bool {
         for p in params.iter().skip(1) {
             if p.explicit_object.is_some() {
-                self.error(DiagId::sema_explicit_object_param_not_first, p.loc);
+                let m = self.diag(DiagId::sema_explicit_object_param_not_first, p.loc).arg(0u8);
+                self.emit(m);
             }
         }
         let Some(first) = params.first() else { return false };
@@ -1313,7 +1315,8 @@ impl Sema<'_, '_> {
             None
         };
         if let Some(w) = which {
-            let m = self.diag(DiagId::sema_explicit_object_param_nonmember, this_loc).arg(w);
+            let m =
+                self.diag(DiagId::sema_explicit_object_param_nonmember, this_loc).arg(w).arg(0u8);
             self.emit(m);
             return false;
         }
@@ -1343,7 +1346,7 @@ impl Sema<'_, '_> {
             DefaultArg::None => {}
             DefaultArg::Unparsed(l, _) => self.error(DiagId::sema_explicit_object_param_default, l),
             DefaultArg::Parsed(e) => {
-                let l = self.eloc(e);
+                let l = if first.default_loc.is_valid() { first.default_loc } else { self.eloc(e) };
                 self.error(DiagId::sema_explicit_object_param_default, l);
             }
         }
@@ -2413,6 +2416,20 @@ impl Sema<'_, '_> {
             self.diag(DiagId::note_forward_declaration, loc)
                 .arg(format!("'{}'", self.qualified_decl_name(rec))),
         )
+    }
+
+    /// P2169: `name` is the placeholder `_` ([basic.scope.scope]/5).
+    pub(crate) fn is_placeholder_name(&self, name: Symbol) -> bool {
+        self.ast.symbols().as_str(name) == "_"
+    }
+
+    /// A name-independent declaration ([basic.scope.scope]/5) at `loc`
+    /// that redeclares `_` in its scope: valid, and before C++26 clang's
+    /// `-Wc++26-extensions` warning.
+    pub(crate) fn diagnose_placeholder_redecl(&self, loc: Loc) {
+        if self.std < kiln_lex::Std::Cxx26 {
+            self.error(DiagId::sema_ext_placeholder_var, loc);
+        }
     }
 
     pub(crate) fn register_local(&mut self, name: Symbol, d: DeclId) {
@@ -3694,12 +3711,21 @@ impl Sema<'_, '_> {
                 c.pending_nsdmi += 1;
             }
         }
+        // [basic.scope.scope]/5 (P2169): a non-static data member `_` is
+        // name-independent and conflicts with no earlier one.
+        let independent = name.is_some_and(|n| self.is_placeholder_name(n));
         if let Some(n) = name
             && let Some(&prev) = self.lookup_in(ctx, n, LookupKind::Ordinary).decls.first()
         {
-            let note = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
-            let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
-            self.emit(msg.with_note(note));
+            if independent && self.kind_of(prev) == DeclKind::Field {
+                self.diagnose_placeholder_redecl(d.name_loc());
+            } else {
+                let note =
+                    self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
+                let msg =
+                    self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
+                self.emit(msg.with_note(note));
+            }
         }
         // [dcl.spec.auto.general]/5: a placeholder is not allowed in a
         // non-static data member (clang's `err_auto_not_allowed`).
@@ -3762,7 +3788,8 @@ impl Sema<'_, '_> {
             ty
         };
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
-        let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
+        let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc())
+            .misc(DeclMisc::new().with_name_independent(independent));
         let f = self.builder().field(h, ty, width, flags);
         if failed_spec {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
@@ -4140,6 +4167,32 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// Whether variable `name` declared by `d` with `spec` is
+    /// name-independent, and its earlier declaration in its scope: a
+    /// block-scope variable `_` of automatic storage duration
+    /// ([basic.scope.scope]/5, P2169) conflicts with no earlier variable
+    /// or binding of its scope.
+    fn var_prev_local(
+        &mut self,
+        spec: VarSpec,
+        d: &Declarator,
+        name: Symbol,
+    ) -> (bool, Option<DeclId>) {
+        let independent = d.qualifier.is_none()
+            && self.in_local_scope()
+            && matches!(spec.storage(), VarStorage::None | VarStorage::Register)
+            && spec.tls() == TlsKind::None
+            && self.is_placeholder_name(name);
+        let local = self.find_prev(name, d.qualifier);
+        if independent
+            && local.is_some_and(|p| matches!(self.kind_of(p), DeclKind::Var | DeclKind::Binding))
+        {
+            self.diagnose_placeholder_redecl(d.name_loc());
+            return (true, None);
+        }
+        (independent, local)
+    }
+
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
@@ -4149,7 +4202,7 @@ impl Sema<'_, '_> {
         }
         let mut prev_ok = None;
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
-        let local = self.find_prev(name, d.qualifier);
+        let (independent, local) = self.var_prev_local(spec, d, name);
         let mut prev = match local {
             None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
@@ -4212,7 +4265,8 @@ impl Sema<'_, '_> {
             }
         }
         let ty = prev_ok.map_or(ty, |p| self.redecl_var_type(p, ty));
-        let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
+        let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc())
+            .misc(DeclMisc::new().with_name_independent(independent));
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
@@ -6628,7 +6682,7 @@ impl Sema<'_, '_> {
             kiln_ast::decl::NewDecl {
                 kind: DeclKind::UsingDirective,
                 flags,
-                misc: kiln_ast::decl::DeclMisc::default(),
+                misc: DeclMisc::default(),
                 name: DeclName::EMPTY,
                 ctx: Some(self.ctx),
                 loc,
@@ -6681,6 +6735,9 @@ impl Sema<'_, '_> {
         };
         let c = self.act_on_constant_full_expr(c);
         let cloc = self.begin_loc(cond);
+        // [dcl.pre]/11 (P2741): a message that is not a string literal is
+        // checked now, evaluated only if the assertion fails.
+        let parts = msg.and_then(|m| self.static_assert_message_parts(m));
         // [dcl.pre]/10: a value-dependent condition waits for instantiation,
         // and so does any condition in a template definition (P2593R1,
         // a DR: `else static_assert(false);` in a discarded branch;
@@ -6689,10 +6746,20 @@ impl Sema<'_, '_> {
             self.in_template() || self.ast.decls.get(self.ctx).has(DeclFlags::DEPENDENT_CTX);
         if !self.has_errors_in(c) && !self.expr_is_value_dependent(c) && !in_definition {
             match self.eval_const(c, EvalContext::new(EvalKind::StaticAssert, loc)) {
-                Ok(v) if self.const_truth(v) != Some(false) => {}
+                Ok(v) if self.const_truth(v) != Some(false) => {
+                    if let (Some(m), Some(Some((size, data)))) = (msg, parts) {
+                        self.check_static_assert_message(m, size, data, loc);
+                    }
+                }
                 Ok(_) => {
                     failed = true;
-                    let text = msg.and_then(|m| self.string_literal_text(m));
+                    let text = match (msg, parts) {
+                        (Some(m), None) => self.string_literal_text(m),
+                        (Some(m), Some(Some((size, data)))) => {
+                            self.static_assert_message_text(m, size, data, loc)
+                        }
+                        _ => None,
+                    };
                     // clang's `findFailedBooleanCondition`: the failing
                     // conjunct, printed unless it is a literal.
                     let inner = self.failed_condition(c);
@@ -6756,6 +6823,139 @@ impl Sema<'_, '_> {
         }
         let ctx = self.ctx;
         (self.builder().static_assert(ctx, loc, c, msg), failed)
+    }
+
+    /// The `size()` and `data()` calls of `static_assert` message `m`
+    /// that is not a string literal ([dcl.pre]/11, P2741; clang
+    /// `Sema::EvaluateAsString`): `None` for a string literal or a
+    /// dependent or invalid message (nothing to check), `Some(None)` if
+    /// it is ill-formed (diagnosed at `m`).
+    #[allow(clippy::option_option, reason = "not checked / ill-formed / the calls")]
+    fn static_assert_message_parts(&mut self, m: ExprId) -> Option<Option<(ExprId, ExprId)>> {
+        if self.ast.exprs.get(m).kind() == ExprKind::StringLiteral
+            || self.has_errors_in(m)
+            || self.expr_is_value_dependent(m)
+        {
+            return None;
+        }
+        let at = self.begin_loc(m);
+        let class = self
+            .ast
+            .types
+            .as_record(self.ety(m))
+            .filter(|&r| self.kind_of(r) == DeclKind::CXXRecord)
+            .map(|r| self.ast.definition(r).unwrap_or(r));
+        let Some(class) = class else {
+            self.error(DiagId::sema_static_assert_invalid_message, at);
+            return Some(None);
+        };
+        let size_sym = self.intern("size");
+        let data_sym = self.intern("data");
+        let no_size = self.lookup_in_class(class, size_sym, LookupKind::Ordinary).decls.is_empty();
+        let no_data = self.lookup_in_class(class, data_sym, LookupKind::Ordinary).decls.is_empty();
+        if no_size || no_data {
+            let sel = match (no_size, no_data) {
+                (true, true) => "2",
+                (true, false) => "0",
+                _ => "1",
+            };
+            let d = self.diag(DiagId::sema_static_assert_missing_member_function, at).arg(sel);
+            self.emit(d);
+            return Some(None);
+        }
+        // clang's `BuildExpr`: `m.size()`, `m.data()`.
+        let call = |s: &mut Self, sym: Symbol| {
+            let f = s.act_on_member(m, sym, at, at, false);
+            if s.is_err_expr(f) {
+                return None;
+            }
+            let c = s.act_on_call(f, &[], at, at);
+            (!s.is_err_expr(c) && !s.expr_is_value_dependent(c)).then_some(c)
+        };
+        let size = call(self, size_sym);
+        let data = call(self, data_sym);
+        let size_t = self.size_type();
+        let ccp = self.const_char_ptr(QualType::CHAR);
+        let Some(size) = self.static_assert_message_conv(size, size_t, "0", "std::size_t", at)
+        else {
+            return Some(None);
+        };
+        let Some(data) = self.static_assert_message_conv(data, ccp, "1", "const char *", at) else {
+            return Some(None);
+        };
+        Some(Some((size, data)))
+    }
+
+    /// The `size()` or `data()` call `e` of a `static_assert` message
+    /// converted to `to` (clang `BuildConvertedConstantExpression`);
+    /// `None` after diagnosing a call that is invalid or does not convert.
+    fn static_assert_message_conv(
+        &mut self,
+        e: Option<ExprId>,
+        to: QualType,
+        sel: &str,
+        to_text: &str,
+        at: Loc,
+    ) -> Option<ExprId> {
+        let converted = e.and_then(|e| {
+            if let Ok(c) = conv::implicit_convert(self, e, to, ConvCtx::Initialization) {
+                return Some(c);
+            }
+            let d = self
+                .diag(DiagId::sema_cce_not_implicitly_convertible, at)
+                .arg(self.ty_arg(self.ety(e)))
+                .arg(self.ty_arg(to));
+            self.emit(d);
+            None
+        });
+        if converted.is_none() {
+            let d = self
+                .diag(DiagId::sema_static_assert_invalid_mem_fn_ret_ty, at)
+                .arg(sel)
+                .arg(to_text);
+            self.emit(d);
+        }
+        converted
+    }
+
+    /// The text of the failed `static_assert`'s message `m` from its
+    /// `size()` and `data()` calls, evaluated in the Oven
+    /// ([dcl.pre]/12); `None` after diagnosing a message that is not a
+    /// constant expression (clang 22's wording, at `m`).
+    fn static_assert_message_text(
+        &mut self,
+        m: ExprId,
+        size: ExprId,
+        data: ExprId,
+        loc: Loc,
+    ) -> Option<String> {
+        let (bytes, r) = self.eval_chars(size, data, EvalContext::new(EvalKind::StaticAssert, loc));
+        let ok = r.is_ok();
+        if let Err(f) = r {
+            let at = self.begin_loc(m);
+            let d = self.diag(DiagId::sema_static_assert_message_constexpr, at);
+            let d = Self::with_failure_notes(d, f);
+            self.emit(d);
+        }
+        // clang prints what was read before a failing read.
+        (ok || !bytes.is_empty()).then(|| escape_diag_text(&bytes))
+    }
+
+    /// clang's check of the message of a `static_assert` that holds
+    /// (`-Winvalid-static-assert-message`, an error by default): the
+    /// message is still evaluated. [dcl.pre]/12 makes it an unevaluated
+    /// operand, so the check is skipped when the warning is disabled.
+    fn check_static_assert_message(&mut self, m: ExprId, size: ExprId, data: ExprId, loc: Loc) {
+        let at = self.begin_loc(m);
+        if !self.diags.is_enabled_at(DiagId::sema_static_assert_message_not_constant, at) {
+            return;
+        }
+        let (_, r) = self.eval_chars(size, data, EvalContext::new(EvalKind::StaticAssert, loc));
+        if let Err(f) = r {
+            let d = self.diag(DiagId::sema_static_assert_message_not_constant, at);
+            let d = Self::with_failure_notes(d, f);
+            self.emit(d);
+        }
     }
 
     /// The conjunct of the failed condition `c` that evaluates to false
@@ -7335,6 +7535,39 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// An ambiguous lookup `decls` of `_` ([basic.scope.scope]/5, P2169)
+    /// that clang words as a placeholder ambiguity: the first declaration
+    /// (in source order) is name-independent.
+    pub(crate) fn placeholder_ambiguity(&self, decls: &[DeclId]) -> bool {
+        decls.len() > 1
+            && decls
+                .iter()
+                .min_by_key(|&&d| self.ast.decls.get(d).loc())
+                .is_some_and(|&d| self.ast.decls.get(d).misc().name_independent())
+    }
+
+    /// clang's `err_reference_to_placeholder_ambiguous` for `decls` at
+    /// `loc`, with a "placeholder declared here" note each, in source
+    /// order when `ascending` (member access) else latest first.
+    pub(crate) fn diagnose_placeholder_ambiguity(
+        &self,
+        name: String,
+        decls: &[DeclId],
+        ascending: bool,
+        loc: Loc,
+    ) {
+        let mut locs: Vec<Loc> = decls.iter().map(|&d| self.ast.decls.get(d).loc()).collect();
+        locs.sort_unstable();
+        if !ascending {
+            locs.reverse();
+        }
+        let mut msg = self.diag(DiagId::sema_placeholder_ambiguous, loc).arg(name);
+        for l in locs {
+            msg = msg.with_note(self.diag(DiagId::note_placeholder_declared, l));
+        }
+        self.emit(msg);
+    }
+
     /// clang's `err_ambiguous_reference` for distinct entities `decls`
     /// found by one lookup of `name` ([namespace.udir]/6), with a note
     /// per candidate in clang's order.
@@ -7346,6 +7579,11 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         let text = self.decl_name_str(name);
+        if self.placeholder_ambiguity(decls) {
+            // [basic.scope.scope]/5 (P2169), latest first (clang).
+            self.diagnose_placeholder_ambiguity(text, decls, false, loc);
+            return;
+        }
         let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
         for c in self.ambiguity_order(decls, unqualified) {
             let n = self
@@ -8212,4 +8450,26 @@ impl Sema<'_, '_> {
         self.abi.triple.arch == kiln_abi::target::Arch::X86_64
             && self.ast.types.canonical(ty).ty() == QualType::HALF.ty()
     }
+}
+
+/// `bytes` as clang's diagnostic engine prints a string argument
+/// (`pushEscapedString`): valid UTF-8 as is, except that an unprintable
+/// code point other than a tab or newline prints as `<U+XXXX>`; a byte
+/// that is not valid UTF-8 prints as `<XX>`.
+fn escape_diag_text(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            if c.is_control() && c != '\t' && c != '\n' {
+                let _ = write!(out, "<U+{:04X}>", u32::from(c));
+            } else {
+                out.push(c);
+            }
+        }
+        for b in chunk.invalid() {
+            let _ = write!(out, "<{b:02X}>");
+        }
+    }
+    out
 }

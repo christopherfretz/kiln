@@ -2,8 +2,8 @@
 // comparison of two arrays is ill-formed. WP-185 feature probe.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): array comparison accepted without error
-//@ xfail(clang): clang 19 only warns (P2865 is in clang 20)
+//@ requires: clang>=22
+// clang 19 only warns (P2865 is in clang 20).
 //@ diag: 11:12 error "comparison between two arrays"
 //@ diag: 11:12 warning "array comparison always evaluates to false"
 int a[2], b[2];
