@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use kiln_ast::decl::{DeclKind, DefinitionBits, NamespaceData};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{
-    BuiltinType, PrintOptions, Quals, TypeNames, TypeView, VectorKind, write_type,
+    BuiltinType, PrintOptions, Quals, TypeNames, TypeView, VectorKind, write_arg_list_c, write_type,
 };
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, TypeId};
 use kiln_source::SourceManager;
@@ -54,16 +54,18 @@ pub fn dump_record_layout(ast: &Ast, record: DeclId, target: &Target) -> String 
 }
 
 /// The complete, valid, non-dependent class definitions of `ast` in the
-/// order their closing braces were seen, the order clang's
+/// order their closing braces were seen
+/// ([`kiln_ast::decl::DeclArena::completed_records`]), the order clang's
 /// `-fdump-record-layouts-complete` dumps them in: a class follows the
-/// classes defined lexically inside it; otherwise classes are in
-/// creation order. A class in a function body is ordered by itself
-/// (member function bodies are parsed after the class's `}`).
+/// classes defined lexically inside it, and an implicit instantiation
+/// comes where it was first required to be complete (before the class
+/// whose member required it). A class in a function body is ordered by
+/// itself (member function bodies are parsed after the class's `}`).
 pub fn record_definitions(ast: &Ast) -> Vec<DeclId> {
     use kiln_ast::decl::DeclFlags;
     let mut defs = Vec::new();
-    let mut index = std::collections::HashMap::new();
-    for d in ast.decls.ids() {
+    let mut seen = std::collections::HashSet::new();
+    for &d in ast.decls.completed_records() {
         let Some(r) = ast.decls.record(d) else { continue };
         let n = ast.decls.get(d);
         if !r.defn.contains(DefinitionBits::COMPLETE)
@@ -74,38 +76,13 @@ pub fn record_definitions(ast: &Ast) -> Vec<DeclId> {
             || (n.has(DeclFlags::IMPLICIT) && n.loc() == kiln_source::Loc::INVALID)
             || n.has(DeclFlags::DEPENDENT_CTX)
             || n.ty().is_none_or(|t| ast.types.is_dependent(t))
+            || !seen.insert(d)
         {
             continue;
         }
-        index.insert(d, defs.len());
         defs.push(d);
     }
-    // The innermost enclosing class definition through lexical contexts
-    // (stopping at anything but a class).
-    let parent = |d: DeclId| -> Option<usize> {
-        let p = ast.decls.lexical_ctx(d)?;
-        ast.decls.record(p)?;
-        index.get(&p).copied()
-    };
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); defs.len()];
-    let mut roots = Vec::new();
-    for (i, &d) in defs.iter().enumerate() {
-        match parent(d) {
-            Some(p) => children[p].push(i),
-            None => roots.push(i),
-        }
-    }
-    let mut out = Vec::with_capacity(defs.len());
-    let mut stack: Vec<(usize, bool)> = roots.iter().rev().map(|&i| (i, false)).collect();
-    while let Some((i, expanded)) = stack.pop() {
-        if expanded {
-            out.push(defs[i]);
-            continue;
-        }
-        stack.push((i, true));
-        stack.extend(children[i].iter().rev().map(|&c| (c, false)));
-    }
-    out
+    defs
 }
 
 /// The `-fdump-record-layouts-complete` output for `ast`: every class of
@@ -408,6 +385,11 @@ fn write_simple_name(names: &Names<'_>, d: DeclId, keyword_printed: bool, out: &
     let name = node.name();
     if !name.is_empty() {
         out.push_str(&ast.names.simple_spelling(name, ast.symbols()).unwrap_or_default());
+        // A class template specialization prints its arguments (clang
+        // `printTag` under the C policy): `S<int, 4>`, `P<struct Q>`.
+        if let Some(args) = <Ast as TypeNames>::specialization_args(ast, d) {
+            write_arg_list_c(&ast.types, &AbiNames { names: *names }, d, args, out);
+        }
         return;
     }
     match node.kind() {
@@ -458,8 +440,24 @@ impl TypeNames for AbiNames<'_> {
         write_expr(self.names.ast, expr, out);
     }
 
-    fn write_value(&self, _ty: QualType, _value: ConstValueId, out: &mut String) {
-        out.push_str("<value>");
+    fn write_value(&self, ty: QualType, value: ConstValueId, out: &mut String) {
+        self.names.ast.write_value(ty, value, out);
+    }
+
+    fn write_value_typed(&self, ty: QualType, value: ConstValueId, out: &mut String) {
+        self.names.ast.write_value_typed(ty, value, out);
+    }
+
+    fn arg_includes_type(&self, template: DeclId, index: usize) -> bool {
+        self.names.ast.arg_includes_type(template, index)
+    }
+
+    fn write_template_param(&self, associated: DeclId, index: u32, out: &mut String) {
+        self.names.ast.write_template_param(associated, index, out);
+    }
+
+    fn tag_keyword(&self, decl: DeclId) -> &'static str {
+        self.names.ast.decls.record(decl).map_or("struct", |r| r.tag.keyword())
     }
 
     fn write_symbol(&self, sym: Symbol, out: &mut String) {
@@ -490,11 +488,22 @@ struct CPrinter<'a> {
     /// clang's `HasEmptyPlaceHolder`.
     empty_ph: bool,
     depth: u32,
+    /// Printing a substituted template parameter's replacement: clang's
+    /// replacement is the canonical argument, whose class and enum types
+    /// print with their tag keyword and scope (`enum E`, `struct ns::Q *`).
+    canonical_tags: bool,
 }
 
 impl<'a> CPrinter<'a> {
     fn new(names: Names<'a>) -> Self {
-        CPrinter { ast: names.ast, names, out: String::new(), empty_ph: true, depth: 0 }
+        CPrinter {
+            ast: names.ast,
+            names,
+            out: String::new(),
+            empty_ph: true,
+            depth: 0,
+            canonical_tags: false,
+        }
     }
 
     fn print_into(mut self, q: QualType, out: &mut String) {
@@ -660,9 +669,22 @@ impl<'a> CPrinter<'a> {
             }
             TypeView::Record(d) | TypeView::Enum(d) => {
                 let mut s = String::new();
-                write_decl_name(&self.names, d, false, &mut s);
+                if !self.canonical_tags {
+                    write_decl_name(&self.names, d, false, &mut s);
+                } else if ast.decls.record(d).is_some() {
+                    write_tag_type(&self.names, ast.first(d), &mut s);
+                } else {
+                    s.push_str("enum ");
+                    write_decl_name(&self.names, ast.first(d), true, &mut s);
+                }
                 self.push(&s);
                 self.space_before_ph();
+            }
+            TypeView::SubstTemplateTypeParm { replacement, .. } => {
+                let saved = self.canonical_tags;
+                self.canonical_tags = true;
+                self.before(ast.types.canonical(replacement));
+                self.canonical_tags = saved;
             }
             TypeView::Typedef { decl, .. } | TypeView::Using { shadow: decl, .. } => {
                 let mut s = String::new();
@@ -735,6 +757,12 @@ impl<'a> CPrinter<'a> {
                     let _ = write!(self.out, " __attribute__((ext_vector_type({count})))");
                 }
             }
+            TypeView::SubstTemplateTypeParm { replacement, .. } => {
+                let saved = self.canonical_tags;
+                self.canonical_tags = true;
+                self.after(ast.types.canonical(replacement));
+                self.canonical_tags = saved;
+            }
             _ => {}
         }
     }
@@ -743,7 +771,8 @@ impl<'a> CPrinter<'a> {
     /// (C++ policy) as a leaf.
     fn delegate(&mut self, q: QualType, scoped: bool) {
         let names = AbiNames { names: self.names };
-        let opts = PrintOptions { full_scope: scoped, ..PrintOptions::SUGARED };
+        let opts =
+            PrintOptions { full_scope: scoped, split_closers: true, ..PrintOptions::SUGARED };
         write_type(&self.ast.types, &names, q, opts, &mut self.out);
         self.space_before_ph();
     }

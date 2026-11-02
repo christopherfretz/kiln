@@ -1076,7 +1076,7 @@ impl Parser<'_, '_> {
                 self.parse_using();
                 true
             }
-            (Some(Punct::LSquare), _) if self.at_attributed_using() => {
+            _ if self.at_attributed_using() => {
                 self.parse_attributed_using();
                 true
             }
@@ -1115,8 +1115,17 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::Comma], true, false);
             }
         }
-        if self.at_attr() {
-            self.parse_attributes(&mut d.attrs);
+        if d.is_function_declarator()
+            && d.asm_label.is_none()
+            && d.virt_final.is_none()
+            && d.virt_override.is_none()
+        {
+            // `void f() [[a]];`: the function type's (not yet checked).
+            if self.at_attr() {
+                self.parse_attributes(&mut d.attrs);
+            }
+        } else {
+            self.parse_member_tail_attrs(&mut d.attrs);
         }
         if !has_width && d.virt_final.is_none() && d.virt_override.is_none() {
             self.parse_virt_specifiers(d, friend);
@@ -1230,6 +1239,19 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// [dcl.attr.grammar]/5: an attribute-specifier-seq appertaining to
+    /// a friend declaration requires it to be a definition: before a
+    /// friend type or friend function declaration clang reports `an
+    /// attribute list cannot appear here` at its start and drops it.
+    fn prohibit_friend_lead_attrs(&mut self, ds: &mut DeclSpec) {
+        if ds.friend.is_none() {
+            return;
+        }
+        let Some(at) = ds.lead_cxx11 else { return };
+        self.s.error(DiagId::parse_attributes_not_allowed, at);
+        Self::drop_lead_cxx11(&self.s.ast.attrs, ds);
+    }
+
     /// member-declaration ([class.mem]; clang's
     /// `ParseCXXClassMemberDeclaration`).
     pub(crate) fn parse_member_declaration(&mut self) {
@@ -1246,8 +1268,9 @@ impl Parser<'_, '_> {
         if !self.stack_ok() || self.parse_member_declaration_leader() {
             return;
         }
-        let ds = self.parse_decl_specifiers(DeclaratorContext::Member);
+        let mut ds = self.parse_decl_specifiers(DeclaratorContext::Member);
         if self.at(Punct::Semi) {
+            self.prohibit_friend_lead_attrs(&mut ds);
             self.bump();
             self.act_on_member_decl_spec_only(&ds);
             return;
@@ -1298,29 +1321,11 @@ impl Parser<'_, '_> {
                 self.parse_member_function_definition(&ds, base, &d, parts);
                 return;
             }
-            // clang's in-class initializer classification.
-            let mut nsdmi = false;
-            let mut init = false;
-            if self.at(Punct::Equal) || self.at(Punct::LBrace) {
-                if has_width && !d.has_name() {
-                    self.error_here(DiagId::parse_anon_bitfield_member_init);
-                    self.skip_until(&[Punct::Comma], true, false);
-                } else if is_fn {
-                    if let Some(z) = self.try_pure_specifier() {
-                        d.pure = Some(z);
-                    } else {
-                        init = true;
-                    }
-                } else {
-                    d.init_style =
-                        Some(if self.at(Punct::Equal) { InitStyle::C } else { InitStyle::List });
-                    if !is_static && !is_typedef && ds.friend.is_none() {
-                        nsdmi = true;
-                    } else {
-                        init = true;
-                    }
-                }
+            if first {
+                self.prohibit_friend_lead_attrs(&mut ds);
             }
+            let data_member = !is_static && !is_typedef && ds.friend.is_none();
+            let (nsdmi, init) = self.classify_member_init(&mut d, has_width, is_fn, data_member);
             let (decl, target) =
                 if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
             if let Some(x) = decl {
@@ -1346,6 +1351,37 @@ impl Parser<'_, '_> {
             self.s.error(DiagId::parse_expected_semi_decl_list, self.expected_loc());
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
+        }
+    }
+
+    /// clang's in-class initializer classification of a member
+    /// declarator `d` at `=` or `{`: (a default member initializer of a
+    /// non-static data member, an initializer parsed in place). A pure
+    /// specifier is stored in `d`.
+    fn classify_member_init(
+        &mut self,
+        d: &mut Declarator,
+        has_width: bool,
+        is_fn: bool,
+        data_member: bool,
+    ) -> (bool, bool) {
+        if !self.at(Punct::Equal) && !self.at(Punct::LBrace) {
+            return (false, false);
+        }
+        if has_width && !d.has_name() {
+            self.error_here(DiagId::parse_anon_bitfield_member_init);
+            self.skip_until(&[Punct::Comma], true, false);
+            (false, false)
+        } else if is_fn {
+            if let Some(z) = self.try_pure_specifier() {
+                d.pure = Some(z);
+                (false, false)
+            } else {
+                (false, true)
+            }
+        } else {
+            d.init_style = Some(if self.at(Punct::Equal) { InitStyle::C } else { InitStyle::List });
+            (data_member, !data_member)
         }
     }
 

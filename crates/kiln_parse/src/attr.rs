@@ -11,6 +11,7 @@ use kiln_ast::attr::AttrSyntax;
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::decl::AttrArg;
+use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
 use crate::expr::prec;
@@ -63,51 +64,116 @@ impl Parser<'_, '_> {
         self.at(Punct::LSquare) && self.peek_is(1, Punct::LSquare)
     }
 
-    /// True at `[[...]]` attribute-specifiers followed by `using` (an
-    /// attribute-specifier-seq written before a using-declaration).
+    /// True at a `[[...]]` / `alignas(...)` attribute-specifier-seq
+    /// followed by `using`.
     pub(crate) fn at_attributed_using(&self) -> bool {
-        let mut i = self.pos();
-        loop {
-            let t = self.tok_at(i);
-            let two = Self::punct_of(t) == Some(Punct::LSquare)
-                && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::LSquare);
-            if !two {
-                return self.kw_of(t) == Some(Kw::Using);
-            }
-            let mut depth = 0usize;
-            loop {
-                let t = self.tok_at(i);
-                match Self::punct_of(t) {
-                    Some(Punct::LSquare) => depth += 1,
-                    Some(Punct::RSquare) => {
-                        depth = depth.saturating_sub(1);
-                        if depth == 0 {
-                            i += 1;
-                            break;
-                        }
-                    }
-                    _ if t.kind == TokKind::Eof => return false,
-                    _ => {}
-                }
-                i += 1;
-            }
+        if !self.at_cxx11_attr() && !self.at_kw(Kw::Alignas) {
+            return false;
         }
+        self.after_cxx11_attrs().is_some_and(|j| self.kw_of(self.tok_at(j)) == Some(Kw::Using))
     }
 
-    /// `[[...]] using ...`: the attributes (an extension clang warns
-    /// about), then the using-declaration they apply to.
+    /// `[[...]] using ...`: the attribute-specifier-seq, then the
+    /// using-directive, using-declaration or alias-declaration
+    /// ([`Parser::parse_using_leading`]).
     pub(crate) fn parse_attributed_using(&mut self) -> Vec<kiln_ast::DeclId> {
-        let at = self.peek(2).span.lo;
-        self.s.error(DiagId::parse_cxx11_attr_placement, at);
+        let at = self.loc();
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
-        self.parse_using_attrs(&attrs)
+        self.parse_using_leading(&attrs, Some(at))
+    }
+
+    /// A `using` declaration after the attribute-specifier-seq `attrs`
+    /// that starts at `at` (clang `ParseUsingDirectiveOrDeclaration`):
+    /// they appertain to a using-directive ([namespace.udir]/1); before
+    /// an alias-declaration they are an error, `an attribute list cannot
+    /// appear here`, and dropped ([dcl.pre]/5);
+    /// before a using-declaration or using-enum-declaration they are a
+    /// clang extension, `ISO C++ does not allow an attribute list to
+    /// appear here` at each C++11 attribute, and appertain to each
+    /// using-declarator.
+    pub(crate) fn parse_using_leading(
+        &mut self,
+        attrs: &[AttrId],
+        at: Option<Loc>,
+    ) -> Vec<kiln_ast::DeclId> {
+        if attrs.is_empty() || at.is_none() {
+            return self.parse_using();
+        }
+        let next = self.peek(1);
+        if self.kw_of(next) == Some(Kw::Namespace) {
+            return self.parse_using_attrs(attrs);
+        }
+        let alias = self.ident_of(next).is_some()
+            && (self.peek_is(2, Punct::Equal)
+                || self.peek_is(2, Punct::LSquare)
+                || matches!(self.kw_of(self.peek(2)), Some(Kw::Attribute | Kw::Alignas)));
+        if alias {
+            self.prohibit_attrs_at(at);
+            return self.parse_using();
+        }
+        for &a in attrs {
+            let node = *self.s.ast.attrs.get(a);
+            if matches!(node.syntax, AttrSyntax::Cxx11 | AttrSyntax::Keyword) {
+                self.s.error(DiagId::parse_cxx11_attr_placement, node.loc);
+            }
+        }
+        if self.kw_of(next) == Some(Kw::Enum) {
+            return self.parse_using();
+        }
+        self.parse_using_attrs(attrs)
+    }
+
+    /// `an attribute list cannot appear here` at `at`, the start of an
+    /// attribute-specifier-seq already parsed and dropped (clang
+    /// `ProhibitAttributes`).
+    /// An attribute-specifier-seq after the class-name of a
+    /// class-specifier or a class-head-only declaration
+    /// (`struct S [[x]] final { };`, `struct S alignas(4);`): its place
+    /// is after the class-key ([class.pre]/1). Like clang, reports "an
+    /// attribute list cannot appear here" and moves the attributes into
+    /// `attrs`, the class's own. One after `final` (`struct S final
+    /// [[x]] { }`) is reported and dropped by
+    /// [`Self::parse_class_virt_specifiers`]. Not at a reference
+    /// (`struct S [[x]] *p;`): those appertain to the type
+    /// ([dcl.spec.general]/1).
+    pub(crate) fn parse_class_head_attrs(&mut self, storage: bool, attrs: &mut Vec<AttrId>) {
+        if !self.at_kw(Kw::Alignas) && !self.at_cxx11_attr() {
+            return;
+        }
+        let Some(i) = self.after_cxx11_attrs() else { return };
+        let mut j = i;
+        while self.is_final_tok(self.tok_at(j)) {
+            j += 1;
+        }
+        let Some(j) = self.after_cxx11_attrs_at(j) else { return };
+        let ok = match Self::punct_of(self.tok_at(j)) {
+            Some(Punct::LBrace | Punct::Colon) => true,
+            Some(Punct::Semi) => j == i && !storage,
+            _ => false,
+        };
+        if !ok {
+            return;
+        }
+        let at = self.loc();
+        self.prohibit_attrs_at(Some(at));
+        self.parse_attributes(attrs);
+    }
+
+    pub(crate) fn prohibit_attrs_at(&mut self, at: Option<Loc>) {
+        if let Some(at) = at {
+            self.s.error(DiagId::parse_attributes_not_allowed, at);
+        }
     }
 
     /// The token index after the `[[...]]` / `alignas(...)` specifiers at
     /// the current token (the current index if there are none).
     fn after_cxx11_attrs(&self) -> Option<usize> {
-        let mut i = self.pos();
+        self.after_cxx11_attrs_at(self.pos())
+    }
+
+    /// [`Self::after_cxx11_attrs`] from token index `i`.
+    pub(crate) fn after_cxx11_attrs_at(&self, mut i: usize) -> Option<usize> {
         loop {
             let t = self.tok_at(i);
             if Self::punct_of(t) == Some(Punct::LSquare)
@@ -122,22 +188,27 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// A C++11 attribute-specifier-seq before a declaration that takes
-    /// none: a namespace-definition, a static_assert-declaration, or (for
-    /// `alignas`, `[[...]] using` being an extension) a using-declaration
-    /// or alias-declaration (clang `ProhibitAttributes`: "an attribute
-    /// list cannot appear here"). Reports and drops it.
+    /// A C++11 attribute-specifier-seq at namespace scope before a
+    /// declaration that takes none ([dcl.pre]/5, [dcl.attr.grammar]/5):
+    /// a namespace-definition or namespace-alias-definition, a
+    /// static_assert-declaration, a template-declaration, explicit
+    /// instantiation or specialization, a linkage-specification, an
+    /// asm-declaration or an export-declaration (clang
+    /// `ProhibitAttributes`: "an attribute list cannot appear here").
+    /// Reports and drops it.
     pub(crate) fn discard_attrs_before_unattributed_decl(&mut self) {
-        let alignas = self.at_kw(Kw::Alignas);
-        if !alignas && !self.at_cxx11_attr() {
+        if !self.at_kw(Kw::Alignas) && !self.at_cxx11_attr() {
             return;
         }
         let Some(j) = self.after_cxx11_attrs() else { return };
         let next = self.kw_of(self.tok_at(j));
         let bad = match next {
-            Some(Kw::Namespace | Kw::StaticAssert) => true,
+            Some(Kw::Namespace | Kw::StaticAssert | Kw::Template | Kw::Asm | Kw::Export) => true,
             Some(Kw::Inline) => self.kw_of(self.tok_at(j + 1)) == Some(Kw::Namespace),
-            Some(Kw::Using) => alignas,
+            Some(Kw::Extern) => {
+                matches!(self.tok_at(j + 1).kind, TokKind::StringLit(_) | TokKind::RawStringLit(_))
+                    || self.kw_of(self.tok_at(j + 1)) == Some(Kw::Template)
+            }
             _ => false,
         };
         if bad {
@@ -146,6 +217,37 @@ impl Parser<'_, '_> {
             self.parse_attributes(&mut attrs);
             self.s.error(DiagId::parse_attributes_not_allowed, at);
         }
+    }
+
+    /// clang `DiagnoseAndSkipCXX11Attributes`: a `[[...]]` / `alignas(...)`
+    /// specifier-seq where none may appear is reported once, at its
+    /// start ("an attribute list cannot appear here"), and skipped.
+    pub(crate) fn diagnose_and_skip_cxx11_attrs(&mut self) {
+        if !self.at_cxx11_attr() && !self.at_kw(Kw::Alignas) {
+            return;
+        }
+        let at = self.loc();
+        let mut attrs = Vec::new();
+        while self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
+            if self.at_kw(Kw::Alignas) {
+                self.parse_alignas(&mut attrs);
+            } else {
+                self.parse_cxx11_attributes(&mut attrs);
+            }
+        }
+        self.s.error(DiagId::parse_attributes_not_allowed, at);
+    }
+
+    /// The attributes after a member-declarator's bit-width or asm label
+    /// (clang `ParseCXXMemberDeclaratorBeforeInitializer`): GNU
+    /// attributes appertain to the member; a C++11 specifier-seq before
+    /// or after them is reported and dropped.
+    pub(crate) fn parse_member_tail_attrs(&mut self, out: &mut Vec<AttrId>) {
+        self.diagnose_and_skip_cxx11_attrs();
+        while self.at_kw(Kw::Attribute) {
+            self.parse_gnu_attributes(out);
+        }
+        self.diagnose_and_skip_cxx11_attrs();
     }
 
     /// True at any attribute-specifier.

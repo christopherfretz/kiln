@@ -1,6 +1,6 @@
 //! Declarations ([dcl], [namespace], [class.mem]; spec/parse.md §4).
 
-use kiln_ast::attr::AttrKind;
+use kiln_ast::attr::{AttrKind, AttrSyntax};
 use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::names::DeclName;
@@ -184,7 +184,7 @@ impl Parser<'_, '_> {
                 self.skip_unsupported_declaration();
             }
             (_, Some(Kw::Asm)) => self.parse_file_scope_asm(),
-            (Some(Punct::LSquare), _) if self.at_attributed_using() => {
+            _ if self.at_attributed_using() => {
                 self.parse_attributed_using();
             }
             _ => {
@@ -347,6 +347,7 @@ impl Parser<'_, '_> {
             };
             self.s.act_on_namespace_name_use(ns, nl);
             let d = self.s.act_on_using_directive(ns, loc);
+            self.s.act_on_decl_attrs(d, leading);
             self.expect_semi_after("namespace name");
             return vec![d];
         }
@@ -376,7 +377,13 @@ impl Parser<'_, '_> {
             return self.parse_using_enum();
         }
         let if_exists = self.has_using_if_exists(leading);
-        self.parse_using_declaration(loc, if_exists)
+        let ds = self.parse_using_declaration(loc, if_exists);
+        if !leading.is_empty() {
+            for &d in &ds {
+                self.s.act_on_decl_attrs(d, leading);
+            }
+        }
+        ds
     }
 
     fn has_using_if_exists(&self, attrs: &[AttrId]) -> bool {
@@ -509,6 +516,7 @@ impl Parser<'_, '_> {
     pub(crate) fn parse_decl_specifiers(&mut self, ctx: DeclaratorContext) -> DeclSpec {
         let mut ds = DeclSpec::new(self.name_begin());
         ds.attrs = std::mem::take(&mut self.lead_decl_attrs);
+        ds.lead_cxx11 = self.stmt_attrs_loc.take().filter(|_| !ds.attrs.is_empty());
         // The spelling of the thread storage class (`_Thread_local`).
         let mut thread_spelling: Option<String> = None;
         // The end of the leading attribute-specifier-seq: attributes there
@@ -534,6 +542,14 @@ impl Parser<'_, '_> {
                 let mut attrs = Vec::new();
                 self.parse_attributes(&mut attrs);
                 if lead {
+                    if cxx11 && ds.lead_cxx11.is_none() {
+                        ds.lead_cxx11 = Some(loc);
+                    }
+                    if cxx11 && ds.loc == loc {
+                        // The decl-specifier-seq starts after its leading
+                        // attributes (clang's `DeclSpec` range).
+                        ds.loc = self.loc();
+                    }
                     lead_end = self.pos();
                     ds.attrs.extend(attrs);
                 } else if cxx11 {
@@ -703,8 +719,17 @@ impl Parser<'_, '_> {
                 // At the end of the decl-specifier-seq the attributes
                 // appertain to the type ([dcl.spec.general]/1): an
                 // alignment-specifier is no type attribute.
-                self.s.act_on_type_position_attrs(&attrs);
-                ds.attrs.extend(attrs.into_iter().filter(|&a| !self.s.is_alignas_attr(a)));
+                let mut attrs = attrs;
+                let all = attrs.clone();
+                self.s.act_on_type_position_attrs(&mut attrs, false);
+                if self.at(Punct::Semi)
+                    && let Some(t) = ds.tag
+                {
+                    // A declaration of the tag alone: no declarator's
+                    // type takes them (spec/sema.md §4.5).
+                    self.s.warn_free_standing_tag_attrs(&ds, t, &all);
+                }
+                ds.attrs.extend(attrs);
             } else {
                 self.s.error(DiagId::parse_attributes_not_allowed, at);
             }
@@ -1248,6 +1273,7 @@ impl Parser<'_, '_> {
         }
         let mut final_loc = None;
         if is_class && name.is_some() {
+            self.parse_class_head_attrs(ds.storage.is_some(), &mut attrs);
             final_loc = self.parse_class_virt_specifiers();
         }
         let use_ = self.tag_use(ds, is_class, final_loc);
@@ -1263,7 +1289,7 @@ impl Parser<'_, '_> {
             self.s.check_standalone_tag_qualifier(keyword, qual_loc);
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
-        self.s.act_on_tag_attrs(d, &attrs);
+        self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition {
             // `struct A::B { ... }`: names in the body are looked up in
             // `A` too ([basic.lookup.unqual]/2, [class.nest]/3).
@@ -1337,7 +1363,9 @@ impl Parser<'_, '_> {
         // [temp.spec.general]/6); a reference's join the declaration's.
         let level = self.s.delayed_access_level();
         self.s.begin_delayed_access();
+        let mut attrs = attrs.to_vec();
         let parsed = self.parse_template_arg_list().map(|a| {
+            self.parse_class_head_attrs(ds.storage.is_some(), &mut attrs);
             let final_loc = self.parse_class_virt_specifiers();
             (a, final_loc, self.tag_use(ds, true, final_loc))
         });
@@ -1366,7 +1394,7 @@ impl Parser<'_, '_> {
             if use_ != TagUse::Reference
                 && let Some(d) = rec
             {
-                self.s.act_on_tag_attrs(d, attrs);
+                self.s.act_on_tag_attrs(d, &attrs, use_);
             }
             if use_ == TagUse::Definition {
                 match rec {
@@ -1429,8 +1457,9 @@ impl Parser<'_, '_> {
         while self.is_final_tok(self.tok_at(i)) {
             i += 1;
         }
+        let j = self.after_cxx11_attrs_at(i)?;
         if i == self.pos()
-            || !matches!(Self::punct_of(self.tok_at(i)), Some(Punct::LBrace | Punct::Colon))
+            || !matches!(Self::punct_of(self.tok_at(j)), Some(Punct::LBrace | Punct::Colon))
         {
             return None;
         }
@@ -1439,6 +1468,14 @@ impl Parser<'_, '_> {
             let loc = self.bump().span.lo;
             let d = self.s.diag(DiagId::parse_duplicate_class_virt_specifier, loc).arg("final");
             self.emit(d);
+        }
+        if j > i {
+            // `struct S final [[x]] { }`: no attribute appertains here
+            // ([class.pre]/1); clang reports and drops them.
+            let at = self.loc();
+            self.prohibit_attrs_at(Some(at));
+            let mut dropped = Vec::new();
+            self.parse_attributes(&mut dropped);
         }
         Some(first)
     }
@@ -1449,9 +1486,15 @@ impl Parser<'_, '_> {
         self.s.act_on_start_enum_definition(e);
         while !self.at(Punct::RBrace) && !self.at_eof() {
             let Some(name) = self.ident() else {
+                // An enumerator cannot start with an attribute
+                // ([dcl.enum]/1: they follow its name); like clang, resume
+                // at the next enumerator.
                 let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
                 self.emit(d);
-                self.skip_until(&[Punct::RBrace], false, false);
+                self.skip_until(&[Punct::Comma, Punct::RBrace], false, false);
+                if self.eat(Punct::Comma).is_some() {
+                    continue;
+                }
                 break;
             };
             let loc = self.bump().span.lo;
@@ -1596,7 +1639,7 @@ impl Parser<'_, '_> {
     fn skip_type_position_attrs(&mut self) {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
-        self.s.act_on_type_position_attrs(&attrs);
+        self.s.act_on_type_position_attrs(&mut attrs, false);
     }
 
     /// The cv-qualifiers (and attributes) after a `*`.
@@ -1777,6 +1820,14 @@ impl Parser<'_, '_> {
                     ambiguous = amb;
                 }
                 self.parse_function_suffix(d, ambiguous);
+                // [dcl.fct]/1: an attribute-specifier-seq after the
+                // parameter clause appertains to the function type.
+                if self.at_cxx11_attr() {
+                    let mut attrs = Vec::new();
+                    self.parse_attributes(&mut attrs);
+                    self.s.act_on_type_position_attrs(&mut attrs, true);
+                    d.attrs.extend(attrs);
+                }
             } else {
                 break;
             }
@@ -2485,20 +2536,64 @@ impl Parser<'_, '_> {
         decls
     }
 
+    /// The leading C++11 attribute-specifier-seq of a declaration
+    /// without declarators (`[[nodiscard]] struct S { };`, `[[x]] int;`)
+    /// would appertain to no entity ([dcl.pre]/5): at namespace scope,
+    /// before a class or enum specifier, clang reports `misplaced
+    /// attributes; expected attributes here` after the class-key, where
+    /// they would appertain to the class ([class.pre]/1, [dcl.enum]/1),
+    /// and otherwise `an attribute list cannot appear here` at their
+    /// start; at block scope always the latter. They are dropped. (In
+    /// a class they reach [`Sema::act_on_decl_spec_only`], which warns.)
+    fn prohibit_free_standing_lead_attrs(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) {
+        let Some(at) = ds.lead_cxx11 else { return };
+        if ds.is_empty() && ds.tag.is_none() {
+            // An attribute-declaration ([dcl.pre]/10).
+            return;
+        }
+        let key_len = match ds.keyword {
+            TagKeyword::Struct => 6,
+            TagKeyword::Class | TagKeyword::Union => 5,
+            TagKeyword::Enum => 4,
+            _ => 0,
+        };
+        match ctx {
+            DeclaratorContext::File if ds.tag.is_some() && key_len > 0 => {
+                let fix = ds.type_loc.unwrap_or(at).with_offset(key_len);
+                self.s.error(DiagId::parse_attributes_misplaced, fix);
+            }
+            DeclaratorContext::File | DeclaratorContext::Block => {
+                self.s.error(DiagId::parse_attributes_not_allowed, at);
+            }
+            _ => return,
+        }
+        Self::drop_lead_cxx11(&self.s.ast.attrs, ds);
+    }
+
+    /// Drops the C++11 attributes (`[[...]]`, `alignas`) of `ds`, whose
+    /// leading attribute-specifier-seq was reported.
+    pub(crate) fn drop_lead_cxx11(attrs: &kiln_ast::attr::AttrArena, ds: &mut DeclSpec) {
+        ds.attrs
+            .retain(|&a| !matches!(attrs.get(a).syntax, AttrSyntax::Cxx11 | AttrSyntax::Keyword));
+        ds.lead_cxx11 = None;
+    }
+
     fn parse_simple_declaration_delayed(
         &mut self,
         ctx: DeclaratorContext,
         allow_fn_def: bool,
         level: usize,
     ) -> Vec<DeclId> {
-        let ds = self.parse_decl_specifiers(ctx);
+        let mut ds = self.parse_decl_specifiers(ctx);
         let mut decls = Vec::new();
         if ds.tag_declares
             && let Some(t) = ds.tag
         {
             decls.push(t);
         }
-        if self.eat(Punct::Semi).is_some() {
+        if self.at(Punct::Semi) {
+            self.prohibit_free_standing_lead_attrs(&mut ds, ctx);
+            self.bump();
             decls.extend(self.s.act_on_decl_spec_only(&ds));
             self.s.end_delayed_access_to(level, ds.tag);
             return decls;
