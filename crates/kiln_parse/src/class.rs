@@ -1115,8 +1115,17 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::Comma], true, false);
             }
         }
-        if self.at_attr() {
-            self.parse_attributes(&mut d.attrs);
+        if d.is_function_declarator()
+            && d.asm_label.is_none()
+            && d.virt_final.is_none()
+            && d.virt_override.is_none()
+        {
+            // `void f() [[a]];`: the function type's (not yet checked).
+            if self.at_attr() {
+                self.parse_attributes(&mut d.attrs);
+            }
+        } else {
+            self.parse_member_tail_attrs(&mut d.attrs);
         }
         if !has_width && d.virt_final.is_none() && d.virt_override.is_none() {
             self.parse_virt_specifiers(d, friend);

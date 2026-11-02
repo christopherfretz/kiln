@@ -1019,7 +1019,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   - after the declarator-id (`int x alignas(8);`, [dcl.decl.general]/4,
     [class.mem.general]/1), for the declaration; `alignas` there may be
     followed by a bit-width (`int b alignas(8) : 3`, then rejected by
-    sema on the bit-field) (WP-312)
+    sema on the bit-field) (WP-312). After a member's bit-width or asm
+    label, or a member function declarator with virt-specifiers, an
+    attribute-specifier-seq is not allowed ([class.mem.general]/1):
+    each run of `[[...]]`/`alignas` specifiers is parsed, dropped and
+    reported once as `an attribute list cannot appear here` at its
+    start (clang `DiagnoseAndSkipCXX11Attributes`); GNU attributes
+    between them are kept (`parse_member_tail_attrs`; WP-324)
   - between decl-specifiers (clang `ProhibitAttributes` in
     `ParseDeclarationSpecifiers`), at the end of the decl-specifier-seq
     ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1) or after

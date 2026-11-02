@@ -2001,6 +2001,7 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
+        self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
@@ -5849,6 +5850,8 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_friends(r, &b.friends);
         }
         self.builder().complete_record_definition(r, bits);
+        let own = self.own_aligned(r);
+        self.check_alignas_underalignment(r, &own);
         self.hide_inherited_ctors(r);
         self.check_pending_defaulted(r);
         self.act_on_complete_virtual(r);
@@ -7399,13 +7402,28 @@ impl Sema<'_, '_> {
 
     /// The attributes of a class-head or enum-head (`struct alignas(8)
     /// [[nodiscard]] S`, [class.pre]/1, [dcl.enum]/1).
-    pub fn act_on_tag_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
-        if attrs.is_empty() {
-            return;
-        }
+    /// `use_` is the head's use: a declaration or definition merges its
+    /// alignment attributes with the previous declaration's
+    /// ([dcl.align]/6, [`Sema::merge_aligned_redecl`]).
+    pub fn act_on_tag_attrs(&mut self, d: DeclId, attrs: &[AttrId], use_: TagUse) {
         let mut attrs = attrs.to_vec();
-        self.check_decl_attrs(d, &mut attrs);
-        let _ = self.builder().attach_attrs(d, &attrs);
+        if !attrs.is_empty() {
+            self.check_decl_attrs(d, &mut attrs);
+        }
+        if self.ast.decls.get(d).kind() == DeclKind::Enum {
+            // `alignas` on an enumeration is rejected ([dcl.align]/1).
+        } else if use_ == TagUse::Declaration
+            && (self.ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE))
+                || !self.ast.lists.is_empty(self.ast.attrs.of_decl(d)))
+        {
+            // `struct S;` names the existing declaration.
+            self.merge_aligned_folded_redecl(d, &mut attrs);
+        } else if matches!(use_, TagUse::Declaration | TagUse::Definition) {
+            self.merge_aligned_redecl(d, &mut attrs, use_ == TagUse::Definition);
+        }
+        if !attrs.is_empty() {
+            let _ = self.builder().attach_attrs(d, &attrs);
+        }
     }
 
     /// Checks attributes against the declaration they appertain to,
@@ -7431,14 +7449,6 @@ impl Sema<'_, '_> {
                 }
                 AttrKind::NORETURN => {
                     (!kind.is_function()).then_some("functions, classes, or enumerations")
-                }
-                AttrKind::ALIGNED => {
-                    if node.b != 0 || node.a != 0 {
-                        self.check_underaligned(d, node);
-                        None
-                    } else {
-                        None
-                    }
                 }
                 AttrKind::PACKED => (kind != DeclKind::Field && kind != DeclKind::CXXRecord)
                     .then_some("structs, unions, classes and fields"),
@@ -7614,32 +7624,6 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return;
             }
-        }
-    }
-
-    /// `alignas` may not weaken alignment ([dcl.align]/5).
-    fn check_underaligned(&mut self, d: DeclId, node: AttrNode) {
-        if node.syntax != AttrSyntax::Keyword {
-            return;
-        }
-        let Some(ty) = self.ast.decls.get(d).ty() else { return };
-        let Some((_, natural)) = target::size_align(&self.ast, ty, &self.abi) else { return };
-        let requested = if node.b != 0 {
-            QualType::from_raw(node.b)
-                .and_then(|t| target::size_align(&self.ast, t, &self.abi))
-                .map(|x| x.1)
-        } else {
-            ExprId::from_raw(node.a)
-                .and_then(|e| self.fold_int(e))
-                .and_then(|v| u64::try_from(v).ok())
-        };
-        if let Some(r) = requested.filter(|&r| r != 0 && r < natural) {
-            let _ = r;
-            let msg = self
-                .diag(DiagId::sema_alignas_underaligned, node.loc)
-                .arg(natural.to_string())
-                .arg(self.ty_arg(ty));
-            self.emit(msg);
         }
     }
 

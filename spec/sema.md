@@ -1105,6 +1105,40 @@ and returns the scope it names:
     attribute-specifier-seq containing `alignas` is `an attribute list
     cannot appear here` (parser `discard_attrs_before_unattributed_decl`;
     file scope only). Tests: `tests/conformance/dcl.align/alignas-*.cpp`.
+  - Alignment across redeclarations ([dcl.align]/6, `align_redecl.rs`
+    `merge_aligned_redecl`, clang `mergeAlignedAttrs`; WP-324), for
+    variables, data members and classes. The old declaration's
+    alignment attributes are its own plus those it inherited
+    (`Sema::inherited_aligned`). When both the old and the new
+    declaration carry an `alignas` and their largest requests differ
+    (`alignas(0)` counts as the natural alignment), it is `redeclaration
+    has different alignment requirement (N vs M)` (new, old) at the new
+    `alignas`, with `previous declaration is here` at the old one. A
+    definition without `alignas` after a declaration with one is
+    `'alignas' must be specified on definition if it is specified on any
+    declaration` at the definition's name, with `declared with 'alignas'
+    attribute here` at the old `alignas`; so is an `alignas` added on a
+    redeclaration after a definition that had none (the attribute is
+    then dropped). A redeclaration without `alignas` after one with it is
+    fine and inherits the old `alignas`, and one with a weaker request
+    inherits the strictest. A class redeclaration that names an existing
+    class (`struct alignas(8) S;`) is checked against it
+    (`merge_aligned_folded_redecl`). A dependent request skips the
+    check. Test: `tests/conformance/dcl.align/redecl-alignment-diag.cpp`.
+  - Under-alignment ([dcl.align]/5, `check_alignas_underalignment`,
+    clang `CheckAlignasUnderalignment`; WP-324): when a declaration has
+    an `alignas` (own or inherited) and the largest requested alignment
+    (`alignas` and GNU `aligned`, whose bare form is the target's
+    biggest alignment; `alignas(0)` requests nothing) is nonzero and
+    less than the natural alignment of its type, it is `requested
+    alignment is less than minimum alignment of N for type 'T'` at the
+    last `alignas`. Checked for a variable or data member when its
+    declarator is finished (`finish_decl_alignment`) and for a class or
+    union when its definition completes, including one written in a
+    typedef or alias-declaration and a class template specialization
+    (at the pattern's `alignas`, with the instantiation note); the
+    type's natural alignment ignores the request itself. Test:
+    `tests/conformance/dcl.align/underalignment-diag.cpp`.
   - `alignof` of an expression ([expr.alignof]/1 takes a type-id) is
     the GNU extension `'alignof' applied to an expression is a GNU
     extension` (`-Wgnu-alignof-expression`, in `-Wgnu`, at the keyword;
@@ -4112,7 +4146,6 @@ the P2996R13 wording.
     object from anything but a braced list
 - **Rules not checked yet:**
   - jumps past initialization ([stmt.dcl]/3)
-  - [dcl.align]/6, that `alignas` must be on the definition
   - full [basic.def.odr] for inline functions and variables across
     redeclarations
 - **Using-declarations** (§4.8):

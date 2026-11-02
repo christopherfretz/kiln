@@ -1195,7 +1195,7 @@ impl Parser<'_, '_> {
             self.s.check_standalone_tag_qualifier(keyword, qual_loc);
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
-        self.s.act_on_tag_attrs(d, &attrs);
+        self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition {
             // `struct A::B { ... }`: names in the body are looked up in
             // `A` too ([basic.lookup.unqual]/2, [class.nest]/3).
@@ -1298,7 +1298,7 @@ impl Parser<'_, '_> {
             if use_ != TagUse::Reference
                 && let Some(d) = rec
             {
-                self.s.act_on_tag_attrs(d, attrs);
+                self.s.act_on_tag_attrs(d, attrs, use_);
             }
             if use_ == TagUse::Definition {
                 match rec {

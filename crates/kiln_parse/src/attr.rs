@@ -148,6 +148,37 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// clang `DiagnoseAndSkipCXX11Attributes`: a `[[...]]` / `alignas(...)`
+    /// specifier-seq where none may appear is reported once, at its
+    /// start ("an attribute list cannot appear here"), and skipped.
+    pub(crate) fn diagnose_and_skip_cxx11_attrs(&mut self) {
+        if !self.at_cxx11_attr() && !self.at_kw(Kw::Alignas) {
+            return;
+        }
+        let at = self.loc();
+        let mut attrs = Vec::new();
+        while self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
+            if self.at_kw(Kw::Alignas) {
+                self.parse_alignas(&mut attrs);
+            } else {
+                self.parse_cxx11_attributes(&mut attrs);
+            }
+        }
+        self.s.error(DiagId::parse_attributes_not_allowed, at);
+    }
+
+    /// The attributes after a member-declarator's bit-width or asm label
+    /// (clang `ParseCXXMemberDeclaratorBeforeInitializer`): GNU
+    /// attributes appertain to the member; a C++11 specifier-seq before
+    /// or after them is reported and dropped.
+    pub(crate) fn parse_member_tail_attrs(&mut self, out: &mut Vec<AttrId>) {
+        self.diagnose_and_skip_cxx11_attrs();
+        while self.at_kw(Kw::Attribute) {
+            self.parse_gnu_attributes(out);
+        }
+        self.diagnose_and_skip_cxx11_attrs();
+    }
+
     /// True at any attribute-specifier.
     pub(crate) fn at_attr(&self) -> bool {
         self.at_cxx11_attr() || matches!(self.kw(), Some(Kw::Alignas | Kw::Attribute))
