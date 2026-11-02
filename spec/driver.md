@@ -67,7 +67,7 @@ starting with `-` are inputs.
 | `-disable-llvm-passes` (usually after `-Xclang`) | no `opt` run: `-emit-llvm` writes the frontend's IR (see "IR optimization") |
 | `-O*`, `-f[no-]exceptions`, `-f[no-]cxx-exceptions`, `-f[no-]rtti`, `-f[no-]char8_t`, `-f[no-]pic/PIC/pie/PIE`, `-f[no-]fast-math`, `-ffreestanding`, `-fhosted`, `-pthread`, `-f[no-]threadsafe-statics`, `-f[no-]sized-deallocation` | change predefined macros only (see "Predefines") |
 | `-fsigned-char`, `-funsigned-char` (`-fno-unsigned-char`, `-fno-signed-char` are their synonyms; the last one wins) | the signedness of plain `char` ([basic.fundamental]/7), overriding the target's (signed on x86-64, unsigned on AArch64): it sets `TargetTypes::char_signed` of the `kiln_abi::Target` the parser, sema, the Oven and codegen use, the `#if` evaluator's character type ([cpp.cond]), and adds or removes `__CHAR_UNSIGNED__` as clang 19 does (see "Predefines") |
-| `-fclang-compat=<major>` | kiln: which clang release's predefined macros and `__has_*` answers to reproduce, `19` (default) or `22`; any other value is an error (spec/pp.md "clang compatibility level") |
+| `-fclang-compat=<major>` | kiln: which clang release's observable output to reproduce, `19` (default) or `22`: predefined macros and `__has_*` answers (spec/pp.md "clang compatibility level"), diagnostic text and names, AST dump types and deprecation warnings (spec/sema.md §1.1, spec/ast-dump.md §2, spec/codegen.md); any other value is an error |
 | `-W...`, `-w`, `-pedantic`, `-ferror-limit=`, `-fdiagnostics-format=`, `-f[no-]color-diagnostics`, `-f[no-]caret-diagnostics`, ... | diagnostic options, validated and applied by `kiln_diag::DiagOptions` (`spec/diag.md`) |
 | `-fkiln-reproducible-time` | see "Reproducible time" |
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration" |
@@ -150,7 +150,10 @@ and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
   executable, else the source tree's `resource/`. kiln's predefines base
   files are `<resource>/predefines/<triple>.<std>.txt`.
 - **LLVM:** `$KILN_LLVM_DIR`, default `/usr/lib/llvm-19`. This is where
-  libc++'s headers are found.
+  libc++'s headers are found. Its major version (`Toolchain::llvm_major`:
+  the `N` of a directory named `llvm-N`, after resolving symlinks, else
+  19) selects the intrinsic signatures that differ between LLVM 19 and 22
+  (spec/codegen.md, coroutines).
 - **GCC:** clang `GCCInstallationDetector`. The newest
   `<sysroot>/usr/lib/gcc/<triple>/<version>` that contains `crtbegin.o`,
   over the target's candidate triples in clang's order.

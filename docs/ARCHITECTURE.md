@@ -32,6 +32,12 @@ established and `docs/ROADMAP.md` for sequencing.
    feature macros it actually implements (`__clang__`, `__clang_major__`, ...)
    plus `__KILN__`, and implements the clang builtins libc++ relies on
    (`__is_same`, `__type_pack_element`, `__make_integer_seq`, `__builtin_*`).
+   **Two oracles (WP-355):** clang 22 is the oracle and the default
+   (`KILN_ORACLE=22`); clang 19 stays installed as the second oracle and the
+   frozen M3 libc++ gate. kiln imitates either release with `-fclang-compat=N`
+   (feature queries, predefined macros, diagnostic wording, AST sugar), the
+   corpus is green under both, and where they disagree a test pins one with
+   `requires: clang>=22` / `clang<22` (docs/VALIDATION.md "Two-oracle policy").
 4. **Metrics are part of correctness.** Every constant evaluation reports steps,
    peak bytes, and time. The test harness records both and fails on regression.
 5. **Specs over folklore.** Behavior lives in `spec/*.md` with references to

@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.variadic]/5: pack expansions in braced initializers ([dcl.init.list])
 template <class... Ts> int first(Ts... ts) {
   int a[] = {ts...};

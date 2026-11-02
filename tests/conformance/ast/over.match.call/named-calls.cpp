@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [over.match.call]: calls through an overload set name the selected
 // function with an ImplicitCastExpr to a pointer around its DeclRefExpr;
 // a qualified call keeps the qualifier; the chosen candidate's argument

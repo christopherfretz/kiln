@@ -6,6 +6,8 @@
 // The C++23 forms take a non-reference U as a prvalue. libc++'s
 // __tuple_leaf<I, T&> static_asserts on the first one (std::tie).
 //@ expect: compile-ok
+//@ requires: clang<22
+// clang 22 expected compile-ok, but the compiler failed (exit code 1); WP-355 residual
 struct B {};
 struct D : B {};
 struct ToRef { operator int &(); };

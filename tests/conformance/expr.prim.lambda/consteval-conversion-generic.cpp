@@ -5,13 +5,15 @@
 // immediate function); other specializations are not.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(clang): clang 19 does not make the conversion of an escalated generic lambda immediate and accepts every use (cf. consteval-conversion.cpp)
-//@ diag: 17:18 error "call to immediate function '(anonymous class)::operator auto (*)(int)<int>' is not a constant expression"
-//@ diag: 17:18 note "pointer to a consteval declaration is not a constant expression"
-//@ diag: 16:12 note "declared here"
-//@ diag: 20:19 error "call to immediate function '(anonymous class)::operator auto (*)(int)<int>' is not a constant expression"
-//@ diag: 20:19 note "pointer to a consteval declaration is not a constant expression"
-//@ diag: 16:12 note "declared here"
+//@ xfail(clang): clang (19 and 22) does not make the conversion of an escalated generic lambda immediate and accepts every use (cf. consteval-conversion.cpp)
+//@ diag: 19:18 error "call to immediate function '(lambda)::operator auto (*)(int)<int>' is not a constant expression"
+//@ diag: 19:18 note "pointer to a consteval declaration is not a constant expression"
+//@ diag: 18:12 note "declared here"
+//@ diag: 22:19 error "call to immediate function '(lambda)::operator auto (*)(int)<int>' is not a constant expression"
+//@ diag: 22:19 note "pointer to a consteval declaration is not a constant expression"
+//@ diag: 18:12 note "declared here"
+//@ requires: clang>=22
+// kiln follows clang 22 naming the closure `(lambda)`
 consteval int id(int x) { return x; }
 auto esc = [](auto x) { if constexpr (sizeof(x) == 4) return id(x); else return x; };
 int (*p1)(int) = esc;

@@ -5,14 +5,16 @@
 // operator is not considered and typo correction suggests nothing.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 24:17 error "no matching function found in local scope"
-//@ diag: 20:19 note "type of 1st parameter of local declaration does not match definition ('A *' vs 'A &')"
-//@ diag: 25:17 error "no matching function found in local scope"
 //@ diag: 26:17 error "no matching function found in local scope"
-//@ diag: 33:19 error "no matching function found in local scope"
-//@ diag: 21:8 note "local declaration nearly matches"
-//@ diag: 37:16 error "functions that differ only in their return type cannot be overloaded"
-//@ diag: 21:8 note "previous declaration is here"
+//@ diag: 22:19 note "type of 1st parameter of local declaration does not match definition ('A *' vs 'A &')"
+//@ diag: 27:17 error "no matching function found in local scope"
+//@ diag: 28:17 error "no matching function found in local scope"
+//@ diag: 35:19 error "no matching function found in local scope"
+//@ diag: 23:8 note "local declaration nearly matches"
+//@ diag: 39:16 error "functions that differ only in their return type cannot be overloaded"
+//@ diag: 23:8 note "previous declaration is here"
+//@ requires: clang<22
+// clang 22 emits error: cannot define friend function in a local class definition; WP-355 residual
 struct A {};
 bool operator<=(A, A);
 void f() {

@@ -3,22 +3,23 @@
 // decided per instantiation.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 31:43 error "'x' is a private member of 'A'"
-//@ diag: 38:19 note "in instantiation of function template specialization 'X<char>::m<int>' requested here"
-//@ diag: 24:7 note "implicitly declared private here"
-//@ diag: 32:31 error "'x' is a private member of 'A'"
-//@ diag: 39:18 note "in instantiation of member function 'X<char>::s' requested here"
-//@ diag: 24:7 note "implicitly declared private here"
-//@ diag: 33:36 error "'x' is a private member of 'A'"
-//@ diag: 40:19 note "in instantiation of member function 'X<char>::l' requested here"
-//@ diag: 24:7 note "implicitly declared private here"
-//@ diag: 34:43 error "'x' is a private member of 'A'"
-//@ diag: 34:21 note "in instantiation of function template specialization 'X<char>::gl()::(anonymous class)::operator()<int>' requested here"
-//@ diag: 41:19 note "in instantiation of member function 'X<char>::gl' requested here"
-//@ diag: 24:7 note "implicitly declared private here"
-//@ diag: 35:23 error "'N' is a private member of 'A'"
-//@ diag: 42:18 note "in instantiation of member function 'X<char>::n' requested here"
-//@ diag: 25:10 note "implicitly declared private here"
+//@ diag: 32:43 error "'x' is a private member of 'A'"
+//@ diag: 39:19 note "in instantiation of function template specialization 'X<char>::m<int>' requested here"
+//@ diag: 25:7 note "implicitly declared private here"
+//@ diag: 33:31 error "'x' is a private member of 'A'"
+//@ diag: 40:18 note "in instantiation of member function 'X<char>::s' requested here"
+//@ diag: 25:7 note "implicitly declared private here"
+//@ diag: 34:36 error "'x' is a private member of 'A'"
+//@ diag: 41:19 note "in instantiation of member function 'X<char>::l' requested here"
+//@ diag: 25:7 note "implicitly declared private here"
+//@ diag: 35:43 error "'x' is a private member of 'A'"
+//@ diag: 35:21 note "in instantiation of function template specialization 'X<char>::gl()::(lambda)::operator()<int>' requested here"
+//@ diag: 42:19 note "in instantiation of member function 'X<char>::gl' requested here"
+//@ diag: 25:7 note "implicitly declared private here"
+//@ diag: 36:23 error "'N' is a private member of 'A'"
+//@ diag: 43:18 note "in instantiation of member function 'X<char>::n' requested here"
+//@ diag: 26:10 note "implicitly declared private here"
+//@ requires: clang>=22
 template<class T> struct X;
 class A {
   int x;

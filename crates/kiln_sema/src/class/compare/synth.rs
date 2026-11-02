@@ -271,11 +271,15 @@ impl Sema<'_, '_> {
             let t = self.ast.types.qualify(spec.ty, quals);
             let (l, r) = self.cmp_complete_object(sx)?;
             let path = self.ast.lists.push_raw(&[idx]);
+            // clang 22 casts to the cv-qualified base (`'const B'
+            // <DerivedToBase (B)>`); clang 19 cast to the unqualified
+            // base and the operand binding added a NoOp.
+            let base_ty = if self.clang_compat >= 22 { t } else { spec.ty };
             let l = conv::raw_cast(
                 self,
                 CastKind::DerivedToBase,
                 l,
-                spec.ty,
+                base_ty,
                 ValueCategory::LValue,
                 Some(path),
             );
@@ -283,7 +287,7 @@ impl Sema<'_, '_> {
                 self,
                 CastKind::DerivedToBase,
                 r,
-                spec.ty,
+                base_ty,
                 ValueCategory::LValue,
                 Some(path),
             );

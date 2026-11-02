@@ -1,6 +1,7 @@
 //@ expect: ast
 //@ oracle: clang
 //@ ast-filter: f
+//@ requires: clang>=22
 // [class.temporary]/6: the contexts that extend a temporary's lifetime to
 // that of the reference bound to it: class member access, array subscript
 // of an array temporary, parentheses, the right operand of a comma, both

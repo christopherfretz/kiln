@@ -177,8 +177,40 @@ impl Sema<'_, '_> {
         self.ast.types.builtin(t) == Some(BuiltinType::NullPtr)
     }
 
+    /// `size_t` ([support.types.layout]): the type of `sizeof`/`alignof`
+    /// and of the allocation functions' size parameter. Under
+    /// `-fclang-compat=22` it carries clang 22's `__size_t` sugar
+    /// (`'__size_t':'unsigned long'` in the AST dump, `'__size_t' (aka
+    /// 'unsigned long')` in diagnostics); the canonical type is the
+    /// target's.
     pub(crate) fn size_type(&self) -> QualType {
-        QualType::unqual(self.target.size_t)
+        if self.clang_compat >= 22 {
+            self.size_t_sugar
+        } else {
+            QualType::unqual(self.target.size_t)
+        }
+    }
+
+    /// The signed integer type corresponding to `size_t`: the type of a
+    /// `z` literal ([lex.icon] table 8), `'__signed_size_t':'long'` under
+    /// `-fclang-compat=22` (see [`Sema::size_type`]).
+    pub(crate) fn signed_size_type(&self) -> QualType {
+        if self.clang_compat >= 22 {
+            self.signed_size_t_sugar
+        } else {
+            self.ast.types.canonical(self.signed_size_t_sugar)
+        }
+    }
+
+    /// `ptrdiff_t` ([expr.add]/5): the type of a pointer difference,
+    /// `'__ptrdiff_t':'long'` under `-fclang-compat=22` (see
+    /// [`Sema::size_type`]).
+    pub(crate) fn ptrdiff_type(&self) -> QualType {
+        if self.clang_compat >= 22 {
+            self.ptrdiff_t_sugar
+        } else {
+            QualType::unqual(self.target.ptrdiff_t)
+        }
     }
 
     /// A `RecoveryExpr` of type `ty` over `kids`.
@@ -730,6 +762,13 @@ impl Sema<'_, '_> {
         self.ast.decls.set_flags(f, DeclFlags::USED);
     }
 
+    /// Whether function `d` has an invalid parameter (a `void`
+    /// parameter, an erroneous default argument), which made it invalid
+    /// at its declaration.
+    pub(crate) fn invalid_by_param(&self, d: DeclId) -> bool {
+        self.param_decls(d).iter().any(|&p| self.ast.decls.get(p).has(DeclFlags::INVALID))
+    }
+
     /// [`Sema::mark_used`] for a use at `loc`: a member function of a
     /// class template specialization is instantiated ([temp.inst]/5).
     pub(crate) fn mark_used_at(&mut self, d: DeclId, loc: Loc) {
@@ -773,8 +812,10 @@ impl Sema<'_, '_> {
     /// clang's `DiagnoseUnusedExprResult` for an expression statement.
     pub(crate) fn diagnose_unused(&mut self, e: ExprId) {
         // A type-dependent expression is checked at instantiation (clang
-        // does not warn in the template definition).
-        if self.is_err_expr(e) || self.expr_is_type_dependent(e) {
+        // does not warn in the template definition). Nothing is unused in
+        // an unevaluated operand (clang `DiagnoseUnusedExprResult`'s
+        // `isUnevaluatedContext()`: a statement expression in `decltype`).
+        if self.unevaluated > 0 || self.is_err_expr(e) || self.expr_is_type_dependent(e) {
             return;
         }
         if let Some(w) = self.unused_warning(e) {
@@ -1486,6 +1527,10 @@ impl Sema<'_, '_> {
         }
         if fns && valid.len() == 1 {
             d = valid[0];
+        } else if found.decls.len() > 1 && valid.len() <= 1 {
+            // Likewise for other entities: `const int c = 1; const c = 2;`
+            // names the valid `c`, `y; y;` the last `y` (silently).
+            d = valid.first().or(found.decls.last()).copied().unwrap_or(d);
         } else if found.decls.len() > 1 {
             // Distinct entities found via using-directives ([namespace.udir]/6).
             self.diagnose_ambiguous_reference(name, &found.decls, qualifier.is_none(), loc);
@@ -1782,7 +1827,9 @@ impl Sema<'_, '_> {
         // A reference to a function already invalid (its body failed to
         // instantiate, diagnosed then) is erroneous with no diagnostic of
         // its own (clang's `BuildDeclarationNameExpr`).
-        if n.kind().is_function() && n.has(DeclFlags::INVALID) {
+        // A function invalid only for an invalid parameter is named as
+        // usual (clang resolves its calls through an overload set).
+        if n.kind().is_function() && n.has(DeclFlags::INVALID) && !self.invalid_by_param(d) {
             return self.recover_err(&[], loc);
         }
         if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod)
@@ -1877,8 +1924,11 @@ impl Sema<'_, '_> {
                 None => (ty, ExprFlags::NONE),
             },
             // clang 19 keeps a captured binding's own type (its
-            // `getCapturedDeclRefType` adjusts variables only).
+            // `getCapturedDeclRefType` adjusts variables only); clang 22
+            // follows [expr.prim.id.unqual]/3 for bindings too (`const`
+            // inside a non-mutable lambda that copies it).
             DeclKind::Binding => match self.capture_at_decl_ref(d, loc) {
+                Some(t) if self.clang_compat >= 22 => (t, ExprFlags::REFERS_TO_ENCLOSING),
                 Some(_) => (ty, ExprFlags::REFERS_TO_ENCLOSING),
                 None => (ty, ExprFlags::NONE),
             },
@@ -2186,7 +2236,11 @@ impl Sema<'_, '_> {
 
     /// `( e )` ([expr.prim.paren]).
     pub fn act_on_paren(&mut self, e: ExprId, lparen: Loc, rparen: Loc) -> ExprId {
-        self.builder().paren(e, lparen, rparen)
+        let x = self.builder().paren(e, lparen, rparen);
+        if !self.special.pending_deleted.is_empty() {
+            self.widen_pending_template_id(e, x);
+        }
+        x
     }
 
     // -- assignment checks -------------------------------------------------------
@@ -2374,11 +2428,16 @@ impl Sema<'_, '_> {
             }
             return self.builder().dependent_unary(op, e, loc);
         }
-        match self.try_overloaded_operator(OperForm::Unary(op), &[e], &[], loc, Loc::INVALID) {
-            OperResult::Done(x) => x,
-            OperResult::Converted(v) => self.builtin_unary(op, v[0], loc),
-            OperResult::Builtin | OperResult::BuiltinNotes(_) => self.builtin_unary(op, e, loc),
+        let x =
+            match self.try_overloaded_operator(OperForm::Unary(op), &[e], &[], loc, Loc::INVALID) {
+                OperResult::Done(x) => x,
+                OperResult::Converted(v) => self.builtin_unary(op, v[0], loc),
+                OperResult::Builtin | OperResult::BuiltinNotes(_) => self.builtin_unary(op, e, loc),
+            };
+        if op == UnaryOp::AddrOf && !self.special.pending_deleted.is_empty() {
+            self.widen_pending_template_id(e, x);
         }
+        x
     }
 
     /// The built-in unary operator `op` ([expr.unary.op], [expr.pre.incr],
@@ -3015,7 +3074,7 @@ impl Sema<'_, '_> {
             if !self.check_pointer_pair_arith(lt, rt, loc) || !same {
                 return self.recover_err(&[l2, r2], loc);
             }
-            let ty = QualType::unqual(self.target.ptrdiff_t);
+            let ty = self.ptrdiff_type();
             return self.builder().binary(op, l2, r2, ty, loc);
         }
         if lp && int_like(self, rt) {
@@ -4026,8 +4085,15 @@ impl Sema<'_, '_> {
         // A function named directly whose definition failed to
         // instantiate when this reference odr-used it (it is now invalid):
         // the call is erroneous, undiagnosed (clang builds a
-        // `RecoveryExpr`; a member call is not affected).
-        if direct && named.is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::INVALID)) {
+        // `RecoveryExpr`; a member call is not affected). A function
+        // invalid only for an invalid parameter (an erroneous default
+        // argument) is still called: its arguments are checked
+        // ([dcl.fct.default]; clang resolves it like any other).
+        if direct
+            && named.is_some_and(|d| {
+                self.ast.decls.get(d).has(DeclFlags::INVALID) && !self.invalid_by_param(d)
+            })
+        {
             return self.recover_err(&kids, loc);
         }
         let f = match self.builtin_callee(callee) {
@@ -4077,6 +4143,12 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         }
         if let Some(d) = named {
+            // A function invalid for an invalid parameter: its arguments
+            // were checked, the call itself is erroneous and undiagnosed
+            // (not constant-evaluated).
+            if self.ast.decls.get(d).has(DeclFlags::INVALID) && self.invalid_by_param(d) {
+                return self.recover_err(&kids, loc);
+            }
             self.check_format_attr(d, &conv_args);
             self.check_absolute_value(d, callee, &conv_args);
         }

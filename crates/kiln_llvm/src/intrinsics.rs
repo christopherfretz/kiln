@@ -489,8 +489,13 @@ pub enum Coro {
     Save,
     /// `i8 @llvm.coro.suspend(token, i1)`.
     Suspend,
-    /// `i1 @llvm.coro.end(ptr, i1, token)`.
+    /// `i1 @llvm.coro.end(ptr, i1, token)` (LLVM 19).
     End,
+    /// `void @llvm.coro.end(ptr, i1, token)` (LLVM 22, where the "in the
+    /// ramp function" result moved to [`Coro::IsInRamp`]).
+    EndVoid,
+    /// `i1 @llvm.coro.is_in_ramp()` (LLVM 22).
+    IsInRamp,
     /// `ptr @llvm.coro.free(token, ptr nocapture readonly)`.
     Free,
     /// `void @llvm.coro.resume(ptr)`.
@@ -568,6 +573,17 @@ pub fn coro(m: &mut Module, which: Coro, size: TypeId) -> FuncId {
             &[],
             Shape::NoUnwind(false),
         ),
+        Coro::EndVoid => declare(
+            m,
+            "llvm.coro.end",
+            TypeId::VOID,
+            &[(p, &[]), (TypeId::I1, &[]), (t, &[])],
+            &[],
+            Shape::NoUnwind(false),
+        ),
+        Coro::IsInRamp => {
+            declare(m, "llvm.coro.is_in_ramp", TypeId::I1, &[], &[], Shape::NoUnwind(true))
+        }
         Coro::Free => declare(
             m,
             "llvm.coro.free",
@@ -600,12 +616,18 @@ pub fn coro(m: &mut Module, which: Coro, size: TypeId) -> FuncId {
         ),
         Coro::Noop => declare(m, "llvm.coro.noop", p, &[], &[], Shape::NoUnwind(true)),
         Coro::AwaitSuspendVoid | Coro::AwaitSuspendBool | Coro::AwaitSuspendHandle => {
-            let (name, ret) = match which {
-                Coro::AwaitSuspendVoid => ("llvm.coro.await.suspend.void", TypeId::VOID),
-                Coro::AwaitSuspendBool => ("llvm.coro.await.suspend.bool", TypeId::I1),
-                _ => ("llvm.coro.await.suspend.handle", TypeId::VOID),
-            };
-            declare(m, name, ret, &[(p, &[]), (p, &[]), (p, &[])], &[], Shape::Throws)
+            coro_await_suspend(m, which)
         }
     }
+}
+
+/// The three `llvm.coro.await.suspend.*` intrinsics of [`coro`].
+fn coro_await_suspend(m: &mut Module, which: Coro) -> FuncId {
+    let p = ptr(m);
+    let (name, ret) = match which {
+        Coro::AwaitSuspendVoid => ("llvm.coro.await.suspend.void", TypeId::VOID),
+        Coro::AwaitSuspendBool => ("llvm.coro.await.suspend.bool", TypeId::I1),
+        _ => ("llvm.coro.await.suspend.handle", TypeId::VOID),
+    };
+    declare(m, name, ret, &[(p, &[]), (p, &[]), (p, &[])], &[], Shape::Throws)
 }

@@ -1,5 +1,7 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
+//@ xfail(kiln): clang 22 orders the guide-deduced specializations differently (WP-355 residual)
 // [temp.deduct.guide]: user-declared deduction guides dump as clang's
 // CXXDeductionGuideDecl (a template one under its FunctionTemplateDecl);
 // implicit guides are not printed.

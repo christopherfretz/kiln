@@ -7,19 +7,21 @@
 // inherits its constructor.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 26:13 error "constexpr variable cannot have non-literal type 'const M'"
-//@ diag: 24:8 note "struct with virtual base class is not a literal type"
-//@ diag: 24:12 note "virtual base class declared here"
-//@ diag: 28:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 27:23 note "non-literal type 'M' cannot be used in a constant expression"
-//@ diag: 28:15 note "in call to 'f()'"
-//@ diag: 31:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 30:23 note "non-literal type 'P' cannot be used in a constant expression"
-//@ diag: 31:15 note "in call to 'g()'"
-//@ diag: 33:13 error "constexpr variable cannot have non-literal type 'const W[1]'"
-//@ diag: 32:7 note "class with virtual base classes is not a literal type"
-//@ diag: 24:12 note "virtual base class declared here"
-//@ diag: 32:21 note "virtual base class declared here"
+//@ diag: 28:13 error "constexpr variable cannot have non-literal type 'const M'"
+//@ diag: 26:8 note "struct with virtual base class is not a literal type"
+//@ diag: 26:12 note "virtual base class declared here"
+//@ diag: 30:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 29:23 note "non-literal type 'M' cannot be used in a constant expression"
+//@ diag: 30:15 note "in call to 'f()'"
+//@ diag: 33:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 32:23 note "non-literal type 'P' cannot be used in a constant expression"
+//@ diag: 33:15 note "in call to 'g()'"
+//@ diag: 35:13 error "constexpr variable cannot have non-literal type 'const W[1]'"
+//@ diag: 34:7 note "class with virtual base classes is not a literal type"
+//@ diag: 26:12 note "virtual base class declared here"
+//@ diag: 34:21 note "virtual base class declared here"
+//@ requires: clang<22
+// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
 struct V { constexpr V(int v) : v(v) {} int v; };
 struct M : virtual V { using V::V; };
 struct N : V { using V::V; };

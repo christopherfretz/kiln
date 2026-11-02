@@ -334,6 +334,9 @@ impl DeclSpec {
     /// `long long long`, `short long`, ...
     pub fn set_width(&mut self, w: Width, loc: Loc) -> Result<(), SpecError> {
         self.note_type(loc);
+        if self.type_error && self.base != TypeSpecKind::None {
+            return Ok(()); // after an unknown type name, as `set_base`
+        }
         let new = match (self.width, w) {
             (Width::None, w) => w,
             (Width::Long, Width::Long) => Width::LongLong,
@@ -365,6 +368,9 @@ impl DeclSpec {
     /// A duplicate or conflicting sign.
     pub fn set_sign(&mut self, s: Sign, loc: Loc) -> Result<(), SpecError> {
         self.note_type(loc);
+        if self.type_error && self.base != TypeSpecKind::None {
+            return Ok(()); // after an unknown type name, as `set_base`
+        }
         let sp = |s: Sign| if s == Sign::Signed { "signed" } else { "unsigned" };
         match self.sign {
             Sign::None => {}
@@ -393,6 +399,11 @@ impl DeclSpec {
         loc: Loc,
     ) -> Result<(), SpecError> {
         self.note_type(loc);
+        if self.type_error && self.base != TypeSpecKind::None {
+            // clang's `SetTypeSpecType` after `TST_error`: a later type
+            // specifier is dropped silently (`restrict int f();`).
+            return Ok(());
+        }
         if self.base != TypeSpecKind::None {
             return Err(SpecError::new(
                 DiagId::parse_invalid_decl_spec_combination,

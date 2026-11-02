@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 // [namespace.memdef]/3, [temp.friend]/1: a class or class template first
 // declared by a friend declaration is hidden from ordinary lookup until a
 // declaration at namespace scope, which redeclares it (WP-121; kiln once

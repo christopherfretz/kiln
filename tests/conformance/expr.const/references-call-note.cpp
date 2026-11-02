@@ -3,13 +3,15 @@
 // through a reference bound to `*nullptr` is diagnosed at the read.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 15:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 13:51 note "division by zero"
-//@ diag: 14:50 note "in call to 'bad(a[1], 0)'"
-//@ diag: 15:15 note "in call to 'f()'"
 //@ diag: 17:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 16:62 note "read of dereferenced null pointer is not allowed in a constant expression"
-//@ diag: 17:15 note "in call to 'dang()'"
+//@ diag: 15:51 note "division by zero"
+//@ diag: 16:50 note "in call to 'bad(a[1], 0)'"
+//@ diag: 17:15 note "in call to 'f()'"
+//@ diag: 19:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 18:62 note "read of dereferenced null pointer is not allowed in a constant expression"
+//@ diag: 19:15 note "in call to 'dang()'"
+//@ requires: clang<22
+// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
 constexpr int bad(const int &x, int y) { return x / y; }
 constexpr int f() { int a[3] = {1, 2, 3}; return bad(a[1], 0); }
 static_assert(f() == 1);

@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.param]/4, [temp.constr.decl]: a type-constraint becomes the
 // parameter's immediately-declared constraint; a trailing requires-clause
 // follows the parameters.

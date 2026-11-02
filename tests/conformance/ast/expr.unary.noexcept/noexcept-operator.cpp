@@ -2,6 +2,7 @@
 // operand is unevaluated; it is false only when the operand is potentially
 // throwing.
 //@ expect: ast
+//@ requires: clang>=22
 int may();
 void wont() noexcept;
 int add(int a, int b) noexcept { return a + b; }

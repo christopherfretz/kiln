@@ -3058,6 +3058,31 @@ inside an expansion or a pack index is captured as a whole. Test
 `tests/conformance/temp.variadic/p12-unexpanded-full-expr.cpp`,
 `dcl.struct.bind/pack-unexpanded.cpp`.
 
+A declarator's type naming an unexpanded pack (WP-371;
+`Sema::diagnose_unexpanded_declarator`, clang `HandleDeclarator`) is one
+error at the declarator-id: "data member type contains …" for a
+non-static data member, "non-type template parameter type contains …"
+for an NTTP, else "declaration type contains …" (variables, pointers,
+functions, typedefs, alias-declarations, parameters, special members and
+conversion types). `type_packs` walks member pointers and dependent-size
+array and vector bounds. The declaration becomes `INVALID`, so a use of
+it is silent (`recover_err`). The error sets `Sema::declarator_type_invalid`,
+which the parser takes after each declarator: as with clang's sticky
+`Declarator::InvalidType`, the rest of a block- or namespace-scope group
+is parsed but not declared, so `Ts c = 1, d = 2;` also gets "expected ';'
+at end of declaration" at the second `=`; a member group diagnoses every
+declarator. A default argument (function or template) naming an
+unexpanded pack is "default argument contains …" at the expression's
+start (a type template parameter's at the parameter), and the default is
+dropped; an in-class default is checked when its delayed parse ends.
+Inside a lambda body none of these apply (the lambda carries the pack).
+At instantiation an `INVALID` pattern declaration is not instantiated:
+its `DeclStmt` fails silently and ends its compound statement (clang's
+`SubstDecl` / `TransformCompoundStmt`), so no later statement, such as a
+`static_assert` after `int a[-1];`, is checked. Tests
+`temp.variadic/p12-unexpanded-declarator-type.cpp`,
+`p12-unexpanded-declarator-group.cpp`.
+
 A lambda whose body names an enclosing template's pack in a
 full-expression or a declaration (`[] { A x{}; return sizeof(x); }()...`)
 is itself unexpanded: its `LambdaExpr` carries `UNEXPANDED_PACK`, so the
@@ -3093,9 +3118,8 @@ takes its initializer's dependence without `UNEXPANDED_PACK`
   - An init-capture `[x = ts]` naming an unexpanded pack outside an
     expansion makes its lambda unexpanded, so the enclosing statement is
     diagnosed ("expression contains unexpanded parameter pack 'ts'", as
-    clang). Gap: a declarator type (`Ts x;`, clang "declaration type
-    contains …") is not diagnosed. The sites checked are an `alignas`
-    operand and the statements and initializers above. `Sema::diagnose_unexpanded_pack`
+    clang). Declarator types are checked as above. The sites checked
+    are an `alignas` operand and the statements and initializers above. `Sema::diagnose_unexpanded_pack`
     (`templ/pack.rs`, emits `sema_unexpanded_pack`; WP-302) is the
     reusable collector and diagnostic for the remaining sites.
 
@@ -3577,7 +3601,7 @@ trait of its own.
 | `__has_virtual_destructor(T)` | complete; its destructor is virtual | `cls` |
 | `__has_unique_object_representations(T)` | complete; [meta.unary.prop]: no padding bits; floating types are false; member pointers per the Itanium ABI | `abi.record_layout` + `tc` |
 | `__is_trivially_equality_comparable(T)` | clang 19 (WP-166): not an enum or array; for a class, `const T& == const T&` (built under a SFINAE frame from the TU) selects a defaulted `operator==` whose parameters are `const T&` (or `T` when trivially copyable), recursively for every base and field (reference or enum fields fail; a union fails); then unique object representations without the trivially-copyable requirement | `cls` + `abi` + lookup |
-| `__is_trivially_relocatable(T)` | clang 19 (WP-166): a class that can be passed in registers (`canPassInRegisters`, as `__can_pass_in_regs`), or any other complete object type; references, functions and `void` are false | `cls` |
+| `__is_trivially_relocatable(T)` | clang 19 (WP-166): a class that can be passed in registers (`canPassInRegisters`, as `__can_pass_in_regs`), or any other complete object type; references, functions and `void` are false. At `-fclang-compat=22` it also warns `sema_deprecated_builtin` (`-Wdeprecated-builtins`) naming `__builtin_is_cpp_trivially_relocatable`, as clang 22 (WP-355) | `cls` |
 | `__is_base_of(B,D)` | both are classes (not unions), `D` is complete when the two differ, and `B` is `D` or a base of `D` (cv ignored) | `cls.bases` (S3C) |
 | `__is_convertible(F,T)` / `__is_nothrow_convertible(F,T)` | `conv_check(F,T).ok` (and `.nothrow`). WP-131 landed them (and `__is_convertible_to`): `To` void is true only for `From` void; `To` function or array, or `From` void, is false; otherwise the copy-initialization of a `To` from an opaque `declval<From>()` operand under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `conv_check` |
 | `__is_constructible(T,A…)` / `__is_trivially_constructible` / `__is_nothrow_constructible` | `init_check(T, A…, Direct)`: `.ok`, `.ok && .trivial`, `.ok && .nothrow`. A reference `T` takes exactly one argument; it still counts as constructible when the reference binds to a temporary created by an implicit conversion (clang 19; only `__reference_constructs_from_temporary` excludes that). WP-131 landed `__is_constructible` and `__is_nothrow_constructible`: a temporary's direct-initialization (value-initialization for no arguments) built on opaque `declval` operands under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `init_check` |
@@ -5069,6 +5093,21 @@ explicit specialization errors remain. The blockers are:
   `aka`-worthy (`print.rs::should_aka`), so a member of `V<s::pl>`
   takes 'W<plain>' with no `aka` (WP-366). Test:
   `tests/conformance/temp.arg.explicit/explicit-arg-sugar-nondependent-param.cpp`.
+  Deduced arguments are not substituted as written (WP-373, checked
+  against clang 19 and 22): clang 19's `FinishTemplateArgumentDeduction`
+  substitutes the canonical deduced list, so `f(x, 1)` of `f(T, typename
+  id<W<T>>::type)` with `x` an `s::pl` notes 'typename id<W<plain>>::type'
+  (aka 'W<s::plain>'), as kiln does; clang 22 substitutes the deduced list
+  `Final` but deduces `T` from the call argument's canonical type, so
+  only its printing differs (`id<W<s::plain>>`, the clang-22 scoped
+  printing of a bare class, left to the clang-22 switch). The
+  specialization's own arguments are canonical in both (clang's
+  `TemplateArgumentList` comes from the canonical builder), so a
+  candidate note naming it binds them canonically, `[with T = s::plain,
+  U = int]` for `f<s::pl>(x, i, 1)` with `i` a `myint`
+  (`overload/diag.rs` `spec_desc`), while a failed deduction's
+  bindings keep the argument's sugar (`'myint' (aka 'int')`). Test:
+  `tests/conformance/temp.deduct.call/specialization-binding-canonical.cpp`.
   `deduce_explicit_only` is the same pipeline with no call: it is used
   for a function template-id that is not called ([over.over]/3,
   `Sema::resolve_single_template_id`). Mismatch notes print P as

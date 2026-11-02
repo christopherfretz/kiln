@@ -39,11 +39,11 @@ TranslationUnitDecl
 |     `-DeclRefExpr 'const bool' lvalue Var 'value' 'const bool' non_odr_use_constant
 |-StaticAssertDecl
 | `-BinaryOperator 'bool' '=='
-|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Size<18446744073709551615UL>':'Size<18446744073709551615>'
-|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|   |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Size<18446744073709551615UL>':'Size<18446744073709551615>'
+|   `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
 |     `-IntegerLiteral 'int' 1
 `-StaticAssertDecl
   `-BinaryOperator 'bool' '=='
-    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Signed<-3>'
-    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Signed<-3>'
+    `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
       `-IntegerLiteral 'int' 1

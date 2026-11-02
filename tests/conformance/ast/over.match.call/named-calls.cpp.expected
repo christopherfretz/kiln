@@ -2,13 +2,13 @@ TranslationUnitDecl
 |-NamespaceDecl N
 | |-CXXRecordDecl referenced struct A definition
 | |-FunctionDecl used f 'int (A, int)'
-| | |-ParmVarDecl 'A':'N::A'
+| | |-ParmVarDecl 'A'
 | | |-ParmVarDecl 'int'
 | | `-CompoundStmt
 | |   `-ReturnStmt
 | |     `-IntegerLiteral 'int' 2
 | `-FunctionDecl used f 'int (A, double)'
-|   |-ParmVarDecl 'A':'N::A'
+|   |-ParmVarDecl 'A'
 |   |-ParmVarDecl 'double'
 |   `-CompoundStmt
 |     `-ReturnStmt
@@ -56,16 +56,16 @@ TranslationUnitDecl
         | `-CallExpr 'int'
         |   |-ImplicitCastExpr 'int (*)(A, int)' <FunctionToPointerDecay>
         |   | `-DeclRefExpr 'int (A, int)' lvalue Function 'f' 'int (A, int)'
-        |   |-CXXConstructExpr 'A':'N::A' 'void (const A &) noexcept'
-        |   | `-ImplicitCastExpr 'const A':'const N::A' lvalue <NoOp>
+        |   |-CXXConstructExpr 'A' 'void (const A &) noexcept'
+        |   | `-ImplicitCastExpr 'const A' lvalue <NoOp>
         |   |   `-DeclRefExpr 'N::A' lvalue ParmVar 'a' 'N::A'
         |   `-ImplicitCastExpr 'int' <IntegralCast>
         |     `-CharacterLiteral 'char' 99
         `-CallExpr 'int'
           |-ImplicitCastExpr 'int (*)(A, double)' <FunctionToPointerDecay>
           | `-DeclRefExpr 'int (A, double)' lvalue Function 'f' 'int (A, double)'
-          |-CXXConstructExpr 'A':'N::A' 'void (const A &) noexcept'
-          | `-ImplicitCastExpr 'const A':'const N::A' lvalue <NoOp>
+          |-CXXConstructExpr 'A' 'void (const A &) noexcept'
+          | `-ImplicitCastExpr 'const A' lvalue <NoOp>
           |   `-DeclRefExpr 'N::A' lvalue ParmVar 'a' 'N::A'
           `-ImplicitCastExpr 'double' <FloatingCast>
             `-FloatingLiteral 'float' 2.5e0

@@ -19,7 +19,7 @@ TranslationUnitDecl
 | `-ClassTemplateSpecializationDecl struct B definition implicit_instantiation
 |   |-TemplateArgument type 'int'
 |   |-TemplateArgument template
-|   `-TypeAliasDecl referenced type 'apply<int>':'int *'
+|   `-TypeAliasDecl referenced type 'X<int>::apply<int>':'int *'
 |-TypeAliasTemplateDecl A
 | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
 | `-TypeAliasDecl A 'typename B<T, X<T>::template apply>::type'

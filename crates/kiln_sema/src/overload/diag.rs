@@ -102,7 +102,11 @@ impl Sema<'_, '_> {
                 return None;
             }
         }
-        Some(self.deduced_args_desc(tmpl, args))
+        // The specialization's arguments are canonical in clang (its
+        // `TemplateArgumentList` is the canonical builder's), whatever
+        // sugar the deduction or the explicit arguments carried: `f<s::pl>`
+        // is noted `[with T = s::plain]` (WP-373).
+        Some(self.deduced_args_desc(tmpl, self.ast.types.canonical_args(args)))
     }
 
     /// The detail of candidate `c`'s bad conversion (`slot` in its

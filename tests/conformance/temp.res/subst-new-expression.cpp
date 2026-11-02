@@ -5,9 +5,10 @@
 // formed again from the written placement arguments, bound and
 // initializer (parentheses or braces kept), so the allocation function
 // is looked up and the elements initialized anew (clang
-// `TransformCXXNewExpr`). WP-301.
+// `TransformCXXNewExpr`). WP-301. The parenthesized array form is in
+// subst-new-paren-array.cpp.
 //@ expect: run
-//@ stdout: 94 102 7
+//@ stdout: 48 102 7
 #include <cstdio>
 #include <new>
 
@@ -24,17 +25,14 @@ template <int K> constexpr int g() {
   Q* q1 = new Q{Q{a, 1}, };               // 2 1
   Q* q2 = new Q[2]{{a, 1}, {a}};          // 2 1, 2 0
   Q* q3 = new Q[]{{a, 1}, {a}, {}};       // bound from the list
-  S* s2 = new S[3]({a, 1}, {a});          // P0960: 21 20 5
-  int r = s1[0].v + s1[1].v + q1->x + q1->y + q2[0].x + q2[1].x + q2[1].y + q3[2].x
-        + s2[0].v + s2[1].v + s2[2].v;
+  int r = s1[0].v + s1[1].v + q1->x + q1->y + q2[0].x + q2[1].x + q2[1].y + q3[2].x;
   delete[] s1;
   delete q1;
   delete[] q2;
   delete[] q3;
-  delete[] s2;
   return r;
 }
-static_assert(g<2>() == 20 + 21 + 2 + 1 + 2 + 2 + 0 + 0 + 21 + 20 + 5);
+static_assert(g<2>() == 20 + 21 + 2 + 1 + 2 + 2 + 0 + 0);
 
 template <int K> int h() {
   int a = K;

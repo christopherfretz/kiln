@@ -5,8 +5,9 @@ apart from the conversion machinery, which spec/sema-conv.md
 (WP-049) covers. §10 lists what is still to be implemented.
 
 Standard: [basic], [conv], [expr], [stmt], [dcl], [class], [namespace].
-Reference: clang 19's `Sema`, with diagnostics checked against
-`clang++-19 -fsyntax-only` and ASTs against `cargo xtask clang-ast`.
+Reference: clang's `Sema` (clang 22, the oracle; clang 19 at
+`-fclang-compat=19`, §1.1), with diagnostics checked against
+`clang++-22 -fsyntax-only` and ASTs against `cargo xtask clang-ast`.
 
 ## 1. State
 `Sema<'a, 'sm>` holds the semantic state of one translation unit.
@@ -46,6 +47,43 @@ Constructors:
   builtin types.
 - `Sema::for_target(ast, diags, Target)` takes the target directly.
   The parser uses this one.
+
+### 1.1 Clang compatibility level (`clang_compat`, WP-355)
+`Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or
+22; spec/driver.md). It selects which clang release's observable output
+kiln reproduces where clang 19 and 22 differ on the same program; the
+language accepted is the same at both levels. The harness passes the
+oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
+- **Names.** A closure type in a scope chain prints `(lambda)`, not
+  `(anonymous class)`, in every diagnostic and predefined name
+  (`'f()::(lambda)::operator()<int>'`; `SemaNames::closure_as_lambda`).
+- **Sugar.** `size_t`, the signed `size_t` and `ptrdiff_t` carry clang
+  22's `__size_t` / `__signed_size_t` / `__ptrdiff_t` sugar
+  (`Sema::size_type`; diagnostics print `'__size_t' (aka 'unsigned
+  long')`); an alias template specialization substitutes its arguments
+  as written (`templ/class.rs`); a `PackExpansionExpr` keeps its
+  pattern's type; a synthesized `<=>`/`==` converts each operand to the
+  cv-qualified base ([class.compare.default]).
+- **Structured bindings** (§4.9): `std::tuple_element`'s index is a
+  `size_t` integer literal (`tuple_element<0UL, E>`); a binding
+  captured by a non-mutable lambda and named in its body is `const`
+  ([expr.prim.id.unqual]/3).
+- **Statement expressions** (GNU): only the statement's own `;` may
+  precede the `})`, so a trailing null statement is the last statement
+  and the expression is `void` (clang 19 skipped null statements).
+- **Deprecations.** `-Wdeprecated-literal-operator` (CWG2521,
+  [over.literal]/1, [depr.lit]): `operator "" _x`, the suffix
+  identifier preceded by whitespace, warns by default
+  (`sema_deprecated_literal_operator_id`; clang 19 has the warning off).
+  `__is_trivially_relocatable` warns `-Wdeprecated-builtins` with the
+  replacement `__builtin_is_cpp_trivially_relocatable`
+  (spec/sema-templates.md §9.1).
+- Codegen's `-Watomic-alignment` text follows the level
+  (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
+
+Where clang 22's output differs and kiln has not followed it yet, the
+test pins clang 19 with `requires: clang<22` and the comment `WP-355
+residual` (docs/status/wp-184-oracle-switch.md).
 
 ## 2. Scopes (`scope.rs`)
 - **Kinds:** `ScopeKind` is one of TranslationUnit, Namespace,
@@ -103,6 +141,15 @@ Constructors:
     to instantiation. Member lookup's subobject merge (`class_hit`)
     keys declarations the same way, and its candidate note names a
     record by its canonical type.
+  - **Invalid declarations** (clang `resolveKind`, WP-371): an
+    id-expression whose lookup finds several declarations, at most one
+    of them valid, names the valid one, else the last one found, with
+    no ambiguity. A variable declared without a type specifier
+    ([dcl.type.general]/2; `const c = 2;` after `const int c = 1;`,
+    `y; y;`) is invalid and not merged with a previous declaration
+    (clang's `MergeVarDecl` returns at an invalid new declaration), so
+    it reports no redefinition and `c` still names the valid `c`.
+    `dcl.type/missing-type-specifier-implicit-int.cpp`.
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
@@ -479,7 +526,16 @@ Redeclaration and linkage rules:
   default argument on parameter` error (`merge_default_args` with
   `trailing == false`); a call that would need the invalid default
   argument is then measured against the redeclaration's arity. Test:
-  `dcl.fct.default/invalid-cast-default-arg.cpp`.
+  `dcl.fct.default/invalid-cast-default-arg.cpp`. A non-template
+  function invalid only because of an invalid parameter
+  (`Sema::invalid_by_param`) is still named and called normally (WP-373;
+  clang resolves the call through its overload set): the call's
+  arguments are converted and their errors diagnosed (`m(1, {2})`
+  through an explicit constructor), and only then is the call itself
+  erroneous and silent (a recovery expression, never constant-evaluated).
+  A function invalid for another reason (its instantiated body failed)
+  keeps the earlier silent recovery. Test:
+  `dcl.fct.default/invalid-default-arg-still-callable.cpp`.
 - **`register`** ([dcl.stc]/1; removed in C++17 by P0001R1, clang's
   `ext_register_storage_class`). `register` is `ISO C++17 does not allow
   'register' storage class specifier` (`sema_register_storage_class`,
@@ -616,6 +672,16 @@ Redeclaration and linkage rules:
   with an initializer`, `remove parentheses`).
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
+- A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
+  `BuildQualifiedType`; WP-371) on a type that is not a pointer,
+  reference or member pointer (and not dependent, an undeduced
+  placeholder or an error) is "restrict requires a pointer or reference
+  ('int' is invalid)" at the qualifier, which is dropped
+  (`type_from_declspec_at`, so `__restrict int *p;` qualifies `int` and
+  is diagnosed). It is reported once per declaration group where clang
+  reports it per declarator. `_Atomic int g();` (friend or not) is
+  accepted, as clang 19 and 22 do;
+  `class.friend/restrict-atomic-decl-specifiers.cpp`.
 - `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
   over the declared type of an unparenthesized id-expression or member
   access, else `T&&`/`T&`/`T` by value category. The operand is
@@ -1222,6 +1288,12 @@ and returns the scope it names:
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
+- **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
+  `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
+  `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
+  `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
+  `always_inline` with the GNU flag. Test:
+  `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
   - GNU `visibility`, `section` and `format`: `'x' attribute ignored`
     (a written `format` is not stored; only the printf builtins' implicit
     one is, §5.4)
@@ -2165,7 +2237,10 @@ diagnostics and IR.
       decompose this type; 'std::tuple_size<T>::value' is not a valid
       integral constant expression`.
     - Each binding gets a holding variable of type `tuple_element<i,
-      E>::type&` (lvalue `e`) or `&&`, with the binding's name. It is
+      E>::type&` (lvalue `e`) or `&&`, with the binding's name. The
+      index `i` is a `size_t` value argument or, at
+      `-fclang-compat=22`, a `size_t` integer literal written as an
+      expression argument (`tuple_element<0UL, E>`; §1.1). It is
       initialized with `e.get<i>()` when a member template `get` has a
       non-type first parameter, else with an ADL-only `get<i>(xvalue
       e)`, which prints `adl`.

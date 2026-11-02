@@ -26,7 +26,7 @@ options:
   --std <std>       -std= of the generated tests (default c++26); other than
                     c++26, the category directories get a `.<std>` suffix
   --libcxx <dir>    libc++ header directory (default /usr/lib/llvm-N/include/c++/v1,
-                    N from KILN_ORACLE: 19 or 22, default 19)
+                    N from KILN_ORACLE: 19 or 22, default 22)
   --sysroot <dir>   C library header directory (default /usr/include)
   --out <dir>       output directory (default <repo>/tests/differential/pp)
   --check           change nothing; exit 1 if the corpus is not up to date

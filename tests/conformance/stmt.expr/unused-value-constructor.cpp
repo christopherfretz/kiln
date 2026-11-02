@@ -4,19 +4,21 @@
 // the class or constructor is [[nodiscard]]); a braced or scalar
 // functional cast does.
 //@ strict-diags
-//@ diag: 38:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute [-Wunused-value]"
-//@ diag: 39:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute [-Wunused-value]"
-//@ diag: 31:3 warning "expression result unused [-Wunused-value]"
-//@ diag: 36:3 warning "expression result unused [-Wunused-value]"
-//@ diag: 37:9 warning "expression result unused [-Wunused-value]"
-//@ diag: 46:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: why [-Wunused-value]"
-//@ diag: 48:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: because [-Wunused-value]"
-//@ diag: 49:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: because [-Wunused-value]"
-//@ diag: 50:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute [-Wunused-value]"
-//@ diag: 51:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute [-Wunused-value]"
-//@ diag: 52:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: why [-Wunused-value]"
-//@ diag: 53:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: why [-Wunused-value]"
-//@ diag: 54:3 warning "expression result unused [-Wunused-value]"
+//@ diag: 40:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute [-Wunused-value]"
+//@ diag: 41:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute [-Wunused-value]"
+//@ diag: 33:3 warning "expression result unused [-Wunused-value]"
+//@ diag: 38:3 warning "expression result unused [-Wunused-value]"
+//@ diag: 39:9 warning "expression result unused [-Wunused-value]"
+//@ diag: 48:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: why [-Wunused-value]"
+//@ diag: 50:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: because [-Wunused-value]"
+//@ diag: 51:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: because [-Wunused-value]"
+//@ diag: 52:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute [-Wunused-value]"
+//@ diag: 53:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute [-Wunused-value]"
+//@ diag: 54:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: why [-Wunused-value]"
+//@ diag: 55:3 warning "ignoring temporary created by a constructor declared with 'nodiscard' attribute: why [-Wunused-value]"
+//@ diag: 56:3 warning "expression result unused [-Wunused-value]"
+//@ requires: clang<22
+// clang 22 emits warning: ignoring temporary of type 'N' declared with 'nodiscard' attribute; WP-355 residual
 struct X { int a; X(int); };
 struct Y { int a; };
 struct Z { Z(); Z(int); ~Z(); };
