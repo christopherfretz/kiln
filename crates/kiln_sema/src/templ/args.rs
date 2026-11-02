@@ -238,9 +238,24 @@ impl Sema<'_, '_> {
 
     pub(crate) fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
         let name = self.qualified_decl_name(tmpl);
+        // The most recent (non-friend) declaration, as name lookup finds
+        // it: a redeclaration after the definition, not the definition
+        // (clang notes the found `TemplateDecl`).
         let at = self
             .pattern_of(self.visible_template(tmpl))
-            .map_or_else(|| self.ast.decls.get(tmpl).loc(), |p| self.ast.decls.get(p).loc());
+            .and_then(|p| {
+                self.ast.redecls_of(p).find(|&x| {
+                    self.ast.decls.get(x).misc().friend() == kiln_ast::decl::FriendKind::None
+                        && self.ast.described_template(x).is_some()
+                })
+            })
+            .map_or_else(
+                || self.ast.decls.get(tmpl).loc(),
+                |p| match self.templ.class_redecl_loc.get(&p) {
+                    Some(&l) => l,
+                    None => self.ast.decls.get(p).loc(),
+                },
+            );
         let d = self
             .diag(DiagId::sema_template_arg_list_different_arity, loc)
             .arg(u32::from(too_many))

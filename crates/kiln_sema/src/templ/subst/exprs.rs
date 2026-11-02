@@ -191,6 +191,16 @@ impl Substituter<'_, '_, '_> {
                 if let Some(r) = self.kept_parm_pack(e, d, loc) {
                     return Ok(r);
                 }
+                if let Some(q) = ex(self).decl_ref_extra(e).and_then(|x| x.qualifier)
+                    && self.in_dependent_specialization(d, loc)?
+                {
+                    // `X<A...>::name` with the substituted class still
+                    // dependent: looked up again later.
+                    let nns = self.nns(q, loc)?;
+                    let name = self.sema.ast.decls.get(d).name();
+                    let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
+                    return Ok(self.sema.act_dependent_scope_ref(nns, name, None, begin, loc));
+                }
                 let i = self.find_instantiated_decl(d, loc)?;
                 // The qualifier as written survives ([temp.inst]; clang's
                 // `TransformDeclRefExpr` transforms the qualifier loc).
@@ -1101,6 +1111,16 @@ impl Substituter<'_, '_, '_> {
         decls: &[DeclId],
         targs: Option<ArgListId>,
     ) -> SubstResult<ExprId> {
+        if let (Some(&d), Some(q)) =
+            (decls.first(), self.sema.ast.templates.expr_nns.get(c).copied())
+            && self.in_dependent_specialization(d, n.loc())?
+        {
+            // A member of a class template pattern whose substituted class
+            // is still dependent: `X<A...>::name`, looked up again later.
+            let nns = self.nns(q, n.loc())?;
+            let begin = self.sema.ast.templates.expr_begin.get(c).copied().unwrap_or(n.loc());
+            return Ok(self.sema.act_dependent_scope_ref(nns, name, targs, begin, n.loc()));
+        }
         if let [d] = decls {
             let d = self.find_instantiated_decl(*d, n.loc())?;
             // `v<args>` naming a member variable template of the
