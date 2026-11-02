@@ -101,8 +101,8 @@ TranslationUnitDecl
     | `-CompoundStmt
     |-IfStmt has_init
     | |-DeclStmt
-    | | `-VarDecl used g '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)' cinit
-    | |   `-LambdaExpr '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)'
+    | | `-VarDecl used g '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:17:16)' cinit
+    | |   `-LambdaExpr '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:17:16)'
     | |     `-CompoundStmt
     | |       `-ReturnStmt
     | |         `-IntegerLiteral 'int' 1
@@ -110,8 +110,8 @@ TranslationUnitDecl
     | | `-CXXOperatorCallExpr 'int' '()'
     | |   |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
     | |   | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
-    | |   `-ImplicitCastExpr 'const (lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)' lvalue <NoOp>
-    | |     `-DeclRefExpr '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)' lvalue Var 'g' '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)'
+    | |   `-ImplicitCastExpr 'const (lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:17:16)' lvalue <NoOp>
+    | |     `-DeclRefExpr '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:17:16)' lvalue Var 'g' '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:17:16)'
     | `-CompoundStmt
     |-SwitchStmt has_init
     | |-DeclStmt

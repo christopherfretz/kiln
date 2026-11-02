@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [expr.type.conv]/1-2, [expr.static.cast]: a named or functional cast
 // prints its type as written (`CI`, `R`), although a non-class prvalue
 // drops the qualifiers ([expr.type]/2) and the alias; a class temporary

@@ -14,7 +14,7 @@ cargo xtask test [options] [paths...]
 | Option | Meaning |
 |---|---|
 | `--compiler <path>` | Compiler under test. Default: `cargo build -p kiln_driver`, then `kiln++` (the `kiln` binary under its C++ name, made beside it if missing) in the target dir (`$CARGO_TARGET_DIR`, else `target_directory` from `cargo metadata`), `debug` profile. |
-| `--oracle <path>` | Oracle compiler for `run`/`pp`/`ast`/`layout`/`vtables` comparisons. Default `clang++-N` of `KILN_ORACLE` (`clang++-19`; see "Oracle toolchain"). |
+| `--oracle <path>` | Oracle compiler for `run`/`pp`/`ast`/`layout`/`vtables` comparisons. Default `clang++-N` of `KILN_ORACLE` (`clang++-22`; see "Oracle toolchain"). |
 | `--no-oracle` | Skip all oracle comparisons (`layout` and `vtables` tests, which have no other reference, are then a SKIP). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--update` | Rewrite existing pp and ast `.expected` goldens with the actual output. |
@@ -186,8 +186,8 @@ gets the same.
 ### Oracle toolchain
 
 One environment variable, `KILN_ORACLE`, names the clang/LLVM release the
-harness compares kiln with. It accepts `19` (the default when unset or
-empty, and the release the M3 gate runs on) or `22`; any other value is an
+harness compares kiln with. It accepts `22` (the default when unset or
+empty, WP-355) or `19` (the release the M3 gate is frozen on); any other value is an
 infrastructure error (exit 2) naming the two accepted values, raised before
 anything is built or run, by `xtask test`, `ci`, `stress`, `clang-ast`,
 `gen-pp-corpus` and `libcxx` alike. The one place that maps the release to
@@ -205,16 +205,24 @@ and, when it is kiln, `KILN_LLVM_DIR=/usr/lib/llvm-N`; the oracle is
 `clang++-N` with the same flags (an explicit `--oracle` replaces the
 compiler, not N: kiln still gets release N's directory). Clang ignores
 `KILN_LLVM_DIR`, so a clang under test or a clang oracle runs as before.
-With `KILN_ORACLE` unset every command is what it was before the variable
-existed (kiln_driver's own default is `/usr/lib/llvm-19`). `requires:
-clang>=N` compares with the oracle's `--version`, so it follows the
-release without further configuration.
+kiln_driver's own default (no `KILN_LLVM_DIR`) is still `/usr/lib/llvm-19`.
+`requires: clang>=N` compares with the oracle's `--version`, so it follows
+the release without further configuration.
 
-The goldens, `//@ diag:` directives, kiln's builtin tables and the IR-diff
-baseline are clang 19's; under `KILN_ORACLE=22` FAILs are expected until
-WP-184 steps B–E land (docs/status/wp-184-oracle-switch.md). An ERROR
-under 22 from the AST normalizer ("is not in the mapping table") is a
-harness bug: `xtask/src/clang_ast/table.rs` lists the clang 22 JSON
+**Two-oracle policy (WP-355).** The goldens, `//@ diag:` directives and
+the IR-diff baseline are clang 22's, and the corpus is green under BOTH
+releases: `cargo xtask ci` (oracle 22) and `KILN_ORACLE=19 cargo xtask ci
+--quick` are both gates. An expectation that differs between the releases
+is pinned to one of them by `requires:` — `clang>=22` where clang 22's
+output is the contract (a C++26 feature clang 19 lacks, a reworded
+diagnostic, a re-sugared dump), `clang<22` where kiln has not followed
+clang 22 yet (the residual list in docs/status/wp-184-oracle-switch.md).
+A test that compares with the oracle (`oracle: clang`, `layout`,
+`vtables`) SKIPs under the other release; a kiln-only test (`diag`, a
+golden without `oracle: clang`) still runs, with kiln at the level the
+`requires:` names (below), so kiln is checked against the pinned
+expectation under either oracle. An ERROR from the AST normalizer ("is not in
+the mapping table") is a harness bug: `xtask/src/clang_ast/table.rs` lists the clang 22 JSON
 attributes it ignores (`TemplateInstantiationPattern` on
 `ClassTemplateSpecializationDecl`, `hasExplicitParameters` on
 `LambdaExpr`; WP-262).
@@ -239,8 +247,11 @@ For `layout` and `vtables`, the oracle's dump is the reference; see "Layout
 and vtable tests".
 
 When the compiler is kiln and the oracle is a clang whose version is known,
-every kiln command gets `-fclang-compat=<major>` (the oracle's major version)
-ahead of the test's `args`, so kiln's predefined macros and `__has_*` answers
+every kiln command gets `-fclang-compat=<major>` ahead of the test's `args`:
+the oracle's major version, unless the test's `requires: clang>=X` /
+`clang<X` excludes it, in which case the nearest supported level that meets
+the requirement (`requires: clang>=22` under oracle 19 runs kiln at 22,
+`clang<22` under oracle 22 runs it at 19; `runner::compat_for`), so kiln's predefined macros and `__has_*` answers
 are the oracle's (spec/pp.md "clang compatibility level"; WP-263). A test's
 own `args: -fclang-compat=N` comes later and wins. Without an oracle
 (`--no-oracle`, or a kiln oracle) kiln runs at its default level.
@@ -676,7 +687,7 @@ runs, stopping at the first failing step:
 
 then the two corpus runs, both over the default paths (`tests/conformance`,
 `tests/differential` and `tests/stress`) with the default oracle
-`clang++-N` (N from `KILN_ORACLE`, default 19; "Oracle toolchain") and the
+`clang++-N` (N from `KILN_ORACLE`, default 22; "Oracle toolchain") and the
 default `--mem-limit` (8192 MiB). A bad `KILN_ORACLE` fails `ci` (exit 2)
 before step 0. Both run even
 if the first fails, so one cannot hide the other:

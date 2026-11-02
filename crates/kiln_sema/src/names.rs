@@ -18,17 +18,25 @@ pub struct SemaNames<'s> {
     ast: &'s Ast,
     /// Where unnamed tags' locations resolve (`(lambda at F:L:C)`).
     sources: Option<&'s kiln_source::SourceManager>,
+    /// A closure type in a scope prints as `(lambda)` (clang 22:
+    /// `'f()::(lambda)::operator()<int>'`) rather than `(anonymous class)`
+    /// (clang 19).
+    closure_as_lambda: bool,
 }
 
 impl<'s> SemaNames<'s> {
     /// Names for `sema`'s AST.
     pub fn new(sema: &'s Sema<'_, '_>) -> Self {
-        SemaNames { ast: &sema.ast, sources: Some(sema.diags.sm()) }
+        SemaNames {
+            ast: &sema.ast,
+            sources: Some(sema.diags.sm()),
+            closure_as_lambda: sema.clang_compat >= 22,
+        }
     }
 
     /// Names for `ast` alone.
     pub fn of_ast(ast: &'s Ast) -> Self {
-        SemaNames { ast, sources: None }
+        SemaNames { ast, sources: None, closure_as_lambda: false }
     }
 
     fn simple(&self, d: DeclId) -> Option<String> {
@@ -159,7 +167,8 @@ impl SemaNames<'_> {
 
     /// The scope of function `d` as clang's
     /// `NamedDecl::printNestedNameSpecifier` prints it: an enclosing
-    /// function as `f(int)`, a closure type as `(anonymous class)`.
+    /// function as `f(int)`, a closure type as `(anonymous class)`
+    /// (`(lambda)` under clang 22 compatibility).
     fn write_decl_scope(&self, d: DeclId, out: &mut String) {
         let mut chain = Vec::new();
         let mut name_in_scope = self.ast.decls.get(d).name();
@@ -199,7 +208,9 @@ impl SemaNames<'_> {
                 s.push(')');
                 chain.push(s);
             } else if self.ast.closure_lambda(c).is_some() {
-                chain.push("(anonymous class)".into());
+                chain.push(
+                    if self.closure_as_lambda { "(lambda)" } else { "(anonymous class)" }.into(),
+                );
             } else if matches!(k, DeclKind::Namespace | DeclKind::CXXRecord | DeclKind::Enum) {
                 let mut s = String::new();
                 self.write_scope_component(c, &mut s);

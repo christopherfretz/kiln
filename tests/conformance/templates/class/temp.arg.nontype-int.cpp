@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.arg.nontype]/1: a non-type template argument is a converted constant
 // expression of the parameter's type.
 template <int N> struct Arr { char data[N]; };
