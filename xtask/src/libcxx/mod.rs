@@ -557,8 +557,13 @@ fn execute(opts: &Options) -> Result<bool, String> {
     std::fs::create_dir_all(&scratch)
         .map_err(|e| format!("cannot create {}: {e}", scratch.display()))?;
     let probe = RssProbe::detect(&scratch);
+    // Clang mode: the harness self-check (spec/libcxx.md "Clang mode").
+    let clang = opts.compiler.is_some()
+        && crate::util::identify(&kiln)?.kind == crate::util::CompilerKind::Clang;
     let cfg = Config {
         kiln: kiln.clone(),
+        clang,
+        libcxx_include: toolchain.libcxx_include(),
         checkout: checkout.clone(),
         tag,
         llvm_dir: toolchain.llvm_dir(),
@@ -610,12 +615,8 @@ fn execute(opts: &Options) -> Result<bool, String> {
     for r in &results {
         total.add(&r.outcome);
     }
-    println!(
-        "\n{}; wall {:.1} s; {} kiln",
-        total.summary_line(),
-        wall.as_secs_f64(),
-        profile_text(opts)
-    );
+    let compiler = if clang { "clang".to_owned() } else { format!("{} kiln", profile_text(opts)) };
+    println!("\n{}; wall {:.1} s; {compiler}", total.summary_line(), wall.as_secs_f64());
 
     if let Some(path) = &opts.report {
         let info = run_info(opts, &cfg, &root, wall);
@@ -751,7 +752,7 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
     let link: Vec<String> = cfg.link_flags().iter().map(|f| shorten(f)).collect();
     report::RunInfo {
         kiln_version,
-        profile: profile_text(opts),
+        profile: if cfg.clang { "clang (--compiler)".to_owned() } else { profile_text(opts) },
         kiln_commit: git(root, &["rev-parse", "--short", "HEAD"]),
         tests_tag: match git(&cfg.checkout, &["describe", "--tags", "--always"]) {
             t if t == cfg.tag => t,

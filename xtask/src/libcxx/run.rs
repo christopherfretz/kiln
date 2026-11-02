@@ -14,7 +14,16 @@ use crate::util::process::{self, Measured, MemLimit, RssProbe};
 
 /// Everything a test run needs that does not vary per test.
 pub struct Config {
+    /// The compiler: kiln++, or clang in clang mode ([`Config::clang`]).
     pub kiln: PathBuf,
+    /// Clang mode (spec/libcxx.md "Clang mode"): `--compiler` is a clang,
+    /// run as the harness self-check. Its base flags have no
+    /// `-resource-dir` and no `-fclang-compat`, and the libc++ headers are
+    /// pinned to the tag's with `-nostdinc++ -isystem`.
+    pub clang: bool,
+    /// The libc++ headers of `llvm_dir` (`Oracle::libcxx_include`), pinned
+    /// in clang mode when there is no [`LibcxxTree`].
+    pub libcxx_include: PathBuf,
     /// The `llvm-project` checkout (holding `libcxx/test`).
     pub checkout: PathBuf,
     /// The release tag the checkout should be at (`--tag`).
@@ -65,22 +74,25 @@ impl Config {
 
     /// The flags every compile gets, before the test's own.
     pub fn base_compile_flags(&self) -> Vec<String> {
-        let mut v: Vec<String> = [
-            format!("-std={}", features::STD),
-            "-stdlib=libc++".to_owned(),
-            "-resource-dir".to_owned(),
-            self.resource_dir.display().to_string(),
-            "-pthread".to_owned(),
-            "-ferror-limit=0".to_owned(),
-            "-D_LIBCPP_ENABLE_EXPERIMENTAL".to_owned(),
-        ]
-        .into();
-        if self.clang_compat != 19 {
+        let mut v: Vec<String> = vec![format!("-std={}", features::STD), "-stdlib=libc++".into()];
+        if !self.clang {
+            v.extend(["-resource-dir".to_owned(), self.resource_dir.display().to_string()]);
+        }
+        v.extend(
+            ["-pthread", "-ferror-limit=0", "-D_LIBCPP_ENABLE_EXPERIMENTAL"].map(str::to_owned),
+        );
+        if self.clang_compat != 19 && !self.clang {
             v.push(format!("-fclang-compat={}", self.clang_compat));
         }
-        if let Some(t) = &self.libcxx {
+        // A clang finds the system's libc++ headers, which need not be the
+        // tag's (clang++-22 here finds libc++ 19's): pin them.
+        let include = match &self.libcxx {
+            Some(t) => Some(&t.include),
+            None => self.clang.then_some(&self.libcxx_include),
+        };
+        if let Some(include) = include {
             v.extend(["-nostdinc++".to_owned(), "-isystem".to_owned()]);
-            v.push(t.include.display().to_string());
+            v.push(include.display().to_string());
         }
         v.push("-I".to_owned());
         v.push(self.test_root().join("support").display().to_string());
@@ -905,6 +917,41 @@ mod tests {
         );
     }
 
+    /// Clang mode drops kiln's own flags and pins the tag's libc++ headers
+    /// (spec/libcxx.md "Clang mode").
+    #[test]
+    fn clang_mode_flags() {
+        let mut cfg = Config {
+            kiln: "kiln++".into(),
+            clang: false,
+            libcxx_include: "/llvm/include/c++/v1".into(),
+            checkout: "/co".into(),
+            tag: String::new(),
+            llvm_dir: "/llvm".into(),
+            clang_compat: 22,
+            libcxx: None,
+            resource_dir: "/res".into(),
+            features: Vec::new(),
+            libcxx_version: None,
+            compile_timeout: Duration::from_secs(1),
+            run_timeout: Duration::from_secs(1),
+            long_run_timeout: Duration::from_secs(1),
+            mem: None,
+            probe: RssProbe::Unavailable,
+            scratch: "/s".into(),
+            keep: false,
+        };
+        let kiln = cfg.base_compile_flags().join(" ");
+        assert!(kiln.contains("-resource-dir /res") && kiln.contains("-fclang-compat=22"));
+        assert!(!kiln.contains("-nostdinc++"));
+        cfg.clang = true;
+        let clang = cfg.base_compile_flags().join(" ");
+        assert!(!clang.contains("-resource-dir") && !clang.contains("-fclang-compat"));
+        assert!(clang.contains("-nostdinc++ -isystem /llvm/include/c++/v1"));
+        cfg.libcxx = Some(LibcxxTree { include: "/tree/inc".into(), lib: "/tree/lib".into() });
+        assert!(cfg.base_compile_flags().join(" ").contains("-isystem /tree/inc"));
+    }
+
     /// A `lit.local.cfg` that adds a feature satisfies `REQUIRES:` below
     /// it; `.sh.cpp` tests run unless their `RUN:` lines need something
     /// the driver lacks (spec/libcxx.md "RUN lines").
@@ -1066,6 +1113,8 @@ mod tests {
         std::fs::write(&src, script).unwrap();
         let cfg = Config {
             kiln,
+            clang: false,
+            libcxx_include: base.clone(),
             checkout: base.clone(),
             tag: String::new(),
             llvm_dir: base.clone(),
