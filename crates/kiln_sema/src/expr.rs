@@ -2628,6 +2628,22 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_nonconst_member_fn_ptr, loc);
             return self.recover_err(&[e], loc);
         }
+        // `&(C::f)` of an overload set of instance members without an
+        // object: as for one member function below.
+        let x = self.ignore_parens(e);
+        if x != e && self.ast.exprs.get(x).kind() == ExprKind::UnresolvedLookupExpr {
+            let decls = self.ast.unresolved_decls(x);
+            let instance = |s: &Self, d: DeclId| {
+                let f = s.templated_or_self(d);
+                s.kind_of(f) == DeclKind::CXXMethod
+                    && !s.is_static_method(f)
+                    && !s.has_explicit_object(f)
+            };
+            if !decls.is_empty() && decls.iter().all(|&d| instance(self, d)) {
+                self.error(DiagId::sema_member_call_without_object, self.eloc(x));
+                return self.recover_err(&[e], loc);
+            }
+        }
         if self.overload_operand(e).is_some_and(|(_, addr)| !addr) {
             // [over.over]: `&f` of an overload set is resolved by its target.
             return self.builder().unary(
@@ -2638,15 +2654,33 @@ impl Sema<'_, '_> {
                 ExprFlags::CANNOT_OVERFLOW,
             );
         }
-        // `&(C::f)` is no pointer to member: its member name is still
-        // "without an object" (clang names it before it checks validity).
-        let x = self.ignore_parens(e);
+        // `&(C::f)` is no pointer to member ([expr.unary.op]/4): without
+        // an object, its member name is "without an object" (clang's
+        // `DiagnoseInstanceReference`, at the name, before validity).
+        if x != e
+            && let Some(r) = self.member_refs.get(&x).copied()
+            && r.error
+            && self.kind_of(r.decl) == DeclKind::CXXMethod
+        {
+            self.member_refs.remove(&x);
+            self.error(DiagId::sema_member_call_without_object, self.eloc(x));
+            return self.recover_err(&[e], loc);
+        }
         if self.names_invalid_function(e) && (x == e || !self.member_refs.contains_key(&x)) {
             self.member_refs.remove(&x);
             return self.recover_err(&[e], loc);
         }
         if let Some(mp) = self.member_pointer_of(e, loc) {
             return mp;
+        }
+        // [expr.unary.op]/4: neither is `&(C::f)` with an implicit object,
+        // `&(f)` nor `&b.f` (clang's `err_parens_pointer_member_function`
+        // for a bound member function).
+        if self.ety(e) == QualType::BOUND_MEMBER
+            && self.ast.exprs.get(x).kind() == ExprKind::MemberExpr
+        {
+            self.error(DiagId::sema_nonconst_member_fn_ptr, loc);
+            return self.recover_err(&[e], loc);
         }
         let Some(t) = self.check_addressable(e, loc) else {
             return self.recover_err(&[e], loc);
