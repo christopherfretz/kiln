@@ -1033,8 +1033,9 @@ impl Sema<'_, '_> {
                 let ttp = self.kind_of(d) == DeclKind::TemplateTemplateParm;
                 if ttp {
                     self.check_ttp_arity(d, args, l)?;
-                }
-                if !dep_args && !ttp {
+                } else if dep_args {
+                    self.check_expanded_pack_arity(d, args, l)?;
+                } else {
                     let locs = std::mem::take(&mut self.templ.arg_locs);
                     let t = self.class_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
@@ -1371,6 +1372,27 @@ impl Sema<'_, '_> {
                 false
             }
         }
+    }
+
+    /// [`Sema::act_pack_indexing_type`] for the type name `name` written
+    /// at `name_loc`: a `T` that is not a pack is reported there by name,
+    /// as clang does ("'T' does not refer to the name of a parameter
+    /// pack").
+    pub fn act_pack_indexing_type_named(
+        &mut self,
+        pattern: QualType,
+        name: Symbol,
+        name_loc: Loc,
+        ellipsis: Loc,
+        index: ExprId,
+    ) -> QualType {
+        if !self.ast.types.flags(pattern.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
+            let text = format!("'{}'", self.ast.symbols().as_str(name));
+            let msg = self.diag(DiagId::sema_sizeof_pack_no_pack, name_loc).arg(text);
+            self.emit(msg);
+            return QualType::ERROR;
+        }
+        self.act_pack_indexing_type(pattern, ellipsis, index)
     }
 
     /// `T...[index]` as a type (C++26 [dcl.type.pack.index]).

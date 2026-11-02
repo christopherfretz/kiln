@@ -219,6 +219,7 @@ sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is depre
 sema_deprecated_literal_operator_id = Warning [DeprecatedLiteralOperator] (1) "identifier '{0}' preceded by whitespace in a literal operator declaration is deprecated";
 sema_deprecated_msg = Warning [DeprecatedDeclarations] (2) "'{0}' is deprecated: {1}";
 sema_deprecated_this_capture = Warning [DeprecatedThisCapture] (0) "implicit capture of 'this' with a capture default of '=' is deprecated";
+sema_deprecated_volatile_return = Warning [DeprecatedVolatile] (1) "volatile-qualified return type {0} is deprecated";
 sema_dereference_incomplete_type = Error (1) "dereference of pointer to incomplete type {0}";
 sema_designated_init_array = ExtWarn [C99Designator] (0) "array designators are a C99 extension";
 sema_designated_init_brace_elision = ExtWarn [C99Designator] (0) "brace elision for designated initializer is a C99 extension";

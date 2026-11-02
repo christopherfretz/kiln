@@ -262,7 +262,9 @@ ops! {
     // of the `type` object at `p`; aux 1 = check that its lifetime has
     // not ended, aux 2 = end it (`std::allocator` storage only); aux 4 =
     // a member call on it instead: `std::allocator` storage must be
-    // within its lifetime.
+    // within its lifetime; aux 8 = a base subobject the constructor
+    // does not construct: its `copy_size` bytes begin outside their
+    // lifetime, in any storage (WP-390).
     EndLife = 2,
     // [handler]: enters a try-block (P3068, [except.handle]): registers a
     // handler marker in the cleanup stack (spec/oven.md "Exceptions");

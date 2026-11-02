@@ -512,13 +512,21 @@ impl Sema<'_, '_> {
         let params = self.ast.types.params(&p).to_vec();
         let exc = self.ast.types.exc_spec(&p);
         let first = self.ast.first(f);
-        if self.contains_undeduced_auto(p.ret()) {
+        let placeholder = self.contains_undeduced_auto(p.ret());
+        if placeholder {
             self.declared_returns.entry(first).or_insert(p.ret());
         }
         let nty = self.ast.types.function(ret, &params, p.info(), exc);
         let redecls: Vec<DeclId> = self.ast.redecls_of(f).collect();
+        let deduced = kiln_ast::decl::FnSpec::new().with_return_deduced(true);
         for d in redecls {
             self.ast.decls.set_ty(d, nty);
+            // The linkage looks at the type as written (clang
+            // `getLVForNamespaceScopeDecl`), which a deduced return type
+            // is not part of.
+            if placeholder && self.ast.decls.function(d).is_some() {
+                self.ast.decls.mark_function(d, deduced);
+            }
         }
         self.finish_source_locs(f);
     }

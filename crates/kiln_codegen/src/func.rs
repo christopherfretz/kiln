@@ -570,6 +570,11 @@ impl Cg<'_> {
             mustprogress: self.f.mustprogress,
             vector_width: self.f.vector_width,
             noreturn,
+            inline: if thunk.is_some() {
+                crate::module::DefInline::OptNone
+            } else {
+                self.def_inline_attrs(d)
+            },
             extra,
         });
         let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), true);
