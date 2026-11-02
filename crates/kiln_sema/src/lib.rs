@@ -14,6 +14,7 @@
     reason = "sema code uses the standard's short names (e, t, d, l, r)"
 )]
 
+mod absolute_value;
 mod asm;
 mod bitfield_constant;
 mod builtins;

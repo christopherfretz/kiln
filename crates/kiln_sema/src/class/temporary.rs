@@ -191,6 +191,58 @@ impl Sema<'_, '_> {
         self.builder().expr_with_cleanups(e, st.side_effects)
     }
 
+    /// A subexpression `e` that template instantiation reuses unchanged
+    /// (a non-dependent operand of a rebuilt full-expression): the
+    /// temporaries it materializes or binds, and those of the default
+    /// arguments it uses, outside a nested `ExprWithCleanups` or lambda,
+    /// belong to the full-expression being built, as if `e` had been
+    /// built again ([intro.execution]/5; clang's `TreeTransform` rebuilds
+    /// the operand, and `MaybeBindToTemporary` and
+    /// `CreateMaterializeTemporaryExpr` set `ExprNeedsCleanups`). Without
+    /// this, `B b(S{42});` in a function template loses its
+    /// `ExprWithCleanups`, and the `S` temporary outlives the declaration.
+    pub(crate) fn note_shared_temporaries(&mut self, e: ExprId) {
+        if (self.cleanup.needs && self.cleanup.side_effects) || self.unevaluated > 0 {
+            return;
+        }
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::MaterializeTemporaryExpr => {
+                    self.cleanup.needs = true;
+                    stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+                }
+                ExprKind::CXXBindTemporaryExpr => {
+                    self.cleanup.needs = true;
+                    self.cleanup.side_effects = true;
+                    return;
+                }
+                // As `note_default_use` does for a default argument it
+                // builds.
+                ExprKind::CXXDefaultArgExpr => {
+                    let p = self.ast.exprs.default_arg_param(x);
+                    if let Some(d) = self.ast.decls.param(p).and_then(|p| p.default_arg)
+                        && self.ast.exprs.get(d).kind() == ExprKind::ExprWithCleanups
+                    {
+                        self.cleanup.needs = true;
+                        self.cleanup.side_effects |= self.ast.exprs.cleanups_have_side_effects(d);
+                    }
+                }
+                // Unevaluated operands ([expr.context]/1) and lambda
+                // bodies own no temporaries of this full-expression.
+                ExprKind::ExprWithCleanups
+                | ExprKind::LambdaExpr
+                | ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::ExpressionTraitExpr
+                | ExprKind::RequiresExpr
+                | ExprKind::ConceptSpecializationExpr => {}
+                ExprKind::CXXTypeidExpr if !self.ast.exprs.typeid_potentially_evaluated(x) => {}
+                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+            }
+        }
+    }
+
     /// Enters a context whose temporaries belong to no enclosing
     /// full-expression (an unevaluated operand).
     pub(crate) fn push_cleanups(&mut self) {

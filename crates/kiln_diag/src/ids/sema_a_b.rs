@@ -57,7 +57,6 @@ sema_array_init_not_init_list = Error (1) "array initializer must be an initiali
 sema_array_not_modifiable = Error (1) "array type {0} is not assignable";
 sema_array_of_functions = Error (2) "'{0}' declared as array of functions of type {1}";
 sema_array_of_references = Error (2) "'{0}' declared as array of references of type {1}";
-sema_array_of_void = Error (1) "'{0}' declared as array of void";
 sema_array_size_non_int = Error (1) "size of array has non-integer type {0}";
 sema_array_sizeless_element = Error (1) "array has sizeless element type {0}";
 sema_array_too_large = Error (1) "array is too large ({0} elements)";
