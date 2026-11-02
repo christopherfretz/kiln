@@ -4354,6 +4354,18 @@ impl Sema<'_, '_> {
     /// The initializer of variable `v` ([dcl.init]). Its syntax
     /// ([`Declarator::init_style`]) was recorded when `v` was declared.
     pub fn act_on_init(&mut self, v: DeclId, init: Initializer) {
+        let (es, at) = match &init {
+            Initializer::Expr(e) => (vec![*e], None),
+            Initializer::Paren(es, l, _) => (es.clone(), Some(*l)),
+            Initializer::List(l) => (Self::list_exprs(l), Some(l.lbrace)),
+        };
+        // [temp.variadic]/12: "initializer contains unexpanded parameter
+        // pack", at the `(`/`{` of a parenthesized or braced initializer
+        // (clang's ParenListExpr/InitListExpr); the variable becomes
+        // invalid (its initializer dropped).
+        if es.iter().any(|&e| self.diagnose_unexpanded_written(e, "initializer", at)) {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
         self.act_on_init_inner(v, init);
         self.check_constinit(v);
         self.initializing = None;
@@ -5906,6 +5918,11 @@ impl Sema<'_, '_> {
         if self.has_pending_head() {
             return self.act_on_friend_class_template(keyword, n, nloc, ns);
         }
+        // [temp.local]/6: `friend class T;` naming a template parameter
+        // redeclares it (clang's `DiagnoseTemplateParameterShadow` in
+        // `ActOnTag`); the friend then declares a new class `T`, so
+        // `friend class Ts...;` expands no pack.
+        self.check_template_param_shadow(n, nloc);
         let found = self.lookup_name(n, LookupKind::Tag).decls;
         let hidden = || {
             self.ast
