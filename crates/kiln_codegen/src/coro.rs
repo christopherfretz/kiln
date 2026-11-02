@@ -9,7 +9,7 @@ use kiln_ast::expr::{CoawaitParts, ExprKind, SuspendKind};
 use kiln_ast::types::{ExcSpec, NoexceptValue};
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_llvm::intrinsics::{Coro, coro};
-use kiln_llvm::{Attr, AttrKind, IntPredicate, Linkage, TypeId as LTy};
+use kiln_llvm::{Attr, AttrKind, CastOp, Flags, IntPredicate, Linkage, TypeId as LTy};
 
 use crate::builtins::BuiltinCall;
 use crate::cleanup::{Cleanup, JumpDest};
@@ -44,9 +44,9 @@ pub(crate) struct CoroData {
     pub final_jd: Option<JumpDest>,
     pub kind: AwaitKind,
     pub coreturns: u32,
-    /// The `llvm.coro.free` result the deallocation's
-    /// `__builtin_coro_free` stands for.
-    pub cur_free: Option<V>,
+    /// The last `llvm.coro.free` call (clang `LastCoroFree`), moved to
+    /// guard the deallocation.
+    pub last_free: Option<u32>,
     /// `__promise.unhandled_exception();`.
     pub on_exception: Option<StmtId>,
     /// `<init>.resume.eh`: an exception escaped the initial
@@ -113,7 +113,7 @@ impl Cg<'_> {
             final_jd: None,
             kind: AwaitKind::Normal,
             coreturns: 0,
-            cur_free: None,
+            last_free: None,
             on_exception: None,
             resume_eh: None,
             await_num: 0,
@@ -171,7 +171,10 @@ impl Cg<'_> {
         }
         self.emit_stmt(c.promise_stmt)?;
         if let Some(p) = self.f.locals.get(&c.promise).copied() {
-            self.f.fir.set_call_arg(id_inst, 1, p.v);
+            // clang inserts `bitcast ptr %promise to ptr` before coro.id.
+            let cast = Op::Cast { op: CastOp::BitCast, flags: Flags::NONE, v: p.v, to: LTy::PTR };
+            let pv = self.f.fir.insert_before(id_inst, cast, LTy::PTR);
+            self.f.fir.set_call_arg(id_inst, 1, pv);
         }
         // `GetReturnObjectManager::EmitGroInit`.
         match (gro, c.return_stmt) {
@@ -415,8 +418,8 @@ impl Cg<'_> {
                 Op::Switch { c: r, default: ret_bb, cases: vec![(zero, ready), (one, cleanup)] },
                 LTy::VOID,
             );
-            self.f.fir.set_cur(None);
         }
+        // clang `EmitBlock(CleanupBlock)`: placed after the suspend block.
         self.emit_block(cleanup, true);
         if self.f.fir.cur().is_some() {
             let jd = self.coro_data().cleanup_jd.expect("coroutine cleanup destination");
@@ -557,12 +560,8 @@ impl Cg<'_> {
         let a0 = self.m.attr_set(&[Attr::Flag(AttrKind::NonNull), noundef.clone()]);
         let a1 = self.m.attr_set(std::slice::from_ref(&noundef));
         let ret = if rty == LTy::VOID { None } else { Some(self.m.attr_set(&[noundef])) };
-        let fa = self
-            .m
-            .attr_set(&[Attr::Flag(AttrKind::AlwaysInline), Attr::Flag(AttrKind::MustProgress)]);
         let func = self.m.func_mut(f);
         func.linkage = Linkage::Private;
-        func.attrs.func = fa;
         if let Some(r) = ret {
             func.attrs.ret = r;
         }
@@ -635,6 +634,13 @@ impl Cg<'_> {
             self.f.fir.erase_block(rb);
             self.f.ret_block = None;
         }
+        // FinishFunction adds x86's `min-legal-vector-width` here too.
+        let mut fa = vec![Attr::Flag(AttrKind::AlwaysInline), Attr::Flag(AttrKind::MustProgress)];
+        if self.is_x86() {
+            fa.push(Attr::string("min-legal-vector-width", &self.f.vector_width.to_string()));
+        }
+        let fa = self.m.attr_set(&fa);
+        self.m.func_mut(f).attrs.func = fa;
         let fir = std::mem::replace(&mut self.f.fir, Fir::new(Vec::new()));
         let loc = decl.map(|d| self.ast.decls.get(d).loc());
         if self.f.uses_ph {
@@ -648,23 +654,32 @@ impl Cg<'_> {
         Ok(())
     }
 
-    /// `CallCoroDelete`: `if (coro.free(id, frame)) deallocate`.
+    /// `CallCoroDelete`: `if (coro.free(id, frame)) deallocate`. As
+    /// clang, the deallocation is emitted first and the `coro.free` call
+    /// it made is then moved up to guard it.
     pub(crate) fn emit_coro_delete(&mut self, dealloc: ExprId) -> R<()> {
-        let Some(data) = self.f.coro.as_deref() else { return Ok(()) };
-        let (id, begin) = (data.id, data.begin.expect("coro.begin"));
-        let ff = self.coro_fn(Coro::Free);
-        let mem = self.intrinsic_call(ff, vec![id, begin]);
+        if self.f.coro.is_none() {
+            return Ok(());
+        }
+        let Some(saved_bb) = self.f.fir.cur() else { return Ok(()) };
         let free_bb = self.f.fir.create_block();
-        let after = self.f.fir.create_block();
-        let null = self.null_ptr();
-        let c = self.icmp(IntPredicate::Ne, mem, null);
-        self.cond_br(c, free_bb, after);
         self.emit_block(free_bb, false);
-        let saved = self.coro_data().cur_free.replace(mem);
+        let prev = self.coro_data().last_free.take();
         let r = self.emit_ignored(dealloc);
-        self.coro_data().cur_free = saved;
+        let last = std::mem::replace(&mut self.coro_data().last_free, prev);
         r?;
+        let after = self.f.fir.create_block();
         self.emit_block(after, false);
+        let (Some(cf), Some(t)) = (last, self.f.fir.terminator(saved_bb)) else {
+            return err(self.loc_of(dealloc), "Deallocation expressoin does not refer to coro.free");
+        };
+        self.f.fir.move_before(cf, t);
+        self.f.fir.erase(t);
+        self.f.fir.set_cur(Some(saved_bb));
+        let null = self.null_ptr();
+        let c = self.icmp(IntPredicate::Ne, V::I(cf), null);
+        self.cond_br(c, free_bb, after);
+        self.f.fir.set_cur(Some(after));
         Ok(())
     }
 
@@ -698,15 +713,7 @@ impl Cg<'_> {
                     ),
                 };
             }
-            id::CORO_FREE => {
-                if let Some(v) = self.f.coro.as_deref().and_then(|c| c.cur_free) {
-                    for &a in &args {
-                        self.emit_ignored(a)?;
-                    }
-                    return Ok(BuiltinCall::Emitted(Some(v)));
-                }
-                Coro::Free
-            }
+            id::CORO_FREE => Coro::Free,
             id::CORO_SIZE | id::CORO_ALIGN => {
                 let which = if b == id::CORO_SIZE { Coro::Size } else { Coro::Align };
                 let t = self.mty(q);
@@ -747,6 +754,12 @@ impl Cg<'_> {
         }
         let f = self.coro_fn(which);
         let r = self.intrinsic_call(f, vals);
+        // clang remembers the call for `CallCoroDelete`.
+        if which == Coro::Free
+            && let Some(c) = self.f.coro.as_deref_mut()
+        {
+            c.last_free = Some(Fir::last_inst(r));
+        }
         let void = matches!(which, Coro::Resume | Coro::Destroy);
         Ok(BuiltinCall::Emitted((!void).then_some(r)))
     }

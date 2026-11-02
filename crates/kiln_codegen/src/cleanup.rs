@@ -283,7 +283,7 @@ pub(crate) struct Cleanups {
     pub stack: Vec<Scope>,
     fixups: Vec<Fixup>,
     /// `NormalCleanupDest`.
-    dest_slot: Option<V>,
+    pub dest_slot: Option<V>,
     /// `UnreachableBlock`.
     pub unreachable: Option<Blk>,
     /// `NextCleanupDestIndex`.

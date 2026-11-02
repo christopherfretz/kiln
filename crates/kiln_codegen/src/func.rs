@@ -362,7 +362,17 @@ impl Cg<'_> {
         self.f.cl.next_index = 2;
         let mut arg_no = 0u32;
         match &sig.info.ret.kind {
-            ArgKind::Ignore => self.f.ret_kind = RetKind::Void,
+            ArgKind::Ignore => {
+                self.f.ret_kind = RetKind::Void;
+                // clang `CreateIRTemp(RetTy, "retval")` for an ignored
+                // (empty-class) return; FinishFunction erases it unused.
+                if !ast.types.is_void(sig.ret) {
+                    let vt = self.lty(sig.ret);
+                    let (_, align) = self.size_align(sig.ret);
+                    let slot = self.f.fir.alloca(vt, align);
+                    self.f.ret_slot = Some(Addr { v: slot, ty: vt, align });
+                }
+            }
             ArgKind::Indirect { byval, align } => {
                 self.f.ret_kind = RetKind::Sret;
                 let ty = self.mty(sig.ret);
@@ -515,6 +525,13 @@ impl Cg<'_> {
         }
         self.finish_eh();
         self.emit_unreachable_if_used();
+        // FinishFunction: a coroutine's cleanup destination slot becomes
+        // SSA values and phis (LLVM `PromoteMemToReg`, spec/codegen.md §7p).
+        if self.f.coro.is_some()
+            && let Some(slot) = self.f.cl.dest_slot.take()
+        {
+            self.f.fir.promote_alloca(&mut self.m, slot);
+        }
         if let Some(e) = self.f.error.take() {
             return Err(e);
         }
@@ -526,12 +543,15 @@ impl Cg<'_> {
         {
             self.f.fir.erase_block(rb);
             self.f.ret_block = None;
-            if let Some(slot) = self.f.ret_slot
-                && let V::I(_) = slot.v
-                && self.f.fir.uses(slot.v) == 0
-            {
-                self.f.fir.erase(Fir::last_inst(slot.v));
-            }
+        }
+        // ... and so is a return-value alloca nothing uses (an ignored
+        // empty-class return).
+        if let Some(slot) = self.f.ret_slot
+            && let V::I(i) = slot.v
+            && matches!(self.f.fir.op(i), Op::Alloca { .. })
+            && self.f.fir.uses(slot.v) == 0
+        {
+            self.f.fir.erase(i);
         }
 
         // Attributes.
