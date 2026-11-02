@@ -77,9 +77,7 @@ impl Compiler<'_> {
         if depth > 64 {
             return None;
         }
-        self.o
-            .types
-            .fields(cls)[..self.o.types.vbase_start(cls)]
+        self.o.types.fields(cls)[..self.o.types.vbase_start(cls)]
             .iter()
             .filter(|f| f.base)
             .find_map(|f| self.nv_base_offset(f.ty, base, depth + 1).map(|x| x + f.offset))

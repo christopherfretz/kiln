@@ -460,7 +460,8 @@ impl Sema<'_, '_> {
                 }
                 SpecialKind::Dtor => {
                     out.dtor_constexpr = Some(
-                        spec.constexpr_kind() != ConstexprKind::None || in_class_default && !vb_forbid,
+                        spec.constexpr_kind() != ConstexprKind::None
+                            || in_class_default && !vb_forbid,
                     );
                 }
                 _ => {}

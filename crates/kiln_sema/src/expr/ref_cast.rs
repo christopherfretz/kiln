@@ -205,13 +205,13 @@ impl Sema<'_, '_> {
             BaseSearch::NotDerived => {}
         }
         match find_base(self, tc, fc) {
-            BaseSearch::Unique(p) => match p.first_virtual {
-                Some(v) => Err(v),
-                None => {
-                    self.check_base_access(tu, fu, &p, loc);
-                    Ok(Some((CastKind::BaseToDerived, Some(path_list(self, &p)))))
+            BaseSearch::Unique(p) => {
+                if let Some(v) = p.first_virtual {
+                    return Err(v);
                 }
-            },
+                self.check_base_access(tu, fu, &p, loc);
+                Ok(Some((CastKind::BaseToDerived, Some(path_list(self, &p)))))
+            }
             _ => Ok(None),
         }
     }

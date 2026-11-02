@@ -11,7 +11,7 @@
 use kiln_ast::class::SubobjectId;
 use kiln_ast::decl::{Access, DeclKind, TagKind};
 use kiln_ast::{Ast, DeclId, QualType};
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::Fault;
 use crate::Oven;
@@ -61,7 +61,7 @@ pub(crate) struct PolyInfo {
     /// The offset of each virtual base (by class) in a complete object.
     pub vbase_at: FxHashMap<DeclId, u64>,
     /// The (offset, class) of each subobject, for [`Oven::base_owner`].
-    pub at: kiln_source::fx::FxHashSet<(u64, OTy)>,
+    pub at: FxHashSet<(u64, OTy)>,
 }
 
 /// A resolved virtual call.
@@ -168,7 +168,7 @@ impl Oven {
                 vptrs: Vec::new(),
                 vvptrs: Vec::new(),
                 vbase_at: FxHashMap::default(),
-                at: Default::default(),
+                at: FxHashSet::default(),
             });
             self.virt.map.insert(cls, i);
             return i;
@@ -274,7 +274,8 @@ impl Oven {
         if n == 0 {
             return Ok(());
         }
-        let owner = if base_obj { Some(self.owner(b, raw, cls).ok_or(Fault::Invalid)?) } else { None };
+        let owner =
+            if base_obj { Some(self.owner(b, raw, cls).ok_or(Fault::Invalid)?) } else { None };
         for k in 0..n {
             let j = self.virt.infos[i as usize].vvptrs[k];
             let off = self.virt.infos[i as usize].subs[usize::from(j)].off;
@@ -366,13 +367,7 @@ impl Oven {
     /// and the subobject's offset in it. An object of unknown dynamic type
     /// (not usable in constant expressions) or one whose word is not set
     /// (its construction has not reached it: CWG1517) fails.
-    pub(crate) fn read_vptr(
-        &self,
-        ast: &Ast,
-        raw: u64,
-        cls: OTy,
-        k: u32,
-    ) -> Result<Dyn, Fault> {
+    pub(crate) fn read_vptr(&self, ast: &Ast, raw: u64, cls: OTy, k: u32) -> Result<Dyn, Fault> {
         let (sp, abs, _) = self.mem.check(raw, 8, false).map_err(|f| match f {
             MemFault::External(..) | MemFault::Unknown(..) | MemFault::Temporary(..) => {
                 Fault::UnknownDynamic { ak: k, p: raw, ty: cls }
@@ -426,7 +421,8 @@ impl Oven {
             let k = at(false).or_else(|| at(true))?;
             return Some((i, k as u16));
         }
-        let cands: Vec<usize> = (0..subs.len()).filter(|&j| subs[j].virt && subs[j].cls == cls).collect();
+        let cands: Vec<usize> =
+            (0..subs.len()).filter(|&j| subs[j].virt && subs[j].cls == cls).collect();
         let start = self.rel_start(raw, d);
         for j in cands {
             if self.sub_addr(b, start, d.cls, j as u16) == Some(raw) {
@@ -621,9 +617,8 @@ impl Oven {
     ) -> Result<usize, Option<Fault>> {
         let subs = &self.virt.infos[i as usize].subs;
         let stat = subs[usize::from(k)].cls;
-        let fail = |kind: u8| {
-            Err(glvalue.then_some(Fault::DynCast { kind, stat, dynamic: c, target: t }))
-        };
+        let fail =
+            |kind: u8| Err(glvalue.then_some(Fault::DynCast { kind, stat, dynamic: c, target: t }));
         // Phase 1: from the operand's subobject up towards the most
         // derived object, across public edges only.
         let mut cur = usize::from(k);
