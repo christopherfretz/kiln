@@ -778,8 +778,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `mem-initializer-id ( expression-list ) | braced-init-list [...]`,
   separated by `,` (a missing one between two initializers is `missing
   ',' between base or member initializers`). The id is a `MemInitId`:
-  an identifier, or a type for a qualified class name; qualified
-  non-types and `decltype` ids are unsupported. All initializers go to
+  an identifier, or a type for a qualified class name or a
+  decltype-specifier (`decltype(e)(args)`, class-or-decltype; a dependent
+  one is resolved at instantiation, and a type that is not a class is
+  `constructor initializer ... does not name a class` in sema;
+  `decltype(auto)` is `'decltype(auto)' not allowed here` and counts as
+  a failed initializer, `QualType::ERROR`); qualified non-types are
+  unsupported. All initializers go to
   one `act_on_mem_initializers(ctor, inits, colon)`; a constructor
   without a ctor-initializer gets an empty slice at its `{`. A
   ctor-initializer on a non-constructor is `only constructors take base
@@ -1270,7 +1275,7 @@ in `kiln_diag` for now; nothing emits them.
   linkage, `clang diagnostic` to the diagnostic engine; `weak` and the
   other unsupported pragmas of §2.3.
 - **Classes** (parsed by WP-065; their Sema is WP-066b):
-  - qualified non-type and `decltype` mem-initializer-ids, braced
+  - qualified non-type mem-initializer-ids, braced
     default arguments
   - literal operators (`operator""`)
   - pragma events inside saved tokens (they fire at capture)
