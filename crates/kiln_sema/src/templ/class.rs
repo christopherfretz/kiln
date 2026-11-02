@@ -335,7 +335,9 @@ impl Sema<'_, '_> {
     /// by the failed requirement of the alias's first argument, at the
     /// same location. Only the deduction-failure note's text changes.
     fn enable_if_alias_failure(&mut self, tmpl: DeclId, first: Option<TemplateArg>) {
-        if !self.inst.stack.is_sfinae() || !matches!(self.decl_name(tmpl).as_str(), "enable_if_t" | "__enable_if_t") {
+        if !self.inst.stack.is_sfinae()
+            || !matches!(self.decl_name(tmpl).as_str(), "enable_if_t" | "__enable_if_t")
+        {
             return;
         }
         let Some(ArgView::Expr { expr, .. }) = first.map(|a| a.view()) else {

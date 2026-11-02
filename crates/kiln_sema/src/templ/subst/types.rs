@@ -605,7 +605,8 @@ impl Substituter<'_, '_, '_> {
         };
         let (tname, arg) = first_arg(self, n)?;
         let tmpl = self.sema.ast.types.template_decl(tname)?;
-        if self.sema.kind_of(tmpl) != DeclKind::ClassTemplate || self.sema.decl_name(tmpl) != "enable_if"
+        if self.sema.kind_of(tmpl) != DeclKind::ClassTemplate
+            || self.sema.decl_name(tmpl) != "enable_if"
         {
             return None;
         }
@@ -631,7 +632,11 @@ impl Substituter<'_, '_, '_> {
             Some(ArgView::Expr { expr, .. }) => self.sema.begin_loc(expr),
             _ => self.sema.ast.decls.get(ctx).loc(),
         };
-        Some(self.sema.diag(DiagId::sema_typename_nested_not_found_enable_if, at).arg(self.ctx_arg(ctx)))
+        Some(
+            self.sema
+                .diag(DiagId::sema_typename_nested_not_found_enable_if, at)
+                .arg(self.ctx_arg(ctx)),
+        )
     }
 
     pub(crate) fn ctx_arg(&self, ctx: DeclId) -> String {

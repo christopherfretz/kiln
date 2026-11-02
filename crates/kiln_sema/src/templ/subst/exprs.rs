@@ -306,9 +306,7 @@ impl Substituter<'_, '_, '_> {
                 // alone, the template could not deduce them.
                 // A pack's elements are written one by one.
                 let resolved = match self.sema.ast.spec_info(m) {
-                    Some((_, s))
-                        if self.sema.kind_of(s.template) == DeclKind::FunctionTemplate =>
-                    {
+                    Some((_, s)) if self.sema.kind_of(s.template) == DeclKind::FunctionTemplate => {
                         let ty = &self.sema.ast.types;
                         let flat: Vec<TemplateArg> = ty
                             .args(s.args)
@@ -1100,12 +1098,7 @@ impl Substituter<'_, '_, '_> {
 
     /// The argument `a` of the non-type parameter `shown`, wrapped in
     /// `SubstNonTypeTemplateParmExpr`.
-    fn nttp_replacement(
-        &mut self,
-        a: TemplateArg,
-        shown: DeclId,
-        loc: Loc,
-    ) -> SubstResult<ExprId> {
+    fn nttp_replacement(&mut self, a: TemplateArg, shown: DeclId, loc: Loc) -> SubstResult<ExprId> {
         let r = match a.view() {
             ArgView::Value { ty, value } => self.value_literal(ty, value, loc)?,
             ArgView::Expr { expr, .. } => expr,
