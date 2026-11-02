@@ -3763,6 +3763,19 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `parse_qualified_type_rest`). At block scope the statement is
   parsed as an expression, as clang does. Test:
   `tests/conformance/temp.names/no-template-named-qualified.cpp`.
+  An unqualified decl-specifier `X<...>` whose `X` is undeclared is a
+  template-name by [temp.names]/3.3 (P0846: an unqualified-id followed by
+  `<` whose lookup finds nothing), so it gets clang's "no template named
+  'X'" (`sema_no_template_named`; clang `ParseImplicitInt`) instead of
+  "expected unqualified-id": at namespace or class scope always, at block
+  scope when a declarator follows the argument list
+  (`undeclared<int> x;`; the tentative parse takes `X<...> ident` as a
+  declaration). The argument list is parsed and dropped, the type is
+  `int` with the specifier marked invalid, and the declarators are not
+  diagnosed again (`kiln_parse` `undeclared_template_type`,
+  `undeclared_template_id_before_ident`; libc++
+  `locale.stdcvt/remove.verify.cpp`, WP-358). Test:
+  `tests/conformance/temp.names/undeclared-template-id-type.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.

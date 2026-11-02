@@ -88,7 +88,11 @@ impl Cg<'_> {
         let (p, al) = self.ptr_align(r)?;
         let xv = self.int_cast(xv, ety, xi.signed);
         let yv = self.int_cast(yv, ety, yi.signed);
-        let (mut v, mut carry) = self.overflow_intrinsic(ovf_op(op, signed), xv, yv);
+        let (mut v, mut carry) = if op == 2 && signed && w.unwrap_or(1) > 64 {
+            self.wide_signed_mul(xv, yv)
+        } else {
+            self.overflow_intrinsic(ovf_op(op, signed), xv, yv)
+        };
         if w.unwrap_or(1) > ri.w {
             let rty = self.lty(rq);
             let t = self.cast(CastOp::Trunc, v, rty);
@@ -158,6 +162,40 @@ impl Cg<'_> {
         let v = self.int_cast(v, mty, false);
         self.store_mem(v, rq, p, al, vol);
         Ok(carry)
+    }
+
+    /// `llvm.smul.with.overflow` on integers wider than 64 bits, expanded
+    /// inline: LLVM lowers the `i128` form to the compiler-rt
+    /// `__muloti4` call on most 64-bit targets, which libgcc does not
+    /// provide (GCC expands it inline). The magnitudes are multiplied
+    /// unsigned; the product overflows past `INT_MAX + IsNegative` (as
+    /// [`Cg::mixed_sign_mul`]), and the wrapped value is the magnitude
+    /// product negated when the signs differ (spec/codegen.md §3).
+    fn wide_signed_mul(&mut self, x: V, y: V) -> (V, V) {
+        let ty = self.f.fir.ty(&self.m, x);
+        let w = self.m.types.int_width(ty).unwrap_or(128);
+        let zero = V::C(self.m.const_int(ty, 0));
+        let mag = |cg: &mut Self, v: V| {
+            let neg = cg.icmp(IntPredicate::Slt, v, zero);
+            let minus = cg.bin(BinOp::Sub, Flags::NONE, zero, v);
+            (neg, cg.fold_select(neg, minus, v))
+        };
+        let (nx, ax) = mag(self, x);
+        let (ny, ay) = mag(self, y);
+        let (ur, uo) = self.overflow_intrinsic(OverflowOp::UMul, ax, ay);
+        let neg = self.bin(BinOp::Xor, Flags::NONE, nx, ny);
+        // `INT_MAX` of any width (an `i129` encompassing type included).
+        let mut words = vec![u64::MAX; w.div_ceil(64) as usize];
+        if let Some(top) = words.get_mut(((w - 1) / 64) as usize) {
+            *top &= !(1u64 << ((w - 1) % 64));
+        }
+        let max = V::C(self.m.const_int_words(ty, &words));
+        let nz = self.cast(CastOp::ZExt, neg, ty);
+        let max = self.bin(BinOp::Add, Flags::NONE, max, nz);
+        let so = self.icmp(IntPredicate::Ugt, ur, max);
+        let carry = self.bin(BinOp::Or, Flags::NONE, uo, so);
+        let negr = self.bin(BinOp::Sub, Flags::NONE, zero, ur);
+        (self.fold_select(neg, negr, ur), carry)
     }
 
     /// `IRBuilder::CreateSelect`: folded only when every operand is a

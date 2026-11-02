@@ -367,6 +367,16 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       the three is; each unsigned type one bit wider then), the
       intrinsic's flag is extracted before its value, and a narrower
       result is truncated, extended back and compared (`icmp ne`, `or`).
+      Deviation (WP-352): a signed `mul` whose encompassing width is
+      above 64 bits is not `llvm.smul.with.overflow` (LLVM lowers that to
+      compiler-rt's `__muloti4`, which libgcc, linked by the GNU driver,
+      lacks on aarch64) but its inline expansion: each operand's sign
+      (`slt 0`) and magnitude (`select` of `sub 0, x` and `x`), `umul`
+      of the magnitudes, `neg = xor` of the signs, overflow `uo or
+      (ur ugt INT_MAX + zext neg)`, value `select neg, (sub 0, ur), ur`
+      (`checked.rs` `wide_signed_mul`; `crates/kiln_codegen/tests/lower.rs`
+      `wide_signed_mul_overflow_is_inline`,
+      `tests/conformance/ext.gnu.builtins/overflow-i128-smul-run.cpp`).
       The value is stored through `EmitToMemory` (an `i1` widened),
       volatile per the pointee. A `select` whose arms are not both
       constants is not folded (IRBuilder `FoldSelect`). The calls are not
