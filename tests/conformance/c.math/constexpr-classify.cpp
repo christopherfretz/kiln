@@ -9,6 +9,20 @@
 //@ expect: compile-ok
 //@ strict-diags
 //@ skip(clang): clang 19 constant-evaluates none of these builtins
+// clang -Wconstant-logical-operand (spec/sema.md §5.25): an int-valued
+// builtin as the right operand of `&&` folds, as in clang 22.
+//@ diag: 31:42 warning "use of logical '&&' with constant operand"
+//@ diag: 31:42 note "use '&' for a bitwise operation"
+//@ diag: 31:42 note "remove constant to silence this warning"
+//@ diag: 36:48 warning "use of logical '&&' with constant operand"
+//@ diag: 36:48 note "use '&' for a bitwise operation"
+//@ diag: 36:48 note "remove constant to silence this warning"
+//@ diag: 39:48 warning "use of logical '&&' with constant operand"
+//@ diag: 39:48 note "use '&' for a bitwise operation"
+//@ diag: 39:48 note "remove constant to silence this warning"
+//@ diag: 41:43 warning "use of logical '&&' with constant operand"
+//@ diag: 41:43 note "use '&' for a bitwise operation"
+//@ diag: 41:43 note "remove constant to silence this warning"
 constexpr double qnan = __builtin_nan("");
 
 static_assert(__builtin_signbit(-0.0) && !__builtin_signbit(0.0) && __builtin_signbit(-qnan));
