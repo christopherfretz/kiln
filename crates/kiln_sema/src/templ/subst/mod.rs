@@ -611,7 +611,8 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         let ty = self.ty(t, loc)?;
         let ctx = self.sema.ctx;
         let flags = pd.flags & !kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING;
-        let np = self.sema.builder().prototype_param(ctx, node.name(), node.loc(), ty, pd.index, flags);
+        let np =
+            self.sema.builder().prototype_param(ctx, node.name(), node.loc(), ty, pd.index, flags);
         self.sema.unowned_params.insert(np);
         self.locals.insert(d, DeclOrPack::Decl(np));
         Ok(np)

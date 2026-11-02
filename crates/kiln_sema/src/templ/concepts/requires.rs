@@ -82,7 +82,8 @@ impl Substituter<'_, '_, '_> {
                         let mut decls = Vec::with_capacity(v.len());
                         for t in v {
                             let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
-                            let np = self.sema.builder().param(body, n.name(), n.loc(), t, idx, depth);
+                            let np =
+                                self.sema.builder().param(body, n.name(), n.loc(), t, idx, depth);
                             decls.push(np);
                             new_params.push(np);
                         }

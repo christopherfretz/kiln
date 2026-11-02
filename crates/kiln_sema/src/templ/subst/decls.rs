@@ -410,7 +410,8 @@ impl Substituter<'_, '_, '_> {
                 for ty in tys {
                     let ctx = self.sema.ctx;
                     let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
-                    let np = self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, depth);
+                    let np =
+                        self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, depth);
                     self.sema.unowned_params.insert(np);
                     decls.push(np);
                     // The elements share the pack's name (carried by

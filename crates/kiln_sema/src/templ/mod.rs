@@ -50,6 +50,10 @@ use crate::Sema;
 use crate::declspec::ParamInfo;
 use crate::scope::{Ns, Scope, ScopeKind};
 
+/// A type-constraint `C<A...>` of a placeholder: the concept and the
+/// arguments after the constrained type.
+pub type TypeConstraint = (DeclId, Vec<TemplateArg>);
+
 /// A template parameter list being parsed or waiting for its
 /// declaration (one per `ScopeKind::TemplateParams` scope, plus invented
 /// heads of abbreviated function templates).
@@ -1207,7 +1211,7 @@ impl Sema<'_, '_> {
     pub fn trailing_return_placeholder(
         &self,
         t: QualType,
-    ) -> Option<(bool, Option<(DeclId, Vec<TemplateArg>)>)> {
+    ) -> Option<(bool, Option<TypeConstraint>)> {
         let mut cur = t;
         for _ in 0..256 {
             match self.ast.types.canonical_view(cur) {
