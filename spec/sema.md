@@ -1119,6 +1119,36 @@ and returns the scope it names:
 ### 4.6 Namespaces, linkage specifications, static_assert
 - **Namespaces:**
   - Named namespaces are reopened ([namespace.def]).
+  - **Reopening through the inline namespace set**
+    ([namespace.def.general]/3, WP-309): the identifier of a named
+    namespace definition is looked up in the enclosing namespace and in
+    every element of its inline namespace set. If it finds a namespace
+    `A::I::R` (with `I` inline in `A`), `namespace A { namespace R {` extends
+    that namespace. The reopening `NamespaceDecl` has semantic ctx `A::I`
+    and lexical ctx `A`. Test:
+    tests/conformance/namespace.def/reopen-through-inline.cpp.
+  - **Mangling and printing an entity of such a reopening** (clang, our
+    ABI target; GCC mangles through the semantic path, and GCC
+    compatibility is not a goal here). A reopening namespace mangles and
+    prints under its lexical ctx, not its semantic one. This is clang's
+    `getEffectiveDeclContext` / `printQualifiedName` walk over the
+    reopening `NamespaceDecl`, implemented in `kiln_abi::mangle::effective_ctx` and
+    `kiln_codegen` `qualified_name`. For the code above, `int y;` declared in the
+    reopened `R` is `_ZN1A1R1yE`, and a class `U` there is LLVM type
+    `%"struct.A::R::U"`. `int x;` from the original definition stays
+    `_ZN1A1I1R1xE`. The namespace part comes from the namespace
+    definition that holds the entity's **first declaration** (codegen
+    mangles the first declaration):
+    - A function or static member declared in `A::I::R` and defined in
+      the reopening keeps `_ZN1A1I1R…`.
+    - A member of a class keeps its class's path.
+    - An explicit specialization mangles in its template's namespace.
+    - Known clang divergence: clang mangles whichever redeclaration it
+      reaches first. Take an entity declared in `A::I::R` and defined in
+      the reopening before any use. Clang uses the reopening's `A::R`
+      path and kiln uses `A::I::R`. clang 22 behaves the same.
+    - Test: tests/codegen/namespace_reopen_inline.cpp (IR diff against
+      clang++-19 on both triples).
   - An unnamed namespace is created once per scope and gets an
     implicit `UsingDirectiveDecl` ([namespace.unnamed]).
 - **Using-directives:** the payload is `Payload::None(nominated.raw())`.
@@ -3287,10 +3317,10 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   - `act_on_call` replaces it by the list-initialization of the
     parameter.
   - Viability follows [over.ics.list]: a scalar takes at most one
-    unbraced, convertible element; an aggregate at most as many
-    elements as brace elision reaches (bases count; a non-aggregate
-    class member takes one, a subaggregate at least one;
-    spec/sema-overload.md [over.ics.list]). A non-viable list is clang's
+    unbraced, convertible element. For an aggregate, the list is walked
+    under brace elision and each element's conversion is checked; a
+    designated list instead takes at most as many elements as brace
+    elision reaches (spec/sema-overload.md [over.ics.list]). A non-viable list is clang's
     `cannot convert initializer list argument to 'T'` candidate note,
     except that a single class-type element for a non-class parameter
     notes the element's own conversion ([over.ics.list]/10: `no known
