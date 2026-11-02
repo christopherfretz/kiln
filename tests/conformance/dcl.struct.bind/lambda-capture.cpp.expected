@@ -14,8 +14,8 @@ FunctionDecl test_capture 'int (P)'
   |     `-MemberExpr 'int' lvalue .y
   |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
   |-DeclStmt
-  | `-VarDecl used byref '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)' cinit
-  |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)'
+  | `-VarDecl used byref '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:16)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:16)'
   |     |-DeclRefExpr 'int' lvalue Binding 'a' 'int'
   |     |-DeclRefExpr 'int' lvalue Binding 'b' 'int'
   |     `-CompoundStmt
@@ -26,17 +26,17 @@ FunctionDecl test_capture 'int (P)'
   |           `-ImplicitCastExpr 'int' <LValueToRValue>
   |             `-DeclRefExpr 'int' lvalue Binding 'b' 'int'
   |-DeclStmt
-  | `-VarDecl used bycopy '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)' cinit
-  |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)'
+  | `-VarDecl used bycopy '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:17)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:17)'
   |     |-ImplicitCastExpr 'int' <LValueToRValue>
   |     | `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
   |     `-CompoundStmt
   |       `-ReturnStmt
   |         `-ImplicitCastExpr 'int' <LValueToRValue>
-  |           `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |           `-DeclRefExpr 'const int' lvalue Binding 'a' 'int'
   |-DeclStmt
-  | `-VarDecl used mixed '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)' cinit
-  |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)'
+  | `-VarDecl used mixed '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:13:16)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:13:16)'
   |     |-DeclRefExpr 'int' lvalue Binding 'b' 'int'
   |     |-ImplicitCastExpr 'int' <LValueToRValue>
   |     | `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
@@ -44,7 +44,7 @@ FunctionDecl test_capture 'int (P)'
   |       `-ReturnStmt
   |         `-BinaryOperator 'int' '*'
   |           |-ImplicitCastExpr 'int' <LValueToRValue>
-  |           | `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |           | `-DeclRefExpr 'const int' lvalue Binding 'a' 'int'
   |           `-ImplicitCastExpr 'int' <LValueToRValue>
   |             `-DeclRefExpr 'int' lvalue Binding 'b' 'int'
   `-ReturnStmt
@@ -53,16 +53,16 @@ FunctionDecl test_capture 'int (P)'
       | |-CXXOperatorCallExpr 'int' '()'
       | | |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
       | | | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
-      | | `-ImplicitCastExpr 'const (lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)' lvalue <NoOp>
-      | |   `-DeclRefExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)' lvalue Var 'byref' '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:10:16)'
+      | | `-ImplicitCastExpr 'const (lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:16)' lvalue <NoOp>
+      | |   `-DeclRefExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:16)' lvalue Var 'byref' '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:16)'
       | `-CXXOperatorCallExpr 'int' '()'
       |   |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
       |   | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
-      |   `-ImplicitCastExpr 'const (lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)' lvalue <NoOp>
-      |     `-DeclRefExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)' lvalue Var 'bycopy' '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:11:17)'
+      |   `-ImplicitCastExpr 'const (lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:17)' lvalue <NoOp>
+      |     `-DeclRefExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:17)' lvalue Var 'bycopy' '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:17)'
       `-CXXOperatorCallExpr 'int' '()'
         |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
         | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
-        `-ImplicitCastExpr 'const (lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)' lvalue <NoOp>
-          `-DeclRefExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)' lvalue Var 'mixed' '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)'
+        `-ImplicitCastExpr 'const (lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:13:16)' lvalue <NoOp>
+          `-DeclRefExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:13:16)' lvalue Var 'mixed' '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:13:16)'
 

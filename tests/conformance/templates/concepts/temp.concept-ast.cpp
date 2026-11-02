@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.concept]: a concept definition and a concept-id evaluated in a
 // variable initializer.
 template <class T> concept Big = sizeof(T) > 4;

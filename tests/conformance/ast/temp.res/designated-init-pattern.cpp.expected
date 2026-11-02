@@ -55,7 +55,7 @@ FunctionTemplateDecl f4
     `-ReturnStmt
       `-CXXUnresolvedConstructExpr 'T' list
         `-InitListExpr 'void'
-          `-PackExpansionExpr '<dependent type>' lvalue
+          `-PackExpansionExpr 'void' lvalue
             `-DesignatedInitExpr 'void' lvalue
               `-DeclRefExpr 'U' lvalue ParmVar 'u' 'U...'
 

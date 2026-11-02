@@ -17,7 +17,7 @@ TranslationUnitDecl
 | `-FieldDecl n 'int'
 |-VarDecl x 'int' cinit
 | `-ImplicitCastExpr 'int' <IntegralCast>
-|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'P<int *>'
+|   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'P<int *>'
 `-VarDecl y 'int' cinit
   `-ImplicitCastExpr 'int' <IntegralCast>
-    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'P<char>'
+    `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'P<char>'

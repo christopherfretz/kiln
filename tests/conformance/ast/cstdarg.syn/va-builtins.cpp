@@ -4,6 +4,7 @@
 //@ expect: ast
 //@ args: --target=aarch64-unknown-linux-gnu
 //@ ast-filter: vafmt
+//@ requires: clang>=22
 extern "C" int vsnprintf(char *, unsigned long, const char *, __builtin_va_list);
 int vafmt(char *buf, const char *f, ...) {
   __builtin_va_list ap, aq;

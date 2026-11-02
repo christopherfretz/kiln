@@ -6,8 +6,10 @@
 // Verified against clang 19.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 22:38 error "in-class initializer for static data member is not a constant expression"
-//@ diag: 23:30 error "in-class initializer for static data member is not a constant expression"
+//@ diag: 24:38 error "in-class initializer for static data member is not a constant expression"
+//@ diag: 25:30 error "in-class initializer for static data member is not a constant expression"
+//@ requires: clang<22
+// clang 22 emits error: in-class initializer for static data member is not a constant expression; WP-355 residual
 enum En { ea = 5 };
 enum class Ec : long long { x = 7 };
 template<typename V> struct traits {

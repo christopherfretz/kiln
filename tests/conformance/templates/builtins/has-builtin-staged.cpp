@@ -1,7 +1,8 @@
 // __has_builtin in the modes that run sema answers from TABLE's
 // implemented column (spec/sema-templates.md §9, Q10): every row kiln
 // implements answers 1, as clang 19 does (WP-166 implemented the last
-// staged-off trait rows).
+// staged-off trait rows). clang 22 removed __is_nullptr and
+// __is_referenceable, and kiln under -fclang-compat=22 mirrors that.
 //@ strict-diags
 #if !__has_builtin(__add_lvalue_reference)
 #error __add_lvalue_reference
@@ -138,8 +139,10 @@
 #if !__has_builtin(__is_nothrow_destructible)
 #error __is_nothrow_destructible
 #endif
-#if !__has_builtin(__is_nullptr)
+#if !__has_builtin(__is_nullptr) && __clang_major__ < 22
 #error __is_nullptr
+#elif __has_builtin(__is_nullptr) && __clang_major__ >= 22
+#error __is_nullptr (removed in clang 22)
 #endif
 #if !__has_builtin(__is_object)
 #error __is_object
@@ -156,8 +159,10 @@
 #if !__has_builtin(__is_reference)
 #error __is_reference
 #endif
-#if !__has_builtin(__is_referenceable)
+#if !__has_builtin(__is_referenceable) && __clang_major__ < 22
 #error __is_referenceable
+#elif __has_builtin(__is_referenceable) && __clang_major__ >= 22
+#error __is_referenceable (removed in clang 22)
 #endif
 #if !__has_builtin(__is_rvalue_expr)
 #error __is_rvalue_expr

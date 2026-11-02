@@ -18,4 +18,4 @@ TranslationUnitDecl
 |-VarDecl e 'E<int> *'
 `-VarDecl s 'int' cinit
   `-ImplicitCastExpr 'int' <IntegralCast>
-    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'E<int>'
+    `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'E<int>'

@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 struct S { char c; double d; };
 unsigned long sizes(int x) {
   int arr[7];

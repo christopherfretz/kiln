@@ -5,19 +5,20 @@
 // clang 19.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 22:3 error "argument to '__builtin_alloca_with_align' must be a constant integer"
-//@ diag: 23:3 error "requested alignment is not a power of 2"
-//@ diag: 24:3 error "requested alignment must be 8 or greater"
-//@ diag: 26:3 error "requested alignment must be 2147483647 or smaller"
-//@ diag: 28:20 warning "implicit conversion from 'double' to 'unsigned long' changes value from 1.5 to 1"
-//@ diag: 29:20 error "too few arguments to function call, expected 1, have 0"
-//@ diag: 30:12 error "builtin functions must be directly called"
-//@ diag: 33:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 32:32 note "subexpression not valid in a constant expression"
-//@ diag: 33:15 note "in call to 'g2()'"
-//@ diag: 35:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 34:32 note "subexpression not valid in a constant expression"
-//@ diag: 35:15 note "in call to 'g3()'"
+//@ diag: 23:3 error "argument to '__builtin_alloca_with_align' must be a constant integer"
+//@ diag: 24:3 error "requested alignment is not a power of 2"
+//@ diag: 25:3 error "requested alignment must be 8 or greater"
+//@ diag: 27:3 error "requested alignment must be 2147483647 or smaller"
+//@ diag: 29:20 warning "implicit conversion from 'double' to '__size_t' (aka 'unsigned long') changes value from 1.5 to 1"
+//@ diag: 30:20 error "too few arguments to function call, expected 1, have 0"
+//@ diag: 31:12 error "builtin functions must be directly called"
+//@ diag: 34:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 33:32 note "subexpression not valid in a constant expression"
+//@ diag: 34:15 note "in call to 'g2()'"
+//@ diag: 36:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 35:32 note "subexpression not valid in a constant expression"
+//@ diag: 36:15 note "in call to 'g3()'"
+//@ requires: clang>=22
 void f(unsigned long n) {
   __builtin_alloca_with_align(4, n);
   __builtin_alloca_with_align(4, 3);

@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: test
+//@ requires: clang>=22
 // [dcl.struct.bind]/4 (C++26 /7): without a member get template, the
 // initializer is `get<i>(xe)` with get found only by argument-dependent
 // lookup ([basic.lookup.argdep]); the call is marked `adl`.

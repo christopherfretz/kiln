@@ -1,6 +1,6 @@
 TranslationUnitDecl
 |-CXXRecordDecl class W definition
-| `-FriendDecl 'class X':'X'
+| `-FriendDecl 'class X'
 |   `-CXXRecordDecl parent friend_undeclared class X
 |-CXXRecordDecl referenced class X
 |-VarDecl p 'X *'

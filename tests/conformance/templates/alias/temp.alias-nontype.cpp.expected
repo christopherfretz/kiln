@@ -6,4 +6,4 @@ TranslationUnitDecl
 |-VarDecl a 'Arr<int, 4>':'int[4]'
 `-VarDecl n 'int' cinit
   `-ImplicitCastExpr 'int' <IntegralCast>
-    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Arr<char, 7>':'char[7]'
+    `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Arr<char, 7>':'char[7]'

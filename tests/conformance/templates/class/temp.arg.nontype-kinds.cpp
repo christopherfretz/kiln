@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.arg.nontype]/1: bool, unsigned and negative non-type arguments are
 // converted to the parameter's type.
 template <bool B> struct Flag { static constexpr bool value = B; };

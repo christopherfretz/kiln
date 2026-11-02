@@ -1,9 +1,11 @@
 // The __has_builtin / __has_constexpr_builtin probe of every builtin in
 // kiln_sema::templ::builtins::TABLE, the traits and the transforms
-// (spec/sema-templates.md §9, §13.3). Under -E the answers are clang 19's
-// (kiln_pp's feature table); the golden is clang's output. The staged
-// answers of the modes that run sema are has-builtin-staged*.cpp.
+// (spec/sema-templates.md §9, §13.3). Under -E the answers are clang 22's
+// (kiln_pp's feature table at -fclang-compat=22); the golden is clang 22's
+// output; has-builtin-probe-19.cpp is clang 19's. The staged answers of the
+// modes that run sema are has-builtin-staged*.cpp.
 //@ expect: pp
+//@ requires: clang>=22
 __add_lvalue_reference __has_builtin(__add_lvalue_reference) __has_constexpr_builtin(__add_lvalue_reference)
 __add_pointer __has_builtin(__add_pointer) __has_constexpr_builtin(__add_pointer)
 __add_rvalue_reference __has_builtin(__add_rvalue_reference) __has_constexpr_builtin(__add_rvalue_reference)

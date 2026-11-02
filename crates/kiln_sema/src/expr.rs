@@ -177,8 +177,40 @@ impl Sema<'_, '_> {
         self.ast.types.builtin(t) == Some(BuiltinType::NullPtr)
     }
 
+    /// `size_t` ([support.types.layout]): the type of `sizeof`/`alignof`
+    /// and of the allocation functions' size parameter. Under
+    /// `-fclang-compat=22` it carries clang 22's `__size_t` sugar
+    /// (`'__size_t':'unsigned long'` in the AST dump, `'__size_t' (aka
+    /// 'unsigned long')` in diagnostics); the canonical type is the
+    /// target's.
     pub(crate) fn size_type(&self) -> QualType {
-        QualType::unqual(self.target.size_t)
+        if self.clang_compat >= 22 {
+            self.size_t_sugar
+        } else {
+            QualType::unqual(self.target.size_t)
+        }
+    }
+
+    /// The signed integer type corresponding to `size_t`: the type of a
+    /// `z` literal ([lex.icon] table 8), `'__signed_size_t':'long'` under
+    /// `-fclang-compat=22` (see [`Sema::size_type`]).
+    pub(crate) fn signed_size_type(&self) -> QualType {
+        if self.clang_compat >= 22 {
+            self.signed_size_t_sugar
+        } else {
+            self.ast.types.canonical(self.signed_size_t_sugar)
+        }
+    }
+
+    /// `ptrdiff_t` ([expr.add]/5): the type of a pointer difference,
+    /// `'__ptrdiff_t':'long'` under `-fclang-compat=22` (see
+    /// [`Sema::size_type`]).
+    pub(crate) fn ptrdiff_type(&self) -> QualType {
+        if self.clang_compat >= 22 {
+            self.ptrdiff_t_sugar
+        } else {
+            QualType::unqual(self.target.ptrdiff_t)
+        }
     }
 
     /// A `RecoveryExpr` of type `ty` over `kids`.
@@ -773,8 +805,10 @@ impl Sema<'_, '_> {
     /// clang's `DiagnoseUnusedExprResult` for an expression statement.
     pub(crate) fn diagnose_unused(&mut self, e: ExprId) {
         // A type-dependent expression is checked at instantiation (clang
-        // does not warn in the template definition).
-        if self.is_err_expr(e) || self.expr_is_type_dependent(e) {
+        // does not warn in the template definition). Nothing is unused in
+        // an unevaluated operand (clang `DiagnoseUnusedExprResult`'s
+        // `isUnevaluatedContext()`: a statement expression in `decltype`).
+        if self.unevaluated > 0 || self.is_err_expr(e) || self.expr_is_type_dependent(e) {
             return;
         }
         if let Some(w) = self.unused_warning(e) {
@@ -1486,6 +1520,10 @@ impl Sema<'_, '_> {
         }
         if fns && valid.len() == 1 {
             d = valid[0];
+        } else if found.decls.len() > 1 && valid.len() <= 1 {
+            // Likewise for other entities: `const int c = 1; const c = 2;`
+            // names the valid `c`, `y; y;` the last `y` (silently).
+            d = valid.first().or(found.decls.last()).copied().unwrap_or(d);
         } else if found.decls.len() > 1 {
             // Distinct entities found via using-directives ([namespace.udir]/6).
             self.diagnose_ambiguous_reference(name, &found.decls, qualifier.is_none(), loc);
@@ -1877,8 +1915,11 @@ impl Sema<'_, '_> {
                 None => (ty, ExprFlags::NONE),
             },
             // clang 19 keeps a captured binding's own type (its
-            // `getCapturedDeclRefType` adjusts variables only).
+            // `getCapturedDeclRefType` adjusts variables only); clang 22
+            // follows [expr.prim.id.unqual]/3 for bindings too (`const`
+            // inside a non-mutable lambda that copies it).
             DeclKind::Binding => match self.capture_at_decl_ref(d, loc) {
+                Some(t) if self.clang_compat >= 22 => (t, ExprFlags::REFERS_TO_ENCLOSING),
                 Some(_) => (ty, ExprFlags::REFERS_TO_ENCLOSING),
                 None => (ty, ExprFlags::NONE),
             },
@@ -3015,7 +3056,7 @@ impl Sema<'_, '_> {
             if !self.check_pointer_pair_arith(lt, rt, loc) || !same {
                 return self.recover_err(&[l2, r2], loc);
             }
-            let ty = QualType::unqual(self.target.ptrdiff_t);
+            let ty = self.ptrdiff_type();
             return self.builder().binary(op, l2, r2, ty, loc);
         }
         if lp && int_like(self, rt) {

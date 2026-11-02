@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 // [expr.new]/1,3: a parenthesized type-id after `new` (and after a
 // new-placement) is a full type-id, so it may hold a function or
 // member-pointer declarator; the unparenthesized new-type-id's

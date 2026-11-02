@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 int dec = 42;
 unsigned hex = 0xFFu;
 long oct = 017L;

@@ -14,8 +14,8 @@ TranslationUnitDecl
 | | | `-TemplateArgument type 'T'
 | | `-ParenExpr 'bool'
 | |   `-BinaryOperator 'bool' '>'
-| |     |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
-| |     `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+| |     |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'T'
+| |     `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
 | |       `-IntegerLiteral 'int' 1
 | `-FunctionDecl f 'void (T)'
 |   `-ParmVarDecl 'T'

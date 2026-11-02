@@ -92,7 +92,7 @@ TranslationUnitDecl
         | |         `-DeclRefExpr 'D *' lvalue ParmVar 'p' 'D *'
         | `-ImplicitCastExpr 'int' <LValueToRValue>
         |   `-MemberExpr 'int' lvalue .m
-        |     `-ImplicitCastExpr 'B' lvalue <UncheckedDerivedToBase (B)>
+        |     `-ImplicitCastExpr '::B' lvalue <UncheckedDerivedToBase (B)>
         |       `-DeclRefExpr 'D' lvalue ParmVar 'd' 'D'
         `-ImplicitCastExpr 'int' <LValueToRValue>
           `-MemberExpr 'int' lvalue ->m

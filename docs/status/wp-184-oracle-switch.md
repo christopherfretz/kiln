@@ -1,7 +1,10 @@
 # WP-184: oracle switch clang/LLVM 19 → 22 — measurement and plan
 
-Status: write-up for the operator's go/no-go (2026-11-02). Nothing in the
-tree has moved yet. Measured on main `b161fb06` in the development
+Status: **done** (steps A–B in WP-184/185/263, C–E in WP-355,
+2026-11-02). The oracle is clang/LLVM 22; clang 19 stays installed as the
+second oracle and the frozen M3 gate. "Outcome" below is the result and
+the residual list; the rest of this page is the original measurement
+(2026-11-02, before the switch). Measured on main `b161fb06` in the development
 container (Debian 13, aarch64; `clang++-22` = Debian clang 22.1.8
 `1~deb13u4`, same apt source as clang 19, so the CI image can install it
 with one more package line).
@@ -128,3 +131,63 @@ transition.
 3. Bucket 1 policy: regenerate goldens from clang 22 and make kiln print
    alias sugar like 22 (recommended) versus normalizing both sides to 19's
    desugared form.
+
+## Outcome (WP-355)
+- `KILN_ORACLE` defaults to 22 (`xtask/src/oracle.rs`); the harness passes
+  `-fclang-compat=<oracle major>` to kiln, and a test whose `requires:
+  clang>=N` / `clang<N` the oracle does not meet runs kiln alone at the
+  nearest supported level (spec/harness.md "Two-oracle policy").
+- CI (`.github/actions/kiln-ci`) installs clang-22/llvm-22/lld-22 beside
+  19 and runs `cargo xtask ci` on 22 plus `KILN_ORACLE=19 cargo xtask ci
+  --quick`. libc++ 22 is an extracted tree under
+  `.toolchain/libcxx-22-root` (`libc++-22-dev` conflicts with
+  `libc++-19-dev`; spec/libcxx.md "Toolchain"); `libcxx --gate m4` runs on
+  it, baseline in docs/status/libcxx.md.
+- Goldens (step C) are clang 22's; kiln's dumper follows at level 22
+  (spec/ast-dump.md §2). IR diff (step E): structural mode on 22, strict
+  ABI slice (spec/codegen.md §6).
+- kiln follows clang 22 at `-fclang-compat=22` (spec/sema.md §1.1):
+  `(lambda)` closure names, `__size_t`/`__ptrdiff_t` sugar, alias sugar,
+  stmt-expr trailing null statement, structured-binding index literal and
+  captured-binding `const`, `-Wdeprecated-literal-operator` (CWG2521),
+  `__is_trivially_relocatable` deprecation, codegen atomic text.
+- Codegen follows the backend LLVM where the two reject each other's IR:
+  coroutines use LLVM 22's `void` `llvm.coro.end` +
+  `llvm.coro.is_in_ramp` when `KILN_LLVM_DIR` is an `llvm-22` tree
+  (`Toolchain::llvm_major`; spec/codegen.md "LLVM 22 `coro.end`").
+  Padded `_Atomic` operands are zeroed and a failed compare-exchange
+  writes `*expected` back at every level (clang 22's behaviour; an
+  oracle-19 `ir_vs_clang` deviation).
+- Tests that skipped clang 19 now `requires: clang>=22` (with
+  `xfail(kiln)` where kiln lacks the feature); docs/status/cxx-features.md.
+
+### Residuals (follow-ups)
+**Diagnostic wording kiln has not followed**: 152 tests pinned with
+`//@ requires: clang<22` and `// clang 22 emits <text>; WP-355 residual`
+(list: `git grep -l "WP-355 residual" tests`). They still run kiln at
+level 19 under either oracle. Buckets (approximate counts):
+- constant-evaluation notes and `static_assert` operand notes (~32,
+  incl. "addresses of potentially overlapping literals", which needs the
+  compat level in kiln_oven);
+- scoped names in `aka`, qualifiers, "no viable/matching", out-of-line
+  mismatch notes, "refers into" (~22);
+- GNU/vendor extensions: case ranges, ext_vector component names, global
+  register variables, `__builtin_assume_aligned`, format checks (~11);
+- attribute names printed scoped (`'gnu::x'`), `nodiscard` wording (~9);
+- CTAD implicit deduction guide notes (8); structured binding
+  "decomposition" → "structured binding" (~10 incl. access/union rows);
+  `-Wswitch`, array comparison, self-comparison (7); local-class friend
+  definitions (6); digit separators in "array is too large" (4);
+  template template parameter notes (3); typeid "or import std" (1);
+  the rest single cases (`git grep -h "clang 22 emits" tests`).
+
+**AST goldens kiln does not match yet** (`xfail(kiln)`, WP-355 residual):
+`ast/class.inhctor.init/shadow-implicit.cpp`,
+`ast/expr.ref/qualified-member.cpp`, `temp.class/redeclaration-ast.cpp`,
+`templates/alias/temp.alias-dependent-template-template-arg-ast.cpp`,
+`templates/ctad/temp.deduct.guide-ast-dump.cpp`.
+
+**Other**: kiln++'s own `-fclang-compat` default is still 19 (only the
+harness passes 22); flipping it is a driver decision. Codegen at level 22
+(`dead_on_return`, `nuw` gep, datalayout) is covered only structurally
+(spec/codegen.md §6).
