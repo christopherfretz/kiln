@@ -2995,7 +2995,7 @@ impl Sema<'_, '_> {
             let l2 = conv::implicit_convert(self, l, rt, ConvCtx::Comparison).ok()?;
             return Some((l2, r, rt));
         }
-        if !(lp && rp) && !(lmp && rmp) {
+        if !((lp && rp) || (lmp && rmp)) {
             return None;
         }
         if self.ast.types.same_type(lt, rt) {
