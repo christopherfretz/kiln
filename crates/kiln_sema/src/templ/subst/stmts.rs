@@ -679,6 +679,25 @@ impl Substituter<'_, '_, '_> {
                 self.locals.insert(d, super::DeclOrPack::Decl(x));
                 Ok(x)
             }
+            // A block-scope namespace alias ([namespace.alias]; clang
+            // `TemplateDeclInstantiator::VisitNamespaceAliasDecl`): its
+            // target is never dependent, so the alias is redeclared in the
+            // instantiation's block scope with the same (or the mapped
+            // local alias) target.
+            DeclKind::NamespaceAlias => {
+                let dname = self.sema.ast.decls.get(d).name();
+                let name = dname.as_ident().ok_or(SubstFail)?;
+                let t = self.sema.ast.using_target(d).ok_or(SubstFail)?;
+                let t = match self.locals.get(&t) {
+                    Some(super::DeclOrPack::Decl(x)) => *x,
+                    _ => t,
+                };
+                let h = kiln_ast::builder::DeclHead::new(self.sema.ctx, dname, loc);
+                let x = self.sema.builder().namespace_alias(h, t, None);
+                self.sema.push_local(name, x);
+                self.locals.insert(d, super::DeclOrPack::Decl(x));
+                Ok(x)
+            }
             k => self.unimplemented(&format!("local {k:?} declarations in templates"), loc),
         }
     }

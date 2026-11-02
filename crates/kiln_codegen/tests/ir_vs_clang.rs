@@ -149,6 +149,17 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("new_array_cookie", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("new_delete_replaced", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("new_delete_replaced", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    // clang 22 gives a coroutine's `await_suspend` wrappers internal (19:
+    // private) linkage, and LLVM 22's coroutine lowering reshapes the
+    // resume/destroy functions; kiln's coroutine IR follows clang 19. On
+    // AArch64 the ABI slice also differs by the `coroutine_handle<>`
+    // (aggregate of a pointer) coercion to `ptr` noted above.
+    ("coro_aligned_alloc", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("coro_aligned_alloc", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("coro_await_suspend", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("coro_await_suspend", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    ("coro_only_destroy_when_complete", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("coro_only_destroy_when_complete", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // clang 22 emits `insertelement <8 x i1> .., i8 1, ..` for a bool
     // vector element store, which opt-22 rejects.
     ("vector_ops", "aarch64-unknown-linux-gnu", "22", Allow::OracleInvalid),

@@ -68,7 +68,7 @@ impl Command {
     /// `stderr`. Failures are reported on `drv`; returns success.
     pub fn run(
         &self,
-        input: Option<&str>,
+        input: Option<&[u8]>,
         stdout: &mut dyn Write,
         stderr: &SharedWriter,
         drv: &DiagEngine<'_>,
@@ -109,7 +109,7 @@ impl Command {
                 s.spawn(move || {
                     // A child that exits early closes the pipe; its exit
                     // status says what went wrong.
-                    let _ = w.write_all(text.as_bytes());
+                    let _ = w.write_all(text);
                 });
             }
             let err = s.spawn(move || {
@@ -202,7 +202,7 @@ mod tests {
         let drv =
             crate::make_engine(&sm, &kiln_diag::DiagOptions::default(), err.clone(), Some("kiln"));
         let mut out = Vec::new();
-        assert!(!cmd(None, &["-O0"]).run(Some("x"), &mut out, &err, &drv));
+        assert!(!cmd(None, &["-O0"]).run(Some(b"x"), &mut out, &err, &drv));
         drv.flush();
         assert_eq!(
             buf.contents(),

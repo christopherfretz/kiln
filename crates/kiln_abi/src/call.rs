@@ -429,6 +429,55 @@ fn is_empty_field(t: &mut IrTypes<'_>, f: &props::FieldDesc, allow_arrays: bool)
     is_empty_record(t, ft, allow_arrays)
 }
 
+/// clang `isSingleElementStruct`: the one non-empty scalar a record
+/// wraps (through bases, nested records and one-element arrays), when the
+/// record has no padding beyond it.
+fn single_element(t: &mut IrTypes<'_>, q: QualType) -> Option<QualType> {
+    let ast = t.ast();
+    let TypeView::Record(d) = view(t, q) else { return None };
+    let def = ast.definition(d)?;
+    let mut found = None;
+    for b in ast.decls.bases(def, &ast.lists) {
+        if is_empty_record(t, b.ty, true) {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(single_element(t, b.ty)?);
+    }
+    for f in props::fields(ast, def) {
+        if is_empty_field(t, &f, true) {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        let mut ft = f.ty;
+        while let TypeView::ConstantArray(a) = view(t, ft) {
+            if ast.types.array_size(ft) != Some(1) {
+                break;
+            }
+            ft = a.elem;
+        }
+        found = Some(if is_aggregate(t, ft) { single_element(t, ft)? } else { ft });
+    }
+    let found = found?;
+    (type_bits(t, found) == type_bits(t, q)).then_some(found)
+}
+
+/// clang `X86_64ABIInfo::GetByteVectorType`: the IR type of an `SSE`+`SSEUP`
+/// eightbyte pair. A wrapper record of one vector or `fp128` passes as that
+/// vector or `fp128`; anything else as `<N x double>`.
+fn byte_vector(t: &mut IrTypes<'_>, q: QualType) -> IrType {
+    let q = single_element(t, q).unwrap_or(q);
+    let ir = t.convert(q);
+    if matches!(ir, IrType::Vector(..) | IrType::Fp128) {
+        return ir;
+    }
+    IrType::Vector(Box::new(IrType::Double), type_bits(t, q) / 64)
+}
+
 /// clang `isHomogeneousAggregate` with `AArch64`'s base-type and size rules.
 fn homogeneous(t: &mut IrTypes<'_>, q: QualType) -> Option<(QualType, u64)> {
     let mut base = None;
@@ -881,7 +930,7 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
             }
             high = Some(h);
         }
-        SseUp => res = Some(natural.clone()),
+        SseUp => res = Some(byte_vector(t, q)),
         _ => {}
     }
     let res = match (res, high) {
@@ -944,7 +993,7 @@ fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
             }
             high = Some(h);
         }
-        SseUp => res = Some(natural.clone()),
+        SseUp => res = Some(byte_vector(t, q)),
         X87Up if lo != X87 => {
             let h = sse_at(t, &natural, 8, q, 8);
             if lo == NoClass {
