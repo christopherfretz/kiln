@@ -1235,7 +1235,9 @@ is iterative and needs no native recursion. Locals are destroyed in
 reverse declaration order at scope exit, `break`/`continue`/`return`
 included; temporaries at the end of their full-expression
 (`ExprWithCleanups`); members and bases after the destructor body, in
-reverse construction order; array elements from the last. A class
+reverse construction order; array elements from the last. An anonymous
+union member is not destroyed: its members are variant members
+([class.dtor]/13, WP-276). A class
 without a user-provided destructor and with trivially destructible
 members registers nothing.
 

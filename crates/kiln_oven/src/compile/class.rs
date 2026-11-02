@@ -397,6 +397,14 @@ impl Compiler<'_> {
             if fi.base || fi.width.is_some() || super::is_reference_decl(self.ast(), fi.decl) {
                 continue;
             }
+            // The destructor of an anonymous union member is never
+            // invoked: its members are variant members of this class
+            // ([class.dtor]/13; clang's `MarkBaseAndMemberDestructorsReferenced`).
+            if let TyKind::Record { decl, union: true, .. } = self.kind(fi.ty)
+                && record_bits(self.b.ast(), decl).contains(DefinitionBits::ANONYMOUS)
+            {
+                continue;
+            }
             if self.dtor_of(fi.ty).is_none() {
                 continue;
             }
