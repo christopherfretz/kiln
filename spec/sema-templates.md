@@ -1879,6 +1879,42 @@ mechanism above is the same for every name. kiln matches clang:
 | `my_t<is_ptr<P>::value, int>` (alias not named `enable_if_t`) | disabled by 'enable_if', at `my_t`'s pattern |
 | `typename enable_if<B, int>::type` with NTTP `B` | disabled by 'enable_if', at `B` |
 
+#### 5.7.2 Invalid substituted parameter types (WP-306)
+
+[temp.deduct.general]/11 lists the invalid types whose formation during
+substitution is a deduction failure. For a function parameter
+(`Substituter::param_type`, used by `param_infos` and by the explicit
+argument substitution in `deduce_call`):
+
+- **`void`** (`T` with `T = void`, a pack element `void` of `Ts...`):
+  `argument may not have 'void' type` at the substituted type, clang's
+  `err_param_with_void_type`; a SFINAE failure with the usual
+  `substitution failure [with ...]` note. A function type substituted
+  to have a `void` parameter (`void (*)(T)`) fails the same way.
+- **Array of `void`, of a function or of a reference**: clang's
+  `BuildArrayType` wording, `array has incomplete element type 'void'`
+  (also for a non-template `void x[3]`, which no longer uses the old
+  `declared as array of void` text).
+- **Array of an abstract class** (as clang 19, which has not implemented
+  P0929): `array of abstract class type 'A'`, from
+  `require_non_abstract_element`.
+- **Pointer to reference, reference to `void`, function returning an
+  array or function**: already failures of `Substituter::ty`.
+
+After the checks the parameter type is adjusted ([dcl.fct]/5: array to
+pointer, function to pointer, `Sema::adjust_param_type`); the declared
+type is kept as `ParmVar::original_ty` (and `ParamInfo::original_ty`), as
+clang's `getOriginalType`, for a written parameter and for a substituted
+one whose declared type is still dependent (a member template of an
+instantiated class template, so that `T a[3]` with `T = void` still fails
+at its own deduction). A fully substituted parameter has none: a
+range-`for` over it in an instantiation is clang's plain invalid-range
+error, not the array-parameter diagnostic of the definition.
+`tests/conformance/temp.deduct.general/invalid-parameter-type-sfinae.cpp`
+(the libc++ `MoveOnly` deleted `operator,` shape),
+`.../invalid-parameter-type-notes.cpp` (strict notes) and
+`.../invalid-parameter-type-member-template.cpp`.
+
 ### 5.8 Written locations of dependent names
 
 Kiln's types are interned and carry no `TypeLoc`, so the substituter
@@ -2289,6 +2325,30 @@ the guide's arguments into such a typedef substitutes its underlying type
 and keeps the typedef as sugar, without instantiating the class
 (`Substituter::class_not_instantiated`). clang's guide transform clones
 the typedef instead.
+
+The guide of a constructor template may also name other members of the
+class template in its signature or template parameters: a member class,
+a member alias template, a static member function or member template of
+a member class (libc++ `pair`: `__enable_if_t<_CheckArgs::template
+__is_pair_constructible<_U1, _U2>(), int> = 0`). When the guide is
+substituted with the deduced arguments, such a member resolves in the
+specialization the substituted `X<P...>` names, made complete
+(`Substituter::pattern_specialization`, from `find_instantiated_decl`;
+clang's `FindInstantiatedDecl`). When an alias guide is built
+([over.match.class.deduct]/3), the substituted class is still dependent
+(`P<T, short>`): the member becomes a member of an unknown
+specialization ([temp.dep.type]/6) — a `DependentIdentifier` template
+name, a `DependentName` type or a `DependentScopeDeclRefExpr`, with the
+qualifier `P<T, short>::` (`Substituter::dependent_member_nns`,
+`in_dependent_specialization`) — and is looked up again when the alias
+guide is used. A canonical pack-expansion argument (`Idx<I...>` in a
+guide's canonical signature) expands like the written one
+(`expand_arg`). The aggregate deduction candidate goes through the same
+alias transformation. Guide signatures print such members qualified
+(`typename P<T, short>::Chk::same<U>()`) where clang prints them as
+written (`Chk::template same<U>()`), a note-only difference.
+`tests/conformance/over.match.class.deduct/alias-ctor-template-members.cpp`,
+`.../alias-aggregate.cpp`.
 
 A template template parameter named alone (`C(args)`, `C{args}`,
 `C x(args);`) is a placeholder for a deduced class type as in clang
@@ -3649,6 +3709,22 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   parameters. A class-template forward redeclaration creates no new
   decl, so chained default checks are partial.
 - A template template parameter's inner list is not order-checked.
+- A template template parameter's own default template arguments
+  ([temp.param]/14, [temp.arg.template]) complete `TT<args>` when the
+  parameter is substituted (`Substituter::ttp_default_args`): each
+  missing argument is the parameter's default, substituted with the
+  enclosing levels and the arguments before it (`class = T*` names an
+  earlier parameter of `TT`'s list, `class = U` an enclosing template's).
+  The argument template's own defaults are not consulted for those
+  positions. Not done when `TT`'s list has a pack or an argument is a
+  pack expansion.
+  `tests/conformance/temp.param/template-template-param-own-defaults.cpp`.
+- The arity note (`template is declared here`) names the latest
+  declaration, as name lookup finds it: a class template redeclaration
+  after the definition creates no decl, so its name location is recorded
+  in `templ.class_redecl_loc`, keyed by the latest decl at the time
+  (`diag_template_arity`;
+  `tests/conformance/temp.arg.general/arity-note-latest-redeclaration.cpp`).
 - `TT<args>` for a template template parameter `TT` checks only the arity
   against `TT`'s own list (`check_ttp_arity`: "too few/many template
   arguments for template template parameter 'TT'", note at `TT`); a pack
