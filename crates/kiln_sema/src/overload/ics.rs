@@ -891,11 +891,8 @@ impl Sema<'_, '_> {
         let def = self.ast.definition(r).unwrap_or(r);
         let mut out: Vec<(QualType, Option<DeclId>)> =
             self.init_bases(def).into_iter().map(|b| (b, None)).collect();
-        let union = self
-            .ast
-            .decls
-            .record(def)
-            .is_some_and(|x| x.tag == kiln_ast::decl::TagKind::Union);
+        let union =
+            self.ast.decls.record(def).is_some_and(|x| x.tag == kiln_ast::decl::TagKind::Union);
         for f in self.init_fields(def) {
             out.push((self.ast.decls.get(f).ty()?, Some(f)));
             if union {
