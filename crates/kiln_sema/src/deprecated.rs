@@ -107,6 +107,7 @@ impl Sema<'_, '_> {
                 // canonical arguments (`CanonicalBuilder`); the deduced
                 // ones carry the call arguments' sugar.
                 let args = types.canonical_args(i.args);
+                let names = names.typed_args_of(d);
                 kiln_ast::types::write_arg_list_scoped_of(types, &names, d, args, &mut name);
             }
         }

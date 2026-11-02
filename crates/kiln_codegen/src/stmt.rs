@@ -703,10 +703,16 @@ impl Cg<'_> {
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
-        if let Some(v) = d.cond_var {
-            self.emit_var_decl(v)?;
-        }
+        // [stmt.pre]/4 (P0963): a structured binding declaration's
+        // tuple-like bindings are initialized after the condition.
+        let deferred = match d.cond_var {
+            Some(v) => self.emit_cond_var_decl(v)?.then_some(v),
+            None => None,
+        };
         let c = self.emit_scalar(d.cond)?;
+        if let Some(v) = deferred {
+            self.emit_binding_vars(v)?;
+        }
         let cond_ty = self.f.fir.ty(&self.m, c);
         let default = self.f.fir.create_block();
         let sw = self.f.fir.push(Op::Switch { c, default, cases: Vec::new() }, LTy::VOID);

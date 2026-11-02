@@ -801,7 +801,7 @@ impl Sema<'_, '_> {
     /// instantiation, diagnosing an undefined template
     /// ([temp.explicit]/5).
     fn instantiate_explicit(&mut self, spec: DeclId, loc: Loc) -> bool {
-        if self.instantiate_class(spec, loc, false) {
+        if self.instantiate_class_as(spec, loc, false, false) {
             return true;
         }
         if self.inst.undefined_diagnosed.get() == Some(spec) {
