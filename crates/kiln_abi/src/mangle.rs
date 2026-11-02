@@ -839,10 +839,11 @@ struct Mangler<'a, 'b> {
     used_tags: Vec<&'a str>,
     /// The tags written as `B <source-name>` so far.
     emitted_tags: Vec<&'a str>,
-    /// clang's `DisableDerivedAbiTags`: while collecting the tags of a
-    /// return or variable type, or of a name, no implicit tags are
-    /// derived for the functions and variables mangled inside it.
-    no_derived: bool,
+    /// The number of [`Mangler::trial_tags`] runs in progress; clang's
+    /// `DisableDerivedAbiTags` while non-zero: collecting the tags of a
+    /// return or variable type, or of a name, derives no implicit tags
+    /// for the functions and variables mangled inside it.
+    trials: u32,
     /// The implicit tags of the function or variable whose encoding is
     /// being mangled, written after the unqualified name of the
     /// declarations listed (the entity and, for a function template
@@ -888,7 +889,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             fn_depth: (0, false),
             used_tags: Vec::new(),
             emitted_tags: Vec::new(),
-            no_derived: false,
+            trials: 0,
             extra_tags: None,
         }
     }
@@ -1068,12 +1069,12 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// `AbiTagsRoot` starts empty).
     fn trial_tags(&mut self, f: impl FnOnce(&mut Self)) -> Vec<&'a str> {
         let snap = self.snapshot();
-        let no_derived = std::mem::replace(&mut self.no_derived, true);
+        self.trials += 1;
         let extra = self.extra_tags.take();
         f(self);
         let mut tags = self.used_tags[snap.used..].to_vec();
         self.restore(&snap);
-        self.no_derived = no_derived;
+        self.trials -= 1;
         self.extra_tags = extra;
         tags.sort_unstable();
         tags.dedup();
@@ -1101,11 +1102,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// tags are disabled, and none for an unmangled function).
     fn return_type_tags(&mut self, d: DeclId) -> Vec<&'a str> {
         let ast = self.ast;
-        if self.no_derived || !self.has_abi_tags() {
+        if self.trials > 0 || !self.has_abi_tags() {
             return Vec::new();
         }
         let Some(ty) = ast.decls.get(d).ty() else { return Vec::new() };
-        let Some(ret) = ast.types.proto(ast.types.canonical(ty)).map(|p| p.ret()) else {
+        let Some(ret) =
+            ast.types.proto(ast.types.canonical(ty)).map(kiln_ast::types::FuncProto::ret)
+        else {
             return Vec::new();
         };
         self.type_tags(ret, true)
@@ -1115,7 +1118,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
     fn variable_type_tags(&mut self, d: DeclId) -> Vec<&'a str> {
         let ast = self.ast;
         let n = ast.decls.get(d);
-        if self.no_derived
+        if self.trials > 0
             || n.kind() != DeclKind::Var
             || !self.has_abi_tags()
             || ast.decls.decomp_bindings(d).is_some()

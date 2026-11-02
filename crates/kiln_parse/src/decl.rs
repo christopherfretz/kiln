@@ -2881,23 +2881,9 @@ impl Parser<'_, '_> {
             self.parse_trailing_requires(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
-            // The first declarator of a group, when it declares a function,
-            // takes GNU attributes before its asm label as well (clang's
-            // `ParseDeclGroup`: `void f() __attribute__((x)) asm("l");`).
-            if declarators == 0 && d.is_function_declarator() {
-                while self.at_kw(Kw::Attribute) {
-                    self.parse_gnu_attributes(&mut d.attrs);
-                }
-            }
-            // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
-            // a malformed one drops the declarator.
-            let Ok(label) = self.parse_asm_label() else {
+            if self.parse_asm_label_and_attrs(&mut d, declarators == 0).is_err() {
                 self.skip_until(&[], true, false);
                 break;
-            };
-            d.asm_label = label;
-            if self.at_attr() {
-                self.parse_attributes(&mut d.attrs);
             }
             if !d.has_name() {
                 if !d.invalid {
@@ -3006,6 +2992,25 @@ impl Parser<'_, '_> {
             let diag = self.s.diag(DiagId::parse_virt_specifier_outside_class, loc).arg(sp);
             self.emit(diag);
         }
+    }
+
+    /// The GNU asm label after a non-member declarator (clang's
+    /// `ParseAsmAttributesAfterDeclarator`; `Err` when malformed, which
+    /// drops the declarator) and the attributes after it. The first
+    /// declarator of a group, when it declares a function, takes GNU
+    /// attributes before its label as well (clang's `ParseDeclGroup`:
+    /// `void f() __attribute__((x)) asm("l");`).
+    fn parse_asm_label_and_attrs(&mut self, d: &mut Declarator, first: bool) -> Result<(), ()> {
+        if first && d.is_function_declarator() {
+            while self.at_kw(Kw::Attribute) {
+                self.parse_gnu_attributes(&mut d.attrs);
+            }
+        }
+        d.asm_label = self.parse_asm_label()?;
+        if self.at_attr() {
+            self.parse_attributes(&mut d.attrs);
+        }
+        Ok(())
     }
 
     /// The `;` ending a simple-declaration.
