@@ -3910,11 +3910,48 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   operands and declarators; before anything else (`(undeclared<int> 5)`)
   it is a parse error the enclosing construct skips. Followed by `::` it
   is "no template named 'X'" (clang's `ActOnCXXNestedNameSpecifier`).
-  Clang 19 adds "expected ')'" / "expected ';'" after some of these forms
-  (delayed typo correction); kiln follows clang 22 at every compat level.
+  Under `-fclang-compat=19` the name is a delayed typo
+  (`act_on_undeclared_template_id_typo`, clang 19's `TypoExpr`): an
+  error expression parsing goes on around whatever follows, so clang
+  19's "expected ')'" (`(v<int> 5)`) and "expected ';' after return
+  statement" (`return v<int>{};`) follow, and the typo is reported at the
+  end of the full-expression (WP-391).
   `kiln_parse` `parse_id_expression_rest`. Tests:
   `tests/conformance/temp.names/undeclared-template-id-expr.cpp`,
-  `undeclared-template-id-expr-22.cpp` (`requires: clang>=22`).
+  `undeclared-template-id-expr-22.cpp` (`requires: clang>=22`),
+  `undeclared-template-id-expr-19.cpp` (`requires: clang<22`).
+- **Template-id of a function that is not called** ([temp.names]/3,
+  WP-391): from C++20 an unqualified `f<...>` that ordinary lookup finds
+  only non-member functions for, not followed by `(`, names nothing
+  either. Clang 22 typo-corrects `f` to itself qualified from its
+  namespace (`template_id_typo.rs`, `correct_function_template_id`):
+  "use of undeclared identifier 'f'; did you mean '::f'?" (the qualifier
+  as for a local friend, `correction_qualifier`), with "'::f' declared
+  here" at the latest declaration of the first function declared, or at
+  the using-declaration that is the only one found. The expression is an
+  overload set of that one function without template arguments: a
+  built-in operator resolves it to the function
+  (`resolve_single_overload_candidate`, clang's
+  `resolveAndFixAddressOfSingleOverloadCandidate`; `f<int> + 1` is
+  "arithmetic on a pointer to the function type"), a conversion
+  diagnoses it as an overload set ("address of overloaded function 'f'
+  does not match required type"), and with a dependent template argument
+  it is an error expression. There is no correction, only "use of
+  undeclared identifier", when the functions belong to several
+  namespaces, or are found both directly and through a using-declaration
+  (several using-declarations included). There is none either when a
+  keyword or another visible name is no more distant (clang's
+  `CorrectTypo` limits: `(len+2)/3` edits, `len/edits >= 3`;
+  `closer_typo_candidate` scans the interner). Clang suggests that other
+  name; kiln does not yet. A qualified `N::f<int>` (or `::f<int>`) for a
+  single non-template `f` is "'f' does not name a template but is
+  followed by template arguments", as unqualified before C++20
+  (`potential_template_name_in`). Clang 19 reports the name as
+  undeclared (the delayed typo above). Clang 19 does correct to `::f`
+  when the expression it rebuilds is valid (`return f<int>;`,
+  `(f<int> 5)`), and kiln does not model that. Tests:
+  `tests/conformance/temp.names/undeclared-template-id-function-22.cpp`,
+  `undeclared-template-id-function-19.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.

@@ -73,9 +73,8 @@ impl Sema<'_, '_> {
         // One namespace's functions, found directly or as one
         // using-declarator's single target (clang finds nothing to
         // correct to beside a using-declarator, or across namespaces).
-        let shadows = found.found.iter().filter(|&&f| self.kind_of(f) == DeclKind::UsingShadow);
-        let shadows = shadows.count();
-        if shadows > 0 && found.found.len() > 1 {
+        let shadow = found.found.iter().any(|&f| self.kind_of(f) == DeclKind::UsingShadow);
+        if shadow && found.found.len() > 1 {
             return None;
         }
         let mut ns = None;
@@ -104,12 +103,14 @@ impl Sema<'_, '_> {
             return None;
         }
         let text = sym_str(self, name);
-        let corrected = format!("'{qual}{text}'");
-        let note = self.diag(DiagId::note_entity_declared_here, self.decl_loc(shown)).arg(&corrected);
+        let corrected = format!("{qual}{text}");
+        let note = self
+            .diag(DiagId::note_entity_declared_here, self.decl_loc(shown))
+            .arg(format!("'{corrected}'"));
         let msg = self
             .diag(DiagId::sema_undeclared_var_use_suggest, loc)
             .arg(text)
-            .arg(format!("{qual}{}", sym_str(self, name)))
+            .arg(corrected)
             .with_note(note);
         self.emit(msg);
         if args.iter().any(|&a| Self::dependent_flags(self.ast.types.arg_flags(a))) {
