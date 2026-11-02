@@ -455,7 +455,9 @@ rebuilt one is in `locals`, step 1) to itself, as clang's
    ([expr.prim.lambda.capture]/17), also in templates; `consteval`
    lambdas; a lambda-expression as a template argument and calling an
    `auto` template parameter whose default is a closure
-   (`template-argument.cpp`); `x.template operator()<T>()` (WP-121).
+   (`template-argument.cpp`). `x.template operator()<T>()` and an
+   unqualified or qualified `operator()<T>` template-id work (WP-364,
+   spec/sema-templates.md).
 
 ## Landed (WP-075)
 

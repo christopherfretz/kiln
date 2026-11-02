@@ -589,6 +589,78 @@ impl Sema<'_, '_> {
         self.builder().unresolved_lookup(DeclName::ident(name), &decls, true, None, Some(list), loc)
     }
 
+    /// Whether the operator-function-id `name`, optionally qualified by
+    /// the non-dependent `qualifier`, followed by `<` starts a
+    /// template-id ([temp.names]/3): lookup finds a function template;
+    /// unqualified, also when it finds nothing or only functions (P0846).
+    pub fn operator_names_template(&mut self, name: DeclName, qualifier: Option<DeclId>) -> bool {
+        match qualifier {
+            Some(q) => self.declare_implicit_named(q, name),
+            None => self.declare_implicit_named_in_scope(name),
+        }
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
+            None => self.lookup_name_dn(name, LookupKind::Ordinary),
+        };
+        let kinds: Vec<DeclKind> =
+            found.decls.iter().map(|&d| self.kind_of(self.ast.strip_shadow(d))).collect();
+        kinds.contains(&DeclKind::FunctionTemplate)
+            || (qualifier.is_none() && kinds.iter().all(|&k| k == DeclKind::Function))
+    }
+
+    /// `operator@ < args >`, optionally qualified by the non-dependent
+    /// `qualifier` ([temp.names]/1: an operator-function-id is a
+    /// template-name when it names a function template; `operator()<T>()`
+    /// in a member function, `Q::operator()<T>()`): an
+    /// `UnresolvedLookupExpr` over the functions lookup finds, completed
+    /// by the call as for `f<T>`. Unqualified and `call`ed, a name lookup
+    /// finds nothing or only non-member functions for is assumed to be a
+    /// template, completed by argument-dependent lookup ([temp.names]/3,
+    /// P0846: `operator+<7>(a, b)`). Diagnoses a name that finds no
+    /// function template otherwise.
+    pub fn act_on_operator_template_id(
+        &mut self,
+        name: DeclName,
+        args: &[TemplateArg],
+        loc: Loc,
+        qualifier: Option<DeclId>,
+        call: bool,
+    ) -> ExprId {
+        match qualifier {
+            Some(q) => self.declare_implicit_named(q, name),
+            None => self.declare_implicit_named_in_scope(name),
+        }
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
+            None => self.lookup_name_dn(name, LookupKind::Ordinary),
+        };
+        let decls: Vec<DeclId> = found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
+        let functions = decls.iter().all(|&d| {
+            matches!(
+                self.kind_of(d),
+                DeclKind::FunctionTemplate | DeclKind::Function | DeclKind::CXXMethod
+            )
+        });
+        let list = self.ast.types.arg_list(args);
+        if qualifier.is_none()
+            && call
+            && decls.iter().all(|&d| self.kind_of(d) == DeclKind::Function)
+        {
+            return self.builder().unresolved_lookup(name, &decls, true, None, Some(list), loc);
+        }
+        if decls.is_empty() && qualifier.is_none() {
+            let msg = self.diag(Self::undeclared_use_id(name), loc).arg(self.decl_name_str(name));
+            self.emit(msg);
+            return self.act_on_error_expr(&[], loc);
+        }
+        if !functions || !decls.iter().any(|&d| self.kind_of(d) == DeclKind::FunctionTemplate) {
+            let msg = self.diag(DiagId::sema_no_template_named, loc).arg(self.decl_name_str(name));
+            self.emit(msg);
+            return self.act_on_error_expr(&[], loc);
+        }
+        self.builder().unresolved_lookup(name, &decls, false, None, Some(list), loc)
+    }
+
     /// The qualified function or variable template-id `e` named at `loc`
     /// begins at its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`,
     /// `DeclRefExpr::getBeginLoc`).

@@ -907,7 +907,10 @@ impl Parser<'_, '_> {
             // After an error the initializer is still counted, as failed
             // (no implicit base or member initializers are added).
             let ty = ty.filter(|_| kind != TypeSpecKind::DecltypeAuto).unwrap_or(QualType::ERROR);
-            return (Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }), true);
+            return (
+                Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }),
+                true,
+            );
         }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_member_or_base_name);
