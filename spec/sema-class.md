@@ -828,6 +828,21 @@ WP-400 models clang's `DefaultedDefaultConstructorIsConstexpr` and
   base is constexpr (C++26: with one too, P3533); a non-constexpr member or
   base constructor fails only when an evaluation reaches it, with the
   defaulted constructor in the call stack.
+- C++23 with a *direct* virtual base (indirect ones do not count; copy and
+  move constructors are never constexpr, assignments always are): the
+  default constructor and destructor follow clang's running flag
+  (`vbase_flag_cxx23`). It starts true; over the bases in declaration
+  order a virtual base clears it and a non-virtual base without a
+  constexpr default constructor (destructor) sets it; then over the
+  fields a class-type member (an array's element type; references and
+  anonymous-union members skipped; for the constructor, a member with a
+  default member initializer skipped too) without one sets it. So
+  `A : virtual V, NB` may declare `constexpr A() = default;` but
+  `A : NB, virtual V` may not. A destructor so found constexpr is
+  recorded in `SpecialState::vbase_dtor_constexpr` (dump `constexpr`);
+  the class stays non-literal ([basic.types.general]/10, `LITERAL`
+  unaffected). Test:
+  `tests/conformance/class.default.ctor/constexpr-defaulted-vbase-order-cxx23.cpp`.
 - Before C++23 the per-subobject rule holds: each base's and each member's
   selected constructor (default, copy or move as the member requires) or
   assignment must be constexpr, a member without an initializer and a union

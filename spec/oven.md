@@ -1870,7 +1870,12 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   At `-fclang-compat=22` from C++23 none of these `CheckLiteralType`
   traps is made (clang 22 dropped it with P2448): a non-literal object
   fails only at the non-constexpr constructor its creation calls
-  (`literal_check_relaxed`, WP-400).
+  (`literal_check_relaxed`, WP-400). Constructing a class with a virtual
+  base through a constexpr constructor (before C++26) instead traps
+  "cannot construct object of type 'X' with virtual base class in a
+  constant expression" at the construct expression, with no frame for
+  the constructor (clang `HandleConstructorCall`; test
+  `expr.const/constexpr-vbase-construct-cxx23.cpp`).
 - A local variable that sema marked invalid (its initialization was
   already diagnosed) traps silently when its declaration is evaluated,
   so the enclosing constant expression reports only its own error

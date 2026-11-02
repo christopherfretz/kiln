@@ -3431,8 +3431,9 @@ impl Sema<'_, '_> {
                     // [dcl.constexpr]/1: if any declaration of a function
                     // is `constexpr` or `consteval`, every declaration is
                     // (clang `err_constexpr_redecl_mismatch`).
+                    // An invalid previous declaration is not checked.
                     let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
-                    if ok != nk {
+                    if ok != nk && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID) {
                         let msg = self
                             .diag(DiagId::sema_constexpr_redecl_mismatch, d.name_loc())
                             .arg(nk as u8)
@@ -5586,6 +5587,9 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name(f));
             let msg = self.note_prev(msg, prev, true);
             self.emit(msg);
+            // clang `CheckForFunctionRedefinition` invalidates the
+            // redefinition (a later redeclaration is not checked against it).
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // The return type as written: diagnostics name its typedef.
