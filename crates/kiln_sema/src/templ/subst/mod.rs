@@ -75,6 +75,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// substituted function type returning an array or function is
     /// diagnosed ([dcl.fct]/11). Cleared inside function parameters.
     pub(crate) type_begin: Option<Loc>,
+    /// The written outermost `&`/`&&` of the declarator whose type is
+    /// substituted ([`crate::Sema::ref_locs`]): the first reference
+    /// rebuilt takes it (clang's `ReferenceTypeLoc`).
+    pub(crate) ref_loc: Option<Loc>,
     /// How many lambda bodies are being rebuilt (a shared expression in
     /// one still captures `this`).
     pub(crate) lambda_bodies: u32,
@@ -130,6 +134,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             pairs: Vec::new(),
             declarator_name: None,
             type_begin: None,
+            ref_loc: None,
             lambda_bodies: 0,
             stmt_failed: false,
             init_failures: 0,

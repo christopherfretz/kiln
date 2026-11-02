@@ -259,6 +259,21 @@ impl Sema<'_, '_> {
         let mut retained = 0usize;
         let written: Vec<TemplateArg> =
             explicit.map(|l| self.ast.types.args(l).to_vec()).unwrap_or_default();
+        // [temp.deduct.call]/1: clang checks the call's arity against
+        // the written parameters before substituting the explicit
+        // arguments, so `f<void>()` of `f(T&)` is "requires 1 argument"
+        // rather than a substitution failure. A function parameter pack
+        // anywhere leaves the maximum to the check after substitution.
+        if let Some(a) = call {
+            if a.len() < self.fn_min_args(templated) {
+                return Err(DeductionFailure::new(Tdk::TooFewArguments, d));
+            }
+            let any_pack =
+                ptys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
+            if a.len() > ptys.len() && !variadic && !any_pack {
+                return Err(DeductionFailure::new(Tdk::TooManyArguments, d));
+            }
+        }
         if !written.is_empty() {
             if written.len() > n && !has_pack {
                 // clang: a substitution failure with the arity message.

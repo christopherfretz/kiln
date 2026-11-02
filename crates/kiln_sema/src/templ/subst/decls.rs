@@ -164,10 +164,12 @@ impl Substituter<'_, '_, '_> {
         let saved = std::mem::replace(&mut self.declarator_name, name);
         let begin = self.decl_begin(d);
         let outer = self.type_begin.replace(begin);
+        let outer_ref = std::mem::replace(&mut self.ref_loc, self.sema.ref_locs.get(&d).copied());
         let scope = self.decl_written_scope(d, loc);
         let r = self.with_written_scope(scope, |s| s.ty(t, loc));
         self.declarator_name = saved;
         self.type_begin = outer;
+        self.ref_loc = outer_ref;
         r
     }
 
@@ -399,6 +401,7 @@ impl Substituter<'_, '_, '_> {
                             default_arg: DefaultArg::None,
                             range: (loc, loc),
                             type_loc: loc,
+                            ref_loc: Loc::INVALID,
                             decl: Some(np),
                             explicit_object: None,
                         });
@@ -423,6 +426,7 @@ impl Substituter<'_, '_, '_> {
                         default_arg: DefaultArg::None,
                         range: (loc, loc),
                         type_loc: loc,
+                        ref_loc: Loc::INVALID,
                         decl: Some(np),
                         explicit_object: None,
                     });
@@ -434,8 +438,11 @@ impl Substituter<'_, '_, '_> {
             let scope = self.decl_written_scope(p, n.loc());
             let begin = self.decl_begin(p);
             let outer = self.type_begin.replace(begin);
+            let outer_ref =
+                std::mem::replace(&mut self.ref_loc, self.sema.ref_locs.get(&p).copied());
             let ty = self.with_written_scope(scope, |s| s.ty(t, n.loc()));
             self.type_begin = outer;
+            self.ref_loc = outer_ref;
             let ty = ty?;
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
@@ -455,6 +462,7 @@ impl Substituter<'_, '_, '_> {
                 default_arg: DefaultArg::None,
                 range: (n.loc(), n.loc()),
                 type_loc: n.loc(),
+                ref_loc: Loc::INVALID,
                 decl: Some(np),
                 explicit_object: (eo != 0).then_some(n.loc()),
             });
@@ -1089,7 +1097,9 @@ impl Substituter<'_, '_, '_> {
         };
         let begin = self.decl_begin(d);
         let outer = self.type_begin.replace(begin);
+        let outer_ref = std::mem::replace(&mut self.ref_loc, self.sema.ref_locs.get(&d).copied());
         let ty = self.with_written_scope(scope, |s| s.ty(u, loc));
+        self.ref_loc = outer_ref;
         self.type_begin = outer;
         // clang `VisitTypedefNameDecl`: a member typedef whose type fails
         // to substitute is still declared, invalid (lookup finds it, its

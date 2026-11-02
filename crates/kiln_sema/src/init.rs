@@ -1753,7 +1753,8 @@ impl Sema<'_, '_> {
                             .range(r);
                         self.emit_designator_warning(msg);
                     }
-                    let sub = Sub { braced: false, entry: None, prior: None, update: false, direct };
+                    let sub =
+                        Sub { braced: false, entry: None, prior: None, update: false, direct };
                     self.check_aggregate_in(ty, items, pos, sub, at, at)
                 } else {
                     *pos += 1;

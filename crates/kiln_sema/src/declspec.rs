@@ -446,6 +446,9 @@ pub struct ParamInfo {
     pub range: (Loc, Loc),
     /// Where the first type-specifier was written (`T` of `const T x`).
     pub type_loc: Loc,
+    /// The outermost `&`/`&&` of the declarator when the declared type
+    /// is a reference (invalid otherwise; [`crate::Sema::ref_locs`]).
+    pub ref_loc: Loc,
     /// The parameter declaration created at its point of declaration
     /// ([basic.scope.pdecl]/1) by [`crate::Sema::act_on_prototype_param`],
     /// so that it is in scope in the rest of the declarator
