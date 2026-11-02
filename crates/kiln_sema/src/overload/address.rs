@@ -130,8 +130,17 @@ impl Sema<'_, '_> {
 
     /// The matching non-template candidates of `ule` for `target`.
     fn address_candidates(&mut self, ule: ExprId, target: QualType) -> Vec<(DeclId, DeclId)> {
-        let fnty = self.address_target(target);
         let cands = self.ule_candidates(ule);
+        self.matching_candidates(cands, target)
+    }
+
+    /// Of `cands`, the non-templates matching `target`.
+    fn matching_candidates(
+        &mut self,
+        cands: Vec<(DeclId, DeclId)>,
+        target: QualType,
+    ) -> Vec<(DeclId, DeclId)> {
+        let fnty = self.address_target(target);
         cands.into_iter().filter(|&(d, _)| self.address_matches(d, fnty)).collect()
     }
 
@@ -143,14 +152,28 @@ impl Sema<'_, '_> {
         ule: ExprId,
         target: QualType,
     ) -> Vec<(DeclId, DeclId)> {
+        let explicit = self.ast.templates.expr_targs.get(ule).copied();
+        let loc = self.ast.exprs.get(ule).loc();
+        let cands = self.ule_candidates(ule);
+        self.template_candidates(cands, explicit, loc, target)
+    }
+
+    /// Of `cands`, the specializations of the templates deduced from
+    /// `target` (with the `explicit` template arguments) that match it,
+    /// the most specialized kept.
+    fn template_candidates(
+        &mut self,
+        cands: Vec<(DeclId, DeclId)>,
+        explicit: Option<kiln_ast::ids::ArgListId>,
+        loc: Loc,
+        target: QualType,
+    ) -> Vec<(DeclId, DeclId)> {
         let (fnty, member) = self.address_target(target);
         if !self.ast.types.is_function(fnty) {
             return Vec::new();
         }
-        let explicit = self.ast.templates.expr_targs.get(ule).copied();
-        let loc = self.ast.exprs.get(ule).loc();
         let mut out: Vec<(DeclId, DeclId, DeclId)> = Vec::new();
-        for (d, f) in self.ule_candidates(ule) {
+        for (d, f) in cands {
             if self.kind_of(d) != DeclKind::FunctionTemplate {
                 continue;
             }
@@ -179,6 +202,35 @@ impl Sema<'_, '_> {
         out.into_iter().map(|(s, f, _)| (s, f)).collect()
     }
 
+    /// The candidates of the overloaded member access `x` matching the
+    /// non-member `target` ([over.over]/2-3; P2418's
+    /// `__output_buffer<C>{..., __prepare_write, ...}`): only its static
+    /// member functions can (a non-static one needs `&C::f`). Templates
+    /// only when no non-template matches.
+    fn member_address_candidates(&mut self, x: ExprId, target: QualType) -> Vec<(DeclId, DeclId)> {
+        let Some(m) = self.ovl.members.get(&x) else { return Vec::new() };
+        let (explicit, loc) = (m.targs, self.ast.exprs.get(x).loc());
+        let cands: Vec<(DeclId, DeclId)> = m
+            .decls
+            .iter()
+            .copied()
+            .zip(m.found.iter().copied())
+            .filter(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID))
+            .collect();
+        if self.address_target(target).1 {
+            return Vec::new();
+        }
+        let found = if explicit.is_some() {
+            Vec::new()
+        } else {
+            self.matching_candidates(cands.clone(), target)
+        };
+        if !found.is_empty() {
+            return found;
+        }
+        self.template_candidates(cands, explicit, loc, target)
+    }
+
     /// The function an expression of overloaded-function type `e`
     /// resolves to for `target`, silently (an implicit conversion
     /// sequence's query, [over.ics.scs]/… via [over.over]). Selects as
@@ -187,6 +239,12 @@ impl Sema<'_, '_> {
     /// type is a match too ([over.over]/3; clang's
     /// `ResolveAddressOfOverloadedFunction` from `TryImplicitConversion`).
     pub(crate) fn address_match(&mut self, e: ExprId, target: QualType) -> Option<DeclId> {
+        if let Some(x) = self.member_overload(e) {
+            return match self.member_address_candidates(x, target)[..] {
+                [(d, _)] => Some(d),
+                _ => None,
+            };
+        }
         let (ule, _) = self.overload_operand(e)?;
         let mut m = self.address_candidates(ule, target);
         if m.is_empty() {
@@ -287,6 +345,9 @@ impl Sema<'_, '_> {
         at: Loc,
     ) -> Option<ExprId> {
         let Some((ule, _)) = self.overload_operand(e) else {
+            if let Some(x) = self.member_overload(e) {
+                return self.resolve_member_address(e, x, target, complain, ctx, at);
+            }
             if complain {
                 self.check_overload_use(e);
             }
@@ -373,6 +434,89 @@ impl Sema<'_, '_> {
         }
         failed.sort_by_key(|&(at, _)| at);
         notes.extend(failed.into_iter().map(|(_, n)| n));
+        self.emit(notes.into_iter().fold(msg, Diag::with_note));
+        None
+    }
+
+    /// [`Sema::resolve_address_of_overloaded`] of the overloaded member
+    /// access `x` (`e` is it, possibly parenthesized). As clang's
+    /// `ResolveAddressOfOverloadedFunction`: a static winner named
+    /// through an explicit object (`this->f`, `o.f`) is "cannot create a
+    /// non-constant pointer to member function" at the access
+    /// (`IsStaticMemberFunctionFromBoundPointer`); no match lists every
+    /// candidate, the last declared first.
+    fn resolve_member_address(
+        &mut self,
+        e: ExprId,
+        x: ExprId,
+        target: QualType,
+        complain: bool,
+        ctx: AddrCtx,
+        at: Loc,
+    ) -> Option<ExprId> {
+        let matches = self.member_address_candidates(x, target);
+        let loc = self.ast.exprs.get(x).loc();
+        if let [(d, f)] = matches[..] {
+            let m = self.ovl.members.remove(&x)?;
+            if !m.implicit && self.is_static_method(d) {
+                if !complain {
+                    self.ovl.members.insert(x, m);
+                    return None;
+                }
+                let b = self.begin_loc(x);
+                self.emit(self.diag(DiagId::sema_nonconst_member_fn_ptr, b));
+                return Some(self.recover_err(&[m.base], loc));
+            }
+            let r = self.finish_member_winner(&m, d, f, loc);
+            return Some(self.rebuild_parens(e, r));
+        }
+        if !complain {
+            return None;
+        }
+        let Some(m) = self.ovl.members.get(&x) else { return None };
+        let name = self.decl_name_str(m.name);
+        let mut cands = m.decls.clone();
+        cands.reverse();
+        let b = self.begin_loc(x);
+        let (fnty, _) = self.address_target(target);
+        let (msg, detailed) = if matches.len() > 1 {
+            (self.diag(DiagId::sema_addr_ovl_ambiguous, b).arg(name), false)
+        } else {
+            match ctx {
+                AddrCtx::Convert => (
+                    self.diag(DiagId::sema_addr_ovl_no_match, b).arg(name).arg(self.ty_arg(fnty)),
+                    true,
+                ),
+                AddrCtx::Cast(which) => (
+                    self.diag(DiagId::sema_addr_ovl_cast, at)
+                        .arg(name)
+                        .arg(which)
+                        .arg(self.ty_arg(target)),
+                    false,
+                ),
+                AddrCtx::Reinterpret => (
+                    self.diag(DiagId::sema_addr_ovl_reinterpret, at)
+                        .arg(name)
+                        .arg(self.ty_arg(target)),
+                    false,
+                ),
+            }
+        };
+        let fn_target = detailed && self.ast.types.is_function(fnty);
+        let notes: Vec<Diag> = if matches.len() > 1 {
+            matches.iter().map(|&(d, _)| self.plain_candidate_note(d)).collect()
+        } else {
+            cands
+                .iter()
+                .map(|&d| {
+                    if fn_target && self.kind_of(d) != DeclKind::FunctionTemplate {
+                        self.mismatch_note(d, fnty)
+                    } else {
+                        self.plain_candidate_note(d)
+                    }
+                })
+                .collect()
+        };
         self.emit(notes.into_iter().fold(msg, Diag::with_note));
         None
     }
