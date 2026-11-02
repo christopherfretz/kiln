@@ -403,6 +403,21 @@ fn plan<'a>(
     steps
 }
 
+/// Whether the IR text defines a coroutine still to be split: an
+/// attribute group holding `presplitcoroutine` (spec/codegen.md §7c).
+pub fn has_presplit_coroutine(ir: &str) -> bool {
+    ir.lines().any(|l| l.starts_with("attributes #") && l.contains(" presplitcoroutine"))
+}
+
+/// `opt` running clang's O0 coroutine lowering (`CoroConditionalWrapper`
+/// in `buildO0DefaultPipeline`): `CoroEarly`, `CoroSplit`, `CoroCleanup`,
+/// then `GlobalDCE`. Text in, text out.
+fn coro_lowering(tc: &Toolchain) -> Command {
+    let mut cmd = Command::new(tc, Tool::Opt);
+    cmd.arg("-passes=coro-early,cgscc(coro-split),coro-cleanup,globaldce").arg("-S").arg("-");
+    cmd
+}
+
 /// `llc` for an assembly or object output.
 fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     let mut cmd = Command::new(tc, Tool::Llc);
@@ -519,6 +534,24 @@ fn execute(
                     failed = true;
                     continue;
                 }
+                // A coroutine is lowered first: `llc` does not run the
+                // coroutine passes (spec/driver.md "Coroutine lowering").
+                if cmd.tool == Tool::Llc
+                    && let Some(text) = &ir
+                    && has_presplit_coroutine(text)
+                {
+                    let opt = coro_lowering(tc);
+                    if args.verbose {
+                        let mut err = io.stderr.clone();
+                        let _ = err.write_all(opt.render(false).as_bytes());
+                    }
+                    let mut out = Vec::new();
+                    if !opt.run(Some(text), &mut out, &io.stderr, drv) {
+                        failed = true;
+                        continue;
+                    }
+                    ir = Some(String::from_utf8_lossy(&out).into_owned());
+                }
                 failed |= !cmd.run(ir.as_deref(), &mut io.stdout, &io.stderr, drv);
             }
             Step::External { cmd, piped: false } => {
@@ -597,6 +630,12 @@ mod tests {
         assert_eq!(default_output("foo.cpp", Phase::IrText), "foo.ll");
         assert_eq!(default_output("foo.cpp", Phase::Bitcode), "foo.bc");
         assert_eq!(default_output("-", Phase::Object), "-.o");
+    }
+
+    #[test]
+    fn presplit_detection() {
+        assert!(has_presplit_coroutine("define void @f() #0 {\n}\nattributes #0 = { noinline presplitcoroutine }\n"));
+        assert!(!has_presplit_coroutine("define void @presplitcoroutine() #0 {\n}\nattributes #0 = { noinline }\n"));
     }
 
     #[test]
