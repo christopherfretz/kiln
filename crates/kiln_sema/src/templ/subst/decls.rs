@@ -679,6 +679,18 @@ impl Substituter<'_, '_, '_> {
         if friend.is_none() {
             self.class_attrs(f, d);
         }
+        // [expr.prim.this]/3: `this` in a static member function's
+        // *noexcept-specifier* is diagnosed again in each instantiation
+        // of the class, at the pattern's `this` (clang
+        // `checkThisInStaticMemberFunctionExceptionSpec` from
+        // `InitMethodInstantiation`).
+        if friend.is_none()
+            && self.sema.is_static_method(d)
+            && let kiln_ast::types::ExcSpec::NoexceptExpr { expr, .. } =
+                self.sema.ast.types.exc_spec(&p)
+        {
+            self.sema.check_this_in_static_exception_spec(expr);
+        }
         if lazy_exc {
             let first = self.sema.ast.first(f);
             if first == f {

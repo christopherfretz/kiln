@@ -28,6 +28,7 @@ use crate::declspec::{
     SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 use crate::init::{InitValue, Initializer};
+use crate::local_friend::LocalFriend;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
 use crate::qualified_decl::QualifiedDecl;
@@ -1586,6 +1587,14 @@ impl Sema<'_, '_> {
         new: NewFn,
     ) -> Option<DeclId> {
         let mut found = self.prev_candidates_dn(dname, qualifier);
+        // A friend of a templated class is not visible to redeclaration
+        // lookup until instantiated: a later namespace-scope declaration
+        // declares a new function, matched by the friend's
+        // instantiations ([temp.friend]/9, [temp.inst]/3; clang leaves a
+        // friend of a dependent context out of its namespace's lookup).
+        // One that redeclared an earlier function (a qualified friend)
+        // stands for it.
+        found.retain(|&x| !self.is_dependent_friend_fn(x) || self.ast.first(x) != x);
         if qualifier.is_some() {
             // A declaration whose parameter needed the missing-`typename`
             // recovery is invalid: a qualified redeclaration does not
@@ -1621,7 +1630,7 @@ impl Sema<'_, '_> {
 
     /// The innermost namespace (or the translation unit) enclosing the
     /// current context.
-    fn enclosing_namespace(&self) -> Option<DeclId> {
+    pub(crate) fn enclosing_namespace(&self) -> Option<DeclId> {
         let mut ns = self.ctx;
         for _ in 0..10_000 {
             if matches!(
@@ -2206,6 +2215,12 @@ impl Sema<'_, '_> {
             // Still being defined (clang `RequireCompleteType` on a tag
             // that `isBeingDefined`).
             if self.defining.contains(&def) {
+                // An invalid class (a member of incomplete type) is not
+                // reported again (clang).
+                if self.invalid_defining.contains(&def) {
+                    self.inst.suppress_next_error.set(true);
+                    return msg;
+                }
                 let note = self
                     .diag(DiagId::note_definition_not_complete, self.ast.decls.get(def).loc())
                     .arg(format!("'{}'", self.qualified_decl_name(def)));
@@ -2607,6 +2622,10 @@ impl Sema<'_, '_> {
         let late_exc =
             d.late_noexcept.is_some() || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
         let mut delayed_prev = false;
+        // A non-dependent friend of a templated class: the function it
+        // would redeclare once instantiated, whose exception
+        // specification it is checked against now (`pattern_friend_prev`).
+        let mut pattern_prev = None;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
         let new_fn = NewFn {
             ty,
@@ -2656,18 +2675,23 @@ impl Sema<'_, '_> {
             };
         // An invalid local-class friend redeclares nothing (clang returns
         // after `DiagnoseInvalidRedeclaration`).
-        let bad_local_friend = friend
-            && d.qualifier.is_none()
-            && d.op_name.is_none()
-            && dname
-                .as_ident()
-                .is_some_and(|sym| self.check_local_friend(ctx, sym, new_fn, d.name_loc()));
+        let local_friend = if friend && d.qualifier.is_none() {
+            self.check_local_friend(dname, new_fn, d.name_loc())
+        } else {
+            LocalFriend::NotLocal
+        };
+        let bad_local_friend = local_friend == LocalFriend::Invalid;
         invalid_redecl |= bad_local_friend;
         // An invalid declaration (an illegal storage class, an invalid
         // parameter) redeclares nothing either: clang checks it against no
         // previous declaration (`ActOnFunctionDeclarator`).
         let prev = if global_new_delete || deferred_friend || invalid_decl || bad_local_friend {
             None
+        } else if let LocalFriend::Redeclares(p) = local_friend
+            && !self.in_templated_class(Some(lexical))
+        {
+            // The block-scope declaration it redeclares ([class.friend]/11).
+            Some(p)
         } else if friend && d.qualifier.is_none() && self.in_templated_class(Some(lexical)) {
             // A friend of a templated class redeclares nothing until
             // instantiated (see `is_dependent_friend_fn`); a non-dependent
@@ -2684,6 +2708,9 @@ impl Sema<'_, '_> {
                     .collect();
                 invalid_redecl |=
                     self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
+                if !invalid_redecl {
+                    pattern_prev = self.pattern_friend_prev(ctx, dname, new_fn);
+                }
             }
             None
         } else if friend && d.qualifier.is_none() {
@@ -2946,7 +2973,8 @@ impl Sema<'_, '_> {
                     // a non-throwing specification has one, and only those.
                     let msg = self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc());
                     let msg = self.note_prev(msg, p, false);
-                    self.emit(msg);
+                    let ne = self.written_exc_spec(ty);
+                    self.emit(crate::except::per_instantiation_exc(msg, ne));
                     invalid_redecl = true;
                 } else {
                     let same_params = match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
@@ -3080,6 +3108,13 @@ impl Sema<'_, '_> {
         self.defer_late_noexcept(f, d);
         if delayed_prev && let Some(p) = prev_ok {
             self.delayed_exc_equiv.push((f, p));
+        }
+        if let Some(p) = pattern_prev {
+            // Compared now, or once its replayed specification is known.
+            self.delayed_exc_equiv.push((f, p));
+            if !late_exc {
+                self.check_delayed_exc_equiv(f);
+            }
         }
         if d.lit_suffix.is_some() {
             if !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
@@ -3257,6 +3292,15 @@ impl Sema<'_, '_> {
                 if p.type_loc.is_valid() && p.type_loc != p.loc && self.is_dependent_type(p.ty) {
                     self.type_spec_locs.insert(pd, p.type_loc);
                 }
+            }
+            // A block-scope function's, where the local-friend notes
+            // point (`check_local_friend`).
+            if p.type_loc.is_valid()
+                && p.type_loc != p.range.0
+                && self.kind_of(f) == DeclKind::Function
+                && self.in_local_scope()
+            {
+                self.type_spec_locs.insert(pd, p.type_loc);
             }
             if p.ref_loc.is_valid() && self.is_dependent_type(p.ty) {
                 self.ref_locs.insert(pd, p.ref_loc);
@@ -3493,6 +3537,11 @@ impl Sema<'_, '_> {
             let elem = self.field_complete_type(ty);
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
+            // The class becomes invalid: later uses that need it complete
+            // before its `}` are quiet (clang `CheckFieldDecl`).
+            if let Some(&c) = self.defining.last() {
+                let _ = self.invalid_defining.insert(c);
+            }
             // clang marks the field invalid: initialization never
             // descends into it (a field of the class's own type would
             // recurse forever).
@@ -4768,66 +4817,30 @@ impl Sema<'_, '_> {
 
     // -- function definitions ----------------------------------------------------
 
-    /// [class.friend]/11: an unqualified friend function declared in a
-    /// local class must redeclare a function declared in the innermost
-    /// enclosing non-class (block) scope; "no matching function found in
-    /// local scope" otherwise (clang `DiagnoseInvalidRedeclaration` with
-    /// `IsLocalFriend`). A function of namespace `ns` with the friend's
-    /// signature is suggested, as clang's typo correction does. Returns
-    /// whether the friend is invalid.
-    fn check_local_friend(&mut self, ns: DeclId, name: Symbol, new: NewFn, loc: Loc) -> bool {
-        let Some(c) = self.current_class() else { return false };
-        let record = c.record;
-        if !self.is_local_class(record) {
-            return false;
-        }
-        let Some(scope) =
-            self.scopes.iter().rev().find(|s| !s.is_transparent() && s.kind != ScopeKind::Record)
-        else {
-            return false;
-        };
-        if !scope.is_local() {
-            return false;
-        }
-        let found: Vec<DeclId> = scope
-            .locals
-            .iter()
-            .filter(|&&(s, x, ns)| {
-                s == name && ns == Ns::Ordinary && {
-                    let k = self.kind_of(x);
-                    k.payload() == kiln_ast::decl::PayloadClass::Function
-                        || k == DeclKind::FunctionTemplate
-                }
-            })
-            .map(|&(_, x, _)| x)
-            .collect();
-        if self.pick_prev_function(&found, new).is_some() {
-            return false;
-        }
-        let in_ns: Vec<DeclId> = self
+    /// [except.spec]/5 at the definition of a templated class
+    /// (clang `CheckEquivalentExceptionSpec` from `MergeFunctionDecl`,
+    /// which runs for a friend of a dependent context too): the function
+    /// of namespace `ns` that non-dependent unqualified friend `new`
+    /// redeclares, found as for a friend of a non-templated class. The
+    /// friend stays out of its redeclaration chain until instantiated.
+    /// The instantiation's own check repeats what was reported here,
+    /// which deduplication drops (spec/diag.md §7.4) unless a
+    /// `noexcept(expr)` was compared again (`per_instantiation_exc`).
+    fn pattern_friend_prev(&mut self, ns: DeclId, dname: DeclName, new: NewFn) -> Option<DeclId> {
+        let found: Vec<DeclId> = self
             .ast
-            .lookup_local(ns, DeclName::ident(name))
-            .iter_with_flags()
-            .filter(|&(x, fl)| {
-                !fl.contains(LookupFlags::ADL_ONLY) && self.kind_of(x) != DeclKind::UsingShadow
+            .lookup_local(ns, dname)
+            .iter_with_inline()
+            .filter(|&(x, via_inline)| {
+                !via_inline
+                    && !self.is_dependent_friend_fn(x)
+                    && self.kind_of(x) != DeclKind::UsingShadow
             })
             .map(|(x, _)| x)
             .collect();
-        let msg = match self.pick_prev_function(&in_ns, new) {
-            Some(p) => {
-                let qual = format!("::{}", self.qualified_decl_name(p));
-                let note = self
-                    .diag(DiagId::note_entity_declared_here, self.ast.decls.get(p).loc())
-                    .arg(format!("'{qual}'"));
-                self.diag(DiagId::sema_no_matching_local_friend_suggest, loc)
-                    .arg(sym_str(self, name))
-                    .arg(qual)
-                    .with_note(note)
-            }
-            None => self.diag(DiagId::sema_no_matching_local_friend, loc),
-        };
-        self.emit(msg);
-        true
+        let p = self.pick_prev_function(&found, new)?;
+        let pty = self.ast.decls.get(p).ty()?;
+        self.same_ignoring_exc_spec(pty, new.ty).then_some(p)
     }
 
     /// Whether function (template) `f` is a friend declared in a
@@ -4837,7 +4850,7 @@ impl Sema<'_, '_> {
     /// definitions are not a redefinition before then (libc++ `expected` and its `void` partial
     /// specialization both define `operator==(const expected&, const
     /// unexpected<_E2>&)`; clang's `CheckForFunctionRedefinition`).
-    fn is_dependent_friend_fn(&self, f: DeclId) -> bool {
+    pub(crate) fn is_dependent_friend_fn(&self, f: DeclId) -> bool {
         let f = if self.kind_of(f) == DeclKind::FunctionTemplate {
             self.pattern_of(f).unwrap_or(f)
         } else {
@@ -5782,12 +5795,9 @@ impl Sema<'_, '_> {
 
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
-        let mut build = if self.classes.last().is_some_and(|c| c.record == r) {
-            self.classes.pop()
-        } else {
-            None
-        };
+        let mut build = self.classes.pop_if(|c| c.record == r);
         self.defining.retain(|&d| d != r);
+        let _ = self.invalid_defining.remove(&r);
         self.ctx = build.as_ref().map_or_else(
             || {
                 self.ast

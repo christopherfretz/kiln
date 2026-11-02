@@ -108,21 +108,44 @@ field's type becomes the error type);
 static data member in a local class or in an anonymous/unnamed class;
 `virtual`/`explicit`/pure on the wrong kind of member.
 
-Friend functions of a local class ([class.friend]/11, WP-280): an unqualified
-friend function (identifier name) must redeclare a function declared in the
-innermost enclosing non-class scope (the block holding the class, its
-`Scope.locals`, matched by `pick_prev_function`); outer blocks and namespaces
-are not considered. Otherwise `no matching function found in local scope`,
-the friend is `INVALID` and redeclares nothing (`check_local_friend`; at the
-definition only, also in a function template, not again at instantiation). A
-function of the enclosing namespace with the friend's signature is suggested
-as clang's typo correction does: `no matching function 'f' found in local
-scope; did you mean '::f'?` + `'::f' declared here`. Divergences (clang's
-typo correction): a near miss in an outer block (clang adds `local declaration
-nearly matches`), a similarly named namespace function (clang suggests
-`'::outer'` for `outer2`), a using-declarator's target and an
-unnamed-namespace function are not suggested; operator friends are not
-checked. Test: `class.friend/local-class-friend-no-prior.cpp`.
+Friend functions of a local class ([class.friend]/11, WP-280, WP-290;
+`local_friend.rs`): an unqualified friend function must redeclare a function
+declared in the innermost enclosing non-class scope (the block holding the
+class, its `Scope.locals`, matched by `pick_prev_function`); that declaration
+is its previous one, so the merge checks apply (`exception specification in
+declaration does not match previous declaration`, return types; not in a
+templated class, whose friends wait for instantiation). Otherwise `no
+matching function found in local scope`, the friend is `INVALID` and
+redeclares nothing (`check_local_friend`; at the definition, also in a
+function template). Clang's notes (`DiagnoseInvalidRedeclaration` with
+`IsLocalFriend`): the enclosing blocks are searched outward to the
+function's outermost one, stopping at the first declaring the name; each
+function found there whose parameters are similar (same count, each the
+same ignoring top-level cv, or after stripping pointers and references, or
+classes/enumerations of the same name) gets `local declaration nearly
+matches` at its name, or `type of Nth parameter of local declaration does
+not match definition ('A' vs 'B')` at the first differing parameter's first
+type-specifier (block-scope functions record it in `type_spec_locs`). When
+no block declares the name, clang's typo correction runs over every
+namespace-scope function (not templates, hidden friends or block-scope
+declarations) that has no definition and similar parameters, whose name is
+within `(len+2)/3` byte edits (a name under 3 bytes only exactly), with
+`len/ed >= 3`: its distance is `(100*ed + 110*q + 50)/100` for `q` qualifier
+components, and must also keep `len/distance >= 3` unless the name is the
+friend's. The qualifier, from the enclosing namespace: `::` for the global
+namespace (one component); `::A::B::` for an enclosing namespace, or when the
+first relative component names an enclosing namespace; else the path from
+the common namespace (`N::M::`); inline and unnamed namespaces are not
+spelled. The least distance wins; a tie between names or namespaces suggests
+nothing, and so does a winner the friend would not redeclare (another
+parameter list or return type, or a non-throwing against a potentially
+throwing exception specification): `no matching function 'f' found in local
+scope; did you mean 'N::f'?` + `'N::f' declared here`. A using-declarator's
+target is found as a namespace function. Operator friends get the plain
+error (block-scope operator declarations are not recorded in
+`Scope.locals`). Tests: `class.friend/local-class-friend-no-prior.cpp`,
+`local-friend-near-match.cpp`, `local-friend-typo-correction.cpp`,
+`local-friend-typo-correction-qualifiers.cpp`.
 
 Out-of-line member definitions (`void S::f() {}`): `act_on_declarator` with a
 qualified declarator-id looks up the name in `S` only and picks the declaration
@@ -1986,6 +2009,11 @@ access, out-of-line declarator scope.**
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
   expression only, and the Oven does not end the object's lifetime (as
   for an explicit destructor call; a gap).
+- *Member not found* ([expr.ref]/7.4, [class.member.lookup]/1): "no
+  member named 'm' in 'C'" names the object's class without its
+  cv-qualifiers (`member_access`; clang prints the record, so a
+  `const It&` object is `in 'It'`; WP-290,
+  `expr.ref/no-member-cv-qualified-object.cpp`).
 - *Qualified member access* ([expr.ref]/5, [class.member.lookup]):
   `e.N::m`, `p->B::f()`, `this->Base::x`, dependent qualifiers.
   `begin_member_qualifier`/`end_member_qualifier` bracket the qualifier
