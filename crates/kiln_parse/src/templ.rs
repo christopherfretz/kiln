@@ -879,7 +879,13 @@ impl Parser<'_, '_> {
         if self.at_splice() {
             return self.parse_splice_type();
         }
-        let qual = self.parse_nested_name_nns().ok()?;
+        let Ok(qual) = self.parse_nested_name_nns() else {
+            // clang annotates the whole (invalid) typename-specifier: the
+            // components after a qualifier that failed (an incomplete
+            // class, [temp.inst]/2) are consumed without a second error.
+            self.skip_after_failed_qualifier();
+            return None;
+        };
         let Some(q) = qual else {
             let d = self.s.diag(DiagId::parse_expected_qualified_after_typename, self.loc());
             self.emit(d);
