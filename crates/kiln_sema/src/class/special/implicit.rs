@@ -312,9 +312,17 @@ impl Sema<'_, '_> {
 
     /// Whether an implicit or defaulted `k` of a class with `bits` is
     /// `constexpr` (spec/sema-class.md §4.6, C++23 and later: unless a
-    /// constructor or destructor of a class with a virtual base).
-    pub(crate) fn defaulted_is_constexpr(bits: DefinitionBits, k: SpecialKind) -> bool {
-        k.is_assign() || !bits.contains(DefinitionBits::HAS_VIRTUAL_BASES)
+    /// constructor or destructor of a class with a virtual base before
+    /// C++26, P3533R2).
+    pub(crate) fn defaulted_is_constexpr(&self, bits: DefinitionBits, k: SpecialKind) -> bool {
+        k.is_assign() || !self.vbases_forbid_constexpr(bits)
+    }
+
+    /// Whether a class with `bits` has a virtual base that keeps its
+    /// constructors and destructor from being constexpr-suitable
+    /// ([dcl.constexpr]/3 before C++26; P3533R2 lifts it).
+    pub(crate) fn vbases_forbid_constexpr(&self, bits: DefinitionBits) -> bool {
+        self.std < kiln_lex::Std::Cxx26 && bits.contains(DefinitionBits::HAS_VIRTUAL_BASES)
     }
 
     /// Whether `m`, a defaulted or deleted `k` of a class whose subobjects
@@ -734,7 +742,7 @@ impl Sema<'_, '_> {
             bits = bits.with(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM);
         }
         // `constexpr` and literal types (§4.6, [basic.types.general]/10).
-        let no_vbases = !bits.contains(DefinitionBits::HAS_VIRTUAL_BASES);
+        let no_vbases = !self.vbases_forbid_constexpr(bits);
         if no_vbases {
             bits = bits.with(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR);
         }
@@ -968,7 +976,7 @@ impl Sema<'_, '_> {
         };
         let fty = self.ast.types.function(ret, &params, FuncInfo::new(), ExcSpec::None);
         let mut spec = FnSpec::new().with_inline(true).with_defaulted(Defaulted::Implicit);
-        if Self::defaulted_is_constexpr(bits, k) {
+        if self.defaulted_is_constexpr(bits, k) {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr);
         }
         let trivial = match k.needs_ovl_bit() {

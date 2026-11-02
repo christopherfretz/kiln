@@ -174,6 +174,7 @@ sema_defaulted_cmp_ref_qual = Error (0) "ref-qualifier '&&' is not allowed on a 
 sema_defaulted_cmp_return = Error (2) "return type for defaulted {0:equality|three-way|equality|relational} comparison operator must be 'bool', not {1}";
 sema_defaulted_cmp_template = Error (0) "comparison operator template cannot be defaulted";
 sema_defaulted_cmp_volatile = Error (0) "defaulted comparison function must not be volatile";
+sema_defaulted_constexpr_with_vbase = Error (1) "{0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot be 'constexpr' in a class with virtual base class";
 sema_defaulted_copy_assign_not_ref = Error (0) "the parameter for an explicitly-defaulted copy assignment operator must be an lvalue reference type";
 sema_defaulted_default_args = Error (1) "an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot have default arguments";
 sema_defaulted_deleted = Warning [DefaultedFunctionDeleted] (1) "explicitly defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} is implicitly deleted";

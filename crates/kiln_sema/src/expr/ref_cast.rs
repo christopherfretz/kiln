@@ -59,7 +59,7 @@ impl Sema<'_, '_> {
             // [expr.static.cast]/2 and /4: a base or derived class.
             if style.allows_static()
                 && (keeps_cv || style.allows_const())
-                && let Some(x) = self.class_ref_cast(style, e, et, r, vk, loc, rparen)
+                && let Some(x) = self.class_ref_cast(style, e, et, ty, vk, loc, rparen)
             {
                 return x;
             }
@@ -122,30 +122,57 @@ impl Sema<'_, '_> {
         self.bad_cast(style, e, ty, loc)
     }
 
-    /// A glvalue `e` of class type `et` as the related class `r`:
-    /// `DerivedToBase` or (not through a virtual base) `BaseToDerived`.
+    /// A glvalue `e` of class type `et` as the referent `r` of reference
+    /// type `ty`: `DerivedToBase` or (not through a virtual base)
+    /// `BaseToDerived`; a downcast through a virtual base is diagnosed
+    /// and recovered.
     #[allow(clippy::too_many_arguments, reason = "the cast's parts")]
     fn class_ref_cast(
         &mut self,
         style: CastStyle,
         e: ExprId,
         et: QualType,
-        r: QualType,
+        ty: QualType,
         vk: ValueCategory,
         loc: Loc,
         rparen: Loc,
     ) -> Option<ExprId> {
+        let r = self.ast.types.pointee(ty)?;
         let ec = self.ast.types.as_record(et)?;
         let rc = self.ast.types.as_record(r)?;
-        let (ck, path) = self.class_relation(et, ec, r, rc, loc)?;
-        Some(self.typed_cast(style, ck, e, r, vk, path, loc, rparen))
+        match self.class_relation(et, ec, r, rc, loc) {
+            Ok(Some((ck, path))) => Some(self.typed_cast(style, ck, e, r, vk, path, loc, rparen)),
+            Ok(None) => None,
+            Err(v) => {
+                self.static_downcast_via_virtual(et, ty, v, loc);
+                Some(self.recover(ty, &[e], loc))
+            }
+        }
+    }
+
+    /// clang `err_static_downcast_via_virtual` ([expr.static.cast]/2,
+    /// /11): a downcast from `from` to `to` through virtual base `v`.
+    fn static_downcast_via_virtual(
+        &mut self,
+        from: QualType,
+        to: QualType,
+        v: kiln_ast::DeclId,
+        loc: Loc,
+    ) {
+        let vt = QualType::unqual(self.ast.types.record_type(v));
+        let msg = self
+            .diag(DiagId::sema_static_downcast_via_virtual, loc)
+            .arg(self.ty_arg(from))
+            .arg(self.ty_arg(to))
+            .arg(self.ty_arg(vt));
+        self.emit(msg);
     }
 
     /// The cast between related classes `from` (record `fc`) and `to`
     /// (record `tc`): an upcast, or a downcast not through a virtual base
-    /// ([expr.static.cast]/2, /11). `None` when unrelated; an ambiguous
-    /// base is diagnosed (`Some` with `CastKind::NoOp` never occurs: the
-    /// caller treats the error as a failed cast).
+    /// ([expr.static.cast]/2, /11). `Ok(None)` when unrelated; an
+    /// ambiguous base is diagnosed (the caller treats the error as a
+    /// failed cast); `Err(v)` a downcast through virtual base `v`.
     fn class_relation(
         &mut self,
         from: QualType,
@@ -153,7 +180,7 @@ impl Sema<'_, '_> {
         to: QualType,
         tc: kiln_ast::DeclId,
         loc: Loc,
-    ) -> Option<(CastKind, Option<ListId>)> {
+    ) -> Result<Option<(CastKind, Option<ListId>)>, kiln_ast::DeclId> {
         let (fu, tu) = (conv::strip_cv(self, from), conv::strip_cv(self, to));
         // The relation is only known for complete classes: a class
         // template specialization is instantiated first ([temp.inst]/2;
@@ -163,7 +190,7 @@ impl Sema<'_, '_> {
         match find_base(self, fc, tc) {
             BaseSearch::Unique(p) => {
                 self.check_base_access(fu, tu, &p, loc);
-                return Some((CastKind::DerivedToBase, Some(path_list(self, &p))));
+                return Ok(Some((CastKind::DerivedToBase, Some(path_list(self, &p)))));
             }
             BaseSearch::Ambiguous(paths) => {
                 let shown = ambiguous_paths_string(self, from, &paths);
@@ -173,16 +200,19 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(tu))
                     .arg(shown);
                 self.emit(msg);
-                return None;
+                return Ok(None);
             }
             BaseSearch::NotDerived => {}
         }
         match find_base(self, tc, fc) {
-            BaseSearch::Unique(p) if p.first_virtual.is_none() => {
-                self.check_base_access(tu, fu, &p, loc);
-                Some((CastKind::BaseToDerived, Some(path_list(self, &p))))
-            }
-            _ => None,
+            BaseSearch::Unique(p) => match p.first_virtual {
+                Some(v) => Err(v),
+                None => {
+                    self.check_base_access(tu, fu, &p, loc);
+                    Ok(Some((CastKind::BaseToDerived, Some(path_list(self, &p)))))
+                }
+            },
+            _ => Ok(None),
         }
     }
 
@@ -213,8 +243,9 @@ impl Sema<'_, '_> {
             return None;
         }
         let BaseSearch::Unique(p) = find_base(self, tc, fc) else { return None };
-        if p.first_virtual.is_some() {
-            return None;
+        if let Some(v) = p.first_virtual {
+            self.static_downcast_via_virtual(xt, to, v, loc);
+            return Some(self.recover(to, &[x], loc));
         }
         self.check_base_access(tu, fu, &p, loc);
         let path = Some(path_list(self, &p));
