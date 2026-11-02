@@ -114,6 +114,80 @@ impl Oven {
         format!(" (vector of {count} '{}' {v})", Self::type_name(ast, elem))
     }
 
+    /// clang's `note_constexpr_invalid_void_star_cast` for a failed
+    /// [expr.static.cast]/14 cast `e` of the `void *` `p`: the operand
+    /// type as written (with its `aka`), the designated type `from` with
+    /// the qualifiers of the complete object (or array element) it names
+    /// (clang's designator type), and the target pointee as written.
+    fn void_cast_note(&self, ast: &Ast, e: Option<ExprId>, from: OTy, to: OTy, p: u64) -> String {
+        let cast = e.filter(|&e| ast.exprs.get(e).kind().is_cast());
+        let src = cast.map_or_else(
+            || "'void *'".to_owned(),
+            |e| Self::quoted_aka(ast, ast.exprs.get(ast.exprs.operand(e)).ty()),
+        );
+        let target = cast
+            .and_then(|e| {
+                let top = ast.types.desugar_top(ast.exprs.get(e).ty());
+                match ast.types.view(top.ty()) {
+                    kiln_ast::types::TypeView::Pointer(q) => Some(q),
+                    _ => None,
+                }
+            })
+            .map_or_else(|| format!("'{}'", self.tname(ast, to)), |q| Self::quoted_aka(ast, q));
+        let ptr = Ptr::decode(p);
+        let mut desig = self.tname(ast, from);
+        if let Some(a) = self.alloc_any(ptr)
+            && let Some(dq) = match a.origin {
+                Origin::Var(d) | Origin::Global(d) | Origin::External(d) => ast.decls.get(d).ty(),
+                Origin::Temp(x) => Some(ast.exprs.get(x).ty()),
+                Origin::Let(t) => crate::value::let_mte(ast, t)
+                    .map(|x| ast.exprs.get(x).ty())
+                    .or_else(|| ast.decls.get(t).ty()),
+                _ => None,
+            }
+            && !matches!(self.types.kind(from), TyKind::Array { .. })
+        {
+            // Walk the designator: the qualifiers are those of the
+            // declaration that names the subobject (the variable, or the
+            // member), kept through array elements and dropped at a base.
+            let (mut t, mut off) = (a.ty, u64::from(ptr.off));
+            let mut cv = ast.types.effective_quals(dq);
+            while t != from {
+                match self.types.kind(t) {
+                    TyKind::Array { elem, .. } => {
+                        off %= self.types.size(elem).max(1);
+                        t = elem;
+                    }
+                    TyKind::Record { .. } if let Some(f) = self.types.field_at(t, off) => {
+                        cv = match ast.decls.get(f.decl).ty() {
+                            Some(fq) if !f.base => ast.types.effective_quals(fq),
+                            _ => kiln_ast::types::Quals::NONE,
+                        };
+                        off -= f.offset;
+                        t = f.ty;
+                    }
+                    _ => break,
+                }
+            }
+            if t == from && !cv.is_empty() {
+                let q = self.types.info(from).q;
+                desig = Self::type_name(ast, QualType::new(q.ty(), q.quals_bits() | cv.bits()));
+            }
+        }
+        format!(
+            "cast from {src} is not allowed in a constant expression because the pointed object type '{desig}' is not similar to the target type {target}"
+        )
+    }
+
+    /// `'T'`, or `'T' (aka 'U')` when `q` is sugar clang desugars.
+    fn quoted_aka(ast: &Ast, q: QualType) -> String {
+        let s = Self::type_name(ast, q);
+        match kiln_ast::types::aka(&ast.types, ast, q) {
+            Some(a) => format!("'{s}' (aka '{a}')"),
+            None => format!("'{s}'"),
+        }
+    }
+
     pub(crate) fn tname(&self, ast: &Ast, t: OTy) -> String {
         if let TyKind::Array { elem, n } = self.types.kind(t)
             && self.types.is_synthetic_array(t)
@@ -371,14 +445,7 @@ impl Oven {
                     ),
                 )
             }
-            Fault::VoidCast { from, to } => (
-                site.loc,
-                format!(
-                    "cast from 'void *' is not allowed in a constant expression because the pointed object type '{}' is not similar to the target type '{}'",
-                    self.tname(ast, from),
-                    self.tname(ast, to)
-                ),
-            ),
+            Fault::VoidCast { from, to, p } => (site.loc, self.void_cast_note(ast, site.e, from, to, p)),
             Fault::NullCallee => {
                 let callee =
                     site.e.and_then(|e| callee_name(ast, e)).unwrap_or_else(|| "callee".into());

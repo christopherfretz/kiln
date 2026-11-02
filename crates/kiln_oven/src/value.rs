@@ -504,7 +504,12 @@ impl Oven {
                 Some(d) => {
                     let r = b.ast().types.is_reference(q);
                     self.check_not_immediate(b, d, r, loc)?;
-                    Ok(Scalar::Pointer { ty: q, base: PtrBase::Function(d), offset: 0, designated: None })
+                    Ok(Scalar::Pointer {
+                        ty: q,
+                        base: PtrBase::Function(d),
+                        offset: 0,
+                        designated: None,
+                    })
                 }
                 None => Err(Freeze::Fault(FailKind::NotConstant)),
             };

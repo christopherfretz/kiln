@@ -248,9 +248,12 @@ pub(crate) enum Fault {
         ak: u32,
         field: DeclId,
     },
+    /// [expr.static.cast]/14: the `void *` `p` designates an object of
+    /// type `from`, not similar to `to`.
     VoidCast {
         from: OTy,
         to: OTy,
+        p: u64,
     },
     NullCallee,
     Callee(u32),
@@ -1771,7 +1774,7 @@ impl Oven {
             if self.types.similar(from, to) {
                 return Ok(());
             }
-            return Err(Fault::VoidCast { from, to });
+            return Err(Fault::VoidCast { from, to, p: raw });
         }
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
@@ -1781,7 +1784,7 @@ impl Oven {
             return Ok(());
         }
         let from = self.deepest_at(a.ty, off);
-        Err(Fault::VoidCast { from, to })
+        Err(Fault::VoidCast { from, to, p: raw })
     }
 
     /// The most derived (innermost) type of an object at byte `off` of

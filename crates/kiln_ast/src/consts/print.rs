@@ -173,6 +173,11 @@ pub trait PrintEnv {
         let _ = decl;
         None
     }
+    /// Whether `a` and `b` are the same type, ignoring top-level
+    /// qualifiers.
+    fn same_unqualified(&self, a: QualType, b: QualType) -> bool {
+        a.without_quals() == b.without_quals()
+    }
     /// Appends a type's name.
     fn type_name(&self, ty: QualType, out: &mut String) {
         let _ = write!(out, "#t{}", ty.ty().index());
@@ -322,7 +327,9 @@ impl Printer<'_> {
             Scalar::Bool { value, .. } => out.push_str(if value { "true" } else { "false" }),
             Scalar::Float { kind, bits, .. } => format_float(kind, bits, out),
             Scalar::Null { .. } => out.push_str("nullptr"),
-            Scalar::Pointer { ty, base, offset, .. } => self.pointer(ty, base, offset, out),
+            Scalar::Pointer { ty, base, offset, designated } => {
+                self.pointer(ty, base, offset, designated, out);
+            }
             Scalar::MemberPtr { member, .. } => {
                 out.push('&');
                 self.env.decl_name(member, out);
@@ -375,12 +382,38 @@ impl Printer<'_> {
         }
     }
 
-    fn pointer(&self, ty: QualType, base: PtrBase, offset: u64, out: &mut String) {
+    /// A `void *` prints the designator of the object it `designated`:
+    /// the whole object one past its end as `&x + 1`, and (as a template
+    /// argument) an array variable's address as the array (`arr`; clang
+    /// keys the argument by the declaration, ignoring the decay).
+    fn pointer(
+        &self,
+        ty: QualType,
+        base: PtrBase,
+        offset: u64,
+        designated: Option<QualType>,
+        out: &mut String,
+    ) {
         let (pointee, reference) = match self.env.shape(ty) {
             Shape::Pointer { pointee, reference } => (pointee, reference),
             _ => (None, false),
         };
-        let amp = !(reference && self.template());
+        let pointee = designated.or(pointee);
+        let mut amp = !(reference && self.template());
+        if let (PtrBase::Decl(d), Some(t)) = (base, designated)
+            && let Some(whole) = self.env.decl_type(d)
+            && self.env.same_unqualified(whole, t)
+        {
+            if offset != 0 {
+                out.push('&');
+                self.env.decl_name(d, out);
+                out.push_str(" + 1");
+                return;
+            }
+            if self.template() && matches!(self.env.shape(whole), Shape::Array { .. }) {
+                amp = false;
+            }
+        }
         match base {
             PtrBase::StringLit { lit, .. } => {
                 let unit = u64::from(self.strings.encoding(lit).unit_bytes());
@@ -451,18 +484,25 @@ impl Printer<'_> {
         }
     }
 
-    fn walk(
+    fn walk(&self, ty: QualType, offset: u64, pointee: Option<QualType>, d: &mut String) -> bool {
+        self.walk_at(ty, offset, pointee, d, 0)
+    }
+
+    /// [`Self::walk`] at nesting `depth`. Several members can share an
+    /// offset (an empty base, a `[[no_unique_address]]` member): each is
+    /// tried until one holds `pointee`.
+    fn walk_at(
         &self,
         mut ty: QualType,
         mut offset: u64,
         pointee: Option<QualType>,
         d: &mut String,
+        depth: u32,
     ) -> bool {
-        let same = |a: QualType, b: QualType| a.without_quals() == b.without_quals();
         // Bounded by the nesting depth of the type; 4096 guards a cyclic
         // (buggy) environment.
-        for _ in 0..4096 {
-            if offset == 0 && pointee.is_none_or(|p| same(p, ty)) {
+        for _ in depth..4096 {
+            if offset == 0 && pointee.is_none_or(|p| self.env.same_unqualified(p, ty)) {
                 return true;
             }
             match self.env.shape(ty) {
@@ -479,20 +519,25 @@ impl Printer<'_> {
                     ty = elem;
                 }
                 Shape::Record { members, .. } => {
-                    let hit = members.iter().find(|m| {
+                    let hits = members.iter().filter(|m| {
                         let at = m.offset_bits / 8;
                         m.bit_width.is_none()
                             && m.offset_bits % 8 == 0
                             && at <= offset
                             && (offset < at + m.size || (offset == at && m.size == 0))
                     });
-                    let Some(m) = hit else { return false };
-                    if !m.name.is_empty() {
-                        d.push('.');
-                        d.push_str(&m.name);
+                    let len = d.len();
+                    for m in hits {
+                        if !m.name.is_empty() {
+                            d.push('.');
+                            d.push_str(&m.name);
+                        }
+                        if self.walk_at(m.ty, offset - m.offset_bits / 8, pointee, d, depth + 1) {
+                            return true;
+                        }
+                        d.truncate(len);
                     }
-                    offset -= m.offset_bits / 8;
-                    ty = m.ty;
+                    return false;
                 }
                 _ => return offset == 0,
             }

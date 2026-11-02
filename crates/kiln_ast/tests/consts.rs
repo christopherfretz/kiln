@@ -347,18 +347,33 @@ fn every_scalar_kind_roundtrips() {
         PtrBase::Const(c),
         PtrBase::TypeInfo(ty(INT)),
     ] {
-        let id = roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 0, designated: None });
+        let id = roundtrip(
+            &mut st,
+            Scalar::Pointer { ty: ty(INT_PTR), base, offset: 0, designated: None },
+        );
         assert_eq!(st.kind(id), ValueKind::Pointer);
         if !matches!(base, PtrBase::Function(_)) {
-            roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 12, designated: None });
+            roundtrip(
+                &mut st,
+                Scalar::Pointer { ty: ty(INT_PTR), base, offset: 12, designated: None },
+            );
             // Offsets beyond 32 bits go to the word pool.
-            roundtrip(&mut st, Scalar::Pointer { ty: ty(INT_PTR), base, offset: 1 << 40, designated: None });
+            roundtrip(
+                &mut st,
+                Scalar::Pointer { ty: ty(INT_PTR), base, offset: 1 << 40, designated: None },
+            );
             // A `void *`'s designated type is part of its identity: the
             // same address naming a different subobject is a different
             // value ([temp.type]/2.4).
-            let plain = st.push_scalar(Scalar::Pointer { ty: ty(INT_PTR), base, offset: 4, designated: None });
+            let plain = st.push_scalar(Scalar::Pointer {
+                ty: ty(INT_PTR),
+                base,
+                offset: 4,
+                designated: None,
+            });
             for (off, d) in [(4, INT), (4, PAIR), (1 << 40, INT)] {
-                let at = Scalar::Pointer { ty: ty(INT_PTR), base, offset: off, designated: Some(ty(d)) };
+                let at =
+                    Scalar::Pointer { ty: ty(INT_PTR), base, offset: off, designated: Some(ty(d)) };
                 let id = roundtrip(&mut st, at);
                 assert_ne!(Ok(id), plain);
             }
@@ -475,7 +490,12 @@ fn aggregate_with_nested_relocations() {
     assert_eq!(st.get(inner), ConstValue::Aggregate(inner_img));
     // outer: P{9, &inner.a} — a pointer into another frozen value.
     let pin = st
-        .push_scalar(Scalar::Pointer { ty: ty(INT_PTR), base: PtrBase::Const(inner), offset: 0, designated: None })
+        .push_scalar(Scalar::Pointer {
+            ty: ty(INT_PTR),
+            base: PtrBase::Const(inner),
+            offset: 0,
+            designated: None,
+        })
         .unwrap();
     let bytes2 = le(&[9, 0, 0, 0]);
     let relocs2 = [Reloc { at: 8, value: pin }];
@@ -700,11 +720,21 @@ fn malformed_scalars_are_rejected() {
     bad(&mut st, Scalar::Float { ty: ty(DOUBLE), kind: FloatKind::X87Extended, bits: 1 << 80 });
     bad(
         &mut st,
-        Scalar::Pointer { ty: ty(FN_PTR), base: PtrBase::Function(DeclId::new(4)), offset: 1, designated: None },
+        Scalar::Pointer {
+            ty: ty(FN_PTR),
+            base: PtrBase::Function(DeclId::new(4)),
+            offset: 1,
+            designated: None,
+        },
     );
     bad(
         &mut st,
-        Scalar::Pointer { ty: ty(INT_PTR), base: PtrBase::Const(ConstValueId::new(99)), offset: 0, designated: None },
+        Scalar::Pointer {
+            ty: ty(INT_PTR),
+            base: PtrBase::Const(ConstValueId::new(99)),
+            offset: 0,
+            designated: None,
+        },
     );
     assert!(st.is_empty());
     let e = ConstError::Malformed("x");
@@ -946,7 +976,11 @@ fn print_scalars() {
             "&s.x",
             "&s.x",
         ),
-        (push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 0, designated: None }), "\"hi\"", "\"hi\""),
+        (
+            push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 0, designated: None }),
+            "\"hi\"",
+            "\"hi\"",
+        ),
         (
             push(Scalar::Pointer { ty: ty(INT_PTR), base: lit(hi), offset: 1, designated: None }),
             "&\"hi\"[1]",
@@ -968,7 +1002,12 @@ fn print_scalars() {
             "&f",
         ),
         (
-            push(Scalar::Pointer { ty: ty(FN_PTR), base: PtrBase::TypeInfo(ty(SHORT)), offset: 0, designated: None }),
+            push(Scalar::Pointer {
+                ty: ty(FN_PTR),
+                base: PtrBase::TypeInfo(ty(SHORT)),
+                offset: 0,
+                designated: None,
+            }),
             "&typeid(short)",
             "&typeid(short)",
         ),
