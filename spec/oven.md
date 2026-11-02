@@ -555,6 +555,35 @@ literal is one instruction and one step, not an interpreted loop.
   `__builtin_snprintf` and `__builtin_sprintf` trap "subexpression not
   valid in a constant expression", as clang 19.
 
+- **Landed (WP-282): library builtins.** `__builtin_object_size` and
+  `__builtin_dynamic_object_size` are `bi::OBJECT_SIZE` (kbc 22, `SIDE`
+  1: the operand is evaluated only for its pointer value, clang's
+  `tryEvaluateBuiltinObjectSize`): for a pointer into a known complete
+  object the bytes from the pointer to the end of the whole object
+  (types 0/2) or of the closest subobject (types 1/3), 0 past the end;
+  an operand with side effects is not evaluated and gives the unknown
+  value (-1 for types 0/1, 0 for 2/3); a null or function pointer or an
+  object of incomplete type is not a constant (clang 19's
+  `ConstantExpression` mode).
+  `__builtin_assume_aligned` evaluates to its pointer operand (the
+  offset is evaluated). `__builtin_shufflevector` (`vec_shuffle`)
+  concatenates the two operands' lanes and picks by index; a -1 lane is
+  the note `index for __builtin_shufflevector not within the bounds of
+  the input vectors; index of -1 found at position N is not permitted in
+  a constexpr context`. The `*f128` builtins with a `long double` twin
+  evaluate as the twin (quad-precision `softfloat` arithmetic);
+  `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
+  trap "subexpression not valid", as clang 19. **Divergences:** clang
+  reports the -1 shuffle index as an error, kiln as the note of the
+  failed evaluation; assume_aligned does not check the pointer's
+  alignment (clang: "alignment of the base pointee object (N bytes) is
+  less than the asserted M bytes"); an object-size operand with side
+  effects gives the unknown value (clang evaluates the pointer anyway,
+  e.g. 4 for `__builtin_object_size(p++, 0)` of an `int`), and an
+  operand cast to another pointer type (`(const char *)&s`) is
+  rejected as a reinterpreting cast (clang's object-size evaluation
+  looks through it).
+
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,
   `bool` or floating and its result is such a scalar (not a pointer, not
