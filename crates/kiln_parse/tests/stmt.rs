@@ -238,7 +238,9 @@ fn delayed_no_member_nested_in_expression_statement() {
 /// order: a subscript missing its `]` drops its index's typo until the end
 /// of the translation unit (after the pending instantiations); a
 /// subscript's base is corrected at the `]`; a call missing its `)`
-/// corrects its callee and arguments at once; a lambda body's and a
+/// corrects its callee and arguments at once and makes the expression
+/// invalid, so an expression statement missing its `;` after it skips to
+/// the next `;` with no "expected ';'"; a lambda body's and a
 /// statement expression's statements end their own full-expressions
 /// (`tests/conformance/stmt.expr/delayed-typo-correction-points.cpp`).
 #[test]
@@ -255,6 +257,10 @@ fn delayed_typo_correction_points() {
         "  [] { int v = S::nom6; return; }(), 1 +;\n",
         "  ({ int w = S::nom7; w; }) + 5 +;\n",
         "  tf(1);\n",
+        "  a = g(S::nom8 x)\n",
+        "  a = 1;\n",
+        "  ({ g(S::nom9 z) 1; });\n",
+        "  a = 2\n",
         "}\n",
     ));
     let errs: Vec<&str> =
@@ -274,6 +280,9 @@ fn delayed_typo_correction_points() {
             "11:41 error: expected expression",
             "12:17 error: no member named 'nom7' in 'S'",
             "12:34 error: expected expression",
+            "14:12 error: no member named 'nom8' in 'S'",
+            "16:11 error: no member named 'nom9' in 'S'",
+            "17:8 error: expected ';' after expression",
             "4:36 error: member reference base type 'int' is not a structure or union",
             "6:14 error: no member named 'nom1' in 'S'",
             "7:18 error: no member named 'nom2' in 'S'",

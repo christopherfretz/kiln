@@ -1116,6 +1116,7 @@ impl Parser<'_, '_> {
                             had_typo |= self.s.correct_delayed_typos_in(a);
                         }
                         if had_typo {
+                            self.expr_invalid = true;
                             let at = self.loc();
                             self.skip_until(&[Punct::RParen], true, false);
                             self.eat(Punct::RParen).unwrap_or(at)

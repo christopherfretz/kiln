@@ -268,7 +268,12 @@ impl Parser<'_, '_> {
     /// the statement expression's value (clang's `handleExprStmt`).
     fn parse_expression_statement(&mut self, in_stmt_expr: bool) -> Option<StmtId> {
         let mark = self.s.begin_delayed_typos();
-        let Some(e) = self.parse_expression() else {
+        let outer_invalid = std::mem::replace(&mut self.expr_invalid, false);
+        let parsed = self.parse_expression();
+        // clang's `ParseExprStatement`: an invalid expression skips to the
+        // `;` (`a = g(S::nom x)` with no `;` reports no "expected ';'").
+        let invalid = std::mem::replace(&mut self.expr_invalid, outer_invalid);
+        let Some(e) = parsed.filter(|_| !invalid) else {
             self.s.end_delayed_typos(mark);
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);

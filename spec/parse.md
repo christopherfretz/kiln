@@ -989,7 +989,11 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     `g(1, S::nom x);`) reports the callee's and the arguments' typos at
     once, before what follows (`a = g(S::nom x) + ;` reports the typo,
     then "expected expression"); if there were any, the parser skips to
-    the `)` (stopping at `;`) with no "expected ')'". In a
+    the `)` (stopping at `;`) with no "expected ')'", and the
+    expression is invalid (clang's `ExprError`; `Parser::expr_invalid`):
+    an expression statement missing its `;` after it (`a = g(S::nom x)`
+    then a newline) skips to the next `;` with no "expected ';' after
+    expression", as clang's `ParseExprStatement`. In a
     parenthesized expression (`(S::nom x);`) "expected ')'" and its note
     come first.
   - A subscript's base is corrected at the `]` (`S::nom[1 2]` reports
@@ -1009,14 +1013,10 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     scopes (`Sema::suspend_delayed_typos`): their statements and
     declarations end their own full-expressions, so `[] { int v =
     S::nom; }(), 1 +;` reports the typo before "expected expression".
-  Kept deviation: a missing `)` makes clang's call expression invalid,
-  so an expression statement missing its `;` after it
-  (`a = g(S::nom x)` then a newline) skips to the next `;` with no
-  "expected ';' after expression"; kiln reports it
-  (`tests/conformance/stmt.expr/delayed-no-member-after-missing-semi.cpp`,
+  Tests: `tests/conformance/stmt.expr/delayed-no-member-after-missing-semi.cpp`,
   `tests/conformance/stmt.expr/delayed-no-member-nested-full-expression.cpp`,
-  `tests/conformance/stmt.expr/delayed-typo-correction-points.cpp`,
-  kiln_parse `delayed_no_member_after_missing_semi`,
+  `tests/conformance/stmt.expr/delayed-typo-correction-points.cpp`
+  (kiln_parse `delayed_no_member_after_missing_semi`,
   `delayed_no_member_nested_in_expression_statement`,
   `delayed_typo_correction_points`).
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
