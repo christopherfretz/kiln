@@ -862,16 +862,28 @@ impl Sema<'_, '_> {
         let mut ty = self.auto_declarator_check(ty, spec_loc, d);
         let name = self.declarator_name(d);
         let mut prev_ref = false;
+        let recover = std::mem::take(&mut self.declarator_int_recovery);
+        // A failed chunk: the declarator's type is the error type, or
+        // `int` under recovery (checked at the next chunk and the end).
+        macro_rules! fail {
+            () => {{
+                ty = QualType::ERROR;
+                continue;
+            }};
+        }
         for (i, chunk) in d.chunks.iter().enumerate().rev() {
             if self.is_error_type(ty) {
-                return ty;
+                if !recover {
+                    return ty;
+                }
+                ty = QualType::INT;
             }
             ty = self.declarator_parens(ty, d, i + 1);
             if let Some(which) = self.decltype_auto_compound(ty, chunk) {
                 let loc = Self::chunk_loc(chunk);
                 let msg = self.diag(DiagId::sema_decltype_auto_compound, loc).arg(which);
                 self.emit(msg);
-                return QualType::ERROR;
+                fail!();
             }
             let t = &self.ast.types;
             match chunk {
@@ -882,10 +894,10 @@ impl Sema<'_, '_> {
                             .arg(&name)
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
-                        return QualType::ERROR;
+                        fail!();
                     }
                     if self.check_qualified_function(ty, false, *loc) {
-                        return QualType::ERROR;
+                        fail!();
                     }
                     let p = self.ast.types.pointer_to(ty);
                     ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
@@ -893,7 +905,7 @@ impl Sema<'_, '_> {
                 }
                 Chunk::MemberPointer { qual, quals, loc } => {
                     prev_ref = false;
-                    let Some(qual) = qual else { return QualType::ERROR };
+                    let Some(qual) = qual else { fail!() };
                     let Some(class) = self.member_pointer_class(qual) else {
                         // clang 22 says "member pointer" for an abstract declarator
                         // (clang 19 "'type name'"; no identifier has a space).
@@ -903,7 +915,7 @@ impl Sema<'_, '_> {
                             self.diag(DiagId::sema_mptr_in_nonclass, *loc).arg(&name)
                         };
                         self.emit(msg);
-                        return QualType::ERROR;
+                        fail!();
                     };
                     let t = &self.ast.types;
                     if t.is_reference(ty) {
@@ -912,12 +924,12 @@ impl Sema<'_, '_> {
                             .arg(&name)
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
-                        return QualType::ERROR;
+                        fail!();
                     }
                     if t.is_void(ty) {
                         let msg = self.diag(DiagId::sema_mptr_to_void, *loc).arg(&name);
                         self.emit(msg);
-                        return QualType::ERROR;
+                        fail!();
                     }
                     let p = self.ast.types.member_pointer(ty, class.ty());
                     ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
@@ -926,14 +938,17 @@ impl Sema<'_, '_> {
                     if t.is_reference(ty) && prev_ref {
                         let msg = self.diag(DiagId::sema_reference_to_reference, *loc).arg(&name);
                         self.emit(msg);
-                        return QualType::ERROR;
+                        if !recover {
+                            fail!();
+                        }
                     }
+                    let t = &self.ast.types;
                     if t.is_void(ty) {
                         self.error(DiagId::sema_reference_to_void, *loc);
-                        return QualType::ERROR;
+                        fail!();
                     }
                     if self.check_qualified_function(ty, true, *loc) {
-                        return QualType::ERROR;
+                        fail!();
                     }
                     let t = &self.ast.types;
                     let lref = matches!(chunk, Chunk::LRef { .. });
@@ -962,7 +977,7 @@ impl Sema<'_, '_> {
                             .diag(DiagId::sema_array_incomplete_type, *loc)
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
-                        return QualType::ERROR;
+                        fail!();
                     }
                     if t.is_function(ty) {
                         let msg = self
@@ -970,7 +985,7 @@ impl Sema<'_, '_> {
                             .arg(&name)
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
-                        return QualType::ERROR;
+                        fail!();
                     }
                     if t.is_reference(ty) {
                         let msg = self
@@ -978,7 +993,7 @@ impl Sema<'_, '_> {
                             .arg(&name)
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
-                        return QualType::ERROR;
+                        fail!();
                     }
                     // [dcl.array]/1, /3 (clang `BuildArrayType`): in C++
                     // only an array of unknown bound is rejected here; an
@@ -989,17 +1004,17 @@ impl Sema<'_, '_> {
                             .diag(DiagId::sema_array_incomplete_type, *loc)
                             .arg(self.ty_arg(ty));
                         self.emit(self.incomplete_note(msg, ty));
-                        return QualType::ERROR;
+                        fail!();
                     }
                     if self.ast.types.is_sizeless(ty) {
                         let msg = self
                             .diag(DiagId::sema_array_sizeless_element, *loc)
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
-                        return QualType::ERROR;
+                        fail!();
                     }
                     if self.require_non_abstract_element(*loc, ty) {
-                        return QualType::ERROR;
+                        fail!();
                     }
                     // §5.8 (clang `BuildArrayType`): an element class with a
                     // flexible array member is a GNU extension.
@@ -1024,7 +1039,7 @@ impl Sema<'_, '_> {
                             Some(Ok(0)) if self.inst.stack.is_sfinae() => {
                                 let l = self.begin_loc(*e);
                                 self.error(DiagId::sema_zero_array_size_sfinae, l);
-                                return QualType::ERROR;
+                                fail!();
                             }
                             // clang `BuildArrayType`: an array of variable
                             // length arrays is one too.
@@ -1045,7 +1060,7 @@ impl Sema<'_, '_> {
                             }
                             Some(Ok(n)) => self.ast.types.constant_array(ty, n, None),
                             Some(Err(size)) => self.ast.types.variable_array(ty, size),
-                            None => return QualType::ERROR,
+                            None => fail!(),
                         },
                     };
                 }
@@ -1067,7 +1082,7 @@ impl Sema<'_, '_> {
                                     .arg(self.ty_arg(ty));
                                 self.emit(msg);
                             }
-                            return QualType::ERROR;
+                            fail!();
                         }
                         ty = ret;
                         info = info.with_trailing_return(true);
@@ -1084,7 +1099,10 @@ impl Sema<'_, '_> {
                             .arg(which)
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
-                        return QualType::ERROR;
+                        if !recover {
+                            fail!();
+                        }
+                        ty = QualType::INT;
                     }
                     // [basic.extended.fp] (clang): `__fp16` is a storage-only
                     // type where the target passes no half values, checked
@@ -1108,7 +1126,7 @@ impl Sema<'_, '_> {
                         }
                     }
                     if fp16_bad {
-                        return QualType::ERROR;
+                        fail!();
                     }
                     // [depr.volatile.type]/2 (C++20 [dcl.fct]/12): a
                     // volatile-qualified return type is deprecated, at the
@@ -1128,6 +1146,9 @@ impl Sema<'_, '_> {
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
             }
+        }
+        if recover && self.is_error_type(ty) {
+            return QualType::INT;
         }
         ty
     }
@@ -1320,21 +1341,48 @@ impl Sema<'_, '_> {
         // [dcl.stc]/2: no storage class but `register`, which C++17
         // removed and clang accepts as an extension (an error by default,
         // `-Wregister`). Both before the type, in clang's order.
-        match ds.storage {
-            Some((StorageSpec::Register, loc)) => {
-                self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+        // A non-type template parameter ([temp.param]/2: no storage
+        // class; [dcl.inline]/1, [dcl.constexpr]/1, [dcl.fct.spec]/1):
+        // clang's `CheckValidDeclSpecifiers`, one error per specifier in
+        // its order, instead of the function parameter's.
+        let nttp = d.site == DeclSite::TemplateParam;
+        if nttp {
+            let locs = [
+                ds.storage.map(|(_, l)| l),
+                ds.thread_local,
+                ds.inline,
+                ds.constexpr.or(ds.consteval).or(ds.constinit),
+                ds.virtual_,
+                ds.explicit,
+            ];
+            for l in locs.into_iter().flatten() {
+                self.error(DiagId::sema_invalid_decl_spec_in_nontype_parm, l);
             }
-            Some((_, loc)) => self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc),
-            None => {}
+        } else {
+            match ds.storage {
+                Some((StorageSpec::Register, loc)) => {
+                    self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+                }
+                Some((_, loc)) => self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc),
+                None => {}
+            }
         }
         let base = self.type_from_declspec(ds);
         let base = self.apply_declspec_vector_attrs(base, ds);
         self.warn_redundant_parens(None, d);
+        // A pack's erroneous type recovers as `int` (clang's recovery
+        // type), so "type 'int' of function parameter pack does not
+        // contain any unexpanded parameter packs" follows the type error.
+        let errs = self.diags.error_count();
+        self.declarator_int_recovery = d.ellipsis.is_some();
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+        self.declarator_int_recovery = false;
+        let recovered = d.ellipsis.is_some() && self.diags.error_count() != errs;
         // [dcl.constexpr]/1, [dcl.constinit]/1: clang `err_invalid_constexpr`.
         let specs = [ds.constexpr, ds.consteval, ds.constinit];
-        if let Some((which, l)) =
-            specs.iter().enumerate().find_map(|(i, l)| l.map(|l| (i as u8, l)))
+        if !nttp
+            && let Some((which, l)) =
+                specs.iter().enumerate().find_map(|(i, l)| l.map(|l| (i as u8, l)))
         {
             let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
             self.emit(m);
@@ -1375,7 +1423,7 @@ impl Sema<'_, '_> {
             original_ty,
             loc: d.name_loc(),
             attrs,
-            invalid: ds.invalid || d.invalid,
+            invalid: ds.invalid || d.invalid || recovered,
             default_arg: DefaultArg::None,
             default_loc: Loc::INVALID,
             range: (ds.loc, d.name_loc()),
@@ -1462,6 +1510,18 @@ impl Sema<'_, '_> {
     /// ([dcl.fct.default]/5), stored as [`DefaultArg::Parsed`]. (A default
     /// argument replayed in a complete-class context goes through
     /// [`Sema::act_on_param_default_arg`] instead.)
+    /// [dcl.fct.default]/3: "A default argument shall not be specified
+    /// for a function parameter pack": clang's "parameter pack cannot
+    /// have a default argument" at the `=` `eq`, the argument discarded.
+    /// True (and diagnosed) if `ty`, a parameter's type, is a pack.
+    pub fn reject_param_pack_default(&mut self, ty: QualType, eq: Loc) -> bool {
+        if !matches!(self.ast.types.view(ty.ty()), TypeView::PackExpansion { .. }) {
+            return false;
+        }
+        self.error(DiagId::sema_param_default_argument_on_parameter_pack, eq);
+        true
+    }
+
     pub fn act_on_param_default_init(&mut self, p: &mut ParamInfo, init: Initializer) {
         let roots: Vec<ExprId> = match &init {
             Initializer::Expr(e) => vec![*e],
@@ -1477,6 +1537,15 @@ impl Sema<'_, '_> {
                 let at = self.begin_loc(e);
                 self.diagnose_unexpanded_pack(PackOperand::Expr(e), "default argument", at)
             });
+        // [dcl.fct.default]/3, after the unexpanded-pack check (clang's
+        // `ActOnParamDefaultArgument`); an invalid argument says nothing.
+        if !unexpanded
+            && !p.invalid
+            && !roots.iter().any(|&e| self.has_errors_in(e))
+            && self.reject_param_pack_default(p.ty, p.default_loc)
+        {
+            return;
+        }
         if unexpanded || !roots.into_iter().all(|e| self.check_default_arg_refs(e)) {
             p.invalid = true;
             if let Some(d) = p.decl {
@@ -2060,7 +2129,7 @@ impl Sema<'_, '_> {
             self.check_member_spec_header(d.qualifier, nloc, ds.loc);
         }
         let head = self.take_template_head(d.qualifier);
-        if self.check_template_in_local_class(false) {
+        if self.check_template_in_local_class(false, ds.lead_cxx11.unwrap_or(ds.loc)) {
             return None;
         }
         if self.templ.head_mismatch {
@@ -2129,6 +2198,10 @@ impl Sema<'_, '_> {
             }
         }
         let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        // [temp.mem]/2: a member function template of a local class is
+        // diagnosed and invalid, so no call selects it (clang's "no
+        // matching member function", without candidates).
+        invalid |= self.templ.local_template && self.ast.types.is_function(ty);
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
@@ -2825,7 +2898,7 @@ impl Sema<'_, '_> {
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
         let _ = self.take_template_head(None);
-        let _ = self.check_template_in_local_class(false);
+        let _ = self.check_template_in_local_class(false, Loc::INVALID);
         let mut attrs = attrs.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
@@ -5840,7 +5913,7 @@ impl Sema<'_, '_> {
     ) -> Option<kiln_ast::ids::TemplateParamListId> {
         if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
             let head = self.take_template_head(qualifier);
-            let _ = self.check_template_in_local_class(false);
+            let _ = self.check_template_in_local_class(false, Loc::INVALID);
             return head;
         }
         if is_enum && qualifier.is_some() && use_ == TagUse::Definition {

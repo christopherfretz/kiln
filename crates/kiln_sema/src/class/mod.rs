@@ -312,7 +312,7 @@ impl Sema<'_, '_> {
     /// carries `ParamData::DEFAULT_ARG_PENDING`); one parsed in place goes
     /// through [`Sema::act_on_param_default_init`]. WP-066b (temporaries in
     /// defaults: WP-067b).
-    pub fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId) {
+    pub fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId, eq: Loc) {
         self.unparsed_default_args.remove(&p);
         // [temp.variadic]/12, as `act_on_param_default_init`.
         let at = self.begin_loc(e);
@@ -320,6 +320,12 @@ impl Sema<'_, '_> {
         if self.lambdas.is_empty() && self.diagnose_unexpanded_pack(op, "default argument", at) {
             self.ast.decls.set_flags(p, DeclFlags::INVALID);
             let _ = self.ast.decls.set_default_arg(p, e);
+            return;
+        }
+        // [dcl.fct.default]/3: dropped from a parameter pack (`eq` is
+        // the replayed `=`; invalid for an instantiated argument).
+        let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        if eq.is_valid() && !self.has_errors_in(e) && self.reject_param_pack_default(pty, eq) {
             return;
         }
         self.attach_default_arg(p, e);

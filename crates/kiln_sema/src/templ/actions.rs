@@ -1033,8 +1033,9 @@ impl Sema<'_, '_> {
                 let ttp = self.kind_of(d) == DeclKind::TemplateTemplateParm;
                 if ttp {
                     self.check_ttp_arity(d, args, l)?;
-                }
-                if !dep_args && !ttp {
+                } else if dep_args {
+                    self.check_expanded_pack_arity(d, args, l)?;
+                } else {
                     let locs = std::mem::take(&mut self.templ.arg_locs);
                     let t = self.class_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
