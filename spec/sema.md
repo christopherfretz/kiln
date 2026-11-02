@@ -150,6 +150,15 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (clang's `MergeVarDecl` returns at an invalid new declaration), so
     it reports no redefinition and `c` still names the valid `c`.
     `dcl.type/missing-type-specifier-implicit-int.cpp`.
+    A function whose declaration is invalid (an unknown return or
+    parameter type) is erroneous when named outside a call (clang's
+    `BuildDeclarationNameExpr` makes such a name an error; a call
+    resolves it through its overload set and is still checked, so
+    `k()` reports "no matching function"): `&A::f` and `&k`
+    (`Sema::address_of`) and an implicit conversion of `k`
+    (`conv::implicit_convert`, `Sema::names_invalid_function`) recover
+    silently, with no "cannot initialize" after the first error
+    (WP-379, `expr.unary.op/address-of-invalid-member-function.cpp`).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery

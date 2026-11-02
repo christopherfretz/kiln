@@ -1026,7 +1026,7 @@ pub fn implicit_convert(
     if !s.misaligned.is_empty() && ctx != ConvCtx::Assignment {
         s.discard_misaligned_member_address(to, e);
     }
-    if s.check_builtin_fn_use(e) {
+    if s.check_builtin_fn_use(e) || s.names_invalid_function(e) {
         let loc = s.eloc(e);
         return Ok(s.recover_err(&[e], loc));
     }
