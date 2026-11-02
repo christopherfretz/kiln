@@ -1040,9 +1040,8 @@ impl Cg<'_> {
     /// clang `TargetInfo::shouldEmitFloat16WithExcessPrecision` and
     /// `ScalarExprEmitter::getPromotionType`: on x86-64 `_Float16`
     /// arithmetic is evaluated in `float`
-    /// (`-ffloat16-excess-precision=standard`); AArch64 operates on
-    /// `half`. `__fp16` is promoted by sema.
-
+    /// (`-ffloat16-excess-precision=standard`); an aarch64 target
+    /// operates on `half`. `__fp16` is promoted by sema.
     pub(crate) fn f16_excess(&self, q: QualType) -> bool {
         self.is_x86()
             && self.ast.types.builtin(self.ast.types.canonical(q))
