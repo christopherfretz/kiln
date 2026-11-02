@@ -555,6 +555,35 @@ literal is one instruction and one step, not an interpreted loop.
   `__builtin_snprintf` and `__builtin_sprintf` trap "subexpression not
   valid in a constant expression", as clang 19.
 
+- **Landed (WP-282): library builtins.** `__builtin_object_size` and
+  `__builtin_dynamic_object_size` are `bi::OBJECT_SIZE` (kbc 22, `SIDE`
+  1: the operand is evaluated only for its pointer value, clang's
+  `tryEvaluateBuiltinObjectSize`): for a pointer into a known complete
+  object the bytes from the pointer to the end of the whole object
+  (types 0/2) or of the closest subobject (types 1/3), 0 past the end;
+  an operand with side effects is not evaluated and gives the unknown
+  value (-1 for types 0/1, 0 for 2/3); a null or function pointer or an
+  object of incomplete type is not a constant (clang 19's
+  `ConstantExpression` mode).
+  `__builtin_assume_aligned` evaluates to its pointer operand (the
+  offset is evaluated). `__builtin_shufflevector` (`vec_shuffle`)
+  concatenates the two operands' lanes and picks by index; a -1 lane is
+  the note `index for __builtin_shufflevector not within the bounds of
+  the input vectors; index of -1 found at position N is not permitted in
+  a constexpr context`. The `*f128` builtins with a `long double` twin
+  evaluate as the twin (quad-precision `softfloat` arithmetic);
+  `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
+  trap "subexpression not valid", as clang 19. **Divergences:** clang
+  reports the -1 shuffle index as an error, kiln as the note of the
+  failed evaluation; assume_aligned does not check the pointer's
+  alignment (clang: "alignment of the base pointee object (N bytes) is
+  less than the asserted M bytes"); an object-size operand with side
+  effects gives the unknown value (clang evaluates the pointer anyway,
+  e.g. 4 for `__builtin_object_size(p++, 0)` of an `int`), and an
+  operand cast to another pointer type (`(const char *)&s`) is
+  rejected as a reinterpreting cast (clang's object-size evaluation
+  looks through it).
+
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,
   `bool` or floating and its result is such a scalar (not a pointer, not
@@ -1218,7 +1247,12 @@ Looking a member up by offset (`Types::field_at`, `subobject_at`,
 `has_member_at`) skips zero-size members (libc++'s `char __padding_[0]`
 shares its offset with the next member). Within a union, extents are
 computed per member, so a path through a bit-field member of a union
-resolves (WP-201). Extents compare element types up to array-element
+resolves (WP-201). A class's members may overlap too: an empty
+`[[no_unique_address]]` member shares its offset with the next one
+([intro.object]/9; libc++ `layout_stride::mapping`'s empty `extents`
+before its `strides` array), so `Types::extent_in` tries every
+non-bit-field member containing the byte, union or not, and takes the
+first that resolves (WP-282). Extents compare element types up to array-element
 qualifiers (`Types::same_unqualified`): `p[1][2]` through a `const S&`
 designates the member `P[2][3]` although the subscript's element type is
 `const P[3]` (WP-201). A function named by a `DeclRefExpr` or a member access

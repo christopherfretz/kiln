@@ -62,10 +62,13 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId) -> bool {
 }
 
 /// The argument of the builtin call `e` codegen folds rather than emits
-/// (the `__builtin_isfpclass` mask), for the fold prepass.
+/// (the `__builtin_isfpclass` mask, the `__builtin_object_size` type,
+/// the `__builtin_assume_aligned` alignment), for the fold prepass.
 pub(crate) fn folded_arg(ast: &Ast, e: ExprId) -> Option<ExprId> {
     let (_, b) = builtin_callee(ast, e)?;
-    (b == id::ISFPCLASS).then(|| ast.lists.iter(ast.exprs.call_args(e)).nth(1)).flatten()
+    matches!(b, id::ISFPCLASS | id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE | id::ASSUME_ALIGNED)
+        .then(|| ast.lists.iter(ast.exprs.call_args(e)).nth(1))
+        .flatten()
 }
 
 /// The name of the library function a library builtin calls (clang
@@ -121,6 +124,10 @@ fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
         id::RINT | id::RINTF | id::RINTL => ("llvm.rint", 1),
         id::NEARBYINT | id::NEARBYINTF | id::NEARBYINTL => ("llvm.nearbyint", 1),
         id::FMA | id::FMAF | id::FMAL => ("llvm.fma", 3),
+        // WP-282: `_Float16` / `__float128` forms without a `long double`
+        // twin ([`id::f128_twin`] maps the others).
+        id::COPYSIGNF16 => ("llvm.copysign", 2),
+        id::ROUNDEVENF128 => ("llvm.roundeven", 1),
         _ => return None,
     })
 }
@@ -323,6 +330,9 @@ impl Cg<'_> {
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
         let arg = |i: usize| args.get(i).copied();
         let Some(a0) = arg(0).or(Some(e)) else { unreachable!() };
+        // WP-282: a `__float128` builtin with a `long double` twin lowers
+        // as the twin (the operand types pick the intrinsic overload).
+        let b = id::f128_twin(b).unwrap_or(b);
         let v = match b {
             id::IS_CONSTANT_EVALUATED => V::C(self.m.const_bool(false)),
             // clang `Builtin::BI__builtin_complex`: the two parts.
@@ -572,6 +582,24 @@ impl Cg<'_> {
                 }
                 x
             }
+            // WP-282: `llvm.powi.T.i32` (clang `Builtin::BI__builtin_powi`).
+            id::POWI | id::POWIF | id::POWIL => {
+                let Some(n) = arg(1) else {
+                    return err(self.loc_of(e), "__builtin_powi without two arguments");
+                };
+                let x = self.emit_scalar(a0)?;
+                let nv = self.emit_scalar(n)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let it = self.f.fir.ty(&self.m, nv);
+                let f = kiln_llvm::intrinsics::powi(&mut self.m, ty, it);
+                self.intrinsic_call(f, vec![x, nv])
+            }
+            id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE => {
+                return self
+                    .builtin_object_size(b, e, &args)
+                    .map(|v| BuiltinCall::Emitted(Some(v)));
+            }
+            id::ASSUME_ALIGNED => self.builtin_assume_aligned(e, &args)?,
             id::ASSUME => {
                 let c = self.emit_scalar(a0)?;
                 let f = kiln_llvm::intrinsics::assume(&mut self.m);
@@ -597,8 +625,10 @@ impl Cg<'_> {
                 self.intrinsic_call(f, ops);
                 return Ok(BuiltinCall::Emitted(None));
             }
-            id::TRAP => {
-                // clang `EmitTrapCall`: no `unreachable` follows.
+            // clang `EmitTrapCall`: no `unreachable` follows. The
+            // `__builtin_verbose_trap` category and message only reach the
+            // debug info (WP-282).
+            id::TRAP | id::VERBOSE_TRAP => {
                 let f = kiln_llvm::intrinsics::trap(&mut self.m);
                 self.intrinsic_call(f, vec![]);
                 return Ok(BuiltinCall::Emitted(None));
@@ -779,6 +809,63 @@ impl Cg<'_> {
             }
         };
         Ok(BuiltinCall::Emitted(Some(v)))
+    }
+
+    /// clang `emitBuiltinObjectSize` for a pointer the fold prepass could
+    /// not evaluate (WP-282): type 3 is the default 0 without evaluating
+    /// the pointer; otherwise `llvm.objectsize(p, min, nullunknown=true,
+    /// dynamic)` with `min` the type's bit 1.
+    fn builtin_object_size(&mut self, b: u32, e: ExprId, args: &[ExprId]) -> R<V> {
+        let rt = self.lty(self.ast.exprs.get(e).ty());
+        let (Some(&p), Some(t)) = (args.first(), args.get(1).and_then(|&t| self.fold_int(t)))
+        else {
+            return err(self.loc_of(e), "__builtin_object_size without a constant type");
+        };
+        if t == 3 {
+            return Ok(V::C(self.m.const_int(rt, 0)));
+        }
+        let pv = self.emit_scalar(p)?;
+        let f = kiln_llvm::intrinsics::objectsize(&mut self.m, rt);
+        let min = V::C(self.m.const_bool(t & 2 != 0));
+        let null_unknown = V::C(self.m.const_bool(true));
+        let dynamic = V::C(self.m.const_bool(b == id::DYNAMIC_OBJECT_SIZE));
+        Ok(self.intrinsic_call(f, vec![pv, min, null_unknown, dynamic]))
+    }
+
+    /// clang `Builtin::BI__builtin_assume_aligned` (WP-282): the pointer,
+    /// after `llvm.assume(i1 true) ["align"(ptr p, i64 a[, i64 off])]`
+    /// with the alignment clamped to 2^32 (clang `MaximumAlignment`).
+    fn builtin_assume_aligned(&mut self, e: ExprId, args: &[ExprId]) -> R<V> {
+        let (Some(&p), Some(a)) = (args.first(), args.get(1).and_then(|&a| self.fold_int(a)))
+        else {
+            return err(self.loc_of(e), "__builtin_assume_aligned without a constant alignment");
+        };
+        let pv = self.emit_scalar(p)?;
+        let off = match args.get(2) {
+            Some(&o) => Some(self.emit_scalar(o)?),
+            None => None,
+        };
+        let a = a.clamp(1, 1 << 32);
+        let mut bundle = vec![pv, V::C(self.m.const_int(LTy::I64, a))];
+        if let Some(o) = off {
+            bundle.push(self.int_cast(o, LTy::I64, false));
+        }
+        if self.f.fir.cur().is_some() {
+            let f = kiln_llvm::intrinsics::assume(&mut self.m);
+            let fn_ty = self.m.func(f).ty();
+            let cond = self.m.const_bool(true);
+            self.f.fir.push(
+                Op::AssumeBundle {
+                    fn_ty,
+                    callee: Value::func(f),
+                    cond,
+                    tag: "align",
+                    args: bundle,
+                },
+                LTy::VOID,
+            );
+        }
+        Ok(pv)
     }
 
     /// clang `EmitFAbs`: `llvm.fabs` with a `memory(none)` call site.

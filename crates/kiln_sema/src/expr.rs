@@ -3787,6 +3787,9 @@ impl Sema<'_, '_> {
         {
             return self.recover_err(&kids, loc);
         }
+        if let Some(d) = named {
+            self.check_format_attr(d, &conv_args);
+        }
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
         let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
