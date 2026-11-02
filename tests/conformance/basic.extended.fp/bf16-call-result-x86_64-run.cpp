@@ -9,9 +9,11 @@
 // bits; kiln spills the result through memory when its backend is LLVM 19
 // and it does not optimize. clang 19 miscompiles this program (hence
 // `clang>=22` and no oracle); clang 22 and kiln print the values below.
+// The constant is a cast, not `1.0bf16`: clang 22 rejects the `bf16`
+// literal suffix on x86-64.
 extern "C" int printf(const char *, ...);
 
-__attribute__((noinline)) __bf16 one() { return 1.0bf16; }
+__attribute__((noinline)) __bf16 one() { return static_cast<__bf16>(1.0f); }
 __attribute__((noinline)) __bf16 twice(__bf16 x) { return x + x; }
 __attribute__((noinline)) __bf16 add(__bf16 x, __bf16 y) { return x + y; }
 __attribute__((noinline)) __bf16 neg(__bf16 x) { return -x; }

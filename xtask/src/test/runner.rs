@@ -1099,6 +1099,9 @@ impl Test<'_> {
             (false, DumpKind::Vtables) => &["-S", "-emit-llvm", "-Xclang", "-fdump-vtable-layouts"],
             (_, DumpKind::Ir) => &["-S", "-emit-llvm", "-O0"],
         };
+        let target = ir_target_flag(kind, spec, std::env::consts::ARCH);
+        let mode: Vec<&str> = mode.iter().copied().chain(target.as_deref()).collect();
+        let mode = mode.as_slice();
         let ir = match (kiln, kind) {
             (false, DumpKind::Vtables) | (_, DumpKind::Ir) => {
                 Some(self.scratch()?.join(if oracle { "oracle.ll" } else { "test.ll" }))
@@ -1127,6 +1130,16 @@ impl Test<'_> {
         self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
         if kind == DumpKind::Ir { module(ir.as_deref()) } else { Ok(o.stdout_str()) }
     }
+}
+
+/// The `--target=` an `expect: ir` test without one is compiled with, by
+/// both the compiler and the oracle: the vendor of clang's default triple
+/// is a build setting (`x86_64-pc-linux-gnu` for Debian's x86-64 clang,
+/// `x86_64-unknown-linux-gnu` for kiln), not part of the program, and the
+/// `target triple` line is compared exactly (`spec/harness.md` "IR tests").
+fn ir_target_flag(kind: DumpKind, spec: &TestSpec, host: &str) -> Option<String> {
+    (kind == DumpKind::Ir && spec.target_triple().is_none())
+        .then(|| format!("--target={host}-unknown-linux-gnu"))
 }
 
 /// An LLVM module without what differs between producers but not in the
@@ -1305,7 +1318,8 @@ fn compat_for(
 
 #[cfg(test)]
 mod compat_tests {
-    use super::{compat_for, ir_diff, ir_normalize};
+    use super::{DumpKind, compat_for, ir_diff, ir_normalize, ir_target_flag};
+    use crate::test::directives::{Lang, parse};
 
     /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
     /// the clang a `requires:` names when the oracle does not meet it.
@@ -1333,5 +1347,19 @@ mod compat_tests {
         assert!(ir_diff(clang, kiln).is_none());
         let d = ir_diff(clang, &kiln.replace("ret void", "unreachable")).expect("a diff");
         assert!(d.contains("+  unreachable") && d.contains("-  ret void"), "{d}");
+    }
+
+    /// spec/harness.md "IR tests": both compilers are given the triple
+    /// (clang's default vendor differs by build), unless the test names one.
+    #[test]
+    fn ir_tests_name_the_target_triple() {
+        let plain = parse("//@ expect: ir\n", Lang::Cxx).unwrap();
+        let flag = ir_target_flag(DumpKind::Ir, &plain, "x86_64");
+        assert_eq!(flag.as_deref(), Some("--target=x86_64-unknown-linux-gnu"));
+        let own =
+            parse("//@ expect: ir\n//@ args: --target=aarch64-linux-gnu\n", Lang::Cxx).unwrap();
+        assert_eq!(ir_target_flag(DumpKind::Ir, &own, "x86_64"), None);
+        let layout = parse("//@ expect: layout\n", Lang::Cxx).unwrap();
+        assert_eq!(ir_target_flag(DumpKind::Layout, &layout, "x86_64"), None);
     }
 }

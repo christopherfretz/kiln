@@ -394,7 +394,10 @@ budgets apply as usual (kiln's `-fsyntax-only` compile is the one checked).
 `ir` tests (WP-386) pin kiln's LLVM IR to the oracle's exactly: both
 compile the test with `-S -emit-llvm -O0` (plus `std:`, `args:` and, for
 kiln, the usual `-fclang-compat`/`KILN_LLVM_DIR`) for the default target,
-and the two modules must be equal after dropping comment lines and
+named explicitly as `--target=<host arch>-unknown-linux-gnu` to both unless
+`args:` gives a `--target` (the vendor of clang's default triple is a
+build setting: Debian's x86-64 clang says `x86_64-pc-linux-gnu`; unit
+test `ir_tests_name_the_target_triple`), and the two modules must be equal after dropping comment lines and
 trailing comments (`; preds = ...`), the `; ModuleID` and
 `source_filename` lines, `!llvm.ident` and the producer string node
 (`!N = !{!"... clang version ..."}` / `kiln version`). Nothing else is
