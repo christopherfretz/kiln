@@ -215,6 +215,15 @@ impl Sema<'_, '_> {
                 n -= 1;
                 continue;
             }
+            if self.ast.decls.get(p).kind() == DeclKind::NonTypeTemplateParm
+                && !self.integral_constant_default(def)
+            {
+                // clang's `isSubstitutedTemplateArgument`: a value equals a
+                // non-type default only when the default is a
+                // non-dependent integral constant expression (`= 2`, not
+                // `= N` or `= Max<L>::value`).
+                break;
+            }
             if !self.push_inst_frame(FrameKind::DefaultArgChecking, p, tmpl, loc) {
                 break;
             }
@@ -234,6 +243,14 @@ impl Sema<'_, '_> {
             }
         }
         if n == elems.len() { args } else { self.ast.types.arg_list(&elems[..n]) }
+    }
+
+    /// Whether the non-type default `def` is an expression that is not
+    /// value-dependent, of integral or unscoped enumeration type.
+    fn integral_constant_default(&self, def: TemplateArg) -> bool {
+        let ArgView::Expr { expr, .. } = def.view() else { return false };
+        let n = self.ast.exprs.get(expr);
+        !n.is_value_dependent() && crate::conv::rank::is_integral_or_unscoped_enum(self, n.ty())
     }
 
     /// The type `name<args>` naming a specialization of class template
