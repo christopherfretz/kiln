@@ -527,17 +527,26 @@ impl Compiler<'_> {
             | id::FMAXL
             | id::FMIN
             | id::FMINF
-            | id::FMINL => {
+            | id::FMINL
+            | id::FMAXIMUM_NUMF16
+            | id::FMINIMUM_NUMF16 => {
                 let Some(fk) = self.float_kind(e) else {
                     self.trap_loc(begin, INVALID.into());
                     return Some(self.finish_builtin(dst));
                 };
+                // WP-403: clang 22 folds `fmax`/`fmin` with LLVM 22's
+                // `maxnum`/`minnum`, which quiet a signaling NaN operand.
+                let c22 = self.o.clang_compat >= 22;
                 let k = match bid {
                     id::FABS | id::FABSF | id::FABSL => bi::FABS,
                     id::COPYSIGN | id::COPYSIGNF | id::COPYSIGNL | id::COPYSIGNF16 => {
                         bi::COPYSIGN
                     }
+                    id::FMAX | id::FMAXF | id::FMAXL if c22 => bi::FMAX_22,
                     id::FMAX | id::FMAXF | id::FMAXL => bi::FMAX,
+                    id::FMAXIMUM_NUMF16 => bi::FMAXIMUM_NUM,
+                    id::FMINIMUM_NUMF16 => bi::FMINIMUM_NUM,
+                    _ if c22 => bi::FMIN_22,
                     _ => bi::FMIN,
                 };
                 let a = self.rv(arg(0)?);
@@ -723,7 +732,9 @@ impl Compiler<'_> {
                 }
             }
             // The other libm functions and the rounding intrinsics.
-            _ if id::is_libm(bid) => self.trap_loc(begin, INVALID.into()),
+            _ if id::is_libm(bid) || bid == id::CANONICALIZEF16 => {
+                self.trap_loc(begin, INVALID.into());
+            }
             // WP-171: clang constant-evaluates no coroutine builtin.
             _ if id::is_coro(bid) => self.trap_loc(begin, INVALID.into()),
             id::STRLEN | id::WCSLEN => {

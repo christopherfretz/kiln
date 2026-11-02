@@ -4576,7 +4576,8 @@ pub mod builtin {
 
     /// The `long double` builtin a [`F128`] builtin is lowered and
     /// evaluated as, if any; also the
-    /// `float` / `double` twin of a [`FLOATN`] builtin.
+    /// `float` / `double` twin of a [`FLOATN`] builtin, and (WP-403) the
+    /// [`f16_twin`] of an `__fp16` builtin.
     pub fn f128_twin(id: u32) -> Option<u32> {
         Some(match id {
             HUGE_VALF16 | HUGE_VALF32 => HUGE_VALF,
@@ -4602,7 +4603,7 @@ pub mod builtin {
             RINTF128 => RINTL,
             ROUNDF128 => ROUNDL,
             TRUNCF128 => TRUNCL,
-            _ => return None,
+            _ => return f16_twin(id),
         })
     }
 
@@ -4612,6 +4613,111 @@ pub mod builtin {
     }
 
     // ---- end WP-282 ----
+
+    // ---- WP-403: the `__fp16` (`h`) libm builtins ----
+
+    /// `__builtin_fabsf16`.
+    pub const FABSF16: u32 = 554;
+    /// `__builtin_fmaxf16`.
+    pub const FMAXF16: u32 = 589;
+    /// `__builtin_fminf16`.
+    pub const FMINF16: u32 = 597;
+    /// `__builtin_roundevenf16` (`llvm.roundeven`).
+    pub const ROUNDEVENF16: u32 = 1054;
+    /// `__builtin_canonicalizef16` (`llvm.canonicalize`; not a constant).
+    pub const CANONICALIZEF16: u32 = 2034;
+    /// `__builtin_fmaximum_numf16` (clang 22; `llvm.maximumnum`).
+    pub const FMAXIMUM_NUMF16: u32 = 2037;
+    /// `__builtin_fminimum_numf16` (clang 22; `llvm.minimumnum`).
+    pub const FMINIMUM_NUMF16: u32 = 2038;
+
+    /// The `__builtin_<fn>f16` libm builtins clang declares on `__fp16`
+    /// (`Builtins.td` `F16F128` variants; the ids are clang 19's, one
+    /// below the `f128` twin, and kiln-private from 2034 for the ones
+    /// clang 19 lacks) that lower to an LLVM intrinsic: the ones with a
+    /// `float` twin go down its path ([`f16_twin`]; the `__fp16` operand
+    /// type picks the `half` overload and the Oven format), the others
+    /// are lowered by id (kiln_codegen `fp_intrinsic`). `sqrtf16` is in [`LIBM`] and
+    /// `copysignf16` in [`EXTRA`].
+    pub const F16_INTR: &[Info] = &[
+        row(CANONICALIZEF16, "__builtin_canonicalizef16", "hh", N | C),
+        row(316, "__builtin_ceilf16", "hh", N | C),
+        row(FABSF16, "__builtin_fabsf16", "hh", N | C),
+        row(573, "__builtin_floorf16", "hh", N | C),
+        row(581, "__builtin_fmaf16", "hhhh", N),
+        row(FMAXF16, "__builtin_fmaxf16", "hhh", N | C),
+        row(FMAXIMUM_NUMF16, "__builtin_fmaximum_numf16", "hhh", N | C),
+        row(FMINF16, "__builtin_fminf16", "hhh", N | C),
+        row(FMINIMUM_NUMF16, "__builtin_fminimum_numf16", "hhh", N | C),
+        row(619, "__builtin_frexpf16", "hhi*", N),
+        row(1022, "__builtin_rintf16", "hh", N | C),
+        row(1052, "__builtin_roundf16", "hh", N | C),
+        row(ROUNDEVENF16, "__builtin_roundevenf16", "hh", N | C),
+        row(1338, "__builtin_truncf16", "hh", N | C),
+    ];
+
+    /// The `__fp16` libm builtins that are library calls of the function
+    /// the builtin names (clang 19 and 22 at `-fmath-errno`), like
+    /// [`LIBM`] ([`is_libm`]).
+    pub const F16_LIBM: &[Info] = &[
+        row(104, "__builtin_acosf16", "hh", N),
+        row(139, "__builtin_asinf16", "hh", N),
+        row(2035, "__builtin_atan2f16", "hhh", N),
+        row(163, "__builtin_atanf16", "hh", N),
+        row(382, "__builtin_cosf16", "hh", N),
+        row(390, "__builtin_coshf16", "hh", N),
+        row(524, "__builtin_exp10f16", "hh", N),
+        row(519, "__builtin_exp2f16", "hh", N),
+        row(526, "__builtin_expf16", "hh", N),
+        row(605, "__builtin_fmodf16", "hhh", N),
+        row(763, "__builtin_ldexpf16", "hhi", N),
+        row(813, "__builtin_log10f16", "hh", N),
+        row(805, "__builtin_log2f16", "hh", N),
+        row(815, "__builtin_logf16", "hh", N),
+        row(971, "__builtin_powf16", "hhh", N),
+        row(1098, "__builtin_sinf16", "hh", N),
+        row(2036, "__builtin_sincosf16", "vhh*h*", N),
+        row(1106, "__builtin_sinhf16", "hh", N),
+        row(1306, "__builtin_tanf16", "hh", N),
+        row(1314, "__builtin_tanhf16", "hh", N),
+    ];
+
+    /// The `float` builtin a [`F16_INTR`] builtin is lowered and
+    /// evaluated as, if any.
+    pub fn f16_twin(id: u32) -> Option<u32> {
+        Some(match id {
+            316 => CEILF,
+            FABSF16 => FABSF,
+            573 => FLOORF,
+            581 => FMAF,
+            FMAXF16 => FMAXF,
+            FMINF16 => FMINF,
+            619 => FREXPF,
+            1022 => RINTF,
+            1052 => ROUNDF,
+            1338 => TRUNCF,
+            _ => return None,
+        })
+    }
+
+    /// The lowest `-fclang-compat` level that declares builtin `id`
+    /// (clang 19 lacks `atan2f16`, `sincosf16` and the `f16`
+    /// `fmaximum_num` / `fminimum_num`; `__has_builtin` answers from the
+    /// generated clang tables, which agree).
+    pub fn min_compat(id: u32) -> u32 {
+        match id {
+            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 => 22,
+            _ => 0,
+        }
+    }
+
+    /// [`by_name`] at `-fclang-compat=compat`: `None` for a builtin that
+    /// level does not declare ([`min_compat`]).
+    pub fn by_name_at(name: &str, compat: u32) -> Option<u32> {
+        by_name(name).filter(|&id| min_compat(id) <= compat)
+    }
+
+    // ---- end WP-403 ----
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
@@ -4624,6 +4730,8 @@ pub mod builtin {
             .chain(EXTRA)
             .chain(F128)
             .chain(FLOATN)
+            .chain(F16_INTR)
+            .chain(F16_LIBM)
             .find(|e| e.name == name)
             .map(|e| e.id)
     }
@@ -4639,6 +4747,8 @@ pub mod builtin {
             .chain(EXTRA)
             .chain(F128)
             .chain(FLOATN)
+            .chain(F16_INTR)
+            .chain(F16_LIBM)
             .find(|e| e.id == id)
     }
 
@@ -4719,6 +4829,7 @@ pub mod builtin {
     /// `roundevenf128`, an intrinsic) counts as one.
     pub fn is_libm(id: u32) -> bool {
         LIBM.iter().any(|e| e.id == id)
+            || F16_LIBM.iter().any(|e| e.id == id)
             || (is_f128(id) && f128_twin(id).is_none() && id != ROUNDEVENF128)
     }
 

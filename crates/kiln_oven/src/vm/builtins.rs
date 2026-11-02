@@ -267,10 +267,19 @@ impl Oven {
                 let neg = |x: u128| x & sign != 0;
                 let zero = |x: u128| softfloat::classify(k, x) == Class::Zero;
                 let nan = |x: u128| softfloat::classify(k, x) == Class::NaN;
-                Ok(match sub >> 4 {
+                let quiet = |x: u128| softfloat::quiet(k, x);
+                let snan = |x: u128| softfloat::is_signaling(k, x);
+                let op = sub >> 4;
+                Ok(match op {
                     bi::FABS => a & !sign,
                     bi::COPYSIGN => a & !sign | b & sign,
-                    bi::FMAX => {
+                    bi::FMAX_22 | bi::FMIN_22 if snan(a) => quiet(a),
+                    bi::FMAX_22 | bi::FMIN_22 if snan(b) => quiet(b),
+                    bi::FMAXIMUM_NUM | bi::FMINIMUM_NUM if nan(a) => {
+                        if nan(b) { quiet(b) } else { b }
+                    }
+                    bi::FMAXIMUM_NUM | bi::FMINIMUM_NUM if nan(b) => a,
+                    bi::FMAX | bi::FMAX_22 | bi::FMAXIMUM_NUM => {
                         let gt = softfloat::cmp(k, b, a) == Some(std::cmp::Ordering::Greater);
                         if zero(a) && zero(b) {
                             if neg(a) { b } else { a }
@@ -280,7 +289,7 @@ impl Oven {
                             a
                         }
                     }
-                    bi::FMIN => {
+                    bi::FMIN | bi::FMIN_22 | bi::FMINIMUM_NUM => {
                         let lt = softfloat::cmp(k, b, a) == Some(std::cmp::Ordering::Less);
                         if zero(a) && zero(b) {
                             if neg(b) { b } else { a }

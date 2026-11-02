@@ -339,7 +339,7 @@ pub(crate) mod bi {
     /// (spec/oven.md, Builtins).
     pub const THAW_PTR: u32 = 10;
     /// A sign-bit or comparison operation on the floats `a` and `b`;
-    /// sub = float kind | `FABS`..`ISINF_SIGN` << 4 (clang 19's
+    /// sub = float kind | `FABS`..`FMINIMUM_NUM` << 4 (clang 19's
     /// `FloatExprEvaluator::VisitCallExpr`).
     pub const FP_OP: u32 = 11;
     /// `__atomic_always_lock_free`/`__atomic_is_lock_free`/
@@ -454,6 +454,16 @@ pub(crate) mod bi {
     pub const FMAX: u32 = 2;
     pub const FMIN: u32 = 3;
     pub const ISINF_SIGN: u32 = 4;
+    /// WP-403: `fmax` / `fmin` as LLVM 22's `maxnum` / `minnum` (clang
+    /// 22): a signaling NaN operand (`a` first) yields itself quieted,
+    /// otherwise as [`FMAX`] / [`FMIN`].
+    pub const FMAX_22: u32 = 5;
+    pub const FMIN_22: u32 = 6;
+    /// WP-403: `fmaximum_num` / `fminimum_num` (`maximumnum` /
+    /// `minimumnum`): a NaN `a` yields `b` (quieted if a NaN), a NaN `b`
+    /// yields `a`; `-0 < +0`.
+    pub const FMAXIMUM_NUM: u32 = 7;
+    pub const FMINIMUM_NUM: u32 = 8;
 
     // WP-365: P0533 constexpr <cmath>.
     /// A `<cmath>` operation on `a` (`b`, `c`) in the float kind of sub's

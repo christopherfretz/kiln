@@ -257,7 +257,7 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(name) = self.ast.decls.get(f).name().as_ident() else { return };
-        let Some(id) = builtin::by_name(self.ast.symbols().as_str(name)) else { return };
+        let Some(id) = builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat) else { return };
         let Some(info) = builtin::info(id).copied() else { return };
         if !self.c_linkage_file_scope_fn_of_type(f, info.sig) {
             return;
@@ -325,7 +325,7 @@ impl Sema<'_, '_> {
     /// type, and the implicit attributes in clang's order (`BuiltinAttr`,
     /// then `NoThrowAttr`, `ConstAttr` / `PureAttr`).
     pub(crate) fn lazily_create_builtin(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
-        let id = builtin::by_name(self.ast.symbols().as_str(name))?;
+        let id = builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)?;
         let info = *builtin::info(id)?;
         let (ret, params, variadic) = self.builtin_signature(info.sig);
         let has = |a: u8| info.attrs & a != 0;
@@ -1560,7 +1560,7 @@ impl Sema<'_, '_> {
     /// function (clang's `LookupBuiltin`): the parser then treats a call of
     /// it in a template as naming a function, not as an ADL-only name.
     pub fn is_builtin_name(&self, name: Symbol) -> bool {
-        builtin::by_name(self.ast.symbols().as_str(name))
+        builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)
             .is_some_and(|id| builtin::info(id).is_some())
     }
 
