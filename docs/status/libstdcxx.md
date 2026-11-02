@@ -17,7 +17,7 @@ absolute numbers.
 
 ### `-std=c++26`
 
-**c++26: 108 of 109 headers ok with kiln (1 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.14 s / p95 0.79 s, peak RSS p50 14 MiB / p95 44 MiB; clang++-19 wall p50 0.12 s / p95 0.81 s, peak RSS p50 90 MiB / p95 140 MiB**
+**c++26: 109 of 109 headers ok with kiln (0 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.14 s / p95 0.79 s, peak RSS p50 14 MiB / p95 44 MiB; clang++-19 wall p50 0.12 s / p95 0.81 s, peak RSS p50 90 MiB / p95 140 MiB**
 
 | | |
 |---|---|
@@ -88,7 +88,7 @@ absolute numbers.
 | `<fstream>` | ok |  |  | ok | 0.68 s | 40 MiB | 0.67 s | 132 MiB |
 | `<functional>` | ok |  |  | ok | 0.21 s | 17 MiB | 0.22 s | 100 MiB |
 | `<future>` | ok |  |  | ok | 0.83 s | 46 MiB | 0.80 s | 146 MiB |
-| `<generator>` | fail | 1 | `generator:164:8: error: 'co_yield' expressions is not supported yet` | ok | 0.46 s | 29 MiB | 0.49 s | 127 MiB |
+| `<generator>` | ok |  |  | ok | 0.43 s | 29 MiB | 0.43 s | 134 MiB |
 | `<initializer_list>` | ok |  |  | ok | 0.07 s | 7 MiB | 0.09 s | 76 MiB |
 | `<iomanip>` | ok |  |  | ok | 0.63 s | 38 MiB | 0.59 s | 131 MiB |
 | `<ios>` | ok |  |  | ok | 0.37 s | 26 MiB | 0.37 s | 108 MiB |
@@ -149,11 +149,7 @@ absolute numbers.
 
 #### Error clusters (`-std=c++26`, generated)
 
-1 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 1; the hand-written triage is in "Clusters" below.
-
-| # | first | any | cluster | headers (first) |
-|---:|---:|---:|---|---|
-| 1 | 1 | 1 | `'…' expressions is not supported yet` | `<generator>` |
+0 clusters over kiln's non-ok headers that clang++-19 accepts (the `<generator>` row was re-run alone by WP-370: `cargo xtask libstdcxx --std c++26 --filter generator`, at -std=c++23 too; the other rows are from the full run at `3e1cc24d`).
 
 <!-- libstdcxx:c++26:end -->
 
@@ -305,7 +301,7 @@ absolute numbers.
 
 This is hand-written triage of the runs above. It was refreshed on 2026-11-02 (WP-332), on wp/332 (main 8f3b4cc5 plus wp/323 plus the WP-332 fixes):
 
-- c++26: 108 of 109 headers are clean (80 at WP-323, 69 at WP-294, 39 at the WP-188 triage).
+- c++26: 109 of 109 headers are clean since WP-351/WP-370 (`<generator>`; 108 at WP-332, 80 at WP-323, 69 at WP-294, 39 at the WP-188 triage).
 - c++20: 109 of 109 headers are clean (98 at WP-323).
 
 The generated tables above are current. Each failing header was compiled with `-ferror-limit=0`, and every error was mapped to a root cause. Every listed repro passes under clang++-19.
@@ -338,26 +334,12 @@ Fixed in WP-332 (each test is under `tests/conformance/`):
 
 ### Open clusters
 
-| # | Cluster | First | Any | Std | Repro |
-|---|---------|------:|----:|-----|-------|
-| CY | `'co_yield' expressions is not supported yet` (generator:164) | 1 | 1 | c++26 | below |
+None at -std=c++26/c++20. **CY: `co_yield`** (generator:164) was fixed by WP-351 (coroutines); `std::generator<int>` compiles and runs at -std=c++23 (`coro.generator/libstdcxx-generator-int-run.cpp`, WP-370). The three generator errors listed for WP-370 (ranges `_Const`, tuple `__constructible`, `friend struct _Erased_promise::_Subyield_state`) no longer reproduce: clusters N, the tuple CTAD-guide row and the generator:684 row above fixed them.
 
-**CY: `co_yield`.** `<generator>` (C++23) is the only failing header. Its only error is the unimplemented `co_yield` expression ([expr.yield]). Reduced repro (clang++-19 accepts it):
+Beyond the header, instantiating `co_yield std::ranges::elements_of(g)` still fails (WP-370 follow-ups):
 
-```cpp
-#include <coroutine>
-struct G {
-  struct promise_type {
-    G get_return_object() { return {}; }
-    std::suspend_always initial_suspend() noexcept { return {}; }
-    std::suspend_always final_suspend() noexcept { return {}; }
-    std::suspend_always yield_value(int) { return {}; }
-    void return_void() {}
-    void unhandled_exception() {}
-  };
-};
-G f() { co_yield 1; }
-```
+- `std::variant::emplace` (variant:1552, :730) calls `__variant::__emplace<N>(*this, ...)`, whose `_Variant_storage<_Triv, _Types...>&` parameter is deduced from a derived class whose base is written through an alias template (`_Variant_storage_alias<_Types...>`): kiln deduces against the written alias specialization instead of its canonical class (`templ/deduce.rs` `deduce_from_bases`; repro `template<class T> using A = S<T>; template<class T> struct D : A<T> {};` then `put(S<T>&)` with a `D<int>`). So any `std::variant` assignment or `emplace` fails with libstdc++.
+- The local `namespace __variant = ...;` in that body (variant:1546) was not instantiated; fixed by WP-370 (`namespace.alias/local-alias-in-function-template.cpp`).
 
 ### Known divergences seen while reducing (not header failures)
 
