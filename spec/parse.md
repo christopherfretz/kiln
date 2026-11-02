@@ -1200,7 +1200,19 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     each run of `[[...]]`/`alignas` specifiers is parsed, dropped and
     reported once as `an attribute list cannot appear here` at its
     start (clang `DiagnoseAndSkipCXX11Attributes`); GNU attributes
-    between them are kept (`parse_member_tail_attrs`; WP-324)
+    between them are kept (`parse_member_tail_attrs`; WP-324). The
+    same holds after a member function declarator's GNU attributes
+    (`void f() __attribute__((cold)) [[nodiscard]];`): only the
+    `[[...]]`/`alignas` run right after the parameter clause is the
+    function type's (WP-381). Outside a class, after a declarator's asm
+    label only GNU attributes follow (clang `ParseDeclGroup`,
+    `ParseAsmAttributesAfterDeclarator`): a C++11 run there ends the
+    declarator, so at namespace scope a first function declarator gets
+    `expected function body after function declarator` and the
+    declaration is skipped through its `;`, and any other declarator
+    `expected ';' after top level declarator` (`expected ';' at end of
+    declaration` at block scope)
+    (`tests/conformance/dcl.attr.grammar/attribute-list-after-gnu-attributes.cpp`)
   - between decl-specifiers (clang `ProhibitAttributes` in
     `ParseDeclarationSpecifiers`), at the end of the decl-specifier-seq
     ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1), after
