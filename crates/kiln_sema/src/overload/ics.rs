@@ -77,6 +77,14 @@ impl IcsOptions {
     /// [over.match.ref]/1.1; clang `hasCopyOrMoveCtorParam`). Consumed by
     /// [`Sema::add_found_candidates`], never seen by a sequence.
     pub const DIRECT_COPY_CTOR: IcsOptions = IcsOptions(32);
+    /// The constructor candidates of the second phase of
+    /// [over.match.list] for a list whose only element is itself a
+    /// braced-init-list, in an implicit conversion sequence: a
+    /// constructor whose first parameter is (a reference to) cv the class
+    /// gets [`Self::SUPPRESS_UDC`] there ([over.best.ics.general]/4.5;
+    /// clang `isFirstArgumentCompatibleWithType`). Consumed by
+    /// [`Sema::add_found_candidates`], never seen by a sequence.
+    pub const LIST_COPY_CTOR: IcsOptions = IcsOptions(64);
 
     /// The raw bits.
     pub(crate) fn bits(self) -> u8 {
@@ -785,6 +793,12 @@ impl Sema<'_, '_> {
                 if l.items.iter().any(|i| !i.designator.is_empty()) {
                     return Ics::bad(BadKind::InitList, void_from, to);
                 }
+                // [over.best.ics.general]/4: a suppressed user-defined
+                // conversion (clang `TryUserDefinedConversion`), unless the
+                // only element is the class or derived from it (/2).
+                if opts.contains(IcsOptions::SUPPRESS_UDC) && !self.single_elem_of_class(l, c) {
+                    return Ics::bad(BadKind::InitList, void_from, to);
+                }
                 return self.list_ctor_conversion(l, c, to, opts);
             }
             // /8: an aggregate.
@@ -812,6 +826,20 @@ impl Sema<'_, '_> {
             }
             _ => Ics::bad(BadKind::InitList, void_from, to),
         }
+    }
+
+    /// Whether `l`'s only element is an expression of class `c` or a
+    /// class derived from it ([over.ics.list]/2).
+    fn single_elem_of_class(&mut self, l: &InitList, c: DeclId) -> bool {
+        let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
+            return false;
+        };
+        let ty = self.ety(*e);
+        designator.is_empty()
+            && self.ast.types.as_record(ty).is_some_and(|f| {
+                same_class(self, f, c)
+                    || (complete_class(self, f).is_some() && is_derived_from(self, f, c))
+            })
     }
 
     /// The worst conversion of the elements of `l` to `elem`
@@ -1060,8 +1088,16 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        // [over.best.ics]/4.5: one element converting to the class.
-        let suppress = if l.items.len() == 1 { IcsOptions::SUPPRESS_UDC } else { IcsOptions::NONE };
+        // [over.best.ics.general]/4.5: one element that is itself a
+        // braced-init-list, converting to the class through a copy or
+        // move constructor, considers no user-defined conversion. Any
+        // other element may use one (clang `IsUserDefinedConversion`
+        // with `ListInitializing`: `H hh({1})` with `H(E)` finds the copy
+        // and move constructors through `{1}` -> `H` too).
+        let suppress = match l.items.as_slice() {
+            [InitItem { value: InitValue::List(_), .. }] => IcsOptions::LIST_COPY_CTOR,
+            _ => IcsOptions::NONE,
+        };
         self.add_ctor_candidates(&mut set, c, suppress, false);
         for _ in 0..pushed {
             self.ovl.lists.pop();
@@ -1195,20 +1231,21 @@ impl Sema<'_, '_> {
     /// `ResolveConstructorOverload` `AllowExplicitConv`). An inherited
     /// constructor's first parameter names its base, never `C`.
     fn direct_copy_ctor_opts(&self, fd: DeclId, f: DeclId, opts: IcsOptions) -> IcsOptions {
-        if !opts.contains(IcsOptions::DIRECT_COPY_CTOR) {
+        let flags = IcsOptions::DIRECT_COPY_CTOR.with(IcsOptions::LIST_COPY_CTOR);
+        if opts.0 & flags.0 == 0 {
             return opts;
         }
-        let opts = IcsOptions(opts.0 & !IcsOptions::DIRECT_COPY_CTOR.0);
-        if self.kind_of(f) != DeclKind::CXXConstructor {
-            // clang: not for a constructor template (its FIXME), nor an
-            // inherited constructor.
-            return opts;
-        }
-        match self.ast.decls.get(fd).ctx() {
-            Some(class) if self.copy_or_move_ctor_param(f, class) => {
-                opts.with(IcsOptions::EXPLICIT_REF_CONV)
-            }
-            _ => opts,
+        let rest = IcsOptions(opts.0 & !flags.0);
+        // clang: not for a constructor template (its FIXME), nor an
+        // inherited constructor.
+        let copy_or_move = self.kind_of(f) == DeclKind::CXXConstructor
+            && self.ast.decls.get(fd).ctx().is_some_and(|c| self.copy_or_move_ctor_param(f, c));
+        if !copy_or_move {
+            rest
+        } else if opts.contains(IcsOptions::LIST_COPY_CTOR) {
+            rest.with(IcsOptions::SUPPRESS_UDC)
+        } else {
+            rest.with(IcsOptions::EXPLICIT_REF_CONV)
         }
     }
 
