@@ -93,6 +93,9 @@ impl Cg<'_> {
         let c = *ast.stmts.coroutine_body(s);
         let null = self.null_ptr();
         let Some(entry) = self.f.fir.cur() else { return Ok(()) };
+        // Coroutines always get lifetime markers (clang `GenerateCode`).
+        self.f.lifetime_markers = true;
+        self.f.bypasses = Some(Box::new(crate::lifetime::detect_bypasses(ast, c.body)));
         let alloc_bb = self.f.fir.create_block();
         let init_bb = self.f.fir.create_block();
         let final_bb = self.f.fir.create_block();
@@ -300,6 +303,7 @@ impl Cg<'_> {
         self.f.fir.add_md(Fir::last_inst(a), kind, md);
         let addr = Addr { v: a, ty, align };
         self.f.locals.insert(d, addr);
+        self.var_lifetime(d, a, ty);
         if let Some(rd) = self.var_destructed_class(d, q) {
             self.push_cleanup(Cleanup::FlaggedDtor { addr: a, record: rd, flag });
         }

@@ -78,7 +78,7 @@ impl Cg<'_> {
     /// `getInvokeDest`: the landing pad of the current scope, `None` when
     /// a call cannot unwind into anything.
     pub(crate) fn invoke_dest(&mut self) -> Option<Blk> {
-        if !self.opts.exceptions || self.f.cl.innermost_eh() == 0 {
+        if !self.opts.exceptions || !self.f.cl.requires_landing_pad() {
             return None;
         }
         if let Some(lp) = self.f.cl.stack.last().and_then(|s| s.cached_lpad) {

@@ -33,6 +33,7 @@ mod fold;
 mod func;
 mod global_init;
 mod lambda;
+mod lifetime;
 mod memptr;
 mod module;
 mod new_delete;

@@ -187,6 +187,12 @@ pub(crate) struct Fx {
     /// value of `__builtin_coro_frame()` (clang
     /// `CurAwaitSuspendWrapper.FramePtr`).
     pub await_frame: Option<V>,
+    /// Emit lifetime markers (clang `ShouldEmitLifetimeMarkers`; set in
+    /// a coroutine, spec/codegen.md §7p).
+    pub lifetime_markers: bool,
+    /// The variables a jump bypasses, which get no lifetime markers
+    /// (clang `Bypasses`).
+    pub bypasses: Option<Box<crate::lifetime::Bypasses>>,
 }
 
 impl Fx {
@@ -234,6 +240,8 @@ impl Fx {
             did_stack_save: false,
             coro: None,
             await_frame: None,
+            lifetime_markers: false,
+            bypasses: None,
         }
     }
 }
