@@ -113,7 +113,6 @@ impl Sema<'_, '_> {
         if site.method
             && site.in_class
             && !site.friend
-            && (d.op_name.is_none() || d.special.is_some())
             && d.explicit_object.is_none()
             && site.prev.is_none()
         {

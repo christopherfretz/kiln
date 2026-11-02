@@ -1495,7 +1495,8 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   / with `static`, pure-specifier on a non-virtual, `override`/`final` on
   a non-member, the overridden-method search over all bases
   (`overridden_methods`, same name + `is_method_overload` false: same
-  parameter-type-list, cv- and ref-qualifiers), implicit virtualness,
+  parameter-type-list, cv- and ref-qualifiers; operator functions such
+  as `operator()` included, WP-276), implicit virtualness,
   `override` that overrides nothing, overriding a `final` function,
   covariant returns ([class.virtual]/8, `check_override_return`, clang
   `CheckOverridingFunctionReturnType`, with [class.access.base]
