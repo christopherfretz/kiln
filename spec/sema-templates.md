@@ -3058,6 +3058,31 @@ inside an expansion or a pack index is captured as a whole. Test
 `tests/conformance/temp.variadic/p12-unexpanded-full-expr.cpp`,
 `dcl.struct.bind/pack-unexpanded.cpp`.
 
+A declarator's type naming an unexpanded pack (WP-371;
+`Sema::diagnose_unexpanded_declarator`, clang `HandleDeclarator`) is one
+error at the declarator-id: "data member type contains …" for a
+non-static data member, "non-type template parameter type contains …"
+for an NTTP, else "declaration type contains …" (variables, pointers,
+functions, typedefs, alias-declarations, parameters, special members and
+conversion types). `type_packs` walks member pointers and dependent-size
+array and vector bounds. The declaration becomes `INVALID`, so a use of
+it is silent (`recover_err`). The error sets `Sema::declarator_type_invalid`,
+which the parser takes after each declarator: as with clang's sticky
+`Declarator::InvalidType`, the rest of a block- or namespace-scope group
+is parsed but not declared, so `Ts c = 1, d = 2;` also gets "expected ';'
+at end of declaration" at the second `=`; a member group diagnoses every
+declarator. A default argument (function or template) naming an
+unexpanded pack is "default argument contains …" at the expression's
+start (a type template parameter's at the parameter), and the default is
+dropped; an in-class default is checked when its delayed parse ends.
+Inside a lambda body none of these apply (the lambda carries the pack).
+At instantiation an `INVALID` pattern declaration is not instantiated:
+its `DeclStmt` fails silently and ends its compound statement (clang's
+`SubstDecl` / `TransformCompoundStmt`), so no later statement, such as a
+`static_assert` after `int a[-1];`, is checked. Tests
+`temp.variadic/p12-unexpanded-declarator-type.cpp`,
+`p12-unexpanded-declarator-group.cpp`.
+
 A lambda whose body names an enclosing template's pack in a
 full-expression or a declaration (`[] { A x{}; return sizeof(x); }()...`)
 is itself unexpanded: its `LambdaExpr` carries `UNEXPANDED_PACK`, so the
@@ -3093,9 +3118,8 @@ takes its initializer's dependence without `UNEXPANDED_PACK`
   - An init-capture `[x = ts]` naming an unexpanded pack outside an
     expansion makes its lambda unexpanded, so the enclosing statement is
     diagnosed ("expression contains unexpanded parameter pack 'ts'", as
-    clang). Gap: a declarator type (`Ts x;`, clang "declaration type
-    contains …") is not diagnosed. The sites checked are an `alignas`
-    operand and the statements and initializers above. `Sema::diagnose_unexpanded_pack`
+    clang). Declarator types are checked as above. The sites checked
+    are an `alignas` operand and the statements and initializers above. `Sema::diagnose_unexpanded_pack`
     (`templ/pack.rs`, emits `sema_unexpanded_pack`; WP-302) is the
     reusable collector and diagnostic for the remaining sites.
 

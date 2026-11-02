@@ -1110,6 +1110,13 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             && matches!(self.punct_at(self.i + 1), Some(Punct::Star | Punct::Amp | Punct::AmpAmp))
     }
 
+    /// An undeclared unqualified name followed by a type-specifier keyword.
+    fn undeclared_before_type_keyword(&self) -> bool {
+        self.ident_at(self.i).is_some()
+            && matches!(self.name_here(), Some((end, NameClass::Undeclared)) if end == self.i + 1)
+            && self.kw_at(self.i + 1).is_some_and(crate::decl::is_type_specifier_kw)
+    }
+
     /// clang's `isCXXSimpleDeclaration`.
     fn is_simple_declaration(&mut self, allow_for_range: bool) -> bool {
         if self.dependent_template_id_name() {
@@ -1140,6 +1147,11 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 return false;
             }
             Tpr::Ambiguous
+        } else if self.undeclared_before_type_keyword() {
+            // `restrict int z;`: no expression continues a name with a
+            // type-specifier keyword; the declaration parser reports
+            // "unknown type name" (clang's `ParseImplicitInt`, WP-371).
+            return true;
         } else if self.undeclared_before_ptr_operator() {
             // An undeclared unqualified name followed by a ptr-operator
             // (`u5 &r;`, `u5 *p;`): clang's `ANK_Unresolved`, ambiguous

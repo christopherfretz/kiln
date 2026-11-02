@@ -62,7 +62,7 @@ flow, `constexpr` functions and variables, `static_assert`, string literals,
 ## M3 — Classes, overloading, templates — done (2026-11-01)
 Status: done. The M3 libc++ gate (`cargo xtask libcxx --gate m3`) is 585/585
 on main `4c3e8be9` (`docs/status/libcxx-m3.md`; since WP-143 the gate is 642 tests incl. `.verify.cpp`:
-630 pass, 6 unsupported, and the 6 `.verify.cpp` failures are WP-253). The clang 22
+636 pass and 6 unsupported since WP-367/WP-371, WP-253's six `.verify.cpp` failures closed). The clang 22
 oracle switch (WP-184 C–E) is WP-355 in M4.
 Member functions, constructors/destructors, references, overload resolution,
 implicit conversion sequences, class templates, function templates, deduction,
