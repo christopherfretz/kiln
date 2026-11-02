@@ -1404,8 +1404,7 @@ impl Parser<'_, '_> {
             if !self.at(Punct::Colon) {
                 self.parse_declarator(&mut d);
                 self.parse_trailing_requires(&mut d);
-                let e = self.prev_lo();
-                d.end = if e == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { e };
+                self.set_declarator_end(&mut d);
             }
             let parts = mem::take(&mut self.late_fn);
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
@@ -1440,12 +1439,7 @@ impl Parser<'_, '_> {
             let (nsdmi, init) = self.classify_member_init(&mut d, has_width, is_fn, data_member);
             let (decl, target) =
                 if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
-            if let Some(f) = target
-                && d.end != Loc::INVALID
-                && self.s.ast.decls.function(f).is_some_and(|x| x.body.is_none())
-            {
-                let _ = self.s.ast.decls.cold.declarator_end.insert(f, d.end);
-            }
+            self.record_declarator_end(target, &d);
             if let Some(x) = decl {
                 self.s.act_on_group_declarator(&mut group, x);
             }
