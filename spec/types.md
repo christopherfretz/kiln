@@ -520,10 +520,18 @@ where `inner` is the declarator text so far (empty at the top):
   `T __attribute__((ext_vector_type(N)))`; `Elaborated` prints its keyword
   and qualifier as written; `QualifiedArray` prints `const A`.
 
-Diagnostics print `'T'` and add ` (aka 'U')` when `U`, the printed
-canonical type (`full_scope`), differs textually from `T` (clang's
-`desugarForDiagnostic`; deviations, if any, are recorded in spec/diag.md
-§11). A dependent type whose canonical form would name
+Diagnostics print `'T'` and add ` (aka 'U')` when `U` differs
+textually from `T`. `U` is the type desugared for diagnostics (clang's
+`desugarForDiagnostic`, `print_diag_desugared`): sugar is stripped down
+to the first non-alias class template specialization, at the top and
+inside every compound and template argument, and the result is printed
+with `full_scope`, except that a specialization prints its template
+name unqualified, as clang prints a `TemplateSpecializationType`. So
+`'O::J<SA>'` is `(aka 'J<ns::S>')`, `'ns::K<ns::K<SA>>'` is
+`(aka 'K<K<ns::S>>')` and `'KA'` for `using KA = ns::K<SA>` is
+`(aka 'K<ns::S>')`, while a plain record argument such as `SA` prints
+`ns::S` (WP-291; deviations, if any, are recorded in spec/diag.md §11).
+A dependent type whose canonical form would name
 `type-parameter-D-I` gets no `aka` (clang's `Desugar` keeps the
 parameter's name, which the canonical printer cannot). The `aka` is
 also given only when desugaring meets sugar that asks for one

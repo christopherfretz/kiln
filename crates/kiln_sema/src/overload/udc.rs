@@ -115,8 +115,13 @@ impl Sema<'_, '_> {
                         },
                         ..site
                     };
+                    // The temporary is destroyed (at the end of the
+                    // full-expression, or with the extending reference):
+                    // clang's `CXXBindTemporaryExpr` under the
+                    // materialization.
                     match self.construct_class(referee, &[e], InitStyle::Copy, site) {
-                        Some(c) => c,
+                        Some(c) if self.is_err_expr(c) => c,
+                        Some(c) => self.maybe_bind_temporary(c),
                         None => return Err(no_conversion(self, e, to)),
                     }
                 } else {

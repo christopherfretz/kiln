@@ -261,6 +261,7 @@ pub fn write_declarator(
         c_policy: opts.c_policy,
         no_parens: opts.no_parens,
         inside_cc_attr: false,
+        diag_desugar: false,
         depth: 0,
     };
     p.print(q, placeholder);
@@ -280,6 +281,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         c_policy: false,
         no_parens: false,
         inside_cc_attr: false,
+        diag_desugar: false,
         depth: 0,
     };
     p.nns(n);
@@ -321,6 +323,7 @@ fn arg_list_with_scope(
         c_policy: false,
         no_parens: false,
         inside_cc_attr: false,
+        diag_desugar: false,
         depth: 0,
     };
     p.arg_list(l, false);
@@ -346,6 +349,7 @@ pub fn write_arg_list_prefix(
         c_policy: false,
         no_parens: false,
         inside_cc_attr: false,
+        diag_desugar: false,
         depth: 0,
     };
     p.arg_list_prefix(l, false, len);
@@ -370,6 +374,7 @@ pub fn write_template_arg(
         c_policy: false,
         no_parens: false,
         inside_cc_attr: false,
+        diag_desugar: false,
         depth: 0,
     };
     p.arg(a.view());
@@ -391,7 +396,7 @@ pub fn aka(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<Stri
         return None;
     }
     let written = print_type(ctx, names, q, PrintOptions::SUGARED);
-    let canon = print_type(ctx, names, q, PrintOptions::CANONICAL);
+    let canon = print_diag_desugared(ctx, names, q);
     // clang's `Desugar` keeps template type parameters by name (`'pr<T, I>'
     // (aka 'pr<T, int>')`); the canonical printer cannot, so a dependent
     // type whose canonical form names `type-parameter-D-I` gets no `aka`
@@ -414,6 +419,28 @@ pub fn aka(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<Stri
         }
     }
     (canon != written && without_exc_specs(&canon) != without_exc_specs(&written)).then_some(canon)
+}
+
+/// `q` as clang prints `desugarForDiagnostic(q)`: every name scoped, sugar
+/// looked through except a class template specialization's, whose name
+/// prints unqualified (`'J<ns::S>'` for `O::J<SA>`, `'basic_string<char>'`
+/// for `std::string`; WP-291).
+fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> String {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: String::new(),
+        empty_ph: true,
+        scope: true,
+        suppress_tag: false,
+        c_policy: false,
+        no_parens: false,
+        inside_cc_attr: false,
+        diag_desugar: true,
+        depth: 0,
+    };
+    p.print(q, "");
+    p.out
 }
 
 /// clang's `desugarForDiagnostic` `ShouldAKA`: whether desugaring `q`
@@ -617,6 +644,11 @@ struct Printer<'a> {
     no_parens: bool,
     /// clang's `InsideCCAttribute`.
     inside_cc_attr: bool,
+    /// Print every node as clang's `desugarForDiagnostic` leaves it (the
+    /// `aka` string, [`aka`]): sugar is looked through, except a class
+    /// template specialization's name, which prints unqualified with its
+    /// arguments desugared.
+    diag_desugar: bool,
     depth: u32,
 }
 
@@ -753,6 +785,7 @@ impl Printer<'_> {
             return;
         }
         self.depth += 1;
+        let q = if self.diag_desugar { self.diag_strip(q) } else { q };
         let (t, mut quals) = split(self.ctx, q);
         if self.ctx.kind(t) == TypeKind::SubstTemplateTypeParm {
             // cv1 T where T was substituted by cv2 U: print cv1 - cv2 here.
@@ -768,6 +801,7 @@ impl Printer<'_> {
             return;
         }
         self.depth += 1;
+        let q = if self.diag_desugar { self.diag_strip(q) } else { q };
         let (t, _) = split(self.ctx, q);
         self.after_node(t);
         self.depth -= 1;
@@ -1385,8 +1419,35 @@ impl Printer<'_> {
 
     /// clang's `printTemplateId`.
     fn template_id(&mut self, name: TemplateNameId, args: ArgListId) {
-        self.template_name(name, if self.scope { Qual::Fully } else { Qual::None });
+        if self.diag_desugar {
+            // clang's `printTemplateId` prints a specialization's name
+            // with `Qualified::None`; its scope was the `ElaboratedType`
+            // that desugaring removed (`'O::J<SA>' (aka 'J<ns::S>')`).
+            self.with_scope(false, |p| p.template_name(name, Qual::None));
+        } else {
+            self.template_name(name, if self.scope { Qual::Fully } else { Qual::None });
+        }
         self.arg_list(args, false);
+    }
+
+    /// [`Printer::diag_desugar`]: `q` with its sugar looked through, down
+    /// to a node clang's `desugarForDiagnostic` keeps: a class template
+    /// specialization (not an alias template's), or an undeduced `auto`
+    /// with a type-dependent initializer (see [`desugar_top_for_print`]).
+    fn diag_strip(&self, mut q: QualType) -> QualType {
+        for _ in 0..MAX_DEPTH {
+            match self.ctx.view(q.ty()) {
+                TypeView::TemplateSpecialization { alias: false, .. } => return q,
+                TypeView::Auto { deduced: Some(d), .. } if d == QualType::DEPENDENT => return q,
+                _ => {}
+            }
+            let n = self.ctx.desugar_once(q);
+            if n == q {
+                return q;
+            }
+            q = n;
+        }
+        q
     }
 
     /// clang's `TemplateName::print`.

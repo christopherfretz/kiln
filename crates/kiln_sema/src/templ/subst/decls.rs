@@ -1127,12 +1127,13 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// A `static_assert` of the pattern: evaluated now ([temp.inst]/3).
-    pub(crate) fn static_assert_decl(&mut self, d: DeclId) -> SubstResult<DeclId> {
+    /// With whether it failed ([`Sema::static_assert_checked`]).
+    pub(crate) fn static_assert_decl(&mut self, d: DeclId) -> SubstResult<(DeclId, bool)> {
         let loc = self.sema.ast.decls.get(d).loc();
         let Some(sa) = self.sema.ast.decls.static_assert(d).copied() else { return Err(SubstFail) };
         let c = self.expr(sa.cond)?;
         let m = self.opt_expr(sa.message)?;
-        Ok(self.sema.act_on_static_assert(c, m, loc))
+        Ok(self.sema.static_assert_checked(c, m, loc))
     }
 
     /// An enumeration of the pattern: an unscoped one is defined now
