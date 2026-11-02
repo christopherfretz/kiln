@@ -536,23 +536,10 @@ impl Sema<'_, '_> {
             }
         }
         let sugared = self.ast.types.arg_list(&d.args);
-        // [temp.deduct.general]/5: the associated constraints
-        // ([temp.constr.decl]/3) are checked before the function type is
-        // substituted (§8.3).
-        let constraints = self.associated_constraints(ft);
-        if !constraints.is_empty() {
-            let levels = self.prior_levels(ft, depth, &d.args);
-            let sat = self.check_constraints(ft, &constraints, &levels, sugared, loc);
-            if !self.sat_ok(sat) {
-                let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d);
-                f.args = Some(sugared);
-                f.sat = Some(sat);
-                return Err(f);
-            }
-        }
         // [temp.deduct.call]/10 (CWG1391): an argument that does not
         // convert to its non-dependent P fails deduction before the
-        // function type is substituted, so a later parameter's
+        // function type is substituted (and before the constraints are
+        // checked, as clang 19 does), so a later parameter's
         // substitution (libc++ `shared_ptr(nullptr_t, D, enable_if_t<
         // __well_formed_deleter<D, nullptr_t>>)` for an `int*`
         // argument) is not instantiated (clang `CheckNonDependent`).
@@ -575,6 +562,22 @@ impl Sema<'_, '_> {
         match r {
             None => Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
             Some((Ok(spec), Ok(()))) => {
+                // [temp.deduct.general]/5: the associated constraints
+                // ([temp.constr.decl]/3) are checked once the function
+                // type has been substituted without failure, so a
+                // candidate failing both reports the substitution failure
+                // (clang 19 `FinishTemplateArgumentDeduction`; §6.1, §8.3).
+                let constraints = self.associated_constraints(ft);
+                if !constraints.is_empty() {
+                    let levels = self.prior_levels(ft, depth, &d.args);
+                    let sat = self.check_constraints(ft, &constraints, &levels, sugared, loc);
+                    if !self.sat_ok(sat) {
+                        let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d);
+                        f.args = Some(sugared);
+                        f.sat = Some(sat);
+                        return Err(f);
+                    }
+                }
                 if let Some((i, deduced_a, a)) = self.original_arg_mismatch(spec, &originals) {
                     d.info.param = u16::try_from(i).ok();
                     d.info.first = Some(TemplateArg::ty(deduced_a));
