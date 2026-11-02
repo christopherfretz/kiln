@@ -4983,6 +4983,32 @@ impl Sema<'_, '_> {
         ns: DeclId,
     ) -> DeclId {
         let head = self.take_template_head(None);
+        // [namespace.memdef]/3 stops the search at the innermost enclosing
+        // namespace, so a member class template of an enclosing class
+        // (or its injected-class-name) is found by ordinary lookup and
+        // befriended as `friend class C::X;` would be (clang
+        // `CheckClassTemplate`; libc++ `elements_view::__iterator`'s
+        // `template <bool> friend class __sentinel;`).
+        let member = self.lookup_name(n, LookupKind::All).decls.last().and_then(|&d| {
+            let t = if self.kind_of(d) == DeclKind::ClassTemplate {
+                d
+            } else {
+                self.injected_template_of(d)?
+            };
+            let c = self.ast.decls.get(t).ctx()?;
+            (self.kind_of(c) == DeclKind::CXXRecord).then_some(t)
+        });
+        if let Some((t, p)) = member.and_then(|t| self.pattern_of(t).map(|p| (t, p))) {
+            self.templ.cur = None;
+            if !self.tag_matches(p, keyword) {
+                let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
+                let msg = self.note_prev(msg, p, false);
+                self.emit(msg);
+            }
+            self.mark_type_referenced(p);
+            self.friend_class_template = Some(t);
+            return p;
+        }
         let prev = self
             .ast
             .lookup_local(ns, DeclName::ident(n))

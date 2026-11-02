@@ -89,8 +89,7 @@ impl Sema<'_, '_> {
         // through overload resolution, as clang's `BuildOverloadedCallExpr`
         // for an ADL lookup: unsatisfied, it is a non-viable candidate
         // ([over.match.viable]/3), not an invalid reference.
-        let adl_constrained =
-            adl && self.ast.templates.trailing_requires.get(cands[0].0).is_some();
+        let adl_constrained = adl && self.ast.templates.trailing_requires.get(cands[0].0).is_some();
         if plain == 1 && !templates && !adl_constrained {
             // One candidate: the direct path's conversions and
             // diagnostics are clang's for a one-candidate set.

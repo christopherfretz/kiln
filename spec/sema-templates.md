@@ -4311,7 +4311,13 @@ requires-clause scope.**
   (`act_on_qualified_friend_class_template`; a member template is found
   again in the instantiated class; another kind of entity is
   `sema_redefinition_different_kind`, nothing found in a namespace
-  `sema_friend_def_no_match`),
+  `sema_friend_def_no_match`); an unqualified name that ordinary
+  lookup finds as a member class template of an enclosing class (the
+  search stops at the innermost enclosing namespace, [namespace.memdef]/3,
+  so class scopes are searched) is befriended the same way, as if
+  qualified (WP-278; libc++ `elements_view::__iterator`'s
+  `template <bool> friend class __sentinel;`;
+  `tests/conformance/temp.friend/friend-member-class-template-of-enclosing-class.cpp`),
   `template<class U> friend R f(U);` (`friend_function_template`), and
   friend specializations `friend R f<>(...)` / `friend R N::g<T>(...)`
   (`Declarator::friend`, `friend_spec_template`,
