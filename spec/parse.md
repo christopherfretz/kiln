@@ -759,7 +759,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   where the `...` stays the varargs `...` above: a function parameter
   whose declarator has its own `...` and the `...` is followed by `)`
   (`(Ts......)`), and in a lambda any `...` followed by `)`
-  (`[](Ts a...)`) — clang's observable split. For a non-type template
+  (`[](Ts a...)`) — clang's observable split. In a parameter, `(` then
+  `...` starts a nested parameter list (an abstract function declarator)
+  only for `(...)`; `(...x)` groups a pack's declarator-id
+  ([dcl.decl.general]/4, `is_param_list_start`). For a non-type template
   parameter (no varargs there) every such `...` is the error, unexpanded
   pack or not (`template<int a...>`); `Ts......a` then fails at `a`
   (`expected ')'` / `expected ',' or '>' in template-parameter-list`).
@@ -1173,7 +1176,11 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     expression is invalid (clang's `ExprError`; `Parser::expr_invalid`):
     an expression statement missing its `;` after it (`a = g(S::nom x)`
     then a newline) skips to the next `;` with no "expected ';' after
-    expression", as clang's `ParseExprStatement`. In a
+    expression", as clang's `ParseExprStatement`; an invalid `= expression`
+    initializer (also after a non-template name followed by `<...>`,
+    `int q = 1 + v<S>{};`) skips to the next declarator's `,` or the `;`
+    with no "expected ';'", as clang's
+    `ParseDeclarationAfterDeclaratorAndAttributes`. In a
     parenthesized expression (`(S::nom x);`) "expected ')'" and its note
     come first.
   - A subscript's base is corrected at the `]` (`S::nom[1 2]` reports

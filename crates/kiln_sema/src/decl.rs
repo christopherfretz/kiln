@@ -2083,7 +2083,7 @@ impl Sema<'_, '_> {
             self.check_member_spec_header(d.qualifier, nloc, ds.loc);
         }
         let head = self.take_template_head(d.qualifier);
-        if self.check_template_in_local_class(false) {
+        if self.check_template_in_local_class(false, ds.lead_cxx11.unwrap_or(ds.loc)) {
             return None;
         }
         if self.templ.head_mismatch {
@@ -2152,6 +2152,10 @@ impl Sema<'_, '_> {
             }
         }
         let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        // [temp.mem]/2: a member function template of a local class is
+        // diagnosed and invalid, so no call selects it (clang's "no
+        // matching member function", without candidates).
+        invalid |= self.templ.local_template && self.ast.types.is_function(ty);
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
@@ -2837,7 +2841,7 @@ impl Sema<'_, '_> {
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
         let _ = self.take_template_head(None);
-        let _ = self.check_template_in_local_class(false);
+        let _ = self.check_template_in_local_class(false, Loc::INVALID);
         let mut attrs = attrs.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
@@ -5852,7 +5856,7 @@ impl Sema<'_, '_> {
     ) -> Option<kiln_ast::ids::TemplateParamListId> {
         if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
             let head = self.take_template_head(qualifier);
-            let _ = self.check_template_in_local_class(false);
+            let _ = self.check_template_in_local_class(false, Loc::INVALID);
             return head;
         }
         if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
