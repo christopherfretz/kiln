@@ -537,6 +537,17 @@ impl Substituter<'_, '_, '_> {
             TypeView::Attributed { kind, modified, equivalent } => {
                 let m = self.ty(modified, loc)?;
                 let e = self.ty(equivalent, loc)?;
+                // A nullability qualifier on a type that became a
+                // non-pointer (clang `TransformAttributedType`).
+                if crate::nullability::is_nullability(kind) && !self.sema.can_have_nullability(m) {
+                    let d = self
+                        .sema
+                        .diag(DiagId::sema_nullability_nonpointer, loc)
+                        .arg(crate::nullability::spelling(kind))
+                        .arg(self.sema.ty_arg(m));
+                    self.sema.emit(d);
+                    return Err(SubstFail);
+                }
                 Ok(self.sema.ast.types.attributed(kind, m, e))
             }
             TypeView::Complex(e) => {

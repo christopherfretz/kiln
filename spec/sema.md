@@ -342,6 +342,51 @@ residual` (docs/status/wp-184-oracle-switch.md).
     exactly the chunks applied so far (`declarator_parens`; none around
     the outermost type or a function or array type, spec/types.md)
 
+### 4.1.1 Nullability qualifiers (`nullability.rs`, WP-398)
+A clang extension. A nullability qualifier (`_Nonnull`, `_Nullable`,
+`_Null_unspecified`, `_Nullable_result`; spec/parse.md §4) is recorded
+as `Attributed` sugar (`TypeAttrKind::{Nonnull, Nullable,
+NullUnspecified, NullableResult}`) over the type it qualifies, as
+clang's `AttributedType`; the canonical type is unchanged
+(`__is_same(int* _Nonnull, int*)`), and the type prints as clang does
+(`int * _Nonnull`). `apply_nullability` is clang's
+`CheckNullabilityTypeSpecifier`:
+- the type must be able to have nullability (`can_have_nullability`:
+  canonically a pointer or member pointer, or a dependent type), else
+  `sema_nullability_nonpointer` ("nullability specifier '_Nonnull'
+  cannot be applied to non-pointer type 'int'") and the qualifier is
+  dropped; a reference is a non-pointer
+- the same qualifier written twice is `sema_nullability_duplicate`
+  (warning, `-Wnullability`); a different one already written on the
+  type, or carried through sugar (a typedef), is
+  `sema_nullability_conflicting` (an error, the new one dropped), with
+  `note_nullability_here` at the typedef that carries it
+- order: a declarator chunk's qualifiers apply right after the chunk
+  (`chunk_nullability`, clang's `processTypeAttrs` on the chunk).
+
+Decl-specifier qualifiers apply to the decl-specifier type when it can
+have nullability (`declspec_nullability`; `_Nonnull NP x` with `NP` a
+pointer typedef). Otherwise, as clang's `distributeNullabilityTypeAttr`,
+they move to the declarator's outermost pointer or member-pointer chunk
+(through arrays, not through references; past a function's return
+type to a function pointer) with the `-Wnullability-declspec`
+warning-as-error `sema_nullability_declspec` ("...; did you mean to
+apply the specifier to the pointer?"), unless that chunk already has
+one. An array parameter (it decays) accepts one directly. With no
+target, the non-pointer error stands. A qualifier on an undeduced
+`auto` is dropped (clang applies it after deduction; follow-up).
+
+Instantiation (`templ/subst/types.rs`, clang's
+`TransformAttributedType`): a qualifier on a dependent type that
+substitutes to a non-pointer is `sema_nullability_nonpointer` and a
+substitution failure (a SFINAE note in deduction). kiln reports it at
+the instantiation location (a member's name), clang at the keyword
+(it keeps a TypeLoc).
+Not implemented: clang's redeclaration check
+(`warn_nullability_conflict` on `void f(int* _Nonnull); void
+f(int* _Nullable);`), the `-Wnullability-completeness` family, and the
+`nonnull` attribute spellings.
+
 ### 4.2 Declarator to declaration
 `act_on_declarator` turns a `Declarator` into a declaration:
 1. It applies the chunks from the base type outwards ([dcl.meaning]),
@@ -3927,7 +3972,15 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   canonical types, keeping the written arguments as sugar, so it is the
   type the in-class declaration named. When they are still dependent,
   the template-id is formed again from the rebuilt arguments, defaults
-  included (stl_tree.h:2107). Tests:
+  included (stl_tree.h:2107). The rebuild also looks through `*`, `&`
+  and `&&` around such a member (`pair<typename X<T>::ptr&, bool>`,
+  libc++ `__tree::__find_equal`, WP-398). A template-id is dependent only
+  when a *canonical* argument is dependent ([temp.dep.type]/8, clang's
+  `anyDependentTemplateArguments`): `pair<nbp>` with `using nbp =
+  rebind<T, int>` (an alias of a dependent alias template specialization
+  naming `int*`) is the concrete `pair<int*>`, written arguments kept as
+  sugar. Tests:
+  `tests/conformance/temp.dep.type/p8-out-of-line-nondependent-alias-arg.cpp`,
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return.cpp`,
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return-args.cpp`.
   A qualifier `typename X<P...>::template M<A...>::m` (or the type

@@ -36,6 +36,7 @@ note_not_structural_mutable_field = Note (1) "{0} is not a structural type becau
 note_not_structural_non_public = Note (2) "{0} is not a structural type because it has a {1:non-static data member|base class} that is not public";
 note_not_structural_rvalue_ref_field = Note (1) "{0} is not a structural type because it has a non-static data member of rvalue reference type";
 note_not_structural_subobject = Note (3) "{0} is not a structural type because it has a {1:non-static data member|base class} of non-structural type {2}";
+note_nullability_here = Note (1) "'{0}' specified here";
 note_operator_arrow_depth = Note (0) "use -foperator-arrow-depth=N to increase 'operator->' limit";
 note_operator_arrow_here = Note (1) "'operator->' declared here produces an object of type {0}";
 note_operator_arrows_suppressed = Note (2) "(skipping {0} 'operator->'{1:|s} in backtrace)";

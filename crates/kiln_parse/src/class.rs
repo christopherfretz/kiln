@@ -1938,9 +1938,9 @@ impl Parser<'_, '_> {
         match Self::punct_of(self.tok()) {
             Some(Punct::Star) => {
                 self.bump();
-                let quals = self.parse_ptr_cv();
+                let (quals, nulls) = self.parse_ptr_quals();
                 self.parse_conversion_declarator(d);
-                d.chunks.push(Chunk::Pointer { quals, loc });
+                d.push_chunk(Chunk::Pointer { quals, loc }, nulls);
             }
             Some(Punct::Amp) => {
                 self.bump();
@@ -2197,6 +2197,10 @@ impl Parser<'_, '_> {
                 Kw::Const
                 | Kw::Volatile
                 | Kw::Restrict
+                | Kw::Nonnull
+                | Kw::Nullable
+                | Kw::NullUnspecified
+                | Kw::NullableResult
                 | Kw::Inline
                 | Kw::Virtual
                 | Kw::Friend

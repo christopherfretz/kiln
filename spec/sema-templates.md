@@ -1424,7 +1424,17 @@ class name" at `B`
 - Inside the pattern, `A` names an `InjectedClassName` type. Its
   canonical type is the dependent `A<T…>` (types.md T6).
 - `A` followed by `<`, or used as a template template argument, is the
-  template-name ([temp.local]/1–2).
+  template-name ([temp.local]/1–2). The parser forms such an argument as
+  a type; `template_id` converts it to the template when the
+  corresponding parameter of a class, alias or variable template is a
+  template template parameter (`injected_template_args`, clang's
+  `convertTypeTemplateArgumentToTemplate`), so substitution never sees
+  the injected type there (libc++ `__split_buffer:160`
+  `__split_buffer_pointer_layout<__split_buffer<…>, …>`, WP-398). Test:
+  `tests/conformance/temp.local/injected-class-name-template-template-arg.cpp`.
+  Gap: `H<Y<T>>` (a specialization, not a template) for a template
+  template parameter is diagnosed only at instantiation, clang at the
+  definition.
 - A template argument `ns::A` or `C::A` whose qualifier is a namespace
   or the class `A` is a member of finds the template itself, never an
   injected-class-name, so inside `A`'s own definition it is a template
@@ -2799,7 +2809,13 @@ after selection and on any odr-use:
 - **`constexpr`, `consteval` or deduced-return specializations** are
   instantiated **immediately**, under the frame `TemplateInstantiation`
   with poi `loc`. This keeps clang's diagnostic order and makes the body
-  ready for the Oven (Q7).
+  ready for the Oven (Q7). A specialization whose definition is already
+  being instantiated further up the instantiation stack (mutually
+  recursive constexpr templates, one forward-declared, as libc++'s
+  `__stable_sort` and `__stable_sort_move`) is not instantiated again:
+  its definition is in progress, as clang's `isDefined` is once
+  `InstantiateFunctionDefinition` has started. Test:
+  `temp.inst/constexpr-mutual-recursion.cpp`.
 - **Every other specialization** is pushed onto `pending`. It is
   instantiated at end of TU, or earlier through `ensure_body`.
 - **Explicit-instantiation-declaration members** are queued only if they
@@ -3756,7 +3772,11 @@ function template) is not checked. The requires-expression is then
 rebuilt as a dependent `RequiresExpr` with the substituted parameters
 and requirements, and evaluated when the remaining level is
 substituted. A compound requirement's type-constraint keeps its
-invented first argument in that case.
+invented first argument in that case. The expression is dependent when
+a parameter's type or a requirement is ([temp.variadic]/5, WP-398); a
+requirement that already fails settles it `false`, and the result then
+drops parameters whose types still name a retained level so it is not
+substituted again.
 
 The expression is a `bool` prvalue. `RequiresExpr` stores the value plus
 the index of the failed requirement.
