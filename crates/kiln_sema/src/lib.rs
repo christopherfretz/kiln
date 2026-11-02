@@ -316,6 +316,11 @@ pub struct Sema<'a, 'sm> {
     /// issues them again, as clang's rebuilt one does (spec/sema.md
     /// §5.15, WP-235).
     pub(crate) null_deref_rewarn: kiln_source::fx::FxHashMap<ExprId, (usize, Diag)>,
+    /// The non-dependent variadic arguments of a template definition's
+    /// calls that the instantiation must diagnose (a `void` or non-trivial
+    /// class argument), with the callee kind: clang checks them only in
+    /// the instantiation, which shares the call (spec/sema.md §5.19).
+    pub(crate) vararg_recheck: kiln_source::fx::FxHashMap<ExprId, u8>,
     /// The null dereferences warned about per instantiation context
     /// (`queue_null_deref`).
     pub(crate) null_deref_seen: kiln_source::fx::FxHashSet<(ExprId, u64)>,
@@ -625,6 +630,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
             null_deref_rewarn: kiln_source::fx::FxHashMap::default(),
+            vararg_recheck: kiln_source::fx::FxHashMap::default(),
             null_deref_seen: kiln_source::fx::FxHashSet::default(),
             designator_pending: None,
             deferred_call_refs: Vec::new(),

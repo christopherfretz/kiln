@@ -1254,7 +1254,8 @@ impl Sema<'_, '_> {
     /// converted to its parameter's type (copy-initialization,
     /// [expr.call]/7; checked for narrowing if `narrowing`), then the
     /// default arguments (used at the construction `loc`), then the
-    /// variadic arguments promoted.
+    /// variadic arguments promoted and checked
+    /// ([`Sema::check_variadic_args`]).
     pub(crate) fn ctor_args(
         &mut self,
         m: DeclId,
@@ -1304,6 +1305,9 @@ impl Sema<'_, '_> {
                 self.note_default_use(arg, p, loc);
                 out.push(arg);
             }
+        }
+        if args.len() > params.len() {
+            self.check_variadic_args(&out[params.len()..], 3);
         }
         Some(out)
     }
