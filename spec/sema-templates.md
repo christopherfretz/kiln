@@ -3556,6 +3556,37 @@ ambiguity errors.
   `TDF_ParamWithReferenceType`): `const S<T>&` against `const char[3]` is
   `'const S<T>'`, `volatile S<T>&` is `'S<T>'` (WP-152). The same rule
   makes `const T&` from `const char[3]` deduce `T = char[3]`.
+- `NonDeducedMismatch` names the argument's template as clang does
+  (`written_template_in`): the specialized template, qualified by the
+  outermost written qualifier on the way down (an elaborated type's,
+  kept through typedefs and aliases, or a deduced placeholder's own
+  qualified name). `P{}` for `using P = s::pr<int, long>` prints `pr`,
+  `t::Q{}` prints `t::pr`, `s::pr{1, 2}` prints `s::pr`. An
+  `initializer_list<E>` parameter whose element cannot be deduced
+  reports the element type as written (`'pr<const K, T>'`, also through
+  a member typedef in a CTAD guide).
+- The `[with …]` bindings of `ConstraintsNotSatisfied`,
+  `SubstitutionFailure` and `DeducedMismatch` (and the overload
+  ambiguity notes) come from `deduced_args_desc`: a deduced type keeps
+  the call argument's sugar (`resugar_call_deduction`: `N::H<int>` when
+  written qualified, `H<int>` after a using-declaration); a canonical
+  class or enum, deduced through a nested template-id or a base class,
+  prints fully scoped (`_Container = std::deque<int>`). Explicit
+  template arguments and an argument written as a bare class name are
+  wrapped in an unqualified `Elaborated` (`written_bare`) so they stay
+  bare. An unnamed template parameter prints as `$N` (clang's
+  `getTemplateArgumentBindingsText`).
+  Gap: a binding taken from a default template argument
+  (`class U = V<T>`) prints its replacement canonical (`U = V<N::P>`
+  where clang prints `V<P>`), because `subst` canonicalizes a
+  non-dependent replacement.
+- An `Inconsistent` type note prints each type with its `aka`
+  (`'s3::al<PC>' (aka 'al<pr<const int, long>>')`).
+- Tests `temp.deduct.call/deduced-binding-sugar.cpp`,
+  `temp.deduct.type/mismatch-template-names.cpp`.
+- "constraints not satisfied for alias/class/variable template 'X'"
+  names the template bare, however it was qualified
+  (`temp.names/constraint-template-name.cpp`).
 
 ### 10.5 Other template diagnostics (texts from clang 19; goldens are authoritative)
 

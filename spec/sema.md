@@ -835,6 +835,23 @@ and returns the scope it names:
   sugar; its `__is_deducible(A, R)` prints the guide's sugared return
   type `R` (WP-311; test
   `over.match.class.deduct/guide-signature-as-written.cpp`).
+- **Guide printing** (WP-320), as clang:
+  - The injected class type of an implicit guide (`-> vector<_Tp,
+    _Alloc>`) uses the template parameters of the class template's
+    first declaration (`injected_params_template`): a forward
+    declaration's names, `type-parameter-0-N` for unnamed ones. A friend
+    declaration inside a templated class does not count (clang links it
+    only at instantiation); one in a non-template class does.
+  - A type-constraint prints with its written arguments in the guide's
+    parameter names (`template <Compat<T> R>`, `Var<T, int>`), not as
+    `Compat<>`.
+  - The simple `C() -> C<T>` guide and the copy guide sit at the class
+    template's definition.
+  - Tests `over.match.class.deduct/implicit-guide-constraint-args.cpp`,
+    `implicit-guide-first-declaration-params.cpp`,
+    `implicit-guide-locations-init-list.cpp`.
+  - Gap: a qualified concept name in a type-constraint loses its
+    qualifier (`template <NC R>` where clang prints `N::NC R`).
 - **Building the implicit guides** runs under a
   `FrameKind::BuildingDeductionGuides` frame (not an instantiation;
   clang `BuildingDeductionGuides`), so an error forming them (the
