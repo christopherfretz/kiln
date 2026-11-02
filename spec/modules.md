@@ -1,0 +1,281 @@
+# spec: C++20 modules (part A: in-process modules, header units, `import std;`)
+
+Standard: [module] (module.unit, module.interface, module.import,
+module.global.frag, module.private.frag, module.context, module.reach),
+[basic.link]/8-11, [basic.lookup.argdep]/4, [cpp.module], [cpp.import],
+[cpp.pre]/1 (import-seq / directive tokenisation), [dcl.module] grammar.
+Reference: clang 22 (`clang++-22 -std=c++20`) for diagnostics, mangling and
+`__cpp_modules`; libc++ 19's `std.cppm` / `std.compat.cppm`.
+
+## 1. The design: no binary module interface in part A
+
+A kiln invocation that imports a module **builds that module in-process
+from its interface source**. There is no BMI and no serialisation: the
+imported unit is preprocessed, parsed and analysed by the same
+`Preprocessor` / `Parser` / `Sema` / `Ast` as the importer, its tokens
+spliced into the token stream at the import, with every declaration tagged
+with the module unit that owns it. The module cache is per-invocation
+memory: a unit is built once per invocation, and a second import of it only
+records the import edge (and, for a header unit, re-applies its macros).
+
+This is clang's "implicit module build" kept inside one compilation. The
+cost of importing a module is the cost of parsing its source; for
+`import std;` with libc++ 19 that is about the cost of including every
+standard header once.
+
+Part B (a later WP) adds a BMI. The ownership model below is designed so
+that a serialiser can be added without reworking lookup: everything lookup
+and codegen consult is the `kiln_ast::modules::ModuleTable` (units, the
+owner of every declaration, the import graph), which a BMI writer can
+serialise with the AST and a reader can rebuild.
+
+Crate placement. Data lives in `kiln_ast::modules` (read by sema, the
+mangler in `kiln_abi` and codegen); the semantic rules live in
+`kiln_sema::modules`; the directives in `kiln_pp` (`modules.rs`); the
+directive events and export declarations in `kiln_parse`. No new crate is
+needed: no dependency edge is added.
+
+## 2. Activation and driver flags
+
+Modules are enabled for `-fsyntax-only` and code generation under
+`-std=c++20` and later (`PpOptions::modules = Some(ModuleOptions)`). `-E`
+keeps printing directives as text (as today), and before C++20 a directive
+stays "unsupported".
+
+Module sources are found in this order (spec/driver.md, "Modules"):
+
+1. `-fmodule-file=<name>=<path>`: the interface source for module `<name>`
+   (a partition is named `M:P`). A `-fmodule-file=<path>` without `=` is
+   accepted and ignored (it names a BMI; there is none in part A).
+2. `-fprebuilt-module-path=<dir>` (repeatable, in order): `<dir>/<name>.cppm`,
+   then `.ixx`, then `.cpp`; a partition `M:P` is looked up as `M-P.*`.
+3. `std` and `std.compat`: `<llvm>/share/libc++/v1/std.cppm` and
+   `std.compat.cppm`, where `<llvm>` is the LLVM installation whose libc++
+   headers are in use (`KILN_LLVM_DIR`, default `/usr/lib/llvm-19`; the
+   llvm-22 layout is the same).
+
+A module that is not found is `fatal error: module 'M' not found`. A file
+that cannot be read is the include "file not found" error.
+
+Activation inside a TU. The preprocessor scans the main file's text once
+for a line starting with `module`, `import` or `export`; if there is none
+the TU pays nothing (no ownership records, no visibility checks). An
+import first reached through an `#include` still works; only the dedup of
+§6 for declarations before that point is lost.
+
+## 3. Directives (kiln_pp)
+
+A directive is recognised exactly where [cpp.pre]/1 says: `module`,
+`import`, `export module`, `export import` at the start of a logical line,
+followed on the same line by an identifier, `:`, `;` (for `module`) or a
+header name / `<` / string (for `import`). Elsewhere `import` and `module`
+are ordinary identifiers (`int import = 1;` keeps working).
+
+With modules enabled, the preprocessor consumes the directive (tokens up to
+`;`, unexpanded; module names are never macro-expanded and an object-like
+macro of that name is diagnosed) and queues a `Marker::Module` carrying a
+parsed `ModuleDirective`:
+
+- `module;` - global module fragment introducer;
+- `[export] module M[.N][:P] [attrs];` - module declaration;
+- `module :private;` - private module fragment;
+- `[export] import M;` / `import :P;` / `import M:P;` / `import <h>;` /
+  `import "h";`.
+
+Attributes on module and import declarations are skipped (no attribute
+applies to them in C++26).
+
+**Performing an import.** After an import directive (and after `module M;`,
+which implicitly imports the primary interface of `M`, [module.unit]/8), the
+preprocessor resolves the source (§2; header units through the
+`IncludeResolver` as for `#include`). If the unit is already built or being
+built it does nothing more (a cycle is an error). Otherwise it queues
+`Marker::UnitBegin`, saves its unit-local state (macro table, `#pragma once`
+files, include guards, poisoned identifiers, `push_macro` stacks, include
+depth), starts the unit with only the predefines (`<built-in>`, re-entered)
+and pushes the unit's file. When that file ends, the importer's state is
+restored and `Marker::UnitEnd` is queued. The unit's tokens therefore reach
+the parser between the two markers.
+
+**Header units** ([cpp.import]/5, [module.import]/5). The header is built as
+an implicit header unit in-process: no `-fmodule-header` is needed. When it
+ends, the macros it defined (all definitions whose location is outside
+`<built-in>`) become visible in the importer at the import, and are
+re-applied on every later import of the same header. An `#include` of an
+importable header stays a textual include: the include-to-import
+translation of [cpp.include]/10 is implementation-defined and not done.
+
+Named module units export no macros.
+
+## 4. Unit kinds and the preamble (kiln_parse, kiln_sema::modules)
+
+Directive events reach the parser keyed by the index of the token they
+precede and are processed at the start of the next namespace-scope
+declaration (never inside one). Sema tracks the current unit's phase:
+`Start` → (`module;`) `Gmf` → (module declaration) `Purview` →
+(`module :private;`) `Private`. Errors (clang 22 wording):
+
+| Rule | Diagnostic |
+|---|---|
+| [module.global.frag]/1 `module;` first | `'module;' introducing a global module fragment can appear only at the start of the translation unit` |
+| [module.unit]/1 one module declaration, first or after the GMF | `module declaration must occur at the start of the translation unit` (+ note `add 'module;' to the start of the file to introduce a global module fragment`); `translation unit contains multiple module declarations` |
+| [module.private.frag]/1 | `private module fragment declaration with no preceding module declaration`; `private module fragment in module implementation unit`; `private module fragment redefined` |
+| [module.import]/1 imports before other declarations | `imports must immediately follow the module declaration` |
+| [module.import] partitions | `module partition imports must be within a module purview` |
+| [module.interface]/1 | `export declaration can only be used within a module interface`; `export declaration appears within another export declaration`; `export declaration appears within anonymous namespace`; `anonymous namespaces cannot be exported` |
+| [module.interface]/3 (C++20 wording) | `declaration of 'x' with internal linkage cannot be exported` |
+| import at top level only | `import of module 'M' appears within namespace` |
+| missing module | `module 'M' not found` (fatal) |
+| [basic.link]/11 | `declaration of 'x' in module M follows declaration in the global module`, `... in the global module follows declaration in module M`, `... in module N follows declaration in module M` |
+
+Imports are allowed at the start of the private module fragment
+([module.import]/1, "and of the private-module-fragment"), as clang does.
+
+`export` declarations build `DeclKind::Export` contexts (transparent, like
+linkage specifications). `export import M;` re-exports `M`.
+
+`__cpp_modules` is defined as `1` from C++20 on: clang 22's value (it does
+not claim `201907L` while its implementation is incomplete; kiln follows
+the reference compiler). clang 19 does not define it.
+
+## 5. Ownership and visibility
+
+`ModuleTable` (kiln_ast) holds the units (`UnitInfo`: kind, module name,
+partition, imports, exported imports) and the owner of every declaration as
+change points `(first DeclId, Owner)`: `Owner { unit, purview, exported }`.
+Sema pushes a change point when the current owner changes (unit begin/end,
+module declaration, private fragment, export begin/end), so the owner of a
+declaration is a binary search on its id. Unit 0 is always the main file.
+
+Attachment ([module.unit]/7): a declaration in a purview is attached to the
+named module unless it is in a linkage specification; everything else is
+attached to the global module.
+
+**Visibility** of declaration `D` (owner `O`) from the current unit `C`
+(`Sema::module_visible`), consulted by `Sema::filter` (every ordinary,
+qualified and class-scope name lookup), by ADL, and by redeclaration lookup:
+
+1. modules inactive, or `D` not at namespace scope, or `D` a namespace:
+   visible (members are filtered one by one);
+2. `O.unit == C`: visible;
+3. `D` is in a range `C` merged (§6): visible;
+4. `O.unit` not imported by `C`: not visible. Imports are transitive
+   through `export import` ([module.import]/7), and a unit of module `M`
+   importing another unit of `M` also imports what that unit imports;
+5. `O.unit` is a header unit: visible;
+6. `D` in the purview and exported, or in the purview and `C` is a unit of
+   the same named module: visible; otherwise (the GMF of an imported unit,
+   non-exported purview declarations of another module) not visible.
+
+A using-declaration is filtered by its own owner, not its target's: `export
+namespace std { using std::vector; }` makes `std::vector` visible to an
+importer although the class template, declared in std's GMF, is not.
+
+ADL ([basic.lookup.argdep]/4) uses the same predicate plus: a function
+declared in the purview of the named module an associated entity is
+attached to is visible (exported or not), and hidden friends of associated
+classes are always visible.
+
+Redeclaration matching ([basic.link]/8) excludes non-exported purview
+declarations of another named module (a declaration with module linkage of
+another module is a different entity); internal-linkage declarations of
+other units are excluded as well. A matched previous declaration attached
+to a different module is the [basic.link]/11 error.
+
+**Instantiation.** While any template is being instantiated
+(`inst.stack` non-empty) the filter is off: the instantiation context
+([module.context]) is approximated as "every declaration reachable in the
+invocation". This is a documented deviation: it can accept a program that
+names a non-visible entity from a template instantiated in the importer
+only when the same name is also findable by the template's own definition
+context, which is what clang's instantiation-context rule allows anyway in
+every case libc++ exercises.
+
+**Reachability.** Every declaration of an imported unit is reachable
+([module.reach]/3 allows it): member access, class completeness, default
+arguments and inline / constexpr / template definitions all work through
+import, since they never go through the namespace-scope filter.
+
+GMF discarding ([module.global.frag]/3-4) is not done: it only shrinks a
+BMI, and part A has none. Not discarding is observable only as accepting
+some programs that name a discarded declaration through a template
+instantiated in an importer (the instantiation deviation above).
+
+## 6. Cross-unit deduplication (the substitute for ODR merging)
+
+An importer and its imports routinely see the same header text (std's GMF
+includes every header; the importer may `#include <vector>` too; std.compat
+re-includes them all). Since there is no deserialiser to merge
+definitions, the parser deduplicates by source position.
+
+Each namespace-scope declaration parsed while modules are active records
+`(start key, end key, token count, DeclId range, unit)`, where a key is the
+(file, offset) of a token's expansion location and of its spelling
+location. At the start of a namespace-scope declaration, if a record from
+**another unit** has the same start key, and the token `count - 1` ahead
+has the same end key, the declaration is skipped (its tokens consumed, its
+pragma events still processed) and the record's DeclId range is merged into
+the current unit (visible as if declared there). Re-parsing the same text
+in the *same* unit is never skipped, so genuine redefinitions are still
+diagnosed.
+
+The check compares positions and length, not the tokens: two expansions of
+the same text under different macro definitions with the same length would
+be merged. A mismatch falls back to finer records (a namespace block that
+differs is entered and its members checked one by one); a declaration that
+still differs is parsed and can then be a redefinition error, where real
+ODR merging would accept it. Both are documented deviations.
+
+## 7. Code generation and mangling
+
+Codegen treats a declaration owned by an imported named-module unit (not a
+header unit) like clang treats one from a BMI: a non-inline function or
+variable definition with external linkage is emitted as a declaration only
+(the module's own object file defines it); inline functions, templates
+and internal-linkage entities are emitted on use as usual. Compiling the
+module unit itself emits everything.
+
+Module initializers (`_ZGIW...`) are not emitted or called in part A
+(follow-up for part B, needed to link against clang-built module objects).
+
+Mangling (Itanium `<module-name>`, clang 22): an entity at namespace scope
+attached to named module `A.B` with linkage gets `W1AW1B` before its
+unqualified name (`_ZW1AW1B1fv`, `_ZN2nsW1M1kEv`, class members through
+their class: `_ZNW1M1S1mEv`); each module-name prefix is a substitution
+candidate. Partitions do not appear in entity names. Entities in
+`extern "C++"` and internal-linkage entities carry no module name.
+
+## 8. `import std;` (libc++)
+
+`std.cppm` is a GMF including every header, then `export module std;` and
+`#include "std/*.inc"`, each `export namespace std { using std::X; }`.
+`std.compat.cppm` has its own GMF (deduplicated against std's, §6), then
+`export import std;` and the `::` re-exports. Both work under `-std=c++20`
+and later. The libc++ 22 layout adds partitions-free `std.cppm` too.
+
+## 9. Part B hooks
+
+- A BMI writer serialises the AST plus `ModuleTable` for one unit; a reader
+  appends a deserialised unit with fresh `DeclId`s and change points, and
+  its `UnitInfo`; lookup does not change.
+- §6 dedup is replaced by real ODR merging when deserialising.
+- Module initializers, `-fmodule-output`, `--precompile`, and a two-step
+  clang oracle mode in the harness.
+
+## 10. Deviations
+
+1. No BMI; modules are built from source per invocation (§1).
+2. Visibility is not enforced during template instantiation (§5).
+3. Cross-unit merging by source position and length, not by ODR (§6).
+4. No module initializer functions (§7).
+5. `#include` is never translated into an import (§3).
+6. Attributes on module / import declarations are ignored (§3).
+
+## Tests
+
+`tests/conformance/module.*/` (strict-diags and run tests, one per rule,
+named by section); `tests/conformance/module.import/import-std-*.cpp`
+(`import std;` with vector, format/println, ranges; `oracle: none`, because
+clang needs a two-step BMI build the harness does not drive);
+`tests/codegen/check-x86_64/module-mangling*.cpp` goldens for `_ZW`
+names; libc++'s `std/modules/` through the harness.
