@@ -85,7 +85,8 @@ is `debug`, `harness` or `release` (`release (--compiler)`), else
 The implicit build is optimized by default: an unoptimized kiln++ is several
 times slower on template-heavy tests, which pushed
 `variant.visit/visit.pass.cpp` past the compile limit, and it makes every
-large run (a stratum, the whole suite) take ~3x longer. `debug` stays the
+large run several times longer (the M3 gate at `-j 4`: 303 s with a debug
+kiln++, 48–63 s with `harness`). `debug` stays the
 profile of `cargo build`, `cargo xtask test` and `ci`, so an implementer's
 default build is unchanged.
 
@@ -103,30 +104,33 @@ fired assertion is a panic and so a FAIL, never a PASS. A harness run
 therefore cannot pass a test that a debug run fails because of an assertion
 it skips; it can only miss such a crash, and `--profile debug` remains the
 way to look for one. No gate result depends on the choice (WP-319: the M3
-gate gives the same counts under `harness` as under `debug`).
+gate gives the same 630 PASS, 6 UNSUPPORTED and 6 `.verify` FAILs, the
+same tests, under `harness` as under `debug`).
 
 Measured on the shared 24-core aarch64 box under load (load average 13–15,
 shared jobserver), each build in a fresh target directory, `cargo build -p
 kiln_driver --profile <p>` under `/usr/bin/time -f "%e %M"` (`%M` is the
-largest rustc), and `kiln++ -c` of `variant.visit/visit.pass.cpp` with the
-harness flags (best of two; same instantiation counts in every profile):
+largest rustc), and `kiln++ -c` of `variant.visit/visit.pass.cpp` and
+`visit_return_type.pass.cpp` with the harness flags:
 
 | profile | clean build | largest rustc | `visit.pass` | `visit_return_type.pass` |
 |---|---:|---:|---:|---:|
-| `debug` (`dev`) | 24 s | 1.08 GiB | 216 s | 447 s |
-| `harness` | 58 s, 35 s | 1.23 GiB | 7.2 s | 12.3 s |
-| `release` | 44 s, 61 s | 1.62 GiB | 9.2 s | 18.2 s |
-| clang++-19 | | | 9.5 s | 15.7 s |
+| `debug` (`dev`) | 24 s | 1.08 GiB | 247 s | 465 s |
+| `harness` | 58 s, 35 s | 1.23 GiB | 13.7 s | 20.9 s |
+| `release` | 44 s, 61 s | 1.62 GiB | 16.6 s | 26.8 s |
+| clang++-19 | | | 10.2 s | 16.7 s |
 
-(Two clean builds where two numbers are given; the spread is the box's
-load, not the profile.) `harness` builds within the 3-minute budget and
-compiles the two tests faster than `release` (0.78x and 0.68x of its
-time; why the thin-LTO build is slower here is not yet investigated), so it
-is the default. The kiln numbers were taken on main `f4e76bcd`, where both
-tests still stop at an ambiguity error (WP-303), so they measure the whole
-instantiation work but not code generation. A debug kiln++ is ~30x slower
-here: `visit_return_type.pass` exceeds even the 300 s `debug` limit, which
-is meant for ordinary tests, not these.
+Where two build times are given, two clean builds were run; the spread
+comes from the box's load, not from the profile. The compile times are on
+main `93ee57ff`, where both tests compile cleanly (WP-303); they are best of
+two, and the box was loaded, so they are higher than on a quiet box. kiln's
+peak RSS is the same in every profile (0.48 and 0.73 GiB; clang 1.0 and
+1.6 GiB). `harness` builds well within the 3-minute budget and compiles the
+two tests faster than `release` does (0.82x and 0.78x of its time; the
+reason the thin-LTO build is slower here has not been investigated), so it
+is the default. A debug kiln++ is 18–22x slower than `harness` on these
+two tests: `visit_return_type.pass` exceeds even the 300 s `debug` limit,
+which is sized for ordinary tests, not for these two.
 
 ## Classification
 
