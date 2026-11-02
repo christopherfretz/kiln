@@ -484,12 +484,15 @@ type>'`:
     dependent `N::v<T>` carries it over (WP-300).
   - `T(a, b)` for an unresolved construct, `sizeof...(Ts)`, and folds as
     `(... + xs)`.
+- **Trailing return types survive substitution** (WP-318): a member
+  function or member function template of an implicit class
+  instantiation declared `auto f(U) -> T` prints as written with the
+  substituted type (`auto (U) -> int`, `auto (U, int) -> int *`), as
+  clang; the substituted declarator keeps the trailing-return bit and a
+  plain `auto` base (`templ/subst/decls.rs` `function_decl`)
+  (`tests/conformance/temp.inst/member-trailing-return-ast.cpp`).
 
 Known gaps:
-- A member function template of an implicit class instantiation
-  declared with a trailing return type prints its leading form
-  (`decltype(e) (U)`; clang: `auto (U) -> decltype(e)`): the
-  substituted declarator does not keep the trailing-return bit.
 - A function parameter named inside its own declarator's trailing
   return type (`auto f(T t) -> decltype(t.x)`) is unsupported, so the
   type prints with `...` for the expression.
