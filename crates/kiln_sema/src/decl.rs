@@ -541,6 +541,32 @@ impl Sema<'_, '_> {
         self.rebuild_ci_type(base, qual, d.loc, 0)
     }
 
+    /// [`Sema::rebuild_ci_type`] through `*`, `&` and `&&`
+    /// (`pair<typename X<T>::ptr&, bool>`); `None` when `view` is none of
+    /// those.
+    fn rebuild_ci_derived(
+        &mut self,
+        base: QualType,
+        view: TypeView,
+        qual: DeclId,
+        loc: Loc,
+        depth: u32,
+    ) -> Option<QualType> {
+        let (TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p)) = view else {
+            return None;
+        };
+        let r = self.rebuild_ci_type(p, qual, loc, depth + 1);
+        if r == p {
+            return Some(base);
+        }
+        let t = match view {
+            TypeView::Pointer(_) => self.ast.types.pointer_to(r),
+            TypeView::LValueRef(_) => self.ast.types.lvalue_ref_to(r),
+            _ => self.ast.types.rvalue_ref_to(r),
+        };
+        Some(self.ast.types.qualify(t, base.quals()))
+    }
+
     /// [`Sema::rebuild_in_current_instantiation`] of `base`, also through
     /// the type arguments of a template-id (libc++'s
     /// `pair<typename __hash_table<...>::iterator, bool>
@@ -550,18 +576,8 @@ impl Sema<'_, '_> {
             return base;
         }
         let view = self.ast.types.view(base.ty());
-        // Through `*`, `&` and `&&` (`pair<typename X<T>::ptr&, bool>`).
-        if let TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) = view {
-            let r = self.rebuild_ci_type(p, qual, loc, depth + 1);
-            if r == p {
-                return base;
-            }
-            let t = match view {
-                TypeView::Pointer(_) => self.ast.types.pointer_to(r),
-                TypeView::LValueRef(_) => self.ast.types.lvalue_ref_to(r),
-                _ => self.ast.types.rvalue_ref_to(r),
-            };
-            return self.ast.types.qualify(t, base.quals());
+        if let Some(t) = self.rebuild_ci_derived(base, view, qual, loc, depth) {
+            return t;
         }
         if let TypeView::Elaborated { keyword, nns, named } = view {
             let r = self.rebuild_ci_type(named, qual, loc, depth + 1);
