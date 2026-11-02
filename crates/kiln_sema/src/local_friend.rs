@@ -30,6 +30,18 @@ pub(crate) enum LocalFriend {
     Invalid,
 }
 
+/// The outcome of [`Sema::local_friend_member`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LocalFriendMember {
+    /// No member of the name in the local classes enclosing the friend.
+    None,
+    /// It redeclares a member of this class (its definition).
+    Member(DeclId),
+    /// Members of the name were found, none of which it redeclares;
+    /// diagnosed.
+    Invalid,
+}
+
 /// How a function's parameters compare with the friend's (clang
 /// `hasSimilarParameters`).
 #[derive(Clone, Copy)]
@@ -62,8 +74,9 @@ impl Sema<'_, '_> {
     /// whose parameters are similar ("local declaration nearly matches",
     /// or the first parameter whose type differs), or, when no block
     /// declares it, the namespace function typo correction finds
-    /// ([`Sema::local_friend_correction`]). An operator friend gets the
-    /// plain error.
+    /// ([`Sema::local_friend_correction`]). An operator friend matches
+    /// the blocks' operator declarations (`Scope.local_ops`) and gets no
+    /// typo correction.
     pub(crate) fn check_local_friend(
         &mut self,
         dname: DeclName,
@@ -74,10 +87,11 @@ impl Sema<'_, '_> {
         if !self.is_local_class(c.record) {
             return LocalFriend::NotLocal;
         }
-        let Some(name) = dname.as_ident() else {
+        let (name, op) = (dname.as_ident(), dname.as_operator());
+        if name.is_none() && op.is_none() {
             self.error(DiagId::sema_no_matching_local_friend, loc);
             return LocalFriend::Invalid;
-        };
+        }
         // The enclosing block scopes, innermost first, up to the
         // function's outermost one (clang `LookupLocalFriendName`).
         let mut blocks = self
@@ -92,9 +106,18 @@ impl Sema<'_, '_> {
             if !s.is_local() {
                 break;
             }
-            found.extend(
-                s.locals.iter().filter(|&&(n, _, k)| n == name && k == Ns::Ordinary).map(|e| e.1),
-            );
+            match (name, op) {
+                (Some(name), _) => found.extend(
+                    s.locals
+                        .iter()
+                        .filter(|&&(n, _, k)| n == name && k == Ns::Ordinary)
+                        .map(|e| e.1),
+                ),
+                (None, Some(op)) => {
+                    found.extend(s.local_ops.iter().filter(|e| e.0 == op).map(|e| e.1));
+                }
+                (None, None) => {}
+            }
             if !found.is_empty() || s.kind == ScopeKind::Function {
                 break;
             }
@@ -112,7 +135,9 @@ impl Sema<'_, '_> {
         if innermost && let Some(p) = self.pick_prev_function(&fns, new) {
             return LocalFriend::Redeclares(p);
         }
-        let msg = if found.is_empty() {
+        let msg = if found.is_empty()
+            && let Some(name) = name
+        {
             match self.local_friend_correction(name, new) {
                 Some(c) => {
                     let qual = format!("{}{}", c.qual, sym_str(self, c.name));
@@ -126,45 +151,111 @@ impl Sema<'_, '_> {
                 }
                 None => self.diag(DiagId::sema_no_matching_local_friend, loc),
             }
+        } else if found.is_empty() {
+            // An operator: typo correction suggests nothing.
+            self.diag(DiagId::sema_no_matching_local_friend, loc)
         } else {
-            let mut msg = self.diag(DiagId::sema_no_matching_local_friend, loc);
-            for f in fns {
-                if self.kind_of(f) == DeclKind::FunctionTemplate {
-                    continue;
-                }
-                let Some(similar) = self.similar_params(f, new.ty) else { continue };
-                let note = match similar {
-                    Similar::Same => {
-                        self.diag(DiagId::note_local_decl_close_match, self.decl_loc(f))
-                    }
-                    Similar::Differs(i, local, friend) => {
-                        let params: Vec<DeclId> = self
-                            .ast
-                            .decls
-                            .function(f)
-                            .map(|fd| self.ast.lists.iter::<DeclId>(fd.params).collect())
-                            .unwrap_or_default();
-                        // The first type-specifier (clang `getTypeSpecStartLoc`).
-                        let ploc = params.get(i).map_or(self.decl_loc(f), |&p| {
-                            let begin = self.ast.decls.cold.begin_loc.get(p).copied();
-                            self.type_spec_locs
-                                .get(&p)
-                                .copied()
-                                .or(begin)
-                                .unwrap_or(self.decl_loc(p))
-                        });
-                        self.diag(DiagId::note_local_decl_close_param_match, ploc)
-                            .arg(crate::expr::ordinal(i + 1))
-                            .arg(self.ty_arg(local))
-                            .arg(self.ty_arg(friend))
-                    }
-                };
-                msg = msg.with_note(note);
-            }
-            msg
+            let msg = self.diag(DiagId::sema_no_matching_local_friend, loc);
+            self.local_friend_near_matches(msg, fns, new)
         };
         self.emit(msg);
         LocalFriend::Invalid
+    }
+
+    /// Clang's near-match notes on "no matching function found in local
+    /// scope": each function of `fns` whose parameters are similar to the
+    /// friend's gets "local declaration nearly matches", or the first
+    /// parameter whose type differs.
+    fn local_friend_near_matches(
+        &mut self,
+        mut msg: kiln_diag::Diag,
+        fns: Vec<DeclId>,
+        new: NewFn,
+    ) -> kiln_diag::Diag {
+        for f in fns {
+            if self.kind_of(f) == DeclKind::FunctionTemplate {
+                continue;
+            }
+            let Some(similar) = self.similar_params(f, new.ty) else { continue };
+            let note = match similar {
+                Similar::Same => self.diag(DiagId::note_local_decl_close_match, self.decl_loc(f)),
+                Similar::Differs(i, local, friend) => {
+                    let params: Vec<DeclId> = self
+                        .ast
+                        .decls
+                        .function(f)
+                        .map(|fd| self.ast.lists.iter::<DeclId>(fd.params).collect())
+                        .unwrap_or_default();
+                    // The first type-specifier (clang `getTypeSpecStartLoc`).
+                    let ploc = params.get(i).map_or(self.decl_loc(f), |&p| {
+                        let begin = self.ast.decls.cold.begin_loc.get(p).copied();
+                        self.type_spec_locs.get(&p).copied().or(begin).unwrap_or(self.decl_loc(p))
+                    });
+                    self.diag(DiagId::note_local_decl_close_param_match, ploc)
+                        .arg(crate::expr::ordinal(i + 1))
+                        .arg(self.ty_arg(local))
+                        .arg(self.ty_arg(friend))
+                }
+            };
+            msg = msg.with_note(note);
+        }
+        msg
+    }
+
+    /// [class.friend]/11 with [class.local]: the redeclaration lookup of
+    /// an unqualified friend function `dname` of type `ty` declared in a
+    /// local class first searches the class itself and the local classes
+    /// enclosing it, innermost first, up to the block holding the
+    /// outermost one (clang `LookupLocalFriendName`, a redeclaration
+    /// lookup: members of base classes are not found). The first class
+    /// declaring the name decides: a member function the friend
+    /// corresponds to is redeclared, as if the friend were qualified by
+    /// that class; a non-function member gives `redefinition of 'x' as
+    /// different kind of symbol`; otherwise `no matching function found
+    /// in local scope` (no notes, as in clang).
+    pub(crate) fn local_friend_member(
+        &mut self,
+        dname: DeclName,
+        ty: QualType,
+        requires: Option<kiln_ast::ExprId>,
+        loc: Loc,
+    ) -> LocalFriendMember {
+        let Some(c) = self.current_class() else { return LocalFriendMember::None };
+        if !self.is_local_class(c.record) {
+            return LocalFriendMember::None;
+        }
+        let classes: Vec<DeclId> = self
+            .scopes
+            .iter()
+            .rev()
+            .filter(|s| !s.is_transparent())
+            .take_while(|s| s.kind == ScopeKind::Record)
+            .filter_map(|s| s.entity)
+            .collect();
+        for class in classes {
+            let def = self.ast.definition(class).unwrap_or(class);
+            let found = self.lookup_in_dn(def, dname, crate::lookup::LookupKind::Ordinary).decls;
+            if found.is_empty() {
+                continue;
+            }
+            let new = NewFn { ty, is_static: false, head: None, requires };
+            let Some(p) = self.pick_prev_function(&found, new) else {
+                self.error(DiagId::sema_no_matching_local_friend, loc);
+                return LocalFriendMember::Invalid;
+            };
+            let k = self.kind_of(p);
+            if k.payload() != kiln_ast::decl::PayloadClass::Function
+                && k != DeclKind::FunctionTemplate
+            {
+                let name = self.decl_name_str(dname);
+                let msg = self.diag(DiagId::sema_redefinition_different_kind, loc).arg(name);
+                let msg = self.note_prev(msg, p, true);
+                self.emit(msg);
+                return LocalFriendMember::Invalid;
+            }
+            return LocalFriendMember::Member(def);
+        }
+        LocalFriendMember::None
     }
 
     /// clang's `hasSimilarParameters`: whether function `f` has as many

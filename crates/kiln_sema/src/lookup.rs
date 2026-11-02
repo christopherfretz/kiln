@@ -851,6 +851,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Adds a block-scope declaration of operator function `d` to the
+    /// innermost local scope ([`crate::scope::Scope::local_ops`]).
+    pub(crate) fn push_local_operator(
+        &mut self,
+        op: kiln_ast::names::OverloadedOperator,
+        d: DeclId,
+    ) {
+        if self.in_local_scope()
+            && let Some(s) = self.scopes.iter_mut().rev().find(|s| s.is_local())
+        {
+            s.local_ops.push((op, d));
+        }
+    }
+
     /// True while the innermost non-linkage scope is function-local.
     pub fn in_local_scope(&self) -> bool {
         self.scopes

@@ -11,6 +11,7 @@ note_access_protected_object = Note (1) "can only access this member on an objec
 note_add_constexpr = Note (0) "add 'constexpr'";
 note_additional_parens_for_variable_declaration = Note (0) "add a pair of parentheses to declare a variable";
 note_alias_not_deducible = Note (2) "cannot deduce template arguments for '{0}' from {1}";
+note_alignas_on_declaration = Note (1) "declared with {0} attribute here";
 note_ambiguous_atomic_constraints = Note (0) "similar constraint expressions not considered equivalent; constraint expressions cannot be considered equivalent unless they originate from the same concept";
 note_ambiguous_atomic_constraints_similar_expression = Note (0) "similar constraint expression here";
 note_ambiguous_candidate = Note (1) "candidate found by name lookup is '{0}'";

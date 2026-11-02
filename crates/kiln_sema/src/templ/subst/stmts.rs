@@ -638,6 +638,15 @@ impl Substituter<'_, '_, '_> {
                 self.locals.insert(d, super::DeclOrPack::Decl(x));
                 Ok(x)
             }
+            // A block-scope function declaration ([basic.scope.block],
+            // [temp.inst]/3): declared again with the substituted
+            // signature in the instantiation's block, where a local
+            // class's friend finds it ([class.friend]/11).
+            DeclKind::Function => {
+                let x = self.function_decl(d, DeclaratorContext::Block, None)?;
+                self.locals.insert(d, super::DeclOrPack::Decl(x));
+                Ok(x)
+            }
             k => self.unimplemented(&format!("local {k:?} declarations in templates"), loc),
         }
     }

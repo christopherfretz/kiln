@@ -94,6 +94,7 @@ sema_format_conversion_type = Warning [Format] (3) "format specifies type {0} bu
 sema_format_extra_args = Warning [FormatExtraArgs] (0) "data argument not used by format string";
 sema_format_insufficient_args = Warning [FormatInsufficientArgs] (0) "more '%' conversions than data arguments";
 sema_format_star_type = Warning [Format] (3) "field {0:width|precision} should have type {1}, but argument has type {2}";
+sema_friend_def_in_local_class = Error (0) "friend function cannot be defined in a local class";
 sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in {1}";
 sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
 sema_func_returning_array_function = Error (2) "function cannot return {0:array|function} type {1}";

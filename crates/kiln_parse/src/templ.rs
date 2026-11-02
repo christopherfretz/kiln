@@ -325,6 +325,19 @@ impl Parser<'_, '_> {
         let Some((end, _, class, _)) = self.scan_name_at(i) else { return false };
         let _ = class;
         // The last component of the scanned name carries the `<`.
+        // Misplaced attributes and `final` after the template-id
+        // (`struct A<int> [[x]] final {`) are reported by the tag parser.
+        let mut end = end;
+        loop {
+            if self.is_final_tok(self.tok_at(end)) {
+                end += 1;
+                continue;
+            }
+            match self.after_cxx11_attrs_at(end) {
+                Some(e) if e > end => end = e,
+                _ => break,
+            }
+        }
         (i..end).any(|j| self.tok_at(j).kind == TokKind::Punct(Punct::Less))
             && matches!(
                 Self::punct_of(self.tok_at(end)),
