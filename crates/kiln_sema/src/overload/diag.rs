@@ -320,6 +320,10 @@ impl Sema<'_, '_> {
             .filter(|&c| !ambiguous || set.cand(c).ambiguous_mark && set.cand(c).viable)
             // A non-viable built-in candidate is never listed.
             .filter(|&c| set.cand(c).kind != CandidateKind::Builtin || set.cand(c).viable)
+            // Nor is an invalid function template (`Tdk::Invalid`).
+            .filter(|&c| {
+                set.cand(c).deduction.as_ref().is_none_or(|d| d.tdk != crate::templ::deduce::Tdk::Invalid)
+            })
             // An inherited copy/move constructor excluded by
             // [over.match.funcs]/8 is not listed (clang
             // `NoteFunctionCandidate`, `ovl_fail_inhctor_slice`).
@@ -583,7 +587,8 @@ fn deduction_rank(c: &Candidate) -> u8 {
             | Tdk::DeducedMismatch
             | Tdk::ConstraintsNotSatisfied
             | Tdk::NonDeducedMismatch
-            | Tdk::MiscellaneousDeductionFailure,
+            | Tdk::MiscellaneousDeductionFailure
+            | Tdk::Invalid,
         ) => 3,
         Some(Tdk::InstantiationDepth) => 4,
         Some(Tdk::InvalidExplicitArguments) => 5,

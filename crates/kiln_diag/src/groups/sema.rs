@@ -73,6 +73,7 @@ PotentiallyEvaluatedExpression = "potentially-evaluated-expression" [];
 PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
 // ----- WP-191 (vexing parse, null dereference, empty body)
 RedundantParens = "redundant-parens" [];
+Register = "register" [];
 ReorderCtor = "reorder-ctor" [];
 ReorderInitList = "reorder-init-list" [];
 ReturnStackAddress = "return-stack-address" [];

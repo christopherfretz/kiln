@@ -92,6 +92,11 @@ pub enum Tdk {
     InstantiationDepth,
     /// Any other failure (no note).
     MiscellaneousDeductionFailure,
+    /// The function template is an invalid declaration, already
+    /// diagnosed (an erroneous default argument, an invalid parameter):
+    /// it matches no call and is not listed as a candidate (clang's
+    /// `TemplateDeductionResult::Invalid`).
+    Invalid,
 }
 
 /// What a failed deduction reports (clang's `TemplateDeductionInfo`).

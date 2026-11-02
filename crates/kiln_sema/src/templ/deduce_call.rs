@@ -6,7 +6,7 @@
 //! [`DeductionFailure`] the overload candidate keeps for its note
 //! (§10.4).
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::types::{ArgView, TemplateArg, TypeView};
@@ -180,6 +180,14 @@ impl Sema<'_, '_> {
         opts: &[IcsOptions],
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
+        // clang `DeduceTemplateArguments`: an invalid function template
+        // (its declaration already diagnosed) deduces nothing.
+        if self.templated_function(ft).is_some_and(|f| self.ast.decls.get(f).has(DeclFlags::INVALID))
+        {
+            let ft = self.ast.first(ft);
+            let d = DeducedArgs::new(self.template_param_depth(ft), self.template_params(ft).len());
+            return Err(DeductionFailure::new(Tdk::Invalid, d));
+        }
         self.deduce_spec(ft, explicit, Some((args, opts)), DeduceTarget::None, loc)
     }
 
