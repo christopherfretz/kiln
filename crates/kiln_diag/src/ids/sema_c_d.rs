@@ -208,6 +208,7 @@ sema_designated_init_reordered = ExtWarn [ReorderInitList] (2) "ISO C++ requires
 sema_different_asm_label = Error (0) "conflicting asm label";
 sema_dimension_expr_not_const = Error (0) "dimension expression does not evaluate to a constant unsigned int";
 sema_division_by_zero = Warning [DivisionByZero] (1) "{0} by zero is undefined";
+sema_does_not_refer_to_template = Error (1) "'{0}' does not refer to a template";
 sema_dtor_access_base = Error (2) "base class {0} has {1:private|protected} destructor";
 sema_dtor_access_field = Error (2) "field of type {0} has {1:private|protected} destructor";
 sema_dtor_access_var = Error (2) "variable of type {0} has {1:private|protected} destructor";
