@@ -127,26 +127,91 @@ pub fn json_string_field(json: &str, key: &str) -> Option<String> {
     Json::parse(json).ok()?.get(key)?.as_str().map(str::to_owned)
 }
 
+/// The cargo profile a suite driver builds kiln with (`--profile`,
+/// spec/libcxx.md "Build profiles").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Profile {
+    /// `dev`: what `cargo build` makes; cheapest to build, slowest to run.
+    Debug,
+    /// `harness`: optimized, no LTO, 16 codegen units (Cargo.toml).
+    Harness,
+    /// `release`: thin LTO, 4 codegen units; the bench baseline.
+    Release,
+}
+
+impl Profile {
+    /// The `--profile` spellings, in the order the usage text lists them.
+    pub const NAMES: &str = "debug|harness|release";
+
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "debug" | "dev" => Ok(Self::Debug),
+            "harness" => Ok(Self::Harness),
+            "release" => Ok(Self::Release),
+            _ => Err(format!("unknown --profile `{s}` (known: {})", Self::NAMES)),
+        }
+    }
+
+    /// The name reports and status rows use.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Harness => "harness",
+            Self::Release => "release",
+        }
+    }
+
+    /// The name `cargo build --profile` takes.
+    pub fn cargo_name(self) -> &'static str {
+        match self {
+            Self::Debug => "dev",
+            other => other.label(),
+        }
+    }
+
+    /// The directory under the target dir the binaries land in.
+    pub fn dir(self) -> &'static str {
+        self.label()
+    }
+
+    /// The default limit for one compile or link step: an unoptimized kiln
+    /// is several times slower on template-heavy tests (`variant.visit`).
+    pub fn compile_timeout(self) -> Duration {
+        match self {
+            Self::Debug => Duration::from_secs(300),
+            Self::Harness | Self::Release => Duration::from_secs(120),
+        }
+    }
+}
+
 /// `cargo build [--release] -p kiln_driver`, returning the path of the
 /// `kiln++` binary (the C++ driver mode: spec/driver.md "Driver modes").
 /// `who` names the subcommand in the progress message.
 pub fn build_kiln(root: &Path, target: &Path, who: &str, release: bool) -> Result<PathBuf, String> {
-    let profile = if release { "release" } else { "debug" };
-    let flags: &[&str] = if release { &["--release"] } else { &[] };
+    build_kiln_with(root, target, who, if release { Profile::Release } else { Profile::Debug })
+}
+
+/// `cargo build --profile <p> -p kiln_driver`, returning the path of the
+/// `kiln++` binary.
+pub fn build_kiln_with(
+    root: &Path,
+    target: &Path,
+    who: &str,
+    profile: Profile,
+) -> Result<PathBuf, String> {
     eprintln!(
-        "xtask {who}: building kiln (cargo build {}-p kiln_driver)",
-        if release { "--release " } else { "" }
+        "xtask {who}: building kiln (cargo build --profile {} -p kiln_driver)",
+        profile.cargo_name()
     );
     let status = Command::new(env!("CARGO"))
-        .args(["build", "--quiet", "-p", "kiln_driver"])
-        .args(flags)
+        .args(["build", "--quiet", "-p", "kiln_driver", "--profile", profile.cargo_name()])
         .current_dir(root)
         .status()
         .map_err(|e| format!("cannot run cargo build: {e}"))?;
     if !status.success() {
         return Err(format!("cargo build -p kiln_driver failed ({status})"));
     }
-    kilnpp_beside(&target.join(profile))
+    kilnpp_beside(&target.join(profile.dir()))
 }
 
 /// `<dir>/kiln++`, made as a symlink to `<dir>/kiln` if it is missing
