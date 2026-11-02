@@ -25,6 +25,7 @@ pub mod conv;
 pub mod decl;
 pub mod declspec;
 mod deduce;
+mod deprecated;
 mod empty_body;
 pub mod except;
 pub mod expr;
@@ -249,6 +250,11 @@ pub struct Sema<'a, 'sm> {
     /// that is a function or array is diagnosed there (clang's
     /// `FunctionTypeLoc` begin; [dcl.fct]/11, WP-222, WP-241).
     pub(crate) type_spec_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where the outermost `&`/`&&` of a declaration of dependent
+    /// reference type was written (`T &m;`): a substitution that forms
+    /// a reference to `void` is diagnosed there (clang's
+    /// `ReferenceTypeLoc`; [dcl.ref]/1).
+    pub(crate) ref_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// The namespace named by the qualifier of each friend function (or
     /// function template pattern) declared with a qualified name in a
     /// templated class (`friend void N::f(T);`): its instantiation is
@@ -328,6 +334,16 @@ pub struct Sema<'a, 'sm> {
     /// dropped ([temp.spec.general]/6) at each open delay point,
     /// innermost last.
     pub(crate) delayed_access_depth: Vec<(usize, DeclId, bool)>,
+    /// Deprecation warnings held by the open delay points (with the
+    /// 1-based depth of the point holding them), emitted when the
+    /// declaration they belong to is formed and is not deprecated
+    /// (spec/sema.md "Deprecation warnings").
+    pub(crate) delayed_deprecations: Vec<(usize, Diag)>,
+    /// The open deprecation delay points: the context each was opened in.
+    pub(crate) depr_points: Vec<DeclId>,
+    /// The declaration whose initializer is being parsed: a use in it is
+    /// in that declaration's context for deprecation.
+    pub(crate) depr_init: Option<DeclId>,
     /// The next delay point drops its checks (the declaration of an
     /// explicit instantiation or specialization; [`Sema::exempt_next_delayed_access`]).
     pub(crate) exempt_next_delay: bool,
@@ -582,6 +598,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
+            ref_locs: kiln_source::fx::FxHashMap::default(),
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),
@@ -603,6 +620,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             special: class::SpecialState::default(),
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
+            delayed_deprecations: Vec::new(),
+            depr_points: Vec::new(),
+            depr_init: None,
             exempt_next_delay: false,
             explicit_conv: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),

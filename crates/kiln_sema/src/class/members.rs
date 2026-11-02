@@ -254,6 +254,7 @@ impl Sema<'_, '_> {
             let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
             self.note_type_spec_loc(v, ds, loc);
         }
+        self.note_ref_loc(v, d, ty);
         self.lambda_mangle.var = Some(v);
         if invalid {
             self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);

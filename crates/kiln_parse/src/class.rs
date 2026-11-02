@@ -1233,6 +1233,16 @@ impl Parser<'_, '_> {
     /// member-declaration ([class.mem]; clang's
     /// `ParseCXXClassMemberDeclaration`).
     pub(crate) fn parse_member_declaration(&mut self) {
+        // Deprecation warnings in the decl-specifiers and first declarator
+        // wait for the member they declare (clang's `ParsingDeclRAIIObject`).
+        let level = self.s.begin_delayed_deprecation();
+        let saved = self.member_depr.replace(level);
+        self.parse_member_declaration_inner();
+        self.member_depr = saved;
+        self.s.end_delayed_deprecation_to(level, None);
+    }
+
+    fn parse_member_declaration_inner(&mut self) {
         if !self.stack_ok() || self.parse_member_declaration_leader() {
             return;
         }
@@ -1405,6 +1415,9 @@ impl Parser<'_, '_> {
             self.trace(|p| format!("declarator({})", p.declarator_name(d)));
             self.s.act_on_declarator(ds, base, d)
         };
+        if let Some(level) = self.member_depr.take() {
+            self.s.end_delayed_deprecation_to(level, decl);
+        }
         let target = decl.and_then(|x| {
             let decls = &self.s.ast.decls;
             if decls.get(x).kind() == DeclKind::Friend {

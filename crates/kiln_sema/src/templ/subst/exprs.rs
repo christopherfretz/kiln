@@ -1111,10 +1111,17 @@ impl Substituter<'_, '_, '_> {
                 let l = self.args(targs, n.loc())?;
                 let args = self.sema.ast.types.args(l).to_vec();
                 let name = self.sema.template_name_for(d);
-                return match self.sema.act_template_id(name, &args, n.loc(), n.loc()) {
-                    Ok(crate::templ::actions::TemplateIdRef::Value(e)) => Ok(e),
-                    _ => Err(SubstFail),
+                let Ok(crate::templ::actions::TemplateIdRef::Value(e)) =
+                    self.sema.act_template_id(name, &args, n.loc(), n.loc())
+                else {
+                    return Err(SubstFail);
                 };
+                // `N::v<T>` keeps its qualifier (WP-300).
+                if let Some(q) = self.sema.ast.templates.expr_nns.get(c).copied() {
+                    let q = self.nns(q, n.loc())?;
+                    self.sema.set_template_id_qualifier(e, q);
+                }
+                return Ok(e);
             }
             let nns = match self.sema.ast.templates.expr_nns.get(c).copied() {
                 Some(q) => Some(self.nns(q, n.loc())?),

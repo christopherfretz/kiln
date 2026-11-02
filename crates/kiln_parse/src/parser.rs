@@ -97,6 +97,9 @@ pub struct Parser<'a, 'sm> {
     /// The saved default arguments and *noexcept-specifier* of the member
     /// function declarator being parsed, taken by the member-declaration.
     pub(crate) late_fn: crate::class::LateFnParts,
+    /// The deprecation delay level of the member-declaration being
+    /// parsed, closed by its first declarator ([`Sema::begin_delayed_deprecation`]).
+    pub(crate) member_depr: Option<usize>,
     /// The `act_on_*` calls the class parser made, in order (for the
     /// sequence tests of spec/sema-class.md §2.1).
     #[cfg(test)]
@@ -241,6 +244,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             replay: Vec::new(),
             late: Vec::new(),
             late_fn: crate::class::LateFnParts::default(),
+            member_depr: None,
             #[cfg(test)]
             trace: Vec::new(),
             in_stmt_expr: false,
@@ -827,6 +831,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
             return Some((end, false, class, name, qual));
         }
+    }
+
+    /// Whether the name at token `i` is qualified by a non-dependent
+    /// class or namespace in which lookup finds nothing (clang's
+    /// `TryAnnotateName` giving `ANK_Unresolved` after a scope).
+    pub(crate) fn unresolved_scope_name(&self, i: usize) -> bool {
+        matches!(
+            self.scan_name_qual_at(i),
+            Some((end, false, NameClass::Undeclared, _, Some(q)))
+                if end > i + 1 && !self.s.is_dependent_ctx(q)
+        )
     }
 
     /// Whether the template argument list between `<` at `lt` and its

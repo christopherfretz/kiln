@@ -972,6 +972,32 @@ and returns the scope it names:
     `BuildMemberReferenceExpr`, WP-203). Unlike clang, a non-dependent
     use in a template is not diagnosed again at instantiation (nor is
     a non-dependent discarded nodiscard call).
+    Type names warn too (WP-297, `deprecated.rs`): a class, enumeration,
+    typedef or alias named as a type (`check_type_name_access`), an
+    elaborated-type-specifier that refers to a class, and a template-id
+    naming a class template specialization (`class_template_type`, at
+    the template-name, on parse and on substitution, the latter with
+    instantiation notes). The deprecation is the decl's own attribute
+    (on any redeclaration), else an undeclared specialization's
+    pattern's (an explicit or partial specialization has its own class-head
+    attributes); a typedef/alias looks through to its class or enum and
+    an enumerator to its enumeration (clang
+    `ShouldDiagnoseAvailabilityOfDecl`), the note naming that entity.
+    A specialization is named with its written arguments plus defaults
+    (`D<N::X, int>` prints `D<N::X>` as clang does). No warning in a
+    deprecated context: the current context or any enclosing semantic
+    context is deprecated (clang `ShouldDiagnoseAvailabilityInContext`).
+    Warnings for uses in a declaration's decl-specifiers, declarator and
+    initializer wait for that declaration (clang's delayed
+    diagnostics): every access delay point is also a deprecation delay
+    point, and the parser opens one alone around a member-declaration's
+    decl-specifiers and first declarator (`begin_delayed_deprecation`);
+    they are dropped when the declared entity is deprecated or in a
+    deprecated context, discarded with a dropped access delay point
+    (specialization class-head arguments), and otherwise join the
+    enclosing point. Delay applies only outside instantiation.
+    Namespace attributes are not parsed yet, so a deprecated namespace
+    is not a deprecated context.
   - `maybe_unused` suppresses unused warnings.
   - `alignas` is validated as a power of two and fed into layout.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
@@ -2754,6 +2780,14 @@ clang 19's C99/GNU complex support in C++:
   - character arrays from string literals: the bound is deduced, and
     an over-long string is an error
     (`initializer-string for char array is too long`, two arguments)
+  - an array from an expression that is not a braced list or (for a
+    character array) a string literal ([dcl.init.general]/16.5) is
+    `array initializer must be an initializer list`, at the entity: the
+    declarator name of a variable, the initializer of a default member
+    initializer (WP-300). The suffix follows clang's element-type test:
+    ` or string literal` for (signed/unsigned) `char`, ` or wide string
+    literal` for unqualified `wchar_t`/`char16_t`/`char32_t`, none
+    otherwise (`char8_t`, `const wchar_t`)
   - aggregates, with brace elision, designators (C++20, in order) and
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived
@@ -2831,7 +2865,14 @@ clang 19's C99/GNU complex support in C++:
     designated member). Lists nested in an updater fill with
     `NoInitExpr` too (`Sub::update`, clang `FillWithNoInit`), except a
     braced value, which value-initializes, and a merged prior list,
-    which keeps its own fill (`is_update_list`). The next designator
+    which keeps its own fill (`is_update_list`). A designator path that
+    ends at an aggregate whose value is an expression (`.m = 1` for
+    `int m[2]`) starts a brace-elided list whose first clause is that
+    value with its designator consumed (`Sub::direct`, clang
+    `CheckSubElementType` with `DirectlyDesignated`); the positional
+    clauses that follow continue it, and it warns `brace elision for
+    designated initializer is a C99 extension` (`-Wc99-designator`) at
+    the value. The next designator
     warns `initializer partially overrides prior initialization of
     this subobject` with the old initializer noted; keeping the old
     object of a class with a non-trivial destructor is an error
@@ -2952,7 +2993,9 @@ clang 19's C99/GNU complex support in C++:
     parameter.
   - Viability follows [over.ics.list]: a scalar takes at most one
     unbraced, convertible element; an aggregate at most as many
-    elements as brace elision reaches. A non-viable list is clang's
+    elements as brace elision reaches (bases count; a non-aggregate
+    class member takes one, a subaggregate at least one;
+    spec/sema-overload.md [over.ics.list]). A non-viable list is clang's
     `cannot convert initializer list argument to 'T'` candidate note,
     except that a single class-type element for a non-class parameter
     notes the element's own conversion ([over.ics.list]/10: `no known

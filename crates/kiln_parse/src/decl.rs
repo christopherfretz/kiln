@@ -966,14 +966,21 @@ impl Parser<'_, '_> {
                 true
             }
             // `X<A>::name` with an annotated scope ([`Parser::annotate_template_scope`])
-            // in which `name` is not a type, where only a type can be:
-            // the parse proper reports it ("no type named ..."; clang's
-            // `DiagnoseUnknownTypeName`).
+            // in which `name` is not a type, or `S::name d` with `S` a
+            // non-dependent class or namespace that has no `name`, where
+            // only a type can be: the parse proper reports it ("no type
+            // named 'name' in 'S'"; clang's `DiagnoseUnknownTypeName`).
+            // At block scope the statement disambiguation chose a
+            // declaration already (`S::name(e);`, `S::name *g;`).
             Some((end, NameClass::Undeclared, _))
-                if end == start + 2
+                if (end == start + 2
                     && self.at_decltype_scope()
                     && self.decltype_scope_ok()
-                    && self.unknown_type_follows(end, ctx) =>
+                    && self.unknown_type_follows(end, ctx))
+                    || (end > start + 1
+                        && self.unresolved_scope_name(start)
+                        && (ctx == DeclaratorContext::Block
+                            || self.unknown_type_follows(end, ctx))) =>
             {
                 if let Ok(Some(q)) = self.parse_nested_name_nns() {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
@@ -1005,8 +1012,15 @@ impl Parser<'_, '_> {
         self.ident_of(next).is_some()
             || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && matches!(Self::punct_of(next), Some(Punct::Star | Punct::Amp | Punct::AmpAmp)))
+            // A parameter: clang's `ParseImplicitInt` diagnoses any
+            // undeclared name where a decl-specifier is required in C++
+            // (`void a(u1);`, `int e(u4 *p);`); `(`, `::` and `<` are
+            // reported elsewhere.
             || (ctx == DeclaratorContext::Prototype
-                && matches!(Self::punct_of(next), Some(Punct::RParen | Punct::Comma)))
+                && !matches!(
+                    Self::punct_of(next),
+                    Some(Punct::LParen | Punct::ColonColon | Punct::Less)
+                ))
     }
 
     // -- class and enum specifiers ----------------------------------------------------
@@ -1120,7 +1134,7 @@ impl Parser<'_, '_> {
             && let NameClass::TypeTemplate(t) = self.s.classify_name(n, qualifier)
             && self.s.ast.decls.get(t).kind() == kiln_ast::decl::DeclKind::ClassTemplate
         {
-            self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, ctx);
+            self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, &attrs);
             return;
         }
         let mut final_loc = None;
@@ -1207,9 +1221,8 @@ impl Parser<'_, '_> {
         qualifier: Option<DeclId>,
         name_loc: Loc,
         kw_loc: Loc,
-        ctx: DeclaratorContext,
+        attrs: &[AttrId],
     ) {
-        let _ = ctx;
         // The template arguments of a partial or explicit specialization's
         // class-head are not access checked ([temp.spec.partial.general]/10,
         // [temp.spec.general]/6); a reference's join the declaration's.
@@ -1239,6 +1252,13 @@ impl Parser<'_, '_> {
             kw_loc,
         );
         let ty = if let Ok((rec, ty)) = r {
+            // A partial or explicit specialization's own attributes
+            // ([class.pre]/1); a reference's appertain to nothing.
+            if use_ != TagUse::Reference
+                && let Some(d) = rec
+            {
+                self.s.act_on_tag_attrs(d, attrs);
+            }
             if use_ == TagUse::Definition {
                 match rec {
                     Some(d) => {
@@ -2267,7 +2287,7 @@ impl Parser<'_, '_> {
             _ => 0,
         };
         // The initializer, with its conversions, is potentially evaluated.
-        let quiet = self.s.enter_var_initializer();
+        let quiet = self.s.enter_var_initializer(v);
         let init = self.parse_initializer(d.init_style, d.is_function_declarator());
         self.s.act_on_exit_declarator_scope(entered);
         let r = self.finish_declarator_initializer(d, v, init);

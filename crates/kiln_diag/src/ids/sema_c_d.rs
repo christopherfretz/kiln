@@ -174,6 +174,7 @@ sema_deprecated_msg = Warning [DeprecatedDeclarations] (2) "'{0}' is deprecated:
 sema_deprecated_this_capture = Warning [DeprecatedThisCapture] (0) "implicit capture of 'this' with a capture default of '=' is deprecated";
 sema_dereference_incomplete_type = Error (1) "dereference of pointer to incomplete type {0}";
 sema_designated_init_array = ExtWarn [C99Designator] (0) "array designators are a C99 extension";
+sema_designated_init_brace_elision = ExtWarn [C99Designator] (0) "brace elision for designated initializer is a C99 extension";
 sema_designated_init_mixed = ExtWarn [C99Designator] (0) "mixture of designated and non-designated initializers in the same initializer list is a C99 extension";
 sema_designated_init_nested = ExtWarn [C99Designator] (0) "nested designators are a C99 extension";
 sema_designated_init_non_aggregate = Error (1) "initialization of non-aggregate type {0} with a designated initializer list";
