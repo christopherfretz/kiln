@@ -188,8 +188,10 @@ impl Parser<'_, '_> {
     pub(crate) fn on_event(&mut self, e: Event) {
         // Module events (and anything queued behind them) wait for the next
         // namespace-scope declaration (spec/modules.md §4).
-        let module_event =
-            matches!(e, Event::ModuleDirective(_) | Event::UnitBegin { .. } | Event::UnitEnd { .. });
+        let module_event = matches!(
+            e,
+            Event::ModuleDirective(_) | Event::UnitBegin { .. } | Event::UnitEnd { .. }
+        );
         if module_event || self.module_pending() {
             self.module_event(e);
             return;

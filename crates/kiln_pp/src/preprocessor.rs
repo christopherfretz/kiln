@@ -818,10 +818,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                                     || s == self.syms.import
                                     || s == self.syms.export)
                                 && !self.disable_expand
+                                && self.maybe_module_directive(t, s)
                             {
-                                if self.maybe_module_directive(t, s) {
-                                    continue;
-                                }
+                                continue;
                             }
                             if !self.disable_expand && self.macros.is_defined(s) {
                                 match self.handle_identifier(PpTok::new(t)) {

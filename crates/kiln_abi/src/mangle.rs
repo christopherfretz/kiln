@@ -270,7 +270,7 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
             // named module has module (or, exported, external) linkage.
             is_const
                 && !v.spec.is_inline()
-                && !(ast.modules.active && ast.module_attachment(first).is_some())
+                && (!ast.modules.active || ast.module_attachment(first).is_none())
                 && v.spec.storage() != VarStorage::Extern
                 && !is_extern_c(ast, first)
                 && !matches!(v.templ.get(), Some((TemplLinkKind::Specialization, _)))
@@ -1248,13 +1248,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
         };
         self.out.push('W');
         self.source_name(last);
-        let i = match self.modnames.iter().position(|&n| n == name) {
-            Some(i) => i,
-            None => {
-                self.modnames.push(name);
-                self.modnames.len() - 1
-            }
-        };
+        let i = self.modnames.iter().position(|&n| n == name).unwrap_or_else(|| {
+            self.modnames.push(name);
+            self.modnames.len() - 1
+        });
         self.subs.push(Sub::Module(i as u32));
     }
 

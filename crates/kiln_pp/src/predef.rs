@@ -275,20 +275,17 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
+        let cplusplus =
+            m.get("__cplusplus").and_then(|v| v.trim_end_matches('L').parse::<u32>().ok());
         // C++20 modules (spec/modules.md §4): clang 22's value, from C++20
         // on (clang 19 does not define it).
-        let std = m.get("__cplusplus").and_then(|v| v.trim_end_matches('L').parse::<u64>().ok());
-        if std.is_some_and(|v| v >= 202_002) {
+        if cplusplus.is_some_and(|v| v >= 202_002) {
             set(m, "__cpp_modules", "1");
         }
         // [cpp.predefined] (P0847, C++23): kiln implements explicit object
         // parameters, members and lambdas; clang 19 leaves the macro
         // undefined, clang 22 defines it from C++23.
-        let cxx23 = m
-            .get("__cplusplus")
-            .and_then(|v| v.trim_end_matches('L').parse::<u32>().ok())
-            .is_some_and(|v| v >= 202_302);
-        if cxx23 {
+        if cplusplus.is_some_and(|v| v >= 202_302) {
             set(m, "__cpp_explicit_this_parameter", "202110L");
         }
         // Features kiln implements beyond clang 19, at clang 22's values

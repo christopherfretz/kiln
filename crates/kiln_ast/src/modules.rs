@@ -121,13 +121,33 @@ impl ModuleTable {
     pub fn is_imported_module_decl(&self, d: DeclId) -> bool {
         let o = self.owner(d);
         o.purview
-            && o.unit != 0 && self.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
+            && o.unit != 0
+            && self.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
     }
 
     /// Heap bytes.
     pub fn heap_bytes(&self) -> usize {
         self.points.capacity() * size_of::<(u32, Owner)>()
             + self.units.iter().map(|u| u.merged.capacity() * 8).sum::<usize>()
+    }
+}
+
+impl crate::Ast {
+    /// The named module `d` is attached to ([module.unit]/7): its owner's
+    /// module when declared in a purview, unless inside a linkage
+    /// specification (`extern "C++"` attaches to the global module).
+    pub fn module_attachment(&self, d: DeclId) -> Option<&str> {
+        use crate::decl::DeclKind;
+        let m = self.modules.purview_module(d)?;
+        let mut c = self.decls.get(d).ctx();
+        while let Some(x) = c {
+            match self.decls.get(x).kind() {
+                DeclKind::LinkageSpec => return None,
+                DeclKind::Export | DeclKind::Namespace => c = self.decls.get(x).ctx(),
+                _ => break,
+            }
+        }
+        Some(m)
     }
 }
 
@@ -150,24 +170,5 @@ mod tests {
         // A change at the same index replaces the previous one.
         t.set_owner_from(DeclId::new(30), b);
         assert_eq!(t.owner(DeclId::new(31)), b);
-    }
-}
-
-impl crate::Ast {
-    /// The named module `d` is attached to ([module.unit]/7): its owner's
-    /// module when declared in a purview, unless inside a linkage
-    /// specification (`extern "C++"` attaches to the global module).
-    pub fn module_attachment(&self, d: DeclId) -> Option<&str> {
-        use crate::decl::DeclKind;
-        let m = self.modules.purview_module(d)?;
-        let mut c = self.decls.get(d).ctx();
-        while let Some(x) = c {
-            match self.decls.get(x).kind() {
-                DeclKind::LinkageSpec => return None,
-                DeclKind::Export | DeclKind::Namespace => c = self.decls.get(x).ctx(),
-                _ => break,
-            }
-        }
-        Some(m)
     }
 }

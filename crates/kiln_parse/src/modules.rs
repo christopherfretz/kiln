@@ -42,6 +42,14 @@ pub(crate) struct ParseModules {
 }
 
 /// What [`Parser::module_before_decl`] saw at a declaration's start.
+/// What `module_before_decl` decided about the next declaration.
+pub(crate) enum BeforeDecl {
+    /// Another unit already parsed this text: its tokens were consumed.
+    Skipped,
+    /// Parse it; `Some` when it is recorded for deduplication.
+    Parse(Option<DeclStart>),
+}
+
 pub(crate) struct DeclStart {
     key: Key,
     pos: usize,
@@ -111,19 +119,18 @@ impl Parser<'_, '_> {
 
     /// At the start of a namespace-scope declaration: processes the
     /// pending module events, then skips the declaration if another unit
-    /// already parsed the same text (spec/modules.md §6). Returns `None`
-    /// when it was skipped.
-    pub(crate) fn module_before_decl(&mut self) -> Option<Option<DeclStart>> {
+    /// already parsed the same text (spec/modules.md §6).
+    pub(crate) fn module_before_decl(&mut self) -> BeforeDecl {
         self.module_flush();
         if self.at_eof() {
-            return Some(None);
+            return BeforeDecl::Parse(None);
         }
         let t = self.tok();
         self.s.module_note_decl(t.span.lo);
         if self.in_replay() || t.kind == TokKind::Punct(Punct::Semi) {
-            return Some(None);
+            return BeforeDecl::Parse(None);
         }
-        let Some(key) = self.module_key(t.span.lo) else { return Some(None) };
+        let Some(key) = self.module_key(t.span.lo) else { return BeforeDecl::Parse(None) };
         let unit = self.s.module_current_unit();
         let hit = self.mods.as_ref().and_then(|m| {
             m.records.get(&key)?.iter().copied().find(|r| {
@@ -151,9 +158,13 @@ impl Parser<'_, '_> {
             for (lo, hi) in same {
                 self.s.module_merge_range(DeclId::new(lo), DeclId::new(hi));
             }
-            return None;
+            return BeforeDecl::Skipped;
         }
-        Some(Some(DeclStart { key, pos: self.token_index(), first: self.s.ast.decls.next_id() }))
+        BeforeDecl::Parse(Some(DeclStart {
+            key,
+            pos: self.token_index(),
+            first: self.s.ast.decls.next_id(),
+        }))
     }
 
     /// After a namespace-scope declaration: records it and checks the

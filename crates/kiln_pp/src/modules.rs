@@ -159,7 +159,9 @@ impl Preprocessor<'_, '_> {
                 // imports its primary interface.
                 (!export && partition.is_none()).then(|| (name.clone(), *name_span))
             }
-            DirectiveKind::Import { key, header: false, name_span, .. } if !key.starts_with(':') => {
+            DirectiveKind::Import { key, header: false, name_span, .. }
+                if !key.starts_with(':') =>
+            {
                 Some((key.clone(), *name_span))
             }
             _ => None,
@@ -184,9 +186,7 @@ impl Preprocessor<'_, '_> {
         let mut t = self.lex_unexpanded().tok;
         let kind = match t.kind {
             TokKind::Punct(Punct::Semi) if !import => return DirectiveKind::GlobalFragment,
-            TokKind::Punct(Punct::Less) | TokKind::StringLit(_) | TokKind::HeaderName
-                if import =>
-            {
+            TokKind::Punct(Punct::Less) | TokKind::StringLit(_) | TokKind::HeaderName if import => {
                 self.unlex_file_tok(t);
                 match self.read_header_import() {
                     Some(k) => k,
@@ -245,7 +245,12 @@ impl Preprocessor<'_, '_> {
                         Some(p) => format!("{name}:{p}"),
                         None => name,
                     };
-                    DirectiveKind::Import { display: key.clone(), key, header: false, name_span: at }
+                    DirectiveKind::Import {
+                        display: key.clone(),
+                        key,
+                        header: false,
+                        name_span: at,
+                    }
                 } else {
                     DirectiveKind::Module { name, partition, name_span: at }
                 }
@@ -365,12 +370,11 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_module_not_found, span).arg(key));
             return;
         };
-        match self.sm.load_file(Path::new(&path)) {
-            Ok(file) => self.begin_unit(key.to_string(), false, file, false, span),
-            Err(_) => {
-                let p = path.display().to_string();
-                self.emit(Diag::new(DiagId::pp_file_not_found, span).arg(p));
-            }
+        if let Ok(file) = self.sm.load_file(Path::new(&path)) {
+            self.begin_unit(key.to_string(), false, file, false, span);
+        } else {
+            let p = path.display().to_string();
+            self.emit(Diag::new(DiagId::pp_file_not_found, span).arg(p));
         }
     }
 
@@ -450,7 +454,10 @@ impl Preprocessor<'_, '_> {
                 .values()
                 .filter(|d| {
                     d.builtin.is_none()
-                        && self.sm.offset_of(d.name_span.lo).is_some_and(|(f, _)| Some(f) != builtin)
+                        && self
+                            .sm
+                            .offset_of(d.name_span.lo)
+                            .is_some_and(|(f, _)| Some(f) != builtin)
                 })
                 .cloned()
                 .collect();

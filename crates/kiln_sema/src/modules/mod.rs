@@ -110,9 +110,14 @@ fn internal(s: &Sema<'_, '_>, d: DeclId) -> bool {
         DeclKind::Function => {
             ast.decls.function(first).is_some_and(|f| f.spec.storage() == FnStorage::Static)
         }
-        DeclKind::Var => ast.decls.var(first).is_some_and(|v| v.spec.storage() == VarStorage::Static),
+        DeclKind::Var => {
+            ast.decls.var(first).is_some_and(|v| v.spec.storage() == VarStorage::Static)
+        }
         DeclKind::FunctionTemplate | DeclKind::VarTemplate => {
-            return ast.template_info(first).and_then(|t| t.pattern).is_some_and(|t| internal(s, t));
+            return ast
+                .template_info(first)
+                .and_then(|t| t.pattern)
+                .is_some_and(|t| internal(s, t));
         }
         _ => false,
     };
@@ -194,10 +199,8 @@ impl Sema<'_, '_> {
         let units = &self.ast.modules.units;
         let n = units.len();
         let cur = usize::from(self.modules.cur());
-        let cur_mod = units
-            .get(cur)
-            .filter(|u| u.kind.is_named())
-            .and_then(|u| u.module.as_deref());
+        let cur_mod =
+            units.get(cur).filter(|u| u.kind.is_named()).and_then(|u| u.module.as_deref());
         let same: Vec<bool> = units
             .iter()
             .map(|u| u.kind.is_named() && cur_mod.is_some() && u.module.as_deref() == cur_mod)
@@ -236,7 +239,7 @@ impl Sema<'_, '_> {
         let cur = usize::from(self.modules.cur());
         let Some(f) = self.modules.frames.last().cloned() else { return };
         match d {
-                        Directive::GlobalFragment => {
+            Directive::GlobalFragment => {
                 if f.phase != Phase::Start || f.first_decl.is_valid() {
                     let m = self.diag(DiagId::sema_module_gmf_not_first, loc);
                     self.emit(m);
@@ -460,13 +463,20 @@ impl Sema<'_, '_> {
                         None
                     };
                     if let Some(k) = linkage {
-                        let note = self.diag(DiagId::note_module_using_target, self.ast.decls.get(t).loc());
+                        let note = self
+                            .diag(DiagId::note_module_using_target, self.ast.decls.get(t).loc());
                         let name = self.decl_name_str(self.ast.decls.get(t).name());
-                        let m = self.diag(DiagId::sema_module_export_using_internal, n.loc()).arg(name).arg(k);
+                        let m = self
+                            .diag(DiagId::sema_module_export_using_internal, n.loc())
+                            .arg(name)
+                            .arg(k);
                         self.emit(m.with_note(note));
                     }
                 }
-                DeclKind::Function | DeclKind::Var | DeclKind::FunctionTemplate | DeclKind::VarTemplate
+                DeclKind::Function
+                | DeclKind::Var
+                | DeclKind::FunctionTemplate
+                | DeclKind::VarTemplate
                     if internal(self, d) && anon_ns_of(self, d).is_none() =>
                 {
                     let name = self.decl_name_str(n.name());
@@ -573,9 +583,9 @@ impl Sema<'_, '_> {
             return true;
         }
         let mt = &self.ast.modules;
-        let exported = self.module_scope_decl(raw).is_some_and(|d| {
-            mt.owner(d).exported || mt.owner(self.ast.first(d)).exported
-        });
+        let exported = self
+            .module_scope_decl(raw)
+            .is_some_and(|d| mt.owner(d).exported || mt.owner(self.ast.first(d)).exported);
         if !exported {
             return false;
         }
@@ -658,7 +668,8 @@ impl Sema<'_, '_> {
             let name = self.decl_name_str(dn.name());
             if a != b {
                 let say = |m: &Option<String>| {
-                    m.as_ref().map_or_else(|| "the global module".to_owned(), |m| format!("module {m}"))
+                    m.as_ref()
+                        .map_or_else(|| "the global module".to_owned(), |m| format!("module {m}"))
                 };
                 let note = self.diag(DiagId::note_previous_declaration, pn.loc());
                 let m = self
@@ -673,7 +684,8 @@ impl Sema<'_, '_> {
             let (od, op) = (mt.owner(d), mt.owner(self.ast.first(prev)));
             if od.exported && op.purview && !op.exported && a.is_some() {
                 let note = self.diag(DiagId::note_previous_declaration, pn.loc());
-                let m = self.diag(DiagId::sema_module_export_redecl_module_linkage, dn.loc()).arg(name);
+                let m =
+                    self.diag(DiagId::sema_module_export_redecl_module_linkage, dn.loc()).arg(name);
                 self.emit(m.with_note(note));
             }
         }
