@@ -253,7 +253,23 @@ impl Job<'_> {
             let d2 = Rc::clone(d);
             search.set_observer(Box::new(move |sm, e| on_search_event(&d2, sm, e)));
         }
-        let mut pp = Preprocessor::new(sm, engine, interner, self.pp_options(predefines));
+        let mut opts = self.pp_options(predefines);
+        // Modules for the modes that run sema, from C++20 (spec/modules.md
+        // §2); `-E`/`-M` keep the directives as text.
+        if staged && self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx20 {
+            opts.modules = Some(kiln_pp::ModuleOptions {
+                module_files: a
+                    .module_files
+                    .iter()
+                    .map(|(n, p)| (n.clone(), std::path::PathBuf::from(p)))
+                    .collect(),
+                prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
+                std_dir: Some(
+                    Path::new(&self.toolchain.llvm_dir).join("share").join("libc++").join("v1"),
+                ),
+            });
+        }
+        let mut pp = Preprocessor::new(sm, engine, interner, opts);
         pp.set_include_resolver(Box::new(search));
         let triple = self.toolchain.target.triple;
         let mut ifeval = IfEval::for_triple(triple);

@@ -51,6 +51,7 @@ pub mod literal;
 mod literal_op;
 mod local_friend;
 pub mod lookup;
+pub mod modules;
 pub mod names;
 pub mod new_delete;
 mod null_deref;
@@ -575,6 +576,8 @@ pub struct Sema<'a, 'sm> {
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
     /// The mangling-number state of closure types (spec/sema-lambda.md).
     pub(crate) lambda_mangle: lambda::ManglingState,
+    /// C++20 modules: the units being read (spec/modules.md).
+    pub(crate) modules: modules::ModSema,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -732,6 +735,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             srcloc: builtins::SrcLocCache::default(),
             lambdas: Vec::new(),
             lambda_mangle: lambda::ManglingState::default(),
+            modules: modules::ModSema::default(),
         };
         s.declare_builtin_va_list();
         s.declare_sve_typedefs();

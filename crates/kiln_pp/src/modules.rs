@@ -57,7 +57,10 @@ pub enum DirectiveKind {
         name_span: Span,
     },
     /// `module :private;`.
-    Private,
+    Private {
+        /// The `private` token.
+        span: Span,
+    },
     /// `import M;`, `import :P;`, `import M:P;`, `import <h>;`.
     Import {
         /// The unit's key: the module name (`M`, `M:P`), the partition
@@ -196,7 +199,7 @@ impl Preprocessor<'_, '_> {
                     && let TokKind::Identifier(s) = c.kind
                     && self.interner.as_str(s) == "private"
                 {
-                    DirectiveKind::Private
+                    DirectiveKind::Private { span: c.span }
                 } else {
                     t = c;
                     let Some((p, _)) = self.read_module_name(&mut t, kw) else {

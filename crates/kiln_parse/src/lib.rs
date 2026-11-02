@@ -13,6 +13,7 @@ mod decl;
 mod expr;
 pub mod keywords;
 mod lambda;
+mod modules;
 mod new_delete;
 mod parser;
 mod pragma;

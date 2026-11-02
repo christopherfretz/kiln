@@ -329,6 +329,11 @@ pub struct Args {
     pub frameworks: Vec<String>,
     /// `--embed-dir=<dir>`.
     pub embed_dirs: Vec<String>,
+    /// `-fmodule-file=<name>=<path>`: module interface sources
+    /// (spec/modules.md §2).
+    pub module_files: Vec<(String, String)>,
+    /// `-fprebuilt-module-path=<dir>`, in order.
+    pub prebuilt_module_paths: Vec<String>,
     /// `-nostdinc`.
     pub nostdinc: bool,
     /// `-nostdinc++`.
@@ -594,6 +599,13 @@ impl Args {
                     }
                 } else if let Some(v) = arg.strip_prefix("--embed-dir=") {
                     self.embed_dirs.push(v.to_owned());
+                } else if let Some(v) = arg.strip_prefix("-fmodule-file=") {
+                    // `<path>` alone names a BMI: none in part A, ignored.
+                    if let Some((name, path)) = v.split_once('=') {
+                        self.module_files.push((name.to_owned(), path.to_owned()));
+                    }
+                } else if let Some(v) = arg.strip_prefix("-fprebuilt-module-path=") {
+                    self.prebuilt_module_paths.push(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast-filter=") {
                     self.dump_ast_filter = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast=") {
