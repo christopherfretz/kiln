@@ -1452,6 +1452,10 @@ impl PrintEnv for AstNames<'_> {
         write_type(&self.ast.types, self, ty, PrintOptions::SUGARED, out);
     }
 
+    fn arg_type_name(&self, ty: QualType, out: &mut String) {
+        write_type(&self.ast.types, self, ty, PrintOptions::CANONICAL, out);
+    }
+
     fn enumerator(&self, ty: QualType, bits: &IntBits<'_>, out: &mut String) -> bool {
         let Some(e) = self.ast.types.as_enum(ty) else { return false };
         let e = self.ast.definition(e).unwrap_or(e);
@@ -1540,6 +1544,10 @@ impl PrintEnv for Ast {
 
     fn type_name(&self, ty: QualType, out: &mut String) {
         AstNames::new(self).type_name(ty, out);
+    }
+
+    fn arg_type_name(&self, ty: QualType, out: &mut String) {
+        AstNames::new(self).arg_type_name(ty, out);
     }
 
     fn enumerator(&self, ty: QualType, bits: &IntBits<'_>, out: &mut String) -> bool {

@@ -4,7 +4,6 @@
 //! A subset of the parser package's (WP-048) printer of the same name;
 //! on merge, that one is kept.
 
-use kiln_ast::consts::Scalar;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::TypeNames;
@@ -259,20 +258,11 @@ impl TypeNames for SemaNames<'_> {
     }
 
     fn write_value(&self, ty: QualType, value: ConstValueId, out: &mut String) {
-        match self.ast.consts.scalar(value) {
-            Some(Scalar::Int { signed: true, bits, .. }) => match bits.to_i128() {
-                Some(v) => out.push_str(&v.to_string()),
-                None => out.push_str("<value>"),
-            },
-            Some(Scalar::Int { bits, .. }) => match bits.to_u128() {
-                Some(v) => out.push_str(&v.to_string()),
-                None => out.push_str("<value>"),
-            },
-            Some(Scalar::Bool { value, .. }) => out.push_str(if value { "true" } else { "false" }),
-            // Class, pointer and floating values (§6.10): the constant
-            // printer.
-            _ => kiln_ast::dump::AstNames::new(self.ast).write_value(ty, value, out),
-        }
+        // The constant printer in template-argument style (clang
+        // `TemplateArgument::print` / `printIntegral`): enumerators by
+        // qualified name (`S<E::a>`), characters as literals (`C<'x'>`),
+        // class, pointer and floating values (§6.10).
+        kiln_ast::dump::AstNames::new(self.ast).write_value(ty, value, out)
     }
 
     fn write_value_typed(&self, ty: QualType, value: ConstValueId, out: &mut String) {
