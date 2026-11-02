@@ -728,8 +728,9 @@ impl Sema<'_, '_> {
     /// elements, else a `vector_size` vector of the element type. The
     /// operands stay unconverted, as in clang's AST; the folded indices
     /// ride along for codegen and the Oven. Errors are at `loc`, the
-    /// builtin's name (clang `getBeginLoc`). The unary form with a vector
-    /// mask (two arguments) is not supported yet.
+    /// builtin's name (clang `getBeginLoc`). With two arguments it is the
+    /// unary form `(v, mask)`: `mask` an integer vector with `v`'s element
+    /// count, the result `v`'s type, the (empty) folded mask known.
     pub fn act_on_shufflevector(&mut self, args: &[ExprId], loc: Loc, rparen: Loc) -> ExprId {
         if args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_err(args, loc);
@@ -748,7 +749,7 @@ impl Sema<'_, '_> {
         let mut count = None;
         if !dep(self, args[0]) && !dep(self, args[1]) {
             let (lt, rt) = (self.ety(args[0]), self.ety(args[1]));
-            let (Some(l), Some(_)) = (self.vector_parts(lt), self.vector_parts(rt)) else {
+            let (Some(l), Some(r)) = (self.vector_parts(lt), self.vector_parts(rt)) else {
                 let d = self.diag(DiagId::sema_shufflevector_non_vector, loc).arg(name());
                 self.emit(d);
                 return self.recover_err(args, loc);
@@ -756,8 +757,14 @@ impl Sema<'_, '_> {
             let same = self.ast.types.canonical(lt).without_quals()
                 == self.ast.types.canonical(rt).without_quals();
             if args.len() == 2 {
-                self.unsupported("the two-argument form of __builtin_shufflevector", loc);
-                return self.recover_err(args, loc);
+                // The unary form: `v2` is a mask of integers with as many
+                // elements as `v1`; the result has `v1`'s type.
+                if !self.has_integer_repr(rt) || r.count != l.count {
+                    let d = self.diag(DiagId::sema_shufflevector_incompatible_vec, loc).arg(name());
+                    self.emit(d);
+                    return self.recover_err(args, loc);
+                }
+                return self.builder().shuffle_vector(args, Some(&[]), res, loc, rparen);
             }
             if !same {
                 let d = self.diag(DiagId::sema_shufflevector_incompatible_vec, loc).arg(name());

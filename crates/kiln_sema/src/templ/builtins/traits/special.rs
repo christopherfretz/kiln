@@ -495,7 +495,7 @@ impl Sema<'_, '_> {
     }
 
     /// `[[no_unique_address]]` written on the field `f`.
-    fn has_nua(&self, f: DeclId) -> bool {
+    pub(crate) fn has_nua(&self, f: DeclId) -> bool {
         self.ast.decls.get(f).has(DeclFlags::HAS_ATTRS)
             && self
                 .ast

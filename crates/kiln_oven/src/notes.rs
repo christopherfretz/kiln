@@ -552,6 +552,23 @@ impl Oven {
             BiFault::CastUnrep { v } => {
                 return format!("value {v} cannot be represented in type 'bool'");
             }
+            BiFault::Align { kind, v, align } => {
+                let bytes = |n: i64| if n == 1 { "byte" } else { "bytes" };
+                let a = format!("{align} {}", bytes(i64::try_from(align).unwrap_or(0)));
+                return match kind {
+                    0 => format!(
+                        "alignment of the base pointee object ({v} {}) is less than the asserted {a}",
+                        bytes(v)
+                    ),
+                    1 => format!(
+                        "offset of the aligned pointer from the base pointee object ({v} {}) is not a multiple of the asserted {a}",
+                        bytes(v)
+                    ),
+                    _ => format!(
+                        "value of the aligned pointer ({v}) is not a multiple of the asserted {a}"
+                    ),
+                };
+            }
             _ => {}
         }
         let arg_ty = |i: usize, t: OTy| {
@@ -604,9 +621,10 @@ impl Oven {
                 "constant evaluation of '__builtin_memchr' on array of type '{}' is not supported; only arrays of narrow character types can be searched",
                 arg_ty(0, t)
             ),
-            BiFault::CastBitfield | BiFault::CastIndet { .. } | BiFault::CastUnrep { .. } => {
-                String::new()
-            }
+            BiFault::CastBitfield
+            | BiFault::CastIndet { .. }
+            | BiFault::CastUnrep { .. }
+            | BiFault::Align { .. } => String::new(),
         }
     }
 
