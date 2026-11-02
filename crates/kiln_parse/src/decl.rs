@@ -710,7 +710,11 @@ impl Parser<'_, '_> {
                     let sp = self.spelling_of(&self.tok());
                     let r = set_flag(&mut ds.thread_local, loc, "thread_local");
                     if r.is_ok() {
-                        ds.thread_static = sp != "thread_local";
+                        ds.thread_kind = if sp == "thread_local" {
+                            kiln_ast::decl::TlsKind::Dynamic
+                        } else {
+                            kiln_ast::decl::TlsKind::Static
+                        };
                     }
                     thread_spelling = Some(sp);
                     r
