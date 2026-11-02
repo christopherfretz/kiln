@@ -827,7 +827,18 @@ and returns the scope it names:
   `implicit deduction guide declared as '<sig>'`
   (`implicit_guide_signature`; parameter names as clang's DeclPrinter
   places them, `Ts ...xs`, and an inherited default argument as
-  `= <null expr>`).
+  `= <null expr>`). Parameter types print as the constructor wrote
+  them (member typedefs, `typename X<T>::type`,
+  `typename T::template rebind<int>::other`): a guide's function type
+  is built from the sugared prototype (`TypeTable::proto_of`), and an
+  alias template's guide substitutes the alias's arguments into that
+  sugar; its `__is_deducible(A, R)` prints the guide's sugared return
+  type `R` (WP-311; test
+  `over.match.class.deduct/guide-signature-as-written.cpp`). Not
+  printed yet: clang's `while building implicit deduction guide first
+  needed here` frame note, at the placeholder's template-name location,
+  for an error substituting a member template's constructors (the
+  placeholder's name location is not recorded).
 - **Array new.** `new X[n]{…}` with a placeholder element type is
   `sema_ctad_compound_type` ("cannot form array of deduced class
   template specialization type") at the innermost bound, as clang.
