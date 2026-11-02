@@ -97,6 +97,16 @@ impl Sema<'_, '_> {
                 } else {
                     opts
                 };
+            // [over.best.ics.general]/4.5: a list whose only element is a
+            // braced-init-list reaches no copy or move constructor through
+            // a user-defined conversion (clang `ResolveConstructorOverload`
+            // `SuppressUserConversions`).
+            let opts = match args {
+                [a] if style.is_list() && self.braced_args.iter().any(|(x, _)| x == a) => {
+                    opts.with(IcsOptions::LIST_COPY_CTOR)
+                }
+                _ => opts,
+            };
             self.add_ctor_candidates(&mut set, c, opts, false);
         }
         if let [arg] = args

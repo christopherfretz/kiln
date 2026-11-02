@@ -8,7 +8,7 @@ typedef decltype(sizeof 0) size_t;
 namespace lit {
 struct sv { const char* p; size_t n; };
 constexpr sv operator""_sv(const char* p, size_t n) { return {p, n}; }
-constexpr unsigned long long operator"" _k(unsigned long long v) { return v * 1000; }
+constexpr unsigned long long operator""_k(unsigned long long v) { return v * 1000; }
 constexpr long double operator""_h(long double v) { return v * 100; }
 constexpr int operator""_c(char c) { return c + 1; }
 constexpr int operator""_w(char16_t c) { return c + 2; }

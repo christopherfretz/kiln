@@ -41,6 +41,9 @@ pub(crate) const STATIC_BIT: u32 = 1 << 21;
 /// Marks a heap slot (frame slots are below it).
 pub(crate) const HEAP_BIT: u32 = 1 << 20;
 pub(crate) const FN_SLOT: u32 = (1 << 22) - 1;
+/// [`Alloc::base`] of a static allocation that holds no bytes
+/// ([`Memory::alloc_unbacked`]).
+pub(crate) const UNBACKED: u32 = u32::MAX;
 
 /// A decoded pointer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -420,14 +423,22 @@ pub(crate) enum MemFault {
     Speculative,
 }
 
+/// Dead frame slots kept from reuse: a pointer to a just-ended object
+/// (a callee's local after a return or an unwinding, a block's local
+/// after its scope, whose slot the next frame object would take) is then
+/// still "a variable whose lifetime has ended" with its declaration, not
+/// a stale slot (clang's notes; spec/oven.md "Exceptions").
+const FRAME_QUARANTINE: usize = 16;
+
 #[derive(Debug)]
 pub(crate) struct Memory {
     pub frame: Space,
     pub heap: Space,
     pub stat: Space,
     pub slots: Vec<Alloc>,
-    /// Dead slots, reused first-in first-out so a dangling pointer stays
-    /// diagnosable (its slot keeps its origin) for as long as possible.
+    /// Dead slots, reused first-in first-out, and only once more than
+    /// [`FRAME_QUARANTINE`] wait, so a dangling pointer stays diagnosable
+    /// (its slot keeps its origin) for as long as possible.
     free: VecDeque<u32>,
     pub live: Vec<u32>,
     pub statics: Vec<Alloc>,
@@ -656,7 +667,8 @@ impl Memory {
             origin,
             frame: self.cur_frame,
         };
-        let slot = if let Some(s) = self.free.pop_front() {
+        let reuse = if self.free.len() > FRAME_QUARANTINE { self.free.pop_front() } else { None };
+        let slot = if let Some(s) = reuse {
             let g = self.slots[s as usize].generation + 1;
             self.slots[s as usize] = Alloc { generation: g, ..a };
             s
@@ -713,6 +725,35 @@ impl Memory {
             origin,
             frame: 0,
         };
+        self.push_static(a, reuse)
+    }
+
+    /// A static object no access may reach, of origin
+    /// [`Origin::External`] or [`Origin::Unknown`]: an
+    /// [`flags::EXTERNAL`] slot with a size (for address arithmetic and
+    /// bounds) but no bytes in the static space ([`UNBACKED`] base), so
+    /// naming a reference to, or an `extern` array of, any size costs one
+    /// slot (spec/oven.md "Unknown references"). [`Memory::check_storage`]
+    /// rejects every access before the base is used. A size over 4 GiB is
+    /// clamped: pointer offsets are 32 bits.
+    pub fn alloc_unbacked(&mut self, ty: OTy, size: u64, fl: u8, origin: Origin) -> u64 {
+        debug_assert!(fl & flags::EXTERNAL != 0);
+        let a = Alloc {
+            base: UNBACKED,
+            size: size.min(u64::from(u32::MAX)) as u32,
+            generation: 0,
+            live: true,
+            flags: fl | flags::EXTERNAL,
+            ty,
+            origin,
+            frame: 0,
+        };
+        let reuse = !self.in_trial();
+        self.push_static(a, reuse)
+    }
+
+    /// Puts static allocation `a` in a dead slot (`reuse`) or a new one.
+    fn push_static(&mut self, a: Alloc, reuse: bool) -> u64 {
         let (idx, generation) = match if reuse { self.sfree.pop() } else { None } {
             Some(i) => {
                 let g = self.statics[i as usize].generation + 1;
@@ -756,6 +797,9 @@ impl Memory {
         }
         if a.generation < GEN_MAX {
             self.sfree.push(idx);
+        }
+        if a.base == UNBACKED {
+            return;
         }
         let (base, len) = (u64::from(a.base), u64::from(a.size).max(1).next_multiple_of(GRAN));
         // Insert the range, coalescing with its neighbours.
@@ -891,6 +935,10 @@ impl Memory {
                 Origin::Let(t) => return Err(MemFault::Temporary(t)),
                 _ => {}
             }
+        }
+        if a.base == UNBACKED {
+            // Only External and Unknown objects are unbacked.
+            return Err(MemFault::Stale);
         }
         Ok((p.space(), u64::from(a.base) + u64::from(p.off), a))
     }
@@ -2335,5 +2383,34 @@ mod tests {
         let r = snew(&mut m, 64);
         assert_eq!(base(&m, r), 0, "reused once the trial closed");
         assert_eq!(m.static_top(), top);
+    }
+
+    /// spec/oven.md "Unknown references" (P2280, WP-375): an external or
+    /// unknown object holds no bytes whatever its size, every access is
+    /// diagnosed, its address arithmetic keeps its bounds, and freeing it
+    /// leaves no hole in the static space.
+    #[test]
+    fn unbacked_statics_hold_no_bytes() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let keep = snew(&mut m, 8);
+        put(&mut m, keep, 5).unwrap();
+        let top = m.static_top();
+        let fl = flags::EXTERNAL | flags::CONST;
+        let d = DeclId::new(1);
+        let u = m.alloc_unbacked(OTy(0), 3_000_000_000, fl, Origin::Unknown(d));
+        let x = m.alloc_unbacked(OTy(0), 1 << 40, fl, Origin::External(d));
+        assert_eq!(m.static_top(), top, "no bytes");
+        assert_eq!(m.check(u, 8, false).err(), Some(MemFault::Unknown(d)));
+        let last = Ptr::with_off(u, 2_999_999_992, false);
+        assert_eq!(m.check(last, 8, true).err(), Some(MemFault::Unknown(d)));
+        assert_eq!(m.check(x, 1, true).err(), Some(MemFault::External(d, true)));
+        assert_eq!(m.alloc_any(Ptr::decode(x)).unwrap().size, u32::MAX, "clamped");
+        m.free_static(u, &t);
+        m.free_static(x, &t);
+        assert_eq!(m.static_top(), top);
+        let r = snew(&mut m, 8);
+        assert_eq!(base(&m, r), top, "no hole was made");
+        assert_eq!(get(&m, keep), Some(5));
     }
 }

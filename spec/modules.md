@@ -49,10 +49,13 @@ Module sources are found in this order (spec/driver.md, "Modules"):
    accepted and ignored (it names a BMI; there is none in part A).
 2. `-fprebuilt-module-path=<dir>` (repeatable, in order): `<dir>/<name>.cppm`,
    then `.ixx`, then `.cpp`; a partition `M:P` is looked up as `M-P.*`.
-3. `std` and `std.compat`: `<llvm>/share/libc++/v1/std.cppm` and
-   `std.compat.cppm`, where `<llvm>` is the LLVM installation whose libc++
-   headers are in use (`KILN_LLVM_DIR`, default `/usr/lib/llvm-19`; the
-   llvm-22 layout is the same).
+3. `std` and `std.compat`: `<prefix>/share/libc++/v1/std.cppm` and
+   `std.compat.cppm`, where `<prefix>/include/c++/v1` is the libc++ header
+   directory `-stdlib=libc++` resolved to (spec/driver.md; symlinks
+   resolved, so Debian's `/usr/include/c++/v1` yields
+   `/usr/lib/llvm-19/share/libc++/v1`); when no `share/libc++/v1` sits
+   beside those headers, `<llvm>/share/libc++/v1` of `KILN_LLVM_DIR`
+   (default `/usr/lib/llvm-19`; the llvm-22 layout is the same).
 
 A module that is not found is `fatal error: module 'M' not found`. A file
 that cannot be read is the include "file not found" error.

@@ -11,11 +11,11 @@ TranslationUnitDecl
 |   `-FieldDecl data 'char[5]'
 |-StaticAssertDecl
 | `-BinaryOperator 'bool' '=='
-|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Arr<3>'
-|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|   |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Arr<3>'
+|   `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
 |     `-IntegerLiteral 'int' 3
 `-StaticAssertDecl
   `-BinaryOperator 'bool' '=='
-    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Arr<1 + 4>':'Arr<5>'
-    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Arr<1 + 4>':'Arr<5>'
+    `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
       `-IntegerLiteral 'int' 5

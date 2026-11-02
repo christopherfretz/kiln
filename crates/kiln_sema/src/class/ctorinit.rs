@@ -179,6 +179,14 @@ impl Sema<'_, '_> {
         self.cleanup = super::CleanupState::default();
     }
 
+    /// True if a mem-initializer of the instantiation of constructor
+    /// `ctor` failed (its substitution or its initialization): clang's
+    /// `InstantiateMemInitializers` then marks the constructor invalid,
+    /// so it is never constant-evaluated ([temp.inst]; WP-374).
+    pub(crate) fn instantiated_mem_inits_failed(&self, ctor: DeclId) -> bool {
+        self.mem_inits.ctor == Some(ctor) && self.mem_inits.any_errors
+    }
+
     /// The definition-time check of an unqualified mem-initializer-id of a
     /// constructor in a template ([class.base.init]/2, clang
     /// `BuildMemInitializer` in a dependent context): it must name a

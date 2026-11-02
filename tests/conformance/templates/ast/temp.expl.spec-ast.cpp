@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.expl.spec]/1, [temp.explicit]/1: explicit specialization and
 // explicit instantiation of a class template.
 template <class T> struct E { T v; };

@@ -19,7 +19,7 @@ struct P {
 };
 export struct Q {
   int q() { return 3; }
-  friend int fr(Q) { return 4; }
+  friend int fr(const Q &) { return 4; }
 };
 int P::q() { return 5; }
 struct V {

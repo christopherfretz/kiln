@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.mem]/1: member templates are redeclared in each specialization of
 // the enclosing class template.
 template <class T> struct A {

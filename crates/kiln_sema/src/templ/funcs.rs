@@ -289,6 +289,7 @@ impl Sema<'_, '_> {
             // pack's elements take the pack's name.
             sub.rename_params_from_pattern(&pp);
             sub.sema.act_on_start_function_def(f);
+            let mut inits_failed = false;
             if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
                 // A constructor template's ctor-initializer, as a class
                 // template member's (`templ/class.rs`).
@@ -309,6 +310,7 @@ impl Sema<'_, '_> {
                         Err(_) => sub.sema.note_failed_mem_initializer(f),
                     }
                 }
+                inits_failed = sub.sema.instantiated_mem_inits_failed(f);
                 if sub.sema.inst.failed_mem_inits.contains(&pdef) {
                     sub.sema.note_failed_mem_initializer(f);
                 }
@@ -321,7 +323,10 @@ impl Sema<'_, '_> {
             // as a substitution failure and an undeduced placeholder
             // return type is not deduced `void` (spec/sema-templates.md
             // §5.5).
-            if sub.stmt_failed {
+            // A mem-initializer that failed to instantiate does too (clang's
+            // `InstantiateMemInitializers`): the constructor is never
+            // constant-evaluated, so no evaluation note follows (WP-374).
+            if sub.stmt_failed || inits_failed {
                 s.ast.decls.set_flags(f, DeclFlags::INVALID);
             }
             s.act_on_finish_function_def(f, b, rbrace);

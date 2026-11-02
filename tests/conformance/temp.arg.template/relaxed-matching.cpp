@@ -3,25 +3,27 @@
 // argument matching.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 39:3 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 30:22 note "template parameter has a different kind in template argument"
-//@ diag: 29:33 note "previous template template parameter is here"
-//@ diag: 40:3 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 31:10 note "too many template parameters in template template argument"
-//@ diag: 29:19 note "previous template template parameter is here"
-//@ diag: 58:4 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 56:20 note "template parameter has a different kind in template argument"
-//@ diag: 57:25 note "previous template template parameter is here"
-//@ diag: 64:3 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 63:14 note "template non-type parameter has a different type 'int *' in template argument"
-//@ diag: 28:22 note "previous non-type template parameter with type 'int' is here"
-//@ diag: 69:3 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 68:12 note "template non-type parameter has a different type 'En' in template argument"
-//@ diag: 28:22 note "previous non-type template parameter with type 'int' is here"
-//@ diag: 71:13 error "use of undeclared identifier 'B'"
-//@ diag: 77:3 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 76:1 note "too many template parameters in template template argument"
-//@ diag: 27:10 note "previous template template parameter is here"
+//@ diag: 41:3 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 32:22 note "template parameter has a different kind in template argument"
+//@ diag: 31:33 note "previous template template parameter is here"
+//@ diag: 42:3 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 33:10 note "too many template parameters in template template argument"
+//@ diag: 31:19 note "previous template template parameter is here"
+//@ diag: 60:4 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 58:20 note "template parameter has a different kind in template argument"
+//@ diag: 59:25 note "previous template template parameter is here"
+//@ diag: 66:3 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 65:14 note "template non-type parameter has a different type 'int *' in template argument"
+//@ diag: 30:22 note "previous non-type template parameter with type 'int' is here"
+//@ diag: 71:3 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 70:12 note "template non-type parameter has a different type 'En' in template argument"
+//@ diag: 30:22 note "previous non-type template parameter with type 'int' is here"
+//@ diag: 73:13 error "use of undeclared identifier 'B'"
+//@ diag: 79:3 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 78:1 note "too many template parameters in template template argument"
+//@ diag: 29:10 note "previous template template parameter is here"
+//@ requires: clang<22
+// clang 22 emits 30:22 note "template parameter has a different kind in template argument"; WP-355 residual
 template<class... T> struct V {};
 template<long N> struct L {};
 template<template<class> class P> struct Q {};

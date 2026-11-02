@@ -3,7 +3,9 @@
 // member's, type-constraint included.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 13:30 error "out-of-line definition of 'e' does not match any declaration in 'A"
+//@ diag: 15:30 error "out-of-line definition of 'e' does not match any declaration in 'A"
+//@ requires: clang<22
+// clang 22 emits error: out-of-line definition of 'e' does not match any declaration in 'A<T>'; WP-355 residual
 template <class T> concept C = sizeof(T) >= 4;
 template <class T> concept D = sizeof(T) >= 2;
 template <class T> struct A {

@@ -314,6 +314,14 @@ impl Sema<'_, '_> {
     /// defaults: WP-067b).
     pub fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId) {
         self.unparsed_default_args.remove(&p);
+        // [temp.variadic]/12, as `act_on_param_default_init`.
+        let at = self.begin_loc(e);
+        let op = crate::templ::pack::PackOperand::Expr(e);
+        if self.lambdas.is_empty() && self.diagnose_unexpanded_pack(op, "default argument", at) {
+            self.ast.decls.set_flags(p, DeclFlags::INVALID);
+            let _ = self.ast.decls.set_default_arg(p, e);
+            return;
+        }
         self.attach_default_arg(p, e);
     }
 

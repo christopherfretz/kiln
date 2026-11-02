@@ -64,6 +64,10 @@ pub struct ParseOptions {
     /// `-freflection` (P2996 spike): `^^`, type splices and the kiln
     /// reflection intrinsics ([`kiln_sema::Sema::reflection`]).
     pub reflection: bool,
+    /// `-fclang-compat=<major>`: the clang release whose spellings kiln
+    /// reproduces where they differ (spec/pp.md "clang compatibility
+    /// level"; [`kiln_sema::Sema::clang_compat`]).
+    pub clang_compat: u32,
 }
 
 impl Default for ParseOptions {
@@ -77,6 +81,7 @@ impl Default for ParseOptions {
             inst_limits: kiln_sema::templ::stack::InstLimits::default(),
             inst_report: kiln_sema::templ::report::ReportFormat::Off,
             reflection: false,
+            clang_compat: 19,
         }
     }
 }
@@ -197,6 +202,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.rtti = opts.rtti;
     s.reflection = opts.reflection;
     s.gnu = opts.gnu;
+    s.clang_compat = opts.clang_compat;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;

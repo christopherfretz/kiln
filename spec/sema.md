@@ -5,8 +5,9 @@ apart from the conversion machinery, which spec/sema-conv.md
 (WP-049) covers. §10 lists what is still to be implemented.
 
 Standard: [basic], [conv], [expr], [stmt], [dcl], [class], [namespace].
-Reference: clang 19's `Sema`, with diagnostics checked against
-`clang++-19 -fsyntax-only` and ASTs against `cargo xtask clang-ast`.
+Reference: clang's `Sema` (clang 22, the oracle; clang 19 at
+`-fclang-compat=19`, §1.1), with diagnostics checked against
+`clang++-22 -fsyntax-only` and ASTs against `cargo xtask clang-ast`.
 
 ## 1. State
 `Sema<'a, 'sm>` holds the semantic state of one translation unit.
@@ -46,6 +47,43 @@ Constructors:
   builtin types.
 - `Sema::for_target(ast, diags, Target)` takes the target directly.
   The parser uses this one.
+
+### 1.1 Clang compatibility level (`clang_compat`, WP-355)
+`Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or
+22; spec/driver.md). It selects which clang release's observable output
+kiln reproduces where clang 19 and 22 differ on the same program; the
+language accepted is the same at both levels. The harness passes the
+oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
+- **Names.** A closure type in a scope chain prints `(lambda)`, not
+  `(anonymous class)`, in every diagnostic and predefined name
+  (`'f()::(lambda)::operator()<int>'`; `SemaNames::closure_as_lambda`).
+- **Sugar.** `size_t`, the signed `size_t` and `ptrdiff_t` carry clang
+  22's `__size_t` / `__signed_size_t` / `__ptrdiff_t` sugar
+  (`Sema::size_type`; diagnostics print `'__size_t' (aka 'unsigned
+  long')`); an alias template specialization substitutes its arguments
+  as written (`templ/class.rs`); a `PackExpansionExpr` keeps its
+  pattern's type; a synthesized `<=>`/`==` converts each operand to the
+  cv-qualified base ([class.compare.default]).
+- **Structured bindings** (§4.9): `std::tuple_element`'s index is a
+  `size_t` integer literal (`tuple_element<0UL, E>`); a binding
+  captured by a non-mutable lambda and named in its body is `const`
+  ([expr.prim.id.unqual]/3).
+- **Statement expressions** (GNU): only the statement's own `;` may
+  precede the `})`, so a trailing null statement is the last statement
+  and the expression is `void` (clang 19 skipped null statements).
+- **Deprecations.** `-Wdeprecated-literal-operator` (CWG2521,
+  [over.literal]/1, [depr.lit]): `operator "" _x`, the suffix
+  identifier preceded by whitespace, warns by default
+  (`sema_deprecated_literal_operator_id`; clang 19 has the warning off).
+  `__is_trivially_relocatable` warns `-Wdeprecated-builtins` with the
+  replacement `__builtin_is_cpp_trivially_relocatable`
+  (spec/sema-templates.md §9.1).
+- Codegen's `-Watomic-alignment` text follows the level
+  (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
+
+Where clang 22's output differs and kiln has not followed it yet, the
+test pins clang 19 with `requires: clang<22` and the comment `WP-355
+residual` (docs/status/wp-184-oracle-switch.md).
 
 ## 2. Scopes (`scope.rs`)
 - **Kinds:** `ScopeKind` is one of TranslationUnit, Namespace,
@@ -103,6 +141,15 @@ Constructors:
     to instantiation. Member lookup's subobject merge (`class_hit`)
     keys declarations the same way, and its candidate note names a
     record by its canonical type.
+  - **Invalid declarations** (clang `resolveKind`, WP-371): an
+    id-expression whose lookup finds several declarations, at most one
+    of them valid, names the valid one, else the last one found, with
+    no ambiguity. A variable declared without a type specifier
+    ([dcl.type.general]/2; `const c = 2;` after `const int c = 1;`,
+    `y; y;`) is invalid and not merged with a previous declaration
+    (clang's `MergeVarDecl` returns at an invalid new declaration), so
+    it reports no redefinition and `c` still names the valid `c`.
+    `dcl.type/missing-type-specifier-implicit-int.cpp`.
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
@@ -479,7 +526,16 @@ Redeclaration and linkage rules:
   default argument on parameter` error (`merge_default_args` with
   `trailing == false`); a call that would need the invalid default
   argument is then measured against the redeclaration's arity. Test:
-  `dcl.fct.default/invalid-cast-default-arg.cpp`.
+  `dcl.fct.default/invalid-cast-default-arg.cpp`. A non-template
+  function invalid only because of an invalid parameter
+  (`Sema::invalid_by_param`) is still named and called normally (WP-373;
+  clang resolves the call through its overload set): the call's
+  arguments are converted and their errors diagnosed (`m(1, {2})`
+  through an explicit constructor), and only then is the call itself
+  erroneous and silent (a recovery expression, never constant-evaluated).
+  A function invalid for another reason (its instantiated body failed)
+  keeps the earlier silent recovery. Test:
+  `dcl.fct.default/invalid-default-arg-still-callable.cpp`.
 - **`register`** ([dcl.stc]/1; removed in C++17 by P0001R1, clang's
   `ext_register_storage_class`). `register` is `ISO C++17 does not allow
   'register' storage class specifier` (`sema_register_storage_class`,
@@ -616,6 +672,16 @@ Redeclaration and linkage rules:
   with an initializer`, `remove parentheses`).
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
+- A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
+  `BuildQualifiedType`; WP-371) on a type that is not a pointer,
+  reference or member pointer (and not dependent, an undeduced
+  placeholder or an error) is "restrict requires a pointer or reference
+  ('int' is invalid)" at the qualifier, which is dropped
+  (`type_from_declspec_at`, so `__restrict int *p;` qualifies `int` and
+  is diagnosed). It is reported once per declaration group where clang
+  reports it per declarator. `_Atomic int g();` (friend or not) is
+  accepted, as clang 19 and 22 do;
+  `class.friend/restrict-atomic-decl-specifiers.cpp`.
 - `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
   over the declared type of an unparenthesized id-expression or member
   access, else `T&&`/`T&`/`T` by value category. The operand is
@@ -1215,6 +1281,12 @@ and returns the scope it names:
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
+- **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
+  `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
+  `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
+  `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
+  `always_inline` with the GNU flag. Test:
+  `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
   - GNU `visibility`, `section` and `format`: `'x' attribute ignored`
     (a written `format` is not stored; only the printf builtins' implicit
     one is, §5.4)
@@ -2158,7 +2230,10 @@ diagnostics and IR.
       decompose this type; 'std::tuple_size<T>::value' is not a valid
       integral constant expression`.
     - Each binding gets a holding variable of type `tuple_element<i,
-      E>::type&` (lvalue `e`) or `&&`, with the binding's name. It is
+      E>::type&` (lvalue `e`) or `&&`, with the binding's name. The
+      index `i` is a `size_t` value argument or, at
+      `-fclang-compat=22`, a `size_t` integer literal written as an
+      expression argument (`tuple_element<0UL, E>`; §1.1). It is
       initialized with `e.get<i>()` when a member template `get` has a
       non-type first parameter, else with an ADL-only `get<i>(xvalue
       e)`, which prints `adl`.
@@ -3026,8 +3101,23 @@ and aggregate element types.
   reference or an incomplete type; `auto` is deduced from a single
   parenthesized or braced argument (`new auto(x)`; `new auto*(p)` is
   unsupported). The new-declarator's first bound is converted to `size_t`
-  ([expr.new]/8: integral or unscoped enumeration, or a class with one
-  conversion, which is unsupported); a constant first bound that is
+  ([expr.new]/8). From C++14 that is an implicit conversion (clang
+  `PerformImplicitConversion`, `AssignmentAction::Converting`): a class
+  bound uses its non-explicit conversion functions (templates deduced
+  against `size_t`); no usable one is `converting 'C' to incompatible
+  type`, an ambiguity `conversion from 'C' to ... is ambiguous` with the
+  candidate notes, a deleted one `attempt to use a deleted function`.
+  Before C++14 it is the contextual implicit conversion to an integral or
+  unscoped enumeration type (`switch_conv.rs`, as for `switch`, all
+  diagnostics at the new-expression): `array size expression must have
+  integral or {unscoped }enumeration type, not 'T'`, `ambiguous
+  conversion of array size expression of type 'C' to an integral or
+  enumeration type`, `array size expression of type 'C' requires
+  explicit conversion to type 'U'`, `array size expression has
+  incomplete class type 'C'`, with `conversion to {integral|enumeration}
+  type 'U' declared here` notes (WP-374; tests
+  `expr.new/array-bound-class-conversion{,-cxx11}.cpp`,
+  `expr.delete/class-operand-conversion-run.cpp`). A constant first bound that is
   negative, too large, or smaller than the number of initializers is an
   error; later bounds are converted constant expressions. A `new T[]`
   takes its bound from the initializer. In a parenthesized type-id a
@@ -3072,8 +3162,16 @@ and aggregate element types.
   parenthesized initialization (they need `CXXConstructExpr`,
   WP-067b); braced aggregate initialization works.
 - **Delete** ([expr.delete]): the operand is converted to a pointer
-  prvalue (a class operand with a conversion function is unsupported).
-  Errors and warnings follow clang: `cannot delete expression of type`,
+  prvalue. A class operand is contextually implicitly converted to a
+  pointer to object (or incomplete) type (`switch_conv.rs`, as for
+  `switch`; WP-374), at the `delete` keyword: `deleting incomplete class
+  type 'C'; no conversions to pointer type` (with the forward
+  declaration note), `ambiguous conversion of delete expression of type
+  'C' to a pointer`, `converting delete expression from type 'C' to type
+  'T *' invokes an explicit conversion function` (then called), each
+  conversion function noted `conversion to pointer type 'T *'`; with no
+  usable conversion, `cannot delete expression of type 'C'` (tests
+  `expr.delete/class-operand-conversion{,-run}.cpp`). Errors and warnings follow clang: `cannot delete expression of type`,
   `cannot delete pointer to incomplete type 'void'` (an error for
   `void*` in C++26), the incomplete-type warning, and `'delete' applied
   to a pointer-to-array type ... treated as 'delete[]'` (then
@@ -4293,7 +4391,10 @@ Each rule names the libc++ test it fixed and its corpus test.
   - a condition of class type ([stmt.switch]/2, [conv.general]/5;
     `switch_conv.rs`, clang `PerformContextualImplicitConversion`
     with the C++14 rules, WP-364) is contextually implicitly converted
-    before promotion. All diagnostics are at the `switch` keyword:
+    before promotion. The same helper (`contextual_class_conversion`,
+    parameterized by `ContextualConv`) converts a `delete` operand and a
+    pre-C++14 array-new bound with their own wording (§ new/delete,
+    WP-374). All diagnostics are at the `switch` keyword:
     1. An incomplete class (after instantiating a specialization) is
        `switch condition has incomplete class type 'T'` with the
        `forward declaration` note.
@@ -4306,12 +4407,19 @@ Each rule names the libc++ test it fixed and its corpus test.
        cv-unqualified target `T`; otherwise `multiple conversions from
        switch condition type 'C' to an integral or enumeration type`
        with one `conversion to {integral|enumeration} type 'U'` note per
-       conversion function (at its name).
+       conversion function (at its name). A conversion function
+       template among them is noted `candidate function template`.
     4. Overload resolution ([over.match.conv]) among the non-explicit
        matching ones (templates deduced against `T`) picks the function
        called (`call_conversion_function`), then a standard conversion
        to `T` (so a `const int&` result is read). An ambiguity is the
-       same `multiple conversions` error.
+       same `multiple conversions` error; a conversion function template
+       is noted by its deduced specialization, `candidate function [with
+       T = int]` (`candidate function template` when deduction failed).
+       clang 19-22 crash on both template cases
+       (`diagnoseAmbiguousConversion` casts the template to a conversion
+       function), so this wording is kiln's (WP-374;
+       `stmt.switch/ambiguous-conversion-template.cpp`, `skip(clang)`).
     5. With none viable (none, deleted, only templates, a non-viable
        object qualifier) and exactly one explicit matching non-template
        conversion function: `switch condition type 'C' requires

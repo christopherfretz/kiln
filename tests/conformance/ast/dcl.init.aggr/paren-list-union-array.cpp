@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: f
+//@ requires: clang>=22
 // [dcl.init.general]/16.6.2.2 (P0960): a parenthesized initialization of
 // a union initializes its first member; an array of classes takes the
 // default construction as its filler (zeroing unless user-provided); an

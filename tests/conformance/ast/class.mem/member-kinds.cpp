@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 // [class.mem.general]/1: nested classes, mutable data members, bit-fields
 // (named, unnamed, of enumeration type, several in one declaration) and
 // empty declarations.

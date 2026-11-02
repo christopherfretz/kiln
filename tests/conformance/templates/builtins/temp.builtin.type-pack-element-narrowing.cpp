@@ -6,11 +6,12 @@
 // carry no argument locations yet; spec/sema-templates.md §11, WP-074).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 14:31 error "non-type template argument evaluates to -1, which cannot be narrowed to type 'unsigned long' [-Wc++11-narrowing]"
-//@ diag: 14:31 error "a parameter pack may not be accessed at an out of bounds index"
-//@ diag: 15 error "non-type template argument evaluates to -2, which cannot be narrowed to type 'unsigned long' [-Wc++11-narrowing]"
-//@ diag: 16:7 note "in instantiation of template class 'P<-2>' requested here"
-//@ diag: 15 error "a parameter pack may not be accessed at an out of bounds index"
+//@ diag: 15:31 error "non-type template argument evaluates to -1, which cannot be narrowed to type '__size_t' (aka 'unsigned long') [-Wc++11-narrowing]"
+//@ diag: 15:31 error "a parameter pack may not be accessed at an out of bounds index"
+//@ diag: 16 error "non-type template argument evaluates to -2, which cannot be narrowed to type '__size_t' (aka 'unsigned long') [-Wc++11-narrowing]"
+//@ diag: 17:7 note "in instantiation of template class 'P<-2>' requested here"
+//@ diag: 16 error "a parameter pack may not be accessed at an out of bounds index"
+//@ requires: clang>=22
 using A = __type_pack_element<-1, int>;
 template <int N> struct P { typedef __type_pack_element<N, int> type; };
 P<-2> p;

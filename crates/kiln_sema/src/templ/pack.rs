@@ -750,6 +750,39 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// [temp.variadic]/12 for the type of a declarator: `Ts x;`,
+    /// `Ts *p;`, `Ts f();`, `void g(Ts);` (`what` = "declaration type";
+    /// a non-static data member's, "data member type"; a non-type
+    /// template parameter's, "non-type template parameter type"),
+    /// reported at the declarator-id (clang's `HandleDeclarator`). The
+    /// declaration is then invalid, and the flag
+    /// [`Sema::take_declarator_type_invalid`] reads is set. True after
+    /// the diagnostic.
+    pub(crate) fn diagnose_unexpanded_declarator(
+        &mut self,
+        ty: QualType,
+        what: &'static str,
+        at: Loc,
+    ) -> bool {
+        // In a lambda body the lambda-expression carries the pack (a
+        // lambda in a pack expansion, `[] { Ts x{}; }()...`).
+        if !self.lambdas.is_empty()
+            || !self.diagnose_unexpanded_pack(PackOperand::Type(ty), what, at)
+        {
+            return false;
+        }
+        self.declarator_type_invalid = true;
+        true
+    }
+
+    /// True (once) if the last declarator's type was diagnosed as naming
+    /// an unexpanded pack: the parser then parses, but does not declare,
+    /// the rest of a simple-declaration's group (clang's sticky
+    /// `Declarator::InvalidType` in `ParseDeclGroup`).
+    pub fn take_declarator_type_invalid(&mut self) -> bool {
+        std::mem::take(&mut self.declarator_type_invalid)
+    }
+
     /// [temp.variadic]/12 for an expression written in a template (an
     /// expression statement, `return` operand or condition, `what` =
     /// "expression"; a variable's initializer, "initializer"): naming a
@@ -840,7 +873,6 @@ impl Sema<'_, '_> {
             | TypeView::Elaborated { named: x, .. }
             | TypeView::ExtQual { base: x, .. }
             | TypeView::Attributed { modified: x, .. }
-            | TypeView::MemberPointer { pointee: x, .. }
             | TypeView::Vector { elem: x, .. }
             | TypeView::ConstantArray(kiln_ast::types::ConstArray { elem: x, .. }) => {
                 self.type_packs(x, out, depth + 1);
@@ -849,8 +881,21 @@ impl Sema<'_, '_> {
                 self.type_packs(elem, out, depth + 1);
                 self.expr_packs(size, out, depth + 1);
             }
-            TypeView::DependentSizedArray { elem: x, .. }
-            | TypeView::DependentVector { elem: x, .. } => self.type_packs(x, out, depth + 1),
+            TypeView::MemberPointer { pointee, class } => {
+                self.type_packs(QualType::unqual(class), out, depth + 1);
+                self.type_packs(pointee, out, depth + 1);
+            }
+            TypeView::DependentSizedArray { elem, size }
+            | TypeView::DependentVector { elem, size, .. } => {
+                self.type_packs(elem, out, depth + 1);
+                let size = match size {
+                    kiln_ast::types::ExprOperand::Expr(e) => Some(e),
+                    kiln_ast::types::ExprOperand::Profile(p) => t.profile_expr(p),
+                };
+                if let Some(e) = size {
+                    self.expr_packs(e, out, depth + 1);
+                }
+            }
             TypeView::Function(p) => {
                 self.type_packs(p.ret(), out, depth + 1);
                 for &x in t.params(&p) {

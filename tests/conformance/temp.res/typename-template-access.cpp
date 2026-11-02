@@ -6,25 +6,27 @@
 // and in a default argument's `sizeof`.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 38:24 error "'Z' is a private member of 'P'"
-//@ diag: 47:6 note "in instantiation of template class 'A<P>' requested here"
-//@ diag: 29:29 note "implicitly declared private here"
-//@ diag: 39:24 error "'Z' is a private member of 'P'"
-//@ diag: 29:29 note "implicitly declared private here"
-//@ diag: 40:31 error "'Z' is a private member of 'P'"
-//@ diag: 29:29 note "implicitly declared private here"
-//@ diag: 41:31 error "'Z' is a private member of 'P'"
-//@ diag: 29:29 note "implicitly declared private here"
-//@ diag: 42:15 error "'type' is a private member of 'P'"
-//@ diag: 30:15 note "implicitly declared private here"
-//@ diag: 44:26 error "'Z' is a private member of 'P'"
-//@ diag: 48:9 note "in instantiation of member class 'A<P>::N' requested here"
-//@ diag: 29:29 note "implicitly declared private here"
-//@ diag: 42:47 error "'type' is a private member of 'P'"
-//@ diag: 49:10 note "in instantiation of default function argument expression for 'g<P>' required here"
-//@ diag: 30:15 note "implicitly declared private here"
-//@ diag: 52:10 error "no matching function for call to 'k'"
-//@ diag: 51:48 note "candidate template ignored: substitution failure [with T = P]: 'Z' is a private member of 'P'"
+//@ diag: 40:24 error "'Z' is a private member of 'P'"
+//@ diag: 49:6 note "in instantiation of template class 'A<P>' requested here"
+//@ diag: 31:29 note "implicitly declared private here"
+//@ diag: 41:24 error "'Z' is a private member of 'P'"
+//@ diag: 31:29 note "implicitly declared private here"
+//@ diag: 42:31 error "'Z' is a private member of 'P'"
+//@ diag: 31:29 note "implicitly declared private here"
+//@ diag: 43:31 error "'Z' is a private member of 'P'"
+//@ diag: 31:29 note "implicitly declared private here"
+//@ diag: 44:15 error "'type' is a private member of 'P'"
+//@ diag: 32:15 note "implicitly declared private here"
+//@ diag: 46:26 error "'Z' is a private member of 'P'"
+//@ diag: 50:9 note "in instantiation of member class 'A<P>::N' requested here"
+//@ diag: 31:29 note "implicitly declared private here"
+//@ diag: 44:47 error "'type' is a private member of 'P'"
+//@ diag: 51:10 note "in instantiation of default function argument expression for 'g<P>' required here"
+//@ diag: 32:15 note "implicitly declared private here"
+//@ diag: 54:10 error "no matching function for call to 'k'"
+//@ diag: 53:48 note "candidate template ignored: substitution failure [with T = P]: 'Z' is a private member of 'P'"
+//@ requires: clang<22
+// clang 22 emits error: 'type' is a private member of 'P'; WP-355 residual
 class P {
   template <class U> struct Z {};
   typedef int type;

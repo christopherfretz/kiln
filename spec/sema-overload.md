@@ -300,6 +300,24 @@ copy-init, [over.match.copy]/[conv]/[ref], or [over.match.list] phase 2 with
 a single initializer-list argument converting to `X` or `cv X&`. This also
 breaks copy-ctor ↔ converting-ctor recursion.
 
+The [over.match.list] phase 2 case (WP-373, clang `IsUserDefinedConversion`
+and `ResolveConstructorOverload`) applies only when the single element is
+itself a braced-init-list: `IcsOptions::LIST_COPY_CTOR` is set by the list
+conversion (`list_ctor_conversion`) and by `resolve_ctor_ex` for a single
+braced argument of a list-initialization, and becomes `SUPPRESS_UDC` only
+for a copy or move constructor's first parameter. A list converting to a
+non-aggregate class under `SUPPRESS_UDC` is a bad ICS ([over.ics.list]/7
+needs a user-defined conversion) unless its single element is of that class
+or derived from it ([over.ics.list]/2). So `h({{1}})` with `H(E)` picks
+`H(E)` (the copy/move constructors are not viable for `{1}`) and reports
+the explicit `E(int)` chosen in copy-list-initialization, while `H
+hh({1})` (element `1`, not a list) leaves `H(E)` and both copy/move
+constructors viable and is ambiguous. A braced argument of a constructor
+call is list-initialized with the constructor parameter's "passing argument
+to parameter here" note (`define.rs` `ctor_args`). Tests:
+`over.best.ics/list-copy-ctor-ambiguous.cpp`,
+`over.best.ics/nested-braced-explicit-ctor.cpp`.
+
 ### 2.8 CTAD hook
 S3T builds the [over.match.class.deduct] guide set and resolves it with
 `SetKind::Guides`/`CandidateKind::DeductionGuide` (§4.1 step 10); M3 only
@@ -326,6 +344,19 @@ different number of parameters (2 vs 1)".) AST: the ULE becomes the
 selected `DeclRefExpr` (qualifier, `found` kept); `&f` is `UnaryOperator
 '&'` over it; decay is `FunctionToPointerDecay` (`part_of_explicit_cast`
 inside a cast).
+
+A function template-id with no call and no target (`&f<2>`, `auto e =
+f<6>`) is resolved at once (`resolve_single_template_id`, [over.over]/3 via
+[temp.arg.explicit]/4), but clang keeps it an overload set until its use, so
+a deleted specialization is not diagnosed at its name (WP-373): it is
+pending (`defer_deleted_template_id`, qualified or not), widened by each
+enclosing parenthesis (`act_on_paren`) and `&` (`act_on_unary`) to start at
+their location, then reported at the end of the full-expression as "attempt
+to use a deleted function" at that start (`&(f<3>)`, `(&f<5>)`, `&N::f<4>`
+all at the first token), or by a call through it as "call to deleted
+function 'f'" naming the template and noting "candidate function [with I =
+7] has been explicitly deleted". Test:
+`over.over/deleted-template-id-location.cpp`.
 
 ## 3. Viable functions ([over.match.viable])
 
@@ -656,9 +687,11 @@ and contextual bool. `contextually_convert_to_bool(e)` becomes
 `if (w)` accepts `explicit operator bool`, `bool k = w;` is "no viable
 conversion from 'W' to 'bool'" + "explicit conversion function is not a
 candidate". Contextual implicit conversion ([conv]/6: `switch`, `delete`,
-array-new size) is `contextual_implicit_convert(e, pred)`: the unique
-non-explicit conversion function whose result satisfies `pred`; several is
-clang's `err_*_multiple_conversions` + one note per function.
+pre-C++14 array-new size) is `contextual_class_conversion(kind, e, loc)`
+(`switch_conv.rs`, sema.md `switch`): the non-explicit conversion
+functions whose result `kind` accepts must agree on one target, then
+overload resolution picks one; several targets or an ambiguity is
+clang's `err_*_multiple_conversions`/`ambiguous` + one note per function.
 
 ### 6.7 Literal operators and user-defined literals ([over.literal], [lex.ext]; `literal_op.rs`)
 - **Declarations.** A literal-operator-id is `operator "" X` or

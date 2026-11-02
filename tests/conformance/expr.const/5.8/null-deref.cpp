@@ -2,8 +2,10 @@
 // Mirrors crates/kiln_oven/tests/ub.rs `ub_null_deref`.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 9:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 8:34 note "read of dereferenced null pointer is not allowed in a constant expression"
-//@ diag: 9:15 note "in call to 'f(nullptr)'"
+//@ diag: 11:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 10:34 note "read of dereferenced null pointer is not allowed in a constant expression"
+//@ diag: 11:15 note "in call to 'f(nullptr)'"
+//@ requires: clang<22
+// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
 constexpr int f(int *p) { return *p; }
 static_assert(f(nullptr) == 0);

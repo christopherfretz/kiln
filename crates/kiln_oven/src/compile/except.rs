@@ -3,12 +3,13 @@
 //! core constant expression and a try-block is its compound statement
 //! (clang 19).
 
-use kiln_ast::{ExprId, StmtId};
+use kiln_ast::{DeclId, ExprId, StmtId};
 
 use super::{Compiler, Local, Place};
 use crate::kbc::{NO_DTOR, Op};
 use crate::mem::Origin;
 use crate::ty::TyKind;
+use crate::vm::exc::EXC_FREE;
 
 impl Compiler<'_> {
     /// A throw-expression ([expr.throw]): the exception object is a heap
@@ -29,6 +30,9 @@ impl Compiler<'_> {
         let dst = self.reg();
         let oi = self.o.push_origin(Origin::Heap(e, 0));
         self.emit_site(Op::New, 0, &[dst, ty.0, dst, oi, 0], e, loc);
+        // An exception from the initialization releases the storage, as a
+        // new-expression's ([expr.new]/28); `Throw` drops the registration.
+        self.emit_loc(Op::PushCleanup, 4, &[dst, EXC_FREE, ty.0], loc);
         self.init(x, dst, ty);
         let dtor = self.dtor_of(ty).unwrap_or(NO_DTOR);
         self.emit_site(Op::Throw, 0, &[dst, ty.0, dtor], e, loc);
@@ -38,13 +42,19 @@ impl Compiler<'_> {
     /// A try-block ([except.pre], [except.handle]): its handlers are
     /// registered for the compound statement; an exception unwound to
     /// them is matched against each in order, and resumes unwinding when
-    /// none matches. `rethrow` is set for the function-try-block of a
-    /// constructor or destructor: reaching the end of one of its handlers
-    /// rethrows the handled exception ([except.handle]/15).
-    pub(super) fn try_stmt(&mut self, s: StmtId, rethrow: bool) {
+    /// none matches. `cdtor` is the constructor or destructor whose
+    /// function-try-block this is: its ctor-initializers or the
+    /// destruction of its subobjects are inside the try-block, and
+    /// reaching the end of one of its handlers rethrows the handled
+    /// exception ([except.handle]/13, 15).
+    pub(super) fn try_stmt(&mut self, s: StmtId, cdtor: Option<DeclId>) {
         let ast = self.ast();
         let block = ast.stmts.try_block(s);
+        let rethrow = cdtor.is_some();
         if !self.b.cxx26() {
+            if let Some(def) = cdtor {
+                self.member_prologue(def);
+            }
             return self.stmt(block);
         }
         let try_loc = ast.stmts.get(s).loc();
@@ -53,6 +63,9 @@ impl Compiler<'_> {
         self.open_scope(&[], true);
         let Some(&Some(mark)) = self.scopes.last() else { return };
         let at = self.emit(Op::TryEnter, 0, &[0]) + 1;
+        if let Some(def) = cdtor {
+            self.member_prologue(def);
+        }
         self.stmt(block);
         self.close_scope();
         let done = self.jmp();

@@ -602,8 +602,11 @@ impl Oven {
             _ => QualType::INT,
         };
         let std_ice = is_std_is_constant_evaluated(ast, def);
+        let std_construct =
+            is_std_named(ast, def, "construct_at") || is_std_named(ast, def, "__construct_at");
         let mut c = Compiler::new(self, b);
         c.std_ice = std_ice;
+        c.std_construct = std_construct;
         let rty = c.ty(ret_q);
         let ret = if c.o.types.is_aggregate(rty) {
             RetKind::Sret(rty)
@@ -652,18 +655,20 @@ impl Oven {
                 c.locals.insert(pi.decl, Local::Reg(pi.reg));
             }
         }
-        c.member_prologue(def);
-        c.lambda_prologue(def);
         let ast = c.b.ast();
         if ast.stmts.get(body).kind() == StmtKind::CXXTryStmt {
-            // A function-try-block ([except.pre]/4). Its handlers do not
-            // cover the mem-initializers (spec/oven.md "Exceptions").
+            // A function-try-block ([except.pre]/4): its handlers cover a
+            // constructor's ctor-initializers and a destructor's
+            // destruction of its subobjects ([except.handle]/13).
             let cdtor = matches!(
                 ast.decls.get(def).kind(),
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor
             );
-            c.try_stmt(body, cdtor);
+            c.lambda_prologue(def);
+            c.try_stmt(body, cdtor.then_some(def));
         } else {
+            c.member_prologue(def);
+            c.lambda_prologue(def);
             c.stmt(body);
         }
         // Falling off the end ([stmt.return]/4).
@@ -737,6 +742,11 @@ pub(crate) struct Compiler<'a> {
     catch_obj: Option<u32>,
     /// The function being compiled is `std::is_constant_evaluated`.
     std_ice: bool,
+    /// The function being compiled is `std::construct_at` (or libc++'s
+    /// `std::__construct_at`): its placement new constructs `*location`
+    /// ([specialized.construct]/2), a `T` whatever designator the
+    /// `void *` argument lost (libc++ passes it through `__voidify`).
+    std_construct: bool,
     /// The code reads the evaluation context (`Op::IsConstEval`): the
     /// function is not memoized.
     uses_cc: bool,
@@ -801,6 +811,7 @@ impl<'a> Compiler<'a> {
             ret_ref: false,
             has_temps: false,
             std_ice: false,
+            std_construct: false,
             uses_cc: false,
             this_reg: None,
             this_override: None,
@@ -1740,7 +1751,7 @@ impl Compiler<'_> {
             // evaluating its compound statement (clang `EvaluateStmt`, one
             // step for the try itself); from C++26 (P3068) its handlers
             // catch exceptions thrown in it (`compile/except.rs`).
-            StmtKind::CXXTryStmt => self.try_stmt(s, false),
+            StmtKind::CXXTryStmt => self.try_stmt(s, None),
             // [dcl.attr.assume]/1, [expr.const]/5.8: an assumption that
             // would evaluate to false is not a core constant expression;
             // one with possible side effects is ignored (clang
@@ -4621,6 +4632,25 @@ impl Compiler<'_> {
             self.uses_cc = true;
             return r;
         }
+        // `std::uncaught_exceptions()` declared `constexpr` (P3068R6, a
+        // library predating its rollback by P3842R2): the count of this
+        // evaluation's uncaught exceptions ([except.uncaught]/1). C++26
+        // as published has it non-`constexpr` (libc++ 19 and 22,
+        // libstdc++ 14), so such a call is not constant (spec/oven.md
+        // "Exceptions").
+        if let Some(d) = direct
+            && args.is_empty()
+            && is_std_function(ast, d, "uncaught_exceptions")
+            && ast
+                .decls
+                .function(ast.latest(d))
+                .is_some_and(|f| f.spec.constexpr_kind() != ConstexprKind::None)
+        {
+            let r = self.reg();
+            let loc = self.begin(e);
+            self.emit_site(Op::Builtin, crate::kbc::bi::UNCAUGHT, &[r, r, r, r, 0, 0], e, loc);
+            return r;
+        }
         // `__builtin_addressof(x)`: the address of the lvalue `x`, as
         // `&x` without a user `operator&` ([specialized.addressof]).
         if let Some(d) = direct
@@ -4704,11 +4734,18 @@ impl Compiler<'_> {
 /// `isInStdNamespace`: a function of that name in namespace `std` at
 /// translation-unit scope, possibly through inline namespaces).
 fn is_std_is_constant_evaluated(ast: &kiln_ast::Ast, d: DeclId) -> bool {
+    is_std_function(ast, d, "is_constant_evaluated")
+}
+
+/// Whether function `d` is named `name` in namespace `std` at
+/// translation-unit scope, possibly through inline namespaces (clang's
+/// `isInStdNamespace`).
+fn is_std_function(ast: &kiln_ast::Ast, d: DeclId, name: &str) -> bool {
     let decls = &ast.decls;
     let named = |d: DeclId, n: &str| {
         decls.get(d).name().as_ident().is_some_and(|s| ast.symbols().as_str(s) == n)
     };
-    if !named(d, "is_constant_evaluated") {
+    if !named(d, name) {
         return false;
     }
     let mut ns = decls.get(d).ctx();

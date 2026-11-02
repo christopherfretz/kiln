@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: f
+//@ requires: clang>=22
 // [dcl.init.general]/16.5, /16.6.2.2, /9 (P0960; WP-182): in a
 // parenthesized initialization of a multidimensional array, a
 // braced-init-list argument copy-list-initializes its row, and the

@@ -200,6 +200,31 @@ clang's `Parser` over `Preprocessor::Lex`.
   recovers to `int` (`unknown_type_follows` accepts a ptr-operator in
   those contexts). `const u7 &c;` is likewise "unknown type name 'u7'"
   plus the `int &` consequence, not "a type specifier is required".
+  An undeclared name followed by a type-specifier keyword
+  (`restrict int f();`, `foo const v = 1;`; `restrict` is no keyword in
+  C++) is "unknown type name" in a namespace, class or block-scope
+  declaration (clang's `ParseImplicitInt` default case; at block scope
+  `undeclared_before_type_keyword` makes the statement a declaration),
+  and the type, width and sign specifiers after a `type_error` are
+  dropped silently (clang's `TST_error`; `DeclSpec::set_base`,
+  `set_width`, `set_sign`; WP-371,
+  `class.friend/restrict-atomic-decl-specifiers.cpp`).
+  An unqualified typename-specifier (`typename T`, `typename Ts...[0]`;
+  [temp.res.general]/3) is "expected a qualified name after 'typename'"
+  and recovers as clang does, by context (`parse_typename_specifier_in`,
+  WP-371): a block declaration or a type-id consumes the name and its
+  pack-index-specifier as an erroneous type; a namespace-scope or member
+  declaration with a pack index ends there ("expected unqualified-id" /
+  "expected member name or ';' after declaration specifiers" at the name,
+  skipped to the `;`); an alias-declaration whose type-id ends with the
+  pack index is "expected ';' after alias declaration" at its end
+  (`typename_pack_index`); in a parameter with a pack index, or in the
+  first parameter of a namespace- or block-scope declarator (which clang
+  parses tentatively first, so it reports the name twice), the
+  parameter list ends at the name (`param_abort`: "expected ')'", the
+  declarator invalid). A type-requirement `typename Ts...[0];` is not a
+  type-name and takes the same diagnostic
+  (`temp.res.general/typename-unqualified-pack-index.cpp`).
   Once a decl-specifier names no type (`DeclSpec::type_error`), the
   later declarators of the group are skipped up to the `;`, as clang's
   `ParseDeclGroup`, so `u5 &x1, &x2;` and `S::c &x3, &x4;` report once
@@ -596,6 +621,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - A declarator whose special declarator-id was malformed
     (`operator;`) takes the error type, so no `a type specifier is
     required` follows.
+  - At namespace scope a declaration with no decl-specifiers whose
+    first token is a name followed by `;`, `=`, `,`, `[`, `(` or `{`
+    (`at_implicit_int_declarator`; `y;`, `y();`) is a declarator, not
+    `expected unqualified-id`: Sema reports `a type specifier is
+    required for all declarations` at the name and declares it as an
+    invalid `int` (clang's implicit-int recovery, WP-371).
+  - Group stickiness (clang's `Declarator::InvalidType` surviving
+    `Declarator::clear`): after a declarator without a type, or one whose
+    type named an unexpanded pack (`Sema::take_declarator_type_invalid`,
+    spec/sema-templates.md), the later declarators of the group are
+    parsed but not declared and take no initializer.
   - A declaration with no declarator (`struct S;`,
     `union { int a; };`) goes to `act_on_decl_spec_only`.
   - That call returns the implicit object of an anonymous union, if
@@ -710,6 +746,27 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   and `insert ',' before '...' to silence this warning` at the `...`.
   Tests: `dcl.fct/p3176-ambiguous-ellipsis.cpp` (C++23),
   `dcl.fct/p3176-variadic-comma.cpp` (C++26, clang >= 22).
+- **Misplaced pack ellipsis** ([dcl.decl.general]/4, [temp.variadic]/5,
+  WP-374, clang `DiagnoseMisplacedEllipsisInDeclarator`): a `...` after
+  a parameter's complete declarator whose (unadjusted, non-placeholder)
+  type names an unexpanded pack — `Ts a...`, `Ts (*)()...`, `Ts[2]...`,
+  `Ts......a` — is consumed and diagnosed at the `...`:
+  `parse_misplaced_ellipsis_in_declaration`, `'...' must immediately
+  precede declared identifier` (named) or `'...' must be innermost
+  component of anonymous pack declaration` (abstract). The parameter
+  becomes the pack (unless it already has its own `...`), so calls and
+  template arguments then work without further errors. Exceptions,
+  where the `...` stays the varargs `...` above: a function parameter
+  whose declarator has its own `...` and the `...` is followed by `)`
+  (`(Ts......)`), and in a lambda any `...` followed by `)`
+  (`[](Ts a...)`) — clang's observable split. For a non-type template
+  parameter (no varargs there) every such `...` is the error, unexpanded
+  pack or not (`template<int a...>`); `Ts......a` then fails at `a`
+  (`expected ')'` / `expected ',' or '>' in template-parameter-list`).
+  clang emits the error inside the declarator, kiln right after the
+  parameter's Sema action (any type diagnostic of the parameter comes
+  first). Tests: `dcl.fct/misplaced-pack-ellipsis.cpp` (function,
+  member, friend and lambda parameters), `temp.param/misplaced-pack-ellipsis.cpp`.
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
@@ -735,15 +792,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `template` (unsupported).
   - `decl-specifier-seq ;`: `act_on_friend(ds, base, None, loc)` for
     `friend class X;`, else `act_on_decl_spec_only`.
-  - No decl-specifiers and no special declarator (`member_without_type`,
-    WP-367): a non-type name followed by `;`, `=`, `,` or `[` is `a type
-    specifier is required for all declarations` at the name (clang's
-    implicit-int recovery, `err_missing_type_specifier`); `()` is
+  - No decl-specifiers and no special declarator: a name followed by
+    `;`, `=`, `,`, `[`, `(` or `{` (`at_implicit_int_declarator`) is
+    parsed as a member-declarator and declared as an invalid `int`
+    member (data member or, for `y();`, member function, so `S::y`
+    resolves and its uses are silent) after `a type specifier is
+    required for all declarations` at the name, once per declarator
+    (clang's implicit-int recovery, `err_missing_type_specifier`;
+    WP-371). Otherwise (`member_without_type`, WP-367) `()` is
     `expected member name or ';' after declaration specifiers` at the
-    `)` (clang's parenthesized declarator), anything else at the token.
-    The declaration is skipped to its `;` (clang declares an invalid
-    `int` member: later uses of the name differ).
-    `class.mem/member-without-type.cpp`.
+    `)` (clang's parenthesized declarator), anything else at the token,
+    and the declaration is skipped to its `;`.
+    `class.mem/member-without-type.cpp`,
+    `dcl.type/missing-type-specifier-implicit-int.cpp`.
   - A friend-type-specifier-list ([class.friend]/3, P2893, WP-359): with
     `friend` and the next token `...` or `,`, `parse_friend_type_list`
     takes each friend-type-specifier, an optional `...`, and calls

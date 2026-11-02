@@ -13,11 +13,11 @@ ClassTemplateDecl UTDerived
 |-CXXRecordDecl struct UTDerived definition
 | |-public 'UTBase<T>'
 | |-UnresolvedUsingTypenameDecl referenced type
-| |-FieldDecl referenced m 'type':'UTDerived::type'
+| |-FieldDecl referenced m 'type'
 | `-CXXMethodDecl get 'type () const' implicit-inline
 |   `-CompoundStmt
 |     `-ReturnStmt
-|       `-MemberExpr 'const type':'const UTDerived::type' lvalue ->m
+|       `-MemberExpr 'const type' lvalue ->m
 |         `-CXXThisExpr 'const UTDerived<T> *' implicit this
 `-ClassTemplateSpecializationDecl struct UTDerived definition implicit_instantiation
   |-TemplateArgument type 'int'

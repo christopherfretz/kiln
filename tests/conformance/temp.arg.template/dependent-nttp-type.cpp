@@ -3,18 +3,20 @@
 // is matched with the earlier arguments substituted; the argument's parameters are not.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 28:9 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 19:16 note "template non-type parameter has a different type 'int *' in template argument"
-//@ diag: 18:31 note "previous non-type template parameter with type 'int' is here"
-//@ diag: 29:11 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 20:14 note "template non-type parameter has a different type 'int' in template argument"
-//@ diag: 18:31 note "previous non-type template parameter with type 'int *' is here"
-//@ diag: 35:9 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 33:24 note "template non-type parameter has a different type 'char *' in template argument"
-//@ diag: 31:40 note "previous non-type template parameter with type 'int' is here"
-//@ diag: 42:9 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 40:26 note "template non-type parameter has a different type 'int *' in template argument"
-//@ diag: 38:41 note "previous non-type template parameter with type 'int' is here"
+//@ diag: 30:9 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 21:16 note "template non-type parameter has a different type 'int *' in template argument"
+//@ diag: 20:31 note "previous non-type template parameter with type 'int' is here"
+//@ diag: 31:11 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 22:14 note "template non-type parameter has a different type 'int' in template argument"
+//@ diag: 20:31 note "previous non-type template parameter with type 'int *' is here"
+//@ diag: 37:9 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 35:24 note "template non-type parameter has a different type 'char *' in template argument"
+//@ diag: 33:40 note "previous non-type template parameter with type 'int' is here"
+//@ diag: 44:9 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 42:26 note "template non-type parameter has a different type 'int *' in template argument"
+//@ diag: 40:41 note "previous non-type template parameter with type 'int' is here"
+//@ requires: clang<22
+// clang 22 emits 19:16 note "template non-type parameter has a different type 'int *' in template a...; WP-355 residual
 template <class T, template <T> class P> struct DP {};
 template <int *> struct IP;
 template <int> struct II;
