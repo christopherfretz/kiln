@@ -230,11 +230,11 @@ impl Sema<'_, '_> {
         let (keep, candidates) =
             std::mem::take(&mut p.candidates).into_iter().partition(|c| inside.contains(&c.0));
         p.candidates = keep;
-        let (keep, refs) = std::mem::take(&mut p.refs).into_iter().partition(|r| inside.contains(r));
+        let (keep, refs) =
+            std::mem::take(&mut p.refs).into_iter().partition(|r| inside.contains(r));
         p.refs = keep;
-        let (keep, default_uses) = std::mem::take(&mut p.default_uses)
-            .into_iter()
-            .partition(|u| inside.contains(&u.expr));
+        let (keep, default_uses) =
+            std::mem::take(&mut p.default_uses).into_iter().partition(|u| inside.contains(&u.expr));
         p.default_uses = keep;
         OuterImm { candidates, refs, default_uses }
     }
