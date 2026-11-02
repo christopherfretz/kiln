@@ -595,7 +595,19 @@ points, thunks and method indices are clang's.
     data size (clang 19 `lowerUnion(isNonVirtualBaseType)`), which a
     potentially-overlapping member of that union type uses (WP-289);
   - `IrRecord::base_index` and `vbase_index` map each base to its
-    element.
+    element;
+  - padding (clang `insertPadding`) fills the gap before each member
+    with storage. Those members are disjoint and sorted by offset: an
+    empty `[[no_unique_address]]` member has no storage (several may
+    share an offset, with each other and with the next member), a
+    potentially-overlapping one is stored as its base-subobject type,
+    and a bit-field run as its access units. That is an internal
+    invariant (clang's `assert(Offset >= Size)`): the gap is a
+    `checked_sub`, debug-asserted, and a violation drops the padding
+    rather than wrapping. No diagnostic, since no input reaches it
+    (WP-294; `tests/layout/nua_overlap_bitfields.cpp` and
+    `tests/codegen/record_type_nua_bitfields.cpp` cover both shapes on
+    both triples).
 - **Argument passing** (`call.rs`): `can_pass_in_registers` follows
   clang's `canPassInRegisters`. A class with a non-trivial copy or move
   constructor or destructor, or with all of them deleted, is passed
