@@ -4897,6 +4897,26 @@ impl Sema<'_, '_> {
         ctx
     }
 
+    /// A class first declared by an elaborated-type-specifier (`struct S*`
+    /// in a parameter or template argument, `friend class S;`) into
+    /// namespace `h.ctx` ([basic.scope.pdecl]/7, [class.friend]/11): even
+    /// when written inside a template, it is a member of the namespace,
+    /// neither dependent nor a templated entity (clang gives it the
+    /// namespace as its `DeclContext`), so its type is not dependent and
+    /// a later definition at namespace scope completes the same
+    /// non-dependent type. A class declared in a block or class scope
+    /// keeps the enclosing template's dependence.
+    fn namespace_tag_record(&mut self, h: DeclHead, tag: TagKind) -> DeclId {
+        let ns = self.ast.redecl_context(h.ctx);
+        if !matches!(self.kind_of(ns), DeclKind::Namespace | DeclKind::TranslationUnit) {
+            return self.builder().record(h, tag, None);
+        }
+        let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
+        let d = self.builder().record(h, tag, None);
+        self.ast.templates.dependent_depth = saved;
+        d
+    }
+
     /// The promotion type of an enumeration with underlying type `t`
     /// ([conv.prom]/4).
     fn enum_promotion(&self, t: QualType) -> QualType {
@@ -5249,9 +5269,12 @@ impl Sema<'_, '_> {
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
         h.lexical = Some(if qualifier.is_some() { self.ctx } else { ctx });
+        let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         let d = if is_enum {
             let fx = fixed.map(|f| (f, self.enum_promotion(f)));
             self.builder().enumeration(h, scoped, fx, prev)
+        } else if plain_ref && self.templ.cur.is_none() {
+            self.namespace_tag_record(h, Self::tag_kind_of(keyword))
         } else {
             self.mark_pattern_next();
             self.builder().record(h, Self::tag_kind_of(keyword), prev)
@@ -5352,7 +5375,7 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(ns, DeclName::ident(n), nloc);
         h.lexical = Some(self.ctx);
         h.misc = h.misc.with_friend(FriendKind::Undeclared);
-        let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
+        let d = self.namespace_tag_record(h, Self::tag_kind_of(keyword));
         self.friend_tag = Some(d);
         d
     }
