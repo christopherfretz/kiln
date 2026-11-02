@@ -119,7 +119,7 @@ impl Sema<'_, '_> {
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
-            self.check_decl_attrs(f, &attrs);
+            self.check_decl_attrs(f, &mut attrs);
             let _ = self.builder().attach_attrs(f, &attrs);
         }
         let target = self.finish_template_pattern(f).unwrap_or(f);

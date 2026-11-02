@@ -262,6 +262,15 @@ pub trait SemaBridge {
         let _ = d;
         0
     }
+    /// `alignof` of an expression naming declaration `d` (a variable or
+    /// data member: [expr.alignof] as clang's `GetAlignOfExpr`, which is
+    /// `ASTContext::getDeclAlign(d, /*ForAlignof=*/true)`, so `alignas`
+    /// on the declaration counts). The default 0 means the type's
+    /// alignment.
+    fn alignof_decl(&mut self, d: DeclId) -> u64 {
+        let _ = d;
+        0
+    }
     /// The final overrider of virtual function `method` called on the
     /// subobject `at` of an object whose most-derived class is
     /// `most_derived`, with the subobject the overrider is a member of

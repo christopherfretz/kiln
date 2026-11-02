@@ -157,8 +157,9 @@ impl Sema<'_, '_> {
             h.lexical = Some(lexical);
             let bd = self.builder().binding(h);
             if !b.attrs.is_empty() {
-                self.check_decl_attrs(bd, &b.attrs);
-                let _ = self.builder().attach_attrs(bd, &b.attrs);
+                let mut attrs = b.attrs.clone();
+                self.check_decl_attrs(bd, &mut attrs);
+                let _ = self.builder().attach_attrs(bd, &attrs);
             }
             self.register_local(b.name, bd);
             bindings.push(bd);
@@ -184,7 +185,7 @@ impl Sema<'_, '_> {
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
-            self.check_decl_attrs(v, &attrs);
+            self.check_decl_attrs(v, &mut attrs);
             let _ = self.builder().attach_attrs(v, &attrs);
         }
         v
