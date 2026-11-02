@@ -421,10 +421,18 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `thread_local` with the combined name when both appear: `'static
   thread_local'`), and both are dropped, so the friend declaration goes
   on (`reject_friend_storage`, WP-293;
-  `class.friend/friend-storage-class.cpp`). A condition declaration
-  (`parse_condition`) is a type name for this purpose: a storage class or
-  `thread_local` there is `type name does not allow storage class to be
-  specified` at the specifier and is dropped (WP-293).
+  `class.friend/friend-storage-class.cpp`). A type-specifier-seq takes
+  no storage class ([dcl.type.general]/1; clang
+  `ParseSpecifierQualifierList`): in `DeclaratorContext::TypeName` (every
+  type-id — casts, `sizeof`, `alignof`, `typeid`, template arguments,
+  alias-declarations, trailing return types —, a new-type-id, also
+  parenthesized, a conversion-type-id and a functional cast's type),
+  a condition declaration (`parse_condition`, WP-293) and an
+  exception-declaration (`parse_handler`) a storage class or
+  `thread_local` is `type name does not allow storage class to be
+  specified` at the specifier (else at `thread_local`) and is dropped
+  (`reject_type_name_storage`, WP-327). spec/sema.md [dcl.stc] lists
+  every context that rejects a storage class.
 
   Sema checks the combination when it converts the DeclSpec to a type
   (`[dcl.type.simple]`, `type_from_declspec_at`).
@@ -848,7 +856,10 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   placement and `new (int (*)[2])` a type-id. A `(` followed by a
   member-pointer declarator (`new (void (T::*)())`, `member_pointer_at`;
   WP-216) is a type-id too. `decltype`, `typeof`, `__typeof_unqual`,
-  `typename` and a class-key are always a type-id.
+  `typename` and a class-key are always a type-id, and so is a
+  decl-specifier keyword that is no type-specifier (`new (static int)`,
+  clang `isCXXDeclarationSpecifier`; its storage class is then rejected,
+  §4, WP-327).
 - **new-type-id.** The decl-specifiers and an abstract new-declarator
   (`*`, `&`-free ptr-operators, then `[expr]` bounds); the first bound
   is an expression, the later ones constant expressions (checked by

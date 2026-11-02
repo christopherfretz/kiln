@@ -10,7 +10,7 @@ use kiln_ast::QualType;
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::TypeView;
+use kiln_ast::types::{ExcSpec, NoexceptValue, TypeView};
 use kiln_ast::{DeclId, ExprId};
 use kiln_source::Loc;
 
@@ -369,6 +369,9 @@ impl Sema<'_, '_> {
         };
         let _ = spec_head;
         if let Some((ext, _)) = inst {
+            if !self.check_inst_exc_spec(m.spec, ty, ds.loc) {
+                return Ok(None);
+            }
             self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
             return Ok(None);
         }
@@ -428,21 +431,15 @@ impl Sema<'_, '_> {
     ) -> Option<SpecMatch> {
         let mut matches: Vec<SpecMatch> = Vec::new();
         let mut failures = Vec::new();
-        // [temp.explicit]/9, [except.spec]/2: an explicit instantiation that
-        // writes no exception specification takes the template's (clang
-        // `adjustCCAndNoReturn(..., AdjustExceptionSpec)`; libstdc++'s
-        // `extern template bool has_facet<...>(const locale&)` of a
-        // `throw()` template).
-        let adopt = inst && matches!(self.written_exc_spec(ty), kiln_ast::types::ExcSpec::None);
+        // [temp.deduct.decl]: the exception specifications take no part
+        // (clang `adjustCCAndNoReturn(..., AdjustExceptionSpec)`); the
+        // caller checks the specialization's against the one written
+        // ([`Self::check_inst_exc_spec`], [`Self::check_spec_exc_spec`]).
+        // An explicit instantiation that writes none takes the template's
+        // ([temp.explicit]/9; libstdc++'s `extern template bool
+        // has_facet<...>(const locale&)` of a `throw()` template).
         for &ft in templates {
-            let pattern_ty = self.pattern_of(ft).and_then(|p| self.ast.decls.get(p).ty());
-            // A dependent one is not compared by deduction.
-            let exc = pattern_ty.map(|pt| self.written_exc_spec(pt));
-            let target = match exc {
-                Some(exc) if adopt && exc.is_nothrow() => self.with_exc_spec(ty, exc),
-                _ => ty,
-            };
-            match self.deduce_funcaddr(ft, explicit, target, loc) {
+            match self.deduce_decl(ft, explicit, ty, loc) {
                 Ok(s) => {
                     let sty = self.ast.decls.get(s).ty().unwrap_or(QualType::ERROR);
                     if self.same_ignoring_exc_spec(sty, ty) {
@@ -505,6 +502,107 @@ impl Sema<'_, '_> {
         matches.pop()
     }
 
+    /// The exception specification of specialization `s`, instantiated if
+    /// it is still pending ([temp.inst]/14: an explicit instantiation or
+    /// specialization needs it), against the one in `ty`, its explicit
+    /// instantiation's or specialization's type. None while either is
+    /// still unknown (dependent) or they are compatible ([except.spec]/5:
+    /// both non-throwing or both potentially-throwing, except that with
+    /// `strict` no specification does not match `noexcept(false)`, as
+    /// clang's explicit-instantiation check without
+    /// `AllowNoexceptAllMatchWithNoSpec`); else the specialization's.
+    fn spec_exc_conflict(
+        &mut self,
+        s: DeclId,
+        ty: QualType,
+        loc: Loc,
+        strict: bool,
+    ) -> Option<ExcSpec> {
+        if !self.in_template() {
+            self.resolve_exception_spec(s, loc);
+        }
+        let sty = self.declared_fn_type(s)?;
+        let (pe, ne) = (self.written_exc_spec(sty), self.written_exc_spec(ty));
+        let unknown = |e: ExcSpec| {
+            matches!(
+                e,
+                ExcSpec::Deferred(_)
+                    | ExcSpec::DependentNoexcept(_)
+                    | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
+            )
+        };
+        let is_false =
+            |e: ExcSpec| matches!(e, ExcSpec::NoexceptExpr { value: NoexceptValue::False, .. });
+        let none_vs_false =
+            strict && (pe == ExcSpec::None && is_false(ne) || is_false(pe) && ne == ExcSpec::None);
+        let conflict = pe.is_nothrow() != ne.is_nothrow() || none_vs_false;
+        (!unknown(pe) && !unknown(ne) && conflict).then_some(pe)
+    }
+
+    /// [except.spec]/5, [temp.explicit]/9 (clang `ActOnExplicitInstantiation`
+    /// → `CheckEquivalentExceptionSpec`): an explicit instantiation of type
+    /// `ty` that writes an exception specification must agree with the
+    /// one of specialization `s`. On a mismatch, `exception specification
+    /// in explicit instantiation does not match instantiated one` at
+    /// `begin` (the decl-specifiers) with `explicit instantiation refers
+    /// here` at the specialization's latest declaration, and false: the
+    /// explicit instantiation has no effect.
+    fn check_inst_exc_spec(&mut self, s: DeclId, ty: QualType, begin: Loc) -> bool {
+        if self.written_exc_spec(ty) == ExcSpec::None
+            || self.spec_exc_conflict(s, ty, begin, true).is_none()
+        {
+            return true;
+        }
+        let latest = self.ast.latest(s);
+        let note = self.diag(DiagId::note_explicit_instantiation_here, self.loc_of(latest));
+        let e =
+            self.diag(DiagId::sema_explicit_inst_exception_spec_mismatch, begin).with_note(note);
+        self.emit(e);
+        false
+    }
+
+    /// [except.spec]/5, [temp.expl.spec]: an explicit specialization (or a
+    /// friend naming a specialization) of type `ty` declared at `loc`
+    /// redeclares specialization `s`, whose exception specification is the
+    /// instantiated one (clang `MergeFunctionDecl` →
+    /// `CheckEquivalentExceptionSpec`, the previous declaration being `s`,
+    /// moved to `loc`). Written without one where `s` is non-throwing:
+    /// `'f<int>' is missing exception specification 'noexcept'` (fix-it at
+    /// `fix_at`); otherwise `exception specification in declaration does
+    /// not match previous declaration`; each with `previous declaration is
+    /// here` at `loc`, and false: the declaration is invalid.
+    pub(crate) fn check_spec_exc_spec(
+        &mut self,
+        s: DeclId,
+        ty: QualType,
+        loc: Loc,
+        fix_at: Option<Loc>,
+    ) -> bool {
+        let Some(pe) = self.spec_exc_conflict(s, ty, loc, false) else { return true };
+        let mut e = if self.written_exc_spec(ty) == ExcSpec::None {
+            // clang: the specialization unqualified with its arguments.
+            let mut name = self.decl_name(s);
+            if let Some(i) = self.ast.spec_info(s).map(|(_, i)| *i) {
+                name = self.decl_name(i.template);
+                let names = crate::names::SemaNames::new(self);
+                let canon = self.ast.types.canonical_args(i.print_args);
+                kiln_ast::types::write_arg_list_scoped(&self.ast.types, &names, canon, &mut name);
+            }
+            let spelled = self.exc_spec_spelling(pe);
+            let mut e =
+                self.diag(DiagId::sema_missing_exception_spec, loc).arg(name).arg(spelled.clone());
+            if let Some(at) = fix_at {
+                e = e.fixit(kiln_diag::FixIt::insert(at, format!(" {spelled}")));
+            }
+            e
+        } else {
+            self.diag(DiagId::sema_exception_spec_mismatch, loc)
+        };
+        e = e.with_note(self.diag(DiagId::note_previous_declaration, loc));
+        self.emit(e);
+        false
+    }
+
     /// `template<> R f<args>(params)` for specialization `m.spec`
     /// ([temp.expl.spec]; §4.5): diagnosed after an instantiation; else
     /// a declaration of the specialization joins its redeclarations and
@@ -549,6 +647,10 @@ impl Sema<'_, '_> {
                 .arg(name)
                 .with_note(note);
             self.emit(e);
+            return None;
+        }
+        if !self.check_spec_exc_spec(s, ty, name_loc, crate::except::missing_exc_spec_fixit_loc(d))
+        {
             return None;
         }
         let fspec = self.explicit_spec_fnspec(ds, ty, s);
@@ -704,7 +806,7 @@ impl Sema<'_, '_> {
                 // not repeat the exception specification (libc++'s
                 // extern template list omits `noexcept`; clang's
                 // `adjustCCAndNoReturn(..., AdjustExceptionSpec)`).
-                if inst && matches!(self.written_exc_spec(ty), kiln_ast::types::ExcSpec::None) {
+                if inst && matches!(self.written_exc_spec(ty), ExcSpec::None) {
                     return Some(Some(self.ast.first(c)));
                 }
                 exc = Some(c);

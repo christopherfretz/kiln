@@ -274,6 +274,24 @@ If `typename` is missing outside these contexts, clang's error and fix-it
 apply: "missing 'typename' prior to dependent type name 'T::type'". The
 parser then recovers as if `typename` had been written.
 
+A qualifier naming a class that is declared in a dependent context but is
+not the current instantiation where it is used ([temp.dep.type]/1) makes
+the name dependent too: a local class `L` of a function template named
+after its definition (`L::U x;` at block scope), or a member class `N` of
+a class template named in a block of a member function outside `N`
+(clang's `computeDeclContext` gives no context for it). In a context
+where `typename` is required (block scope, a condition, a for-init, a
+function parameter outside the implied contexts above), a type found
+through such a qualifier is "missing 'typename' prior to dependent type
+name 'L::U'" at the qualifier (`Sema::is_unentered_dependent_class`,
+checked by `kiln_parse` `check_missing_typename_in_class` from the
+qualified type arm of `parse_type_name_spec`). Kiln still finds the type
+in `L` and recovers as if `typename` had been written. Inside `L`'s own
+definition (its members, its declarators' scope) `L` is the current
+instantiation and no `typename` is needed. Clang parses `L::U *p;` and
+`sizeof(L::U)` at block scope as expressions; kiln parses them as types
+(a gap). Test: `tests/conformance/temp.res.general/missing-typename-unentered-class.cpp`.
+
 A parameter-declaration of a function declared at namespace or block
 scope with an unqualified declarator-id (`template <class T> void
 f(X<T>::m x);`) is such a context (WP-287): the parser sets
@@ -2045,6 +2063,16 @@ formed it:
   template class" note points there, as clang's
   `RequireCompleteDeclContext` does, not at the declarator (WP-307;
   `temp.inst/instantiation-note-template-id-column.cpp`).
+- A using-declaration's qualifier error (`T` not a class or not a base,
+  "cannot be used prior to '::'") is reported at the start of its
+  nested-name-specifier, as clang does: `Substituter::qualifier_begin`
+  walks the NNS prefixes to the outermost dependent one and returns its
+  written location (block scope `subst/stmts.rs` `local_using_decl`,
+  member `templ/class.rs` `member_using`/`member_using_typename`, pack
+  expansions included; WP-328,
+  `namespace.udecl/dependent-qualifier-location.cpp`). A non-dependent
+  leading prefix (`N::X<T>::m`) or a leading `::` is not recorded, so
+  such a qualifier reports at its first dependent component.
 - Recording happens only while parsing (the instantiation stack is
   empty), so instantiation never grows the table.
 - `Substituter::written(key, loc)` returns the recorded location nearest
@@ -2218,9 +2246,8 @@ formed it:
      relies on it
      (`tests/conformance/temp.deduct.call/noexcept-function-pointer-argument.cpp`,
      `libstdcxx-deduce-noexcept-fnptr.cpp`).
-     Deviation: binding `void (&)(int)` to a `noexcept` function is not
-     yet reference-compatible in kiln ([dcl.init.ref]/4, `ics.rs`
-     `ref_related`), so such a call is "not viable" after deduction.
+     Binding `void (&)(int)` to a `noexcept` function after deduction is
+     reference-compatible ([dcl.init.ref]/4, see spec/sema-conv.md).
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
    the `FunctionTemplateSpecialization` decl. It has the substituted
    type and is a declaration only.
@@ -2622,20 +2649,50 @@ instantiation.
 For `template<> R f<args>(params)` or `template<> R f(params)`, and for
 `template R f(params);`:
 1. Collect the function templates named `f` in the scope.
-2. Deduce each one from the declared function type ([temp.deduct.decl]).
-   An explicit instantiation that writes no exception specification
-   takes each template's non-dependent nothrow one first ([temp.explicit]/9,
-   [except.spec]/2; clang `adjustCCAndNoReturn(..., AdjustExceptionSpec)`;
-   WP-294, libstdc++'s `extern template bool has_facet<...>(const
-   locale&)` of a `throw()` template,
-   `tests/conformance/temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp`).
-   Deviations: a written mismatching specification is "does not refer
-   to a function template" where clang says "exception specification in
-   explicit instantiation does not match instantiated one"; an explicit
-   specialization differing only in its exception specification is "no
-   function template matches" where clang matches it and reports the
-   redeclaration mismatch; a template with a dependent `noexcept(expr)`
-   does not match an instantiation without one.
+2. Deduce each one from the declared function type ([temp.deduct.decl];
+   `deduce_decl`). Neither top-level exception specification takes part.
+   Nothing is deduced from it, so `template void f() noexcept;` of
+   `template <bool B> void f() noexcept(B)` is "couldn't infer template
+   argument 'B'". The template's specification is not substituted with
+   the explicit arguments, so `noexcept(T::value)` is no substitution
+   failure. This is clang's `adjustCCAndNoReturn(..., AdjustExceptionSpec)`.
+   A mismatch elsewhere in the type prints both whole types with their
+   specifications ("could not match 'void (int) noexcept' against 'void
+   (long)'"). Then the specialization's specification is instantiated
+   if it is still pending ([temp.inst]/14) and compared (WP-322):
+   - **Explicit instantiation** ([temp.explicit]/9, [except.spec]/5;
+     `check_inst_exc_spec`, clang `ActOnExplicitInstantiation` →
+     `CheckEquivalentExceptionSpec`). One that writes no specification
+     takes the template's. This covers libstdc++'s `extern template bool
+     has_facet<...>(const locale&)` of a `throw()` template
+     (`tests/conformance/temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp`).
+     One that writes a specification must agree with the instantiated
+     one: both non-throwing, or both potentially-throwing. Here no
+     specification does not match `noexcept(false)`: clang does not set
+     `AllowNoexceptAllMatchWithNoSpec`, and a failed instantiation counts
+     as none. Otherwise the error is "exception specification in
+     explicit instantiation does not match instantiated one", at the
+     decl-specifiers. Its note "explicit instantiation refers here" is
+     at the specialization's latest declaration: the template, or an
+     earlier explicit specialization. The explicit instantiation then
+     has no effect, and this is checked before §4.5's kind checks.
+   - **Explicit specialization, or a friend naming a specialization**
+     ([temp.expl.spec], [except.spec]/5; `check_spec_exc_spec`, clang
+     `MergeFunctionDecl`). It redeclares the specialization, whose
+     specification is the instantiated one, moved to the new name. One
+     that writes none where the instantiated one is non-throwing gets
+     "'h<int>' is missing exception specification 'noexcept'". Any other
+     mismatch gets "exception specification in declaration does not
+     match previous declaration". Each has "previous declaration is
+     here" at the new name, and the declaration is invalid. Here no
+     specification matches `noexcept(false)`. The check comes after the
+     after-instantiation check (§4.5).
+   Tests: `tests/conformance/temp.explicit/exception-spec-match.cpp`,
+   `tests/conformance/temp.expl.spec/exception-spec-redeclaration.cpp`.
+   Left: a friend whose noexcept-specifier waits for the end of its
+   class is not compared, where clang checks it later. Instantiating an
+   explicit instantiation definition does not instantiate a pending
+   specification, which clang does in `InstantiateFunctionDefinition`.
 3. Take the most specialized of those that succeed (§6.7).
 4. If none or several remain, the errors are clang's: "no function
    template matches function template specialization 'f'" and
@@ -3045,6 +3102,21 @@ whose head the notes name. It evaluates:
     `EvalContext` kind; Q5).
   - A non-constant result is clang's error "substitution into constraint
     expression resulted in a non-constant expression".
+  - A substituted atom that is still value-dependent is *satisfied* only
+    while the levels themselves are dependent (a retained level or a
+    dependent argument: a partial check during a template definition,
+    checked again at instantiation). With concrete levels it is an
+    **internal error**, not "not satisfied": [temp.constr.atomic]/3
+    gives only substitution failure, `false` and a non-constant result
+    as outcomes, and substitution with concrete arguments always yields
+    a non-dependent expression, so a dependent one means kiln's
+    substituter left the atom incomplete. Treating it as unsatisfied
+    would silently pick another overload or reject a valid program; it
+    is reported as `sema_unimplemented_template_feature` ("an atomic
+    constraint that stays value-dependent after substitution",
+    `sat_atom_uncached` in `templ/concepts/sat.rs`), and the fix for any
+    reachable case is in the substitution, not this guard. No known
+    program reaches it (libc++ M3 gate, WP-325).
 - **`And` and `Or`** short-circuit from left to right.
 - **Context.** Atomic constraints are substituted in the context of the
   constrained entity's declaration (its semantic `DeclContext`, via
@@ -4770,10 +4842,10 @@ explicit specialization errors remain. The blockers are:
   requires-expression stores its value in `ExprNode.aux`
   (`ExprArena::satisfied`/`set_satisfied`), and the Oven folds that.
   The §8.3 `atom_cache` landed with WP-109 (below).
-- Conservative fallbacks (WP-073; tightened by WP-109, below): an atom
-  was treated as *satisfied* when its substitution hit
-  `sema_unimplemented_template_feature`, or when it was still
-  value-dependent after substitution.
+- Conservative fallbacks (WP-073; replaced by WP-109's fallback policy,
+  below, and §8.3): an atom was treated as *satisfied* when its
+  substitution hit `sema_unimplemented_template_feature`, or when it was
+  still value-dependent after substitution.
 - Call sites:
   - `deduce_call.rs` checks the associated constraints after deduction
     (`Tdk::ConstraintsNotSatisfied`, `DeductionFailure::sat`, and the

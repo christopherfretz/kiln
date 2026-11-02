@@ -24,7 +24,7 @@ cargo xtask bench [options] [paths...]
 | `--threshold-time <PCT>` | Allowed wall-clock regression, percent, >= 0. Default 5. |
 | `--threshold-mem <PCT>` | Allowed peak-RSS regression, percent, >= 0. Default 2. |
 | `--threshold-steps <PCT>` | Allowed constexpr `steps` regression, percent, >= 0. Default 0. |
-| `--threshold-bytes <PCT>` | Allowed constexpr `bytes`/`peak_bytes`/`peak_arena`/`frozen_bytes` regression, percent, >= 0. Default 2. |
+| `--threshold-bytes <PCT>` | Allowed constexpr `bytes`/`peak_bytes`/`peak_arena`/`frozen_bytes`/`static_bytes` regression, percent, >= 0. Default 2. |
 | `--mem-limit <MiB>` | Address-space cap of every measured compile. Default 8192; `0` disables it. See "Resource limits". |
 
 A `--threshold-*` option overrides the same entry's `threshold-*:` directive
@@ -85,7 +85,7 @@ scanner is shared; the keys are not.
 | `threshold-time: <PCT>` | This entry's allowed wall-clock regression (default 5). |
 | `threshold-mem: <PCT>` | This entry's allowed peak-RSS regression (default 2). |
 | `threshold-steps: <PCT>` | This entry's allowed constexpr `steps` regression (default 0). |
-| `threshold-bytes: <PCT>` | This entry's allowed constexpr `bytes`/`peak_bytes`/`peak_arena`/`frozen_bytes` regression (default 2). |
+| `threshold-bytes: <PCT>` | This entry's allowed constexpr `bytes`/`peak_bytes`/`peak_arena`/`frozen_bytes`/`static_bytes` regression (default 2). |
 
 | Mode | Flags |
 |---|---|
@@ -154,7 +154,7 @@ the fixed 300 s timeout) fails the entry, and its remaining runs are skipped.
   The counters are deterministic, so every run must report the same total;
   a difference fails the entry ("nondeterministic constexpr counters"). The
   total's `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`,
-  `frozen_bytes` and `evaluations` are recorded (`wall_us` is not: the wall clock is measured already). clang
+  `frozen_bytes`, `static_bytes` and `evaluations` are recorded (`wall_us` is not: the wall clock is measured already). clang
   and other compilers get no flag and record no counters.
 - **Instantiation counters** (the `inst.*` metrics of
   `spec/sema-templates.md` §11.4; kiln only, entries of the `frontend` group
@@ -181,7 +181,7 @@ same compiler kind** (`kiln`, `clang` or `other`, from the first line of
 | `REGRESSED (time)` | `cur.min > base.median * (1 + t)` and `cur.min - base.median >= 2 ms`. | yes, unless `--record` |
 | `REGRESSED (mem)` | `cur.rss > base.rss * (1 + m)`, both sides measured. | yes, unless `--record` |
 | `REGRESSED (steps)` | `cur.steps > base.steps * (1 + s)`, both sides have counters. | yes, unless `--record` |
-| `REGRESSED (bytes)` | `cur.bytes > base.bytes * (1 + b)` or the same for `peak_bytes`, `peak_arena` or `frozen_bytes`, both sides have counters. A key the baseline lacks (`peak_arena` and `frozen_bytes` in a baseline recorded before WP-061b) is not judged. | yes, unless `--record` |
+| `REGRESSED (bytes)` | `cur.bytes > base.bytes * (1 + b)` or the same for `peak_bytes`, `peak_arena`, `frozen_bytes` or `static_bytes`, both sides have counters. A key the baseline lacks (`peak_arena` and `frozen_bytes` in a baseline recorded before WP-061b, `static_bytes` before WP-322) is not judged. | yes, unless `--record` |
 | `REGRESSED (inst)` | `cur.inst.count > base.inst.count` (exact, whatever the thresholds), or `cur.inst.bytes > base.inst.bytes * (1 + b)`, both sides have instantiation counters. A baseline recorded before WP-086 has none and is not judged on them. | yes, unless `--record` |
 | `improved` | `cur.median < base.min * (1 - t)` and `base.min - cur.median >= 2 ms`, or `cur.rss < base.rss * (1 - m)`, or a counter below its baseline by the same rules. | no |
 | `ok` | Anything else. | no |
@@ -313,7 +313,7 @@ A **measurement** object:
 | `wall_ms_median`, `wall_ms_min`, `wall_ms_max` | number | Milliseconds (µs precision) |
 | `spread_pct` | number | Percent, 2 decimals |
 | `max_rss_kb` | integer or null | Median peak RSS, KiB; null when not measured |
-| `oven` | object, optional | kiln's constexpr report total: `{"steps", "bytes", "peak_bytes", "calls", "allocs", "peak_arena", "frozen_bytes", "evaluations"}`, integers. `peak_arena` and `frozen_bytes` may be absent (baselines recorded before WP-061b); a missing one is not compared, and is not written back when the entry is not re-recorded. Absent when the compiler reported none. |
+| `oven` | object, optional | kiln's constexpr report total: `{"steps", "bytes", "peak_bytes", "calls", "allocs", "peak_arena", "frozen_bytes", "static_bytes", "evaluations"}`, integers. `peak_arena` and `frozen_bytes` may be absent (baselines recorded before WP-061b), and `static_bytes` (before WP-322); a missing one is not compared, and is not written back when the entry is not re-recorded. Absent when the compiler reported none. |
 | `inst` | object, optional | kiln's instantiation report totals (`frontend` entries): `{"count", "nodes", "bytes"}`, integers. Absent for other entries and compilers, and in baselines recorded before WP-086 (not compared then). |
 | `samples_wall_ms`, `samples_rss_kb` | arrays | Every run, in run order (results files only) |
 | `compiler` | string | The path or name the compiler was invoked as |

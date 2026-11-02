@@ -63,6 +63,12 @@ pub(crate) struct VirtualDecl {
     /// The declaration is invalid (`override`/`final` on a function that
     /// hides a virtual function).
     invalid: bool,
+    /// Where `override` and `final` were written on a member whose
+    /// override control is checked at instantiation (a dependent class
+    /// or type): recorded on the pattern so the instantiation's
+    /// diagnostics point at the specifier, as clang's `OverrideAttr` /
+    /// `FinalAttr` locations do.
+    deferred_locs: Option<(Option<Loc>, Option<Loc>)>,
 }
 
 impl Sema<'_, '_> {
@@ -189,6 +195,9 @@ impl Sema<'_, '_> {
         if v.invalid {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
+        if let Some(locs) = v.deferred_locs {
+            self.virt_spec_locs.insert(f, locs);
+        }
     }
 
     /// clang `CheckOverrideControl`: `override`/`final` on a function that
@@ -213,9 +222,15 @@ impl Sema<'_, '_> {
             && (self.is_dependent_type(ty) || self.has_dependent_bases(site.class))
         {
             *spec = spec.with_override(ov.is_some()).with_final(fin.is_some());
+            out.deferred_locs = Some((ov, fin));
             return;
         }
-        if site.method && !spec.is_virtual() {
+        // clang `CXXMethodDecl::isVirtual`: a function that overrides one
+        // is virtual for these checks even when it is static (that
+        // mismatch is diagnosed at `}`, `report_override_mismatch`), so
+        // `static void f() override;` keeps its specifier.
+        let virt = spec.is_virtual() || (site.method && !out.overridden.is_empty());
+        if site.method && !virt {
             let hidden = self.hidden_virtuals(site.class, site.name, ty, &[]);
             if !hidden.is_empty() {
                 let (loc, kw) = match ov {
@@ -233,7 +248,7 @@ impl Sema<'_, '_> {
                 return;
             }
         }
-        if !site.method || !spec.is_virtual() {
+        if !site.method || !virt {
             for (at, kw) in [(ov, "override"), (fin, "final")] {
                 if let Some(l) = at {
                     let msg = self.diag(DiagId::sema_virt_spec_not_virtual, l).arg(kw);

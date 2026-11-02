@@ -710,7 +710,23 @@ impl Parser<'_, '_> {
             }
         }
         self.reject_friend_storage(&mut ds, thread_spelling.as_deref().unwrap_or("thread_local"));
+        if ctx == DeclaratorContext::TypeName {
+            self.reject_type_name_storage(&mut ds);
+        }
         ds
+    }
+
+    /// A type-specifier-seq ([dcl.type.general]/1: a type-id, new-type-id,
+    /// conversion-type-id, condition; spec/sema.md [dcl.stc]) takes no
+    /// storage class (clang `ParseSpecifierQualifierList`,
+    /// `err_typename_invalid_storageclass`): reported at the storage class,
+    /// else at `thread_local`, and dropped.
+    pub(crate) fn reject_type_name_storage(&mut self, ds: &mut DeclSpec) {
+        if let Some(l) = ds.storage.map(|(_, l)| l).or(ds.thread_local) {
+            self.s.error(DiagId::parse_typename_storage_class, l);
+            ds.storage = None;
+            ds.thread_local = None;
+        }
     }
 
     /// [class.friend]/6: no storage class in a friend declaration (clang
@@ -976,7 +992,10 @@ impl Parser<'_, '_> {
                 // A qualified name: the qualifier is formed (and kept as
                 // sugar) by the parse proper.
                 let ty = match self.parse_nested_name_nns() {
-                    Ok(Some(q)) => self.parse_qualified_type_rest(q, TagKeyword::None),
+                    Ok(Some(q)) => {
+                        self.check_missing_typename_in_class(q, ctx, loc);
+                        self.parse_qualified_type_rest(q, TagKeyword::None)
+                    }
                     _ => None,
                 };
                 if ty.is_none() {

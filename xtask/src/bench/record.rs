@@ -232,7 +232,8 @@ impl Measurement {
 
 /// Counters added after baselines were first recorded: a baseline without
 /// them still loads and is compared on the counters it has.
-pub const OPTIONAL_COUNTERS: [Counter; 2] = [Counter::PeakArena, Counter::FrozenBytes];
+pub const OPTIONAL_COUNTERS: [Counter; 3] =
+    [Counter::PeakArena, Counter::FrozenBytes, Counter::StaticBytes];
 
 /// The counters, and which optional ones are absent.
 fn oven_from_json(j: &Json) -> Result<(Counters, Vec<Counter>), String> {
@@ -257,6 +258,7 @@ fn oven_from_json(j: &Json) -> Result<(Counters, Vec<Counter>), String> {
         allocs: n(Counter::Allocs)?,
         peak_arena: n(Counter::PeakArena)?,
         frozen_bytes: n(Counter::FrozenBytes)?,
+        static_bytes: n(Counter::StaticBytes)?,
         wall_us: 0,
         evaluations: n(Counter::Evaluations)?,
     };
@@ -574,6 +576,7 @@ pub(super) mod tests {
             allocs: 5,
             peak_arena: 7,
             frozen_bytes: 8,
+            static_bytes: 0,
             wall_us: 0,
             evaluations: 6,
         });
@@ -618,7 +621,7 @@ pub(super) mod tests {
                 "\"oven\": {\n          \"steps\": 1,\n          \"bytes\": 2,\n          \
                  \"peak_bytes\": 3,\n          \"calls\": 4,\n          \"allocs\": 5,\n          \
                  \"peak_arena\": 7,\n          \"frozen_bytes\": 8,\n          \
-                 \"evaluations\": 6\n        }"
+                 \"static_bytes\": 0,\n          \"evaluations\": 6\n        }"
             ),
             "{k}"
         );
@@ -694,10 +697,18 @@ pub(super) mod tests {
         let text = file.to_json("oven").to_pretty();
         let back = BaselineFile::from_json(&Json::parse(&text).unwrap(), "oven").unwrap();
         assert_eq!(back.entries["e"]["kiln"].measurement.oven_missing, []);
-        // An older baseline has neither key: read as 0, marked missing, and
+        // An older baseline has none of these keys: read as 0, marked missing, and
         // written back without them.
-        let old = text.replace("\"peak_arena\": 7,", "").replace("\"frozen_bytes\": 8,", "");
-        assert!(!old.contains("peak_arena") && !old.contains("frozen_bytes"), "{old}");
+        let old = text
+            .replace("\"peak_arena\": 7,", "")
+            .replace("\"frozen_bytes\": 8,", "")
+            .replace("\"static_bytes\": 0,", "");
+        assert!(
+            !old.contains("peak_arena")
+                && !old.contains("frozen_bytes")
+                && !old.contains("static_bytes"),
+            "{old}"
+        );
         let back = BaselineFile::from_json(&Json::parse(&old).unwrap(), "oven").unwrap();
         let got = &back.entries["e"]["kiln"].measurement;
         assert_eq!(got.oven_missing, OPTIONAL_COUNTERS);

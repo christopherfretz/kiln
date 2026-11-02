@@ -521,6 +521,7 @@ impl Oven {
             allocs: c.allocs,
             peak_arena: c.arena,
             frozen_bytes: c.frozen,
+            static_bytes: self.mem.static_top(),
             wall_us: c.wall_us,
             ok: r.is_ok(),
         });
@@ -773,6 +774,7 @@ impl Oven {
         c.peak = self.mem.peak;
         c.arena = self.mem.arena_peak;
         c.allocs = self.mem.heap_allocs;
+        self.stats.note_static_peak(self.mem.static_peak());
         self.mem.reset();
         self.stack.clear();
         self.cleanups.clear();
