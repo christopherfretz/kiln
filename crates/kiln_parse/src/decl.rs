@@ -1964,6 +1964,8 @@ impl Parser<'_, '_> {
         {
             self.parse_special_declarator_id(d);
             self.parse_declarator_id_attrs(d);
+        } else if abstract_ok && d.abstract_at.is_none() {
+            d.abstract_at = Some(self.loc());
         }
         self.parse_declarator_suffixes(d, abstract_ok);
         self.s.act_on_exit_declarator_scope(entered);
@@ -2231,18 +2233,21 @@ impl Parser<'_, '_> {
     /// the `)`: the parameters and whether `...` ends the list. With
     /// `delay_args`, default arguments are saved in `late_fn`.
     /// An abstract declarator's identifier location is where the name
-    /// would be (clang `ParseDirectDeclarator`): the first array bound,
-    /// else the token after the declarator. Named declarators keep theirs.
+    /// would be (clang `ParseDirectDeclarator`): the token at its
+    /// innermost position (`(*)` gives the `)`), else the first array
+    /// bound, else the token after the declarator. Named declarators keep
+    /// theirs.
     pub(crate) fn set_abstract_loc(&self, d: &mut Declarator) {
         if d.name.is_none() && d.special.is_none() && d.decomp.is_none() {
-            d.loc = d
-                .chunks
-                .iter()
-                .find_map(|c| match c {
-                    Chunk::Array { loc, .. } => Some(*loc),
-                    _ => None,
-                })
-                .unwrap_or_else(|| self.loc());
+            d.loc = d.abstract_at.unwrap_or_else(|| {
+                d.chunks
+                    .iter()
+                    .find_map(|c| match c {
+                        Chunk::Array { loc, .. } => Some(*loc),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| self.loc())
+            });
         }
     }
 
@@ -2316,8 +2321,8 @@ impl Parser<'_, '_> {
             if self.at_attr() {
                 self.parse_attributes(&mut pd.attrs);
             }
+            self.misplaced_param_pack_ellipsis(&ds, &mut pd, site);
             let mut p = self.s.act_on_param_declarator(&ds, &pd);
-            self.misplaced_param_pack_ellipsis(&ds, &mut pd, &mut p, site);
             // The point of declaration: before the default argument
             // ([basic.scope.pdecl]/1).
             self.s.act_on_prototype_param(&mut p);
@@ -2360,27 +2365,31 @@ impl Parser<'_, '_> {
         (params, variadic)
     }
 
-    /// A `...` after parameter `pd` (`p` as sema built it) whose
-    /// declarator names an unexpanded pack is a misplaced pack ellipsis
-    /// ([dcl.decl.general]/4: the `...` of a declarator-id or
-    /// abstract-pack-declarator comes first): clang 22's "'...' must
-    /// immediately precede declared identifier" (named) or "must be
-    /// innermost component of anonymous pack declaration" (abstract), and
-    /// the parameter becomes the pack (`Ts a...`, `Ts (*)()...`,
-    /// `Ts......a`). Not when `)` follows a declarator that already has its
-    /// `...` (`Ts......`), or in a lambda one without (`[](Ts a...)`):
-    /// those are the varargs `...` of -Wambiguous-ellipsis. A placeholder
-    /// type names no pack yet.
+    /// A `...` after parameter declarator `pd` that names an unexpanded
+    /// pack is a misplaced pack ellipsis ([dcl.decl.general]/4: the `...`
+    /// of a declarator-id or abstract-pack-declarator comes first):
+    /// clang 22's "'...' must immediately precede declared identifier"
+    /// (named) or "must be innermost component of anonymous pack
+    /// declaration" (abstract), and the parameter becomes the pack (`Ts
+    /// a...`, `Ts (*)()...`, `Ts......a`). As in clang
+    /// (`DiagnoseMisplacedEllipsisInDeclarator` in the parser), this is
+    /// decided syntactically and reported before the parameter's Sema
+    /// action, so it precedes any type diagnostic of the parameter, and a
+    /// parameter whose type became invalid is then "type 'int' of function
+    /// parameter pack does not contain any unexpanded parameter packs".
+    /// Not when `)` follows a declarator that already has its `...`
+    /// (`Ts......`), or in a lambda one without (`[](Ts a...)`): those are
+    /// the varargs `...` of -Wambiguous-ellipsis. A placeholder type names
+    /// no pack yet.
     fn misplaced_param_pack_ellipsis(
         &mut self,
         ds: &DeclSpec,
         pd: &mut Declarator,
-        p: &mut ParamInfo,
         site: DeclSite,
     ) {
         if !self.at(Punct::Ellipsis)
             || matches!(ds.base, TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto)
-            || !self.s.declarator_has_unexpanded_pack(p.original_ty.unwrap_or(p.ty))
+            || !self.s.declarator_has_unexpanded_pack(ds, pd)
         {
             return;
         }
@@ -2393,7 +2402,6 @@ impl Parser<'_, '_> {
         self.misplaced_declarator_ellipsis(pd, ellipsis);
         if pd.ellipsis.is_none() {
             pd.ellipsis = Some(ellipsis);
-            self.s.make_param_pack(p, ellipsis);
         }
     }
 
