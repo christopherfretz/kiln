@@ -2576,8 +2576,12 @@ guide is used. A canonical pack-expansion argument (`Idx<I...>` in a
 guide's canonical signature) expands like the written one
 (`expand_arg`). The aggregate deduction candidate goes through the same
 alias transformation. Guide signatures print such members qualified
-(`typename P<T, short>::Chk::same<U>()`) where clang prints them as
-written (`Chk::template same<U>()`), a note-only difference.
+(`typename P<T, short>::Chk::template same<U>()`) where clang prints
+them as written (`Chk::template same<U>()`), and a member alias
+template-id in a qualifier gains a stray keyword (`template
+ChkDep<D>::ok()` for clang's `ChkDep<D>::ok()`): note-only differences
+kept for a follow-up (the rebuilt dependent name has no written-form
+sugar).
 `tests/conformance/over.match.class.deduct/alias-ctor-template-members.cpp`,
 `.../alias-aggregate.cpp`.
 
@@ -3797,6 +3801,37 @@ ambiguity errors.
   `TDF_ParamWithReferenceType`): `const S<T>&` against `const char[3]` is
   `'const S<T>'`, `volatile S<T>&` is `'S<T>'` (WP-152). The same rule
   makes `const T&` from `const char[3]` deduce `T = char[3]`.
+- `NonDeducedMismatch` names the argument's template as clang does
+  (`written_template_in`): the specialized template, qualified by the
+  outermost written qualifier on the way down (an elaborated type's,
+  kept through typedefs and aliases, or a deduced placeholder's own
+  qualified name). `P{}` for `using P = s::pr<int, long>` prints `pr`,
+  `t::Q{}` prints `t::pr`, `s::pr{1, 2}` prints `s::pr`. An
+  `initializer_list<E>` parameter whose element cannot be deduced
+  reports the element type as written (`'pr<const K, T>'`, also through
+  a member typedef in a CTAD guide).
+- The `[with …]` bindings of `ConstraintsNotSatisfied`,
+  `SubstitutionFailure` and `DeducedMismatch` (and the overload
+  ambiguity notes) come from `deduced_args_desc`: a deduced type keeps
+  the call argument's sugar (`resugar_call_deduction`: `N::H<int>` when
+  written qualified, `H<int>` after a using-declaration); a canonical
+  class or enum, deduced through a nested template-id or a base class,
+  prints fully scoped (`_Container = std::deque<int>`). Explicit
+  template arguments and an argument written as a bare class name are
+  wrapped in an unqualified `Elaborated` (`written_bare`) so they stay
+  bare. An unnamed template parameter prints as `$N` (clang's
+  `getTemplateArgumentBindingsText`).
+  Gap: a binding taken from a default template argument
+  (`class U = V<T>`) prints its replacement canonical (`U = V<N::P>`
+  where clang prints `V<P>`), because `subst` canonicalizes a
+  non-dependent replacement.
+- An `Inconsistent` type note prints each type with its `aka`
+  (`'s3::al<PC>' (aka 'al<pr<const int, long>>')`).
+- Tests `temp.deduct.call/deduced-binding-sugar.cpp`,
+  `temp.deduct.type/mismatch-template-names.cpp`.
+- "constraints not satisfied for alias/class/variable template 'X'"
+  names the template bare, however it was qualified
+  (`temp.names/constraint-template-name.cpp`).
 
 ### 10.5 Other template diagnostics (texts from clang 19; goldens are authoritative)
 
@@ -4031,10 +4066,11 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
 - Each class template redeclaration is its own `ClassTemplateDecl`
   (with its own parameter list and pattern record) linked into the
   chain, as clang's (WP-311). `merge_template_defaults` gives every
-  redeclaration's parameters the defaults of the others, but in
-  `Sema::inherited_defaults`, not on the AST: the dump prints no
-  `inherited from`. `check_template_param_list` takes the location of a
-  repeated default from whichever earlier redeclaration gave it.
+  redeclaration's parameters the defaults of the others in
+  `Sema::inherited_defaults`, which instantiation reads. That is the
+  union over all declarations, so it also reaches earlier ones.
+  `check_template_param_list` takes the location of a repeated default
+  from whichever earlier redeclaration gave it.
   `tests/conformance/temp.class/redeclaration-diags.cpp`,
   `tests/conformance/temp.class/redeclaration-ast.cpp`.
 - A template template parameter's inner list is not order-checked.
@@ -5279,8 +5315,14 @@ requires-clause scope.**
   class template naming an existing template is a redeclaration in that
   group and does not make the original dependent.
 - *Inherited default arguments* ([temp.param]/12):
-  `Sema.inherited_defaults`, filled by `merge_template_defaults`; they
-  are not dumped (a gap). Deduction completes a dependent `P` with its
+  `Sema.inherited_defaults`, filled by `merge_template_defaults`. The
+  AST records, separately, what clang records:
+  `record_inherited_defaults` gives each parameter of a redeclaration
+  that has no default of its own the parameter owning its counterpart's
+  default in the previous declaration (`TemplateTables::
+  inherited_defaults`, clang `setInheritedDefaultArgument`). It runs
+  only when the heads match. The dump prints it as `inherited from`
+  (spec/ast-dump.md). Deduction completes a dependent `P` with its
   defaulted arguments (`complete_dependent_args`, [temp.deduct.type]).
   The parameters and defaults, and the defaults' depth, are the head
   declaration's (`head_template`, §6.2; WP-286, WP-295, WP-296).

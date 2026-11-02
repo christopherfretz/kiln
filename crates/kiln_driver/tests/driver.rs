@@ -548,3 +548,55 @@ fn exception_spec_fixits_and_ranges_like_clang() {
     let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], EXC_SPEC_SOURCE);
     assert_eq!((o.code, o.stderr.as_str()), (1, EXC_SPEC_GOLDEN));
 }
+
+/// [class.bit]/1, /3, [dcl.pre]/12: bit-field diagnostics underline the
+/// width where clang does (zero width, non-integral field type, a
+/// non-integral width, a static member or typedef with a width), and a
+/// failed `static_assert` comparison's note underlines the whole
+/// comparison (clang `DiagnoseStaticAssertDetails`) (WP-320).
+const BIT_WIDTH_SOURCE: &str = r"struct A { int c : 0; int d : (0); float f : 3; int g : 2.0; };
+struct C { static int s : 3; typedef int td : 2; };
+constexpr struct D { unsigned u : 3; int s : 2; } d{5, 1};
+static_assert(d.u == 4);
+static_assert(d.s + 1 == 3);
+";
+
+/// clang 19's `-fsyntax-only` output for `BIT_WIDTH_SOURCE`.
+const BIT_WIDTH_GOLDEN: &str = r"<stdin>:1:16: error: named bit-field 'c' has zero width
+    1 | struct A { int c : 0; int d : (0); float f : 3; int g : 2.0; };
+      |                ^   ~
+<stdin>:1:27: error: named bit-field 'd' has zero width
+    1 | struct A { int c : 0; int d : (0); float f : 3; int g : 2.0; };
+      |                           ^   ~~~
+<stdin>:1:42: error: bit-field 'f' has non-integral type 'float'
+    1 | struct A { int c : 0; int d : (0); float f : 3; int g : 2.0; };
+      |                                          ^   ~
+<stdin>:1:57: error: integral constant expression must have integral or unscoped enumeration type, not 'double'
+    1 | struct A { int c : 0; int d : (0); float f : 3; int g : 2.0; };
+      |                                                         ^~~
+<stdin>:2:23: error: static member 's' cannot be a bit-field
+    2 | struct C { static int s : 3; typedef int td : 2; };
+      |                       ^   ~
+<stdin>:2:42: error: typedef member 'td' cannot be a bit-field
+    2 | struct C { static int s : 3; typedef int td : 2; };
+      |                                          ^    ~
+<stdin>:4:15: error: static assertion failed due to requirement 'd.u == 4'
+    4 | static_assert(d.u == 4);
+      |               ^~~~~~~~
+<stdin>:4:19: note: expression evaluates to '5 == 4'
+    4 | static_assert(d.u == 4);
+      |               ~~~~^~~~
+<stdin>:5:15: error: static assertion failed due to requirement 'd.s + 1 == 3'
+    5 | static_assert(d.s + 1 == 3);
+      |               ^~~~~~~~~~~~
+<stdin>:5:23: note: expression evaluates to '2 == 3'
+    5 | static_assert(d.s + 1 == 3);
+      |               ~~~~~~~~^~~~
+8 errors generated.
+";
+
+#[test]
+fn bit_width_and_static_assert_ranges_like_clang() {
+    let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], BIT_WIDTH_SOURCE);
+    assert_eq!((o.code, o.stderr.as_str()), (1, BIT_WIDTH_GOLDEN));
+}

@@ -4545,8 +4545,17 @@ impl Sema<'_, '_> {
     }
 
     /// Checks the operand type of `sizeof`/`alignof` ([expr.sizeof]/1,
-    /// [expr.alignof]/1).
-    fn check_trait_operand(&mut self, kind: TraitKind, ty: QualType, loc: Loc) -> bool {
+    /// [expr.alignof]/1). As clang `CheckUnaryExprOrTypeTraitOperand`,
+    /// the diagnostics point at `loc` with `range`: an expression operand
+    /// at its expression location with its range, a type operand at the
+    /// keyword with the parenthesized type-id's range.
+    fn check_trait_operand(
+        &mut self,
+        kind: TraitKind,
+        ty: QualType,
+        loc: Loc,
+        range: Option<kiln_source::Span>,
+    ) -> bool {
         let name = Self::trait_name(kind);
         if self.is_error_type(ty) {
             return false;
@@ -4558,7 +4567,7 @@ impl Sema<'_, '_> {
         // for both are C-only ("hard errors for SFINAE").
         if self.ast.types.is_function(t) {
             let msg = self.diag(DiagId::sema_sizeof_function_expr, loc).arg(name);
-            self.emit(msg);
+            self.emit(Self::with_range(msg, range));
             return false;
         }
         let check = if size_like {
@@ -4575,16 +4584,45 @@ impl Sema<'_, '_> {
             let shown = if size_like { ty } else { check };
             let msg =
                 self.diag(DiagId::sema_sizeof_incomplete, loc).arg(name).arg(self.ty_arg(shown));
+            let msg = Self::with_range(msg, range);
             self.emit(self.incomplete_note(msg, shown));
             return false;
         }
         // clang `err_sizeof_alignof_typeof_sizeless`.
         if self.ast.types.is_sizeless(check) {
             let msg = self.diag(DiagId::sema_sizeof_sizeless, loc).arg(name).arg(self.ty_arg(ty));
-            self.emit(msg);
+            self.emit(Self::with_range(msg, range));
             return false;
         }
         true
+    }
+
+    fn with_range(d: Diag, range: Option<kiln_source::Span>) -> Diag {
+        match range {
+            Some(r) => d.range(r),
+            None => d,
+        }
+    }
+
+    /// The range `( type-id )` of the type operand of the keyword at
+    /// `kw` closed by `rparen`: the `(` is the first non-blank after the
+    /// keyword (none in a macro expansion, whose text is not at hand).
+    fn paren_type_range(&self, kw: Loc, rparen: Loc) -> Option<kiln_source::Span> {
+        let sm = self.diags.sm();
+        let (file, pos) = sm.offset_of(kw)?;
+        let text = sm.text(file).as_bytes();
+        let mut i = pos as usize;
+        while text.get(i).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_') {
+            i += 1;
+        }
+        while text.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        if text.get(i) != Some(&b'(') {
+            return None;
+        }
+        let open = sm.loc(file, u32::try_from(i).ok()?);
+        Some(kiln_source::Span::new(open, self.token_end(rparen).unwrap_or(rparen)))
     }
 
     /// `sizeof(T)` / `alignof(T)`.
@@ -4595,7 +4633,33 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
-        if !self.check_trait_operand(kind, ty, loc) {
+        let range = self.paren_type_range(loc, rparen);
+        self.trait_type_in(kind, ty, loc, rparen, range)
+    }
+
+    /// [`Self::act_on_trait_type`] rebuilt by template instantiation:
+    /// clang `RebuildUnaryExprOrTypeTrait` underlines the whole pattern
+    /// expression, keyword to `)`.
+    pub(crate) fn rebuild_trait_type(
+        &mut self,
+        kind: TraitKind,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let range = kiln_source::Span::new(loc, self.token_end(rparen).unwrap_or(rparen));
+        self.trait_type_in(kind, ty, loc, rparen, Some(range))
+    }
+
+    fn trait_type_in(
+        &mut self,
+        kind: TraitKind,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+        range: Option<kiln_source::Span>,
+    ) -> ExprId {
+        if !self.check_trait_operand(kind, ty, loc, range) {
             return self.recover_err(&[], loc);
         }
         let st = self.size_type();
@@ -4618,7 +4682,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[e], loc);
         }
         if self.is_bitfield(e) {
-            let msg = self.diag(DiagId::sema_sizeof_bitfield, loc).arg(Self::trait_name(kind));
+            // clang: at the operand's expression location, no range.
+            let at = self.expr_loc(e);
+            let msg = self.diag(DiagId::sema_sizeof_bitfield, at).arg(Self::trait_name(kind));
             self.emit(msg);
             return self.recover_err(&[e], loc);
         }
@@ -4639,7 +4705,7 @@ impl Sema<'_, '_> {
             self.emit(msg.arg(Self::trait_name(kind)));
             return self.recover_err(&[e], loc);
         }
-        if !self.check_trait_operand(kind, ty, loc) {
+        if !self.check_trait_operand(kind, ty, self.expr_loc(e), Some(self.expr_range(e))) {
             return self.recover_err(&[e], loc);
         }
         let st = self.size_type();

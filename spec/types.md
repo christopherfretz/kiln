@@ -572,6 +572,17 @@ prints as written (`Q<O::template J>`, `Q< ::O::template J>`); one
 written without the keyword prints fully qualified (`Q<O::J>`,
 `Q<ns::T2>` for `T2` found by a using-directive) (WP-300;
 `tests/conformance/temp.names/template-keyword-qualified-printing.cpp`).
+
+An undeduced CTAD placeholder (`DeducedTemplateSpecialization` with no
+deduced type) prints with the spelling of the **first** placeholder formed
+for its template in the translation unit (`N::A`, `A`, `::A`, or the bare
+name of a deduction guide's declarator), because clang uniques these types
+on the canonical template declaration. `TypeTable` records that spelling
+in `first_dtst_names` (keyed by the canonical template name;
+`note_dtst_spelling`) and the printer asks `dtst_display_name`. The node
+keeps its written name; a deduced placeholder prints the deduced type.
+Dependent names and names that resolve to no template are not recorded
+(WP-320; `tests/conformance/dcl.type.class.deduct/placeholder-spelling*.cpp`).
 A dependent type whose canonical form would name
 `type-parameter-D-I` gets no `aka` (clang's `Desugar` keeps the
 parameter's name, which the canonical printer cannot). The `aka` is

@@ -754,7 +754,7 @@ impl Substituter<'_, '_, '_> {
                 let kind = ex(self).trait_kind(e);
                 if let Some(t) = ex(self).trait_type_arg(e) {
                     let t = self.ty_written_after(t, loc)?;
-                    Ok(self.sema.act_on_trait_type(kind, t, loc, end))
+                    Ok(self.sema.rebuild_trait_type(kind, t, loc, end))
                 } else {
                     let o = ExprId::new(n.a());
                     let o = self.unevaluated_operand(o)?;
