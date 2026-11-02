@@ -106,6 +106,7 @@ note_expr_evaluates_to = Note (3) "expression evaluates to '{0} {1} {2}'";
 note_extern_c_begins_here = Note (0) "extern \"C\" language linkage specification begins here";
 note_extern_c_global_conflict = Note (1) "declared {0:in global scope|with C language linkage} here";
 note_final_overrider = Note (2) "final overrider of '{0}' in '{1}'";
+note_flexible_array_member = Note (1) "initialized flexible array member '{0}' is here";
 note_fn_template_spec_matched = Note (2) "function template '{0}' matches specialization {1}";
 note_for_range_begin_end = Note (4) "selected '{0:begin|end}' {1:function|template }{2} with iterator type {3}";
 note_for_range_invalid_iterator = Note (2) "in implicit call to 'operator{0:!=|*|++}' for iterator of type {1}";

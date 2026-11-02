@@ -710,6 +710,7 @@ impl<'a> AstNames<'a> {
                 out.push_str(if exprs.bool_value(e) { "true" } else { "false" });
             }
             ExprKind::CXXNullPtrLiteralExpr => out.push_str("nullptr"),
+            ExprKind::GNUNullExpr => out.push_str("__null"),
             // clang's `VisitDeclRefExpr`: the qualifier as written, then
             // the name.
             ExprKind::DeclRefExpr => {

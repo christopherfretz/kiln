@@ -1276,6 +1276,12 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::CXXNullPtrLiteralExpr, ValueCategory::PRValue, deps, 0, ty, loc, 0, 0)
     }
 
+    /// GNU `__null`: `GNUNullExpr`, an integer null pointer constant of
+    /// type `ty` (the signed integer type as wide as a pointer).
+    pub fn gnu_null(&mut self, ty: QualType, loc: Loc) -> ExprId {
+        self.simple(ExprKind::GNUNullExpr, ValueCategory::PRValue, ExprDeps::NONE, 0, ty, loc, 0, 0)
+    }
+
     /// `__func__`, `__FUNCTION__` or `__PRETTY_FUNCTION__`
     /// ([dcl.fct.def.general]/8): `PredefinedExpr`, an lvalue of type `ty`
     /// (`const char[N]`, or the dependent type in a dependent context,

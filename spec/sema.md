@@ -1922,6 +1922,110 @@ for them.
     the Oven and codegen.
   - kiln does not wrap the elements of a namespace-scope literal in
     `ConstantExpr` nodes, as clang does.
+- **Flexible array members** (`flex_array.rs`, WP-271; a C99 feature,
+  clang `ActOnFields` / `CheckFlexibleArrayInit`). A non-static data
+  member of array-of-unknown-bound type `T[]` is accepted when its
+  element type is complete (`field_complete_type`; an incomplete or
+  abstract element is diagnosed as for a bounded array). The member
+  keeps the incomplete type; the class is complete and records
+  `DefinitionBits::HAS_FLEXIBLE_ARRAY_MEMBER`. Layout: size zero at the
+  aligned end of the preceding members, counting for the alignment
+  (`sizeof(struct { int n; char d[]; }) == 4`); LLVM type `[0 x T]`;
+  implicit copies copy only the other members. At the `}`
+  (`check_flexible_array_members`, run per instantiation; each
+  diagnostic is `per_instantiation`, spec/diag.md §7.4), over the
+  fields in order:
+  - not the last field of a struct/class: error `flexible array member
+    'd' with type 'T[]' is not at the end of struct`, note `next field
+    declaration is here` at the next field; field and class invalid;
+  - in a union: `-Wgnu-flexible-array-union-member`; otherwise, when no
+    named field precedes it: `-Wgnu-empty-struct`;
+  - a class with a virtual base (direct or inherited): error `...not
+    allowed in struct which has a virtual base class`;
+  - always `flexible array members are a C99 feature` [-Wc99-extensions];
+  - a non-dependent element type with non-trivial destruction: error
+    `flexible array member 'd' of type 'T[]' with non-trivial
+    destruction`; field and class invalid;
+  - a field whose class has a flexible array member gives this class one
+    too; in a struct/class it warns `field 'a' with variable sized type
+    'A' not at the end of a struct or class is a GNU extension`
+    [-Wgnu-variable-sized-type-not-at-end, on by default] when not last,
+    else `'a' may not be nested in a struct due to flexible array member`
+    [-Wflexible-array-extensions];
+  - an array of such a class: `'A' may not be used as an array element
+    due to flexible array member` [-Wflexible-array-extensions] at the
+    `[` (the declarator's array chunk).
+
+  Except where noted, the warnings are Extensions (`-pedantic`). A
+  default member initializer of a `d[]` member is the parse error `array
+  bound cannot be deduced from a default member initializer` (at the `=`
+  or `{`; the member is invalid and gets no checks). In an aggregate
+  initialization the member's initializer is: an empty list, the GNU
+  extension `flexible array initialization is a GNU extension`
+  [-Wgnu-flexible-array-initializer] with the note `initialized flexible
+  array member 'd' is here` and `zero size arrays are an extension`
+  [-Wzero-length-array]; elements, an error `initialization of flexible
+  array member is not allowed` (same note) unless they initialize a
+  variable without automatic storage directly (`Sema::init_var` with no
+  `init_entity`). The Oven rejects the decay of a member subobject of
+  unknown bound (`array-to-pointer decay of array member without known
+  bound is not supported`, clang `addUnsizedArray`).
+
+  Deviation: elements initializing a static variable (clang's extension,
+  which emits the variable with a larger type) are reported as not
+  supported yet.
+- **Zero-length arrays** `T[0]`: `zero size arrays are an extension`
+  [-Wzero-length-array, in -Wgnu] at the bound, per instantiation; an
+  error in a SFINAE context (above).
+- **`__null`** (`gnu_null.rs`; `NULL` in the resource `<stddef.h>`): a
+  `GNUNullExpr` prvalue of the signed integer type as wide as a data
+  pointer (`int`, `long` or `long long`; `long` on LP64, clang's
+  `ActOnGNUNullExpr`), with value 0. It is a null pointer constant
+  (`conv::is_null_pointer_constant`), so it converts to any pointer,
+  pointer to member and `std::nullptr_t`; as an integer it converts like
+  any `long` (so `g(int)`/`g(void*)` is ambiguous). Constant-evaluates to
+  0; mangles as the literal `Ll0E`; prints as `__null`. Warnings (both on
+  by default, not runtime-behavior diagnostics):
+  - `implicit conversion of NULL constant to 'T'` [-Wnull-conversion, in
+    -Wconversion; alias -Wconversion-null] for an implicit conversion to
+    a scalar type other than its own, a pointer, a pointer to member or
+    `std::nullptr_t` (clang's `DiagnoseNullConversion`, from the
+    implicit-conversion walk, `impcast.rs`). It is reported at `__null`,
+    or at the `NULL` macro name when `__null` came from `NULL`'s
+    expansion; after taking both locations out of macro arguments, it is
+    dropped when that location and the conversion's context are in
+    different files or macro expansions (`#define MYNULL __null` does
+    not warn).
+  - [-Wnull-arithmetic] (clang's `checkArithmeticNull`), at the operator
+    of a built-in `+ - * / % << >> & ^ |`, compound assignment, or
+    comparison with a `__null` operand (implicit casts and parentheses
+    stripped), unless the other operand is a pointer to member or a
+    function: `use of NULL in arithmetic operation` for the arithmetic
+    operators; for a comparison, `comparison between NULL and non-pointer
+    (NULL and 'T')` / `('T' and NULL)` when only one side is `__null`
+    and the other is neither a pointer nor an array.
+- **GNU `typeof`** (`gnu_typeof.rs`; parsing in spec/parse.md §4):
+  `__typeof ( type-id )` is `TypeOf` sugar over that type
+  (`act_on_typeof_type`), printed `typeof(T)`. `__typeof e` /
+  `__typeof ( e )` (`act_on_typeof_expr`; clang
+  `ActOnTypeofExpression`) is sugar over the unevaluated operand's
+  expression type: an lvalue adds no reference (`__typeof(ri)` for
+  `int& ri` is `int`), cv-qualifiers are kept, an id-expression or
+  bit-field member gives its expression type, a function name its
+  function type, and side effects are not diagnosed (unlike
+  `decltype`). It prints `typeof (e)` (the parentheses are a
+  `ParenExpr`). An erroneous operand or an unresolved overload set
+  (`check_overload_use`: "reference to overloaded function could not
+  be resolved; did you mean to call it?") makes the type specifier an
+  error that combines with no other specifier. A type-dependent
+  operand gives a dependent type whose canonical form is keyed on the
+  operand's profile (clang `DependentTypeOfExprType`), rebuilt at
+  substitution (`templ/subst/types.rs`) and mangled as clang's vendor
+  type `u6typeof`; a dependent `__typeof(T)` is canonically `T`.
+  `__typeof_unqual` is the same with the cv-qualifiers dropped
+  (canonically, `ctx.unqualified`; `typeof_unqual (e)` prints).
+  No diagnostics of its own (no pedantic warning, as clang).
+  `tests/conformance/ext.gnu.typeof/`.
 
 ### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
@@ -2338,7 +2442,7 @@ pointer constant: a zero integer literal, a `std::nullptr_t` value or
   (`null_deref_seen`), so a shared dereference that a rebuilt parent
   re-checks warns once. Other run-time warnings (division by zero,
   shift counts) are not repeated, as in clang.
-- **Deviations:** kiln does not parse `__null` yet. A default member
+- **Deviations:** A default member
   initializer of a class template does not warn again when a
   constructor uses it (clang instantiates it then), and a variable
   template specialization's warning can print later than clang's,
@@ -2915,7 +3019,12 @@ template saved in `range_for_outer_depth` for instantiations).
   (`rebuild_with_dereference`); an iterator or loop-variable failure gets
   `selected 'begin' function with iterator type T` (the candidate notes
   are captured through `diag_capture` while each attempt runs and
-  released on success of the diagnosis).
+  released on success of the diagnosis). A SFINAE context entered
+  inside a capture (deeper on the instantiation stack than where the
+  capture began, such as deducing a converting constructor template
+  for a rewritten `operator==` candidate of `__begin != __end`) takes
+  its errors as substitution failures, not captured diagnostics
+  (WP-271).
 - **Templates.** A type-dependent range (or loop-variable type) keeps
   only `__range` and the loop variable in the pattern; instantiation
   (`templ/subst/stmts.rs` `range_for`) substitutes the range under a new

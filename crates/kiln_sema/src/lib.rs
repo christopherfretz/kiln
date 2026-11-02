@@ -30,9 +30,12 @@ pub mod except;
 pub mod expr;
 mod extern_c;
 mod fallthrough;
+mod flex_array;
 mod for_loop_analysis;
 mod forms;
 mod gnu;
+mod gnu_null;
+mod gnu_typeof;
 mod impcast;
 mod implicit_fallthrough;
 pub mod init;
@@ -341,6 +344,10 @@ pub struct Sema<'a, 'sm> {
     /// (clang `InitializedEntity::EK_Temporary` "a value" for `T{x}`,
     /// `EK_New` "a new value"): a `sema_init_conversion_failed` select.
     pub(crate) init_entity: Option<&'static str>,
+    /// The variable whose initializer is being analysed (the entity of a
+    /// top-level initializer list while [`Sema::init_entity`] is `None`;
+    /// a flexible array member's initialization, §5.8).
+    pub(crate) init_var: Option<DeclId>,
     /// The context access is checked from while a namespace-scope alias
     /// template is substituted in its own context: the use's
     /// (spec/sema-class.md §2.4, clang's `CheckTemplateIdType`).
@@ -395,8 +402,11 @@ pub struct Sema<'a, 'sm> {
     pub(crate) extend_collector: Option<Vec<ExprId>>,
     /// Diagnostics held back while a range-based `for` step runs, so
     /// clang's trailing notes (`when looking up 'begin' function...`)
-    /// can be attached to the last of them (`range_for.rs`).
-    pub(crate) diag_capture: std::cell::RefCell<Option<Vec<Diag>>>,
+    /// can be attached to the last of them (`range_for.rs`), with the
+    /// instantiation stack depth where the capture began: a SFINAE
+    /// context entered inside it (a deduction during the step's overload
+    /// resolution) takes its errors as usual.
+    pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>)>>,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -577,6 +587,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
             init_entity: None,
+            init_var: None,
             access_ctx: None,
             access_checks: 0,
             cleanup: class::CleanupState::default(),
@@ -670,7 +681,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
-        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
+        if let Some((depth, held)) = self.diag_capture.borrow_mut().as_mut()
+            && !(self.inst.stack.len() > *depth && self.inst.stack.is_sfinae())
+        {
             held.push(d);
             return;
         }

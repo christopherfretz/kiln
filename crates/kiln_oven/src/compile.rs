@@ -891,6 +891,27 @@ impl<'a> Compiler<'a> {
         self.trap(e, "subexpression not valid in a constant expression");
     }
 
+    /// clang `LValue::addUnsizedArray`: a subobject of array of unknown
+    /// bound (a flexible array member, spec/sema.md §5.8) does not decay
+    /// in a constant expression. Traps (with clang's note at `op`'s
+    /// begin) and returns true for such an operand `op` of a decay.
+    fn unsized_member_decay(&mut self, op: ExprId) -> bool {
+        let ast = self.b.ast();
+        let inner = skip_parens(ast, op);
+        if !matches!(ast.types.canonical_view(ast.exprs.get(op).ty()), TypeView::IncompleteArray(_))
+            || ast.exprs.get(inner).kind() != ExprKind::MemberExpr
+        {
+            return false;
+        }
+        let at = self.begin(op);
+        self.trap_loc(
+            at,
+            "array-to-pointer decay of array member without known bound is not supported"
+                .to_owned(),
+        );
+        true
+    }
+
     fn unsupported(&mut self, e: ExprId) {
         let n = self.b.ast().exprs.get(e);
         let k = n.kind();
@@ -3062,9 +3083,13 @@ impl Compiler<'_> {
                 self.next = z;
             }
             CastKind::ArrayToPointerDecay => {
-                let p = self.lv_mem(op, Access::Addr);
-                if p != dst {
-                    self.emit(Op::Mov, 0, &[dst, p]);
+                if self.unsized_member_decay(op) {
+                    self.konst(dst, 0);
+                } else {
+                    let p = self.lv_mem(op, Access::Addr);
+                    if p != dst {
+                        self.emit(Op::Mov, 0, &[dst, p]);
+                    }
                 }
             }
             CastKind::FunctionToPointerDecay => {
@@ -3399,6 +3424,9 @@ impl Compiler<'_> {
                 let pn = self.node(pe0);
                 let decay = pn.kind() == ExprKind::ImplicitCastExpr
                     && self.ast().exprs.cast_kind(pe0) == CastKind::ArrayToPointerDecay;
+                if decay && self.unsized_member_decay(self.ast().exprs.operand(pe0)) {
+                    return Place::Mem(self.reg());
+                }
                 let (p, i) = if decay {
                     let inner = self.ast().exprs.operand(pe0);
                     let sub = if acc == Access::Addr { Access::Addr } else { acc };

@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+sema_c99_flexible_array_member = Extension [C99Extensions] (0) "flexible array members are a C99 feature";
 sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
 sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
 sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";
