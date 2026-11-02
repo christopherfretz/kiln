@@ -654,8 +654,14 @@ impl Substituter<'_, '_, '_> {
                         return self.paren_list_init(p, ty, loc, end);
                     }
                 }
-                if self.sema.ast.exprs.get(o).kind() == ExprKind::InitListExpr {
-                    let l = self.init_list(o)?;
+                // `T{...}` of an aggregate with a non-trivial destructor
+                // binds the list's temporary under the cast.
+                let mut p = o;
+                while ex(self).get(p).kind() == ExprKind::CXXBindTemporaryExpr {
+                    p = ex(self).operand(p);
+                }
+                if self.sema.ast.exprs.get(p).kind() == ExprKind::InitListExpr {
+                    let l = self.init_list(p)?;
                     return Ok(self.sema.act_on_list_cast(ty, &l, loc));
                 }
                 let o = self.expr(o)?;
@@ -1584,6 +1590,10 @@ impl Substituter<'_, '_, '_> {
         let r = match a.view() {
             ArgView::Value { ty, value } => self.value_literal(ty, value, loc)?,
             ArgView::Expr { expr, .. } => expr,
+            // A canonical value-dependent argument (a dependent default
+            // argument converted for a partial substitution): its first
+            // expression stands for it, as in `template_arg` (§5.1).
+            ArgView::Profile(p) => self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?,
             _ => return self.unimplemented("non-type template argument of this kind", loc),
         };
         Ok(self.sema.ast.builder().subst_nttp_expr(shown, r, loc))

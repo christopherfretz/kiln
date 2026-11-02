@@ -923,6 +923,25 @@ Diagnosed at definition, as clang does:
 - A missing `typename` or `template` (§2.3), a redefined default
   argument, a malformed template head.
 
+**Instantiation-dependent but not dependent** (WP-404). `TC<N>`, with
+`N` a constant local of a function template, is instantiation-dependent
+only (§3.1). Like clang (`anyDependentTemplateArguments` tests
+`isDependent`), it does not defer a check:
+- A concept-id over it is satisfied at once. `concept_spec_expr` is
+  value-dependent only when an argument is dependent; an
+  instantiation-dependent argument leaves it `INSTANTIATION` only.
+- A type trait over it (`__is_object(TC<N> *)`) is evaluated on the
+  argument's canonical type, so a variable template specialization
+  instantiated with it (`is_object_v<T *>`) does not cache an
+  unevaluated `false`.
+- A function or variable template specialization keyed by canonical
+  arguments stores the canonical form of such an argument
+  (`Sema::settle_inst_sugar`; clang builds a specialization from its
+  canonical converted arguments). Another function template's use of the
+  same specialization (an implicit deduction guide's, `subrange(p, p)`)
+  must never substitute the first template's local.
+- Test: tests/conformance/temp.dep.expr/instantiation-dependent-arguments.cpp.
+
 Not diagnosed at definition:
 - `static_assert(false)`, or any non-dependent `static_assert` failure
   inside a template (P2593, clang 17+).
@@ -2000,7 +2019,12 @@ recomputed exactly as for non-template code (clang's
     `ConstValueId`;
   - for a class-type NTTP, a `DeclRefExpr` to the `TemplateParamObject`
     (§6.10);
-  - for a reference or pointer NTTP, the entity expression.
+  - for a reference or pointer NTTP, the entity expression;
+  - for a floating-point NTTP, a `FloatingLiteral` of the value (WP-404;
+    tests/conformance/temp.arg.nontype/float-argument-substituted.cpp);
+  - for a canonical value-dependent argument (`ArgView::Profile`, a
+    dependent default argument met in a partial substitution), its first
+    expression, as `template_arg` uses it (WP-404).
   This matches clang's dump.
 - **`ConceptSpecializationExpr`, `RequiresExpr`.** §8.
 - **Lambdas** get a new closure class per instantiation (WP-075).
@@ -2017,7 +2041,10 @@ recomputed exactly as for non-template code (clang's
   the parameter type is), NTTP arguments and requirements are handled
   the same way. An unknown field in a requirement is a substitution
   failure. The aggregate checks of spec/sema.md §6 run on the
-  instantiated type.
+  instantiated type. `T{x}` of an aggregate whose temporary is bound
+  (`CXXBindTemporaryExpr` between the functional cast and its list) is
+  rebuilt from the list the same way (WP-404;
+  tests/conformance/expr.type.conv/aggregate-list-temporary-substituted.cpp).
 - **Analyzed initializations as operands** (WP-296). An operand that is
   only instantiation-dependent (it names a local of the template) was
   analyzed at definition; its resolved initialization is not reused but
