@@ -966,14 +966,21 @@ impl Parser<'_, '_> {
                 true
             }
             // `X<A>::name` with an annotated scope ([`Parser::annotate_template_scope`])
-            // in which `name` is not a type, where only a type can be:
-            // the parse proper reports it ("no type named ..."; clang's
-            // `DiagnoseUnknownTypeName`).
+            // in which `name` is not a type, or `S::name d` with `S` a
+            // non-dependent class or namespace that has no `name`, where
+            // only a type can be: the parse proper reports it ("no type
+            // named 'name' in 'S'"; clang's `DiagnoseUnknownTypeName`).
+            // At block scope the statement disambiguation chose a
+            // declaration already (`S::name(e);`, `S::name *g;`).
             Some((end, NameClass::Undeclared, _))
-                if end == start + 2
+                if (end == start + 2
                     && self.at_decltype_scope()
                     && self.decltype_scope_ok()
-                    && self.unknown_type_follows(end, ctx) =>
+                    && self.unknown_type_follows(end, ctx))
+                    || (end > start + 1
+                        && self.unresolved_scope_name(start)
+                        && (ctx == DeclaratorContext::Block
+                            || self.unknown_type_follows(end, ctx))) =>
             {
                 if let Ok(Some(q)) = self.parse_nested_name_nns() {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
@@ -1005,8 +1012,15 @@ impl Parser<'_, '_> {
         self.ident_of(next).is_some()
             || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && matches!(Self::punct_of(next), Some(Punct::Star | Punct::Amp | Punct::AmpAmp)))
+            // A parameter: clang's `ParseImplicitInt` diagnoses any
+            // undeclared name where a decl-specifier is required in C++
+            // (`void a(u1);`, `int e(u4 *p);`); `(`, `::` and `<` are
+            // reported elsewhere.
             || (ctx == DeclaratorContext::Prototype
-                && matches!(Self::punct_of(next), Some(Punct::RParen | Punct::Comma)))
+                && !matches!(
+                    Self::punct_of(next),
+                    Some(Punct::LParen | Punct::ColonColon | Punct::Less)
+                ))
     }
 
     // -- class and enum specifiers ----------------------------------------------------

@@ -246,6 +246,11 @@ pub struct Sema<'a, 'sm> {
     /// that is a function or array is diagnosed there (clang's
     /// `FunctionTypeLoc` begin; [dcl.fct]/11, WP-222, WP-241).
     pub(crate) type_spec_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where the outermost `&`/`&&` of a declaration of dependent
+    /// reference type was written (`T &m;`): a substitution that forms
+    /// a reference to `void` is diagnosed there (clang's
+    /// `ReferenceTypeLoc`; [dcl.ref]/1).
+    pub(crate) ref_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// The namespace named by the qualifier of each friend function (or
     /// function template pattern) declared with a qualified name in a
     /// templated class (`friend void N::f(T);`): its instantiation is
@@ -588,6 +593,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
+            ref_locs: kiln_source::fx::FxHashMap::default(),
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),

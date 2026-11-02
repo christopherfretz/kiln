@@ -469,6 +469,11 @@ type>'`:
     see "Known gaps" below.
   - `t.x` and `t->template y<1>`.
   - `f<T>` with the qualifier and arguments as written.
+  - `N::v<int>`, a variable template specialization named through a
+    nested-name-specifier, with the qualifier as written: the
+    `DeclRefExpr` records it (`ExprArena::set_decl_ref_qualifier`, set
+    by `Sema::set_template_id_qualifier`), and substitution of a
+    dependent `N::v<T>` carries it over (WP-300).
   - `T(a, b)` for an unresolved construct, `sizeof...(Ts)`, and folds as
     `(... + xs)`.
 

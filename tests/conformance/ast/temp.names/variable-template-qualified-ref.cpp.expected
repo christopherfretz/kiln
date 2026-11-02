@@ -1,0 +1,58 @@
+TranslationUnitDecl
+|-NamespaceDecl N
+| |-VarTemplateDecl v
+| | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| | |-VarDecl v 'const int' constexpr cinit
+| | | `-ImplicitCastExpr 'const int' <IntegralCast>
+| | |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+| | `-VarTemplateSpecializationDecl referenced v 'const int' implicit_instantiation constexpr cinit value=4
+| |   |-TemplateArgument type 'int'
+| |   `-ImplicitCastExpr 'const int' <IntegralCast>
+| |     `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+| `-VarTemplateSpecializationDecl referenced v 'const int' implicit_instantiation constexpr cinit value=4
+|   |-TemplateArgument type 'int'
+|   `-ImplicitCastExpr 'const int' <IntegralCast>
+|     `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|-CXXRecordDecl struct S definition
+| |-VarTemplateDecl w
+| | |-TemplateTypeParmDecl class depth 0 index 0 T
+| | |-VarDecl w 'const int' static inline constexpr cinit value=1
+| | | `-IntegerLiteral 'int' 1
+| | |-VarTemplateSpecializationDecl referenced w 'const int' implicit_instantiation static inline constexpr cinit value=1
+| | | |-TemplateArgument type 'char'
+| | | `-IntegerLiteral 'int' 1
+| | `-VarTemplateSpecializationDecl referenced w 'const int' implicit_instantiation static inline constexpr cinit value=1
+| |   |-TemplateArgument type 'int'
+| |   `-IntegerLiteral 'int' 1
+| |-VarTemplateSpecializationDecl referenced w 'const int' implicit_instantiation static inline constexpr cinit value=1
+| | |-TemplateArgument type 'char'
+| | `-IntegerLiteral 'int' 1
+| `-VarTemplateSpecializationDecl referenced w 'const int' implicit_instantiation static inline constexpr cinit value=1
+|   |-TemplateArgument type 'int'
+|   `-IntegerLiteral 'int' 1
+|-ClassTemplateDecl I_
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 0 I
+| |-CXXRecordDecl struct I_ definition
+| |-ClassTemplateSpecializationDecl struct I_
+| | `-TemplateArgument value 'int' 4
+| `-ClassTemplateSpecializationDecl struct I_
+|   `-TemplateArgument value 'int' 1
+|-TypeAliasDecl A 'I_<N::v<int>>':'I_<4>'
+|-TypeAliasDecl B 'decltype(N::v<int>)':'const int'
+|-TypeAliasDecl C 'I_<S::w<char>>':'I_<1>'
+|-TypeAliasDecl D 'decltype(::N::v<int>)':'const int'
+|-ClassTemplateDecl P
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct P definition
+| | |-TypeAliasDecl A 'I_<N::v<int>>':'I_<4>'
+| | |-TypeAliasDecl B 'decltype(N::v<T>)'
+| | |-TypeAliasDecl C 'I_<S::w<T>>'
+| | `-FieldDecl arr 'int[N::v<T>]'
+| `-ClassTemplateSpecializationDecl struct P definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-TypeAliasDecl A 'I_<N::v<int>>':'I_<4>'
+|   |-TypeAliasDecl B 'decltype(N::v<int>)':'const int'
+|   |-TypeAliasDecl C 'I_<S::w<int>>':'I_<1>'
+|   `-FieldDecl arr 'int[4]'
+`-VarDecl p 'P<int>' callinit
+  `-CXXConstructExpr 'P<int>' 'void () noexcept'
