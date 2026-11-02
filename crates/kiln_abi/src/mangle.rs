@@ -266,10 +266,11 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
 
             let q = ast.types.canonical(n.ty().unwrap_or(QualType::INT));
             let is_const = ast.types.effective_quals(q).is_const() || const_array(ast, q);
-            // [basic.link]/3.2: an exported `const` variable has linkage.
+            // [basic.link]/3.2 (P2788): a `const` variable attached to a
+            // named module has module (or, exported, external) linkage.
             is_const
                 && !v.spec.is_inline()
-                && !ast.modules.owner(first).exported
+                && !(ast.modules.active && ast.module_attachment(first).is_some())
                 && v.spec.storage() != VarStorage::Extern
                 && !is_extern_c(ast, first)
                 && !matches!(v.templ.get(), Some((TemplLinkKind::Specialization, _)))

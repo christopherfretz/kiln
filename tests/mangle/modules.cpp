@@ -2,7 +2,8 @@
 // a namespace-scope entity with linkage attached to named module `A.B`
 // carries `W1AW1B` before its unqualified name, each module-name prefix is
 // a substitution candidate, and entities in `extern "C++"` or with
-// internal linkage carry none.
+// internal linkage carry none. A non-exported `const` variable attached to
+// the module has module linkage (P2788), not internal linkage.
 export module A.B;
 export int f(int x) { return x; }
 int g() { return 1; }
@@ -34,4 +35,6 @@ export int q();
 int ns2::q() { return 1; }
 export extern "C++" int ecpp() { return 6; }
 export extern "C" int ec() { return 11; }
+const int mc = 12;
+export const int *use_mc() { return &mc; }
 export int use() { return tw(1) + tw(2L) + h() + g() + ii() + var + ci; }
