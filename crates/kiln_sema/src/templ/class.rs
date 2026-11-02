@@ -40,6 +40,7 @@ struct SavedState {
     enums: Vec<crate::decl::EnumBuild>,
     braced_args: Vec<(kiln_ast::ExprId, crate::init::InitList)>,
     prototype_params: Vec<crate::decl::PrototypeFrame>,
+    requires_param_scopes: usize,
     deferring_call_ref: bool,
     deferred_call_refs: Vec<(kiln_ast::ExprId, DeclId)>,
     classes: Vec<crate::class::ClassBuild>,
@@ -79,6 +80,7 @@ impl Sema<'_, '_> {
             enums: std::mem::take(&mut self.enums),
             braced_args: std::mem::take(&mut self.braced_args),
             prototype_params: std::mem::take(&mut self.prototype_params),
+            requires_param_scopes: std::mem::take(&mut self.requires_param_scopes),
             deferring_call_ref: std::mem::take(&mut self.deferring_call_ref),
             deferred_call_refs: std::mem::take(&mut self.deferred_call_refs),
             classes: std::mem::take(&mut self.classes),
@@ -136,6 +138,7 @@ impl Sema<'_, '_> {
         self.enums = saved.enums;
         self.braced_args = saved.braced_args;
         self.prototype_params = saved.prototype_params;
+        self.requires_param_scopes = saved.requires_param_scopes;
         self.deferring_call_ref = saved.deferring_call_ref;
         self.deferred_call_refs = saved.deferred_call_refs;
         self.classes = saved.classes;

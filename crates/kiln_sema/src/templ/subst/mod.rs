@@ -592,6 +592,26 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         Ok(inst_parent == parent && !self.levels_retained(self.sema.ctx_template_levels(parent)))
     }
 
+    /// A parameter of a function type written inside the pattern
+    /// (`void (*)(T a, decltype(a))`, never adopted by a function), named
+    /// in a later part of that function type: a parameter with the
+    /// substituted type, made once per substitution (clang
+    /// `TransformFunctionTypeParams` instantiating the `ParmVarDecl`s).
+    /// It keeps its index and function-scope depth for the mangling of
+    /// a still-dependent reference.
+    fn nested_prototype_param(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
+        let node = *self.sema.ast.decls.get(d);
+        let Some(pd) = self.sema.ast.decls.param(d).copied() else { return Ok(d) };
+        let t = pd.original_ty.unwrap_or_else(|| self.decl_ty(d));
+        let ty = self.ty(t, loc)?;
+        let ctx = self.sema.ctx;
+        let flags = pd.flags & !kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING;
+        let np = self.sema.builder().prototype_param(ctx, node.name(), node.loc(), ty, pd.index, flags);
+        self.sema.unowned_params.insert(np);
+        self.locals.insert(d, DeclOrPack::Decl(np));
+        Ok(np)
+    }
+
     /// The declaration of the instantiation that pattern declaration `d`
     /// became (clang's `FindInstantiatedDecl`, §5.6): a local of the
     /// pattern, a member of an instantiated class, or `d` itself when it
@@ -622,6 +642,9 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         }
         if let Some(&(_, i)) = self.pairs.iter().rev().find(|p| p.0 == d) {
             return Ok(i);
+        }
+        if node.kind() == DeclKind::ParmVar && self.sema.unowned_params.contains(&d) {
+            return self.nested_prototype_param(d, loc);
         }
         if matches!(
             node.kind(),

@@ -180,15 +180,20 @@ impl Ast {
                 }
             }
             DeclKind::ParmVar => {
-                let (index, pack) = self
-                    .decls
-                    .param(d)
-                    .map_or((0, false), |p| (u32::from(p.index), p.flags & ParamData::PACK != 0));
+                // Position, pack-ness and function-scope depth (clang's
+                // `VisitDecl` for a `ParmVarDecl`): `a` of
+                // `void (*)(T a, decltype(a))` is not the outer `a`.
+                let (index, pack, depth) = self.decls.param(d).map_or((0, false, 0), |p| {
+                    (u32::from(p.index), p.flags & ParamData::PACK != 0, p.scope_depth())
+                });
                 // A requires-expression's parameters are a scope of their own.
                 let in_requires = node
                     .ctx()
                     .is_some_and(|c| self.decls.get(c).kind() == DeclKind::RequiresExprBody);
-                let pos = index | (u32::from(pack) << 16) | (u32::from(in_requires) << 17);
+                let pos = index
+                    | (u32::from(pack) << 16)
+                    | (u32::from(in_requires) << 17)
+                    | (depth << 18);
                 out.extend([D_PARM, pos, self.opt_canon_word(node.ty())]);
             }
             _ => out.extend([D_DECL, self.first(d).raw()]),

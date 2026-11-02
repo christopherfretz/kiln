@@ -776,13 +776,11 @@ struct Mangler<'a, 'b> {
     real_depth: bool,
     /// Comparing template-heads (constraint.rs): depths are ignored.
     head_only: bool,
-    /// The requires-clause being mangled, for `fp`/`fL` references.
-    req: Option<constraint::ReqCtx>,
-    /// Outside a requires-clause, clang's `FunctionTypeDepth`: the
-    /// number of function types being mangled (the encoded function's
-    /// bare function type included) and whether the innermost one's
-    /// result type is (`fp`/`fL` nesting of a parameter named in a
-    /// `decltype` of the signature, [abi] <function-param>).
+    /// clang's `FunctionTypeDepth`: the number of function types being
+    /// mangled (the encoded function's bare function type, a
+    /// requires-clause and a requires-expression's parameter list
+    /// included) and whether the innermost one's result type is (`fp`/`fL`
+    /// nesting of a parameter reference, [abi] <function-param>).
     fn_depth: (u32, bool),
 }
 
@@ -796,7 +794,6 @@ impl<'a, 'b> Mangler<'a, 'b> {
             comdat: false,
             real_depth: false,
             head_only: false,
-            req: None,
             fn_depth: (0, false),
         }
     }
@@ -841,9 +838,18 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.source_name(&decl_name(ast, d));
             return;
         }
-        self.name(d, v);
         if is_fn {
+            // The name is mangled inside the function's prototype scope:
+            // its template arguments, template-head requires-clause and
+            // lambda signatures may name its parameters one function type
+            // deep (clang `mangleFunctionEncoding`).
+            let saved = self.fn_depth;
+            self.fn_depth = (saved.0 + 1, false);
+            self.name(d, v);
+            self.fn_depth = saved;
             self.bare_function_type(d);
+        } else {
+            self.name(d, v);
         }
     }
 
@@ -1278,6 +1284,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
             return;
         }
         self.out.push_str("Ul");
+        // A bare function type (clang `mangleLambdaSig`): one function
+        // type deeper for the `fp`/`fL` nesting.
+        let saved = self.fn_depth;
+        self.fn_depth = (saved.0 + 1, false);
         let proto = data
             .call_op
             .and_then(|f| ast.decls.get(f).ty())
@@ -1296,6 +1306,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         } else {
             self.out.push('v');
         }
+        self.fn_depth = saved;
         self.out.push('E');
         if number > 1 {
             self.out.push_str(&(number - 2).to_string());
