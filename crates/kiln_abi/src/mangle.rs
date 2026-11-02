@@ -677,6 +677,20 @@ pub fn mangle_guard(ast: &Ast, anon: &mut AnonIds, d: DeclId, index: u32) -> Str
     }
 }
 
+/// The initializer function of module `name` (partition `partition`):
+/// `_ZGI <module-name>` (clang `mangleModuleInitializer`; a partition
+/// adds `WP <source-name>`). Not emitted in part A (spec/modules.md §7).
+pub fn mangle_module_initializer(ast: &Ast, name: &str, partition: Option<&str>) -> String {
+    let mut anon = AnonIds::new();
+    let mut m = Mangler::new(ast, &mut anon, "_ZGI");
+    m.module_name(name);
+    if let Some(p) = partition {
+        m.out.push_str("WP");
+        m.source_name(p);
+    }
+    m.out
+}
+
 /// The reference temporary `index` (clang's mangling number) extended by
 /// variable `d`: `_ZGR <name> [<seq-id>] _` ([abi:mangling]
 /// <special-name>).
