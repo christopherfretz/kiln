@@ -7,6 +7,7 @@
 
 use kiln_ast::QualType;
 use kiln_ast::types::{TypeAttrKind, TypeView};
+use kiln_source::Loc;
 use kiln_diag::DiagId;
 
 use crate::Sema;
@@ -223,7 +224,7 @@ impl Sema<'_, '_> {
     pub(crate) fn declarator_nullability(
         &mut self,
         mut base: QualType,
-        spec_loc: kiln_source::Loc,
+        spec_loc: Loc,
         d: &Declarator,
     ) -> (QualType, Vec<(usize, NullSpec)>) {
         let mut marks = Vec::new();

@@ -535,7 +535,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.ast.types.paren_type(i))
             }
             TypeView::Attributed { kind, modified, equivalent } => {
-                let at = self.sema.nullability_loc(t, loc);
+                let at = self.sema.nullability_loc(q, loc);
                 let m = self.ty(modified, loc)?;
                 let e = self.ty(equivalent, loc)?;
                 // A nullability qualifier on a type that became a
