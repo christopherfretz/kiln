@@ -423,6 +423,54 @@ impl Oven {
         idx
     }
 
+    /// The function of [`Oven::evaluate_chars`]: in one scope, `size`,
+    /// then `data` (a pointer to characters), then `bi::MSG_CHARS`;
+    /// returns the size. Not cached (a failed `static_assert` is
+    /// evaluated once).
+    pub(crate) fn compile_chars(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        size: ExprId,
+        data: ExprId,
+    ) -> u32 {
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry: UNCOMPILED,
+            state: FState::Stub,
+            nregs: 0,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+        });
+        let mut c = Compiler::new(self, b);
+        let entry = c.here();
+        let size_ty = c.ety(size);
+        let data_ty = c.ety(data);
+        let ct = match c.kind(data_ty) {
+            TyKind::Ptr(t) => t,
+            _ => data_ty,
+        };
+        c.open_scope(&[], true);
+        let n = c.reg();
+        c.rv_into(size, n);
+        let p = c.reg();
+        c.rv_into(data, p);
+        let loc = c.begin(data);
+        c.emit_site(Op::Builtin, crate::kbc::bi::MSG_CHARS, &[n, n, p, p, ct.0, 0], data, loc);
+        c.close_scope();
+        c.emit(Op::Ret, 1, &[n]);
+        let nregs = c.max;
+        let f = &mut self.funcs[idx as usize];
+        f.entry = entry;
+        f.state = FState::Ready;
+        f.nregs = nregs;
+        f.ret = RetKind::Scalar(size_ty);
+        idx
+    }
+
     /// A function destroying the object of type `ty` whose address is in
     /// its register 0 (the constant destruction of `constexpr` variable
     /// `d`, [dcl.constexpr]/6), or `None` if destroying it does nothing.
@@ -698,8 +746,12 @@ pub(crate) struct Compiler<'a> {
     /// initializing (its `this`, [class.mem.general]/11).
     this_override: Option<u32>,
     /// In a lambda call operator capturing `this` or `*this`: the
-    /// captured `this` (the `this` of its body; `this_reg` is the closure).
+    /// captured `this` (the `this` of its body; `closure_reg` is the
+    /// closure).
     lambda_this: Option<u32>,
+    /// In a lambda call operator: the closure object (`this_reg`, or the
+    /// explicit object parameter as the closure type).
+    closure_reg: Option<u32>,
     /// The storage of the lifetime-extended temporaries of the variable
     /// being initialized, allocated before its initializer's cleanups
     /// scope (keyed by the `MaterializeTemporaryExpr`).
@@ -753,6 +805,7 @@ impl<'a> Compiler<'a> {
             this_reg: None,
             this_override: None,
             lambda_this: None,
+            closure_reg: None,
             ext_temps: FxHashMap::default(),
             late_const: FxHashSet::default(),
             cur_fn: None,
@@ -1542,7 +1595,7 @@ impl Compiler<'_> {
                     self.stmt(i);
                 }
                 if let Some(v) = d.cond_var {
-                    self.decl(v);
+                    self.decl_one(v);
                 }
                 match kind {
                     // Constant evaluation is always manifestly constant-evaluated.
@@ -1560,6 +1613,7 @@ impl Compiler<'_> {
                         let j = match d.cond {
                             Some(c) => {
                                 let r = self.rv(c);
+                                self.cond_bindings(d.cond_var);
                                 Some(self.jmp_if(r, false))
                             }
                             None => None,
@@ -1734,13 +1788,17 @@ impl Compiler<'_> {
         let mut exit = None;
         if kind != StmtKind::DoStmt {
             if let Some(v) = d.cond_var {
-                self.decl(v);
+                self.decl_one(v);
             }
             if let Some(c) = d.cond {
                 let m = self.next;
                 let r = self.rv(c);
+                // The bindings' registers live as long as the loop (the
+                // statement's caller resets `next`).
+                if !self.cond_bindings(d.cond_var) {
+                    self.next = m;
+                }
                 exit = Some(self.jmp_if(r, false));
-                self.next = m;
             }
         }
         let cont_depth = self.scopes.len();
@@ -2050,6 +2108,17 @@ impl Compiler<'_> {
         for h in holding_vars(self.b.ast(), d) {
             self.decl_one(h);
         }
+    }
+
+    /// A condition variable's tuple-like bindings, initialized after the
+    /// condition is evaluated ([stmt.pre]/4, P0963).
+    /// Whether there were any.
+    fn cond_bindings(&mut self, v: Option<DeclId>) -> bool {
+        let hs = v.map(|v| holding_vars(self.b.ast(), v)).unwrap_or_default();
+        for &h in &hs {
+            self.decl_one(h);
+        }
+        !hs.is_empty()
     }
 
     fn decl_one(&mut self, d: DeclId) {
@@ -4573,11 +4642,14 @@ impl Compiler<'_> {
         }
         // An operator call whose callee is a member function: the first
         // argument is the object ([over.match.oper]/2, clang's
-        // `EmitCXXOperatorMemberCallExpr`).
+        // `EmitCXXOperatorMemberCallExpr`); for an explicit object member
+        // function it is the (converted) first argument, as in a plain
+        // call ([over.call.func]/3).
         let ast = self.ast();
         if let Some(md) = direct
             && ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
             && ast.decls.get(md).kind() == DeclKind::CXXMethod
+            && !ast.decls.function(md).is_some_and(|f| f.spec.has_explicit_object())
             && let Some((&obj, rest)) = args.split_first()
         {
             return self.method_call(e, c, md, obj, false, false, rest, sret);

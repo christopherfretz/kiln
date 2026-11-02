@@ -392,6 +392,24 @@ pub trait SemaBridge {
     }
 }
 
+/// What one evaluation context runs.
+#[derive(Clone, Copy, Debug)]
+enum Job {
+    /// The value of an expression.
+    Expr(ExprId),
+    /// The characters of a `static_assert` message ([`Oven::evaluate_chars`]).
+    Chars { size: ExprId, data: ExprId },
+}
+
+impl Job {
+    /// The expression located in a depth-limit failure.
+    fn expr(self) -> ExprId {
+        match self {
+            Job::Expr(e) | Job::Chars { size: e, .. } => e,
+        }
+    }
+}
+
 /// The constant evaluator of one translation unit.
 #[derive(Debug)]
 pub struct Oven {
@@ -435,6 +453,8 @@ pub struct Oven {
     /// The static temporaries a frozen result points to, with their
     /// objects: frozen into `LetData.value` once the result is.
     pub(crate) let_pending: Vec<(DeclId, u64)>,
+    /// The characters [`Oven::evaluate_chars`] read (`bi::MSG_CHARS`).
+    pub(crate) msg_chars: Vec<u8>,
     pub(crate) mem: Memory,
     pub(crate) regs: Vec<u128>,
     pub(crate) stack: Vec<Frame>,
@@ -493,6 +513,7 @@ impl Oven {
             lets: FxHashMap::default(),
             unknowns: FxHashMap::default(),
             let_pending: Vec::new(),
+            msg_chars: Vec::new(),
             mem: Memory::new(budget.bytes),
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
@@ -557,6 +578,44 @@ impl Oven {
             ok: r.is_ok(),
         });
         r
+    }
+
+    /// Evaluates the character range of a `static_assert` message
+    /// ([dcl.pre]/11, P2741; clang `Expr::EvaluateCharRangeAsString`):
+    /// `size` (of type `std::size_t`) and `data` (of type `const char *`),
+    /// then the `size` characters `data` points to, in one manifestly
+    /// constant-evaluated context whose temporaries live until the last
+    /// character is read. Recorded in [`Oven::stats`] as `ctx.kind`.
+    ///
+    /// Returns the characters read (those before a failing read: clang
+    /// prints them) and the failure, with its notes, if any of these is
+    /// not a constant expression (a read outside the object `data`
+    /// points into).
+    pub fn evaluate_chars(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        size: ExprId,
+        data: ExprId,
+        ctx: EvalContext,
+    ) -> (Vec<u8>, Result<(), EvalFailure>) {
+        let job = Job::Chars { size, data };
+        let (r, c) = self.eval_job(bridge, job, None, false, false, true);
+        self.stats.push(EvalRecord {
+            loc: ctx.loc,
+            kind: ctx.kind,
+            steps: c.steps,
+            bytes: c.bytes,
+            peak_bytes: c.peak,
+            calls: c.calls,
+            allocs: c.allocs,
+            peak_arena: c.arena,
+            frozen_bytes: c.frozen,
+            static_bytes: self.mem.static_top(),
+            wall_us: c.wall_us,
+            ok: r.is_ok(),
+        });
+        let chars = std::mem::take(&mut self.msg_chars);
+        (chars, r.map(|_| ()))
     }
 
     /// Folds `e` if it is a constant expression; never reports anything
@@ -695,6 +754,7 @@ impl Oven {
             + map(&self.lets)
             + map(&self.unknowns)
             + cap(&self.let_pending)
+            + cap(&self.msg_chars)
             + self.mem.footprint()
             + cap(&self.regs)
             + cap(&self.stack)
@@ -720,6 +780,19 @@ impl Oven {
         &mut self,
         bridge: &mut dyn SemaBridge,
         e: ExprId,
+        object: Option<DeclId>,
+        silent: bool,
+        enum_check: bool,
+        const_context: bool,
+    ) -> (Result<ConstValueId, EvalFailure>, Cost) {
+        self.eval_job(bridge, Job::Expr(e), object, silent, enum_check, const_context)
+    }
+
+    /// [`Oven::eval_ctx`] of any job.
+    fn eval_job(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: Job,
         object: Option<DeclId>,
         silent: bool,
         enum_check: bool,
@@ -755,19 +828,33 @@ impl Oven {
         (r, cost)
     }
 
+    /// Runs `job` with registers from `fb`.
+    fn run_job(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        job: Job,
+        object: Option<DeclId>,
+        fb: u32,
+    ) -> Result<ConstValueId, EvalFailure> {
+        match job {
+            Job::Expr(e) => self.eval_inner(b, e, object, fb),
+            Job::Chars { size, data } => self.eval_chars(b, size, data, fb),
+        }
+    }
+
     /// The outermost context: owns the frame and heap spaces, reset at its
     /// end.
     fn eval_outermost(
         &mut self,
         bridge: &mut dyn SemaBridge,
-        e: ExprId,
+        e: Job,
         object: Option<DeclId>,
         silent: bool,
         enum_check: bool,
         const_context: bool,
     ) -> (Result<ConstValueId, EvalFailure>, vm::Counters) {
         self.begin_outermost(silent, enum_check, const_context);
-        let r = self.eval_inner(bridge, e, object, 0);
+        let r = self.run_job(bridge, e, object, 0);
         let c = self.end_outermost();
         (r, c)
     }
@@ -823,7 +910,7 @@ impl Oven {
     fn eval_nested(
         &mut self,
         bridge: &mut dyn SemaBridge,
-        e: ExprId,
+        e: Job,
         object: Option<DeclId>,
         silent: bool,
         enum_check: bool,
@@ -836,7 +923,7 @@ impl Oven {
             let notes = if silent {
                 Vec::new()
             } else {
-                let loc = bridge.ast().exprs.get(e).loc();
+                let loc = bridge.ast().exprs.get(e.expr()).loc();
                 vec![Note::new(
                     loc,
                     format!(
@@ -889,7 +976,7 @@ impl Oven {
         self.mem.arena_peak = arena0;
         self.mem.heap_allocs = 0;
         self.mem.ctx = ctx;
-        let r = self.eval_inner(bridge, e, object, fb);
+        let r = self.run_job(bridge, e, object, fb);
         let steps1 = self.run.counters.steps;
         let c = vm::Counters {
             steps: steps1 - steps0,

@@ -365,11 +365,12 @@ impl Cg<'_> {
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
-        if let Some(v) = d.cond_var {
-            self.emit_var_decl(v)?;
-        }
+        let deferred = match d.cond_var {
+            Some(v) => self.emit_cond_var_decl(v)?.then_some(v),
+            None => None,
+        };
         let cond = d.cond.expect("if condition");
-        if let Some(b) = self.fold_bool(cond) {
+        if let Some(b) = self.fold_bool(cond).filter(|_| deferred.is_none()) {
             let (live, dead) = if b { (d.then, d.els) } else { (d.els, d.then) };
             if kind == IfKind::Constexpr || !dead.is_some_and(|x| self.contains_label(x)) {
                 if let Some(l) = live {
@@ -384,7 +385,13 @@ impl Cg<'_> {
         let then_b = self.f.fir.create_block();
         let end_b = self.f.fir.create_block();
         let else_b = if d.els.is_some() { self.f.fir.create_block() } else { end_b };
-        self.branch_on_bool(cond, then_b, else_b)?;
+        if let Some(v) = deferred {
+            let cv = self.eval_bool(cond)?;
+            self.emit_binding_vars(v)?;
+            self.cond_br(cv, then_b, else_b);
+        } else {
+            self.branch_on_bool(cond, then_b, else_b)?;
+        }
         self.emit_block(then_b, false);
         if let Some(t) = d.then {
             let sc = self.begin_scope(false);
@@ -479,11 +486,15 @@ impl Cg<'_> {
         let end = self.jump_dest_here();
         self.f.jumps.push(Jump { brk: end, cont: Some(header) });
         let cond_scope = self.begin_scope(false);
-        if let Some(v) = d.cond_var {
-            self.emit_var_decl(v)?;
-        }
+        let deferred = match d.cond_var {
+            Some(v) => self.emit_cond_var_decl(v)?.then_some(v),
+            None => None,
+        };
         let cond = d.cond.expect("while condition");
         let cv = self.eval_bool(cond)?;
+        if let Some(v) = deferred {
+            self.emit_binding_vars(v)?;
+        }
         let const_true = matches!(self.cint(cv), Some((_, 1, _)));
         let md = self.new_loop_md(Some(cond), d.body);
         self.f.loops.push(LoopFrame { header: header_b, md });
@@ -571,10 +582,17 @@ impl Cg<'_> {
         };
         self.f.jumps.push(Jump { brk: end, cont });
         if let Some(c) = d.cond {
-            if let Some(v) = d.cond_var {
-                self.emit_var_decl(v)?;
+            let deferred = match d.cond_var {
+                Some(v) => self.emit_cond_var_decl(v)?.then_some(v),
+                None => None,
+            };
+            if d.cond_var.is_some() {
                 cont = Some(if d.inc.is_some() { self.jump_dest_here() } else { cond_d });
                 self.f.jumps.last_mut().expect("loop").cont = cont;
+            }
+            let cv = self.eval_bool(c)?;
+            if let Some(v) = deferred {
+                self.emit_binding_vars(v)?;
             }
             let exit = if self.requires_cleanups(&for_scope) {
                 self.f.fir.create_block()
@@ -582,7 +600,6 @@ impl Cg<'_> {
                 end.blk
             };
             let body_b = self.f.fir.create_block();
-            let cv = self.eval_bool(c)?;
             self.cond_br(cv, body_b, exit);
             if exit != end.blk {
                 self.emit_block(exit, false);

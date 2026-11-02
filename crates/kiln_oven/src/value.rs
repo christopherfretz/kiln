@@ -224,6 +224,32 @@ impl Oven {
         Ok(cv)
     }
 
+    /// Runs the message job of [`Oven::evaluate_chars`] with its frame at
+    /// `fb`: the characters are left in `msg_chars`; the value is the
+    /// size.
+    pub(crate) fn eval_chars(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        size: ExprId,
+        data: ExprId,
+        fb: u32,
+    ) -> Result<ConstValueId, EvalFailure> {
+        self.run.object = None;
+        self.msg_chars.clear();
+        let f = self.compile_chars(b, size, data);
+        self.let_pending.clear();
+        self.exec(b, f, fb)?;
+        let v = self.regs[fb as usize];
+        let loc = expr_loc(b.ast(), size);
+        let RetKind::Scalar(ty) = self.funcs[f as usize].ret else {
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        };
+        self.freeze_scalar(b, ty, v, loc).map_err(|f| match f {
+            Freeze::Fault(k) => EvalFailure::silent(k),
+            Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
+        })
+    }
+
     /// Runs the destruction of variable `d` (`Oven::has_constant_destruction`):
     /// whether it succeeds without leaking.
     pub(crate) fn destroy_var(

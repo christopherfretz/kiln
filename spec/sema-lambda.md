@@ -35,7 +35,19 @@ through four entry points (`kiln_sema/src/lambda/mod.rs`), in order:
    definition, pushes the `LambdaData` side record and a `LambdaScope`,
    and checks the explicit captures (§4.1). The scope records
    `templ.heads.len()` and `scopes.len()` so that a later head is known to
-   be the lambda's own.
+   be the lambda's own. It also creates the init-capture variables
+   (`create_init_capture_vars`, `LambdaScope::init_cap_vars`): P2036 (a
+   DR, so in every mode) puts them in scope from the introducer on
+   ([expr.prim.lambda.capture]/6), so unqualified lookup in the
+   *lambda-declarator* (parameters' default arguments, `noexcept`,
+   trailing return type, requires-clause) finds them
+   (`lambda_init_captures_named`), after the lambda's template and
+   function parameters and before the enclosing scopes. They stay in the
+   enclosing context until the call operator adopts them when its body
+   opens (`declare_init_captures`). Several init-captures named `_` are
+   all found, in order ([basic.scope.scope]/5, P2169). As in clang 19 and
+   22, `decltype((x))` of an init-capture `x` in the declarator does not
+   add the call operator's `const`.
 2. `act_on_lambda_template_params_start(l_angle)` if `<` follows: opens a
    template head one level deeper than the enclosing ones and a
    template-parameter scope. The parser then parses the parameter list
@@ -78,6 +90,38 @@ function; `constexpr` (implicitly, [expr.prim.lambda.closure]/5) unless
 `consteval` was written; the return type is `auto` (deduced from the body)
 unless a trailing return type was written. Its parameters may have
 default arguments; the [dcl.fct.default]/4 check is the ordinary one.
+
+**Explicit object parameter** (P0847, WP-356). When the first parameter
+is declared `this T` (`lambda_explicit_object`, clang
+`CheckExplicitObjectLambda`), the call operator is an explicit object
+member function (FnSpec `explicit_object`), never `const`. Errors, with
+clang's wording and location: the parameter not first
+(`sema_explicit_object_param_not_first`, "of the lambda"), a `static`
+lambda (`sema_explicit_object_param_nonmember`, "static lambda"; the
+operator is then an ordinary static one), `mutable`
+(`sema_explicit_object_lambda_mutable`), a default argument (at its `=`,
+`ParamInfo::default_loc`) and a pack. With a capture-default or a
+capture, the parameter's type, references and cv removed, must be the
+closure type or a class derived from it ([expr.prim.lambda.closure]/5;
+`check_lambda_explicit_object_type`, clang
+`DiagnoseInvalidExplicitObjectParameterInLambda`):
+
+- a non-template call operator is checked once, at the parameter's
+  name, when it is declared: `sema_explicit_object_lambda_capture_type`
+  ("must be the same as, or derived from, the lambda");
+- a specialization of a generic one is checked at each call that
+  selects it (`check_lambda_explicit_object_call`, from
+  `build_operator_call` and `explicit_object_call`), at the call's
+  object: a type not derived from the closure gets the same message, a
+  private or protected derivation "must derive publicly from the
+  lambda" plus the access note (`check_lambda_object_base_access`,
+  `BaseUse::LambdaObject` in `class/access.rs`). The call is then
+  invalid.
+
+A lambda without captures takes any object type. The conversion to
+pointer to function of such a lambda returns the call operator's address
+(its type has the object parameter first, [expr.prim.lambda.closure]/8);
+there is no static invoker.
 
 ### 3.2 Conversion to pointer to function and the static invoker
 
@@ -204,7 +248,12 @@ and the type of the member's access: `const` in a non-`mutable` lambda for
 a by-copy capture ([expr.prim.lambda.capture]/11, so assignment reports
 `cannot assign to a variable captured by copy in a non-mutable lambda`).
 Such a name is not a candidate for implicit move or NRVO
-([class.copy.elision]/3). `this` in the body is the captured `this` or
+([class.copy.elision]/3). With an explicit object parameter, a by-copy
+capture is `const` exactly when the parameter's (referenced) type is
+const-qualified, whatever `mutable` says ([expr.prim.id.unqual]/3;
+`lambda_capture_const`, clang `lambdaCaptureShouldBeConst`). For a
+generic lambda this is decided on the template's parameter as written
+(`this auto&` versus `this const auto&`), not per specialization (§11). `this` in the body is the captured `this` or
 the address of the `*this` copy.
 
 ## 5. Generic lambdas
@@ -258,8 +307,10 @@ in `kiln_diag/src/ids/parse.rs` and `ids/sema_*.rs`: `parse_*lambda*`, `parse_ex
 `sema_lambda_impcap`, `sema_capture_*`, `sema_this_capture`,
 `sema_deprecated_this_capture`, `sema_assign_captured_by_copy`,
 `sema_reference_to_local_in_enclosing`, `sema_falloff_nonvoid_lambda*`
-and their notes). `-Wdeprecated-this-capture` and `-Wreturn-type`
-control the warnings.
+and their notes; for explicit object parameters,
+`sema_explicit_object_param_*`, `sema_explicit_object_lambda_mutable`
+and `sema_explicit_object_lambda_capture_type`, §3.1).
+`-Wdeprecated-this-capture` and `-Wreturn-type` control the warnings.
 
 ## 7. Evaluation (the Oven)
 
@@ -269,7 +320,12 @@ A closure object is an ordinary class object in the Oven's memory; the
 - **Calls** go through the ordinary member call path to the call
   operator (or its specialization). The prologue (`lambda_prologue`)
   sets the body's `this` to the captured `this`, or to the address of
-  the captured `*this` copy.
+  the captured `*this` copy. A call operator with an explicit object
+  parameter is called through the generic call path with the object as
+  argument 0 (also for an overloaded `operator()` call); its closure
+  object (`closure_reg`) is that parameter or its referent, adjusted to
+  its closure-type base when the parameter's class derives from the
+  closure, so captured names and `this` read the right object.
 - **Captured names** (`captured_var_place`): a name with
   `REFERS_TO_ENCLOSING` in a call operator that captures it is the closure
   member's place, or the referent of a reference member. A by-reference
@@ -287,7 +343,11 @@ object itself.
 
 `kiln_codegen/src/lambda.rs`. The closure is an ordinary class type
 (named as clang names it); capture members are fields. The call
-operator's prologue records the closure and the captured `this`. The
+operator's prologue records the closure and the captured `this`; with an
+explicit object parameter the closure is that parameter (its referent
+for a reference), adjusted by the non-virtual offset of the closure-type
+base when its class derives from the closure (`explicit_object_closure`,
+`nv_base_offset`; clang `EmitLValueForLambdaField`). The
 conversion function returns the invoker's address (or the call
 operator's for a static lambda); `__invoke` calls the call operator on an
 unused closure temporary, forwarding each parameter (clang
@@ -354,6 +414,10 @@ rebuilt one is in `locals`, step 1) to itself, as clang's
   (WP-282: `run-template-param-pack-fold`, `run-capture-pack`,
   `constexpr-template-param-pack-fold`, `errors-template-param-pack-length`),
   plus six `expect: ast` goldens (`ast-*.cpp`) against clang's JSON.
+- `tests/conformance/dcl.fct/p0847-lambda-*.cpp` (explicit object
+  parameters: compile, run including derived closures, the `[*this]`
+  run test under clang >= 22, and the diagnostics) and
+  `tests/conformance/expr.prim.lambda/p2036-*.cpp` (init-capture scope).
 - `tests/codegen/lambda_basic.cpp`, `lambda_captures.cpp`,
   `lambda_captures_class.cpp`, `lambda_names.cpp`: IR-exact.
 - `xtask clang-ast` prints `LambdaExpr` and its implicit members.
@@ -376,6 +440,11 @@ rebuilt one is in `locals`, step 1) to itself, as clang's
    lambdas; a lambda-expression as a template argument and calling an
    `auto` template parameter whose default is a closure
    (`template-argument.cpp`); `x.template operator()<T>()` (WP-121).
+4. **Explicit object parameters** (WP-356 follow-ups): a generic call
+   operator's capture constness is fixed by the template's parameter
+   as written, not recomputed per specialization; an ambiguous closure
+   base is reported as "not derived" rather than with clang's
+   ambiguity wording.
 
 ## Landed (WP-075)
 

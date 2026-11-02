@@ -252,6 +252,25 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate(b, e, ctx))
     }
 
+    /// The characters of a `static_assert` message: its `size` and
+    /// `data` calls evaluated together ([`Oven::evaluate_chars`]): the
+    /// characters read, and the evaluation's failure.
+    pub fn eval_chars(
+        &mut self,
+        size: ExprId,
+        data: ExprId,
+        ctx: EvalContext,
+    ) -> (Vec<u8>, Result<(), EvalFailure>) {
+        if !self.eval_stack_ok(size) {
+            return (Vec::new(), Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant)));
+        }
+        self.flush_member_refs();
+        if !self.special.pending_deleted.is_empty() {
+            self.flush_pending_deleted();
+        }
+        self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate_chars(b, size, data, ctx))
+    }
+
     /// The value of `e` if it is a constant expression. Silent (no
     /// diagnostics, no notes) and not recorded in the statistics: for
     /// warnings and other speculative folds.

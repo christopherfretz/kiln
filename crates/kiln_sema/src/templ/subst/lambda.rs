@@ -47,6 +47,26 @@ impl Substituter<'_, '_, '_> {
         };
         let init_vars = self.lambda_captures(&data.captures, &mut intro)?;
         let lambda = self.sema.act_on_lambda_start(&intro);
+        // The init-capture variables, in order (several pattern
+        // variables share a name after an earlier expansion of an
+        // init-capture pack); an expanded pack maps to all its elements.
+        // Mapped before the declarator, where they are in scope (P2036).
+        let caps = self.sema.ast.exprs.lambdas.get(lambda).captures.clone();
+        let mut news = caps.iter().filter(|c| c.init).filter_map(|c| c.var);
+        for (v, n) in init_vars {
+            let vars: Vec<kiln_ast::DeclId> = news.by_ref().take(n.unwrap_or(1)).collect();
+            match n {
+                Some(_) => {
+                    let l = self.sema.ast.lists.push(&vars);
+                    self.locals.insert(v, DeclOrPack::Pack(l));
+                }
+                None => {
+                    if let Some(&x) = vars.first() {
+                        self.locals.insert(v, DeclOrPack::Decl(x));
+                    }
+                }
+            }
+        }
         if let Some((_, params)) = head
             && self.open_substituted_head(params).is_err()
         {
@@ -74,26 +94,6 @@ impl Substituter<'_, '_, '_> {
         self.sema.copy_dependent_access(call_op, new_op);
         self.lambda_constraints(head.map(|h| h.0), call_op, new_op);
         self.lambda_default_args(call_op, new_op);
-        // The init-capture variables, by name.
-        // The init-capture variables, in order (several pattern
-        // variables share a name after an earlier expansion of an
-        // init-capture pack); an expanded pack maps to all its elements.
-        let caps = self.sema.ast.exprs.lambdas.get(lambda).captures.clone();
-        let mut news = caps.iter().filter(|c| c.init).filter_map(|c| c.var);
-        for (v, n) in init_vars {
-            let vars: Vec<kiln_ast::DeclId> = news.by_ref().take(n.unwrap_or(1)).collect();
-            match n {
-                Some(_) => {
-                    let l = self.sema.ast.lists.push(&vars);
-                    self.locals.insert(v, DeclOrPack::Pack(l));
-                }
-                None => {
-                    if let Some(&x) = vars.first() {
-                        self.locals.insert(v, DeclOrPack::Decl(x));
-                    }
-                }
-            }
-        }
         let rbrace = self.sema.ast.stmts.rbrace(body);
         self.lambda_bodies += 1;
         let b = self.body(body);
