@@ -332,7 +332,14 @@ fails (clang's `ActOnCallExpr` check of the callee). A dependent call
 warns at the definition and again per instantiation (`per_instantiation`,
 spec/diag.md §7.4); a non-dependent one in a template once. A call where
 ADL finds no template is an undeclared identifier with no warning.
+From C++20 the same points get the off-by-default compatibility warning
+"... is incompatible with C++ standards before C++20"
+(`sema_cxx17_compat_adl_only_template_id`, group `pre-c++20-compat`, also
+enabled by `pre-c++20-compat-pedantic`; clang 19 says "no prior function
+template declaration", its `_19` row; WP-401).
 Tests: `temp.names/adl-only-template-id-cxx17.cpp`,
+`temp.arg.explicit/pre-cxx20-compat-adl-only-template-id{,-clang19}.cpp`,
+`temp.arg.explicit/adl-only-template-id-cxx20-silent.cpp`,
 `temp.names/non-template-followed-by-args-recovery.cpp`,
 `temp.names/non-template-followed-by-args-cxx17.cpp`,
 `temp.names/non-template-followed-by-args.cpp`.
