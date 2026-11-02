@@ -264,7 +264,7 @@ impl Sema<'_, '_> {
             let cap = self.capture_type(l, i);
             let data = self.ast.exprs.lambdas.get(l);
             let copy = data.captures[i].kind == CaptureKind::ByCopy;
-            let konst = copy && !data.mutable;
+            let konst = copy && self.lambda_capture_const(l);
             let mut rf = self.non_reference(cap);
             if konst {
                 rf = self.ast.types.qualify(rf, Quals::CONST);
@@ -282,7 +282,7 @@ impl Sema<'_, '_> {
             } else {
                 data.default == CaptureDefault::ByRef
             };
-            let mutable = data.mutable;
+            let mutable = !self.lambda_capture_const(l);
             if by_ref {
                 cap = self.ast.types.lvalue_ref_to(rf);
             } else {
@@ -313,6 +313,95 @@ impl Sema<'_, '_> {
             }
         }
         Captured::Yes(rf)
+    }
+
+    /// Whether a capture by copy of lambda `l` is `const` in its body
+    /// ([expr.prim.id.unqual]/3): with an explicit object parameter, when
+    /// the parameter's (referenced) type is const-qualified; otherwise
+    /// unless the lambda is `mutable` (clang
+    /// `LambdaScopeInfo::lambdaCaptureShouldBeConst`).
+    pub(crate) fn lambda_capture_const(&self, l: LambdaId) -> bool {
+        let data = self.ast.exprs.lambdas.get(l);
+        let obj = data.call_op.filter(|&f| self.has_explicit_object(f)).and_then(|f| {
+            let x = self.ast.decls.function(f)?;
+            self.ast.lists.iter::<DeclId>(x.params).next()
+        });
+        match obj.and_then(|p| self.ast.decls.get(p).ty()) {
+            Some(t) => {
+                let t = self
+                    .ast
+                    .types
+                    .pointee(t)
+                    .filter(|_| self.ast.types.is_reference(t))
+                    .unwrap_or(t);
+                self.ast.types.canonical(t).quals().contains(Quals::CONST)
+            }
+            None => !data.mutable,
+        }
+    }
+
+    /// [expr.prim.lambda.closure]/5 (P0847) for a call at `loc` of `f`:
+    /// [`Self::check_lambda_explicit_object_type`] for a specialization
+    /// of a generic lambda's call operator (a non-template one was
+    /// checked where it was declared). Returns false after an error.
+    pub(crate) fn check_lambda_explicit_object_call(&mut self, f: DeclId, loc: Loc) -> bool {
+        let Some(l) = self.ast.call_op_lambda(f) else { return true };
+        let op = self.ast.exprs.lambdas.get(l).call_op;
+        if op.is_some_and(|op| self.ast.first(op) == self.ast.first(f)) {
+            return true;
+        }
+        self.check_lambda_explicit_object_type(f, loc)
+    }
+
+    /// [expr.prim.lambda.closure]/5 (P0847): the explicit object
+    /// parameter of `f`, the call operator of a lambda with a
+    /// lambda-capture, is of the closure type or of a class publicly and
+    /// unambiguously derived from it (clang
+    /// `DiagnoseInvalidExplicitObjectParameterInLambda`). Reports a
+    /// violation at `loc` and returns false.
+    pub(crate) fn check_lambda_explicit_object_type(&mut self, f: DeclId, loc: Loc) -> bool {
+        if !self.has_explicit_object(f) {
+            return true;
+        }
+        let Some(l) = self.ast.call_op_lambda(f) else { return true };
+        let data = self.ast.exprs.lambdas.get(l);
+        if data.default == CaptureDefault::None && data.captures.is_empty() {
+            return true;
+        }
+        let closure = data.closure;
+        let Some(p) =
+            self.ast.decls.function(f).and_then(|x| self.ast.lists.iter::<DeclId>(x.params).next())
+        else {
+            return true;
+        };
+        let Some(t) = self.ast.decls.get(p).ty() else { return true };
+        let t = self.ast.types.pointee(t).filter(|_| self.ast.types.is_reference(t)).unwrap_or(t);
+        let t = QualType::unqual(self.ast.types.canonical(t).ty());
+        if self.ast.types.is_dependent(t) || t == QualType::ERROR {
+            return true;
+        }
+        let Some(r) = self.ast.types.as_record(t) else {
+            return self.lambda_object_not_derived(t, loc);
+        };
+        if self.ast.first(r) == self.ast.first(closure) {
+            return true;
+        }
+        let paths = crate::conv::bases::base_paths(self, r, closure);
+        let Some(path) = paths.first() else {
+            return self.lambda_object_not_derived(t, loc);
+        };
+        let closure_ty = QualType::unqual(self.ast.types.record_type(closure));
+        self.check_lambda_object_base_access(t, closure_ty, path, loc)
+    }
+
+    /// `the type must be the same as, or derived from the lambda`.
+    fn lambda_object_not_derived(&mut self, t: QualType, loc: Loc) -> bool {
+        let m = self
+            .diag(DiagId::sema_explicit_object_lambda_capture_type, loc)
+            .arg(self.ty_arg(t))
+            .arg(0u8);
+        self.emit(m);
+        false
     }
 
     /// Records capture `c` of open lambda `l` with member type `ty`.
@@ -752,7 +841,7 @@ impl Sema<'_, '_> {
         let Some(i) = data.captures.iter().position(|c| c.kind == CaptureKind::StarThis) else {
             return outer;
         };
-        let konst = !data.mutable;
+        let konst = self.lambda_capture_const(id);
         let mut t = self.capture_type(id, i);
         if konst {
             t = self.ast.types.qualify(t, Quals::CONST);

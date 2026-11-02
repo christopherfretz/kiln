@@ -1262,6 +1262,9 @@ impl Sema<'_, '_> {
         let Some(conv_args) = conv_args else {
             return self.recover_err(&kids, loc);
         };
+        if !self.check_lambda_explicit_object_call(m, self.begin_loc(obj)) {
+            return self.recover_err(&kids, loc);
+        }
         let (ty, vk) = self.call_result(proto.ret(), loc);
         let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
         let call = self.maybe_bind_temporary(call);

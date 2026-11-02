@@ -1217,6 +1217,7 @@ impl Sema<'_, '_> {
             attrs,
             invalid: ds.invalid || d.invalid,
             default_arg: DefaultArg::None,
+            default_loc: Loc::INVALID,
             range: (ds.loc, d.name_loc()),
             type_loc: ds.type_loc.unwrap_or(ds.loc),
             ref_loc: if d.ellipsis.is_none() { Self::outer_ref_loc(d) } else { Loc::INVALID },
@@ -1239,7 +1240,8 @@ impl Sema<'_, '_> {
     ) -> bool {
         for p in params.iter().skip(1) {
             if p.explicit_object.is_some() {
-                self.error(DiagId::sema_explicit_object_param_not_first, p.loc);
+                let m = self.diag(DiagId::sema_explicit_object_param_not_first, p.loc).arg(0u8);
+                self.emit(m);
             }
         }
         let Some(first) = params.first() else { return false };
@@ -1254,7 +1256,8 @@ impl Sema<'_, '_> {
             None
         };
         if let Some(w) = which {
-            let m = self.diag(DiagId::sema_explicit_object_param_nonmember, this_loc).arg(w);
+            let m =
+                self.diag(DiagId::sema_explicit_object_param_nonmember, this_loc).arg(w).arg(0u8);
             self.emit(m);
             return false;
         }
@@ -1284,7 +1287,7 @@ impl Sema<'_, '_> {
             DefaultArg::None => {}
             DefaultArg::Unparsed(l, _) => self.error(DiagId::sema_explicit_object_param_default, l),
             DefaultArg::Parsed(e) => {
-                let l = self.eloc(e);
+                let l = if first.default_loc.is_valid() { first.default_loc } else { self.eloc(e) };
                 self.error(DiagId::sema_explicit_object_param_default, l);
             }
         }

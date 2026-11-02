@@ -723,8 +723,12 @@ pub(crate) struct Compiler<'a> {
     /// initializing (its `this`, [class.mem.general]/11).
     this_override: Option<u32>,
     /// In a lambda call operator capturing `this` or `*this`: the
-    /// captured `this` (the `this` of its body; `this_reg` is the closure).
+    /// captured `this` (the `this` of its body; `closure_reg` is the
+    /// closure).
     lambda_this: Option<u32>,
+    /// In a lambda call operator: the closure object (`this_reg`, or the
+    /// explicit object parameter as the closure type).
+    closure_reg: Option<u32>,
     /// The storage of the lifetime-extended temporaries of the variable
     /// being initialized, allocated before its initializer's cleanups
     /// scope (keyed by the `MaterializeTemporaryExpr`).
@@ -777,6 +781,7 @@ impl<'a> Compiler<'a> {
             this_reg: None,
             this_override: None,
             lambda_this: None,
+            closure_reg: None,
             ext_temps: FxHashMap::default(),
             late_const: FxHashSet::default(),
             cur_fn: None,
@@ -4562,11 +4567,14 @@ impl Compiler<'_> {
         }
         // An operator call whose callee is a member function: the first
         // argument is the object ([over.match.oper]/2, clang's
-        // `EmitCXXOperatorMemberCallExpr`).
+        // `EmitCXXOperatorMemberCallExpr`); for an explicit object member
+        // function it is the (converted) first argument, as in a plain
+        // call ([over.call.func]/3).
         let ast = self.ast();
         if let Some(md) = direct
             && ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
             && ast.decls.get(md).kind() == DeclKind::CXXMethod
+            && !ast.decls.function(md).is_some_and(|f| f.spec.has_explicit_object())
             && let Some((&obj, rest)) = args.split_first()
         {
             return self.method_call(e, c, md, obj, false, false, rest, sret);

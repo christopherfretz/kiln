@@ -2254,6 +2254,7 @@ impl Parser<'_, '_> {
     /// `= initializer-clause` after a parameter-declaration
     /// ([dcl.fct.default]/1). At the `=`.
     fn parse_default_argument(&mut self, p: &mut ParamInfo) {
+        p.default_loc = self.loc();
         self.bump();
         // clang rejects a default argument that starts with `({` outright
         // (`err_stmt_expr_in_default_arg`), skipping to the next `,`/`)`.

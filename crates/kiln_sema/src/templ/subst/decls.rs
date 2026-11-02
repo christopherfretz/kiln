@@ -1453,6 +1453,7 @@ fn subst_param_info(
         attrs: Vec::new(),
         invalid: false,
         default_arg: DefaultArg::None,
+        default_loc: Loc::INVALID,
         range: (loc, loc),
         type_loc: loc,
         ref_loc: Loc::INVALID,

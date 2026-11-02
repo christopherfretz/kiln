@@ -440,8 +440,15 @@ impl Cg<'_> {
         if let Some(a) = this_addr {
             self.f.this = Some(self.load(LTy::PTR, a, 8, false));
             if let Some(l) = ast.call_op_lambda(d) {
-                self.lambda_prolog(l)?;
+                let closure = self.this_value();
+                self.lambda_prolog(l, closure)?;
             }
+        } else if let Some(l) = ast.call_op_lambda(d)
+            && let Some(&obj) = param_decls.first()
+            && self.is_explicit_object_method(d)
+        {
+            let closure = self.explicit_object_closure(l, obj)?;
+            self.lambda_prolog(l, closure)?;
         }
         if let Some(a) = vtt_addr {
             self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));
