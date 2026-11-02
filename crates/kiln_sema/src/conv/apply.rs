@@ -97,7 +97,11 @@ fn apply_second(
             let ck = if to_bool { CastKind::IntegralToBoolean } else { CastKind::IntegralCast };
             cast_to(s, ck, e, to, None)
         }
-        SecondStep::FloatingPromotion | SecondStep::FloatingConversion => {
+        SecondStep::FloatingPromotion => cast_to(s, CastKind::FloatingCast, e, to, None),
+        SecondStep::FloatingConversion => {
+            if !s.explicit_conv {
+                fp_rank_check(s, e, from, to);
+            }
             cast_to(s, CastKind::FloatingCast, e, to, None)
         }
         SecondStep::FloatingIntegral => {
@@ -334,4 +338,22 @@ fn complex_real(
         Some(ck) => cast_to(s, ck, e, to, None),
         None => e,
     })
+}
+
+/// GCC's pedantic warning for an implicit floating-point conversion that
+/// P1467 does not allow ([conv.double]/1; `fp_rank_violation`): kiln, as
+/// GCC 14, accepts it with `sema_fp_conversion_rank`.
+pub(crate) fn fp_rank_check(s: &mut Sema<'_, '_>, e: ExprId, from: QualType, to: QualType) {
+    let (Some(f), Some(t)) = (s.ast.types.builtin(from), s.ast.types.builtin(to)) else {
+        return;
+    };
+    if let Some(unordered) = super::rank::fp_rank_violation(s, f, t) {
+        let loc = s.eloc(e);
+        let msg = s
+            .diag(DiagId::sema_fp_conversion_rank, loc)
+            .arg(s.ty_arg(to))
+            .arg(s.ty_arg(from))
+            .arg(if unordered { "1" } else { "0" });
+        s.emit(msg);
+    }
 }

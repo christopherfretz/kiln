@@ -36,6 +36,7 @@ ExternInitializer = "extern-initializer" [];
 // ----- WP-197 (DR482 namespace extra qualification)
 ExtraQualification = "extra-qualification" [];
 FlexibleArrayExtensions = "flexible-array-extensions" [];
+FloatConversionRank = "float-conversion-rank" [];
 FormatExtraArgs = "format-extra-args" [];
 FormatInsufficientArgs = "format-insufficient-args" [];
 GnuAlignofExpression = "gnu-alignof-expression" [];

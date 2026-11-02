@@ -234,7 +234,19 @@ pub fn narrowing_kind(
             let (Some(fb), Some(tb)) = (s.ast.types.builtin(from), s.ast.types.builtin(to)) else {
                 return Narrowing::NotNarrowing;
             };
-            if clang_float_rank(fb) <= clang_float_rank(tb) {
+            // [dcl.init.list]/7.2 (C++23): to a type whose rank is not
+            // greater or equal. clang's ranks for the types clang has,
+            // the P1467 value-set ranks for the extended types.
+            let p1467 = fb.is_std_extended_floating() || tb.is_std_extended_floating();
+            let widening = if p1467 {
+                match (super::rank::float_format(s, fb), super::rank::float_format(s, tb)) {
+                    (Some(ff), Some(tf)) => super::rank::format_subset(ff, tf),
+                    _ => true,
+                }
+            } else {
+                clang_float_rank(fb) <= clang_float_rank(tb)
+            };
+            if widening {
                 return Narrowing::NotNarrowing;
             }
             if dependent {

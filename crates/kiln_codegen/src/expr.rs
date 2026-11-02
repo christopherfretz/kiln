@@ -603,6 +603,13 @@ impl Cg<'_> {
         }
         let fw = self.m.types.float_width(ft).unwrap_or(0);
         let tw = self.m.types.float_width(tt).unwrap_or(0);
+        if tw == fw {
+            // `half` ↔ `bfloat` (P1467 explicit conversion): through
+            // `float`, exact one way and singly rounded the other, as
+            // clang lowers `(T)(float)x`.
+            let w = self.cast(CastOp::FPExt, v, LTy::FLOAT);
+            return self.cast(CastOp::FPTrunc, w, tt);
+        }
         if tw < fw { self.cast(CastOp::FPTrunc, v, tt) } else { self.cast(CastOp::FPExt, v, tt) }
     }
 
@@ -905,7 +912,8 @@ impl Cg<'_> {
         match ast.exprs.unary_op(e) {
             UnaryOp::Minus | UnaryOp::Plus if self.f16_excess(q) => {
                 let v = self.emit_promoted(e)?;
-                Ok(self.cast(CastOp::FPTrunc, v, LTy::HALF))
+                let t = self.lty(q);
+                Ok(self.cast(CastOp::FPTrunc, v, t))
             }
             UnaryOp::Plus | UnaryOp::Extension => self.emit_scalar(s),
             UnaryOp::Minus => {
@@ -1066,7 +1074,8 @@ impl Cg<'_> {
             }
             _ if self.f16_excess(ast.exprs.get(e).ty()) && is_promotable_op(op) => {
                 let v = self.emit_promoted(e)?;
-                self.cast(CastOp::FPTrunc, v, LTy::HALF)
+                let t = self.lty(ast.exprs.get(e).ty());
+                self.cast(CastOp::FPTrunc, v, t)
             }
             _ => {
                 let lv = self.emit_scalar(l)?;
@@ -1090,11 +1099,16 @@ impl Cg<'_> {
     /// `ScalarExprEmitter::getPromotionType`: on x86-64 `_Float16`
     /// arithmetic is evaluated in `float`
     /// (`-ffloat16-excess-precision=standard`); an aarch64 target
-    /// operates on `half`. `__fp16` is promoted by sema.
+    /// operates on `half`. `__fp16` is promoted by sema. `__bf16`
+    /// arithmetic is evaluated in `float` on both targets (clang 19/22
+    /// `shouldEmitBFloat16WithExcessPrecision`,
+    /// `-fbfloat16-excess-precision=standard`; spec/codegen.md).
     pub(crate) fn f16_excess(&self, q: QualType) -> bool {
-        self.is_x86()
-            && self.ast.types.builtin(self.ast.types.canonical(q))
-                == Some(kiln_ast::types::BuiltinType::Float16)
+        match self.ast.types.builtin(self.ast.types.canonical(q)) {
+            Some(kiln_ast::types::BuiltinType::Float16) => self.is_x86(),
+            Some(kiln_ast::types::BuiltinType::BFloat16) => true,
+            _ => false,
+        }
     }
 
     /// clang `ScalarExprEmitter::EmitPromoted` to `float`: `+ - * /` and
