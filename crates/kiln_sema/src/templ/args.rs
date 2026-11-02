@@ -513,7 +513,27 @@ impl Sema<'_, '_> {
 
     /// The default argument of parameter `p`, substituted with the
     /// arguments before it ([temp.arg.general]/9) and converted.
+    ///
+    /// In a cleanup context of its own: the temporaries of the default are
+    /// not those of the full-expression whose overload resolution uses it
+    /// (clang `SubstDefaultTemplateArgument` enters a `ConstantEvaluated`
+    /// context; spec/sema-class.md §5.3).
     pub(crate) fn default_template_arg(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        def: TemplateArg,
+        loc: Loc,
+        prior: &[TemplateArg],
+    ) -> Result<TemplateArg, ()> {
+        self.push_cleanups();
+        let r = self.default_template_arg_in(tmpl, depth, p, def, loc, prior);
+        self.pop_cleanups();
+        r
+    }
+
+    fn default_template_arg_in(
         &mut self,
         tmpl: DeclId,
         depth: u16,

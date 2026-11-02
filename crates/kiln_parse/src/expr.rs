@@ -156,7 +156,7 @@ impl Parser<'_, '_> {
     pub fn parse_constant_expr(&mut self) -> PExpr {
         self.s.enter_constant_evaluated();
         let r = self.parse_cast_expr().and_then(|lhs| self.parse_rhs(lhs, prec::COND));
-        self.s.exit_constant_evaluated();
+        self.s.exit_constant_evaluated(r);
         r
     }
 

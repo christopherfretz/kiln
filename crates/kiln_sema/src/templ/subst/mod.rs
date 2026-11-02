@@ -286,7 +286,12 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         match a.view() {
             ArgView::Type(t) => Ok(TemplateArg::ty(self.ty(t, loc)?)),
             ArgView::Expr { expr, .. } => {
+                // A constant-expression ([temp.arg.nontype]/1): converted
+                // later, it keeps the enclosing full-expression's cleanups
+                // (spec/sema-class.md §5.3).
+                let outer = self.sema.cleanup;
                 let e = self.expr(expr)?;
+                self.sema.note_constant_outer_cleanups(e, outer);
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
             ArgView::Template(n) => Ok(TemplateArg::template(self.template_name(n, loc)?)),
