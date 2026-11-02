@@ -6,9 +6,9 @@
 //@ strict-diags
 //@ requires: clang<22
 // clang 22 prints attribute names scoped (`'clang::coro_only_destroy_when_complete'`); WP-377 owns the compat-22 wording
-//@ diag: 11:3 warning "'coro_only_destroy_when_complete' attribute only applies to classes"
-//@ diag: 12:3 warning "'coro_only_destroy_when_complete' attribute only applies to classes"
-//@ diag: 13:10 error "'coro_only_destroy_when_complete' attribute takes no arguments"
+//@ diag: 13:3 warning "'coro_only_destroy_when_complete' attribute only applies to classes"
+//@ diag: 14:3 warning "'coro_only_destroy_when_complete' attribute only applies to classes"
+//@ diag: 15:10 error "'coro_only_destroy_when_complete' attribute takes no arguments"
 struct [[clang::coro_only_destroy_when_complete]] S {};
 [[clang::coro_only_destroy_when_complete]] int x;
 [[clang::coro_only_destroy_when_complete]] void f();
