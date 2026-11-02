@@ -222,8 +222,19 @@ argument pack <1>". Partial specializations over it work
 (`template<Ts... a> struct Is<A<a...>>`). Such a parameter is not itself
 a parameter pack ([temp.param]/14), so "template parameter pack must be
 the last template parameter" does not apply to it: `template<Ts... a,
-int n>` is valid. Tests: `temp.variadic/p5-member-nttp-pack-expansion.cpp`,
-`temp.variadic/p5-member-nttp-pack-arity.cpp`.
+int n>` is valid. Arity is checked even when the argument list is
+dependent (`check_expanded_pack_arity`, as clang's
+`CheckTemplateArgumentList`): each expanded parameter takes at most one
+argument per element, a pack expansion argument counting as one, and
+"too few" is excused once a pack expansion was taken; so `O<>` with
+`Is<A<a...>>`, or `A<1, u...>` for a one-element expanded pack, is "too
+many template arguments for class template 'A'" in the instantiation.
+The template is named unqualified there (`diag_template_arity` uses
+the declaration's own name, as clang prints a `NamedDecl`), not
+`O<int, char>::A`. Tests: `temp.variadic/p5-member-nttp-pack-expansion.cpp`,
+`temp.variadic/p5-member-nttp-pack-arity.cpp`,
+`temp.variadic/p5-member-nttp-pack-dependent-arity.cpp`,
+`temp.variadic/p5-member-nttp-pack-alias-arity.cpp`.
 
 **Local classes** ([temp.mem]/2, WP-385). A local class, or a class
 nested in one, has no member templates. A member function, class,
