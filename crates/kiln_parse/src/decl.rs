@@ -2015,6 +2015,8 @@ impl Parser<'_, '_> {
             if named || self.pack_hint {
                 d.ellipsis = Some(self.bump().span.lo);
             }
+        } else if std::mem::take(&mut self.catch_declarator) && self.at(Punct::Ellipsis) {
+            d.ellipsis = Some(self.bump().span.lo);
         }
         if self.at_decomposition_declarator(d) {
             self.parse_decomposition_declarator(d);

@@ -1336,6 +1336,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     `expected '(' after 'if'`; the parser skips to the next `;`.
 - **Unsupported:** case ranges, computed goto, statement expressions
   and range-based `for` are "not supported yet".
+  - **Deviation (computed goto):** GNU `goto *e;` is parsed. Its operand
+    is checked for an unexpanded pack (`Sema::act_on_indirect_goto`),
+    and then the statement is "computed goto is not supported yet" at the
+    `*`. The address-of-label operator `&&l` is not supported either.
+    clang accepts both, and reports "indirect goto in function with no
+    address-of-label expressions" when the function takes no label's
+    address.
 
 ### 6.2 Attributes (`attr.rs`)
 - **Syntax:** `[[ ]]` (with `using ns:`), `alignas(…)`, and GNU

@@ -2262,9 +2262,27 @@ impl Sema<'_, '_> {
   pointing at the point of use; `TemplState.deduce_poi` is a qualified
   callee's name, where clang marks it referenced); clang 19 replays the
   bare warning, so the notes are dropped under `-fkiln-compat=19`.
-  A failed deduction drops them. Gap: the warnings of an explicit
-  substitution (`&f<volatile int>`) are dropped, because the SFINAE frames
-  are popped per deduction phase.
+  A failed deduction drops them. One deduction collects the warnings of
+  all its phases (clang's single `TemplateDeductionInfo`): `deduce_spec`
+  appends what each SFINAE frame held (`in_sfinae_held`) to one list, so
+  the explicit-argument substitution's come before the signature's.
+  For a target type, and for a template-id naming one specialization
+  without a call (`&f<volatile int>` with `auto`, `decltype`), the
+  explicit phase substitutes the whole function type. clang
+  `BuildFunctionType` reports that at the template's name. In clang 22
+  its note is "while substituting explicitly-specified template
+  arguments into function template 'f' ", with an empty argument list,
+  so it ends in a space. `keep_deduction_warnings` stores the list only
+  on success. If the specialization already has an entry, the list is
+  stored only when the specialization was formed by this deduction;
+  otherwise it is dropped. clang stores only into an empty slot. An
+  emitted entry stays, empty, so a second `&n<volatile int>` or a later
+  call reports nothing. Test `depr.volatile.type/volatile-return-funcaddr{,-19}.cpp`.
+  Gap: the parser resolves a template-id that is not called to its
+  specialization before the target type is known
+  (`resolve_single_template_id`). So `int (*)() = &f<volatile int>`
+  reports the held warnings and a conversion error, where clang
+  reports "address of overloaded function 'f' does not match".
 - Fatal errors are always reported: the depth limit and stack
   exhaustion.
 
@@ -3409,14 +3427,22 @@ The sites, as clang:
   an expansion and fine);
 - "exception type contains …" at the declarator-id (or the type) of a
   handler (`diagnose_unexpanded_type_written`; the handler type becomes
-  `int`);
+  `int`). A `...` in the handler's direct declarator is parsed
+  (`Parser::catch_declarator`, clang `ParseDirectDeclarator`) and is
+  "only function and template parameters can be parameter packs" at the
+  ellipsis, before that check
+  (`except.handle/exception-decl-ellipsis.cpp`);
+- "expression contains …" at the operand of a computed `goto *e`
+  (`act_on_indirect_goto`), before the computed goto is reported
+  unsupported (`stmt.goto/computed-goto-unexpanded-pack.cpp`);
 - "initializer contains …" for a local variable's initializer.
 Outside a lambda these sites check every unexpanded pack (template
 definitions); during instantiation they do not run. Tests
 `expr.prim.lambda/errors-lambda-local-pack-unexpanded.cpp`,
-`temp.variadic/p12-unexpanded-statement-sites.cpp`. Not done: a computed
-`goto *xs` (not supported), and `catch (T...)` ("only function and
-template parameters can be parameter packs" is a parse error in kiln).
+`temp.variadic/p12-unexpanded-statement-sites.cpp`. Not done: a `...`
+in any other non-parameter declarator (`T... x;` in a block, a member,
+a variable template). clang reports the same error there; kiln reports
+"expected unqualified-id". Also `catch (T(...))`.
 At instantiation an `INVALID` pattern declaration is not instantiated:
 its `DeclStmt` fails silently and ends its compound statement (clang's
 `SubstDecl` / `TransformCompoundStmt`), so no later statement, such as a
