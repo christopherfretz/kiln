@@ -12,7 +12,8 @@ Columns:
   CLANG22 is `clang++-22 -std=c++26 -dM -E -x c++ /dev/null` (22.1.8). `—` means
   the macro is not defined; a bare `—` means the paper has no `__cpp_*` macro of
   its own. Where clang 19 differs from clang 22, its value is in Notes (kiln's
-  predefines are generated from clang 19, so they match it everywhere).
+  predefines are generated from clang 19, so they match it except where
+  `apply_flags` raises a macro for a feature kiln implements: P1061, P2893).
 - **Status**: `done` = kiln passes corpus tests covering the core forms;
   `partial` = some pass, or some are `xfail(kiln)`; `todo` = nothing passes.
   Seeded on 2026-11-01 (WP-185) from a corpus run through kiln.
@@ -39,7 +40,7 @@ Columns:
 | P2242R3 | Non-literal variables, labels and `goto` in constexpr functions | — | done | `conformance/dcl.constexpr/p2242-probe.cpp` | `__cpp_constexpr` 202110L (see P2747). |
 | P2280R4 | Unknown references in constant expressions | — | todo | `conformance/expr.const/p2280-probe.cpp` | DR. clang 19 lacks it (probe `xfail(clang)`); clang 20+ accepts. |
 | P2647R1 | `static constexpr` variables in constexpr functions | — | done | `conformance/dcl.constexpr/p2647-probe.cpp` | `__cpp_constexpr` 202211L (see P2747). |
-| P2582R1 | CTAD from inherited constructors | — | todo | `conformance/over.match.class.deduct/p2582-probe.cpp` | Neither clang implements it (probe `xfail(clang)`). Its macro bump, `__cpp_deduction_guides` 202207L, is absent from both (both 201703L). |
+| P2582R1 | CTAD from inherited constructors | — | done | `conformance/over.match.class.deduct/p2582-probe.cpp`<br>`conformance/over.match.class.deduct/p2582-inherited-guides.cpp`<br>`conformance/over.match.class.deduct/p2582-not-deducible.cpp`<br>`conformance/over.match.class.deduct/run-p2582.cpp` | Neither clang implements it (clang 19 and 22 reject the paper's examples; probe `xfail(clang)`, the other tests `skip(clang)`). Its macro bump, `__cpp_deduction_guides` 202207L, is absent from both clangs (201703L) and kiln keeps 201703L to match them. Not yet: `using G::F::F` naming the base through the injected-class-name, guides the base itself inherited, and an alias template of an inheriting class (spec/sema-templates.md §6.6.1). |
 | P2324R2 | Labels at the end of compound statements | — | done | `conformance/stmt.label/p2324-probe.cpp` | ROADMAP M4 cites this as "P2360 labels at the end of blocks"; P2324 is the labels paper. |
 | P0330R8 | `size_t` literal suffixes | `__cpp_size_t_suffix` 202011L / 202011L | done | `conformance/lex.icon/p0330-probe.cpp`<br>`conformance/ast/lex.icon/integer-literals.cpp` | ROADMAP M4 cites this as "P2324 `size_t` literals"; the paper is P0330. |
 | P2360R0 | Alias-declaration in an init-statement | — | partial | `conformance/stmt.pre/p2360-probe.cpp`<br>`conformance/stmt.pre/p2360-for-probe.cpp` | `if`/`switch` forms work; the range-based `for` form is rejected (`xfail(kiln)`). |
@@ -68,14 +69,14 @@ Columns:
 | P2169R4 | Placeholder variables `_` | `__cpp_placeholder_variables` 202306L / 202306L | todo | `conformance/basic.scope.scope/p2169-probe.cpp` | kiln advertises the macro without the feature (Macro gaps). |
 | P2573R2 | `= delete("reason")` | `__cpp_deleted_function` 202403L / 202403L | done | `conformance/dcl.fct.def.delete/redeclaration.cpp`<br>`conformance/dcl.fct.def.delete/templates.cpp`<br>`conformance/dcl.fct.def.delete/uses.cpp` | |
 | P2741R3 | User-generated `static_assert` messages | `__cpp_static_assert` 202306L / 202306L | todo | `conformance/dcl.pre/p2741-probe.cpp` | kiln advertises the macro without the feature (Macro gaps). |
-| P2893R3 | Variadic friends | `__cpp_variadic_friend` — / 202403L | todo | `conformance/class.friend/p2893-probe.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`. |
+| P2893R3 | Variadic friends | `__cpp_variadic_friend` 202403L / 202403L | done | `conformance/class.friend/p2893-probe.cpp`<br>`conformance/class.friend/p2893-variadic-friend.cpp`<br>`conformance/class.friend/p2893-access-errors.cpp`<br>`conformance/class.friend/p2893-diags.cpp`<br>`conformance/class.friend/p2893-ext.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`; kiln defines the macro in every C++ mode, as clang 22 does. |
 | P2747R2 | `constexpr` placement new | `__cpp_constexpr` 202306L / 202406L | todo | `conformance/expr.new/p2747-probe.cpp`<br>`conformance/expr.new/constexpr-placement.cpp` | clang 19: 202306L, the P2738 level, with no P2747 (probe `xfail(clang)`). `constexpr-placement.cpp` pins clang 19's pre-P2747 rejection; flip it at the oracle switch (WP-184). |
 | P3068R6 | `constexpr` exceptions | `__cpp_constexpr_exceptions` — / — | todo | `conformance/expr.throw/p3068-probe.cpp`<br>`conformance/expr.throw/constexpr-throw.cpp` | Not in clang 22: written reason for the M4 exit. `constexpr-throw.cpp` pins the pre-P3068 rejection. |
 | P2738R1 | `constexpr` cast from `void*` | — | done | `conformance/expr.static.cast/p2738-probe.cpp` | `__cpp_constexpr` 202306L (see P2747). |
 | P1967R14 | `#embed` | `__cpp_pp_embed` — / — | done | `conformance/cpp.embed/p1967-probe.cpp`<br>`differential/pp/torture/cpp.embed-params.cpp` | Neither clang defines `__cpp_pp_embed`; use `__has_embed`. clang reports `#embed` in C++ as a C23 extension (`-Wc23-extensions`), and kiln matches. |
-| P0963R3 | Structured binding declaration as a condition | — | partial | `conformance/dcl.struct.bind/condition.cpp` | Accepted, but with clang 19's "C++17 extension" warning, which C++26 should not emit. Its `__cpp_structured_bindings` bump (202406L) is subsumed by P1061's. |
-| P1061R10 | Structured bindings can introduce a pack | `__cpp_structured_bindings` 202403L / 202411L | todo | `conformance/dcl.struct.bind/pack.cpp` | `pack.cpp` pins kiln's "not supported yet" error. kiln's and clang 19's 202403L is the P0609 level. |
-| P0609R3 | Attributes for structured bindings | — | done | `conformance/dcl.struct.bind/p0609-probe.cpp` | Supplies `__cpp_structured_bindings` 202403L (see P1061). |
+| P0963R3 | Structured binding declaration as a condition | — | partial | `conformance/dcl.struct.bind/condition.cpp` | Accepted, but with clang 19's "C++17 extension" warning, which C++26 should not emit. Its `__cpp_structured_bindings` bump (202406L) is subsumed by P1061's 202411L, which kiln defines. |
+| P1061R10 | Structured bindings can introduce a pack | `__cpp_structured_bindings` 202411L / 202411L | done | `conformance/dcl.struct.bind/pack.cpp`<br>`conformance/dcl.struct.bind/pack-positive.cpp`<br>`conformance/dcl.struct.bind/pack-errors.cpp`<br>`conformance/dcl.struct.bind/pack-ext.cpp`<br>`conformance/dcl.struct.bind/run-pack-fold.cpp` | clang 19 lacks it (202403L, the P0609 level); kiln raises the macro to 202411L wherever it is defined (C++17 on), as clang 22 does. |
+| P0609R3 | Attributes for structured bindings | — | done | `conformance/dcl.struct.bind/p0609-probe.cpp` | Supplies `__cpp_structured_bindings` 202403L, now superseded by P1061's 202411L. |
 | P2795R5 | Erroneous behaviour for uninitialized reads | — | todo | `conformance/dcl.attr.indet/p2795-probe.cpp` | Not in clang 22 (no `[[indeterminate]]`): written reason for the M4 exit. |
 | P2786R13 | Trivial relocatability | `__cpp_trivial_relocatability` — / 202502L | partial | `conformance/class.prop/p2786-probe.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`. kiln has `__builtin_is_cpp_trivially_relocatable` (clang 22 semantics, WP-263); the macro stays undefined. Check its standing in the C++26 draft before investing (reportedly pulled at Kona 2025). |
 | P1306R5 | Expansion statements | `__cpp_expansion_statements` — / — | todo | `conformance/stmt.expand/p1306-probe.cpp` | Not in clang 22: written reason for the M4 exit. |
@@ -105,14 +106,12 @@ Not tabulated:
 
 ## Macro gaps
 
-kiln's `__cpp_*` set under `-std=c++26` is clang 19's, so it differs from clang 22 as follows:
+kiln's `__cpp_*` set under `-std=c++26` is clang 19's (plus the P1061 and P2893 macros), so it differs from clang 22 as follows:
 
 | Macro | kiln (= clang 19) | clang 22 | Row | Action |
 |---|---|---|---|---|
 | `__cpp_explicit_this_parameter` | — | 202110L | P0847 (partial) | Add it once lambdas with an explicit object parameter work. Adding it changes which libc++/libstdc++ code kiln parses (`<variant>` and `<format>` `visit` members, libstdc++ ranges and `std::function`), so it needs a gate run. |
 | `__cpp_constexpr` | 202306L | 202406L | P2747 (todo) | Bump with P2747. |
-| `__cpp_structured_bindings` | 202403L | 202411L | P1061 (todo) | Bump with P0963 (202406L) and P1061. |
-| `__cpp_variadic_friend` | — | 202403L | P2893 (todo) | Add with the feature. |
 | `__cpp_trivial_relocatability` | — | 202502L | P2786 (todo) | Add with the feature. |
 | `__cpp_modules` | — | 1 | (modules, not tabulated) | Add with the M4 modules work. |
 

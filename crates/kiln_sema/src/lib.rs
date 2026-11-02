@@ -245,7 +245,7 @@ pub struct Sema<'a, 'sm> {
     /// deduces anew (the pattern's own may be deduced, spec/sema.md).
     pub(crate) decomp_written: std::collections::HashMap<DeclId, QualType>,
     /// The structured binding packs `...xs` declared so far (P1061,
-    /// spec/sema.md §4.10).
+    /// spec/sema.md §4.9).
     pub(crate) binding_packs: std::collections::HashSet<DeclId>,
     /// A binding pack decomposed once its element count is known: the
     /// bindings it expanded into, which replace it in its decomposition's

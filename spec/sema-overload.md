@@ -462,7 +462,9 @@ than `ics2[k]` and the first applicable of:
    parameter types;
 8. /2.8 `c2` rewritten, `c1` not;
 9. /2.9 both rewritten, `c2` reversed, `c1` not;
-10. /2.10–2.13 CTAD guides (§2.8): inherited-constructor guides; declared
+10. /2.10–2.13 CTAD guides (§2.8): a guide not from an inherited
+    constructor beats one that is, when the parameter types for the
+    arguments are the same (P2582, spec/sema-templates.md §6.6.1); declared
     guide beats generated; copy deduction candidate; non-template-ctor guide
     beats template-ctor guide.
 
