@@ -313,7 +313,7 @@ impl<'sm> DiagEngine<'sm> {
     /// not dropped, in order.
     pub fn release(&self) {
         let prev =
-            self.holding.fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| d.checked_sub(1));
+            self.holding.try_update(Ordering::AcqRel, Ordering::Acquire, |d| d.checked_sub(1));
         match prev {
             Ok(1) => {}
             Ok(_) => return,

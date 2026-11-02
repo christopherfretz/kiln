@@ -1206,6 +1206,29 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// `p->~T()` / `x.~T()` / `p->~X<T>()` after `.`/`->`, at the `~`
+    /// ([expr.prim.id.dtor]).
+    fn parse_member_destructor_name(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
+        let tl = self.bump().span.lo;
+        let Some(name) = self.ident() else {
+            self.error_here(DiagId::parse_destructor_tilde_identifier);
+            return None;
+        };
+        let nl = self.bump().span.lo;
+        if self.at(Punct::Less) {
+            // `p->~X<T>()`: the simple-template-id names the destroyed
+            // class type.
+            let class = self.s.classify_name(name, None);
+            return match self.parse_template_id_rest(class, name, nl) {
+                Ok(TemplateIdRef::Type(t)) => {
+                    Some(self.s.rebuild_member_destructor(e, t, false, nl, loc, arrow))
+                }
+                _ => None,
+            };
+        }
+        Some(self.s.act_on_member_destructor(e, name, tl, nl, loc, arrow))
+    }
+
     /// The member designator after `.`/`->` (the operator token at `loc`
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
@@ -1261,25 +1284,7 @@ impl Parser<'_, '_> {
             ));
         }
         if self.at(Punct::Tilde) {
-            // `p->~T()` / `x.~T()`.
-            let tl = self.bump().span.lo;
-            let Some(name) = self.ident() else {
-                self.error_here(DiagId::parse_destructor_tilde_identifier);
-                return None;
-            };
-            let nl = self.bump().span.lo;
-            if self.at(Punct::Less) {
-                // `p->~X<T>()` ([expr.prim.id.dtor]): the simple-template-id
-                // names the destroyed class type.
-                let class = self.s.classify_name(name, None);
-                return match self.parse_template_id_rest(class, name, nl) {
-                    Ok(TemplateIdRef::Type(t)) => {
-                        Some(self.s.rebuild_member_destructor(e, t, false, nl, loc, arrow))
-                    }
-                    _ => None,
-                };
-            }
-            return Some(self.s.act_on_member_destructor(e, name, tl, nl, loc, arrow));
+            return self.parse_member_destructor_name(e, loc, arrow);
         }
         let nl = self.loc();
         let name = if self.at_kw(Kw::Operator) {

@@ -92,7 +92,7 @@ impl Sema<'_, '_> {
     /// correction holds if the expression rebuilt on it at the correction
     /// point is valid, which kiln finds out by going on with the
     /// correction: a reference to the function, with the corrected
-    /// diagnostic ("did you mean '::val'?" and its note). Only inside a
+    /// diagnostic ("did you mean `::val`?" and its note). Only inside a
     /// delayed-typo scope outside an instantiation (otherwise there is no
     /// correction point to decide at), and not with dependent arguments.
     fn speculate_template_id_typo(
@@ -222,7 +222,6 @@ impl Sema<'_, '_> {
         self.emit(msg);
         match kind {
             Correction::Type => return TemplateIdTypo::Suggested,
-            Correction::Quiet => {}
             Correction::Member(m) => self.typo_member_not_called(m, !c.qualified, loc),
             Correction::Value if !self.in_template() => {
                 // clang re-forms the template-id on the variable and finds
@@ -236,7 +235,7 @@ impl Sema<'_, '_> {
                     .with_note(note);
                 self.emit(msg);
             }
-            Correction::Value => {}
+            Correction::Value | Correction::Quiet => {}
             Correction::Function => {
                 if args.iter().any(|&a| Self::dependent_flags(self.ast.types.arg_flags(a))) {
                     return TemplateIdTypo::Recovered(self.recover_err(&[], loc));
@@ -398,7 +397,7 @@ impl Sema<'_, '_> {
     fn best_template_id_typo(&self, name: Symbol) -> Option<Candidate> {
         let typo = sym_str(self, name);
         let len = typo.len();
-        let bound = (len + 2) / 3;
+        let bound = len.div_ceil(3);
         // `TypoCorrectionConsumer::addName`: the length difference and
         // the edit distance bound the candidates.
         let near = |s: &str| {
@@ -578,34 +577,31 @@ impl Sema<'_, '_> {
             "alignof",
             "nullptr",
         ];
-        match self.func.as_ref() {
-            Some(f) => {
-                if f.this_ty.is_some() {
-                    k.push("this");
-                }
-                k.extend(["do", "else", "for", "goto", "if", "return", "switch", "while"]);
-                k.extend(["catch", "try"]);
-                if !f.breakables.is_empty() {
-                    k.push("break");
-                }
-                if f.breakables.contains(&true) {
-                    k.push("continue");
-                }
-                if !f.switches.is_empty() {
-                    k.extend(["case", "default"]);
-                }
+        if let Some(f) = self.func.as_ref() {
+            if f.this_ty.is_some() {
+                k.push("this");
             }
-            None => {
-                k.extend(["namespace", "template"]);
-                if matches!(
-                    self.kind_of(self.ctx),
-                    DeclKind::CXXRecord
-                        | DeclKind::ClassTemplateSpecialization
-                        | DeclKind::ClassTemplatePartialSpecialization
-                ) {
-                    k.extend(["explicit", "friend", "mutable", "private", "protected"]);
-                    k.extend(["public", "virtual"]);
-                }
+            k.extend(["do", "else", "for", "goto", "if", "return", "switch", "while"]);
+            k.extend(["catch", "try"]);
+            if !f.breakables.is_empty() {
+                k.push("break");
+            }
+            if f.breakables.contains(&true) {
+                k.push("continue");
+            }
+            if !f.switches.is_empty() {
+                k.extend(["case", "default"]);
+            }
+        } else {
+            k.extend(["namespace", "template"]);
+            if matches!(
+                self.kind_of(self.ctx),
+                DeclKind::CXXRecord
+                    | DeclKind::ClassTemplateSpecialization
+                    | DeclKind::ClassTemplatePartialSpecialization
+            ) {
+                k.extend(["explicit", "friend", "mutable", "private", "protected"]);
+                k.extend(["public", "virtual"]);
             }
         }
         k.extend(["using", "static_assert"]);
@@ -696,7 +692,11 @@ impl Sema<'_, '_> {
         }
         let common = chain.iter().zip(cur).take_while(|(a, b)| a == b).count();
         let spell = |part: &[DeclId]| {
-            part.iter().map(|&n| format!("{}::", self.decl_name(n))).collect::<String>()
+            part.iter().fold(String::new(), |mut s, &n| {
+                s.push_str(&self.decl_name(n));
+                s.push_str("::");
+                s
+            })
         };
         let rel = &chain[common..];
         let global = rel.first().is_none_or(|&r| {
