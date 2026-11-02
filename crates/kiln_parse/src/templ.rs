@@ -777,10 +777,26 @@ impl Parser<'_, '_> {
                 .template_name(TemplateName::DependentIdentifier { nns: qual.nns, name: n });
             return Some(TemplateArg::template(tn));
         };
+        // `nns template name` naming a member template found now keeps
+        // its qualifier and keyword as written ([temp.names]/5).
+        let template_kw = end >= 2 && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template);
+        let underlying = self.s.template_name_for(d);
+        if template_kw && qual.is_some() {
+            if let Some(Some(q)) = self.parse_nested_name_nns().ok() {
+                self.eat_kw(Kw::Template);
+                self.bump();
+                let tn = self.s.ast.types.template_name(TemplateName::Qualified {
+                    nns: q.nns,
+                    template_kw: true,
+                    underlying,
+                });
+                return Some(TemplateArg::template(tn));
+            }
+        }
         while self.pos() < end {
             self.bump();
         }
-        Some(TemplateArg::template(self.s.template_name_for(d)))
+        Some(TemplateArg::template(underlying))
     }
 
     /// The template-id `name < args >` with `name` (already classified as
@@ -878,10 +894,13 @@ impl Parser<'_, '_> {
             return match self.parse_template_id_rest(class, name, name_loc) {
                 // The qualifier as written is sugar: `'O::I<int>'`.
                 Ok(TemplateIdRef::Type(t)) => {
-                    let named = match self.s.ast.types.view(t.ty()) {
+                    let mut named = match self.s.ast.types.view(t.ty()) {
                         kiln_ast::types::TypeView::Elaborated { nns: None, named, .. } => named,
                         _ => t,
                     };
+                    if template_kw {
+                        named = self.template_kw_name(q.nns, named);
+                    }
                     Some(self.s.ast.types.elaborated(kw, Some(q.nns), named))
                 }
                 _ => None,
@@ -907,6 +926,31 @@ impl Parser<'_, '_> {
         let named = if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
         // The qualifier as written is sugar: `'S::P':'int *'`.
         Some(self.s.ast.types.elaborated(kw, Some(q.nns), named))
+    }
+
+    /// The specialization `t` named as `nns::template J<...>`: its
+    /// template name becomes the qualified name with the `template`
+    /// keyword, which clang keeps as written and prints
+    /// (`'O::template J<SA>' (aka 'template J<ns::S>')`, [temp.names]/5).
+    /// Sugar only; the canonical type is unchanged.
+    fn template_kw_name(&mut self, nns: kiln_ast::NnsId, t: QualType) -> QualType {
+        let types = &mut self.s.ast.types;
+        let kiln_ast::types::TypeView::TemplateSpecialization { name, args, underlying, alias } =
+            types.view(t.ty())
+        else {
+            return t;
+        };
+        let underlying_name = match types.template_name_view(name) {
+            TemplateName::Qualified { underlying, .. } => underlying,
+            _ => name,
+        };
+        let qn = types.template_name(TemplateName::Qualified {
+            nns,
+            template_kw: true,
+            underlying: underlying_name,
+        });
+        let r = types.template_specialization(qn, args, underlying, alias);
+        QualType::new(r.ty(), t.quals_bits())
     }
 
     /// True at a type-constraint followed by `auto` or `decltype(auto)`
