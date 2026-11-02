@@ -10,6 +10,7 @@ passes when run as the compiler under `cargo xtask libcxx` (contract:
 
 | Date | kiln main | Scope | pass | fail | xfail | unsupported | pass rate | wall |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-02 | 94249795 | stratum A: same 10% sample (790 tests) after WP-297, 300, 301, 304 (#61–#63, #65) | 760 | 1 | 3 | 25 (3 driver) | **99.3%** | 29 min, -j 3, debug kiln, 20 s timeout, box loaded (6 implementers); the 1 fail is coroutines (`co_await`, M4), the 1 timeout is `charconv.msvc/test.pass.cpp` (run) |
 | 2026-11-02 | a812270a | stratum B: disjoint 10% sample (790 tests, offset 5 in sorted order) | 730 | 25 | 3 | 31 (4 driver) | **96.2%** | 28 min, -j 3, debug kiln, 20 s timeout, 1 timeout counted as fail, box loaded (6 implementers) |
 | 2026-11-02 | 68822097 | same 10% sample (790 tests) after WP-268…276, 279, 280, 282, 287 | 724 | 41 | 3 | 22 (3 driver) | **94.3%** | 24 min, -j 3, debug kiln, 20 s timeout |
 | 2026-11-02 | c74c7353 | same 10% sample (790 tests) after WP-286, 288, 289, 291, 295 (#52–#56) | 748 | 17 | 3 | 22 (3 driver) | **97.4%** | 26 min, -j 3, debug kiln, 20 s timeout, box loaded (6 implementers) |
