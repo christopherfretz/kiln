@@ -704,6 +704,56 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// [over.ics.list]/9: the ICS of braced-init-list `l` to the
+    /// reference type `to` (referring to `r`).
+    fn list_ref_ics(&mut self, l: &InitList, to: QualType, r: QualType, opts: IcsOptions) -> Ics {
+        let void_from = QualType::VOID;
+        let inner = conv::strip_cv(self, r);
+        let lref = matches!(self.ast.types.canonical_view(to), TypeView::LValueRef(_));
+        let q = self.ast.types.effective_quals(r);
+        if lref && (!q.is_const() || q.is_volatile()) {
+            // A non-const lvalue reference binds no temporary (an
+            // element of the referenced type is not handled here).
+            if let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice()
+                && designator.is_empty()
+            {
+                let a = self.arg_info(*e);
+                let x = self.try_implicit_conversion(&a, to, opts);
+                if !x.is_bad() {
+                    return x;
+                }
+            }
+            // clang's `TryListConversion`: the temporary would be
+            // list-initialized, then fails to bind ("expects an
+            // lvalue"); otherwise the list does not convert to `T`.
+            return match self.list_ics(l, inner, opts) {
+                Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, r),
+                _ => Ics::bad(BadKind::LvalueRequired, void_from, to),
+            };
+        }
+        let rb = if lref {
+            RefBinding::IS_REF.with(RefBinding::LVALUE_REF).with(RefBinding::BINDS_RVALUE)
+        } else {
+            RefBinding::IS_REF.with(RefBinding::BINDS_RVALUE)
+        };
+        match self.list_ics(l, inner, opts) {
+            Ics::Standard(mut s) => {
+                s.rb = rb;
+                s.to_types[2] = r;
+                Ics::Standard(s)
+            }
+            Ics::UserDefined(mut u) => {
+                u.after.rb = rb;
+                u.after.to_types[2] = r;
+                Ics::UserDefined(u)
+            }
+            // The failure names the referenced type (clang recurses
+            // on `T1`).
+            Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, r),
+            other => other,
+        }
+    }
+
     /// The ICS of a braced-init-list ([over.ics.list]).
     pub(crate) fn list_ics(&mut self, l: &InitList, to: QualType, opts: IcsOptions) -> Ics {
         let void_from = QualType::VOID;
@@ -714,50 +764,7 @@ impl Sema<'_, '_> {
         if self.ast.types.is_reference(to)
             && let Some(r) = self.ast.types.pointee(to)
         {
-            let inner = conv::strip_cv(self, r);
-            let lref = matches!(self.ast.types.canonical_view(to), TypeView::LValueRef(_));
-            let q = self.ast.types.effective_quals(r);
-            if lref && (!q.is_const() || q.is_volatile()) {
-                // A non-const lvalue reference binds no temporary (an
-                // element of the referenced type is not handled here).
-                if let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice()
-                    && designator.is_empty()
-                {
-                    let a = self.arg_info(*e);
-                    let x = self.try_implicit_conversion(&a, to, opts);
-                    if !x.is_bad() {
-                        return x;
-                    }
-                }
-                // clang's `TryListConversion`: the temporary would be
-                // list-initialized, then fails to bind ("expects an
-                // lvalue"); otherwise the list does not convert to `T`.
-                return match self.list_ics(l, inner, opts) {
-                    Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, r),
-                    _ => Ics::bad(BadKind::LvalueRequired, void_from, to),
-                };
-            }
-            let rb = if lref {
-                RefBinding::IS_REF.with(RefBinding::LVALUE_REF).with(RefBinding::BINDS_RVALUE)
-            } else {
-                RefBinding::IS_REF.with(RefBinding::BINDS_RVALUE)
-            };
-            return match self.list_ics(l, inner, opts) {
-                Ics::Standard(mut s) => {
-                    s.rb = rb;
-                    s.to_types[2] = r;
-                    Ics::Standard(s)
-                }
-                Ics::UserDefined(mut u) => {
-                    u.after.rb = rb;
-                    u.after.to_types[2] = r;
-                    Ics::UserDefined(u)
-                }
-                // The failure names the referenced type (clang recurses
-                // on `T1`).
-                Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, r),
-                other => other,
-            };
+            return self.list_ref_ics(l, to, r, opts);
         }
         // /6: an array: the worst element conversion.
         if self.ast.types.is_array(to) {

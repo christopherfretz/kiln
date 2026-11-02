@@ -924,11 +924,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     /// True if `a` is `::std::<name><char>` (clang `isCharSpecialization`).
     fn is_std_char_spec(&self, a: ArgView, name: &str) -> bool {
-        let ArgView::Type(q) = a else { return false };
-        let Some(r) = self.ast.types.as_record(q) else { return false };
-        let Some((t, args)) = self.spec_of(r) else { return false };
-        self.parent(r).is_some_and(|p| self.is_std(p))
-            && decl_name(self.ast, t) == name
+        let ArgView::Type(ty) = a else { return false };
+        let Some(rec) = self.ast.types.as_record(ty) else { return false };
+        let Some((tmpl, args)) = self.spec_of(rec) else { return false };
+        self.parent(rec).is_some_and(|p| self.is_std(p))
+            && decl_name(self.ast, tmpl) == name
             && matches!(self.ast.types.args(args), [c] if self.is_char_arg(c.view()))
     }
 
