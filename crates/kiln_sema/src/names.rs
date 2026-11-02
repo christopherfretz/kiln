@@ -231,6 +231,10 @@ impl TypeNames for SemaNames<'_> {
         self.ast.spec_print_args(decl)
     }
 
+    fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
+        self.ast.preferred_name_of(decl)
+    }
+
     fn tag_keyword(&self, decl: DeclId) -> &'static str {
         self.ast.decls.record(decl).map_or("struct", |r| r.tag.keyword())
     }

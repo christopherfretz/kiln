@@ -1687,8 +1687,18 @@ impl Sema<'_, '_> {
                     let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
                     let ret = self.ast.types.proto_of(ty.ty()).or_else(|| self.ast.types.proto(ty));
                     let ret = ret.map_or(QualType::ERROR, FuncProto::ret);
+                    // A guide from an inherited constructor returns the
+                    // base's specialization; map it to the derived class.
                     let g = set.cand(b).template.unwrap_or(f);
-                    let ret = self.ctad_result_type(g, ret);
+                    let mut ret = self.ctad_result_type(g, ret);
+                    // An implicit guide returns the injected-class-name
+                    // specialization, which substitutes to the class
+                    // itself (clang's `RecordType`), not a template-id.
+                    if self.ast.decls.get(pattern).has(DeclFlags::IMPLICIT)
+                        && !self.ast.types.is_dependent(ret)
+                    {
+                        ret = self.ast.types.canonical(ret);
+                    }
                     Some(with_quals(self, ret))
                 }
             }

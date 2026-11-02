@@ -69,6 +69,15 @@ pub trait TypeNames {
         self.specialization_args(decl)
     }
 
+    /// The type a class template specialization `decl` prints as, from
+    /// its template's `preferred_name` attribute (clang
+    /// `PreferredNameAttr`, `printRecordBefore`): the typedef type that
+    /// names `decl`. `None` for other records.
+    fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
+        let _ = decl;
+        None
+    }
+
     /// The keyword of class `decl` (`struct`, `class` or `union`), for
     /// [`PrintOptions::c_policy`].
     fn tag_keyword(&self, decl: DeclId) -> &'static str {
@@ -294,6 +303,8 @@ pub fn write_declarator(
         no_parens: opts.no_parens,
         inside_cc_attr: false,
         diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
         canon_args: false,
         depth: 0,
     };
@@ -316,6 +327,8 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
         canon_args: false,
         depth: 0,
     };
@@ -342,6 +355,8 @@ pub fn write_nns_resolved(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, ou
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
         canon_args: true,
         depth: 0,
     };
@@ -388,6 +403,8 @@ pub fn write_arg_list_canonical(
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
         canon_args: true,
         depth: 0,
     };
@@ -445,6 +462,8 @@ fn arg_list_with_scope(
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: scope,
         canon_args: false,
         depth: 0,
     };
@@ -489,6 +508,8 @@ pub fn write_arg_list_c(
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
         canon_args: true,
         depth: 0,
     };
@@ -517,6 +538,8 @@ pub fn write_arg_list_prefix(
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
         canon_args: false,
         depth: 0,
     };
@@ -544,6 +567,8 @@ pub fn write_template_arg(
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
         canon_args: false,
         depth: 0,
     };
@@ -572,6 +597,8 @@ pub fn write_template_name(
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
         canon_args: false,
         depth: 0,
     };
@@ -636,6 +663,8 @@ fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: true,
+        in_tst_args: false,
+        scoped_args: false,
         canon_args: false,
         depth: 0,
     };
@@ -851,6 +880,15 @@ struct Printer<'a> {
     /// template specialization's name, which prints unqualified with its
     /// arguments desugared.
     diag_desugar: bool,
+    /// Printing a written template-id's arguments. clang wraps every
+    /// written type name in an `ElaboratedType`, whose policy suppresses
+    /// scope for everything inside it, so a substituted class prints
+    /// unscoped there (`'Box<Q, P>'`) and scoped elsewhere (`'N::Q *'`).
+    in_tst_args: bool,
+    /// The printer stands for clang printing canonical arguments
+    /// ([`write_arg_list_scoped`]), which carry no `ElaboratedType`, so
+    /// [`Printer::in_tst_args`] never applies.
+    scoped_args: bool,
     /// Print template arguments canonical (clang's `PrintCanonicalTypes`
     /// in `TemplateArgument::print`), with their scope.
     canon_args: bool,
@@ -889,7 +927,29 @@ impl Printer<'_> {
             f(self, replacement);
         } else {
             let r = self.ctx.canonical(replacement);
-            self.with_scope(true, |p| f(p, r));
+            let scope = !self.in_tst_args;
+            self.with_scope(scope, |p| f(p, r));
+        }
+    }
+
+    /// clang `printRecordBefore`'s `UsePreferredNames`: a specialization
+    /// named by its template's `preferred_name` typedef prints as that
+    /// typedef (with its scope, as a bare `TypedefType`), canonical
+    /// arguments (`PrintCanonicalTypes`) included; not in C.
+    fn preferred_name(&mut self, d: DeclId) -> bool {
+        if self.c_policy {
+            return false;
+        }
+        let Some(mut t) = self.names.preferred_name(d) else { return false };
+        loop {
+            match self.ctx.view(t.ty()) {
+                TypeView::Elaborated { named, .. } => t = named,
+                TypeView::Typedef { decl, .. } => {
+                    self.decl(decl, self.scope);
+                    return true;
+                }
+                _ => return false,
+            }
         }
     }
 
@@ -1091,6 +1151,10 @@ impl Printer<'_> {
             | TypeView::DependentSizedArray { elem: e, .. } => self.before(e),
             TypeView::Function(_) => self.function_before(t),
             TypeView::Record(d) => {
+                if self.preferred_name(d) {
+                    self.space_before_ph();
+                    return;
+                }
                 if self.c_policy {
                     let names = self.names;
                     self.push(names.tag_keyword(d));
@@ -1642,7 +1706,11 @@ impl Printer<'_> {
             self.template_name(name, if self.scope { Qual::Fully } else { Qual::None });
         }
         let template = self.ctx.template_decl(name);
+        let saved = self.in_tst_args;
+        // The `aka` and canonical arguments have no `ElaboratedType`.
+        self.in_tst_args = !self.diag_desugar && !self.scoped_args;
         self.arg_list_prefix(args, false, usize::MAX, template, false);
+        self.in_tst_args = saved;
     }
 
     /// [`Printer::diag_desugar`]: `q` with its sugar looked through, down
@@ -1654,6 +1722,13 @@ impl Printer<'_> {
             match self.ctx.view(q.ty()) {
                 TypeView::TemplateSpecialization { alias: false, .. } => return q,
                 TypeView::Auto { deduced: Some(d), .. } if d == QualType::DEPENDENT => return q,
+                // clang substitutes canonical arguments: `N::S<int>` is a
+                // class there, printed scoped (`'Box<N::S<int>, int>'`).
+                TypeView::SubstTemplateTypeParm { replacement, .. }
+                    if !self.ctx.is_dependent(replacement) =>
+                {
+                    return self.ctx.canonical(q);
+                }
                 _ => {}
             }
             let n = self.ctx.desugar_once(q);

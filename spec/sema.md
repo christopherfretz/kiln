@@ -3707,6 +3707,84 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   parsed as an expression, as clang does. Test:
   `tests/conformance/temp.names/no-template-named-qualified.cpp`.
 
+### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
+Each rule names the libc++ test it fixed and its corpus test.
+- **Deleted call operator** ([over.call.object]/1,
+  [dcl.fct.def.delete]/2): a call through an object whose selected
+  `operator()` is deleted reports "call to deleted function call operator
+  in type 'T'" with the candidate notes (`oper.rs`,
+  `diagnose_deleted_use` for `OperForm::Call`). A requires-clause naming
+  a deleted member is unsatisfied, with "attempt to use a deleted
+  function" as the reason (ranges `begin`/`end`/`rbegin`/`rend`). Test:
+  `tests/conformance/over.call.object/deleted-call-operator.cpp`.
+- **Invalid classes** ([temp.inst]/2): a class whose instantiation
+  failed, or one that dropped a base-specifier that names no class
+  ([class.derived.general]/2; `attach_bases` returns false), is marked
+  invalid. Initializing an object of an invalid class reports nothing
+  more and recovers (`is_invalid_class`). This covers list-init,
+  parenthesized aggregate init, `static_cast` and functional casts. As
+  an aggregate element, the invalid class takes one initializer
+  (out_ptr/inout_ptr). Tests:
+  `tests/conformance/temp.inst/invalid-class-quiet-init.cpp`,
+  `tests/conformance/class.derived/dependent-base-not-class.cpp`.
+- **typename-specifier after a failed qualifier**
+  ([temp.res.general]/4): only the first failing component is
+  diagnosed, and the parser skips the rest of the specifier
+  (tuple_element). Test:
+  `tests/conformance/temp.res/typename-failed-qualifier.cpp`.
+- **Non-type argument of class type with no conversion**
+  ([temp.arg.nontype]/1): reported with the converted-constant wording
+  "value of type 'S' is not implicitly convertible to 'int'", at the
+  argument (tuple_size_incomplete). Test:
+  `tests/conformance/temp.arg.nontype/class-arg-no-conversion.cpp`.
+- **Non-type parameter types substituted from prior arguments**
+  ([temp.param]/7):
+  - `template <class T, T V>`: `V`'s substituted type is checked at the
+    parameter, under a `PriorArgSubstitution` frame ("while
+    substituting prior template arguments into non-type template
+    parameter 'V' [with T = ...]").
+  - A deduced placeholder (`template <Pair P>`) is checked at the
+    argument, with "template parameter is declared here".
+  - Implicit deduction guides return the canonical injected type.
+  
+  Covers the pair/array NTTP tests. Test:
+  `tests/conformance/temp.param/nttp-structural-prior-args.cpp`.
+- **`static_cast<void>`** ([expr.static.cast]/6): its result is never
+  unused, unlike `(a == b);` or a comma's left operand
+  (size_incompatible_comparison). Test:
+  `tests/conformance/expr.static.cast/void-cast-not-unused.cpp`.
+- **Assignment through a const-returning call** ([expr.assign]/1): the
+  left operand may be a call whose return type is const-qualified
+  (through a reference), or a non-const member of one through `.`. The
+  error is "cannot assign to return value because function 'f' returns
+  a const value", with a note at the return type (get_const). Test:
+  `tests/conformance/expr.assign/const-return-call.cpp`.
+- **Initializer-list constructors in implicit conversion sequences**
+  ([over.ics.list]/7, [over.ics.rank]/3.3): a conversion through an
+  initializer-list constructor is an ordinary user-defined conversion,
+  with no rank of its own. So `one({1, 2})` with `one(pair<int, int>)` and
+  `one(span<const int>)` is ambiguous (span initializer_list, P2447R4).
+  Test: `tests/conformance/over.ics.list/init-list-ctor-ambiguous.cpp`.
+- **`preferred_name`** (clang extension, `__attribute__` and
+  `[[clang::]]`):
+  - Placement: on a class template. On anything else it warns "only
+    applies to class templates" and is ignored.
+  - Argument: a single type, which must be a cv-unqualified typedef for
+    a specialization of that template. Otherwise: "argument 'X' to
+    'preferred_name' attribute is not a typedef for a specialization of
+    'T'", with a note at the typedef.
+  - Printing: a specialization prints as the typedef
+    (`TypeNames::preferred_name`, `Ast::preferred_name_of`), with scope
+    unless printed among a written template-id's arguments. This applies
+    in C++ printing only.
+  
+  The pair/array NTTP tests print `std::string`. Test:
+  `tests/conformance/dcl.attr/preferred-name.cpp`.
+- **Substituted classes among written template arguments** ([temp.names]):
+  a class substituted into a written template-id prints unscoped there
+  (`'Box<Q, int>'`) and scoped elsewhere (`'N::Q *'`) (tuple.by.type).
+  Test: `tests/conformance/temp.names/substituted-args-unscoped.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit

@@ -1205,6 +1205,21 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.decltype_scope_at(i).map(|d| d.qual.map(|q| q.0).ok_or(()))
     }
 
+    /// After a nested-name-specifier that failed just past one of its
+    /// `::`s: skips the components that follow it
+    /// ([`Parser::skip_qualified_rest`]).
+    pub(crate) fn skip_after_failed_qualifier(&mut self) {
+        let Some(cc) = self.pos.checked_sub(1) else { return };
+        if self.tok_at(cc).kind != TokKind::Punct(Punct::ColonColon) {
+            return;
+        }
+        if let Some(end) = self.skip_qualified_rest(cc) {
+            while self.pos < end {
+                self.bump();
+            }
+        }
+    }
+
     /// The index after the components following the `::` at token `cc`,
     /// skipped without classifying them (the scope is unknown): `template`,
     /// identifiers, template argument lists after a `<` that close, and
