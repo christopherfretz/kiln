@@ -838,6 +838,16 @@ impl Sema<'_, '_> {
                     self.type_packs(t, out, depth + 1);
                 }
             }
+            // The call operator's parameter and return types (clang's
+            // `TraverseLambdaExpr` visits the lambda's type-loc).
+            ExprKind::LambdaExpr => {
+                let l = self.ast.exprs.lambda_id(e);
+                if let Some(op) = self.ast.exprs.lambdas.get(l).call_op
+                    && let Some(t) = self.ast.decls.get(op).ty()
+                {
+                    self.type_packs(t, out, depth + 1);
+                }
+            }
             _ => {}
         }
         let before = out.len();

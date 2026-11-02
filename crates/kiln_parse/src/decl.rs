@@ -1964,6 +1964,8 @@ impl Parser<'_, '_> {
         {
             self.parse_special_declarator_id(d);
             self.parse_declarator_id_attrs(d);
+        } else if abstract_ok && d.abstract_at.is_none() {
+            d.abstract_at = Some(self.loc());
         }
         self.parse_declarator_suffixes(d, abstract_ok);
         self.s.act_on_exit_declarator_scope(entered);
@@ -2231,18 +2233,21 @@ impl Parser<'_, '_> {
     /// the `)`: the parameters and whether `...` ends the list. With
     /// `delay_args`, default arguments are saved in `late_fn`.
     /// An abstract declarator's identifier location is where the name
-    /// would be (clang `ParseDirectDeclarator`): the first array bound,
-    /// else the token after the declarator. Named declarators keep theirs.
+    /// would be (clang `ParseDirectDeclarator`): the token at its
+    /// innermost position (`(*)` gives the `)`), else the first array
+    /// bound, else the token after the declarator. Named declarators keep
+    /// theirs.
     pub(crate) fn set_abstract_loc(&self, d: &mut Declarator) {
         if d.name.is_none() && d.special.is_none() && d.decomp.is_none() {
-            d.loc = d
-                .chunks
-                .iter()
-                .find_map(|c| match c {
-                    Chunk::Array { loc, .. } => Some(*loc),
-                    _ => None,
-                })
-                .unwrap_or_else(|| self.loc());
+            d.loc = d.abstract_at.unwrap_or_else(|| {
+                d.chunks
+                    .iter()
+                    .find_map(|c| match c {
+                        Chunk::Array { loc, .. } => Some(*loc),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| self.loc())
+            });
         }
     }
 
