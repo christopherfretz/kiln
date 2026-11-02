@@ -478,12 +478,9 @@ fn execute(
         };
         let timeout = if is_kiln { cfg.compile_timeout } else { run.timeout };
         let attempts = if is_kiln { 1 } else { run.retries + 1 };
-        let mut verdict = Step::Ok;
-        for attempt in 1..=attempts {
-            let measured =
-                process::run_measured(&cmd, &cfg.probe, &scratch.join("rss.txt"), timeout, limit);
-            let m = match measured {
-                Ok(m) => m,
+        let verdict =
+            match attempt_step(cfg, &cmd, scratch, stage, kind, timeout, limit, attempts, r) {
+                Ok(v) => v,
                 Err(e) => {
                     r.outcome = Outcome::Error(format!(
                         "cannot run {stage:?} step: {e}",
@@ -492,16 +489,6 @@ fn execute(
                     return;
                 }
             };
-            r.wall += m.wall;
-            r.max_rss_kb = r.max_rss_kb.max(m.max_rss_kb);
-            verdict = judge(stage, &m, kind == Kind::Verify);
-            if matches!(verdict, Step::Ok) {
-                if attempt > 1 {
-                    r.detail = format!("passed on attempt {attempt} of {attempts}");
-                }
-                break;
-            }
-        }
         match verdict {
             Step::Ok if expect_success => {}
             Step::Ok => {
@@ -531,6 +518,36 @@ fn execute(
             }
         }
     }
+}
+
+/// Runs one step up to `attempts` times, until it succeeds, adding each
+/// attempt's wall time and peak RSS to `r`; the last attempt's verdict.
+#[allow(clippy::too_many_arguments)] // the step, its limits and the result
+fn attempt_step(
+    cfg: &Config,
+    cmd: &Command,
+    scratch: &Path,
+    stage: Stage,
+    kind: Kind,
+    timeout: Duration,
+    limit: Option<MemLimit>,
+    attempts: u32,
+    r: &mut TestResult,
+) -> std::io::Result<Step> {
+    let mut verdict = Step::Ok;
+    for attempt in 1..=attempts {
+        let m = process::run_measured(cmd, &cfg.probe, &scratch.join("rss.txt"), timeout, limit)?;
+        r.wall += m.wall;
+        r.max_rss_kb = r.max_rss_kb.max(m.max_rss_kb);
+        verdict = judge(stage, &m, kind == Kind::Verify);
+        if matches!(verdict, Step::Ok) {
+            if attempt > 1 {
+                r.detail = format!("passed on attempt {attempt} of {attempts}");
+            }
+            break;
+        }
+    }
+    Ok(verdict)
 }
 
 /// Classifies one step's end. A compiler step "crashes" on a panic, an LLVM
@@ -698,7 +715,7 @@ mod tests {
     #[test]
     fn slow_tests_list() {
         let entries: Vec<_> = slow_tests().collect();
-        assert!(!entries.is_empty());
+        assert_ne!(entries.len(), 0);
         let mut sorted: Vec<&str> = entries.iter().map(|(p, _)| *p).collect();
         sorted.sort_unstable();
         sorted.dedup();
@@ -721,8 +738,11 @@ mod tests {
     #[cfg(unix)]
     fn fake_run(script: &str, run: RunLimits) -> TestResult {
         use std::os::unix::fs::PermissionsExt;
-        let base = std::env::temp_dir()
-            .join(format!("kiln-libcxx-retry-{}-{}", std::process::id(), script.len()));
+        let base = std::env::temp_dir().join(format!(
+            "kiln-libcxx-retry-{}-{}",
+            std::process::id(),
+            script.len()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let kiln = base.join("fake-kiln");

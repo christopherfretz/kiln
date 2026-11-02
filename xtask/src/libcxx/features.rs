@@ -129,9 +129,12 @@ pub fn locale_features(locale_a: &str) -> Vec<String> {
 pub fn normalize_locale(name: &str) -> String {
     let Some((lang, rest)) = name.split_once('.') else { return name.to_owned() };
     let (codeset, modifier) = rest.split_once('@').map_or((rest, None), |(c, m)| (c, Some(m)));
-    let mut norm: String =
-        codeset.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect();
-    if norm.chars().all(|c| c.is_ascii_digit()) {
+    let mut norm: String = codeset
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if !norm.is_empty() && norm.chars().all(|c| c.is_ascii_digit()) {
         norm.insert_str(0, "iso");
     }
     let mut out = format!("{lang}.{norm}");
@@ -192,7 +195,7 @@ mod tests {
     #[test]
     fn locale_features_from_locale_a() {
         // A container without locales: only C, C.utf8 and POSIX.
-        assert!(locale_features("C\nC.utf8\nPOSIX\n").is_empty());
+        assert_eq!(locale_features("C\nC.utf8\nPOSIX\n"), Vec::<String>::new());
         // After scripts/provision-locales.sh (Debian's `locale -a`).
         let provisioned = "C\nC.utf8\nPOSIX\ncs_CZ.iso88592\nczech\nen_US.utf8\n\
                            fr_CA.iso88591\nfr_FR.utf8\nja_JP.utf8\nru_RU.utf8\nzh_CN.utf8\n";
@@ -202,7 +205,7 @@ mod tests {
         assert!(got.contains(&"locale.en_US.UTF-8".to_owned()));
         // A bare `fr_CA` (no codeset) is not `fr_CA.ISO8859-1`, and an
         // unrelated codeset does not count.
-        assert!(locale_features("fr_CA\nja_JP.eucjp\nen_US.UTF-8\n") == ["locale.en_US.UTF-8"]);
+        assert_eq!(locale_features("fr_CA\nja_JP.eucjp\nen_US.UTF-8\n"), ["locale.en_US.UTF-8"]);
         // Merged into the static set, sorted and unique.
         let set = with_locales(all(), provisioned);
         let mut sorted = set.clone();
