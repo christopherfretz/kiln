@@ -10,7 +10,7 @@
 //! and `-Wnull-conversion` for GNU `__null` (`gnu_null.rs`).
 
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
-use kiln_ast::types::BuiltinType;
+use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::{Loc, Span};
@@ -101,7 +101,8 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(src).kind() == ExprKind::GNUNullExpr {
             self.check_null_conversion(src, to, cc);
         }
-        if self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
+        let bit_int = matches!(self.ast.types.canonical_view(to), TypeView::BitInt { .. });
+        if !bit_int && self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
         }
         if self.ast.types.builtin(from).and_then(|b| float_kind(self, b)).is_some() {

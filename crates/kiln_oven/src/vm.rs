@@ -2399,8 +2399,12 @@ impl Oven {
         }
         // An object holding no data (an empty class) may share its bytes
         // with another subobject (an empty base, `[[no_unique_address]]`):
-        // its construction touches none of them.
-        let size = if self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
+        // its construction touches none of them. A complete object or an
+        // array element owns its bytes: their lifetime is its own, which
+        // its destruction checks (`end_life`; `std::vector<std::bitset<0>>`).
+        let owns = self.element_type(a.ty, off) == Some(target);
+        let size =
+            if !owns && self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
         if a.flags & flags::HAS_UNION != 0 {
             self.place_in_unions(raw, a.ty, ty)?;
         }
@@ -2430,6 +2434,20 @@ impl Oven {
             t
         };
         extent(s) >= extent(t) && base(s) == base(t)
+    }
+
+    /// The type of the complete object or array element at offset `off`
+    /// of a `root` (arrays stripped), if `off` is where one begins.
+    fn element_type(&self, mut t: OTy, mut off: u64) -> Option<OTy> {
+        while let TyKind::Array { elem, n } = self.types.kind(t) {
+            let es = self.types.size(elem);
+            if es == 0 || off / es >= n {
+                break;
+            }
+            off %= es;
+            t = elem;
+        }
+        (off == 0).then_some(t)
     }
 
     /// The outermost object at offset `off` of a `root`.
