@@ -1689,6 +1689,21 @@ recomputed exactly as for non-template code (clang's
   - `CXXDependentScopeMemberExpr` becomes member lookup;
   - `CXXUnresolvedConstructExpr` becomes [expr.type.conv];
   - `ParenListExpr` becomes the initialization of its variable.
+- **A resolved `MemberExpr` naming a member function template
+  specialization** is rebuilt from the member name and the template
+  arguments *as written* ([temp.arg.explicit]/4; clang
+  `TreeTransform::TransformMemberExpr` passes only the written
+  `TemplateArgs`), never from the arguments deduction chose: overload
+  resolution runs again in the instantiation, so `s.str("")` with a
+  `template <class A> void str(const basic_string<C, T, A>&)` overload
+  deduces again and fails quietly instead of naming
+  `basic_string<char, char_traits<char>, char[1]>`, which a deduced
+  argument list replayed as explicit would instantiate (libc++
+  `ostream.formatted.print/locale-specific_form.pass.cpp`, WP-358). An
+  implicit member access (`f<X>()` inside a member, an implicit `this->`)
+  keeps the written arguments on the `MemberExpr` it forms
+  (`finish_overload_ref`, `set_member_template_args`). Test:
+  `tests/conformance/temp.arg.explicit/deduced-member-template-args-not-rewritten.cpp`.
 - **An NTTP reference** becomes `SubstNonTypeTemplateParmExpr {param,
   pack_index, replacement}`. The replacement is:
   - an `IntegerLiteral` (or the matching literal) built from the
