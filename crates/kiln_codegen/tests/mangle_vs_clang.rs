@@ -64,6 +64,13 @@ fn kiln_names(src: &str, arch: Arch) -> Result<BTreeSet<String>, String> {
     let ast = &tu.ast;
     let mut names = BTreeSet::new();
     let anon = &mut mangle::AnonIds::new();
+    // A module interface unit's initializer (`_ZGI`).
+    if let Some(u) = ast.modules.units.first()
+        && u.kind.is_interface()
+        && let Some(m) = &u.module
+    {
+        names.insert(mangle::mangle_module_initializer(ast, m, u.partition.as_deref()));
+    }
     for d in ast.decls.ids() {
         match ast.decls.get(d).kind() {
             DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion => {

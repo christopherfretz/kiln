@@ -13,6 +13,7 @@ mod decl;
 mod expr;
 pub mod keywords;
 mod lambda;
+mod modules;
 mod new_delete;
 mod parser;
 mod pragma;
@@ -156,6 +157,11 @@ pub fn parse_tu<'sm>(
 ) -> ParsedTu {
     let mut ppo = PpOptions::new(opts.std);
     ppo.reflection = opts.reflection;
+    // Module units parse from C++20 on (spec/modules.md §2); no module
+    // sources are configured, so an import is "module not found".
+    if opts.std >= Std::Cxx20 {
+        ppo.modules = Some(kiln_pp::ModuleOptions::default());
+    }
     let mut pp = Preprocessor::new(sm, diags, interner, ppo);
     pp.enter_main_file(file);
     parse_preprocessed(pp, Arc::clone(interner), diags, target, opts, limits).0

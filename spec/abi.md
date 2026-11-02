@@ -1078,7 +1078,24 @@ passed as the first-class aggregate `%struct.Q` where clang coerces it to
 `tests/conformance/basic.extended.fp/p1467-run.cpp` (calls on both CI
 targets).
 
-### 8.19 Landed (WP-373): standard abbreviations, tagged inline namespaces
+### 8.19 Landed (WP-363): module names
+
+`mangle.rs`, clang 22's `mangleModuleName`; the contract is
+spec/modules.md §7. A namespace-scope entity with linkage attached to a
+named module (`Ast::module_attachment`: in a purview and not in a linkage
+specification) gets `W<len><component>` per dotted name component before
+its unqualified name; namespaces, closures and internal-linkage entities
+get none, and partitions never appear. Each module-name prefix is a
+substitution candidate (`Sub::Module`). Module-attached variables are
+always mangled (never the plain C name), and a `const` variable attached to
+a named module has module linkage, not internal (P2788).
+`mangle_module_initializer` gives `_ZGI<module-name>[WP<partition>]`
+(not emitted yet). Tested differentially against clang by
+`crates/kiln_codegen/tests/mangle_vs_clang.rs` over
+`tests/mangle/modules.cpp` and `tests/mangle/module_partition.cpp`
+(target-neutral; no `check-x86_64` golden is needed).
+
+### 8.20 Landed (WP-373): standard abbreviations, tagged inline namespaces
 - **Standard abbreviations** (Itanium `<substitution>`, clang
   `mangleStandardSubstitution`; `Mangler::std_abbrev`): for an entity
   whose parent is `::std` itself (not a nested or inline namespace),

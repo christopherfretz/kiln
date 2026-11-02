@@ -75,6 +75,9 @@ pub struct PpOptions {
     pub timestamp: Option<String>,
     /// `-freflection`: lex the P2996 tokens `^^`, `[:`, `:]` (C++26).
     pub reflection: bool,
+    /// Modules enabled (C++20 and later, not with `-E`): module and import
+    /// directives are consumed and imports performed (spec/modules.md).
+    pub modules: Option<crate::ModuleOptions>,
 }
 
 impl PpOptions {
@@ -93,6 +96,7 @@ impl PpOptions {
             reproducible_time: None,
             timestamp: None,
             reflection: false,
+            modules: None,
         }
     }
 
