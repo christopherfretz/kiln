@@ -3146,6 +3146,17 @@ impl Cg<'_> {
             self.coerced_store_sized(r, &coerce, t, size);
             return Ok(Some(self.load_scalar(t, rq)));
         }
+        if rty == LTy::BFLOAT && self.is_x86() && !self.opts.optimize && self.opts.llvm_major < 22
+        {
+            // spec/abi.md §8.18: LLVM 19's x86-64 FastISel (`-O0`) takes
+            // a `bfloat` call result for the already widened `float`, so a
+            // result passed straight on reaches `__truncsfbf2` as raw
+            // bits. Through memory the result is extended correctly. LLVM
+            // 22 and the optimizing selector are not affected.
+            let t = self.temp(rq);
+            self.store(r, t.v, t.align, false);
+            return Ok(Some(self.load(LTy::BFLOAT, t.v, t.align, false)));
+        }
         Ok(Some(r))
     }
 

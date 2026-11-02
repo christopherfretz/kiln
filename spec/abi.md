@@ -1106,14 +1106,22 @@ vector, so `struct Q { _Float128 x; }` is `fp128` and `struct V { v4 v; }`
 `tests/conformance/basic.extended.fp/p1467-run.cpp` (calls on both CI
 targets).
 
-**Known backend defect (x86-64, LLVM 19):** `llc-19` (kiln's backend, and
-clang 19's) widens `bfloat` to `float` and, at `-O0`, takes a `bfloat`
-call result passed straight on as another call's argument (`g(f())`) as
-already widened: it runs `__truncsfbf2` on the raw bf16 bits, so the
-callee receives garbage. The IR is clang 19's and correct; LLVM 22
-compiles it correctly (the clang 22 switch, WP-355, removes it). kiln
-does not work around it; `nextafterf16-run.cpp` stores each `__bf16`
-call result to a local before passing it.
+**Backend defect workaround (x86-64, LLVM 19; WP-386):** `llc-19`
+(kiln's LLVM 19 backend, and clang 19's) widens `bfloat` to `float` and,
+in FastISel (`-O0`), takes a `bfloat` call result from a callee defined in
+the same module, passed straight on as another call's argument (`g(f())`),
+for the already widened value: it runs `__truncsfbf2` on the raw bf16 bits,
+so the callee receives garbage. External callees and the optimizing
+selector are unaffected; LLVM 22 compiles the same IR correctly. kiln
+spills instead of diagnosing (a diagnostic would reject valid code that
+works under LLVM 22): when the target is x86-64, `optimize` is off and
+`CodegenOptions::llvm_major < 22`, every `bfloat` call result is stored to
+an entry-block temporary and loaded back (`expr.rs`, end of `call_with`),
+and the backend extends a loaded `bfloat` correctly. The IR at LLVM 22, or
+when optimizing, is unchanged (clang's). clang 19 itself still miscompiles
+such programs, so `bf16-call-result-x86_64-run.cpp` (`requires:
+target-x86_64`, `clang>=22`, `oracle: none`) checks kiln's output against
+a fixed `stdout:`.
 
 ### 8.19 Landed (WP-363): module names
 
