@@ -125,7 +125,7 @@ impl Sema<'_, '_> {
     // -- diagnostics capture ----------------------------------------------------
 
     /// Runs `f` with its diagnostics stash back; returns them in order.
-    fn capturing<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> (R, Vec<Diag>) {
+    pub(crate) fn capturing<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> (R, Vec<Diag>) {
         let old = self.diag_capture.replace(Some((self.inst.stack.len(), Vec::new())));
         let r = f(self);
         let stash = self.diag_capture.replace(old).map(|c| c.1).unwrap_or_default();
@@ -134,7 +134,7 @@ impl Sema<'_, '_> {
 
     /// Emits `stash`, the last with `notes` attached (clang's standalone
     /// notes continue the diagnostic before them).
-    fn release(&self, mut stash: Vec<Diag>, notes: Vec<Diag>) {
+    pub(crate) fn release(&self, mut stash: Vec<Diag>, notes: Vec<Diag>) {
         if let Some(mut last) = stash.pop() {
             for n in notes {
                 last = last.with_note(n);

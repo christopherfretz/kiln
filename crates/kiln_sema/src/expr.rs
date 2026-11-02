@@ -4700,7 +4700,7 @@ impl Sema<'_, '_> {
                     ty,
                     ConvCtx::Cast,
                     loc,
-                    crate::class::DeletedAs::Cast(d),
+                    crate::class::DeletedAs::Cast(d, style.select()),
                 )
             }
         {
@@ -4736,7 +4736,7 @@ impl Sema<'_, '_> {
                 sites: crate::class::DiagSites {
                     access: loc,
                     deleted: loc,
-                    deleted_as: crate::class::DeletedAs::Cast(d),
+                    deleted_as: crate::class::DeletedAs::Cast(d, style.select()),
                 },
             };
             // The temporary has the written type, qualifiers and sugar
