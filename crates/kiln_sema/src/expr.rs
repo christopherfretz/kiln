@@ -1486,6 +1486,10 @@ impl Sema<'_, '_> {
         }
         if fns && valid.len() == 1 {
             d = valid[0];
+        } else if found.decls.len() > 1 && valid.len() <= 1 {
+            // Likewise for other entities: `const int c = 1; const c = 2;`
+            // names the valid `c`, `y; y;` the last `y` (silently).
+            d = valid.first().or(found.decls.last()).copied().unwrap_or(d);
         } else if found.decls.len() > 1 {
             // Distinct entities found via using-directives ([namespace.udir]/6).
             self.diagnose_ambiguous_reference(name, &found.decls, qualifier.is_none(), loc);

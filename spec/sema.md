@@ -103,6 +103,15 @@ Constructors:
     to instantiation. Member lookup's subobject merge (`class_hit`)
     keys declarations the same way, and its candidate note names a
     record by its canonical type.
+  - **Invalid declarations** (clang `resolveKind`, WP-371): an
+    id-expression whose lookup finds several declarations, at most one
+    of them valid, names the valid one, else the last one found, with
+    no ambiguity. A variable declared without a type specifier
+    ([dcl.type.general]/2; `const c = 2;` after `const int c = 1;`,
+    `y; y;`) is invalid and not merged with a previous declaration
+    (clang's `MergeVarDecl` returns at an invalid new declaration), so
+    it reports no redefinition and `c` still names the valid `c`.
+    `dcl.type/missing-type-specifier-implicit-int.cpp`.
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
@@ -616,6 +625,16 @@ Redeclaration and linkage rules:
   with an initializer`, `remove parentheses`).
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
+- A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
+  `BuildQualifiedType`; WP-371) on a type that is not a pointer,
+  reference or member pointer (and not dependent, an undeduced
+  placeholder or an error) is "restrict requires a pointer or reference
+  ('int' is invalid)" at the qualifier, which is dropped
+  (`type_from_declspec_at`, so `__restrict int *p;` qualifies `int` and
+  is diagnosed). It is reported once per declaration group where clang
+  reports it per declarator. `_Atomic int g();` (friend or not) is
+  accepted, as clang 19 and 22 do;
+  `class.friend/restrict-atomic-decl-specifiers.cpp`.
 - `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
   over the declared type of an unparenthesized id-expression or member
   access, else `T&&`/`T&`/`T` by value category. The operand is

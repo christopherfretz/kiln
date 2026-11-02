@@ -4,7 +4,7 @@
 //! checks of the actions (case values, `break` placement, return
 //! conversions, NRVO) run on the instantiation.
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprDeps, ExprKind};
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
@@ -82,7 +82,11 @@ impl Substituter<'_, '_, '_> {
         let rb = self.sema.ast.stmts.rbrace(s);
         let mut out = Vec::with_capacity(items.len());
         for x in items {
+            let decl = self.sema.ast.stmts.get(x).kind() == StmtKind::DeclStmt;
             out.push(self.stmt(x));
+            if std::mem::take(&mut self.invalid_decl_stmt) && decl {
+                break;
+            }
         }
         self.sema.act_on_compound(&out, n.loc(), rb)
     }
@@ -138,6 +142,15 @@ impl Substituter<'_, '_, '_> {
                     .lists
                     .iter::<DeclId>(self.sema.ast.stmts.decl_stmt_decls(s))
                     .collect();
+                // clang's `SubstDecl`: an invalid pattern declaration
+                // (`Ts x;`, [temp.variadic]/12) does not instantiate, and
+                // its failed statement ends the enclosing compound
+                // statement (`TransformCompoundStmt`), silently.
+                if ds.iter().any(|&d| self.sema.ast.decls.get(d).has(DeclFlags::INVALID)) {
+                    self.failed_locals.extend_from_slice(&ds);
+                    self.invalid_decl_stmt = true;
+                    return Err(SubstFail);
+                }
                 let mut out = Vec::with_capacity(ds.len());
                 for (i, &d) in ds.iter().enumerate() {
                     match self.local_decl(d) {
