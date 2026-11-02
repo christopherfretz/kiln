@@ -6885,12 +6885,38 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
+        self.classify_found(&found)
+    }
+
+    /// [`Sema::classify_name`] of a name followed by `::`: lookup of a
+    /// name before `::` considers only namespaces, types and templates
+    /// whose specializations are types ([basic.lookup.qual]/1), so a
+    /// variable `fs` does not hide the namespace alias in `fs::path(..)`.
+    pub fn classify_nested_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        let class = self.classify_name(name, qualifier);
+        if !matches!(class, NameClass::Value(_) | NameClass::FunctionTemplate(_)) {
+            return class;
+        }
+        let q = qualifier.map(|q| self.type_name_qualifier(q));
+        let found = match q {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Nested),
+            None => self.lookup_name(name, LookupKind::Nested),
+        };
+        if found.decls.is_empty() {
+            return class;
+        }
+        self.classify_found(&found)
+    }
+
+    /// The [`NameClass`] of a non-empty ordinary (or nested-name) lookup
+    /// result.
+    fn classify_found(&self, found: &crate::lookup::Found) -> NameClass {
         let Some(&d) = found.decls.first() else { return NameClass::Undeclared };
         // An ambiguous lookup that found a type recovers with the
         // earliest type found ([basic.lookup.general]/1; clang's
         // `getTypeName`): the parser commits to a type-name and
         // [`Sema::diagnose_ambiguous_name`] reports the ambiguity once.
-        let d = self.ambiguous_type_recovery(&found).unwrap_or(d);
+        let d = self.ambiguous_type_recovery(found).unwrap_or(d);
         let k = self.ast.decls.get(d).kind();
         if k == DeclKind::Namespace {
             return NameClass::Namespace(d);
