@@ -2188,9 +2188,9 @@ formed it:
      relies on it
      (`tests/conformance/temp.deduct.call/noexcept-function-pointer-argument.cpp`,
      `libstdcxx-deduce-noexcept-fnptr.cpp`).
-     Deviation: binding `void (&)(int)` to a `noexcept` function is not
-     yet reference-compatible in kiln ([dcl.init.ref]/4, `ics.rs`
-     `ref_related`), so such a call is "not viable" after deduction.
+     Binding `void (&)(int)` to a `noexcept` function after deduction is
+     reference-compatible ([dcl.init.ref]/4, see spec/sema.md
+     "[conv.fctptr] function-pointer conversions").
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
    the `FunctionTemplateSpecialization` decl. It has the substituted
    type and is a declaration only.

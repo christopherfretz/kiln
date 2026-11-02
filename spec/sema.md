@@ -1311,6 +1311,23 @@ specification as written (`TypeNames` prints ` noexcept`,
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
+- *Function references* ([dcl.init.ref]/4, [conv.fctptr], WP-322). A
+  function type `T noexcept` is reference-compatible with `T`: the
+  function conversion drops `noexcept` (`conv/qual.rs`
+  `is_function_conversion`), so `void (&r)(int) = f;` and
+  `void (&&r)(int) = f;` bind directly to a `noexcept` `f` through a
+  NoOp cast (clang's `SK_FunctionReferenceConversion`). The reverse
+  (`void (&)(int) noexcept` to a potentially-throwing function) is
+  "non-const lvalue reference ... cannot bind to a value of unrelated
+  type". In overload resolution (`overload/ics.rs` `ref_related`) the
+  binding ranks as identity, as clang's `TryReferenceInit` does: two
+  reference overloads `void (&)(int)` and `void (&)(int) noexcept` called
+  with a `noexcept` function are ambiguous, and so are `void (&)(int)`
+  and `void (*)(int) noexcept` (different target types, both exact
+  matches), while between two pointer overloads the `noexcept` pointer
+  wins ([over.ics.rank]/3.2.6). Tests:
+  `tests/conformance/dcl.init.ref/function-noexcept-binding.cpp`,
+  `function-noexcept-binding-run.cpp`.
 - **Invalid function declarations** (WP-288; clang's
   `ActOnFunctionDeclarator`, `MergeFunctionDecl`, `LookupResult::resolveKind`).
   A function declaration is invalid at its source when it has an

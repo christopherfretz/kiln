@@ -23,7 +23,7 @@ mod arith;
 pub(crate) mod bases;
 pub(crate) mod narrow;
 mod qual;
-pub(crate) use qual::drop_noexcept;
+pub(crate) use qual::{drop_noexcept, is_function_conversion};
 pub(crate) mod rank;
 pub(crate) mod scs;
 pub(crate) mod soft;
@@ -678,8 +678,12 @@ fn bind_reference(
     // ([dcl.init.ref]/4).
     // A `T[N]` glvalue binds a `T (&)[]` (P0388R4); clang treats the
     // pair as unrelated when the binding would drop qualifiers.
-    let same =
-        s.ast.types.same_type(f_un, r_un) || (rq.contains(fq) && s.unknown_bound_of(r_un, f_un));
+    // A function lvalue binds a reference to the function type without
+    // its `noexcept` ([dcl.init.ref]/4 via [conv.fctptr]; clang
+    // `SK_FunctionReferenceConversion`, a no-op cast).
+    let same = s.ast.types.same_type(f_un, r_un)
+        || (rq.contains(fq) && s.unknown_bound_of(r_un, f_un))
+        || is_function_conversion(s, f_un, r_un);
     let base = match (s.ast.types.as_record(f_un), s.ast.types.as_record(r_un)) {
         (Some(d), Some(b)) if !same => find_base(s, d, b),
         _ => BaseSearch::NotDerived,

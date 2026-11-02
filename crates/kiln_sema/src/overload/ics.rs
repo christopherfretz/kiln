@@ -380,8 +380,12 @@ impl Sema<'_, '_> {
     /// canonical and unqualified ([dcl.init.ref]/4): `(related,
     /// derived)`. A class template specialization `t2` is instantiated
     /// first (clang `CompareReferenceRelationship`'s `isCompleteType`).
+    /// A function type `t2` that becomes `t1` by dropping `noexcept` is
+    /// reference-compatible ("pointer to `t2`" converts to "pointer to
+    /// `t1`", [conv.fctptr]); the binding ranks as identity, as clang's
+    /// `TryReferenceInit` ranks it.
     pub(crate) fn ref_related(&mut self, t1: QualType, t2: QualType) -> (bool, bool) {
-        if t1 == t2 || self.unknown_bound_of(t1, t2) {
+        if t1 == t2 || self.unknown_bound_of(t1, t2) || conv::is_function_conversion(self, t2, t1) {
             return (true, false);
         }
         if let (Some(d), Some(b)) = (self.ast.types.as_record(t2), self.ast.types.as_record(t1))

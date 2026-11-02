@@ -182,14 +182,23 @@ pub fn is_function_pointer_conversion(s: &mut Sema<'_, '_>, from: QualType, to: 
         ) if s.ast.types.same_type(QualType::unqual(x), QualType::unqual(y)) => (a, b),
         _ => return false,
     };
-    if !s.ast.types.is_function(pf) || !s.ast.types.is_function(pt) {
+    is_function_conversion(s, pf, pt)
+}
+
+/// True if function type `from` becomes function type `to` by dropping
+/// its non-throwing exception specification ([conv.fctptr]): then "pointer
+/// to `from`" converts to "pointer to `to`", and `to` is
+/// reference-compatible with `from` ([dcl.init.ref]/4, clang
+/// `ReferenceConversions::Function`).
+pub(crate) fn is_function_conversion(s: &mut Sema<'_, '_>, from: QualType, to: QualType) -> bool {
+    if !s.ast.types.is_function(from) || !s.ast.types.is_function(to) {
         return false;
     }
-    if !s.ast.types.canonical(pt).quals().is_empty() {
+    if !s.ast.types.canonical(to).quals().is_empty() {
         return false;
     }
-    match drop_noexcept(s, s.ast.types.canonical(pf)) {
-        Some(f) => s.ast.types.same_type(f, pt),
+    match drop_noexcept(s, s.ast.types.canonical(from)) {
+        Some(f) => s.ast.types.same_type(f, to),
         None => false,
     }
 }
