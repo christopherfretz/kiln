@@ -1084,9 +1084,15 @@ AArch64 HFA as its twin's is.
 | `_Float64` | SSE (`double`) | V reg / HFA | `DF64_` |
 | `_Float128` | SSE+SSEUP (`fp128`) | Q reg / HFA | `DF128_` |
 
-Deviation: on x86-64 a struct holding one `__float128` or `_Float128` is
-passed as the first-class aggregate `%struct.Q` where clang coerces it to
-`fp128`; the machine-level passing is the same. Tests:
+On x86-64 an SSE+SSEUP pair is coerced as clang's `GetByteVectorType`
+(WP-365, `call.rs` `byte_vector`): a record that wraps a single element
+(`isSingleElementStruct`, `single_element`: through one-element arrays,
+nested records and empty bases, with no padding beyond the element) is
+passed and returned as that element's type when it is `fp128` or a
+vector, so `struct Q { _Float128 x; }` is `fp128` and `struct V { v4 v; }`
+`<4 x float>`; any other SSE+SSEUP type as `<N x double>`. Tests:
+`tests/codegen/fp128_wrapper_abi.cpp`,
+`tests/conformance/basic.extended.fp/f128-wrapper-args-run.cpp`, and
 `tests/mangle/extended_fp.cpp`, `tests/codegen/bfloat16_arith.cpp`,
 `tests/conformance/basic.extended.fp/p1467-run.cpp` (calls on both CI
 targets).
