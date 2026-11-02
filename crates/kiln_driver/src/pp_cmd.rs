@@ -124,6 +124,7 @@ impl Job<'_> {
         cfg.exceptions = p.exceptions.unwrap_or(cplusplus);
         cfg.rtti = p.rtti.unwrap_or(cplusplus);
         cfg.char8_t = p.char8_t;
+        cfg.char_signed = p.char_signed;
         cfg.pic = p.pic.unwrap_or(PicModel::Pie(2));
         cfg.fast_math = p.fast_math.unwrap_or(p.ofast);
         cfg.freestanding = p.freestanding.unwrap_or(false);
@@ -255,7 +256,13 @@ impl Job<'_> {
         let mut pp = Preprocessor::new(sm, engine, interner, self.pp_options(predefines));
         pp.set_include_resolver(Box::new(search));
         let triple = self.toolchain.target.triple;
-        pp.set_if_evaluator(Box::new(IfEval::for_triple(triple)));
+        let mut ifeval = IfEval::for_triple(triple);
+        if let Some(signed) = a.predef.char_signed {
+            let mut params = ifeval.params();
+            params.char_signed = signed;
+            ifeval = IfEval::new(params);
+        }
+        pp.set_if_evaluator(Box::new(ifeval));
         // `from_args` sees the GNU dialect only through `-std=`; the
         // effective dialect (clang's default is GNU) goes last so it wins.
         let mut fargs = a.argv.clone();

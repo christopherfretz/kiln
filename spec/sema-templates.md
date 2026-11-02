@@ -425,6 +425,13 @@ type parameter named `auto:N`, as in clang's dump.
   `act_on_finish_template_decl` pops such invented heads (WP-169,
   `temp.mem/out-of-line-abbreviated.cpp`).
 - `C auto` attaches the type-constraint `C<auto:N>`.
+- When the first invented parameter opens a new head, the named
+  parameters of the same clause declared before it (`int c` in
+  `f(int c, auto& x)`) get `DEPENDENT_CTX` (`DeclArena::mark_dependent_param`):
+  they are parameters of the template, and instantiation maps their uses to
+  the specialization's parameters ([temp.inst]/3; WP-298, libc++
+  formatter.handle.pass.cpp; `dcl.fct/abbreviated-leading-param-run.cpp`,
+  `tests/codegen/abbreviated_template_leading_param.cpp`).
 - Generic lambdas use the same routine (WP-075).
 
 ### 2.7 Pack expansions by context ([temp.variadic]/5)
@@ -725,7 +732,8 @@ the running `Substituter` instead.
 
 ### 4.2 Forming a specialization: `get_class_spec(tmpl, written, loc)`
 
-1. `check_template_args(tmpl, written)` ([temp.arg]):
+1. `check_template_args(tmpl, written)` ([temp.arg]), with the head
+   declaration's parameters (§4.8.1):
    - matches kinds and arity;
    - fills missing args from defaults, substituting the earlier args into
      them (frame `DefaultTemplateArgumentInstantiation`);
@@ -1196,6 +1204,56 @@ class name" at `B`
   Type names are checked as other names (spec/sema-class.md §2.4).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
+
+#### 4.8.1 Which declaration's head is read (the shared rule)
+
+**Template parameter lists are always read from the head/defining
+declaration, never from `ast.first(t)`.** A class template's first
+declaration may be a friend declaration inside a class template
+(`template <class C, class Tr> friend class sv;` in `wrap<I>`, as libc++
+19 declares `basic_string_view`, `basic_string` and `vector` first in
+`__wrap_iter`): it redeclares the namespace scope template
+([temp.friend]/1), but its parameters sit one level (or more) deeper, may
+have other names, and carry no default arguments ([temp.param]/12).
+`ast.first(t)` stays the template's identity (the key of
+`specializations`, `partials`, caches); everything that reads the
+parameters, their defaults or their depth goes through one of:
+
+- `head_template(t)`: the definition's template, else the earliest
+  declaration that is not a friend, else the first. Parameters, defaults
+  and depth for argument checking (`check_template_args`, §4.2), default
+  completion of dependent template-ids (§6.2), default suppression in
+  printed names, outer levels, and the partial specialization check that
+  the arguments are not the primary's own parameters
+  ([temp.spec.partial.general]/9.3, "class template partial
+  specialization does not specialize any template argument";
+  `check_partial_args`).
+- `visible_template(t)`: the latest declaration that is not a friend
+  (the one name lookup finds; a friend is invisible to it), else the
+  first. The constraints checked for a class template-id
+  ([temp.names]/8, §8.3) and the "template is declared here" note of an
+  arity error: clang names that declaration's head (`[with C = char]`,
+  its requires-clause), never a friend's. Satisfaction is the same for
+  every declaration (equivalent heads, [temp.over.link]/6).
+
+CTAD forms its guides from the definition's template (§6.6). A friend
+*function* template in a templated class redeclares nothing until the
+class is instantiated, and then with its head substituted to the
+namespace template's depth (§4.8), so function deduction, address
+deduction and partial ordering (`deduce_spec`, `more_specialized_in`)
+read a declaration at the right depth through `ast.first` and need no
+redirect. Audited (WP-299): `deduce_call.rs` `deduce_spec`/
+`deduce_conversion`, `order.rs` (function and partial ordering),
+`ctad.rs` (implicit, aggregate, user and copy guides), `ttarg.rs`
+(template template argument matching), `spec.rs`/`actions.rs`
+(specialization, instantiation, partial specialization matching),
+`funcs.rs`; only the partial specialization check, the class constraint
+check and the arity note read a friend's head, and are redirected. Tests:
+`tests/conformance/temp.friend/friend-first-class-template-uses.cpp`,
+`tests/conformance/temp.friend/friend-first-head-diagnostics.cpp`,
+`tests/conformance/temp.deduct.call/friend-first-function-template.cpp`,
+`tests/conformance/over.match.class.deduct/friend-first-class-template.cpp`,
+and the §6.2 tests.
 
 ### 4.9 Default member initializers
 
@@ -2002,7 +2060,8 @@ template has is first completed with the template's default arguments
 template-id's arguments up front): `basic_string_view<_CharT>` is matched
 as `basic_string_view<_CharT, char_traits<_CharT>>`. The parameters, their
 defaults and their depth are the head declaration's (`head_template`, as
-in `check_template_args`), never the first declaration's: that may be a
+in `check_template_args`; the shared rule is §4.8.1), never the first
+declaration's: that may be a
 friend declaration inside a class template ([temp.friend]/1; libc++'s
 `friend class basic_string_view` in `__wrap_iter`), whose parameters sit
 one level deeper, so substituting at its depth would leave the default
@@ -2160,7 +2219,8 @@ after selection and on any odr-use:
 ### 6.6 CTAD in M3 ([over.match.class.deduct])
 
 On the first use of CTAD for a class template `X`, the guide set is
-built and cached in `guides[X]`:
+built and cached in `guides[X]` (from the definition's template, never a
+friend first declaration's deeper head, §4.8.1):
 - one implicit guide per constructor of the primary pattern;
 - the copy-deduction candidate `X(X<T…>) -> X<T…>`;
 - every namespace-scope `CXXDeductionGuide` declared so far.
@@ -2621,7 +2681,9 @@ declared constraint of a constrained pack `C... Ts` is the fold
 ### 8.3 Satisfaction ([temp.constr.sat])
 
 `check_satisfaction(entity, args, loc) -> SatId` runs under the frame
-`ConstraintsCheck`. It evaluates the normal form:
+`ConstraintsCheck`. It evaluates the normal form. For a class template-id
+the entity is the declaration lookup finds (`visible_template`, §4.8.1),
+whose head the notes name. It evaluates:
 
 - **Atomic.** Substitute `args` into `mapping` and then into `expr`,
   under `ConstraintSubstitution` (SFINAE).
@@ -4566,7 +4628,14 @@ explicit specialization errors remain. The blockers are:
   - naming a function whose constraints fail is
     `sema_reference_to_unsatisfied_function` ("invalid reference to
     function 'f': constraints not satisfied",
-    `Sema::diagnose_unsatisfied_use`);
+    `Sema::diagnose_unsatisfied_use`). A member access naming such a
+    member (`x.f`, `x.operator->`, the only candidate) is then an error
+    expression, as clang's failed `DiagnoseUseOfDecl` is `ExprError`:
+    the call never deduces the member's placeholder return type, so its
+    definition is not instantiated ([temp.inst]/5), and inside a
+    requires-expression the requirement is just unsatisfied (WP-298;
+    libc++ `counted_iterator::operator->` probed by `iterator_traits`;
+    `tests/conformance/over.match.viable/unsatisfied-member-auto-return.cpp`);
   - special-member redeclaration matching also compares the trailing
     requires-clauses, so constrained copy constructors overload;
   - friends attach their trailing requires-clause; hidden friends

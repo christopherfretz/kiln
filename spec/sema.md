@@ -2744,6 +2744,13 @@ clang 19's C99/GNU complex support in C++:
     conversion sequence, with narrowing enforced for list-init
     ([dcl.init.list]/7)
   - references, binding directly or to a temporary
+  - class objects by constructor ([dcl.init.general]/16.6.2.1; spec/sema-class.md
+    §5): a direct-initialization from one expression of an unrelated class
+    is overload resolution over the constructors (`construct_class`,
+    `InitStyle::Direct`), whose copy or move constructor may bind its
+    reference through an explicit conversion function, plus clang's
+    CWG2327 conversion-function (and conversion-function-template)
+    candidates (spec/sema-overload.md §2.6, §10.5 "User-defined conversions")
   - character arrays from string literals: the bound is deduced, and
     an over-long string is an error
     (`initializer-string for char array is too long`, two arguments)
