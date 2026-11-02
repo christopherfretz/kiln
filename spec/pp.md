@@ -654,6 +654,24 @@ belong to WP-017, which builds them on `macro_defined` and
   `MacroDef::is_builtin` set, so `#ifdef __has_include` is true.
   `__DATE__`, `__TIME__` and `__TIMESTAMP__` can be fixed through
   `reproducible_time` and `timestamp`.
+
+  **P1467 macros (WP-361, [cpp.predefined]/2).** The base files come
+  from clang, which lacks P1467, so `apply_flags` adds GCC 14's set in
+  C++ (not in C): `__STDCPP_FLOAT16_T__`, `__STDCPP_FLOAT32_T__`,
+  `__STDCPP_FLOAT64_T__`, `__STDCPP_FLOAT128_T__` and
+  `__STDCPP_BFLOAT16_T__`, each `1`, when `__cplusplus >= 202302L`; and in
+  every C++ mode, as GCC does, the 64 limit macros `__FLT32_*__`,
+  `__FLT64_*__`, `__FLT128_*__` and `__BFLT16_*__` (`DIG`, `MANT_DIG`,
+  `MIN_EXP`, `MAX_EXP`, `MIN_10_EXP`, `MAX_10_EXP`, `DECIMAL_DIG`, `MAX`,
+  `NORM_MAX`, `MIN`, `EPSILON`, `DENORM_MIN`, `HAS_DENORM`,
+  `HAS_INFINITY`, `HAS_QUIET_NAN`, `IS_IEC_60559`; values copied from
+  `g++-14 -dM -E`, identical on x86-64 and AArch64, `predef.rs`
+  `P1467_LIMITS`) plus `__FLT16_IS_IEC_60559__`. libstdc++ keys
+  `<stdfloat>`, `numeric_limits` and the `<cmath>` overloads on them. The
+  other `__FLT16_*__` macros stay clang's (same values, clang's shorter
+  digit strings); GCC's `__FLT32X_*__`/`__FLT64X_*__` are not defined
+  (kiln has no `_Float32x`/`_Float64x`). Test:
+  `conformance/basic.extended.fp/p1467-macros.cpp`, `-cxx17.cpp`.
 - **Diagnostics.** Every [cpp] diagnostic has a `pp_*` id in
   `kiln_diag/src/ids/pp.rs`, with clang 19's wording, level and group. After
   an error in a directive, the rest of the line is skipped.
@@ -737,6 +755,10 @@ belong to WP-017, which builds them on `macro_defined` and
 21. **`defined` anywhere in an `#embed` parameter is an error.** clang 19
     only rejects it when it leads the expression (its `DefinedTracker`);
     kiln follows [cpp.embed.param.limit]/1.
+22. **GCC 14's P1467 macros are predefined** (`__STDCPP_FLOAT32_T__`,
+    `__FLT32_*__`, `__BFLT16_*__`, ...; "Predefined macros"). clang 19
+    and 22 define none of them, so `-dM -E` output has them in addition
+    to clang's.
 
 ## Error recovery
 

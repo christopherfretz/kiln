@@ -72,6 +72,10 @@ keywords! {
     Float = "float";
     Float128 = "__float128";
     Float16 = "_Float16";
+    Float32 = "_Float32";
+    Float64 = "_Float64";
+    StdFloat128 = "_Float128";
+    Bf16 = "__bf16";
     Fp16 = "__fp16";
     For = "for";
     Friend = "friend";

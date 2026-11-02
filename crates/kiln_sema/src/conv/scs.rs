@@ -307,8 +307,13 @@ fn is_floating_conversion(s: &Sema<'_, '_>, from: QualType, to: QualType) -> boo
     if !f.is_floating() || !t.is_floating() {
         return false;
     }
-    let half16 = |b: BuiltinType| matches!(b, BuiltinType::Float16 | BuiltinType::Half);
-    if (f == BuiltinType::BFloat16 && half16(t)) || (t == BuiltinType::BFloat16 && half16(f)) {
+    // clang: no conversion between `__bf16` and the half types. P1467
+    // ([conv.double], [expr.static.cast]/11) converts `__bf16` and
+    // `_Float16` (unordered ranks): explicitly, or implicitly with the
+    // rank diagnostic of `fp_rank_violation`. `__fp16` keeps clang's rule.
+    if (f == BuiltinType::BFloat16 && t == BuiltinType::Half)
+        || (t == BuiltinType::BFloat16 && f == BuiltinType::Half)
+    {
         return false;
     }
     let (ff, tf) = (float_format(s, f), float_format(s, t));
@@ -791,6 +796,16 @@ fn same_fp_rank(s: &Sema<'_, '_>, x: BuiltinType, y: BuiltinType) -> bool {
     }
 }
 
+/// True if `scs`'s second conversion is a floating-point conversion that
+/// breaks P1467's rank rule (`fp_rank_violation`).
+pub(crate) fn fp_rank_violating(s: &Sema<'_, '_>, scs: &StandardConversion) -> bool {
+    scs.second == SecondStep::FloatingConversion
+        && matches!(
+            (float_builtin(s, scs.to_types[0]), float_builtin(s, scs.to_types[1])),
+            (Some(f), Some(t)) if super::rank::fp_rank_violation(s, f, t).is_some()
+        )
+}
+
 /// [over.ics.rank]/4.3: a conversion between `fp1` and `fp2` beats one
 /// between `fp1` and `t3` when `fp2` has the rank of `fp1` and `t3` is
 /// not a floating-point type, has another rank, or a lesser subrank
@@ -882,6 +897,16 @@ pub fn compare_standard_conversions(
     a: &StandardConversion,
     b: &StandardConversion,
 ) -> IcsCompare {
+    // P1467 [conv.double]/1: a floating-point conversion to an extended
+    // type of lesser or unordered rank (or from one, to a type of lesser
+    // or unordered rank) is not a standard conversion; kiln, like GCC,
+    // accepts it with a warning and ranks it below every other standard
+    // conversion sequence (spec/sema-conv.md §6).
+    match (fp_rank_violating(s, a), fp_rank_violating(s, b)) {
+        (false, true) => return IcsCompare::Better,
+        (true, false) => return IcsCompare::Worse,
+        _ => {}
+    }
     // /3.2.1.
     let sub = compare_subsets(s, a, b);
     if sub != IcsCompare::Indistinguishable {

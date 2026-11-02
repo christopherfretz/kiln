@@ -268,13 +268,13 @@ impl<'a> IrTypes<'a> {
             BuiltinType::Void => IrType::Void,
             BuiltinType::Float16 | BuiltinType::Half => IrType::Half,
             BuiltinType::BFloat16 => IrType::BFloat,
-            BuiltinType::Float => IrType::Float,
-            BuiltinType::Double => IrType::Double,
+            BuiltinType::Float | BuiltinType::Float32 => IrType::Float,
+            BuiltinType::Double | BuiltinType::Float64 => IrType::Double,
             BuiltinType::LongDouble => match t.arch() {
                 Arch::X86_64 => IrType::X86Fp80,
                 Arch::AArch64 => IrType::Fp128,
             },
-            BuiltinType::Float128 => IrType::Fp128,
+            BuiltinType::Float128 | BuiltinType::StdFloat128 => IrType::Fp128,
             BuiltinType::NullPtr => IrType::Ptr,
             b if b.is_sizeless() => sve_type(b),
             _ => {

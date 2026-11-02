@@ -268,7 +268,7 @@ candidate. Partitions do not appear in entity names. Entities in
 Variables attached to a module are always mangled, and a `const` variable
 attached to a named module has module linkage (P2788), so it is
 `_ZW1M1c`, not `_ZL1c`. `kiln_abi::mangle_module_initializer` gives the
-initializer's name, `_ZGIW1M` / `_ZGIW1MWP1P` (spec/abi.md §8.18).
+initializer's name, `_ZGIW1M` / `_ZGIW1MWP1P` (spec/abi.md §8.19).
 
 ## 8. `import std;` (libc++)
 
@@ -334,5 +334,5 @@ and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
 - `module.import/import-identifier*.cpp`, `import-not-found.cpp`,
   `import-order.cpp`: [cpp.pre] tokenisation and import rules.
 - `tests/mangle/modules.cpp`, `module_partition.cpp`: `_ZW` names,
-  differential against clang (spec/abi.md §8.18).
+  differential against clang (spec/abi.md §8.19).
 - libc++'s `std/modules/` through `cargo xtask libcxx` (§8).

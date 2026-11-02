@@ -68,13 +68,13 @@ pub enum FloatSuffix {
     L,
     /// `f16` / `F16`: `std::float16_t`.
     F16,
-    /// `f32` / `F32` (C++23): `std::float32_t`.
+    /// `f32` / `F32` (C++23; earlier as an extension): `std::float32_t`.
     F32,
-    /// `f64` / `F64` (C++23): `std::float64_t`.
+    /// `f64` / `F64` (C++23; earlier as an extension): `std::float64_t`.
     F64,
-    /// `f128` / `F128` (C++23): `std::float128_t`.
+    /// `f128` / `F128` (C++23; earlier as an extension): `std::float128_t`.
     F128,
-    /// `bf16` / `BF16` (C++23): `std::bfloat16_t`.
+    /// `bf16` / `BF16` (C++23; earlier as an extension): `std::bfloat16_t`.
     BF16,
 }
 
@@ -471,6 +471,19 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
     } else if sx.size == IntSize::Size && std < Std::Cxx23 {
         p.diags.push(LexDiagKind::SizeSuffixExtension, suffix_begin, b.len());
     }
+    // WP-361: as GCC, the P1467 suffixes are accepted before C++23 too
+    // (libstdc++'s `<limits>` and `<bits/c++config.h>` spell `0.5F32` and
+    // `0.0bf16` in every mode), with a pedantic extension warning.
+    if floating
+        && ud_suffix.is_none()
+        && std < Std::Cxx23
+        && matches!(
+            sx.fsuffix,
+            FloatSuffix::F32 | FloatSuffix::F64 | FloatSuffix::F128 | FloatSuffix::BF16
+        )
+    {
+        p.diags.push(LexDiagKind::FloatSuffixExtension, suffix_begin, b.len());
+    }
     let class = if floating {
         NumberClass::Floating(FloatLiteral {
             radix: body.radix,
@@ -663,7 +676,6 @@ impl Parser<'_> {
         let b = self.b;
         let mut sx = Suffixes::default();
         let mut has_size = false;
-        let cxx23 = self.std >= Std::Cxx23;
         while let Some(&c) = b.get(i) {
             let rest = &b[i..];
             let ok = match c {
@@ -671,16 +683,16 @@ impl Parser<'_> {
                     has_size = true;
                     let (s, n) = match &rest[1..] {
                         [b'1', b'6', ..] => (FloatSuffix::F16, 3),
-                        [b'3', b'2', ..] if cxx23 => (FloatSuffix::F32, 3),
-                        [b'6', b'4', ..] if cxx23 => (FloatSuffix::F64, 3),
-                        [b'1', b'2', b'8', ..] if cxx23 => (FloatSuffix::F128, 4),
+                        [b'3', b'2', ..] => (FloatSuffix::F32, 3),
+                        [b'6', b'4', ..] => (FloatSuffix::F64, 3),
+                        [b'1', b'2', b'8', ..] => (FloatSuffix::F128, 4),
                         _ => (FloatSuffix::F, 1),
                     };
                     sx.fsuffix = s;
                     i += n;
                     true
                 }
-                b'b' | b'B' if floating && !has_size && cxx23 => {
+                b'b' | b'B' if floating && !has_size => {
                     let upper = c == b'B';
                     let want: &[u8] = if upper { b"BF16" } else { b"bf16" };
                     if rest.starts_with(want) {
