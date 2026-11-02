@@ -611,6 +611,12 @@ impl<'a> IrTypes<'a> {
         }
     }
 
+    /// clang `isEmptyRecordForLayout(T)`: is `q` a class type with no
+    /// storage of its own (no vptr, and only empty bases and fields)?
+    pub fn is_empty_record_for_layout(&mut self, q: QualType) -> bool {
+        self.is_empty_record_type(q)
+    }
+
     /// clang `isEmptyRecordForLayout` of class `d`.
     fn is_empty_class(&mut self, d: DeclId) -> bool {
         let ast = self.ast();
