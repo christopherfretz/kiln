@@ -6164,6 +6164,34 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [`Sema::classify_name`] of `name` in `q`, a class named through a
+    /// typedef (`typedef L<int>::P Q; Q::I`, `typedef L<int> D; D::P::I`)
+    /// whose definition is not instantiated yet: lookahead cannot
+    /// instantiate ([temp.inst]/2 happens when the nested-name-specifier
+    /// is parsed), so the name is classified in the pattern the class
+    /// will be instantiated from, as a template-id qualifier is
+    /// (`L<int>::P::I`). `None` when `q` is not such a class.
+    fn classify_uninstantiated_member(&self, q: DeclId, name: Symbol) -> Option<NameClass> {
+        if self.kind_of(q) != DeclKind::CXXRecord || self.ast.definition(q).is_some() {
+            return None;
+        }
+        if let Some((_, info)) = self.ast.spec_info(q) {
+            return Some(self.classify_template_member(info.template, name));
+        }
+        let p = self.ast.instantiated_from(q)?;
+        let def = self.ast.definition(p)?;
+        let found = self.lookup_qualified(def, name, LookupKind::Ordinary);
+        let Some(&d) = found.decls.first() else { return Some(NameClass::Dependent) };
+        let k = self.kind_of(self.ast.strip_shadow(d));
+        Some(match k {
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => NameClass::TypeTemplate(d),
+            DeclKind::VarTemplate => NameClass::VarTemplate(d),
+            DeclKind::FunctionTemplate => NameClass::FunctionTemplate(d),
+            _ if is_type_kind(k) => NameClass::Type(QualType::DEPENDENT, d),
+            _ => NameClass::Value(d),
+        })
+    }
+
     /// The first member named `name` of an explicit or partial
     /// specialization of `tmpl` (the lookahead fallback of
     /// [`Sema::classify_template_member`]).
@@ -6204,6 +6232,11 @@ impl Sema<'_, '_> {
             && self.kind_of(q) == DeclKind::ClassTemplate
         {
             return self.classify_template_member(q, name);
+        }
+        if let Some(q) = qualifier
+            && let Some(c) = self.classify_uninstantiated_member(q, name)
+        {
+            return c;
         }
         if let Some(q) = qualifier
             && self.is_dependent_ctx(q)

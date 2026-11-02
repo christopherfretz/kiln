@@ -169,6 +169,17 @@ Constructors:
   `act_on_nested_name` does, so `typedef D J; J::T x;` declares `x`
   (libc++ `<typeinfo>`'s `__impl::__type_name_t`;
   `tests/conformance/basic.lookup.qual/typedef-qualifier-decl.cpp`).
+  When that class is not instantiated yet (a typedef of a member class
+  of a class template specialization, `typedef L<int>::P Q; Q::I x;`, or
+  of an undefined specialization, `typedef L<int> D; D::P::I x;`),
+  `classify_name` cannot instantiate it, so it classifies the name in
+  the pattern (the member class's pattern definition, or the template
+  through `classify_template_member`), as for a template-id qualifier;
+  parsing the nested-name-specifier then instantiates the class
+  ([temp.inst]/2) and the real lookup takes the instantiated member
+  (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;
+  `tests/conformance/temp.res/qualified-name-through-typedef.cpp`,
+  `qualified-name-through-typedef-run.cpp`).
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 
