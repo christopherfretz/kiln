@@ -384,6 +384,12 @@ pub fn write_template_arg(
 /// specification as written, so a difference only there (`noexcept(false)`
 /// against its canonical nothing) gives no `aka`.
 pub fn aka(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<String> {
+    // Only sugar clang counts gives an `aka`: a type whose canonical form
+    // differs from its written form only by scope (`'plain'` for
+    // `view<int>::plain`, written in the class) has none (WP-287).
+    if !should_aka(ctx, q, 0) {
+        return None;
+    }
     let written = print_type(ctx, names, q, PrintOptions::SUGARED);
     let canon = print_type(ctx, names, q, PrintOptions::CANONICAL);
     // clang's `Desugar` keeps template type parameters by name (`'pr<T, I>'
@@ -408,6 +414,72 @@ pub fn aka(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<Stri
         }
     }
     (canon != written && without_exc_specs(&canon) != without_exc_specs(&written)).then_some(canon)
+}
+
+/// clang's `desugarForDiagnostic` `ShouldAKA`: whether desugaring `q`
+/// for a diagnostic looks through any sugar that asks for an `aka`.
+/// Elaborated, `using`, parenthesized, attributed and deduced (`auto`)
+/// types and template parameter substitutions do not; nor does a class
+/// template specialization's name, though its type arguments are
+/// desugared, as are a function type's return and parameter types, an
+/// array's element and a pointer's or reference's pointee. Any other
+/// sugar (typedef, alias template, `decltype`, ...) does, except sugar
+/// for a vector type.
+fn should_aka(ctx: &TypeContext, q: QualType, depth: u32) -> bool {
+    if depth >= MAX_DEPTH {
+        return false;
+    }
+    let deeper = |q: QualType| should_aka(ctx, q, depth + 1);
+    let mut cur = q;
+    for _ in 0..MAX_DEPTH {
+        match ctx.view(cur.ty()) {
+            TypeView::ExtQual { base, .. } => {
+                cur = base;
+                continue;
+            }
+            TypeView::Elaborated { .. }
+            | TypeView::Using { .. }
+            | TypeView::Paren(_)
+            | TypeView::SubstTemplateTypeParm { .. }
+            | TypeView::Attributed { .. }
+            | TypeView::Auto { deduced: Some(_), .. } => {
+                cur = ctx.desugar_once(cur);
+                continue;
+            }
+            TypeView::Function(p) => {
+                if deeper(p.ret()) || ctx.params(&p).iter().any(|&t| deeper(t)) {
+                    return true;
+                }
+                break;
+            }
+            TypeView::TemplateSpecialization { args, alias: false, .. } => {
+                return ctx.args(args).iter().any(|a| match a.view() {
+                    ArgView::Type(t) => deeper(t),
+                    _ => false,
+                });
+            }
+            TypeView::ConstantArray(a) => return deeper(a.elem),
+            TypeView::IncompleteArray(e)
+            | TypeView::VariableArray { elem: e, .. }
+            | TypeView::DependentSizedArray { elem: e, .. } => return deeper(e),
+            TypeView::QualifiedArray { base, .. } => return deeper(QualType::unqual(base)),
+            _ => {}
+        }
+        let next = ctx.desugar_once(cur);
+        if next == cur
+            || matches!(
+                ctx.view(next.ty()),
+                TypeView::Vector { .. } | TypeView::DependentVector { .. }
+            )
+        {
+            break;
+        }
+        return true;
+    }
+    match ctx.view(cur.ty()) {
+        TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => deeper(p),
+        _ => false,
+    }
 }
 
 /// `s` with the elaborated-type keywords `struct `, `class `, `union `
@@ -911,7 +983,19 @@ impl Printer<'_> {
                 self.parm_name(depth, index);
                 self.space_before_ph();
             }
-            TypeView::SubstTemplateTypeParm { replacement, .. } => self.before(replacement),
+            // clang substitutes canonical template arguments, and prints
+            // the bare `RecordType` that leaves scoped:
+            // `'view<int>::iterator<false>'` (WP-287). A dependent
+            // replacement (a partial substitution) keeps its parameter
+            // names.
+            TypeView::SubstTemplateTypeParm { replacement, .. } => {
+                if self.ctx.is_dependent(replacement) {
+                    self.before(replacement);
+                } else {
+                    let r = self.ctx.canonical(replacement);
+                    self.with_scope(true, |p| p.before(r));
+                }
+            }
             TypeView::SubstTemplateTypeParmPack { associated, index, .. } => {
                 let names = self.names;
                 names.write_template_param(associated, index, &mut self.out);
@@ -1097,7 +1181,14 @@ impl Printer<'_> {
             TypeView::QualifiedArray { quals, base } => {
                 self.after(QualType::new(base, quals.bits()));
             }
-            TypeView::SubstTemplateTypeParm { replacement, .. } => self.after(replacement),
+            TypeView::SubstTemplateTypeParm { replacement, .. } => {
+                if self.ctx.is_dependent(replacement) {
+                    self.after(replacement);
+                } else {
+                    let r = self.ctx.canonical(replacement);
+                    self.with_scope(true, |p| p.after(r));
+                }
+            }
             TypeView::PackExpansion { pattern, .. } => {
                 self.after(pattern);
                 self.push("...");
