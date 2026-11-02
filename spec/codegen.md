@@ -767,6 +767,26 @@ The normative description is spec/driver.md "Code generation". In short:
   code), and it only runs for modules that need it. Test:
   `tests/codegen/always_inline.cpp` (exact under oracle 19, structural
   under 22).
+- **Cost (WP-397).** libstdc++'s and libc++'s headers define
+  `always_inline` functions that almost every TU uses, so the pass runs
+  for nearly every `-O0` compile. Measured on a TU including
+  `<string>`, `<vector>` and `<algorithm>` (`-O0 -c`, harness build,
+  aarch64, 20 interleaved runs, median wall clock; peak RSS ~64 MiB,
+  the frontend's, in every configuration): libstdc++ 0.339 s without
+  the pass, 0.362 s (+6.8%) with WP-389's two `opt` runs; libc++
+  0.445 s / 0.478 s (+7.4%). The pass itself is not the cost: `opt
+  -passes=always-inline` takes as long as `default<O0>` (process start
+  ~10 ms, IR parse ~12 ms) and inserts lifetime markers clang's O0
+  pipeline does not, so it is not used; skipping `opt` when no
+  `always_inline` function is called would never fire, as kiln defines
+  such a function only when it is used. The cost was the second `opt`
+  (bitcode back to text, ~17 ms) and `llc` reparsing text, so for an
+  object `llc` now reads the first run's bitcode directly (spec/driver.md
+  "IR optimization"): libstdc++ 0.359 s (+5.9%), libc++ 0.462 s
+  (+3.8%), a fixed ~20 ms per TU that shrinks relative to larger TUs.
+  The objects are byte-identical at `-O0`; above `-O0` the bitcode
+  keeps the in-memory use-list order, which makes `llc`'s output match
+  clang's in-process codegen where the text round trip did not.
 
 ### Deviations
 - **clang 22 codegen (WP-355).** kiln's IR follows clang 19 under every
