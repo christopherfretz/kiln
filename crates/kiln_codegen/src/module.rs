@@ -1570,6 +1570,7 @@ impl<'a> Cg<'a> {
         gv.linkage = Linkage::External;
         gv.align = Some(align);
         self.gvars.insert(first, g);
+        self.mark_tls(first, g, false);
         self.available_externally(first, g, ty)?;
         Ok(g)
     }
@@ -1671,6 +1672,7 @@ impl<'a> Cg<'a> {
             let name = mangle::mangle_decl(ast, &mut self.anon, first);
             let g = self.m.add_global(&name, ity);
             self.gvars.insert(first, g);
+            self.mark_tls(first, g, false);
             g
         };
         let internal = mangle::is_internal_symbol(ast, d);
@@ -1785,6 +1787,7 @@ impl<'a> Cg<'a> {
         } else {
             gv.linkage = Linkage::Internal;
         }
+        self.mark_tls(first, g, true);
         self.static_locals.insert(first, g);
         // clang `AddInitializerToStaticVarDecl`.
         // A dynamic initializer runs, guarded, at the declaration

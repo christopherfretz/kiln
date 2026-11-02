@@ -841,7 +841,8 @@ impl Cg<'_> {
         if let Some(v) = self.vec_load(a, q, vol) {
             return v;
         }
-        let v = self.load(a.ty, a.v, a.align, vol);
+        let p = self.scalar_tls_addr(a.v);
+        let v = self.load(a.ty, p, a.align, vol);
         if self.is_bool_value(q) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
     }
 
@@ -856,7 +857,8 @@ impl Cg<'_> {
         } else {
             v
         };
-        self.store(v, a.v, a.align, vol);
+        let p = self.scalar_tls_addr(a.v);
+        self.store(v, p, a.align, vol);
     }
 
     /// `memcpy(dst, src, n)`.

@@ -17,7 +17,7 @@ use kiln_llvm::{
 
 use crate::cleanup::{Cleanup, IrregularPartialArray};
 use crate::fir::{Fir, Op, V};
-use crate::fold::is_local;
+use crate::fold::{is_local, is_static_local};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, Sig, err, gval};
 
@@ -1730,7 +1730,20 @@ impl Cg<'_> {
                         a
                     } else {
                         let g = self.ref_var_global(e, d)?;
-                        Addr { v: V::C(gval(g)), ty: LTy::PTR, align: self.global_align(dq) }
+                        let mut v = V::C(gval(g));
+                        if self.var_is_tls(d) {
+                            if is_local(ast, d) {
+                                v = self.threadlocal_address(g);
+                            } else {
+                                let (p, wrapped) = self.tls_var_addr(d, g)?;
+                                if wrapped {
+                                    // The wrapper returns the referee.
+                                    return Ok(self.ref_lvalue(p, q));
+                                }
+                                v = p;
+                            }
+                        }
+                        Addr { v, ty: LTy::PTR, align: self.global_align(dq) }
                     };
                     let p = self.load(LTy::PTR, slot.v, slot.align, false);
                     return Ok(self.ref_lvalue(p, q));
@@ -1740,7 +1753,7 @@ impl Cg<'_> {
                 }
                 let ty = self.mty(q);
                 let st = ast.decls.var(d).map(|v| v.spec.storage());
-                let g = if is_local(ast, d) && st == Some(VarStorage::Static) {
+                let g = if is_static_local(ast, d) {
                     self.static_local(d)?
                 } else if is_local(ast, d) && st != Some(VarStorage::Extern) {
                     return err(self.loc_of(e), "reference to an unemitted local variable");
@@ -1748,7 +1761,16 @@ impl Cg<'_> {
                     self.get_gvar(d)?
                 };
                 let align = self.var_align(d);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
+                let mut v = V::C(gval(g));
+                if self.var_is_tls(d) {
+                    // [basic.stc.thread]: this thread's object.
+                    v = if is_local(ast, d) {
+                        self.threadlocal_address(g)
+                    } else {
+                        self.tls_var_addr(d, g)?.0
+                    };
+                }
+                Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
             }
             DeclKind::TemplateParamObject => {
                 let g = self.param_object_global(d)?;
@@ -1790,7 +1812,7 @@ impl Cg<'_> {
     fn ref_var_global(&mut self, e: ExprId, d: DeclId) -> R<kiln_llvm::GlobalId> {
         let ast = self.ast;
         let st = ast.decls.var(d).map(|v| v.spec.storage());
-        if is_local(ast, d) && st == Some(VarStorage::Static) {
+        if is_static_local(ast, d) {
             self.static_local(d)
         } else if is_local(ast, d) && st != Some(VarStorage::Extern) {
             err(self.loc_of(e), "reference to an unemitted local variable")
@@ -2025,9 +2047,12 @@ impl Cg<'_> {
         let s = if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
         let sq = ast.exprs.get(s).ty();
         // [class.temporary]/6: a temporary bound to a reference
-        // with static storage duration is a `_ZGR` global.
+        // with static or thread storage duration is a `_ZGR` global.
         let static_tmp = n.kind() == ExprKind::MaterializeTemporaryExpr
-            && ast.exprs.temporary_storage(e) == StorageDuration::Static;
+            && matches!(
+                ast.exprs.temporary_storage(e),
+                StorageDuration::Static | StorageDuration::Thread
+            );
         let (tmp, needs_init) =
             if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
         if !needs_init {
@@ -4043,7 +4068,7 @@ impl Cg<'_> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
         match v.spec.storage() {
-            VarStorage::Static => {
+            _ if is_static_local(ast, d) => {
                 let g = self.static_local(d)?;
                 return self.static_local_init(d, g);
             }
@@ -4123,7 +4148,8 @@ impl Cg<'_> {
         if self.referee(q).is_some() {
             // A reference binds the address of its initializer glvalue.
             let p = self.emit_ref_binding(init)?;
-            self.store(p, addr.v, addr.align, false);
+            let slot = self.scalar_tls_addr(addr.v);
+            self.store(p, slot, addr.align, false);
             return Ok(());
         }
         if ast.types.as_atomic(q).is_some() {

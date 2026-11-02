@@ -533,6 +533,14 @@ impl Oven {
                 Note::new(ast.decls.get(d).loc(), "declared here"),
             ]));
         }
+        // An object with thread storage duration has no constant address
+        // either ([expr.const]/14 permits static storage duration only;
+        // clang `CheckLValueConstantExpression` rejects it without a note).
+        if let Origin::Global(d) | Origin::External(d) = a.origin
+            && b.ast().decls.var(d).is_some_and(|v| v.spec.tls() != kiln_ast::decl::TlsKind::None)
+        {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        }
         if p.is_static() && !automatic {
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),

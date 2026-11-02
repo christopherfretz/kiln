@@ -55,6 +55,14 @@ pub(crate) struct GlobalInits {
     /// `_ZGR` globals by lifetime-extended temporary (clang
     /// `MaterializedGlobalTemporaryMap`).
     temps: FxHashMap<DeclId, GlobalId>,
+    /// clang `CXXThreadLocals`: the namespace-scope `thread_local`
+    /// variables (first declarations) in global creation order.
+    pub tls_vars: Vec<DeclId>,
+    /// clang `CXXThreadLocalInits` / `CXXThreadLocalInitVars`.
+    pub tls_inits: Vec<(FuncId, DeclId)>,
+    /// clang `ThreadWrappers`: (first declaration, `_ZTW` wrapper) in
+    /// creation order.
+    pub tls_wrappers: Vec<(DeclId, FuncId)>,
 }
 
 /// clang `getTransformedFileName`: the module name's file name with
@@ -243,6 +251,13 @@ impl Cg<'_> {
         let r = r.and_then(|()| self.finish_init_fn(f, d));
         self.f = saved;
         r?;
+        if self.var_is_tls(d) {
+            // Run from `__tls_init` (or, for an instantiation, its own
+            // `_ZTH`) in each thread instead (`emit_tls_trailer`).
+            self.gi.tls_inits.push((f, d));
+            self.gi.delayed.insert(first, DONE);
+            return Ok(());
+        }
         let internal = mangle::is_internal_symbol(ast, d);
         let key = (!internal).then_some(g);
         let unordered =
@@ -296,12 +311,13 @@ impl Cg<'_> {
         }
         // EmitDeclDestroy.
         if let Some(rd) = self.var_destructed_class(d, ty) {
+            let tls = self.var_is_tls(d);
             if self.array_elem(ty).is_some() {
                 let helper = self.global_array_dtor(d, addr, rd)?;
                 let null = V::C(self.m.const_null(LTy::PTR));
-                self.register_global_dtor_fn(helper, null);
+                self.register_global_dtor_fn(helper, null, tls);
             } else {
-                self.register_global_dtor(rd, V::C(gval(g)))?;
+                self.register_global_dtor(rd, V::C(gval(g)), tls)?;
             }
         }
         Ok(())
@@ -339,24 +355,25 @@ impl Cg<'_> {
 
     /// clang `registerGlobalDtor` / `emitGlobalDtorWithCXAAtExit`: the
     /// complete destructor of class `record` runs on the object at `addr`
-    /// at exit ([basic.start.term]/1).
-    fn register_global_dtor(&mut self, record: DeclId, addr: V) -> R<()> {
+    /// at exit, or at thread exit when `tls` ([basic.start.term]/1).
+    fn register_global_dtor(&mut self, record: DeclId, addr: V, tls: bool) -> R<()> {
         let ast = self.ast;
         let Some(def) = self.class_def(record) else { return Ok(()) };
         let Some(dtor) = ast.destructor(def) else {
             return err(Some(ast.decls.get(def).loc()), "destructor not declared");
         };
         let (callee, _) = self.structor_ref(dtor, Structor::Complete)?;
-        self.register_global_dtor_fn(callee, addr);
+        self.register_global_dtor_fn(callee, addr, tls);
         Ok(())
     }
 
-    /// `__cxa_atexit(callee, arg, &__dso_handle)`.
-    fn register_global_dtor_fn(&mut self, callee: V, arg: V) {
+    /// `__cxa_atexit(callee, arg, &__dso_handle)`; `__cxa_thread_atexit`
+    /// for a thread-local object (Itanium ABI §3.3.5.3).
+    fn register_global_dtor_fn(&mut self, callee: V, arg: V, tls: bool) {
         let h = self.dso_handle();
         let nounwind = [Attr::Flag(AttrKind::NoUnwind)];
-        let atexit =
-            self.rt_fn("__cxa_atexit", LTy::I32, &[LTy::PTR, LTy::PTR, LTy::PTR], &nounwind);
+        let name = if tls { "__cxa_thread_atexit" } else { "__cxa_atexit" };
+        let atexit = self.rt_fn(name, LTy::I32, &[LTy::PTR, LTy::PTR, LTy::PTR], &nounwind);
         self.nounwind_runtime_call(atexit, LTy::I32, vec![callee, arg, V::C(gval(h))]);
     }
 
@@ -402,9 +419,9 @@ impl Cg<'_> {
         let guard = self.m.add_global(&name, ty);
         let zero = self.m.const_int(ty, 0);
         let _ = self.m.set_initializer(guard, Some(zero));
-        let (lin, dso, vis, comdat) = {
+        let (lin, dso, vis, comdat, tls) = {
             let v = self.m.global(g);
-            (v.linkage, v.dso_local, v.visibility, v.comdat)
+            (v.linkage, v.dso_local, v.visibility, v.comdat, v.thread_local)
         };
         let weak = matches!(
             lin,
@@ -423,6 +440,7 @@ impl Cg<'_> {
         gm.visibility = vis;
         gm.align = Some(align);
         gm.comdat = gc;
+        gm.thread_local = tls;
         self.gi.guards.insert(first, guard);
         guard
     }
@@ -436,7 +454,8 @@ impl Cg<'_> {
         let local = self.static_locals.contains_key(&first);
         let non_template_inline =
             self.var_is_inline(d) && self.var_instantiation_linkage(first).is_none();
-        let threadsafe = local || non_template_inline;
+        let tls = self.var_is_tls(d);
+        let threadsafe = (local || non_template_inline) && !tls;
         let internal = matches!(self.m.global(g).linkage, Linkage::Internal | Linkage::Private);
         let int8 = !threadsafe && internal;
         let (gty, galign) = if int8 { (LTy::I8, 1) } else { (LTy::I64, 8) };
@@ -460,12 +479,13 @@ impl Cg<'_> {
         let zero = V::C(self.m.const_int(LTy::I8, 0));
         let needs = self.icmp(IntPredicate::Eq, v, zero);
         // EmitCXXGuardedInitBranch: a static local is initialized once
-        // in 2^20 entries.
+        // in 2^20 entries, a thread-local one once in 2^10.
         let br = self.f.fir.push(Op::CondBr { c: needs, t: check, f: end }, LTy::VOID);
         if local {
             let s = self.m.md_string(b"branch_weights");
             let w1 = self.m.const_int(LTy::I32, 1);
-            let w2 = self.m.const_int(LTy::I32, 1024 * 1024 - 1);
+            let n = if tls { 1024 } else { 1024 * 1024 };
+            let w2 = self.m.const_int(LTy::I32, n - 1);
             let (Ok(m1), Ok(m2)) = (self.m.md_const(w1), self.m.md_const(w2)) else {
                 return err(None, "bad branch weights");
             };
@@ -559,6 +579,10 @@ impl Cg<'_> {
         };
         let g = self.m.add_global(&name, lt);
         self.gi.temps.insert(t, g);
+        if self.var_is_tls(vfirst) {
+            // [basic.stc.thread]: one temporary per thread.
+            self.m.global_mut(g).thread_local = Some(kiln_llvm::TlsModel::GeneralDynamic);
+        }
         let value = match init {
             Some(k) => k,
             None => self.null_const(ty)?,
@@ -675,16 +699,21 @@ impl Cg<'_> {
         let ast = self.ast;
         let q = ast.exprs.get(m).ty();
         let Some(rd) = self.destructed_class(q) else { return Ok(()) };
+        let extending = ast
+            .exprs
+            .lifetime_extended_temporary(m)
+            .map(|t| ast.decls.lifetime_extended(t).map_or(t, |l| l.extending));
+        // A temporary bound to a thread_local reference dies at thread exit.
+        let tls = extending.is_some_and(|x| self.var_is_tls(x));
         if self.array_elem(q).is_none() {
-            return self.register_global_dtor(rd, a.v);
+            return self.register_global_dtor(rd, a.v, tls);
         }
-        let Some(t) = ast.exprs.lifetime_extended_temporary(m) else {
+        let Some(extending) = extending else {
             return err(self.loc_of(m), "static temporary without an extending declaration");
         };
-        let extending = ast.decls.lifetime_extended(t).map_or(t, |l| l.extending);
         let helper = self.global_array_dtor(extending, a, rd)?;
         let null = V::C(self.m.const_null(LTy::PTR));
-        self.register_global_dtor_fn(helper, null);
+        self.register_global_dtor_fn(helper, null, tls);
         Ok(())
     }
 
@@ -724,6 +753,7 @@ impl Cg<'_> {
             r?;
             self.gi.ctors.push((DONE, f, None));
         }
+        self.emit_tls_trailer()?;
         if self.gi.ctors.is_empty() {
             return Ok(());
         }
@@ -791,6 +821,30 @@ impl Cg<'_> {
         let gm = self.m.global_mut(g);
         gm.linkage = Linkage::Internal;
         gm.align = Some(1);
+        self.emit_guarded_calls(g, fns)
+    }
+
+    /// The internal `void()` function `f` (`__tls_init`) calling `fns`
+    /// once, guarded by the `i8` `guard`.
+    pub(crate) fn emit_guarded_init_fn(
+        &mut self,
+        f: FuncId,
+        guard: GlobalId,
+        fns: &[FuncId],
+    ) -> R<()> {
+        let saved = std::mem::replace(&mut self.f, Fx::empty());
+        self.start_init_fn(f);
+        let r = self.emit_guarded_calls(guard, fns);
+        let r = r.and_then(|()| self.finish_init_fn(f, self.ast.tu));
+        self.f = saved;
+        r
+    }
+
+    /// clang `GenerateCXXGlobalInitFunc` with a guard: when the `i8`
+    /// `g` is 0 (a `TlsGuard`-weighted branch, 1 : 1023), set it, then
+    /// call `fns` in order.
+    fn emit_guarded_calls(&mut self, g: GlobalId, fns: &[FuncId]) -> R<()> {
+        let zero8 = self.m.const_int(LTy::I8, 0);
         let gp = V::C(gval(g));
         let init = self.f.fir.create_block();
         let end = self.f.fir.create_block();

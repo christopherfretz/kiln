@@ -1487,8 +1487,7 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   value (`fold.rs` `refers_to_const_var`, clang `CEK_AsValueOrReference`).
   `tests/codegen/ref_constant_read.cpp`,
   `tests/conformance/basic.def.odr/reference-constant-init-not-odr-used.cpp`.
-- **Not implemented:** `init_priority`, `thread_local` dynamic
-  initialization (TLS wrappers), folding of reads of `const` class
+- **Not implemented:** `init_priority`, folding of reads of `const` class
   objects that clang permits ([basic.start.static]/3), and `constant` on
   an `extern` declaration of a reference or const scalar (clang
   `isTypeConstant`; `module.rs` `get_gvar` emits `external global`).
@@ -2000,6 +1999,59 @@ pipeline; `musttail` symmetric transfer and clang 19's
 allocation (`llvm.coro.align`, `align_val_t` `operator new`); clang's
 `coro_only_destroy_when_complete` attribute.
 
+## 7p. Landed (WP-376): thread-local storage (`tls.rs`)
+
+clang `CodeGenModule::setTLSMode`, `ItaniumCXXABI::EmitThreadLocalInitFuncs`
+and `EmitThreadLocalVarDeclLValue` mirrored ([basic.stc.thread],
+[basic.start.dynamic]/7, [basic.start.term]/1, Itanium ABI §3.4). Every
+`thread_local`, `_Thread_local` or `__thread` variable is a C++ dynamic
+TLS variable (sema does not yet tell `__thread` apart, kiln_sema
+`decl.rs` `TlsKind::Static`).
+
+- **Globals.** A thread-local variable's global (namespace-scope, static
+  data member, function-local, its `_ZGV` guard and the `_ZGR` of a
+  temporary it extends) is `thread_local` (general dynamic). The address
+  of a thread-local object is not a constant ([expr.const]/14; the Oven's
+  result check rejects it without a note, as clang), so a reference bound
+  to one is dynamically initialized.
+- **Access.** A scalar load or store whose pointer is a thread-local
+  global goes through `@llvm.threadlocal.address` (clang
+  `EmitLoadOfScalar`/`EmitStoreOfScalar`); constructor calls and
+  `__cxa_thread_atexit` take the raw global. A namespace-scope variable
+  with dynamic initialization or a destructor, or one with no
+  initializing declaration here (clang `usesThreadWrapperFunction`), is
+  reached by calling its wrapper `_ZTW<name>`; otherwise, and for every
+  function-local one, by `@llvm.threadlocal.address`. A reference's
+  wrapper returns the referee.
+- **Initialization.** Dynamic initializers are ordinary
+  `__cxx_global_var_init.N` functions; an ordered variable's is called
+  from `internal void @__tls_init()` behind `internal thread_local i8
+  @__tls_guard` (branch weights 1:1023, guard stored before the calls)
+  and named by `_ZTH<name>`, an alias of `__tls_init` with the variable's
+  linkage. A template instantiation's (unordered) `_ZTH` aliases its own
+  guarded initializer. Destructors register with `__cxa_thread_atexit`
+  (`nounwind`). A function-local `thread_local` is guarded by its
+  `thread_local` `_ZGV` byte without `__cxa_guard_*` (weights 1:1023).
+- **Wrappers.** Created at first use and, at the end of the TU, for each
+  defined non-discardable thread-local variable in creation order:
+  `internal` for an internal variable, else `weak_odr hidden` in a comdat
+  (`linkonce_odr` when the variable is not defined here); `noinline`,
+  `uwtable` (`nounwind` under `-fno-exceptions`), `noundef ptr` return.
+  The body calls `_ZTH` (through `icmp ne ptr @_ZTH, null` and an
+  `extern_weak` declaration when not defined here; omitted for a
+  constant-initialized one), then returns `@llvm.threadlocal.address`
+  (loaded through for a reference). Importers of a named module declare
+  its variables and use the `linkonce_odr` form (spec/modules.md §10
+  deviation 9).
+- Tests: `tests/codegen/thread_local.cpp`,
+  `tests/codegen/module_thread_local.cpp` (oracle 22),
+  `tests/conformance/basic.stc.thread/module-tls-run.cpp`.
+- **Remaining:** `__thread`/`_Thread_local` as clang `TLS_Static` (no
+  wrapper, constant initialization only); clang emits a template
+  variable's initializer after the TU's functions (deferred) where kiln
+  emits it at first use, so `thread_local.cpp` has no thread-local
+  variable template.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
@@ -2020,8 +2072,7 @@ no `result.ptr` spill).
 
 **Remaining (M3):**
 1. Oven folding of constant-initialized references, for the
-   direct-referee use (deviations above); `init_priority` and
-   `thread_local` dynamic initialization (§7e).
+   direct-referee use (deviations above); `init_priority` (§7f).
 2. The Sema gaps above, then corpus cases for them: class copy-init,
    braced returns, reference casts, temporaries, range-for over arrays.
 3. Bit-field and base-class constants, reference members.

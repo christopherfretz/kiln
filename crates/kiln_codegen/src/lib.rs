@@ -39,6 +39,7 @@ mod module_init;
 mod new_delete;
 mod null_init;
 mod stmt;
+mod tls;
 mod try_catch;
 mod va_arg;
 mod vla;

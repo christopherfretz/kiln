@@ -367,9 +367,17 @@ and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
    clang 22 says `declaration of 'x' must be imported from module 'M'
    before it is required` / `missing '#include'; 'x' must be declared
    before it is used`.
-9. `thread_local` is not lowered by codegen at all (a pre-existing gap,
-   not specific to modules), so module `thread_local` variables are plain
-   globals with no `_ZTW` wrapper.
+9. A named module's `thread_local` variables are defined (with their
+   `__tls_init`, `_ZTH` aliases and `weak_odr` `_ZTW` wrappers,
+   spec/codegen.md §7p) by the unit that owns them only; an importer
+   declares them `external thread_local` and reaches them through a
+   `linkonce_odr` `_ZTW` wrapper that calls the `extern_weak` `_ZTH`
+   initializer when it is present, as for any `extern thread_local`
+   declaration. clang 22 instead re-defines the variables, their
+   initializers and `_ZTH` aliases in every importer, so a program of a
+   module unit and an importer fails to link (`multiple definition of
+   x@tm`); kiln follows the Itanium rule
+   (`basic.stc.thread/module-tls-run.cpp`).
 
 ## Tests
 
