@@ -247,6 +247,25 @@ impl Sema<'_, '_> {
         self.is_err_expr(e)
     }
 
+    /// clang's `Expr::containsErrors`: `e` or an expression under it is
+    /// erroneous (a `RecoveryExpr` or of the error type). The walk is
+    /// bounded: it serves parser recovery only (WP-391).
+    pub fn contains_errors(&self, e: ExprId) -> bool {
+        let mut stack = vec![e];
+        let mut budget = 1usize << 16;
+        while let Some(x) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if self.is_err_expr(x) {
+                return true;
+            }
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        false
+    }
+
     /// True if an integer type `t` is narrower than `int`: arithmetic on
     /// it is done in `int` and cannot overflow (clang's
     /// `UnaryOperator::canOverflow` rule).
@@ -581,7 +600,7 @@ impl Sema<'_, '_> {
         if !self.lambdas.is_empty()
             && self.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
         {
-            self.note_unexpanded_in_lambda();
+            self.note_unexpanded_in_lambda(crate::templ::pack::PackOperand::Expr(e));
         }
         self.check_implicit_conversions(e, cc);
         self.flush_member_refs();
@@ -913,6 +932,28 @@ impl Sema<'_, '_> {
         Some(at.with_offset(u32::try_from(i).ok()?))
     }
 
+    /// clang 22 `warn_unused_return_type`: "ignoring {return
+    /// value|temporary} of type 'T' declared with 'nodiscard' attribute",
+    /// with the attribute's message if any.
+    fn unused_type_warning(
+        &self,
+        which: &str,
+        ty: QualType,
+        name: String,
+        text: Option<String>,
+        at: Loc,
+    ) -> (DiagId, Loc, Vec<String>) {
+        let mut args = vec![which.to_owned(), self.ty_arg(ty), name];
+        let id = match text {
+            Some(t) => {
+                args.push(t);
+                DiagId::sema_unused_return_type_msg
+            }
+            None => DiagId::sema_unused_return_type,
+        };
+        (id, at, args)
+    }
+
     /// The `nodiscard` forms of the unused-result warning.
     fn is_nodiscard_warning(id: DiagId) -> bool {
         matches!(
@@ -921,6 +962,8 @@ impl Sema<'_, '_> {
                 | DiagId::sema_unused_result_msg
                 | DiagId::sema_unused_constructor
                 | DiagId::sema_unused_constructor_msg
+                | DiagId::sema_unused_return_type
+                | DiagId::sema_unused_return_type_msg
         )
     }
 
@@ -1035,7 +1078,12 @@ impl Sema<'_, '_> {
                 if self.ast.types.is_void(n.ty()) {
                     return None;
                 }
-                let at = self.begin_loc(callee);
+                // clang 22 reports an operator call at its start.
+                let at = if self.clang_compat >= 22 && n.kind() == ExprKind::CXXOperatorCallExpr {
+                    self.begin_loc(x)
+                } else {
+                    self.begin_loc(callee)
+                };
                 // clang `getUnusedResultAttr`: a nodiscard class or
                 // enumeration returned by value first, then the callee
                 // ([dcl.attr.nodiscard]/2).
@@ -1052,6 +1100,11 @@ impl Sema<'_, '_> {
                     let attr = *self.ast.attrs.get(a);
                     let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
                     let name = "'nodiscard'".to_owned();
+                    // clang 22 `warn_unused_return_type`: a nodiscard
+                    // type is named, under -Wunused-value.
+                    if by_type.is_some() && self.clang_compat >= 22 {
+                        return Some(self.unused_type_warning("0", t, name, text, at));
+                    }
                     return Some(match text {
                         Some(t) => (DiagId::sema_unused_result_msg, at, vec![name, t]),
                         None => (DiagId::sema_unused_result, at, vec![name]),
@@ -1160,12 +1213,17 @@ impl Sema<'_, '_> {
                 // constructor ([dcl.attr.nodiscard]/4, clang
                 // `warn_unused_constructor`).
                 let ctor = self.ast.exprs.constructor(x);
-                let a = self.find_attr(ctor, AttrKind::NODISCARD).or_else(|| {
+                let by_ctor = self.find_attr(ctor, AttrKind::NODISCARD);
+                let a = by_ctor.or_else(|| {
                     let class = self.ast.types.as_record(n.ty())?;
                     self.find_attr(class, AttrKind::NODISCARD)
                 })?;
                 let attr = *self.ast.attrs.get(a);
                 let name = "'nodiscard'".to_owned();
+                if by_ctor.is_none() && self.clang_compat >= 22 {
+                    let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
+                    return Some(self.unused_type_warning("1", n.ty(), name, text, loc));
+                }
                 Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_text(m)) {
                     Some(t) => (DiagId::sema_unused_constructor_msg, loc, vec![name, t]),
                     None => (DiagId::sema_unused_constructor, loc, vec![name]),
@@ -1244,6 +1302,20 @@ impl Sema<'_, '_> {
             };
         }
         None
+    }
+
+    /// True if `e` (under parens) names a function that is already invalid
+    /// (an unknown return or parameter type): clang's
+    /// `BuildDeclarationNameExpr` makes such a name an error unless it is
+    /// resolved as a call's overload set, so taking its address or
+    /// converting it is erroneous without a diagnostic of its own
+    /// (`&A::f` into a pointer to member, `void (*p)() = k;`; WP-379).
+    pub(crate) fn names_invalid_function(&self, e: ExprId) -> bool {
+        let x = self.ignore_parens(e);
+        self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr && {
+            let d = self.ast.decls.get(self.ast.exprs.decl(x));
+            d.kind().is_function() && d.has(DeclFlags::INVALID)
+        }
     }
 
     /// clang `CallExpr::getCallReturnType` is a reference: the callee's
@@ -2576,6 +2648,13 @@ impl Sema<'_, '_> {
                 ExprFlags::CANNOT_OVERFLOW,
             );
         }
+        // `&(C::f)` is no pointer to member: its member name is still
+        // "without an object" (clang names it before it checks validity).
+        let x = self.ignore_parens(e);
+        if self.names_invalid_function(e) && (x == e || !self.member_refs.contains_key(&x)) {
+            self.member_refs.remove(&x);
+            return self.recover_err(&[e], loc);
+        }
         if let Some(mp) = self.member_pointer_of(e, loc) {
             return mp;
         }
@@ -2809,6 +2888,8 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         // [over.over]/1: an overload set needs a target; only an
         // assignment's right operand has one.
+        let l = self.resolve_single_overload_candidate(l);
+        let r = if op == BinaryOp::Assign { r } else { self.resolve_single_overload_candidate(r) };
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
         }
@@ -4055,6 +4136,13 @@ impl Sema<'_, '_> {
                 .zip(&braced)
                 .map(|(&a, b)| b.as_ref().map_or(a, |l| self.dependent_init_list(l)))
                 .collect();
+            let c = self.ast.exprs.get(callee);
+            if c.kind() == ExprKind::UnresolvedLookupExpr
+                && self.ast.templates.expr_targs.contains(callee)
+                && self.ast.unresolved_decls(callee).is_empty()
+            {
+                self.diagnose_adl_only_template_id(c.loc());
+            }
             return self.dependent_call(callee, &args, loc, rparen);
         }
         // [over.call.object]: a call of an object of class type.

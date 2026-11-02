@@ -376,7 +376,16 @@ the current directory (standard input is `-`). `-o -` is standard output.
     `coro::declaresAnyIntrinsic`),
     `-passes=coro-early,cgscc(coro-split),coro-cleanup,globaldce` (the
     coroutine part of clang 19's O0 pipeline); any other `-O0` module
-    takes the unchanged `llc`-only path.
+    takes the unchanged `llc`-only path;
+  - at `-O0`, when the IR defines an `always_inline` function (an
+    `attributes #N` line holds `alwaysinline`; `needs_always_inline`;
+    WP-389), `-passes=default<O0>`: clang 19's whole O0 module pipeline
+    (`buildO0DefaultPipeline`), i.e. `AlwaysInlinerPass` without
+    lifetime markers (`-passes=always-inline` alone would insert them)
+    followed by the coroutine lowering above when needed. clang runs it
+    before `-emit-llvm` writes the module, so `-S -emit-llvm` gets every
+    call to such a function inlined and a discardable one deleted
+    (spec/codegen.md §6 "Always-inliner").
 
   The pass run writes bitcode, which a second `opt -discard-value-names
   -S` reads back so the local value names the passes made are dropped,

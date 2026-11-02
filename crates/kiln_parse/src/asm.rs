@@ -6,7 +6,7 @@ use kiln_ast::stmt::{AsmOperand, asm_bits};
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::{DeclId, StmtId, StringLitId};
 use kiln_diag::DiagId;
-use kiln_lex::Punct;
+use kiln_lex::{Punct, Std};
 use kiln_source::{Loc, Span};
 
 use crate::keywords::Kw;
@@ -26,7 +26,14 @@ impl Parser<'_, '_> {
     /// [`Self::parse_asm_string`], also returning the literal expression.
     fn parse_asm_string_expr(&mut self) -> Option<(AsmStr, kiln_ast::ExprId)> {
         if !self.at_string() {
-            let d = self.s.diag(DiagId::parse_expected_string_literal_in, self.loc()).arg("'asm'");
+            // clang 22 accepts a parenthesized constant expression in an
+            // asm statement since C++11 and says so (kiln does not parse
+            // one yet); asm labels and C++98 keep the plain wording.
+            let d = if self.std >= Std::Cxx11 {
+                self.s.diag(DiagId::parse_asm_expected_string, self.loc())
+            } else {
+                self.s.diag(DiagId::parse_expected_string_literal_in, self.loc()).arg("'asm'")
+            };
             self.emit(d);
             return None;
         }

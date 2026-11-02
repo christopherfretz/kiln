@@ -3,10 +3,10 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 12:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 11:32 note "read of dereferenced null pointer is not allowed in a constant expression"
+//@ diag: 11 note "null pointer"
 //@ diag: 12:15 note "in call to 'f(nullptr)'"
-//@ requires: clang<22
-// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
+// clang 19 and 22 word and place these null-pointer notes differently; kiln
+// follows its -fclang-compat level (WP-377), so the directives are column-less.
 struct S { int a; int b; };
 constexpr int f(S *p) { return p[0].b; }
 static_assert(f(nullptr) == 0);

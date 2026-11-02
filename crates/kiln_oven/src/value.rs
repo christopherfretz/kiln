@@ -778,8 +778,11 @@ impl Oven {
                     self.walk(b, s, elem, r, at + i * es, field, loc)?;
                 }
             }
-            TyKind::Record { union, first, count, .. } => {
+            TyKind::Record { union, first, count, decl, .. } => {
                 let (first, count) = (first as usize, count as usize);
+                if !union {
+                    self.unconstructed_base(b, raw, decl, first..first + count)?;
+                }
                 if union {
                     let key = Ptr::union_key(raw, u64::from(p.off), t);
                     let Some(&i) = self.mem.unions.get(&key) else { return Ok(()) };
@@ -797,6 +800,48 @@ impl Oven {
                     return Err(Freeze::Fault(FailKind::NotConstant));
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// clang `CheckEvaluationResult` of a base subobject without a value:
+    /// a direct base of the class `rdef` at `raw` (fields `range`) whose
+    /// constructor never ran, its bytes outside their lifetime
+    /// (`Memory::set_unconstructed`), is "constructor of base class 'B'
+    /// is not called" at the base-specifier (WP-390).
+    fn unconstructed_base(
+        &self,
+        b: &dyn SemaBridge,
+        raw: u64,
+        rdef: DeclId,
+        range: std::ops::Range<usize>,
+    ) -> Result<(), Freeze> {
+        let off = u64::from(Ptr::decode(raw).off);
+        for i in range {
+            let f = self.types.fields[i];
+            if !f.base {
+                break;
+            }
+            let n = self.types.copy_size(f.ty);
+            if n == 0 || !self.mem.ended(Ptr::with_off(raw, off + f.offset, false), n) {
+                continue;
+            }
+            if self.run.silent {
+                return Err(Freeze::Fault(FailKind::NotConstant));
+            }
+            let ast = b.ast();
+            let q = self.types.info(f.ty).q;
+            let canon = ast.types.canonical(q).ty();
+            let loc = ast
+                .decls
+                .bases(rdef, &ast.lists)
+                .find(|s| !s.is_virtual && ast.types.canonical(s.ty).ty() == canon)
+                .map_or(ast.decls.get(rdef).loc(), |s| s.loc);
+            let t = Self::type_name(ast, q);
+            return Err(Freeze::Notes(vec![Note::new(
+                loc,
+                format!("constructor of base class '{t}' is not called"),
+            )]));
         }
         Ok(())
     }

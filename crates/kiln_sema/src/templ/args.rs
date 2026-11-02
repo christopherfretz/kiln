@@ -325,8 +325,63 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// The arity check of the dependent template-id `tmpl<args>` whose
+    /// parameters include an expanded parameter pack (a member template
+    /// `template<Ts... a>` of a specialization, §3.2): clang's
+    /// `CheckTemplateArgumentList` checks it even with dependent
+    /// arguments. An expanded pack of `n` types takes at most `n`
+    /// arguments, a pack expansion counting as one; it may take fewer
+    /// once a pack expansion was among them. `O<>::A<a...>` and
+    /// `O<int>::A<1, a...>` are "too many template arguments". `Err`
+    /// after the diagnostic.
+    pub(crate) fn check_expanded_pack_arity(
+        &self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> Result<(), ()> {
+        let params = self.template_params(self.head_template(tmpl));
+        if !params.iter().any(|p| self.templ.expanded_packs.contains_key(p)) {
+            return Ok(());
+        }
+        let mut wi = 0usize;
+        for &p in &params {
+            if let Some(tys) = self.expanded_pack_types(p) {
+                let mut open = false;
+                let mut taken = 0usize;
+                while wi < args.len() && taken < tys.len() {
+                    open |= self.is_pack_expansion_arg(args[wi]);
+                    taken += 1;
+                    wi += 1;
+                }
+                if !open && taken < tys.len() {
+                    self.diag_template_arity(tmpl, false, loc);
+                    return Err(());
+                }
+                continue;
+            }
+            // A parameter pack takes the rest; a pack expansion for a
+            // single parameter leaves the rest unknown; a missing
+            // argument is the full check's (defaults).
+            if self.ast.template_parm(p).is_some_and(|x| x.pack)
+                || wi >= args.len()
+                || self.is_pack_expansion_arg(args[wi])
+            {
+                return Ok(());
+            }
+            wi += 1;
+        }
+        if wi < args.len() {
+            self.diag_template_arity(tmpl, true, loc);
+            return Err(());
+        }
+        Ok(())
+    }
+
     pub(crate) fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
-        let name = self.qualified_decl_name(tmpl);
+        // clang prints the `TemplateDecl` unqualified: `A`, also for a
+        // member template of a specialization (`O<int, char>::A`).
+        let name = self.unqualified_decl_name(tmpl);
         // The most recent (non-friend) declaration, as name lookup finds
         // it: a redeclaration after the definition, not the definition
         // (clang notes the found `TemplateDecl`).
@@ -615,7 +670,7 @@ impl Sema<'_, '_> {
             return self.convert_class_nttp_arg(pty, e, at);
         }
         if t.is_reference(pty) {
-            return self.convert_ref_nttp_arg(pty, e, at);
+            return self.convert_ref_nttp_arg(pty, e, at, Some(self.ast.decls.get(p).loc()));
         }
         // clang `CheckConvertedConstantExpression`: an argument with no
         // implicit conversion sequence to the parameter's type
@@ -632,6 +687,7 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_cce_not_implicitly_convertible, from)
                     .arg(self.ty_arg(ety))
                     .arg(self.ty_arg(pty));
+                let d = self.note_nttp_param(d, Some(self.ast.decls.get(p).loc()));
                 self.emit(d);
                 return Err(());
             }
@@ -651,6 +707,7 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_cce_conversion_not_allowed, at)
                 .arg(self.ty_arg(ety))
                 .arg(self.ty_arg(pty));
+            let d = self.note_nttp_param(d, Some(self.ast.decls.get(p).loc()));
             self.emit(d);
             return Err(());
         }

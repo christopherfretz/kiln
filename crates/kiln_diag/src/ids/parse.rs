@@ -4,6 +4,8 @@
 
 parse_anon_bitfield_member_init = Error (0) "anonymous bit-field cannot have a default member initializer";
 parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
+parse_asm_expected_string = Error (0) "expected string literal or parenthesized constant expression in 'asm'";
+parse_asm_expected_string_19 = Error (0) "expected string literal in 'asm'";
 parse_asm_qualifier_ignored = Error (0) "expected 'volatile', 'inline', 'goto', or '('";
 parse_asm_string_kind = Error (1) "cannot use {0:unicode|wide|an empty} string literal in 'asm'";
 parse_assume_attr_expects_cond_expr = Error (1) "use of this expression in an '{0}' attribute requires parentheses";
@@ -21,7 +23,8 @@ parse_concept_legacy_bool = Error (0) "ISO C++ does not permit the 'bool' keywor
 parse_ctor_init_missing_comma = Error (0) "missing ',' between base or member initializers";
 parse_cxx11_attr_placement = ExtWarn [CxxAttributeExtension] (0) "ISO C++ does not allow an attribute list to appear here";
 parse_decltype_auto_invalid = Error (0) "'decltype(auto)' not allowed here";
-parse_decomp_decl_empty = ExtWarn [EmptyDecomposition] (0) "ISO C++17 does not allow a decomposition group to be empty";
+parse_decomp_decl_empty = ExtWarn [EmptyDecomposition] (0) "ISO C++17 does not allow a structured binding group to be empty";
+parse_decomp_decl_empty_19 = ExtWarn [EmptyDecomposition] (0) "ISO C++17 does not allow a decomposition group to be empty";
 parse_default_arg_unparsed = Error (0) "unexpected end of default argument expression";
 parse_default_delete_in_multiple_declaration = Error (1) "'= {0}' is a function definition and must occur in a standalone declaration";
 parse_default_special_members = Error (0) "only special member functions and comparison operators may be defaulted";
@@ -81,7 +84,8 @@ parse_for_range_identifier = Error (0) "range-based for loop requires type for l
 parse_friend_decl_defines_type = Error (0) "cannot define a type in a friend declaration";
 parse_friend_decl_spec = Error (1) "'{0}' is invalid in friend declarations";
 parse_function_definition_not_allowed = Error (0) "function definition is not allowed here";
-parse_gnu_case_range = Extension [GnuCaseRange] (0) "use of GNU case range extension";
+parse_gnu_case_range = Extension [GnuCaseRange] (0) "case ranges are a GNU extension";
+parse_gnu_case_range_19 = Extension [GnuCaseRange] (0) "use of GNU case range extension";
 parse_incomplete_array_member_init = Error (0) "array bound cannot be deduced from a default member initializer";
 parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";
 parse_invalid_decl_spec_combination = Error (1) "cannot combine with previous '{0}' declaration specifier";
@@ -94,6 +98,7 @@ parse_misplaced_ellipsis_vararg = Warning [AmbiguousEllipsis] (1) "'...' in this
 parse_missing_dependent_template_kw = Error (1) "use 'template' keyword to treat '{0}' as a dependent template name";
 parse_missing_type_specifier = Error (0) "a type specifier is required for all declarations";
 parse_missing_typename = Error (1) "missing 'typename' prior to dependent type name '{0}'";
+parse_multiple_template_declarators = Error (1) "{0:a template declaration|an explicit template specialization|an explicit template instantiation} can only {0:declare|declare|instantiate} a single entity";
 parse_only_constructors_take_base_inits = Error (0) "only constructors take base initializers";
 parse_postfix_after_unary_requires_parens = Error (1) "expression cannot be followed by a postfix {0} operator; add parentheses";
 parse_pragma_expected_identifier = Warning [IgnoredPragmas] (1) "expected identifier in '#pragma {0}' - ignored";

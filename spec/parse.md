@@ -214,6 +214,13 @@ clang's `Parser` over `Preprocessor::Lex`.
   dropped silently (clang's `TST_error`; `DeclSpec::set_base`,
   `set_width`, `set_sign`; WP-371,
   `class.friend/restrict-atomic-decl-specifiers.cpp`).
+  An undeclared name followed by `:` with no decl-specifier before it
+  (`y : 3;`) is "unknown type name 'y'" in a class or namespace
+  (clang's `ParseImplicitInt`); the class member is then an invalid
+  anonymous bit-field of type `int` (`y : 3 = 1;` adds "anonymous
+  bit-field cannot have a default member initializer"), and at namespace
+  scope the `:` is "expected unqualified-id". At block scope `y : 3;` is
+  a label (WP-379, `class.bit/untyped-bit-field.cpp`).
   An unqualified typename-specifier (`typename T`, `typename Ts...[0]`;
   [temp.res.general]/3) is "expected a qualified name after 'typename'"
   and recovers as clang does, by context (`parse_typename_specifier_in`,
@@ -771,7 +778,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   where the `...` stays the varargs `...` above: a function parameter
   whose declarator has its own `...` and the `...` is followed by `)`
   (`(Ts......)`), and in a lambda any `...` followed by `)`
-  (`[](Ts a...)`) — clang's observable split. For a non-type template
+  (`[](Ts a...)`) — clang's observable split. In a parameter, `(` then
+  `...` starts a nested parameter list (an abstract function declarator)
+  only for `(...)`; `(...x)` groups a pack's declarator-id
+  ([dcl.decl.general]/4, `is_param_list_start`). For a non-type template
   parameter (no varargs there) every such `...` is the error, unexpanded
   pack or not (`template<int a...>`); `Ts......a` then fails at `a`
   (`expected ')'` / `expected ',' or '>' in template-parameter-list`).
@@ -997,6 +1007,27 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   token with `to match this '('`, then, unless already at a closing
   bracket, the parser skips to the closer and takes it (clang's
   `BalancedDelimiterTracker::diagnoseMissingClose`).
+- **Expression-list recovery** (`parse_expr_list`, clang's
+  `ParseExpressionList`; WP-391): an argument that fails to parse is
+  skipped to the next `,` or the closing `)` without taking it, nested
+  `()`/`[]`/`{}` skipped whole (`SkipUntil(comma, r_paren,
+  StopBeforeMatch)`), and parsing goes on after the `,`: in
+  `f(undeclared<int> 7, "a"*2)` the second argument is diagnosed too. A
+  `...` after an argument is taken even when the argument failed. A list
+  with a failed argument then takes its `)` (skipping to it, stopping at
+  `;`) and is invalid. Its call is then a parse error under clang 19 and
+  a recovery expression over the callee under clang 22, which goes on
+  with what follows. A call whose last valid argument is not followed by
+  `,` or `)` (`f(1 2)`) reports "expected ')'" and is an error expression
+  with no overload resolution. The skip to the `)` is quiet instead when
+  the callee or an argument holds a delayed typo (clang 19,
+  `correct_delayed_typos_in`), or contains an error expression (clang 22,
+  `Sema::contains_errors`, clang's `containsErrors`). Tests:
+  `tests/conformance/expr.call/expression-list-recovery-22.cpp`,
+  `expression-list-recovery-19.cpp`. Not modelled: clang's
+  `ExprError` for a subscript or other expression whose Sema action
+  failed (kiln builds a recovery expression), so `f(1 [2, 3] 4, "a"*2)`
+  does not yet skip to the `,`.
 - **Literals:**
   - Integer, floating and character literals are classified by
     `kiln_lex::literal` and typed by `kiln_sema::literal`
@@ -1185,7 +1216,11 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     expression is invalid (clang's `ExprError`; `Parser::expr_invalid`):
     an expression statement missing its `;` after it (`a = g(S::nom x)`
     then a newline) skips to the next `;` with no "expected ';' after
-    expression", as clang's `ParseExprStatement`. In a
+    expression", as clang's `ParseExprStatement`; an invalid `= expression`
+    initializer (also after a non-template name followed by `<...>`,
+    `int q = 1 + v<S>{};`) skips to the next declarator's `,` or the `;`
+    with no "expected ';'", as clang's
+    `ParseDeclarationAfterDeclaratorAndAttributes`. In a
     parenthesized expression (`(S::nom x);`) "expected ')'" and its note
     come first.
   - A subscript's base is corrected at the `]` (`S::nom[1 2]` reports
@@ -1493,6 +1528,23 @@ argument skipping) is skipped syntactically (`skip_qualified_rest`) and
 classified by what follows the name: an identifier, a `*`/`&`/`&&`
 before `)`/`,`/`>`, or a `)` before an identifier, literal or `(` make it
 a type. A name begins at the `decltype` keyword (`name_begin`).
+
+**Landed (WP-379).** A pack-index-specifier `T ... [ expression ] ::`
+(C++26 [dcl.type.pack.index], the other computed-type-specifier) is the
+same pending first component: `decltype_scope_end` also matches a type
+name followed by `...[`, a balanced bracket group and `::`
+(`pack_index_scope_end`), and `annotate_decltype_scope` then parses the
+name and its index (`parse_pack_index_scope`,
+`Sema::act_pack_indexing_type_named`) before
+`Sema::act_on_nested_name_decltype`, so every decision point above takes
+it (`typename Ts...[0]::type`, `Ts...[0]::v`, `Ts...[0]::template M<U>`,
+`Ts...[1]::In` as a base). A name that is not a pack is "'T' does not
+refer to the name of a parameter pack" at the name, and the qualified
+name is then skipped like a failed decltype scope; an index out of range
+is diagnosed when the pack is substituted ("invalid index 2 for pack 'Ts'
+of size 2" at the index). A base-specifier also takes an unqualified
+`Ts...[I]` ([class.derived.general]/1: a class-or-decltype). Tests:
+`dcl.type.pack.index/nested-name-specifier{,-errors}.cpp`.
 **Landed (WP-140).** GNU asm ([dcl.asm], `asm.rs`): the asm-declaration
 `asm ( string-literal ) ;` at namespace scope goes to
 `act_on_file_scope_asm`; in a function body `asm`/`__asm`/`__asm__` with

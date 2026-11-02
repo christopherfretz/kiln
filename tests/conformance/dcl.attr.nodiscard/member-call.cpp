@@ -28,7 +28,7 @@
 //@ diag: 49:3 warning "ignoring return value of function declared with 'nodiscard' attribute"
 //@ diag: 50:3 warning "expression result unused; should this cast be to 'void'?"
 //@ requires: clang<22
-// clang 22 emits warning: ignoring return value of function declared with 'nodiscard' attribute; WP-355 residual
+// clang 19 spelling; member-call-clang22.cpp has clang 22's (WP-377).
 struct M {
   [[deprecated]] void d();
   void o(int);

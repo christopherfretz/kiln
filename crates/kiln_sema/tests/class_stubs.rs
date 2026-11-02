@@ -140,7 +140,7 @@ fn class_features_landed_in_066b() {
         let pn = name(s, "p");
         let p = s.ast.builder().param(f, pn, L, QualType::INT, 0, 0);
         let two = int_lit(s, QualType::INT, 2);
-        s.act_on_param_default_arg(p, two);
+        s.act_on_param_default_arg(p, two, L);
         assert_eq!(messages(sink), Vec::<String>::new());
         s.act_on_finish_record_definition(r, true);
         let this = s.act_on_this(L);

@@ -10,7 +10,7 @@
 //@ diag: 30:9 error "no viable conversion from 'D' to 'double'"
 //@ diag: 28:22 note "candidate template ignored: cannot deduce a type for 'T' that would make 'const T' equal 'double'"
 //@ requires: clang<22
-// clang 22 emits error: no viable conversion from 'A' to 'int'; WP-355 residual
+// clang 19 spelling; temp.deduct.conv-errors-clang22.cpp has clang 22's (WP-377).
 struct A {
   template <class T> operator T*() const;
 };

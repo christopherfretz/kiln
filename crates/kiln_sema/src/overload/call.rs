@@ -168,7 +168,21 @@ impl Sema<'_, '_> {
         self.ovl.lists.truncate(base);
         let r = self.finish_overloaded_call(&set, out, name, at, n.loc(), naming, nns, ule);
         self.end_set(set);
+        if explicit.is_some() && decls.is_empty() {
+            self.diagnose_adl_only_template_id(n.loc());
+        }
         r
+    }
+
+    /// A call `f<args>(…)` whose `f` ordinary lookup did not find (only
+    /// argument-dependent lookup found its templates, [temp.names]/3) is
+    /// a C++20 feature: before C++20 clang's `ext_adl_only_template_id`
+    /// at the name, after the call's own diagnostics (`ActOnCallExpr`).
+    pub(crate) fn diagnose_adl_only_template_id(&mut self, loc: Loc) {
+        if self.std < kiln_lex::Std::Cxx20 {
+            let w = self.diag(DiagId::sema_ext_adl_only_template_id, loc).per_instantiation();
+            self.emit(w);
+        }
     }
 
     /// Adds function template `ft` (found as `found`) to `set`: its

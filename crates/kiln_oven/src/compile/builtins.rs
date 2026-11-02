@@ -309,6 +309,7 @@ fn math_op(b: u32) -> Option<u32> {
         "ilogb" => bi::ILOGB,
         "logb" => bi::LOGB,
         "modf" => bi::MODF,
+        "sqrt" => bi::SQRT,
         _ => bi::NEXTAFTER,
     })
 }

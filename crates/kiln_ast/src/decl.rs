@@ -779,7 +779,8 @@ impl FnSpec {
     /// [`Defaulted::Explicit`] and `constexpr` [`ConstexprKind::Constexpr`],
     /// known only at `= default` after the declarator, [dcl.fct.def.default],
     /// [dcl.constexpr]/7; WP-289: `not_selected`, known only at the
-    /// class's `}`, [class.dtor]/4). The two fields are OR-ed in, so sema
+    /// class's `}`, [class.dtor]/4; WP-389: `return_deduced`, known only
+    /// at the first `return`, [dcl.spec.auto.general]/3). The two fields are OR-ed in, so sema
     /// sets them only from [`Defaulted::No`] / [`ConstexprKind::None`].
     pub const LATE: FnSpec = FnSpec(
         (1 << 3)
@@ -790,7 +791,8 @@ impl FnSpec {
             | (1 << 14)
             | (1 << 15)
             | (1 << 16)
-            | (1 << 23),
+            | (1 << 23)
+            | (1 << 24),
     );
 }
 
@@ -841,6 +843,12 @@ bit_accessors!(FnSpec:
     /// ([class.dtor]/4; clang `isIneligibleOrNotSelected`). Set at class
     /// completion; [`crate::Ast::destructor`] skips it.
     not_selected / with_not_selected = 23;
+    /// The return type was deduced from a placeholder (`auto`,
+    /// `decltype(auto)`; [dcl.spec.auto]): the declared type's return
+    /// type is the deduced one, not the type as written. Set when the
+    /// return type is deduced (WP-389; clang looks only at the type as
+    /// written for the linkage, `getLVForNamespaceScopeDecl`).
+    return_deduced / with_return_deduced = 24;
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).
@@ -3704,11 +3712,11 @@ pub mod builtin {
     /// `round`, `fabs`, `fmin`, `fmax` and `copysign`, each with its
     /// `f`/`l` variant (`ceil` -> `__builtin_ceil`). Left out: `rint` and
     /// `nearbyint` (GCC does not fold them: the result depends on the
-    /// rounding mode) and `sqrt` (GCC folds it; the Oven has no
-    /// `__builtin_sqrt`, which clang does not fold either).
+    /// rounding mode). WP-393 adds `sqrt` (GCC folds it; the Oven
+    /// evaluates `__builtin_sqrt` correctly rounded).
     pub fn gnu_lib_twin(name: &str) -> Option<u32> {
         const BASES: &[&str] =
-            &["ceil", "floor", "trunc", "round", "fabs", "fmin", "fmax", "copysign"];
+            &["ceil", "floor", "trunc", "round", "fabs", "fmin", "fmax", "copysign", "sqrt"];
         let base = name.strip_suffix(['f', 'l']).filter(|b| BASES.contains(b)).unwrap_or(name);
         if !BASES.contains(&base) || lib_by_name(name).is_none() {
             return None;
@@ -3881,6 +3889,8 @@ pub mod builtin {
         row(1117, "__builtin_sqrt", "dd", N),
         row(1115, "__builtin_sqrtf", "ff", N),
         row(1119, "__builtin_sqrtl", "LdLd", N),
+        // WP-393: clang's `__fp16` form (a call of the library `sqrtf16`).
+        row(1121, "__builtin_sqrtf16", "hh", N),
         row(1302, "__builtin_tan", "dd", N),
         row(1300, "__builtin_tanf", "ff", N),
         row(1310, "__builtin_tanh", "dd", N),
@@ -4663,7 +4673,7 @@ pub mod builtin {
 
     /// WP-365: the `<cmath>` function of the P0533 builtin `id` (the
     /// rounding, remainder, `fdim`/`fma`, exponent and `nextafter`
-    /// families): its name without the `__builtin_` prefix and the `f`,
+    /// families, and WP-393's `sqrt`): its name without the `__builtin_` prefix and the `f`,
     /// `l`, `f128`, `f16` or `f16b` suffix (`"ceil"` for
     /// `__builtin_ceilf128`); the Oven evaluates these and clang 19 does
     /// not.
@@ -4694,6 +4704,8 @@ pub mod builtin {
             "modf",
             "nextafter",
             "nexttoward",
+            // WP-393: P1383's `sqrt`, correctly rounded.
+            "sqrt",
         ];
         let name = info(id)?.name.strip_prefix("__builtin_")?;
         BASES.iter().copied().find(|base| {

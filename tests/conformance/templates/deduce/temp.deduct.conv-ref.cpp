@@ -7,7 +7,7 @@
 //@ diag: 17:7 error "no viable conversion from 'C' to 'int'"
 //@ diag: 16:31 note "candidate function [with T = int]"
 //@ requires: clang<22
-// clang 22 emits error: no viable conversion from 'A' to 'int'; WP-355 residual
+// clang 19 spelling; temp.deduct.conv-ref-clang22.cpp has clang 22's (WP-377).
 template <class T> struct W {};
 struct A { template <class T> operator W<T>() const; };
 int x = A();

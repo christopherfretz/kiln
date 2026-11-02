@@ -155,7 +155,7 @@ Expected after PR #57, WP-297 and WP-298 land: 16 of 17 fixed (one coroutine tes
 | 11 | `field has incomplete type 'unsigned char[]'` | flexible array member in glibc `bits/socket.h` (every `<filesystem>` test) | WP-271 |
 | 6 | `no type named 'type' in 'enable_if<false, int>'` | SFINAE through `__enable_if_t` alias reported as hard error | WP-274 |
 | 4 | `friend declaration of 'get_underlying' does not match any declaration` | friend function templates in class templates (`experimental/propagate_const`) | WP-273 |
-| 6 | `.verify.cpp` expectation mismatches | diag wording | WP-143/WP-253 |
+| 6 | `.verify.cpp` expectation mismatches | diag wording | WP-143/WP-253 (closed: all six pass since WP-367; gate m3 636 pass + 6 unsupported, re-checked by WP-391) |
 | 42 | static assertions, no matching function, link failures, access/abstractness false positives, rewritten comparisons, … | long tail, reduced per test with cause, reproducer and status in [libcxx-longtail.md](libcxx-longtail.md) | WP-276, WP-289 |
 
 Fixing the five largest clusters (129 of 210) should move the sample to about

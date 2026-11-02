@@ -207,6 +207,29 @@ impl DiagId {
     pub fn from_name(name: &str) -> Option<DiagId> {
         DiagId::ALL.iter().copied().find(|id| id.name() == name)
     }
+
+    /// The id that reports this diagnostic at clang compatibility level
+    /// `level` (`-fclang-compat=`; spec/diag.md §2.5): below 22, an id
+    /// whose wording clang 22 changed is replaced by its `<name>_19` row
+    /// (clang 19's wording, same kind, group and arguments). Every other id,
+    /// and every id at level 22, is itself.
+    #[must_use]
+    pub fn for_compat(self, level: u32) -> DiagId {
+        static MAP: std::sync::OnceLock<Vec<DiagId>> = std::sync::OnceLock::new();
+        if level >= 22 {
+            return self;
+        }
+        let map = MAP.get_or_init(|| {
+            let mut map = DiagId::ALL.to_vec();
+            for &old in DiagId::ALL {
+                if let Some(base) = old.name().strip_suffix("_19").and_then(DiagId::from_name) {
+                    map[base as usize] = old;
+                }
+            }
+            map
+        });
+        map[self as usize]
+    }
 }
 
 // The tail block (spec/diag.md §2.4): rows here compile, but `cargo xtask
