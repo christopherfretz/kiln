@@ -168,7 +168,10 @@ impl Sema<'_, '_> {
     ) -> Result<DeclId, ()> {
         let tmpl = self.ast.first(tmpl);
         let conv = self.check_template_args(tmpl, written, arg_locs, loc)?;
-        self.ensure_template_constraints(tmpl, conv.sugared, 0, loc)?;
+        // The constraints of the declaration lookup finds (clang's notes
+        // and `[with ...]` name its head), never a friend first
+        // declaration's deeper head.
+        self.ensure_template_constraints(self.visible_template(tmpl), conv.sugared, 0, loc)?;
         if let Some(s) = self.ast.templates.find_spec(tmpl, conv.canonical) {
             return Ok(s);
         }
