@@ -1376,11 +1376,12 @@ impl Sema<'_, '_> {
                 // end of the full-expression.
                 let msg =
                     self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q));
-                self.emit_delayed_typo(msg);
-            } else {
-                let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
-                self.emit(msg);
+                let e = self.recover_err(&[], loc);
+                self.emit_delayed_typo(msg, e);
+                return e;
             }
+            let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
+            self.emit(msg);
             return self.recover_err(&[], loc);
         };
         if found.decls.len() > 1

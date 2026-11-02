@@ -100,6 +100,16 @@ pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
 
+/// A delayed-typo diagnostic held for the end of its full-expression
+/// ([`Sema::begin_delayed_typos`]): its sequence number and the recovery
+/// expression that stands for the `TypoExpr`.
+#[derive(Debug)]
+struct HeldTypo {
+    seq: u32,
+    expr: ExprId,
+    diag: Diag,
+}
+
 /// The semantic-analysis state of one translation unit (spec/sema.md §1).
 ///
 /// `'a` is the borrow of the diagnostics engine and `'sm` the source
@@ -462,13 +472,21 @@ pub struct Sema<'a, 'sm> {
     /// The "no member named" errors of qualified-ids held back until the
     /// end of the enclosing expression statement (clang's delayed typo
     /// correction, `TypoExpr`), while `typo_delay` is non-zero
-    /// ([`Sema::begin_delayed_typos`], WP-308).
-    delayed_typos: Vec<Diag>,
+    /// ([`Sema::begin_delayed_typos`], WP-308), in order.
+    delayed_typos: Vec<HeldTypo>,
     /// The nesting depth of [`Sema::begin_delayed_typos`].
     typo_delay: u32,
     /// How many delayed-typo diagnostics were reported or held so far
-    /// ([`Sema::typo_count`]).
+    /// (also the sequence number of the next one, [`Sema::typo_mark`]).
     typo_count: u32,
+    /// The recovery expressions that stand for a delayed typo (clang's
+    /// `TypoExpr`s), reported or held ([`Sema::correct_delayed_typos_in`]).
+    typo_exprs: kiln_source::fx::FxHashSet<ExprId>,
+    /// Delayed typos whose expression the parser dropped without
+    /// finishing it ([`Sema::drop_delayed_typos`]): clang never corrects
+    /// such a `TypoExpr` and reports it at the end of the translation
+    /// unit (WP-330).
+    dropped_typos: Vec<Diag>,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -680,6 +698,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delayed_typos: Vec::new(),
             typo_delay: 0,
             typo_count: 0,
+            typo_exprs: kiln_source::fx::FxHashSet::default(),
+            dropped_typos: Vec::new(),
             range_for_outer_depth: None,
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
@@ -821,36 +841,133 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// `TypoExpr` when the full-expression is finished, after the parser
     /// has checked the `;` of an expression statement, so `S::nom y;`
     /// reports "expected ';' after expression" first (WP-308). Returns
-    /// the mark to end with; scopes nest.
+    /// the mark to end with (the sequence number of the next typo);
+    /// scopes nest.
     pub fn begin_delayed_typos(&mut self) -> usize {
         self.typo_delay += 1;
-        self.delayed_typos.len()
+        self.typo_count as usize
     }
 
-    /// Ends the scope begun at `mark`, emitting the diagnostics it held
-    /// in order.
+    /// Ends the scope begun at `mark`. The diagnostics it held stay held
+    /// while an enclosing scope is open (the full-expression has not
+    /// ended: a subscript inside an expression statement) and are emitted
+    /// in order otherwise.
     pub fn end_delayed_typos(&mut self, mark: usize) {
         self.typo_delay = self.typo_delay.saturating_sub(1);
-        let held = self.delayed_typos.split_off(mark.min(self.delayed_typos.len()));
-        for d in held {
+        if self.typo_delay == 0 {
+            for t in self.take_held_typos(mark) {
+                self.emit(t.diag);
+            }
+        }
+    }
+
+    /// Ends the scope begun at `mark`, emitting what it held now, even
+    /// inside an enclosing scope: clang's `ParseExpressionList` corrects
+    /// the typos of the expressions it parsed after an error (WP-330).
+    pub fn flush_delayed_typos(&mut self, mark: usize) {
+        self.typo_delay = self.typo_delay.saturating_sub(1);
+        self.flush_typos_from(mark);
+    }
+
+    /// Emits now the typos held since `mark` (a [`Sema::typo_mark`]),
+    /// without ending a scope.
+    pub fn flush_typos_from(&mut self, mark: usize) {
+        for t in self.take_held_typos(mark) {
+            self.emit(t.diag);
+        }
+    }
+
+    /// The current typo mark: typos reported from here on have a
+    /// sequence number at least this (for [`Sema::flush_typos_from`]).
+    pub fn typo_mark(&self) -> usize {
+        self.typo_count as usize
+    }
+
+    /// Ends the scope begun at `mark`, keeping what it held for the end
+    /// of the translation unit ([`Sema::emit_dropped_typos`]): the parser
+    /// dropped the expression (a subscript missing its `]`), so clang
+    /// never corrects its `TypoExpr` (WP-330).
+    pub fn drop_delayed_typos(&mut self, mark: usize) {
+        self.typo_delay = self.typo_delay.saturating_sub(1);
+        let held = self.take_held_typos(mark);
+        self.dropped_typos.extend(held.into_iter().map(|t| t.diag));
+    }
+
+    /// clang's `CorrectDelayedTyposInExpr(e)` as the parser calls it on a
+    /// subexpression it is about to give up on (the callee of a call
+    /// missing its `)`, the base of a subscript, WP-330): the typos held
+    /// for the expressions in `e` are reported now. True if `e` holds a
+    /// delayed typo, reported earlier or now (clang's `HadDelayedTypo`).
+    pub fn correct_delayed_typos_in(&mut self, e: ExprId) -> bool {
+        if self.typo_exprs.is_empty() {
+            return false;
+        }
+        let mut found = kiln_source::fx::FxHashSet::default();
+        let mut stack = vec![e];
+        // A bound on the walk: recovery only, never a semantic result.
+        let mut budget = 1usize << 16;
+        while let Some(x) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if self.typo_exprs.contains(&x) {
+                found.insert(x);
+            }
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        if found.is_empty() {
+            return false;
+        }
+        let (now, keep): (Vec<HeldTypo>, Vec<HeldTypo>) =
+            std::mem::take(&mut self.delayed_typos).into_iter().partition(|t| found.contains(&t.expr));
+        self.delayed_typos = keep;
+        for t in now {
+            self.emit(t.diag);
+        }
+        true
+    }
+
+    /// Starts a new full-expression context inside an expression (a
+    /// lambda body, a statement expression): its statements and
+    /// declarations end their own full-expressions, so their delayed
+    /// typos are not held for the enclosing statement. Returns the depth
+    /// to restore with [`Sema::resume_delayed_typos`] (WP-330).
+    pub fn suspend_delayed_typos(&mut self) -> u32 {
+        std::mem::take(&mut self.typo_delay)
+    }
+
+    /// Restores the depth [`Sema::suspend_delayed_typos`] returned.
+    pub fn resume_delayed_typos(&mut self, depth: u32) {
+        self.typo_delay = depth;
+    }
+
+    /// Removes the held typos numbered `mark` or later, in order.
+    fn take_held_typos(&mut self, mark: usize) -> Vec<HeldTypo> {
+        let i = self.delayed_typos.partition_point(|t| (t.seq as usize) < mark);
+        self.delayed_typos.split_off(i)
+    }
+
+    /// Emits the delayed typos of dropped expressions, at the end of the
+    /// translation unit after the pending instantiations, as clang
+    /// (WP-330).
+    pub(crate) fn emit_dropped_typos(&mut self) {
+        for d in std::mem::take(&mut self.dropped_typos) {
             self.emit(d);
         }
     }
 
-    /// The number of diagnostics reported through delayed typo correction
-    /// so far (held or emitted): the parser compares two counts to tell
-    /// whether a call's arguments held a `TypoExpr` (WP-318).
-    pub fn typo_count(&self) -> u32 {
-        self.typo_count
-    }
-
-    /// Emits `d`, or holds it back inside a [`Sema::begin_delayed_typos`]
-    /// scope (outside any instantiation, where a SFINAE context must see
-    /// it).
-    pub(crate) fn emit_delayed_typo(&mut self, d: Diag) {
+    /// Emits `d` for the typo standing as recovery expression `e`, or
+    /// holds it back inside a [`Sema::begin_delayed_typos`] scope
+    /// (outside any instantiation, where a SFINAE context must see it).
+    pub(crate) fn emit_delayed_typo(&mut self, d: Diag, e: ExprId) {
+        let seq = self.typo_count;
         self.typo_count = self.typo_count.wrapping_add(1);
+        if self.inst.stack.is_empty() {
+            self.typo_exprs.insert(e);
+        }
         if self.typo_delay > 0 && self.inst.stack.is_empty() {
-            self.delayed_typos.push(d);
+            self.delayed_typos.push(HeldTypo { seq, expr: e, diag: d });
         } else {
             self.emit(d);
         }

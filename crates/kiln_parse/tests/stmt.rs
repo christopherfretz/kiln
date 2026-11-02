@@ -233,3 +233,52 @@ fn delayed_no_member_nested_in_expression_statement() {
         p.diags
     );
 }
+
+/// WP-330: where clang's delayed typo correction reports `S::nom`, in
+/// order: a subscript missing its `]` drops its index's typo until the end
+/// of the translation unit (after the pending instantiations); a
+/// subscript's base is corrected at the `]`; a call missing its `)`
+/// corrects its callee and arguments at once; a lambda body's and a
+/// statement expression's statements end their own full-expressions
+/// (`tests/conformance/stmt.expr/delayed-typo-correction-points.cpp`).
+#[test]
+fn delayed_typo_correction_points() {
+    let p = parse(concat!(
+        "struct S { static int m; };\nint arr[3];\nint g(int);\n",
+        "template <class T> void tf(T t) { t.zz; }\n",
+        "void h(int a) {\n",
+        "  a = arr[S::nom1 x];\n",
+        "  int v = arr[S::nom2 x];\n",
+        "  a = S::nom3[1 2] + ;\n",
+        "  S::nom4(1;\n",
+        "  a = g(S::nom5 x) + ;\n",
+        "  [] { int v = S::nom6; return; }(), 1 +;\n",
+        "  ({ int w = S::nom7; w; }) + 5 +;\n",
+        "  tf(1);\n",
+        "}\n",
+    ));
+    let errs: Vec<&str> =
+        p.diags.iter().map(String::as_str).filter(|d| d.contains("error")).collect();
+    assert_eq!(
+        errs,
+        [
+            "6:19 error: expected ']'",
+            "7:23 error: expected ']'",
+            "8:10 error: no member named 'nom3' in 'S'",
+            "8:17 error: expected ']'",
+            "8:22 error: expected expression",
+            "9:6 error: no member named 'nom4' in 'S'",
+            "10:12 error: no member named 'nom5' in 'S'",
+            "10:22 error: expected expression",
+            "11:19 error: no member named 'nom6' in 'S'",
+            "11:41 error: expected expression",
+            "12:17 error: no member named 'nom7' in 'S'",
+            "12:34 error: expected expression",
+            "4:36 error: member reference base type 'int' is not a structure or union",
+            "6:14 error: no member named 'nom1' in 'S'",
+            "7:18 error: no member named 'nom2' in 'S'",
+        ],
+        "{:?}",
+        p.diags
+    );
+}
