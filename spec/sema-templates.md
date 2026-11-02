@@ -1864,7 +1864,18 @@ recomputed exactly as for non-template code (clang's
   failed type, a variable, a local class made invalid by a member) stays
   invalid in `failed_locals`: its later uses fail silently instead of
   reporting a second error (WP-316; was "not yet implemented: reference
-  to a member of a dependent context"). A local (or member) class
+  to a member of a dependent context").
+  A block-scope function declaration of the body, including an operator,
+  is declared again in the instantiation's block with the substituted
+  signature (`local_decl`, `function_decl` with `DeclaratorContext::Block`,
+  WP-329; [basic.scope.block], [temp.inst]/3), so it redeclares and
+  conflicts like a non-template one. A substituted declaration that differs
+  from a namespace function only in its return type is diagnosed for each
+  instantiation, with its instantiation note. A local class's friends are
+  checked against the block once, at the template definition, even when
+  their types are dependent (`friend void ft(T);` matches `void ft(T);`):
+  instantiation repeats no local friend error (`tests/conformance/temp.inst/local-function-declaration.cpp`,
+  `local-function-declaration-run.cpp`). A local (or member) class
   instantiated from a template keeps its implicit special members when a
   member made it invalid, as a specialization does (`ensure_implicit`,
   clang `CanDeclareSpecialMemberFunction`), so `L()` adds no "no

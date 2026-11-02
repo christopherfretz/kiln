@@ -57,6 +57,9 @@ Constructors:
     (`AstBuilder::register_name`).
   - Local names live in the scope's own `locals`, which plays the
     role of clang's `DeclsInScope` and `IdResolver` together.
+    Block-scope operator function declarations live in `local_ops`
+    instead, which only a local class's friend redeclaration searches
+    (sema-class.md, friend functions of a local class; WP-329).
   - Context scopes also record their `using namespace` directives.
 - **Who pushes which scope:**
   - **Function:** pushed by `act_on_start_function`. It holds the
@@ -1635,8 +1638,6 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     noexcept-specifiers deferred like any class. clang 19 substitutes
     them with the class (`no member 'y' in 'L'; it has not yet been
     instantiated`).
-  - A friend declared in a local class is not diagnosed (clang: `no
-    matching function found in local scope`).
 
 ### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
 - **Using-declarators** ([namespace.udecl]):
