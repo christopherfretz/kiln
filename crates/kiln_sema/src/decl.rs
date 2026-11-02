@@ -6269,10 +6269,18 @@ impl Sema<'_, '_> {
             return NameClass::Dependent;
         };
         let Some(def) = self.ast.definition(p) else { return NameClass::Dependent };
+        self.classify_pattern_member(def, name, Some(tmpl))
+    }
+
+    /// Classifies `name` as a member of `def`, the definition of a class
+    /// template's pattern or of a member class of one; for a class
+    /// template `tmpl`, a name only an explicit specialization declares is
+    /// looked up there.
+    fn classify_pattern_member(&self, def: DeclId, name: Symbol, tmpl: Option<DeclId>) -> NameClass {
         let found = self.lookup_qualified(def, name, LookupKind::Ordinary);
         let d = match found.decls.first() {
             Some(&d) => d,
-            None => match self.specialization_member(tmpl, name) {
+            None => match tmpl.and_then(|t| self.specialization_member(t, name)) {
                 Some(d) => d,
                 None => return NameClass::Dependent,
             },
@@ -6371,6 +6379,18 @@ impl Sema<'_, '_> {
             && spec.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
         {
             return self.classify_template_member(spec.template, name);
+        }
+        // Likewise a typedef naming a member class of a specialization
+        // that is not instantiated yet (`typedef L<int>::P T; T::name`,
+        // [temp.inst]/3): classify by the member class's pattern.
+        if let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::CXXRecord
+            && self.ast.definition(q).is_none()
+            && self.ast.spec_info(q).is_none()
+            && let Some(p) = self.ast.instantiated_from(q)
+            && let Some(def) = self.ast.definition(p)
+        {
+            return self.classify_pattern_member(def, name, None);
         }
         if let Some(q) = qualifier
             && self.kind_of(q) == DeclKind::TypeAliasTemplate
