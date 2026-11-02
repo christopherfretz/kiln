@@ -1019,7 +1019,8 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   is the static pointee type of the placement argument before its
   conversion to `void *` (`bi::DYN` when it was `void *` already). As in
   clang 22's `HandlePlacementNew`, the designated object is the `stat`
-  subobject at `p` (for `bi::DYN`, the outermost object there; inside
+  subobject at `p` (for `bi::DYN`, the subobject the `void *` was made
+  from, below, else the outermost object there; inside
   `std::construct_at` and libc++'s `std::__construct_at` the compiler
   passes `T` instead of `bi::DYN`, since [specialized.construct]/2
   constructs `*location` and libc++ hands the placement a `void *` from
@@ -1035,6 +1036,23 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   (`new_aux::BOUND`). It then
   begins the lifetime of `sizeof(T)` bytes, marks them uninitialized, and
   the initializer runs as for any `new` (a constructor call for a class).
+  The designator survives a `void *` that a user function returns
+  (WP-378): a conversion of a non-null `T *` (`T` not `void`) to `void
+  *` lowers to `VoidCast [dst, p, T]` aux `kbc::VOID_TAG`, which records
+  `T` (+ 1) in bits 64..96 of the pointer register, and `Placement`
+  with `bi::DYN` designates the `T` subobject at `p` when there is one.
+  `constexpr void *f(S &s) { return &s.first; }` then makes `new (f(s))
+  int(5)` construct `s.first`, a base `static_cast<B *>(&d)` a `B`, and
+  `new (f(s)) S{}` is "... from 'int' to 'S'", as in clang 22, whose
+  `void *` keeps the full lvalue designator; a `void *` made from `&s`
+  designates `s` (`expr.new/p2747-placement-voidified-subobject*.cpp`).
+  The tag rides registers only: copies, calls, returns and register
+  locals keep it; every pointer operation reads the low 64 bits; a
+  store to memory (a `void *` member, a `void *` local whose address is
+  taken) and a cast back to `T *` drop it, so such a `void *` falls back
+  to the outermost object. Deviation: the tag is a type, not a path, so
+  two subobjects of one type at one offset (empty bases,
+  `[[no_unique_address]]`) are not told apart.
   A placement new allocates nothing: constructing and destroying objects
   in one storage in a loop holds that storage only
   (`expr.new/p2747-placement-churn.cpp`, 100000 objects, one heap
@@ -1341,7 +1359,8 @@ it yet; the unit tests exercise it.
 **Not rolled back.** These effects are all either independent of the trial
 or idempotent:
 - thawed globals and the provisional-resolution cache, which are reverted at
-  the next outermost evaluation;
+  the next outermost evaluation (the provisional objects themselves are
+  kept and reused, "Unknown references");
 - the memo cache, which holds only pure calls with scalar parameters and no
   heap operations, so its entries do not depend on context;
 - constants interned into the AST store, which are deduplicated by content;
@@ -1965,6 +1984,26 @@ the object's own address is constant and with null is not
 (`expr.const/p2280-ok.cpp`, `p2280-errors.cpp`). *Deviation:* a
 reference to an object of 4 GiB or more stays external (naming it is
 diagnosed as before C++23); clang accepts it.
+
+**Provisional globals (WP-378).** A variable with no initializer yet
+(`extern const int &r;` before its definition, `extern const int n;`)
+may get one later in the translation unit, so its resolution
+(`GState::Resolved`) holds for one outermost evaluation only: it is
+listed in `Oven::provisional` and reset to `Unresolved` by the next
+`begin_outermost`. Its *object* is owned by the translation unit:
+`Oven::provisional_objs` keeps, per global, the object it resolved to and
+its `OTy`, and the next resolution reuses that object while the variable
+still has no initializer, is `NotEvaluated` or `NotConstant`, its type
+interns to the same `OTy` and the object is live. So a provisional global
+costs one static slot (an unbacked one, or a reference's pointer slot
+bound to its `Origin::Unknown` object) per translation unit however many
+evaluations name it, and its address is the same in each
+(`tests/stress/p2280-provisional-globals.cpp`: 20 000 evaluations,
+`static_bytes<=16`; `kiln_oven` test `provisional_globals_do_not_grow`:
+footprint flat over 10 000 evaluations). Once a definition gives it an
+initializer, the next resolution is a fresh one (the old object stays, at
+most one per variable, since a frozen result may still point to it)
+(`expr.const/p2280-provisional-global.cpp`).
 
 ### Reflection runtime (M6; WP-267 spike behind `-freflection`)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's
