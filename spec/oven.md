@@ -1086,18 +1086,39 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   Copies, calls, returns and register locals keep the tag; every pointer
   operation reads the low 64 bits. A store of a tagged pointer to memory
   (a `void *` member or array element, a `void *` local whose address is
-  taken, an object copy) keeps it in the granule's pointer mark (WP-387):
-  the tag types are interned TU-wide (`Memory::void_mark`, append-only,
-  so a rolled-back or copied mark stays valid), mark `PTR_TAGGED + i`
-  naming the `i`-th, and a load of a pointer whose granule bears such a
-  mark puts the tag back in bits 64..96 (`Memory::void_tag`). A `void
-  *` therefore costs what it did before: 8 bytes in memory plus the
-  granule's existing mark byte, 16 in a register; the intern table
-  holds at most 254 types (4 bytes each plus a hash entry). Once it is
-  full, a `void *` of a further type is stored untagged (mark 1). An
-  untagged `void *` (that one, a thawed constant's, which holds no
-  designator, or a builtin's result) designates the outermost object
-  at its address.
+  taken, an object copy) keeps it with the granule's pointer mark (WP-387,
+  WP-395), and a load of a pointer whose granule bears a tagged mark puts
+  the tag back in bits 64..96 (`Memory::set_void_tag`,
+  `Memory::void_tag`). The first 253 distinct tag types are interned
+  TU-wide (append-only, so a rolled-back or copied mark stays valid):
+  mark `PTR_TAGGED + i` names the `i`-th, and a `void *` costs what it
+  did before, 8 bytes plus the granule's existing mark byte. A pointer of
+  any further type is marked `PTR_SPILL` and its tag kept in a map keyed
+  by space and granule (`Memory::vspill`), which a trial's rollback
+  restores (`Undo::Gran` carries the spilled tag) and `Memory::copy`
+  carries with the marks. There is no cap and no fallback: the 300th
+  distinct type is checked as the first is
+  (`expr.static.cast/p2738-void-cast-300-types.cpp`). A map for every
+  tag (no table) measured 3.5% slower on a `void *` store/load loop (15M
+  tagged stores and loads: 1.10 s table, 1.17 s map, 1.09 s table plus
+  spill, medians of 11) and within noise on `bench/oven`; the table
+  keeps the common case to a byte. A frozen `void *` carries its tag as
+  the pointer's designated type (`Scalar::Pointer::designated`,
+  spec/ast.md §9; carried through the frozen value rather than rebuilt
+  from the declaration and offset), and thawing puts it back in the register or the
+  granule's mark: a `constexpr const void *g = &s.x;` read in a later
+  evaluation designates `s.x`, not `s`, with no allocation on the thaw
+  path (the type is interned once). An untagged `void *` (a builtin's
+  result) designates the outermost object at its address.
+  The tag is a type, not a designator path. With the pointer's offset
+  and past-the-end bit that names one subobject in every case the
+  standard distinguishes, but a `void *` loaded from memory cannot tell
+  which of two same-typed members of a union it came from, and an
+  untagged `void *` falls back to the outermost object at its address
+  (`expr.static.cast/p2738-void-cast-thawed.cpp` covers thawed
+  constants: the complete object, a member, an array element, an empty
+  base at offset 0 against the first member and a `[[no_unique_address]]`
+  member sharing its address).
   The tag is the designated subobject's type; with the pointer's offset
   and past-the-end bit it names one subobject ([intro.object]/9: two
   distinct objects of one type have distinct addresses), except members
@@ -1117,7 +1138,11 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   `Types::similar`: equal but for the cv-qualifiers at each pointer or
   array level), as clang's check of `Designator.getType`; otherwise
   "cast from 'void *' is not allowed in a constant expression because
-  the pointed object type 'U' is not similar to the target type 'T'". So
+  the pointed object type 'U' is not similar to the target type 'T'",
+  clang's wording: the operand type as written (`'CVP' (aka 'const void
+  *')`), `U` with the qualifiers of the declaration naming the
+  subobject (the variable through array elements, or the member; none
+  for a base: `'const D'`, `'int'`), and `T` as written. So
   a `void *` made from a base subobject, a first member or an array is
   not the derived object, the enclosing object or the first element. An
   untagged `void *` succeeds when the allocation has a `T` subobject at
