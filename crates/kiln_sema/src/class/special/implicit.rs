@@ -946,7 +946,13 @@ impl Sema<'_, '_> {
                     && bits.contains(DefinitionBits::IMPLICIT_COPY_CTOR_CONST_PARAM)
                     || k == K::CopyAssign
                         && bits.contains(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM);
-                self.selected_all_trivial(d, k, const_arg)
+                let t = self.selected_all_trivial(d, k, const_arg);
+                // The class's trivial bit now follows its declared member
+                // (clang `addedMember` / `addedEligibleSpecialMember`), so a
+                // class deriving from or containing `d` sees it trivial.
+                let b = k.trivial_bit();
+                self.set_finishing_bits(d, |x| if t { x.with(b) } else { x.without(b) });
+                t
             }
             _ => bits.contains(k.trivial_bit()),
         };

@@ -718,6 +718,11 @@ impl<'a> AstNames<'a> {
                     write_nns(&ast.types, self, q, out);
                 }
                 self.write_name(exprs.decl(e), out);
+                // clang `VisitDeclRefExpr`: explicit template arguments as
+                // written (`n::same<n::A, n::A>`).
+                if let Some(l) = exprs.decl_ref_extra(e).and_then(|x| x.template_args) {
+                    write_arg_list(&ast.types, self, l, out);
+                }
             }
             ExprKind::PredefinedExpr => out.push_str(exprs.predefined_kind(e).spelling()),
             ExprKind::SourceLocExpr => {
