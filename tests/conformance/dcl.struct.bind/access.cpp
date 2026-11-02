@@ -1,11 +1,11 @@
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 18:9 error "cannot decompose private member 'p' of 'Pr'"
+//@ diag: 18 error "private member 'p' of 'Pr'"
 //@ diag: 12:16 note "implicitly declared private here"
-//@ diag: 19:9 error "cannot decompose protected member 'x' of 'Pro'"
+//@ diag: 19 error "protected member 'x' of 'Pro'"
 //@ diag: 13:29 note "declared protected here"
-//@ requires: clang<22
-// clang 22 emits error: cannot bind private member 'p' of 'Pr'; WP-355 residual
+// clang 22 reports these at the `[` ("cannot bind"), clang 19 at the
+// binding ("cannot decompose"); kiln follows its -fclang-compat level.
 // [dcl.struct.bind]/5 (C++26 /7, P0969): every data member must be
 // accessible at the declaration; clang names the member and notes where it
 // became inaccessible. Friends and members may decompose.

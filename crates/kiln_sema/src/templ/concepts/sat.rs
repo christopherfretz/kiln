@@ -509,7 +509,8 @@ impl Sema<'_, '_> {
                     return false;
                 }
                 let at = first.as_ref().map_or(loc, Diag::loc);
-                let msg = first.map(|d| format!(": {}", d.message())).unwrap_or_default();
+                let level = self.diags.clang_compat();
+                let msg = first.map(|d| format!(": {}", d.message_at(level))).unwrap_or_default();
                 recs.push(SatRecord {
                     id: DiagId::note_substituted_constraint_ill_formed,
                     loc: at,

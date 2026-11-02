@@ -21,7 +21,8 @@ parse_concept_legacy_bool = Error (0) "ISO C++ does not permit the 'bool' keywor
 parse_ctor_init_missing_comma = Error (0) "missing ',' between base or member initializers";
 parse_cxx11_attr_placement = ExtWarn [CxxAttributeExtension] (0) "ISO C++ does not allow an attribute list to appear here";
 parse_decltype_auto_invalid = Error (0) "'decltype(auto)' not allowed here";
-parse_decomp_decl_empty = ExtWarn [EmptyDecomposition] (0) "ISO C++17 does not allow a decomposition group to be empty";
+parse_decomp_decl_empty = ExtWarn [EmptyDecomposition] (0) "ISO C++17 does not allow a structured binding group to be empty";
+parse_decomp_decl_empty_19 = ExtWarn [EmptyDecomposition] (0) "ISO C++17 does not allow a decomposition group to be empty";
 parse_default_arg_unparsed = Error (0) "unexpected end of default argument expression";
 parse_default_delete_in_multiple_declaration = Error (1) "'= {0}' is a function definition and must occur in a standalone declaration";
 parse_default_special_members = Error (0) "only special member functions and comparison operators may be defaulted";

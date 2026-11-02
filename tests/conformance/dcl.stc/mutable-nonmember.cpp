@@ -17,12 +17,12 @@
 //@ diag: 34:16 error "'mutable' can only be applied to member variables"
 //@ diag: 35:20 error "'mutable' can only be applied to member variables"
 //@ diag: 37:20 error "'mutable' can only be applied to member variables"
-//@ diag: 38:3 error "decomposition declaration cannot be declared 'mutable'"
+//@ diag: 38:3 error "declaration cannot be declared 'mutable'"
 //@ diag: 38:16 error "'mutable' can only be applied to member variables"
 //@ diag: 41:3 error "'mutable' cannot be applied to references"
 //@ diag: 45:16 error "'mutable' can only be applied to member variables"
-//@ requires: clang<22
-// clang 22 emits error: structured binding declaration cannot be declared 'mutable'; WP-355 residual
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 
 mutable int x = "s";
 namespace N { mutable int y; }

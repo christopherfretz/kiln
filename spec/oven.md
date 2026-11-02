@@ -160,7 +160,10 @@ the evaluator's flattened type table.
   arguments rendered as clang prints them; more than 10 frames elide the
   middle with clang's "(skipping N calls in backtrace; ...)" line), then
   any "declared here"/"temporary created here" notes. Wording is clang
-  19's, byte for byte.
+  19's, byte for byte, or clang 22's at `-fclang-compat=22`: the level is
+  an Oven option (`Oven::set_clang_compat`, set by sema from its own
+  level before every evaluation), never a global (WP-377). The level-22
+  rewordings are listed in the "Compat-22 note wording" rows below.
 - Note locations follow clang: an lvalue-to-rvalue read is reported at the
   begin of the read expression (leftmost token); a float-to-integer
   overflow at the begin of the cast operand; `p->m` with `p` null at the

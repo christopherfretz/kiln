@@ -1519,7 +1519,8 @@ impl Sema<'_, '_> {
                     }
                     _ => {}
                 }
-                let msg = f.diag.as_ref().map(|x| format!(": {}", x.message()));
+                let level = self.diags.clang_compat();
+                let msg = f.diag.as_ref().map(|x| format!(": {}", x.message_at(level)));
                 self.diag(DiagId::note_ovl_candidate_substitution_failure, loc)
                     .arg(with.unwrap_or_default())
                     .arg(msg.unwrap_or_default())

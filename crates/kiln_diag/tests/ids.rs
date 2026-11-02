@@ -89,3 +89,25 @@ fn kinds_and_groups() {
     assert!(all.members().any(|m| m == DiagId::pp_unknown_pragma));
     assert!(!all.members().any(|m| m == DiagId::pp_macro_unused));
 }
+
+/// spec/diag.md §2.5: a `<name>_19` row is clang 19's wording of `<name>`
+/// and differs from it only in the template; below level 22 it replaces
+/// `<name>`, at 22 nothing is replaced.
+#[test]
+fn compat_19_rows_mirror_their_base() {
+    let mut n = 0;
+    for &old in DiagId::ALL {
+        let Some(base) = old.name().strip_suffix("_19") else { continue };
+        let base = DiagId::from_name(base)
+            .unwrap_or_else(|| panic!("{} has no base id {base}", old.name()));
+        assert_eq!(old.kind(), base.kind(), "{}", old.name());
+        assert_eq!(old.group(), base.group(), "{}", old.name());
+        assert_eq!(old.arg_count(), base.arg_count(), "{}", old.name());
+        assert_eq!(base.for_compat(19), old);
+        assert_eq!(base.for_compat(22), base);
+        assert_eq!(old.for_compat(19), old);
+        n += 1;
+    }
+    assert!(n > 0);
+    assert_eq!(DiagId::sema_call_not_function.for_compat(19), DiagId::sema_call_not_function);
+}

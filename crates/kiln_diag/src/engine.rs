@@ -40,6 +40,9 @@ pub struct DiagEngine<'sm> {
     sm: &'sm SourceManager,
     policy: Policy,
     error_limit: u32,
+    /// `-fclang-compat=`: ids clang 22 reworded print clang 19's text
+    /// below 22 ([`DiagId::for_compat`]).
+    clang_compat: u32,
     state: Mutex<State<'sm>>,
     /// `#pragma clang diagnostic` state ([`crate::pragma`]).
     pragmas: RwLock<Pragmas>,
@@ -79,6 +82,7 @@ impl<'sm> DiagEngine<'sm> {
             sm,
             policy,
             error_limit: opts.error_limit,
+            clang_compat: opts.clang_compat,
             state: Mutex::new(State { sink: Box::new(sink), seen: HashSet::new() }),
             pragmas: RwLock::new(Pragmas::new()),
             has_pragmas: AtomicBool::new(false),
@@ -268,6 +272,7 @@ impl<'sm> DiagEngine<'sm> {
     /// diagnostic that will be dropped.
     pub fn would_emit(&self, d: &Diag) -> bool {
         let Some(id) = d.id else { return false };
+        let id = id.for_compat(self.clang_compat);
         if self.has_fatal() || self.severity_at(id, d.span.lo) == Severity::Ignored {
             return false;
         }
@@ -275,6 +280,12 @@ impl<'sm> DiagEngine<'sm> {
             return false;
         }
         !Self::is_duplicate(&self.lock(), id, d)
+    }
+
+    /// The clang compatibility level diagnostics are worded for
+    /// (`-fclang-compat=`, [`DiagOptions::clang_compat`]).
+    pub fn clang_compat(&self) -> u32 {
+        self.clang_compat
     }
 
     /// The deduplication rule (spec/diag.md §7.4): the key is
@@ -290,7 +301,8 @@ impl<'sm> DiagEngine<'sm> {
     }
 
     /// Applies policy to `d` and sinks it. Same as [`Diag::emit`].
-    pub fn emit(&self, d: Diag) {
+    pub fn emit(&self, mut d: Diag) {
+        d.set_compat(self.clang_compat);
         let Some(id) = d.id else {
             debug_assert!(false, "free-text diagnostics are notes only");
             return;
