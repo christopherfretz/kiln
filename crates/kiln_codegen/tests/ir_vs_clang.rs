@@ -79,6 +79,15 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // every compat level, as clang 22 does; clang 19 did neither.
     ("atomic_padded", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
     ("atomic_padded", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
+    // An importer of a module whose global module fragment defines G's key
+    // function: kiln declares `_ZTV1G` external (the interface unit emits
+    // it with `_ZTI1G`/`_ZTS1G`, Itanium ABI §5.2.3); clang 22 omits them
+    // from the interface and defines them, with G's deleting destructor,
+    // strongly in every importer, so two importers fail to link
+    // (spec/modules.md §10 deviation 7). The extra globals are in the ABI
+    // slice.
+    ("module_gmf_vtable", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("module_gmf_vtable", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 20+ passes an AArch64 empty class by value as `i64` (GCC's
     // convention; `-fclang-abi-compat=19` keeps the old `i8`). kiln follows
     // clang 19 until codegen honours `-fclang-compat=22` (WP-184 residual).

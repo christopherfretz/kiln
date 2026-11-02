@@ -421,13 +421,26 @@ part B (§9).
 4. (Retired: module initializers are emitted, §7.)
 5. `#include` is never translated into an import (§3).
 6. Attributes on module / import declarations are ignored (§3).
-7. A class in a module unit's global module fragment whose key function
-   that unit defines has its vtable emitted by that unit, and importers
-   declare it external (§7). clang 22 does the opposite (the module unit
-   omits it and every importer defines it strongly), so two clang
-   importers of one such interface fail to link with a duplicate
-   `vtable for G`; kiln follows the Itanium key-function rule instead
-   (`module.global.frag/gmf-dup-run.cpp`).
+7. **Deliberate, at every compat level (WP-396).** A class in a module
+   unit's global module fragment, whose key function that unit's fragment
+   defines, has its vtable, `type_info` and type name emitted by that
+   unit, and importers declare the vtable `external` (§7; Itanium ABI
+   §5.2.3, [basic.def.odr]/15).
+   - clang 22 and clang 19 do the same thing as each other, which is the
+     opposite. The module unit omits `_ZTV1G`/`_ZTI1G`/`_ZTS1G`. Every
+     importer defines them `dso_local`, with no comdat, together with
+     G's deleting destructor.
+   - So with either clang, an interface linked with two importers fails:
+     `multiple definition of 'vtable for G'` (and `typeinfo for G`,
+     `typeinfo name for G`). This was probed with `--precompile`, `-c`
+     of the BMI and both importers, and one link (WP-396).
+   - Defining the key function in the purview instead is ill-formed in
+     both clangs (`declaration of 'f' in module m follows declaration in
+     the global module`), so this is the only form of the case.
+   - kiln keeps the placement that links. Tests:
+     `module.global.frag/gmf-dup-run.cpp` (links and runs) and
+     `tests/codegen/module_gmf_vtable.cpp` (importer IR against clang 22;
+     the difference is an `Allow::Abi` row in `ir_vs_clang.rs`).
 8. (Retired: a reachable but non-visible declaration is reported as a
    missing import, §5.)
 9. A named module's `thread_local` variables are defined (with their
@@ -478,6 +491,9 @@ part B (§9).
   in-class non-inline members, a defaulted virtual destructor) linked
   with two importers that both use them: no duplicate symbol, one
   variable ([module.global.frag]/1, [class.mfct]/1, §7).
+- `tests/codegen/module_gmf_vtable.cpp`: an importer of a GMF class
+  with a key function (vtable declared `external`, deviation 7), a GMF
+  class with inline virtuals (`linkonce_odr`) and a purview class.
 - `tests/codegen/module_class_defs.cpp`: IR golden of a module
   interface's in-class definitions (order, strong linkage), its unused
   vtables and the global `operator delete` against clang 22.
