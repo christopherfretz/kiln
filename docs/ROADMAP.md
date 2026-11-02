@@ -63,7 +63,7 @@ flow, `constexpr` functions and variables, `static_assert`, string literals,
 Status: done. The M3 libc++ gate (`cargo xtask libcxx --gate m3`) is 585/585
 on main `4c3e8be9` (`docs/status/libcxx-m3.md`; since WP-143 the gate is 642 tests incl. `.verify.cpp`:
 630 pass, 6 unsupported, and the 6 `.verify.cpp` failures are WP-253). The clang 22
-oracle switch (WP-184) waits for M3b.
+oracle switch (WP-184 C–E) is WP-355 in M4.
 Member functions, constructors/destructors, references, overload resolution,
 implicit conversion sequences, class templates, function templates, deduction,
 partial/explicit specialization, `auto`, variadic templates, fold expressions,
@@ -78,7 +78,11 @@ record layout matching clang (checked by layout-dump differential tests).
   `<bit>`, `<limits>`, `<initializer_list>` from libc++ compile and their
   libc++ tests pass.
 
-## M3b — libc++ 19 end to end (operator decision 2026-11-01)
+## M3b — libc++ 19 end to end — done (2026-11-02)
+Status: closed by operator decision at 98.3% of `std/` (7469 pass / 92 fail / 29 xfail / 1110 unsupported /
+5 timeout on fe5406b9; `docs/status/libcxx.md`). The remainder is coroutines (WP-351, M4), environment
+exclusions (WP-340) and small sema clusters tracked as follow-up rows; the ≥ 99% target was a goal, not a
+gate, and M4 started the same day (WP-351, WP-355…359).
 Before any C++23/26 feature work or the clang 22 oracle switch, the C++20-level
 base must be fully functional, and the measure is libc++ 19 driven end to end
 with the clang 19 oracle still in place: every libc++ 19 header compiles, the
@@ -124,7 +128,7 @@ static initialization order, inline variables.
   libc++ test checkout move from clang/llvm 19 to clang/llvm 22 (both are in the
   sandbox). The M3 gate is frozen on 19 so its numbers stay comparable; M4+ gates run
   on 22 in `-std=c++26`. Steps A/B (the `KILN_ORACLE` and `-fclang-compat`
-  knobs, default 19) landed early (WP-262/263); C–E are shelved until M3b exits.
+  knobs, default 19) landed early (WP-262/263); C–E are WP-355 (started 2026-11-02).
 - Exit: every C++23 row is `done`; every clang-22 C++26 row is `done` or has a
   written reason; `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>`, `<expected>`, `<mdspan>`,
