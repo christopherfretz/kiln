@@ -1059,8 +1059,17 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   `__divsc3`; nested operands stay in `float`) and truncated once, which
   is what GCC 14 emits for `_Complex __bf16`
   (`ext.complex/complex-bf16.cpp`, `libstdcxx-complex-bf16.cpp`).
-  `_Complex` of `_Float32`, `_Float64` or `_Float128` is not tested (GCC
-  14 accepts it). `__float128` is not diagnosed on
+  `_Complex` of `_Float32`, `_Float64` or `_Float128` (GCC 14 accepts
+  them; clang 19 has no `_FloatN` in C++; WP-365) is laid out, passed,
+  computed and mangled as its ABI twin's `_Complex float` / `double` /
+  `__float128` (x86-64: `<2 x float>`, two SSE eightbytes, memory for the
+  32-byte pair; AArch64: an HFA of two; `__mulsc3`/`__muldc3`/`__multc3`
+  and the `__div?c3` forms) with the mangling `CDF32_`/`CDF64_`/`CDF128_`;
+  constant evaluation is that of the element type, and conversions follow
+  the extended types' ranks (`ext.complex/complex-floatn.cpp`,
+  `complex-floatn-run.cpp`, whose calls go through asm labels naming the
+  GCC symbols; on AArch64 kiln and g++ 14 objects were also linked
+  against each other in both directions). `__float128` is not diagnosed on
   AArch64, where clang 19 rejects it ("__float128 is not supported on
   this target"; `Target::has_float128` is false there but unread): kiln
   accepts it as binary128.
