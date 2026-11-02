@@ -1308,14 +1308,23 @@ impl Sema<'_, '_> {
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
         let declared = ty;
         ty = self.adjust_param_type(ty);
-        let original_ty = (ty != declared).then_some(declared);
+        let mut original_ty = (ty != declared).then_some(declared);
         if let Some(l) = d.ellipsis {
             // [dcl.fct]/16, [temp.variadic]/5: a function parameter pack
             // `T... x` names a pack; else clang's
             // `err_function_parameter_pack_without_parameter_packs`, which
             // prints the declared (unadjusted) type and drops the `...`.
             if self.ast.types.flags(declared.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
-                ty = self.act_pack_expansion_type(ty, l);
+                // An array whose bound alone names the pack (`int
+                // ...a[Ns]`) expands unadjusted; each element decays when
+                // the pack is substituted, as in clang.
+                let base = if self.has_unexpanded_pack(ty) {
+                    ty
+                } else {
+                    original_ty = None;
+                    declared
+                };
+                ty = self.act_pack_expansion_type(base, l);
             } else if !self.is_error_type(declared) {
                 let m =
                     self.diag(DiagId::sema_param_pack_without_packs, l).arg(self.ty_arg(declared));
@@ -2013,6 +2022,9 @@ impl Sema<'_, '_> {
             self.check_member_spec_header(d.qualifier, nloc, ds.loc);
         }
         let head = self.take_template_head(d.qualifier);
+        if self.check_template_in_local_class(false) {
+            return None;
+        }
         if self.templ.head_mismatch {
             // `template<class T> void A<int>::f()`: diagnosed; clang
             // drops the declaration.
@@ -2774,6 +2786,7 @@ impl Sema<'_, '_> {
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
         let _ = self.take_template_head(None);
+        let _ = self.check_template_in_local_class(false);
         let mut attrs = attrs.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
@@ -5787,7 +5800,9 @@ impl Sema<'_, '_> {
         use_: TagUse,
     ) -> Option<kiln_ast::ids::TemplateParamListId> {
         if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
-            return self.take_template_head(qualifier);
+            let head = self.take_template_head(qualifier);
+            let _ = self.check_template_in_local_class(false);
+            return head;
         }
         if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
             let _ = self.take_template_head(qualifier);
@@ -7976,6 +7991,7 @@ impl Sema<'_, '_> {
                         | "flag_enum"
                         | "enum_extensibility"
                         | "preferred_name"
+                        | "coro_only_destroy_when_complete"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
@@ -8578,6 +8594,9 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,
+        ("coro_only_destroy_when_complete", _, gnu) if gnu || clang_scope => {
+            AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE
+        }
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,

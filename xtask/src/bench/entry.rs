@@ -16,6 +16,9 @@ pub enum Mode {
     Pp,
     /// `-S -emit-llvm -o /dev/null`: the whole frontend including codegen.
     EmitLlvm,
+    /// Compile and link once (`-o <scratch>`, unmeasured), then measure
+    /// the program: generated-code speed, not the compiler's.
+    Run,
 }
 
 impl Mode {
@@ -24,6 +27,7 @@ impl Mode {
             "syntax" => Self::Syntax,
             "pp" => Self::Pp,
             "emit-llvm" => Self::EmitLlvm,
+            "run" => Self::Run,
             _ => return None,
         })
     }
@@ -33,13 +37,16 @@ impl Mode {
             Self::Syntax => "syntax",
             Self::Pp => "pp",
             Self::EmitLlvm => "emit-llvm",
+            Self::Run => "run",
         }
     }
 
     /// The compiler flags that select this mode. Output that would be
     /// written goes to `/dev/null`, so disk I/O does not enter the timing.
+    /// `Run` adds only `-o <executable>`, which is not recorded.
     pub fn flags(self) -> &'static [&'static str] {
         match self {
+            Self::Run => &[],
             Self::Syntax => &["-fsyntax-only"],
             Self::Pp => &["-E", "-o", "/dev/null"],
             Self::EmitLlvm => &["-S", "-emit-llvm", "-o", "/dev/null"],
@@ -120,7 +127,7 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
             "mode" => match Mode::parse(value) {
                 Some(_) if mode.is_some() => err("duplicate `mode`".into()),
                 Some(m) => mode = Some(m),
-                None => err(format!("unknown mode `{value}` (syntax|pp|emit-llvm)")),
+                None => err(format!("unknown mode `{value}` (syntax|pp|emit-llvm|run)")),
             },
             "std" => {
                 if std.is_some() {
@@ -160,12 +167,14 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
         }
     }
     let mode = mode.unwrap_or(Mode::Syntax);
-    if mode == Mode::Pp {
+    if matches!(mode, Mode::Pp | Mode::Run) {
         for (line, _) in &oven {
-            errors.push(DirectiveError {
-                line: *line,
-                message: "`oven` does not apply to `mode: pp` (nothing is evaluated)".into(),
-            });
+            let message = if mode == Mode::Pp {
+                "`oven` does not apply to `mode: pp` (nothing is evaluated)"
+            } else {
+                "`oven` does not apply to `mode: run` (the program is measured)"
+            };
+            errors.push(DirectiveError { line: *line, message: message.into() });
         }
     }
     if !errors.is_empty() {
@@ -349,6 +358,7 @@ mod tests {
             ("syntax", &["-fsyntax-only"][..]),
             ("pp", &["-E", "-o", "/dev/null"]),
             ("emit-llvm", &["-S", "-emit-llvm", "-o", "/dev/null"]),
+            ("run", &[]),
         ] {
             let s = parse_spec(&format!("//@ mode: {m}\n")).unwrap();
             assert_eq!(s.mode.as_str(), m);
@@ -358,7 +368,10 @@ mod tests {
 
     #[test]
     fn rejects_bad_headers() {
-        assert_eq!(errs("//@ mode: link\n"), ["line 1: unknown mode `link` (syntax|pp|emit-llvm)"]);
+        assert_eq!(
+            errs("//@ mode: link\n"),
+            ["line 1: unknown mode `link` (syntax|pp|emit-llvm|run)"]
+        );
         assert_eq!(errs("//@ mode: pp\n//@ mode: pp\n"), ["line 2: duplicate `mode`"]);
         assert_eq!(errs("//@ mode\n"), ["line 1: `mode` requires a value (`mode: ...`)"]);
         assert_eq!(errs("//@ std: c17\n").len(), 1);
@@ -372,6 +385,10 @@ mod tests {
         assert_eq!(
             errs("//@ mode: pp\n//@ oven: steps<=1\n"),
             ["line 2: `oven` does not apply to `mode: pp` (nothing is evaluated)"]
+        );
+        assert_eq!(
+            errs("//@ mode: run\n//@ oven: steps<=1\n"),
+            ["line 2: `oven` does not apply to `mode: run` (the program is measured)"]
         );
         assert_eq!(
             errs("//@ threshold-time: -1\n"),

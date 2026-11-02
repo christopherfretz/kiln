@@ -281,7 +281,17 @@ impl Sema<'_, '_> {
         // [temp.arg.explicit]/9: a template parameter pack anywhere in the
         // list (`template <class... A, class T>`) takes every remaining
         // explicit argument; only a list without one has a maximum arity.
-        let has_pack = params.iter().any(|&p| is_pack(self, p));
+        // An expanded parameter pack takes exactly its element count
+        // ([temp.variadic]/5).
+        let mut max_written = 0usize;
+        let mut has_pack = false;
+        for &p in &params {
+            match self.expanded_pack_types(p) {
+                Some(t) => max_written += t.len(),
+                None if is_pack(self, p) => has_pack = true,
+                None => max_written += 1,
+            }
+        }
         // §6.1 step 1: the explicitly-specified arguments.
         let (mut ptys, variadic) = self.proto_param_types(templated);
         // CWG1391: the parameters the explicit arguments make
@@ -320,7 +330,7 @@ impl Sema<'_, '_> {
             }
         }
         if !written.is_empty() {
-            if written.len() > n && !has_pack {
+            if written.len() > max_written && !has_pack {
                 // clang: a substitution failure with the arity message.
                 let msg = self
                     .diag(DiagId::sema_template_arg_list_different_arity, loc)
@@ -333,14 +343,35 @@ impl Sema<'_, '_> {
             }
             let mut bad = None;
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, None, loc, |s| {
-                for (i, &w) in written.iter().enumerate() {
-                    let Some(&parm) = params.get(i) else { break };
+                let mut wi = 0usize;
+                for (i, &parm) in params.iter().enumerate() {
+                    let Some(&w) = written.get(wi) else { break };
                     let prior: Vec<TemplateArg> = d.args[..i].to_vec();
+                    // An expanded parameter pack takes one argument per
+                    // element type ([temp.variadic]/5).
+                    if let Some(tys) = s.expanded_pack_types(parm) {
+                        let mut v = Vec::new();
+                        while let Some(&w) = written.get(wi).filter(|_| v.len() < tys.len()) {
+                            let ty = Some(tys[v.len()]);
+                            let Ok(a) =
+                                s.check_expanded_pack_arg(ft, depth, parm, w, loc, &prior, ty)
+                            else {
+                                bad = Some(i);
+                                return;
+                            };
+                            v.push(a);
+                            wi += 1;
+                        }
+                        let l = s.ast.types.arg_list(&v);
+                        d.args[i] = TemplateArg::pack(l);
+                        continue;
+                    }
+                    wi += 1;
                     if is_pack(s, parm) {
                         // [temp.arg.explicit]/9: the rest form a pack,
                         // which deduction may extend.
                         let mut v = Vec::new();
-                        for &w in &written[i..] {
+                        for &w in &written[wi - 1..] {
                             let Ok(a) = s.check_template_arg(ft, depth, parm, w, loc, &prior)
                             else {
                                 bad = Some(i);
@@ -350,6 +381,7 @@ impl Sema<'_, '_> {
                         }
                         let l = s.ast.types.arg_list(&v);
                         d.args[i] = TemplateArg::pack(l);
+                        wi = written.len();
                         break;
                     }
                     let Ok(a) = s.check_template_arg(ft, depth, parm, w, loc, &prior) else {
@@ -360,6 +392,11 @@ impl Sema<'_, '_> {
                         ArgView::Type(q) => TemplateArg::ty(s.written_bare(q)),
                         _ => a,
                     };
+                }
+                // More arguments than an expanded pack and the parameters
+                // after it take.
+                if wi < written.len() {
+                    bad = Some(params.len().saturating_sub(1));
                 }
             });
             let Some(((), failed)) = r else {
@@ -610,6 +647,22 @@ impl Sema<'_, '_> {
         }
         // §6.1 step 3: defaults, then completeness.
         for (j, &p) in params.iter().enumerate() {
+            // An expanded parameter pack needs one argument per element
+            // type ([temp.variadic]/5; clang's `TDK_IncompletePack`).
+            if let Some(tys) = self.expanded_pack_types(p) {
+                let have = match d.args[j].view() {
+                    ArgView::Pack(l) => self.ast.types.args(l).len(),
+                    _ => 0,
+                };
+                if have < tys.len() {
+                    if matches!(d.args[j].view(), ArgView::Null) {
+                        d.args[j] = TemplateArg::pack(self.ast.types.arg_list(&[]));
+                    }
+                    d.info.param = u16::try_from(j).ok();
+                    d.info.first = Some(d.args[j]);
+                    return Err(DeductionFailure::new(Tdk::IncompletePack, d));
+                }
+            }
             if !matches!(d.args[j].view(), ArgView::Null) {
                 continue;
             }

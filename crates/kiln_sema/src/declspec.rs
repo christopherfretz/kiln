@@ -623,6 +623,11 @@ pub struct Declarator {
     pub attrs: Vec<AttrId>,
     /// Where the declarator starts.
     pub loc: Loc,
+    /// The start of its last token, counting a trailing requires-clause,
+    /// an asm label, GNU attributes and the last virt-specifier but not
+    /// trailing C++11 attributes (clang's `getEndLoc`); invalid unless
+    /// the parser set it (member declarators only, for now).
+    pub end: Loc,
     /// An error was already reported.
     pub invalid: bool,
     /// A parameter needed the missing-`typename` recovery
@@ -675,6 +680,10 @@ pub struct Declarator {
     /// `...` before the declarator-id: a function or template parameter
     /// pack ([dcl.fct]/16, [temp.variadic]/3).
     pub ellipsis: Option<Loc>,
+    /// Where an abstract declarator's name would go: the token at its
+    /// innermost position (clang `ParseDirectDeclarator`'s
+    /// `SetIdentifier(nullptr, Tok.getLocation())`).
+    pub abstract_at: Option<Loc>,
     /// The trailing requires-clause of a function declarator
     /// ([dcl.decl.general]/4, [temp.pre]/9).
     pub trailing_requires: Option<ExprId>,
@@ -821,6 +830,7 @@ impl Declarator {
             bit_width: None,
             attrs: Vec::new(),
             loc,
+            end: Loc::INVALID,
             invalid: false,
             missing_typename: false,
             init_style: None,
@@ -842,6 +852,7 @@ impl Declarator {
             op_name: None,
             lit_suffix: None,
             ellipsis: None,
+            abstract_at: None,
             trailing_requires: None,
             dropped: false,
             spec_id: None,

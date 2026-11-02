@@ -30,6 +30,7 @@ note_non_literal_field = Note (4) "{0} is not literal because it has data member
 note_non_literal_no_constexpr_ctors = Note (1) "{0} is not literal because it is not an aggregate and has no constexpr constructors other than copy or move constructors";
 note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
 note_non_literal_virtual_base = Note (2) "{0:struct|interface|class} with virtual base {1:class|classes} is not a literal type";
+note_non_template_in_template_id_found = Note (0) "non-template declaration found by name lookup";
 note_not_structural_mutable_field = Note (1) "{0} is not a structural type because it has a mutable non-static data member";
 note_not_structural_non_public = Note (2) "{0} is not a structural type because it has a {1:non-static data member|base class} that is not public";
 note_not_structural_rvalue_ref_field = Note (1) "{0} is not a structural type because it has a non-static data member of rvalue reference type";
