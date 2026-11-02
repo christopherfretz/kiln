@@ -1552,10 +1552,11 @@ impl Sema<'_, '_> {
     /// print. A friend declared in a templated class does not count: clang
     /// links it into the chain only at instantiation.
     pub(crate) fn injected_params_template(&self, c: DeclId) -> Option<DeclId> {
-        let own = self.ast.redecls_of(c).filter_map(|d| self.ast.described_template(d)).filter(|&t| {
-            self.ast.decls.get(t).misc().friend() == FriendKind::None
-                || !self.in_templated_class(self.ast.decls.lexical_ctx(t))
-        });
+        let own =
+            self.ast.redecls_of(c).filter_map(|d| self.ast.described_template(d)).filter(|&t| {
+                self.ast.decls.get(t).misc().friend() == FriendKind::None
+                    || !self.in_templated_class(self.ast.decls.lexical_ctx(t))
+            });
         own.last().or_else(|| self.ast.described_template(c))
     }
 

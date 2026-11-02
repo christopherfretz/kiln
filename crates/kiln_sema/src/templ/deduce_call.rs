@@ -327,7 +327,10 @@ impl Sema<'_, '_> {
                         bad = Some(i);
                         return;
                     };
-                    d.args[i] = a;
+                    d.args[i] = match a.view() {
+                        ArgView::Type(q) => TemplateArg::ty(s.written_bare(q)),
+                        _ => a,
+                    };
                 }
             });
             let Some(((), failed)) = r else {
@@ -1074,10 +1077,33 @@ impl Sema<'_, '_> {
         }
         let Some(&cur) = d.args.get(index) else { return };
         let ArgView::Type(cq) = cur.view() else { return };
-        if t.canonical(cq) != cq || t.canonical(cand) != cq || cand == cq {
+        if t.canonical(cq) != cq || t.canonical(cand) != cq {
             return;
         }
-        d.args[index] = TemplateArg::ty(cand);
+        // A class or enumeration named bare is canonical in kiln
+        // (spec/types.md R4); marked as written, so the binding prints it
+        // unscoped (clang's `ElaboratedType` without a qualifier).
+        let cand = if cand == cq { self.written_bare(cand) } else { cand };
+        if cand != cq {
+            d.args[index] = TemplateArg::ty(cand);
+        }
+    }
+
+    /// `q` marked as written, if it is a bare (canonical) class or
+    /// enumeration type, `cv`-qualified or not: an `Elaborated` node with
+    /// neither keyword nor qualifier, which deduced bindings print
+    /// unscoped where they print a canonical class scoped
+    /// ([`Sema::deduced_args_desc`]).
+    pub(crate) fn written_bare(&mut self, q: QualType) -> QualType {
+        let t = &mut self.ast.types;
+        let u = t.unqualified(q);
+        if t.canonical(u) != u || !matches!(t.view(u.ty()), TypeView::Record(_) | TypeView::Enum(_))
+        {
+            return q;
+        }
+        let cv = t.effective_quals(q);
+        let w = t.elaborated(kiln_ast::types::TagKeyword::None, None, u);
+        t.qualify(w, cv)
     }
 
     /// A mismatch in parameter type `p` is noted with the mismatched part
@@ -1092,18 +1118,27 @@ impl Sema<'_, '_> {
             }
             return;
         }
-        let t = &mut self.ast.types;
         let ArgView::Type(fq) = first.view() else { return };
-        let want = t.canonical(fq);
+        let want = self.ast.types.canonical(fq);
         let mut cur = p;
         for _ in 0..64 {
-            let bare = t.unqualified(cur);
+            let bare = self.ast.types.unqualified(cur);
             for cand in [cur, bare] {
-                if t.canonical(cand) == want {
+                if self.ast.types.canonical(cand) == want {
                     d.info.first = Some(TemplateArg::ty(cand));
                     return;
                 }
             }
+            // The element of a `std::initializer_list<E>` parameter
+            // ([temp.deduct.call]/1), as written (`value_type`).
+            if let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(cur.ty())
+                && self.initializer_list_param(cur).is_some()
+                && let Some(ArgView::Type(e)) = self.ast.types.args(args).first().map(|x| x.view())
+            {
+                cur = e;
+                continue;
+            }
+            let t = &mut self.ast.types;
             cur = match t.view(cur.ty()) {
                 TypeView::LValueRef(x) | TypeView::RValueRef(x) | TypeView::Pointer(x) => x,
                 TypeView::ConstantArray(a) => a.elem,
@@ -1190,10 +1225,10 @@ impl Sema<'_, '_> {
     fn written_template_in(&mut self, q: QualType, n: TemplateNameId) -> Option<TemplateNameId> {
         let t = &self.ast.types;
         let want = t.template_decl(n).map(|x| self.ast.first(x))?;
-        let mut stack = vec![(q, None::<NnsId>)];
+        let mut stack = vec![(q, None::<NnsId>, false)];
         let mut found = None;
         for _ in 0..256 {
-            let Some((cur, nns)) = stack.pop() else { break };
+            let Some((cur, nns, aliased)) = stack.pop() else { break };
             let t = &self.ast.types;
             match t.view(cur.ty()) {
                 TypeView::TemplateSpecialization { name, args, .. } => {
@@ -1203,26 +1238,48 @@ impl Sema<'_, '_> {
                     }
                     for a in t.args(args).iter().rev() {
                         if let ArgView::Type(x) = a.view() {
-                            stack.push((x, None));
+                            stack.push((x, None, false));
                         }
                     }
                 }
-                TypeView::Elaborated { nns, named, .. } => stack.push((named, nns)),
-                TypeView::LValueRef(x) | TypeView::RValueRef(x) | TypeView::Pointer(x) => {
-                    stack.push((x, None));
+                // A deduced class template placeholder: clang takes the
+                // specialized template, qualified only by the elaborated
+                // qualifier around the placeholder (`s::pr` for
+                // `s::pr{1, 2}`, `pr` for `pr{1, 2}`).
+                TypeView::DeducedTemplateSpecialization { name, deduced: Some(_) }
+                    if t.template_decl(name).map(|x| self.ast.first(x)) == Some(want) =>
+                {
+                    let d = t.template_decl(name)?;
+                    // kiln keeps the placeholder's qualifier in its name.
+                    let written = match t.template_name_view(name) {
+                        TemplateName::Qualified { nns, .. } => Some(nns),
+                        _ => None,
+                    };
+                    found = Some((self.template_name_for(d), written.or(nns)));
+                    break;
                 }
-                TypeView::ConstantArray(a) => stack.push((a.elem, None)),
-                TypeView::IncompleteArray(e) => stack.push((e, None)),
+                // Below an alias the qualifier is the one written on the
+                // alias's own name (clang's outermost `ElaboratedType`,
+                // which has none for an unqualified name): `pair` for `P`
+                // and `t::pair` for `t::Q`, both naming `std::pair<...>`.
+                TypeView::Elaborated { nns: written, named, .. } => {
+                    stack.push((named, if aliased { nns } else { written }, aliased));
+                }
+                TypeView::LValueRef(x) | TypeView::RValueRef(x) | TypeView::Pointer(x) => {
+                    stack.push((x, None, false));
+                }
+                TypeView::ConstantArray(a) => stack.push((a.elem, None, false)),
+                TypeView::IncompleteArray(e) => stack.push((e, None, false)),
                 TypeView::Function(f) => {
                     for &x in t.params(&f).iter().rev() {
-                        stack.push((x, None));
+                        stack.push((x, None, false));
                     }
-                    stack.push((f.ret(), None));
+                    stack.push((f.ret(), None, false));
                 }
                 _ => {
                     let next = t.desugar_once(cur);
                     if next != cur {
-                        stack.push((next, None));
+                        stack.push((next, nns, true));
                     }
                 }
             }
@@ -1322,7 +1379,7 @@ impl Sema<'_, '_> {
         };
         match f.tdk {
             Tdk::ConstraintsNotSatisfied => {
-                let with = f.args.map(|l| format!(" {}", self.template_args_desc(ft, l)));
+                let with = f.args.map(|l| format!(" {}", self.deduced_args_desc(ft, l)));
                 let d = self
                     .diag(DiagId::note_ovl_candidate_unsatisfied_constraints, loc)
                     .arg(with.unwrap_or_default());
@@ -1334,7 +1391,7 @@ impl Sema<'_, '_> {
                 }
             }
             Tdk::SubstitutionFailure => {
-                let with = f.args.map(|l| format!(" {}", self.template_args_desc(ft, l)));
+                let with = f.args.map(|l| format!(" {}", self.deduced_args_desc(ft, l)));
                 // clang names a failed `enable_if` instead of quoting the
                 // error (spec/sema-templates.md §5.7.1): at the condition
                 // when only the `enable_if` is known, at the template when
@@ -1360,7 +1417,7 @@ impl Sema<'_, '_> {
                     .arg(msg.unwrap_or_default())
             }
             Tdk::DeducedMismatch => {
-                let with = f.args.map(|l| format!(" {}", self.template_args_desc(ft, l)));
+                let with = f.args.map(|l| format!(" {}", self.deduced_args_desc(ft, l)));
                 let ty = |x: Option<TemplateArg>| match x.map(|a| a.view()) {
                     Some(ArgView::Type(q)) => Some(q),
                     _ => None,

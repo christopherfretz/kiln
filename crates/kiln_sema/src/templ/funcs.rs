@@ -120,16 +120,48 @@ impl Sema<'_, '_> {
     /// clang's template argument binding string, `[with T = int, N = 3]`,
     /// for the parameters of `tmpl` and the arguments `args`.
     pub(crate) fn template_args_desc(&self, tmpl: DeclId, args: ArgListId) -> String {
+        self.args_desc(tmpl, args, false)
+    }
+
+    /// [`Sema::template_args_desc`] for arguments a deduction produced
+    /// (the failed-candidate notes): a canonical type, deduced from inside
+    /// a template-id or a base class, prints fully scoped as clang prints
+    /// a bare `RecordType` (`_Container = std::deque<int>`); a type named
+    /// in the call or the explicit arguments carries its written sugar
+    /// ([`Sema::written_bare`]).
+    pub(crate) fn deduced_args_desc(&self, tmpl: DeclId, args: ArgListId) -> String {
+        self.args_desc(tmpl, args, true)
+    }
+
+    fn args_desc(&self, tmpl: DeclId, args: ArgListId, deduced: bool) -> String {
         let params = self.template_params(tmpl);
         let list = self.ast.types.args(args).to_vec();
         let mut parts = Vec::with_capacity(params.len());
-        for (p, a) in params.iter().zip(list) {
-            if matches!(a.view(), kiln_ast::types::ArgView::Null) {
-                continue;
-            }
-            parts.push(format!("{} = {}", self.decl_name(*p), self.binding_arg_str(a)));
+        for (i, (p, a)) in params.iter().zip(list).enumerate() {
+            let arg = match a.view() {
+                kiln_ast::types::ArgView::Null => continue,
+                kiln_ast::types::ArgView::Type(q)
+                    if deduced && self.ast.types.canonical(q) == q =>
+                {
+                    let names = crate::names::SemaNames::new(self);
+                    let opts = kiln_ast::types::PrintOptions {
+                        full_scope: true,
+                        ..kiln_ast::types::PrintOptions::SUGARED
+                    };
+                    kiln_ast::types::print_type(&self.ast.types, &names, q, opts)
+                }
+                _ => self.binding_arg_str(a),
+            };
+            parts.push(format!("{} = {}", self.binding_param_name(*p, i), arg));
         }
         format!("[with {}]", parts.join(", "))
+    }
+
+    /// Template parameter `p` (the `i`th) as a binding names it: its
+    /// name, `$i` when unnamed (clang's `getTemplateArgumentBindingsText`).
+    fn binding_param_name(&self, p: DeclId, i: usize) -> String {
+        let n = self.decl_name(p);
+        if n.is_empty() { format!("${i}") } else { n }
     }
 
     /// The parameter types of `f`'s function type (`ERROR`s for a

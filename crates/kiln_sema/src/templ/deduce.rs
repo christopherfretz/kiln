@@ -1359,10 +1359,11 @@ impl Sema<'_, '_> {
         self.arg_str(a)
     }
 
-    /// A conflicting deduction: a type in quotes, a value or template bare.
+    /// A conflicting deduction: a type in quotes with its `aka`, a value
+    /// or template bare.
     fn deduced_arg_str(&self, a: TemplateArg) -> String {
         match a.view() {
-            ArgView::Type(q) => format!("'{}'", self.ty_str(q)),
+            ArgView::Type(q) => self.ty_arg(q),
             ArgView::Pack(l) => {
                 let v: Vec<String> =
                     self.ast.types.args(l).iter().map(|&x| self.arg_str(x)).collect();

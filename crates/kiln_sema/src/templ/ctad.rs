@@ -397,7 +397,8 @@ impl Sema<'_, '_> {
     /// class, class, class> class map;`); see
     /// [`Sema::injected_params_template`].
     fn guide_injected_type(&mut self, owner: DeclId) -> Option<QualType> {
-        let own = self.pattern_of(owner).and_then(|p| self.injected_params_template(p)).unwrap_or(owner);
+        let own =
+            self.pattern_of(owner).and_then(|p| self.injected_params_template(p)).unwrap_or(owner);
         self.injected_type_of(own)
     }
 
@@ -461,7 +462,9 @@ impl Sema<'_, '_> {
             }
         }
         if !any_ctor {
-            let loc = self.ast.decls.get(first).loc();
+            // clang's `buildSimpleDeductionGuide` sits at the template
+            // whose definition this is, like the copy guide.
+            let loc = self.ast.decls.get(owner).loc();
             out.extend(self.implicit_guide(ctx, name, injected, info.params, None, loc));
         }
         // [over.match.class.deduct]/1.3: `C(C<T...>) -> C<T...>`.
@@ -1812,7 +1815,10 @@ impl Sema<'_, '_> {
                         // A constrained pack's constraint is the fold
                         // `(C<Q> && ...)`.
                         if n.kind() == kiln_ast::expr::ExprKind::CXXFoldExpr {
-                            n = self.ast.exprs.get(<ExprId as kiln_ast::ids::RawId>::from_raw(n.a())?);
+                            n = self
+                                .ast
+                                .exprs
+                                .get(<ExprId as kiln_ast::ids::RawId>::from_raw(n.a())?);
                         }
                         (n.kind() == kiln_ast::expr::ExprKind::ConceptSpecializationExpr)
                             .then(|| {
