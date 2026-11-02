@@ -944,7 +944,13 @@ impl<'a> Cg<'a> {
                     });
                 }
             }
-            cur = n.ctx();
+            // A namespace reopened through an inline namespace set prints
+            // under its lexical parent, as clang's `printQualifiedName`
+            // does (`struct.A::R::U`, spec/sema.md §4.6).
+            cur = match n.kind() {
+                DeclKind::Namespace => ast.decls.lexical_ctx(x).or(n.ctx()),
+                _ => n.ctx(),
+            };
         }
         parts.reverse();
         parts.join("::")
