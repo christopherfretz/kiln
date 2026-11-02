@@ -778,6 +778,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   member, friend and lambda parameters), `temp.param/misplaced-pack-ellipsis.cpp`,
   `dcl.fct/misplaced-pack-ellipsis-order.cpp` (the order with a second
   error).
+  In a lambda, `[](Ts a...)` keeps the varargs reading, so the lambda's
+  call operator names the unexpanded `Ts`: the enclosing initializer is
+  then "initializer contains unexpanded parameter pack 'Ts'" ("expression
+  contains ..." for an expression statement; spec/sema-templates.md §2.7; `temp.variadic/p5-lambda-param-unexpanded.cpp`).
+  An abstract declarator's location (`Declarator::abstract_at`, used by
+  the -Wambiguous-ellipsis "place '...' here" note) is where its identifier would go
+  at the innermost position, as clang's identifier location: set by
+  `parse_direct_declarator` when nothing names it, else the first array
+  bound or the next token (WP-385).
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
