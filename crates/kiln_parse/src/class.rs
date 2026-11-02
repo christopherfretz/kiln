@@ -1265,6 +1265,7 @@ impl Parser<'_, '_> {
         loop {
             let mut d = Declarator::new(DeclaratorContext::Member, self.loc());
             d.friend = ds.friend.is_some();
+            d.typedef = is_typedef;
             self.late_fn = LateFnParts {
                 delay_args: !is_typedef,
                 // A friend function's noexcept-specifier is a

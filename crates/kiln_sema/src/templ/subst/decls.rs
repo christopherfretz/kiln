@@ -207,6 +207,7 @@ impl Substituter<'_, '_, '_> {
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
         self.copy_begin_loc(d, v, ty);
         self.locals.insert(d, DeclOrPack::Decl(v));
+        self.var_align_attrs(v, d);
         // A constrained placeholder's diagnostics point at its
         // type-constraint, as in the pattern.
         if let Some(&l) = self.sema.inst.concepts.placeholder_locs.get(&d) {
@@ -385,6 +386,8 @@ impl Substituter<'_, '_, '_> {
         for p in params {
             let n = *self.sema.ast.decls.get(p);
             let pd = self.sema.ast.decls.param(p).copied();
+            // The function-scope depth stays (`ParamData::scope_depth`).
+            let depth = pd.map_or(0, |x| x.flags & ParamData::SCOPE_DEPTH_MASK);
             let t = pd.and_then(|x| x.original_ty).unwrap_or_else(|| self.decl_ty(p));
             let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
             if pd.is_some_and(|x| x.flags & ParamData::PACK != 0)
@@ -408,7 +411,7 @@ impl Substituter<'_, '_, '_> {
                             loc,
                             ty,
                             idx,
-                            ParamData::PACK,
+                            ParamData::PACK | depth,
                         );
                         self.sema.unowned_params.insert(np);
                         self.locals.insert(p, DeclOrPack::Decl(np));
@@ -421,7 +424,8 @@ impl Substituter<'_, '_, '_> {
                     let ty = self.param_type(ty, loc)?;
                     let ctx = self.sema.ctx;
                     let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
-                    let np = self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, 0);
+                    let np =
+                        self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, depth);
                     self.sema.unowned_params.insert(np);
                     decls.push(np);
                     // The elements share the pack's name (carried by
@@ -447,7 +451,8 @@ impl Substituter<'_, '_, '_> {
             let ctx = self.sema.ctx;
             let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
             let eo = pd.map_or(0, |x| x.flags & ParamData::EXPLICIT_OBJECT);
-            let np = self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo);
+            let np =
+                self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo | depth);
             self.sema.unowned_params.insert(np);
             self.locals.insert(p, DeclOrPack::Decl(np));
             // The type as declared is kept only while still dependent (a
@@ -535,6 +540,8 @@ impl Substituter<'_, '_, '_> {
             // `BuildFunctionType` after the parameters).
             let ret_loc = self.sema.type_spec_locs.get(&d).copied().unwrap_or(loc);
             self.check_return_type(ret, ret_loc)?;
+            let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
+            self.check_param_types(&ptys, ret_loc)?;
             // A dependent `noexcept(expr)` waits until needed (WP-112).
             let exc = if lazy_exc {
                 kiln_ast::types::ExcSpec::Deferred(d)
@@ -765,6 +772,8 @@ impl Substituter<'_, '_, '_> {
         let sig = params.and_then(|params| {
             let ret = self.ty(p.ret(), loc)?;
             self.check_return_type(ret, loc)?;
+            let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
+            self.check_param_types(&ptys, loc)?;
             // DR1330 ([temp.inst]/14): a dependent `noexcept(expr)` is
             // not part of deduction; it is substituted when needed (clang
             // `InitFunctionInstantiation` -> `EST_Uninstantiated`), from

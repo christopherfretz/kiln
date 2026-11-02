@@ -19,23 +19,6 @@ use kiln_ast::ids::{ArgListId, DeclId, ExprId, TemplateParamListId};
 use kiln_ast::templates::Requirement;
 use kiln_ast::types::{ArgView, TemplateArg, TemplateName};
 
-/// Where the requires-clause being mangled sits; it decides the
-/// `fp`/`fL` nesting of parameter references (clang's
-/// `FunctionTypeDepthState` around `mangleRequiresClause`).
-#[derive(Clone, Debug, Default)]
-pub(super) struct ReqCtx {
-    /// A function's trailing requires-clause (mangled after the bare
-    /// function type, inside its prototype), not a template-head's.
-    trailing: bool,
-    /// clang's "in result type" bit: set for a trailing clause and while
-    /// a requires-expression's parameter types are mangled, cleared
-    /// after them.
-    in_result: bool,
-    /// The bodies of the enclosing requires-expressions with parameters,
-    /// outermost first.
-    scopes: Vec<DeclId>,
-}
-
 impl Mangler<'_, '_> {
     /// The concept and written arguments of type parameter `p`'s
     /// immediately-declared constraint (a `ConceptSpecializationExpr`,
@@ -187,9 +170,15 @@ impl Mangler<'_, '_> {
     }
 
     /// `Q <expression>`: a requires-clause.
+    /// A trailing clause (after the bare function type) is mangled one
+    /// function type deeper, as its result type; a template-head's at
+    /// the depth of its context, the function encoding's name (clang's
+    /// `FunctionTypeDepth`, for [`Mangler::function_param_ref`]).
     pub(super) fn requires_clause(&mut self, r: ExprId, trailing: bool) {
-        let ctx = ReqCtx { trailing, in_result: trailing, scopes: Vec::new() };
-        let saved_ctx = self.req.replace(ctx);
+        let saved_fn = self.fn_depth;
+        if trailing {
+            self.fn_depth = (saved_fn.0 + 1, true);
+        }
         let saved_depth = std::mem::replace(&mut self.real_depth, true);
         let (len, subs) = (self.out.len(), self.subs.len());
         self.out.push('Q');
@@ -201,7 +190,7 @@ impl Mangler<'_, '_> {
             self.out.push_str("u7unknown");
         }
         self.real_depth = saved_depth;
-        self.req = saved_ctx;
+        self.fn_depth = saved_fn;
     }
 
     /// The requires-clause of function template `t`'s template-head, when
@@ -266,21 +255,20 @@ impl Mangler<'_, '_> {
         let Some(data) = ast.requires_of(e) else { return false };
         let params: Vec<DeclId> = ast.lists.iter::<DeclId>(data.params).collect();
         let reqs: Vec<Requirement> = ast.templates.requirements(data).to_vec();
-        let body = data.body;
         let scoped = !params.is_empty();
+        // A parameter list is a function prototype scope: its types are
+        // mangled one function type deeper, the requirements as its
+        // result type (clang `RequiresExprClass`).
+        let saved_fn = self.fn_depth;
         if scoped {
             self.out.push_str("rQ");
-            let ctx = self.req.get_or_insert_with(ReqCtx::default);
-            ctx.in_result = true;
+            self.fn_depth = (saved_fn.0 + 1, false);
             for p in params {
                 let q = ast.decls.get(p).ty().unwrap_or(kiln_ast::ids::QualType::INT);
                 self.ty(self.param_type(q));
             }
             self.out.push('_');
-            if let Some(ctx) = self.req.as_mut() {
-                ctx.in_result = false;
-                ctx.scopes.push(body);
-            }
+            self.fn_depth.1 = true;
         } else {
             self.out.push_str("rq");
         }
@@ -317,9 +305,7 @@ impl Mangler<'_, '_> {
                 break;
             }
         }
-        if scoped && let Some(ctx) = self.req.as_mut() {
-            ctx.scopes.pop();
-        }
+        self.fn_depth = saved_fn;
         self.out.push('E');
         ok
     }
@@ -341,32 +327,24 @@ impl Mangler<'_, '_> {
     }
 
     /// A reference to a function or requires-expression parameter in a
-    /// requires-clause, or to a function parameter in a `decltype` of
-    /// the signature: `fp [<cv>] [<index - 1>] _` at nesting 0, else
-    /// `fL <nesting - 1> p ...` (clang `mangleFunctionParam`). Outside a
-    /// requires-clause the parameter is taken to be the encoded
-    /// function's (function-scope depth 0).
+    /// requires-clause or in a `decltype` of a signature: `fp [<cv>]
+    /// [<index - 1>] _` at nesting 0, else `fL <nesting - 1> p ...`
+    /// (clang `mangleFunctionParam`). The nesting is the number of
+    /// function types (and requires-expression parameter lists) being
+    /// mangled around the reference less the parameter's function-scope
+    /// depth (`ParamData::scope_depth`), less one in a result type: a
+    /// parameter of a function type nested in the signature
+    /// (`void (*)(T a, decltype(a))`) is one prototype scope closer.
     pub(super) fn function_param_ref(&mut self, d: DeclId) -> bool {
         let ast = self.ast;
         let Some(pd) = ast.decls.param(d) else { return false };
         let index = u32::from(pd.index);
-        let nesting = if let Some(ctx) = self.req.as_ref() {
-            let owner = ast.decls.get(d).ctx();
-            let depth = match owner {
-                Some(b) if ast.decls.get(b).kind() == DeclKind::RequiresExprBody => {
-                    let pos = ctx.scopes.iter().position(|&s| s == b).unwrap_or(0);
-                    u32::from(ctx.trailing) + pos as u32
-                }
-                _ => 0,
-            };
-            1u32.saturating_sub(depth).saturating_sub(u32::from(ctx.in_result))
-        } else {
-            let (depth, in_result) = self.fn_depth;
-            if depth == 0 {
-                return false;
-            }
-            depth - u32::from(in_result)
-        };
+        let (depth, in_result) = self.fn_depth;
+        let own = pd.scope_depth();
+        if depth <= own {
+            return false;
+        }
+        let nesting = depth - own - u32::from(in_result);
         if nesting == 0 {
             self.out.push_str("fp");
         } else {

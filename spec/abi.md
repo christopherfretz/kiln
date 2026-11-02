@@ -838,9 +838,41 @@ encoded function's bare function type and one per nested function type,
 less one while that type's result is mangled, so `-> decltype(x + y)` is
 `DTplfp_fp0_E`, `f(T x, decltype(x))` is `DtfL0p_E` and a parameter type
 `void (*)(decltype(x))` gives `fL1p_` (`tests/mangle/decltype_function_param.cpp`).
-The parameter is taken to be the encoded function's own (function-scope
-depth 0): a parameter of a nested function declarator named in its own
-`decltype` would mangle one level too deep. An unsupported expression
+The nesting `L` is that depth less the parameter's own function-scope
+depth (WP-305; clang `mangleFunctionParam`: `FunctionTypeDepth -
+getFunctionScopeDepth() - in-result`), so a parameter of a nested
+function declarator named in that declarator's own `decltype`
+(`void f(T a, auto (*p)(T b) -> decltype(a + b))`: `DTplfL0p_fp_E`) is
+`fp`. The scope depth is the number of prototype scopes enclosing the
+parameter's own ([basic.scope.param]), stored in the high byte of
+`ParamData::flags` (`ParamData::scope_depth`, set by
+`Sema::act_on_prototype_param` and `act_on_requires_param`, kept by
+substitution) and part of the canonical profile of a parameter reference
+in a `decltype` (`types/profile_expr.rs`), as clang profiles a
+`ParmVarDecl` by depth and index: `decltype(a)` for an outer and an inner
+`a` at the same index are different types. `fn_depth` is pushed, as
+clang pushes `FunctionTypeDepth`:
+- once around the encoded function's name (`Mangler::encoding`), so its
+  template arguments, template-head requires-clause and a closure named
+  in it see depth 1, and once more by the bare function type;
+- once around a closure's `Ul <lambda-sig> E` parameters (a generic
+  lambda's `decltype(x)` in an `operator()` name is `fL1p_`);
+- for a trailing requires-clause, one level in its result (its
+  parameters are the function's: depth 0 after re-entering its scope); a
+  template-head clause uses the depth of its context;
+- for a requires-expression with parameters, one level for `rQ <param
+  types>` and one in result for its requirements; its parameters have
+  scope depth = the enclosing prototype scopes plus enclosing
+  requires-parameter clauses (`Sema::requires_param_scopes`, kept by
+  `act_on_start_requires_params`/`act_on_end_requires_params`), and a
+  requires-expression's body is no scope of its own.
+A pattern parameter named in its own signature is substituted with the
+signature (a nested declarator's parameter, in `Sema::unowned_params`,
+or the function's own when only its type is substituted for deduction
+against a target type): `Subst::nested_prototype_param` makes a fresh
+parameter keeping index and scope depth, as clang's
+`TransformFunctionTypeParams` does (`tests/mangle/function_param_depth.cpp`).
+An unsupported expression
 (non-dependent `sizeof` whose value would be needed, ...) mangles as
 `XLi0EE` in a template argument and `u7unknown` as a `decltype`
 operand. The
@@ -875,8 +907,9 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   holds the unexpanded pack); requires-expressions are `rQ <param-types>
   _ <requirements> E` / `rq <requirements> E` with `X <expr> [N] [R
   <type-constraint>]`, `T <type>` and `Q <expr>` requirements; parameter
-  references are `fp [cv] [n-1] _` or `fL<nest-1>p...` (a requires-
-  expression's parameters count as one level per enclosing `rQ`). Member
+  references are `fp [cv] [n-1] _` or `fL<nest-1>p...` (the nesting
+  rule of §8.15: one level per enclosing `rQ`, less the parameter's
+  scope depth). Member
   access (`dt`/`pt`), pseudo-destructors (`dn`), `ix`, `cv`/`tl`
   construction, `nw`/`na` new-expressions and the assignment operators
   (`aS`, `pL`, ...) are added for these.

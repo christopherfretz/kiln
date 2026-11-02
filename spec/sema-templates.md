@@ -320,7 +320,7 @@ All of these are built by sema actions, which compute dependence as in
 
 | Syntax (in a dependent context) | Node |
 |---|---|
-| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
+| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
 | `e.m` or `p->m` with a type-dependent object, or a member of the current instantiation that is not found when it has dependent bases | `CXXDependentScopeMemberExpr {base, arrow, nns?, name, targs?}` |
 | unqualified `f(args)` with type-dependent args, where lookup finds functions or templates (or nothing) | `UnresolvedLookupExpr {requires_adl, overloaded, decls, targs?}`, plus `CallExpr` of dependent type |
 | unqualified `operator@(args)` / `operator T(args)` (an operator- or conversion-function-id as the callee) whose lookup finds nothing ([temp.dep.general]/2, [basic.lookup.argdep]/1) | an empty `UnresolvedLookupExpr` with `requires_adl`, as for an undeclared `f(args)` (`Sema::act_on_id_expression_dn` while `deferring_call_ref`); ADL at the call or at instantiation, and no candidate is clang's `use of undeclared 'operator@'` (`sema_undeclared_use`) |
@@ -433,6 +433,31 @@ type parameter named `auto:N`, as in clang's dump.
   formatter.handle.pass.cpp; `dcl.fct/abbreviated-leading-param-run.cpp`,
   `tests/codegen/abbreviated_template_leading_param.cpp`).
 - Generic lambdas use the same routine (WP-075).
+- Placement (WP-305, clang's `FunctionDeclarationScope` and
+  `err_auto_not_allowed`; `Parser::parse_param_clause`). Only the clause
+  of a function declaration invents: a declarator in a `File`, `Member`,
+  `Block` or `ForInit` context, not of a `typedef`
+  (`Declarator::typedef`), whose function declarator applies directly to
+  the declarator-id (no chunk before it, grouping parentheses aside;
+  `isFunctionDeclaratorAFunctionDeclaration`), or a lambda's clause. An
+  `auto` in any other clause (a nested function declarator, a function
+  type in a type-id, alias, typedef, variable or template parameter) is
+  "'auto' not allowed in function prototype that is not a function
+  declaration" at the `auto` (`sema_auto_not_allowed_prototype`), and the
+  parameter's type becomes `int`. `decltype(auto)` is never a parameter's
+  placeholder ("... in function prototype", "... in lambda parameter").
+- A parameter declarator with a trailing return type
+  (`auto (*cb)(int) -> int`) keeps its decl-specifier `auto`: it is the
+  function type's `auto` ([dcl.fct]/2; a `C auto` or `const auto` there is
+  `sema_trailing_return_without_auto`). A placeholder in that trailing
+  return type (under pointer and reference declarators) is checked as
+  above, reported at the decl-specifier, and otherwise invents a
+  parameter (`void f(auto (*p)() -> C auto)` is a template; clang's
+  `GetFullTypeForDeclarator`). Tests: `dcl.fct/p22-auto-nested-prototype*.cpp`,
+  `dcl.fct/p22-auto-trailing-return-run.cpp`,
+  `dcl.fct/p2-trailing-param-auto-diags.cpp`,
+  `dcl.spec.auto/p2-decltype-auto-param.cpp`,
+  `tests/mangle/abbreviated_trailing_auto.cpp`.
 
 ### 2.7 Pack expansions by context ([temp.variadic]/5)
 
@@ -445,7 +470,7 @@ type parameter named `auto:N`, as in clang's dump.
 | mem-initializer-list | `D() : B<T>(0)... {}` | ctor-initializer (WP-065) | yes |
 | template-argument-list | `X<T...>` | §2.2 | yes |
 | using-declarator-list | `using B<T>::f...;` | using-decl (WP-062) | yes |
-| alignment-specifier | `alignas(T...)` | attributes | yes |
+| alignment-specifier | `alignas(T...)`, `alignas(N...)` | `parse_alignas`; one `ALIGNED` per element at instantiation (spec/sema.md §4.5, WP-302) | yes |
 | lambda capture | `[t...]`, `[...x = t]` | WP-075 | yes |
 | `sizeof...` | `sizeof...(T)` | primary expression | yes |
 | fold-expression | `(t + ...)` | parenthesized primary | yes |
@@ -2303,6 +2328,13 @@ the guide's arguments into such a typedef substitutes its underlying type
 and keeps the typedef as sugar, without instantiating the class
 (`Substituter::class_not_instantiated`). clang's guide transform clones
 the typedef instead.
+Any other member of the pattern that a guide's parameter types name (a
+static data member or enumerator, `span<O, rank_>` in libc++'s
+`layout_stride::mapping`, or a member of a member class) is found in the
+specialization the substituted injected-class-name `X<P...>` names: that
+class is completed and the member instantiated from the pattern member
+is used ([temp.inst]/3; `Substituter::pattern_specialization`, clang's
+`FindInstantiatedDecl` on a deduction guide; WP-302).
 
 The guide of a constructor template may also name other members of the
 class template in its signature or template parameters: a member class,
@@ -2551,10 +2583,12 @@ takes its initializer's dependence without `UNEXPANDED_PACK`
     pattern init-capture maps positionally to its new variables.
   - Gap: an init-capture `[x = ts]` whose initializer names an
     unexpanded pack outside an expansion is not diagnosed ("initializer
-    contains unexpanded parameter pack"). Nor is any other site: the
-    unexpanded-pack check described above is not implemented
-    (`sema_unexpanded_pack` has no emitter; `T x;`, `ts;` in a variadic
-    template are accepted).
+    contains unexpanded parameter pack"). Nor is any other site except
+    an `alignas` operand: the general unexpanded-pack check described
+    above is not implemented (`T x;`, `ts;` in a variadic template are
+    accepted). `Sema::diagnose_unexpanded_pack` (`templ/pack.rs`, emits
+    `sema_unexpanded_pack`; WP-302) is the reusable collector and
+    diagnostic for the remaining sites.
 
 ### 7.2 Expansion: `expand(pattern, site) -> Result<Expansion, SubstFail>`
 
@@ -4061,7 +4095,12 @@ answers yes for every table name.
 - Abominable function types (`void() const`) are not diagnosed as
   trait operands.
 - `ExcSpec::Deferred` is not resolved. `dtor_nothrow` computes the
-  implicit destructor's exception specification itself.
+  implicit destructor's exception specification itself
+  ([except.spec]/8): from each subobject's selected destructor whatever
+  its access (a protected base destructor leaves the derived class
+  nothrow-destructible, libc++'s `std::list` over `__list_imp`); a
+  deleted or ambiguous subobject destructor does not make it throwing
+  (tests/conformance/except.spec/implicit-dtor-protected-base.cpp).
 - `x.f()` with `f` an undeduced member goes through
   `class/member_expr.rs` (WP-067b). That path has no
   `check_undeduced_use` and does not instantiate on use; its return
@@ -4503,8 +4542,15 @@ explicit specialization errors remain. The blockers are:
     (`Tdk::ConstraintsNotSatisfied`, `DeductionFailure::sat`, and the
     note "candidate template ignored: constraints not satisfied
     [with …]" plus its chain).
-  - `ensure_template_constraints` checks class and variable template
-    specializations (`get_class_spec`, `get_var_spec`).
+  - `ensure_template_constraints` checks class, variable and alias
+    template specializations (`get_class_spec`, `get_var_spec`,
+    `alias_template_type`; [temp.names]/9). An alias is checked when its
+    arguments and template name are not dependent, before the aliased
+    type is substituted; inside a requires-expression or deduction the
+    error is a substitution failure, so `requires { typename
+    std::projected<int, F>; }` is false
+    (tests/conformance/expr.prim.req.type/constrained-alias-template.cpp,
+    temp.constr.decl/alias-template-unsatisfied.cpp; WP-309).
   - `order.rs::deduce_partial` checks a partial specialization's head
     constraints after matching.
   - `find_partial_decl` tells same-argument partial specializations
