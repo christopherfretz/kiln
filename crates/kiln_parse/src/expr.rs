@@ -1467,18 +1467,15 @@ impl Parser<'_, '_> {
                 self.parse_assignment_expr()
             };
             let ellipsis = self.eat(Punct::Ellipsis);
-            match a {
-                Some(a) => {
-                    let a = match ellipsis {
-                        Some(l) => self.s.act_pack_expansion(a, l),
-                        None => a,
-                    };
-                    args.push(a);
-                }
-                None => {
-                    saw_error = true;
-                    self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
-                }
+            if let Some(a) = a {
+                let a = match ellipsis {
+                    Some(l) => self.s.act_pack_expansion(a, l),
+                    None => a,
+                };
+                args.push(a);
+            } else {
+                saw_error = true;
+                self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
             }
             if self.eat(Punct::Comma).is_none() {
                 break;
@@ -1796,7 +1793,8 @@ impl Parser<'_, '_> {
         if self.at(Punct::Less)
             && !template_kw
             && let NameClass::Value(_) = class
-            && (qual.is_some() || !(self.std >= Std::Cxx20 && self.s.is_assumed_template_name(name)))
+            && (qual.is_some()
+                || !(self.std >= Std::Cxx20 && self.s.is_assumed_template_name(name)))
             && let Some(found) = self.s.potential_template_name_in(qual.map(|q| q.ctx), name)
             && let Some(close) = self.potential_angle_close()
         {

@@ -3,13 +3,13 @@
 //! names nothing (spec/sema.md "Undeclared template-ids", WP-372,
 //! WP-391). clang 19 reports it through delayed typo correction; clang 22
 //! typo-corrects a name that lookup found functions for to the same name
-//! qualified by its namespace (`val<int> + 1` with `int val(int)`: "use of
-//! undeclared identifier 'val'; did you mean '::val'?").
+//! qualified by its namespace (`val<int> + 1` with `int val(int)`:
+//! `use of undeclared identifier 'val'; did you mean '::val'?`).
 
-use kiln_ast::{DeclId, ExprId};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::TemplateArg;
+use kiln_ast::{DeclId, ExprId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -22,15 +22,77 @@ use crate::lookup::LookupKind;
 /// (`AddKeywordsToConsumer` with every `Want*` flag, C++ mode, regardless
 /// of the scope conditions some of them have).
 const EXPR_KEYWORDS: &[&str] = &[
-    "char", "const", "double", "enum", "float", "int", "long", "short", "signed", "struct",
-    "union", "unsigned", "void", "volatile", "_Complex", "_Imaginary", "extern", "inline",
-    "static", "typedef", "restrict", "bool", "class", "typename", "wchar_t", "char16_t",
-    "char32_t", "constexpr", "decltype", "thread_local", "typeof", "const_cast",
-    "dynamic_cast", "reinterpret_cast", "static_cast", "sizeof", "false", "true", "delete",
-    "new", "operator", "throw", "typeid", "this", "alignof", "nullptr", "static_assert", "do",
-    "else", "for", "goto", "if", "return", "switch", "while", "catch", "try", "break",
-    "continue", "case", "default", "namespace", "template", "explicit", "friend", "mutable",
-    "private", "protected", "public", "virtual", "using",
+    "char",
+    "const",
+    "double",
+    "enum",
+    "float",
+    "int",
+    "long",
+    "short",
+    "signed",
+    "struct",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "_Complex",
+    "_Imaginary",
+    "extern",
+    "inline",
+    "static",
+    "typedef",
+    "restrict",
+    "bool",
+    "class",
+    "typename",
+    "wchar_t",
+    "char16_t",
+    "char32_t",
+    "constexpr",
+    "decltype",
+    "thread_local",
+    "typeof",
+    "const_cast",
+    "dynamic_cast",
+    "reinterpret_cast",
+    "static_cast",
+    "sizeof",
+    "false",
+    "true",
+    "delete",
+    "new",
+    "operator",
+    "throw",
+    "typeid",
+    "this",
+    "alignof",
+    "nullptr",
+    "static_assert",
+    "do",
+    "else",
+    "for",
+    "goto",
+    "if",
+    "return",
+    "switch",
+    "while",
+    "catch",
+    "try",
+    "break",
+    "continue",
+    "case",
+    "default",
+    "namespace",
+    "template",
+    "explicit",
+    "friend",
+    "mutable",
+    "private",
+    "protected",
+    "public",
+    "virtual",
+    "using",
 ];
 
 impl Sema<'_, '_> {
@@ -53,8 +115,8 @@ impl Sema<'_, '_> {
     /// (assumed a template, [temp.names]/3) and that is not called: the
     /// correction is the same name qualified from the enclosing namespace
     /// (`::val`, `::N::fn`) when it is the least distant candidate. Emits
-    /// "use of undeclared identifier 'val'; did you mean '::val'?" with
-    /// "'::val' declared here" and returns the overload set of the first
+    /// `use of undeclared identifier 'val'; did you mean '::val'?` with
+    /// `'::val' declared here` and returns the overload set of the first
     /// function declared (no template arguments; an erroneous expression
     /// when an argument is dependent). `None`, diagnosing nothing, when
     /// the functions are not one namespace's, or a keyword or another
@@ -119,7 +181,14 @@ impl Sema<'_, '_> {
         // clang's recovery: an overload set of the one declaration, which
         // a built-in operator resolves to it
         // ([`Sema::resolve_single_overload_candidate`]).
-        Some(self.builder().unresolved_lookup(DeclName::ident(name), &[decl], false, None, None, loc))
+        Some(self.builder().unresolved_lookup(
+            DeclName::ident(name),
+            &[decl],
+            false,
+            None,
+            None,
+            loc,
+        ))
     }
 
     /// The namespace (or translation unit) declaration `d` belongs to,
@@ -166,5 +235,3 @@ impl Sema<'_, '_> {
         })
     }
 }
-
-
