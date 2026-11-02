@@ -456,6 +456,8 @@ impl Oven {
                 None => 0,
             };
             Ok(u128::from(p))
+        } else if aux & 0xff == crate::kbc::bi::ASSUME_ALIGNED {
+            self.bi_assume_aligned(b, aux >> 8 != 0, a as u64, bb, c).map(|()| a)
         } else if aux & 0xff == crate::kbc::bi::META {
             self.exec_meta(b, pc, fb, aux >> 8, (a, bb, c), (t1, t2))
         } else {

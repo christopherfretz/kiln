@@ -14,10 +14,10 @@ use kiln_ast::decl::DefinitionBits;
 use kiln_ast::types::BuiltinType;
 
 use super::{Fault, write_fault};
-use crate::Oven;
+use crate::{Oven, SemaBridge};
 use crate::compile::float_of;
 use crate::kbc::{ak, bi};
-use crate::mem::{MemFault, Ptr, flags};
+use crate::mem::{MemFault, Origin, Ptr, flags};
 use crate::softfloat::{self, Class};
 use crate::ty::{OTy, TyKind};
 
@@ -50,6 +50,13 @@ pub(crate) enum BiFault {
     CastIndet { t: OTy },
     /// `note_constexpr_bit_cast_unrepresentable_value` (a `bool` byte).
     CastUnrep { v: u8 },
+    /// `__builtin_assume_aligned` to `align` bytes (WP-292): the base
+    /// object's alignment `v` is less (`kind` 0,
+    /// `note_constexpr_baa_insufficient_alignment`), or the offset `v`
+    /// from it is not a multiple (1, the same note), or the value `v` of
+    /// a pointer to no object is not (2,
+    /// `note_constexpr_baa_value_insufficient_alignment`).
+    Align { kind: u8, v: i64, align: u64 },
 }
 
 /// `bi::OVERFLOW` (WP-270; clang `BI__builtin_*_overflow`): the
@@ -275,7 +282,7 @@ impl Oven {
                 })
             }
             bi::OVERFLOW => Ok(checked(sub, a, b)),
-            bi::OBJECT_SIZE => self.bi_object_size(sub, a as u64, b, t1),
+            bi::OBJECT_SIZE => self.bi_object_size(sub, a as u64, b, c, t1),
             bi::BIT_CAST => {
                 let (to_mem, read) = (sub == bi::TO_MEM, sub == bi::READ_ONLY);
                 self.bit_cast(ast, a as u64, b as u64, OTy(t1), OTy(t2), to_mem, read)
@@ -284,12 +291,56 @@ impl Oven {
         }
     }
 
+    /// `bi::ASSUME_ALIGNED` (WP-292; clang `PointerExprEvaluator`): the
+    /// complete object of `p` must be aligned to `align` (a variable's
+    /// declared alignment, else its type's), and `p`'s byte offset in it
+    /// minus `off` (when `has_off`) a multiple of `align`.
+    pub(super) fn bi_assume_aligned(
+        &self,
+        b: &mut dyn SemaBridge,
+        has_off: bool,
+        p: u64,
+        align: u128,
+        off: u128,
+    ) -> Result<(), Fault> {
+        let ptr = Ptr::decode(p);
+        if ptr.is_fn() {
+            return Ok(());
+        }
+        let align = u64::try_from(align).unwrap_or(u64::MAX).max(1);
+        let base = (p != 0).then(|| self.alloc_any(ptr)).flatten();
+        if let Some(a) = base {
+            let decl = match a.origin {
+                Origin::Var(d) | Origin::Global(d) | Origin::External(d) => b.decl_align(d),
+                _ => 0,
+            };
+            let have = if decl != 0 { decl } else { u64::from(self.types.info(a.ty).align) };
+            if have < align {
+                let v = i64::try_from(have).unwrap_or(i64::MAX);
+                return Err(Fault::Bi(BiFault::Align { kind: 0, v, align }));
+            }
+        }
+        let at = if p == 0 { 0 } else { i64::from(ptr.off) };
+        // clang: `Offset += -Offset.getZExtValue()` on 64-bit `CharUnits`.
+        let v = if has_off { at.wrapping_sub(off as u64 as i64) } else { at };
+        if v.rem_euclid(i64::try_from(align).unwrap_or(i64::MAX)) != 0 {
+            let kind = if base.is_some() { 1 } else { 2 };
+            return Err(Fault::Bi(BiFault::Align { kind, v, align }));
+        }
+        Ok(())
+    }
+
     /// `bi::OBJECT_SIZE` (WP-282): a pointer that designates no object (a
     /// null or function pointer, an unknown object) is not a constant.
-    fn bi_object_size(&self, sub: u32, p: u64, ty: u128, t: u32) -> Result<u128, Fault> {
+    /// With [`bi::SIDE`], `ok` says whether the speculative evaluation of
+    /// the pointer completed.
+    fn bi_object_size(&self, sub: u32, p: u64, ty: u128, ok: u128, t: u32) -> Result<u128, Fault> {
         let ty = (ty & 3) as u32;
-        if sub & bi::SIDE != 0 {
+        if ok == 0 && sub & bi::SIDE != 0 {
             return Ok(if ty & 2 != 0 { 0 } else { u128::from(u64::MAX) });
+        }
+        if ok == 0 {
+            return Err(Fault::Invalid);
         }
         let ptr = Ptr::decode(p);
         if p == 0 || ptr.is_fn() {

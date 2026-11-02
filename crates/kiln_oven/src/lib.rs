@@ -252,6 +252,15 @@ pub trait SemaBridge {
         let _ = ty;
         (0, 1)
     }
+    /// The alignment in bytes of variable `d`'s object (clang
+    /// `ASTContext::getDeclAlign`: its `alignas`/`aligned`, else its
+    /// type's, raised by the target's large-array rule), for the
+    /// `__builtin_assume_aligned` check. The default 0 means the type's
+    /// alignment.
+    fn decl_align(&mut self, d: DeclId) -> u64 {
+        let _ = d;
+        0
+    }
     /// The final overrider of virtual function `method` called on the
     /// subobject `at` of an object whose most-derived class is
     /// `most_derived`, with the subobject the overrider is a member of

@@ -5,7 +5,7 @@
 
 use kiln_ast::consts::FloatKind;
 use kiln_ast::decl::builtin as id;
-use kiln_ast::expr::ExprKind;
+use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::{Ast, ExprId, QualType};
 
 use super::{Compiler, float_code, skip_parens};
@@ -36,6 +36,92 @@ pub(crate) fn designator_type(ast: &Ast, mut e: ExprId) -> Option<QualType> {
         }
         e = ast.exprs.operand(e);
     }
+}
+
+/// clang `ignorePointerCastsAndParens` (`__builtin_object_size`): through
+/// parentheses and no-op / bit casts of pointer prvalues.
+fn strip_pointer_casts(ast: &Ast, e: ExprId) -> ExprId {
+    use kiln_ast::expr::{CastKind, ValueCategory};
+    let e = skip_parens(ast, e);
+    let n = ast.exprs.get(e);
+    if !n.kind().is_cast()
+        || !matches!(ast.exprs.cast_kind(e), CastKind::NoOp | CastKind::BitCast)
+    {
+        return e;
+    }
+    let sub = ast.exprs.operand(e);
+    let s = ast.exprs.get(sub);
+    if ast.types.pointee(s.ty()).is_none() || s.value_category() != ValueCategory::PRValue {
+        return e;
+    }
+    strip_pointer_casts(ast, sub)
+}
+
+/// Whether `e`, through parentheses, is a comma operator.
+fn is_comma(ast: &Ast, e: ExprId) -> bool {
+    let e = skip_parens(ast, e);
+    ast.exprs.get(e).kind() == ExprKind::BinaryOperator && ast.exprs.binary_op(e) == BinaryOp::Comma
+}
+
+/// Whether `e` is an array-to-pointer decay.
+fn is_decay(ast: &Ast, e: ExprId) -> bool {
+    ast.exprs.get(e).kind().is_cast()
+        && ast.exprs.cast_kind(e) == kiln_ast::expr::CastKind::ArrayToPointerDecay
+}
+
+/// Whether `e` calls a function not declared `const` or `pure` (the part
+/// of clang `Expr::HasSideEffects` that [`has_side_effects`] leaves out).
+fn has_calls(ast: &Ast, e: ExprId) -> bool {
+    let exprs = &ast.exprs;
+    let mut stack = vec![e];
+    while let Some(x) = stack.pop() {
+        match exprs.get(x).kind() {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+                if !is_pure_call(ast, x) =>
+            {
+                return true;
+            }
+            ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::RequiresExpr => {}
+            _ => stack.extend(exprs.children(x, &ast.lists)),
+        }
+    }
+    false
+}
+
+/// Whether the callee of the call `e` is a function declared `const` or
+/// `pure` (clang `getCalleeDecl` with a `ConstAttr` / `PureAttr`).
+fn is_pure_call(ast: &Ast, e: ExprId) -> bool {
+    use kiln_ast::attr::AttrKind;
+    let exprs = &ast.exprs;
+    let mut c = exprs.callee(e);
+    for _ in 0..64 {
+        c = skip_parens(ast, c);
+        let k = exprs.get(c).kind();
+        if k == ExprKind::ImplicitCastExpr {
+            c = exprs.operand(c);
+            continue;
+        }
+        if !matches!(k, ExprKind::DeclRefExpr | ExprKind::MemberExpr) {
+            return false;
+        }
+        let mut d = Some(exprs.decl(c));
+        for _ in 0..4096 {
+            let Some(x) = d else { break };
+            if ast
+                .lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(x))
+                .any(|a| matches!(ast.attrs.get(a).kind, AttrKind::PURE | AttrKind::CONST))
+            {
+                return true;
+            }
+            d = ast.prev(x);
+        }
+        return false;
+    }
+    false
 }
 
 /// Whether evaluating `e` would modify an object, allocate, or throw on
@@ -393,23 +479,66 @@ impl Compiler<'_> {
             id::EXPECT | id::EXPECT_WITH_PROBABILITY => self.rv_into(arg(0)?, dst),
             // clang: the assumption is not evaluated.
             id::ASSUME => self.konst(dst, 0),
-            // WP-282: the pointer (the offset is evaluated); the Oven
-            // tracks no allocation alignment, so the assumption is not
-            // checked (spec/oven.md "Divergences").
+            // WP-292: the pointer, checked against the alignment (and
+            // offset); a failure is noted at the pointer operand.
             id::ASSUME_ALIGNED => {
-                self.rv_into(arg(0)?, dst);
-                if let Some(o) = arg(2) {
-                    self.rv(o);
-                }
+                let p = arg(0)?;
+                let r = [self.rv(p), self.rv(arg(1)?), arg(2).map_or(dst, |o| self.rv(o))];
+                let at = self.ast().exprs.get(p).loc();
+                op(self, bi::ASSUME_ALIGNED, u32::from(arg(2).is_some()), r, [0, 0], at);
             }
+            // clang `tryEvaluateBuiltinObjectSize` (WP-292): the pointer
+            // without its pointer casts, evaluated speculatively. clang
+            // fails any modification of an object from before the trial
+            // and ignores a failing comma operand: the left operands of
+            // top-level commas (also under a decay) are skipped as clang's
+            // ignored values, and a remaining side effect gives the
+            // default. Otherwise the pointer runs as a trial; its failure
+            // gives the default when the operand has side effects (calls
+            // included, clang `HasSideEffects`), else an invalid
+            // subexpression at the call.
             id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE => {
                 let (p, t) = (arg(0)?, arg(1)?);
                 let ast = self.ast();
-                let side = has_side_effects(ast, p);
-                let ty = designator_type(ast, p).map_or(bi::DYN, |q| self.ty(q).0);
+                let mut p = strip_pointer_casts(ast, p);
+                let des = designator_type(ast, p);
+                let side = has_side_effects(ast, p) || has_calls(ast, p);
+                let mut decay = false;
+                loop {
+                    if is_comma(ast, p) {
+                        p = strip_pointer_casts(ast, ExprId::new(ast.exprs.get(p).b()));
+                    } else if !decay && is_decay(ast, p) && is_comma(ast, ast.exprs.operand(p)) {
+                        // `(x, arr)` decays as the array operand alone.
+                        decay = true;
+                        p = skip_parens(ast, ast.exprs.operand(p));
+                        p = ExprId::new(ast.exprs.get(p).b());
+                    } else if decay && is_comma(ast, p) {
+                        p = ExprId::new(ast.exprs.get(p).b());
+                    } else {
+                        break;
+                    }
+                }
+                let still = has_side_effects(ast, p);
+                let ty = des.map_or(bi::DYN, |q| self.ty(q).0);
                 let b = self.rv(t);
-                let a = if side { b } else { self.rv(p) };
-                op(self, bi::OBJECT_SIZE, u32::from(side) * bi::SIDE, [a, b, dst], [ty, 0], begin);
+                let addr = |c: &mut Self| {
+                    if decay { c.lv_mem(p, crate::compile::Access::Addr) } else { c.rv(p) }
+                };
+                let (a, ok) = if still {
+                    let ok = self.reg();
+                    self.konst(ok, 0);
+                    (b, ok)
+                } else {
+                    let ok = self.reg();
+                    let pc = self.emit(Op::Speculate, 0, &[ok, 0, 0]);
+                    let v = addr(self);
+                    self.emit(Op::Ret, 1, &[v]);
+                    let end = self.here();
+                    self.patch(pc + 2, v);
+                    self.patch(pc + 3, end);
+                    (v, ok)
+                };
+                op(self, bi::OBJECT_SIZE, u32::from(side) * bi::SIDE, [a, b, ok], [ty, 0], begin);
             }
             // As `::operator new`/`delete` (spec/oven.md "Transient
             // allocation").

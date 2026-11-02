@@ -70,6 +70,25 @@ impl SemaBridge for Bridge<'_, '_, '_> {
             .map_or((0, 1), |(size, align)| (size, u32::try_from(align).unwrap_or(1)))
     }
 
+    // clang `getDeclAlign(D, /*ForAlignof=*/false)`: an alignment
+    // attribute alone, else the type's (a reference's as a pointer),
+    // raised to 16 for an x86-64 array of at least 16 bytes
+    // (`LargeArrayMinWidth`); no minimum global alignment on Linux.
+    fn decl_align(&mut self, d: DeclId) -> u64 {
+        let s = &*self.sema;
+        let attr = kiln_abi::layout::decl_max_align(&s.ast, d, &s.abi) / 8;
+        if attr != 0 {
+            return attr;
+        }
+        let Some(ty) = s.ast.decls.get(d).ty() else { return 0 };
+        if s.ast.types.is_reference(ty) {
+            return s.abi.pointer_size;
+        }
+        let Some((size, align)) = crate::target::size_align(&s.ast, ty, &s.abi) else { return 0 };
+        let x86 = s.abi.triple.arch == kiln_abi::target::Arch::X86_64;
+        if x86 && s.ast.types.is_array(ty) && size >= 16 { align.max(16) } else { align }
+    }
+
     // Final overriders and subobject graphs are computed on demand and
     // cached in `Ast::virtuals` (WP-078a; spec/sema-class.md §3.5).
     fn final_overrider(
