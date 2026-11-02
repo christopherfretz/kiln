@@ -754,7 +754,7 @@ impl Sema<'_, '_> {
                     Some(i) if t.is_integral(canon) || t.as_enum(canon).is_some() => {
                         self.int_const(canon, i)
                     }
-                    _ => v,
+                    _ => self.undecayed_void_ptr_arg(v),
                 };
                 Ok(TemplateArg::value(canon, v))
             }

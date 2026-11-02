@@ -91,6 +91,7 @@ keywords! {
     Namespace = "namespace";
     New = "new";
     Noexcept = "noexcept";
+    Noreturn = "_Noreturn";
     Nullptr = "nullptr";
     Nonnull = "_Nonnull";
     Nullable = "_Nullable";

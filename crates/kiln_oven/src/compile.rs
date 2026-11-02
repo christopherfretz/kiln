@@ -3418,6 +3418,8 @@ impl Compiler<'_> {
                             self.emit(Op::VoidCast, crate::kbc::VOID_TAG, &[dst, r, fp.0]);
                         } else if tvoid || fp == tp || in_allocate {
                             self.emit(Op::Mov, 0, &[dst, r]);
+                        } else if fvoid && ek != ExprKind::CXXReinterpretCastExpr && !self.b.cxx26() {
+                            self.void_cast_pre26(e, op, r);
                         } else if fvoid && ek != ExprKind::CXXReinterpretCastExpr {
                             self.emit_at(Op::VoidCast, 0, &[dst, r, tp.0], e);
                         } else {
@@ -3433,6 +3435,24 @@ impl Compiler<'_> {
             }
             _ => self.unsupported(e),
         }
+    }
+
+    /// [expr.const]/5.15 before C++26 (P2738): a conversion from `void *`
+    /// to a pointer to object type is never a core constant expression.
+    /// As clang, at the cast: a null operand names only the source type, a
+    /// non-null one adds "in C++ standards before C++2c" (spec/oven.md
+    /// "Casts from void *").
+    fn void_cast_pre26(&mut self, e: ExprId, op: ExprId, r: u32) {
+        let ast = self.ast();
+        let src = Oven::quoted_aka(ast, ast.exprs.get(op).ty());
+        let msg = format!("cast from {src} is not allowed in a constant expression");
+        let loc = self.begin(e);
+        let nz = self.reg();
+        self.emit(Op::PtrToBool, 0, &[nz, r]);
+        let j = self.jmp_if(nz, true);
+        self.trap_loc(loc, msg.clone());
+        self.patch_here(j);
+        self.trap_loc(loc, format!("{msg} in C++ standards before C++2c"));
     }
 
     /// The function an lvalue of function type designates, as a function

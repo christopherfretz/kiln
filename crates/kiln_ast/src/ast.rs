@@ -491,9 +491,9 @@ impl Ast {
     }
 
     /// Whether the function `d` does not return (clang
-    /// `FunctionDecl::isNoReturn` minus the C11/Microsoft spellings): some
+    /// `FunctionDecl::isNoReturn` minus the Microsoft spelling): some
     /// declaration of it carries `[[noreturn]]` /
-    /// `__attribute__((noreturn))` ([dcl.attr.noreturn]/1: the attribute
+    /// `__attribute__((noreturn))` / C11 `_Noreturn` ([dcl.attr.noreturn]/1: the attribute
     /// appertains to the function), or its type is `noreturn`.
     pub fn is_noreturn_fn(&self, d: DeclId) -> bool {
         let attr = |r: DeclId| {

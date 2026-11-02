@@ -12,8 +12,8 @@
 //! Each space keeps, per 8-byte granule, a byte-granular initialization
 //! mask (bit `i` = byte `i` of the granule holds a value) and a pointer
 //! mark (nonzero: the granule holds a pointer, whose bytes are an encoded
-//! [`Ptr`]; 2 and up: a `void *` whose designated type is
-//! [`Memory::void_tag`] of the mark, spec/oven.md "Construction").
+//! [`Ptr`]; [`PTR_TAGGED`] and up: a `void *` whose designated type is
+//! [`Memory::void_tag`] of the granule, spec/oven.md "Construction").
 //! Allocations start on a granule boundary.
 //!
 //! A pointer is a `u64`: `offset (32) | past-end (1) | slot (22) | gen (9)`.
@@ -46,8 +46,11 @@ pub(crate) const FN_SLOT: u32 = (1 << 22) - 1;
 /// [`Alloc::base`] of a static allocation that holds no bytes
 /// ([`Memory::alloc_unbacked`]).
 pub(crate) const UNBACKED: u32 = u32::MAX;
-/// The first pointer mark of a tagged `void *` ([`Memory::void_mark`]).
+/// The first pointer mark of a tagged `void *` ([`Memory::set_void_tag`]).
 pub(crate) const PTR_TAGGED: u8 = 2;
+/// The pointer mark of a tagged `void *` whose type did not fit the
+/// interned marks: its tag is in [`Memory::vspill`].
+pub(crate) const PTR_SPILL: u8 = u8::MAX;
 
 /// A decoded pointer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -144,6 +147,12 @@ pub(crate) enum Sp {
     Frame,
     Heap,
     Static,
+}
+
+/// The [`Memory::vtags`] key of granule `g` of space `sp`.
+#[inline]
+fn vkey(sp: Sp, g: u64) -> u64 {
+    (sp as u64) << 62 | g
 }
 
 pub(crate) fn fn_ptr(func: u32) -> u64 {
@@ -250,9 +259,15 @@ pub(crate) struct Alloc {
     /// Frame objects: serial of the call frame that created it (0: none);
     /// tells a dead local of a live frame (scope ended) from one of a
     /// returned call. Heap objects: the evaluation context
-    /// ([`Memory::ctx`]) that allocated it.
+    /// ([`Memory::ctx`]) that allocated it. Static objects: [`LAX_READ`]
+    /// for the value of a variable only a lax fold may read, else 0.
     pub frame: u32,
 }
+
+/// [`Alloc::frame`] of a static [`flags::EXTERNAL`] object that holds the
+/// value of a variable not usable in constant expressions but readable by
+/// a lax fold ([`Memory::lax`]; spec/oven.md "Lax folds").
+pub(crate) const LAX_READ: u32 = 1;
 
 #[derive(Debug, Default)]
 pub(crate) struct Space {
@@ -499,9 +514,18 @@ pub(crate) struct Memory {
     /// The designated types of the `void *` values stored to memory
     /// (`kbc::VOID_TAG`), interned: pointer mark `PTR_TAGGED + i` is
     /// `vtags[i]`. Append-only for the translation unit (a rolled-back or
-    /// copied mark stays valid) and at most `256 - PTR_TAGGED` long.
+    /// copied mark stays valid) and at most `PTR_SPILL - PTR_TAGGED`
+    /// long.
     vtags: Vec<OTy>,
     vtag_ix: FxHashMap<OTy, u8>,
+    /// The designated types of the `void *` values stored once
+    /// [`Memory::vtags`] is full (mark [`PTR_SPILL`]), keyed by granule
+    /// (`sp << 62 | granule`, as [`Trial`]'s `seen`): no cap on distinct
+    /// types (spec/oven.md "Construction"). An entry is meaningful while
+    /// its granule's mark is [`PTR_SPILL`]; one whose granule was since
+    /// overwritten is stale and harmless (the next spilled store there
+    /// replaces it), so writes never clear it.
+    vspill: FxHashMap<u64, OTy>,
     /// Bytes allocated (cumulative, granule-rounded; frame and heap).
     pub allocated: u64,
     /// Peak live bytes: `frame.top + heap_live`.
@@ -515,12 +539,17 @@ pub(crate) struct Memory {
     /// A frame object has been [`flags::LIFE`]-tracked in this evaluation:
     /// leaving a scope checks the objects it releases (`Oven::scope_life`).
     pub life_frame: bool,
+    /// A lax fold is running (`Oven::fold_rvalue`): a [`LAX_READ`] object
+    /// may be read.
+    pub lax: bool,
     /// The base subobjects a constructor did not construct
     /// ([`Memory::set_unconstructed`]) in this evaluation, by pointer:
     /// their bytes are outside their lifetime while their derived object
-    /// is not ([`Memory::holds_unconstructed`]). Empty unless Sema
-    /// diagnosed a constructor (WP-390).
-    pub unconstructed: Vec<(u64, OTy)>,
+    /// is not ([`Memory::holds_unconstructed`]); an empty base (`true`)
+    /// has no bytes and is found by identity
+    /// ([`Memory::empty_unconstructed`]). Empty unless Sema diagnosed a
+    /// constructor (WP-390, WP-401).
+    pub unconstructed: Vec<(u64, OTy, bool)>,
     /// Open checkpoints and their undo log (spec/oven.md "Trial
     /// evaluation").
     trial: Trial,
@@ -562,6 +591,7 @@ impl Memory {
             union_alts: FxHashMap::default(),
             vtags: Vec::new(),
             vtag_ix: FxHashMap::default(),
+            vspill: FxHashMap::default(),
             allocated: 0,
             peak: 0,
             arena_peak: 0,
@@ -569,31 +599,60 @@ impl Memory {
             cur_frame: 0,
             serial: 0,
             life_frame: false,
+            lax: false,
             unconstructed: Vec::new(),
             trial: Trial::default(),
         }
     }
 
-    /// The pointer mark for a pointer register's tag bits (`v >> 64`,
-    /// `kbc::VOID_TAG`: a type + 1, or 0): 1 when untagged, else the
-    /// tag's interned mark, or 1 once every mark is taken (the `void *`
-    /// then falls back as an untagged one does).
-    pub fn void_mark(&mut self, tag: u32) -> u8 {
+    /// The pointer mark of a pointer about to be stored at `abs` of space
+    /// `sp` with register tag bits `tag` (`v >> 64`, `kbc::VOID_TAG`: a
+    /// type + 1, or 0): 1 when untagged, else the tag's interned mark, or
+    /// [`PTR_SPILL`] once every mark is taken, the tag then going to
+    /// [`Memory::vspill`]. The caller logged the granule under the open
+    /// checkpoints (its old spilled tag with it), so this is not logged
+    /// again.
+    #[inline]
+    pub fn set_void_tag(&mut self, sp: Sp, abs: u64, tag: u32) -> u8 {
         let Some(t) = tag.checked_sub(1).map(OTy) else { return 1 };
         if let Some(&m) = self.vtag_ix.get(&t) {
             return m;
         }
-        let Ok(m) = u8::try_from(self.vtags.len() + usize::from(PTR_TAGGED)) else { return 1 };
-        self.vtags.push(t);
-        self.vtag_ix.insert(t, m);
-        m
+        let m = self.vtags.len() + usize::from(PTR_TAGGED);
+        if m < usize::from(PTR_SPILL) {
+            self.vtags.push(t);
+            self.vtag_ix.insert(t, m as u8);
+            return m as u8;
+        }
+        self.vspill.insert(vkey(sp, abs / GRAN), t);
+        PTR_SPILL
     }
 
-    /// The register tag bits (a type + 1, or 0) of pointer mark `m`.
-    pub fn void_tag(&self, m: u8) -> u32 {
-        match m.checked_sub(PTR_TAGGED) {
-            Some(i) => self.vtags[usize::from(i)].0 + 1,
-            None => 0,
+    /// The register tag bits (a type + 1, or 0) of the pointer stored at
+    /// `abs` of space `sp`.
+    #[inline]
+    pub fn void_tag(&self, sp: Sp, abs: u64) -> u32 {
+        match self.space(sp).ptr_mark(abs) {
+            0 | 1 => 0,
+            PTR_SPILL => self.spilled(sp, abs / GRAN),
+            m => self.vtags[usize::from(m - PTR_TAGGED)].0 + 1,
+        }
+    }
+
+    /// The spilled tag of granule `g` of `sp` (a type + 1, or 0).
+    fn spilled(&self, sp: Sp, g: u64) -> u32 {
+        self.vspill.get(&vkey(sp, g)).map_or(0, |t| t.0 + 1)
+    }
+
+    /// Copies the spilled tags among `n` granules from granule `sg` of
+    /// `ssp` to granule `dg` of `dsp` (different spaces).
+    fn copy_spilled(&mut self, dsp: Sp, dg: u64, ssp: Sp, sg: u64, n: u64) {
+        for i in 0..n {
+            if self.space(ssp).ptr[(sg + i) as usize] == PTR_SPILL
+                && let Some(&t) = self.vspill.get(&vkey(ssp, sg + i))
+            {
+                self.vspill.insert(vkey(dsp, dg + i), t);
+            }
         }
     }
 
@@ -616,6 +675,7 @@ impl Memory {
             + self.union_alts.capacity() * (size_of::<(UKey, u64)>() + 1)
             + self.vtags.capacity() * size_of::<OTy>()
             + self.vtag_ix.capacity() * (size_of::<(OTy, u8)>() + 1)
+            + self.vspill.capacity() * (size_of::<(u64, OTy)>() + 1)
             + self.trial.footprint()
     }
 
@@ -750,6 +810,18 @@ impl Memory {
     /// static object made since the checkpoint is fresh (its base is at
     /// or above the checkpoint's static top).
     pub fn alloc_static(&mut self, ty: OTy, size: u64, fl: u8, origin: Origin) -> u64 {
+        self.alloc_static_in(ty, size, fl, origin, 0)
+    }
+
+    /// [`Memory::alloc_static`] with [`Alloc::frame`] `frame` ([`LAX_READ`]).
+    pub fn alloc_static_in(
+        &mut self,
+        ty: OTy,
+        size: u64,
+        fl: u8,
+        origin: Origin,
+        frame: u32,
+    ) -> u64 {
         let reuse = !self.in_trial();
         let base = self.static_range(size);
         let a = Alloc {
@@ -760,7 +832,7 @@ impl Memory {
             flags: fl,
             ty,
             origin,
-            frame: 0,
+            frame,
         };
         self.push_static(a, reuse)
     }
@@ -1032,6 +1104,7 @@ impl Memory {
         }
         if a.flags & flags::EXTERNAL != 0 {
             match a.origin {
+                Origin::External(_) if self.lax && !write && a.frame == LAX_READ => {}
                 Origin::External(d) => return Err(MemFault::External(d, write)),
                 Origin::Unknown(d) => return Err(MemFault::Unknown(d)),
                 Origin::Let(t) => return Err(MemFault::Temporary(t)),
@@ -1084,9 +1157,27 @@ impl Memory {
                 sp.set_init(dst + i, 1, v);
             }
             if src.is_multiple_of(GRAN) && dst.is_multiple_of(GRAN) {
-                for g in 0..len.div_ceil(GRAN) {
-                    sp.ptr[(dst / GRAN + g) as usize] = sp.ptr[(src / GRAN + g) as usize];
+                let n = len.div_ceil(GRAN);
+                let range = (src / GRAN) as usize..(src / GRAN + n) as usize;
+                if sp.ptr[range].contains(&PTR_SPILL) {
+                    // Collected first: an overlapping copy reads every
+                    // source entry before writing one.
+                    let entries: Vec<(u64, OTy)> = (0..n)
+                        .filter_map(|g| {
+                            let m = self.space(dst_sp).ptr[(src / GRAN + g) as usize];
+                            (m == PTR_SPILL)
+                                .then(|| self.vspill.get(&vkey(dst_sp, src / GRAN + g)))
+                                .flatten()
+                                .map(|&t| (vkey(dst_sp, dst / GRAN + g), t))
+                        })
+                        .collect();
+                    self.vspill.extend(entries);
                 }
+                let sp = self.space_mut(dst_sp);
+                sp.ptr.copy_within(
+                    (src / GRAN) as usize..(src / GRAN + n) as usize,
+                    (dst / GRAN) as usize,
+                );
             }
             return;
         }
@@ -1098,9 +1189,11 @@ impl Memory {
             d.set_init(dst + i, 1, v);
         }
         if src.is_multiple_of(GRAN) && dst.is_multiple_of(GRAN) {
-            for g in 0..len.div_ceil(GRAN) {
+            let n = len.div_ceil(GRAN);
+            for g in 0..n {
                 d.ptr[(dst / GRAN + g) as usize] = s.ptr[(src / GRAN + g) as usize];
             }
+            self.copy_spilled(dst_sp, dst / GRAN, src_sp, src / GRAN, n);
         }
     }
 
@@ -1294,10 +1387,17 @@ impl Memory {
     /// Its destruction is checked as a frame object's is (`life_frame`).
     /// Entries a rolled-back trial made stay (an error path only).
     pub fn set_unconstructed(&mut self, raw: u64, len: u64, ty: OTy) -> Result<(), MemFault> {
+        let (sp, abs, a) = self.check_storage(raw, len, true)?;
         if len == 0 {
+            // An empty base: no bytes to mark; the allocation is tracked
+            // so its destructions and member calls consult the entry.
+            if a.flags & flags::TRACKED == 0 {
+                self.track_life(raw)?;
+            }
+            self.life_frame = true;
+            self.unconstructed.push((raw, ty, true));
             return Ok(());
         }
-        let (sp, abs, a) = self.check_storage(raw, len, true)?;
         if a.flags & flags::TRACKED == 0 {
             self.track_life(raw)?;
         }
@@ -1306,7 +1406,7 @@ impl Memory {
         s.set_init(abs, len, false);
         s.set_life(abs, len, false);
         self.life_frame = true;
-        self.unconstructed.push((raw, ty));
+        self.unconstructed.push((raw, ty, false));
         Ok(())
     }
 
@@ -1316,13 +1416,25 @@ impl Memory {
     pub fn holds_unconstructed(&self, raw: u64, len: u64, ty: OTy) -> bool {
         let p = Ptr::decode(raw);
         let off = u64::from(p.off);
-        self.unconstructed.iter().any(|&(b, bt)| {
+        self.unconstructed.iter().any(|&(b, bt, empty)| {
             let q = Ptr::decode(b);
             let o = u64::from(q.off);
-            q.slot == p.slot
+            !empty
+                && q.slot == p.slot
                 && q.generation == p.generation
                 && (off..off + len).contains(&o)
                 && (o != off || bt != ty)
+        })
+    }
+
+    /// Whether the `ty` object at `raw` is an empty base subobject its
+    /// derived class's constructor did not construct (WP-401): it has no
+    /// bytes whose lifetime could tell.
+    pub fn empty_unconstructed(&self, raw: u64, ty: OTy) -> bool {
+        let p = Ptr::decode(raw);
+        self.unconstructed.iter().any(|&(b, bt, empty)| {
+            let q = Ptr::decode(b);
+            empty && bt == ty && q.slot == p.slot && q.generation == p.generation && q.off == p.off
         })
     }
 
@@ -1466,7 +1578,9 @@ struct Checkpoint {
 enum Undo {
     /// A granule of an object that existed at the innermost checkpoint:
     /// bytes and shadow.
-    Gran { sp: Sp, g: u32, bytes: [u8; 8], init: u8, ptr: u8, life: u8 },
+    /// `vtag`: its [`Memory::vspill`] entry when `ptr` is [`PTR_SPILL`]
+    /// (a type + 1, else 0).
+    Gran { sp: Sp, g: u32, bytes: [u8; 8], init: u8, ptr: u8, life: u8, vtag: u32 },
     /// A union's active-member entry ([`Memory::unions`]).
     Union(UKey, Option<u32>),
     /// A union's alternative active members ([`Memory::union_alts`]).
@@ -1572,7 +1686,10 @@ impl Memory {
         while self.trial.log.len() > cp.pos {
             let Some(u) = self.trial.log.pop() else { break };
             match u {
-                Undo::Gran { sp, g, bytes, init, ptr, life } => {
+                Undo::Gran { sp, g, bytes, init, ptr, life, vtag } => {
+                    if let Some(t) = vtag.checked_sub(1) {
+                        self.vspill.insert(vkey(sp, u64::from(g)), OTy(t));
+                    }
                     let s = self.space_mut(sp);
                     let i = g as usize;
                     s.bytes[i * GRAN as usize..(i + 1) * GRAN as usize].copy_from_slice(&bytes);
@@ -1680,7 +1797,8 @@ impl Memory {
             bytes.copy_from_slice(&s.bytes[i * GRAN as usize..(i + 1) * GRAN as usize]);
             let (init, ptr) = (s.init[i], s.ptr[i]);
             let life = s.life.get(i).copied().unwrap_or(0);
-            self.trial.log.push(Undo::Gran { sp, g: g as u32, bytes, init, ptr, life });
+            let vtag = if ptr == PTR_SPILL { self.spilled(sp, g) } else { 0 };
+            self.trial.log.push(Undo::Gran { sp, g: g as u32, bytes, init, ptr, life, vtag });
         }
     }
 
@@ -2200,22 +2318,66 @@ mod tests {
         assert_eq!((m.heap.top, m.heap_live, m.heap_count), (0, 0, 0));
     }
 
-    /// spec/oven.md "Construction" (WP-387): `void *` tags intern to
-    /// stable pointer marks, and past the mark space fall back to 1.
+    /// Stores a tagged `void *` (tag bits `tag`) at `p` as `Oven::store`
+    /// does.
+    fn put_tagged(m: &mut Memory, p: u64, tag: u32) {
+        let (sp, abs, _) = m.check(p, 8, true).unwrap();
+        m.trial_write(p, 8).unwrap();
+        let mark = m.set_void_tag(sp, abs, tag);
+        let s = m.space_mut(sp);
+        s.write(abs, 8, 1);
+        s.set_init(abs, 8, true);
+        s.set_ptr_mark(abs, 8, mark);
+    }
+
+    fn tag_at(m: &Memory, p: u64) -> u32 {
+        let (sp, abs, _) = m.check(p, 8, false).unwrap();
+        m.void_tag(sp, abs)
+    }
+
+    /// spec/oven.md "Construction" (WP-387, WP-395): `void *` tags
+    /// intern to stable pointer marks and past the mark space spill to a
+    /// per-granule map: no cap on the number of distinct types, and a
+    /// spilled tag follows a copy and is restored by a rollback.
     #[test]
-    fn void_marks_intern_and_saturate() {
-        let mut m = Memory::new(MIB);
-        assert_eq!(m.void_mark(0), 1);
-        assert_eq!(m.void_tag(1), 0);
-        let a = m.void_mark(8);
-        assert_eq!((a, m.void_mark(9), m.void_mark(8)), (PTR_TAGGED, PTR_TAGGED + 1, a));
-        assert_eq!(m.void_tag(a), 8);
-        for t in 10..300 {
-            let k = m.void_mark(t);
-            assert!(k == 1 || m.void_tag(k) == t);
+    fn void_tags_intern_then_spill() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let a = m.alloc(OTy(0), 8 * 400, 0, Origin::None).unwrap();
+        let at = |i: u32| Ptr::with_off(a, 8 * u64::from(i), false);
+        // Untagged: mark 1, no tag.
+        let (sp, abs, _) = m.check(a, 8, true).unwrap();
+        assert_eq!(m.set_void_tag(sp, abs, 0), 1);
+        for i in 0..400 {
+            put_tagged(&mut m, at(i), i + 1);
         }
-        assert_eq!(m.void_mark(1000), 1);
-        assert_eq!(m.void_tag(255), 255 - u32::from(PTR_TAGGED) + 8);
+        assert!((0..400).all(|i| tag_at(&m, at(i)) == i + 1), "no cliff past 254 types");
+        let mark = |m: &Memory, i: u64| m.space(sp).ptr_mark(abs + 8 * i);
+        assert_eq!((mark(&m, 0), mark(&m, 1), mark(&m, 252)), (PTR_TAGGED, PTR_TAGGED + 1, 254));
+        assert_eq!((mark(&m, 253), mark(&m, 399)), (PTR_SPILL, PTR_SPILL));
+        // An interned type keeps its mark at any granule.
+        put_tagged(&mut m, at(399), 1);
+        assert_eq!((mark(&m, 399), tag_at(&m, at(399))), (PTR_TAGGED, 1));
+        put_tagged(&mut m, at(399), 400);
+        // A granule-aligned copy carries the tags (and an overlapping one
+        // reads its sources first).
+        let (sp, abs, _) = m.check(a, 8, false).unwrap();
+        m.copy(sp, abs + 8, sp, abs, 16);
+        assert_eq!((tag_at(&m, at(0)), tag_at(&m, at(1)), tag_at(&m, at(2))), (1, 1, 2));
+        let h = heap(&mut m, 16);
+        let (hsp, habs, _) = m.check(h, 16, true).unwrap();
+        m.copy(hsp, habs, sp, abs + 8 * 300, 16);
+        assert_eq!((tag_at(&m, h), tag_at(&m, Ptr::with_off(h, 8, false))), (301, 302));
+        // A rollback restores the overwritten tag.
+        m.checkpoint(TrialMode::Transactional);
+        put_tagged(&mut m, at(299), 450);
+        assert_eq!(tag_at(&m, at(299)), 450);
+        m.rollback(&t);
+        assert_eq!(tag_at(&m, at(299)), 300);
+        // A non-pointer write leaves a stale entry the mark hides.
+        put(&mut m, at(299), 5).unwrap();
+        m.space_mut(sp).set_ptr_mark(abs + 8 * 299, 8, 0);
+        assert_eq!(tag_at(&m, at(299)), 0);
     }
 
     #[test]
