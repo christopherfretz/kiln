@@ -1371,8 +1371,8 @@ impl Oven {
                     pc += 4;
                 }
                 Op::VoidCast => {
-                    let raw = reg!(1) as u64;
-                    match self.void_cast(raw, OTy(arg!(2) as u32)) {
+                    let (raw, tag) = (reg!(1) as u64, (reg!(1) >> 64) as u32);
+                    match self.void_cast(raw, tag, OTy(arg!(2) as u32)) {
                         Ok(()) => reg!(0) = u128::from(raw),
                         Err(f) => fail!(f),
                     }
@@ -1861,9 +1861,20 @@ impl Oven {
         Ok(c == cmp::NE)
     }
 
-    fn void_cast(&self, raw: u64, to: OTy) -> Result<(), Fault> {
+    /// [expr.static.cast]/14 (P2738): a cast of the `void *` `raw` to
+    /// `to *` designates an object whose type is similar to `to`: the
+    /// type `tag` (+ 1) its conversion to `void *` recorded
+    /// (`kbc::VOID_TAG`), or for an untagged one, some subobject at its
+    /// address.
+    fn void_cast(&self, raw: u64, tag: u32, to: OTy) -> Result<(), Fault> {
         if raw == 0 {
             return Ok(());
+        }
+        if let Some(from) = tag.checked_sub(1).map(OTy) {
+            if self.types.similar(from, to) {
+                return Ok(());
+            }
+            return Err(Fault::VoidCast { from, to });
         }
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
@@ -2153,6 +2164,10 @@ impl Oven {
         }
         Ok(match info.kind {
             TyKind::Int { width, signed } => canon(v, u32::from(width), signed),
+            // A `void *` stored with its tag gets it back (`kbc::VOID_TAG`).
+            TyKind::Ptr(_) if sp.ptr_mark(abs) >= crate::mem::PTR_TAGGED => {
+                v | u128::from(self.mem.void_tag(sp.ptr_mark(abs))) << 64
+            }
             _ => v,
         })
     }
@@ -2175,10 +2190,18 @@ impl Oven {
         if has_union {
             self.union_path(raw, ty, k)?;
         }
+        // A pointer keeps its `void *` tag in its mark (`kbc::VOID_TAG`).
+        let mark = if !is_ptr {
+            0
+        } else if v >> 64 == 0 {
+            1
+        } else {
+            self.mem.void_mark((v >> 64) as u32)
+        };
         let sp = self.mem.space_mut(st);
         sp.write(abs, len, v);
         sp.set_init(abs, len, true);
-        sp.set_ptr(abs, len, is_ptr);
+        sp.set_ptr_mark(abs, len, mark);
         Ok(())
     }
 
@@ -2477,7 +2500,10 @@ impl Oven {
         if self.types.size(target) < self.types.size(ty) {
             return Err(Fault::PlacementType { from: target, to: ty });
         }
-        let size = self.types.size(ty);
+        // An object holding no data (an empty class) may share its bytes
+        // with another subobject (an empty base, `[[no_unique_address]]`):
+        // its construction touches none of them.
+        let size = if self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
         if a.flags & flags::HAS_UNION != 0 {
             self.place_in_unions(raw, a.ty, ty)?;
         }

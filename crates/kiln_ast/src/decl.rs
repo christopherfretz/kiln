@@ -1600,6 +1600,10 @@ pub struct ColdDeclData {
     pub declarator_end: ColdMap<DeclId, Loc>,
     /// Builtin function ids of implicit builtin `Function` decls (§5.3).
     pub builtin_id: ColdMap<DeclId, u32>,
+    /// WP-380: the `__builtin_` twin of a C library function GCC folds
+    /// as an implicit builtin (`ceil` -> `__builtin_ceil`), recorded
+    /// under `-stdlib=libstdc++` only (spec/sema.md §5.4).
+    pub gnu_lib_twin: ColdMap<DeclId, u32>,
     /// The typedef that names an unnamed class or enumeration for linkage
     /// purposes ([dcl.typedef]/9, clang's `TypedefNameForAnonDecl`): the
     /// tag's type prints with the typedef's name.
@@ -1660,6 +1664,7 @@ impl Default for ColdDeclData {
             injection_point: ColdMap::new("injection_point"),
             declarator_end: ColdMap::new("declarator_end"),
             builtin_id: ColdMap::new("builtin_id"),
+            gnu_lib_twin: ColdMap::new("gnu_lib_twin"),
             typedef_for_anon: ColdMap::new("typedef_for_anon"),
             decomp_bindings: ColdMap::new("decomp_bindings"),
             binding_decomp: ColdMap::new("binding_decomp"),
@@ -1675,7 +1680,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 29] {
+    fn rows(&self) -> [MemRow; 30] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1696,6 +1701,7 @@ impl ColdDeclData {
             self.injection_point.mem_row(),
             self.declarator_end.mem_row(),
             self.builtin_id.mem_row(),
+            self.gnu_lib_twin.mem_row(),
             self.typedef_for_anon.mem_row(),
             self.decomp_bindings.mem_row(),
             self.binding_decomp.mem_row(),
@@ -2087,6 +2093,13 @@ impl DeclArena {
     /// declaration ([`builtin`], §5.3).
     pub fn builtin_id(&self, d: DeclId) -> Option<u32> {
         self.cold.builtin_id.get(d).copied()
+    }
+
+    /// The `__builtin_` twin the Oven folds a call of `d` as, if `d` is
+    /// a C library function GCC treats as an implicit builtin (WP-380,
+    /// spec/sema.md §5.4; recorded under `-stdlib=libstdc++` only).
+    pub fn gnu_lib_twin(&self, d: DeclId) -> Option<u32> {
+        self.cold.gnu_lib_twin.get(d).copied()
     }
 
     /// The member list of context `ctx` (`None` if `ctx` owns none).
@@ -3683,6 +3696,24 @@ pub mod builtin {
     /// The [`LIB`] row of the C library function spelled `name`.
     pub fn lib_by_name(name: &str) -> Option<&'static Info> {
         LIB.iter().find(|e| e.name == name)
+    }
+
+    /// WP-380: the `__builtin_` twin of the [`LIB`] function `name` when
+    /// GCC 14 folds that function as an implicit builtin in constant
+    /// evaluation and the Oven folds the twin: `ceil`, `floor`, `trunc`,
+    /// `round`, `fabs`, `fmin`, `fmax` and `copysign`, each with its
+    /// `f`/`l` variant (`ceil` -> `__builtin_ceil`). Left out: `rint` and
+    /// `nearbyint` (GCC does not fold them: the result depends on the
+    /// rounding mode) and `sqrt` (GCC folds it; the Oven has no
+    /// `__builtin_sqrt`, which clang does not fold either).
+    pub fn gnu_lib_twin(name: &str) -> Option<u32> {
+        const BASES: &[&str] =
+            &["ceil", "floor", "trunc", "round", "fabs", "fmin", "fmax", "copysign"];
+        let base = name.strip_suffix(['f', 'l']).filter(|b| BASES.contains(b)).unwrap_or(name);
+        if !BASES.contains(&base) || lib_by_name(name).is_none() {
+            return None;
+        }
+        by_name(&format!("__builtin_{name}"))
     }
 
     /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,

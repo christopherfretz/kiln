@@ -4728,7 +4728,7 @@ impl Compiler<'_> {
         }
         // Library builtins (spec/oven.md "Builtins").
         if let Some(d) = direct
-            && let Some(bid) = ast.decls.builtin_id(d)
+            && let Some(bid) = ast.decls.builtin_id(d).or_else(|| ast.decls.gnu_lib_twin(d))
             && let Some(r) = self.builtin_call(e, bid, &args)
         {
             return r;

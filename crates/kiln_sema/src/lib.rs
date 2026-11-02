@@ -75,6 +75,7 @@ mod switch_conv;
 mod switch_enum;
 pub mod target;
 pub mod templ;
+mod template_id_typo;
 mod try_stmt;
 mod type_diff;
 mod unreachable_code;
@@ -173,6 +174,12 @@ pub struct Sema<'a, 'sm> {
     /// 22's point of instantiation for a class or enumeration completed
     /// as a qualifier (`Sema::nns_poi`).
     pub nns_start: Option<Loc>,
+    /// GCC's implicit library builtins (`-stdlib=libstdc++`, WP-380): a
+    /// call of a recognized C library `ceil` / `floor` / `trunc` /
+    /// `round` / `fabs` / `fmin` / `fmax` / `copysign` function folds in
+    /// constant evaluation as its `__builtin_` twin, as GCC folds
+    /// `::ceil` (spec/sema.md §5.4).
+    pub gnu_lib_builtins: bool,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -676,6 +683,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             gnu: false,
             clang_compat: 19,
             nns_start: None,
+            gnu_lib_builtins: false,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,

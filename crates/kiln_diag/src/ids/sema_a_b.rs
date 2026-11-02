@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+sema_abi_tag_namespace = Warning [IgnoredAttributes] (1) "'abi_tag' attribute on {0:non-inline|anonymous} namespace ignored";
 sema_abstract_allocation = Error (1) "allocating an object of abstract class type {0}";
 sema_abstract_array = Error (1) "array of abstract class type {0}";
 sema_abstract_final_class = Warning [AbstractFinalClass] (0) "abstract class is marked 'final'";

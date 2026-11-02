@@ -37,12 +37,13 @@ pub(crate) fn builtin_width(s: &Sema<'_, '_>, b: BuiltinType) -> u32 {
         | BuiltinType::UInt128
         | BuiltinType::Float128
         | BuiltinType::StdFloat128 => 128,
-        BuiltinType::LongDouble => match s.target.long_double {
+        BuiltinType::LongDouble | BuiltinType::Float64x => match s.target.long_double {
             FloatFormat::IeeeDouble => 64,
             FloatFormat::X87Extended => 80,
             _ => 128,
         },
-        // `Long`, `ULong`, `LongLong`, `ULongLong`, `Double`, `Float64`.
+        // `Long`, `ULong`, `LongLong`, `ULongLong`, `Double`, `Float64`,
+        // `Float32x`.
         _ => 64,
     }
 }
@@ -278,8 +279,10 @@ pub(crate) fn float_format(s: &Sema<'_, '_>, b: BuiltinType) -> Option<FloatForm
         BuiltinType::Half | BuiltinType::Float16 => FloatFormat::IeeeHalf,
         BuiltinType::BFloat16 => FloatFormat::BFloat,
         BuiltinType::Float | BuiltinType::Float32 => FloatFormat::IeeeSingle,
-        BuiltinType::Double | BuiltinType::Float64 => FloatFormat::IeeeDouble,
-        BuiltinType::LongDouble => s.target.long_double,
+        BuiltinType::Double | BuiltinType::Float64 | BuiltinType::Float32x => {
+            FloatFormat::IeeeDouble
+        }
+        BuiltinType::LongDouble | BuiltinType::Float64x => s.target.long_double,
         BuiltinType::Float128 | BuiltinType::StdFloat128 => FloatFormat::IeeeQuad,
         _ => return None,
     })
@@ -359,11 +362,18 @@ fn standard_float_index(b: BuiltinType) -> u8 {
 /// The subrank among extended types of equal value sets: the vendor
 /// `__float128` sits below the C++23 `_Float128` (kiln's choice; GCC has
 /// both only on x86-64, clang 22 has no `_Float128`), so mixing them
-/// yields `_Float128` whichever operand comes first. Only that pair is
-/// ordered here: `__fp16` vs `_Float16` keeps clang's handling (the
+/// yields `_Float128` whichever operand comes first. GCC's `_FloatNx`
+/// sit between the two (GCC 13+ prefers `_FloatN` over `_FloatNx` of the
+/// same value set: `_Float32x + _Float64` is `_Float64`, `_Float64x +
+/// _Float128` on `AArch64` is `_Float128`; WP-380). `__fp16` vs
+/// `_Float16` stays unordered by subrank, keeping clang's handling (the
 /// operation computes in `_Float16`'s `half`).
 fn extended_subrank(b: BuiltinType) -> u8 {
-    u8::from(b == BuiltinType::StdFloat128)
+    match b {
+        BuiltinType::Float32x | BuiltinType::Float64x => 1,
+        BuiltinType::StdFloat128 | BuiltinType::Float32 | BuiltinType::Float64 => 2,
+        _ => 0,
+    }
 }
 
 /// Compares the floating-point conversion ranks, then subranks, of

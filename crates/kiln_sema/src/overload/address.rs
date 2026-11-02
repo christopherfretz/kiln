@@ -504,6 +504,28 @@ impl Sema<'_, '_> {
         self.plain_candidate_note(d)
     }
 
+    /// An operand `e` that is an overload set of one non-template
+    /// function without template arguments: the reference to that
+    /// function (clang's `resolveAndFixAddressOfSingleOverloadCandidate`
+    /// in `CheckPlaceholderExpr`), else `e`. Only typo correction builds
+    /// such a set (spec/sema.md "Undeclared template-ids").
+    pub(crate) fn resolve_single_overload_candidate(&mut self, e: ExprId) -> ExprId {
+        if self.ast.exprs.get(e).kind() != ExprKind::UnresolvedLookupExpr
+            || self.ast.exprs.get(e).ty() != QualType::OVERLOAD
+            || self.ast.templates.expr_targs.get(e).is_some()
+        {
+            return e;
+        }
+        let [(d, found)] = self.ule_candidates(e)[..] else { return e };
+        if self.kind_of(d) != DeclKind::Function || self.is_class_member_ref(d) {
+            return e;
+        }
+        let naming = self.ovl.ule_found.get(&e).and_then(|x| x.naming);
+        let nns = self.ast.templates.expr_nns.get(e).copied();
+        let loc = self.ast.exprs.get(e).loc();
+        self.finish_overload_ref(d, found, naming, loc, nns, e, true)
+    }
+
     /// An expression of overloaded-function type used without a target
     /// ([over.over]/1): "reference to overloaded function could not be
     /// resolved" with a "possible target for call" per candidate. True

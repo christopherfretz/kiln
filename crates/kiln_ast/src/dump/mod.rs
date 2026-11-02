@@ -2051,7 +2051,26 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ast.strings.write_literal(exprs.string_lit(e), &mut self.line);
             return;
         }
-        self.ty(n.ty());
+        // A type-dependent pseudo-destructor call (and a parenthesized
+        // one) is `void` in clang's AST ([expr.call]/5); kiln types it
+        // dependent so its uses wait for instantiation (spec/ast-dump.md
+        // §3).
+        let ty = if n.ty() == QualType::DEPENDENT && {
+            let strip = |mut c: ExprId| {
+                while exprs.get(c).kind() == ExprKind::ParenExpr {
+                    c = exprs.operand(c);
+                }
+                c
+            };
+            let c = strip(e);
+            exprs.get(c).kind() == ExprKind::CallExpr
+                && exprs.get(strip(exprs.callee(c))).kind() == ExprKind::CXXPseudoDestructorExpr
+        } {
+            QualType::VOID
+        } else {
+            n.ty()
+        };
+        self.ty(ty);
         if n.deps().contains(ExprDeps::ERROR) {
             self.line.push_str(" contains-errors");
         }

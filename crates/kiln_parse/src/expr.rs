@@ -562,6 +562,8 @@ impl Parser<'_, '_> {
                         | Kw::Float32
                         | Kw::Float64
                         | Kw::StdFloat128
+                        | Kw::Float32x
+                        | Kw::Float64x
                         | Kw::Bf16
                         | Kw::Fp16
                         | Kw::Int
@@ -1120,9 +1122,14 @@ impl Parser<'_, '_> {
                         // clang's `ParseExpressionList` corrects the
                         // arguments it parsed after an error, then
                         // `ParsePostfixExpressionSuffix` the callee
-                        // (WP-330).
+                        // (WP-330). clang 22 goes on with a recovery
+                        // expression for the call (its `)` consumed).
                         self.s.flush_typos_from(mark);
                         self.s.correct_delayed_typos_in(e);
+                        if self.s.clang_compat >= 22 {
+                            e = self.s.act_on_error_expr(&[e], loc);
+                            continue;
+                        }
                         return None;
                     };
                     let rparen = if self.at(Punct::RParen) {
@@ -1134,18 +1141,30 @@ impl Parser<'_, '_> {
                         // there were any (`f(S::nom x)`, `S::nom(1`), it
                         // skips to the `)` (stopping at a `;`) with no
                         // "expected ')'" for the unmatched `(` (WP-318).
+                        // clang 22 has no delayed typos: it skips so when
+                        // the callee or an argument contains errors
+                        // (`f(u<int>(1) 5)`, WP-391).
                         let mut had_typo = self.s.correct_delayed_typos_in(e);
                         for &a in &args {
                             had_typo |= self.s.correct_delayed_typos_in(a);
                         }
+                        if self.s.clang_compat >= 22 {
+                            had_typo = self.s.contains_errors(e)
+                                || args.iter().any(|&a| self.s.contains_errors(a));
+                        }
+                        self.expr_invalid = true;
                         if had_typo {
-                            self.expr_invalid = true;
                             let at = self.loc();
                             self.skip_until(&[Punct::RParen], true, false);
-                            self.eat(Punct::RParen).unwrap_or(at)
+                            let _ = self.eat(Punct::RParen).unwrap_or(at);
                         } else {
-                            self.expect_closing(Punct::RParen, Punct::LParen, loc)
+                            // "expected ')'", and the call is `ExprError`
+                            // (no overload resolution: `f(1 2)` reports
+                            // nothing more).
+                            let _ = self.expect_closing(Punct::RParen, Punct::LParen, loc);
                         }
+                        e = self.s.act_on_error_expr(&[], loc);
+                        continue;
                     };
                     e = self.s.act_on_call(e, &args, loc, rparen);
                 }
@@ -1433,32 +1452,44 @@ impl Parser<'_, '_> {
     }
 
     /// A non-empty expression-list of initializer-clauses closed by
-    /// `close` ([expr.post.general]).
+    /// `close` ([expr.post.general]). clang's `ParseExpressionList`
+    /// recovery (spec/parse.md "Expression-list recovery"): an invalid
+    /// initializer-clause skips to the next `,` or `)` (brackets balanced,
+    /// past `;`, before an unmatched closer) and the list goes on, so a
+    /// later clause's errors are reported too; after an invalid clause the
+    /// list is `None`, its `close` taken (or skipped to, stopping at `;`:
+    /// the callers' `SkipUntil(close, StopAtSemi)`).
     pub(crate) fn parse_expr_list(&mut self, close: Punct) -> Option<Vec<ExprId>> {
         let mut args = Vec::new();
+        let mut saw_error = false;
         loop {
             let a = if self.at(Punct::LBrace) {
-                let Ok(l) = self.parse_init_list() else {
-                    self.skip_until(&[close], false, true);
-                    return None;
-                };
-                self.s.act_on_braced_arg(l)
+                self.parse_init_list().ok().map(|l| self.s.act_on_braced_arg(l))
             } else {
-                let Some(a) = self.parse_assignment_expr() else {
-                    self.skip_until(&[close], false, true);
-                    return None;
+                self.parse_assignment_expr()
+            };
+            let ellipsis = self.eat(Punct::Ellipsis);
+            if let Some(a) = a {
+                let a = match ellipsis {
+                    Some(l) => self.s.act_pack_expansion(a, l),
+                    None => a,
                 };
-                a
-            };
-            let a = match self.eat(Punct::Ellipsis) {
-                Some(l) => self.s.act_pack_expansion(a, l),
-                None => a,
-            };
-            args.push(a);
+                args.push(a);
+            } else {
+                saw_error = true;
+                self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
+            }
             if self.eat(Punct::Comma).is_none() {
-                return Some(args);
+                break;
             }
         }
+        if saw_error {
+            if self.eat(close).is_none() {
+                self.skip_until(&[close], true, true);
+            }
+            return None;
+        }
+        Some(args)
     }
 
     // -- primary expressions ----------------------------------------------------------------
@@ -1601,6 +1632,104 @@ impl Parser<'_, '_> {
         self.parse_id_expression_rest()
     }
 
+    /// The template-id of an id-expression whose name is a template (or
+    /// follows `template`): a function template's overload set, a variable
+    /// template or concept's value, or an error for a type template
+    /// ([temp.names]/1).
+    fn template_id_expr(
+        &mut self,
+        qual: Option<kiln_sema::using::Qualifier>,
+        (class, name, nl): (NameClass, kiln_source::symbol::Symbol, Loc),
+        begin: Loc,
+        template_loc: Option<Loc>,
+    ) -> ExprId {
+        match self.parse_template_id_rest(class, name, nl) {
+            Ok(TemplateIdRef::Overload(e)) => {
+                let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
+                if let Some(q) = qual {
+                    self.s.set_template_id_begin(e, begin, nl);
+                    self.s.set_template_id_qualifier(e, q.nns);
+                    self.s.set_template_kw(e, template_loc);
+                }
+                if !self.at(Punct::LParen) {
+                    return self.s.resolve_single_template_id(e);
+                }
+                if qual.is_none() {
+                    self.s.act_on_template_id_call_name(e);
+                }
+                e
+            }
+            Ok(TemplateIdRef::Value(e)) => {
+                if let Some(q) = qual {
+                    self.s.set_template_id_begin(e, begin, nl);
+                    self.s.set_template_id_qualifier(e, q.nns);
+                    self.s.set_template_kw(e, template_loc);
+                }
+                e
+            }
+            Ok(TemplateIdRef::Type(_)) => {
+                let t = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, nl).arg(t);
+                self.emit(d);
+                self.s.act_on_error_expr(&[], nl)
+            }
+            Err(()) => self.s.act_on_error_expr(&[], nl),
+        }
+    }
+
+    /// An undeclared template-id that is not called (`(undeclared<int> * 2)`),
+    /// at its `<` ([temp.names]/3.3): the name is still a template-name, so
+    /// the list is its arguments (not `<`/`>` operators), and the id names
+    /// nothing: "use of undeclared identifier" and an invalid expression
+    /// (clang 22's `ExprError` from the annotated template-id). Before an
+    /// operator or a closing token the enclosing expression goes on
+    /// parsing around an error operand, which diagnoses nothing more;
+    /// before anything else the enclosing construct skips past it. WP-372.
+    fn undeclared_template_id_expr(
+        &mut self,
+        name: kiln_source::symbol::Symbol,
+        nl: Loc,
+        functions: bool,
+    ) -> PExpr {
+        let args = self.parse_template_arg_list().map(|(a, _, _)| a).unwrap_or_default();
+        if self.at(Punct::ColonColon) {
+            // `undeclared<int>::x`: a nested-name-specifier naming no
+            // template (clang's `ActOnCXXNestedNameSpecifier` on a
+            // `TNK_Undeclared_template`).
+            let text = self.s.ast.symbols().as_str(name).to_owned();
+            let d = self.s.diag(DiagId::sema_no_template_named, nl).arg(text);
+            self.emit(d);
+            return None;
+        }
+        if self.s.clang_compat < 22 {
+            // clang 19: a delayed typo on an expression parsing goes on
+            // around ("expected ')'" / "expected ';'" may follow).
+            return Some(self.s.act_on_undeclared_template_id_typo(name, nl));
+        }
+        if functions {
+            if let Some(e) = self.s.correct_function_template_id(name, &args, nl) {
+                return Some(e);
+            }
+            let text = self.s.ast.symbols().as_str(name).to_owned();
+            let d = self.s.diag(DiagId::sema_undeclared_var_use, nl).arg(text);
+            self.emit(d);
+        } else {
+            let _ = self.s.act_on_id_expression(name, nl, None);
+        }
+        let goes_on = self.cur_binop().is_some()
+            || [
+                Punct::RParen,
+                Punct::RSquare,
+                Punct::RBrace,
+                Punct::Comma,
+                Punct::Semi,
+                Punct::Colon,
+            ]
+            .iter()
+            .any(|&p| self.at(p));
+        goes_on.then(|| self.s.act_on_error_expr(&[], nl))
+    }
+
     /// A (possibly qualified) id-expression that does not name a type
     /// ([expr.prim.id]): a template-id names a variable template, a
     /// function template or a concept ([temp.names]/1); a name after a
@@ -1638,38 +1767,7 @@ impl Parser<'_, '_> {
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
-            return match self.parse_template_id_rest(class, name, nl) {
-                Ok(TemplateIdRef::Overload(e)) => {
-                    let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
-                    if let Some(q) = qual {
-                        self.s.set_template_id_begin(e, begin, nl);
-                        self.s.set_template_id_qualifier(e, q.nns);
-                        self.s.set_template_kw(e, template_loc);
-                    }
-                    if !self.at(Punct::LParen) {
-                        return Some(self.s.resolve_single_template_id(e));
-                    }
-                    if qual.is_none() {
-                        self.s.act_on_template_id_call_name(e);
-                    }
-                    Some(e)
-                }
-                Ok(TemplateIdRef::Value(e)) => {
-                    if let Some(q) = qual {
-                        self.s.set_template_id_begin(e, begin, nl);
-                        self.s.set_template_id_qualifier(e, q.nns);
-                        self.s.set_template_kw(e, template_loc);
-                    }
-                    Some(e)
-                }
-                Ok(TemplateIdRef::Type(_)) => {
-                    let t = self.s.ast.symbols().as_str(name).to_owned();
-                    let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, nl).arg(t);
-                    self.emit(d);
-                    Some(self.s.act_on_error_expr(&[], nl))
-                }
-                Err(()) => Some(self.s.act_on_error_expr(&[], nl)),
-            };
+            return Some(self.template_id_expr(qual, (class, name, nl), begin, template_loc));
         }
         // [temp.names]/3 (P0846): an unqualified name that lookup finds
         // nothing or only functions for, followed by `<`, is a
@@ -1694,11 +1792,12 @@ impl Parser<'_, '_> {
         // `>` (clang's `checkPotentialAngleBracket`; before C++20 also
         // for functions, which [temp.names]/3 does not yet assume to be
         // templates). The list is skipped and the name is an error.
-        if qual.is_none()
-            && self.at(Punct::Less)
+        if self.at(Punct::Less)
+            && !template_kw
             && let NameClass::Value(_) = class
-            && !(self.std >= Std::Cxx20 && self.s.is_assumed_template_name(name))
-            && let Some(found) = self.s.potential_template_name(name)
+            && (qual.is_some()
+                || !(self.std >= Std::Cxx20 && self.s.is_assumed_template_name(name)))
+            && let Some(found) = self.s.potential_template_name_in(qual.map(|q| q.ctx), name)
             && let Some(close) = self.potential_angle_close()
         {
             while self.pos() < close {
@@ -1707,6 +1806,25 @@ impl Parser<'_, '_> {
             let _ = self.split_greater();
             self.s.diagnose_expr_intended_as_template_name(name, found, nl);
             return Some(self.s.act_on_error_expr(&[], nl));
+        }
+        if qual.is_none()
+            && self.at(Punct::Less)
+            && class == NameClass::Undeclared
+            && matches!(self.skip_template_args(self.pos()), Some((_, false)))
+            && self.s.is_assumed_template_name(name)
+        {
+            return self.undeclared_template_id_expr(name, nl, false);
+        }
+        // The same for a name lookup found only functions for (C++20):
+        // clang 22 typo-corrects it to the qualified function name.
+        if qual.is_none()
+            && self.at(Punct::Less)
+            && self.std >= Std::Cxx20
+            && matches!(class, NameClass::Value(_))
+            && matches!(self.skip_template_args(self.pos()), Some((_, false)))
+            && self.s.is_assumed_template_name(name)
+        {
+            return self.undeclared_template_id_expr(name, nl, true);
         }
         if qual.is_none()
             && class == NameClass::Undeclared

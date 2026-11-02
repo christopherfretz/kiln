@@ -147,6 +147,7 @@ sema_udl_no_operator_string = Error (3) "no matching literal operator for call t
 sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
 sema_undeclared_use = Error (1) "use of undeclared '{0}'";
 sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
+sema_undeclared_var_use_suggest = Error (2) "use of undeclared identifier '{0}'; did you mean '{1}'?";
 // ----- WP-220 (-Wundefined-var-template; clang `InstantiateVariableDefinition`)
 sema_undefined_var_template = Warning [UndefinedVarTemplate] (1) "instantiation of variable '{0}' required here, but no definition is available";
 sema_underlying_type_of_incomplete_enum = Error (1) "cannot determine underlying type of incomplete enumeration type {0}";
