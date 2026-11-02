@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 // [temp.names]/1, [expr.prim.id.qual]: a template-id naming a variable
 // template specialization through a nested-name-specifier keeps the
 // qualifier as written, so types that spell the expression print it as

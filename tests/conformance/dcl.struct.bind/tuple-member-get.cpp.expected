@@ -7,32 +7,32 @@ FunctionDecl test_value 'int ()'
   |   | `-InitListExpr 'Q'
   |   |   |-IntegerLiteral 'int' 1
   |   |   `-FloatingLiteral 'float' 2e0
-  |   |-BindingDecl referenced m 'std::tuple_element<0, Q>::type':'int'
-  |   | |-VarDecl implicit used m 'std::tuple_element<0, Q>::type &&' cinit
+  |   |-BindingDecl referenced m 'std::tuple_element<0UL, Q>::type':'int'
+  |   | |-VarDecl implicit used m 'std::tuple_element<0UL, Q>::type &&' cinit
   |   | | `-ExprWithCleanups 'int' xvalue
-  |   | |   `-MaterializeTemporaryExpr 'int' xvalue extended by Var 'm' 'std::tuple_element<0, Q>::type &&'
+  |   | |   `-MaterializeTemporaryExpr 'int' xvalue extended by Var 'm' 'std::tuple_element<0UL, Q>::type &&'
   |   | |     `-CXXMemberCallExpr 'int'
   |   | |       `-MemberExpr '<bound member function type>' .get
   |   | |         `-ImplicitCastExpr 'const Q' xvalue <NoOp>
   |   | |           `-DeclRefExpr 'Q' lvalue Decomposition '' 'Q'
-  |   | `-DeclRefExpr 'std::tuple_element<0, Q>::type':'int' lvalue Var 'm' 'std::tuple_element<0, Q>::type &&'
-  |   `-BindingDecl referenced n 'std::tuple_element<1, Q>::type':'float'
-  |     |-VarDecl implicit used n 'std::tuple_element<1, Q>::type &&' cinit
+  |   | `-DeclRefExpr 'std::tuple_element<0UL, Q>::type':'int' lvalue Var 'm' 'std::tuple_element<0UL, Q>::type &&'
+  |   `-BindingDecl referenced n 'std::tuple_element<1UL, Q>::type':'float'
+  |     |-VarDecl implicit used n 'std::tuple_element<1UL, Q>::type &&' cinit
   |     | `-ExprWithCleanups 'float' xvalue
-  |     |   `-MaterializeTemporaryExpr 'float' xvalue extended by Var 'n' 'std::tuple_element<1, Q>::type &&'
+  |     |   `-MaterializeTemporaryExpr 'float' xvalue extended by Var 'n' 'std::tuple_element<1UL, Q>::type &&'
   |     |     `-CXXMemberCallExpr 'float'
   |     |       `-MemberExpr '<bound member function type>' .get
   |     |         `-ImplicitCastExpr 'const Q' xvalue <NoOp>
   |     |           `-DeclRefExpr 'Q' lvalue Decomposition '' 'Q'
-  |     `-DeclRefExpr 'std::tuple_element<1, Q>::type':'float' lvalue Var 'n' 'std::tuple_element<1, Q>::type &&'
+  |     `-DeclRefExpr 'std::tuple_element<1UL, Q>::type':'float' lvalue Var 'n' 'std::tuple_element<1UL, Q>::type &&'
   `-ReturnStmt
     `-BinaryOperator 'int' '+'
-      |-ImplicitCastExpr 'std::tuple_element<0, Q>::type':'int' <LValueToRValue>
-      | `-DeclRefExpr 'std::tuple_element<0, Q>::type':'int' lvalue Binding 'm' 'std::tuple_element<0, Q>::type':'int'
+      |-ImplicitCastExpr 'std::tuple_element<0UL, Q>::type':'int' <LValueToRValue>
+      | `-DeclRefExpr 'std::tuple_element<0UL, Q>::type':'int' lvalue Binding 'm' 'std::tuple_element<0UL, Q>::type':'int'
       `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
         `-ImplicitCastExpr 'int' <FloatingToIntegral> part_of_explicit_cast
-          `-ImplicitCastExpr 'std::tuple_element<1, Q>::type':'float' <LValueToRValue> part_of_explicit_cast
-            `-DeclRefExpr 'std::tuple_element<1, Q>::type':'float' lvalue Binding 'n' 'std::tuple_element<1, Q>::type':'float'
+          `-ImplicitCastExpr 'std::tuple_element<1UL, Q>::type':'float' <LValueToRValue> part_of_explicit_cast
+            `-DeclRefExpr 'std::tuple_element<1UL, Q>::type':'float' lvalue Binding 'n' 'std::tuple_element<1UL, Q>::type':'float'
 
 Dumping test_ref:
 FunctionDecl test_ref 'int (Q &)'
@@ -41,25 +41,25 @@ FunctionDecl test_ref 'int (Q &)'
   |-DeclStmt
   | `-DecompositionDecl used 'Q &' cinit
   |   |-DeclRefExpr 'Q' lvalue ParmVar 'q' 'Q &'
-  |   |-BindingDecl referenced m 'std::tuple_element<0, Q>::type':'int'
-  |   | |-VarDecl implicit used m 'std::tuple_element<0, Q>::type &&' cinit
+  |   |-BindingDecl referenced m 'std::tuple_element<0UL, Q>::type':'int'
+  |   | |-VarDecl implicit used m 'std::tuple_element<0UL, Q>::type &&' cinit
   |   | | `-ExprWithCleanups 'int' xvalue
-  |   | |   `-MaterializeTemporaryExpr 'int' xvalue extended by Var 'm' 'std::tuple_element<0, Q>::type &&'
+  |   | |   `-MaterializeTemporaryExpr 'int' xvalue extended by Var 'm' 'std::tuple_element<0UL, Q>::type &&'
   |   | |     `-CXXMemberCallExpr 'int'
   |   | |       `-MemberExpr '<bound member function type>' .get
   |   | |         `-ImplicitCastExpr 'const Q' lvalue <NoOp>
   |   | |           `-DeclRefExpr 'Q' lvalue Decomposition '' 'Q &'
-  |   | `-DeclRefExpr 'std::tuple_element<0, Q>::type':'int' lvalue Var 'm' 'std::tuple_element<0, Q>::type &&'
-  |   `-BindingDecl n 'std::tuple_element<1, Q>::type':'float'
-  |     |-VarDecl implicit used n 'std::tuple_element<1, Q>::type &&' cinit
+  |   | `-DeclRefExpr 'std::tuple_element<0UL, Q>::type':'int' lvalue Var 'm' 'std::tuple_element<0UL, Q>::type &&'
+  |   `-BindingDecl n 'std::tuple_element<1UL, Q>::type':'float'
+  |     |-VarDecl implicit used n 'std::tuple_element<1UL, Q>::type &&' cinit
   |     | `-ExprWithCleanups 'float' xvalue
-  |     |   `-MaterializeTemporaryExpr 'float' xvalue extended by Var 'n' 'std::tuple_element<1, Q>::type &&'
+  |     |   `-MaterializeTemporaryExpr 'float' xvalue extended by Var 'n' 'std::tuple_element<1UL, Q>::type &&'
   |     |     `-CXXMemberCallExpr 'float'
   |     |       `-MemberExpr '<bound member function type>' .get
   |     |         `-ImplicitCastExpr 'const Q' lvalue <NoOp>
   |     |           `-DeclRefExpr 'Q' lvalue Decomposition '' 'Q &'
-  |     `-DeclRefExpr 'std::tuple_element<1, Q>::type':'float' lvalue Var 'n' 'std::tuple_element<1, Q>::type &&'
+  |     `-DeclRefExpr 'std::tuple_element<1UL, Q>::type':'float' lvalue Var 'n' 'std::tuple_element<1UL, Q>::type &&'
   `-ReturnStmt
-    `-ImplicitCastExpr 'std::tuple_element<0, Q>::type':'int' <LValueToRValue>
-      `-DeclRefExpr 'std::tuple_element<0, Q>::type':'int' lvalue Binding 'm' 'std::tuple_element<0, Q>::type':'int'
+    `-ImplicitCastExpr 'std::tuple_element<0UL, Q>::type':'int' <LValueToRValue>
+      `-DeclRefExpr 'std::tuple_element<0UL, Q>::type':'int' lvalue Binding 'm' 'std::tuple_element<0UL, Q>::type':'int'
 

@@ -22,4 +22,4 @@ TranslationUnitDecl
 |-VarDecl head 'Node<int> *'
 `-VarDecl k 'int' cinit
   `-ImplicitCastExpr 'int' <IntegralCast>
-    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Node<int>'
+    `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Node<int>'

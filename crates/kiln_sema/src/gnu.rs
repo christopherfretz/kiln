@@ -89,8 +89,9 @@ impl Sema<'_, '_> {
 
     /// `( compound-statement )` (a GNU statement expression; clang's
     /// `ActOnStmtExpr`). Its type is that of the last statement that is
-    /// not a null statement, looking through labels, when that is an
-    /// expression statement, else `void`; it is always a prvalue. `lparen`
+    /// not a null statement (under `-fclang-compat=22`: the last statement),
+    /// looking through labels, when that is an expression statement, else
+    /// `void`; it is always a prvalue. `lparen`
     /// and `rparen` are the parentheses.
     pub fn act_on_stmt_expr(
         &mut self,
@@ -113,6 +114,9 @@ impl Sema<'_, '_> {
     pub(crate) fn stmt_expr_result(&self, body: StmtId) -> Option<ExprId> {
         let stmts = &self.ast.stmts;
         let children = self.ast.lists.get(stmts.compound_body(body));
+        if self.clang_compat >= 22 {
+            return self.value_stmt_expr(StmtId::new(*children.last()?));
+        }
         let last = children
             .iter()
             .rev()

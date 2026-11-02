@@ -23,12 +23,10 @@ FunctionDecl parent used constexpr friend_undeclared operator== 'bool (const A &
   | |   |-CXXOperatorCallExpr 'bool' '=='
   | |   | |-ImplicitCastExpr 'bool (*)(const B &) const noexcept' <FunctionToPointerDecay>
   | |   | | `-DeclRefExpr 'bool (const B &) const noexcept' lvalue CXXMethod 'operator==' 'bool (const B &) const noexcept'
-  | |   | |-ImplicitCastExpr 'const B' lvalue <NoOp>
-  | |   | | `-ImplicitCastExpr 'B' lvalue <DerivedToBase (B)>
-  | |   | |   `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
-  | |   | `-ImplicitCastExpr 'const B' lvalue <NoOp>
-  | |   |   `-ImplicitCastExpr 'B' lvalue <DerivedToBase (B)>
-  | |   |     `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  | |   | |-ImplicitCastExpr 'const B' lvalue <DerivedToBase (B)>
+  | |   | | `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
+  | |   | `-ImplicitCastExpr 'const B' lvalue <DerivedToBase (B)>
+  | |   |   `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
   | |   `-BinaryOperator 'bool' '=='
   | |     |-ImplicitCastExpr 'int' <LValueToRValue>
   | |     | `-MemberExpr 'const int' lvalue .a
@@ -40,14 +38,14 @@ FunctionDecl parent used constexpr friend_undeclared operator== 'bool (const A &
   |   `-CXXBoolLiteralExpr 'bool' false
   |-ForStmt has_init has_cond has_inc
   | |-DeclStmt
-  | | `-VarDecl used i0 'unsigned long' cinit
-  | |   `-IntegerLiteral 'unsigned long' 0
+  | | `-VarDecl used i0 '__size_t':'unsigned long' cinit
+  | |   `-IntegerLiteral '__size_t':'unsigned long' 0
   | |-BinaryOperator 'bool' '!='
-  | | |-ImplicitCastExpr 'unsigned long' <LValueToRValue>
-  | | | `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
-  | | `-IntegerLiteral 'unsigned long' 2
-  | |-UnaryOperator 'unsigned long' lvalue prefix '++'
-  | | `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  | | |-ImplicitCastExpr '__size_t':'unsigned long' <LValueToRValue>
+  | | | `-DeclRefExpr '__size_t':'unsigned long' lvalue Var 'i0' '__size_t':'unsigned long'
+  | | `-IntegerLiteral '__size_t':'unsigned long' 2
+  | |-UnaryOperator '__size_t':'unsigned long' lvalue prefix '++'
+  | | `-DeclRefExpr '__size_t':'unsigned long' lvalue Var 'i0' '__size_t':'unsigned long'
   | `-IfStmt
   |   |-UnaryOperator 'bool' prefix '!' cannot overflow
   |   | `-BinaryOperator 'bool' '=='
@@ -56,15 +54,15 @@ FunctionDecl parent used constexpr friend_undeclared operator== 'bool (const A &
   |   |   |   |-ImplicitCastExpr 'const int *' <ArrayToPointerDecay>
   |   |   |   | `-MemberExpr 'const int[2]' lvalue .arr
   |   |   |   |   `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
-  |   |   |   `-ImplicitCastExpr 'unsigned long' <LValueToRValue>
-  |   |   |     `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  |   |   |   `-ImplicitCastExpr '__size_t':'unsigned long' <LValueToRValue>
+  |   |   |     `-DeclRefExpr '__size_t':'unsigned long' lvalue Var 'i0' '__size_t':'unsigned long'
   |   |   `-ImplicitCastExpr 'int' <LValueToRValue>
   |   |     `-ArraySubscriptExpr 'const int' lvalue
   |   |       |-ImplicitCastExpr 'const int *' <ArrayToPointerDecay>
   |   |       | `-MemberExpr 'const int[2]' lvalue .arr
   |   |       |   `-DeclRefExpr 'const A' lvalue ParmVar '' 'const A &'
-  |   |       `-ImplicitCastExpr 'unsigned long' <LValueToRValue>
-  |   |         `-DeclRefExpr 'unsigned long' lvalue Var 'i0' 'unsigned long'
+  |   |       `-ImplicitCastExpr '__size_t':'unsigned long' <LValueToRValue>
+  |   |         `-DeclRefExpr '__size_t':'unsigned long' lvalue Var 'i0' '__size_t':'unsigned long'
   |   `-ReturnStmt
   |     `-CXXBoolLiteralExpr 'bool' false
   `-ReturnStmt

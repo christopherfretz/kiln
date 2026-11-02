@@ -2,17 +2,19 @@
 // each implicit guide's note says what it was synthesized as.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 21:6 error "no viable constructor or deduction guide for deduction of template arguments of 'N::S'"
-//@ diag: 17:30 note "candidate template ignored: deduced conflicting types for parameter 'T' ('int' vs. 'double')"
-//@ diag: 17:30 note "implicit deduction guide declared as 'template <class T> S(T, T) -> S<T>'"
-//@ diag: 17:26 note "candidate function template not viable: requires 1 argument, but 2 were provided"
-//@ diag: 17:26 note "implicit deduction guide declared as 'template <class T> S(S<T>) -> S<T>'"
-//@ diag: 22:3 error "no viable constructor or deduction guide for deduction of template arguments of 'U'"
-//@ diag: 19:30 note "candidate function template not viable: requires 1 argument, but 2 were provided"
-//@ diag: 19:30 note "implicit deduction guide declared as 'template <class T> U(T) -> U<T>'"
+//@ diag: 23:6 error "no viable constructor or deduction guide for deduction of template arguments of 'N::S'"
+//@ diag: 19:30 note "candidate template ignored: deduced conflicting types for parameter 'T' ('int' vs. 'double')"
+//@ diag: 19:30 note "implicit deduction guide declared as 'template <class T> S(T, T) -> S<T>'"
 //@ diag: 19:26 note "candidate function template not viable: requires 1 argument, but 2 were provided"
-//@ diag: 19:26 note "implicit deduction guide declared as 'template <class T> U(U<T>) -> U<T>'"
-//@ diag: 20:19 note "candidate function template not viable: requires 1 argument, but 2 were provided"
+//@ diag: 19:26 note "implicit deduction guide declared as 'template <class T> S(S<T>) -> S<T>'"
+//@ diag: 24:3 error "no viable constructor or deduction guide for deduction of template arguments of 'U'"
+//@ diag: 21:30 note "candidate function template not viable: requires 1 argument, but 2 were provided"
+//@ diag: 21:30 note "implicit deduction guide declared as 'template <class T> U(T) -> U<T>'"
+//@ diag: 21:26 note "candidate function template not viable: requires 1 argument, but 2 were provided"
+//@ diag: 21:26 note "implicit deduction guide declared as 'template <class T> U(U<T>) -> U<T>'"
+//@ diag: 22:19 note "candidate function template not viable: requires 1 argument, but 2 were provided"
+//@ requires: clang<22
+// clang 22 emits error: no viable constructor or deduction guide for deduction of template argument...; WP-355 residual
 namespace N {
 template<class T> struct S { S(T, T); };
 }

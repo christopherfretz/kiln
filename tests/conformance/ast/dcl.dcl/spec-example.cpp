@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 // spec/ast-dump.md §4, verbatim.
 struct P { int x; int y; };
 enum E { A, B = 5 };

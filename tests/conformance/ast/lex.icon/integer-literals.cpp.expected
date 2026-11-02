@@ -9,8 +9,8 @@ TranslationUnitDecl
 | `-IntegerLiteral 'unsigned long long' 10
 |-VarDecl sep 'long long' cinit
 | `-IntegerLiteral 'long long' 1000000
-|-VarDecl sz 'unsigned long' cinit
-| `-IntegerLiteral 'unsigned long' 3
+|-VarDecl sz '__size_t':'unsigned long' cinit
+| `-IntegerLiteral '__size_t':'unsigned long' 3
 `-VarDecl big 'unsigned long' cinit
   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
     `-IntegerLiteral 'long' 4294967296

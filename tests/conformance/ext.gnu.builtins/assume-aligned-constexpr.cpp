@@ -6,19 +6,21 @@
 // pointer to no object is checked by value.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 29:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 29:40 note "alignment of the base pointee object (4 bytes) is less than the asserted 8 bytes"
-//@ diag: 30:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 30:44 note "offset of the aligned pointer from the base pointee object (2 bytes) is not a multiple of the asserted 4 bytes"
+//@ diag: 31:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 31:40 note "alignment of the base pointee object (4 bytes) is less than the asserted 8 bytes"
 //@ diag: 32:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 32:40 note "offset of the aligned pointer from the base pointee object (5 bytes) is not a multiple of the asserted 2 bytes"
-//@ diag: 35:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 35:40 note "value of the aligned pointer (-1) is not a multiple of the asserted 4 bytes"
-//@ diag: 36:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 36:40 note "alignment of the base pointee object (1 byte) is less than the asserted 2 bytes"
-//@ diag: 40:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 39:78 note "alignment of the base pointee object (4 bytes) is less than the asserted 8 bytes"
-//@ diag: 40:15 note "in call to 'f3()'"
+//@ diag: 32:44 note "offset of the aligned pointer from the base pointee object (2 bytes) is not a multiple of the asserted 4 bytes"
+//@ diag: 34:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 34:40 note "offset of the aligned pointer from the base pointee object (5 bytes) is not a multiple of the asserted 2 bytes"
+//@ diag: 37:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 37:40 note "value of the aligned pointer (-1) is not a multiple of the asserted 4 bytes"
+//@ diag: 38:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 38:40 note "alignment of the base pointee object (1 byte) is less than the asserted 2 bytes"
+//@ diag: 42:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 41:78 note "alignment of the base pointee object (4 bytes) is less than the asserted 8 bytes"
+//@ diag: 42:15 note "in call to 'f3()'"
+//@ requires: clang<22
+// clang 22 emits error: non-pointer argument to '__builtin_assume_aligned' is not allowed; WP-355 residual
 struct S { int a; char c[8]; };
 constexpr int x = 1;
 alignas(16) constexpr char buf[4] = {};

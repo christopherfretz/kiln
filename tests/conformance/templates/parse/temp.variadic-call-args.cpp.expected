@@ -7,7 +7,7 @@ TranslationUnitDecl
 |   `-CompoundStmt
 |     `-CallExpr '<dependent type>'
 |       |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'sink'
-|       `-PackExpansionExpr '<dependent type>' lvalue
+|       `-PackExpansionExpr 'Ts' lvalue
 |         `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
 |-FunctionTemplateDecl twice
 | |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
@@ -16,9 +16,9 @@ TranslationUnitDecl
 |   `-CompoundStmt
 |     `-CallExpr '<dependent type>'
 |       |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'sink'
-|       |-PackExpansionExpr '<dependent type>' lvalue
+|       |-PackExpansionExpr 'Ts' lvalue
 |       | `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
-|       `-PackExpansionExpr '<dependent type>' lvalue
+|       `-PackExpansionExpr 'Ts' lvalue
 |         `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
 `-FunctionTemplateDecl plus1
   |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts

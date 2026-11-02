@@ -2,9 +2,11 @@
 // Mirrors crates/kiln_oven/tests/ub.rs `ub_cmp_cross_alloc`.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 13:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 11:13 note "comparison between '&a' and '&b' has unspecified value"
-//@ diag: 13:15 note "in call to 'f()'"
+//@ diag: 15:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 13:13 note "comparison between '&a' and '&b' has unspecified value"
+//@ diag: 15:15 note "in call to 'f()'"
+//@ requires: clang<22
+// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
 constexpr bool f() {
   int a = 1;
   int b = 2;

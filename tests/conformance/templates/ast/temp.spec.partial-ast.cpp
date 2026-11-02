@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.spec.partial]/1, [temp.spec.partial.match]/2: a class template
 // partial specialization and the specialization instantiated from it.
 template <class T> struct P { T v; };

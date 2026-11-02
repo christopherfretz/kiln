@@ -284,7 +284,7 @@ impl Test<'_> {
         }
         c.arg(format!("-std={}", spec.std));
         c.args(mode);
-        if let Some(n) = self.clang_compat(program) {
+        if let Some(n) = self.clang_compat(program, spec) {
             c.arg(format!("-fclang-compat={n}"));
         }
         c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
@@ -298,13 +298,17 @@ impl Test<'_> {
     /// The `-fclang-compat=<major>` kiln is run with: the oracle clang's
     /// major version, so kiln answers the feature queries as the oracle
     /// does (`spec/harness.md` "Oracle"; WP-263). `None` when
-    /// `program` is not kiln or no clang oracle is configured.
-    fn clang_compat(&self, program: &Path) -> Option<u32> {
+    /// `program` is not kiln or no clang oracle is configured. A test
+    /// whose `requires: clang>=N` / `clang<N` the oracle does not meet
+    /// runs kiln alone, imitating the clang it requires: the nearest
+    /// level kiln has on that side ([`crate::oracle::SUPPORTED`]).
+    fn clang_compat(&self, program: &Path, spec: &TestSpec) -> Option<u32> {
         let kiln = program == self.cfg.compiler && self.cfg.compiler_kind == CompilerKind::Kiln;
         if !kiln || self.cfg.oracle_kind != CompilerKind::Clang {
             return None;
         }
-        self.cfg.oracle_clang.map(|v| v[0])
+        let oracle = self.cfg.oracle_clang.map(|v| v[0])?;
+        Some(compat_for(oracle, spec.requires_clang, spec.requires_clang_below))
     }
 
     /// The value of an `args:` placeholder (`spec/harness.md` "Placeholders").
@@ -1198,4 +1202,39 @@ pub fn indent(s: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// The `-fclang-compat` level for a kiln run beside a clang `oracle`
+/// major (`Runner::clang_compat`).
+fn compat_for(
+    oracle: u32,
+    at_least: Option<directives::ClangVersion>,
+    below: Option<directives::ClangVersion>,
+) -> u32 {
+    let levels = crate::oracle::SUPPORTED;
+    if let Some(r) = at_least.filter(|r| oracle < r[0]) {
+        return levels.iter().copied().find(|&l| l >= r[0]).unwrap_or(oracle);
+    }
+    if let Some(b) = below.filter(|b| oracle >= b[0]) {
+        return levels.iter().copied().rev().find(|&l| l < b[0]).unwrap_or(oracle);
+    }
+    oracle
+}
+
+#[cfg(test)]
+mod compat_tests {
+    use super::compat_for;
+
+    /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
+    /// the clang a `requires:` names when the oracle does not meet it.
+    #[test]
+    fn compat_level() {
+        assert_eq!(compat_for(22, None, None), 22);
+        assert_eq!(compat_for(19, None, None), 19);
+        assert_eq!(compat_for(19, Some([22, 0, 0]), None), 22);
+        assert_eq!(compat_for(22, Some([22, 0, 0]), None), 22);
+        assert_eq!(compat_for(19, Some([20, 0, 0]), None), 22);
+        assert_eq!(compat_for(22, None, Some([22, 0, 0])), 19);
+        assert_eq!(compat_for(19, None, Some([22, 0, 0])), 19);
+    }
 }

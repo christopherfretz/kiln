@@ -304,22 +304,44 @@ impl Toolchain {
     /// `<sysroot>/usr/include` with a `c++/v1`, the per-target directory
     /// first if it exists.
     fn libcxx_dirs(&self, v: &mut Vec<SearchDirSpec>) {
-        let bases = [
+        let Some(base) = self.libcxx_include_base() else { return };
+        let per_target = format!("{base}/{}/c++/v1", self.target.triple);
+        if Path::new(&per_target).is_dir() {
+            v.push(SearchDirSpec::new(per_target, DirGroup::System));
+        }
+        v.push(SearchDirSpec::new(format!("{base}/c++/v1"), DirGroup::System));
+    }
+
+    /// The include base holding the libc++ headers (`<base>/c++/v1`):
+    /// the first of `<llvm>/bin/../include`, `<sysroot>/usr/local/include`,
+    /// `<sysroot>/usr/include` that has one, as [`Self::libcxx_dirs`].
+    fn libcxx_include_base(&self) -> Option<String> {
+        [
             format!("{}/bin/../include", self.llvm_dir),
             format!("{}/usr/local/include", self.sysroot),
             format!("{}/usr/include", self.sysroot),
-        ];
-        for base in bases {
-            let generic = format!("{base}/c++/v1");
-            if !Path::new(&generic).is_dir() {
-                continue;
+        ]
+        .into_iter()
+        .find(|base| Path::new(&format!("{base}/c++/v1")).is_dir())
+    }
+
+    /// Where libc++'s module interface sources (`std.cppm`,
+    /// `std.compat.cppm`) are (spec/modules.md §2): `<prefix>/share/libc++/v1`
+    /// for the `<prefix>/include/c++/v1` that `-stdlib=libc++` uses, with
+    /// symlinks resolved (Debian's `/usr/include/c++/v1` points into
+    /// `/usr/lib/llvm-N`), else `<llvm>/share/libc++/v1`.
+    pub fn libcxx_module_dir(&self) -> PathBuf {
+        let fallback = Path::new(&self.llvm_dir).join("share").join("libc++").join("v1");
+        let Some(base) = self.libcxx_include_base() else { return fallback };
+        let v1 = Path::new(&base).join("c++").join("v1");
+        let v1 = std::fs::canonicalize(&v1).unwrap_or(v1);
+        // `<prefix>/include/c++/v1` -> `<prefix>/share/libc++/v1`.
+        match v1.parent().and_then(Path::parent).and_then(Path::parent) {
+            Some(prefix) => {
+                let share = prefix.join("share").join("libc++").join("v1");
+                if share.is_dir() { share } else { fallback }
             }
-            let per_target = format!("{base}/{}/c++/v1", self.target.triple);
-            if Path::new(&per_target).is_dir() {
-                v.push(SearchDirSpec::new(per_target, DirGroup::System));
-            }
-            v.push(SearchDirSpec::new(generic, DirGroup::System));
-            return;
+            None => fallback,
         }
     }
 
@@ -388,6 +410,17 @@ impl Tool {
 }
 
 impl Toolchain {
+    /// The major version of the LLVM installation (`KILN_LLVM_DIR`) that
+    /// consumes kiln's IR: the `N` of a directory named `llvm-N` (after
+    /// resolving symlinks), else 19, the version of the unversioned
+    /// default and of the `-19` tool names.
+    pub fn llvm_major(&self) -> u32 {
+        let dir = Path::new(&self.llvm_dir);
+        llvm_dir_major(dir)
+            .or_else(|| std::fs::canonicalize(dir).ok().and_then(|d| llvm_dir_major(&d)))
+            .unwrap_or(19)
+    }
+
     /// Where `tool` is: `<llvm_dir>/bin/<tool>` (`KILN_LLVM_DIR`, default
     /// `/usr/lib/llvm-19`), else the versioned name (`llc-19`) on `PATH`.
     /// `None` if neither exists.
@@ -423,6 +456,12 @@ fn detect_gcc(sysroot: &str, target: &Target) -> Option<GccInstall> {
     best.map(|(_, g)| g)
 }
 
+/// `/usr/lib/llvm-22` -> `22`; `None` unless the last component is
+/// `llvm-N`.
+fn llvm_dir_major(dir: &Path) -> Option<u32> {
+    dir.file_name()?.to_str()?.strip_prefix("llvm-")?.parse().ok()
+}
+
 /// `14`, `13.2.0` -> `[14]`, `[13, 2, 0]`; `None` if not a version.
 fn gcc_version_key(s: &str) -> Option<Vec<u32>> {
     s.split('.').map(|p| p.parse::<u32>().ok()).collect()
@@ -456,6 +495,14 @@ mod tests {
         for bad in ["c++27", "gnu", "c", "gnuc11", "99", "gnu++", "c++"] {
             assert_eq!(LangStd::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn llvm_dir_majors() {
+        assert_eq!(llvm_dir_major(Path::new("/usr/lib/llvm-22")), Some(22));
+        assert_eq!(llvm_dir_major(Path::new("/usr/lib/llvm-19/")), Some(19));
+        assert_eq!(llvm_dir_major(Path::new("/opt/llvm")), None);
+        assert_eq!(llvm_dir_major(Path::new("/opt/llvm-main")), None);
     }
 
     #[test]

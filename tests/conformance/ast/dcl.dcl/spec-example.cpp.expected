@@ -77,7 +77,7 @@ TranslationUnitDecl
       `-BinaryOperator 'long' '+'
         |-CStyleCastExpr 'long' <NoOp>
         | `-ImplicitCastExpr 'long' <IntegralCast> part_of_explicit_cast
-        |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'P'
+        |   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'P'
         `-CallExpr 'long'
           |-ImplicitCastExpr 'long (*)(char, int *)' <FunctionToPointerDecay>
           | `-DeclRefExpr 'long (char, int *)' lvalue Function 'f' 'long (char, int *)'

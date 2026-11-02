@@ -1,12 +1,14 @@
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 16:1 error "decomposition declaration cannot be declared 'constexpr'"
-//@ diag: 17:1 error "decomposition declaration cannot be declared 'constinit'"
-//@ diag: 18:1 error "decomposition declaration cannot be declared 'inline'"
-//@ diag: 19:1 error "decomposition declaration cannot be declared with 'constexpr inline' specifiers"
-//@ diag: 23:1 error "decomposition declaration cannot be declared 'typedef'"
-//@ diag: 25:3 error "decomposition declaration cannot be declared 'extern'"
-//@ diag: 25:15 error "declaration of block scope identifier with linkage cannot have an initializer"
+//@ diag: 18:1 error "decomposition declaration cannot be declared 'constexpr'"
+//@ diag: 19:1 error "decomposition declaration cannot be declared 'constinit'"
+//@ diag: 20:1 error "decomposition declaration cannot be declared 'inline'"
+//@ diag: 21:1 error "decomposition declaration cannot be declared with 'constexpr inline' specifiers"
+//@ diag: 25:1 error "decomposition declaration cannot be declared 'typedef'"
+//@ diag: 27:3 error "decomposition declaration cannot be declared 'extern'"
+//@ diag: 27:15 error "declaration of block scope identifier with linkage cannot have an initializer"
+//@ requires: clang<22
+// clang 22 emits error: structured binding declaration cannot be declared 'inline'; WP-355 residual
 // [dcl.pre]/6: the decl-specifier-seq of a structured binding declaration
 // may contain only static, thread_local, auto and cv-qualifiers; clang
 // names the first offending specifier, or all of them. An extern block

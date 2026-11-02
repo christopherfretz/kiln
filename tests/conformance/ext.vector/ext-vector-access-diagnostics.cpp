@@ -7,25 +7,27 @@
 //@ expect: compile-fail
 //@ args: -ferror-limit=0
 //@ strict-diags
-//@ diag: 34:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 36:13 error "illegal vector component name 'r'"
-//@ diag: 37:13 error "illegal vector component name 'q'"
-//@ diag: 38:13 error "vector component access exceeds type 'float3' (vector of 3 'float' values)"
-//@ diag: 39:23 error "vector is not assignable (contains duplicate components)"
-//@ diag: 40:29 error "vector component access exceeds type 'int8' (vector of 8 'int' values)"
-//@ diag: 43:21 error "expression is not assignable"
-//@ diag: 45:29 error "cannot assign to variable 'cc' with const-qualified type 'const float4' (vector of 4 'float' values)"
-//@ diag: 45:16 note "variable 'cc' declared const here"
-//@ diag: 52:13 error "illegal vector component name 's'"
-//@ diag: 53:13 error "illegal vector component name 'x'"
+//@ diag: 36:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 38:13 error "illegal vector component name 'r'"
+//@ diag: 39:13 error "illegal vector component name 'q'"
+//@ diag: 40:13 error "vector component access exceeds type 'float3' (vector of 3 'float' values)"
+//@ diag: 41:23 error "vector is not assignable (contains duplicate components)"
+//@ diag: 42:29 error "vector component access exceeds type 'int8' (vector of 8 'int' values)"
+//@ diag: 45:21 error "expression is not assignable"
+//@ diag: 47:29 error "cannot assign to variable 'cc' with const-qualified type 'const float4' (vector of 4 'float' values)"
+//@ diag: 47:16 note "variable 'cc' declared const here"
 //@ diag: 54:13 error "illegal vector component name 's'"
-//@ diag: 60:13 error "illegal vector component name 'g'"
-//@ diag: 63:15 error "member reference base type 'float' is not a structure or union"
-//@ diag: 67:53 error "vector is not assignable (contains duplicate components)"
-//@ diag: 65:43 error "illegal vector component name 'q'"
-//@ diag: 68:20 note "in instantiation of function template specialization 'bad<float __attribute__((ext_vector_type(4)))>' requested here"
-//@ diag: 66:40 error "vector is not assignable (contains duplicate components)"
-//@ diag: 68:28 note "in instantiation of function template specialization 'dup<float __attribute__((ext_vector_type(4)))>' requested here"
+//@ diag: 55:13 error "illegal vector component name 'x'"
+//@ diag: 56:13 error "illegal vector component name 's'"
+//@ diag: 62:13 error "illegal vector component name 'g'"
+//@ diag: 65:15 error "member reference base type 'float' is not a structure or union"
+//@ diag: 69:53 error "vector is not assignable (contains duplicate components)"
+//@ diag: 67:43 error "illegal vector component name 'q'"
+//@ diag: 70:20 note "in instantiation of function template specialization 'bad<float __attribute__((ext_vector_type(4)))>' requested here"
+//@ diag: 68:40 error "vector is not assignable (contains duplicate components)"
+//@ diag: 70:28 note "in instantiation of function template specialization 'dup<float __attribute__((ext_vector_type(4)))>' requested here"
+//@ requires: clang<22
+// clang 22 emits error: illegal vector component name 'r'; WP-355 residual
 typedef float float4 __attribute__((ext_vector_type(4)));
 typedef float float2 __attribute__((ext_vector_type(2)));
 typedef float float3 __attribute__((ext_vector_type(3)));

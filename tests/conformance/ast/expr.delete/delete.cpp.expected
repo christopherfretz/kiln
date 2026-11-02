@@ -4,7 +4,7 @@ TranslationUnitDecl
 |-FunctionDecl a 'void (int *)'
 | |-ParmVarDecl used p 'int *'
 | `-CompoundStmt
-|   `-CXXDeleteExpr 'void' Function 'operator delete' 'void (void *, unsigned long) noexcept'
+|   `-CXXDeleteExpr 'void' Function 'operator delete' 'void (void *, __size_t) noexcept'
 |     `-ImplicitCastExpr 'int *' <LValueToRValue>
 |       `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
 |-FunctionDecl b 'void (int *)'
@@ -16,7 +16,7 @@ TranslationUnitDecl
 |-FunctionDecl c 'void (S *)'
 | |-ParmVarDecl used s 'S *'
 | `-CompoundStmt
-|   `-CXXDeleteExpr 'void' global Function 'operator delete' 'void (void *, unsigned long) noexcept'
+|   `-CXXDeleteExpr 'void' global Function 'operator delete' 'void (void *, __size_t) noexcept'
 |     `-ImplicitCastExpr 'S *' <LValueToRValue>
 |       `-DeclRefExpr 'S *' lvalue ParmVar 's' 'S *'
 |-FunctionDecl d 'void (int (*)[3])'

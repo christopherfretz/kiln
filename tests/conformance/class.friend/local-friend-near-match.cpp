@@ -8,28 +8,30 @@
 // name). An operator friend finds nothing (WP-290).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 38:8 warning "empty parentheses interpreted as a function declaration"
-//@ diag: 38:8 note "replace parentheses with an initializer to declare a variable"
-//@ diag: 42:17 error "exception specification in declaration does not match previous declaration"
-//@ diag: 37:8 note "previous declaration is here"
-//@ diag: 43:17 error "functions that differ only in their return type cannot be overloaded"
-//@ diag: 38:7 note "previous declaration is here"
-//@ diag: 44:17 error "'n' is missing exception specification 'noexcept'"
+//@ diag: 40:8 warning "empty parentheses interpreted as a function declaration"
+//@ diag: 40:8 note "replace parentheses with an initializer to declare a variable"
+//@ diag: 44:17 error "exception specification in declaration does not match previous declaration"
 //@ diag: 39:8 note "previous declaration is here"
-//@ diag: 45:17 error "no matching function found in local scope"
-//@ diag: 46:14 error "no matching function found in local scope"
+//@ diag: 45:17 error "functions that differ only in their return type cannot be overloaded"
+//@ diag: 40:7 note "previous declaration is here"
+//@ diag: 46:17 error "'n' is missing exception specification 'noexcept'"
+//@ diag: 41:8 note "previous declaration is here"
 //@ diag: 47:17 error "no matching function found in local scope"
-//@ diag: 58:19 error "no matching function found in local scope"
-//@ diag: 51:8 note "local declaration nearly matches"
-//@ diag: 59:19 error "no matching function found in local scope"
+//@ diag: 48:14 error "no matching function found in local scope"
+//@ diag: 49:17 error "no matching function found in local scope"
 //@ diag: 60:19 error "no matching function found in local scope"
-//@ diag: 51:10 note "type of 1st parameter of local declaration does not match definition ('int' vs 'int &')"
+//@ diag: 53:8 note "local declaration nearly matches"
 //@ diag: 61:19 error "no matching function found in local scope"
 //@ diag: 62:19 error "no matching function found in local scope"
-//@ diag: 53:16 note "type of 1st parameter of local declaration does not match definition ('const S &' vs 'T::S')"
+//@ diag: 53:10 note "type of 1st parameter of local declaration does not match definition ('int' vs 'int &')"
 //@ diag: 63:19 error "no matching function found in local scope"
-//@ diag: 52:10 note "type of 1st parameter of local declaration does not match definition ('S *' vs 'S')"
 //@ diag: 64:19 error "no matching function found in local scope"
+//@ diag: 55:16 note "type of 1st parameter of local declaration does not match definition ('const S &' vs 'T::S')"
+//@ diag: 65:19 error "no matching function found in local scope"
+//@ diag: 54:10 note "type of 1st parameter of local declaration does not match definition ('S *' vs 'S')"
+//@ diag: 66:19 error "no matching function found in local scope"
+//@ requires: clang<22
+// clang 22 emits error: cannot define friend function in a local class definition; WP-355 residual
 
 struct S {};
 namespace T { struct S {}; }

@@ -3,10 +3,11 @@
 // A non-`bool` atomic constraint that is not type-dependent is diagnosed
 // where it is written; the concept (or clause) is invalid and naming it
 // adds no further diagnostic (WP-109).
-//@ diag: 11:33 error "atomic constraint must be of type 'bool' (found 'int')"
-//@ diag: 12:33 error "atomic constraint must be of type 'bool' (found 'unsigned long')"
-//@ diag: 13:41 error "atomic constraint must be of type 'bool' (found 'int')"
-//@ diag: 14:40 error "atomic constraint must be of type 'bool' (found 'unsigned long')"
+//@ diag: 12:33 error "atomic constraint must be of type 'bool' (found 'int')"
+//@ diag: 13:33 error "atomic constraint must be of type 'bool' (found '__size_t' (aka 'unsigned long'))"
+//@ diag: 14:41 error "atomic constraint must be of type 'bool' (found 'int')"
+//@ diag: 15:40 error "atomic constraint must be of type 'bool' (found '__size_t' (aka 'unsigned long'))"
+//@ requires: clang>=22
 // Matches clang 19.
 template <class T> concept C1 = 1;
 template <class T> concept C2 = sizeof(T);
