@@ -1257,7 +1257,8 @@ has no usable default constructor ([class.base.init]/9, clang's
 `err_missing_default_ctor`); clang's evaluator still runs the
 constructor, leaving the base subobject without a value. A
 non-delegating constructor's prologue (`member_prologue`) emits
-`EndLife` aux 8 for each such base that holds data: `Memory::set_unconstructed`
+`EndLife` aux 8 for each such direct non-virtual base that holds data (a
+virtual base is the most derived constructor's alone, "Virtual bases"): `Memory::set_unconstructed`
 tracks the allocation in any space (a `constexpr` variable's static
 storage too), marks the base's `copy_size` bytes uninitialized and
 outside their lifetime, sets `life_frame` and records the base in

@@ -547,7 +547,10 @@ impl Compiler<'_> {
             .filter(|c| c.kind == CtorInitKind::Base)
             .filter_map(|c| self.init_index(c, cls))
             .collect();
-        let fields = self.o.types.fields(cls).to_vec();
+        // Not the virtual bases: the most derived constructor initializes
+        // them, the others never do (P3533R2, "Virtual bases").
+        let n = self.o.types.vbase_start(cls);
+        let fields = self.o.types.fields(cls)[..n].to_vec();
         for (i, fi) in fields.into_iter().enumerate() {
             if !fi.base || covered.contains(&i) || self.o.types.holds_no_data(fi.ty) {
                 continue;
