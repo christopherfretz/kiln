@@ -38,18 +38,10 @@ and the harness flags (`spec/libcxx.md`).
 | 12 | `not yet implemented: reference to a member of a dependent context` | hidden friends of nested class templates under constraint satisfaction (join/filter/elements views) | WP-272 |
 | 11 | `use of undeclared identifier '__builtin_mul_overflow'` | mdspan layouts, gcd/lcm | WP-270 |
 | 11 | `field has incomplete type 'unsigned char[]'` | flexible array member in glibc `bits/socket.h` (every `<filesystem>` test) | WP-271 |
-| 8 | `static assertion expression is not an integral constant expression` | copy_backward, `<expected>` converting ctors | WP-276 |
 | 6 | `no type named 'type' in 'enable_if<false, int>'` | SFINAE through `__enable_if_t` alias reported as hard error | WP-274 |
-| 6 | `no matching function for call` | mixed | WP-276 |
-| 5 | link failure | mixed | WP-276 |
-| 5 | `static assertion failed due to requirement` | mixed | WP-276 |
 | 4 | `friend declaration of 'get_underlying' does not match any declaration` | friend function templates in class templates (`experimental/propagate_const`) | WP-273 |
-| 4 + 4 + 2 | abstract-class / private-member / private-ctor false positives | access and abstractness checks | WP-276 |
-| 3 | `aggregate expression CXXRewrittenBinaryOperator is not supported yet` | rewritten comparison in aggregate init | WP-276 |
-| 3 / 3 / 3 | incompatible initializer / ambiguous ctor / no matching ctor | mixed | WP-276 |
-| 2 | runtime `std::bad_array_new_length` | codegen of array new size | WP-276 |
 | 6 | `.verify.cpp` expectation mismatches | diag wording | WP-143/WP-253 |
-| 1 each | pack expansion NYI; IR `TypeMismatch "call argument N: expected iN, found ptr"`; returning reference to local temporary; array initializer must be an initializer list; reinterpret_cast rejected; destructor not declared; … | long tail | WP-276 |
+| 42 | static assertions, no matching function, link failures, access/abstractness false positives, rewritten comparisons, … | long tail, reduced per test with cause, reproducer and status in [libcxx-longtail.md](libcxx-longtail.md) | WP-276, WP-289 |
 
 Fixing the five largest clusters (129 of 210) should move the sample to about
 90%; several tests will then surface a second failure, so the next sample run
