@@ -32,8 +32,18 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         &self.sema.ast
     }
 
-    fn cxx26(&self) -> bool {
-        self.sema.std >= kiln_lex::Std::Cxx26
+    fn cxx_year(&self) -> u32 {
+        use kiln_lex::Std;
+        match self.sema.std {
+            Std::Cxx98 => 1998,
+            Std::Cxx03 => 2003,
+            Std::Cxx11 => 2011,
+            Std::Cxx14 => 2014,
+            Std::Cxx17 => 2017,
+            Std::Cxx20 => 2020,
+            Std::Cxx23 => 2023,
+            Std::Cxx26 => 2026,
+        }
     }
 
     fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {

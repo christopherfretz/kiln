@@ -243,6 +243,15 @@ impl Oven {
                     self.ptr_string(ast, q, pointee)
                 ),
             ),
+            // clang note_constexpr_pointer_comparison_unspecified (P2280).
+            Fault::PtrCmpUnknown { p, q, pointee } => (
+                site.loc,
+                format!(
+                    "comparison between pointers to unrelated objects '{}' and '{}' has unspecified value",
+                    self.ptr_string(ast, p, pointee),
+                    self.ptr_string(ast, q, pointee)
+                ),
+            ),
             Fault::PtrPastCmp { p, pointee } => (
                 site.loc,
                 format!(
@@ -909,7 +918,7 @@ impl Oven {
         let Some(a) = self.alloc_any(p) else { return "&<dead object>".into() };
         let mut s = String::from("&");
         match a.origin {
-            Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
+            Origin::Var(d) | Origin::Global(d) | Origin::External(d) | Origin::Unknown(d) => {
                 s.push_str(&name_of(ast, d));
             }
             Origin::Str(id, _) => ast.strings.write_literal(id, &mut s),
@@ -1180,6 +1189,11 @@ impl Oven {
                     "{verb} temporary is not allowed in a constant expression outside the expression that created the temporary"
                 )
             }
+            // clang note_constexpr_access_unknown_variable (P2280).
+            MemFault::Unknown(d) => {
+                extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
+                format!("{verb} variable '{}' whose value is not known", name_of(ast, d))
+            }
             MemFault::External(d, false) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 let name = name_of(ast, d);
@@ -1222,7 +1236,10 @@ impl Oven {
             MemFault::NotHeap => {
                 if let Some(a) = self.alloc_any(Ptr::decode(p)) {
                     match a.origin {
-                        Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
+                        Origin::Var(d)
+                        | Origin::Global(d)
+                        | Origin::External(d)
+                        | Origin::Unknown(d) => {
                             extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                         }
                         Origin::Temp(e) | Origin::Str(_, Some(e)) => {

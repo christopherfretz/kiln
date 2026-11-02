@@ -271,7 +271,7 @@ impl Oven {
         k: u32,
     ) -> Result<(OTy, u64), Fault> {
         let (sp, abs, _) = self.mem.check(raw, 8, false).map_err(|f| match f {
-            MemFault::External(..) | MemFault::Temporary(..) => {
+            MemFault::External(..) | MemFault::Unknown(..) | MemFault::Temporary(..) => {
                 Fault::UnknownDynamic { ak: k, p: raw, ty: cls }
             }
             f => Fault::Mem { f, ak: k, ty: cls, p: raw },

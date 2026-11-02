@@ -188,6 +188,13 @@ pub(crate) enum Fault {
         pointee: OTy,
     },
     LiteralCmp,
+    /// `==`/`!=` of pointers to different objects one of which is of
+    /// unknown identity ([`Origin::Unknown`], P2280).
+    PtrCmpUnknown {
+        p: u64,
+        q: u64,
+        pointee: OTy,
+    },
     NullField,
     /// A base-class step of a member pointer access through a null
     /// object pointer.
@@ -1602,6 +1609,14 @@ impl Oven {
         self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(..)))
     }
 
+    /// A pointer into an object of unknown identity (P2280).
+    fn is_unknown(&self, raw: u64) -> bool {
+        raw != 0
+            && self
+                .alloc_any(Ptr::decode(raw))
+                .is_some_and(|a| matches!(a.origin, Origin::Unknown(_)))
+    }
+
     /// One past the end of a complete object.
     fn past_complete(&self, raw: u64) -> bool {
         let p = Ptr::decode(raw);
@@ -1629,6 +1644,10 @@ impl Oven {
             if Ptr::decode(q).off == 0 && !Ptr::decode(q).is_fn() && self.past_complete(p) {
                 return Err(Fault::PtrPastCmp { p, pointee });
             }
+        }
+        // clang: an object of unknown identity may be any other object.
+        if self.is_unknown(p) || self.is_unknown(q) {
+            return Err(Fault::PtrCmpUnknown { p, q, pointee });
         }
         Ok(c == cmp::NE)
     }
@@ -2228,13 +2247,7 @@ impl Oven {
     /// `Op::Placement`: a placement new of a `ty` at `raw` (clang's
     /// `VisitCXXNewExpr` placement path: `findCompleteObject` for
     /// construction, then the type of the designated subobject).
-    fn placement(
-        &mut self,
-        raw: u64,
-        ty: OTy,
-        stat: Option<OTy>,
-        aux: u32,
-    ) -> Result<(), Fault> {
+    fn placement(&mut self, raw: u64, ty: OTy, stat: Option<OTy>, aux: u32) -> Result<(), Fault> {
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
         let (sp, _, a) = self.mem.check_storage(raw, 0, true).map_err(fault)?;
         let (sp, a) = (sp, *a);
@@ -2311,7 +2324,6 @@ impl Oven {
         }
         Some(t)
     }
-
 
     /// The unions on the path to a placement new of a `ty` at `raw` (in an
     /// allocation of type `root`): clang's `findSubobject` with
