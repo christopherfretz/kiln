@@ -5,21 +5,23 @@
 // and creating one in a constexpr function is not a constant expression
 // (clang `CheckLiteralType`), also through a virtual base that itself
 // inherits its constructor.
+// Pinned to C++23: P3533R2 (C++26) allows virtual bases in constant evaluation.
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 28:13 error "constexpr variable cannot have non-literal type 'const M'"
-//@ diag: 26:8 note "struct with virtual base class is not a literal type"
-//@ diag: 26:12 note "virtual base class declared here"
-//@ diag: 30:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 29:23 note "non-literal type 'M' cannot be used in a constant expression"
-//@ diag: 30:15 note "in call to 'f()'"
-//@ diag: 33:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 32:23 note "non-literal type 'P' cannot be used in a constant expression"
-//@ diag: 33:15 note "in call to 'g()'"
-//@ diag: 35:13 error "constexpr variable cannot have non-literal type 'const W[1]'"
-//@ diag: 34:7 note "class with virtual base classes is not a literal type"
-//@ diag: 26:12 note "virtual base class declared here"
-//@ diag: 34:21 note "virtual base class declared here"
+//@ diag: 30:13 error "constexpr variable cannot have non-literal type 'const M'"
+//@ diag: 28:8 note "struct with virtual base class is not a literal type"
+//@ diag: 28:12 note "virtual base class declared here"
+//@ diag: 32:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 31:23 note "non-literal type 'M' cannot be used in a constant expression"
+//@ diag: 32:15 note "in call to 'f()'"
+//@ diag: 35:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 34:23 note "non-literal type 'P' cannot be used in a constant expression"
+//@ diag: 35:15 note "in call to 'g()'"
+//@ diag: 37:13 error "constexpr variable cannot have non-literal type 'const W[1]'"
+//@ diag: 36:7 note "class with virtual base classes is not a literal type"
+//@ diag: 28:12 note "virtual base class declared here"
+//@ diag: 36:21 note "virtual base class declared here"
 //@ requires: clang<22
 // clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
 struct V { constexpr V(int v) : v(v) {} int v; };

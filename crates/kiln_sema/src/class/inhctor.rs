@@ -5,7 +5,7 @@
 //! `DefineInheritingConstructor`) and its exception specification (clang
 //! `ComputeInheritingCtorExceptionSpec`).
 
-use kiln_ast::decl::{CtorInit, CtorInitKind, DeclFlags, DeclKind, DefinitionBits, FnSpec};
+use kiln_ast::decl::{CtorInit, CtorInitKind, DeclFlags, DeclKind, FnSpec};
 use kiln_ast::expr::ConstructionKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::ExcSpec;
@@ -49,7 +49,8 @@ impl Sema<'_, '_> {
         let fty = self.ast.types.function(QualType::VOID, &params, info, ExcSpec::None);
         let bspec = self.fn_spec(bc);
         let mut spec = FnSpec::new().with_inline(true).with_explicit(bspec.is_explicit());
-        if !self.defn_bits(d).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+        // [dcl.constexpr]/3 before C++26 (P3533R2): no virtual bases.
+        if !self.vbases_forbid_constexpr(self.defn_bits(d)) {
             spec = spec.with_constexpr_kind(bspec.constexpr_kind());
         }
         let loc = self.ast.decls.get(shadow).loc();

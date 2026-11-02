@@ -863,6 +863,22 @@ impl Oven {
                     }
                     pc += 5;
                 }
+                Op::VBase => {
+                    let raw = reg!(1) as u64;
+                    if raw == 0 {
+                        if aux == 0 {
+                            fail!(Fault::NullField);
+                        }
+                        reg!(0) = 0;
+                    } else {
+                        let (cls, k) = (OTy(arg!(2) as u32), arg!(3) as u16);
+                        match self.sub_addr(b, raw, cls, k) {
+                            Some(q) => reg!(0) = u128::from(q),
+                            None => fail!(Fault::Invalid),
+                        }
+                    }
+                    pc += 5;
+                }
                 Op::Load => {
                     let ty = OTy(arg!(2) as u32);
                     let raw = reg!(1) as u64;
@@ -1168,7 +1184,8 @@ impl Oven {
                     None => fail!(Fault::Invalid),
                 },
                 Op::SetVptr => {
-                    if let Err(f) = self.set_vptrs(b, reg!(0) as u64, OTy(arg!(1) as u32)) {
+                    let cls = OTy(arg!(1) as u32);
+                    if let Err(f) = self.set_vptrs(b, reg!(0) as u64, cls, aux & 1 != 0) {
                         fail!(f);
                     }
                     pc += 3;

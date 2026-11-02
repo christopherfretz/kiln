@@ -33,10 +33,6 @@ const MAX_ELEMS: u64 = 10;
 /// clang 22's `note_constexpr_dereferencing_null`.
 const NULL_DEREF_22: &str = "dereferencing a null pointer is not allowed in a constant expression";
 
-pub(crate) fn notes_name(ast: &Ast, d: DeclId) -> String {
-    name_of(ast, d)
-}
-
 fn name_of(ast: &Ast, d: DeclId) -> String {
     let mut s = String::new();
     write_name_for_diag(ast, d, &mut s);
