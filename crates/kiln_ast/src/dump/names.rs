@@ -725,15 +725,15 @@ impl<'a> AstNames<'a> {
                     if let Some(q) = extra.and_then(|x| x.qualifier) {
                         write_nns_resolved(&ast.types, self, q, out);
                         self.write_name(d0, out);
-                        if ast.decls.get(d0).kind() == DeclKind::Var {
-                            if let Some((_, info)) = ast.spec_info(d0) {
-                                write_arg_list_canonical(
-                                    &ast.types,
-                                    self,
-                                    ast.types.canonical_args(info.args),
-                                    out,
-                                );
-                            }
+                        if ast.decls.get(d0).kind() == DeclKind::Var
+                            && let Some((_, info)) = ast.spec_info(d0)
+                        {
+                            write_arg_list_canonical(
+                                &ast.types,
+                                self,
+                                ast.types.canonical_args(info.args),
+                                out,
+                            );
                         }
                     } else {
                         self.write_name(d0, out);

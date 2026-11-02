@@ -262,7 +262,7 @@ impl TypeNames for SemaNames<'_> {
         // `TemplateArgument::print` / `printIntegral`): enumerators by
         // qualified name (`S<E::a>`), characters as literals (`C<'x'>`),
         // class, pointer and floating values (§6.10).
-        kiln_ast::dump::AstNames::new(self.ast).write_value(ty, value, out)
+        kiln_ast::dump::AstNames::new(self.ast).write_value(ty, value, out);
     }
 
     fn write_value_typed(&self, ty: QualType, value: ConstValueId, out: &mut String) {

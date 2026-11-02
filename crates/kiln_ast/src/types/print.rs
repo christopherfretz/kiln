@@ -319,12 +319,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
 /// `ResolveTemplateArguments`): template arguments print canonical, and
 /// a last type component naming a class template specialization prints
 /// as its name with its converted arguments (`is_conv<int, bool>::`).
-pub fn write_nns_resolved(
-    ctx: &TypeContext,
-    names: &dyn TypeNames,
-    n: NnsId,
-    out: &mut String,
-) {
+pub fn write_nns_resolved(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut String) {
     let mut p = Printer {
         ctx,
         names,
