@@ -402,10 +402,13 @@ pub struct Sema<'a, 'sm> {
     pub(crate) extend_collector: Option<Vec<ExprId>>,
     /// Diagnostics held back while a range-based `for` step runs, so
     /// clang's trailing notes (`when looking up 'begin' function...`)
-    /// can be attached to the last of them (`range_for.rs`), with the
-    /// instantiation stack depth where the capture began: a SFINAE
-    /// context entered inside it (a deduction during the step's overload
-    /// resolution) takes its errors as usual.
+    /// can be attached to the last of them (`range_for.rs`). The `usize`
+    /// is the instantiation-stack length when the capture began: only
+    /// diagnostics of the step itself are held, never one from an
+    /// instantiation the step started (a SFINAE context traps those,
+    /// [temp.deduct.general]/8, also WP-271's converting-constructor
+    /// deduction for a rewritten `operator==`; a hard error keeps its
+    /// context notes).
     pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>)>>,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
@@ -681,15 +684,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
-        if let Some((depth, held)) = self.diag_capture.borrow_mut().as_mut()
-            && !(self.inst.stack.len() > *depth && self.inst.stack.is_sfinae())
-        {
-            held.push(d);
-            return;
-        }
-        if self.inst.suppress_next_error.replace(false) {
-            return;
-        }
+        // The overload candidates' notes go with the error they explain,
+        // also when a range-based `for` holds it back.
         if !self.trailing_notes.borrow().is_empty()
             && d.id()
                 .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
@@ -697,6 +693,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             for n in self.trailing_notes.take() {
                 d = d.with_note(n);
             }
+        }
+        if let Some((depth, held)) = self.diag_capture.borrow_mut().as_mut()
+            && *depth == self.inst.stack.len()
+        {
+            held.push(d);
+            return;
+        }
+        if self.inst.suppress_next_error.replace(false) {
+            return;
         }
         let mut inst_notes = Vec::new();
         if !self.inst.stack.is_empty()

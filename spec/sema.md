@@ -3054,14 +3054,19 @@ template saved in `range_for_outer_depth` for instantiations).
   (`rebuild_with_dereference`); an iterator or loop-variable failure gets
   `selected 'begin' function with iterator type T` (the candidate notes
   are captured through `diag_capture` while each attempt runs and
-  released on success of the diagnosis). A SFINAE context entered
-  inside a capture (deeper on the instantiation stack than where the
-  capture began, such as deducing a converting constructor template
-  for a rewritten `operator==` candidate of `__begin != __end`) takes
-  its errors as substitution failures, not captured diagnostics
-  (WP-271; also libc++ `sentinel_wrapper::operator==`'s
-  requires-expression instantiated by `__begin != __end`, WP-280,
-  `temp.inst/range-for-member-substitution-context.cpp`).
+  released on success of the diagnosis). The capture holds only the
+  step's own diagnostics: it records the instantiation-stack depth it
+  started at, so an error raised in a deeper frame (a candidate's
+  deduction substituting an alias or a default template argument) still
+  reaches that frame's SFINAE trap (sema-templates.md §5.7) instead of
+  being held and released as a hard error. Overload-candidate notes
+  (`trailing_notes`) attach to the held error before it is held.
+  One such deeper SFINAE context is deducing a converting constructor
+  template for a rewritten `operator==` candidate of `__begin != __end`
+  (WP-271); another is the requires-expression of libc++
+  `sentinel_wrapper::operator==` instantiated by `__begin != __end`
+  (WP-280, `temp.inst/range-for-member-substitution-context.cpp`).
+  (WP-274.)
 - **Templates.** A type-dependent range (or loop-variable type) keeps
   only `__range` and the loop variable in the pattern; instantiation
   (`templ/subst/stmts.rs` `range_for`) substitutes the range under a new

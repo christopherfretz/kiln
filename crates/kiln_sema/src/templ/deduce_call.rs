@@ -1127,6 +1127,25 @@ impl Sema<'_, '_> {
             }
             Tdk::SubstitutionFailure => {
                 let with = f.args.map(|l| format!(" {}", self.template_args_desc(ft, l)));
+                // clang names a failed `enable_if` instead of quoting the
+                // error (spec/sema-templates.md §5.7.1): at the condition
+                // when only the `enable_if` is known, at the template when
+                // the failed requirement is.
+                match f.diag.as_ref().and_then(|x| x.id().map(|id| (id, x))) {
+                    Some((DiagId::sema_typename_nested_not_found_enable_if, x)) => {
+                        return self
+                            .diag(DiagId::note_ovl_candidate_disabled_by_enable_if, x.loc())
+                            .arg("'enable_if'")
+                            .arg(with.unwrap_or_default());
+                    }
+                    Some((DiagId::sema_typename_nested_not_found_requirement, x)) => {
+                        return self
+                            .diag(DiagId::note_ovl_candidate_disabled_by_requirement, loc)
+                            .arg(x.arg_at(0).unwrap_or_default())
+                            .arg(with.unwrap_or_default());
+                    }
+                    _ => {}
+                }
                 let msg = f.diag.as_ref().map(|x| format!(": {}", x.message()));
                 self.diag(DiagId::note_ovl_candidate_substitution_failure, loc)
                     .arg(with.unwrap_or_default())
