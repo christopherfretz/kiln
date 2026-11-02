@@ -1323,6 +1323,17 @@ object reports the lifetime read where clang notes the base (needs a
 fault kind in `notes.rs`); the destruction note of a heap object is
 located at the implicit destructor where clang uses the `delete`.
 
+*A virtual base without a mem-initializer (WP-400).* When the most
+derived constructor names no mem-initializer for a virtual base, Sema
+default-initializes it ([class.base.init]/9); a base whose default
+constructor is trivial has its lifetime begun with indeterminate
+contents, so it is *not* an unconstructed base: reading a member is
+"read of uninitialized object is not allowed in a constant expression",
+writing it first is fine, and a default member initializer of the base
+runs. This is clang's behaviour for the non-virtual analog, so
+`unconstructed_bases` deliberately leaves virtual bases out (test
+`tests/conformance/class.base.init/vbase-default-initialized-cxx26.cpp`).
+
 *Deviations from clang 19.* A class
 whose subobjects' lifetimes all ended one by one is diagnosed at its
 implicit destruction as if destroyed itself. An explicit call of a virtual destructor ends only the lifetime of
