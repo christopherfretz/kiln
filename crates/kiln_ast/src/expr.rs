@@ -1940,6 +1940,19 @@ impl ExprArena {
         ListId::new(self.expect_kind(e, ExprKind::AtomicExpr).a)
     }
 
+    /// The operands of a `ShuffleVectorExpr`: the two vectors, then the
+    /// indices, as written.
+    pub fn shuffle_subs(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::ShuffleVectorExpr).a)
+    }
+
+    /// The folded indices of a `ShuffleVectorExpr` (`u32::MAX` for a
+    /// poison lane), `None` while one is value-dependent.
+    pub fn shuffle_mask<'l>(&self, e: ExprId, lists: &'l IdLists) -> Option<&'l [u32]> {
+        let n = self.expect_kind(e, ExprKind::ShuffleVectorExpr);
+        (n.aux & 1 != 0).then(|| lists.get(ListId::new(n.b)))
+    }
+
     /// The explicit initializers of a `CXXParenListInitExpr`.
     pub fn paren_list_inits(&self, e: ExprId) -> ListId {
         ListId::new(self.expect_kind(e, ExprKind::CXXParenListInitExpr).a)
@@ -2223,6 +2236,18 @@ impl ExprArena {
         ArgListId::try_new(b).unwrap_or(ArgListId::EMPTY)
     }
 
+    /// The pattern's parameter pack of a `FunctionParmPackExpr`.
+    pub fn parm_pack_parameter(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::FunctionParmPackExpr).a)
+    }
+
+    /// The expanded `ParmVar`s (a list of `DeclId`) of a
+    /// `FunctionParmPackExpr`.
+    pub fn parm_pack_params(&self, e: ExprId) -> ListId {
+        let b = self.expect_kind(e, ExprKind::FunctionParmPackExpr).b;
+        ListId::from_raw(b).unwrap_or(ListId::EMPTY)
+    }
+
     /// The cached value of a `ConstantExpr`.
     pub fn constant_value(&self, e: ExprId) -> Option<ConstValueId> {
         ConstValueId::from_raw(self.expect_kind(e, ExprKind::ConstantExpr).b)
@@ -2465,6 +2490,7 @@ impl ExprArena {
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr
+            | ExprKind::ShuffleVectorExpr
             | ExprKind::CXXUnresolvedConstructExpr
             | ExprKind::ParenListExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));

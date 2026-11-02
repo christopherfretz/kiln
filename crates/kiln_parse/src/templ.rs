@@ -25,7 +25,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::expr::prec;
 use crate::keywords::Kw;
-use crate::parser::{Parser, is_template_class};
+use crate::parser::{ParamTypename, Parser, is_template_class};
 use crate::tentative::TypeIdContext;
 
 /// The kind of a template-parameter ([temp.param]/1), decided from its
@@ -975,8 +975,10 @@ impl Parser<'_, '_> {
     /// A type-name spelled with a template-id or a dependent qualifier in
     /// a decl-specifier-seq: `X<args>`, `N::X<args>::Y`, `T::type`. A
     /// dependent qualified name without `typename` is a type only where
-    /// [temp.res.general]/4 (P0634) makes it one; elsewhere (block scope)
-    /// it is diagnosed and parsed as if `typename` were written.
+    /// [temp.res.general]/4 (P0634) makes it one; elsewhere (block scope,
+    /// a parameter of a function declared with an unqualified
+    /// declarator-id at namespace or block scope) it is diagnosed and
+    /// parsed as if `typename` were written.
     pub(crate) fn parse_template_type_name(&mut self, ctx: DeclaratorContext) -> Option<QualType> {
         let start = self.loc();
         let q = self.parse_nested_name_nns().ok()?;
@@ -991,14 +993,14 @@ impl Parser<'_, '_> {
                 }
             }
             Some(q) => {
-                if self.s.is_dependent_ctx(q.ctx)
-                    && matches!(
-                        ctx,
-                        DeclaratorContext::Block
-                            | DeclaratorContext::Condition
-                            | DeclaratorContext::ForInit
-                    )
-                {
+                let needs_typename = match ctx {
+                    DeclaratorContext::Block
+                    | DeclaratorContext::Condition
+                    | DeclaratorContext::ForInit => true,
+                    DeclaratorContext::Prototype => self.param_typename == ParamTypename::Required,
+                    _ => false,
+                };
+                if needs_typename && self.s.is_dependent_ctx(q.ctx) {
                     let k = usize::from(self.at_kw(Kw::Template));
                     if let Some(name) = self.ident_of(self.tok_at(self.pos() + k)) {
                         let text = format!(
@@ -1060,7 +1062,16 @@ impl Parser<'_, '_> {
     /// `&&`, and diagnosed at the result's expression location.
     fn parse_constraint_primary(&mut self) -> Option<ExprId> {
         let non_primary = self.at_non_primary_constraint_start();
-        let e = if non_primary { self.parse_cast_expr()? } else { self.parse_primary_expr()? };
+        let e = if non_primary {
+            self.parse_cast_expr()?
+        } else if let Some(crate::keywords::BuiltinKw::Trait(t)) = self.builtin_kw_at(self.pos()) {
+            // A builtin type trait is a primary-expression here, as in
+            // clang's `ParseCastExpression(PrimaryExprOnly)`:
+            // `requires __is_trivially_destructible(T)`.
+            self.parse_type_trait(t)
+        } else {
+            self.parse_primary_expr()?
+        };
         let postfix = self.at(Punct::Period)
             || self.at(Punct::PlusPlus)
             || self.at(Punct::MinusMinus)

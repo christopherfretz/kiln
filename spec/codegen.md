@@ -93,7 +93,12 @@ panic and never silently wrong IR.
 ### 2a. Emission order (WP-172)
 Function and global positions in the module are **creation order** (the
 first `get_fn`/`get_gvar` of a name creates its declaration); a later
-definition fills the existing declaration in place. Emission order still
+definition fills the existing declaration in place. A declaration whose
+mangled name already names a function of the same type is that function
+(clang `GetOrCreateLLVMFunction`): a runtime function codegen declared
+first (`__cxa_allocate_exception` for a `throw`) and a user's
+`extern "C"` redeclaration of it in another namespace ([dcl.link]/7)
+share one symbol, never a renamed `name.1` copy. Emission order still
 matters, because it decides where declarations created inside a body
 land, the order in which comdats are created (at definition), and
 nounwind inference: clang's `TryMarkNoThrow` marks a definition
@@ -153,6 +158,8 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
 ## 3. Expressions (clang CGExprScalar/CGExprAgg/CGDecl rules mirrored)
 `expr.rs` mirrors clang's `ScalarExprEmitter`, `EmitLValue`,
 `AggExprEmitter`, `EmitBranchOnBoolExpr` and `EmitAutoVarDecl`.
+A `CXXRewrittenBinaryOperator` emits its semantic form in every one of
+them, the aggregate path included (a reversed `<=>` with a class result).
 - Conversions follow `EmitScalarConversion`:
   - to bool: `icmp ne 0`, `fcmp une 0.0` or `icmp ne null`;
   - integer to integer: cast by source signedness;
@@ -176,6 +183,10 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
 - Values:
   - an lvalue-to-rvalue conversion of a glvalue `?:` is emitted as a
     scalar `?:`: each arm loads in its own block and the result is a phi;
+  - an lvalue-to-rvalue conversion of a reference-returning call, also
+    through the lvalue `CK_UserDefinedConversion` of a conversion
+    function returning a reference (`operator bool&()`), loads from the
+    returned address (clang `EmitLoadOfLValue`);
   - `&&`/`||` produce an `i1` phi; `EmitBranchOnBoolExpr` splits
     `&&`/`||`/`!`/`?:` conditions into branches and folds constants;
   - bit-fields load the storage unit, then `shl`/`ashr` (signed) or
@@ -304,6 +315,31 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
       to `a / 8` (`tests/codegen/builtins_alloca.cpp`);
     - `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf`
       are library builtins (`tests/codegen/builtins_printf_lib.cpp`).
+    - library builtins (WP-282, clang `EmitBuiltinExpr`):
+      `__builtin_assume_aligned(p, a[, off])` returns `p` and emits
+      `llvm.assume(i1 true) ["align"(ptr p, i64 a[, i64 off])]`
+      (`emitAlignmentAssumption`; the call is folded first so a dependent
+      alignment is a constant; `builtins_assume_aligned.cpp`).
+      `__builtin_object_size` / `__builtin_dynamic_object_size` of an
+      object the frontend does not know is `llvm.objectsize(p, min =
+      type & 2, nullunknown = true, dynamic)`, type 3 the constant 0;
+      a constant-foldable call is its folded value
+      (`builtins_object_size.cpp`). `__builtin_powi*` is
+      `llvm.powi.fT.i32`; `__builtin_copysignf16` truncates to `half`,
+      calls `llvm.copysign.f16` and extends back;
+      `__builtin_verbose_trap` is `llvm.trap` (clang uses the strings
+      only for debug info) (`builtins_powi.cpp`).
+      `__builtin_shufflevector` (a `ShuffleVectorExpr`) is one
+      `shufflevector` with a constant mask, -1 a `poison` lane
+      (`builtins_shufflevector.cpp`). A `*f128` builtin with a `long
+      double` twin (`builtin::f128_twin`) is lowered as the twin on its
+      `fp128` operands (intrinsic or constant); `roundevenf128` is
+      `llvm.roundeven`; the others call the function of the builtin's
+      own name (`builtins_f128.cpp`). Not folded: `fp128` constant
+      arithmetic (`__builtin_huge_valf128() + 1` stays an `fadd`, clang
+      folds it) and the object size of a runtime local (clang's
+      `tryEvaluateObjectSize` gives the constant; kiln emits
+      `llvm.objectsize`, which `opt` folds).
   - a call of one of the standard functions clang treats as builtins
     (clang `isStdBuiltin`: `std::move`, `move_if_noexcept`, `forward`,
     `forward_like`, `as_const`, `addressof`, `__addressof`, declared in
@@ -353,7 +389,13 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
   - a constant aggregate goes through `emitStoresForConstant`. That means
     a single store, memset-0 plus a few stores, a bytewise memset, or a
     memcpy from a `@__const.<fn>.<var>` private global, in that order of
-    preference. Constants are never promoted to globals at -O0;
+    preference. Constants are never promoted to globals at -O0. An
+    aggregate is constant when it is constexpr, or when it is POD and
+    its initializer folds. The exception is a trivial copy or move of
+    an empty class, which reads nothing and so folds whatever its source
+    is. Like clang's `isConstantInitializer`, it is constant only when
+    its source names a constexpr variable. `E e2 = std::move(e)` emits
+    nothing;
   - a non-constant aggregate goes through `EmitAggExpr`, with
     `CheckAggExprForMemSetUse` (size > 16 and nonzero*4 <= size gives a
     memset);
@@ -710,7 +752,11 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
     ignored.
 - **Member-expression folds** (`ScalarExprEmitter::VisitMemberExpr`): an
   integral or enumeration `MemberExpr` that the Oven folds becomes a
-  constant, after the object is evaluated for side effects.
+  constant, after the object is evaluated for side effects. A `const`
+  non-volatile static data member named this way (`this->b.w`) folds to
+  its variable's constant initializer even when the object does not fold
+  (clang `tryToConvertMemberExprToDeclRefExpr`): the read is not an
+  odr-use ([basic.def.odr]/5) and needs no out-of-line definition.
 - **Pointers to members** (`memptr.rs`; Itanium §2.3, the ARM variant on
   AArch64; see spec/abi.md §8.6):
   - `&C::m` constants and Oven `Scalar::MemberPtr` constants, with

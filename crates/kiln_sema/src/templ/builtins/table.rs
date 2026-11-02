@@ -418,6 +418,17 @@ pub static TABLE: &[Row] = &[
     f("__builtin_vsnprintf", DONE, Oven::No),
     f("__builtin_snprintf", DONE, Oven::No),
     f("__builtin_sprintf", DONE, Oven::No),
+    // WP-282: the remaining library builtins the headers probe (the
+    // `*f128` family is answered from the kiln_ast builtin table).
+    f("__builtin_assume_aligned", DONE, Oven::Yes),
+    f("__builtin_object_size", DONE, Oven::Yes),
+    f("__builtin_dynamic_object_size", DONE, Oven::Yes),
+    f("__builtin_powi", DONE, Oven::No),
+    f("__builtin_powif", DONE, Oven::No),
+    f("__builtin_powil", DONE, Oven::No),
+    f("__builtin_shufflevector", DONE, Oven::No),
+    f("__builtin_verbose_trap", DONE, Oven::No),
+    f("__builtin_copysignf16", DONE, Oven::No),
     // Added by clang 20-22 and probed by the C++26 headers; staged off
     // until implemented (spec/sema.md "clang 22 builtins"), so
     // `__has_builtin` answers 0 at every `-fclang-compat` level.
@@ -541,6 +552,15 @@ mod tests {
         assert_eq!(has_constexpr_builtin_staged("__builtin_umulll_overflow"), Some(true));
         assert_eq!(has_constexpr_builtin_staged("__builtin_alloca"), Some(false));
         assert_eq!(has_builtin_staged("__builtin_vsnprintf"), Some(true));
+    }
+
+    #[test]
+    fn wp282_library_rows() {
+        assert_eq!(has_constexpr_builtin_staged("__builtin_object_size"), Some(true));
+        assert_eq!(has_constexpr_builtin_staged("__builtin_assume_aligned"), Some(true));
+        assert_eq!(has_constexpr_builtin_staged("__builtin_shufflevector"), Some(false));
+        assert_eq!(has_builtin_staged("__builtin_verbose_trap"), Some(true));
+        assert_eq!(has_builtin_staged("__builtin_powil"), Some(true));
     }
 
     #[test]

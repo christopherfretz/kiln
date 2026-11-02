@@ -19,7 +19,7 @@ that `expect: ast` goldens compare without special cases.
 | captures | §4: by copy, by reference, init-captures (`= expr`), `this`, `*this`, implicit capture through `=` / `&`, nested lambdas | capture packs (`xs...`, `...xs = e`) |
 | generic | §5: `auto` parameters, template-parameter-lists, constraints, conversion-function templates | |
 | constant evaluation | §7: calls, captures, conversions, `this`/`*this`; `consteval` and escalated lambdas (§3.2, sema.md §5.10) | |
-| templates | §9: lambdas in templates and generic lambdas in templates | capture packs, lambdas as template arguments |
+| templates | §9: lambdas in templates and generic lambdas in templates; simple-capture packs (`[ts...]`) of a function parameter pack (WP-282) | init-capture packs, lambdas as template arguments |
 | codegen | §8: IR-exact against clang for the corpus in `tests/codegen/lambda_*.cpp` | |
 
 Coroutine lambdas are out of scope (coroutines milestone).
@@ -323,6 +323,16 @@ own. The substituter replays the lambda through the parser's actions:
    function parameter pack of the pattern stays a pack
    (`param_infos`, `map_params`, `size_of_pack` handle a retained pack).
 
+A simple-capture pack expansion (`[ts...]`, `[&ts...]`,
+[expr.prim.lambda.capture]/17) whose pack is an instantiated function
+parameter pack becomes one simple capture per element, each resolved to
+its `ParmVar` (`LambdaCaptureSpec.var`); the elements share a name, so
+the "can appear only once" check compares the resolved variables. An
+outer function parameter pack named in a generic lambda's body is a
+`FunctionParmPackExpr` that captures every element (spec/sema-templates.md
+§7.2). Init-capture packs (`[...xs = ts]`) in templates, and a capture
+pack of a pack that is still unexpanded, remain "not yet implemented".
+
 Uses of `this` in a rebuilt body capture it again (`note_this_use`);
 `note_shared_this` keeps the enclosing lambda's `this` capture in step.
 
@@ -337,10 +347,12 @@ rebuilt one is in `locals`, step 1) to itself, as clang's
 
 ## 10. Tests
 
-- `tests/conformance/expr.prim.lambda/`: 46 tests (45 pass, 1 xfail:
-  `template-argument.cpp`) covering syntax errors, captures and their
+- `tests/conformance/expr.prim.lambda/`: 56 tests (xfails are marked
+  per compiler in the files) covering syntax errors, captures and their
   diagnostics, closure members, generic lambdas, conversions, constant
-  evaluation, run-time behaviour, mangling and lambdas in templates,
+  evaluation, run-time behaviour, mangling and lambdas in templates
+  (WP-282: `run-template-param-pack-fold`, `run-capture-pack`,
+  `constexpr-template-param-pack-fold`, `errors-template-param-pack-length`),
   plus six `expect: ast` goldens (`ast-*.cpp`) against clang's JSON.
 - `tests/codegen/lambda_basic.cpp`, `lambda_captures.cpp`,
   `lambda_captures_class.cpp`, `lambda_names.cpp`: IR-exact.

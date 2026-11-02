@@ -386,6 +386,24 @@ impl Cg<'_> {
                 let i = self.emit_scalar(idx)?;
                 self.extract_elt(v, i)
             }
+            ExprKind::ShuffleVectorExpr => {
+                // clang `ScalarExprEmitter::VisitShuffleVectorExpr` with
+                // scalar indices (a `-1` is a poison lane).
+                let subs: Vec<ExprId> = ast.lists.iter(ast.exprs.shuffle_subs(e)).collect();
+                let Some(mask) = ast.exprs.shuffle_mask(e, &ast.lists) else {
+                    return err(self.loc_of(e), "a dependent __builtin_shufflevector");
+                };
+                let mask: Vec<u32> = mask
+                    .iter()
+                    .map(|&w| if w == u32::MAX { kiln_llvm::SHUFFLE_POISON } else { w })
+                    .collect();
+                let (Some(&x), Some(&y)) = (subs.first(), subs.get(1)) else {
+                    return err(self.loc_of(e), "malformed ShuffleVectorExpr");
+                };
+                let a = self.emit_scalar(x)?;
+                let b = self.emit_scalar(y)?;
+                self.shuffle(a, Some(b), mask)
+            }
             ExprKind::ConvertVectorExpr => {
                 let src = ast.exprs.operand(e);
                 let v = self.emit_scalar(src)?;
@@ -717,8 +735,16 @@ impl Cg<'_> {
         }
         // A call returning a reference yields the referee's address
         // (clang `ScalarExprEmitter::VisitCallExpr`: a reference
-        // result is `EmitLoadOfLValue`).
-        let inner = self.skip_parens(s);
+        // result is `EmitLoadOfLValue`), also through the lvalue
+        // `CK_UserDefinedConversion` of a reference-returning conversion
+        // function (`operator bool&()`).
+        let mut inner = self.skip_parens(s);
+        while self.ast.exprs.get(inner).kind() == ExprKind::ImplicitCastExpr
+            && self.ast.exprs.cast_kind(inner) == CastKind::UserDefinedConversion
+            && self.is_glvalue(inner)
+        {
+            inner = self.skip_parens(self.ast.exprs.operand(inner));
+        }
         if matches!(
             self.ast.exprs.get(inner).kind(),
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
@@ -2949,6 +2975,11 @@ impl Cg<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
+            // clang `AggExprEmitter::VisitCXXRewrittenBinaryOperator`: the
+            // semantic form (`(y <=> x)` reversed, or `0 <=> (y <=> x)`).
+            ExprKind::CXXRewrittenBinaryOperator => {
+                self.agg_visit(ast.exprs.rewritten_semantic(e), dest, zeroed)
+            }
             // clang `VisitCompoundLiteralExpr`: `EmitAggExpr` of the
             // initializer into the slot (C++: not destroyed here).
             ExprKind::CompoundLiteralExpr => {
@@ -3785,7 +3816,8 @@ impl Cg<'_> {
             // clang `IsConstantAggregate`: constexpr, or POD with a
             // constant initializer.
             let constexpr = ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
-            if let Some(c) = fold.filter(|_| constexpr || self.is_pod(q)) {
+            let constant_init = || self.is_pod(q) && !self.empty_copy_of_nonconstant(init);
+            if let Some(c) = fold.filter(|_| constexpr || constant_init()) {
                 // A constant the lowering cannot spell yet (bit-fields,
                 // base subobjects) is initialized as written instead,
                 // which has the same effect for a local.
@@ -3996,6 +4028,39 @@ impl Cg<'_> {
             let p = self.struct_gep(st, dst.v, i as u32);
             self.store(V::C(ek), p, min_align(dst.align, offs[i]), vol);
         }
+    }
+
+    /// clang `Expr::isConstantInitializer` on a trivial copy or move of an
+    /// empty class asks whether the source is constant. The copy reads
+    /// nothing ([class.copy.ctor]/14), so it folds whatever the source is,
+    /// and the fold does not answer that question: `E e2 = std::move(e)`
+    /// of a non-constexpr `e` is copied as written. The source counts as
+    /// constant only when it names a constexpr variable.
+    fn empty_copy_of_nonconstant(&self, init: ExprId) -> bool {
+        let ast = self.ast;
+        let mut e = init;
+        while matches!(
+            ast.exprs.get(e).kind(),
+            ExprKind::ExprWithCleanups | ExprKind::CXXBindTemporaryExpr | ExprKind::ParenExpr
+        ) {
+            e = self.sub(e);
+        }
+        if ast.exprs.get(e).kind() != ExprKind::CXXConstructExpr {
+            return false;
+        }
+        let ctor = ast.exprs.constructor(e);
+        let trivial = ast.decls.function(ctor).is_some_and(|f| f.spec.is_trivial());
+        let empty =
+            ast.decls.get(ctor).ctx().is_some_and(|rd| {
+                self.class_bits(rd).contains(kiln_ast::decl::DefinitionBits::EMPTY)
+            });
+        let mut args = ast.lists.iter::<ExprId>(ast.exprs.construct_args(e));
+        let (Some(src), true, true) = (args.next(), trivial, empty) else {
+            return false;
+        };
+        let src = self.ignore_paren_base_casts(src);
+        !(ast.exprs.get(src).kind() == ExprKind::DeclRefExpr
+            && ast.decls.var(ast.exprs.decl(src)).is_some_and(|v| v.spec.is_constexpr()))
     }
 
     fn stores_for_constant(&mut self, d: DeclId, at: Addr, k: Value, vol: bool) -> R<()> {

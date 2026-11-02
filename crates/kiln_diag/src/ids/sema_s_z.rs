@@ -4,6 +4,10 @@
 
 sema_shift_gt_typewidth = Warning [ShiftCountOverflow] (0) "shift count >= width of type";
 sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative";
+sema_shufflevector_argument_too_large = Error (0) "index for __builtin_shufflevector must be less than the total number of vector elements";
+sema_shufflevector_incompatible_vec = Error (1) "first two arguments to '{0}' must have the same type";
+sema_shufflevector_non_vector = Error (1) "first two arguments to '{0}' must be vectors";
+sema_shufflevector_nonconstant_arg = Error (0) "index for __builtin_shufflevector must be a constant integer";
 // [expr.typeid]/3 (WP-219)
 sema_side_effects_typeid = Warning [PotentiallyEvaluatedExpression] (0) "expression with side effects will be evaluated despite being used as an operand to 'typeid'";
 sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";
@@ -96,6 +100,7 @@ sema_template_requires_args = Error (2) "use of {0} {1} requires template argume
 sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
 sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
+sema_this_static_member_func = Error (1) "'this' cannot be{0:| implicitly} used in a static member function declaration";
 sema_three_way_vector_comparison = Error (0) "three-way comparison between vectors is not supported";
 sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
 sema_throw_in_nothrow_func = Warning [Exceptions] (1) "'{0}' has a non-throwing exception specification but can still throw";

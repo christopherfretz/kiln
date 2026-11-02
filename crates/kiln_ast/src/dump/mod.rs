@@ -808,7 +808,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
-            ExprKind::AtomicExpr => {
+            ExprKind::AtomicExpr | ExprKind::ShuffleVectorExpr => {
                 for c in exprs.children(e, lists) {
                     kids.push((Node::Expr(c), None));
                 }
@@ -1848,6 +1848,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         if node.kind == AttrKind::BUILTIN {
             let _ = write!(self.line, " {}", node.a);
+        }
+        if node.kind == AttrKind::FORMAT {
+            let _ = write!(self.line, " printf {} {}", node.b & 0xffff, node.b >> 16);
         }
     }
 

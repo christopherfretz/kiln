@@ -70,6 +70,22 @@ impl Sema<'_, '_> {
         entity_at: Loc,
         deleted_as: DeletedAs,
     ) -> Option<ExprId> {
+        self.construct_from_class_in(e, to, ctx, entity_at, deleted_as, None)
+    }
+
+    /// As [`Sema::construct_from_class`], for the parenthesized
+    /// initializer `T x(e)` closed by `rparen`: the construction keeps its
+    /// `)` so instantiation redoes it as written (without it, the
+    /// pattern's `CXXConstructExpr` reads as a default-initialization).
+    pub(crate) fn construct_from_class_in(
+        &mut self,
+        e: ExprId,
+        to: QualType,
+        ctx: ConvCtx,
+        entity_at: Loc,
+        deleted_as: DeletedAs,
+        rparen: Option<Loc>,
+    ) -> Option<ExprId> {
         let target = self.ast.types.as_record(to)?;
         let source = self.ast.types.as_record(self.ety(e))?;
         self.instantiate_for_init(target, entity_at);
@@ -117,6 +133,7 @@ impl Sema<'_, '_> {
         let sel = self.resolve_ctor(class, std::slice::from_ref(&e), style);
         let call = CtorCall {
             info: ConstructInfo { kind: ck, ..ConstructInfo::COMPLETE },
+            rparen,
             ..CtorCall::new(std::slice::from_ref(&e))
         };
         // A direct-initialization is at the entity (the variable, the

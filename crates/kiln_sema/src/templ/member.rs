@@ -69,6 +69,15 @@ impl Substituter<'_, '_, '_> {
                 self.sema.ast.decls.record(m).map_or(kiln_ast::decl::TagKind::Struct, |r| r.tag);
             let p = self.sema.builder().class_partial_spec(h, new_tmpl, list, args, tag);
             self.sema.ast.templates.set_instantiated_from(p, m);
+            // Its constraints stay the original's, checked with this
+            // specialization's levels outside its own (as for a member
+            // template, `member_constraints`).
+            let pl = *self.sema.ast.templates.param_list(params);
+            let mut cs = Vec::new();
+            self.sema.head_constraints(pl.params, pl.requires, &mut cs);
+            if !cs.is_empty() {
+                self.sema.inst.concepts.member_constraints.insert(p, (m, self.args.clone()));
+            }
             Ok(())
         })();
         self.sema.act_on_finish_template_decl();

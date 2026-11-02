@@ -393,6 +393,27 @@ impl Substituter<'_, '_, '_> {
         Ok(t)
     }
 
+    /// One element of an expression pack expansion: an element that
+    /// still names an unexpanded pack of a level not substituted
+    /// (`(idx * s[P]) + ...` in a generic lambda of a function template
+    /// over the pack `idx`, with only `idx` known) fails and marks the
+    /// expansion partially substituted, rebuilt by
+    /// [`Self::expand_pattern_at`] with the substituted pack kept (§7.2).
+    pub(crate) fn element_expr(&mut self, e: ExprId) -> SubstResult<ExprId> {
+        let saved = std::mem::take(&mut self.pack.element_has_packs);
+        let r = self.expr(e);
+        let from_elements = std::mem::replace(&mut self.pack.element_has_packs, saved);
+        let r = r?;
+        if self.pack_index.is_some()
+            && !from_elements
+            && self.sema.ast.exprs.get(r).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
+        {
+            self.pack.partial = true;
+            return Err(SubstFail);
+        }
+        Ok(r)
+    }
+
     /// Substitutes into a list of expressions that may contain pack
     /// expansions.
     pub fn expand_exprs(&mut self, es: &[ExprId]) -> SubstResult<Vec<ExprId>> {
@@ -404,7 +425,7 @@ impl Substituter<'_, '_, '_> {
             };
             // A `PackExpansionExpr` is located at its `...`.
             let ellipsis = self.sema.ast.exprs.get(x).loc();
-            match self.expand_pattern_rewrap(Some(ellipsis), |s| s.expr(p))? {
+            match self.expand_pattern_rewrap(Some(ellipsis), |s| s.element_expr(p))? {
                 Expansion::Elements(v) => {
                     let rw = self.take_rewrap();
                     for (k, y) in v.into_iter().enumerate() {
@@ -472,7 +493,7 @@ impl Substituter<'_, '_, '_> {
         let pattern = pattern.ok_or(SubstFail)?;
         let ellipsis = self.sema.templ.fold_ellipsis.get(&e).copied().unwrap_or(loc);
         let init = self.opt_expr(init)?;
-        let elems = match self.expand_pattern_at(Some(ellipsis), |s| s.expr(pattern))? {
+        let elems = match self.expand_pattern_at(Some(ellipsis), |s| s.element_expr(pattern))? {
             Expansion::Elements(v) => v,
             Expansion::Unexpanded(p) => {
                 let (l, r) = if right { (Some(p), init) } else { (init, Some(p)) };

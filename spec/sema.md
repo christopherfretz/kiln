@@ -419,7 +419,16 @@ Redeclaration and linkage rules:
   `act_on_start_this_scope(member, quals)` / `act_on_end_this_scope`
   bracket a member function's exception specification and trailing
   return type, where `this` has type `cv X*`; member access into the
-  class being defined is allowed there.
+  class being defined is allowed there (and in NSDMIs, default
+  arguments and bodies, which run after `}`). Anywhere else before the
+  class's `}` (a static data member initializer, an array bound, an
+  alias, a `decltype` member type, a `static_assert`) `((S*)0)->m()`
+  is `member access into incomplete type 'S'` with the note
+  `definition of 'S' is not complete until the closing '}'` (clang's
+  `isThisOutsideMemberFunctionBody`; `Sema::this_outside_member_body`;
+  WP-280; test `expr.ref/member-access-class-being-defined.cpp`).
+  Divergence: clang reports nothing further in a class after its first
+  error there, kiln keeps diagnosing (e.g. a later `S s;` member).
 - **`-Wvexing-parse`**: a function declarator the parser chose over a
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses
@@ -911,6 +920,8 @@ and returns the scope it names:
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
   - GNU `visibility`, `section` and `format`: `'x' attribute ignored`
+    (a written `format` is not stored; only the printf builtins' implicit
+    one is, §5.4)
 - **Argument encoding** (`Attr.a`, `Attr.b`; see spec/abi.md §3.1):
 
   | kind | `a` | `b` |
@@ -919,6 +930,7 @@ and returns the scope it names:
   | NODISCARD, DEPRECATED | `ExprId` of the string-literal message | — |
   | ASM_LABEL | raw `StringLitId` of the label (flags bit 1: inherited) | — |
   | BUILTIN | the builtin id (`kiln_ast::decl::builtin`; implicit, §5.4) | — |
+  | FORMAT | 0 (`printf`; implicit, §5.4) | `F \| A << 16`, one-based format and first data argument indices (`A` = 0: a `va_list`) |
   | MALLOC | — | — |
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
@@ -1038,9 +1050,18 @@ specification as written (`TypeNames` prints ` noexcept`,
   `defer_late_noexcept(f, d)` gives `f`'s type `ExcSpec::Deferred(f)`
   and puts `f` in `unparsed_exc`. The parser brackets the replay with
   `act_on_start_delayed_exception_spec(f) -> bool` (a `this` scope with
-  `f`'s cv-qualifiers unless `f` is static, [expr.prim.this]/2) and
+  `f`'s cv-qualifiers, [expr.prim.this]/2) and
   `act_on_end_this_scope`. `act_on_exception_spec(f, spec)` then sets
   the written spec on every redeclaration (`set_member_exception_spec`).
+  A static `f` gets an unqualified `this` scope too, as in clang, so a
+  non-static member named in its spec is found as `this->m`.
+  `act_on_exception_spec` then reports the first `CXXThisExpr` in the
+  operand: `'this' cannot be [implicitly] used in a static member
+  function declaration` (`sema_this_static_member_func`,
+  [expr.prim.this]/3; clang `checkThisInStaticMemberFunctionExceptionSpec`;
+  WP-280, `class.mem.general/static-member-noexcept-this.cpp`). Clang
+  diagnoses it again when a class template's static member is
+  instantiated; kiln diagnoses only the pattern (a follow-up).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as
@@ -1151,6 +1172,17 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   replayed. A redeclaration written without a spec then takes
   `merge_missing_exc_spec` (`'m' is missing exception specification
   'noexcept(S::x)'`), and otherwise gets the mismatch error.
+- *A class template's friend redeclaring a function* (WP-280): when
+  the class is instantiated, the friend's lazy spec is instantiated at
+  once (`function_decl` in `templ/subst/decls.rs`) and checked against
+  the function's *first* declaration, which clang's note names. So a
+  later friend is not measured against an earlier friend that was
+  already diagnosed as mismatched. Test:
+  `temp.friend/friend-redecl-exception-spec-at-instantiation.cpp`.
+  Divergences (follow-ups): clang also checks at template definition
+  time a friend whose type is not dependent; kiln checks only at
+  instantiation. Kiln also matches a later namespace-scope declaration
+  against the pattern friend, where clang waits for the instantiation.
 - *Unparsed through the redeclaration chain*: `exc_unparsed(f)` is true
   when `f`, its first declaration, or the pattern it waits on is in
   `unparsed_exc`. Both `resolve_exc_for_type` and
@@ -1158,11 +1190,16 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   complete gives the error once (clang 19 gives it twice for a friend
   template, and leaves the specialization unresolved afterwards).
 - *Member and friend templates of class template specializations*: the
-  redeclared pattern keeps `Deferred` (`lazy_exc_spec(d, p, friend)`:
-  the spec is dependent at no more than the template's own level; a
-  friend template that is declared but not defined in the class is
-  substituted at once). Its specializations wait on the original pattern
-  (`defer_spec_exception_spec`).
+  redeclared pattern keeps `Deferred` (`lazy_exc_spec(d, p)`: the spec
+  is dependent at no more than the template's own level). A friend
+  template waits whether it is defined in the class or only declared
+  there (WP-287): the class is still incomplete when its friends are
+  instantiated, so substituting at once would look up members declared
+  after the friend (`no member named '__current_'` for libc++
+  `counted_iterator`'s `iter_swap` inside `counted_iterator<counted_iterator<I>>`).
+  Its specializations wait on the original pattern
+  (`defer_spec_exception_spec`). A specialization of a namespace-scope
+  template the friend redeclares keeps that template's spec.
 - *Function template specializations* (DR1330, clang
   `InitFunctionInstantiation`): `function_spec_signature` does not
   substitute a dependent `noexcept(expr)` during deduction. Unless the
@@ -1507,7 +1544,11 @@ diagnostics and IR.
       clang's DefaultError `-Wincrement-bool` extension and is then
       accepted, `--` is always an error; WP-165)
   - **calls:** argument conversion, arity notes, variadic default
-    promotions
+    promotions. A call returning a non-reference `cv T` is a prvalue of
+    type `T` only when `T` is a non-class, non-dependent type; a class
+    (or dependent) result keeps its cv-qualifiers, so `decltype(f())`
+    for `const X f()` is `const X` ([expr.type]/2, clang
+    `getNonLValueExprType`; WP-276)
   - **member access:** `.` and `->` on records and through
     `IndirectField`; members found in base classes, static members,
     enumerators and member functions, implicit `this->`, `this`,
@@ -1558,6 +1599,15 @@ diagnostics and IR.
   two-pointer form naming both pointees when the pointer types differ
   (`arithmetic on pointers to function types 'void ()' and 'void
   (int)'`); otherwise an incomplete pointee, left side first.
+- **Relational operators and `std::nullptr_t`** ([expr.rel]/1, CWG583;
+  clang's `CheckCompareOperands`, WP-276): the operands of `<`, `>`,
+  `<=`, `>=` have arithmetic, enumeration or pointer type, so a
+  `std::nullptr_t` operand on either side is `invalid operands to binary
+  expression ('std::nullptr_t' and 'int *')` (a SFINAE failure in a
+  template argument, as libc++'s `nullptr_t.pass.cpp` `has_less`
+  checks); a pointer against an integral null pointer constant is
+  `ordered comparison between pointer and zero ('int *' and 'int')`. The
+  composite pointer type is formed only for `==`/`!=` or two pointers.
 - **Member-pointer equality** ([expr.eq]/4, clang's
   `CheckCompareOperands`, WP-085): when either operand of a comparison
   is a member pointer:
@@ -1644,8 +1694,10 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   declares it in the translation unit: an implicit `LinkageSpecDecl`
   (`extern "C"`) holding an implicit `extern` `FunctionDecl` with the
   builtin's function type, its id in the `builtin_id` cold data, an
-  implicit `Builtin` attribute (invalid location, `a` = id) and an
-  implicit `NoThrow` attribute. Later lookups find that declaration.
+  implicit `Builtin` attribute (invalid location, `a` = id), for the
+  printf builtins an implicit `format(printf, F, A)` attribute
+  (`builtin::printf_format`, WP-282) and an implicit `NoThrow`
+  attribute, in clang's order. Later lookups find that declaration.
 - **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
   placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
 - **Calls:** `act_on_call` converts the callee with
@@ -1678,13 +1730,83 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   true). No `Builtin` attribute is attached, so the call stays an
   ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
   calls to intrinsics and its implicit `format` / `alloc_size`
-  attributes (`-Wformat*`) are not modelled.
+  attributes on the library names (`-Wformat*` on `sprintf`) are not
+  modelled; only the `__builtin_` printf rows carry `format` (below).
 - **Custom-checked builtins** (WP-270): the generic
   `__builtin_{add,sub,mul}_overflow` (`builtin_overflow`) and the
   alignment of `__builtin_alloca_with_align` (`check_alloca_align`) are
   checked as clang's `SemaBuiltinOverflow` / `SemaBuiltinAllocaWithAlign`;
   the rules and the builtin table are spec/sema-templates.md §9
   ("checked arithmetic", "stack allocation", "printf family" rows).
+- **Library builtins** (WP-282; clang 19 `SemaChecking.cpp`), each
+  diagnosed with clang's wording:
+  - `__builtin_assume_aligned(p, a[, off])` (custom, `builtin_assume_aligned`,
+    clang `BuiltinAssumeAligned`): 2 or 3 arguments (`too few` / `too many
+    ... at most` at the `)`); `p` decays and must convert to `const void *`
+    (it keeps its own type); `a`, unless value-dependent, an integer
+    constant (`argument to '...' must be a constant integer` at the call),
+    a power of 2 (`requested alignment is not a power of 2`), warned above
+    2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
+    `size_t`. The call is a `void *` prvalue.
+  - `__builtin_object_size` / `__builtin_dynamic_object_size`: the type
+    argument (an `I` constant) must be in [0, 3] (`argument value V is
+    outside the valid range [0, 3]` at the callee), checked after
+    instantiation when value-dependent.
+  - `__builtin_verbose_trap(category, reason)` (`check_verbose_trap`):
+    each argument must be a pointer to a constant string: a string
+    literal (no `$`: `argument to __builtin_verbose_trap must not contain
+    $`) or a constant-foldable pointer; anything else `must be a pointer
+    to a constant string`. A non-literal constant's characters are not
+    inspected for `$` (clang reads them).
+  - `__builtin_shufflevector(v1, v2, i...)` (custom, `act_on_shufflevector`,
+    clang `BuiltinShuffleVector`; a `ShuffleVectorExpr`, spec/ast.md):
+    at least 2 arguments; `v1`/`v2` vectors (`first two arguments to
+    __builtin_shufflevector must be vectors`) of the same unqualified type
+    (`... must have the same type`); each index an integer constant
+    (`index for __builtin_shufflevector must be a constant integer`) that
+    is -1 (an undefined lane) or below twice the lane count (`index for
+    __builtin_shufflevector not within the bounds of the input vectors;
+    index of V found at position N`), all at the callee. The result is
+    `v1`'s type, or a generic vector of the element type with one lane
+    per index. Re-checked at instantiation when any argument is
+    dependent. The two-argument (mask vector) form is not supported.
+  - `__builtin_powi{,f,l}`, `__builtin_copysignf16` and the `*f128` math
+    family are ordinary calls (table rows in spec/sema-templates.md §9.5).
+- **Format strings** (WP-282; `format_string.rs`, clang
+  `CheckPrintfHandler`): a call whose callee has a `format(printf, F, A)`
+  attribute with `A` > 0 and whose argument `F` is an ordinary string
+  literal (through parentheses and implicit casts, concatenation
+  included) has its conversions checked against the data arguments
+  from `A` on. Supported: `%[flags][width][.precision][l|ll|z]conv` with
+  flags `-+ #0`, width/precision digits or `*`, and `conv` one of `d i u
+  o x X c s p f F e E g G a A` (`c s p` and the floating ones without a
+  length). The specified type is `int`/`long`/`long long` (`d i c`),
+  `unsigned` of each (`u o x X`), `size_t` / `ssize_t` for `z`
+  (`'size_t' (aka 'unsigned long')`), `double` (floating), `char *`
+  (`s`: a pointer to any character type) and `void *` (`p`: any pointer
+  or `std::nullptr_t`). An argument is matched by its type before the
+  default promotions (through `IntegralCast`/`FloatingCast`) and an
+  unscoped enumeration by its underlying type: integers by promoted
+  rank class ignoring signedness (`-Wformat-signedness` is off), `float`
+  matches `double`. Diagnostics, all warnings:
+  - `format specifies type 'X' but the argument has type 'Y'`
+    (`underlying type` for an enumeration) at the argument
+    (`-Wformat`);
+  - `field width|precision should have type 'int', but argument has
+    type 'Y'` at the `*` (a width one byte after it, as clang), then the
+    walk stops (`-Wformat`);
+  - `more '%' conversions than data arguments` at the conversion
+    character, then the walk stops (`-Wformat-insufficient-args`);
+  - `data argument not used by format string` at the first unused
+    argument (`-Wformat-extra-args`).
+  `-Wformat` contains the other two and is in `-Wmost`. Not checked
+  (the whole string is skipped, where clang has a diagnostic): other
+  conversions and length modifiers (`h`, `hh`, `j`, `t`, `L`, `n`, `%q`),
+  positional arguments, an embedded NUL, an incomplete trailing `%`, a
+  missing `*` argument, wide strings, class and scoped-enumeration
+  arguments, non-literal formats (`-Wformat-security`), and
+  `-Wformat-truncation`/`-Wformat-overflow`. Dependent calls are checked
+  at instantiation.
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:
@@ -3063,7 +3185,10 @@ template saved in `range_for_outer_depth` for instantiations).
   (`trailing_notes`) attach to the held error before it is held.
   One such deeper SFINAE context is deducing a converting constructor
   template for a rewritten `operator==` candidate of `__begin != __end`
-  (WP-271). (WP-274.)
+  (WP-271); another is the requires-expression of libc++
+  `sentinel_wrapper::operator==` instantiated by `__begin != __end`
+  (WP-280, `temp.inst/range-for-member-substitution-context.cpp`).
+  (WP-274.)
 - **Templates.** A type-dependent range (or loop-variable type) keeps
   only `__range` and the loop variable in the pattern; instantiation
   (`templ/subst/stmts.rs` `range_for`) substitutes the range under a new
