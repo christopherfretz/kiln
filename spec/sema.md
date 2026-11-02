@@ -678,9 +678,14 @@ Redeclaration and linkage rules:
   `volatile-qualified return type T is deprecated`
   [-Wdeprecated-volatile] (`sema_deprecated_volatile_return`, in
   `-Wdeprecated`), at the same location as the array/function return
-  check. Not re-checked after template substitution (clang warns for
-  `T f()` with `T = volatile int`). Tests:
-  `depr.volatile.type/volatile-return{,-cxx17}.cpp`.
+  check. After template substitution (WP-392, `check_volatile_return`)
+  a return type that became volatile warns at the return type's begin:
+  at the class template's instantiation for a member, at the alias's
+  use, and for a function template specialization formed by deduction
+  at its first use (held back by SFINAE and replayed, sema-templates.md
+  §5.7). A non-dependent volatile return type is not re-warned, and a
+  deduced `auto` / `decltype(auto)` return never warns. Tests:
+  `depr.volatile.type/volatile-return{,-cxx17,-subst,-subst-19}.cpp`.
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.

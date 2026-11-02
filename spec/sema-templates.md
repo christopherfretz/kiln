@@ -435,14 +435,40 @@ member declaration) reports clang's `err_multiple_template_declarators`
 at the `,` after the first declarator ("a template declaration can only
 declare a single entity", "an explicit template specialization can only
 declare a single entity", "an explicit template instantiation can only
-instantiate a single entity") and skips the rest of the group; the first
-declarator is declared. clang 19 and 22 declare the later declarators
-too (with the same head), so a later use of `b` after
-`template<class T> int a, b;` is "use of undeclared identifier" in kiln
-only; and clang also reports "explicit template instantiation cannot
-have a definition" at the first declarator of an explicit-instantiation
-group, which kiln does not (WP-379,
+instantiate a single entity"), once per group. As in clang's
+`ParseDeclGroup`, the later declarators are still declared, each as the
+first one was: `Parser::template_group` saves the template-declaration
+state before the first declarator (`Sema::save_template_decl_state`:
+the open heads and the pending `template<>` / `[extern] template`
+markers) and `Parser::next_declarator` restores it after each `,`
+(`Sema::restore_template_decl_state`). So after
+`template<class T> int a, b;` both are variable templates (`b` without
+arguments is "use of variable template 'b' requires template
+arguments"), and `template<class T> void f(), g();` declares a function
+template `g` (WP-379, WP-392;
 `tests/conformance/temp.pre/multiple-declarators.cpp`).
+
+**Explicit instantiation with a definition** ([temp.explicit]/3, WP-392;
+clang `ParseDeclarationAfterDeclaratorAndAttributes`,
+`ParseFunctionDefinition`, `ParseClassSpecifier`). An explicit
+instantiation is not a definition:
+- a class whose class-head-name is a template-id followed by `{`
+  (`template struct S<int> { … };`, also `extern template`) is
+  "explicit template instantiation cannot have a definition; if this
+  definition is meant to be an explicit specialization, add '<>' after
+  the 'template' keyword" at the name, with a `<>` fix-it, and is
+  defined as an explicit specialization;
+- a function or variable declarator whose declarator-id is a template-id
+  followed by a body, `= delete`, an initializer or a `,`
+  (`Sema::act_explicit_inst_with_definition`) is the same error at the
+  name and recovers as an explicit specialization (`template<>`), so a
+  `static_assert` sees the body's value;
+- with a plain declarator-id (`template constexpr int h() { … }`), it is
+  "function/variable cannot be defined in an explicit instantiation; if
+  this declaration is meant to be a function/variable definition, remove
+  the 'template' keyword" at the `{`/`=`/`,`, and the `template` is
+  ignored (a plain declaration or definition follows).
+Test `tests/conformance/temp.explicit/instantiation-with-definition.cpp`.
 
 **Friends.** `template<class U> friend struct B;`,
 `friend void f<>(T);` (a friend specialization), and
@@ -2059,11 +2085,20 @@ impl Sema<'_, '_> {
 `Sema::EmitCurrentDiagnostic`):
 - An *error* is captured, not emitted; the first one is kept. It also
   makes the current substitution return `SubstFail`.
-- Warnings and remarks are stored in
-  `suppressed: FxHashMap<DeclId, Vec<Diagnostic>>`, keyed by the
-  specialization being formed. They are emitted when that specialization
-  is first used (`diagnose_use_of_decl`). This is clang's
-  `SuppressedDiagnostics`.
+- Warnings and remarks are held back in `SfinaeState.warnings` (WP-392).
+  When function template deduction forms a specialization, the ones its
+  signature substitution produced move to
+  `TemplState.suppressed_diags: FxHashMap<DeclId, Vec<Diag>>`, keyed by
+  the specialization. `Sema::emit_suppressed_diags` reports them when
+  that specialization is first used (from `diagnose_use_of_decl`), once.
+  This is clang's `SuppressedDiagnostics`. clang 22 keeps the context
+  notes ("in instantiation of function template specialization …"
+  pointing at the point of use; `TemplState.deduce_poi` is a qualified
+  callee's name, where clang marks it referenced); clang 19 replays the
+  bare warning, so the notes are dropped under `-fkiln-compat=19`.
+  A failed deduction drops them. Gap: the warnings of an explicit
+  substitution (`&f<volatile int>`) are dropped, because the SFINAE frames
+  are popped per deduction phase.
 - Fatal errors are always reported: the depth limit and stack
   exhaustion.
 
@@ -3179,6 +3214,37 @@ unexpanded pack is "default argument contains …" at the expression's
 start (a type template parameter's at the parameter), and the default is
 dropped; an in-class default is checked when its delayed parse ends.
 Inside a lambda body none of these apply (the lambda carries the pack).
+
+Inside a lambda (WP-392), a pack declared by the lambda itself (a
+generic lambda's `auto...` parameter pack, a pack of its own template
+head, or an init-capture pack) is not carried by the lambda: it is
+diagnosed where it is used, with the same wording and location as outside
+a lambda. `Sema::split_lambda_packs` partitions the packs an operand
+names into the lambda's own (declared in scopes at or after the lambda's
+`scope_base`) and the enclosing ones; only the enclosing ones are
+recorded on the lambda (`lambda_unexpanded`, once its body is open).
+The sites, as clang:
+- "expression contains …": a full-expression in the body
+  (`diagnose_unexpanded_full_expr`, from `act_on_full_expr_at`), a
+  `switch` condition, a range-for range (at the `{` of a braced range),
+  a `case` value; an unexpanded range drops the loop
+  (`act_on_for_range_error`) and its initializer is not re-diagnosed
+  (`Sema::discarding_init`);
+- "static assertion contains …" at the condition's start, which then
+  fails silently (also outside a lambda);
+- "default argument contains …" for a default argument of the lambda's
+  own parameters (`diagnose_unexpanded_default_arg`; `sizeof...(xs)` is
+  an expansion and fine);
+- "exception type contains …" at the declarator-id (or the type) of a
+  handler (`diagnose_unexpanded_type_written`; the handler type becomes
+  `int`);
+- "initializer contains …" for a local variable's initializer.
+Outside a lambda these sites check every unexpanded pack (template
+definitions); during instantiation they do not run. Tests
+`expr.prim.lambda/errors-lambda-local-pack-unexpanded.cpp`,
+`temp.variadic/p12-unexpanded-statement-sites.cpp`. Not done: a computed
+`goto *xs` (not supported), and `catch (T...)` ("only function and
+template parameters can be parameter packs" is a parse error in kiln).
 At instantiation an `INVALID` pattern declaration is not instantiated:
 its `DeclStmt` fails silently and ends its compound statement (clang's
 `SubstDecl` / `TransformCompoundStmt`), so no later statement, such as a
