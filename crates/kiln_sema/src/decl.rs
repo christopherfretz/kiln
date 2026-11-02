@@ -541,9 +541,9 @@ impl Sema<'_, '_> {
         self.rebuild_ci_type(base, qual, d.loc, 0)
     }
 
-    /// [`Sema::rebuild_ci_type`] through `*`, `&` and `&&`
-    /// (`pair<typename X<T>::ptr&, bool>`); `None` when `view` is none of
-    /// those.
+    /// [`Sema::rebuild_ci_type`] through an elaborated type and through
+    /// `*`, `&` and `&&` (`pair<typename X<T>::ptr&, bool>`); `None` when
+    /// `view` is none of those.
     fn rebuild_ci_derived(
         &mut self,
         base: QualType,
@@ -552,6 +552,14 @@ impl Sema<'_, '_> {
         loc: Loc,
         depth: u32,
     ) -> Option<QualType> {
+        if let TypeView::Elaborated { keyword, nns, named } = view {
+            let r = self.rebuild_ci_type(named, qual, loc, depth + 1);
+            if r == named {
+                return Some(base);
+            }
+            let t = self.ast.types.elaborated(keyword, nns, r);
+            return Some(self.ast.types.qualify(t, base.quals()));
+        }
         let (TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p)) = view else {
             return None;
         };
@@ -578,14 +586,6 @@ impl Sema<'_, '_> {
         let view = self.ast.types.view(base.ty());
         if let Some(t) = self.rebuild_ci_derived(base, view, qual, loc, depth) {
             return t;
-        }
-        if let TypeView::Elaborated { keyword, nns, named } = view {
-            let r = self.rebuild_ci_type(named, qual, loc, depth + 1);
-            if r == named {
-                return base;
-            }
-            let t = self.ast.types.elaborated(keyword, nns, r);
-            return self.ast.types.qualify(t, base.quals());
         }
         if let TypeView::TemplateSpecialization { name, args, alias: false, .. } = view {
             let list = self.ast.types.args(args).to_vec();
