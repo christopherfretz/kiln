@@ -761,7 +761,7 @@ impl Sema<'_, '_> {
     }
 
     /// "`what` contains unexpanded parameter pack[s] 'P'..." at `at`.
-    fn report_unexpanded_packs(&mut self, packs: &[DeclId], what: &'static str, at: Loc) {
+    pub(crate) fn report_unexpanded_packs(&mut self, packs: &[DeclId], what: &'static str, at: Loc) {
         let names: Vec<String> = packs.iter().map(|&d| self.decl_name(d)).collect();
         let quoted: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
         let list = match quoted.as_slice() {
@@ -850,6 +850,56 @@ impl Sema<'_, '_> {
         }
         let at = at.unwrap_or_else(|| self.begin_loc(e));
         self.diagnose_unexpanded_pack(PackOperand::Expr(e), what, at)
+    }
+
+    /// [temp.variadic]/12 for a default argument written in a function
+    /// declarator (clang's `ActOnParamDefaultArgument`, at the
+    /// argument's begin). In a lambda (its body, or its own declarator)
+    /// an enclosing scope's packs make the lambda-expression contain an
+    /// unexpanded pack instead: `[](auto... xs) { [](int = sizeof(xs))
+    /// {}; }` is then diagnosed at the inner lambda's full-expression.
+    /// True after the diagnostic.
+    pub(crate) fn diagnose_unexpanded_default_arg(&mut self, e: ExprId, at: Loc) -> bool {
+        if !self.inst.stack.is_empty() {
+            return false;
+        }
+        if self.lambdas.is_empty() {
+            return self.diagnose_unexpanded_pack(PackOperand::Expr(e), "default argument", at);
+        }
+        if !self.operand_has_packs(PackOperand::Expr(e)) {
+            return false;
+        }
+        let local = self.split_lambda_packs(PackOperand::Expr(e));
+        if local.is_empty() {
+            return false;
+        }
+        self.report_unexpanded_packs(&local, "default argument", at);
+        true
+    }
+
+    /// [temp.variadic]/12 for a type written in a template: an
+    /// exception-declaration's (`what` = "exception type", clang's
+    /// `ActOnExceptionDeclarator` at the declarator-id's location). In a
+    /// lambda body only the lambda's own packs are diagnosed
+    /// ([`Sema::lambda_unexpanded`]). True after the diagnostic.
+    pub(crate) fn diagnose_unexpanded_type_written(
+        &mut self,
+        ty: QualType,
+        what: &'static str,
+        at: Loc,
+    ) -> bool {
+        if !self.inst.stack.is_empty() || !self.has_unexpanded_pack(ty) {
+            return false;
+        }
+        if !self.lambdas.is_empty() {
+            let local = self.lambda_unexpanded(PackOperand::Type(ty));
+            if local.is_empty() {
+                return false;
+            }
+            self.report_unexpanded_packs(&local, what, at);
+            return true;
+        }
+        self.diagnose_unexpanded_pack(PackOperand::Type(ty), what, at)
     }
 
     /// The packs expression `e` names outside expansions, in order.

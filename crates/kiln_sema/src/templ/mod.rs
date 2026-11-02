@@ -228,6 +228,16 @@ pub struct TemplState {
     /// not substituted yet: deduction checks the associated constraints
     /// first ([`Sema::get_function_spec_signature`], §6.1).
     pub(crate) explicit_pending: kiln_source::fx::FxHashSet<DeclId>,
+    /// The warnings a SFINAE context held back while a function template
+    /// specialization's signature was substituted, by specialization:
+    /// reported at its first use (clang's `SuppressedDiagnostics`,
+    /// emitted by `DiagnoseUseOfDecl`; §5.7).
+    pub(crate) suppressed_diags: kiln_source::fx::FxHashMap<DeclId, Vec<kiln_diag::Diag>>,
+    /// The point of instantiation of the specialization the next call
+    /// deduction forms, when it is not the deduction's location: a
+    /// qualified callee's name (clang deduces at the callee's begin and
+    /// marks the specialization referenced at its name).
+    pub(crate) deduce_poi: Option<Loc>,
     /// The function parameters the last call deduction found
     /// non-dependent once its explicit template arguments were
     /// substituted, as a bit set by index (CWG1391: their conversions

@@ -599,8 +599,9 @@ impl Sema<'_, '_> {
     pub(crate) fn act_on_full_expr_at(&mut self, e: ExprId, cc: Loc) -> ExprId {
         if !self.lambdas.is_empty()
             && self.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
+            && let Some(r) = self.diagnose_unexpanded_full_expr(e)
         {
-            self.note_unexpanded_in_lambda(crate::templ::pack::PackOperand::Expr(e));
+            return r;
         }
         self.check_implicit_conversions(e, cc);
         self.flush_member_refs();

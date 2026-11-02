@@ -689,6 +689,22 @@ impl Sema<'_, '_> {
         let _ = self.lambda_unexpanded(op);
     }
 
+    /// [temp.variadic]/12 at the end of full-expression `e` in a lambda
+    /// body (clang's `ActOnFinishFullExpr`, `DiagnoseUnexpandedParameterPack`
+    /// with `UPPC_Expression` at the expression's begin): an enclosing
+    /// scope's packs are recorded on the lambda; the lambda's own make
+    /// the expression erroneous. `Some(recovery)` after the diagnostic.
+    /// A substituted expression is not checked (§7.2).
+    pub(crate) fn diagnose_unexpanded_full_expr(&mut self, e: ExprId) -> Option<ExprId> {
+        let local = self.lambda_unexpanded(crate::templ::pack::PackOperand::Expr(e));
+        if local.is_empty() || !self.inst.stack.is_empty() || self.discarding_init {
+            return None;
+        }
+        let at = self.begin_loc(e);
+        self.report_unexpanded_packs(&local, "expression", at);
+        Some(self.recover_err(&[], at))
+    }
+
     /// [temp.variadic]/12 in the innermost lambda's body ([temp.variadic]/5,
     /// clang `DiagnoseUnexpandedParameterPacks` with `LocalPacks`): of the
     /// packs `op` names outside an expansion, those declared in an
@@ -698,10 +714,18 @@ impl Sema<'_, '_> {
     /// a generic lambda) are returned, for the caller to diagnose. Empty
     /// outside a lambda body.
     pub(crate) fn lambda_unexpanded(&mut self, op: crate::templ::pack::PackOperand) -> Vec<DeclId> {
-        let Some(top) = self.lambdas.last() else { return Vec::new() };
-        if !top.body_open {
+        if !self.lambdas.last().is_some_and(|top| top.body_open) {
             return Vec::new();
         }
+        self.split_lambda_packs(op)
+    }
+
+    /// [`Sema::lambda_unexpanded`] also in the innermost lambda's
+    /// declarator (before its body opens): a default argument of its
+    /// parameters. The lambda's own packs there are those of its
+    /// *template-parameter-list*.
+    pub(crate) fn split_lambda_packs(&mut self, op: crate::templ::pack::PackOperand) -> Vec<DeclId> {
+        let Some(top) = self.lambdas.last() else { return Vec::new() };
         let base = top.scope_base;
         let packs = self.unexpanded_packs(op);
         let own = |s: &Self, d: DeclId| {
