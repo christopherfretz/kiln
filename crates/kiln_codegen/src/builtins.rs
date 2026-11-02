@@ -543,6 +543,14 @@ impl Cg<'_> {
                 self.store_scalar(exp, Addr { v: p, ty: mt, align }, iq);
                 self.f.fir.push(Op::ExtractValue { agg: call, idx: 0 }, ty)
             }
+            id::NEXTAFTERF16 | id::NEXTAFTERF16B => {
+                let Some(a1) = arg(1) else {
+                    return err(self.loc_of(e), "nextafter without two arguments");
+                };
+                let x = self.emit_scalar(a0)?;
+                let y = self.emit_scalar(a1)?;
+                self.nextafter16(x, y)
+            }
             _ if fp_intrinsic(b).is_some() => {
                 let (name, n) = fp_intrinsic(b).unwrap_or(("llvm.fabs", 1));
                 let mut vs = Vec::with_capacity(n);
@@ -834,6 +842,40 @@ impl Cg<'_> {
             }
         };
         Ok(BuiltinCall::Emitted(Some(v)))
+    }
+
+    /// `__builtin_nextafterf16`/`f16b` (WP-365): there is no library entry
+    /// point (clang 19 has neither builtin; GCC calls an undefined
+    /// `nextafterf16`), so the step is inline on the 16 bits, as
+    /// libstdc++'s run-time `nextafter(_Float16, _Float16)`: a NaN operand
+    /// gives `x + y` (in `float`, narrowed), equal operands `y`, a zero
+    /// `x` the smallest subnormal with `y`'s sign, else the bits of `x`
+    /// plus one when moving away from zero and minus one toward it.
+    fn nextafter16(&mut self, x: V, y: V) -> V {
+        let ty = self.f.fir.ty(&self.m, x);
+        let i16 = LTy::I16;
+        let (hx, hy) = (self.cast(CastOp::BitCast, x, i16), self.cast(CastOp::BitCast, y, i16));
+        let (fx, fy) = (self.cast(CastOp::FPExt, x, LTy::FLOAT), self.cast(CastOp::FPExt, y, LTy::FLOAT));
+        let c = |s: &mut Self, v: i128| V::C(s.m.const_int(i16, v));
+        let (abs_mask, sign_mask, one, m1, zero) =
+            (c(self, 0x7fff), c(self, -0x8000), c(self, 1), c(self, -1), c(self, 0));
+        let ax = self.bin(BinOp::And, Flags::NONE, hx, abs_mask);
+        let x_zero = self.icmp(IntPredicate::Eq, ax, zero);
+        let lt = self.fcmp(FloatPredicate::Olt, fx, fy);
+        let neg = self.icmp(IntPredicate::Slt, hx, zero);
+        let away = self.bin(BinOp::Xor, Flags::NONE, lt, neg);
+        let d = self.select(away, one, m1);
+        let step = self.bin(BinOp::Add, Flags::NONE, hx, d);
+        let sy = self.bin(BinOp::And, Flags::NONE, hy, sign_mask);
+        let tiny = self.bin(BinOp::Or, Flags::NONE, sy, one);
+        let bits = self.select(x_zero, tiny, step);
+        let r = self.cast(CastOp::BitCast, bits, ty);
+        let eq = self.fcmp(FloatPredicate::Oeq, fx, fy);
+        let r = self.select(eq, y, r);
+        let sum = self.bin(BinOp::FAdd, Flags::NONE, fx, fy);
+        let sum = self.cast(CastOp::FPTrunc, sum, ty);
+        let nan = self.fcmp(FloatPredicate::Uno, fx, fy);
+        self.select(nan, sum, r)
     }
 
     /// clang `emitBuiltinObjectSize` for a pointer the fold prepass could
