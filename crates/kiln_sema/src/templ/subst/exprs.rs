@@ -130,6 +130,9 @@ impl Substituter<'_, '_, '_> {
                 if self.sema.kind_of(d) == DeclKind::NonTypeTemplateParm {
                     return self.nttp_ref(e, d, loc);
                 }
+                if let Some(r) = self.kept_parm_pack(e, d, loc) {
+                    return Ok(r);
+                }
                 let i = self.find_instantiated_decl(d, loc)?;
                 // The qualifier as written survives ([temp.inst]; clang's
                 // `TransformDeclRefExpr` transforms the qualifier loc).
@@ -493,6 +496,17 @@ impl Substituter<'_, '_, '_> {
                 let list = self.expr(list)?;
                 Ok(self.sema.act_on_va_arg(list, ty, ty_loc, loc, end))
             }
+            ExprKind::ShuffleVectorExpr => {
+                // clang `TransformShuffleVectorExpr`: the operands, rebuilt
+                // (and re-checked) as the builtin call.
+                let subs: Vec<ExprId> =
+                    self.sema.ast.lists.iter::<ExprId>(ex(self).shuffle_subs(e)).collect();
+                let mut args = Vec::with_capacity(subs.len());
+                for s in subs {
+                    args.push(self.expr(s)?);
+                }
+                Ok(self.sema.act_on_shufflevector(&args, loc, end))
+            }
             ExprKind::ConvertVectorExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 let o = self.expr(ex(self).operand(e))?;
@@ -602,9 +616,8 @@ impl Substituter<'_, '_, '_> {
             ExprKind::SizeOfPackExpr => self.size_of_pack(e, loc, end),
             ExprKind::PackIndexingExpr => self.pack_indexing_expr(e, loc, end),
             ExprKind::SubstNonTypeTemplateParmPackExpr => self.subst_nttp_pack(e, loc),
-            ExprKind::PackExpansionExpr | ExprKind::FunctionParmPackExpr => {
-                self.unimplemented("pack expansion", loc)
-            }
+            ExprKind::FunctionParmPackExpr => self.subst_parm_pack(e, loc),
+            ExprKind::PackExpansionExpr => self.unimplemented("pack expansion", loc),
             ExprKind::ConceptSpecializationExpr => self.concept_id_expr(e, loc),
             ExprKind::RequiresExpr => self.requires_expr(e, loc),
             ExprKind::LambdaExpr => self.lambda_expr(e, loc),
@@ -1129,6 +1142,50 @@ impl Substituter<'_, '_, '_> {
         let i = self.pack_reached(n, |_| crate::templ::pack::PackName::outer(), loc)?;
         let a = self.sema.ast.types.args(l)[i as usize];
         self.nttp_replacement(a, p, loc)
+    }
+
+    /// Rebuilding a partially substituted expansion (§7.2): a reference
+    /// `e` to the function parameter pack `d`, instantiated as a list of
+    /// parameters, stays a pack as a `FunctionParmPackExpr` naming them
+    /// (clang's `TransformFunctionParmPackRefExpr` with no pack index).
+    /// Each parameter is captured by the enclosing lambdas as a reference
+    /// to it would be (clang's `MarkFunctionParmPackReferenced`). `None`
+    /// outside keep mode or for any other declaration.
+    fn kept_parm_pack(&mut self, e: ExprId, d: DeclId, loc: Loc) -> Option<ExprId> {
+        if !self.pack.keep || self.pack_index.is_some() {
+            return None;
+        }
+        let Some(&super::DeclOrPack::Pack(l)) = self.locals.get(&d) else { return None };
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l).collect();
+        for p in params {
+            let _ = self.sema.capture_at_decl_ref(p, loc);
+        }
+        let ty = self.sema.ast.exprs.get(e).ty();
+        Some(self.sema.ast.builder().function_parm_pack_expr(d, l, ty, loc))
+    }
+
+    /// A function parameter pack kept while its expansion stayed
+    /// dependent (§7.2): a reference to its parameter for the current
+    /// index, or itself while another partial expansion is rebuilt.
+    fn subst_parm_pack(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
+        if self.pack.keep && self.pack_index.is_none() {
+            return Ok(e);
+        }
+        let d = self.sema.ast.exprs.parm_pack_parameter(e);
+        let l = self.sema.ast.exprs.parm_pack_params(e);
+        let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
+        let i = self.pack_reached(
+            n,
+            |s| crate::templ::pack::PackName {
+                name: s.sema.decl_name(d),
+                depth: None,
+                outer: true,
+                partial: false,
+            },
+            loc,
+        )?;
+        let p = self.sema.ast.lists.at::<DeclId>(l, i as usize).ok_or(SubstFail)?;
+        Ok(self.sema.build_decl_ref(p, loc))
     }
 
     /// The literal for a non-type template argument value

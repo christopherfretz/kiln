@@ -159,10 +159,7 @@ impl Compiler<'_> {
                     .collect()
             }
             ExprKind::ConditionalOperator => self.vec_cond(e, n),
-            ExprKind::ShuffleVectorExpr => {
-                self.unsupported(e);
-                Vec::new()
-            }
+            ExprKind::ShuffleVectorExpr => self.vec_shuffle(e),
             _ => {
                 let op = self.ast().exprs.operand(e);
                 if self.ast().exprs.cast_kind(e) == CastKind::VectorSplat {
@@ -185,6 +182,43 @@ impl Compiler<'_> {
                 self.load_lanes(d, elem, n, ak::READ, e)
             }
         }
+    }
+
+    /// `__builtin_shufflevector(a, b, i...)` with folded indices (clang
+    /// `ExprConstant` `evalShuffleGeneric`): lane `k` of the result is
+    /// lane `i_k` of `a` followed by `b`; a `-1` (poison) lane is not a
+    /// constant (clang's note, at the builtin).
+    fn vec_shuffle(&mut self, e: ExprId) -> Vec<u32> {
+        let ast = self.ast();
+        let subs: Vec<ExprId> = ast.lists.iter(ast.exprs.shuffle_subs(e)).collect();
+        let Some(mask) = ast.exprs.shuffle_mask(e, &ast.lists).map(<[u32]>::to_vec) else {
+            self.unsupported(e);
+            return Vec::new();
+        };
+        let (Some(&x), Some(&y)) = (subs.first(), subs.get(1)) else {
+            self.unsupported(e);
+            return Vec::new();
+        };
+        let mut lanes = self.vec_regs(x);
+        lanes.extend(self.vec_regs(y));
+        let mut out = Vec::with_capacity(mask.len());
+        for (k, &w) in mask.iter().enumerate() {
+            match lanes.get(w as usize) {
+                Some(&r) => out.push(r),
+                None => {
+                    self.trap(
+                        e,
+                        &format!(
+                            "index for __builtin_shufflevector not within the bounds of the \
+                             input vectors; index of -1 found at position {k} is not permitted \
+                             in a constexpr context"
+                        ),
+                    );
+                    out.push(lanes.first().copied().unwrap_or_else(|| self.reg()));
+                }
+            }
+        }
+        out
     }
 
     /// The lanes of operand `x` of an operation on `n` lanes: a scalar

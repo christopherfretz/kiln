@@ -38,6 +38,10 @@ impl AttrKind {
     pub const WEAK: AttrKind = AttrKind(69);
     pub const VISIBILITY: AttrKind = AttrKind(70);
     pub const SECTION: AttrKind = AttrKind(71);
+    /// GNU `format(archetype, F, A)`: `a` = the archetype (0 `printf`),
+    /// `b` = `F | A << 16`, the one-based format-string and first data
+    /// argument indices (`A` = 0 for a `va_list`). Only the implicit
+    /// attribute of the printf-family builtins is stored (WP-282).
     pub const FORMAT: AttrKind = AttrKind(72);
     pub const CONST: AttrKind = AttrKind(73);
     pub const PURE: AttrKind = AttrKind(74);

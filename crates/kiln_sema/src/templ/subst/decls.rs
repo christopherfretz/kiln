@@ -520,7 +520,7 @@ impl Substituter<'_, '_, '_> {
             _ => self.param_infos(d),
         };
         let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
-        let lazy_exc = self.sema.lazy_exc_spec(d, p, friend.is_some());
+        let lazy_exc = self.sema.lazy_exc_spec(d, p);
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
             let ret = match early_ret {

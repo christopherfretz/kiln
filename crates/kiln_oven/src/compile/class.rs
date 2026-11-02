@@ -145,15 +145,22 @@ impl Compiler<'_> {
     // ---- destruction ------------------------------------------------------
 
     /// The function index of the destructor run for an object of type
-    /// `ty` (each element of an array), if it is not trivial.
+    /// `ty` (each element of an array), if it is not trivial. An
+    /// anonymous union is never destroyed on its own: the destructor of
+    /// the enclosing class that would destroy it is user-provided (the
+    /// implicit one would be deleted, [class.dtor]/7), and destroying it
+    /// has no effect ([class.union.anon]; clang's `HandleDestructionImpl`).
     pub(super) fn dtor_of(&mut self, ty: OTy) -> Option<u32> {
         let mut t = ty;
         while let TyKind::Array { elem, .. } = self.kind(t) {
             t = elem;
         }
-        let TyKind::Record { decl, .. } = self.kind(t) else { return None };
+        let TyKind::Record { decl, union, .. } = self.kind(t) else { return None };
         let ast = self.b.ast();
-        if record_bits(ast, decl).contains(DefinitionBits::TRIVIAL_DTOR) {
+        let bits = record_bits(ast, decl);
+        if bits.contains(DefinitionBits::TRIVIAL_DTOR)
+            || (union && bits.contains(DefinitionBits::ANONYMOUS))
+        {
             return None;
         }
         let d = ast.destructor(decl)?;

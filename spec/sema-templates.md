@@ -266,6 +266,19 @@ If `typename` is missing outside these contexts, clang's error and fix-it
 apply: "missing 'typename' prior to dependent type name 'T::type'". The
 parser then recovers as if `typename` had been written.
 
+A parameter-declaration of a function declared at namespace or block
+scope with an unqualified declarator-id (`template <class T> void
+f(X<T>::m x);`) is such a context (WP-287): the parser sets
+`param_typename` while parsing that parameter's
+decl-specifier-seq (`parse_param_clause`, `DeclSite::Plain`, not a
+deduction guide, whose parameters clang treats as implicit), and the
+error is at the first token of the name. Gap: kiln's tentative parse
+classifies `X<T>::m` by the primary template's member, so `void
+g(X<T>::m);` (a lone, unnamed parameter) is a function declarator with
+this error, where clang's `InvalidAsDeclSpec` tie-breaker makes it a
+variable (`variable has incomplete type 'void'`)
+(`tests/conformance/temp.res.general/missing-typename-parameter.cpp`).
+
 **`template`** is needed after `::`, `.` or `->` when the qualifier or
 object is dependent and not the current instantiation, as in
 `x.template f<int>()` and `T::template X<U>`. Without it, `<` is
@@ -2274,9 +2287,26 @@ check (§6.1) skips pack parameters, so an element mismatch is reported as
 "deduced type 'P<int, [...]>' of 1st parameter does not match adjusted
 type 'P<char, [...]>' of argument".
 
-Function parameter packs and pack expansion expressions met in keep
-mode (`FunctionParmPackExpr`, `PackExpansionExpr` patterns) are still
-"not yet implemented".
+A reference to an instantiated function parameter pack met in keep
+mode outside any element (the enclosing function template's `idx` in the
+body of a generic lambda, `[&]<size_t... P>(seq<P...>) { return ((idx *
+s[P]) + ...); }`) cannot expand yet: the lambda's own pack `P` is
+retained. It becomes a `FunctionParmPackExpr {param, params}` (clang's
+`FunctionParmPackExpr`): an lvalue of the pattern's type,
+type-, value- and instantiation-dependent and unexpanded, whose
+`params` list holds the instantiated `ParmVar`s. Building it captures
+each `ParmVar` at the reference ([expr.prim.lambda.capture]/8, clang
+`MarkFunctionParmPackReferenced`). When the generic lambda's call
+operator is instantiated, a `FunctionParmPackExpr` is a pack of N
+elements for the length check (step 3) and expands to a reference to
+element *i*.
+
+The fold and expansion patterns detect a partial element through
+`element_expr` (the expression analogue of `element_ty`): an element
+that, after substitution with a pack index, still names an unexpanded
+pack is rebuilt in keep mode as one unexpanded expansion. A
+`PackExpansionExpr` pattern met in keep mode is still "not yet
+implemented".
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
@@ -2753,7 +2783,10 @@ records it in `TABLE`.
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
 | checked arithmetic (WP-270) | `__builtin_add_overflow`†, `__builtin_sub_overflow`†, `__builtin_mul_overflow`† (generic: two integer operands of any types, a pointer to a non-const integer result); the typed `__builtin_{s,u}{add,sub,mul}_overflow` with `l`/`ll` forms (fixed `int`/`long`/`long long` parameters, signed or unsigned) | yes | `llvm.{s,u}{add,sub,mul}.with.overflow` in clang's encompassing width (spec/codegen.md §3) |
 | stack allocation (WP-270) | `__builtin_alloca`, `__builtin_alloca_with_align` (the alignment an `I` argument in bits: a power of two, at least 8, at most `INT_MAX`) | no ("subexpression not valid") | dynamic `alloca i8` where the call is |
-| printf family (WP-270) | `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf` (signature letter `R`: `restrict`) | no | libcall |
+| printf family (WP-270) | `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf` (signature letter `R`: `restrict`; implicit `format(printf, F, A)`, WP-282) | no | libcall |
+| library builtins (WP-282) | `__builtin_assume_aligned`†, `__builtin_object_size`, `__builtin_dynamic_object_size` (the type an `I` argument in [0, 3]) | yes | the pointer plus an `align` assumption bundle; `llvm.objectsize` or a folded constant |
+| library builtins (WP-282) | `__builtin_powi`/`f`/`l`, `__builtin_shufflevector`† (a `ShuffleVectorExpr`), `__builtin_verbose_trap`, `__builtin_copysignf16` | no (`shufflevector` yes; the others are "subexpression not valid") | `llvm.powi`, `shufflevector`, `llvm.trap`, `llvm.copysign.f16` |
+| `*f128` math (WP-282) | the `__builtin_*f128` forms of the `math` libm rows (`fabsf128`, `copysignf128`, `ceilf128`, ..., `huge_valf128`, `inff128`, `nanf128`, `nansf128`), typed `__float128` (signature `LLd`) | as clang 19: `fabs`/`copysign`/`fmax`/`fmin` and the constants yes, through the `l` twin (`f128_twin`) | the twin's path at `fp128` (intrinsic or constant); `roundevenf128` `llvm.roundeven`; the rest a libcall of the builtin's own name (`acosf128`) |
 
 **Landed (WP-088).** Every row above is implemented in sema, the Oven
 and codegen, with these exceptions, each matching clang 19:
@@ -2806,11 +2839,23 @@ alignment, after the integer-constant check, must be a power of two
 alignment must be 8 or greater`) and at most 2147483647 (`requested
 alignment must be 2147483647 or smaller`), reported at the callee
 (`check_alloca_align`, clang `SemaBuiltinAllocaWithAlign`). clang's
-implicit `format` attributes on the printf rows are not modelled (see
-§5.4 of spec/sema.md). Tests: `tests/conformance/ext.gnu.builtins/`
+implicit `format` attributes on the printf rows landed with WP-282 (see
+§5.4 of spec/sema.md, "Format strings"). Tests: `tests/conformance/ext.gnu.builtins/`
 (`overflow-args`, `overflow-constexpr`, `overflow-constexpr-invalid`,
 `overflow-run`, `alloca-args`, `alloca-run`, `printf-builtins-run`,
 `libstdcxx-gnu-builtins`), `tests/codegen/builtins_{overflow,alloca,printf_lib}.cpp`.
+
+**Landed (WP-282): library builtins.** The three "library builtins" rows
+and the `*f128` row above (`builtin::F128`, clang 19 ids; `TABLE` rows
+with clang 19's `__has_constexpr_builtin` answers). The argument checks
+are spec/sema.md §5.4 ("Library builtins", "Format strings"); codegen
+spec/codegen.md §3; Oven spec/oven.md "Landed (WP-282)". Not provided:
+`__fp16`/`_Float16` as keywords (so `copysignf16` is only reachable
+through `float` arguments), and `-Wformat` beyond the subset in §5.4.
+Tests: `tests/conformance/ext.gnu.builtins/` (`library-builtins-args`,
+`library-builtins-dependent`, `library-builtins-constexpr`,
+`object-size-constexpr`, `format-printf`) and `tests/codegen/builtins_`
+`{assume_aligned,object_size,powi,shufflevector,f128}.cpp`.
 
 **Source location.** Sema computes the values once, when it builds the
 `SourceLocExpr` (spec/ast.md §5.8): `LINE`/`COLUMN` from the presumed

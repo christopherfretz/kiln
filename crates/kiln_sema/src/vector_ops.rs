@@ -720,6 +720,87 @@ impl Sema<'_, '_> {
         self.builder().convert_vector(e, ty, loc, rparen)
     }
 
+    /// `__builtin_shufflevector(v1, v2, i...)` (clang
+    /// `Sema::BuiltinShuffleVector`; WP-282): at least two arguments; `v1`
+    /// and `v2` vectors of the same unqualified type; each index an
+    /// integer constant `-1` (a poison lane) or below twice the element
+    /// count. The result has `v1`'s type when there are as many indices as
+    /// elements, else a `vector_size` vector of the element type. The
+    /// operands stay unconverted, as in clang's AST; the folded indices
+    /// ride along for codegen and the Oven. Errors are at `loc`, the
+    /// builtin's name (clang `getBeginLoc`). The unary form with a vector
+    /// mask (two arguments) is not supported yet.
+    pub fn act_on_shufflevector(&mut self, args: &[ExprId], loc: Loc, rparen: Loc) -> ExprId {
+        if args.iter().any(|&a| self.is_err_expr(a)) {
+            return self.recover_err(args, loc);
+        }
+        if args.len() < 2 {
+            let d =
+                self.diag(DiagId::sema_call_too_few_args_at_least, rparen).arg(2).arg(args.len());
+            self.emit(d);
+            return self.recover_err(args, loc);
+        }
+        let name = || "__builtin_shufflevector".to_string();
+        let dep = |s: &Self, e: ExprId| {
+            s.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::TYPE)
+        };
+        let mut res = self.ety(args[0]);
+        let mut count = None;
+        if !dep(self, args[0]) && !dep(self, args[1]) {
+            let (lt, rt) = (self.ety(args[0]), self.ety(args[1]));
+            let (Some(l), Some(_)) = (self.vector_parts(lt), self.vector_parts(rt)) else {
+                let d = self.diag(DiagId::sema_shufflevector_non_vector, loc).arg(name());
+                self.emit(d);
+                return self.recover_err(args, loc);
+            };
+            let same = self.ast.types.canonical(lt).without_quals()
+                == self.ast.types.canonical(rt).without_quals();
+            if args.len() == 2 {
+                self.unsupported("the two-argument form of __builtin_shufflevector", loc);
+                return self.recover_err(args, loc);
+            }
+            if !same {
+                let d = self.diag(DiagId::sema_shufflevector_incompatible_vec, loc).arg(name());
+                self.emit(d);
+                return self.recover_err(args, loc);
+            }
+            let n = u32::try_from(args.len() - 2).unwrap_or(u32::MAX);
+            if l.count != n {
+                res = self.ast.types.vector(l.elem, n, VectorKind::Generic);
+            }
+            count = Some(i128::from(l.count));
+        }
+        let mut mask = Some(Vec::with_capacity(args.len() - 2));
+        for &a in &args[2..] {
+            if self.expr_is_value_dependent(a) || dep(self, a) {
+                mask = None;
+                continue;
+            }
+            let v = if self.ast.types.is_integral(self.ety(a)) { self.fold_int(a) } else { None };
+            let Some(v) = v else {
+                self.error(DiagId::sema_shufflevector_nonconstant_arg, loc);
+                return self.recover_err(args, loc);
+            };
+            let word = if v == -1 {
+                u32::MAX
+            } else if let Some(n) = count
+                && (v < 0 || v >= 2 * n)
+            {
+                self.error(DiagId::sema_shufflevector_argument_too_large, loc);
+                return self.recover_err(args, loc);
+            } else {
+                u32::try_from(v).unwrap_or(u32::MAX - 1)
+            };
+            if let Some(m) = mask.as_mut() {
+                m.push(word);
+            }
+        }
+        if count.is_none() {
+            mask = None;
+        }
+        self.builder().shuffle_vector(args, mask.as_deref(), res, loc, rparen)
+    }
+
     /// `__builtin_reduce_{add,mul,and,or,xor,min,max}(v)` (clang
     /// `CheckBuiltinFunctionCall`, `PrepareBuiltinReduceMathOneArgCall`):
     /// one argument after the usual unary conversions, a vector (of
