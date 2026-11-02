@@ -277,6 +277,16 @@ impl Sema<'_, '_> {
         if x.rewrite.is_reversed() != y.rewrite.is_reversed() {
             return !x.rewrite.is_reversed();
         }
+        // [over.match.best.general]/2.10 (P2582): a guide not formed
+        // from an inherited constructor over one that is, when their
+        // parameters for the arguments have the same types.
+        if x.decl.is_some() && y.decl.is_some() {
+            let inh = |c: &Candidate| self.is_inherited_guide(c.template.unwrap_or(c.func()));
+            let (i1, i2) = (inh(x), inh(y));
+            if i1 != i2 && self.same_guide_params(x.func(), y.func(), set.args.len()) {
+                return !i1;
+            }
+        }
         // [over.match.class.deduct] tie-breakers (WP-071b, WP-134):
         // /2.11: a user-declared deduction guide over an implicit one;
         // /2.12: the copy deduction candidate over any other; /2.13: the

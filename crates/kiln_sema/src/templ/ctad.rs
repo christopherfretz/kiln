@@ -27,6 +27,8 @@ use crate::templ::pack::Expansion;
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
 
+mod inherit;
+
 /// How the object whose type is a deduced class template specialization
 /// is initialized ([over.match.class.deduct]/1, /3).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1063,7 +1065,10 @@ impl Sema<'_, '_> {
             if level > 64 {
                 return Some(Vec::new());
             }
-            let inner = self.ctad_guides(target, init, level + 1, name_loc)?;
+            let mut inner = self.ctad_guides(target, init, level + 1, name_loc)?;
+            // An inherited constructor's guide returns a specialization of
+            // a base, not of `target` (follow-up).
+            inner.retain(|&g| !self.is_inherited_guide(g));
             return Some(
                 inner.into_iter().filter_map(|g| self.alias_guide(tmpl, rhs, g)).collect(),
             );
@@ -1079,6 +1084,9 @@ impl Sema<'_, '_> {
             guides.push(g);
         }
         guides.extend(user);
+        // P2582: the guides of the constructors `tmpl` inherits.
+        let inherited = self.inherited_guides(tmpl, level, name_loc);
+        guides.extend(inherited);
         Some(guides)
     }
 
@@ -1679,6 +1687,8 @@ impl Sema<'_, '_> {
                     let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
                     let ret = self.ast.types.proto_of(ty.ty()).or_else(|| self.ast.types.proto(ty));
                     let ret = ret.map_or(QualType::ERROR, FuncProto::ret);
+                    let g = set.cand(b).template.unwrap_or(f);
+                    let ret = self.ctad_result_type(g, ret);
                     Some(with_quals(self, ret))
                 }
             }
