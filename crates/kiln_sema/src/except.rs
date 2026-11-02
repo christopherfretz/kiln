@@ -575,7 +575,12 @@ impl Sema<'_, '_> {
                 .unwrap_or_default()
         };
         let (pp, fp) = (params(self, pattern), params(self, f));
-        let method = self.kind_of(f) == kiln_ast::decl::DeclKind::CXXMethod;
+        // A static member function has no `this`: an implicit one in the
+        // pattern is "invalid use of 'this' outside of a non-static
+        // member function" now ([expr.prim.this]/3; clang's
+        // `TransformCXXThisExpr` in `InstantiateExceptionSpec`).
+        let method =
+            self.kind_of(f) == kiln_ast::decl::DeclKind::CXXMethod && !self.is_static_method(f);
         let at = self.ast.exprs.get(expr).loc();
         let start = self.begin_loc(expr);
         // A friend's is in its class ([class.friend]/7), whose members it

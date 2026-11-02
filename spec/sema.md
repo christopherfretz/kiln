@@ -1153,9 +1153,18 @@ specification as written (`TypeNames` prints ` noexcept`,
   operand: `'this' cannot be [implicitly] used in a static member
   function declaration` (`sema_this_static_member_func`,
   [expr.prim.this]/3; clang `checkThisInStaticMemberFunctionExceptionSpec`;
-  WP-280, `class.mem.general/static-member-noexcept-this.cpp`). Clang
-  diagnoses it again when a class template's static member is
-  instantiated; kiln diagnoses only the pattern (a follow-up).
+  WP-280, `class.mem.general/static-member-noexcept-this.cpp`). In a
+  class template it is reported at the definition and again in each
+  instantiation of the class (`subst::function_decl` reruns the check
+  on the pattern's operand; the diagnostic is `per_instantiation`, so
+  the definition's report does not swallow it, spec/diag.md §7.4), the
+  first per instantiation carrying the `in instantiation of template
+  class` note. The specifier itself, instantiated when needed, gets no
+  `this` scope for a static member (`instantiate_exception_spec`), so
+  its implicit `this` is `invalid use of 'this' outside of a non-static
+  member function` under the `in instantiation of exception
+  specification` note, as in clang (WP-290,
+  `class.mem.general/static-member-noexcept-this-instantiation.cpp`).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as
