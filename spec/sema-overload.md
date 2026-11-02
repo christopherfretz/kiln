@@ -1084,6 +1084,13 @@ Where the code differs from (or details) the design above:
     template-id not followed by `(`; template instantiation calls it again
     for an uncalled template-id whose arguments were dependent
     (`auto *p = &f<T>;`, [over.over]/3, [temp.arg.explicit]/4; WP-276).
+    The same holds for a member template-id of a dependent class
+    (`return D<I>::template f<F>;`, a `DependentScopeDeclRefExpr`): once
+    substituted it is formed as the parser forms `C::f<A>` (every
+    overload of the name, `widen_function_template_id`; the qualifier and
+    begin, so `&C::template m<A>` is a pointer to member) and resolved
+    unless it is a call's callee (`Substituter::as_callee`), where the call
+    deduces the remaining arguments (WP-296).
   - When no non-template matches the target, `address_template_candidates`
     deduces P (the template's function type) from A (the target type)
     through `deduce_spec(.., target)`. It keeps the specializations that

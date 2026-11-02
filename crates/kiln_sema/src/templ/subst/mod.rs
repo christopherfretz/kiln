@@ -98,6 +98,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// nearest to the given location (§5.8); off for an alias template,
     /// whose substitution clang reports at the alias declaration.
     pub(crate) written_locs: bool,
+    /// The `DependentScopeDeclRefExpr` about to be substituted is a
+    /// call's callee: a template-id there is not resolved to its one
+    /// specialization (the call deduces). Taken by that node.
+    pub(crate) as_callee: bool,
     /// The occurrence rule of the declaration whose type is being
     /// substituted (§5.8; [`Substituter::with_written_scope`]).
     pub(crate) written_scope: Option<crate::templ::written::WrittenScope>,
@@ -136,6 +140,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             failed_usings: Vec::new(),
             partial_pack: None,
             written_locs: true,
+            as_callee: false,
             written_scope: None,
             written_used: std::cell::RefCell::default(),
         }

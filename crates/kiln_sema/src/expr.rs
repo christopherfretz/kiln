@@ -483,13 +483,45 @@ impl Sema<'_, '_> {
     /// The immediate invocations of an enclosing full-expression (a
     /// default template argument substituted by its overload resolution)
     /// stay pending ([expr.const]/16).
+    ///
+    /// Likewise a constant-expression without temporaries of its own (a
+    /// template argument converted while an enclosing full-expression is
+    /// being built: `use(D(3)) + C<1>::v`, `f<1>(D(3))`, an
+    /// `enable_if_t<..., int> = 0` default substituted by overload
+    /// resolution) leaves that full-expression's pending cleanups in
+    /// place, so its temporaries are still destroyed at its end
+    /// ([intro.execution]/5, [class.temporary]/4; clang's
+    /// `ConstantEvaluated` context restores `ParentCleanup`).
     pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
         let outer = self.set_aside_outer_immediates(e);
+        let pending = (!self.has_own_temporaries(e)).then(|| std::mem::take(&mut self.cleanup));
         self.constant_full_expr += 1;
         let r = self.act_on_full_expr(e);
         self.constant_full_expr -= 1;
+        if let Some(p) = pending {
+            self.cleanup = p;
+        }
         self.restore_outer_immediates(outer);
         r
+    }
+
+    /// Whether `e` materializes or binds a temporary, or uses a default
+    /// argument or member initializer (whose temporaries it then owns),
+    /// outside a nested `ExprWithCleanups`: its own cleanups, as opposed
+    /// to those of a full-expression it is nested in.
+    fn has_own_temporaries(&self, e: ExprId) -> bool {
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::CXXDefaultArgExpr
+                | ExprKind::CXXDefaultInitExpr => return true,
+                ExprKind::ExprWithCleanups | ExprKind::LambdaExpr => {}
+                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+            }
+        }
+        false
     }
 
     /// [`Sema::act_on_full_expr`] with conversion context `cc` for the
@@ -4990,6 +5022,19 @@ impl Sema<'_, '_> {
             return Some(CastKind::IntegralToPointer);
         }
         if fp && self.is_integral_or_enum(to) {
+            let pw = u32::try_from(self.abi.pointer_size * 8).unwrap_or(64);
+            if conv::int_width(self, to).is_some_and(|w| w < pw) {
+                let msg =
+                    self.diag(DiagId::sema_reinterpret_cast_small_int, loc).arg(self.ty_arg(to));
+                self.emit(msg);
+            }
+            return Some(CastKind::PointerToIntegral);
+        }
+        // [expr.reinterpret.cast]/4: a value of type `std::nullptr_t`
+        // converts to an integral type (not an enumeration) with the
+        // meaning and validity of `(void*)0`'s conversion (clang
+        // `TryReinterpretCast`).
+        if self.is_nullptr_type(from) && self.ast.types.is_integral(to) {
             let pw = u32::try_from(self.abi.pointer_size * 8).unwrap_or(64);
             if conv::int_width(self, to).is_some_and(|w| w < pw) {
                 let msg =
