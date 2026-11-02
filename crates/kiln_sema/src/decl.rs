@@ -389,6 +389,9 @@ impl Sema<'_, '_> {
         if p.explicit_object.is_some() {
             flags |= kiln_ast::decl::ParamData::EXPLICIT_OBJECT;
         }
+        // The prototype scopes enclosing this one (`ParamData::scope_depth`).
+        let depth = self.prototype_params.len().saturating_sub(1) + self.requires_param_scopes;
+        flags |= kiln_ast::decl::ParamData::scope_depth_flags(depth);
         let ctx = self.ctx;
         let pd = self.builder().prototype_param(ctx, name, p.loc, p.ty, idx, flags);
         if p.invalid {
@@ -1413,12 +1416,14 @@ impl Sema<'_, '_> {
             .arg(self.decl_arg(p).trim_matches('\'').to_string())
     }
 
-    /// True if `q` is an undeduced plain `auto` (not `decltype(auto)`).
+    /// True if `q` is an undeduced plain `auto` (not `decltype(auto)`,
+    /// nor a constrained `C auto`: clang's `isConstrained` check for a
+    /// trailing return type, [dcl.fct]/2).
     fn is_plain_auto(&self, q: QualType) -> bool {
         q.quals().is_empty()
             && matches!(
                 self.ast.types.view(q.ty()),
-                TypeView::Auto { keyword: AutoKeyword::Auto, deduced: None, .. }
+                TypeView::Auto { keyword: AutoKeyword::Auto, deduced: None, concept: None, .. }
             )
     }
 
@@ -6152,6 +6157,17 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                 }
             }
+            if prev.is_none() {
+                // [namespace.def.general]/3: the name is also searched for
+                // in the inline namespace set of the enclosing namespace;
+                // a namespace found there is extended (its scope becomes
+                // the target scope; libc++'s `namespace std::ranges {`
+                // reopens `std::__1::ranges`).
+                prev = self
+                    .current_scope_with_inline_dn(DeclName::ident(n))
+                    .into_iter()
+                    .find(|&p| self.ast.decls.get(p).kind() == DeclKind::Namespace);
+            }
         } else {
             // [namespace.unnamed]/1: every unnamed namespace of a scope is
             // the same namespace.
@@ -6160,11 +6176,17 @@ impl Sema<'_, '_> {
                 n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY
             });
         }
-        let h = DeclHead::new(
-            self.ctx,
+        // The semantic context is the extended namespace's (an inline
+        // namespace of `self.ctx`, above); the lexical one is `self.ctx`.
+        let sem = prev.and_then(|p| self.ast.decls.get(p).ctx()).unwrap_or(self.ctx);
+        let mut h = DeclHead::new(
+            sem,
             name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0)),
             name.map_or(loc, |n| n.1),
         );
+        if sem != self.ctx {
+            h = h.lexical(self.ctx);
+        }
         let ns = self.builder().namespace(h, inline, prev);
         if name.is_none() && prev.is_none() {
             // ... followed by an implicit `using namespace unique;`.
@@ -6180,7 +6202,7 @@ impl Sema<'_, '_> {
     /// `}` of a namespace.
     pub fn act_on_finish_namespace(&mut self, ns: DeclId) {
         self.scopes.pop();
-        self.ctx = self.ast.decls.get(ns).ctx().unwrap_or(self.ast.tu);
+        self.ctx = self.ast.decls.lexical_ctx(ns).unwrap_or(self.ast.tu);
     }
 
     /// `extern "C"` / `extern "C++"` ([dcl.link]); `lang` is the string
