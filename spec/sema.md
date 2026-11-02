@@ -1301,10 +1301,25 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   later friend is not measured against an earlier friend that was
   already diagnosed as mismatched. Test:
   `temp.friend/friend-redecl-exception-spec-at-instantiation.cpp`.
-  Divergences (follow-ups): clang also checks at template definition
-  time a friend whose type is not dependent; kiln checks only at
-  instantiation. Kiln also matches a later namespace-scope declaration
-  against the pattern friend, where clang waits for the instantiation.
+  At the template definition a non-dependent unqualified friend (no
+  template head) is checked too, as clang's `MergeFunctionDecl` does
+  for a friend of a dependent context: `pattern_friend_prev` finds the
+  namespace function it would redeclare (as for a friend of a
+  non-templated class, ignoring other pattern friends) and queues the
+  pair on `delayed_exc_equiv`, compared at once or after the replay.
+  The friend is not linked into that function's chain. A dependent
+  `noexcept(expr)` matches no other specification (clang's
+  `CT_Dependent`), so it is a mismatch at the definition and is
+  checked again per instantiation. The instantiation's check repeats
+  a definition-time report for a `noexcept(expr)` friend
+  (`per_instantiation_exc`; clang substitutes and compares it every
+  time) and drops it otherwise (diagnostic deduplication, spec/diag.md
+  §7.4), as clang does not re-diagnose `noexcept` or a missing
+  specification. A pattern friend is invisible to redeclaration
+  lookup (`find_prev_function` filters `is_dependent_friend_fn`): a
+  later namespace-scope declaration declares the function anew, and
+  each instantiated friend then redeclares it and is checked against
+  it (WP-290, `temp.friend/friend-exception-spec-pattern-time.cpp`).
 - *Unparsed through the redeclaration chain*: `exc_unparsed(f)` is true
   when `f`, its first declaration, or the pattern it waits on is in
   `unparsed_exc`. Both `resolve_exc_for_type` and

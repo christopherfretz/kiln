@@ -1579,6 +1579,14 @@ impl Sema<'_, '_> {
         new: NewFn,
     ) -> Option<DeclId> {
         let mut found = self.prev_candidates_dn(dname, qualifier);
+        // A friend of a templated class is not visible to redeclaration
+        // lookup until instantiated: a later namespace-scope declaration
+        // declares a new function, matched by the friend's
+        // instantiations ([temp.friend]/9, [temp.inst]/3; clang leaves a
+        // friend of a dependent context out of its namespace's lookup).
+        // One that redeclared an earlier function (a qualified friend)
+        // stands for it.
+        found.retain(|&x| !self.is_dependent_friend_fn(x) || self.ast.first(x) != x);
         if qualifier.is_some() {
             // A declaration whose parameter needed the missing-`typename`
             // recovery is invalid: a qualified redeclaration does not
@@ -2595,6 +2603,10 @@ impl Sema<'_, '_> {
         let late_exc =
             d.late_noexcept.is_some() || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
         let mut delayed_prev = false;
+        // A non-dependent friend of a templated class: the function it
+        // would redeclare once instantiated, whose exception
+        // specification it is checked against now (`pattern_friend_prev`).
+        let mut pattern_prev = None;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
         let new_fn = NewFn {
             ty,
@@ -2672,6 +2684,9 @@ impl Sema<'_, '_> {
                     .collect();
                 invalid_redecl |=
                     self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
+                if !invalid_redecl {
+                    pattern_prev = self.pattern_friend_prev(ctx, dname, new_fn);
+                }
             }
             None
         } else if friend && d.qualifier.is_none() {
@@ -2933,7 +2948,8 @@ impl Sema<'_, '_> {
                     // a non-throwing specification has one, and only those.
                     let msg = self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc());
                     let msg = self.note_prev(msg, p, false);
-                    self.emit(msg);
+                    let ne = self.written_exc_spec(ty);
+                    self.emit(crate::except::per_instantiation_exc(msg, ne));
                     invalid_redecl = true;
                 } else {
                     let same_params = match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
@@ -3067,6 +3083,13 @@ impl Sema<'_, '_> {
         self.defer_late_noexcept(f, d);
         if delayed_prev && let Some(p) = prev_ok {
             self.delayed_exc_equiv.push((f, p));
+        }
+        if let Some(p) = pattern_prev {
+            // Compared now, or once its replayed specification is known.
+            self.delayed_exc_equiv.push((f, p));
+            if !late_exc {
+                self.check_delayed_exc_equiv(f);
+            }
         }
         if d.lit_suffix.is_some() {
             if !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
@@ -4748,7 +4771,32 @@ impl Sema<'_, '_> {
     /// definitions are not a redefinition before then (libc++ `expected` and its `void` partial
     /// specialization both define `operator==(const expected&, const
     /// unexpected<_E2>&)`; clang's `CheckForFunctionRedefinition`).
-    fn is_dependent_friend_fn(&self, f: DeclId) -> bool {
+    /// [except.spec]/5 at the definition of a templated class
+    /// (clang `CheckEquivalentExceptionSpec` from `MergeFunctionDecl`,
+    /// which runs for a friend of a dependent context too): the function
+    /// of namespace `ns` that non-dependent unqualified friend `new`
+    /// redeclares, found as for a friend of a non-templated class. The
+    /// friend stays out of its redeclaration chain until instantiated;
+    /// the instantiation's own check then repeats only what was reported
+    /// here, which deduplication drops (spec/diag.md §7.4).
+    fn pattern_friend_prev(&mut self, ns: DeclId, dname: DeclName, new: NewFn) -> Option<DeclId> {
+        let found: Vec<DeclId> = self
+            .ast
+            .lookup_local(ns, dname)
+            .iter_with_inline()
+            .filter(|&(x, via_inline)| {
+                !via_inline
+                    && !self.is_dependent_friend_fn(x)
+                    && self.kind_of(x) != DeclKind::UsingShadow
+            })
+            .map(|(x, _)| x)
+            .collect();
+        let p = self.pick_prev_function(&found, new)?;
+        let pty = self.ast.decls.get(p).ty()?;
+        self.same_ignoring_exc_spec(pty, new.ty).then_some(p)
+    }
+
+    pub(crate) fn is_dependent_friend_fn(&self, f: DeclId) -> bool {
         let f = if self.kind_of(f) == DeclKind::FunctionTemplate {
             self.pattern_of(f).unwrap_or(f)
         } else {
