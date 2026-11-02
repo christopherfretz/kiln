@@ -823,7 +823,7 @@ impl Substituter<'_, '_, '_> {
             (_, Some(i)) => match self.sema.ast.exprs.get(i).kind() {
                 ExprKind::ParenListExpr => {
                     let l = kiln_ast::ids::ListId::new(self.sema.ast.exprs.get(i).a());
-                    let args = self.expr_list(l)?;
+                    let args = self.call_arg_list(l)?;
                     let at = self.sema.ast.exprs.get(i).loc();
                     let r = self.sema.ast.exprs.end_loc(i).unwrap_or(at);
                     NewInit::Paren(args, at, r)
@@ -1676,9 +1676,12 @@ impl Substituter<'_, '_, '_> {
         };
         let n = *self.sema.ast.exprs.get(init);
         Ok(Some(match n.kind() {
+            // A braced-init-list argument stays a braced argument, which
+            // the constructor's parameter is list-initialized from
+            // ([over.ics.list], `C c({1, 2}, a)` with `a` dependent).
             ExprKind::ParenListExpr => {
                 let l = kiln_ast::ids::ListId::new(n.a());
-                let args = self.expr_list(l)?;
+                let args = self.call_arg_list(l)?;
                 let r = self.sema.ast.exprs.end_loc(init).unwrap_or(n.loc());
                 Initializer::Paren(args, n.loc(), r)
             }

@@ -474,6 +474,28 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// Gives the parameters [`Self::map_params`] mapped the names of
+    /// their pattern parameters `pp` (an expanded pack's elements all
+    /// take the pack's name), as clang `addInstantiatedParametersToScope`
+    /// does when it defines a function from a definition whose
+    /// parameters are named differently from the declaration's.
+    pub(crate) fn rename_params_from_pattern(&mut self, pp: &[kiln_ast::DeclId]) {
+        use crate::templ::subst::DeclOrPack;
+        for &a in pp {
+            let name = self.sema.ast.decls.get(a).name();
+            match self.locals.get(&a).copied() {
+                Some(DeclOrPack::Decl(b)) => self.sema.ast.decls.set_name(b, name),
+                Some(DeclOrPack::Pack(l)) => {
+                    let elems: Vec<kiln_ast::DeclId> = self.sema.ast.lists.iter(l).collect();
+                    for b in elems {
+                        self.sema.ast.decls.set_name(b, name);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// A fold-expression (§7.3, [temp.variadic]/11): the elements of its
     /// pattern combined by `act_on_binary` in a loop (no recursion per
     /// element, R-WALK), wrapped in a `ParenExpr`.
