@@ -655,7 +655,7 @@ impl Sema<'_, '_> {
         let canonical = self.ast.types.canonical_args(sugared);
         let conv = ConvertedArgs { sugared, canonical };
         let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(sugared), loc, |s| {
-            s.get_function_spec(ft, &conv, loc)
+            s.get_function_spec_signature(ft, &conv, loc)
         });
         match r {
             None => Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
@@ -673,6 +673,21 @@ impl Sema<'_, '_> {
                         let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d);
                         f.args = Some(sugared);
                         f.sat = Some(sat);
+                        return Err(f);
+                    }
+                }
+                // The explicit-specifier, once the constraints are
+                // satisfied (clang `instantiateExplicitSpecifierDeferred`).
+                let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(sugared), loc, |s| {
+                    s.finish_function_spec_explicit(spec)
+                });
+                match r {
+                    None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
+                    Some((Ok(()), Ok(()))) => {}
+                    Some((_, failed)) => {
+                        let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+                        f.args = Some(sugared);
+                        f.diag = failed.err().flatten();
                         return Err(f);
                     }
                 }

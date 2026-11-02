@@ -37,6 +37,25 @@ impl Sema<'_, '_> {
         args: &ConvertedArgs,
         loc: Loc,
     ) -> Result<DeclId, ()> {
+        let spec = self.get_function_spec_signature(tmpl, args, loc)?;
+        self.finish_function_spec_explicit(spec)?;
+        Ok(spec)
+    }
+
+    /// [`Self::get_function_spec`] with the explicit-specifier left
+    /// pending: deduction checks the associated constraints first and
+    /// substitutes it after ([temp.deduct.general]/5, clang
+    /// `instantiateExplicitSpecifierDeferred`), so a constraint that
+    /// fails keeps an `explicit(expr)` that would be ill-formed for the
+    /// arguments from being substituted (libstdc++ `tuple`'s
+    /// `explicit(!__convertible_from_tuple_like<_UTuple>())`; §6.1).
+    #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
+    pub(crate) fn get_function_spec_signature(
+        &mut self,
+        tmpl: DeclId,
+        args: &ConvertedArgs,
+        loc: Loc,
+    ) -> Result<DeclId, ()> {
         let tmpl = self.ast.first(tmpl);
         if let Some(s) = self.ast.templates.find_spec(tmpl, args.canonical) {
             if self.ast.decls.get(s).has(DeclFlags::INVALID) {
@@ -85,7 +104,42 @@ impl Sema<'_, '_> {
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
-            sub.function_spec_signature(pattern, spec)?;
+            sub.function_spec_signature(pattern, spec)
+        });
+        let captured = self.sfinae_errors() > trapped;
+        if r.is_err() || captured {
+            self.ast.decls.set_flags(spec, DeclFlags::INVALID);
+            return Err(());
+        }
+        if self.fn_spec(pattern).is_explicit()
+            && self.ast.decls.cold.explicit_expr.get(pattern).is_some()
+        {
+            let _ = self.templ.explicit_pending.insert(spec);
+        }
+        Ok(spec)
+    }
+
+    /// Substitutes the explicit-specifier [`Self::get_function_spec_signature`]
+    /// left pending on function template specialization `spec`
+    /// ([temp.deduct.general]/7: a failure is a substitution failure, and
+    /// the specialization is memoized as invalid). `Ok` when none is
+    /// pending.
+    #[allow(clippy::result_unit_err, reason = "`Err` means already diagnosed")]
+    pub(crate) fn finish_function_spec_explicit(&mut self, spec: DeclId) -> Result<(), ()> {
+        if !self.templ.explicit_pending.remove(&spec) {
+            return Ok(());
+        }
+        let Some((_, info)) = self.ast.spec_info(spec) else { return Ok(()) };
+        let tmpl = info.template;
+        let Some(pattern) = self.pattern_of(self.inst_template(tmpl)) else { return Err(()) };
+        let Some((_, margs)) = self.spec_args(spec) else { return Err(()) };
+        let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
+        let pairs = self.inst_context_pairs(self.spec_pairs_ctx(spec, tmpl));
+        let trapped = self.sfinae_errors();
+        let r = self.in_inst_context(ctx, |s| {
+            let mut sub = Substituter::new(s, &margs);
+            sub.entity = Some(spec);
+            sub.map_contexts(&pairs);
             sub.function_spec_explicit(pattern, spec)
         });
         let captured = self.sfinae_errors() > trapped;
@@ -93,7 +147,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
             return Err(());
         }
-        Ok(spec)
+        Ok(())
     }
 
     /// Whether `f` is a function template specialization (clang's
