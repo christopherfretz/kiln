@@ -1680,7 +1680,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 29] {
+    fn rows(&self) -> [MemRow; 30] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
