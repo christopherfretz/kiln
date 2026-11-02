@@ -143,7 +143,9 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   access `x.B::m` casts the object to the base as written
   (`member_qualifier_type`, `class/member_expr.rs`); the injected
   parameters of a redeclared class template are the definition's
-  (`injected_params_template`, `templ/actions.rs`).
+  (`injected_params_template`, `templ/actions.rs`), except in an
+  implicit deduction guide, which keeps the first declaration's
+  (`first_injected_params_template`; guide printing below).
 - **Builtins** (WP-394; spec/sema-templates.md §9.1).
   `__is_referenceable` is an ordinary identifier;
   `__reference_binds_to_temporary` is `__reference_constructs_from_temporary`
@@ -1218,7 +1220,8 @@ and returns the scope it names:
 - **Guide printing** (WP-320), as clang:
   - The injected class type of an implicit guide (`-> vector<_Tp,
     _Alloc>`) uses the template parameters of the class template's
-    first declaration (`injected_params_template`): a forward
+    first declaration (`first_injected_params_template`, at every
+    compat level): a forward
     declaration's names, `type-parameter-0-N` for unnamed ones. A friend
     declaration inside a templated class does not count (clang links it
     only at instantiation); one in a non-template class does.

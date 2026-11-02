@@ -210,7 +210,8 @@ fn min_oracle(file: &Path) -> Option<u32> {
     src.lines().find_map(|l| l.strip_prefix("//@ min-oracle:")).and_then(|v| v.trim().parse().ok())
 }
 
-/// Compiles `file` for `triple` with the in-process driver.
+/// Compiles `file` for `triple` with the in-process driver, at the
+/// oracle's compat level (`kiln++` defaults to 22 since WP-394).
 fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     let out = SharedBuffer::new();
     let err = SharedBuffer::new();
@@ -224,6 +225,7 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
             .iter()
             .chain(pinned_flags(triple))
             .map(|s| (*s).to_owned())
+            .chain(std::iter::once(format!("-fclang-compat={}", oracle_version())))
             .chain(extra_flags(file))
             .chain(
                 module_inputs(file)
