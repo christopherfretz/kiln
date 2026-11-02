@@ -505,7 +505,7 @@ impl Sema<'_, '_> {
     }
 
     /// An operand `e` that is an overload set of one non-template
-    /// function without template arguments: the reference to that
+    /// function or static member function without template arguments: the reference to that
     /// function (clang's `resolveAndFixAddressOfSingleOverloadCandidate`
     /// in `CheckPlaceholderExpr`), else `e`. Only typo correction builds
     /// such a set (spec/sema.md "Undeclared template-ids").
@@ -517,7 +517,9 @@ impl Sema<'_, '_> {
             return e;
         }
         let [(d, found)] = self.ule_candidates(e)[..] else { return e };
-        if self.kind_of(d) != DeclKind::Function || self.is_class_member_ref(d) {
+        if !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
+            || self.is_class_member_ref(d)
+        {
             return e;
         }
         let naming = self.ovl.ule_found.get(&e).and_then(|x| x.naming);

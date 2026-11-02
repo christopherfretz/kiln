@@ -9,7 +9,7 @@
 use kiln_ast::decl::DeclKind;
 use kiln_ast::types::TemplateArg;
 use kiln_ast::{DeclId, ExprId};
-use kiln_diag::DiagId;
+use kiln_diag::{DiagId, FixIt};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
@@ -21,6 +21,7 @@ use crate::lookup::LookupKind;
 
 /// What clang 22's typo correction made of a template-id that names
 /// nothing ([`Sema::correct_template_id_typo`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateIdTypo {
     /// Corrected with recovery: the expression the enclosing expression
     /// goes on with.
@@ -101,6 +102,9 @@ impl Sema<'_, '_> {
         args: &[TemplateArg],
         loc: Loc,
     ) -> TemplateIdTypo {
+        if let Some(r) = self.template_id_class_member(name, loc) {
+            return r;
+        }
         let Some(c) = self.best_template_id_typo(name) else {
             return TemplateIdTypo::Uncorrected;
         };
@@ -148,7 +152,7 @@ impl Sema<'_, '_> {
             _ => return TemplateIdTypo::Uncorrected,
         };
         let note = self
-            .diag(DiagId::note_entity_declared_here, self.decl_loc(shown))
+            .diag(DiagId::note_entity_declared_here, self.typo_note_loc(shown))
             .arg(format!("'{}'", c.text));
         let msg = self
             .diag(DiagId::sema_undeclared_var_use_suggest, loc)
@@ -159,22 +163,7 @@ impl Sema<'_, '_> {
         match kind {
             Correction::Type => return TemplateIdTypo::Suggested,
             Correction::Quiet => {}
-            Correction::Member(m) => {
-                // clang rebuilds an implicit member access: a bound member
-                // function not called, or no object at all.
-                let in_method = !c.qualified && self.func.as_ref().is_some_and(|f| f.this_ty.is_some());
-                let msg = if in_method {
-                    let no_args = self
-                        .ast
-                        .decls
-                        .function(m)
-                        .is_some_and(|f| self.ast.lists.get(f.params).is_empty());
-                    self.diag(DiagId::sema_bound_member_not_called, loc).arg(u8::from(no_args))
-                } else {
-                    self.diag(DiagId::sema_member_call_without_object, loc)
-                };
-                self.emit(msg);
-            }
+            Correction::Member(m) => self.typo_member_not_called(m, !c.qualified, loc),
             Correction::Value if !self.in_template() => {
                 // clang re-forms the template-id on the variable and finds
                 // no template kind for it.
@@ -196,15 +185,124 @@ impl Sema<'_, '_> {
                 // (with the template arguments for a function template),
                 // which a built-in operator resolves to it
                 // ([`Sema::resolve_single_overload_candidate`]).
-                let targs = (self.kind_of(d) == DeclKind::FunctionTemplate)
-                    .then(|| self.ast.types.arg_list(args));
+                let template = self.kind_of(d) == DeclKind::FunctionTemplate;
+                let targs = template.then(|| self.ast.types.arg_list(args));
                 let dn = self.ast.decls.get(d).name();
-                return TemplateIdTypo::Recovered(
-                    self.builder().unresolved_lookup(dn, &[decl], false, None, targs, loc),
-                );
+                let e = self.builder().unresolved_lookup(dn, &[decl], false, None, targs, loc);
+                return TemplateIdTypo::Recovered(if template {
+                    self.resolve_single_template_id(e)
+                } else {
+                    e
+                });
             }
         }
         TemplateIdTypo::Recovered(self.recover_err(&[], loc))
+    }
+
+    /// clang's `DiagnoseEmptyLookup` before typo correction: `name`
+    /// declared in a class enclosing the current context (a member
+    /// function whose template-id ordinary lookup set aside). "member
+    /// 'x' used before its declaration" when it is a member of that
+    /// class, "explicit qualification required to use member 'x' from
+    /// dependent base class" when it is inherited -- or when the one
+    /// function of the set callable with no arguments was picked out
+    /// (clang's lookup result then has no naming class) -- with a
+    /// "member is declared here" per declaration and, in a non-static
+    /// member function of that class, a `this->` fix-it; then the
+    /// recovery of a typo correction to those functions.
+    fn template_id_class_member(&mut self, name: Symbol, loc: Loc) -> Option<TemplateIdTypo> {
+        let mut dc = Some(self.ctx);
+        let mut hit = None;
+        for _ in 0..10_000 {
+            let Some(d) = dc else { break };
+            if self.kind_of(d) == DeclKind::CXXRecord {
+                let found = self.lookup_qualified(d, name, LookupKind::Ordinary);
+                if !found.decls.is_empty() {
+                    hit = Some((d, found.decls));
+                    break;
+                }
+            }
+            dc = self.ast.decls.get(d).ctx();
+        }
+        let (class, mut decls) = hit?;
+        let callable: Vec<DeclId> = decls
+            .iter()
+            .copied()
+            .filter(|&d| {
+                let d = self.ast.strip_shadow(d);
+                matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
+                    && self.fn_min_args(d) == 0
+            })
+            .collect();
+        let picked = callable.len() == 1;
+        if picked {
+            decls = callable;
+        }
+        let class = self.ast.first(class);
+        let first = self.ast.strip_shadow(decls[0]);
+        let own = !picked
+            && self.ast.decls.get(first).ctx().is_some_and(|p| self.ast.first(p) == class);
+        let method = self.ast.decls.get(self.ctx).ctx().map(|p| self.ast.first(p));
+        let instance = !picked
+            && self.func.as_ref().is_some_and(|f| f.this_ty.is_some())
+            && self.kind_of(self.ctx) == DeclKind::CXXMethod
+            && method == Some(class);
+        let id = if own {
+            DiagId::sema_found_later_in_class
+        } else {
+            DiagId::sema_found_in_dependent_base
+        };
+        let mut msg = self.diag(id, loc).arg(sym_str(self, name));
+        if instance {
+            msg = msg.fixit(FixIt::insert(loc, "this->"));
+        }
+        for &d in &decls {
+            let at = self.decl_loc(self.ast.strip_shadow(d));
+            msg = msg.with_note(self.diag(DiagId::note_member_declared_at, at));
+        }
+        self.emit(msg);
+        let member = decls.iter().map(|&d| self.ast.strip_shadow(d)).find(|&d| {
+            self.kind_of(d) == DeclKind::CXXMethod && !self.is_static_method(d)
+        });
+        if let Some(m) = member {
+            self.typo_member_not_called(m, true, loc);
+            return Some(TemplateIdTypo::Recovered(self.recover_err(&[], loc)));
+        }
+        let dn = self.ast.decls.get(first).name();
+        Some(TemplateIdTypo::Recovered(
+            self.builder().unresolved_lookup(dn, &decls, false, None, None, loc),
+        ))
+    }
+
+    /// Where clang's "declared here" note for `d` points: its name, or
+    /// for an alias template its `using` keyword.
+    fn typo_note_loc(&self, d: DeclId) -> Loc {
+        let first = self.ast.first(self.ast.strip_shadow(d));
+        (self.kind_of(first) == DeclKind::TypeAliasTemplate)
+            .then(|| self.ast.template_info(first).and_then(|i| i.pattern))
+            .flatten()
+            .and_then(|p| self.templ.alias_using_loc.get(&p).copied())
+            .unwrap_or_else(|| self.decl_loc(d))
+    }
+
+    /// clang's recovery of a non-static member function `m` named
+    /// without an object: "reference to non-static member function must
+    /// be called" in a non-static member function (`implicit`: the name
+    /// was unqualified), else "call to non-static member function without
+    /// an object argument".
+    fn typo_member_not_called(&mut self, m: DeclId, implicit: bool, loc: Loc) {
+        let in_method = implicit && self.func.as_ref().is_some_and(|f| f.this_ty.is_some());
+        let msg = if in_method {
+            let no_args = self
+                .ast
+                .decls
+                .function(m)
+                .is_some_and(|f| self.ast.lists.get(f.params).is_empty());
+            self.diag(DiagId::sema_bound_member_not_called, loc).arg(u8::from(no_args))
+        } else {
+            self.diag(DiagId::sema_member_call_without_object, loc)
+        };
+        self.emit(msg);
     }
 
     /// The candidate clang's `CorrectTypo` settles on for `name` (see
