@@ -1338,15 +1338,19 @@ impl Substituter<'_, '_, '_> {
         let members: Vec<DeclId> = sub.sema.ast.decls.members(def).collect();
         let mut nsdmis = Vec::new();
         // clang `InstantiateClass`: a base that fails to substitute, an
-        // invalid data member of the pattern, or one that instantiates
-        // invalid makes the specialization invalid (its default member
-        // initializers are not instantiated).
+        // invalid member of the pattern (not instantiated; a member
+        // function with a parameter naming no type too, WP-318), or one
+        // that instantiates invalid makes the specialization invalid (its
+        // default member initializers are not instantiated).
         for m in members {
             let n = *sub.sema.ast.decls.get(m);
             if n.flags().contains(DeclFlags::IMPLICIT) {
                 continue;
             }
-            if n.has(DeclFlags::INVALID) && matches!(n.kind(), DeclKind::Field | DeclKind::Var) {
+            if n.has(DeclFlags::INVALID)
+                || n.kind() == DeclKind::FunctionTemplate
+                    && sub.sema.pattern_of(m).is_some_and(|p| sub.sema.is_invalid_decl(p))
+            {
                 invalid = true;
                 continue;
             }
