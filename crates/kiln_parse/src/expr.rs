@@ -1741,12 +1741,15 @@ impl Parser<'_, '_> {
         let mut j = less + 1;
         loop {
             match self.tok_at(j).kind {
-                TokKind::Eof | TokKind::Punct(Punct::Semi) => return None,
+                // The end of the statement, or an unmatched closer.
+                TokKind::Eof
+                | TokKind::Punct(Punct::Semi | Punct::RParen | Punct::RSquare | Punct::RBrace) => {
+                    return None;
+                }
                 TokKind::Punct(Punct::Greater | Punct::GreaterGreater) => return Some(j),
                 TokKind::Punct(Punct::LParen | Punct::LSquare | Punct::LBrace) => {
                     j = self.skip_balanced(j)?;
                 }
-                TokKind::Punct(Punct::RParen | Punct::RSquare | Punct::RBrace) => return None,
                 _ => j += 1,
             }
         }

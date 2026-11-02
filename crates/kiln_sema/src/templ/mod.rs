@@ -112,6 +112,7 @@ impl HeadBuild {
 /// The template state of [`Sema`] (spec/sema-templates.md §11.2; the
 /// engine's `InstState` is WP-070's).
 #[derive(Clone, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent parse-state flags")]
 pub struct TemplState {
     pub(crate) heads: Vec<HeadBuild>,
     /// A declarator-id's nested-name-specifier is being parsed (clang's
