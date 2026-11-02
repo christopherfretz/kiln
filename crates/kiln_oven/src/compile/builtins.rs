@@ -394,7 +394,7 @@ impl Compiler<'_> {
                     // The argument is evaluated speculatively in this
                     // frame's registers: the region ends in a `Ret` of
                     // its value, after which `Speculate` resumes at `end`.
-                    let pc = self.emit(Op::Speculate, u32::from(ptr), &[dst, 0, 0]);
+                    let pc = self.emit(Op::Speculate, u32::from(ptr) | 2, &[dst, 0, 0]);
                     let v = self.rv(x);
                     self.emit(Op::Ret, 1, &[v]);
                     let end = self.here();

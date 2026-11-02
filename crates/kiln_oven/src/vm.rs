@@ -1280,7 +1280,7 @@ impl Oven {
                         // constant context: a lax fold (`EvaluateAsInt`)
                         // of a non-constant argument fails rather than
                         // folding to 0.
-                        Ok(false) if self.run.lax && !self.run.const_context => {
+                        Ok(false) if aux & 2 != 0 && self.run.lax && !self.run.const_context => {
                             fail!(Fault::Invalid)
                         }
                         Ok(c) => reg!(0) = u128::from(c),
