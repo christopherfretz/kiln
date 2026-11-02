@@ -2135,6 +2135,14 @@ for them.
   `expression result unused; should this cast be to 'void'?`
   (-Wunused-value, clang `warn_unused_voidptr`) with only the fix-it
   removing the `*` as its range (WP-203).
+  - **Locations**: a built-in subscript `a[i]` is reported at its `]`
+    (clang `getRBracketLoc`; also as a comma's left operand and inside
+    parentheses, where the parentheses are looked through), a unary
+    operator at the operator, a member access at the member name, a
+    binary operator at the operator; a subscript yielding a `volatile`
+    glvalue, `(void)e` and a call of an overloaded `operator[]` returning
+    a reference are not warned (WP-324; conformance test
+    `stmt.expr/unused-value-subscript.cpp`).
   - `emit_unused` (WP-182) follows clang's order: a comparison is
     `-Wunused-comparison` only when it is the unused expression itself
     (`top_comparison`: not parenthesized, not a comma's right operand or

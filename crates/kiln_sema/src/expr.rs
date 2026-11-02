@@ -1136,6 +1136,11 @@ impl Sema<'_, '_> {
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
                     None
+                } else if n.kind() == ExprKind::ArraySubscriptExpr {
+                    // clang `isUnusedResultAWarning` reports a subscript
+                    // at its `]` (`getRBracketLoc`).
+                    let at = self.ast.exprs.end_loc(x).unwrap_or(loc);
+                    Some((DiagId::sema_unused_expr, at, Vec::new()))
                 } else {
                     Some((DiagId::sema_unused_expr, loc, Vec::new()))
                 }
