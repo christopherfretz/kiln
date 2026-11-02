@@ -4894,6 +4894,7 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         // `C(e)` ([dcl.type.class.deduct]/2, WP-071b).
         let ty = if style == CastStyle::Functional && !self.is_err_expr(e) {
+            let ty = self.auto_cast_type(ty, &[e], None, loc);
             self.ctad_cast_type(ty, &[e], loc)
         } else {
             ty
