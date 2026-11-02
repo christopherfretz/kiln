@@ -5121,7 +5121,7 @@ impl Sema<'_, '_> {
     /// or a partial specialization of class template `X` and the current
     /// context is inside it ([temp.local]/1); `None` otherwise (a
     /// `template<class U> friend class X;` names the template itself).
-    fn injected_tag_type(&mut self, d: DeclId) -> Option<QualType> {
+    pub(crate) fn injected_tag_type(&mut self, d: DeclId) -> Option<QualType> {
         if self.kind_of(d) != DeclKind::CXXRecord || self.friend_class_template.is_some() {
             return None;
         }

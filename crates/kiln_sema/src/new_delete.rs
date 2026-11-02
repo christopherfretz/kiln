@@ -838,6 +838,18 @@ impl Sema<'_, '_> {
         bits > MAX_BITS
     }
 
+    /// Whether the elements of (array) type `elem` are of a
+    /// const-default-constructible class ([dcl.init.general]/7: a
+    /// user-provided default constructor, or every member has a default
+    /// member initializer or is itself const-default-constructible).
+    fn const_default_constructible(&mut self, elem: QualType, at: Loc) -> bool {
+        let Some(rec) = self.ast.types.as_record(self.base_element(elem)) else { return false };
+        self.instantiate_for_init(rec, at);
+        let Some(def) = self.ast.definition(rec) else { return false };
+        conv::bases::complete_class(self, def)
+            .is_some_and(|c| self.defn_bits(c).contains(DefinitionBits::CAN_CONST_DEFAULT_INIT))
+    }
+
     /// Diagnoses the default-initialization of a const class object
     /// without a user-provided default constructor ([dcl.init.general]/8);
     /// true if one was reported (the node is built without an
@@ -1124,8 +1136,11 @@ impl Sema<'_, '_> {
         };
         match init {
             NewInit::None => {
+                // An array of a const-default-constructible class is
+                // default-initialized element by element ([dcl.init.general]/7).
                 if self.ast.types.effective_quals(elem).is_const()
                     && (array_form || self.ast.types.as_record(elem).is_none())
+                    && !(array_form && self.const_default_constructible(elem, at))
                 {
                     // clang names the whole array type (`const int[]`).
                     let ty = if array_form { array_ty(self) } else { elem };
