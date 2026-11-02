@@ -1109,14 +1109,22 @@ vector, so `struct Q { _Float128 x; }` is `fp128` and `struct V { v4 v; }`
 `tests/conformance/basic.extended.fp/p1467-run.cpp` (calls on both CI
 targets).
 
-**Known backend defect (x86-64, LLVM 19):** `llc-19` (kiln's backend, and
-clang 19's) widens `bfloat` to `float` and, at `-O0`, takes a `bfloat`
-call result passed straight on as another call's argument (`g(f())`) as
-already widened: it runs `__truncsfbf2` on the raw bf16 bits, so the
-callee receives garbage. The IR is clang 19's and correct; LLVM 22
-compiles it correctly (the clang 22 switch, WP-355, removes it). kiln
-does not work around it; `nextafterf16-run.cpp` stores each `__bf16`
-call result to a local before passing it.
+**Backend defect workaround (x86-64, LLVM 19; WP-386):** `llc-19`
+(kiln's LLVM 19 backend, and clang 19's) widens `bfloat` to `float` and,
+in FastISel (`-O0`), takes a `bfloat` call result from a callee defined in
+the same module, passed straight on as another call's argument (`g(f())`),
+for the already widened value: it runs `__truncsfbf2` on the raw bf16 bits,
+so the callee receives garbage. External callees and the optimizing
+selector are unaffected; LLVM 22 compiles the same IR correctly. kiln
+spills instead of diagnosing (a diagnostic would reject valid code that
+works under LLVM 22): when the target is x86-64, `optimize` is off and
+`CodegenOptions::llvm_major < 22`, every `bfloat` call result is stored to
+an entry-block temporary and loaded back (`expr.rs`, end of `call_with`),
+and the backend extends a loaded `bfloat` correctly. The IR at LLVM 22, or
+when optimizing, is unchanged (clang's). clang 19 itself still miscompiles
+such programs, so `bf16-call-result-x86_64-run.cpp` (`requires:
+target-x86_64`, `clang>=22`, `oracle: none`) checks kiln's output against
+a fixed `stdout:`.
 
 ### 8.19 Landed (WP-363): module names
 
@@ -1235,6 +1243,25 @@ std_substitutions.cpp`, `std_cxx11_abi_tag.cpp`, `std_libcxx_spelling.cpp`,
   `tests/codegen/linkage_internal_types.cpp`,
   `tests/codegen/linkage_internal_nttp.cpp` (IR diff against clang 19
   and 22).
+
+### 8.23 Landed (WP-386): clang 20+ call lowering at `-fclang-compat=22`
+`IrTypes::with_clang_compat` carries the codegen compat level (the
+driver's `-fclang-compat`, default 19) into classification. At 22,
+`aarch64_arg` follows clang 20+ (`AArch64ABIInfo::classifyArgumentType`,
+GCC's convention): an empty class (`[class.prop]`, no data members, size
+1) is no longer ignored-or-`i8` but goes down the generic small-aggregate
+path, so it is passed as `i64` (`trunc` to the `i8` slot in the callee);
+a variadic empty argument likewise. A zero-size struct (the GNU
+`int a[0]` member) is still ignored, and an empty class *returned* is
+still `void` (clang 22 kept `classifyReturnType`). x86-64 is unchanged
+(an empty class is `Ignore` there under both). `-fclang-abi-compat=19`
+in clang 22 does not restore the old `i8`, so kiln keys on the compat
+level only. Below 22 the clang 19 lowering (`i8` / ignored) is kept.
+The IR-level companions (the data layout, `dead_on_return`, GEP `nuw`)
+are spec/codegen.md §6a. Tests: `tests/conformance/expr.call/
+ir-clang22-argument-passing.cpp` (exact against clang 22) and the
+oracle-22 `ir_vs_clang` corpus, whose former empty-class `Abi`
+deviations now match.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

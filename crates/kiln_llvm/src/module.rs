@@ -234,6 +234,13 @@ pub const AARCH64_LINUX_GNU: TargetSpec = TargetSpec {
     data_layout: "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32",
 };
 
+/// clang 20+'s `aarch64-unknown-linux-gnu` data layout, which adds the
+/// `p270`/`p271`/`p272` address spaces (LLVM 19 parses and compiles it).
+pub const AARCH64_LINUX_GNU_22: TargetSpec = TargetSpec {
+    triple: "aarch64-unknown-linux-gnu",
+    data_layout: "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32",
+};
+
 /// clang 19's `x86_64-unknown-linux-gnu` triple and data layout.
 pub const X86_64_LINUX_GNU: TargetSpec = TargetSpec {
     triple: "x86_64-unknown-linux-gnu",

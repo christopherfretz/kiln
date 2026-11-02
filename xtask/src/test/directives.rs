@@ -34,6 +34,9 @@ pub enum Expect {
     /// `-fsyntax-only -fdump-vtable-layouts`; compare the dump with the
     /// oracle's (emitted at code generation) as a set of blocks.
     Vtables,
+    /// `-S -emit-llvm -O0`; compare the module with the oracle's, exactly
+    /// after dropping comments and the producer lines (WP-386).
+    Ir,
     /// `-fsyntax-only` ends normally (exit 0 or 1): errors are fine, a
     /// crash, a hang or an internal-error exit code is not.
     NoCrash,
@@ -49,6 +52,7 @@ impl Expect {
             "ast" => Self::Ast,
             "layout" => Self::Layout,
             "vtables" => Self::Vtables,
+            "ir" => Self::Ir,
             "no-crash" => Self::NoCrash,
             _ => return None,
         })
@@ -64,6 +68,7 @@ impl Expect {
             Self::Ast => "ast",
             Self::Layout => "layout",
             Self::Vtables => "vtables",
+            Self::Ir => "ir",
             Self::NoCrash => "no-crash",
         }
     }
@@ -292,6 +297,13 @@ pub struct TestSpec {
     /// (an expectation a later release changed, kept until kiln follows it;
     /// docs/status/wp-184-oracle-switch.md "Residual"); otherwise a SKIP.
     pub requires_clang_below: Option<ClangVersion>,
+    /// `requires: llvm>=N`: the least LLVM major of every backend that
+    /// consumes the test's IR (kiln's `KILN_LLVM_DIR`, each clang run);
+    /// otherwise a SKIP. For IR goldens whose syntax an older LLVM rejects.
+    pub requires_llvm: Option<u32>,
+    /// `requires: llvm<N`: every such backend must be older; otherwise a
+    /// SKIP (a workaround only an older backend needs).
+    pub requires_llvm_below: Option<u32>,
 }
 
 /// A clang that a test runs, for `requires: clang>=`: what it is to the
@@ -301,6 +313,15 @@ pub struct TestSpec {
 pub struct ClangRun<'a> {
     pub role: &'a str,
     pub version: Option<ClangVersion>,
+}
+
+/// A backend that consumes a test's IR, for `requires: llvm>=`: what it is
+/// to the test (`kiln's backend`, `the compiler`, `the oracle`) and its LLVM
+/// major (`None`: unknown, which never meets a requirement).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LlvmRun<'a> {
+    pub role: &'a str,
+    pub major: Option<u32>,
 }
 
 impl TestSpec {
@@ -338,8 +359,14 @@ impl TestSpec {
 
     /// Why the test cannot run, if it cannot: `host` is the harness's
     /// architecture (`std::env::consts::ARCH`), `clangs` the clangs the test
-    /// would run (`spec/harness.md`, `requires:`).
-    pub fn unmet_requirement(&self, host: &str, clangs: &[ClangRun<'_>]) -> Option<String> {
+    /// would run, `llvms` the LLVM backends that would consume its IR
+    /// (`spec/harness.md`, `requires:`).
+    pub fn unmet_requirement(
+        &self,
+        host: &str,
+        clangs: &[ClangRun<'_>],
+        llvms: &[LlvmRun<'_>],
+    ) -> Option<String> {
         if let Some(want) = self.requires_target.as_deref() {
             let arch = self.target_arch(host);
             if want != arch {
@@ -357,7 +384,7 @@ impl TestSpec {
                 None => Some(format!("{need}; {} names no clang version", c.role)),
             })
         });
-        at_least.or_else(|| {
+        let below = || {
             let below = self.requires_clang_below?;
             let need = format!("requires clang<{}", version_str(below));
             clangs.iter().find_map(|c| match c.version {
@@ -365,7 +392,19 @@ impl TestSpec {
                 Some(v) => Some(format!("{need}; {} is clang {}", c.role, version_str(v))),
                 None => Some(format!("{need}; {} names no clang version", c.role)),
             })
-        })
+        };
+        let llvm = |bound: Option<u32>, op: &str, ok: fn(u32, u32) -> bool| {
+            let want = bound?;
+            llvms.iter().find_map(|l| match l.major {
+                Some(m) if ok(m, want) => None,
+                Some(m) => Some(format!("requires llvm{op}{want}; {} is LLVM {m}", l.role)),
+                None => Some(format!("requires llvm{op}{want}; {} has no known LLVM", l.role)),
+            })
+        };
+        at_least
+            .or_else(below)
+            .or_else(|| llvm(self.requires_llvm, ">=", |m, w| m >= w))
+            .or_else(|| llvm(self.requires_llvm_below, "<", |m, w| m < w))
     }
 
     /// Does this test use directives only kiln can check?
@@ -428,6 +467,8 @@ struct Parser {
     diag_line: usize,
     requires_clang: Option<ClangVersion>,
     requires_clang_below: Option<ClangVersion>,
+    requires_llvm: Option<u32>,
+    requires_llvm_below: Option<u32>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
@@ -471,6 +512,8 @@ impl Parser {
             diag_line: 0,
             requires_clang: None,
             requires_clang_below: None,
+            requires_llvm: None,
+            requires_llvm_below: None,
             run_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
@@ -778,12 +821,12 @@ impl Parser {
     }
 
     /// `requires: target-<arch>` (`<arch>` one of [`TARGET_ARCHES`]),
-    /// `requires: clang>=X[.Y[.Z]]` or `requires: clang<X[.Y[.Z]]`; each kind
-    /// at most once.
+    /// `requires: clang>=X[.Y[.Z]]`, `requires: clang<X[.Y[.Z]]`,
+    /// `requires: llvm>=N` or `requires: llvm<N`; each kind at most once.
     fn requires_directive(&mut self, line: usize, value: &str) {
         let usage = format!(
-            "expected `requires: target-<arch>` (<arch> one of {}), `requires: clang>=X[.Y[.Z]]` \
-             or `requires: clang<X[.Y[.Z]]`",
+            "expected `requires: target-<arch>` (<arch> one of {}), `requires: clang>=X[.Y[.Z]]`, \
+             `requires: clang<X[.Y[.Z]]`, `requires: llvm>=N` or `requires: llvm<N`",
             TARGET_ARCHES.join(" ")
         );
         if let Some(a) = value.strip_prefix("target-") {
@@ -809,6 +852,22 @@ impl Parser {
                     self.err(line, "duplicate `requires: clang<`");
                 }
                 Some(v) => self.requires_clang_below = Some(v),
+            }
+        } else if let Some((v, below)) = value
+            .strip_prefix("llvm>=")
+            .map(|v| (v, false))
+            .or_else(|| value.strip_prefix("llvm<").map(|v| (v, true)))
+        {
+            let v = v.trim();
+            let major = v.parse::<u32>().ok().filter(|_| v.bytes().all(|b| b.is_ascii_digit()));
+            let slot = if below { &mut self.requires_llvm_below } else { &mut self.requires_llvm };
+            match major {
+                None => self.err(line, usage),
+                Some(_) if slot.is_some() => {
+                    let op = if below { "<" } else { ">=" };
+                    self.err(line, format!("duplicate `requires: llvm{op}`"));
+                }
+                Some(m) => *slot = Some(m),
             }
         } else {
             self.err(line, usage);
@@ -857,6 +916,32 @@ impl Parser {
         true
     }
 
+    /// The `run-stdin`/`run-stdin-file` and `stdout`/`stdout-file`
+    /// pairs, each of which may name only one side.
+    fn take_io(&mut self) -> (Option<StdinInput>, Option<StdoutExpect>) {
+        let stdin = match (self.stdin_lines.take(), self.stdin_file.take()) {
+            (Some(_), Some(_)) => {
+                let line = self.stdin_file_line;
+                self.err(line, "`run-stdin` and `run-stdin-file` are mutually exclusive");
+                None
+            }
+            (Some(s), None) => Some(StdinInput::Inline(s)),
+            (None, Some(p)) => Some(StdinInput::File(p)),
+            (None, None) => None,
+        };
+        let stdout = match (self.stdout_lines.take(), self.stdout_file.take()) {
+            (Some(_), Some(_)) => {
+                let line = self.stdout_file_line;
+                self.err(line, "`stdout` and `stdout-file` are mutually exclusive");
+                None
+            }
+            (Some(s), None) => Some(StdoutExpect::Inline(s)),
+            (None, Some(p)) => Some(StdoutExpect::File(p)),
+            (None, None) => None,
+        };
+        (stdin, stdout)
+    }
+
     fn finish(mut self) -> Result<TestSpec, Vec<DirectiveError>> {
         let expect = self.expect.unwrap_or(Expect::CompileOk);
         if expect != Expect::Run {
@@ -900,26 +985,7 @@ impl Parser {
                 self.err(line, "`oven` does not apply to `pp` tests (nothing is evaluated)");
             }
         }
-        let stdin = match (self.stdin_lines.take(), self.stdin_file.take()) {
-            (Some(_), Some(_)) => {
-                let line = self.stdin_file_line;
-                self.err(line, "`run-stdin` and `run-stdin-file` are mutually exclusive");
-                None
-            }
-            (Some(s), None) => Some(StdinInput::Inline(s)),
-            (None, Some(p)) => Some(StdinInput::File(p)),
-            (None, None) => None,
-        };
-        let stdout = match (self.stdout_lines.take(), self.stdout_file.take()) {
-            (Some(_), Some(_)) => {
-                let line = self.stdout_file_line;
-                self.err(line, "`stdout` and `stdout-file` are mutually exclusive");
-                None
-            }
-            (Some(s), None) => Some(StdoutExpect::Inline(s)),
-            (None, Some(p)) => Some(StdoutExpect::File(p)),
-            (None, None) => None,
-        };
+        let (stdin, stdout) = self.take_io();
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
@@ -938,13 +1004,13 @@ impl Parser {
             run_args: self.run_args,
             stdin,
             env: self.env,
-            // `layout` and `vtables` have no golden: the oracle is their
-            // only reference, and `oracle:` does not apply to them.
+            // `layout`, `vtables` and `ir` have no golden: the oracle is
+            // their only reference, and `oracle:` does not apply to them.
             oracle: self.oracle.unwrap_or(
                 if verify || matches!(expect, Expect::Run | Expect::Pp) {
                     !skip_clang
                 } else {
-                    matches!(expect, Expect::Layout | Expect::Vtables)
+                    matches!(expect, Expect::Layout | Expect::Vtables | Expect::Ir)
                 },
             ),
             oven: self.oven,
@@ -960,6 +1026,8 @@ impl Parser {
             verify,
             requires_clang: self.requires_clang,
             requires_clang_below: self.requires_clang_below,
+            requires_llvm: self.requires_llvm,
+            requires_llvm_below: self.requires_llvm_below,
         })
     }
 }
@@ -1237,12 +1305,12 @@ mod tests {
     fn requires_target_directive() {
         let s = ok("//@ expect: run\n//@ requires: target-aarch64\n");
         assert_eq!(s.requires_target.as_deref(), Some("aarch64"));
-        assert_eq!(s.unmet_requirement("aarch64", &[]), None);
+        assert_eq!(s.unmet_requirement("aarch64", &[], &[]), None);
         assert_eq!(
-            s.unmet_requirement("x86_64", &[]).as_deref(),
+            s.unmet_requirement("x86_64", &[], &[]).as_deref(),
             Some("requires target-aarch64; the default target is x86_64")
         );
-        assert_eq!(ok("int x;\n").unmet_requirement("x86_64", &[]), None);
+        assert_eq!(ok("int x;\n").unmet_requirement("x86_64", &[], &[]), None);
         let e = errs("//@ requires: target-aarch46\n");
         assert!(e.iter().any(|e| e.contains("expected `requires: target-<arch>`")), "{e:?}");
         let e = errs("//@ requires: aarch64\n");
@@ -1258,10 +1326,10 @@ mod tests {
         let s = ok("//@ requires: target-x86_64\n//@ args: --target=x86_64-unknown-linux-gnu\n");
         assert_eq!(s.target_triple(), Some("x86_64-unknown-linux-gnu"));
         assert_eq!(s.target_arch("aarch64"), "x86_64");
-        assert_eq!(s.unmet_requirement("aarch64", &[]), None);
+        assert_eq!(s.unmet_requirement("aarch64", &[], &[]), None);
         let s = ok("//@ requires: target-aarch64\n//@ args: --target=x86_64-unknown-linux-gnu\n");
         assert_eq!(
-            s.unmet_requirement("aarch64", &[]).as_deref(),
+            s.unmet_requirement("aarch64", &[], &[]).as_deref(),
             Some("requires target-aarch64; the test targets x86_64 (`x86_64-unknown-linux-gnu`)")
         );
         // The last spelling wins, in each of clang's three forms, and the
@@ -1286,19 +1354,19 @@ mod tests {
         let old = ClangRun { role: "the oracle", version: Some([19, 1, 1]) };
         let new = ClangRun { role: "the compiler", version: Some([19, 1, 7]) };
         let unknown = ClangRun { role: "the compiler", version: None };
-        assert_eq!(s.unmet_requirement("aarch64", &[]), None, "kiln alone runs no clang");
-        assert_eq!(s.unmet_requirement("aarch64", &[new]), None);
+        assert_eq!(s.unmet_requirement("aarch64", &[], &[]), None, "kiln alone runs no clang");
+        assert_eq!(s.unmet_requirement("aarch64", &[new], &[]), None);
         assert_eq!(
-            s.unmet_requirement("aarch64", &[new, old]).as_deref(),
+            s.unmet_requirement("aarch64", &[new, old], &[]).as_deref(),
             Some("requires clang>=19.1.3; the oracle is clang 19.1.1")
         );
         assert_eq!(
-            s.unmet_requirement("aarch64", &[unknown]).as_deref(),
+            s.unmet_requirement("aarch64", &[unknown], &[]).as_deref(),
             Some("requires clang>=19.1.3; the compiler names no clang version")
         );
         // The target requirement is reported first.
         assert_eq!(
-            s.unmet_requirement("x86_64", &[old]).as_deref(),
+            s.unmet_requirement("x86_64", &[old], &[]).as_deref(),
             Some("requires target-aarch64; the default target is x86_64")
         );
         for bad in ["clang>=", "clang>=19.x", "clang>=19.1.3.4", "clang>=.1", "clang>19", "clang"] {
@@ -1319,30 +1387,72 @@ mod tests {
         let c19 = ClangRun { role: "the compiler", version: Some([19, 1, 7]) };
         let o22 = ClangRun { role: "the oracle", version: Some([22, 1, 8]) };
         let unknown = ClangRun { role: "the oracle", version: None };
-        assert_eq!(s.unmet_requirement("aarch64", &[]), None, "kiln alone runs no clang");
-        assert_eq!(s.unmet_requirement("aarch64", &[c19]), None);
+        assert_eq!(s.unmet_requirement("aarch64", &[], &[]), None, "kiln alone runs no clang");
+        assert_eq!(s.unmet_requirement("aarch64", &[c19], &[]), None);
         assert_eq!(
-            s.unmet_requirement("aarch64", &[c19, o22]).as_deref(),
+            s.unmet_requirement("aarch64", &[c19, o22], &[]).as_deref(),
             Some("requires clang<22.0.0; the oracle is clang 22.1.8")
         );
         assert_eq!(
-            s.unmet_requirement("aarch64", &[unknown]).as_deref(),
+            s.unmet_requirement("aarch64", &[unknown], &[]).as_deref(),
             Some("requires clang<22.0.0; the oracle names no clang version")
         );
         // Both bounds: the lower one is reported first.
         let both = ok("//@ requires: clang>=19.1.3\n//@ requires: clang<22\n");
         let old = ClangRun { role: "the compiler", version: Some([19, 1, 1]) };
         assert_eq!(
-            both.unmet_requirement("aarch64", &[old]).as_deref(),
+            both.unmet_requirement("aarch64", &[old], &[]).as_deref(),
             Some("requires clang>=19.1.3; the compiler is clang 19.1.1")
         );
-        assert_eq!(both.unmet_requirement("aarch64", &[c19]), None);
+        assert_eq!(both.unmet_requirement("aarch64", &[c19], &[]), None);
         for bad in ["clang<", "clang<22.x", "clang<=22"] {
             let e = errs(&format!("//@ requires: {bad}\n"));
             assert!(e.iter().any(|e| e.contains("`requires: clang<X[.Y[.Z]]`")), "{bad}: {e:?}");
         }
         let e = errs("//@ requires: clang<22\n//@ requires: clang<23\n");
         assert!(e.iter().any(|e| e.contains("duplicate `requires: clang<`")), "{e:?}");
+    }
+
+    /// WP-386: `requires: llvm>=N` / `llvm<N` against the backends that
+    /// consume the test's IR.
+    #[test]
+    fn requires_llvm_directive() {
+        let s = ok("//@ requires: llvm>=22\n//@ requires: clang>=22\n");
+        assert_eq!((s.requires_llvm, s.requires_llvm_below), (Some(22), None));
+        let k19 = LlvmRun { role: "kiln's backend", major: Some(19) };
+        let k22 = LlvmRun { role: "kiln's backend", major: Some(22) };
+        let unknown = LlvmRun { role: "the oracle", major: None };
+        assert_eq!(s.unmet_requirement("aarch64", &[], &[]), None, "no backend runs");
+        assert_eq!(s.unmet_requirement("aarch64", &[], &[k22]), None);
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[], &[k22, k19]).as_deref(),
+            Some("requires llvm>=22; kiln's backend is LLVM 19")
+        );
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[], &[unknown]).as_deref(),
+            Some("requires llvm>=22; the oracle has no known LLVM")
+        );
+        // The clang requirement is reported first.
+        let c19 = ClangRun { role: "the oracle", version: Some([19, 1, 7]) };
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[c19], &[k19]).as_deref(),
+            Some("requires clang>=22.0.0; the oracle is clang 19.1.7")
+        );
+        let b = ok("//@ requires: llvm<22\n");
+        assert_eq!(b.requires_llvm_below, Some(22));
+        assert_eq!(b.unmet_requirement("aarch64", &[], &[k19]), None);
+        assert_eq!(
+            b.unmet_requirement("aarch64", &[], &[k22]).as_deref(),
+            Some("requires llvm<22; kiln's backend is LLVM 22")
+        );
+        for bad in ["llvm>=", "llvm>=22.1", "llvm<x", "llvm>22", "llvm<=22", "llvm>=+2"] {
+            let e = errs(&format!("//@ requires: {bad}\n"));
+            assert!(e.iter().any(|e| e.contains("`requires: llvm>=N`")), "{bad}: {e:?}");
+        }
+        let e = errs("//@ requires: llvm>=19\n//@ requires: llvm>=22\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `requires: llvm>=`")), "{e:?}");
+        let e = errs("//@ requires: llvm<19\n//@ requires: llvm<22\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `requires: llvm<`")), "{e:?}");
     }
 
     #[test]
@@ -1611,7 +1721,9 @@ mod tests {
 
     #[test]
     fn layout_and_vtables_directives() {
-        for (text, want) in [("layout", Expect::Layout), ("vtables", Expect::Vtables)] {
+        for (text, want) in
+            [("layout", Expect::Layout), ("vtables", Expect::Vtables), ("ir", Expect::Ir)]
+        {
             let s = ok(&format!("//@ expect: {text}\n//@ diag: 2 warning \"w\"\n"));
             assert_eq!(s.expect, want);
             assert_eq!(s.expect.as_str(), text);
