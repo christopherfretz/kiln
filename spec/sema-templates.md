@@ -3597,7 +3597,11 @@ function template) is not checked. The requires-expression is then
 rebuilt as a dependent `RequiresExpr` with the substituted parameters
 and requirements, and evaluated when the remaining level is
 substituted. A compound requirement's type-constraint keeps its
-invented first argument in that case.
+invented first argument in that case. The expression is dependent when
+a parameter's type or a requirement is ([temp.variadic]/5, WP-398); a
+requirement that already fails settles it `false`, and the result then
+drops parameters whose types still name a retained level so it is not
+substituted again.
 
 The expression is a `bool` prvalue. `RequiresExpr` stores the value plus
 the index of the failed requirement.
