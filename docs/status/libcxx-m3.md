@@ -13,8 +13,8 @@ cargo xtask libcxx --gate m3 -j 4 --report docs/status/libcxx-m3.md
 
 ## Setup
 
-- kiln: debug build of branch `wp/293` (base main `f4e76bcd`; commit in the generated "Run" table
-  below), 2026-11-02.
+- kiln: `harness`-profile build of branch `wp/371` (base main `42a04690`; commit in the generated
+  "Run" table below), 2026-11-02.
 - Tests and headers: libc++ `llvmorg-19.1.7`. The tests come from the sparse checkout. The headers,
   `libc++.so`, `libc++experimental.a` and `libc++abi` come from the clang 19 packages in the
   container.
@@ -25,19 +25,10 @@ cargo xtask libcxx --gate m3 -j 4 --report docs/status/libcxx-m3.md
 
 ## Reading
 
-**Overall: 630 pass, 6 fail, 6 unsupported of 642** (99.1%). Every test that runs and is not a
-`.verify.cpp` passes (585/585 closed M3 on main `4c3e8be9`); the gate grew to 642 tests when
-WP-143 started running `.verify.cpp`. The six failures are all `.verify.cpp` diagnostic gaps,
-tracked as WP-253:
-
-| test | cause |
-|---|---|
-| `containers/sequences/array/array.creation/to_array.verify.cpp` | no `cannot initialize` error for an ill-formed `to_array` element initialization (WP-253) |
-| `containers/sequences/array/array.overview/nttp.verify.cpp` | structural-type / non-literal NTTP errors spell the type and its `aka` differently from clang (WP-253) |
-| `containers/views/views.span/span.cons/initializer_list.verify.cpp` | the `call to 'one' is ambiguous` overload ambiguity is not detected (WP-253) |
-| `utilities/meta/meta.trans/meta.trans.other/underlying_type.verify.cpp` | `underlying_type` of an incomplete enum lacks clang's error and gives follow-on errors instead (WP-253) |
-| `utilities/utility/pairs/pair.astuple/get_const.verify.cpp` | assigning through a `const` return says `read-only variable is not assignable`, not `cannot assign to return value` (WP-253) |
-| `utilities/utility/pairs/pairs.pair/nttp.verify.cpp` | the structural-type NTTP error spells the `pair` type and its `aka` differently from clang (WP-253) |
+**Overall: 636 pass, 0 fail, 6 unsupported of 642** (100.0%). Every test that runs passes
+(585/585 closed M3 on main `4c3e8be9`; the gate grew to 642 tests when WP-143 started running
+`.verify.cpp`). The six `.verify.cpp` diagnostic gaps tracked as WP-253 (`to_array`, the two
+`nttp` tests, span `initializer_list`, `underlying_type`, pair `get_const`) pass since WP-367.
 
 **Caveats.**
 - XFAILs written against compiler identity (`clang-*`, `gcc-*`) evaluate to false, because the
@@ -69,17 +60,18 @@ list; the hardening rows need a libc++ built with assertions, which the containe
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `f6f75f28` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `bcd7064b` |
+| kiln build profile | `harness` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
 | command | `cargo xtask libcxx --gate m3 -j 4` |
 | compile flags | `-std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread -ferror-limit=0 -D_LIBCPP_ENABLE_EXPERIMENTAL -I <llvm-project>/libcxx/test/support <ADDITIONAL_COMPILE_FLAGS> <test>` |
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
-| features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-hardening-mode=none`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu`, `verify-support` |
-| limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 4 |
-| wall time | 323.6 s |
-| peak RSS | 81 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
+| features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `gcc-style-warnings`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-hardening-mode=none`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `locale.cs_CZ.ISO8859-2`, `locale.en_US.UTF-8`, `locale.fr_CA.ISO8859-1`, `locale.fr_FR.UTF-8`, `locale.ja_JP.UTF-8`, `locale.ru_RU.UTF-8`, `locale.zh_CN.UTF-8`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu`, `verify-support` |
+| limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s (240 s for long tests); -j 4 |
+| wall time | 45.1 s |
+| peak RSS | 82 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
@@ -87,25 +79,25 @@ Pass rate is PASS / (total − UNSUPPORTED). "driver" counts the UNSUPPORTED tes
 
 | directory | total | pass | fail | xfail | xpass | unsupported (driver) | killed | timeout | error | pass rate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `std/utilities/meta` | 155 | 153 | 1 | 0 | 0 | 1 (0) | 0 | 0 | 0 | 99.4% |
-| `std/utilities/utility` | 168 | 162 | 2 | 0 | 0 | 4 (0) | 0 | 0 | 0 | 98.8% |
-| `std/containers/sequences/array` | 47 | 45 | 2 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 95.7% |
+| `std/utilities/meta` | 155 | 154 | 0 | 0 | 0 | 1 (0) | 0 | 0 | 0 | 100.0% |
+| `std/utilities/utility` | 168 | 164 | 0 | 0 | 0 | 4 (0) | 0 | 0 | 0 | 100.0% |
+| `std/containers/sequences/array` | 47 | 47 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
 | `std/strings/string.view` | 93 | 93 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
-| `std/containers/views/views.span` | 45 | 43 | 1 | 0 | 0 | 1 (0) | 0 | 0 | 0 | 97.7% |
+| `std/containers/views/views.span` | 45 | 44 | 0 | 0 | 0 | 1 (0) | 0 | 0 | 0 | 100.0% |
 | `std/numerics/bit` | 17 | 17 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
 | `std/language.support/support.limits` | 112 | 112 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
 | `std/language.support/support.initlist` | 5 | 5 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
-| **total** | 642 | 630 | 6 | 0 | 0 | 6 (0) | 0 | 0 | 0 | 99.1% |
+| **total** | 642 | 636 | 0 | 0 | 0 | 6 (0) | 0 | 0 | 0 | 100.0% |
 
 ### Failures by stage
 
 | directory | compile | link | run | expected-fail-but-succeeded |
 |---|---:|---:|---:|---:|
-| `std/utilities/meta` | 1 | 0 | 0 | 0 |
-| `std/utilities/utility` | 2 | 0 | 0 | 0 |
-| `std/containers/sequences/array` | 2 | 0 | 0 | 0 |
+| `std/utilities/meta` | 0 | 0 | 0 | 0 |
+| `std/utilities/utility` | 0 | 0 | 0 | 0 |
+| `std/containers/sequences/array` | 0 | 0 | 0 | 0 |
 | `std/strings/string.view` | 0 | 0 | 0 | 0 |
-| `std/containers/views/views.span` | 1 | 0 | 0 | 0 |
+| `std/containers/views/views.span` | 0 | 0 | 0 | 0 |
 | `std/numerics/bit` | 0 | 0 | 0 | 0 |
 | `std/language.support/support.limits` | 0 | 0 | 0 | 0 |
 | `std/language.support/support.initlist` | 0 | 0 | 0 | 0 |
@@ -116,34 +108,21 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 
 | directory | clusters |
 |---|---|
-| `std/utilities/meta` | `verify: error expected but not seen: cannot determine underlying type of incomplete enumeration type '…'` (1) |
-| `std/utilities/utility` | `verify: error expected but not seen: cannot assign to return value` (1); `verify: error expected but not seen: type '…' of non-type template parameter is not a structural type` (1) |
-| `std/containers/sequences/array` | `verify: error expected but not seen: cannot initialize` (1); `verify: error expected but not seen: type '…' {{(\(aka '…'\) )?}}of non-type template parameter is not a structural type` (1) |
+| `std/utilities/meta` | — |
+| `std/utilities/utility` | — |
+| `std/containers/sequences/array` | — |
 | `std/strings/string.view` | — |
-| `std/containers/views/views.span` | `verify: error expected but not seen: call to '…' is ambiguous` (1) |
+| `std/containers/views/views.span` | — |
 | `std/numerics/bit` | — |
 | `std/language.support/support.limits` | — |
 | `std/language.support/support.initlist` | — |
 
 ### Error clusters
 
-13 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 13:
+0 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 0:
 
 | # | first | any | cluster | example test | example message |
 |---:|---:|---:|---|---|---|
-| 1 | 1 | 1 | `verify: error expected but not seen: call to '…' is ambiguous` | `std/containers/views/views.span/span.cons/initializer_list.verify.cpp` | `call to 'one' is ambiguous` |
-| 2 | 1 | 1 | `verify: error expected but not seen: cannot assign to return value` | `std/utilities/utility/pairs/pair.astuple/get_const.verify.cpp` | `cannot assign to return value` |
-| 3 | 1 | 1 | `verify: error expected but not seen: cannot determine underlying type of incomplete enumeration type '…'` | `std/utilities/meta/meta.trans/meta.trans.other/underlying_type.verify.cpp` | `cannot determine underlying type of incomplete enumeration type 'E1'` |
-| 4 | 1 | 1 | `verify: error expected but not seen: cannot initialize` | `std/containers/sequences/array/array.creation/to_array.verify.cpp` | `cannot initialize` |
-| 5 | 1 | 1 | `verify: error expected but not seen: type '…' of non-type template parameter is not a structural type` | `std/utilities/utility/pairs/pairs.pair/nttp.verify.cpp` | `type 'std::pair<int &&, int &&>' of non-type template parameter is not a structural type` |
-| 6 | 1 | 1 | `verify: error expected but not seen: type '…' {{(\(aka '…'\) )?}}of non-type template parameter is not a structural type` | `std/containers/sequences/array/array.overview/nttp.verify.cpp` | `type 'std::array<{{(std::)?}}string, 2U{{L{0,2}.*}}>' {{(\(aka 'array<basic_string<char>, 2UL{0,2}>'\) )?}}of non-type template parameter is not a structural ty…` |
-| 7 | 0 | 2 | `verify: error expected but not seen: type '…' (aka '…') of non-type template parameter is not a structural type` | `std/containers/sequences/array/array.overview/nttp.verify.cpp` | `type 'std::array<string, 2>' (aka 'std::array<std::string, 2>') of non-type template parameter is not a structural type` |
-| 8 | 0 | 2 | `verify: error seen but not expected: type '…' (aka '…') of non-type template parameter is not a structural type` | `std/containers/sequences/array/array.overview/nttp.verify.cpp` | `type 'std::array<std::basic_string<char>, 2UL>' (aka 'array<basic_string<char>, 2UL>') of non-type template parameter is not a structural type` |
-| 9 | 0 | 1 | `verify: error expected but not seen: non-type template parameter has non-literal type '…'` | `std/containers/sequences/array/array.overview/nttp.verify.cpp` | `non-type template parameter has non-literal type 'std::array<NotALiteral, 1>'` |
-| 10 | 0 | 1 | `verify: error seen but not expected: no member named '…' in '…'` | `std/utilities/meta/meta.trans/meta.trans.other/underlying_type.verify.cpp` | `no member named 'type' in 'std::underlying_type<E1>'` |
-| 11 | 0 | 1 | `verify: error seen but not expected: non-type template parameter has non-literal type '…' (aka '…')` | `std/containers/sequences/array/array.overview/nttp.verify.cpp` | `non-type template parameter has non-literal type 'std::array<NotALiteral, 1UL>' (aka 'array<NotALiteral, 1UL>')` |
-| 12 | 0 | 1 | `verify: error seen but not expected: read-only variable is not assignable` | `std/utilities/utility/pairs/pair.astuple/get_const.verify.cpp` | `read-only variable is not assignable` |
-| 13 | 0 | 1 | `verify: error seen but not expected: template argument for template type parameter must be a type` | `std/utilities/meta/meta.trans/meta.trans.other/underlying_type.verify.cpp` | `template argument for template type parameter must be a type` |
 
 ### Crashes
 
