@@ -2189,9 +2189,26 @@ check (§6.1) skips pack parameters, so an element mismatch is reported as
 "deduced type 'P<int, [...]>' of 1st parameter does not match adjusted
 type 'P<char, [...]>' of argument".
 
-Function parameter packs and pack expansion expressions met in keep
-mode (`FunctionParmPackExpr`, `PackExpansionExpr` patterns) are still
-"not yet implemented".
+A reference to an instantiated function parameter pack met in keep
+mode outside any element (the enclosing function template's `idx` in the
+body of a generic lambda, `[&]<size_t... P>(seq<P...>) { return ((idx *
+s[P]) + ...); }`) cannot expand yet: the lambda's own pack `P` is
+retained. It becomes a `FunctionParmPackExpr {param, params}` (clang's
+`FunctionParmPackExpr`): an lvalue of the pattern's type,
+type-, value- and instantiation-dependent and unexpanded, whose
+`params` list holds the instantiated `ParmVar`s. Building it captures
+each `ParmVar` at the reference ([expr.prim.lambda.capture]/8, clang
+`MarkFunctionParmPackReferenced`). When the generic lambda's call
+operator is instantiated, a `FunctionParmPackExpr` is a pack of N
+elements for the length check (step 3) and expands to a reference to
+element *i*.
+
+The fold and expansion patterns detect a partial element through
+`element_expr` (the expression analogue of `element_ty`): an element
+that, after substitution with a pack index, still names an unexpanded
+pack is rebuilt in keep mode as one unexpanded expansion. A
+`PackExpansionExpr` pattern met in keep mode is still "not yet
+implemented".
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
