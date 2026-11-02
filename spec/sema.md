@@ -1079,6 +1079,28 @@ specification as written (`TypeNames` prints ` noexcept`,
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
+- **Invalid function declarations** (WP-288; clang's
+  `ActOnFunctionDeclarator`, `MergeFunctionDecl`, `LookupResult::resolveKind`).
+  A function declaration is invalid at its source when it has an
+  illegal storage class — `mutable` or `register` outside a member
+  declaration (namespace or block scope, or an out-of-class member
+  definition): error `illegal storage class on function`
+  (`sema_illegal_storage_class_on_function`); in a member declaration
+  `register` is `storage class specified for a member declaration` and
+  `mutable` is `'mutable' cannot be applied to functions`, both leaving
+  the member valid — or an invalid parameter (a `void` parameter, or a
+  default argument parsed in place that is erroneous: the parameter is
+  invalid too). Such a declaration redeclares nothing (no prior
+  declaration is looked up for it). `pick_prev_function` prefers the
+  newest *valid* corresponding declaration; when only invalid ones
+  correspond, the new declaration is invalid without a diagnostic and
+  without being compared. A name whose lookup finds only invalid
+  functions resolves a call against the last one found (so an
+  inviable call is still `no matching function`); a reference to an
+  invalid function is an erroneous expression without a diagnostic.
+  Tests: `dcl.stc/function-storage-class.cpp`,
+  `dcl.fct.default/invalid-default-arg.cpp`,
+  `except.spec/redecl-invalid-decl.cpp`.
 - **Exception specifications on redeclarations** (WP-268,
   `merge_missing_exc_spec`; clang 19's missing-specification path of
   `Sema::CheckEquivalentExceptionSpec`). A function redeclaration
@@ -1099,14 +1121,11 @@ specification as written (`TypeNames` prints ` noexcept`,
   ` S` just past the end of the declarator's `)` or, when present, its
   last cv- or ref-qualifier (`Declarator::fn_qual_locs`; none with a
   trailing return type or for a `)` or qualifier from a macro).
-  An invalid `p` (WP-279; clang compares only valid declarations) is
-  replaced by the latest valid declaration on its redeclaration chain,
-  or, for an invalid member redeclaration that is not on the chain
-  (`struct S { void f() noexcept; void f() noexcept; };`), by the
-  latest valid same-kind function of that name in `p`'s context
-  corresponding to the redeclaration; with neither, the redeclaration
-  inherits `p`'s specification silently (`void e() noexcept = 0;
-  void e();`). "`p`'s" specification is inherited as clang does:
+  `p` is always valid: an invalid declaration is on no redeclaration
+  chain and is never compared (*Invalid function declarations* above;
+  WP-288 replaced WP-279's fallback search here), and a redeclaration
+  of an invalid `p` (`void e() noexcept = 0; void e();`) is itself
+  invalid, silently. "`p`'s" specification is inherited as clang does:
   `noexcept(true)` becomes `noexcept`, `noexcept(false)` none, others
   as written. Only `p`'s location counts, not the redeclaration's: a
   second redeclaration in user code follows the first (now `throw()`,

@@ -727,44 +727,10 @@ impl Sema<'_, '_> {
         (loc, fname, fix_at): (Loc, &str, Option<Loc>),
         replaceable: bool,
     ) -> (QualType, bool) {
-        // clang compares against a valid previous declaration only: an
-        // invalid one (`void e() noexcept = 0;`) is skipped for the latest
-        // valid redeclaration, and with none the specification is
-        // inherited silently.
-        let invalid = |s: &Self, d: DeclId| s.ast.decls.get(d).has(DeclFlags::INVALID);
-        let (p, pty) = if invalid(self, p) {
-            // An invalid redeclaration of a member (`void f(); void f();`
-            // in one class) is not on the first declaration's chain:
-            // look for that corresponding valid function by name.
-            let node = self.ast.decls.get(p);
-            let (nctx, nname, nkind) = (node.ctx(), node.name(), node.kind());
-            let mut valid = self.ast.redecls_of(p).find(|&r| !invalid(self, r));
-            if valid.is_none()
-                && let Some(c) = nctx
-            {
-                let found: Vec<DeclId> = self.ast.lookup_local(c, nname).to_vec();
-                valid = found.into_iter().rev().find(|&c| {
-                    c != p
-                        && !invalid(self, c)
-                        && self.kind_of(c) == nkind
-                        && self
-                            .declared_fn_type(c)
-                            .is_some_and(|t| self.same_ignoring_exc_spec(t, ty))
-                });
-            }
-            let Some(v) = valid else {
-                let ty = match self.written_exc_spec(pty) {
-                    ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
-                    | ExcSpec::DependentNoexcept(_)
-                    | ExcSpec::Deferred(_) => ty,
-                    e => self.with_exc_spec(ty, e),
-                };
-                return (ty, false);
-            };
-            (v, self.declared_fn_type(v).unwrap_or(pty))
-        } else {
-            (p, pty)
-        };
+        debug_assert!(
+            !self.ast.decls.get(p).has(DeclFlags::INVALID),
+            "an invalid previous declaration is never compared (pick_prev_function)"
+        );
         let old = self.written_exc_spec(pty);
         let first = self.ast.redecls_of(p).last().unwrap_or(p);
         let ploc = self.ast.decls.get(p).loc();
