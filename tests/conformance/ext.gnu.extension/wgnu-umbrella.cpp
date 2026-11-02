@@ -10,7 +10,7 @@
 //@ diag: 18:30 warning "string literal operator templates are a GNU extension"
 //@ diag: 19:7 warning "#line directive with zero argument is a GNU extension"
 //@ requires: clang<22
-// clang 22 emits warning: case ranges are a GNU extension; WP-355 residual
+// clang 19 spelling; wgnu-umbrella-clang22.cpp has clang 22's (WP-377).
 void g(int n, int i) {
   int a[n]; (void)a;
   switch (i) { case 1 ... 3: break; }

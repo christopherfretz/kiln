@@ -37,7 +37,7 @@
 //@ diag: 68:3 warning "'switch' missing 'default' label"
 //@ diag: 68:11 warning "5 enumeration values not handled in switch: 'A', 'B', 'C'..."
 //@ requires: clang<22
-// clang 22 emits warning: enumeration value 'H1' not handled in switch; WP-355 residual
+// clang 19 spelling; wswitch-enum-all-flags-clang22.cpp has clang 22's (WP-377).
 enum E { A, B, C, D, F };
 enum class S : unsigned char { X, Y, Z };
 enum G { G0 = 3, G1 = 1, G2 = 2, G3 = 1 };

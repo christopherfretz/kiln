@@ -1140,7 +1140,7 @@ impl Sema<'_, '_> {
             }
             Ok(v) => {
                 if v > i128::from(u64::MAX >> 4) {
-                    let msg = self.diag(DiagId::sema_array_too_large, loc).arg(v.to_string());
+                    let msg = self.diag(DiagId::sema_array_too_large, loc).arg(self.element_count_text(v));
                     self.emit(msg);
                     return None;
                 }

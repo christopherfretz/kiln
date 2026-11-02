@@ -78,6 +78,18 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   `__is_trivially_relocatable` warns `-Wdeprecated-builtins` with the
   replacement `__builtin_is_cpp_trivially_relocatable`
   (spec/sema-templates.md §9.1).
+- **Flow and counts** (WP-377). `-Wswitch` counts a deprecated
+  enumerator as one a switch must handle (only `[[maybe_unused]]` ones
+  may be omitted; `switch_enum.rs`), which also decides whether the
+  switch covers every value for `-Wreturn-type`. An `if consteval` is a
+  branch on an unknown condition in the reachability walk (clang 22
+  builds its CFG; clang 19 builds none and checks nothing;
+  `try_stmt/reach.rs`). `array is too large (N elements)` groups N's
+  digits with `'` (`18'446'744'073'709'551'615`;
+  `element_count_text`). Wording-only changes are `_19` diag rows
+  (spec/diag.md §2.5), e.g. `case ranges are a GNU extension`, `you need
+  to include <typeinfo> or import std before using the 'typeid'
+  operator`.
 - Codegen's `-Watomic-alignment` text follows the level
   (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
 

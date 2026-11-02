@@ -4,7 +4,8 @@
 
 // ----- WP-197 (DR482 namespace extra qualification; ambiguous member types)
 sema_namespace_member_extra_qualification = Warning [ExtraQualification] (1) "extra qualification on member '{0}'";
-sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
+sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> or import std before using the 'typeid' operator";
+sema_need_header_before_typeid_19 = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
 sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::' because it has no members";
 sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
 sema_new_array_size_unknown = Error (0) "array size must be specified in new expression with no initializer";

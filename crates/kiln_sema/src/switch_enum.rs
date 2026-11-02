@@ -121,13 +121,15 @@ impl Sema<'_, '_> {
     }
 
     /// The enumerators of `def` no label of `cases` handles, in value
-    /// order; a deprecated or `[[maybe_unused]]` enumerator may be
-    /// omitted.
+    /// order; a `[[maybe_unused]]` enumerator may be omitted, and below
+    /// `-fclang-compat=22` a deprecated one too (clang 22 warns about an
+    /// unhandled deprecated enumerator).
     pub(crate) fn unhandled_enumerators(&self, def: DeclId, cases: &CaseList) -> Vec<DeclId> {
+        let deprecated_exempt = self.clang_compat < 22;
         self.enum_vals(def)
             .into_iter()
             .filter(|&(_, m)| {
-                self.find_attr(m, AttrKind::DEPRECATED).is_none()
+                !(deprecated_exempt && self.find_attr(m, AttrKind::DEPRECATED).is_some())
                     && self.find_attr(m, AttrKind::UNUSED).is_none()
                     && self.find_attr(m, AttrKind::MAYBE_UNUSED).is_none()
             })
