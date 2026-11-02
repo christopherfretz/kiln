@@ -1144,9 +1144,15 @@ impl Sema<'_, '_> {
         if self.kind_of(t) != DeclKind::ClassTemplate || ps.iter().any(|a| self.is_pack_arg(*a)) {
             return;
         }
+        // The parameters (and their depth) are the head declaration's, as
+        // in `check_template_args`: the first declaration may be a friend
+        // inside a class template, whose parameters sit one level deeper
+        // (libc++'s `friend class basic_string_view` in `__wrap_iter`),
+        // and substituting at that depth would leave the default unchanged.
+        let head = self.head_template(t);
         let t = self.ast.first(t);
-        let params = self.template_params(t);
-        let depth = self.template_param_depth(t);
+        let params = self.template_params(head);
+        let depth = self.template_param_depth(head);
         for &p in params.iter().skip(ps.len()) {
             if self.ast.template_parm(p).is_none_or(|x| x.pack) {
                 return;

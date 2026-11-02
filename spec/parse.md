@@ -407,6 +407,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     is `'final' is invalid in friend declarations`) and a
     pure-specifier `= 0` (other initializers of a function are
     `initializer on function does not look like a pure-specifier`)
+  - outside member context, `final`/`override` after a function
+    declarator (and its requires-clause) are each `'X' specifier is not
+    allowed outside a class definition` (`parse_virt_specifier_outside_class`)
+    and skipped, so the declaration or definition goes on (WP-288)
 
   The parser peeks at `=`, `(` or `{` to set `init_style` *before* the
   declaration exists, because Sema needs it to create the `VarDecl`.

@@ -8,7 +8,7 @@ passes under kiln and under `--compiler clang++-19`. A reproducer that is still 
 
 Rerun of the 42 tests on `wp/276` after merging main 04c330a0 (`cargo xtask libcxx --no-fail -j 4
 <tests>`): **35 pass, 7 fail**. The 7 failures are `<expected>` 25–30 and inout_ptr 36. lazy_split 15–18
-pass now: three of their causes were fixed here, and WP-278 (#46) fixed the last one.
+pass now: three of their causes were fixed here, and WP-278 (#46) fixed the last one. WP-289 then fixed 25–30.
 
 Cause classes:
 
@@ -52,12 +52,12 @@ Paths are relative to `tests/conformance/`. Test paths are relative to `libcxx/t
 | 22 | thread/futures/futures.unique_future/wait.pass.cpp | as #14 | codegen | as #14 | fixed |
 | 23 | thread/…/condvarany/wait_until_token_pred.pass.cpp | runtime "condition_variable::timed wait: mutex not locked" | sema: in a template, `T x(e)` / `T x{e}` with `e` of class `T` was instantiated as a default-initialization (silent miscompile) | temp.inst/direct-init-from-same-class-run.cpp | fixed |
 | 24 | thread/…/sharedtimedmutex.class/try_lock_until.pass.cpp | link: undefined `__shared_mutex_base::__write_entered_` | codegen: a const static member read through `b.w` was not folded (not an odr-use) | basic.def.odr/static-member-via-member-access-not-odr-used.cpp | fixed |
-| 25 | utilities/expected/…/ctor/ctor.convert.copy.pass.cpp | static assertion expression is not an integral constant expression | sema: no prospective destructor selection ([class.dtor]/4): the constrained `= default` destructor is not chosen, so the class is not trivially destructible | class.dtor/prospective-destructor-selection.cpp (temp.pre/requires-clause-builtin-trait.cpp was found on the way and fixed) | xfail(kiln: prospective destructor selection, [class.dtor]/4); proposed new WP |
-| 26 | utilities/expected/…/ctor/ctor.unexpected.copy.pass.cpp | as #25 | sema | as #25 | as #25 |
-| 27 | utilities/expected/…/observers/arrow.pass.cpp | as #25 | sema | as #25 | as #25 |
-| 28 | utilities/expected/expected.void/ctor/ctor.convert.copy.pass.cpp | as #25 | sema | as #25 | as #25 |
-| 29 | utilities/expected/expected.void/dtor.pass.cpp | static assertion failed due to requirement 'is_trivially_destructible_v' | sema | as #25 | as #25 |
-| 30 | utilities/expected/expected.void/observers/error_or.pass.cpp | as #25 | sema | as #25 | as #25 |
+| 25 | utilities/expected/…/ctor/ctor.convert.copy.pass.cpp | static assertion expression is not an integral constant expression | sema: no prospective destructor selection ([class.dtor]/4): the constrained `= default` destructor is not chosen, so the class is not trivially destructible | class.dtor/prospective-destructor-selection.cpp (temp.pre/requires-clause-builtin-trait.cpp was found on the way and fixed) | fixed (WP-289; 25, 26 and 28 also needed the oven/IR tail-padding fix of dcl.attr/no-unique-address-union-tail.cpp) |
+| 26 | utilities/expected/…/ctor/ctor.unexpected.copy.pass.cpp | as #25 | sema | as #25 | fixed (as #25) |
+| 27 | utilities/expected/…/observers/arrow.pass.cpp | as #25 | sema | as #25 | fixed (as #25) |
+| 28 | utilities/expected/expected.void/ctor/ctor.convert.copy.pass.cpp | as #25 | sema | as #25 | fixed (as #25) |
+| 29 | utilities/expected/expected.void/dtor.pass.cpp | static assertion failed due to requirement 'is_trivially_destructible_v' | sema | as #25 | fixed (as #25) |
+| 30 | utilities/expected/expected.void/observers/error_or.pass.cpp | as #25 | sema | as #25 | fixed (as #25) |
 | 31 | utilities/…/func.bind.place/placeholders.pass.cpp | static assertion expression is not an integral constant expression | oven: a trivial copy of an empty class read its (uninitialized `extern const`) source | expr.const/trivial-copy-empty-class-no-read.cpp | fixed |
 | 32 | utilities/…/func.wrap.func.con/F_incomplete.pass.cpp | allocating an object of abstract class type '_Fun' | sema | as #21 | fixed |
 | 33 | utilities/…/func.wrap.func.inv/invoke.pass.cpp | as #32 | sema | as #21 | fixed |
@@ -112,9 +112,7 @@ template <class... Args> struct S { int run() {
 int x = S<int, long>{}.run();
 ```
 
-**Proposed: prospective destructor selection ([class.dtor]/4).** This blocks 25–30. At the class's
-closing `}`, and again at instantiation, kiln must choose the destructor among the prospective
-destructors by their constraints. `Ast::destructor` (kiln_ast/src/ast.rs) would consult a side
-table that records the selected destructor. The implicit-destructor walk in
-kiln_sema/src/class/special/implicit.rs would be restricted to it. Estimated at 200–400 lines.
-`class.dtor/prospective-destructor-selection.cpp` is the xfail reproducer.
+**Done (WP-289): prospective destructor selection ([class.dtor]/4).** Class completion picks the
+destructor by overload resolution among the prospective ones (spec/sema-class.md §4.7.1) and marks the
+others `not_selected`. This unblocked 25–30. Three of them then needed `[[no_unique_address]]`
+union tail-padding fixes in the oven (`field_at`) and in the IR lowering (a union `.base` type).

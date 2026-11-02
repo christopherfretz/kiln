@@ -480,10 +480,15 @@ impl Sema<'_, '_> {
     /// ([expr.const]/22: a `static_assert` condition, an array bound, a
     /// bit-field width, an enumerator value, a `case` value, an alignment,
     /// a template argument).
+    /// The immediate invocations of an enclosing full-expression (a
+    /// default template argument substituted by its overload resolution)
+    /// stay pending ([expr.const]/16).
     pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
+        let outer = self.set_aside_outer_immediates(e);
         self.constant_full_expr += 1;
         let r = self.act_on_full_expr(e);
         self.constant_full_expr -= 1;
+        self.restore_outer_immediates(outer);
         r
     }
 
@@ -1347,14 +1352,19 @@ impl Sema<'_, '_> {
             return e;
         }
         let fns = found.decls.iter().all(|&x| self.ast.decls.get(x).kind().is_function());
-        // An invalid redeclaration is not a separate overload (clang
-        // drops invalid candidates).
-        let valid: Vec<DeclId> = found
+        // An invalid redeclaration is not a separate overload: clang's
+        // `resolveKind` ignores an invalid declaration unless it is the
+        // only one left (redeclarations of an invalid function are
+        // invalid and off its chain, WP-288).
+        let mut valid: Vec<DeclId> = found
             .decls
             .iter()
             .copied()
             .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
             .collect();
+        if fns && valid.is_empty() {
+            valid.extend(found.decls.last().copied());
+        }
         if fns
             && found.naming.is_some()
             && valid.iter().any(|&x| self.member_via_dependent_base(x))
