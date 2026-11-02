@@ -6866,11 +6866,16 @@ impl Sema<'_, '_> {
     // -- namespaces and linkage --------------------------------------------------
 
     /// `namespace N {` ([namespace.def]); `None` for an unnamed namespace.
+    /// `loc` is the `namespace` keyword (where an inline mismatch is
+    /// diagnosed for an unnamed namespace) and `lbrace` the `{`, an
+    /// unnamed namespace's own location (clang's `NamespaceDecl` location,
+    /// which notes point at).
     pub fn act_on_start_namespace(
         &mut self,
         name: Option<(Symbol, Loc)>,
         inline: bool,
         loc: Loc,
+        lbrace: Loc,
     ) -> DeclId {
         let mut prev = None;
         if let Some((n, nloc)) = name {
@@ -6898,10 +6903,14 @@ impl Sema<'_, '_> {
             }
         } else {
             // [namespace.unnamed]/1: every unnamed namespace of a scope is
-            // the same namespace.
-            prev = self.ast.decls.members(self.ctx).find(|&m| {
-                let n = self.ast.decls.get(m);
-                n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY
+            // the same namespace, across the scope's redeclarations and
+            // transparent `extern "C++"` blocks.
+            let key = self.ast.primary_context(self.ast.redecl_context(self.ctx));
+            prev = self.anon_namespaces.get(&key).copied().or_else(|| {
+                self.ast.decls.members(self.ctx).find(|&m| {
+                    let n = self.ast.decls.get(m);
+                    n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY
+                })
             });
         }
         let inline = match prev {
@@ -6914,12 +6923,16 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(
             sem,
             name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0)),
-            name.map_or(loc, |n| n.1),
+            name.map_or(lbrace, |n| n.1),
         );
         if sem != self.ctx {
             h = h.lexical(self.ctx);
         }
         let ns = self.builder().namespace(h, inline, prev);
+        if name.is_none() {
+            let key = self.ast.primary_context(self.ast.redecl_context(self.ctx));
+            self.anon_namespaces.entry(key).or_insert(ns);
+        }
         if name.is_none() && prev.is_none() {
             // ... followed by an implicit `using namespace unique;`.
             let _ = self.using_directive(ns, loc, DeclFlags::IMPLICIT);

@@ -307,6 +307,7 @@ fn is_unique_external(ast: &Ast, d: DeclId) -> bool {
     }
     let n = ast.decls.get(first);
     let own = match n.kind() {
+        DeclKind::TemplateParamObject => return !param_object_externally_visible(ast, first),
         DeclKind::Var => n.ty().is_some_and(|t| !type_externally_visible(ast, t)),
         k if is_function_kind(k) => {
             n.ty().is_some_and(|t| !fn_type_externally_visible(ast, first, t))
@@ -351,20 +352,40 @@ fn args_externally_visible(ast: &Ast, list: ArgListId) -> bool {
     })
 }
 
-/// clang `getLVForValue` for the scalar values kiln has: a pointer or
-/// reference to, or a member pointer naming, an entity without external
-/// linkage is not externally visible. (Class-type values are not walked.)
+/// clang `getLVForValue` is externally visible: a pointer or reference
+/// to, or a member pointer naming, an entity without external linkage is
+/// not, and an aggregate is not when any of its pointer-like subobjects
+/// is not — at any depth: members of members, array elements, base
+/// subobjects and a union's active member (the frozen image keeps them
+/// all as relocations, spec/ast.md "Constant values"). A pointer into a
+/// template parameter object takes the object's linkage (its type and
+/// value), one to a lifetime-extended temporary its extending
+/// declaration's, `&typeid(T)` the linkage of `T`; any other object
+/// without a declaration (a string literal, a frozen object) is internal,
+/// as clang's expression bases are.
 fn value_externally_visible(ast: &Ast, value: ConstValueId) -> bool {
     match ast.consts.get(value) {
-        ConstValue::Scalar(Scalar::Pointer {
-            base: PtrBase::Decl(d) | PtrBase::Function(d),
-            ..
-        }) => {
-            ast.decls.get(d).kind() == DeclKind::TemplateParamObject || !is_internal_symbol(ast, d)
-        }
+        ConstValue::Scalar(Scalar::Pointer { base, .. }) => match base {
+            PtrBase::Decl(d) | PtrBase::Function(d) => !is_internal_symbol(ast, d),
+            PtrBase::Temporary(t) => {
+                ast.decls.lifetime_extended(t).is_none_or(|l| !is_internal_symbol(ast, l.extending))
+            }
+            PtrBase::TypeInfo(t) => type_externally_visible(ast, t),
+            PtrBase::StringLit { .. } | PtrBase::Const(_) => false,
+        },
         ConstValue::Scalar(Scalar::MemberPtr { member, .. }) => !is_internal_symbol(ast, member),
-        _ => true,
+        ConstValue::Scalar(_) => true,
+        ConstValue::Aggregate(img) => {
+            img.relocs.iter().all(|r| value_externally_visible(ast, r.value))
+        }
     }
+}
+
+/// clang's linkage of a template parameter object (`getLVForDecl` of a
+/// `TemplateParamObjectDecl`): that of its type merged with its value's.
+fn param_object_externally_visible(ast: &Ast, d: DeclId) -> bool {
+    ast.decls.get(d).ty().is_none_or(|t| type_externally_visible(ast, t))
+        && ast.templates.param_object_value(d).is_none_or(|v| value_externally_visible(ast, v))
 }
 
 /// clang `Type::getLinkage` is externally visible, for the types kiln
