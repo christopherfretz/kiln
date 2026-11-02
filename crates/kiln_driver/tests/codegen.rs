@@ -310,3 +310,87 @@ fn function_order_is_stable() {
         assert_eq!(order(&text(&c.stdout)), ORDER, "clang's order changed");
     }
 }
+
+/// A generator whose lifetime ends inside its caller: at `-O2` the
+/// default pipeline's coroutine passes (CoroEarly, CoroSplit, CoroElide,
+/// CoroCleanup, spec/driver.md "IR optimization") inline the ramp, elide
+/// the heap frame ([dcl.fct.def.coroutine]/9 lets the allocation be
+/// omitted) and lower every `llvm.coro.*` call, as clang 19's `-O2` does;
+/// at `-O0` the ramp still calls `operator new`.
+const ELIDE: &str = r#"namespace std {
+template <class R, class... A> struct coroutine_traits { using promise_type = typename R::promise_type; };
+template <class P = void> struct coroutine_handle;
+template <> struct coroutine_handle<void> {
+  void *p = nullptr;
+  static coroutine_handle from_address(void *a) noexcept { coroutine_handle h; h.p = a; return h; }
+  void *address() const noexcept { return p; }
+};
+template <class P> struct coroutine_handle {
+  void *p = nullptr;
+  static coroutine_handle from_address(void *a) noexcept { coroutine_handle h; h.p = a; return h; }
+  static coroutine_handle from_promise(P &pr) noexcept {
+    return from_address(__builtin_coro_promise(&pr, alignof(P), true));
+  }
+  operator coroutine_handle<>() const noexcept { return coroutine_handle<>::from_address(p); }
+  void resume() const { __builtin_coro_resume(p); }
+  void destroy() const { __builtin_coro_destroy(p); }
+  bool done() const { return __builtin_coro_done(p); }
+  P &promise() const { return *static_cast<P *>(__builtin_coro_promise(p, alignof(P), false)); }
+};
+struct suspend_always {
+  bool await_ready() const noexcept { return false; }
+  void await_suspend(coroutine_handle<>) const noexcept {}
+  void await_resume() const noexcept {}
+};
+} // namespace std
+struct gen {
+  struct promise_type {
+    int v = 0;
+    gen get_return_object() { return gen{std::coroutine_handle<promise_type>::from_promise(*this)}; }
+    std::suspend_always initial_suspend() noexcept { return {}; }
+    std::suspend_always final_suspend() noexcept { return {}; }
+    std::suspend_always yield_value(int x) noexcept { v = x; return {}; }
+    void return_void() noexcept {}
+    void unhandled_exception() noexcept {}
+  };
+  std::coroutine_handle<promise_type> h;
+  explicit gen(std::coroutine_handle<promise_type> h) : h(h) {}
+  gen(const gen &) = delete;
+  ~gen() { h.destroy(); }
+};
+static gen count(int n) {
+  for (int i = 0; i < n; ++i) co_yield i;
+}
+int sum(int n) {
+  int s = 0;
+  gen g = count(n);
+  for (g.h.resume(); !g.h.done(); g.h.resume()) s += g.h.promise().v;
+  return s;
+}
+"#;
+
+#[test]
+fn coro_elide_at_o2() {
+    if !tools() || !have("opt-19") {
+        return;
+    }
+    let d = scratch("coro-elide");
+    std::fs::write(d.join("elide.cpp"), ELIDE).unwrap();
+    let elided = |ll: &str| {
+        let sum = ll.split("\ndefine ").find(|f| f.contains("@_Z3sumi(")).unwrap_or_default();
+        !ll.contains("@llvm.coro.") && !sum.contains("@_Znwm") && !ll.contains("@_ZL5counti")
+    };
+    let o = kiln_in(&d, &["-std=c++20", "-O2", "-S", "-emit-llvm", "-o", "-", "elide.cpp"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert!(elided(&text(&o.stdout)), "{}", text(&o.stdout));
+    let o = kiln_in(&d, &["-std=c++20", "-S", "-emit-llvm", "-o", "-", "elide.cpp"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert!(text(&o.stdout).contains("call noalias noundef nonnull ptr @_Znwm("));
+    let c = Command::new("clang++-19")
+        .args(["-std=c++20", "-O2", "-S", "-emit-llvm", "-o", "-", "elide.cpp"])
+        .current_dir(&d)
+        .output()
+        .unwrap();
+    assert_eq!(c.status.code(), Some(0), "{}", text(&c.stderr));
+    assert!(elided(&text(&c.stdout)), "clang no longer elides");
+}

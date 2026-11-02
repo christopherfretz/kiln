@@ -1884,9 +1884,14 @@ A port of clang's `CGCoroutine.cpp` (switched-resume ABI). The function
 whose body is a `CoroutineBodyStmt` (sema.md §7.13) is emitted
 **pre-split**: it carries the `presplitcoroutine` attribute and the
 `llvm.coro.*` intrinsics, and the driver's coroutine lowering
-(driver.md "Coroutine lowering") builds the frame and the `.resume`,
-`.destroy` and `.cleanup` clones. `-emit-llvm` prints the pre-split
-form, as clang's `-emit-llvm -O0` does (`-disable-llvm-passes`).
+(driver.md "IR optimization") builds the frame and the `.resume`,
+`.destroy` and `.cleanup` clones. `-emit-llvm` prints the split form, as
+clang's does; `-Xclang -disable-llvm-passes` prints the pre-split one.
+When the return type's class carries `[[clang::coro_only_destroy_when_complete]]`
+(sema.md §7.13 attributes), the function also gets the
+`coro_only_destroy_when_complete` attribute, which CoroSplit copies to
+the clones (clang `EmitCoroutineBody`; `tests/codegen/
+coro_only_destroy_when_complete.cpp`).
 
 **Body layout (`emit_coroutine_body`, clang `EmitCoroutineBody`).**
 
@@ -1894,7 +1899,11 @@ form, as clang's `-emit-llvm -O0` does (`-disable-llvm-passes`).
    ptr null)`; the promise's address is patched into the second
    argument once the promise is emitted.
 2. `coro.alloc`: `llvm.coro.alloc(%id)` chooses between the allocation
-   call (`operator new(llvm.coro.size.i64(), ...)`) and no allocation;
+   call (`operator new(llvm.coro.size.i64(), ...)`; under
+   `-fcoro-aligned-allocation` with an `align_val_t` form,
+   `operator new(llvm.coro.size.i64(), llvm.coro.align.i64(), ...)` and
+   the matching aligned `operator delete`, sema.md §7.13;
+   `tests/codegen/coro_aligned_alloc.cpp`) and no allocation;
    with `get_return_object_on_allocation_failure` a null result
    branches to `coro.ret.on.failure`, which returns that object.
    `coro.init`: `%frame = llvm.coro.begin(%id, phi(null, mem))`.
@@ -1928,9 +1937,16 @@ form, as clang's `-emit-llvm -O0` does (`-disable-llvm-passes`).
 **Suspend points (`emit_suspend`, clang `emitSuspendExpression`).**
 `await_ready()` branches to `<kind>.ready` when true, else to
 `<kind>.suspend`, which does `%save = llvm.coro.save(ptr null)`, then
-the suspend call: `void` falls through; `bool` branches back to
-`.ready` on `false`; `Handle` calls `llvm.coro.resume` on the returned
-address (symmetric transfer, a plain call: see follow-ups). Then
+the suspend call, outlined as in clang 19 (`generateAwaitSuspendWrapper`):
+a private `<coroutine>.__await_suspend_wrapper__<kind>(ptr awaiter, ptr
+frame)` evaluates `await_suspend` (returning its `bool`, or the address
+of its handle) and the coroutine calls `llvm.coro.await.suspend.void`,
+`.bool` or `.handle` with the awaiter, the frame and the wrapper, so no
+frame value is live across the call. `void` falls through; `bool`
+branches back to `.ready` on `false`; for `.handle` CoroSplit resumes the
+returned handle with a `musttail` call (symmetric transfer, [expr.await]/5.1;
+`tests/codegen/coro_await_suspend.cpp`, the 1M-hop run test
+`tests/conformance/expr.await/symmetric_transfer.cpp`). Then
 `%s = llvm.coro.suspend(token %save, i1 <final>)` and `switch i8 %s,
 label %coro.ret [i8 0, label %<kind>.ready; i8 1, label
 %<kind>.cleanup]`. `.cleanup` leaves through the coroutine's cleanups
@@ -1963,12 +1979,40 @@ coroutine, `frame`/`alloc`/`begin`/`free` are a codegen error with
 clang's wording ("this builtin expect that __builtin_coro_begin/id has
 been used earlier in this function").
 
-**Not done (follow-ups).** CoroElide and the coroutine passes' `-O2`
-pipeline; `musttail` symmetric transfer and clang 19's
-`llvm.coro.await.suspend.{void,bool,handle}` wrappers (clang 19 outlines
-`await_suspend` so the frame is not live across it); aligned frame
-allocation (`llvm.coro.align`, `align_val_t` `operator new`); clang's
-`coro_only_destroy_when_complete` attribute.
+**IR parity details (WP-370, §7p).** A coroutine gets lifetime markers;
+its cleanup destination slot is promoted to SSA; the `llvm.coro.free`
+call is moved to guard the deallocation (clang `CallCoroDelete`
+remembers the last one); the promise's address passes through a
+`bitcast ptr %promise to ptr` before `coro.id`; an ignored empty-class
+return gets clang's `retval` temporary, erased when unused.
+
+## 7p. Landed (WP-370): optimization-dependent IR
+
+- **`CodegenOptions::optimize`** (`-O1` and above, clang
+  `CodeGenOpts.OptimizationLevel > 0`): definitions are emitted without
+  the `-O0` `noinline optnone` pair, so the driver's `opt` pipeline
+  (driver.md "IR optimization") can inline and optimize them.
+- **Lifetime markers (`lifetime.rs`, clang `EmitLifetimeStart` /
+  `CallLifetimeEnd`).** In a coroutine (where clang emits them at every
+  level: CoroSplit uses them to keep short-lived locals out of the
+  frame), each automatic variable gets `llvm.lifetime.start` right after
+  its alloca (the end of clang `EmitAutoVarAlloca`) and each materialized
+  temporary when it is created (before the outermost conditional for a
+  full-expression temporary with no destructor), and `llvm.lifetime.end` from a
+  `LifetimeEnd` cleanup (normal and EH, clang `NormalEHLifetimeMarker`).
+  A variable a `goto` or a `switch` jumps past gets none (clang
+  `VarBypassDetector`; an indirect `goto` bypasses every variable).
+  Outside coroutines kiln emits none at any level (a deviation: clang
+  emits them at `-O1`+).
+- **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
+  `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
+  SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
+  one alloca (single-store and single-block fast paths, pruned phi
+  placement at the iterated dominance frontier, the renaming walk whose
+  successor order fixes each phi's incoming order, trivial-phi
+  simplification), so the IR matches clang's.
+- **Empty-record `va_arg`.** The aggregate copy of a `va_arg` result
+  skips empty records, as clang's `EmitAggregateCopy`.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

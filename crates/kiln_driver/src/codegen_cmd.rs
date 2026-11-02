@@ -423,7 +423,7 @@ fn plan<'a>(
 /// `llvm.coro.*` intrinsic (clang's `CoroConditionalWrapper` test,
 /// `coro::declaresAnyIntrinsic`). Every `presplitcoroutine` function
 /// calls `llvm.coro.id`; a `__builtin_coro_noop` alone needs it too
-/// (spec/driver.md "Coroutine lowering").
+/// (spec/driver.md "IR optimization").
 pub fn needs_coro_lowering(ir: &str) -> bool {
     ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
 }
@@ -685,6 +685,12 @@ mod tests {
         assert_eq!(llc_opt_level(Some("-Og")), "-O1");
         assert_eq!(llc_opt_level(Some("-Os")), "-O2");
         assert_eq!(llc_opt_level(Some("-Ofast")), "-O3");
+        assert_eq!(opt_pipeline(None), None);
+        assert_eq!(opt_pipeline(Some("-O0")), None);
+        assert_eq!(opt_pipeline(Some("-O")), Some("default<O1>"));
+        assert_eq!(opt_pipeline(Some("-O2")), Some("default<O2>"));
+        assert_eq!(opt_pipeline(Some("-Oz")), Some("default<Oz>"));
+        assert_eq!(opt_pipeline(Some("-O3")), Some("default<O3>"));
     }
 
     #[test]

@@ -271,7 +271,7 @@ and attribute sets. Each helper returns the existing declaration if present.
 A module that uses the coroutine intrinsics is **pre-split** IR: it
 verifies and is an `opt -S` fixed point like any other (§7), but `llc`
 cannot code-generate it; LLVM's CoroEarly, CoroSplit and CoroCleanup
-passes must run first (spec/driver.md "Coroutine lowering"). Functions
+passes must run first (spec/driver.md "IR optimization"). Functions
 holding `llvm.coro.id` carry the `presplitcoroutine` flag attribute,
 which CoroSplit removes.
 
