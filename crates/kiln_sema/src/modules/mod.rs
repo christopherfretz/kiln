@@ -1,0 +1,699 @@
+//! C++20 modules, part A (spec/modules.md): the module preamble and unit
+//! kinds ([module.unit], [module.global.frag], [module.private.frag],
+//! [module.import]), export declarations ([module.interface]), and the
+//! ownership / visibility rules ([module.context], [module.reach],
+//! [basic.link]/8-11) consulted by name lookup, ADL and redeclaration
+//! lookup. The data lives in [`kiln_ast::modules::ModuleTable`]; this
+//! module keeps the per-unit parse state.
+
+use kiln_ast::DeclId;
+use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage, VarStorage};
+use kiln_ast::modules::{Owner, UnitInfo, UnitKind};
+use kiln_ast::names::DeclName;
+use kiln_diag::DiagId;
+use kiln_source::Loc;
+use kiln_source::fx::FxHashMap;
+
+use crate::Sema;
+use crate::scope::{Scope, ScopeKind};
+
+/// A module or import directive, as the preprocessor parsed it
+/// (`kiln_pp::DirectiveKind`, converted by the parser).
+#[derive(Clone, Copy, Debug)]
+pub enum Directive<'s> {
+    /// `module;`.
+    GlobalFragment,
+    /// `[export] module M[:P];`.
+    Module {
+        /// The dotted module name.
+        name: &'s str,
+        /// The partition.
+        partition: Option<&'s str>,
+        /// The `module` keyword's location (clang reports preamble
+        /// errors there).
+        kw_loc: Loc,
+    },
+    /// `module :private;`, with the `private` token's location.
+    Private(Loc),
+    /// `[export] import ...;`.
+    Import {
+        /// The unit key (spec/modules.md §3).
+        key: &'s str,
+        /// The name as written.
+        display: &'s str,
+    },
+}
+
+/// Where the current unit is in its preamble ([module.unit]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum Phase {
+    /// Before any module directive.
+    #[default]
+    Start,
+    /// In the global module fragment (`module;`).
+    Gmf,
+    /// In the module purview.
+    Purview,
+    /// In the private module fragment (`module :private;`).
+    Private,
+}
+
+/// The parse state of one unit being read.
+#[derive(Clone, Debug, Default)]
+struct Frame {
+    unit: u16,
+    phase: Phase,
+    /// The first token (`export` / `module`) of the module declaration.
+    module_kw: Loc,
+    /// The module declaration's `module` keyword.
+    module_loc: Loc,
+    /// The `private` of the private module fragment.
+    private_loc: Loc,
+    /// The first declaration of the unit (any phase).
+    first_decl: Loc,
+    /// A declaration was seen in the current purview / private fragment.
+    decl_seen: bool,
+    /// Open export declarations: (decl, `export` location).
+    exports: Vec<(DeclId, Loc)>,
+}
+
+/// Module state of [`Sema`].
+#[derive(Debug, Default)]
+pub(crate) struct ModSema {
+    /// The units being read, innermost last; `frames[0]` is the main file.
+    frames: Vec<Frame>,
+    /// Unit index by key.
+    keys: FxHashMap<String, u16>,
+    /// Per unit: visible (imported, directly or transitively) from the
+    /// current unit.
+    visible: Vec<bool>,
+    /// Per unit: a unit of the current unit's named module.
+    same: Vec<bool>,
+    /// The `{` of each unnamed namespace opened while modules are active
+    /// (clang reports unnamed-namespace export errors there).
+    anon_braces: FxHashMap<DeclId, Loc>,
+}
+
+impl ModSema {
+    fn cur(&self) -> u16 {
+        self.frames.last().map_or(0, |f| f.unit)
+    }
+}
+
+/// True for a function or variable declared `static` at namespace scope,
+/// or any declaration in an unnamed namespace ([basic.link]/3).
+fn internal(s: &Sema<'_, '_>, d: DeclId) -> bool {
+    let ast = &s.ast;
+    let first = ast.first(d);
+    let n = ast.decls.get(first);
+    let by_storage = match n.kind() {
+        DeclKind::Function => {
+            ast.decls.function(first).is_some_and(|f| f.spec.storage() == FnStorage::Static)
+        }
+        DeclKind::Var => {
+            ast.decls.var(first).is_some_and(|v| v.spec.storage() == VarStorage::Static)
+        }
+        DeclKind::FunctionTemplate | DeclKind::VarTemplate => {
+            return ast
+                .template_info(first)
+                .and_then(|t| t.pattern)
+                .is_some_and(|t| internal(s, t));
+        }
+        _ => false,
+    };
+    by_storage || anon_ns_of(s, first).is_some()
+}
+
+/// The innermost unnamed namespace enclosing `d`.
+fn anon_ns_of(s: &Sema<'_, '_>, d: DeclId) -> Option<DeclId> {
+    let mut c = s.ast.decls.get(d).ctx();
+    while let Some(x) = c {
+        let n = s.ast.decls.get(x);
+        if n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY {
+            return Some(x);
+        }
+        c = n.ctx();
+    }
+    None
+}
+
+impl Sema<'_, '_> {
+    // -- activation and units ---------------------------------------------------
+
+    /// Starts tracking module ownership (the main file may hold module
+    /// directives, or one was reached). Idempotent.
+    pub fn module_activate(&mut self) {
+        if self.modules.frames.is_empty() {
+            self.ast.modules.active = true;
+            if self.ast.modules.units.is_empty() {
+                self.ast.modules.units.push(UnitInfo::default());
+            }
+            self.modules.frames.push(Frame::default());
+            self.module_recompute();
+        }
+    }
+
+    /// True while modules are tracked.
+    pub fn modules_active(&self) -> bool {
+        self.ast.modules.active
+    }
+
+    /// The tokens of the imported unit `key` start (spec/modules.md §3).
+    pub fn act_on_unit_begin(&mut self, key: &str, header: bool) {
+        self.module_activate();
+        let idx = u16::try_from(self.ast.modules.units.len()).unwrap_or(u16::MAX);
+        let kind = if header { UnitKind::Header } else { UnitKind::NonModule };
+        self.ast.modules.units.push(UnitInfo { key: key.to_owned(), kind, ..UnitInfo::default() });
+        self.modules.keys.insert(key.to_owned(), idx);
+        self.modules.frames.push(Frame { unit: idx, ..Frame::default() });
+        self.module_owner_changed();
+        self.module_recompute();
+    }
+
+    /// The tokens of the imported unit `key` ended.
+    pub fn act_on_unit_end(&mut self, _key: &str) {
+        if self.modules.frames.len() > 1 {
+            self.modules.frames.pop();
+        }
+        self.module_owner_changed();
+        self.module_recompute();
+    }
+
+    /// The owner of the declarations made from now on.
+    fn module_owner(&self) -> Owner {
+        let Some(f) = self.modules.frames.last() else { return Owner::default() };
+        let purview = matches!(f.phase, Phase::Purview | Phase::Private);
+        Owner { unit: f.unit, purview, exported: purview && !f.exports.is_empty() }
+    }
+
+    fn module_owner_changed(&mut self) {
+        let o = self.module_owner();
+        let next = self.ast.decls.next_id();
+        self.ast.modules.set_owner_from(next, o);
+    }
+
+    /// Recomputes the units visible from the current one: its imports,
+    /// transitively through `export import` ([module.import]/7), and all
+    /// imports of the units of its own named module ([module.import]/8).
+    fn module_recompute(&mut self) {
+        let units = &self.ast.modules.units;
+        let n = units.len();
+        let cur = usize::from(self.modules.cur());
+        let cur_mod =
+            units.get(cur).filter(|u| u.kind.is_named()).and_then(|u| u.module.as_deref());
+        let same: Vec<bool> = units
+            .iter()
+            .map(|u| u.kind.is_named() && cur_mod.is_some() && u.module.as_deref() == cur_mod)
+            .collect();
+        let mut vis = vec![false; n];
+        if let Some(v) = vis.get_mut(cur) {
+            *v = true;
+        }
+        let mut stack = vec![cur];
+        while let Some(u) = stack.pop() {
+            let Some(info) = units.get(u) else { continue };
+            for (key, exported) in &info.imports {
+                if u != cur && !exported && !same[u] {
+                    continue;
+                }
+                let Some(&v) = self.modules.keys.get(key) else { continue };
+                let v = usize::from(v);
+                if v < n && !vis[v] {
+                    vis[v] = true;
+                    stack.push(v);
+                }
+            }
+        }
+        self.modules.visible = vis;
+        self.modules.same = same;
+    }
+
+    // -- directives ----------------------------------------------------------------
+
+    /// A module or import directive ([cpp.module], [cpp.import]) reached
+    /// at the start of a namespace-scope declaration.
+    /// `loc` is the directive's first token, `export` whether it starts
+    /// with `export`.
+    pub fn act_on_module_directive(&mut self, loc: Loc, export: bool, d: Directive<'_>) {
+        self.module_activate();
+        let cur = usize::from(self.modules.cur());
+        let Some(f) = self.modules.frames.last().cloned() else { return };
+        match d {
+            Directive::GlobalFragment => {
+                if f.phase != Phase::Start || f.first_decl.is_valid() {
+                    let m = self.diag(DiagId::sema_module_gmf_not_first, loc);
+                    self.emit(m);
+                    return;
+                }
+                if let Some(f) = self.modules.frames.last_mut() {
+                    f.phase = Phase::Gmf;
+                }
+            }
+            Directive::Module { name, partition, kw_loc } => {
+                if f.module_loc.is_valid() {
+                    let note = self.diag(DiagId::note_module_previous_decl, f.module_loc);
+                    let m = self.diag(DiagId::sema_module_multiple_decls, kw_loc);
+                    self.emit(m.with_note(note));
+                    return;
+                }
+                if f.phase == Phase::Start && f.first_decl.is_valid() {
+                    let note = self.diag(DiagId::note_module_add_gmf, f.first_decl);
+                    let m = self.diag(DiagId::sema_module_decl_not_first, kw_loc);
+                    self.emit(m.with_note(note));
+                }
+                let kind = match (export, partition.is_some()) {
+                    (true, false) => UnitKind::Interface,
+                    (false, false) => UnitKind::Implementation,
+                    (true, true) => UnitKind::PartitionInterface,
+                    (false, true) => UnitKind::PartitionImplementation,
+                };
+                if let Some(u) = self.ast.modules.units.get_mut(cur) {
+                    u.kind = kind;
+                    u.module = Some(name.to_owned());
+                    u.partition = partition.map(str::to_owned);
+                    // [module.unit]/8: an implementation unit imports its
+                    // primary interface.
+                    if kind == UnitKind::Implementation {
+                        u.imports.push((name.to_owned(), false));
+                    }
+                }
+                if let Some(f) = self.modules.frames.last_mut() {
+                    f.phase = Phase::Purview;
+                    f.module_kw = loc;
+                    f.module_loc = kw_loc;
+                    f.decl_seen = false;
+                }
+                self.module_owner_changed();
+                self.module_recompute();
+            }
+            Directive::Private(ploc) => {
+                let kind = self.ast.modules.units.get(cur).map_or(UnitKind::NonModule, |u| u.kind);
+                if !f.module_loc.is_valid() {
+                    let m = self.diag(DiagId::sema_module_private_no_module, ploc);
+                    self.emit(m);
+                } else if !kind.is_interface() {
+                    let m = self.diag(DiagId::sema_module_private_in_impl, ploc);
+                    self.emit(m);
+                } else if f.phase == Phase::Private {
+                    let note = self.diag(DiagId::note_previous_definition, f.private_loc);
+                    let m = self.diag(DiagId::sema_module_private_redefined, ploc);
+                    self.emit(m.with_note(note));
+                } else {
+                    if let Some(f) = self.modules.frames.last_mut() {
+                        f.phase = Phase::Private;
+                        f.private_loc = loc;
+                        f.decl_seen = false;
+                    }
+                    self.module_owner_changed();
+                }
+            }
+            Directive::Import { key, display } => {
+                if self.ctx != self.ast.tu {
+                    let within = self.decl_name_str(self.ast.decls.get(self.ctx).name());
+                    let m = self
+                        .diag(DiagId::sema_module_import_not_file_scope, loc)
+                        .arg(display)
+                        .arg(format!("namespace '{within}'"));
+                    self.emit(m);
+                }
+                if key.starts_with(':') {
+                    let m = self.diag(DiagId::sema_module_partition_import_outside, loc);
+                    self.emit(m);
+                    return;
+                }
+                if matches!(f.phase, Phase::Purview | Phase::Private) && f.decl_seen {
+                    let m = self.diag(DiagId::sema_module_import_not_first, loc);
+                    self.emit(m);
+                } else if export && !(f.phase == Phase::Purview && self.module_unit_is_interface())
+                {
+                    let m = self.diag(DiagId::sema_module_export_not_interface, loc);
+                    self.emit(m);
+                }
+                if let Some(u) = self.ast.modules.units.get_mut(cur) {
+                    u.imports.push((key.to_owned(), export));
+                }
+                self.module_recompute();
+            }
+        }
+    }
+
+    fn module_unit_is_interface(&self) -> bool {
+        let cur = usize::from(self.modules.cur());
+        self.ast.modules.units.get(cur).is_some_and(|u| u.kind.is_interface())
+    }
+
+    /// A namespace-scope declaration starts at `loc` (for the import
+    /// ordering rule of [module.import]/1).
+    pub fn module_note_decl(&mut self, loc: Loc) {
+        if let Some(f) = self.modules.frames.last_mut() {
+            if !f.first_decl.is_valid() {
+                f.first_decl = loc;
+            }
+            f.decl_seen = true;
+        }
+    }
+
+    // -- export declarations ---------------------------------------------------
+
+    /// `export` declaration / `export { ... }` ([module.interface]/1):
+    /// opens the transparent export context.
+    pub fn act_on_start_export(&mut self, loc: Loc) -> DeclId {
+        self.module_activate();
+        let f = self.modules.frames.last().cloned().unwrap_or_default();
+        if let Some(&(_, outer)) = f.exports.last() {
+            let note = self.diag(DiagId::note_module_export_block_begins, outer);
+            let m = self.diag(DiagId::sema_module_export_nested, loc);
+            self.emit(m.with_note(note));
+        } else if f.phase == Phase::Private {
+            let note = self.diag(DiagId::note_module_private_begins, f.private_loc);
+            let m = self.diag(DiagId::sema_module_export_in_private, loc);
+            self.emit(m.with_note(note));
+        } else if f.phase != Phase::Purview || !self.module_unit_is_interface() {
+            let mut m = self.diag(DiagId::sema_module_export_not_interface, loc);
+            if f.phase == Phase::Purview {
+                m = m.with_note(self.diag(DiagId::note_module_add_export, f.module_kw));
+            }
+            self.emit(m);
+        } else if let Some(ns) = self.module_enclosing_anon_ns() {
+            let note = self.diag(DiagId::note_module_anon_ns_begins, self.module_anon_loc(ns));
+            let m = self.diag(DiagId::sema_module_export_in_anon_ns, loc);
+            self.emit(m.with_note(note));
+        }
+        let ctx = self.ctx;
+        let e = self.builder().export_decl(ctx, loc);
+        self.scopes.push(Scope::new(ScopeKind::LinkageSpec, Some(e)));
+        self.ctx = e;
+        if let Some(f) = self.modules.frames.last_mut() {
+            f.exports.push((e, loc));
+        }
+        self.module_owner_changed();
+        e
+    }
+
+    /// Records the `{` of the unnamed namespace `ns`.
+    pub fn module_note_anon_namespace(&mut self, ns: DeclId, lbrace: Loc) {
+        self.modules.anon_braces.insert(ns, lbrace);
+    }
+
+    /// Where unnamed namespace `ns` is reported: its `{` if known.
+    fn module_anon_loc(&self, ns: DeclId) -> Loc {
+        self.modules.anon_braces.get(&ns).copied().unwrap_or_else(|| self.ast.decls.get(ns).loc())
+    }
+
+    /// The end of the export declaration `e`: checks what it exported
+    /// ([module.interface]/3, /2). `block` is true for `export { ... }`
+    /// (clang adds the "export block begins here" note only then).
+    pub fn act_on_finish_export(&mut self, e: DeclId, block: bool) {
+        self.scopes.pop();
+        self.ctx = self.ast.decls.get(e).ctx().unwrap_or(self.ast.tu);
+        let mut loc = self.ast.decls.get(e).loc();
+        if let Some(f) = self.modules.frames.last_mut()
+            && let Some((_, l)) = f.exports.pop()
+        {
+            loc = l;
+        }
+        self.module_owner_changed();
+        self.module_check_exported(e, block.then_some(loc));
+    }
+
+    /// The innermost unnamed namespace the current context is in.
+    fn module_enclosing_anon_ns(&self) -> Option<DeclId> {
+        let n = self.ast.decls.get(self.ctx);
+        if n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY {
+            return Some(self.ctx);
+        }
+        anon_ns_of(self, self.ctx)
+    }
+
+    /// [module.interface]/3 (C++20 wording, as clang 22): an exported
+    /// declaration shall not have internal linkage; [module.interface]/2:
+    /// no unnamed namespace is exported.
+    fn module_check_exported(&mut self, e: DeclId, block_loc: Option<Loc>) {
+        let lo = e.index() + 1;
+        let hi = self.ast.decls.next_id().index();
+        for i in lo..hi {
+            let d = DeclId::new(i);
+            let n = self.ast.decls.get(d);
+            // Using-declarations are checked through their (implicit) shadows.
+            let implicit = n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow;
+            if implicit || !self.exported_by(d, e) {
+                continue;
+            }
+            match n.kind() {
+                DeclKind::Namespace if n.name() == DeclName::EMPTY => {
+                    let m = self.diag(DiagId::sema_module_export_anon_ns, self.module_anon_loc(d));
+                    self.emit(m);
+                }
+                DeclKind::UsingShadow => {
+                    let t = self.ast.strip_shadow(d);
+                    let mt = &self.ast.modules;
+                    // Module linkage: owned by a named module's purview and
+                    // never exported.
+                    let module_linkage = || {
+                        let o = mt.owner(t);
+                        o.purview && !o.exported && !mt.owner(self.ast.first(t)).exported
+                    };
+                    let linkage = if t == d {
+                        None
+                    } else if internal(self, t) {
+                        Some(0u8)
+                    } else if module_linkage() {
+                        Some(1)
+                    } else {
+                        None
+                    };
+                    if let Some(k) = linkage {
+                        let note = self
+                            .diag(DiagId::note_module_using_target, self.ast.decls.get(t).loc());
+                        let name = self.decl_name_str(self.ast.decls.get(t).name());
+                        let m = self
+                            .diag(DiagId::sema_module_export_using_internal, n.loc())
+                            .arg(name)
+                            .arg(k);
+                        self.emit(m.with_note(note));
+                    }
+                }
+                DeclKind::Function
+                | DeclKind::Var
+                | DeclKind::FunctionTemplate
+                | DeclKind::VarTemplate
+                    if internal(self, d) && anon_ns_of(self, d).is_none() =>
+                {
+                    let name = self.decl_name_str(n.name());
+                    let mut m = self.diag(DiagId::sema_module_export_internal, n.loc()).arg(name);
+                    if let Some(l) = block_loc {
+                        m = m.with_note(self.diag(DiagId::note_module_export_block_begins, l));
+                    }
+                    self.emit(m);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// True if `d` is directly in export `e`, possibly through namespaces
+    /// and linkage specifications.
+    fn exported_by(&self, d: DeclId, e: DeclId) -> bool {
+        let mut c = self.ast.decls.get(d).ctx();
+        while let Some(x) = c {
+            if x == e {
+                return true;
+            }
+            match self.ast.decls.get(x).kind() {
+                DeclKind::Namespace | DeclKind::LinkageSpec => c = self.ast.decls.get(x).ctx(),
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    // -- visibility --------------------------------------------------------------
+
+    /// The namespace-scope declaration whose owner decides whether `raw`
+    /// is visible: `raw` itself, or the enumeration of an enumerator;
+    /// `None` for anything not at namespace scope, and namespaces.
+    fn module_scope_decl(&self, raw: DeclId) -> Option<DeclId> {
+        let mut d = raw;
+        let n = self.ast.decls.get(d);
+        if n.kind() == DeclKind::Namespace || n.has(DeclFlags::IMPLICIT) || !n.loc().is_valid() {
+            return None;
+        }
+        let mut c = n.ctx()?;
+        loop {
+            match self.ast.decls.get(c).kind() {
+                DeclKind::LinkageSpec | DeclKind::Export => c = self.ast.decls.get(c).ctx()?,
+                DeclKind::Namespace | DeclKind::TranslationUnit => return Some(d),
+                DeclKind::Enum if d == raw => {
+                    d = c;
+                    c = self.ast.decls.get(c).ctx()?;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// True if `raw` (a lookup result before looking through using
+    /// shadows) is visible from the current unit (spec/modules.md §5).
+    pub(crate) fn module_visible(&self, raw: DeclId) -> bool {
+        let mt = &self.ast.modules;
+        if !mt.active || !self.inst.stack.is_empty() {
+            return true;
+        }
+        let Some(d) = self.module_scope_decl(raw) else { return true };
+        self.module_visible_owner(d, mt.owner(d))
+    }
+
+    fn module_visible_owner(&self, d: DeclId, o: Owner) -> bool {
+        let mt = &self.ast.modules;
+        let cur = self.modules.cur();
+        if o.unit == cur {
+            return true;
+        }
+        let i = d.index();
+        if let Some(u) = mt.units.get(usize::from(cur)) {
+            let k = u.merged.partition_point(|&(_, hi)| hi <= i);
+            if u.merged.get(k).is_some_and(|&(lo, _)| lo <= i) {
+                return true;
+            }
+        }
+        let u = usize::from(o.unit);
+        if !self.modules.visible.get(u).copied().unwrap_or(false) {
+            return false;
+        }
+        let Some(info) = mt.units.get(u) else { return true };
+        if !info.kind.is_named() {
+            return true;
+        }
+        if !o.purview {
+            return false;
+        }
+        o.exported
+            || self.modules.same.get(u).copied().unwrap_or(false)
+            || mt.owner(self.ast.first(d)).exported
+    }
+
+    /// ADL ([basic.lookup.argdep]/4): `raw` is visible, or it is an
+    /// exported declaration in the purview of a named module some class
+    /// of `classes` is attached to (reachable through an import the
+    /// current unit does not see). As clang 22, "in the interface of M"
+    /// means exported: a non-exported function of M's interface is not
+    /// found by an importer's ADL.
+    pub(crate) fn module_adl_visible(&self, raw: DeclId, classes: &[DeclId]) -> bool {
+        if self.module_visible(raw) {
+            return true;
+        }
+        let mt = &self.ast.modules;
+        let exported = self
+            .module_scope_decl(raw)
+            .is_some_and(|d| mt.owner(d).exported || mt.owner(self.ast.first(d)).exported);
+        if !exported {
+            return false;
+        }
+        let Some(m) = mt.purview_module(raw) else { return false };
+        classes.iter().any(|&c| mt.purview_module(self.ast.first(c)) == Some(m))
+    }
+
+    /// Redeclaration lookup ([basic.link]/8): drops the declarations of
+    /// another named module that are not exported (module linkage: a
+    /// different entity) and internal-linkage declarations of other units.
+    pub(crate) fn module_redecl_candidate(&self, raw: DeclId) -> bool {
+        let mt = &self.ast.modules;
+        if !mt.active {
+            return true;
+        }
+        let Some(d) = self.module_scope_decl(raw) else { return true };
+        let o = mt.owner(d);
+        let cur = self.modules.cur();
+        if o.unit == cur {
+            return true;
+        }
+        if internal(self, self.ast.strip_shadow(d)) {
+            return false;
+        }
+        if !o.purview || self.modules.same.get(usize::from(o.unit)).copied().unwrap_or(false) {
+            return true;
+        }
+        o.exported || mt.owner(self.ast.first(d)).exported
+    }
+
+    /// Merges the declarations `[lo, hi)` of another unit into the current
+    /// one (spec/modules.md §6): they become visible as if declared here.
+    pub fn module_merge_range(&mut self, lo: DeclId, hi: DeclId) {
+        let cur = usize::from(self.modules.cur());
+        let (lo, hi) = (lo.index(), hi.index());
+        if lo >= hi {
+            return;
+        }
+        let Some(u) = self.ast.modules.units.get_mut(cur) else { return };
+        let v = &mut u.merged;
+        let k = v.partition_point(|&(a, _)| a < lo);
+        v.insert(k, (lo, hi));
+        // Coalesce with the neighbours.
+        let i = if k > 0 && v[k - 1].1 >= v[k].0 { k - 1 } else { k };
+        while i + 1 < v.len() && v[i].1 >= v[i + 1].0 {
+            v[i].1 = v[i].1.max(v[i + 1].1);
+            v.remove(i + 1);
+        }
+    }
+
+    /// The current unit's index (spec/modules.md §6 dedup records).
+    pub fn module_current_unit(&self) -> u16 {
+        self.modules.cur()
+    }
+
+    // -- [basic.link]/11 -----------------------------------------------------------
+
+    /// Checks the redeclarations made since the last call: a redeclaration
+    /// is attached to the same module as the previous declaration
+    /// ([basic.link]/11), and an exported redeclaration does not follow
+    /// one with module linkage ([module.interface]/6).
+    pub fn module_check_links(&mut self) {
+        if self.ast.modules.links.is_empty() {
+            return;
+        }
+        let links = std::mem::take(&mut self.ast.modules.links);
+        if !self.inst.stack.is_empty() {
+            return;
+        }
+        for (d, prev) in links {
+            let (dn, pn) = (self.ast.decls.get(d), self.ast.decls.get(prev));
+            if dn.kind() == DeclKind::Namespace
+                || dn.has(DeclFlags::IMPLICIT)
+                || pn.has(DeclFlags::IMPLICIT)
+                || self.module_scope_decl(d).is_none()
+            {
+                continue;
+            }
+            let (a, b) = (self.module_attachment(d), self.module_attachment(prev));
+            let name = self.decl_name_str(dn.name());
+            if a != b {
+                let say = |m: &Option<String>| {
+                    m.as_ref()
+                        .map_or_else(|| "the global module".to_owned(), |m| format!("module {m}"))
+                };
+                let note = self.diag(DiagId::note_previous_declaration, pn.loc());
+                let m = self
+                    .diag(DiagId::sema_module_redecl_attachment, dn.loc())
+                    .arg(name)
+                    .arg(say(&a))
+                    .arg(say(&b));
+                self.emit(m.with_note(note));
+                continue;
+            }
+            let mt = &self.ast.modules;
+            let (od, op) = (mt.owner(d), mt.owner(self.ast.first(prev)));
+            if od.exported && op.purview && !op.exported && a.is_some() {
+                let note = self.diag(DiagId::note_previous_declaration, pn.loc());
+                let m =
+                    self.diag(DiagId::sema_module_export_redecl_module_linkage, dn.loc()).arg(name);
+                self.emit(m.with_note(note));
+            }
+        }
+    }
+
+    /// The named module `d` is attached to ([module.unit]/7): its purview's
+    /// module unless it is in a linkage specification.
+    fn module_attachment(&self, d: DeclId) -> Option<String> {
+        self.ast.module_attachment(d).map(str::to_owned)
+    }
+}

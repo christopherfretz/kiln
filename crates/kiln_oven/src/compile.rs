@@ -602,8 +602,11 @@ impl Oven {
             _ => QualType::INT,
         };
         let std_ice = is_std_is_constant_evaluated(ast, def);
+        let std_construct =
+            is_std_named(ast, def, "construct_at") || is_std_named(ast, def, "__construct_at");
         let mut c = Compiler::new(self, b);
         c.std_ice = std_ice;
+        c.std_construct = std_construct;
         let rty = c.ty(ret_q);
         let ret = if c.o.types.is_aggregate(rty) {
             RetKind::Sret(rty)
@@ -739,6 +742,11 @@ pub(crate) struct Compiler<'a> {
     catch_obj: Option<u32>,
     /// The function being compiled is `std::is_constant_evaluated`.
     std_ice: bool,
+    /// The function being compiled is `std::construct_at` (or libc++'s
+    /// `std::__construct_at`): its placement new constructs `*location`
+    /// ([specialized.construct]/2), a `T` whatever designator the
+    /// `void *` argument lost (libc++ passes it through `__voidify`).
+    std_construct: bool,
     /// The code reads the evaluation context (`Op::IsConstEval`): the
     /// function is not memoized.
     uses_cc: bool,
@@ -803,6 +811,7 @@ impl<'a> Compiler<'a> {
             ret_ref: false,
             has_temps: false,
             std_ice: false,
+            std_construct: false,
             uses_cc: false,
             this_reg: None,
             this_override: None,

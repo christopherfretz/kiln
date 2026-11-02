@@ -71,7 +71,10 @@ impl Compiler<'_> {
         let x = *ast.exprs.new_extra(e);
         let loc = ast.exprs.get(e).loc();
         let elem = self.ty(x.allocated_ty);
-        let stat = self.placement_target(arg);
+        let stat = match self.placement_target(arg) {
+            crate::kbc::bi::DYN if self.std_construct && aux & new_aux::ARRAY == 0 => elem.0,
+            s => s,
+        };
         let p = self.rv(arg);
         self.emit(Op::Mov, 0, &[dst, p]);
         let ops = [dst, elem.0, stat, cnt, k as u32];
