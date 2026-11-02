@@ -541,9 +541,9 @@ impl Sema<'_, '_> {
         if let Some(Some(e)) = inherited_explicit {
             let _ = self.ast.decls.cold.explicit_expr.insert(f, e);
         }
-        // Where a constexpr defaulted one of a class with virtual bases is
+        // Where a constexpr or consteval defaulted one that cannot be is
         // diagnosed before C++26 (`check_defaulted_impl`).
-        if ds.constexpr.is_some() && ds.loc != d.name_loc() && self.std < kiln_lex::Std::Cxx26 {
+        if ds.constexpr.or(ds.consteval).is_some() && ds.loc != d.name_loc() && self.std < kiln_lex::Std::Cxx26 {
             self.constexpr_begin_locs.insert(f, ds.loc);
         }
         self.create_params(f, &fparams, &defaults);

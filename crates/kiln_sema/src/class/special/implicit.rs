@@ -12,6 +12,7 @@ use kiln_ast::types::{ExcSpec, FuncInfo, Quals, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType};
 
 use super::SpecialKind;
+use super::deletion::Selected;
 use crate::Sema;
 use crate::class::r#virtual::is_virtual;
 
@@ -310,12 +311,174 @@ impl Sema<'_, '_> {
         self.ast.decls.record(self.class_def(r)).is_some_and(|x| x.tag == TagKind::Union)
     }
 
-    /// Whether an implicit or defaulted `k` of a class with `bits` is
-    /// `constexpr` (spec/sema-class.md §4.6, C++23 and later: unless a
-    /// constructor or destructor of a class with a virtual base before
-    /// C++26, P3533R2).
-    pub(crate) fn defaulted_is_constexpr(&self, bits: DefinitionBits, k: SpecialKind) -> bool {
-        k.is_assign() || !self.vbases_forbid_constexpr(bits)
+    /// Whether an implicit or defaulted `k` of class `class` (copying from
+    /// a `const` argument when `const_arg`) is `constexpr`
+    /// (spec/sema-class.md §4.6; clang `defaultedSpecialMemberIsConstexpr`):
+    /// never a constructor of a class with a virtual base before C++26
+    /// (P3533R2); before C++23 (P2448R2) only when the member each base and
+    /// field subobject uses is constexpr, and an assignment of a literal
+    /// class from C++14 on.
+    pub(crate) fn defaulted_is_constexpr(
+        &mut self,
+        class: DeclId,
+        k: SpecialKind,
+        const_arg: bool,
+    ) -> bool {
+        use SpecialKind as K;
+        let c = self.class_def(class);
+        let bits = self.defn_bits(c);
+        match k {
+            K::DefaultCtor => return bits.contains(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR),
+            K::Dtor => return !self.vbases_forbid_constexpr(bits),
+            K::CopyCtor | K::MoveCtor => {
+                if self.is_union(c) {
+                    return true;
+                }
+                if self.vbases_forbid_constexpr(bits) {
+                    return false;
+                }
+            }
+            K::CopyAssign | K::MoveAssign => {
+                if self.std < kiln_lex::Std::Cxx14 {
+                    return false;
+                }
+                if self.std < kiln_lex::Std::Cxx23 && !bits.contains(DefinitionBits::LITERAL) {
+                    return false;
+                }
+            }
+        }
+        if self.std >= kiln_lex::Std::Cxx23 {
+            return true;
+        }
+        let bases: Vec<DeclId> = self
+            .ast
+            .decls
+            .bases(c, &self.ast.lists)
+            .copied()
+            .collect::<Vec<BaseSpec>>()
+            .iter()
+            .filter_map(|b| self.base_class(b))
+            .collect();
+        let rhs = if const_arg { Quals::CONST } else { Quals::NONE };
+        for b in bases {
+            if !self.special_member_is_constexpr(b, k, rhs, Quals::NONE) {
+                return false;
+            }
+        }
+        for f in self.special_fields(c) {
+            if self.is_invalid_decl(f) {
+                continue;
+            }
+            let Some(t) = self.ast.decls.get(f).ty() else { continue };
+            if self.ast.types.is_reference(t) {
+                continue;
+            }
+            let Some(fc) = self.element_class(t) else { continue };
+            let fq = self.ast.types.effective_quals(self.base_element(t))
+                & (Quals::CONST | Quals::VOLATILE);
+            let mut rq = fq;
+            if const_arg && !self.field_is_mutable(f) {
+                rq |= Quals::CONST;
+            }
+            let lq = if k.is_assign() { fq } else { Quals::NONE };
+            if !self.special_member_is_constexpr(fc, k, rq, lq) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Whether the `k` that copies or moves a subobject of class `c`
+    /// (argument qualifiers `rhs`, object qualifiers `lhs`) is constexpr;
+    /// a member that would not be selected involves nothing (clang
+    /// `specialMemberIsConstexpr`).
+    fn special_member_is_constexpr(
+        &mut self,
+        c: DeclId,
+        k: SpecialKind,
+        rhs: Quals,
+        lhs: Quals,
+    ) -> bool {
+        match self.select_special(c, k, rhs, lhs) {
+            Selected::Found(m) | Selected::Deleted(m) => {
+                if self.kind_of(m) == DeclKind::ConstructorUsingShadow {
+                    return self.inherited_constexpr_ctor(m);
+                }
+                let f = if self.kind_of(m) == DeclKind::FunctionTemplate {
+                    self.pattern_of(m).unwrap_or(m)
+                } else {
+                    m
+                };
+                self.fn_spec(f).constexpr_kind() != ConstexprKind::None
+            }
+            Selected::Missing | Selected::Ambiguous | Selected::Unsupported => true,
+        }
+    }
+
+    /// Whether complete class `c` has a constexpr default constructor,
+    /// declared or still to be implicitly declared (clang
+    /// `hasConstexprDefaultConstructor`).
+    pub(crate) fn has_constexpr_default_ctor(&self, c: DeclId) -> bool {
+        let d = self.class_def(c);
+        let declared = self.ast.constructors(d).iter().any(|f| {
+            self.special_kind_of(f) == Some(SpecialKind::DefaultCtor)
+                && self.fn_spec(f).constexpr_kind() != ConstexprKind::None
+        });
+        declared
+            || self.needs_implicit(d, SpecialKind::DefaultCtor)
+                && self.defn_bits(d).contains(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR)
+    }
+
+    /// Whether a defaulted default constructor of class `r` (a union when
+    /// `union`) with direct bases `bases` and fields `fields` is
+    /// constexpr ([dcl.constexpr]/3 before C++23 with [class.default.ctor];
+    /// clang `DefaultedDefaultConstructorIsConstexpr` as `addedMember`
+    /// computes it, with `defaultedDefaultConstructorIsConstexpr`'s union
+    /// rule).
+    fn defaulted_default_ctor_constexpr(
+        &self,
+        bits: DefinitionBits,
+        union: bool,
+        bases: &[(DeclId, bool)],
+        fields: &[DeclId],
+    ) -> bool {
+        use kiln_lex::Std;
+        if self.vbases_forbid_constexpr(bits) {
+            return false;
+        }
+        if self.std >= Std::Cxx23 {
+            return true;
+        }
+        if bases.iter().any(|&(b, _)| !self.has_constexpr_default_ctor(b)) {
+            return false;
+        }
+        let mut any_init = false;
+        for &f in fields {
+            if self.field_has_nsdmi(f) {
+                any_init = true;
+                continue;
+            }
+            if union || self.is_invalid_decl(f) {
+                continue;
+            }
+            let Some(t) = self.ast.decls.get(f).ty() else { continue };
+            let class = if self.ast.types.is_reference(t) { None } else { self.element_class(t) };
+            match class {
+                Some(c) => {
+                    if !self.has_constexpr_default_ctor(c) {
+                        return false;
+                    }
+                }
+                // [dcl.constexpr]/4 before C++20 (P1331R2): every
+                // subobject is initialized.
+                None => {
+                    if self.std < Std::Cxx20 {
+                        return false;
+                    }
+                }
+            }
+        }
+        !union || any_init || fields.is_empty() || self.std >= Std::Cxx20
     }
 
     /// Whether a class with `bits` has a virtual base that keeps its
@@ -394,9 +557,13 @@ impl Sema<'_, '_> {
         let mut out = Declared::default();
         let members: Vec<DeclId> = self.ast.members(r).collect();
         let vbases = class_trivial.contains(DefinitionBits::HAS_VIRTUAL_BASES);
-        // An in-class defaulted constructor or destructor is constexpr
-        // unless virtual bases forbid it (before C++26, P3533R2).
+        // An in-class defaulted destructor is constexpr unless virtual
+        // bases forbid it (before C++26, P3533R2); an in-class defaulted
+        // default constructor when its subobjects allow it
+        // (`DEFAULTED_DEFAULT_CTOR_CONSTEXPR`), or always in an
+        // instantiation (CWG1358, clang `CheckExplicitlyDefaultedSpecialMember`).
         let vb_forbid = self.vbases_forbid_constexpr(class_trivial);
+        let ddc = class_trivial.contains(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR);
         for m in members {
             if self.kind_of(m) == DeclKind::ConstructorUsingShadow {
                 // [basic.types.general]/10.5.2: a constexpr constructor
@@ -443,7 +610,9 @@ impl Sema<'_, '_> {
             let in_class_default = spec.defaulted() == Defaulted::Explicit;
             if fkind == DeclKind::CXXConstructor
                 && !matches!(kind, Some(SpecialKind::CopyCtor | SpecialKind::MoveCtor))
-                && (spec.constexpr_kind() != ConstexprKind::None || in_class_default && !vb_forbid)
+                && (spec.constexpr_kind() != ConstexprKind::None
+                    || in_class_default
+                        && (ddc || !vb_forbid && self.ast.instantiated_from(f).is_some()))
             {
                 out.constexpr_ctor = true;
             }
@@ -666,6 +835,13 @@ impl Sema<'_, '_> {
                 uninit_fields = true;
             }
         }
+        // `constexpr` default construction (§4.6), which the scan of the
+        // in-class defaulted one reads.
+        if self.defaulted_default_ctor_constexpr(bits, union, &base_classes, &fields) {
+            bits = bits.with(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR);
+        } else {
+            bits = bits.without(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR);
+        }
         // Own members.
         let decl = self.scan_declared(r, bits);
         let ud_bits = [
@@ -747,11 +923,10 @@ impl Sema<'_, '_> {
         }
         // `constexpr` and literal types (§4.6, [basic.types.general]/10).
         let no_vbases = !self.vbases_forbid_constexpr(bits);
-        if no_vbases {
-            bits = bits.with(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR);
-        }
         let needs_default = needs_from(bits, implicit, K::DefaultCtor);
-        if decl.constexpr_ctor || needs_default && no_vbases {
+        if decl.constexpr_ctor
+            || needs_default && bits.contains(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR)
+        {
             bits = bits.with(DefinitionBits::HAS_CONSTEXPR_CTOR);
         }
         let constexpr_dtor = decl.dtor_constexpr.unwrap_or(no_vbases);
@@ -912,10 +1087,10 @@ impl Sema<'_, '_> {
             subs.push((c, rhs, if k.is_assign() { q } else { Quals::NONE }));
         }
         subs.into_iter().all(|(c, rhs, lhs)| match self.select_special(c, k, rhs, lhs) {
-            super::deletion::Selected::Found(m) | super::deletion::Selected::Deleted(m) => {
+            Selected::Found(m) | Selected::Deleted(m) => {
                 self.ast.decls.function(m).is_some_and(|x| x.spec.is_trivial())
             }
-            super::deletion::Selected::Unsupported => self.has_trivial(c, k),
+            Selected::Unsupported => self.has_trivial(c, k),
             _ => true,
         })
     }
@@ -980,7 +1155,10 @@ impl Sema<'_, '_> {
         };
         let fty = self.ast.types.function(ret, &params, FuncInfo::new(), ExcSpec::None);
         let mut spec = FnSpec::new().with_inline(true).with_defaulted(Defaulted::Implicit);
-        if self.defaulted_is_constexpr(bits, k) {
+        let const_arg = k == K::CopyCtor
+            && bits.contains(DefinitionBits::IMPLICIT_COPY_CTOR_CONST_PARAM)
+            || k == K::CopyAssign && bits.contains(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM);
+        if self.defaulted_is_constexpr(d, k, const_arg) {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr);
         }
         let trivial = match k.needs_ovl_bit() {

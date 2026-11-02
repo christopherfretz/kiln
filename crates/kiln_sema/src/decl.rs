@@ -3577,6 +3577,15 @@ impl Sema<'_, '_> {
                 self.record_extern_c(name, f);
             }
         }
+        // Where a constexpr or consteval defaulted assignment or comparison
+        // that cannot be one is diagnosed (`check_defaulted_impl`).
+        if (method || friend)
+            && ds.constexpr.or(ds.consteval).is_some()
+            && ds.loc != d.name_loc()
+            && self.std < kiln_lex::Std::Cxx26
+        {
+            self.constexpr_begin_locs.insert(f, ds.loc);
+        }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
         if delayed_prev && let Some(p) = prev_ok {
@@ -5629,6 +5638,7 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_body(f, body);
         }
         self.check_constexpr_virtual_base(f);
+        self.check_constexpr_body_vars(f, body);
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
             && !self.in_template()

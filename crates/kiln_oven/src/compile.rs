@@ -2204,6 +2204,13 @@ impl Compiler<'_> {
             }
             return;
         }
+        if n.has(kiln_ast::decl::DeclFlags::INVALID) {
+            // A variable whose declaration sema already diagnosed (no
+            // viable constructor, say): the evaluation fails with no note,
+            // as clang's on the erroneous declaration.
+            self.trap_loc(n.loc(), String::new());
+            return;
+        }
         if is_reference_var(ast, d) {
             let r = self.reg();
             if let Some(init) = v.init {
