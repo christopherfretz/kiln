@@ -145,6 +145,17 @@ const CLANG22_AARCH64: &[(&str, &str)] = &[
     ("__GCC_DESTRUCTIVE_SIZE", "256"),
 ];
 
+/// Feature-test macros for what kiln implements beyond clang 19's
+/// predefines (docs/status/cxx-features.md, spec/pp.md "clang
+/// compatibility level"): (minimum `__cplusplus`, name, value). Applied in
+/// C++ at every compatibility level.
+const KILN_FEATURES: &[(u64, &str, &str)] = &[
+    // P2747 constexpr placement new (WP-357).
+    (202400, "__cpp_constexpr", "202406L"),
+    // P3068 constexpr exceptions (WP-357); withdrawn with -fno-exceptions.
+    (202400, "__cpp_constexpr_exceptions", "202411L"),
+];
+
 /// The driver-injected `-D` that clang's driver appends after the user's
 /// (it follows the unwind-table defaults on Linux).
 const DRIVER_DEFINES: &[&str] = &["__GCC_HAVE_DWARF2_CFI_ASM"];
@@ -244,9 +255,19 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         }
     }
     if cfg.cplusplus {
+        let cplusplus = m
+            .get("__cplusplus")
+            .and_then(|v| v.trim_end_matches('L').parse::<u64>().ok())
+            .unwrap_or(0);
+        for &(min, n, v) in KILN_FEATURES {
+            if cplusplus >= min {
+                set(m, n, v);
+            }
+        }
         if !cfg.exceptions {
             m.remove("__EXCEPTIONS");
             m.remove("__cpp_exceptions");
+            m.remove("__cpp_constexpr_exceptions");
         }
         if !cfg.rtti {
             m.remove("__GXX_RTTI");
@@ -385,6 +406,28 @@ mod tests {
 
     /// `-fsigned-char` removes `__CHAR_UNSIGNED__` (the `AArch64` default),
     /// `-funsigned-char` adds it (x86-64), as clang 19's driver does.
+    /// kiln's own feature-test macros (P2747, P3068) at C++26, at every
+    /// compatibility level, and not before C++26 or without exceptions.
+    #[test]
+    fn kiln_feature_macros() {
+        let b26 = "#define __cplusplus 202400L\n#define __cpp_constexpr 202306L\n";
+        let b23 = "#define __cplusplus 202302L\n#define __cpp_constexpr 202211L\n";
+        let mut cfg = PredefConfig::new(true);
+        for compat in [ClangCompat::Clang19, ClangCompat::Clang22] {
+            cfg.clang_compat = compat;
+            let s = build_predefines(b26, &cfg, &[]);
+            assert!(s.contains("#define __cpp_constexpr 202406L\n"), "{s}");
+            assert!(s.contains("#define __cpp_constexpr_exceptions 202411L\n"), "{s}");
+        }
+        let s = build_predefines(b23, &cfg, &[]);
+        assert!(s.contains("#define __cpp_constexpr 202211L\n"), "{s}");
+        assert!(!s.contains("__cpp_constexpr_exceptions"), "{s}");
+        cfg.exceptions = false;
+        let s = build_predefines(b26, &cfg, &[]);
+        assert!(!s.contains("__cpp_constexpr_exceptions"), "{s}");
+        assert!(s.contains("#define __cpp_constexpr 202406L\n"), "{s}");
+    }
+
     #[test]
     fn char_signedness() {
         let unsigned_base = format!("{BASE}#define __CHAR_UNSIGNED__ 1\n");
