@@ -378,6 +378,15 @@ pub struct Sema<'a, 'sm> {
     /// The cleanup states of the enclosing full-expressions around
     /// unevaluated operands, innermost last.
     pub(crate) cleanup_saved: Vec<class::CleanupState>,
+    /// The cleanup state at the start of each constant-expression being
+    /// parsed, innermost last ([`Sema::enter_constant_evaluated`]).
+    pub(crate) cleanup_marks: Vec<class::CleanupState>,
+    /// The enclosing full-expression's pending cleanups at the start of a
+    /// constant-expression that is completed later (a template argument
+    /// converted while that full-expression is built), keyed by the
+    /// constant-expression; restored by
+    /// [`Sema::act_on_constant_full_expr`] (spec/sema-class.md §5.3).
+    pub(crate) constant_outer_cleanups: kiln_source::fx::FxHashMap<ExprId, class::CleanupState>,
     /// Implicit special members being defined (spec/sema-class.md §4.5),
     /// innermost last: diagnostics emitted meanwhile get the note `in
     /// implicit ... for 'T' first required here`.
@@ -615,6 +624,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             access_checks: 0,
             cleanup: class::CleanupState::default(),
             cleanup_saved: Vec::new(),
+            cleanup_marks: Vec::new(),
+            constant_outer_cleanups: kiln_source::fx::FxHashMap::default(),
             synth: Vec::new(),
             vtable_uses: Vec::new(),
             vtables_used: kiln_source::fx::FxHashSet::default(),

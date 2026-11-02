@@ -126,8 +126,10 @@ impl Sema<'_, '_> {
         let inner = std::mem::replace(&mut self.pending_odr, scope.outer_odr);
         self.pending_odr.extend(inner);
         self.restore_immediate_state(scope.outer_imm);
-        let ty = self.stmt_expr_result(body).map_or(QualType::VOID, |e| self.ast.exprs.get(e).ty());
-        self.builder().stmt_expr(body, ty, lparen, rparen)
+        let result = self.stmt_expr_result(body);
+        let ty = result.map_or(QualType::VOID, |e| self.ast.exprs.get(e).ty());
+        let dependent_ctx = self.in_template();
+        self.builder().stmt_expr(body, ty, result, dependent_ctx, lparen, rparen)
     }
 
     /// The expression whose value a statement expression with body `body`
