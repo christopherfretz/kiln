@@ -1644,7 +1644,16 @@ impl Sema<'_, '_> {
         };
         let (ss, ds) = (size_of(self, src), size_of(self, ty));
         if ss != ds {
-            let msg = self.diag(DiagId::sema_bit_cast_size_mismatch, loc).arg(ss).arg(ds);
+            // clang 22 names both types; clang 19 only the sizes.
+            let msg = if self.clang_compat >= 22 {
+                self.diag(DiagId::sema_bit_cast_size_mismatch_types, loc)
+                    .arg(self.ty_arg(src))
+                    .arg(self.ty_arg(ty))
+            } else {
+                self.diag(DiagId::sema_bit_cast_size_mismatch, loc)
+            }
+            .arg(ss)
+            .arg(ds);
             self.emit(msg);
             return self.recover_err(&[sub], loc);
         }
