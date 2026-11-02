@@ -734,9 +734,7 @@ impl Sema<'_, '_> {
         let rec = if self.ast.types.is_dependent(ty) { None } else { self.ast.types.as_record(ty) };
         let mut def = None;
         if let Some(r) = rec {
-            let first = self.ast.first(r);
-            let complete = self.defining.iter().any(|&d| self.ast.first(d) == first)
-                || self.require_complete(ty, op_loc);
+            let complete = self.this_outside_member_body(r) || self.require_complete(ty, op_loc);
             let Some(d) = self.ast.definition(r).filter(|_| complete) else {
                 let msg = self
                     .diag(DiagId::sema_member_reference_incomplete, op_loc)

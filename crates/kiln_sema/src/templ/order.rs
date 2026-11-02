@@ -132,10 +132,25 @@ impl Sema<'_, '_> {
         let deduced = r.filter(|_| !failed)?;
         // [temp.spec.partial.match]/2: the partial specialization's
         // associated constraints must be satisfied (§8.3).
+        // A partial specialization of a member template redeclared in a
+        // class template specialization keeps the original's constraints,
+        // checked with that specialization's levels outside its own
+        // ([temp.spec.partial.member]/2).
+        let member = self.inst.concepts.member_constraints.get(&partial).cloned();
+        let head = match member {
+            Some((m, _)) => self
+                .ast
+                .partial_spec_info(m)
+                .map_or(list, |(_, i)| *self.ast.templates.param_list(i.params)),
+            None => list,
+        };
         let mut constraints = Vec::new();
-        self.head_constraints(list.params, list.requires, &mut constraints);
+        self.head_constraints(head.params, head.requires, &mut constraints);
         if !constraints.is_empty() {
-            let mut levels = Self::outer_levels(tmpl, list.depth);
+            let mut levels = match member {
+                Some((_, outer)) => outer,
+                None => Self::outer_levels(tmpl, list.depth),
+            };
             levels.push(deduced, p.partial, LevelMode::Substitute);
             let sat = self.check_constraints(partial, &constraints, &levels, deduced, poi);
             if !self.sat_ok(sat) {

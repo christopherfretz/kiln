@@ -404,6 +404,14 @@ impl Compiler<'_> {
             if fi.base || fi.width.is_some() || super::is_reference_decl(self.ast(), fi.decl) {
                 continue;
             }
+            // The destructor of an anonymous union member is never
+            // invoked: its members are variant members of this class
+            // ([class.dtor]/13; clang's `MarkBaseAndMemberDestructorsReferenced`).
+            if let TyKind::Record { decl, union: true, .. } = self.kind(fi.ty)
+                && record_bits(self.b.ast(), decl).contains(DefinitionBits::ANONYMOUS)
+            {
+                continue;
+            }
             if self.dtor_of(fi.ty).is_none() {
                 continue;
             }
@@ -566,7 +574,11 @@ impl Compiler<'_> {
                 [a] => {
                     let a = skip_parens(self.ast(), a);
                     if self.node(a).value_category().is_glvalue() {
-                        let src = self.lv_mem(a, Access::Read);
+                        // A class holding no data is not read (clang's
+                        // `isReadByLvalueToRvalueConversion`): copying an
+                        // `extern const` empty object is a constant.
+                        let read = !self.o.types.holds_no_data(ty);
+                        let src = self.lv_mem(a, if read { Access::Read } else { Access::Addr });
                         let full = matches!(self.kind(ty), TyKind::Record { union: false, .. });
                         let aux = 1 | 4 | if full { 2 } else { 0 };
                         self.emit_at(Op::Copy, aux, &[p, src, ty.0], e);
@@ -889,7 +901,8 @@ impl Compiler<'_> {
             && let (Some(cls), [src]) = (cls, args)
             && let TyKind::Record { union, .. } = self.kind(cls)
         {
-            let s = self.lv_mem(*src, Access::Read);
+            let read = !self.o.types.holds_no_data(cls);
+            let s = self.lv_mem(*src, if read { Access::Read } else { Access::Addr });
             self.emit_site(Op::Copy, 4 | if union { 0 } else { 2 }, &[this, s, cls.0], e, loc);
             return this;
         }

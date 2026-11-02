@@ -1319,7 +1319,19 @@ impl<'a> Cg<'a> {
         }
         let name = mangle::mangle_decl(ast, &mut self.anon, first);
         let sig = self.decl_sig(first)?;
-        let f = self.declare_fn(&name, first, &sig)?;
+        // An existing function of that name and type is this one: a
+        // runtime function codegen declared first (`__cxa_allocate_exception`
+        // from a `throw`), or a separately declared redeclaration of the
+        // same `extern "C"` function (clang `GetOrCreateLLVMFunction`
+        // returns the entry unchanged).
+        let f = match self.m.get_function(&name) {
+            Some(f) if self.m.func(f).ty() == sig.fn_ty => {
+                let nothrow = sig.nothrow || ast.has_nothrow_attr(first);
+                self.nounwind.entry(f).or_insert(nothrow);
+                f
+            }
+            _ => self.declare_fn(&name, first, &sig)?,
+        };
         self.fns.insert(first, f);
         if let Some(def) = self.deferred.remove(&first) {
             self.to_emit.push(Def::Decl(def));

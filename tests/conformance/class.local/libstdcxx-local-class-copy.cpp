@@ -4,7 +4,6 @@
 // <memory>, <future>, <chrono>, 7 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): no matching constructor for copy-init of a local class in a member template
 template<class T> struct base {
   unsigned n = 3;
   template<class U> unsigned fill(const U *init) {

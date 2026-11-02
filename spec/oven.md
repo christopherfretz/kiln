@@ -911,6 +911,16 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   'S(s)'" at the construct expression, "in call to 't.operator=(s)'" at
   the call), the call stack, and "subobject declared here" (WP-224,
   `tests/conformance/expr.const/constexpr-trivial-copy-uninit.cpp`).
+  `Copy` of a class writes its `dsize` bytes (`Types::copy_size`), not
+  its `sizeof`: a derived class's members may live in a base's tail
+  padding, and copying a base subobject must leave them alone; a
+  `memcpy`/`memmove` of class elements copies each the same way (WP-276,
+  `tests/conformance/class.copy.assign/trivial-copy-base-tail-padding.cpp`).
+  A class holding no data (`Types::holds_no_data`) copies no byte and
+  reads nothing from its source, which is addressed, not read (clang's
+  `isReadByLvalueToRvalueConversion`): copying an `extern const` empty
+  object such as libc++'s `std::placeholders::_1` is a constant (WP-276,
+  `tests/conformance/expr.const/trivial-copy-empty-class-no-read.cpp`).
 
 **Object lifetime outside `std::allocator` storage — landed (WP-222).**
 `EndLife` aux 2 on a frame or `new` allocation not yet tracked makes it
@@ -1253,7 +1263,9 @@ is iterative and needs no native recursion. Locals are destroyed in
 reverse declaration order at scope exit, `break`/`continue`/`return`
 included; temporaries at the end of their full-expression
 (`ExprWithCleanups`); members and bases after the destructor body, in
-reverse construction order; array elements from the last. A class
+reverse construction order; array elements from the last. An anonymous
+union member is not destroyed: its members are variant members
+([class.dtor]/13, WP-276). A class
 without a user-provided destructor and with trivially destructible
 members registers nothing. An anonymous union member is never destroyed
 (`dtor_of` is `None` for it; WP-287): a class that would destroy one

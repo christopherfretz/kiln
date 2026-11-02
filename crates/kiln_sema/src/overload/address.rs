@@ -126,6 +126,9 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Ok(spec) = self.deduce_funcaddr(d, explicit, fnty, loc) else { continue };
+            // A dependent noexcept-specifier left uninstantiated by the
+            // deduction (DR1330) is part of the type compared now.
+            self.resolve_exc_for_type(spec, loc);
             if self.address_matches(spec, (fnty, member)) {
                 out.push((spec, f, d));
             }
@@ -149,10 +152,17 @@ impl Sema<'_, '_> {
 
     /// The function an expression of overloaded-function type `e`
     /// resolves to for `target`, silently (an implicit conversion
-    /// sequence's query, [over.ics.scs]/… via [over.over]).
+    /// sequence's query, [over.ics.scs]/… via [over.over]). Selects as
+    /// [`Sema::resolve_address_of_overloaded`] does, so a function
+    /// template's specialization deduced from each candidate's parameter
+    /// type is a match too ([over.over]/3; clang's
+    /// `ResolveAddressOfOverloadedFunction` from `TryImplicitConversion`).
     pub(crate) fn address_match(&mut self, e: ExprId, target: QualType) -> Option<DeclId> {
         let (ule, _) = self.overload_operand(e)?;
-        let m = self.address_candidates(ule, target);
+        let mut m = self.address_candidates(ule, target);
+        if m.is_empty() {
+            m = self.address_template_candidates(ule, target);
+        }
         match m.as_slice() {
             [(d, _)] => Some(*d),
             _ => None,

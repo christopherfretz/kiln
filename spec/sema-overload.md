@@ -246,11 +246,6 @@ reference-init texts apply instead (WP-161): no usable constructor is
 (`sema_reference_bind_failed`), an ambiguous one is "conversion from
 'int' to 'const F' is ambiguous" at the initializer, and a deleted one is
 "attempt to use a deleted function" (`DeletedAs::Use`).
-The /5.4.1 constructor call is bound to its temporary
-(`maybe_bind_temporary`, clang's `CXXBindTemporaryExpr` under the
-`MaterializeTemporaryExpr`), so a class with a non-trivial destructor, an
-implicit one included, is destroyed at the end of the full-expression or
-with the extending reference ([class.temporary]/4).
 A `return` operand copy-initializing a class with no viable converting
 constructor is clang's "no viable conversion from returned value of type
 'int' to function return type 'S'" (`sema_no_viable_conversion_return`)
@@ -495,11 +490,11 @@ warning. A selected rewritten `==` must return cv `bool`, else clang's
   `<NullToPointer>`). Its failure: "invalid operands to binary expression
   ('int' and 'std::strong_ordering')" + "while rewriting comparison as call
   to 'operator<=>' declared here".
-- Reversed `x <=> y` ([over.match.oper]/9): `CXXRewrittenBinaryOperator` →
-  `resolve_operator(<=>, [0, y <=> x])`, so the ordering is inverted
-  (`nullopt <=> optional`). Its class-typed result is emitted by codegen
-  through the semantic form
-  (tests/conformance/over.match.oper/reversed-spaceship.cpp).
+- Reversed `x <=> y` ([over.match.oper]/8): `CXXRewrittenBinaryOperator` →
+  `0 <=> (y <=> x)`, the nested `resolve_operator(<=>, [0, y <=> x])` as
+  above (for `std::strong_ordering`, its `operator<=>(_CmpUnspecifiedParam,
+  strong_ordering)`), never the bare `y <=> x` call
+  (`tests/conformance/over.match.oper/reversed-spaceship-run.cpp`).
 
 Only the semantic form is stored and dumped (consistent with ast.md §5.6).
 
@@ -1071,11 +1066,28 @@ Where the code differs from (or details) the design above:
     `address of overloaded function` with deduction notes.
 - Address of a function template ([temp.deduct.funcaddr]):
   - `resolve_single_template_id` resolves `&f<int>` when exactly one
-    template accepts the explicit args.
+    template accepts the explicit args. The parser calls it for a
+    template-id not followed by `(`; template instantiation calls it again
+    for an uncalled template-id whose arguments were dependent
+    (`auto *p = &f<T>;`, [over.over]/3, [temp.arg.explicit]/4; WP-276).
   - When no non-template matches the target, `address_template_candidates`
     deduces P (the template's function type) from A (the target type)
     through `deduce_spec(.., target)`. It keeps the specializations that
     match exactly, then the one more specialized than all the others.
+  - A specialization's dependent noexcept-specifier that deduction left
+    uninstantiated (DR1330) is resolved before its type is compared.
+  - The conversion sequence of an overload-set argument (`address_match`,
+    used by `overload_set_ics`) selects in the same way, so `&f` for a
+    function template converts to each candidate's function-pointer
+    parameter through that parameter's own deduced specialization
+    (WP-280, `over.over/template-address-overloaded-callee.cpp`). Clang 19
+    rejects some of these calls where the targets differ only in
+    noexcept (`o(&u)` with `o(void(*)(int) noexcept)` /
+    `o(void(*)(int))`); clang 22 accepts them, and so does kiln. Open
+    divergence: for `int (*)(long) noexcept = &t` with a potentially
+    throwing `t<long>`, clang selects the specialization and reports
+    `different exception specifications`. Kiln reports `address of
+    overloaded function 't' does not match required type`.
 
 ### 10.8 Landed (WP-106): the rest of the template candidates
 - Conversion-function templates: `build_conversion_set` /

@@ -2966,6 +2966,29 @@ impl Sema<'_, '_> {
         }
         let ptr_like = |s: &Self, t: QualType| s.ast.types.is_pointer(t) || s.is_nullptr_type(t);
         if ptr_like(self, lt) || ptr_like(self, rt) {
+            if !matches!(op, BinaryOp::EQ | BinaryOp::NE) {
+                // [expr.rel]/1: the operands of a relational operator have
+                // arithmetic, enumeration or pointer type, so a
+                // `std::nullptr_t` operand is `invalid operands` (CWG583)
+                // and a null pointer constant does not convert to the other
+                // side's pointer type ([expr.rel]/3 applies only when both
+                // are pointers): clang's `CheckCompareOperands`.
+                if self.is_nullptr_type(lt) || self.is_nullptr_type(rt) {
+                    return self.invalid_operands(l2, r2, loc);
+                }
+                let (lp, rp) = (self.ast.types.is_pointer(lt), self.ast.types.is_pointer(rt));
+                let int = |s: &Self, t: QualType| s.ast.types.is_integral(t);
+                let null_int = (lp && int(self, rt) && conv::is_null_pointer_constant(self, r2))
+                    || (rp && int(self, lt) && conv::is_null_pointer_constant(self, l2));
+                if null_int {
+                    let msg = self
+                        .diag(DiagId::sema_ordered_pointer_zero, loc)
+                        .arg(self.ty_arg(lt))
+                        .arg(self.ty_arg(rt));
+                    self.emit(msg);
+                    return self.recover_err(&[l2, r2], loc);
+                }
+            }
             if let Some((l3, r3, _)) = self.composite_pointer(l2, r2) {
                 return self.builder().binary(op, l3, r3, QualType::BOOL, loc);
             }
@@ -4028,6 +4051,11 @@ impl Sema<'_, '_> {
             let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_))
                 || self.ast.types.is_function(r);
             (r, if lvalue { ValueCategory::LValue } else { ValueCategory::XValue })
+        } else if self.ast.types.as_record(ret).is_some() || self.ast.types.is_dependent(ret) {
+            // [expr.type]/2: only a non-class prvalue loses its
+            // cv-qualifiers; `const X f()` yields a `const X` prvalue
+            // (clang `QualType::getNonLValueExprType`).
+            (ret, ValueCategory::PRValue)
         } else {
             (conv::strip_cv(self, ret), ValueCategory::PRValue)
         };
@@ -4215,14 +4243,13 @@ impl Sema<'_, '_> {
         };
         let rec = self.ast.types.as_record(obj_ty).expect("checked above");
         // [expr.ref]/4 (clang diagnoses at the operator). A class being
-        // defined is complete enough: its members declared so far are
-        // found (a trailing return type naming `this->m`, [class.mem]/7).
-        let first = self.ast.first(rec);
+        // defined is complete enough only where `this` may appear outside
+        // a function body: its members declared so far are found (a
+        // trailing return type naming `this->m`, [class.mem]/7).
         if self.instantiation_fails(obj_ty, op_loc) {
             return self.recover_err(&[base], loc);
         }
-        let complete = self.defining.iter().any(|&d| self.ast.first(d) == first)
-            || self.require_complete(obj_ty, op_loc);
+        let complete = self.this_outside_member_body(rec) || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
             let msg = self
                 .diag(DiagId::sema_member_reference_incomplete, op_loc)

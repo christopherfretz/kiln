@@ -1049,8 +1049,8 @@ impl Sema<'_, '_> {
         if op == OO::ExclaimEqual && fop == OO::EqualEqual {
             r = self.act_on_unary(UnaryOp::LNot, r, loc);
         } else if fop == OO::Spaceship && (fop != op || rewrite.is_reversed()) {
-            // `x @ y` is `(x <=> y) @ 0` or, reversed, `0 @ (y <=> x)`;
-            // a reversed `x <=> y` is `0 <=> (y <=> x)` ([over.match.oper]/9).
+            // `x @ y` from `x <=> y` is `(x <=> y) @ 0`; reversed it is
+            // `0 @ (y <=> x)`, `<=>` itself included ([over.match.oper]/8).
             let zero =
                 self.builder().int_literal(QualType::INT, 0, kiln_ast::expr::Radix::Decimal, loc);
             r = if rewrite.is_reversed() {

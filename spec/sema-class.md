@@ -108,6 +108,22 @@ field's type becomes the error type);
 static data member in a local class or in an anonymous/unnamed class;
 `virtual`/`explicit`/pure on the wrong kind of member.
 
+Friend functions of a local class ([class.friend]/11, WP-280): an unqualified
+friend function (identifier name) must redeclare a function declared in the
+innermost enclosing non-class scope (the block holding the class, its
+`Scope.locals`, matched by `pick_prev_function`); outer blocks and namespaces
+are not considered. Otherwise `no matching function found in local scope`,
+the friend is `INVALID` and redeclares nothing (`check_local_friend`; at the
+definition only, also in a function template, not again at instantiation). A
+function of the enclosing namespace with the friend's signature is suggested
+as clang's typo correction does: `no matching function 'f' found in local
+scope; did you mean '::f'?` + `'::f' declared here`. Divergences (clang's
+typo correction): a near miss in an outer block (clang adds `local declaration
+nearly matches`), a similarly named namespace function (clang suggests
+`'::outer'` for `outer2`), a using-declarator's target and an
+unnamed-namespace function are not suggested; operator friends are not
+checked. Test: `class.friend/local-class-friend-no-prior.cpp`.
+
 Out-of-line member definitions (`void S::f() {}`): `act_on_declarator` with a
 qualified declarator-id looks up the name in `S` only and picks the declaration
 with the same parameter-type-list, `this_quals` and `ref_qual` (template heads:
@@ -1073,7 +1089,12 @@ duration. Applies to variables, references in aggregate-initialized objects
 of a reference to a temporary (`returning reference to local temporary object`
 [-Wreturn-stack-address]), a mem-initializer reference member (§4.9), a
 temporary in a `new`-initializer or a function argument (full-expression
-lifetime).
+lifetime). A `.` member access is followed only when it designates a
+non-static data member of non-reference type ([class.temporary]/6.7): a
+reference member denotes what it was bound to, so `int &r = make().first;`
+(with `int &first`) extends nothing and `return make().first;` is not
+`returning reference to local temporary object`, for the extension, the
+return check and the `-Wreturn-stack-address` walk alike (WP-276).
 
 **P2718R0 (C++23 range-for)**: temporaries in the *for-range-initializer* are
 extended to `__range` (clang 19 dump: `MaterializeTemporaryExpr 'S' xvalue
@@ -1519,7 +1540,8 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   / with `static`, pure-specifier on a non-virtual, `override`/`final` on
   a non-member, the overridden-method search over all bases
   (`overridden_methods`, same name + `is_method_overload` false: same
-  parameter-type-list, cv- and ref-qualifiers), implicit virtualness,
+  parameter-type-list, cv- and ref-qualifiers; operator functions such
+  as `operator()` included, WP-276), implicit virtualness,
   `override` that overrides nothing, overriding a `final` function,
   covariant returns ([class.virtual]/8, `check_override_return`, clang
   `CheckOverridingFunctionReturnType`, with [class.access.base]

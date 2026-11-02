@@ -7,7 +7,7 @@
 // 26 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): constrained member partial specializations (value-dependent atomic constraint; params not in scope)
+//@ xfail(kiln): a member partial specialization's template parameters are not in scope in its member function bodies (`Const`)
 template<class It> struct traits {
 private:
   template<class I> struct ptr { using type = void; };

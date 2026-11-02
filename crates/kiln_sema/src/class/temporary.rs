@@ -274,7 +274,7 @@ impl Sema<'_, '_> {
 
     /// The temporaries a reference initialized by the glvalue `e` binds
     /// ([class.temporary]/6: through parentheses, no-op and
-    /// derived-to-base casts, class member access, array subscripts of
+    /// derived-to-base casts, access to a non-reference member, array subscripts of
     /// array temporaries, the right operand of a comma and both arms of a
     /// conditional), followed by those bound by the reference members of
     /// an aggregate temporary.
@@ -296,8 +296,12 @@ impl Sema<'_, '_> {
                 self.temporaries_bound_by(self.ast.exprs.operand(e), out, depth + 1);
             }
             ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
+                // [class.temporary]/6: a member access designating a
+                // non-static data member of non-reference type; a
+                // reference member denotes what it was bound to.
                 let m = self.ast.exprs.decl(e);
-                if self.kind_of(m) == DeclKind::Field {
+                let mty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
+                if self.kind_of(m) == DeclKind::Field && !self.ast.types.is_reference(mty) {
                     self.temporaries_bound_by(self.ast.exprs.operand(e), out, depth + 1);
                 }
             }
