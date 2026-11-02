@@ -165,6 +165,7 @@ impl SyntaxJob<'_> {
             rtti: a.predef.rtti.unwrap_or(true),
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
+            reflection: a.predef.reflection,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();

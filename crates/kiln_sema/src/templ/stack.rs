@@ -511,8 +511,10 @@ impl Sema<'_, '_> {
                 }
             }
             // clang: the unqualified name, then the innermost template
-            // arguments (`f<B>` for a member of `A<B>`).
-            FrameKind::DefaultFunctionArg => {
+            // arguments (`f<B>` for a member of `A<B>`; an exception
+            // specification's frame has them only for a function template
+            // specialization).
+            FrameKind::DefaultFunctionArg | FrameKind::ExceptionSpec => {
                 let mut s = self.decl_name(f.entity);
                 if let Some(l) = f.args {
                     let names = crate::names::SemaNames::new(self);
@@ -521,7 +523,7 @@ impl Sema<'_, '_> {
                 s
             }
             // clang names the function unqualified here.
-            FrameKind::ExceptionSpec | FrameKind::BindingInit => self.decl_name(f.entity),
+            FrameKind::BindingInit => self.decl_name(f.entity),
             _ => self.qualified_decl_name(f.entity),
         }
     }

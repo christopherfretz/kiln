@@ -2137,6 +2137,47 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// `^^T` / `^^entity` (P2996 [expr.reflect], WP-267 spike): a
+    /// `std::meta::info` prvalue. `a` is the operand (a `QualType` raw
+    /// when `aux` is 0, a `DeclId` raw when `aux` is 1), `b` the
+    /// [`crate::ids::ReflectionId`] index plus 1 (0 while the operand is
+    /// dependent: the expression is then value-dependent).
+    pub fn reflect_expr(
+        &mut self,
+        operand: crate::reflect::Reflectee,
+        ty: QualType,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        use crate::reflect::Reflectee;
+        let mut deps = ExprDeps::NONE;
+        let (aux, a) = match operand {
+            Reflectee::Type(t) => {
+                let d = self.type_deps(t);
+                deps |= d.without(ExprDeps::TYPE);
+                if d.contains(ExprDeps::TYPE) {
+                    deps |= ExprDeps::VALUE_INST;
+                }
+                (0u8, t.raw())
+            }
+            Reflectee::Decl(d) => (1, d.raw()),
+            Reflectee::Null => (2, 0),
+        };
+        let b = if deps.contains(ExprDeps::VALUE_INST) {
+            0
+        } else {
+            let canon = match operand {
+                Reflectee::Type(t) => Reflectee::Type(self.ast.types.canonical(t)),
+                r => r,
+            };
+            self.ast.reflections.intern(canon).index()
+        };
+        let e =
+            self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);
+        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        e
+    }
+
     /// `__array_rank(T)` / `__array_extent(T, dim)` (§9.4): a `size_t`
     /// prvalue. Value-dependent if `arg` or `dim` is.
     #[allow(clippy::too_many_arguments, reason = "one per field of the node")]

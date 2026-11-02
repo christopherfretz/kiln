@@ -1163,7 +1163,7 @@ impl Sema<'_, '_> {
         }
         match first.default_arg {
             DefaultArg::None => {}
-            DefaultArg::Unparsed(l) => self.error(DiagId::sema_explicit_object_param_default, l),
+            DefaultArg::Unparsed(l, _) => self.error(DiagId::sema_explicit_object_param_default, l),
             DefaultArg::Parsed(e) => {
                 let l = self.eloc(e);
                 self.error(DiagId::sema_explicit_object_param_default, l);
@@ -2454,6 +2454,9 @@ impl Sema<'_, '_> {
         }
         let mut prev_ok = None;
         let mut invalid_redecl = false;
+        let late_exc =
+            d.late_noexcept.is_some() || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
+        let mut delayed_prev = false;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
         let new_fn = NewFn {
             ty,
@@ -2675,10 +2678,32 @@ impl Sema<'_, '_> {
         } else if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == fkind {
-                let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                let mut pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                // [except.spec]/13: a previous declaration's specification
+                // still uninstantiated is needed now (clang resolves the
+                // old one in `CheckEquivalentExceptionSpec`).
+                if !self.in_template()
+                    && matches!(self.written_exc_spec(pty), ExcSpec::Deferred(_))
+                    && self.uninstantiated_exc.contains_key(&self.ast.first(p))
+                    && !self.exc_unparsed(p)
+                {
+                    self.resolve_exception_spec(p, d.name_loc());
+                    pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                }
+                // A friend whose noexcept-specifier waits for the end of
+                // its class (or, instantiated, until needed), or one
+                // redeclaring such a friend before its class is complete,
+                // matches whatever the other declaration has; the
+                // specifications are compared once both are known (clang's
+                // `DelayedEquivalentExceptionSpecChecks`), never as a
+                // missing specification.
+                let delayed = late_exc
+                    || matches!(self.written_exc_spec(pty), ExcSpec::Deferred(_))
+                        && self.same_ignoring_exc_spec(pty, ty);
                 // [except.spec]/5: a redeclaration without a specification.
                 let mut missing_err = false;
-                if !self.ast.types.same_type(pty, ty)
+                if !delayed
+                    && !self.ast.types.same_type(pty, ty)
                     && self.written_exc_spec(ty) == ExcSpec::None
                     && self.same_ignoring_exc_spec(pty, ty)
                 {
@@ -2692,9 +2717,18 @@ impl Sema<'_, '_> {
                     ty = t;
                     missing_err = err;
                 }
+                if delayed {
+                    delayed_prev = true;
+                }
+                let cmp = if delayed {
+                    let pexc = self.written_exc_spec(pty);
+                    self.with_exc_spec(ty, pexc)
+                } else {
+                    ty
+                };
                 if missing_err {
                     invalid_redecl = true;
-                } else if self.ast.types.same_type(pty, ty) {
+                } else if self.ast.types.same_type(pty, cmp) {
                     prev_ok = Some(p);
                     // [dcl.spec.auto.general]/13: the redeclaration has
                     // the deduced return type.
@@ -2858,6 +2892,9 @@ impl Sema<'_, '_> {
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
+        if delayed_prev && let Some(p) = prev_ok {
+            self.delayed_exc_equiv.push((f, p));
+        }
         if d.lit_suffix.is_some() {
             if !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
                 && !self.check_literal_operator_decl(f)
@@ -3041,7 +3078,10 @@ impl Sema<'_, '_> {
             match p.default_arg {
                 // Replayed in the complete-class context through
                 // `act_on_param_default_arg` (spec/sema-class.md §2.7).
-                DefaultArg::Unparsed(_) => self.ast.decls.mark_default_arg_pending(pd),
+                DefaultArg::Unparsed(_, at) => {
+                    self.ast.decls.mark_default_arg_pending(pd);
+                    self.unparsed_default_args.insert(pd, at);
+                }
                 // A default parsed in place was converted by
                 // `act_on_param_default_init`; `defaults` also holds the
                 // inherited ones ([dcl.fct.default]/4).
@@ -3074,7 +3114,7 @@ impl Sema<'_, '_> {
             .iter()
             .map(|p| match p.default_arg {
                 DefaultArg::Parsed(e) => Some(e),
-                DefaultArg::None | DefaultArg::Unparsed(_) => None,
+                DefaultArg::None | DefaultArg::Unparsed(..) => None,
             })
             .collect();
         let mut redefined = false;

@@ -1153,6 +1153,7 @@ impl Scan<'_> {
             | ExprKind::TypeTraitExpr
             | ExprKind::ArrayTypeTraitExpr
             | ExprKind::ExpressionTraitExpr
+            | ExprKind::CXXReflectExpr
             | ExprKind::ConceptSpecializationExpr
             | ExprKind::RequiresExpr => {}
             ExprKind::CallExpr
@@ -2135,6 +2136,7 @@ fn scalar_bits(s: &Scalar<'_>) -> Option<u128> {
         Scalar::Bool { value, .. } => Some(u128::from(*value)),
         Scalar::Float { bits, .. } => Some(*bits),
         Scalar::Null { .. } => Some(0),
+        Scalar::Reflection { id, .. } => Some(u128::from(id.bits())),
         _ => None,
     }
 }
@@ -2266,6 +2268,11 @@ impl Compiler<'_> {
                 let v = self.ast().exprs.type_trait_value(e);
                 self.konst(dst, u128::from(v));
             }
+            // spec/oven.md "Reflection runtime": the interned id's value.
+            ExprKind::CXXReflectExpr => match self.ast().exprs.reflect_value(e) {
+                Some(id) => self.konst(dst, u128::from(id.bits())),
+                None => self.unsupported(e),
+            },
             ExprKind::ArrayTypeTraitExpr => {
                 let v = self.ast().exprs.array_trait(e).value;
                 let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
@@ -2809,7 +2816,9 @@ impl Compiler<'_> {
                 self.konst(dst, u128::from(matches!(c, cmp::EQ | cmp::LE | cmp::GE)));
             }
             // Interned member pointers: equal values share an index.
-            (TyKind::MemPtr { .. }, _) | (_, TyKind::MemPtr { .. }) => {
+            // Interned reflections likewise ([expr.eq]/6, P2996).
+            (TyKind::MemPtr { .. } | TyKind::Reflection, _)
+            | (_, TyKind::MemPtr { .. } | TyKind::Reflection) => {
                 self.emit(Op::ICmp, int_aux(64, false) | c << 9, &[dst, ra, rb]);
             }
             (k, _) => {
@@ -4381,6 +4390,13 @@ impl Compiler<'_> {
         {
             return r;
         }
+        // Reflection intrinsics (WP-267 spike; spec/oven.md "Reflection
+        // runtime"): recognized by the bridge, run natively.
+        if let Some(d) = direct
+            && let Some(op) = self.b.meta_intrinsic(d)
+        {
+            return self.meta_call(e, op, &args);
+        }
         // `::operator new`/`::operator delete` (spec/oven.md "Transient
         // allocation": constant only in `std::allocator<T>::allocate` /
         // `deallocate`).
@@ -4490,6 +4506,31 @@ impl Compiler<'_> {
     /// `__builtin_LINE()` and the other source-location builtins
     /// ([support.srcloc.cons]): the values sema recorded for the
     /// expression, or for the default argument use enclosing it.
+    /// A call of reflection intrinsic `op` (`bi::META`): the arguments
+    /// are evaluated in order into the builtin's operands.
+    fn meta_call(&mut self, e: ExprId, op: crate::MetaOp, args: &[ExprId]) -> u32 {
+        let mut ops = [0u32; 3];
+        let mut t1 = 0;
+        for (i, &x) in args.iter().take(3).enumerate() {
+            ops[i] = self.rv(x);
+            let xt = self.ety(x);
+            if let TyKind::Ptr(ct) = self.kind(xt) {
+                t1 = ct.0;
+            }
+        }
+        let dst = self.reg();
+        let t2 = self.ety(e).0;
+        let loc = self.begin(e);
+        self.emit_site(
+            Op::Builtin,
+            crate::kbc::bi::META | op.code() << 8,
+            &[dst, ops[0], ops[1], ops[2], t1, t2],
+            e,
+            loc,
+        );
+        dst
+    }
+
     fn source_loc(&mut self, e: ExprId, dst: u32) {
         use kiln_ast::expr::SourceLocKind as K;
         let ast = self.ast();
