@@ -657,6 +657,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - In a simple declaration a malformed label drops the declarator (the
     parser skips to the `;`, clang's `ParseAsmAttributesAfterDeclarator`);
     in a member declaration it skips to the next `,`.
+  - The first declarator of a simple declaration, when it is a function
+    declarator, also takes GNU `__attribute__((...))` before its label
+    (clang's `ParseDeclGroup`, WP-384): `void f() __attribute__((noinline))
+    asm("lbl");` as well as `void g() asm("lbl2")
+    __attribute__((noinline));`. A variable or member declarator does not
+    (`expected ';' after top level declarator` / `at end of declaration
+    list` at the `asm`, as clang). `tests/codegen/asm_label_gnu_attrs.cpp`.
   - A function declarator with a label is never a definition: a
     following `{` is parsed as an initializer, which Sema rejects
     (`illegal initializer`).
