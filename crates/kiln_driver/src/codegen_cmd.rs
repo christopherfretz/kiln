@@ -452,8 +452,12 @@ pub fn needs_always_inline(ir: &str) -> bool {
 /// then `GlobalDCE`), only for a module that needs it. The first run
 /// writes bitcode, which the second reads back discarding the local
 /// value names the passes made, as clang's (release) pipeline does
-/// (`opt` refuses `-discard-value-names` for textual input).
-fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<[Command; 2]> {
+/// (`opt` refuses `-discard-value-names` for textual input). For an
+/// object (`-c`, or before linking) `llc` reads the first run's bitcode
+/// directly: local value names do not reach an object, and the second
+/// process and the text round trip were most of the `-O0`
+/// always-inliner's cost (spec/codegen.md §6 "Always-inliner").
+fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
     if args.disable_llvm_passes {
         return None;
     }
@@ -465,9 +469,12 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<[Command; 2]> {
     };
     let mut run = Command::new(tc, Tool::Opt);
     run.arg(format!("-passes={passes}")).arg("-o").arg("-").arg("-");
+    if matches!(Phase::of(args), Phase::Object | Phase::Link) {
+        return Some(vec![run]);
+    }
     let mut names = Command::new(tc, Tool::Opt);
     names.arg("-discard-value-names").arg("-S").arg("-o").arg("-").arg("-");
-    Some([run, names])
+    Some(vec![run, names])
 }
 
 /// `llc` for an assembly or object output.
@@ -554,7 +561,9 @@ fn execute(
     temp: &TempDir,
 ) -> i32 {
     let mut failed = false;
-    let mut ir: Option<String> = None;
+    // The frontend's textual IR, or the bitcode of an `opt` run that
+    // feeds `llc` directly (`ir_passes`).
+    let mut ir: Option<Vec<u8>> = None;
     let mut skip_piped = false;
     for step in plan {
         if args.verbose {
@@ -563,13 +572,13 @@ fn execute(
         }
         match step {
             Step::Frontend { input, dest } => {
-                ir = frontend(args, tc, input, stdin_text, diag_opts, io);
+                ir = frontend(args, tc, input, stdin_text, diag_opts, io).map(String::into_bytes);
                 // The IR-level passes run before the IR is written or
                 // piped on (spec/driver.md "IR optimization").
                 if let Some(text) = &ir
-                    && let Some(cmds) = ir_passes(args, tc, text)
+                    && let Some(cmds) = ir_passes(args, tc, std::str::from_utf8(text).unwrap_or(""))
                 {
-                    let mut data = text.as_bytes().to_vec();
+                    let mut data = text.clone();
                     let mut ok = true;
                     for cmd in &cmds {
                         if args.verbose {
@@ -583,12 +592,13 @@ fn execute(
                         }
                         data = out;
                     }
-                    ir = ok.then(|| String::from_utf8_lossy(&data).into_owned());
+                    ir = ok.then_some(data);
                 }
                 skip_piped = ir.is_none();
                 failed |= ir.is_none();
                 if let (Some(text), Dest::File(f)) = (&ir, dest)
-                    && let Err(e) = write_output(Some(f), text, &mut io.stdout)
+                    && let Err(e) =
+                        write_output(Some(f), &String::from_utf8_lossy(text), &mut io.stdout)
                 {
                     report_output_error(diag_opts, &io.stderr, f, &e);
                     failed = true;
@@ -607,8 +617,7 @@ fn execute(
                     failed = true;
                     continue;
                 }
-                failed |=
-                    !cmd.run(ir.as_deref().map(str::as_bytes), &mut io.stdout, &io.stderr, drv);
+                failed |= !cmd.run(ir.as_deref(), &mut io.stdout, &io.stderr, drv);
             }
             Step::External { cmd, piped: false } => {
                 // The link step: only when everything before it worked.

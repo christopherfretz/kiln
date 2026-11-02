@@ -309,6 +309,11 @@ pub struct Sema<'a, 'sm> {
     /// a reference to `void` is diagnosed there (clang's
     /// `ReferenceTypeLoc`; [dcl.ref]/1).
     pub(crate) ref_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where a `constexpr` special member function's declaration
+    /// begins, when not at its name: a constexpr defaulted special member
+    /// of a class with virtual bases is diagnosed there before C++26
+    /// (clang `getBeginLoc`; [dcl.fct.def.default]/3, P3533R2).
+    pub(crate) constexpr_begin_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// The namespace named by the qualifier of each friend function (or
     /// function template pattern) declared with a qualified name in a
     /// templated class (`friend void N::f(T);`): its instantiation is
@@ -616,6 +621,12 @@ pub struct Sema<'a, 'sm> {
     pub(crate) inh_ctors: kiln_source::fx::FxHashMap<(DeclId, DeclId), DeclId>,
     /// The base constructor of each inheriting constructor.
     pub(crate) inh_ctor_base: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// The unnamed namespace of each namespace scope, keyed by the
+    /// scope's primary redeclaration context ([namespace.unnamed]/1;
+    /// clang's `getAnonymousNamespace` on the original namespace), so an
+    /// unnamed namespace in a reopened namespace or inside `extern "C++"`
+    /// extends the first one.
+    pub(crate) anon_namespaces: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
@@ -743,6 +754,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
             ref_locs: kiln_source::fx::FxHashMap::default(),
+            constexpr_begin_locs: kiln_source::fx::FxHashMap::default(),
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
@@ -820,6 +832,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inherited_aligned: kiln_source::fx::FxHashMap::default(),
             inh_ctors: kiln_source::fx::FxHashMap::default(),
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
+            anon_namespaces: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
             initializing: None,

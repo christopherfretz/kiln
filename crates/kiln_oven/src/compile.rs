@@ -97,6 +97,10 @@ pub(crate) struct Func {
     pub this_reg: Option<u32>,
     /// Its class (the type `this` points to; for the call-stack notes).
     pub this_ty: Option<OTy>,
+    /// The base-object variant of a constructor or destructor of a class
+    /// with virtual bases, which leaves them alone (spec/oven.md
+    /// "Virtual bases"; Itanium C2/D2).
+    pub base_obj: bool,
 }
 
 /// The source of a faulting instruction.
@@ -294,8 +298,35 @@ impl Oven {
             memo: false,
             this_reg: None,
             this_ty: None,
+            base_obj: false,
         });
         self.func_map.insert(d, i);
+        i
+    }
+
+    /// The function index of the base-object variant of constructor or
+    /// destructor `d` of a class with virtual bases ([class.base.init]/7:
+    /// only the most derived class's constructor initializes them;
+    /// [class.dtor]/13 likewise destroys them).
+    pub(crate) fn func_index_base(&mut self, ast: &kiln_ast::Ast, d: DeclId) -> u32 {
+        let d = ast.first(d);
+        if let Some(&i) = self.base_funcs.get(&d) {
+            return i;
+        }
+        let i = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: Some(d),
+            entry: UNCOMPILED,
+            state: FState::Stub,
+            nregs: 0,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+            base_obj: true,
+        });
+        self.base_funcs.insert(d, i);
         i
     }
 
@@ -358,6 +389,7 @@ impl Oven {
             memo: false,
             this_reg: None,
             this_ty: None,
+            base_obj: false,
         });
         let mut c = Compiler::new(self, b);
         c.srcloc = root;
@@ -444,6 +476,7 @@ impl Oven {
             memo: false,
             this_reg: None,
             this_ty: None,
+            base_obj: false,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -501,6 +534,7 @@ impl Oven {
             memo: false,
             this_reg: None,
             this_ty: None,
+            base_obj: false,
         });
         Some(idx)
     }
@@ -604,7 +638,9 @@ impl Oven {
         let std_ice = is_std_is_constant_evaluated(ast, def);
         let std_construct =
             is_std_named(ast, def, "construct_at") || is_std_named(ast, def, "__construct_at");
+        let base_obj = self.funcs[idx as usize].base_obj;
         let mut c = Compiler::new(self, b);
+        c.base_obj = base_obj;
         c.std_ice = std_ice;
         c.std_construct = std_construct;
         let rty = c.ty(ret_q);
@@ -771,6 +807,9 @@ pub(crate) struct Compiler<'a> {
     late_const: FxHashSet<DeclId>,
     /// The function being compiled (`None`: a thunk).
     cur_fn: Option<DeclId>,
+    /// Compiling the base-object variant of a constructor or destructor
+    /// ([`Func::base_obj`]).
+    base_obj: bool,
     /// Its parameters (forwarded by an inheriting constructor).
     cur_params: Vec<DeclId>,
     /// The index register of the innermost `ArrayInitLoopExpr`.
@@ -820,6 +859,7 @@ impl<'a> Compiler<'a> {
             ext_temps: FxHashMap::default(),
             late_const: FxHashSet::default(),
             cur_fn: None,
+            base_obj: false,
             cur_params: Vec::new(),
             array_index: None,
             srcloc: None,
