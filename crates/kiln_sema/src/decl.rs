@@ -2509,6 +2509,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether return type `ret` is const-qualified after its reference
+    /// (`const T &`): an assignment to the call names it
+    /// ([`Sema::type_spec_locs`]).
+    fn returns_const(&self, ret: QualType) -> bool {
+        let t = &self.ast.types;
+        let p = match t.canonical_view(ret) {
+            TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
+            _ => ret,
+        };
+        t.effective_quals(p).is_const()
+    }
+
     /// `using name = type-id;` ([dcl.typedef]/2).
     /// Records where `d`'s first type-specifier was written (when not at
     /// its name `name`) for a substituted declarator's function type
@@ -3135,11 +3147,14 @@ impl Sema<'_, '_> {
         // Where a substituted signature's return and parameter types are
         // diagnosed (clang `BuildFunctionType` at the declaration's
         // begin, §5.6).
+        // A const-qualified return type is also noted there when the call
+        // is assigned to ([expr.assign]/1, `ret_type_loc`).
         if let Some(tl) = ds.type_loc
             && tl != d.name_loc()
             && self.ast.types.proto(ty).is_some_and(|p| {
                 self.ast.types.is_dependent(p.ret())
                     || self.ast.types.params(p).iter().any(|&q| self.ast.types.is_dependent(q))
+                    || self.returns_const(p.ret())
             })
         {
             self.type_spec_locs.insert(f, tl);

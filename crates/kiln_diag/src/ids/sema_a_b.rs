@@ -86,6 +86,7 @@ sema_asm_unknown_register_name = Error (1) "unknown register name '{0}' in asm";
 sema_asm_unknown_symbolic_operand_name = Error (0) "unknown symbolic operand name in inline assembly string";
 sema_asm_unterminated_symbolic_operand_name = Error (0) "unterminated symbolic operand name in inline assembly string";
 sema_assign_captured_by_copy = Error (0) "cannot assign to a variable captured by copy in a non-mutable lambda";
+sema_assign_const_function_ret = Error (1) "cannot assign to return value because function {0} returns a const value";
 sema_assign_const_var = Error (2) "cannot assign to variable '{0}' with const-qualified type {1}";
 sema_assign_discards_nested_qualifiers = Error (2) "assigning to {0} from {1} discards qualifiers in nested pointer types";
 sema_assign_discards_qualifiers = Error (2) "assigning to {0} from {1} discards qualifiers";
