@@ -159,7 +159,9 @@ transition.
 `//@ requires: clang<22` and `// clang 22 emits <text>; WP-355 residual`
 (list: `git grep -l "WP-355 residual" tests`). They still run kiln at
 level 19 under either oracle. Buckets (approximate counts):
-- constant-evaluation notes and `static_assert` operand notes (~30);
+- constant-evaluation notes and `static_assert` operand notes (~32,
+  incl. "addresses of potentially overlapping literals", which needs the
+  compat level in kiln_oven);
 - scoped names in `aka`, qualifiers, "no viable/matching", out-of-line
   mismatch notes, "refers into" (~22);
 - GNU/vendor extensions: case ranges, ext_vector component names, global
@@ -178,11 +180,10 @@ level 19 under either oracle. Buckets (approximate counts):
 `templates/alias/temp.alias-dependent-template-template-arg-ast.cpp`,
 `templates/ctad/temp.deduct.guide-ast-dump.cpp`.
 
-**Sibling-owned probes** that XPASS under `--compiler clang++-22` (their
-`xfail(clang)` is a clang-19 reason) or fail: `dcl.fct/p3176-probe.cpp`,
-`expr.const/p2280-probe.cpp`, `expr.eq/p2865-probe.cpp`,
-`expr.new/p2747-probe.cpp`, `expr.new/constexpr-placement.cpp`,
-`dcl.struct.bind/condition.cpp`; their owners move them to `requires:
+**Sibling-owned probes** (WP-357) that XPASS under `--compiler clang++-22`
+(their `xfail(clang)` is a clang-19 reason) or fail there:
+`expr.const/p2280-probe.cpp`, `expr.new/p2747-probe.cpp`,
+`expr.new/constexpr-placement.cpp`; their owner moves them to `requires:
 clang>=22` (WP-355 did not edit them).
 
 **Other**: kiln++'s own `-fclang-compat` default is still 19 (only the
