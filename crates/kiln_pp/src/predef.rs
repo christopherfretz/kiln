@@ -372,6 +372,14 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
                 set(m, n, "1");
             }
         }
+        // Features kiln implements beyond clang 19, at clang 22's values
+        // in the same modes (docs/status/cxx-features.md): P1061
+        // structured binding packs (C++17 on) and P2893 variadic friends
+        // (every C++ mode).
+        if m.contains_key("__cpp_structured_bindings") {
+            set(m, "__cpp_structured_bindings", "202411L");
+        }
+        set(m, "__cpp_variadic_friend", "202403L");
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {
         m.remove(n);
@@ -478,6 +486,23 @@ mod tests {
             assert!(s23.contains(&format!("#define {n} 1\n")), "{n}");
             assert!(!s17.contains(n), "{n}");
         }
+    }
+
+    /// [cpp.predefined]/1 (`__cpp_*`, [tab:cpp.predefined.ft]): the
+    /// macros of features kiln implements beyond clang 19 take clang
+    /// 22's values in its modes (P1061 from C++17, P2893 always).
+    #[test]
+    fn kiln_feature_macros() {
+        let cfg = PredefConfig::new(true);
+        let cxx17 = format!("{BASE}#define __cpp_structured_bindings 202403L\n");
+        let s = build_predefines(&cxx17, &cfg, &[]);
+        assert!(s.contains("#define __cpp_structured_bindings 202411L\n"), "{s}");
+        assert!(s.contains("#define __cpp_variadic_friend 202403L\n"), "{s}");
+        let s = build_predefines(BASE, &cfg, &[]);
+        assert!(!s.contains("__cpp_structured_bindings"), "{s}");
+        assert!(s.contains("#define __cpp_variadic_friend 202403L\n"), "{s}");
+        let s = build_predefines(&cxx17, &PredefConfig::new(false), &[]);
+        assert!(!s.contains("__cpp_variadic_friend"), "{s}");
     }
 
     #[test]

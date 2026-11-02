@@ -1222,6 +1222,42 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// `friend friend-type-specifier-list ;` with a `...` or `,` after its
+    /// first friend-type-specifier ([class.friend]/3, P2893; clang's
+    /// variadic friend path in `ParseCXXClassMemberDeclaration`): one
+    /// friend declaration per friend-type-specifier, each optionally a
+    /// pack expansion. `ds` holds the first specifier; the `friend` at
+    /// `fl` applies to all of them.
+    fn parse_friend_type_list(&mut self, mut ds: DeclSpec, fl: Loc) {
+        if self.std < kiln_lex::Std::Cxx26 {
+            let d = self.s.diag(DiagId::parse_ext_variadic_friend, self.loc());
+            self.emit(d);
+        }
+        loop {
+            if !ds.has_type_specifier() {
+                // `friend A, f;`: not a type (clang: the free-standing
+                // decl-specifier-seq is invalid; the rest is skipped).
+                self.error_here(DiagId::parse_missing_type_specifier);
+                self.skip_to_semi();
+                return;
+            }
+            let ellipsis = self.eat(Punct::Ellipsis);
+            let base = self.s.type_from_declspec(&ds);
+            let _ = self.s.act_on_friend_type(&ds, base, ellipsis, fl);
+            if self.eat(Punct::Comma).is_none() {
+                break;
+            }
+            ds = self.parse_decl_specifiers_from(DeclaratorContext::Member, Some(fl));
+        }
+        // clang's `ExpectAndConsume`: nothing is skipped.
+        if self.eat(Punct::Semi).is_none() {
+            let at = self.expected_loc();
+            let d =
+                self.s.diag(DiagId::parse_expected_semi_after_stmt, at).arg("friend declaration");
+            self.emit(d);
+        }
+    }
+
     /// The default member initializer of `decl`, saved for the complete
     /// class. [dcl.array]/3: for an array of unknown bound (`unbounded`)
     /// it is not an initializer that can deduce a bound (clang
@@ -1269,6 +1305,13 @@ impl Parser<'_, '_> {
             return;
         }
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::Member);
+        if let Some(fl) = ds.friend
+            && (self.at(Punct::Ellipsis) || self.at(Punct::Comma))
+        {
+            self.prohibit_friend_lead_attrs(&mut ds);
+            self.parse_friend_type_list(ds, fl);
+            return;
+        }
         if self.at(Punct::Semi) {
             self.prohibit_friend_lead_attrs(&mut ds);
             self.bump();

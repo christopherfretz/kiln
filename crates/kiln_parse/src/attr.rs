@@ -34,7 +34,14 @@ fn takes_expr_args(name: &str) -> bool {
             | "abi_tag"
             | "flag_enum"
             | "enum_extensibility"
+            | "preferred_name"
     )
+}
+
+/// True for the attributes whose argument is a type-id (clang
+/// `attributeIsTypeArgAttr`).
+fn takes_type_arg(name: &str) -> bool {
+    name.trim_start_matches("__").trim_end_matches("__") == "preferred_name"
 }
 
 /// True for the attributes whose first argument is an identifier when
@@ -440,6 +447,14 @@ impl Parser<'_, '_> {
         if !takes_expr_args(&text) {
             self.skip_until(&[Punct::RParen], false, true);
             return Some(Vec::new());
+        }
+        if takes_type_arg(&text) {
+            let Some(t) = self.parse_type_id() else {
+                self.skip_until(&[Punct::RParen], false, true);
+                return None;
+            };
+            self.expect_closing(Punct::RParen, Punct::LParen, open);
+            return Some(vec![AttrArg::Type(t)]);
         }
         let mut args = Vec::new();
         let mut ok = true;

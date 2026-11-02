@@ -462,7 +462,9 @@ than `ics2[k]` and the first applicable of:
    parameter types;
 8. /2.8 `c2` rewritten, `c1` not;
 9. /2.9 both rewritten, `c2` reversed, `c1` not;
-10. /2.10–2.13 CTAD guides (§2.8): inherited-constructor guides; declared
+10. /2.10–2.13 CTAD guides (§2.8): a guide not from an inherited
+    constructor beats one that is, when the parameter types for the
+    arguments are the same (P2582, spec/sema-templates.md §6.6.1); declared
     guide beats generated; copy deduction candidate; non-template-ctor guide
     beats template-ctor guide.
 
@@ -1218,7 +1220,7 @@ types first (interface PR, docs/AGENTS.md); 068b starts from that.
 | **068b** operators | `overload/{oper,builtin,arrow,alloc}.rs`; `expr.rs` one dispatch call per binary/unary/subscript site; `decl.rs` `check_operator_decl`; operator ids | §2.4–2.5, §5, §6, surrogates, memoized built-in tables | `over.match.oper`, `over.built`, `over.call.object`, `over.oper`, `over.ref`, `class.compare` (rewrites), `expr.new` (lookup); 144/121-note relational ambiguity per target; `__float128` per target |
 
 Shared `expr.rs` edits are disjoint (068b: one dispatch call per site), as
-are the diag-id blocks. **Bench** `bench/overload/` (mirrorbind-style): 200
+are the diag-id blocks. **Bench** `bench/overload/` (reference-workload-style): 200
 overloads × 1000 calls, a 50-deep `->` chain, 10k class `a < b`; records
 `ovl.*`, wall time, peak memory (spec/bench.md gates).
 

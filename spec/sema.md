@@ -102,13 +102,30 @@ Constructors:
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
     (`ambiguous_type_recovery`) follows clang: the declaration is
     dropped and the statement skipped.
-- **Block-scope using-directives** ([namespace.udir]/2): a local
-  scope's `using namespace N;` is collected while walking outwards, and
-  `N`'s members are searched at the nearest enclosing namespace (or the
-  translation unit) that encloses `N`, together with that scope's own
-  using-directives.
-- **Qualified lookup** ([basic.lookup.qual]) searches one context's
-  table, plus that namespace's using-directives.
+- **Using-directives** ([namespace.udir]/2-4, WP-339): a namespace-scope
+  `using namespace N;` is recorded on its namespace (or the translation
+  unit) in `LookupTables::using_dirs` (`Ast::add_using_directive`), so it
+  outlives the namespace body and holds for every later reopening and
+  lookup into it; a directive inside an inline namespace is also
+  recorded on each enclosing namespace up to the first non-inline one
+  ([namespace.def.general]/7). A block-scope directive stays on its
+  scope. Unqualified lookup (`visible_using_directives`) collects the
+  directives of the scopes on the stack, then closes them transitively
+  over the nominated namespaces' own directives; each nominated
+  namespace `N` is searched at the nearest enclosing namespace that
+  contains both the directive's scope and `N` (`common_namespace`). At
+  that level its members are *joined* with the namespace's own (clang's
+  `CppNamespaceLookup`): `k(0L)` sees both `S::k(int)` and
+  `S::T::k(long)` from inside `S::U` with `using namespace T;`. Literal
+  operators ([lex.ext]/3-8) are found the same way, through
+  `std::literals::chrono_literals` and `std::chrono`'s directive.
+- **Qualified lookup** ([basic.lookup.qual], [namespace.qual]/2) searches
+  one context's table; only if that finds nothing (after the lookup
+  kind's filter) does it search the namespaces nominated by the
+  context's recorded directives, recursively, each once: S'(X, m) is the
+  union, over nominated namespaces, of their own members, else of their
+  own nominated namespaces' S'. Two different entities so found are
+  ambiguous.
 - **The name before `::`** ([basic.lookup.qual]/1) is looked up for
   namespaces, types and type templates only (`LookupKind::Nested`). The
   parser's lookahead classifies such a component with
@@ -615,6 +632,13 @@ Redeclaration and linkage rules:
   reference: `constexpr decltype(auto) b = 1;` is `const int`,
   `constexpr decltype(auto) r = (g);` is `const int &` for a `constexpr
   int g` (`deduce_placeholder`).
+  A copy-list-initializer (`auto l = {...}`, and the range of a
+  range-based `for` over a braced list) deduces `std::initializer_list<U>`
+  from each element; a nested braced-init-list element is a non-deduced
+  context ([temp.deduct.call]/1) and is left out (`auto_list_items`), so
+  `{P{0, 1}, {2, 3}}` deduces `U = P<int, int>` and `{{1}}` deduces
+  nothing (`cannot deduce actual type ... from initializer list`), as
+  does a designated element (WP-339).
 - Deduced return types ([dcl.spec.auto.general]/9-11): the first
   `return` deduces, later ones must agree (clang's
   `'auto' in return type deduced as ... here but deduced as ...`),
@@ -1016,11 +1040,12 @@ and returns the scope it names:
   undeduced placeholder, so deduction is redone for the instantiation.
   A non-dependent use in a template is deduced at definition.
 
+- **Inherited-constructor guides (P2582, WP-359).** See
+  spec/sema-templates.md §6.6.1; neither clang 19 nor clang 22 implements
+  them, so their tests are `skip(clang)` and the standard's example is
+  the contract.
+
 **Deferred (no candidate, or diagnosed as unsupported).**
-- Inherited-constructor guides (P2582): clang 19 does not implement
-  them either, so `D d(args)` through `using B<T>::B;` finds only `D`'s
-  own guides, as clang 19 does. Implementing it is the alias transform
-  of `B`'s guides with `D`'s base-specifier as the right-hand side.
 - Guides from constructor templates of a member class template of an
   instantiated class template (only its non-template constructors and
   user guides are used).
@@ -2060,9 +2085,11 @@ diagnostics and IR.
     declared with constrained 'auto'`.
 
   `declare_decomposition` then declares the bindings: redefinitions are
-  checked against earlier names, binding attributes are attached, and a
-  pack `...a` (P1061) is reported as `a structured binding pack` is
-  unsupported. It then declares `e`. A second declarator in the same
+  checked against earlier names and binding attributes are attached. A
+  pack `...a` (P1061) is checked first (`check_binding_packs`: only in a
+  template, at most one) and then decomposed at instantiation
+  (`expand_binding_pack`; spec/sema-templates.md §7.1). It then declares
+  `e`. A second declarator in the same
   group is `decomposition declaration must be the only declaration in
   its group` (`act_on_decomposition_not_alone`). A missing initializer
   is `decomposition declaration '[a, b]' requires an initializer`
@@ -2163,7 +2190,6 @@ diagnostics and IR.
     specialization fully qualified (`Sema::decl_ty_str`, clang's
     printing of `getTypeDeclType`).
 - **Left.**
-  - Structured binding packs (P1061).
   - `constexpr` structured bindings (P2686; clang 19 rejects them too).
   - Instantiating binding attributes.
   - The NoOp `'const M'` cast clang adds when a const class `e` is
@@ -3704,6 +3730,84 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `parse_qualified_type_rest`). At block scope the statement is
   parsed as an expression, as clang does. Test:
   `tests/conformance/temp.names/no-template-named-qualified.cpp`.
+
+### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
+Each rule names the libc++ test it fixed and its corpus test.
+- **Deleted call operator** ([over.call.object]/1,
+  [dcl.fct.def.delete]/2): a call through an object whose selected
+  `operator()` is deleted reports "call to deleted function call operator
+  in type 'T'" with the candidate notes (`oper.rs`,
+  `diagnose_deleted_use` for `OperForm::Call`). A requires-clause naming
+  a deleted member is unsatisfied, with "attempt to use a deleted
+  function" as the reason (ranges `begin`/`end`/`rbegin`/`rend`). Test:
+  `tests/conformance/over.call.object/deleted-call-operator.cpp`.
+- **Invalid classes** ([temp.inst]/2): a class whose instantiation
+  failed, or one that dropped a base-specifier that names no class
+  ([class.derived.general]/2; `attach_bases` returns false), is marked
+  invalid. Initializing an object of an invalid class reports nothing
+  more and recovers (`is_invalid_class`). This covers list-init,
+  parenthesized aggregate init, `static_cast` and functional casts. As
+  an aggregate element, the invalid class takes one initializer
+  (out_ptr/inout_ptr). Tests:
+  `tests/conformance/temp.inst/invalid-class-quiet-init.cpp`,
+  `tests/conformance/class.derived/dependent-base-not-class.cpp`.
+- **typename-specifier after a failed qualifier**
+  ([temp.res.general]/4): only the first failing component is
+  diagnosed, and the parser skips the rest of the specifier
+  (tuple_element). Test:
+  `tests/conformance/temp.res/typename-failed-qualifier.cpp`.
+- **Non-type argument of class type with no conversion**
+  ([temp.arg.nontype]/1): reported with the converted-constant wording
+  "value of type 'S' is not implicitly convertible to 'int'", at the
+  argument (tuple_size_incomplete). Test:
+  `tests/conformance/temp.arg.nontype/class-arg-no-conversion.cpp`.
+- **Non-type parameter types substituted from prior arguments**
+  ([temp.param]/7):
+  - `template <class T, T V>`: `V`'s substituted type is checked at the
+    parameter, under a `PriorArgSubstitution` frame ("while
+    substituting prior template arguments into non-type template
+    parameter 'V' [with T = ...]").
+  - A deduced placeholder (`template <Pair P>`) is checked at the
+    argument, with "template parameter is declared here".
+  - Implicit deduction guides return the canonical injected type.
+  
+  Covers the pair/array NTTP tests. Test:
+  `tests/conformance/temp.param/nttp-structural-prior-args.cpp`.
+- **`static_cast<void>`** ([expr.static.cast]/6): its result is never
+  unused, unlike `(a == b);` or a comma's left operand
+  (size_incompatible_comparison). Test:
+  `tests/conformance/expr.static.cast/void-cast-not-unused.cpp`.
+- **Assignment through a const-returning call** ([expr.assign]/1): the
+  left operand may be a call whose return type is const-qualified
+  (through a reference), or a non-const member of one through `.`. The
+  error is "cannot assign to return value because function 'f' returns
+  a const value", with a note at the return type (get_const). Test:
+  `tests/conformance/expr.assign/const-return-call.cpp`.
+- **Initializer-list constructors in implicit conversion sequences**
+  ([over.ics.list]/7, [over.ics.rank]/3.3): a conversion through an
+  initializer-list constructor is an ordinary user-defined conversion,
+  with no rank of its own. So `one({1, 2})` with `one(pair<int, int>)` and
+  `one(span<const int>)` is ambiguous (span initializer_list, P2447R4).
+  Test: `tests/conformance/over.ics.list/init-list-ctor-ambiguous.cpp`.
+- **`preferred_name`** (clang extension, `__attribute__` and
+  `[[clang::]]`):
+  - Placement: on a class template. On anything else it warns "only
+    applies to class templates" and is ignored.
+  - Argument: a single type, which must be a cv-unqualified typedef for
+    a specialization of that template. Otherwise: "argument 'X' to
+    'preferred_name' attribute is not a typedef for a specialization of
+    'T'", with a note at the typedef.
+  - Printing: a specialization prints as the typedef
+    (`TypeNames::preferred_name`, `Ast::preferred_name_of`), with scope
+    unless printed among a written template-id's arguments. This applies
+    in C++ printing only.
+  
+  The pair/array NTTP tests print `std::string`. Test:
+  `tests/conformance/dcl.attr/preferred-name.cpp`.
+- **Substituted classes among written template arguments** ([temp.names]):
+  a class substituted into a written template-id prints unscoped there
+  (`'Box<Q, int>'`) and scoped elsewhere (`'N::Q *'`) (tuple.by.type).
+  Test: `tests/conformance/temp.names/substituted-args-unscoped.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

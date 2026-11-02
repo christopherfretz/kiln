@@ -516,9 +516,22 @@ impl Parser<'_, '_> {
     // -- decl-specifiers ------------------------------------------------------------
 
     /// decl-specifier-seq ([dcl.spec]).
-    #[allow(clippy::too_many_lines, reason = "one arm per decl-specifier")]
     pub(crate) fn parse_decl_specifiers(&mut self, ctx: DeclaratorContext) -> DeclSpec {
+        self.parse_decl_specifiers_from(ctx, None)
+    }
+
+    /// [`Self::parse_decl_specifiers`] for a later friend-type-specifier
+    /// of a friend-type-specifier-list ([class.friend]/3, P2893): the
+    /// `friend` at `friend_loc` applies to it too (clang's `SetFriendSpec`
+    /// before `ParseDeclarationSpecifiers`).
+    #[allow(clippy::too_many_lines, reason = "one arm per decl-specifier")]
+    pub(crate) fn parse_decl_specifiers_from(
+        &mut self,
+        ctx: DeclaratorContext,
+        friend_loc: Option<Loc>,
+    ) -> DeclSpec {
         let mut ds = DeclSpec::new(self.name_begin());
+        ds.friend = friend_loc;
         ds.attrs = std::mem::take(&mut self.lead_decl_attrs);
         ds.lead_cxx11 = self.stmt_attrs_loc.take().filter(|_| !ds.attrs.is_empty());
         // The spelling of the thread storage class (`_Thread_local`).
@@ -1400,6 +1413,13 @@ impl Parser<'_, '_> {
                 TagUse::Definition
             } else if self.at(Punct::Semi) && ds.storage.is_none() {
                 if ds.friend.is_some() { TagUse::Friend } else { TagUse::Declaration }
+            } else if ds.friend.is_some()
+                && ds.storage.is_none()
+                && (self.at(Punct::Comma) || self.at(Punct::Ellipsis))
+            {
+                // An element of a friend-type-specifier-list
+                // ([class.friend]/3, P2893): `friend struct A, struct B;`.
+                TagUse::Friend
             } else {
                 TagUse::Reference
             };
@@ -1966,6 +1986,13 @@ impl Parser<'_, '_> {
                 self.skip_attributes();
             }
             let ellipsis = self.eat(Punct::Ellipsis);
+            if let Some(e) = ellipsis
+                && self.std < kiln_lex::Std::Cxx26
+            {
+                // P1061: clang `ext_cxx_binding_pack`.
+                let w = self.s.diag(DiagId::parse_ext_binding_pack, e);
+                self.emit(w);
+            }
             let Some(name) = self.ident() else {
                 let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
                 self.emit(d);

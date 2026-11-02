@@ -27,7 +27,7 @@ use crate::declspec::{
     Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign,
     SpecialName, StorageSpec, TypeSpecKind, Width,
 };
-use crate::init::{InitValue, Initializer};
+use crate::init::Initializer;
 use crate::local_friend::LocalFriend;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
@@ -2627,6 +2627,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether return type `ret` is const-qualified after its reference
+    /// (`const T &`): an assignment to the call names it
+    /// ([`Sema::type_spec_locs`]).
+    fn returns_const(&self, ret: QualType) -> bool {
+        let t = &self.ast.types;
+        let p = match t.canonical_view(ret) {
+            TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
+            _ => ret,
+        };
+        t.effective_quals(p).is_const()
+    }
+
     /// `using name = type-id;` ([dcl.typedef]/2).
     /// Records where `d`'s first type-specifier was written (when not at
     /// its name `name`) for a substituted declarator's function type
@@ -3255,11 +3267,14 @@ impl Sema<'_, '_> {
         // Where a substituted signature's return and parameter types are
         // diagnosed (clang `BuildFunctionType` at the declaration's
         // begin, §5.6).
+        // A const-qualified return type is also noted there when the call
+        // is assigned to ([expr.assign]/1, `ret_type_loc`).
         if let Some(tl) = ds.type_loc
             && tl != d.name_loc()
             && self.ast.types.proto(ty).is_some_and(|p| {
                 self.ast.types.is_dependent(p.ret())
                     || self.ast.types.params(p).iter().any(|&q| self.ast.types.is_dependent(q))
+                    || self.returns_const(p.ret())
             })
         {
             self.type_spec_locs.insert(f, tl);
@@ -4649,22 +4664,19 @@ impl Sema<'_, '_> {
         direct: bool,
     ) -> Option<QualType> {
         use crate::templ::auto::{AutoFail, AutoInit};
-        let list_items = |l: &crate::init::InitList| -> Vec<Option<ExprId>> {
-            l.items
-                .iter()
-                .map(|it| match it.value {
-                    InitValue::Expr(e) if it.designator.is_empty() => Some(e),
-                    _ => None,
-                })
-                .collect()
-        };
         let (items, kind, lbrace) = match init {
             Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
             Initializer::Paren(es, ..) => {
                 (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
             }
-            Initializer::List(l) if direct => (list_items(l), AutoInit::DirectList, Some(l.lbrace)),
-            Initializer::List(l) => (list_items(l), AutoInit::CopyList, Some(l.lbrace)),
+            Initializer::List(l) if direct => (
+                crate::templ::auto::auto_list_items(l, false),
+                AutoInit::DirectList,
+                Some(l.lbrace),
+            ),
+            Initializer::List(l) => {
+                (crate::templ::auto::auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace))
+            }
         };
         // [temp.deduct.call]/6: every member of an overload set deduces
         // `auto`, so nothing is deduced (a placeholder in a function
@@ -6636,6 +6648,15 @@ impl Sema<'_, '_> {
         }
         if let Some(s) = self.scopes.iter_mut().rev().find(|s| !s.is_transparent()) {
             s.using_dirs.push(nominated);
+            // A namespace-scope directive outlives the scope instance: it
+            // is seen from every later reopening of the namespace, from
+            // instantiations, and through qualified lookup and other
+            // directives ([namespace.udir]/4, [namespace.qual]/2).
+            if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit)
+                && let Some(e) = s.entity
+            {
+                self.ast.add_using_directive(e, nominated);
+            }
         }
         d
     }
@@ -7558,6 +7579,7 @@ impl Sema<'_, '_> {
     }
 
     /// [`Sema::act_on_attribute`] without the scope flag.
+    #[allow(clippy::too_many_lines)]
     fn attribute_node(
         &mut self,
         syntax: AttrSyntax,
@@ -7582,6 +7604,7 @@ impl Sema<'_, '_> {
                         | "exclude_from_explicit_instantiation"
                         | "flag_enum"
                         | "enum_extensibility"
+                        | "preferred_name"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
@@ -7608,6 +7631,20 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
+        }
+        // `preferred_name(typedef-name)`: the type in `b`, checked
+        // against its class template in `check_decl_attrs`.
+        if kind == AttrKind::PREFERRED_NAME {
+            let [AttrArg::Type(t)] = args else {
+                let msg = self
+                    .diag(DiagId::parse_attribute_wrong_arg_count, loc)
+                    .arg("preferred_name")
+                    .arg("1");
+                self.emit(msg);
+                return None;
+            };
+            let node = AttrNode { kind, syntax, flags: 0, loc, a: 0, b: t.to_raw() };
+            return Some(self.ast.attrs.push(node));
         }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
@@ -7839,6 +7876,56 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(d, &attrs);
         }
+    }
+
+    /// clang `handlePreferredName`: `preferred_name` applies to a class
+    /// template (else it is ignored with a warning) and names a typedef
+    /// for one of its specializations (else an error); kept when valid.
+    /// Type names print it ([`kiln_ast::types::TypeNames::preferred_name`]).
+    pub(crate) fn check_preferred_name(&mut self, d: DeclId, node: AttrNode) -> bool {
+        let tmpl = (self.ast.decls.get(d).kind() == DeclKind::CXXRecord)
+            .then(|| self.ast.described_template(d))
+            .flatten();
+        let Some(tmpl) = tmpl else {
+            let msg = self
+                .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
+                .arg("'preferred_name'")
+                .arg("class templates");
+            self.emit(msg);
+            return false;
+        };
+        let Some(t) = QualType::from_raw(node.b) else { return false };
+        if self.is_error_type(t) {
+            return false;
+        }
+        let ts = &self.ast.types;
+        let mut named = t;
+        while let TypeView::Elaborated { named: n, .. } = ts.view(named.ty()) {
+            named = n;
+        }
+        let typedef = match ts.view(named.ty()) {
+            TypeView::Typedef { decl, .. } if t.quals().is_empty() => Some(decl),
+            _ => None,
+        };
+        let of_tmpl = ts
+            .as_record(t)
+            .and_then(|r| self.ast.spec_info(r))
+            .is_some_and(|(_, i)| self.ast.first(i.template) == self.ast.first(tmpl));
+        if typedef.is_some() && of_tmpl {
+            return true;
+        }
+        let mut msg = self
+            .diag(DiagId::sema_attribute_preferred_name_arg_invalid, node.loc)
+            .arg(self.ty_arg(t))
+            .arg(format!("'{}'", self.decl_name(tmpl)));
+        if let Some(td) = typedef {
+            let td_note = self
+                .diag(DiagId::note_entity_declared_at, self.ast.decls.get(td).loc())
+                .arg(format!("'{}'", self.decl_name(td)));
+            msg = msg.with_note(td_note);
+        }
+        self.emit(msg);
+        false
     }
 
     /// [dcl.align]/1: an `alignas` specifier applies to a variable that
@@ -8108,6 +8195,7 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("hot", _, true) => AttrKind::HOT,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
+        ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,

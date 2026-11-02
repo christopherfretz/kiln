@@ -1375,6 +1375,10 @@ impl TypeNames for AstNames<'_> {
         self.ast.spec_print_args(decl)
     }
 
+    fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
+        self.ast.preferred_name_of(decl)
+    }
+
     fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
         self.invented_parm_of(decl)
     }
@@ -1521,6 +1525,10 @@ impl PrintEnv for AstNames<'_> {
 impl TypeNames for Ast {
     fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
         self.spec_print_args(decl)
+    }
+
+    fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
+        self.preferred_name_of(decl)
     }
 
     fn invented_parm(&self, decl: DeclId) -> Option<Option<(DeclId, crate::ids::ArgListId)>> {
