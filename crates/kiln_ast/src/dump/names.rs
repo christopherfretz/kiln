@@ -18,7 +18,7 @@ use crate::names::{DeclName, DeclNameView};
 use crate::strings::{StringEncoding, push_unit};
 use crate::types::{
     ArgView, FloatFormat, PrintOptions, TypeFlags, TypeNames, TypeView, write_arg_list,
-    write_arg_list_prefix, write_nns, write_type,
+    write_arg_list_canonical, write_arg_list_prefix, write_nns, write_nns_resolved, write_type,
 };
 
 /// Scope chains and expressions nested deeper than this print `...`
@@ -714,7 +714,36 @@ impl<'a> AstNames<'a> {
             // clang's `VisitDeclRefExpr`: the qualifier as written, then
             // the name.
             ExprKind::DeclRefExpr => {
-                if let Some(q) = exprs.decl_ref_extra(e).and_then(|x| x.qualifier) {
+                let extra = exprs.decl_ref_extra(e);
+                if self.expr_types.canonical {
+                    // clang's `FailedBooleanConditionPrinterHelper`: a
+                    // qualified name prints its qualifier's template
+                    // arguments resolved, then the name with a variable
+                    // template specialization's arguments; an unqualified
+                    // one its explicit arguments, canonical.
+                    let d0 = exprs.decl(e);
+                    if let Some(q) = extra.and_then(|x| x.qualifier) {
+                        write_nns_resolved(&ast.types, self, q, out);
+                        self.write_name(d0, out);
+                        if ast.decls.get(d0).kind() == DeclKind::Var
+                            && let Some((_, info)) = ast.spec_info(d0)
+                        {
+                            write_arg_list_canonical(
+                                &ast.types,
+                                self,
+                                ast.types.canonical_args(info.args),
+                                out,
+                            );
+                        }
+                    } else {
+                        self.write_name(d0, out);
+                        if let Some(l) = extra.and_then(|x| x.template_args) {
+                            write_arg_list_canonical(&ast.types, self, l, out);
+                        }
+                    }
+                    return;
+                }
+                if let Some(q) = extra.and_then(|x| x.qualifier) {
                     write_nns(&ast.types, self, q, out);
                 }
                 if ast.templates.template_kw.contains(e) {
@@ -1328,6 +1357,13 @@ impl TypeNames for AstNames<'_> {
         self.invented_parm_of(decl)
     }
 
+    fn converted_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
+        if self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
+            return None;
+        }
+        self.ast.spec_info(decl).map(|(_, s)| s.args)
+    }
+
     fn write_decl_name(&self, decl: DeclId, scoped: bool, out: &mut String) {
         let n = self.ast.decls.get(decl);
         let tag = matches!(
@@ -1425,6 +1461,10 @@ impl PrintEnv for AstNames<'_> {
         write_type(&self.ast.types, self, ty, PrintOptions::SUGARED, out);
     }
 
+    fn arg_type_name(&self, ty: QualType, out: &mut String) {
+        write_type(&self.ast.types, self, ty, PrintOptions::CANONICAL, out);
+    }
+
     fn enumerator(&self, ty: QualType, bits: &IntBits<'_>, out: &mut String) -> bool {
         let Some(e) = self.ast.types.as_enum(ty) else { return false };
         let e = self.ast.definition(e).unwrap_or(e);
@@ -1513,6 +1553,10 @@ impl PrintEnv for Ast {
 
     fn type_name(&self, ty: QualType, out: &mut String) {
         AstNames::new(self).type_name(ty, out);
+    }
+
+    fn arg_type_name(&self, ty: QualType, out: &mut String) {
+        AstNames::new(self).arg_type_name(ty, out);
     }
 
     fn enumerator(&self, ty: QualType, bits: &IntBits<'_>, out: &mut String) -> bool {

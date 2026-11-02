@@ -169,6 +169,7 @@ sema_deleted_not_first = Error (0) "deleted definition must be first declaration
 sema_deleted_overrides = Error (2) "{0:deleted|non-deleted} function '{1}' cannot override a {0:non-deleted|deleted} function";
 sema_dependent_friend_spec_no_candidate = Error (0) "no candidate function template was found for dependent friend function template specialization";
 sema_deprecated = Warning [DeprecatedDeclarations] (1) "'{0}' is deprecated";
+sema_deprecated_anonymous_namespace = Warning [IgnoredAttributes] (0) "'deprecated' attribute on anonymous namespace ignored";
 sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is deprecated; use {1} instead";
 sema_deprecated_msg = Warning [DeprecatedDeclarations] (2) "'{0}' is deprecated: {1}";
 sema_deprecated_this_capture = Warning [DeprecatedThisCapture] (0) "implicit capture of 'this' with a capture default of '=' is deprecated";

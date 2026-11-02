@@ -394,7 +394,20 @@ impl Sema<'_, '_> {
         if single && self.diagnose_unsatisfied_use(d, loc) {
             return self.recover_err(&[], loc);
         }
-        let e = self.build_decl_ref_qualified(d, loc, shadow, nns);
+        // clang `FixOverloadedFunctionReference`: the explicit template
+        // arguments written on the name (`ok<int>(0)`) stay on the
+        // reference, so a printed requirement shows them.
+        let targs = self.ast.templates.expr_targs.get(ule).copied();
+        let e = if targs.is_some() && self.kind_of(d).is_function() {
+            let extra = kiln_ast::expr::DeclRefExtra {
+                qualifier: nns,
+                template_args: targs,
+                found_decl: shadow,
+            };
+            self.build_decl_ref_extra(d, loc, Some(extra))
+        } else {
+            self.build_decl_ref_qualified(d, loc, shadow, nns)
+        };
         if let Some(&b) = self.ast.templates.expr_begin.get(ule)
             && b != loc
             && self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr

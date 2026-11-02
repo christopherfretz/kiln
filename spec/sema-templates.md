@@ -1851,6 +1851,15 @@ an address (`overload/address.rs`) or of an explicit specialization
 (`match_function_spec_in`), and is never noted, as clang skips
 `TemplateDeductionResult::Invalid` candidates.
 
+**Memoized specializations** (WP-303): a function declaration
+specialization (`get_function_spec`) or an alias template substitution
+(`alias_template_type`) formed while the SFINAE trap captured an error
+(`InstStack::sfinae_errors()` grew) is a substitution failure, not a
+valid cached entry: without this, the first caller in SFINAE mode
+cached e.g. a narrowing `_Ap[] = {std::forward<_Up>(u)}` signature as
+valid and later overload sets saw a viable candidate
+([temp.deduct.general]/8; libc++ `variant`'s `__overload`).
+
 **Memory.** Types and nodes that a failed substitution created are
 retained, since the AST is append-only. They are metered as
 `templ.sfinae_discarded` (§11.3).

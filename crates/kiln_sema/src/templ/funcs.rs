@@ -75,6 +75,12 @@ impl Sema<'_, '_> {
         let Some((_, margs)) = self.spec_args(spec) else { return Err(()) };
         let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let pairs = self.inst_context_pairs(self.spec_pairs_ctx(spec, tmpl));
+        // An error the enclosing SFINAE frame captures while the signature
+        // is substituted (a narrowing check inside a `decltype` return
+        // type) fails the specialization even when the substitution itself
+        // returns `Ok`: memoize it as invalid, so the next deduction for
+        // the same arguments fails too ([temp.deduct.general]/8).
+        let trapped = self.sfinae_errors();
         let r = self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
@@ -82,7 +88,8 @@ impl Sema<'_, '_> {
             sub.function_spec_signature(pattern, spec)?;
             sub.function_spec_explicit(pattern, spec)
         });
-        if r.is_err() {
+        let captured = self.sfinae_errors() > trapped;
+        if r.is_err() || captured {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
             return Err(());
         }

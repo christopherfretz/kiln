@@ -992,8 +992,12 @@ and returns the scope it names:
     attributes); a typedef/alias looks through to its class or enum and
     an enumerator to its enumeration (clang
     `ShouldDiagnoseAvailabilityOfDecl`), the note naming that entity.
-    A specialization is named with its written arguments plus defaults
-    (`D<N::X, int>` prints `D<N::X>` as clang does). No warning in a
+    A class specialization is named with its written arguments plus
+    defaults (`D<N::X, int>` prints `D<N::X>` as clang does); a function
+    specialization with its converted arguments, every name scoped
+    (`visit_format_arg<(lambda at …), std::basic_format_context<char *,
+    char>>`, clang `getNameForDiagnostic`; WP-303); both print typed
+    arguments for placeholder parameters (`A<(n::E)5>`). No warning in a
     deprecated context: the current context or any enclosing semantic
     context is deprecated (clang `ShouldDiagnoseAvailabilityInContext`).
     Warnings for uses in a declaration's decl-specifiers, declarator and
@@ -1005,8 +1009,18 @@ and returns the scope it names:
     deprecated context, discarded with a dropped access delay point
     (specialization class-head arguments), and otherwise join the
     enclosing point. Delay applies only outside instantiation.
-    Namespace attributes are not parsed yet, so a deprecated namespace
-    is not a deprecated context.
+    Namespaces (WP-303, [dcl.attr.deprecated]/4, [namespace.def]/1):
+    `act_on_namespace_attrs` attaches a namespace definition's
+    attributes (both positions, `namespace [[a]] N [[b]] {`) to that
+    definition only; the attribute is not inherited by a reopening, and
+    lookup finds the latest definition, so a use after an unattributed
+    reopening does not warn (clang). A use warns at the
+    nested-name-specifier's `::` (`act_on_nns_component_use`), at the
+    name of a using-directive and of a namespace alias's target
+    (`act_on_namespace_name_use`). On an unnamed namespace the attribute
+    is dropped with "'deprecated' attribute on anonymous namespace
+    ignored" [-Wignored-attributes]. A deprecated namespace is a
+    deprecated context.
   - `maybe_unused` suppresses unused warnings.
   - `alignas` is validated as a power of two and fed into layout
     (`check_alignment_expr`). `requested alignment is not a power of 2`
@@ -1087,6 +1101,16 @@ and returns the scope it names:
     parameter head prints its canonical replacement without scope
     (`T::y` with `T = ns::S` prints `S::y`, clang's
     `NestedNameSpecifier::print` `SuppressScope`) (WP-302).
+  - The printed names are the substituted ones (clang's
+    `FailedBooleanConditionPrinterHelper`, WP-303): a qualified
+    `DeclRefExpr` prints its nested-name-specifier with the last type
+    component resolved to its class plus all converted arguments,
+    canonical, defaults included (`tr<n::A, int>::value` for
+    `T::value`, `write_nns_resolved`), then the name, then a variable
+    template specialization's canonical arguments; an unqualified one
+    prints its explicit arguments canonical (`ok<n::A>(0)`,
+    `write_arg_list_canonical`). A call to a function template-id keeps
+    the explicit arguments on the resolved `DeclRefExpr`.
   - Evaluation notes follow (§8).
 
 ### 4.7 Exception specifications (`except.rs`)
@@ -2839,7 +2863,11 @@ warnings of the same group. Test:
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
     conversion sequence, with narrowing enforced for list-init
-    ([dcl.init.list]/7)
+    ([dcl.init.list]/7); a list element (`init_element`, an array or
+    aggregate member) converted through a user-defined conversion
+    checks its second standard conversion (`struct B { operator
+    double(); }; int a[] = {B{}};` narrows, clang
+    `checkNarrowing(SCS.After)`; WP-303)
   - references, binding directly or to a temporary
   - class objects by constructor ([dcl.init.general]/16.6.2.1; spec/sema-class.md
     §5): a direct-initialization from one expression of an unrelated class
