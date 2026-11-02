@@ -12,7 +12,7 @@
 //@ diag: 33:13 error "qualifier in array size is a C99 feature, not permitted in C++"
 //@ diag: 34:23 error "nullability specifier '_Nullable' conflicts with existing specifier '_Nonnull'"
 //@ diag: 36:18 error "nullability specifier '_Nonnull' cannot be applied to non-pointer type 'int[2]'"
-//@ diag: 37:6 error "type qualifier used in array declarator outside of function prototype"
+//@ diag: 37:7 error "type qualifier used in array declarator outside of function prototype"
 //@ diag: 38:13 error "static array size is a C99 feature, not permitted in C++"
 //@ diag: 39:13 error "qualifier in array size is a C99 feature, not permitted in C++"
 //@ diag: 40:6 error "'static' used in array declarator outside of function prototype"
@@ -34,7 +34,7 @@ void p(int e[const _Nonnull]);
 void q(int e[_Nonnull _Nullable]);
 void r(int *a[_Nonnull]);
 void s() { int z[_Nonnull 2]; }
-int x[const 3];
+int x2[const 3];
 void f(int a[static 3]);
 void g(int a[volatile]);
 int y[static 2];
