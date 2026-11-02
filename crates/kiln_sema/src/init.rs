@@ -1035,12 +1035,21 @@ impl Sema<'_, '_> {
         // fails, the list is invalid).
         if self.ast.decls.get(f).has(DeclFlags::INVALID) {
             // clang 22's aggregate initialization reports each use of a
-            // default member initializer that is not parsed yet, even
-            // after the field was invalidated (spec/sema.md §1.1).
+            // default member initializer it has no expression for (not
+            // parsed yet, or one that failed outside an instantiation),
+            // even after the field was invalidated (spec/sema.md §1.1).
+            let init = self.ast.decls.field(f).and_then(|x| x.init);
+            let unparsed = init.is_none() && self.in_class_being_defined(f);
+            let failed = init.is_none_or(|e| self.is_err_expr(e))
+                && self
+                    .ast
+                    .decls
+                    .get(f)
+                    .ctx()
+                    .is_none_or(|r| self.ast.instantiated_from(r).is_none());
             if self.clang_compat >= 22
-                && self.in_class_being_defined(f)
                 && self.field_has_nsdmi(f)
-                && self.ast.decls.field(f).and_then(|x| x.init).is_none()
+                && (unparsed || failed)
                 && !self.inst.deferred_nsdmis.contains_key(&f)
             {
                 self.default_member_init_not_yet_parsed(f, at);

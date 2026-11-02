@@ -1479,10 +1479,12 @@ impl Parser<'_, '_> {
         };
         let mut scoped = 0;
         if keyword == TagKeyword::Enum {
-            if self.eat_kw(Kw::Class).is_some() {
+            if let Some(l) = self.eat_kw(Kw::Class) {
                 scoped = EnumData::SCOPED;
-            } else if self.eat_kw(Kw::Struct).is_some() {
+                ds.scoped_key_end = Some(l.with_offset(5));
+            } else if let Some(l) = self.eat_kw(Kw::Struct) {
                 scoped = EnumData::SCOPED | EnumData::SCOPED_STRUCT;
+                ds.scoped_key_end = Some(l.with_offset(6));
             }
         }
         let mut attrs = Vec::new();
@@ -2904,7 +2906,8 @@ impl Parser<'_, '_> {
     /// would appertain to no entity ([dcl.pre]/5): at namespace scope,
     /// before a class or enum specifier, clang reports `misplaced
     /// attributes; expected attributes here` after the class-key, where
-    /// they would appertain to the class ([class.pre]/1, [dcl.enum]/1),
+    /// they would appertain to the class ([class.pre]/1, [dcl.enum]/1;
+    /// at compat 22 after the `class`/`struct` of a scoped enum),
     /// and otherwise `an attribute list cannot appear here` at their
     /// start; at block scope always the latter. They are dropped. (In
     /// a class they reach [`Sema::act_on_decl_spec_only`], which warns.)
@@ -2922,7 +2925,11 @@ impl Parser<'_, '_> {
         };
         match ctx {
             DeclaratorContext::File if ds.tag.is_some() && key_len > 0 => {
-                let fix = ds.type_loc.unwrap_or(at).with_offset(key_len);
+                // clang 22 inserts after `enum class` / `enum struct`.
+                let fix = match ds.scoped_key_end {
+                    Some(e) if self.s.clang_compat >= 22 => e,
+                    _ => ds.type_loc.unwrap_or(at).with_offset(key_len),
+                };
                 self.s.error(DiagId::parse_attributes_misplaced, fix);
             }
             DeclaratorContext::File | DeclaratorContext::Block => {

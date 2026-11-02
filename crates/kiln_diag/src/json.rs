@@ -60,7 +60,11 @@ pub struct JsonSink<W: Write> {
 impl<W: Write> JsonSink<W> {
     /// A JSON sink writing to `out`.
     pub fn new(out: W, opts: &DiagOptions) -> JsonSink<W> {
-        JsonSink { out, backtrace_limit: opts.macro_backtrace_limit, clang_compat: opts.clang_compat }
+        JsonSink {
+            out,
+            backtrace_limit: opts.macro_backtrace_limit,
+            clang_compat: opts.clang_compat,
+        }
     }
 
     /// The underlying writer.

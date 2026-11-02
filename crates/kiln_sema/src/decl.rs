@@ -7225,7 +7225,13 @@ impl Sema<'_, '_> {
             return None;
         }
         if !ds.invalid {
-            self.error(DiagId::sema_no_declarators, ds.loc);
+            // clang 22's declaration range starts at a leading C++11
+            // attribute-specifier-seq (`[[x]] int;`, `alignas(4);`).
+            let at = match ds.lead_cxx11 {
+                Some(a) if self.clang_compat >= 22 => a,
+                _ => ds.loc,
+            };
+            self.error(DiagId::sema_no_declarators, at);
         }
         None
     }

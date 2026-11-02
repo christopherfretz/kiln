@@ -2589,7 +2589,6 @@ impl ExprArena {
             })
     }
 
-
     /// The child expressions of `e` in dump order (§11): the expressions
     /// `e` owns, as clang's `Stmt::children`. Shared subexpressions are
     /// not children (the dump prints them, §11): the source of an
