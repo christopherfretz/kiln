@@ -3833,7 +3833,11 @@ These are declared by WP-063's builtin declaration table, with custom
 type-checking where marked †. "Oven" means the builtin is evaluable in
 constant expressions in clang 19 and therefore in the Oven. WP-074
 verifies every Oven bit with a `static_assert` probe against clang 19 and
-records it in `TABLE`.
+records it in `TABLE`. Since WP-393 the column also marks the P0533
+builtins the Oven folds beyond clang 19 (`abs`/`labs`/`llabs`,
+`signbit`, the six comparison macros): `__has_constexpr_builtin` gives
+the clang table's answer at the `-fclang-compat` level for every `Yes`
+row (spec/pp.md "clang compatibility level").
 
 | Group | Builtins | Oven | Lowering |
 |---|---|---|---|

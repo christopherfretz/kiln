@@ -2597,19 +2597,19 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   ::ceil;` etc., so its C++23 constexpr `std::ceil(double)` (P0533)
   relies on GCC folding the C library function as a builtin. A first
   declaration recognized as a library function above whose name is
-  `ceil`, `floor`, `trunc`, `round`, `fabs`, `fmin`, `fmax` or
-  `copysign` (or the `f`/`l` variant) records its `__builtin_` twin
+  `ceil`, `floor`, `trunc`, `round`, `fabs`, `fmin`, `fmax`,
+  `copysign` or `sqrt` (WP-393; or the `f`/`l` variant) records its `__builtin_` twin
   (`builtin::gnu_lib_twin`; the `gnu_lib_twin` cold data);
   redeclarations inherit it. Only the Oven reads it: a call folds as the
   twin (spec/oven.md "Builtins"); every other rule (attributes, codegen,
   diagnostics) treats the call as ordinary. GCC 14 is the reference:
   `rint`/`nearbyint` are not folded (GCC leaves them to the rounding
-  mode at run time) and `sqrt`, which GCC folds, is not (the Oven has no
-  `__builtin_sqrt`; clang folds neither). Under `-stdlib=libc++` nothing
+  mode at run time); `sqrt` folds correctly rounded, so libstdc++'s
+  constexpr `std::sqrt(double)` works (clang folds neither). Under `-stdlib=libc++` nothing
   is recorded, as clang (libc++'s `constexpr-cxx23-clang.pass.cpp`
   requires `::ceil` to stay non-constant). A C++-linkage or class-scope
   `ceil`, or one with another type, is an ordinary function
-  (`tests/conformance/c.math/gnu-lib-builtins*.cpp`).
+  (`tests/conformance/c.math/gnu-lib-builtins*.cpp`, `gnu-lib-sqrt.cpp`).
 - **Custom-checked builtins** (WP-270): the generic
   `__builtin_{add,sub,mul}_overflow` (`builtin_overflow`) and the
   alignment of `__builtin_alloca_with_align` (`check_alloca_align`) are

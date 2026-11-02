@@ -448,7 +448,7 @@ pub(crate) mod bi {
 
     // WP-365: P0533 constexpr <cmath>.
     /// A `<cmath>` operation on `a` (`b`, `c`) in the float kind of sub's
-    /// low 4 bits: sub = float kind | `CEIL`..`CMP` << 4 | [`SECOND`]
+    /// low 4 bits: sub = float kind | `CEIL`..`SQRT` << 4 | [`SECOND`]
     /// (`softfloat::math`; IEEE-exact, GCC's folding rules: an invalid,
     /// overflowing, inexact-underflowing or signaling-NaN case is not a
     /// constant).
@@ -493,6 +493,8 @@ pub(crate) mod bi {
     /// `LE`, `NE` (`islessgreater`) or [`UNORDERED`]; quiet, never
     /// faults.
     pub const CMP: u32 = 20;
+    /// `sqrt(a)`, correctly rounded (WP-393).
+    pub const SQRT: u32 = 21;
     /// `t1` of `FP_MATH` `CMP`: `isunordered`.
     pub const UNORDERED: u32 = 6;
 }
