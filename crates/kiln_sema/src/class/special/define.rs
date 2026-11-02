@@ -138,6 +138,7 @@ pub(crate) enum DeletedAs {
 /// The call a selected constructor makes: its arguments and the form
 /// of the expression built.
 #[derive(Clone, Copy, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent flags of one construction")]
 pub(crate) struct CtorCall<'a> {
     /// The arguments, unconverted.
     pub args: &'a [ExprId],
