@@ -149,7 +149,8 @@ const CLANG22_AARCH64: &[(&str, &str)] = &[
 /// `_Float128` and `__bf16` (`g++-14 -std=c++23 -dM -E`, identical on
 /// both targets), which libstdc++'s `<limits>`, `<cmath>`, `<format>`
 /// and `<bits/c++config.h>` consume. Defined in every C++ mode, as GCC
-/// does; the `__FLT16_*__` set stays clang's (in the base files), and
+/// does; the `__FLT16_*__` set stays clang's (in the base files, plus
+/// GCC's `__FLT16_IS_IEC_60559__`, which clang lacks), and
 /// GCC's `__FLT32X_*__` / `__FLT64X_*__` are not defined (kiln has no
 /// `_Float32x` / `_Float64x`; spec/pp.md "Predefined macros").
 const P1467_LIMITS: &[(&str, &str)] = &[
@@ -185,6 +186,7 @@ const P1467_LIMITS: &[(&str, &str)] = &[
     ("__FLT128_MIN_EXP__", "(-16381)"),
     ("__FLT128_MIN__", "3.36210314311209350626267781732175260e-4932F128"),
     ("__FLT128_NORM_MAX__", "1.18973149535723176508575932662800702e+4932F128"),
+    ("__FLT16_IS_IEC_60559__", "1"),
     ("__FLT32_DECIMAL_DIG__", "9"),
     ("__FLT32_DENORM_MIN__", "1.40129846432481707092372958328991613e-45F32"),
     ("__FLT32_DIG__", "6"),

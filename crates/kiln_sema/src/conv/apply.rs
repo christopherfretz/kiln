@@ -349,6 +349,8 @@ pub(crate) fn fp_rank_check(s: &mut Sema<'_, '_>, e: ExprId, from: QualType, to:
     };
     if let Some(unordered) = super::rank::fp_rank_violation(s, f, t) {
         let loc = s.eloc(e);
+        // GCC names both types without their cv-qualifiers.
+        let (to, from) = (s.ast.types.unqualified(to), s.ast.types.unqualified(from));
         let msg = s
             .diag(DiagId::sema_fp_conversion_rank, loc)
             .arg(s.ty_arg(to))
