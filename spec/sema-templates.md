@@ -878,6 +878,19 @@ with the enclosing specialization's levels plus the deduced arguments
 (`template <forward_range T> struct cat<T>` in libc++'s
 `lazy_split_view`; WP-276).
 
+Member bodies of an in-class partial specialization of a member class
+template ([temp.local]/8, [class.mem.general]/7; WP-332): the bodies,
+default arguments and *noexcept-specifier*s are parsed after the
+outermost enclosing class is complete, and the replay re-enters the
+partial's own template parameter scope (`act_on_reenter_template_scopes`
+takes a partial specialization's parameter list from its
+`PartialSpecInfo`, as it takes a member class template's from its
+template), so `I` in `template<class I> struct cmp<I, void> { int f()
+{ return I(1); } };` names the parameter. libstdc++ stl_list.h:189,
+chrono:2449, ranges:1888. Tests:
+`temp.spec.partial.member/libstdcxx-member-partial-spec-params-in-body.cpp`,
+`temp.spec.partial.member/libstdcxx-constrained-member-partial-spec.cpp`.
+
 Out-of-class partial specializations of a member template (WP-150):
 `template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
 - The parser takes `Outer<T>::` as a tag qualifier and enters its scope
