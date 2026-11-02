@@ -24,6 +24,7 @@ use crate::overload::{
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::deduce::{DeducedArgs, Tdk};
 use crate::templ::pack::Expansion;
+use crate::templ::stack::FrameKind;
 use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
 
 /// How the object whose type is a deduced class template specialization
@@ -215,8 +216,17 @@ impl Sema<'_, '_> {
     }
 
     /// The undeduced placeholder `X` / `nns::X` for class template `d`
-    /// ([dcl.type.class.deduct]).
-    pub fn ctad_placeholder(&mut self, d: DeclId, nns: Option<NnsId>) -> QualType {
+    /// ([dcl.type.class.deduct]), its type-specifier at `locs.0` and the
+    /// template name at `locs.1`.
+    pub fn ctad_placeholder(
+        &mut self,
+        d: DeclId,
+        nns: Option<NnsId>,
+        locs: (Loc, Loc),
+    ) -> QualType {
+        if locs.0.is_valid() && locs.1.is_valid() {
+            let _ = self.templ.ctad_name_locs.insert(locs.0, locs.1);
+        }
         let mut name = self.template_name_for(d);
         if let Some(nns) = nns {
             name = self.ast.types.template_name(TemplateName::Qualified {
@@ -358,12 +368,24 @@ impl Sema<'_, '_> {
     /// ([over.match.class.deduct]/1.1-1.3): one per constructor of its
     /// definition (or one from a hypothetical `C()`), and the copy
     /// deduction candidate. Formed once per defined template; they are
-    /// template decls that join no member list or lookup table.
-    fn implicit_guides(&mut self, tmpl: DeclId) -> Vec<DeclId> {
+    /// template decls that join no member list or lookup table. A
+    /// diagnostic while forming them notes `name_loc`, the template name
+    /// that first needed them (clang `BuildingDeductionGuides`).
+    fn implicit_guides(&mut self, tmpl: DeclId, name_loc: Loc) -> Vec<DeclId> {
         let first = self.ast.first(tmpl);
         if let Some(v) = self.templ.ctad_guides.get(&first) {
             return v.clone();
         }
+        if !self.push_inst_frame(FrameKind::BuildingDeductionGuides, tmpl, tmpl, name_loc) {
+            return Vec::new();
+        }
+        let out = self.form_implicit_guides(tmpl, first);
+        self.pop_inst_frame();
+        out
+    }
+
+    /// [`Sema::implicit_guides`] once the frame is pushed.
+    fn form_implicit_guides(&mut self, tmpl: DeclId, first: DeclId) -> Vec<DeclId> {
         let Some(pat) = self.pattern_of(tmpl) else { return Vec::new() };
         let def = self.ast.definition(pat);
         // The template decl whose parameters the definition uses.
@@ -1014,18 +1036,19 @@ impl Sema<'_, '_> {
         tmpl: DeclId,
         init: Option<&Initializer>,
         level: u32,
+        name_loc: Loc,
     ) -> Option<Vec<DeclId>> {
         if self.kind_of(tmpl) == DeclKind::TypeAliasTemplate {
             let (target, rhs) = self.alias_ctad_target(tmpl)?;
             if level > 64 {
                 return Some(Vec::new());
             }
-            let inner = self.ctad_guides(target, init, level + 1)?;
+            let inner = self.ctad_guides(target, init, level + 1, name_loc)?;
             return Some(
                 inner.into_iter().filter_map(|g| self.alias_guide(tmpl, rhs, g)).collect(),
             );
         }
-        let mut guides = self.implicit_guides(tmpl);
+        let mut guides = self.implicit_guides(tmpl, name_loc);
         let user = self.user_guides(tmpl);
         // [over.match.class.deduct]/1.5: only when C has no
         // deduction-guides.
@@ -1458,6 +1481,11 @@ impl Sema<'_, '_> {
         init: Option<&Initializer>,
         loc: Loc,
     ) -> Option<QualType> {
+        // The template name of the placeholder, for the note of an error
+        // building the implicit guides: the type-specifier is the
+        // variable's (`ctad_site`) or at `loc`.
+        let site = self.templ.ctad_site.take().unwrap_or(loc);
+        let name_loc = self.templ.ctad_name_locs.get(&site).copied().unwrap_or(loc);
         let (name, tmpl) = self.undeduced_ctad(declared)?;
         let with_quals = |s: &mut Self, t: QualType| {
             let d = s.ast.types.deduced_template_specialization(name, Some(t));
@@ -1480,7 +1508,7 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        let Some(guides) = self.ctad_guides(tmpl, init, 0) else {
+        let Some(guides) = self.ctad_guides(tmpl, init, 0, name_loc) else {
             // [dcl.type.class.deduct]/2: an alias template whose
             // defining-type-id is not a simple-template-id.
             let at = self.alias_guide_loc(tmpl);
@@ -1952,6 +1980,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return None;
         }
+        self.templ.ctad_site = self.templ.ctad_var_type_locs.get(&v).copied();
         let t = self.deduce_ctad(ty, &[], &[], CtadInit::Direct, loc).unwrap_or(QualType::ERROR);
         self.ast.decls.set_ty(v, t);
         if self.is_error_type(t) {

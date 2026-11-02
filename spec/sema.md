@@ -834,11 +834,20 @@ and returns the scope it names:
   alias template's guide substitutes the alias's arguments into that
   sugar; its `__is_deducible(A, R)` prints the guide's sugared return
   type `R` (WP-311; test
-  `over.match.class.deduct/guide-signature-as-written.cpp`). Not
-  printed yet: clang's `while building implicit deduction guide first
-  needed here` frame note, at the placeholder's template-name location,
-  for an error substituting a member template's constructors (the
-  placeholder's name location is not recorded).
+  `over.match.class.deduct/guide-signature-as-written.cpp`).
+- **Building the implicit guides** runs under a
+  `FrameKind::BuildingDeductionGuides` frame (not an instantiation;
+  clang `BuildingDeductionGuides`), so an error forming them (the
+  enclosing arguments substituted into a member template's
+  constructor) is followed by `while building implicit deduction guide
+  first needed here` at the template name of the placeholder that first
+  needed them. The parser records each placeholder's template-name
+  location by its type-specifier location (`ctad_placeholder`,
+  `TemplState::ctad_name_locs`); a variable's type-specifier location is
+  kept per variable (`ctad_var_type_locs`), and an expression form
+  (functional cast, new-expression) deduces at its type-specifier. A
+  variable instantiated from a template notes the variable instead.
+  Test `over.match.class.deduct/building-guides-note.cpp`.
 - **Array new.** `new X[n]{…}` with a placeholder element type is
   `sema_ctad_compound_type` ("cannot form array of deduced class
   template specialization type") at the innermost bound, as clang.

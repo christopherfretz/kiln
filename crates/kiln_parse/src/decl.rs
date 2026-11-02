@@ -821,6 +821,7 @@ impl Parser<'_, '_> {
     ) {
         let mut nns = None;
         let mut d = d;
+        let name_loc = self.tok_at(end - 1).span.lo;
         if qualified {
             let name = self.ident_of(self.tok_at(end - 1));
             if let Ok(Some(q)) = self.parse_nested_name_nns() {
@@ -843,7 +844,7 @@ impl Parser<'_, '_> {
         while self.pos() < end {
             self.bump();
         }
-        let ty = self.s.ctad_placeholder(d, nns);
+        let ty = self.s.ctad_placeholder(d, nns, (loc, name_loc));
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
             ds.invalid = true;
             self.spec_error(&e, loc);

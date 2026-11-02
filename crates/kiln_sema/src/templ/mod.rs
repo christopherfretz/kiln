@@ -194,6 +194,16 @@ pub struct TemplState {
     /// The implicit deduction guides of each class template (first
     /// declaration), formed on first use ([over.match.class.deduct]/1).
     pub(crate) ctad_guides: kiln_source::fx::FxHashMap<DeclId, Vec<DeclId>>,
+    /// The template-name location of each placeholder for a deduced
+    /// class type, by the location of its type-specifier (the
+    /// `while building implicit deduction guide` note's point).
+    pub(crate) ctad_name_locs: kiln_source::fx::FxHashMap<Loc, Loc>,
+    /// The type-specifier location of each variable declared with a
+    /// placeholder for a deduced class type.
+    pub(crate) ctad_var_type_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// The type-specifier location of the variable whose type is being
+    /// deduced now; taken by [`Sema::deduce_ctad`].
+    pub(crate) ctad_site: Option<Loc>,
     /// What each implicit guide among them (template decl) was formed
     /// from ([over.match.class.deduct]/1, [over.match.best.general]/2.12-13).
     pub(crate) ctad_origin: kiln_source::fx::FxHashMap<DeclId, ctad::GuideOrigin>,

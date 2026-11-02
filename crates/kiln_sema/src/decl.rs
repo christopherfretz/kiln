@@ -1970,7 +1970,13 @@ impl Sema<'_, '_> {
             } else {
                 ty
             };
-            self.act_on_var(ds, ty, d, name)
+            let v = self.act_on_var(ds, ty, d, name);
+            if let Some(tl) = ds.type_loc
+                && self.is_ctad_placeholder(ty)
+            {
+                let _ = self.templ.ctad_var_type_locs.insert(v, tl);
+            }
+            v
         };
         if invalid {
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
@@ -4145,6 +4151,7 @@ impl Sema<'_, '_> {
         }
         if self.undeduced_ctad(ty).is_some() {
             // [dcl.type.class.deduct]/1 (WP-071b).
+            self.templ.ctad_site = self.templ.ctad_var_type_locs.get(&v).copied();
             ty = self.ctad_for_initializer(ty, &init, direct, loc).unwrap_or(QualType::ERROR);
             self.ast.decls.set_ty(v, ty);
             if self.is_error_type(ty) {
