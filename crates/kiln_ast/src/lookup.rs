@@ -65,6 +65,11 @@ pub struct LookupEntry(u32);
 pub struct LookupTables {
     map: FxHashMap<(DeclId, DeclName), LookupEntry>,
     sets: Vec<Vec<u32>>,
+    /// The summed lengths and capacities of `sets`, kept as the sets
+    /// grow: the memory meter reads them at every instantiation frame
+    /// (WP-313), so summing the sets there was quadratic.
+    set_words: usize,
+    set_cap: usize,
     inline_children: FxHashMap<DeclId, Vec<DeclId>>,
     /// Bumped by every insertion (see [`LookupTables::generation`]).
     generation: u64,
@@ -232,13 +237,18 @@ impl LookupTables {
             return;
         }
         if !set.iter().any(|s| *s & !FLAG_MASK == d.index()) {
+            let cap = set.capacity();
             set.push(word);
+            self.set_words += 1;
+            self.set_cap += set.capacity() - cap;
         }
     }
 
     fn new_set(&mut self, v: Vec<u32>) -> LookupEntry {
         let i = self.sets.len() as u32;
         assert!(i < SET_BIT, "lookup overload-set space exhausted");
+        self.set_words += v.len();
+        self.set_cap += v.capacity();
         self.sets.push(v);
         LookupEntry(SET_BIT | i)
     }
@@ -277,8 +287,7 @@ impl LookupTables {
     }
 
     fn set_row(&self) -> MemRow {
-        let words: usize = self.sets.iter().map(Vec::len).sum();
-        let cap: usize = self.sets.iter().map(Vec::capacity).sum();
+        let (words, cap) = (self.set_words, self.set_cap);
         let outer = MemRow::of_vec("sets", &self.sets);
         MemRow::new(
             "sets",
