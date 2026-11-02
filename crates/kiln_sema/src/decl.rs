@@ -389,6 +389,9 @@ impl Sema<'_, '_> {
         if p.explicit_object.is_some() {
             flags |= kiln_ast::decl::ParamData::EXPLICIT_OBJECT;
         }
+        // The prototype scopes enclosing this one (`ParamData::scope_depth`).
+        let depth = self.prototype_params.len().saturating_sub(1) + self.requires_param_scopes;
+        flags |= kiln_ast::decl::ParamData::scope_depth_flags(depth);
         let ctx = self.ctx;
         let pd = self.builder().prototype_param(ctx, name, p.loc, p.ty, idx, flags);
         if p.invalid {
@@ -1413,12 +1416,14 @@ impl Sema<'_, '_> {
             .arg(self.decl_arg(p).trim_matches('\'').to_string())
     }
 
-    /// True if `q` is an undeduced plain `auto` (not `decltype(auto)`).
+    /// True if `q` is an undeduced plain `auto` (not `decltype(auto)`,
+    /// nor a constrained `C auto`: clang's `isConstrained` check for a
+    /// trailing return type, [dcl.fct]/2).
     fn is_plain_auto(&self, q: QualType) -> bool {
         q.quals().is_empty()
             && matches!(
                 self.ast.types.view(q.ty()),
-                TypeView::Auto { keyword: AutoKeyword::Auto, deduced: None, .. }
+                TypeView::Auto { keyword: AutoKeyword::Auto, deduced: None, concept: None, .. }
             )
     }
 
