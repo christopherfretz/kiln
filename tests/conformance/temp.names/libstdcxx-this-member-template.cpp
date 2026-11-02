@@ -5,7 +5,6 @@
 // 27 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): member template of the current instantiation after this-> not treated as a template
 template<class... Ts> struct variant {
   template<unsigned I, class... A> int emplace(A &&...) { return int(I); }
   template<class T> static constexpr unsigned index_of = 1;
