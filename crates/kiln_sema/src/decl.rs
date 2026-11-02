@@ -194,6 +194,10 @@ impl Sema<'_, '_> {
             }
             TypeSpecKind::Float128 => QualType::FLOAT128,
             TypeSpecKind::Float16 => QualType::FLOAT16,
+            TypeSpecKind::Float32 => QualType::FLOAT32,
+            TypeSpecKind::Float64 => QualType::FLOAT64,
+            TypeSpecKind::StdFloat128 => QualType::STD_FLOAT128,
+            TypeSpecKind::BFloat16 => QualType::BFLOAT16,
             TypeSpecKind::Fp16 => QualType::HALF,
             // [dcl.type.auto.deduct]/4 (clang
             // `err_decltype_auto_cannot_be_combined`).
@@ -253,6 +257,9 @@ impl Sema<'_, '_> {
                 | TypeSpecKind::Double
                 | TypeSpecKind::Float128
                 | TypeSpecKind::Float16
+                | TypeSpecKind::Float32
+                | TypeSpecKind::Float64
+                | TypeSpecKind::StdFloat128
         );
         if !ok {
             if !ds.invalid && !self.is_error_type(base) {

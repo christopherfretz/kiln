@@ -161,6 +161,7 @@ pub fn literal_diags(
             K::BinaryLiteralExtension => Diag::new(DiagId::lit_binary_ext, start),
             K::HexFloatExtension => Diag::new(DiagId::lit_hex_float_ext, start),
             K::SizeSuffixExtension => Diag::new(DiagId::lit_size_t_ext, start),
+            K::FloatSuffixExtension => Diag::new(DiagId::lit_float_suffix_ext, at).arg(range),
             K::IntegerTooLarge => Diag::new(DiagId::sema_int_literal_too_large, start),
             K::UnknownEscape { ch } => Diag::new(DiagId::lit_unknown_escape, at).arg(ch),
             K::NonstandardEscape { ch } => Diag::new(DiagId::lit_nonstandard_escape, at).arg(ch),
