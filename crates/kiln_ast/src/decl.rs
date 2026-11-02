@@ -4599,6 +4599,47 @@ pub mod builtin {
         CORO.iter().any(|e| e.id == id)
     }
 
+    /// WP-365: the `<cmath>` function of the P0533 builtin `id` (the
+    /// rounding, remainder, `fdim`/`fma`, exponent and `nextafter`
+    /// families): its name without the `__builtin_` prefix and the `f`,
+    /// `l`, `f128`, `f16` or `f16b` suffix (`"ceil"` for
+    /// `__builtin_ceilf128`); the Oven evaluates these and clang 19 does
+    /// not.
+    pub fn p0533_base(id: u32) -> Option<&'static str> {
+        const BASES: &[&str] = &[
+            "ceil",
+            "floor",
+            "trunc",
+            "round",
+            "roundeven",
+            "rint",
+            "nearbyint",
+            "lround",
+            "llround",
+            "lrint",
+            "llrint",
+            "fmod",
+            "remainder",
+            "remquo",
+            "fdim",
+            "fma",
+            "frexp",
+            "ldexp",
+            "scalbn",
+            "scalbln",
+            "ilogb",
+            "logb",
+            "modf",
+            "nextafter",
+            "nexttoward",
+        ];
+        let name = info(id)?.name.strip_prefix("__builtin_")?;
+        BASES.iter().copied().find(|base| {
+            name.strip_prefix(base)
+                .is_some_and(|s| matches!(s, "" | "f" | "l" | "f128" | "f16" | "f16b"))
+        })
+    }
+
     /// Whether builtin `id` is a [`LIBM`] function.
     /// A [`F128`] builtin without a `long double` twin (other than
     /// `roundevenf128`, an intrinsic) counts as one.

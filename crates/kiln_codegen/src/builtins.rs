@@ -56,9 +56,31 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId) -> bool {
     // `__builtin_is_constant_evaluated()` is false outside a manifestly
     // constant-evaluated context, which a fold is not.
     // A checked arithmetic builtin stores its result, so it is emitted.
-    builtin_callee(ast, e)
-        .is_some_and(|(_, b)| b != id::IS_CONSTANT_EVALUATED && id::checked_op(b).is_none())
-        && (ast.types.is_integral(q) || ast.types.is_floating(q))
+    // WP-365: the `<cmath>` builtins the Oven evaluates and clang 19 does
+    // not are emitted as clang emits them.
+    builtin_callee(ast, e).is_some_and(|(_, b)| {
+        b != id::IS_CONSTANT_EVALUATED && id::checked_op(b).is_none() && !clang19_unevaluated(b)
+    }) && (ast.types.is_integral(q) || ast.types.is_floating(q))
+}
+
+/// The builtins kiln constant-evaluates (WP-365, spec/oven.md
+/// "Floating-point math builtins") that clang 19 does not.
+fn clang19_unevaluated(b: u32) -> bool {
+    id::p0533_base(b).is_some()
+        || matches!(
+            b,
+            id::SIGNBIT
+                | id::ISGREATER
+                | id::ISGREATEREQUAL
+                | id::ISLESS
+                | id::ISLESSEQUAL
+                | id::ISLESSGREATER
+                | id::ISUNORDERED
+                | id::ABS
+                | id::LABS
+                | id::LLABS
+                | id::COPYSIGNF16
+        )
 }
 
 /// The argument of the builtin call `e` codegen folds rather than emits

@@ -287,41 +287,29 @@ fn nan_bits(ast: &Ast, mut arg: ExprId, kind: FloatKind, signaling: bool) -> Opt
     Some(softfloat::make_nan(kind, fill, signaling))
 }
 
-/// The `bi::FP_MATH` operation of the P0533 `<cmath>` builtin `b` (WP-365):
-/// `__builtin_<base><suffix>` with a suffix of `f`, `l`, `f128`, `f16` or
-/// `f16b` (or none), matched exactly so `modf` is not `modff`'s base.
+/// The `bi::FP_MATH` operation of the P0533 `<cmath>` builtin `b`
+/// (WP-365).
 fn math_op(b: u32) -> Option<u32> {
-    const BASES: &[(&str, u32)] = &[
-        ("ceil", bi::CEIL),
-        ("floor", bi::FLOOR),
-        ("trunc", bi::TRUNC),
-        ("round", bi::ROUND),
-        ("roundeven", bi::ROUNDEVEN),
-        ("rint", bi::RINT),
-        ("nearbyint", bi::RINT),
-        ("lround", bi::LROUND),
-        ("llround", bi::LROUND),
-        ("lrint", bi::LRINT),
-        ("llrint", bi::LRINT),
-        ("fmod", bi::FMOD),
-        ("remainder", bi::REMAINDER),
-        ("remquo", bi::REMQUO),
-        ("fdim", bi::FDIM),
-        ("fma", bi::FMA),
-        ("frexp", bi::FREXP),
-        ("ldexp", bi::LDEXP),
-        ("scalbn", bi::LDEXP),
-        ("scalbln", bi::LDEXP),
-        ("ilogb", bi::ILOGB),
-        ("logb", bi::LOGB),
-        ("modf", bi::MODF),
-        ("nextafter", bi::NEXTAFTER),
-        ("nexttoward", bi::NEXTAFTER),
-    ];
-    let name = id::info(b)?.name.strip_prefix("__builtin_")?;
-    BASES.iter().find_map(|&(base, m)| {
-        let suffix = name.strip_prefix(base)?;
-        matches!(suffix, "" | "f" | "l" | "f128" | "f16" | "f16b").then_some(m)
+    Some(match id::p0533_base(b)? {
+        "ceil" => bi::CEIL,
+        "floor" => bi::FLOOR,
+        "trunc" => bi::TRUNC,
+        "round" => bi::ROUND,
+        "roundeven" => bi::ROUNDEVEN,
+        "rint" | "nearbyint" => bi::RINT,
+        "lround" | "llround" => bi::LROUND,
+        "lrint" | "llrint" => bi::LRINT,
+        "fmod" => bi::FMOD,
+        "remainder" => bi::REMAINDER,
+        "remquo" => bi::REMQUO,
+        "fdim" => bi::FDIM,
+        "fma" => bi::FMA,
+        "frexp" => bi::FREXP,
+        "ldexp" | "scalbn" | "scalbln" => bi::LDEXP,
+        "ilogb" => bi::ILOGB,
+        "logb" => bi::LOGB,
+        "modf" => bi::MODF,
+        _ => bi::NEXTAFTER,
     })
 }
 
