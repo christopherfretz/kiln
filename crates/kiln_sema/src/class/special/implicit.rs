@@ -329,7 +329,10 @@ impl Sema<'_, '_> {
         let bits = self.defn_bits(c);
         match k {
             K::DefaultCtor => return bits.contains(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR),
-            K::Dtor => return !self.vbases_forbid_constexpr(bits),
+            K::Dtor => {
+                return !self.vbases_forbid_constexpr(bits)
+                    || self.special.vbase_dtor_constexpr.contains(&c);
+            }
             K::CopyCtor | K::MoveCtor => {
                 if self.is_union(c) {
                     return true;
@@ -434,20 +437,25 @@ impl Sema<'_, '_> {
     /// constexpr ([dcl.constexpr]/3 before C++23 with [class.default.ctor];
     /// clang `DefaultedDefaultConstructorIsConstexpr` as `addedMember`
     /// computes it, with `defaultedDefaultConstructorIsConstexpr`'s union
-    /// rule).
+    /// rule). Only a direct virtual base forbids it before C++26, as
+    /// clang's `setBases` clears the flag for one: from C++23 a class whose
+    /// virtual bases are all indirect has a constexpr defaulted default
+    /// constructor (its construction then fails in the Oven).
     fn defaulted_default_ctor_constexpr(
         &self,
-        bits: DefinitionBits,
         union: bool,
         bases: &[(DeclId, bool)],
         fields: &[DeclId],
     ) -> bool {
         use kiln_lex::Std;
-        if self.vbases_forbid_constexpr(bits) {
-            return false;
+        if self.std >= Std::Cxx26 {
+            return true;
         }
         if self.std >= Std::Cxx23 {
-            return true;
+            return self.vbase_flag_cxx23(bases, fields, false);
+        }
+        if bases.iter().any(|&(_, v)| v) {
+            return false;
         }
         if bases.iter().any(|&(b, _)| !self.has_constexpr_default_ctor(b)) {
             return false;
@@ -484,6 +492,59 @@ impl Sema<'_, '_> {
     /// Whether a class with `bits` has a virtual base that keeps its
     /// constructors and destructor from being constexpr-suitable
     /// ([dcl.constexpr]/3 before C++26; P3533R2 lifts it).
+    /// Clang's C++23 `DefaultedDefaultConstructorIsConstexpr` (`dtor`:
+    /// `DefaultedDestructorIsConstexpr`) for a class with direct bases
+    /// `bases` (class, virtual) and fields `fields`: a running flag,
+    /// cleared by a virtual base and set again by a later non-virtual base
+    /// or (non-static, class-type, for the constructor
+    /// non-default-initialized) member whose default constructor
+    /// (destructor) is not constexpr; every other subobject leaves it.
+    /// So `struct A : virtual V, NB {}` with a non-constexpr `NB()` has a
+    /// constexpr defaulted default constructor where `struct A : NB,
+    /// virtual V {}` does not (clang 19 and 22 alike).
+    fn vbase_flag_cxx23(&self, bases: &[(DeclId, bool)], fields: &[DeclId], dtor: bool) -> bool {
+        let lacks = |c: DeclId| {
+            if dtor { !self.has_constexpr_dtor(c) } else { !self.has_constexpr_default_ctor(c) }
+        };
+        let mut flag = true;
+        for &(b, virt) in bases {
+            if virt {
+                flag = false;
+            } else if lacks(b) {
+                flag = true;
+            }
+        }
+        for &f in fields {
+            if !dtor && self.field_has_nsdmi(f) || self.is_invalid_decl(f) {
+                continue;
+            }
+            let Some(t) = self.ast.decls.get(f).ty() else { continue };
+            if self.ast.types.is_reference(t) {
+                continue;
+            }
+            if let Some(c) = self.element_class(t)
+                && !self.is_union(c)
+                && lacks(c)
+            {
+                flag = true;
+            }
+        }
+        flag
+    }
+
+    /// Whether complete class `c` has a constexpr destructor, declared or
+    /// still to be implicitly declared (clang `hasConstexprDestructor`).
+    pub(crate) fn has_constexpr_dtor(&self, c: DeclId) -> bool {
+        let d = self.class_def(c);
+        match self.ast.destructor(d) {
+            Some(f) => self.fn_spec(f).constexpr_kind() != ConstexprKind::None,
+            None => {
+                !self.vbases_forbid_constexpr(self.defn_bits(d))
+                    || self.special.vbase_dtor_constexpr.contains(&d)
+            }
+        }
+    }
+
     pub(crate) fn vbases_forbid_constexpr(&self, bits: DefinitionBits) -> bool {
         self.std < kiln_lex::Std::Cxx26 && bits.contains(DefinitionBits::HAS_VIRTUAL_BASES)
     }
@@ -837,7 +898,13 @@ impl Sema<'_, '_> {
         }
         // `constexpr` default construction (§4.6), which the scan of the
         // in-class defaulted one reads.
-        if self.defaulted_default_ctor_constexpr(bits, union, &base_classes, &fields) {
+        if self.std >= kiln_lex::Std::Cxx23
+            && self.vbases_forbid_constexpr(bits)
+            && self.vbase_flag_cxx23(&base_classes, &fields, true)
+        {
+            self.special.vbase_dtor_constexpr.insert(d);
+        }
+        if self.defaulted_default_ctor_constexpr(union, &base_classes, &fields) {
             bits = bits.with(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR);
         } else {
             bits = bits.without(DefinitionBits::DEFAULTED_DEFAULT_CTOR_CONSTEXPR);

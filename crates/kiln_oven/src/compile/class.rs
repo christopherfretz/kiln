@@ -731,22 +731,38 @@ impl Compiler<'_> {
     /// object (or array of objects) of type `ty` at `p`.
     pub(super) fn construct(&mut self, e: ExprId, p: u32, ty: OTy) {
         let ast = self.ast();
-        if self.cur_fn.is_some()
-            && !self.literal_check_relaxed()
-            && self.has_virtual_bases(e)
-            && !self.constructs_literal(e)
-        {
+        if self.cur_fn.is_some() && self.has_virtual_bases(e) && !self.constructs_literal(e) {
             // clang `CheckLiteralType`: an object of a class with a
             // virtual base (not a literal type) cannot be created in a
             // function called during evaluation; only the object being
             // initialized by the evaluated declaration itself may be.
+            // Where clang 22 skips that check (C++23), a constexpr
+            // constructor of such a class (all its virtual bases
+            // indirect) fails at `HandleConstructorCall`'s virtual-base
+            // check instead; a non-constexpr one fails at the call.
             let q = ast.exprs.get(e).ty().without_quals();
             let t = crate::Oven::type_name(ast, q);
-            self.trap(
-                e,
-                &format!("non-literal type '{t}' cannot be used in a constant expression"),
-            );
-            return;
+            if !self.literal_check_relaxed() {
+                self.trap(
+                    e,
+                    &format!("non-literal type '{t}' cannot be used in a constant expression"),
+                );
+                return;
+            }
+            let ctor = ast.exprs.constructor(e);
+            if ast
+                .decls
+                .function(ast.latest(ctor))
+                .is_some_and(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None)
+            {
+                self.trap(
+                    e,
+                    &format!(
+                        "cannot construct object of type '{t}' with virtual base class in a constant expression"
+                    ),
+                );
+                return;
+            }
         }
         let zeroing = ast.exprs.construct_info(e).zeroing;
         let trivial = ast.is_trivial_default_construction(e);
