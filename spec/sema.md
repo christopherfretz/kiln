@@ -3859,6 +3859,28 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `undeclared_template_id_before_ident`; libc++
   `locale.stdcvt/remove.verify.cpp`, WP-358). Test:
   `tests/conformance/temp.names/undeclared-template-id-type.cpp`.
+  At block scope `X<...>` before a ptr-operator or a cv-qualifier
+  (`undeclared<int> *p;`) is ambiguous and the declarator decides, as for
+  an undeclared name before a ptr-operator (spec/parse.md; `kiln_parse`
+  `undeclared_template_id_before_ptr_operator`; `w<int> & i + 1;` stays
+  an expression). Test:
+  `tests/conformance/temp.names/undeclared-template-id-stmt.cpp` (WP-372).
+- **Undeclared template-id in an expression** ([temp.names]/3.3,
+  WP-372): an undeclared unqualified `X<...>` that is not called
+  (`(undeclared<int> * 2)`, `undeclared<int>[3]`, `&undeclared<1>`) still
+  takes the list as template arguments and reports only "use of
+  undeclared identifier 'X'" (clang 22 returns `ExprError` for the
+  annotated template-id). Before a binary operator or a closing token
+  (`)`, `]`, `}`, `,`, `;`, `:`) the result is an error expression, so
+  the enclosing expression and declaration go on and diagnose their other
+  operands and declarators; before anything else (`(undeclared<int> 5)`)
+  it is a parse error the enclosing construct skips. Followed by `::` it
+  is "no template named 'X'" (clang's `ActOnCXXNestedNameSpecifier`).
+  Clang 19 adds "expected ')'" / "expected ';'" after some of these forms
+  (delayed typo correction); kiln follows clang 22 at every compat level.
+  `kiln_parse` `parse_id_expression_rest`. Tests:
+  `tests/conformance/temp.names/undeclared-template-id-expr.cpp`,
+  `undeclared-template-id-expr-22.cpp` (`requires: clang>=22`).
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.

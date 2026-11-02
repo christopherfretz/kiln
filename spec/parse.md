@@ -198,7 +198,12 @@ clang's `Parser` over `Preprocessor::Lex`.
   decides, so `u5 & r + 1;` and `u5 & i;` with a declared `i` stay
   expressions, and a declaration reports "unknown type name 'u5'" and
   recovers to `int` (`unknown_type_follows` accepts a ptr-operator in
-  those contexts). `const u7 &c;` is likewise "unknown type name 'u7'"
+  those contexts). An undeclared template-id before a ptr-operator or a
+  cv-qualifier (`w<int> *p;`, `w<int> const *q;`) is ambiguous the same
+  way (`undeclared_template_id_before_ptr_operator`; the scan's
+  `consume_decl_specifier` skips its argument list) and a declaration
+  reports "no template named 'w'" (spec/sema.md §5.22, WP-372).
+  `const u7 &c;` is likewise "unknown type name 'u7'"
   plus the `int &` consequence, not "a type specifier is required".
   An undeclared name followed by a type-specifier keyword
   (`restrict int f();`, `foo const v = 1;`; `restrict` is no keyword in

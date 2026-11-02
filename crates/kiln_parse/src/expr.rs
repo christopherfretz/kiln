@@ -1601,6 +1601,40 @@ impl Parser<'_, '_> {
         self.parse_id_expression_rest()
     }
 
+    /// An undeclared template-id that is not called (`(undeclared<int> * 2)`),
+    /// at its `<` ([temp.names]/3.3): the name is still a template-name, so
+    /// the list is its arguments (not `<`/`>` operators), and the id names
+    /// nothing: "use of undeclared identifier" and an invalid expression
+    /// (clang 22's `ExprError` from the annotated template-id). Before an
+    /// operator or a closing token the enclosing expression goes on
+    /// parsing around an error operand, which diagnoses nothing more;
+    /// before anything else the enclosing construct skips past it. WP-372.
+    fn undeclared_template_id_expr(&mut self, name: kiln_source::symbol::Symbol, nl: Loc) -> PExpr {
+        let _ = self.parse_template_arg_list();
+        if self.at(Punct::ColonColon) {
+            // `undeclared<int>::x`: a nested-name-specifier naming no
+            // template (clang's `ActOnCXXNestedNameSpecifier` on a
+            // `TNK_Undeclared_template`).
+            let text = self.s.ast.symbols().as_str(name).to_owned();
+            let d = self.s.diag(DiagId::sema_no_template_named, nl).arg(text);
+            self.emit(d);
+            return None;
+        }
+        let _ = self.s.act_on_id_expression(name, nl, None);
+        let goes_on = self.cur_binop().is_some()
+            || [
+                Punct::RParen,
+                Punct::RSquare,
+                Punct::RBrace,
+                Punct::Comma,
+                Punct::Semi,
+                Punct::Colon,
+            ]
+            .iter()
+            .any(|&p| self.at(p));
+        goes_on.then(|| self.s.act_on_error_expr(&[], nl))
+    }
+
     /// A (possibly qualified) id-expression that does not name a type
     /// ([expr.prim.id]): a template-id names a variable template, a
     /// function template or a concept ([temp.names]/1); a name after a
@@ -1685,6 +1719,14 @@ impl Parser<'_, '_> {
         {
             let (args, _, _) = self.parse_template_arg_list()?;
             return Some(self.s.act_on_assumed_template_id(name, &args, nl));
+        }
+        if qual.is_none()
+            && self.at(Punct::Less)
+            && class == NameClass::Undeclared
+            && matches!(self.skip_template_args(self.pos()), Some((_, false)))
+            && self.s.is_assumed_template_name(name)
+        {
+            return self.undeclared_template_id_expr(name, nl);
         }
         if qual.is_none()
             && class == NameClass::Undeclared
