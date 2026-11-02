@@ -105,7 +105,13 @@ more than one decl or any template, or (b) the name is unqualified, followed
 by `(`, and ADL is not suppressed (§2.2). Otherwise it builds the M2
 `DeclRefExpr`. The ULE carries `requires_adl` (`ExprFlags`), the qualifier,
 explicit template arguments and the found decls (an `IdList` in candidate
-order).
+order). A ULE naming a function of dependent type (a static member
+`key(const node<K>*)` of a class template beside `key(const nb*)`) is
+type-dependent ([temp.dep.expr]/3, clang's `OverloadExpr` of decls in a
+dependent context): its call is resolved at instantiation, not at the
+definition, where the dependent parameter's conversion is unknown
+(libstdc++ `_Rb_tree::_S_key`; test
+`temp.dep.expr/static-member-overload-dependent-type.cpp`).
 
 `act_on_call` resolves a ULE/UME callee. Every other callee — `(g)(x)`,
 `N::f(x)` with one `f`, a single member `h.g(x)`, function pointers — takes

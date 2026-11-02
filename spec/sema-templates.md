@@ -2500,9 +2500,18 @@ immediate context: errors are hard.
   `getMinRequiredArguments`), wherever it is.
 - **The explicit-specifier** ([temp.deduct.general]/7, [dcl.fct.spec]/3).
   A value-dependent `explicit(expr)` (kept in `decls.cold.explicit_expr`)
-  is substituted together with the signature when a specialization is
-  formed. `explicit(false)` makes the specialization non-explicit, and a
-  substitution failure is a deduction failure. A member of a class
+  is substituted once the specialization's signature is formed and, in
+  call deduction, only after its associated constraints are satisfied
+  ([temp.deduct.general]/5; clang `instantiateExplicitSpecifierDeferred`):
+  `get_function_spec_signature` leaves it pending
+  (`templ.explicit_pending`) and `finish_function_spec_explicit`
+  substitutes it, so a candidate whose constraint fails never forms an
+  `explicit(expr)` ill-formed for its arguments (libstdc++ `tuple`'s
+  `explicit(!__convertible_from_tuple_like<_UTuple>())`; test
+  `temp.deduct.general/constraints-before-explicit-specifier.cpp`).
+  `get_function_spec` does both. `explicit(false)` makes the
+  specialization non-explicit, and a substitution failure is a deduction
+  failure. A member of a class
   template substitutes it when the class is instantiated. A template is
   "not a candidate" before deduction only when it is explicit
   non-dependently (clang `isNonDependentlyExplicit`;

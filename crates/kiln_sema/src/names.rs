@@ -13,22 +13,35 @@ use kiln_source::symbol::Symbol;
 use crate::Sema;
 
 /// Prints names from an AST.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct SemaNames<'s> {
     ast: &'s Ast,
     /// Where unnamed tags' locations resolve (`(lambda at F:L:C)`).
     sources: Option<&'s kiln_source::SourceManager>,
+    /// A function template specialization whose own arguments print with
+    /// their types ([`Self::typed_args_of`]).
+    typed_args: Option<DeclId>,
 }
 
 impl<'s> SemaNames<'s> {
     /// Names for `sema`'s AST.
     pub fn new(sema: &'s Sema<'_, '_>) -> Self {
-        SemaNames { ast: &sema.ast, sources: Some(sema.diags.sm()) }
+        SemaNames { ast: &sema.ast, sources: Some(sema.diags.sm()), typed_args: None }
     }
 
     /// Names for `ast` alone.
     pub fn of_ast(ast: &'s Ast) -> Self {
-        SemaNames { ast, sources: None }
+        SemaNames { ast, sources: None, typed_args: None }
+    }
+
+    /// These names, printing the template arguments of function template
+    /// specialization `f` with their types (`'f<2U>'`, `'g<3UL, int>'`):
+    /// clang's `FunctionDecl::getNameForDiagnostic` prints them without
+    /// the template parameter list, so `shouldIncludeTypeForArgument` is
+    /// true for each (spec/diag.md §5). Nested template-ids keep their
+    /// own rule (`'f<X<2>>'`).
+    pub fn typed_args_of(self, f: DeclId) -> Self {
+        SemaNames { typed_args: Some(f), ..self }
     }
 
     fn simple(&self, d: DeclId) -> Option<String> {
@@ -255,7 +268,8 @@ impl TypeNames for SemaNames<'_> {
         if self.ast.decls.get(decl).kind().is_function()
             && let Some((_, info)) = self.ast.spec_info(decl)
         {
-            kiln_ast::types::write_arg_list(&self.ast.types, self, info.print_args, out);
+            let typed = SemaNames { typed_args: Some(decl), ..*self };
+            kiln_ast::types::write_arg_list_of(&self.ast.types, &typed, decl, info.print_args, out);
         }
     }
 
@@ -293,7 +307,7 @@ impl TypeNames for SemaNames<'_> {
     }
 
     fn arg_includes_type(&self, template: DeclId, index: usize) -> bool {
-        self.ast.nttp_has_deduced_type(template, index)
+        self.typed_args == Some(template) || self.ast.nttp_has_deduced_type(template, index)
     }
 
     fn write_symbol(&self, sym: Symbol, out: &mut String) {

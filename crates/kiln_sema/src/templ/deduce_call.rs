@@ -678,17 +678,23 @@ impl Sema<'_, '_> {
                 }
                 // The explicit-specifier, once the constraints are
                 // satisfied (clang `instantiateExplicitSpecifierDeferred`).
-                let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(sugared), loc, |s| {
-                    s.finish_function_spec_explicit(spec)
-                });
-                match r {
-                    None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-                    Some((Ok(()), Ok(()))) => {}
-                    Some((_, failed)) => {
-                        let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
-                        f.args = Some(sugared);
-                        f.diag = failed.err().flatten();
-                        return Err(f);
+                if self.templ.explicit_pending.contains(&spec) {
+                    let r = self.in_sfinae(
+                        FrameKind::DeducedArgSubstitution,
+                        ft,
+                        Some(sugared),
+                        loc,
+                        |s| s.finish_function_spec_explicit(spec),
+                    );
+                    match r {
+                        None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
+                        Some((Ok(()), Ok(()))) => {}
+                        Some((_, failed)) => {
+                            let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+                            f.args = Some(sugared);
+                            f.diag = failed.err().flatten();
+                            return Err(f);
+                        }
                     }
                 }
                 if let Some((i, deduced_a, a)) = self.original_arg_mismatch(spec, &originals) {
