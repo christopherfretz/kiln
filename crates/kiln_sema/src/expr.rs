@@ -3298,13 +3298,17 @@ impl Sema<'_, '_> {
             ExprKind::CXXThisExpr => true,
             ExprKind::DeclRefExpr => {
                 let d = self.ast.exprs.decl(l);
-                d == self.ast.exprs.decl(r) && matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar)
+                d == self.ast.exprs.decl(r)
+                    && matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar)
             }
             ExprKind::MemberExpr => {
                 self.ast.exprs.decl(l) == self.ast.exprs.decl(r)
                     && ln.has(ExprFlags::ARROW) == rn.has(ExprFlags::ARROW)
                     && self.kind_of(self.ast.exprs.decl(l)) == DeclKind::Field
-                    && self.same_comparison_operand(self.ast.exprs.operand(l), self.ast.exprs.operand(r))
+                    && self.same_comparison_operand(
+                        self.ast.exprs.operand(l),
+                        self.ast.exprs.operand(r),
+                    )
             }
             _ => false,
         }
@@ -3318,7 +3322,13 @@ impl Sema<'_, '_> {
     /// class operand only at clang 22, where an operator without a viable
     /// candidate is checked as a built-in comparison (spec/sema.md §1.1).
     /// Arrays are `diagnose_array_comparison`'s.
-    pub(crate) fn diagnose_self_comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) {
+    pub(crate) fn diagnose_self_comparison(
+        &mut self,
+        op: BinaryOp,
+        l: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) {
         if self.inst.stack.depth() > 0 || !self.same_comparison_operand(l, r) {
             return;
         }

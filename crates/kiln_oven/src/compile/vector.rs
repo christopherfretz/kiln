@@ -131,7 +131,9 @@ impl Compiler<'_> {
         };
         let acc = ast.symbols().as_str(ast.exprs.ext_vector_accessor(e));
         match kiln_ast::expr::ext_vector_access(acc, count) {
-            kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } if lanes.len() == 1 => lanes.first().copied(),
+            kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } if lanes.len() == 1 => {
+                lanes.first().copied()
+            }
             _ => None,
         }
     }

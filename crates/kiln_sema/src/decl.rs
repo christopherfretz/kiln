@@ -1775,7 +1775,9 @@ impl Sema<'_, '_> {
             found.retain(|&x| {
                 self.clang_compat >= 22
                     || !self.missing_typename_fns.contains(&x)
-                        && !self.pattern_of(x).is_some_and(|p| self.missing_typename_fns.contains(&p))
+                        && !self
+                            .pattern_of(x)
+                            .is_some_and(|p| self.missing_typename_fns.contains(&p))
             });
         }
         if let Some(p) = self.pick_prev_function(&found, new) {
@@ -7910,7 +7912,12 @@ impl Sema<'_, '_> {
         let name = |s: &Self| {
             if c22 {
                 let mut n = String::new();
-                kiln_ast::types::TypeNames::write_decl_name(&crate::names::SemaNames::new(s), q, true, &mut n);
+                kiln_ast::types::TypeNames::write_decl_name(
+                    &crate::names::SemaNames::new(s),
+                    q,
+                    true,
+                    &mut n,
+                );
                 n
             } else {
                 s.decl_name(q)

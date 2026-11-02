@@ -55,9 +55,16 @@ impl Sema<'_, '_> {
                 // clang 22 checks `ext_vector_type`'s arguments as a
                 // declaration attribute and again as a type attribute:
                 // the error twice (spec/sema.md §1.1).
-                let times = if kind == AttrKind::EXT_VECTOR_TYPE && self.clang_compat >= 22 { 2 } else { 1 };
+                let times = if kind == AttrKind::EXT_VECTOR_TYPE && self.clang_compat >= 22 {
+                    2
+                } else {
+                    1
+                };
                 for _ in 0..times {
-                    let msg = self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n.clone()).arg("1");
+                    let msg = self
+                        .diag(DiagId::parse_attribute_wrong_arg_count, loc)
+                        .arg(n.clone())
+                        .arg("1");
                     self.emit(if times == 2 { msg.allow_duplicate() } else { msg });
                 }
                 return None;

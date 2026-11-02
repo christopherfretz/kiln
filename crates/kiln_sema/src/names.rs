@@ -44,7 +44,13 @@ impl<'s> SemaNames<'s> {
 
     /// Names for `ast` alone.
     pub fn of_ast(ast: &'s Ast) -> Self {
-        SemaNames { ast, sources: None, closure_as_lambda: false, clang_compat: 19, typed_args: None }
+        SemaNames {
+            ast,
+            sources: None,
+            closure_as_lambda: false,
+            clang_compat: 19,
+            typed_args: None,
+        }
     }
 
     /// These names, printing the template arguments of function template

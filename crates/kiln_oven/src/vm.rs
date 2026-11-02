@@ -1777,12 +1777,9 @@ impl Oven {
             }
             r = &r[k..];
         }
-        let (lw, rw) = (
-            self.literal_bytes(p).map_or(1, |x| x.1),
-            self.literal_bytes(q).map_or(1, |x| x.1),
-        );
-        let (longer, shorter, width) =
-            if l.len() > r.len() { (l, r, rw) } else { (r, l, lw) };
+        let (lw, rw) =
+            (self.literal_bytes(p).map_or(1, |x| x.1), self.literal_bytes(q).map_or(1, |x| x.1));
+        let (longer, shorter, width) = if l.len() > r.len() { (l, r, rw) } else { (r, l, lw) };
         for nb in 0..width {
             match longer.get(shorter.len() + nb) {
                 None => break,

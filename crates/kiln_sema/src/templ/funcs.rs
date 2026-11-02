@@ -330,7 +330,12 @@ impl Sema<'_, '_> {
             // variable whose initializer failed is invalid too.
             let named_failed = sub.failed_init_use
                 && sub.sema.clang_compat >= 22
-                && sub.sema.ast.decls.function(f).is_some_and(|x| x.spec.constexpr_kind() != ConstexprKind::None);
+                && sub
+                    .sema
+                    .ast
+                    .decls
+                    .function(f)
+                    .is_some_and(|x| x.spec.constexpr_kind() != ConstexprKind::None);
             if sub.stmt_failed || inits_failed || named_failed {
                 s.ast.decls.set_flags(f, DeclFlags::INVALID);
             }
@@ -964,13 +969,9 @@ impl Sema<'_, '_> {
             fspec = fspec.with_inline(true);
         }
         if ds.constexpr.is_some() {
-            fspec = fspec
-                .with_constexpr_kind(ConstexprKind::Constexpr)
-                .with_implicit_inline(true);
+            fspec = fspec.with_constexpr_kind(ConstexprKind::Constexpr).with_implicit_inline(true);
         } else if ds.consteval.is_some() {
-            fspec = fspec
-                .with_constexpr_kind(ConstexprKind::Consteval)
-                .with_implicit_inline(true);
+            fspec = fspec.with_constexpr_kind(ConstexprKind::Consteval).with_implicit_inline(true);
         }
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
         fspec = fspec.with_variadic(variadic);
