@@ -5985,6 +5985,38 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `A<args>::name` with `A` an alias template, for the lookahead: the
+    /// alias's pattern names a class (template) specialization, whose
+    /// primary pattern's member is classified as for `X<args>::name`
+    /// (WP-278; libc++ `ElementsIter<R>::iterator_concept` as a template
+    /// argument). `None` when the pattern names no class template.
+    fn classify_alias_template_member(&self, tmpl: DeclId, name: Symbol) -> Option<NameClass> {
+        let mut tmpl = tmpl;
+        for _ in 0..64 {
+            let p = self.ast.template_info(tmpl).and_then(|i| i.pattern)?;
+            let mut ty = self.ast.decls.get(p).ty()?;
+            // The pattern's type is its own typedef sugar over what it names.
+            for _ in 0..64 {
+                ty = match self.ast.types.view(ty.ty()) {
+                    TypeView::Typedef { underlying, .. } => underlying,
+                    TypeView::Elaborated { named, .. } => named,
+                    _ => break,
+                };
+            }
+            let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty())
+            else {
+                return None;
+            };
+            let t = self.ast.types.template_decl(tn)?;
+            match self.kind_of(t) {
+                DeclKind::ClassTemplate => return Some(self.classify_template_member(t, name)),
+                DeclKind::TypeAliasTemplate => tmpl = t,
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// The first member named `name` of an explicit or partial
     /// specialization of `tmpl` (the lookahead fallback of
     /// [`Sema::classify_template_member`]).
@@ -6025,6 +6057,12 @@ impl Sema<'_, '_> {
             && self.kind_of(q) == DeclKind::ClassTemplate
         {
             return self.classify_template_member(q, name);
+        }
+        if let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::TypeAliasTemplate
+            && let Some(c) = self.classify_alias_template_member(q, name)
+        {
+            return c;
         }
         if let Some(q) = qualifier
             && self.is_dependent_ctx(q)
