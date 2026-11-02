@@ -380,8 +380,12 @@ impl Sema<'_, '_> {
             (b'f', ..) => QualType::FLOAT,
             (b'd', _, 0) => QualType::DOUBLE,
             (b'd', _, 1) => QualType::LONGDOUBLE,
-            // `LLd`: `__float128` (WP-282).
-            (b'd', ..) => QualType::FLOAT128,
+            // `LLd`: the `*f128` builtins' type. GCC (whose libstdc++
+            // `<cmath>` calls them with `_Float128` and `_Float128*`
+            // arguments on x86-64) types them `_Float128`; clang 19 has
+            // `__float128` (x86-64) or `long double` (AArch64), both of
+            // which convert to `_Float128` by value (WP-361).
+            (b'd', ..) => QualType::STD_FLOAT128,
             // `h`: `__fp16`; `x`: `_Float16`.
             (b'h', ..) => QualType::HALF,
             (b'x', ..) => QualType::FLOAT16,
