@@ -652,18 +652,20 @@ impl Oven {
                 c.locals.insert(pi.decl, Local::Reg(pi.reg));
             }
         }
-        c.member_prologue(def);
-        c.lambda_prologue(def);
         let ast = c.b.ast();
         if ast.stmts.get(body).kind() == StmtKind::CXXTryStmt {
-            // A function-try-block ([except.pre]/4). Its handlers do not
-            // cover the mem-initializers (spec/oven.md "Exceptions").
+            // A function-try-block ([except.pre]/4): its handlers cover a
+            // constructor's ctor-initializers and a destructor's
+            // destruction of its subobjects ([except.handle]/13).
             let cdtor = matches!(
                 ast.decls.get(def).kind(),
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor
             );
-            c.try_stmt(body, cdtor);
+            c.lambda_prologue(def);
+            c.try_stmt(body, cdtor.then_some(def));
         } else {
+            c.member_prologue(def);
+            c.lambda_prologue(def);
             c.stmt(body);
         }
         // Falling off the end ([stmt.return]/4).
@@ -1740,7 +1742,7 @@ impl Compiler<'_> {
             // evaluating its compound statement (clang `EvaluateStmt`, one
             // step for the try itself); from C++26 (P3068) its handlers
             // catch exceptions thrown in it (`compile/except.rs`).
-            StmtKind::CXXTryStmt => self.try_stmt(s, false),
+            StmtKind::CXXTryStmt => self.try_stmt(s, None),
             // [dcl.attr.assume]/1, [expr.const]/5.8: an assumption that
             // would evaluate to false is not a core constant expression;
             // one with possible side effects is ignored (clang

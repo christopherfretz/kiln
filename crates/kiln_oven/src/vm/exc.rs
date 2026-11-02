@@ -23,7 +23,7 @@
 
 use kiln_source::fx::FxHashMap;
 
-use super::{BOTTOM, Cleanup, Fault};
+use super::{BOTTOM, Cleanup, Fault, UNWIND_ONLY};
 use crate::compile::{FState, RetKind};
 use crate::kbc::{NO_DTOR, Op, ak};
 use crate::mem::{DynKind, Ptr};
@@ -63,6 +63,11 @@ pub(crate) struct Excs {
     pub inflight: Vec<Exc>,
     /// Handled by an active handler: the innermost last.
     pub caught: Vec<Exc>,
+    /// The lengths of the two stacks when the innermost evaluation began:
+    /// the exceptions below belong to enclosing evaluations, which a
+    /// nested one does not see ([expr.const]: each is a separate
+    /// evaluation).
+    pub base: (usize, usize),
     /// The pc of the Oven's `Op::Unwind`, once emitted.
     unwind_pc: Option<u32>,
     /// Whether each function (by index) is non-throwing.
@@ -88,6 +93,23 @@ impl Excs {
     pub fn clear(&mut self) {
         self.inflight.clear();
         self.caught.clear();
+        self.base = (0, 0);
+    }
+
+    /// The exceptions of the innermost evaluation thrown and not yet
+    /// caught ([except.throw]/5: `std::uncaught_exceptions()`).
+    pub fn uncaught(&self) -> usize {
+        self.inflight.len().saturating_sub(self.base.0)
+    }
+
+    /// The innermost in-flight exception of the innermost evaluation.
+    fn active(&self) -> Option<&Exc> {
+        self.inflight.get(self.base.0..).and_then(<[Exc]>::last)
+    }
+
+    /// The innermost exception the innermost evaluation handles.
+    fn handled(&self) -> Option<Exc> {
+        self.caught.get(self.base.1..).and_then(<[Exc]>::last).copied()
     }
 }
 
@@ -109,17 +131,20 @@ impl Oven {
         }
         let arg = |i: usize| self.code[pc + 1 + i];
         let mut exc = match aux {
-            0 => Exc {
-                obj: self.regs[fb + arg(0) as usize] as u64,
-                ty: OTy(arg(1)),
-                dtor: arg(2),
-                pc: pc as u32,
-                h: 0,
-                at: 0,
-            },
+            0 => {
+                let obj = self.regs[fb + arg(0) as usize] as u64;
+                // The exception object is initialized: its release on an
+                // exception from that is no longer needed.
+                if self.cleanups.last().is_some_and(|c| {
+                    c.func == EXC_FREE && c.this == obj && c.pc & UNWIND_ONLY != 0
+                }) {
+                    self.cleanups.pop();
+                }
+                Exc { obj, ty: OTy(arg(1)), dtor: arg(2), pc: pc as u32, h: 0, at: 0 }
+            }
             // [expr.throw]/4: the currently handled exception.
-            1 => match self.exc.caught.last() {
-                Some(&e) => e,
+            1 => match self.exc.handled() {
+                Some(e) => e,
                 None => return Err((Fault::RethrowNone, pc)),
             },
             _ => match self.exc.inflight.pop() {
@@ -137,7 +162,7 @@ impl Oven {
         // The frames the exception leaves: those above the handler's.
         let stop = h.map_or(entry, |i| self.cleanups[i].depth as usize);
         if aux != 2
-            && let Some(active) = self.exc.inflight.last()
+            && let Some(active) = self.exc.active()
             && (h.is_none() || stop <= active.at as usize)
         {
             // An exception leaving a destructor run by unwinding
@@ -185,7 +210,7 @@ impl Oven {
                     e.at = n;
                 }
                 let ret = self.unwind_pc();
-                match self.run_cleanup(b, pc, ret, fb)? {
+                match self.run_cleanup(b, pc, ret, fb, true)? {
                     Some(next) => return Ok(next),
                     None => continue,
                 }
@@ -343,9 +368,18 @@ impl Oven {
                     return Ok(Some(0));
                 }
                 if virt {
-                    // The offset of a virtual base depends on the
-                    // pointed-to object's dynamic type.
-                    return Err(Fault::Invalid);
+                    // The offset of a virtual base is `ept`'s layout's
+                    // when the pointer designates a complete `ept`
+                    // object; in a base class subobject it depends on the
+                    // most derived object (not yet evaluated).
+                    let p = Ptr::decode(v as u64);
+                    let complete = !p.past
+                        && self
+                            .alloc_any(p)
+                            .is_some_and(|a| self.types.has_complete_object(a.ty, u64::from(p.off), ept));
+                    if !complete {
+                        return Err(Fault::Invalid);
+                    }
                 }
                 let raw = v as u64;
                 Ok(Some(u128::from(Ptr::with_off(

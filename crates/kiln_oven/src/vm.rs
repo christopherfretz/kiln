@@ -143,9 +143,15 @@ pub(crate) struct Cleanup {
     /// The destroyed object's type.
     pub ty: OTy,
     pub func: u32,
+    /// The registering instruction, | [`UNWIND_ONLY`].
     pub pc: u32,
     pub depth: u32,
 }
+
+/// `Cleanup::pc` flag: a destruction run only by unwinding, dropped by
+/// any other exit (the subobjects of an object under construction,
+/// [except.ctor]/3-4; `Op::PushCleanup` aux 4).
+pub(crate) const UNWIND_ONLY: u32 = 1 << 31;
 
 /// Why execution stopped (rendered into notes by `notes`).
 #[derive(Clone, Debug)]
@@ -421,10 +427,12 @@ impl Oven {
         let pend = self.run.pending.len();
         let clean = self.cleanups.len();
         let excs = self.exc.lens();
+        let exc_base = std::mem::replace(&mut self.exc.base, excs);
         let entry_pc = self.funcs[func as usize].entry as usize;
         let r = self.run_loop(b, func, entry_pc, fb);
         self.cleanups.truncate(clean);
         self.exc.truncate(excs);
+        self.exc.base = exc_base;
         let out = match r {
             Ok(()) => Ok(()),
             Err((fault, pc)) => {
@@ -1023,7 +1031,7 @@ impl Oven {
                     if self.cleanups.len() > (m >> 64) as usize {
                         // Destroy the innermost registered object, then
                         // execute this `ScopeExit` again.
-                        match self.run_cleanup(b, pc, pc, fb) {
+                        match self.run_cleanup(b, pc, pc, fb, false) {
                             Ok(Some((npc, nfb))) => {
                                 pc = npc;
                                 fb = nfb;
@@ -1253,7 +1261,7 @@ impl Oven {
                     if self.cleanups.last().is_some_and(|c| c.depth as usize == self.stack.len()) {
                         // The frame's objects are destroyed after the
                         // result is initialized ([stmt.return]/3).
-                        match self.run_cleanup(b, pc, pc, fb) {
+                        match self.run_cleanup(b, pc, pc, fb, false) {
                             Ok(Some((npc, nfb))) => {
                                 pc = npc;
                                 fb = nfb;
@@ -1341,8 +1349,9 @@ impl Oven {
 
     /// Pops the innermost registered destruction and enters its
     /// destructor from the instruction at `pc` (which executes again on
-    /// return, or `ret` when unwinding); the frame of the running function
-    /// is at `fb`.
+    /// return, or `ret` when `unwinding`); the frame of the running
+    /// function is at `fb`. An [`UNWIND_ONLY`] registration is dropped
+    /// unless `unwinding`.
     #[inline(never)]
     fn run_cleanup(
         &mut self,
@@ -1350,8 +1359,15 @@ impl Oven {
         pc: usize,
         ret: usize,
         fb: usize,
+        unwinding: bool,
     ) -> Result<Option<(usize, usize)>, (Fault, usize)> {
         let Some(mut c) = self.cleanups.pop() else { return Ok(None) };
+        if c.pc & UNWIND_ONLY != 0 {
+            if !unwinding {
+                return Ok(None);
+            }
+            c.pc &= !UNWIND_ONLY;
+        }
         if c.func >= exc::SENTINEL {
             // A try-block's marker or an exception's end (`vm/exc.rs`).
             match self.exc_cleanup(c).map_err(|f| (f, pc))? {
@@ -1409,10 +1425,11 @@ impl Oven {
         let es = self.types.size(elem);
         let off = u64::from(Ptr::decode(raw).off);
         let depth = self.stack.len() as u32;
+        let pc = pc as u32 | if aux & 4 != 0 { UNWIND_ONLY } else { 0 };
         self.cleanups.reserve(n as usize);
         for i in 0..n {
             let this = if i == 0 { raw } else { Ptr::with_off(raw, off + i * es, false) };
-            self.cleanups.push(Cleanup { this, ty: elem, func, pc: pc as u32, depth });
+            self.cleanups.push(Cleanup { this, ty: elem, func, pc, depth });
         }
         Ok(())
     }
