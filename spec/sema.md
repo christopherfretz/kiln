@@ -4259,6 +4259,24 @@ Each rule names the libc++ test it fixed and its corpus test.
   "value of type 'S' is not implicitly convertible to 'int'", at the
   argument (tuple_size_incomplete). Test:
   `tests/conformance/temp.arg.nontype/class-arg-no-conversion.cpp`.
+- **Conversions a non-type argument may not use** ([temp.arg.nontype]/2,
+  [expr.const]/12; clang `CheckConvertedConstantConversions`): the
+  standard conversion sequence (the one after a user-defined conversion)
+  may use a pointer or pointer-to-member conversion only from
+  `std::nullptr_t` (so `&s` is no `const void *`, `const B *` from `D *`,
+  `int D::*` from `int B::*`, nor `0` a pointer), and a boolean
+  conversion only from an integral or unscoped enumeration type.
+  "conversion from 'S *' to 'const void *' is not allowed in a converted
+  constant expression" at the argument's start, plus (clang 22)
+  "template parameter is declared here"; an explicitly specified
+  argument of a function template is an "invalid explicitly-specified
+  argument" deduction failure. A cast (`(const void *)&s`) or a
+  `const void *` constant is accepted (WP-407). Not yet modelled: the
+  "while checking a default template argument used here" note when the
+  failing argument is a default (clang notes the `>` of the
+  template-id, which `check_template_args` does not receive). Tests:
+  `tests/conformance/temp.arg.nontype/pointer-conversion-not-allowed.cpp`
+  (+`-clang22`), `.../pointer-conversion-allowed.cpp`.
 - **Non-type parameter types substituted from prior arguments**
   ([temp.param]/7):
   - `template <class T, T V>`: `V`'s substituted type is checked at the

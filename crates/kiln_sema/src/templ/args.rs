@@ -12,7 +12,8 @@ use kiln_oven::EvalContext;
 use kiln_source::{Loc, Span};
 
 use crate::Sema;
-use crate::conv::{self, ConvCtx};
+use crate::conv::{self, ConvCtx, SecondStep, StandardConversion};
+use crate::overload::Ics;
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
@@ -691,6 +692,30 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 return Err(());
             }
+            // clang `CheckConvertedConstantConversions` ([expr.const]/12):
+            // a pointer or member pointer conversion only from
+            // `std::nullptr_t` (so not `S*` to `const void*` or to a base
+            // pointer), a boolean conversion only from an integral or
+            // unscoped enumeration type. The sequence after a user-defined
+            // conversion is the one checked.
+            let scs = match ics {
+                Ics::Standard(s) => Some(s),
+                Ics::UserDefined(u) => Some(u.after),
+                _ => None,
+            };
+            if let Some(scs) = scs
+                && !self.cce_second_allowed(&scs)
+            {
+                let from = self.begin_loc(e);
+                let from = if from.is_valid() { from } else { at };
+                let d = self
+                    .diag(DiagId::sema_cce_conversion_not_allowed, from)
+                    .arg(self.ty_arg(ety))
+                    .arg(self.ty_arg(pty));
+                let d = self.note_nttp_param(d, Some(self.ast.decls.get(p).loc()));
+                self.emit(d);
+                return Err(());
+            }
         }
         let t = &self.ast.types;
         if t.is_array(ety) && !t.is_pointer(pty) {
@@ -753,6 +778,23 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 Err(())
             }
+        }
+    }
+
+    /// Whether the second conversion of `scs` may appear in a converted
+    /// constant expression of pointer, member pointer or `bool` type
+    /// ([expr.const]/12; clang `CheckConvertedConstantConversions`, its
+    /// pointer and boolean rows: the integral and floating rows are
+    /// checked by the caller).
+    fn cce_second_allowed(&self, scs: &StandardConversion) -> bool {
+        match scs.second {
+            SecondStep::PointerConversion | SecondStep::MemberPointerConversion => {
+                self.is_nullptr_type(scs.from)
+            }
+            SecondStep::BooleanConversion => {
+                self.ast.types.is_integral(scs.from) || conv::is_unscoped_enum(self, scs.from)
+            }
+            _ => true,
         }
     }
 
