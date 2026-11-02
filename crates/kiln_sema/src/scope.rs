@@ -67,6 +67,10 @@ pub struct Scope {
     /// A try-block's compound statement (clang `TryScope`): the search
     /// for a thrown variable's scope stops here ([class.copy.elision]/3.2).
     pub try_barrier: bool,
+    /// A handler's scope (clang `CatchScope`): `co_await` and `co_yield`
+    /// are ill-formed inside it up to the enclosing function scope
+    /// ([expr.await]/2).
+    pub catch_handler: bool,
     /// For a namespace or translation-unit scope: the index of the first
     /// declaration created while this scope instance is open. Members of
     /// the entity with a lower index were declared in an earlier
@@ -100,6 +104,7 @@ impl Scope {
             using_dirs: Vec::new(),
             nrvo: NrvoState::default(),
             try_barrier: false,
+            catch_handler: false,
             first_decl: u32::MAX,
             errors: 0,
         }

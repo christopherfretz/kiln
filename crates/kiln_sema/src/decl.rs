@@ -5191,7 +5191,7 @@ impl Sema<'_, '_> {
     /// Finishes the definition of `f` with `body`.
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
-        self.end_function_body(body, rbrace);
+        let body = self.end_function_body(body, rbrace);
         // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
         if let Some(fty) = self.ast.decls.get(f).ty() {
             self.check_sve_support(fty, self.ast.decls.get(f).loc());

@@ -91,6 +91,12 @@ pub struct FnState {
     /// `if constexpr` branch. A variable's initializer is potentially
     /// evaluated again ([`Sema::enter_var_initializer`]).
     pub(crate) rt_quiet: u32,
+    /// The coroutine state, once a coroutine keyword was seen
+    /// (spec/sema.md §coroutines).
+    pub(crate) coro: Option<Box<crate::coroutine::CoroState>>,
+    /// The first `return` statement (an error in a coroutine,
+    /// [stmt.return.coroutine]/1).
+    pub(crate) first_return: Option<Loc>,
 }
 
 impl FnState {
@@ -110,6 +116,8 @@ impl FnState {
             has_fallthrough: false,
             runtime_diags: Vec::new(),
             rt_quiet: 0,
+            coro: None,
+            first_return: None,
         }
     }
 }
@@ -992,6 +1000,7 @@ impl Sema<'_, '_> {
 
     /// `return e;` ([stmt.return]).
     pub fn act_on_return(&mut self, value: Option<ExprId>, loc: Loc) -> StmtId {
+        self.note_return_stmt(loc);
         let Some((fdecl, mut ret)) = self.func.as_ref().map(|f| (f.decl, f.ret)) else {
             return self.builder().return_stmt(value, None, loc);
         };
@@ -1162,8 +1171,12 @@ impl Sema<'_, '_> {
         }
     }
 
-    pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) {
+    /// Finishes a function body; returns the body to attach (a
+    /// coroutine's is wrapped in its `CoroutineBodyStmt`).
+    pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) -> StmtId {
         self.leave_function_scope();
+        let coroutine = self.coro_state().is_some_and(|c| c.first.is_some());
+        let wrapped = self.complete_coroutine_body(body);
         // No return statement: the placeholder deduces `void`
         // ([dcl.spec.auto.general]/10); a templated function's when it
         // is instantiated (clang skips a dependent context).
@@ -1183,7 +1196,7 @@ impl Sema<'_, '_> {
             };
             self.set_deduced_return(f, ret);
         }
-        let Some(mut state) = self.func.take() else { return };
+        let Some(mut state) = self.func.take() else { return wrapped };
         for &r in &state.returns {
             if let Some(v) = self.ast.stmts.return_nrvo(r)
                 && !self.ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo())
@@ -1239,7 +1252,7 @@ impl Sema<'_, '_> {
         // (`hasUncompilableErrorOccurred`: not a warning promoted by
         // `-Werror`), and in dependent contexts.
         if self.diags.uncompilable_error_count() > 0 || self.in_template() {
-            return;
+            return wrapped;
         }
         if self.decl_is_noreturn(state.decl) {
             // [dcl.attr.noreturn]/2: control reaching the end of a
@@ -1249,11 +1262,16 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_falloff_noreturn, rbrace);
             }
             self.late_analysis(state.decl, body, state.has_fallthrough);
-            return;
+            return wrapped;
         }
-        if self.ast.types.is_void(ret) || self.is_error_type(ret) {
+        // A coroutine that falls off its end calls `return_void()` when
+        // the promise has one ([stmt.return.coroutine]/3).
+        let coro_void = coroutine
+            && wrapped != body
+            && self.ast.stmts.coroutine_body(wrapped).on_fallthrough.is_some();
+        if self.ast.types.is_void(ret) || self.is_error_type(ret) || coro_void {
             self.late_analysis(state.decl, body, state.has_fallthrough);
-            return;
+            return wrapped;
         }
         let is_main = self.decl_name(state.decl) == "main"
             && self
@@ -1272,11 +1290,18 @@ impl Sema<'_, '_> {
                 Falloff::Maybe if lambda => {
                     self.error(DiagId::sema_falloff_nonvoid_lambda_maybe, rbrace);
                 }
+                Falloff::Always if coroutine => {
+                    self.error(DiagId::sema_falloff_nonvoid_coroutine, rbrace);
+                }
+                Falloff::Maybe if coroutine => {
+                    self.error(DiagId::sema_falloff_nonvoid_coroutine_maybe, rbrace);
+                }
                 Falloff::Always => self.error(DiagId::sema_falloff_nonvoid, rbrace),
                 Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
             }
         }
         self.late_analysis(state.decl, body, state.has_fallthrough);
+        wrapped
     }
 
     /// A diagnostic about behavior at run time (clang

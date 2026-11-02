@@ -523,7 +523,7 @@ impl Sema<'_, '_> {
         let top = self.lambdas.pop()?;
         if top.body_open {
             if let Some((b, rbrace)) = body {
-                self.end_function_body(b, rbrace);
+                let b = self.end_function_body(b, rbrace);
                 if let Some(f) = top.call_op {
                     let _ = self.builder().set_body(f, b);
                 }
@@ -794,6 +794,12 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_body(target, body);
         }
         self.mark_function_referenced(target, loc);
+    }
+
+    /// True if the body of call operator `f` is open and its lambda was
+    /// declared `constexpr` or `consteval` explicitly.
+    pub(crate) fn lambda_explicitly_constexpr(&self, f: DeclId) -> bool {
+        self.lambdas.iter().rev().any(|t| t.call_op == Some(f) && t.explicit_constexpr)
     }
 
     /// True if `f` is the function call operator (or its template

@@ -489,7 +489,7 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         };
-        self.s.push_scope(ScopeKind::Control);
+        self.s.push_catch_scope();
         let var = if self.eat(Punct::Ellipsis).is_some() {
             None
         } else {
@@ -1045,7 +1045,6 @@ impl Parser<'_, '_> {
         Some(s)
     }
 
-    /// return-statement ([stmt.return]).
     /// `co_return expr-or-braced-init-list? ;` ([stmt.return.coroutine];
     /// clang's `ParseReturnStatement` for `kw_co_return`).
     fn parse_coreturn(&mut self) -> Option<StmtId> {
@@ -1070,6 +1069,7 @@ impl Parser<'_, '_> {
         Some(s)
     }
 
+    /// return-statement ([stmt.return]).
     fn parse_return(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         let mut value = None;

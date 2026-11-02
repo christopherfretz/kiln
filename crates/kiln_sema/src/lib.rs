@@ -22,6 +22,7 @@ mod builtins;
 pub mod class;
 mod complex;
 mod consteval;
+mod coroutine;
 pub mod constfold;
 pub mod conv;
 pub mod decl;

@@ -210,7 +210,10 @@ impl Sema<'_, '_> {
         let s_ = |x: Option<StmtId>| x.is_some_and(|x| self.fla_match_stmt(decls, x, depth + 1));
         let var = |d: Option<DeclId>| e(d.and_then(|d| self.ast.decls.var(d)).and_then(|v| v.init));
         match st.get(s).kind() {
-            StmtKind::ReturnStmt | StmtKind::BreakStmt | StmtKind::GotoStmt => true,
+            StmtKind::ReturnStmt
+            | StmtKind::CoreturnStmt
+            | StmtKind::BreakStmt
+            | StmtKind::GotoStmt => true,
             StmtKind::CompoundStmt => {
                 lists.iter::<StmtId>(st.compound_body(s)).any(|c| s_(Some(c)))
             }
