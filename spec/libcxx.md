@@ -52,16 +52,26 @@ cargo xtask libcxx [options] [<dir>...]
 | `--gate m3` | The M3 gate directories (below). With `<dir>`s, those are added after them. |
 | `--tag <tag>` | The release whose checkout to use (above). Default `$KILN_LIBCXX_TAG`, else `llvmorg-19.1.7`. |
 | `--libcxx-tests <dir>` | The `llvm-project` checkout. |
-| `--compiler <path>` | kiln binary. Default: `cargo build -p kiln_driver` (debug), then `kiln++`. |
+| `--profile <p>` | The cargo profile the implicit build uses: `debug` (cargo's `dev`), `harness` (default) or `release` (see "Build profiles"). Anything else is a usage error. |
+| `--compiler <path>` | kiln binary. Default: `cargo build --profile <p> -p kiln_driver`, then `<target>/<p>/kiln++`. |
 | `--filter <s>` | Keep only tests whose path (relative to `libcxx/test`) contains `<s>`. |
 | `--list` | Print each selected test's kind and pre-run verdict (`run`, `run (XFAIL: …)`, `UNSUPPORTED (…)`). Nothing is compiled. |
 | `-j, --jobs <n>` | Tests in parallel. Default 2. |
-| `--timeout <secs>` | Test-binary run limit. Default 30. Compile and link steps have a fixed 120 s limit. |
+| `--timeout <secs>` | Test-binary run limit. Default 30. |
+| `--compile-timeout <secs>` | Limit of each compile and link step. Default 120 s for `harness` and `release`, 300 s for `debug` (also with `--compiler`: the default follows `--profile`). |
 | `--mem-limit <MiB>` | Address-space cap for every process (`spec/harness.md` "Resource limits"). kiln steps get kiln's stack reservation on top. Default 8192. `0` means no cap. |
 | `--report <file.md>` | Write the generated region of a status page (see "Report"). |
 | `--keep` | Keep the scratch directories under `<target>/xtask-libcxx/`. |
 | `--no-fail` | Exit 0 even when the run has failures. |
 | `-v` | Print every result, with the tail of the failing step's stderr. |
+
+**Profile in the output.** The start line names the profile and the
+compile limit (`(harness, compile timeout 120 s, -j 4)`), the summary
+line ends with `; harness kiln`, and the report has a `kiln build profile`
+row. With `--compiler` the profile is the binary's directory name when that
+is `debug`, `harness` or `release` (`release (--compiler)`), else
+`--compiler`. The report's command adds `--profile <p>` when it is not
+`harness` and `--compile-timeout` when given.
 
 **Gates.** `m3` is `std/utilities/meta`, `std/utilities/utility`,
 `std/containers/sequences/array`, `std/strings/string.view`,
@@ -69,6 +79,39 @@ cargo xtask libcxx [options] [<dir>...]
 `std/language.support/support.limits` and
 `std/language.support/support.initlist`. The status page is
 `docs/status/libcxx-m3.md`.
+
+## Build profiles
+
+The implicit build is optimized by default: an unoptimized kiln++ is several
+times slower on template-heavy tests, which pushed
+`variant.visit/visit.pass.cpp` past the compile limit, and it makes every
+large run (a stratum, the whole suite) take ~3x longer. `debug` stays the
+profile of `cargo build`, `cargo xtask test` and `ci`, so an implementer's
+default build is unchanged.
+
+`harness` (Cargo.toml) inherits `release` and sets `opt-level = 3`,
+`debug = 1` (line tables: a panic's backtrace keeps file and line),
+`lto = false`, `codegen-units = 16`, `incremental = true`,
+`debug-assertions = false` and `overflow-checks = false`. `release` itself is
+not changed (the bench baselines are measured with it).
+
+Debug assertions are off, as in the `release` binary users run. The
+`debug_assert!`s in the compiler crates check internal invariants (stack
+discipline in `kiln_sema::lambda`, operand counts in `kiln_oven::compile`,
+the punctuator spelling in `kiln_pp`); no test expects one to fire, since a
+fired assertion is a panic and so a FAIL, never a PASS. A harness run
+therefore cannot pass a test that a debug run fails because of an assertion
+it skips; it can only miss such a crash, and `--profile debug` remains the
+way to look for one. No gate result depends on the choice (WP-319: the M3
+gate gives the same counts under `harness` as under `debug`).
+
+Measured on the shared 24-core aarch64 box under load (load average 13–15,
+shared jobserver), each build in a fresh target directory, `cargo build -p
+kiln_driver --profile <p>` under `/usr/bin/time -f "%e %M"` (`%M` is the
+largest rustc), and `kiln++ -c` of `variant.visit/visit.pass.cpp` with the
+harness flags (best of two; same instantiation counts in every profile):
+
+MEASUREMENTS_TABLE
 
 ## Classification
 
@@ -315,8 +358,12 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   `lit.local.cfg`.
 - `cluster.rs`: normalization, message extraction, counting, crash keys.
 - `run.rs`: verdict order, outcome rules.
-- `report.rs`: counts, page rendering, marker splicing.
-- `mod.rs`: options, discovery, `lit.local.cfg` lookup; `tag_selection`
+- `report.rs`: counts, page rendering (with the `kiln build profile` row),
+  marker splicing.
+- `mod.rs`: options, discovery, `lit.local.cfg` lookup;
+  `profiles_and_compile_timeouts` (`--profile`, the per-profile compile
+  limit, `--compile-timeout`, the profile named for a `--compiler` binary);
+  `tag_selection`
   (`--tag`, `KILN_LIBCXX_TAG`, bad tags) and `checkouts_coexist` (two
   `.toolchain/libcxx-<tag>` checkouts side by side, the legacy
   `.toolchain/llvm-project` for the default tag only).
