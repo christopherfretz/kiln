@@ -332,8 +332,10 @@ impl Sema<'_, '_> {
                 AttrKind::FALLTHROUGH => "fallthrough",
                 _ => continue,
             };
+            let name = self.attr_shown(&node, name);
             if sub_kind == StmtKind::DeclStmt {
-                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name);
+                let msg =
+                    self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name.clone());
                 self.emit(msg);
                 continue;
             }
@@ -342,7 +344,7 @@ impl Sema<'_, '_> {
             {
                 let msg = self
                     .diag(DiagId::sema_attribute_wrong_stmt_type, node.loc)
-                    .arg(name)
+                    .arg(name.clone())
                     .arg("empty statements");
                 self.emit(msg);
                 continue;
@@ -368,7 +370,7 @@ impl Sema<'_, '_> {
                 }
                 AttrKind::LIKELY | AttrKind::UNLIKELY => {
                     if std < Std::Cxx20 && node.syntax == kiln_ast::attr::AttrSyntax::Cxx11 {
-                        let msg = self.diag(DiagId::ext_cxx20_attr, node.loc).arg(name);
+                        let msg = self.diag(DiagId::ext_cxx20_attr, node.loc).arg(name.clone());
                         self.emit(msg);
                     }
                     if let Some(prev) = likelihood

@@ -593,14 +593,17 @@ impl Sema<'_, '_> {
                             id: DiagId::note_single_arg_concept_false,
                             loc: self.eloc(inner),
                             select: true,
-                            // clang quotes a type argument, not a value.
+                            // clang 19 quotes a type argument, not a
+                            // value; clang 22 quotes both.
                             args: vec![
-                                if matches!(
-                                    a.view(),
-                                    ArgView::Type(_)
-                                        | ArgView::Template(_)
-                                        | ArgView::TemplateExpansion { .. }
-                                ) {
+                                if self.clang_compat >= 22
+                                    || matches!(
+                                        a.view(),
+                                        ArgView::Type(_)
+                                            | ArgView::Template(_)
+                                            | ArgView::TemplateExpansion { .. }
+                                    )
+                                {
                                     format!("'{}'", self.arg_str(a))
                                 } else {
                                     self.arg_str(a)

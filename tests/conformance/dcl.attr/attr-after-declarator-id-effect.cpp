@@ -17,7 +17,7 @@
 //@ diag: 29:9 note "'f' has been explicitly marked deprecated here"
 //@ diag: 40:3 warning "ignoring return value of function declared with 'nodiscard' attribute"
 //@ requires: clang<22
-// clang 22 emits warning: ignoring return value of function declared with 'nodiscard' attribute; WP-355 residual
+// clang 19 spelling; attr-after-declarator-id-effect-clang22.cpp has clang 22's (WP-377).
 struct S {
   int operator() [[nodiscard]] (int x) const { return x; }
   template<typename T> T g [[nodiscard]] (T t) const { return t; }

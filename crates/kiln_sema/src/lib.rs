@@ -136,6 +136,13 @@ pub struct Sema<'a, 'sm> {
     /// The `#pragma pack` directives seen, in order (location and the
     /// spelling of the argument list).
     pub pragma_packs: Vec<(Loc, String)>,
+    /// The attribute-token as written (scope, name) of each attribute
+    /// spelled with a scope or a `__`-affixed name, by its location; how
+    /// diagnostics name it ([`Sema::attr_shown`]).
+    pub(crate) attr_spellings: kiln_source::fx::FxHashMap<
+        Loc,
+        (Option<kiln_source::symbol::Symbol>, kiln_source::symbol::Symbol),
+    >,
     /// C++ exceptions are enabled (`-f[no-]exceptions`; default on).
     pub exceptions: bool,
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
@@ -650,6 +657,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             target,
             abi,
             pragma_packs: Vec::new(),
+            attr_spellings: kiln_source::fx::FxHashMap::default(),
             exceptions: true,
             rtti: true,
             reflection: false,

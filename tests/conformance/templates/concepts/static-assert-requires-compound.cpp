@@ -5,7 +5,7 @@
 //@ diag: 11:63 note "because type constraint 'Same<long, int>' was not satisfied:"
 //@ diag: 10:44 note "because '__is_same(long, int)' evaluated to false"
 //@ requires: clang<22
-// clang 22 emits error: static assertion failed; WP-355 residual
+// clang 19 spelling; static-assert-requires-compound-clang22.cpp has clang 22's (WP-377).
 // [expr.prim.req.compound]: an unsatisfied return-type-requirement.
 template <class T, class U> concept Same = __is_same(T, U);
 template <class T> concept Cmp = requires(T a) { { a + a } -> Same<int>; };

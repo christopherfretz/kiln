@@ -1148,7 +1148,9 @@ impl Sema<'_, '_> {
             }
             Ok(v) => {
                 if v > i128::from(u64::MAX >> 4) {
-                    let msg = self.diag(DiagId::sema_array_too_large, loc).arg(self.element_count_text(v));
+                    let msg = self
+                        .diag(DiagId::sema_array_too_large, loc)
+                        .arg(self.element_count_text(v));
                     self.emit(msg);
                     return None;
                 }
@@ -7935,6 +7937,10 @@ impl Sema<'_, '_> {
         args: &[AttrArg],
         loc: Loc,
     ) -> Option<AttrId> {
+        let raw = sym_str(self, name);
+        if scope.is_some() || raw.starts_with("__") {
+            self.attr_spellings.insert(loc, (scope, name));
+        }
         let a = self.attribute_node(syntax, scope, name, args, loc)?;
         if scope.is_some_and(|s| norm_attr_scope(&sym_str(self, s)) == "gnu") {
             self.ast.attrs.set_flags(a, AttrNode::GNU_SCOPED);
@@ -7955,6 +7961,7 @@ impl Sema<'_, '_> {
         let raw = sym_str(self, name);
         let scope_s = scope.map(|s| norm_attr_scope(&sym_str(self, s)).to_owned());
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
+        let shown = self.attr_shown_parts(syntax, scope, name);
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
         let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;
         let clang_scope = scope_s.as_deref() == Some("clang");
@@ -7971,7 +7978,7 @@ impl Sema<'_, '_> {
                         | "preferred_name"
                 ))
         {
-            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
+            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
             self.emit(msg);
             return None;
         }
@@ -7981,7 +7988,7 @@ impl Sema<'_, '_> {
             } else {
                 DiagId::parse_unknown_attribute
             };
-            let msg = self.diag(id, loc).arg(raw);
+            let msg = self.diag(id, loc).arg(shown);
             self.emit(msg);
             return None;
         };
@@ -8537,7 +8544,7 @@ impl Sema<'_, '_> {
 /// An attribute scope as clang normalizes it (`normalizeAttrScopeName`):
 /// the reserved spellings `__gnu__` and `_Clang` name `gnu` and `clang`
 /// (`[[__gnu__::__always_inline__]]` is `[[gnu::always_inline]]`).
-fn norm_attr_scope(s: &str) -> &str {
+pub(crate) fn norm_attr_scope(s: &str) -> &str {
     match s {
         "__gnu__" => "gnu",
         "_Clang" => "clang",

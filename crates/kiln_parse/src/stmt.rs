@@ -112,7 +112,11 @@ impl Parser<'_, '_> {
             self.stmt_attrs_loc = Some(start);
             let s = self.parse_statement_after_attrs()?;
             let asm = match self.s.ast.stmts.get(s).kind() {
-                StmtKind::DeclStmt | StmtKind::LabelStmt => return Some(s),
+                StmtKind::DeclStmt => {
+                    self.s.act_on_decl_stmt_attrs(s, &attrs);
+                    return Some(s);
+                }
+                StmtKind::LabelStmt => return Some(s),
                 StmtKind::GCCAsmStmt => true,
                 _ => false,
             };

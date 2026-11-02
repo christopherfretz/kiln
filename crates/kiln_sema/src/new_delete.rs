@@ -397,7 +397,9 @@ impl Sema<'_, '_> {
             elem = match n {
                 Some(n) => {
                     if self.array_too_large(n, elem) {
-                        let msg = self.diag(DiagId::sema_array_too_large, at).arg(self.element_count_text(n));
+                        let msg = self
+                            .diag(DiagId::sema_array_too_large, at)
+                            .arg(self.element_count_text(n));
                         self.emit(msg);
                         return self.recover_err(&kids, loc);
                     }
