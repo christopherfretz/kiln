@@ -193,6 +193,15 @@ pub fn usual_arithmetic_conversions_kind(
         };
     }
     if lfl {
+        // clang `handleFloatConversion`: a (compound-assignment) `__fp16`
+        // left operand computes in float with an integer right operand.
+        let lt = if s.ast.types.builtin(s.ast.types.canonical(lt))
+            == Some(kiln_ast::types::BuiltinType::Half)
+        {
+            QualType::FLOAT
+        } else {
+            lt
+        };
         let r = cast_to(s, CastKind::IntegralToFloating, r, lt, None);
         return Ok((l, r, lt));
     }

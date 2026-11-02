@@ -15,10 +15,21 @@ pub struct Note {
     pub msg: String,
 }
 
+/// The starts of clang's `err_` diagnostics that the evaluator reports as
+/// notes (clang `Info.FFDiag` with an error id); they print and count as
+/// errors (spec/oven.md "Evaluation entry points").
+const ERROR_NOTES: &[&str] =
+    &["index for __builtin_shufflevector not within the bounds of the input vectors"];
+
 impl Note {
     /// A note at `loc`.
     pub fn new(loc: Loc, msg: impl Into<String>) -> Self {
         Note { loc, msg: msg.into() }
+    }
+
+    /// True for a note clang prints at error severity.
+    pub fn is_error(&self) -> bool {
+        ERROR_NOTES.iter().any(|p| self.msg.starts_with(p))
     }
 }
 

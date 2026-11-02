@@ -97,6 +97,10 @@ pub enum TypeSpecKind {
     Double,
     /// `__float128`.
     Float128,
+    /// `_Float16` (`std::float16_t`, an arithmetic type).
+    Float16,
+    /// `__fp16` (ARM half: arithmetic promotes it to `float`).
+    Fp16,
     /// `auto` (a placeholder deduced from the initializer, [dcl.spec.auto]).
     Auto,
     /// `decltype(auto)` ([dcl.type.auto.deduct]/5).
@@ -123,6 +127,8 @@ impl TypeSpecKind {
             TypeSpecKind::Float => "float",
             TypeSpecKind::Double => "double",
             TypeSpecKind::Float128 => "__float128",
+            TypeSpecKind::Float16 => "_Float16",
+            TypeSpecKind::Fp16 => "__fp16",
             TypeSpecKind::Auto => "auto",
             TypeSpecKind::DecltypeAuto => "decltype(auto)",
         }
