@@ -550,6 +550,19 @@ impl Sema<'_, '_> {
             return base;
         }
         let view = self.ast.types.view(base.ty());
+        // Through `*`, `&` and `&&` (`pair<typename X<T>::ptr&, bool>`).
+        if let TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) = view {
+            let r = self.rebuild_ci_type(p, qual, loc, depth + 1);
+            if r == p {
+                return base;
+            }
+            let t = match view {
+                TypeView::Pointer(_) => self.ast.types.pointer_to(r),
+                TypeView::LValueRef(_) => self.ast.types.lvalue_ref_to(r),
+                _ => self.ast.types.rvalue_ref_to(r),
+            };
+            return self.ast.types.qualify(t, base.quals());
+        }
         if let TypeView::Elaborated { keyword, nns, named } = view {
             let r = self.rebuild_ci_type(named, qual, loc, depth + 1);
             if r == named {

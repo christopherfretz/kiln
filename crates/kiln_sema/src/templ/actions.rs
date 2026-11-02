@@ -992,10 +992,16 @@ impl Sema<'_, '_> {
         let args = converted.as_deref().unwrap_or(args);
         let list = self.ast.types.arg_list(args);
         // A member template of a class template's pattern is dependent
-        // too ([temp.dep.type]/9).
-        let dep_args = (self.ast.types.arg_list_flags(list)
+        // too ([temp.dep.type]/9). An argument that is only
+        // instantiation-dependent (an alias of a dependent alias template
+        // specialization that resolves to a concrete type) does not make
+        // the specialization dependent ([temp.dep.type]/8 speaks of
+        // dependent arguments; clang's `anyDependentTemplateArguments`
+        // tests the canonical arguments).
+        let canon_list = self.ast.types.canonical_args(list);
+        let dep_args = (self.ast.types.arg_list_flags(canon_list)
             | self.ast.types.template_name_flags(name))
-        .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
+        .intersects(TypeFlags::DEPENDENT | TypeFlags::UNEXPANDED_PACK);
         let Some(d) = self.ast.types.template_decl(name) else {
             if let TemplateName::TemplateTemplateParm { decl, .. } =
                 self.ast.types.template_name_view(name)
