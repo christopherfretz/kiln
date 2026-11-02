@@ -2,15 +2,15 @@
 //@ strict-diags
 //@ diag: 30:9 error "use of undeclared identifier 'get'"
 //@ diag: 30:9 note "in implicit initialization of binding declaration 't'"
-//@ diag: 31:8 error "cannot decompose this type; 'std::tuple_size<T2>::value' is not a valid integral constant expression"
+//@ diag: 31:8 error "this type; 'std::tuple_size<T2>::value' is not a valid integral constant expression"
 //@ diag: 31:8 note "initializer of 'value' is unknown"
 //@ diag: 26:69 note "declared here"
 //@ diag: 32:9 error "implicit instantiation of undefined template 'std::tuple_element<0, T3>'"
 //@ diag: 32:9 note "in implicit initialization of binding declaration 'u'"
 //@ diag: 21:44 note "template is declared here"
-//@ diag: 33:8 error "type 'T3' decomposes into 2 elements, but only 1 name was provided"
-//@ requires: clang<22
-// clang 22 emits error: cannot bind this type; 'std::tuple_size<T2>::value' is not a valid integral...; WP-355 residual
+//@ diag: 33:8 error "2 elements, but only 1 name was provided"
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 // [dcl.struct.bind]/4 (C++26 /7): for a tuple-like type,
 // std::tuple_size<E>::value must be an integral constant expression, a get
 // must be found (member template or by argument-dependent lookup), and

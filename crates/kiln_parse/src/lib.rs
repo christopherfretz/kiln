@@ -211,6 +211,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.coro_aligned_allocation = opts.coro_aligned_allocation;
     s.gnu = opts.gnu;
     s.clang_compat = opts.clang_compat;
+    s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;

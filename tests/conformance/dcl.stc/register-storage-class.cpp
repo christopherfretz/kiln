@@ -17,11 +17,11 @@
 //@ diag: 35:8 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
 //@ diag: 37:8 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
 //@ diag: 37:8 error "loop variable 'e' may not be declared 'register'"
-//@ diag: 38:3 error "decomposition declaration cannot be declared 'register'"
+//@ diag: 38:3 error "declaration cannot be declared 'register'"
 //@ diag: 38:3 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
 //@ diag: 40:7 error "type name does not allow storage class to be specified"
-//@ requires: clang<22
-// clang 22 emits error: structured binding declaration cannot be declared 'register'; WP-355 residual
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 
 void f(register int x);
 void g(register int);

@@ -5,16 +5,16 @@
 // 'B::'). Each component costs more than a character edit (WP-290).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 23:28 error "no matching function 'abcdxf' found in local scope; did you mean '::Q::abcdef'?"
+//@ diag: 23:28 error "cannot define friend function 'abcdxf' in a local class definition; did you mean '::Q::abcdef'?"
 //@ diag: 19:20 note "'::Q::abcdef' declared here"
-//@ diag: 23:50 error "no matching function 'abcdefghx' found in local scope; did you mean 'R::abcdefghi'?"
+//@ diag: 23:50 error "cannot define friend function 'abcdefghx' in a local class definition; did you mean 'R::abcdefghi'?"
 //@ diag: 20:20 note "'R::abcdefghi' declared here"
-//@ diag: 30:28 error "no matching function 'bfun' found in local scope; did you mean 'B::bfun'?"
+//@ diag: 30:28 error "cannot define friend function 'bfun' in a local class definition; did you mean 'B::bfun'?"
 //@ diag: 26:34 note "'B::bfun' declared here"
-//@ diag: 30:51 error "no matching function 'bothex' found in local scope; did you mean 'B::bother'?"
+//@ diag: 30:51 error "cannot define friend function 'bothex' in a local class definition; did you mean 'B::bother'?"
 //@ diag: 27:20 note "'B::bother' declared here"
-//@ requires: clang<22
-// clang 22 emits error: cannot define friend function 'abcdxf' in a local class definition; did you...; WP-355 residual
+//@ requires: clang>=22
+// kiln at -fclang-compat=22 (WP-377); clang 19 wording: "no matching function 'abcdxf' found in local scope; did you mean '::Q::abcdef'?"
 
 namespace Q { void abcdef(); }
 namespace R { void abcdefghi(); }

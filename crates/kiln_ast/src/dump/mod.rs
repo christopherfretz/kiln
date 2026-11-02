@@ -218,6 +218,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 sources: opts.sources,
                 expr_types: PrintOptions::SUGARED,
                 closure_as_lambda: false,
+                scoped_nns: false,
             },
             opts,
             out,

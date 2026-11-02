@@ -2,8 +2,8 @@
 //@ expect: compile-ok
 //@ strict-diags
 //@ diag: 8:3 warning "unknown attribute 'frobnicate' ignored"
-//@ diag: 9:3 warning "unknown attribute 'thing' ignored"
-//@ requires: clang<22
-// clang 22 emits warning: unknown attribute 'vendor::thing' ignored; WP-355 residual
+//@ diag: 9:3 warning "unknown attribute '"
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 [[frobnicate]] int x;
 [[vendor::thing]] int y;

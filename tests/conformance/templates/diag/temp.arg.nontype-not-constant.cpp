@@ -8,7 +8,7 @@
 //@ diag: 13:5 note "declared here"
 //@ diag: 16:3 error "conversion from 'double' to 'int' is not allowed in a converted constant expression"
 //@ requires: clang<22
-// clang 22 emits error: conversion from 'double' to 'int' is not allowed in a converted constant ex...; WP-355 residual
+// clang 19 spelling; temp.arg.nontype-not-constant-clang22.cpp has clang 22's (WP-377).
 template <int N> struct V {};
 int n = 3;
 V<n> v;

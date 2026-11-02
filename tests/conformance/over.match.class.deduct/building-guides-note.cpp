@@ -27,7 +27,7 @@
 //@ diag: 32:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
 //@ diag: 32:28 note "implicit deduction guide declared as 'template <class U> In(In<U>) -> In<U>'"
 //@ requires: clang<22
-// clang 22 emits error: no viable constructor or deduction guide for deduction of template argument...; WP-355 residual
+// clang 19 spelling; building-guides-note-clang22.cpp has clang 22's (WP-377).
 template<class T> struct Outer {
   template<class U> struct In { In(U, typename T::type); };
 };

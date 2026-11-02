@@ -161,33 +161,34 @@ transition.
 - Tests that skipped clang 19 now `requires: clang>=22` (with
   `xfail(kiln)` where kiln lacks the feature); docs/status/cxx-features.md.
 
-### Residuals (follow-ups)
-**Diagnostic wording kiln has not followed**: 152 tests pinned with
-`//@ requires: clang<22` and `// clang 22 emits <text>; WP-355 residual`
-(list: `git grep -l "WP-355 residual" tests`). They still run kiln at
-level 19 under either oracle. Buckets (approximate counts):
-- constant-evaluation notes and `static_assert` operand notes (~32,
-  incl. "addresses of potentially overlapping literals", which needs the
-  compat level in kiln_oven);
-- scoped names in `aka`, qualifiers, "no viable/matching", out-of-line
-  mismatch notes, "refers into" (~22);
-- GNU/vendor extensions: case ranges, ext_vector component names, global
-  register variables, `__builtin_assume_aligned`, format checks (~11);
-- attribute names printed scoped (`'gnu::x'`), `nodiscard` wording (~9);
-- CTAD implicit deduction guide notes (8); structured binding
-  "decomposition" → "structured binding" (~10 incl. access/union rows);
-  `-Wswitch`, array comparison, self-comparison (7); local-class friend
-  definitions (6); digit separators in "array is too large" (4);
-  template template parameter notes (3); typeid "or import std" (1);
-  the rest single cases (`git grep -h "clang 22 emits" tests`).
+### Residuals: burn-down (WP-377)
+WP-355 pinned 152 tests `//@ requires: clang<22` with `// clang 22 emits
+<text>; WP-355 residual`, and marked 5 AST goldens `xfail(kiln)`. Each
+pinned test still runs kiln at level 19 under either oracle. WP-377 made
+kiln follow clang 22 at `-fclang-compat=22` (`_19` diag rows,
+spec/diag.md §2.5; compat-keyed rules, spec/sema.md §1.1; the level in
+the Oven's options, spec/oven.md). Each fixed test was either unpinned,
+when its directives use substrings that both clangs share, or split
+into a clang 19 copy and a `-clang22.cpp` copy (`requires: clang>=22`).
 
-**AST goldens kiln does not match yet** (`xfail(kiln)`, WP-355 residual):
-`ast/class.inhctor.init/shadow-implicit.cpp`,
-`ast/expr.ref/qualified-member.cpp`, `temp.class/redeclaration-ast.cpp`,
-`templates/alias/temp.alias-dependent-template-template-arg-ast.cpp`,
-`templates/ctad/temp.deduct.guide-ast-dump.cpp`.
+To list what is left: `git grep -l "WP-355 residual" tests`.
 
-**Other**: kiln++'s own `-fclang-compat` default is still 19 (only the
-harness passes 22); flipping it is a driver decision. Codegen at level 22
-(`dead_on_return`, `nuw` gep, datalayout) is covered only structurally
-(spec/codegen.md §6).
+| Bucket | Before | After | What remains, and why |
+|---|---|---|---|
+| Constant-evaluation and `static_assert` operand notes | ~32 | 19 | These are not wording changes. clang 22's evaluator reaches different verdicts or notes: virtual `typeid`/`dynamic_cast`, `std::allocator`, vbase ctors, enum range, frozen string literals, stmt-expr, vector element access, recovery expressions, `__int128` in-class init, a compound literal at namespace scope, consteval address, quiet contexts, extra notes on `__is_trivially_copyable`. Each needs Oven work. |
+| Scoped names in `aka`/args, out-of-line mismatch, "refers into" | ~22 | 13 | This needs clang 22's type printer. A tag type keeps its written qualifier and is not sugar, and a canonical tag prints fully scoped, inside template arguments too (`'O::J<SA>' (aka 'O::J<ns::S>')`, `'const J<ns::S> &'`). `kiln_ast/src/types/print.rs` (`aka`, `template_id`, `in_tst_args`) has no compat input yet. These include item 6's two tests (`explicit-arg-sugar-nondependent-param`, `deduced-binding-sugar`): they fail at 22 on `aka` scope, not on substitution. |
+| GNU/vendor extensions | ~11 | 9 | ext_vector component columns/wording (4), `__builtin_assume_aligned` on a non-pointer (2), `va_start`, atomic memory order, `%s` with `void *`. |
+| Attribute names scoped, `nodiscard` | ~9 | 2 | `leading-attribute-placement-2`: clang 22 recovers "misplaced attributes" differently. `namespace-deprecated`: clang 22 rejects code kiln accepts. |
+| CTAD guide notes | 8 | 1 | `dcl.type.class.deduct-compound-diag`: "cannot form pointer to deduced class template specialization type" is new clang 22 checking. |
+| Structured binding wording | ~10 | 0 | |
+| `-Wswitch`, array and self-comparison | 7 | 1 | `hidden-friend-of-member-class-unsatisfied`: clang 22's self-comparison warning in an instantiated hidden friend. |
+| Local-class friends, digit separators, typeid | 11 | 0 | |
+| Template template notes | 3 | 3 | Not attempted: clang 22 notes the mismatching parameter of a template template argument differently (new note texts and locations). |
+| Single cases | ~39 | 21 | Parser recovery after a missing `;` or `)` (3), NSDMI-needed (2), lazy default arguments (2), DR1467, designated update, `across-namespaces`, noexcept reachability, unused-value reachability, explicit specialization after instantiation, access in substitution, substitution order before constraints, invalid-body substitution, missing `typename`, a macro-argument note, `__reference_constructs_from_temporary`, `meta.unary.comp`, and `mangle/constraints` (WP-384 owns mangling). |
+| **Pinned total** | 152 | 69 | |
+| AST goldens `xfail(kiln)` | 5 | 5 | Not started (item 7): inheriting-ctor shadows, a `::B` base cast as written, redeclaration parameter names, an alias specialization's qualifier, CTAD specialization order. |
+
+**Not done**: kiln++'s own `-fclang-compat` default is still 19 (item 8),
+because the residual count is well above the exit target. Only the
+harness passes 22. Codegen at level 22 (`dead_on_return`, `nuw` gep,
+datalayout) is covered only structurally (spec/codegen.md §6; WP-386).

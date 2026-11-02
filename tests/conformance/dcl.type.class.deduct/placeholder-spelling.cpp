@@ -40,7 +40,7 @@
 //@ diag: 53:45 note "candidate function template not viable: requires 2 arguments, but 1 was provided"
 //@ diag: 53:45 note "implicit deduction guide declared as 'template <class T> C(T, int) -> C<T>'"
 //@ requires: clang<22
-// clang 22 emits error: no viable constructor or deduction guide for deduction of template argument...; WP-355 residual
+// clang 19 spelling; placeholder-spelling-clang22.cpp has clang 22's (WP-377).
 namespace std { inline namespace __1 { template<class T> struct vector { vector(T, int); }; } }
 namespace M { inline namespace __1 { template<class T> struct V { V(T, int); }; } }
 namespace S { template<class T> struct U; template<class T> struct U { U(T, int); }; }

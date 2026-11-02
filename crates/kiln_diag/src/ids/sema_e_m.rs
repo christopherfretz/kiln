@@ -239,6 +239,7 @@ sema_module_private_no_module = Error (0) "private module fragment declaration w
 sema_module_private_redefined = Error (0) "private module fragment redefined";
 sema_module_redecl_attachment = Error (3) "declaration of '{0}' in {1} follows declaration in {2}";
 sema_mptr_in_nonclass = Error (1) "'{0}' does not point into a class";
+sema_mptr_in_nonclass_22 = Error (0) "member pointer does not point into a class";
 sema_mptr_to_reference = Error (2) "'{0}' declared as a member pointer to a reference of type {1}";
 sema_mptr_to_void = Error (1) "'{0}' declared as a member pointer to void";
 sema_multiple_default_labels = Error (0) "multiple default labels in one switch";

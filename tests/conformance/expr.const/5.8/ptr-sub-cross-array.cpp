@@ -3,10 +3,10 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 15:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 13:16 note "subexpression not valid in a constant expression"
+//@ diag: 13:16 note "arithmetic involving unrelated objects '&b[1]' and '&a[0]' has unspecified value"
 //@ diag: 15:15 note "in call to 'f()'"
-//@ requires: clang<22
-// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
+//@ requires: clang>=22
+// kiln at -fclang-compat=22 (WP-377); clang 19 wording: "subexpression not valid in a constant expression"
 constexpr long f() {
   int a[2] = {1, 2};
   int b[2] = {3, 4};
