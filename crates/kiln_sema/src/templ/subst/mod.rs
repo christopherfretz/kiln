@@ -616,6 +616,14 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         ) {
             return Ok(d);
         }
+        // An init-capture variable of a generic lambda whose closure this
+        // substitution does not rebuild (rebuilt ones are in `locals`):
+        // a specialization of its call operator, or of a lambda nested in
+        // one, shares the closure and names the variable itself (clang
+        // `addInstantiatedCapturesToScope`, [expr.prim.lambda.capture]/6).
+        if self.sema.init_capture_owner(d).is_some() {
+            return Ok(d);
+        }
         // A member of a class: find the instantiated class, then its
         // member instantiated from `d`.
         let Some(parent) = node.ctx() else { return Ok(d) };

@@ -89,6 +89,15 @@ pub(crate) struct ImmState {
     reasons: HashMap<DeclId, Escalation>,
 }
 
+/// The pending state of an enclosing full-expression set aside by
+/// [`Sema::set_aside_outer_immediates`].
+#[derive(Debug, Default)]
+pub(crate) struct OuterImm {
+    candidates: Vec<(ExprId, DeclId)>,
+    refs: Vec<ExprId>,
+    default_uses: Vec<DefaultUse>,
+}
+
 /// The pending state taken by [`Sema::take_immediate_state`].
 #[derive(Debug, Default)]
 pub(crate) struct SavedImm {
@@ -194,6 +203,49 @@ impl Sema<'_, '_> {
         if let Some(i) = immediate {
             self.immediate = i;
         }
+    }
+
+    /// Sets aside the pending immediate invocations, references and
+    /// default uses that are not part of constant-expression `e` about
+    /// to be finished as a full-expression of its own: they belong to an
+    /// enclosing full-expression whose overload resolution substituted
+    /// the default template argument `e` (clang pushes a
+    /// `ConstantEvaluated` context for it, `SubstDefaultTemplateArgument`).
+    pub(crate) fn set_aside_outer_immediates(&mut self, e: ExprId) -> OuterImm {
+        let p = &self.imm.pending;
+        if p.candidates.is_empty() && p.refs.is_empty() && p.default_uses.is_empty() {
+            return OuterImm::default();
+        }
+        let mut inside = HashSet::new();
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            if inside.len() > 1_000_000 {
+                break;
+            }
+            if inside.insert(x) {
+                stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            }
+        }
+        let p = &mut self.imm.pending;
+        let (keep, candidates) =
+            std::mem::take(&mut p.candidates).into_iter().partition(|c| inside.contains(&c.0));
+        p.candidates = keep;
+        let (keep, refs) =
+            std::mem::take(&mut p.refs).into_iter().partition(|r| inside.contains(r));
+        p.refs = keep;
+        let (keep, default_uses) =
+            std::mem::take(&mut p.default_uses).into_iter().partition(|u| inside.contains(&u.expr));
+        p.default_uses = keep;
+        OuterImm { candidates, refs, default_uses }
+    }
+
+    /// Returns what [`Sema::set_aside_outer_immediates`] set aside to the
+    /// enclosing full-expression.
+    pub(crate) fn restore_outer_immediates(&mut self, out: OuterImm) {
+        let p = &mut self.imm.pending;
+        p.candidates.extend(out.candidates);
+        p.refs.extend(out.refs);
+        p.default_uses.extend(out.default_uses);
     }
 
     /// The next full-expression is the initializer of `v`.
