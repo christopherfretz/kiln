@@ -1852,7 +1852,10 @@ impl Cg<'_> {
         let Some(referee) = self.referee(rq) else { return p };
         let types = &self.ast.types;
         if types.is_void(referee)
-            || matches!(types.canonical_view(referee), kiln_ast::types::TypeView::IncompleteArray(_))
+            || matches!(
+                types.canonical_view(referee),
+                kiln_ast::types::TypeView::IncompleteArray(_)
+            )
             || !crate::builtins::is_complete(self.ast, referee)
         {
             return p;
