@@ -602,7 +602,7 @@ never recomputed (ast.md §5). The rules follow [temp.dep.expr],
 | `DeclRefExpr` to an NTTP | VALUE \| INST (plus TYPE if the parameter's type is dependent; plus UNEXPANDED_PACK if it is a pack) |
 | `DeclRefExpr` to a variable | TYPE if its type is dependent; VALUE if it is a const integral or `constexpr` variable whose initializer is value-dependent (ast.md §16.15) |
 | `this` in a dependent context | TYPE |
-| `sizeof`, `alignof`, `noexcept`, `typeid(type)`, `__is_*` traits, `requires` | the operand's TYPE becomes VALUE (the result type is fixed) |
+| `sizeof`, `alignof`, `noexcept`, `typeid(type)`, `__is_*` traits, `requires` | the operand's TYPE becomes VALUE (the result type is fixed); `alignof e` naming a variable or member whose `alignas` operand is dependent is VALUE-dependent too (`Builder::names_dependently_aligned_decl`, clang `computeDependence(UnaryExprOrTypeTraitExpr)`; WP-312) |
 | `noexcept(e)` with a can-throw result that is dependent | also VALUE \| INST |
 | `ConceptSpecializationExpr`, `RequiresExpr` | VALUE if any argument is dependent |
 | `SizeOfPackExpr` | VALUE \| INST (UNEXPANDED_PACK is cleared) |
@@ -1079,7 +1079,8 @@ errors.
 | `static_assert` | fully: substituted and evaluated now | — |
 | member template | declaration: a new template decl, with outer levels substituted and its own parameters retained (§5.1); `TemplateInfo.member_of` points to the pattern member | its own specializations need it |
 | friend | declaration; a hidden friend's definition is in `instantiated_from` | odr-use (§4.9) |
-| anonymous union | definition | — |
+| anonymous struct or union, unnamed member class | definition, with the unnamed member object and the injected `IndirectField`s (`subst/anon.rs`) | — |
+| unnamed bit-field | declaration, width substituted (a non-dependent width's `ConstantExpr` is not wrapped again) | — |
 
 6. Complete the class:
    - implicit special-member declarations (S3C);
@@ -1806,7 +1807,15 @@ recomputed exactly as for non-template code (clang's
   parser replays them. Local enumerations are substituted the same way.
   An anonymous struct or union member of a local class is instantiated as
   in a class template (`unnamed_member_class`), which declares its member
-  object and injects its members' names (WP-192).
+  object and injects its members' names (WP-192). A block-scope
+  anonymous union of the body (of a function template, a lambda or a
+  generic lambda in one) is defined by its declaration statement's class
+  (`local_class`, marked anonymous), then its unnamed object, the
+  statement's next declaration, is declared again for it
+  (`local_anonymous_object`), injecting the members' names; the pattern
+  names a member as `obj.member`, so only the object is linked (WP-311,
+  `tests/conformance/class.union.anon/function-template-locals.cpp`,
+  `template-unnamed-members-ast.cpp`).
   The class body is instantiated under a `MemberClass` frame and each
   member function body under a `MemberFunction` frame at the outermost
   local class (clang `InstantiateClass` / `InstantiateClassMembers`,
@@ -1959,7 +1968,17 @@ argument substitution in `deduce_call`):
   `argument may not have 'void' type` at the substituted type, clang's
   `err_param_with_void_type`; a SFINAE failure with the usual
   `substitution failure [with ...]` note. A function type substituted
-  to have a `void` parameter (`void (*)(T)`) fails the same way.
+  to have a `void` parameter (`void (*)(T)`) fails the same way; outside
+  deduction (an alias `template<class T> using F = void(T);` used as
+  `F<void>`, a member `void f(T)` of `W<void>`) it is a hard error at the
+  alias's or member's parameter, with the instantiation note.
+- **Parameter adjustment** ([dcl.fct]/5): every parameter of a substituted
+  function type is adjusted after substitution exactly as a written one
+  (`adjust_param_type`: array of `T` to pointer to `T`, function to
+  pointer to function, top-level cv dropped), so `F<int[3]>` is
+  `void(int*)` and `F<int()>` is `void(int(*)())` (clang
+  `BuildFunctionType`; test
+  `temp.alias/function-type-parameter-adjustment.cpp`, WP-311).
 - **Array of `void`, of a function or of a reference**: clang's
   `BuildArrayType` wording, `array has incomplete element type 'void'`
   (also for a non-template `void x[3]`, which no longer uses the old
@@ -2159,10 +2178,29 @@ formed it:
      WP-161). Each element of the trailing function parameter pack is
      such a pair with the pattern as P, except the explicit elements
      of a pack the pattern alone names (§6.4). The note prints the
-     reference/pointer-stripped deduced type, as clang does, as a
-     template type diff pair (`'pr<[...], char>'`, `Sema::ty_diff`).
-     This check follows the constraint check, as clang's
-     `CheckOriginalCallArgDeduction` follows it.
+     reference-stripped deduced type, and pointer-stripped only when A
+     points to a class (/4.3), as clang does, as a template type diff
+     pair (`'pr<[...], char>'`, `Sema::ty_diff`). This check follows the
+     constraint check, as clang's `CheckOriginalCallArgDeduction`
+     follows it.
+   - /4.2 (WP-294): every call argument deduces with
+     `TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE`, kept through pointers
+     and member pointers (not into a function type's return or
+     parameter types). A function type `P` then matches `A` regardless
+     of a non-deduced `noexcept` (clang's type match ignores it;
+     `noexcept(b)` with a deducible `b` is still deduced), and the
+     deduced A check accepts a function pointer conversion of a pointer
+     or member pointer, or a function lvalue whose type differs only by
+     `noexcept`. Adding `noexcept`, or a mismatch below a second pointer,
+     fails that check ("deduced type 'void (**)(int)' of 1st parameter
+     does not match adjusted type 'void (**)(int) noexcept' of
+     argument"). libstdc++'s `__gnu_cxx::__stoa(&std::wcstol, ...)`
+     relies on it
+     (`tests/conformance/temp.deduct.call/noexcept-function-pointer-argument.cpp`,
+     `libstdcxx-deduce-noexcept-fnptr.cpp`).
+     Deviation: binding `void (&)(int)` to a `noexcept` function is not
+     yet reference-compatible in kiln ([dcl.init.ref]/4, `ics.rs`
+     `ref_related`), so such a call is "not viable" after deduction.
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
    the `FunctionTemplateSpecialization` decl. It has the substituted
    type and is a declaration only.
@@ -2289,9 +2327,12 @@ immediate context: errors are hard.
   explicit arguments are substituted, one whose packs are all given
   is expanded to its explicit elements; it still counts as one
   parameter in the too-many-arguments check (clang retains the
-  expansion). An undeduced pack is then empty, and the arity is
-  checked on the specialization (`candidate function [with T = <>]
-  not viable: requires 1 argument, …`). A parameter pack never counts
+  expansion). A pack that is left unexpanded (not all given) skips the
+  too-many-arguments check before deduction (clang `isTemplateVariadic`:
+  a pack anywhere, not only trailing; WP-311). An undeduced pack is then
+  empty, and the arity is checked on the specialization (`candidate
+  function [with T = <>] not viable: requires 1 argument, …`; test
+  `temp.deduct.call/non-trailing-pack-arity.cpp`). A parameter pack never counts
   towards the minimum argument count (`fn_min_args`, clang
   `getMinRequiredArguments`), wherever it is.
 - **The explicit-specifier** ([temp.deduct.general]/7, [dcl.fct.spec]/3).
@@ -2506,6 +2547,19 @@ For `template<> R f<args>(params)` or `template<> R f(params)`, and for
 `template R f(params);`:
 1. Collect the function templates named `f` in the scope.
 2. Deduce each one from the declared function type ([temp.deduct.decl]).
+   An explicit instantiation that writes no exception specification
+   takes each template's non-dependent nothrow one first ([temp.explicit]/9,
+   [except.spec]/2; clang `adjustCCAndNoReturn(..., AdjustExceptionSpec)`;
+   WP-294, libstdc++'s `extern template bool has_facet<...>(const
+   locale&)` of a `throw()` template,
+   `tests/conformance/temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp`).
+   Deviations: a written mismatching specification is "does not refer
+   to a function template" where clang says "exception specification in
+   explicit instantiation does not match instantiated one"; an explicit
+   specialization differing only in its exception specification is "no
+   function template matches" where clang matches it and reports the
+   redeclaration mismatch; a template with a dependent `noexcept(expr)`
+   does not match an instantiation without one.
 3. Take the most specialized of those that succeed (§6.7).
 4. If none or several remain, the errors are clang's: "no function
    template matches function template specialization 'f'" and
@@ -3783,9 +3837,15 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
 - The shadow check does not cover function parameters. Kiln emits a
   plain error where clang emits the ExtWarn
   `-Wstrict-primary-template-shadow`.
-- Inherited defaults are not recorded on the redeclaration's
-  parameters. A class-template forward redeclaration creates no new
-  decl, so chained default checks are partial.
+- Each class template redeclaration is its own `ClassTemplateDecl`
+  (with its own parameter list and pattern record) linked into the
+  chain, as clang's (WP-311). `merge_template_defaults` gives every
+  redeclaration's parameters the defaults of the others, but in
+  `Sema::inherited_defaults`, not on the AST: the dump prints no
+  `inherited from`. `check_template_param_list` takes the location of a
+  repeated default from whichever earlier redeclaration gave it.
+  `tests/conformance/temp.class/redeclaration-diags.cpp`,
+  `tests/conformance/temp.class/redeclaration-ast.cpp`.
 - A template template parameter's inner list is not order-checked.
 - A template template parameter's own default template arguments
   ([temp.param]/14, [temp.arg.template]) complete `TT<args>` when the
@@ -3798,11 +3858,12 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   pack expansion.
   `tests/conformance/temp.param/template-template-param-own-defaults.cpp`.
 - The arity note (`template is declared here`) names the latest
-  declaration, as name lookup finds it: a class template redeclaration
-  after the definition creates no decl, so its name location is recorded
-  in `templ.class_redecl_loc`, keyed by the latest decl at the time
-  (`diag_template_arity`;
+  declaration, as name lookup finds it (`diag_template_arity`;
   `tests/conformance/temp.arg.general/arity-note-latest-redeclaration.cpp`).
+- The injected-class-name type `X<P...>` names the parameters of the
+  first declaration, even inside a definition that renamed them (clang
+  caches it in the chain's common data); a first declaration made by a
+  friend declaration defers to the definition's.
 - `TT<args>` for a template template parameter `TT` checks only the arity
   against `TT`'s own list (`check_ttp_arity`: "too few/many template
   arguments for template template parameter 'TT'", note at `TT`); a pack
@@ -4832,7 +4893,11 @@ explicit specialization errors remain. The blockers are:
     (outer and member-template parameters), a member typedef, a static
     data member, and a class-scope static member template shadowing a
     namespace function.
-  - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
+  - `Sema::check_function_constraints(f, loc) -> Option<SatId>`; a
+    non-templated function's clause (already an error, `non-templated
+    function cannot have a requires clause`) is still checked, with no
+    template arguments, as clang does (`ConceptState::
+    untemplated_requires`; WP-294, sema-class.md §4.7.1);
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate
     function not viable: constraints not satisfied" plus the chain);

@@ -59,11 +59,14 @@ impl Substituter<'_, '_, '_> {
         // `VisitCXXRecordDecl` for a local class: "in instantiation of
         // member class 'L' requested here", at the class name).
         if defined && self.sema.push_inst_frame(FrameKind::MemberClass, x, d, loc) {
+            // A block-scope anonymous union ([class.union.anon]): its
+            // object is the declaration statement's next declaration.
+            let anon = self.is_anonymous_record(d);
             if let Some(v) = methods {
-                self.class_body(x, d, Some(v));
+                self.class_body_with(x, d, Some(v), anon);
             } else {
                 let mut v = Vec::new();
-                self.class_body(x, d, Some(&mut v));
+                self.class_body_with(x, d, Some(&mut v), anon);
                 self.sema.pop_inst_frame();
                 self.local_methods(x, &v);
                 return x;

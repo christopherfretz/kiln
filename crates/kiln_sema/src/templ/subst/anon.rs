@@ -11,14 +11,14 @@
 //! `BuildAnonymousStructOrUnion`).
 
 use kiln_ast::attr::{AttrKind, AttrNode};
-use kiln_ast::decl::{DeclKind, DefinitionBits, TagKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind, VarStorage};
 use kiln_ast::ids::RawId;
 use kiln_ast::types::TagKeyword;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 
-use super::{SubstFail, Substituter};
+use super::{SubstFail, SubstResult, Substituter};
 use crate::decl::TagUse;
-use crate::declspec::DeclSpec;
+use crate::declspec::{DeclSpec, StorageSpec};
 
 impl Substituter<'_, '_, '_> {
     /// True if `m` is an unnamed member class of the pattern.
@@ -97,6 +97,38 @@ impl Substituter<'_, '_, '_> {
             self.sema.ast.templates.record_member(spec, p, i);
         }
         Ok(())
+    }
+
+    /// Whether pattern variable `v` is the unnamed object of a
+    /// block-scope anonymous union ([class.union.anon]/1).
+    pub(crate) fn is_anonymous_object(&self, v: DeclId) -> bool {
+        let n = self.sema.ast.decls.get(v);
+        n.has(DeclFlags::IMPLICIT)
+            && n.name().is_empty()
+            && n.ty()
+                .and_then(|t| self.sema.ast.types.as_record(t))
+                .is_some_and(|r| self.is_anonymous_record(r))
+    }
+
+    /// The unnamed object `v` of a block-scope anonymous union of the
+    /// pattern: declared again for the instantiated union (already
+    /// defined by the declaration statement's preceding class), which
+    /// injects its members' names into the block scope. The pattern
+    /// names a member as `v.member`, so `v` alone is linked.
+    pub(crate) fn local_anonymous_object(&mut self, v: DeclId) -> SubstResult<DeclId> {
+        let n = *self.sema.ast.decls.get(v);
+        let prec = n.ty().and_then(|t| self.sema.ast.types.as_record(t)).ok_or(SubstFail)?;
+        let rec = self.find_instantiated_decl(prec, n.loc())?;
+        let mut ds = DeclSpec::new(n.loc());
+        ds.keyword = TagKeyword::Union;
+        ds.tag = Some(rec);
+        ds.tag_declares = true;
+        if self.sema.ast.decls.var(v).is_some_and(|x| x.spec.storage() == VarStorage::Static) {
+            ds.storage = Some((StorageSpec::Static, n.loc()));
+        }
+        let obj = self.sema.act_on_decl_spec_only(&ds).ok_or(SubstFail)?;
+        self.locals.insert(v, super::DeclOrPack::Decl(obj));
+        Ok(obj)
     }
 
     /// The attributes of pattern class definition `def` on `spec`

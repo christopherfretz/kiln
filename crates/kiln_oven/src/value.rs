@@ -224,6 +224,39 @@ impl Oven {
         Ok(cv)
     }
 
+    /// Runs the destruction of variable `d` (`Oven::has_constant_destruction`):
+    /// whether it succeeds without leaking.
+    pub(crate) fn destroy_var(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        d: DeclId,
+        value: Option<ConstValueId>,
+    ) -> bool {
+        let ast = b.ast();
+        let Some(q) = ast.decls.get(d).ty() else { return false };
+        let is_const = ast.types.effective_quals(q).is_const();
+        let ty = self.types.intern(b, q);
+        let Some(df) = self.compile_destroy(b, d, ty) else { return true };
+        let size = self.types.size(ty);
+        let p = if is_const {
+            // Its lifetime is treated as begun in the evaluation, except
+            // for `mutable` members (clang `lifetimeStartedInEvaluation`).
+            // A writable static object (`Origin::Global` is read-only).
+            let fl = self.static_flags(ty);
+            let p = self.mem.alloc_static(ty, size, fl, Origin::Var(d));
+            if let Some(cv) = value {
+                self.thaw_into(b, cv, p, 1);
+            }
+            p
+        } else {
+            self.external(ty, d)
+        };
+        self.regs[0] = u128::from(p);
+        let ok = self.exec(b, df, 0).is_ok() && self.leak_notes(b).is_none();
+        self.mem.pop_static(p, &self.types);
+        ok
+    }
+
     /// Whether static temporary `t` is extended by the variable being
     /// initialized.
     fn extends_object(&self, ast: &Ast, t: DeclId) -> bool {

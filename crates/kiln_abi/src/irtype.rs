@@ -564,8 +564,18 @@ impl<'a> IrTypes<'a> {
             let Some(t) = &m.data else { continue };
             let (s, a) = self.size_align(t);
             let aligned = if packed { cur } else { cur.next_multiple_of(a) };
-            if m.offset != aligned {
-                padding.push((cur, m.offset - cur));
+            // Internal invariant (clang's `assert(Offset >= Size)`): the
+            // members with storage are disjoint and sorted -- an empty
+            // `[[no_unique_address]]` member has none, a potentially
+            // overlapping one is stored as its base-subobject type, a
+            // bit-field run as its access units. No user input reaches a
+            // violation; it would only drop the padding, never wrap.
+            let gap = m.offset.checked_sub(cur);
+            debug_assert!(gap.is_some(), "overlapping IR members at {} < {cur}", m.offset);
+            if let Some(gap) = gap
+                && m.offset != aligned
+            {
+                padding.push((cur, gap));
             }
             cur = m.offset + s;
         }

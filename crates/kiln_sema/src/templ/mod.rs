@@ -206,11 +206,6 @@ pub struct TemplState {
     /// The `using` keyword of each alias declaration in a template:
     /// where clang declares the guides formed for an alias template.
     pub(crate) alias_using_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
-    /// The name of the latest redeclaration of a class template that
-    /// created no decl (`Sema::act_on_tag`), keyed by the pattern's latest
-    /// decl when it was seen (a later decl supersedes it): the declaration
-    /// name lookup finds, which clang's notes name.
-    pub(crate) class_redecl_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// Where each dependent type and nested-name-specifier component was
     /// written, sorted (§5.8; [`Sema::written_loc`]).
     pub(crate) written_locs: kiln_source::fx::FxHashMap<written::WrittenKey, Vec<Loc>>,
@@ -666,13 +661,21 @@ impl Sema<'_, '_> {
             let l = *self.ast.templates.param_list(list);
             self.ast.lists.iter::<DeclId>(l.params).collect()
         };
-        let old: Vec<DeclId> = prev
-            .and_then(|t| self.ast.template_info(t).copied())
-            .map(|i| {
-                let l = *self.ast.templates.param_list(i.params);
-                self.ast.lists.iter::<DeclId>(l.params).collect()
-            })
-            .unwrap_or_default();
+        // The parameter lists of every earlier declaration: a default
+        // given by any of them is inherited by `prev` (clang's
+        // `OldParam->hasDefaultArgument()` sees an inherited one).
+        let olds: Vec<Vec<DeclId>> = match prev {
+            Some(t) => match self.pattern_of(t) {
+                Some(pat) => self
+                    .ast
+                    .redecls_of(pat)
+                    .filter_map(|x| self.ast.described_template(x))
+                    .map(|x| self.template_params(x))
+                    .collect(),
+                None => vec![self.template_params(t)],
+            },
+            None => Vec::new(),
+        };
         let ordered = matches!(
             kind,
             DeclKind::ClassTemplate | DeclKind::VarTemplate | DeclKind::TypeAliasTemplate
@@ -680,7 +683,9 @@ impl Sema<'_, '_> {
         let mut prev_default: Option<Loc> = None;
         for (i, &p) in params.iter().enumerate() {
             let new_loc = self.templ.default_locs.get(&p).copied();
-            let old_loc = old.get(i).and_then(|&o| self.templ.default_locs.get(&o).copied());
+            let old_loc = olds
+                .iter()
+                .find_map(|l| l.get(i).and_then(|&o| self.templ.default_locs.get(&o).copied()));
             let pack = self.ast.template_parm(p).is_some_and(|x| x.pack);
             match (new_loc, old_loc) {
                 (Some(n), Some(o)) => {
@@ -976,8 +981,7 @@ impl Sema<'_, '_> {
             .collect();
         let n = lists.iter().map(Vec::len).max().unwrap_or(0);
         for i in 0..n {
-            // Inherited ones too: a redeclaration that created no decl
-            // ([`Sema::inherit_redeclared_defaults`]).
+            // Inherited ones too.
             let any = |q: &DeclId| self.template_default(*q);
             let Some(a) = lists.iter().find_map(|l| l.get(i).and_then(any)) else { continue };
             for l in &lists {
@@ -985,32 +989,6 @@ impl Sema<'_, '_> {
                     && self.template_default(q).is_none()
                 {
                     self.inherited_defaults.insert(q, a);
-                }
-            }
-        }
-    }
-
-    /// Records the default arguments of a class template redeclaration
-    /// that creates no decl (`template <class T = int> class X;` after
-    /// `template <class T> class X;`) for every declaration of template
-    /// `t` whose parameter at that position has none ([temp.param]/12).
-    pub(crate) fn inherit_redeclared_defaults(&mut self, t: DeclId, list: TemplateParamListId) {
-        let Some(p) = self.pattern_of(t) else { return };
-        let new: Vec<DeclId> =
-            self.ast.lists.iter::<DeclId>(self.ast.templates.param_list(list).params).collect();
-        let lists: Vec<Vec<DeclId>> = self
-            .ast
-            .redecls_of(p)
-            .filter_map(|x| self.ast.described_template(x))
-            .map(|x| self.template_params(x))
-            .collect();
-        for (i, &q) in new.iter().enumerate() {
-            let Some(a) = self.ast.templates.defaults.get(q).copied() else { continue };
-            for l in &lists {
-                if let Some(&o) = l.get(i)
-                    && self.template_default(o).is_none()
-                {
-                    self.inherited_defaults.insert(o, a);
                 }
             }
         }
@@ -1291,7 +1269,10 @@ impl Sema<'_, '_> {
 
     /// Attaches the trailing requires-clause `r` to function `f`
     /// ([dcl.decl.general]/4); only a templated function may have one
-    /// ([dcl.decl.general]/5).
+    /// ([dcl.decl.general]/5), and a virtual function may not
+    /// ([class.virtual]/6). Both errors point at the clause's first
+    /// token; the clause is attached anyway and still checked, as in
+    /// clang.
     pub fn act_on_trailing_requires(&mut self, f: DeclId, r: ExprId) {
         if self.kind_of(f).payload() != kiln_ast::decl::PayloadClass::Function {
             let loc = self.ast.exprs.get(r).loc();
@@ -1301,8 +1282,17 @@ impl Sema<'_, '_> {
         // An instantiated member keeps its pattern's clause; an invalid
         // clause was diagnosed already (clang drops it in the parser).
         if !self.in_template() && self.inst.stack.is_empty() && !self.is_err_expr(r) {
-            let loc = self.ast.exprs.get(r).loc();
+            let loc = self.begin_loc(r);
             self.error(DiagId::sema_trailing_requires_non_template, loc);
+            let _ = self.inst.concepts.untemplated_requires.insert(f);
+        }
+        // clang `CheckFunctionDeclaration` (`err_constrained_virtual_method`):
+        // declared `virtual`, overriding a virtual function, or redeclaring
+        // a virtual function; again in each instantiation.
+        if crate::class::is_virtual(&self.ast, f) && !self.is_err_expr(r) {
+            let loc = self.begin_loc(r);
+            let d = self.diag(DiagId::sema_virtual_requires_clause, loc).per_instantiation();
+            self.emit(d);
         }
         let _ = self.ast.templates.trailing_requires.insert(f, r);
     }

@@ -485,6 +485,11 @@ type>'`:
     dependent `N::v<T>` carries it over (WP-300).
   - `T(a, b)` for an unresolved construct, `sizeof...(Ts)`, and folds as
     `(... + xs)`.
+  - `sizeof e` / `alignof e` with an expression operand print the
+    keyword, a space and the operand as written, adding no parentheses
+    (`alignof((g))` stays `alignof((g))`, `sizeof x` stays `sizeof x`;
+    WP-312, `tests/conformance/dcl.pre/static-assert-alignof-operand.cpp`).
+  - `v.xy` for an ext-vector element access.
 
 Known gaps:
 - A member function template of an implicit class instantiation
@@ -527,7 +532,9 @@ Normative. The order and placement are clang 19's.
   there in full.
 - A template's specializations print under its first declaration not
   introduced by a friend declaration (else its first declaration), as
-  clang does (WP-121). A friend redeclaration of a template prints
+  clang does (WP-121). Every other redeclaration that a friend
+  declaration did not introduce lists each of them as a reference line
+  (WP-311). A friend redeclaration of a template prints
   `friend` / `friend_undeclared` only when the friend declaration
   introduced it directly.
 - `ClassTemplateSpecializationDecl <tag> <name> [definition]

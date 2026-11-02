@@ -1,0 +1,39 @@
+TranslationUnitDecl
+|-ClassTemplateDecl B
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+| |-CXXRecordDecl struct B definition
+| | |-CXXRecordDecl union definition
+| | | |-FieldDecl a 'T'
+| | | `-FieldDecl c 'char'
+| | |-CXXRecordDecl struct definition
+| | | `-FieldDecl d 'T'
+| | |-FieldDecl 'int'
+| | | `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | |-FieldDecl e 'T'
+| | | `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | `-FieldDecl 'int'
+| |   `-ConstantExpr 'int' value=0
+| |     `-IntegerLiteral 'int' 0
+| `-ClassTemplateSpecialization 'B'
+`-ClassTemplateSpecializationDecl struct B definition explicit_instantiation_definition
+  |-TemplateArgument type 'short'
+  |-TemplateArgument value 'int' 2
+  |-CXXRecordDecl union definition
+  | |-FieldDecl a 'short'
+  | `-FieldDecl c 'char'
+  |-CXXRecordDecl struct definition
+  | `-FieldDecl d 'short'
+  |-FieldDecl 'int'
+  | `-ConstantExpr 'int' value=2
+  |   `-SubstNonTypeTemplateParmExpr 'int'
+  |     |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+  |     `-IntegerLiteral 'int' 2
+  |-FieldDecl e 'short'
+  | `-ConstantExpr 'int' value=2
+  |   `-SubstNonTypeTemplateParmExpr 'int'
+  |     |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+  |     `-IntegerLiteral 'int' 2
+  `-FieldDecl 'int'
+    `-ConstantExpr 'int' value=0
+      `-IntegerLiteral 'int' 0

@@ -1536,6 +1536,15 @@ impl AstBuilder<'_> {
         }
     }
 
+    /// Locates specialization `spec` at `loc`, the template-name of the
+    /// explicit instantiation that first makes it explicit, before that
+    /// instantiation runs (clang `ActOnExplicitInstantiation` updates the
+    /// location first, so diagnostics during the instantiation that point
+    /// at the class point there).
+    pub fn relocate_spec(&mut self, spec: DeclId, loc: Loc) {
+        self.ast.decls.set_loc(spec, loc);
+    }
+
     /// Marks specialization `spec` as declared in lexical context
     /// `lexical` (an explicit specialization or instantiation, which
     /// clang lists among the decls of the context it appears in;

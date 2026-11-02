@@ -409,12 +409,21 @@ impl Cg<'_> {
                 let sq = ast.exprs.get(src).ty();
                 self.convert_vector(v, sq, q)
             }
-            // clang `ScalarExprEmitter::VisitExtVectorElementExpr` of a
-            // prvalue vector: `extractelement` or `shufflevector`.
+            // clang `EmitExtVectorElementExpr` of a prvalue vector (`(v +
+            // v).x`): the vector is stored to a temporary, then loaded as
+            // an element (`extractelement`) or swizzle (`shufflevector`).
             ExprKind::ExtVectorElementExpr if !self.is_glvalue(e) => {
+                let base = ast.exprs.operand(e);
                 let lanes = self.swizzle_lanes(e, false)?;
-                let v = self.emit_scalar(ast.exprs.operand(e))?;
-                self.swizzle_value(v, &lanes)
+                let bq = ast.exprs.get(base).ty();
+                let v = self.emit_scalar(base)?;
+                let tmp = self.temp(bq);
+                self.store(v, tmp.v, tmp.align, false);
+                let vidx = match lanes.as_slice() {
+                    [l] => VecLane::Index(self.icn(LTy::I64, i128::from(*l))),
+                    _ => VecLane::Swizzle(e),
+                };
+                self.load_lv(LV { addr: tmp, q, bf: None, vidx: Some(vidx) })
             }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
@@ -488,22 +497,9 @@ impl Cg<'_> {
             let vec = self.vec_elt_load(lv);
             let ins = match lane {
                 VecLane::Index(idx) => self.insert_elt(vec, v, idx),
-                // clang `EmitStoreThroughExtVectorComponentLValue`: each
-                // source element into its named lane.
                 VecLane::Swizzle(e) => {
                     let lanes = self.swizzle_lanes(e, true).unwrap_or_default();
-                    let count = self.vec_lane_count(vec);
-                    let mut acc = vec;
-                    for (i, &l) in lanes.iter().enumerate() {
-                        if l >= count {
-                            continue;
-                        }
-                        let si = self.icn(LTy::I32, i as i128);
-                        let elt = self.extract_elt(v, si);
-                        let li = self.icn(LTy::I32, i128::from(l));
-                        acc = self.insert_elt(acc, elt, li);
-                    }
-                    acc
+                    self.store_swizzle(v, vec, &lanes)
                 }
             };
             let raw = if self.m.types.int_width(lv.addr.ty).is_some() {
@@ -1726,8 +1722,7 @@ impl Cg<'_> {
                 } else {
                     self.get_gvar(d)?
                 };
-                let dq = ast.decls.get(d).ty().unwrap_or(q);
-                let align = self.global_align(dq);
+                let align = self.var_align(d);
                 Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             DeclKind::TemplateParamObject => {
@@ -2413,7 +2408,8 @@ impl Cg<'_> {
         };
         let lanes = self.swizzle_lanes(e, true)?;
         let vidx = match lanes.as_slice() {
-            [l] => VecLane::Index(self.icn(LTy::I32, i128::from(*l))),
+            // clang's `SizeTy` index.
+            [l] => VecLane::Index(self.icn(LTy::I64, i128::from(*l))),
             _ => VecLane::Swizzle(e),
         };
         Ok(LV { addr, q, bf: None, vidx: Some(vidx) })
@@ -2476,6 +2472,36 @@ impl Cg<'_> {
         let mask =
             lanes.iter().map(|&l| if l < count { l } else { kiln_llvm::SHUFFLE_POISON }).collect();
         self.shuffle(v, None, mask)
+    }
+
+    /// clang `EmitStoreThroughExtVectorComponentLValue`: `v` shuffled
+    /// into `lanes` of the loaded vector `vec`. A source as long as the
+    /// vector is one shuffle; a shorter one is widened first, then
+    /// shuffled into `vec` (an odd vector's `.hi`/`.odd` names one lane
+    /// past its end, which is dropped).
+    fn store_swizzle(&mut self, v: V, vec: V, lanes: &[u32]) -> V {
+        let src_n = u32::try_from(lanes.len()).unwrap_or(0);
+        let dst_n = self.vec_lane_count(vec);
+        if dst_n == src_n {
+            let mut mask = vec![0; dst_n as usize];
+            for (i, &l) in lanes.iter().enumerate() {
+                if let Some(m) = mask.get_mut(l as usize) {
+                    *m = i as u32;
+                }
+            }
+            return self.shuffle(v, None, mask);
+        }
+        let mut ext: Vec<u32> = (0..src_n).collect();
+        ext.resize(dst_n as usize, kiln_llvm::SHUFFLE_POISON);
+        let wide = self.shuffle(v, None, ext);
+        let mut mask: Vec<u32> = (0..dst_n).collect();
+        let used = if lanes.last() == Some(&dst_n) { lanes.len() - 1 } else { lanes.len() };
+        for (i, &l) in lanes.iter().enumerate().take(used) {
+            if let Some(m) = mask.get_mut(l as usize) {
+                *m = i as u32 + dst_n;
+            }
+        }
+        self.shuffle(vec, Some(wide), mask)
     }
 
     /// The element count of the vector value `v`.
@@ -3973,7 +3999,7 @@ impl Cg<'_> {
         // or reference to a variable length array).
         self.emit_vla_bounds(q)?;
         let ty = self.mty(q);
-        let dtor_class = self.destructed_class(q);
+        let dtor_class = self.var_destructed_class(d, q);
         // NRVO: the variable lives in the return slot (clang
         // `EmitAutoVarAlloca`), with a flag telling its cleanup whether
         // the return happened.
@@ -3992,7 +4018,7 @@ impl Cg<'_> {
             };
             (addr, flag)
         } else {
-            let align = self.global_align(q);
+            let align = self.var_align(d);
             let a = self.f.fir.alloca(ty, align);
             (Addr { v: a, ty, align }, None)
         };
