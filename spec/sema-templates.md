@@ -1516,7 +1516,11 @@ recomputed exactly as for non-template code (clang's
   declaration's parameter name.
 - **Variables** keep the pattern's form of initialization (`cinit`,
   `callinit`, `listinit`): `T v{a, b}` stays direct-list-initialization,
-  which may choose an explicit constructor.
+  which may choose an explicit constructor. A braced list is redone as a
+  list even when the pattern's full-expression (`ExprWithCleanups`) wraps
+  it, as when its elements' constructors bind temporaries: `T a[] = {{1}}`
+  with `T(const int&)` (WP-278;
+  `tests/conformance/dcl.init.aggr/array-of-class-from-list-in-template.cpp`).
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
@@ -4258,6 +4262,30 @@ explicit specialization errors remain. The blockers are:
     yet implemented: reference to a member of a dependent context"),
     including when the friend is found only by argument-dependent lookup
     inside a concept's requires-expression (WP-272);
+  - *Audit (WP-278): this matches the standard.* A friend defined in a
+    class is in that class's scope ([class.friend]/7), so its
+    requires-clause binds names where it is written: the enclosing
+    classes' parameters, member typedefs, static members and member
+    class templates' parameters. Those names bind in the pattern, so a
+    class-scope `test` hides a namespace-scope `test` even though the
+    atom is then substituted in the friend's namespace
+    (`in_inst_context`, which only re-runs dependent ADL). The
+    constraint is not instantiated with the class
+    ([temp.inst]/17). Instead each atom is substituted when satisfaction
+    is checked ([temp.constr.atomic]/3), using the arguments of the
+    specialization that instantiated the friend, i.e. `levels` plus the
+    lexical class's `inst_context_pairs`. Every such specialization
+    declares a distinct function ([temp.friend]/9 last sentence:
+    a constrained friend declares no function of any other scope), so
+    the per-specialization mapping is the whole story. No other
+    declaration's arguments need merging, and [temp.constr.decl]/3's
+    associated constraints are only that clause (a non-template
+    friend has no template-head). `inst_lexical_class` falls back to the
+    semantic context for members, so a member function keeps its own
+    class mapping. Probed against clang 19 for `requires C<T> && B`
+    (outer and member-template parameters), a member typedef, a static
+    data member, and a class-scope static member template shadowing a
+    namespace function.
   - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate
@@ -4411,7 +4439,13 @@ requires-clause scope.**
   (`act_on_qualified_friend_class_template`; a member template is found
   again in the instantiated class; another kind of entity is
   `sema_redefinition_different_kind`, nothing found in a namespace
-  `sema_friend_def_no_match`),
+  `sema_friend_def_no_match`); an unqualified name that ordinary
+  lookup finds as a member class template of an enclosing class (the
+  search stops at the innermost enclosing namespace, [namespace.memdef]/3,
+  so class scopes are searched) is befriended the same way, as if
+  qualified (WP-278; libc++ `elements_view::__iterator`'s
+  `template <bool> friend class __sentinel;`;
+  `tests/conformance/temp.friend/friend-member-class-template-of-enclosing-class.cpp`),
   `template<class U> friend R f(U);` (`friend_function_template`), and
   friend specializations `friend R f<>(...)` / `friend R N::g<T>(...)`
   (`Declarator::friend`, `friend_spec_template`,

@@ -1083,6 +1083,17 @@ specification as written (`TypeNames` prints ` noexcept`,
   instantiation of exception specification for 'f' requested here`
   (`note_template_exception_spec_here`). A failed substitution leaves
   the member potentially throwing (`ExcSpec::None`), as clang does.
+  A function whose constraints are not satisfied is never needed
+  ([temp.inst]/17, WP-278): the one candidate
+  of a call has its constraints checked before its reference is built
+  (`finish_overload_ref`, clang's `DiagnoseUseOfDecl` before
+  `BuildDeclRefExpr`), and a constrained function found by
+  argument-dependent lookup always goes through overload resolution, so
+  an unsatisfied one is a non-viable candidate (`no matching function
+  for call to 'f'` + `candidate function not viable: constraints not
+  satisfied`, as clang's `BuildOverloadedCallExpr`). libc++
+  `filter_view`/`join_view`'s hidden `iter_swap` relies on this. Test:
+  `tests/conformance/temp.inst/hidden-friend-noexcept-unsatisfied.cpp`.
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.

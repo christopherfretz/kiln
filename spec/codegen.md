@@ -657,7 +657,12 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   then member initializers in declaration order. Delegating constructors
   are supported. Defaulted copy and move constructors use clang's
   `ConstructorMemcpyizer`, which merges runs of trivially copyable fields
-  into one `llvm.memcpy`.
+  into one `llvm.memcpy`. A field that is empty for layout
+  (`isEmptyFieldForLayout`, e.g. an empty `[[no_unique_address]]` member
+  sharing offset 0 with a non-empty one) joins the run but copies no
+  bytes. The memcpy starts at the lowest-offset non-empty field and ends
+  at the end of the highest-offset one, and a run of only empty fields
+  emits nothing.
 - **Destructor bodies and cleanups** (`EmitDestructorBody`, `cleanup.rs`):
   a cleanup stack modeled on clang's `EHScopeStack` normal cleanups, with
   branch fixups, the `cleanup.dest.slot` switch, and the single-exit
