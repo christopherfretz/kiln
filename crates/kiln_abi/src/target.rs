@@ -202,8 +202,8 @@ impl Target {
 fn target_types(arch: Arch) -> TargetTypes {
     use BuiltinType as B;
     let x86 = arch == Arch::X86_64;
-    let mut size_align = [(0u16, 0u16); 51];
-    let table: [(B, u16, u16); 31] = [
+    let mut size_align = [(0u16, 0u16); 53];
+    let table: [(B, u16, u16); 33] = [
         (B::Void, 0, 1),
         (B::Bool, 1, 1),
         (B::Char, 1, 1),
@@ -233,6 +233,8 @@ fn target_types(arch: Arch) -> TargetTypes {
         (B::Float32, 4, 4),
         (B::Float64, 8, 8),
         (B::StdFloat128, 16, 16),
+        (B::Float32x, 8, 8),
+        (B::Float64x, 16, 16),
         (B::NullPtr, 8, 8),
         (B::MetaInfo, 8, 8),
     ];

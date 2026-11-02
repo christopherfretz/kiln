@@ -157,9 +157,9 @@ const CLANG22_AARCH64: &[(&str, &str)] = &[
 /// both targets), which libstdc++'s `<limits>`, `<cmath>`, `<format>`
 /// and `<bits/c++config.h>` consume. Defined in every C++ mode, as GCC
 /// does; the `__FLT16_*__` set stays clang's (in the base files, plus
-/// GCC's `__FLT16_IS_IEC_60559__`, which clang lacks), and
-/// GCC's `__FLT32X_*__` / `__FLT64X_*__` are not defined (kiln has no
-/// `_Float32x` / `_Float64x`; spec/pp.md "Predefined macros").
+/// GCC's `__FLT16_IS_IEC_60559__`, which clang lacks). GCC's
+/// `__FLT32X_*__` (the `__FLT64_*__` values) and `__FLT64X_*__` (`long
+/// double`'s) come from [`apply_p1467`] (WP-380).
 const P1467_LIMITS: &[(&str, &str)] = &[
     ("__BFLT16_DECIMAL_DIG__", "4"),
     ("__BFLT16_DENORM_MIN__", "9.18354961579912115600575419704879436e-41BF16"),
@@ -226,6 +226,28 @@ const P1467_LIMITS: &[(&str, &str)] = &[
     ("__FLT64_MIN_EXP__", "(-1021)"),
     ("__FLT64_MIN__", "2.22507385850720138309023271733240406e-308F64"),
     ("__FLT64_NORM_MAX__", "1.79769313486231570814527423731704357e+308F64"),
+];
+
+/// WP-380: GCC 14's `__FLT64X_*__` on x86-64, where `_Float64x` is the
+/// x87 80-bit format (`x86_64-linux-gnu-g++-14 -dM -E`); on `AArch64` they
+/// are the binary128 `__FLT128_*__` values.
+const FLT64X_X87: &[(&str, &str)] = &[
+    ("__FLT64X_DECIMAL_DIG__", "21"),
+    ("__FLT64X_DENORM_MIN__", "3.64519953188247460252840593361941982e-4951F64x"),
+    ("__FLT64X_DIG__", "18"),
+    ("__FLT64X_EPSILON__", "1.08420217248550443400745280086994171e-19F64x"),
+    ("__FLT64X_HAS_DENORM__", "1"),
+    ("__FLT64X_HAS_INFINITY__", "1"),
+    ("__FLT64X_HAS_QUIET_NAN__", "1"),
+    ("__FLT64X_IS_IEC_60559__", "1"),
+    ("__FLT64X_MANT_DIG__", "64"),
+    ("__FLT64X_MAX_10_EXP__", "4932"),
+    ("__FLT64X_MAX_EXP__", "16384"),
+    ("__FLT64X_MAX__", "1.18973149535723176502126385303097021e+4932F64x"),
+    ("__FLT64X_MIN_10_EXP__", "(-4931)"),
+    ("__FLT64X_MIN_EXP__", "(-16381)"),
+    ("__FLT64X_MIN__", "3.36210314311209350626267781732175260e-4932F64x"),
+    ("__FLT64X_NORM_MAX__", "1.18973149535723176502126385303097021e+4932F64x"),
 ];
 
 /// WP-361: the [cpp.predefined] macros of the extended floating-point
@@ -322,10 +344,28 @@ fn set(m: &mut BTreeMap<String, String>, n: &str, v: &str) {
 }
 
 /// P1467 ([basic.extended.fp], [cpp.predefined]/2): GCC 14's limit
-/// macros in every C++ mode, the `__STDCPP_*_T__` ones from C++23.
-fn apply_p1467(m: &mut BTreeMap<String, String>, std_float_aliases: bool) {
+/// macros in every C++ mode, the `__STDCPP_*_T__` ones from C++23. GCC's
+/// `_Float32x` limits are `_Float64`'s and its `_Float64x` limits `long
+/// double`'s, spelled with the `F32x` / `F64x` suffix (WP-380).
+fn apply_p1467(m: &mut BTreeMap<String, String>, std_float_aliases: bool, aarch64: bool) {
     for &(n, v) in P1467_LIMITS {
         set(m, n, v);
+        let nx = if let Some(r) = n.strip_prefix("__FLT64_") {
+            Some(("__FLT32X_", r, "F64", "F32x"))
+        } else if aarch64 {
+            n.strip_prefix("__FLT128_").map(|r| ("__FLT64X_", r, "F128", "F64x"))
+        } else {
+            None
+        };
+        if let Some((prefix, rest, from, to)) = nx {
+            let v = v.strip_suffix(from).map_or_else(|| v.to_owned(), |b| format!("{b}{to}"));
+            m.insert(format!("{prefix}{rest}"), v);
+        }
+    }
+    if !aarch64 {
+        for &(n, v) in FLT64X_X87 {
+            set(m, n, v);
+        }
     }
     let cplusplus: u64 =
         m.get("__cplusplus").map_or(0, |v| v.trim_end_matches('L').parse().unwrap_or(0));
@@ -428,7 +468,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if cxx23 {
             set(m, "__cpp_explicit_this_parameter", "202110L");
         }
-        apply_p1467(m, cfg.std_float_aliases);
+        apply_p1467(m, cfg.std_float_aliases, cfg.aarch64);
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {
         m.remove(n);
@@ -530,7 +570,12 @@ mod tests {
                 "#define __FLT128_MAX__ 1.18973149535723176508575932662800702e+4932F128\n"
             ));
             assert!(s.contains("#define __BFLT16_DIG__ 2\n"));
-            assert!(!s.contains("__FLT32X_"));
+            // WP-380: GCC's `_Float32x` (binary64) and `_Float64x`.
+            assert!(s.contains("#define __FLT32X_MANT_DIG__ 53\n"));
+            assert!(s.contains(
+                "#define __FLT32X_MAX__ 1.79769313486231570814527423731704357e+308F32x\n"
+            ));
+            assert!(s.contains("#define __FLT64X_MANT_DIG__ "));
         }
         assert!(!c.contains("__FLT64_DIG__"));
         for n in P1467_STDCPP {
