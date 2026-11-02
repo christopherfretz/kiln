@@ -1269,6 +1269,23 @@ impl Parser<'_, '_> {
         if !self.unknown_type_follows(end, ctx) {
             return false;
         }
+        // A reachable type that is not visible ([module.reach]):
+        // the missing-import error, then the type is used.
+        if let Some(NameClass::Type(ty, d)) = self.s.module_hidden_type(name, None, loc) {
+            self.bump();
+            self.s.mark_type_referenced(d);
+            let kind = self.s.ast.decls.get(d).kind();
+            let ty = if kiln_sema::lookup::is_tag_kind(kind) {
+                self.s.elaborated_tag_type(d, TagKeyword::None)
+            } else {
+                ty
+            };
+            if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                ds.invalid = true;
+                self.spec_error(&e, loc);
+            }
+            return true;
+        }
         let text = self.s.ast.symbols().as_str(name).to_owned();
         let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
         self.emit(d);
@@ -2223,7 +2240,12 @@ impl Parser<'_, '_> {
     pub(crate) fn is_param_list_start(&self, n: usize) -> bool {
         let t = self.peek(n);
         match t.kind {
-            TokKind::Punct(Punct::RParen | Punct::Ellipsis) => true,
+            TokKind::Punct(Punct::RParen) => true,
+            // `(...)`; `(...x)` groups a pack's declarator-id
+            // ([dcl.decl.general]/4).
+            TokKind::Punct(Punct::Ellipsis) => {
+                self.peek(n + 1).kind == TokKind::Punct(Punct::RParen)
+            }
             TokKind::Punct(Punct::LSquare) => {
                 self.peek(n + 1).kind == TokKind::Punct(Punct::LSquare)
             }
@@ -2844,7 +2866,18 @@ impl Parser<'_, '_> {
         };
         // The initializer, with its conversions, is potentially evaluated.
         let quiet = self.s.enter_var_initializer(v);
+        let outer_invalid = std::mem::replace(&mut self.expr_invalid, false);
         let init = self.parse_initializer(d.init_style, d.is_function_declarator());
+        // clang's `ParseDeclarationAfterDeclaratorAndAttributes`: an
+        // invalid `= expression` (`ExprError`, `expr_invalid`) skips to
+        // the next declarator's `,` or the `;`, with no "expected ';'"
+        // for what is left of it (`int q = 1 + v<S>{};`).
+        if std::mem::replace(&mut self.expr_invalid, outer_invalid)
+            && d.init_style == Some(InitStyle::C)
+            && matches!(init, Ok(Some(Initializer::Expr(_))))
+        {
+            self.skip_until(&[Punct::Comma], true, false);
+        }
         self.s.act_on_exit_declarator_scope(entered);
         let r = self.finish_declarator_initializer(d, v, init);
         self.s.exit_var_initializer(quiet);

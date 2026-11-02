@@ -1,5 +1,5 @@
-// [expr.const]/5, [c.math.abs], [c.math.syn], [library.c]/3: sqrt and the
-// other non-P0533 libm functions and trap/abort are never constants; the
+// [expr.const]/5, [c.math.abs], [c.math.syn], [library.c]/3: cbrt and the
+// other non-P0533 libm functions (sqrt folds since WP-393) and trap/abort are never constants; the
 // P0533 set (abs, floor, fma, fmod, ilogb, ...) is not when the call is
 // undefined or raises an IEEE exception other than inexact; a call is "not
 // valid in a constant expression" at the call, except abs of the most
@@ -31,7 +31,7 @@
 //@ diag: 47:55 error "constexpr variable 'm' must be initialized by a constant expression"
 constexpr int a = __builtin_abs(-__INT_MAX__ - 1);
 constexpr long b = __builtin_labs(-__LONG_MAX__ - 1);
-constexpr double c = __builtin_sqrt(4.0);
+constexpr double c = __builtin_cbrt(8.0);
 constexpr double d = __builtin_floor(__builtin_nans(""));
 constexpr float e = __builtin_fmaf(__builtin_inff(), 0, 1);
 constexpr long double f = __builtin_fmodl(5, 0);
@@ -44,4 +44,4 @@ static_assert(__builtin_fpclassify(0, 1, 2, 3, 4, __builtin_inff()) == 3);
 int j = __builtin_fpclassify(0, 1, 2, 3, 1.0);
 int k = __builtin_fpclassify(0, 1, 2, "x", 4, 1.0);
 int l = __builtin_fpclassify(0, 1, 2, 3, 4, 5);
-constexpr int m = __builtin_fpclassify(0, 1, 2, 3, 4, __builtin_sqrt(2.0));
+constexpr int m = __builtin_fpclassify(0, 1, 2, 3, 4, __builtin_cbrt(2.0));

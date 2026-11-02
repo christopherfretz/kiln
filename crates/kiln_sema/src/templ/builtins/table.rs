@@ -49,9 +49,12 @@ pub enum Status {
 /// evaluable in constant expressions, and who implements that.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Oven {
-    /// Not a function, or not constant-evaluable in clang 19.
+    /// Not a function, or not constant-evaluable by the Oven.
     No,
-    /// Evaluated by the Oven.
+    /// Evaluated by the Oven. `__has_constexpr_builtin` then gives the
+    /// clang table's answer at the `-fclang-compat` level, so a builtin
+    /// clang only made `Constexpr` in 22 (the P0533 `abs`, `signbit` and
+    /// comparison-macro rows, WP-393) still answers 0 below 22.
     Yes,
     /// Constant-evaluable in clang 19; the Oven side belongs to the named
     /// work package (`__has_constexpr_builtin` answers false until then).
@@ -256,13 +259,13 @@ pub static TABLE: &[Row] = &[
     f("__builtin_isinf", DONE, Oven::Yes),
     f("__builtin_isnan", DONE, Oven::Yes),
     f("__builtin_isnormal", DONE, Oven::Yes),
-    f("__builtin_signbit", DONE, Oven::No),
-    f("__builtin_isgreater", DONE, Oven::No),
-    f("__builtin_isgreaterequal", DONE, Oven::No),
-    f("__builtin_isless", DONE, Oven::No),
-    f("__builtin_islessequal", DONE, Oven::No),
-    f("__builtin_islessgreater", DONE, Oven::No),
-    f("__builtin_isunordered", DONE, Oven::No),
+    f("__builtin_signbit", DONE, Oven::Yes),
+    f("__builtin_isgreater", DONE, Oven::Yes),
+    f("__builtin_isgreaterequal", DONE, Oven::Yes),
+    f("__builtin_isless", DONE, Oven::Yes),
+    f("__builtin_islessequal", DONE, Oven::Yes),
+    f("__builtin_islessgreater", DONE, Oven::Yes),
+    f("__builtin_isunordered", DONE, Oven::Yes),
     // float constants
     f("__builtin_huge_val", DONE, Oven::Yes),
     f("__builtin_huge_valf", DONE, Oven::Yes),
@@ -351,9 +354,9 @@ pub static TABLE: &[Row] = &[
     f("__builtin_fma", DONE, Oven::No),
     f("__builtin_fmaf", DONE, Oven::No),
     f("__builtin_fmal", DONE, Oven::No),
-    f("__builtin_abs", DONE, Oven::No),
-    f("__builtin_labs", DONE, Oven::No),
-    f("__builtin_llabs", DONE, Oven::No),
+    f("__builtin_abs", DONE, Oven::Yes),
+    f("__builtin_labs", DONE, Oven::Yes),
+    f("__builtin_llabs", DONE, Oven::Yes),
     // WP-156: vectors
     f("__builtin_reduce_add", DONE, Oven::No),
     f("__builtin_reduce_and", DONE, Oven::No),
@@ -552,6 +555,27 @@ mod tests {
         assert_eq!(has_constexpr_builtin_staged("__builtin_umulll_overflow"), Some(true));
         assert_eq!(has_constexpr_builtin_staged("__builtin_alloca"), Some(false));
         assert_eq!(has_builtin_staged("__builtin_vsnprintf"), Some(true));
+    }
+
+    /// WP-393 ([c.math]/[library.c], P0533): the Oven folds `abs`, `signbit`
+    /// and the comparison macros, so their rows say `Yes`; the clang table
+    /// decides the compat-level answer.
+    #[test]
+    fn p0533_rows() {
+        for n in [
+            "__builtin_abs",
+            "__builtin_labs",
+            "__builtin_llabs",
+            "__builtin_signbit",
+            "__builtin_isgreater",
+            "__builtin_isgreaterequal",
+            "__builtin_isless",
+            "__builtin_islessequal",
+            "__builtin_islessgreater",
+            "__builtin_isunordered",
+        ] {
+            assert_eq!(has_constexpr_builtin_staged(n), Some(true), "{n}");
+        }
     }
 
     #[test]

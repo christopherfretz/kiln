@@ -93,6 +93,13 @@ impl Sema<'_, '_> {
         // argument (`::operator new(n, nothrow)` was ambiguous after a
         // `requires { ::new T; }` in `<concepts>`).
         let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
+        // The implicit declarations are attached to the global module
+        // ([basic.stc.dynamic.general]/2), even when the first use sits in
+        // a module purview (else `operator delete` mangled as `_ZW1Mdl…`).
+        let start = self.ast.decls.next_id();
+        let owner = self.ast.modules.owner(start);
+        let global = kiln_ast::modules::Owner { purview: false, exported: false, ..owner };
+        self.ast.modules.set_owner_from(start, global);
         let al = self.std_align_val_t();
         self.global_ops.align_val_t = Some(al);
         let size = self.size_type();
@@ -106,6 +113,8 @@ impl Sema<'_, '_> {
                 self.declare_global_op(op, QualType::VOID, params, ExcSpec::BasicNoexcept);
             }
         }
+        let end = self.ast.decls.next_id();
+        self.ast.modules.set_owner_from(end, owner);
         self.ast.templates.dependent_depth = saved;
     }
 

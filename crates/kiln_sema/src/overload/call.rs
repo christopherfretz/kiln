@@ -81,6 +81,16 @@ impl Sema<'_, '_> {
         let only_invalid = cands.is_empty() && last.is_some();
         cands.extend(last.filter(|_| only_invalid));
         let at = self.begin_loc(callee);
+        if cands.is_empty()
+            && adl
+            && let Some(f) =
+                self.module_hidden_lookup(name, None, crate::lookup::LookupKind::Ordinary)
+        {
+            // A reachable but not visible function: clang's missing-import
+            // error, and the call goes on with it ([module.reach]).
+            self.module_diagnose_hidden(&f, name, n.loc());
+            cands.extend(f.decls.iter().copied().zip(f.found.iter().copied()));
+        }
         if cands.is_empty() {
             let text = self.decl_name_str(name);
             let msg = self.diag(Self::undeclared_use_id(name), n.loc()).arg(text);
@@ -158,7 +168,21 @@ impl Sema<'_, '_> {
         self.ovl.lists.truncate(base);
         let r = self.finish_overloaded_call(&set, out, name, at, n.loc(), naming, nns, ule);
         self.end_set(set);
+        if explicit.is_some() && decls.is_empty() {
+            self.diagnose_adl_only_template_id(n.loc());
+        }
         r
+    }
+
+    /// A call `f<args>(…)` whose `f` ordinary lookup did not find (only
+    /// argument-dependent lookup found its templates, [temp.names]/3) is
+    /// a C++20 feature: before C++20 clang's `ext_adl_only_template_id`
+    /// at the name, after the call's own diagnostics (`ActOnCallExpr`).
+    pub(crate) fn diagnose_adl_only_template_id(&mut self, loc: Loc) {
+        if self.std < kiln_lex::Std::Cxx20 {
+            let w = self.diag(DiagId::sema_ext_adl_only_template_id, loc).per_instantiation();
+            self.emit(w);
+        }
     }
 
     /// Adds function template `ft` (found as `found`) to `set`: its
