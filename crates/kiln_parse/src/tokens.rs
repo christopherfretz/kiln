@@ -62,6 +62,23 @@ pub enum Event {
         /// An `import` (else a `module`) directive.
         import: bool,
     },
+    /// A module directive the preprocessor parsed (modules enabled,
+    /// spec/modules.md §3); its tokens never reach the parser.
+    ModuleDirective(kiln_pp::ModuleDirective),
+    /// The tokens of an imported unit start here (spec/modules.md §3).
+    UnitBegin {
+        /// The unit's key (module name, `M:P`, or `"` + header path).
+        key: String,
+        /// A header unit.
+        header: bool,
+        /// The import that started it.
+        span: Span,
+    },
+    /// The tokens of the imported unit `key` ended.
+    UnitEnd {
+        /// The unit's key.
+        key: String,
+    },
 }
 
 /// How many consumed tokens the window keeps behind the parser's position
@@ -128,6 +145,11 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
     /// The lexer options of the stream (for spellings).
     pub fn lex_options(&self) -> LexOptions {
         *self.pp.lex_options()
+    }
+
+    /// Whether module directives are recognised (spec/modules.md §2).
+    pub fn module_lines(&self) -> bool {
+        self.pp.module_lines()
     }
 
     /// The source manager.
@@ -233,7 +255,14 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
                     self.events.push_back((next, e));
                 }
             }
-            Marker::Module { span, import, .. } => {
+            Marker::Module { directive: Some(d), .. } => {
+                self.events.push_back((next, Event::ModuleDirective(d)));
+            }
+            Marker::UnitBegin { key, header, span } => {
+                self.events.push_back((next, Event::UnitBegin { key, header, span }));
+            }
+            Marker::UnitEnd { key } => self.events.push_back((next, Event::UnitEnd { key })),
+            Marker::Module { span, import, directive: None, .. } => {
                 // The directive's tokens end with `;` ([cpp.module],
                 // [cpp.import]); the parser never sees them.
                 loop {

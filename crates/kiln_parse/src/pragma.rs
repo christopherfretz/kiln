@@ -186,7 +186,18 @@ fn visibility(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Opti
 impl Parser<'_, '_> {
     /// Acts on a preprocessor event (clang's annotation-token handlers).
     pub(crate) fn on_event(&mut self, e: Event) {
+        // Module events (and anything queued behind them) wait for the next
+        // namespace-scope declaration (spec/modules.md §4).
+        let module_event = matches!(
+            e,
+            Event::ModuleDirective(_) | Event::UnitBegin { .. } | Event::UnitEnd { .. }
+        );
+        if module_event || self.module_pending() {
+            self.module_event(e);
+            return;
+        }
         match e {
+            Event::ModuleDirective(_) | Event::UnitBegin { .. } | Event::UnitEnd { .. } => {}
             Event::Module { span, import } => {
                 // [cpp.module], [cpp.import]: clang parses these; kiln
                 // does not implement modules yet.

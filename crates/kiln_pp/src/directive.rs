@@ -1933,7 +1933,9 @@ impl Preprocessor<'_, '_> {
     /// ([cpp.pre]/1): if the next tokens on the line make it a module or
     /// import directive, queues [`Marker::Module`]. The tokens themselves
     /// are then returned as normal text ([cpp.module]/3, [cpp.import]/4).
-    pub(crate) fn maybe_module_directive(&mut self, t: Token, s: Symbol) {
+    /// With modules enabled the directive is consumed instead
+    /// (`crate::modules`) and true is returned.
+    pub(crate) fn maybe_module_directive(&mut self, t: Token, s: Symbol) -> bool {
         let top = self.frames.len() - 1;
         let same = |x: &Token| {
             !x.flags.contains(TokFlags::START_OF_LINE)
@@ -1956,7 +1958,7 @@ impl Preprocessor<'_, '_> {
                 }
                 _ => {
                     self.unlex_file_tok(n1);
-                    return;
+                    return false;
                 }
             }
         }
@@ -1975,7 +1977,11 @@ impl Preprocessor<'_, '_> {
         }
         self.unlex_file_tok(n1);
         if !ok {
-            return;
+            return false;
+        }
+        if self.modules.is_some() {
+            self.module_directive(t, export, import);
+            return true;
         }
         if import && !matches!(next.kind, TokKind::Identifier(_) | TokKind::Punct(Punct::Colon)) {
             self.emit(Diag::new(DiagId::pp_header_unit_unsupported, next.span));
@@ -1986,7 +1992,8 @@ impl Preprocessor<'_, '_> {
             let sp = self.interner.as_str(n).to_string();
             self.emit(Diag::new(DiagId::pp_module_name_is_macro, next.span).arg(sp));
         }
-        self.queue(Marker::Module { span: t.span, export, import });
+        self.queue(Marker::Module { span: t.span, export, import, directive: None });
+        false
     }
 }
 
