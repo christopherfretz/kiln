@@ -1332,6 +1332,11 @@ impl Substituter<'_, '_, '_> {
             return r;
         }
         if decls.is_empty() {
+            // `get<0>(c)` assumed a template-name ([temp.names]/3): ADL at
+            // the call finds it, with the explicit arguments.
+            if let Some(t) = targs {
+                return Ok(self.sema.builder().unresolved_lookup(name, &[], true, None, Some(t), n.loc()));
+            }
             return Ok(self.sema.act_on_undeclared_call_name_dn(name, n.loc()));
         }
         if targs.is_none() && decls.iter().all(|&d| self.namespace_scope_decl(d)) {
