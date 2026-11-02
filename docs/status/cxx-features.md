@@ -33,7 +33,7 @@ Columns:
 | P1774R8 | `[[assume]]` | — | done | `conformance/dcl.attr.assume/assume-diags.cpp`<br>`conformance/dcl.attr.assume/assume-comma-unused.cpp`<br>`conformance/dcl.attr.assume/assume-pre-cxx23-ext.cpp`<br>`conformance/expr.const/assume-false.cpp`<br>`conformance/ast/dcl.attr.assume/assume-attributed-stmt.cpp` | Detected with `__has_cpp_attribute(assume)`; no `__cpp_*` macro. |
 | P2334R1 | `#elifdef` and `#elifndef` | — | done | `conformance/cpp.cond/p2334-probe.cpp` | |
 | P2437R1 | `#warning` | — | done | `conformance/cpp.error/warning.h` | |
-| P1467R9 | Extended floating-point types | — | todo | `conformance/basic.extended.fp/p1467-probe.cpp` | Detected with `__STDCPP_FLOAT16_T__` and friends, not a `__cpp_*` macro. Neither clang 19 nor clang 22 implements it (probe `xfail(clang)`). |
+| P1467R9 | Extended floating-point types | — | done | `conformance/basic.extended.fp/p1467-probe.cpp` | detected via `__STDCPP_*_T__`. WP-361: `_Float32`/`_Float64`/`_Float128`/`__bf16` (with `_Float16`), suffixes, ranks, GCC 14 macros, libstdc++ `<stdfloat>` (`basic.extended.fp/p1467-*.cpp`, `libstdcxx-stdfloat.cpp`). Neither clang 19 nor clang 22 implements it (tests `xfail(clang)`). |
 | P2718R0 | Lifetime extension in range-based `for` | `__cpp_range_based_for` 202211L / 202211L | done | `conformance/stmt.ranged/p2718-order.cpp`<br>`conformance/stmt.ranged/p2718-constexpr.cpp` | |
 | P2448R2 | Relaxing some constexpr restrictions | — | done | `conformance/dcl.constexpr/p2448-probe.cpp` | `__cpp_constexpr` 202207L; that macro is recorded on P2747, its latest bump. |
 | P2242R3 | Non-literal variables, labels and `goto` in constexpr functions | — | done | `conformance/dcl.constexpr/p2242-probe.cpp` | `__cpp_constexpr` 202110L (see P2747). |

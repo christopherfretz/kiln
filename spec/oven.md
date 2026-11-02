@@ -60,8 +60,13 @@ the evaluator's flattened type table.
   overflow, division by zero, `INT_MIN / -1`, out-of-range shifts, negative
   shifts and float results that are NaN fault; unsigned arithmetic wraps.
   binary32/binary64 use the host's IEEE arithmetic (round to nearest even);
-  x87 `long double` and `__float128` use the bit-exact soft-float in
-  `softfloat.rs`.
+  x87 `long double`, `__float128` / `_Float128`, `_Float16` and `__bf16`
+  use the bit-exact soft-float in `softfloat.rs` (each operation rounded
+  once, never through `double`). The P1467 types (WP-361) map to the
+  `FloatKind` of their format in `ty.rs`: `_Float32` Single, `_Float64`
+  Double, `_Float128` Quad, so they evaluate exactly as `float`,
+  `double` and `__float128` (test:
+  `tests/conformance/basic.extended.fp/p1467-constexpr.cpp`).
 - Compilation is lazy, per function, on first call. A function that cannot
   be called in a constant expression (not constexpr, or no body) compiles
   to a one-instruction stub that traps with clang's note on call, so sema
@@ -644,7 +649,12 @@ literal is one instruction and one step, not an interpreted loop.
   a constexpr context`, which clang emits as an error-level note
   (`Note::is_error`, spec/diag.md §6). The two-argument mask form is not
   a constant (generic note; clang 19 crashes on it). The `*f128` builtins with a `long double` twin
-  evaluate as the twin (quad-precision `softfloat` arithmetic);
+  evaluate as the twin (quad-precision `softfloat` arithmetic), and so
+  do the GCC `_FloatN` constants libstdc++ `<limits>` names
+  (`__builtin_{huge_val,inf,nan,nans}f{16,32,64}`, `__builtin_nansf16b`;
+  WP-361, `kiln_ast` `builtin_ids::FLOATN`), converted to the result
+  type; `__builtin_nextafterf16`/`f16b` are declared only and are not
+  constant expressions (nor lowered);
   `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
   trap "subexpression not valid", as clang 19. **Divergences:** for the
   object-size comma rule a call with arguments counts as a read (its

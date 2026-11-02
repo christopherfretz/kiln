@@ -115,8 +115,8 @@ always sugar (S), or canonical exactly when dependent (S/C). Payload is
 `aux`/`data`/side record. "dep" marks kinds that only occur in templates.
 
 ### 5.1 Builtins (pre-interned at fixed ids, `TypeId::INT` etc.)
-Ids 1..=47 are created by `TypeContext::new(&TargetTypes)` in this order and
-are stable (serialization, `const` comparisons). 48..=63 are reserved.
+Ids 1..=50 are created by `TypeContext::new(&TargetTypes)` in this order and
+are stable (serialization, `const` comparisons). 51..=63 are reserved.
 
 | id | kind | prints | id | kind | prints |
 |---|---|---|---|---|---|
@@ -137,6 +137,11 @@ are stable (serialization, `const` comparisons). 48..=63 are reserved.
 | 15 | ULong | `unsigned long` | 32 | BuiltinFn | `<builtin fn type>` |
 | 16 | LongLong | `long long` | 33 | Error | `<error type>` (recovery; suppresses cascades) |
 | 17 | ULongLong | `unsigned long long` | | | |
+
+Ids 48..=50 are the C++23 extended floating-point types of P1467
+(WP-361): 48 Float32 `_Float32` (= `std::float32_t`), 49 Float64
+`_Float64` (= `std::float64_t`), 50 StdFloat128 `_Float128`
+(= `std::float128_t`).
 
 `_Float16` and `__fp16` are keywords (kiln_parse `Kw::Float16`/`Kw::Fp16`,
 `TypeSpecKind::Float16`/`Fp16`) on every target, as in clang 19; both are
@@ -182,9 +187,46 @@ builtin" is one compare and "which builtin" is the id. Sizes, alignments,
 `TargetTypes` (filled by `kiln_abi` from the target triple; §11), not from
 this table. `__builtin_va_list`, `__NSConstantString`, `__int128_t`,
 `size_t`-like predefined typedefs are *implicit declarations* made by sema
-at TU start, not builtins. `std::float32_t`/`float64_t`/`float128_t` are
-not supported by clang 19's C++ mode either; adding them is a new builtin
-id each, no representation change.
+at TU start, not builtins.
+
+**Extended floating-point types (P1467R9, [basic.extended.fp]; WP-361).**
+`_Float16`, `_Float32`, `_Float64`, `_Float128` and `__bf16` are the
+C++23 extended floating-point types (`BuiltinType::is_std_extended_floating`):
+keywords on every target and in every language mode (`_Float32`,
+`_Float64`, `_Float128` are `Kw::Float32`/`Float64`/`StdFloat128`,
+`__bf16` is `Kw::Bf16`), each a distinct type, IEEE binary32,
+binary64 and binary128 (size and alignment 4, 8, 16) and bfloat16 (2/2),
+lowering to `float`, `double`, `fp128` and `bfloat`. `std::float16_t` ...
+`std::bfloat16_t` are libstdc++'s `<stdfloat>` aliases of these types,
+declared when `__STDCPP_FLOAT16_T__` etc. are defined (spec/pp.md). The
+vendor `__float128` (id 25) stays a separate type: same value set as
+`_Float128` but lower subrank (spec/sema-conv.md §6), mangled `g`; it is
+not diagnosed on AArch64 (spec/abi.md). clang 19 and clang 22 have none of
+`_Float32`, `_Float64`, `_Float128` (`unknown type name`) nor the
+`bf16`/`f32`/`f64`/`f128` suffixes, so the reference behaviour is GCC 14's
+(checked with `clang++-22 -std=c++23 -fsyntax-only`, 2026-11-02).
+
+glibc's `<bits/floatn.h>` and `<bits/floatn-common.h>` declare
+`typedef float _Float32;`, `typedef double _Float64;` and
+`typedef long double _Float128;` for C++ compilers that are not GCC >= 13
+(kiln reports `__GNUC__` 4). In a system header, a `typedef` whose
+declarator-id is one of the keywords `_Float32`, `_Float64` or
+`_Float128` declares nothing: the parser consumes the declaration and the
+built-in type stays (`kiln_parse/src/decl.rs`). The same declaration in
+user code is the usual error.
+
+The builtin signature strings (`kiln_ast::decl::builtin`, clang's
+`Builtins.def` letters) gain three kiln-private letters for the types
+clang lacks: `k` `_Float32`, `K` `_Float64`, `y` `__bf16` (`x` is
+`_Float16`, `LLd` clang's `__float128`). They type the `builtin::FLOATN`
+table (ids from 2000; clang's ids end at 1392), which libstdc++'s
+`<limits>` and `<cmath>` use: `__builtin_huge_valfN`, `__builtin_inffN`,
+`__builtin_nanfN`, `__builtin_nansfN` for N = 16, 32, 64,
+`__builtin_nansf16b` (constant, evaluated by their `float`/`double` twin
+through `f128_twin`), and `__builtin_nextafterf16`/`f16b` (declared only;
+neither constant-evaluated nor lowered, see spec/oven.md). The `*f128`
+builtins stay clang's `__float128` ones; their result converts to
+`_Float128` without a rank diagnostic (same value set).
 
 ### 5.2 Structural kinds
 | kind | k | c | payload | notes |

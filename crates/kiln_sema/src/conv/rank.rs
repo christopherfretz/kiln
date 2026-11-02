@@ -359,9 +359,11 @@ fn standard_float_index(b: BuiltinType) -> u8 {
 /// The subrank among extended types of equal value sets: the vendor
 /// `__float128` sits below the C++23 `_Float128` (kiln's choice; GCC has
 /// both only on x86-64, clang 22 has no `_Float128`), so mixing them
-/// yields `_Float128` whichever operand comes first.
+/// yields `_Float128` whichever operand comes first. Only that pair is
+/// ordered here: `__fp16` vs `_Float16` keeps clang's handling (the
+/// operation computes in `_Float16`'s `half`).
 fn extended_subrank(b: BuiltinType) -> u8 {
-    u8::from(b.is_std_extended_floating())
+    u8::from(b == BuiltinType::StdFloat128)
 }
 
 /// Compares the floating-point conversion ranks, then subranks, of

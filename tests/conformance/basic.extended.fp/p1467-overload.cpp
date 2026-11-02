@@ -47,3 +47,10 @@ static_assert(same<decltype(q(b)), int> && same<decltype(q(h)), char>);
 // on every target, so call with _Float64 instead: equal rank to double.
 char r(double); int r(_Float128);
 static_assert(same<decltype(r(f64)), char>);
+// A conversion that breaks the [conv.double]/1 rank rule (double ->
+// _Float16, double -> _Float32) ranks below every other standard conversion,
+// as GCC 14 ranks it: the floating-integral conversion wins.
+char t(_Float16); int t(int);
+static_assert(same<decltype(t(1.0)), int>);
+char u(_Float32); int u(long);
+static_assert(same<decltype(u(1.0)), int>);

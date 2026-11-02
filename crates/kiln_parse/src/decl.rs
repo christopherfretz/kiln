@@ -662,7 +662,7 @@ impl Parser<'_, '_> {
                 // (and `_Float64`, `_Float128`) for C++ compilers that are
                 // not GCC >= 13; kiln reports itself as clang. In a system
                 // header such a typedef of a P1467 keyword declares
-                // nothing (spec/sema-conv.md §3.4).
+                // nothing (spec/types.md §5.1).
                 Kw::Float32 | Kw::Float64 | Kw::StdFloat128
                     if matches!(ds.storage, Some((StorageSpec::Typedef, _)))
                         && ds.has_type_specifier()

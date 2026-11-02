@@ -353,21 +353,23 @@ fn out_of_range_lex_fcon_3() {
     });
 }
 
-/// [lex.fcon]: the extended-type suffixes the x86-64 target does not
-/// provide (`f32`, `f64`, `f128`, `bf16` without the type support).
-/// `auto f10 = 1.0bf16;` → clang: `error: invalid suffix 'bf16' on
-/// floating constant`
+/// [lex.fcon]/3 (C++23, P1467R9): the `f32`, `f64`, `f128` and `bf16`
+/// suffixes name `_Float32`, `_Float64`, `_Float128` and `__bf16`, and the
+/// value is the decimal rounded once to the type (bf16 is not
+/// double-rounded through float: 1 + 2^-8 + 2^-30 rounds up to 1 + 2^-7).
 #[test]
-fn unsupported_suffixes_lex_fcon() {
+fn extended_suffixes_lex_fcon() {
     with_sema(|s, sink| {
-        for (sp, suf) in
-            [("1.0bf16", "bf16"), ("1.0f32", "f32"), ("1.0f64", "f64"), ("1.0f128", "f128")]
-        {
-            assert_eq!(
-                float(s, sink, sp).unwrap_err(),
-                format!("error: invalid suffix '{suf}' on floating constant"),
-                "{sp}"
-            );
+        let bits = |kind, bits| FloatBits { kind, bits };
+        for (sp, ty, b) in [
+            ("0.1f32", "_Float32", single(0.1)),
+            ("0.1F64", "_Float64", double(0.1)),
+            ("0.1f128", "_Float128", bits(FloatKind::Quad, 0x3ffb_9999_9999_9999_9999_9999_9999_999a)),
+            ("0.1bf16", "__bf16", bits(FloatKind::BFloat16, 0x3dcd)),
+            ("1.003906250931322574615478515625BF16", "__bf16", bits(FloatKind::BFloat16, 0x3f81)),
+            ("1.00390625bf16", "__bf16", bits(FloatKind::BFloat16, 0x3f80)),
+        ] {
+            assert_eq!(float(s, sink, sp).unwrap(), (ty.to_owned(), b, None), "{sp}");
         }
     });
 }

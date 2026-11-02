@@ -121,9 +121,41 @@ Indistinguishable}` implements these rules in clang 19's
 - /4.3: for floating-point conversions between types of equal rank, the one whose target matches the source's conversion rank is better;
 - /4.4.3–4.4.8: the derived/base member-pointer, class (`DerivedToBase`) and reference rules.
 
+Before these rules, a sequence whose second step breaks P1467's rank rule
+(`fp_rank_violating`: a floating-point conversion that [conv.double]/1
+does not allow, §6) is worse than any sequence that does not, as GCC 14
+ranks its pedantic "bad" conversions: `void f(_Float16); void f(int);
+f(1.0)` picks `f(int)`. Test:
+`tests/conformance/basic.extended.fp/p1467-overload.cpp`.
+
 `float_order(a, b) -> FloatOrder {Less, Equal, Greater, Unordered}`
 compares floating-point conversion ranks ([conv.rank]/2) through the
-target's formats (`format_subset`). bf16 and f16 are unordered.
+target's formats (`format_subset`). bf16 and f16 are unordered. For equal
+value sets a standard type has the greater subrank ([conv.rank]/2.4:
+`float` over `_Float32`, `double` over `_Float64`, and `long double` over
+`_Float64` where it is IEEE double), and `extended_subrank` puts
+`_Float128` above the vendor `__float128` (kiln's choice; GCC 14 has both
+only on x86-64 and gives them distinct ranks; clang 22 has no
+`_Float128`). `__fp16` and `_Float16` stay equal, as in clang, so
+`h += f16` still computes in `half`.
+
+**P1467 rank rule** (`rank::fp_rank_violation(s, from, to) ->
+Option<unordered>`, [conv.double]/1 C++23): when either type is one of
+the C++23 extended floating-point types (`_Float16`, `_Float32`,
+`_Float64`, `_Float128`, `__bf16`; `BuiltinType::is_std_extended_floating`),
+an implicit floating-point conversion requires the destination's value set
+to contain the source's. GCC 14 accepts a violating conversion with a
+pedantic warning, and so does kiln: `apply.rs` `fp_rank_check` emits
+`sema_fp_conversion_rank` (ExtWarn, group `float-conversion-rank` in the
+`narrowing` umbrella; spec/diag.md §12.6) at the converted expression for
+every implicit `FloatingConversion` (initialisation, argument passing,
+return, assignment) and, from `compound_assign` in `expr.rs`, for the
+conversion of an `E1 op= E2` result back to `E1`'s type. Explicit casts
+([expr.static.cast]/11) are silent. Floating-point promotion
+([conv.fpprom]) stays `float` → `double` only: no extended type
+promotes, so `_Float32` → `double` is a conversion. `__bf16` ↔ `_Float16`
+(unordered) converts with the warning; `__bf16` ↔ `__fp16` keeps clang's
+rejection. Test: `tests/conformance/basic.extended.fp/p1467-conversions.cpp`.
 
 ## 5. Implicit conversion (`implicit_convert`)
 `implicit_convert(s, e, to, ctx) -> Result<ExprId, ConvError>`:
@@ -212,7 +244,7 @@ clang's `assigning to 'E' from incompatible type 'int'`
 The rules, per [expr.arith.conv]/1:
 - /1.1: a scoped enum mixed with another type is an error.
 - /1.2 (C++26): enum with a different enum, and enum with a floating type, are errors (`sema_arith_enum_enum`, `sema_arith_enum_float`).
-- /1.3: the floating-point rules, using `float_order`. Unordered types are an error (`sema_arith_float_unordered`).
+- /1.3: the floating-point rules, using `float_order`: the operand of lesser rank converts to the other's type, and for equal ranks to the type of greater subrank (`_Float32 + float` is `float`, `_Float32 + double` is `double`, `_Float32 + _Float64` is `_Float64`). Unordered types (`_Float16` with `__bf16`) are an error (`sema_arith_float_unordered`), also in `?:` ([expr.cond]/7.2), comparisons and compound assignment. The usual unary conversions do not promote an extended type.
 - /1.4.x: integral promotion, then the rank and sign rules (1.4.1–1.4.5).
 
 Non-arithmetic operands produce `sema_invalid_operands`. These errors are
@@ -229,7 +261,7 @@ The checks:
 - Integer to integer checks range against the target width, sign and enum underlying type.
 - Floating to integer is always narrowing.
 - Integer to floating checks that the value round-trips exactly. This uses the soft-float in `conv/soft.rs`, which implements IEEE half, bf16, single, double, x87 and quad with round-to-nearest-even.
-- Floating to floating checks [dcl.init.list]/7.2: the value is in range and exactly representable.
+- Floating to floating checks [dcl.init.list]/7.2: the value is in range and exactly representable. When either type is a C++23 extended floating-point type the "lower rank" test is the P1467 value-set rule (`format_subset`; C++23 wording "whose floating-point conversion rank is neither greater than nor equal to"), so `_Float32{1.0}` (constant, exact) is fine and `_Float32{d}` for a `double` variable is narrowing; otherwise clang's ranks.
 
 `narrowing_diag(s, n, init, to) -> Option<Diag>` returns clang's warning
 (warning-as-error, group `c++11-narrowing`) with its "insert an explicit
@@ -242,7 +274,7 @@ the target:
 - `type_integer_literal` / `classify_integer_literal`: [lex.icon] table 8, with the decimal and non-decimal columns, and suffixes `u l ll z` and their combinations. Overflow is handled in two ways:
   - a non-decimal literal that fits only in `unsigned long long` gets `sema_int_literal_implicitly_unsigned` (ExtWarn);
   - a literal that fits in nothing returns `LiteralError(sema_int_literal_too_large)`.
-- `type_float_literal` / `classify_float_literal`: [lex.fcon]. Values are rounded exactly from the decimal or hex string, using bignum rationals in `soft.rs`, into `FloatBits`. Suffixes none, `f`, `l` and `f16` are typed. `f32`, `f64`, `f128` and `bf16` get `sema_invalid_float_suffix`, matching clang 19, which has no P1467 extended floating-point types. Overflow and underflow produce `sema_float_literal_overflow` / `_underflow` (group `literal-range`).
+- `type_float_literal` / `classify_float_literal`: [lex.fcon]. Values are rounded exactly from the decimal or hex string, using bignum rationals in `soft.rs`, into `FloatBits`. Suffixes none, `f`, `l`, `f16`, and (P1467, WP-361) `f32`/`F32`, `f64`/`F64`, `f128`/`F128` and `bf16`/`BF16` are typed, as `_Float32`, `_Float64`, `_Float128` and `__bf16`, each rounded once from the exact decimal or hex value (`bf16` too, not through `float`; spec/lex.md). Before C++23 they are an extension (`lit_float_suffix_ext`, `-Wc++23-extensions`). Overflow and underflow produce `sema_float_literal_overflow` / `_underflow` (group `literal-range`).
 - `type_char_literal`: [lex.ccon], giving `char`, `wchar_t`, `char8_t`, `char16_t`, `char32_t`, or `int` for a multicharacter literal.
 - `string_literal_type(encoding, units)`: [lex.string]/10, giving `const C[units]`, where `units` includes the terminating NUL.
 - `float_const(ty, bits)`: interns the constant.
@@ -297,6 +329,15 @@ the target:
     argument") belong to overload resolution. `ConvCtx::Argument` gives the
     single-function wording "cannot initialize a parameter".
 12. The multicharacter-literal warning is the lexer's (`kiln_lex`).
+13. P1467 (clang 19/22 have no `_Float32`, `_Float64`, `_Float128` or
+    `bf16` literals; GCC 14 is the reference). The rank warning is
+    `-Wfloat-conversion-rank` in kiln and `-Wnarrowing`/`-Wpedantic` in
+    GCC; kiln's group sits in the `narrowing` umbrella. A narrowing
+    list-initialisation such as `_Float32{d}` is kiln's
+    `c++11-narrowing` error with its note, where GCC 14 only warns. An
+    ambiguous call caused by two rank-violating candidates says
+    "ambiguous" where GCC says "no matching function", and the rank
+    warning is not repeated per candidate.
 
 ## 10. Not yet (M3+)
 - Conversion warnings (§9.3) and fix-its.
