@@ -135,15 +135,18 @@ impl ModuleTable {
 impl crate::Ast {
     /// The named module `d` is attached to ([module.unit]/7): its owner's
     /// module when declared in a purview, unless inside a linkage
-    /// specification (`extern "C++"` attaches to the global module).
+    /// specification (`extern "C++"` attaches to the global module). The
+    /// walk follows lexical contexts: a namespace first opened in the
+    /// purview and reopened inside `extern "C++"` attaches what that
+    /// reopening declares to the global module.
     pub fn module_attachment(&self, d: DeclId) -> Option<&str> {
         use crate::decl::DeclKind;
         let m = self.modules.purview_module(d)?;
-        let mut c = self.decls.get(d).ctx();
+        let mut c = self.decls.lexical_ctx(d);
         while let Some(x) = c {
             match self.decls.get(x).kind() {
                 DeclKind::LinkageSpec => return None,
-                DeclKind::Export | DeclKind::Namespace => c = self.decls.get(x).ctx(),
+                DeclKind::Export | DeclKind::Namespace => c = self.decls.lexical_ctx(x),
                 _ => break,
             }
         }

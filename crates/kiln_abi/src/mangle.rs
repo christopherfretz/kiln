@@ -284,35 +284,95 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
 
 /// True if `d` is emitted with internal linkage: it has internal linkage
 /// ([`has_internal_linkage`]) or is unique-external (clang
-/// `getLVForNamespaceScopeDecl`: a namespace-scope variable whose type,
-/// or function whose parameter types, have no linkage; such an entity
-/// keeps its unmangled or `_Z` name).
+/// `getLVForNamespaceScopeDecl`, `getLVForClassMember`: a variable whose
+/// type, or a function whose type as written, has no linkage or internal
+/// linkage, or a specialization whose template arguments do, [basic.link]/8;
+/// such an entity keeps its unmangled or `_Z` name).
 pub fn is_internal_symbol(ast: &Ast, d: DeclId) -> bool {
     has_internal_linkage(ast, d) || is_unique_external(ast, d)
 }
 
 fn is_unique_external(ast: &Ast, d: DeclId) -> bool {
     let first = ast.first(d);
-    if !is_file_context(ast, first) || is_extern_c(ast, first) {
+    if is_extern_c(ast, first) {
+        return false;
+    }
+    // A member of a class without linkage already has internal linkage
+    // (`has_internal_linkage`); one of an externally visible class is
+    // checked like a namespace-scope entity (clang `getLVForClassMember`).
+    let member =
+        ast.decls.get(first).ctx().is_some_and(|c| is_record_kind(ast.decls.get(c).kind()));
+    if !member && !is_file_context(ast, first) {
         return false;
     }
     let n = ast.decls.get(first);
-    match n.kind() {
+    let own = match n.kind() {
         DeclKind::Var => n.ty().is_some_and(|t| !type_externally_visible(ast, t)),
-        DeclKind::Function => ast.decls.function(first).is_some_and(|f| {
-            ast.lists
-                .iter::<DeclId>(f.params)
-                .any(|p| ast.decls.get(p).ty().is_some_and(|t| !type_externally_visible(ast, t)))
-        }),
-        _ => false,
+        k if is_function_kind(k) => {
+            n.ty().is_some_and(|t| !fn_type_externally_visible(ast, first, t))
+        }
+        _ => return false,
+    };
+    // The template arguments of a function or variable template
+    // specialization (clang `mergeTemplateLV`); a member of a class
+    // template specialization takes its class's (`tag_externally_visible`).
+    own || ast.spec_info(first).is_some_and(|(_, s)| !args_externally_visible(ast, s.args))
+}
+
+/// clang's linkage of function `f`'s type as written: its parameter
+/// types and, unless deduced from a placeholder, its return type.
+fn fn_type_externally_visible(ast: &Ast, f: DeclId, ty: QualType) -> bool {
+    let TypeView::Function(p) = ast.types.canonical_view(ast.types.canonical(ty)) else {
+        return true;
+    };
+    let deduced =
+        ast.redecls_of(f).any(|r| ast.decls.function(r).is_some_and(|x| x.spec.return_deduced()));
+    (deduced || type_externally_visible(ast, p.ret()))
+        && ast.types.params(&p).iter().all(|&x| type_externally_visible(ast, x))
+}
+
+/// clang `getLVForTemplateArgumentList` is externally visible: every
+/// type argument's type, every entity a non-type argument names, and
+/// every template template argument.
+fn args_externally_visible(ast: &Ast, list: ArgListId) -> bool {
+    ast.types.args(list).iter().all(|a| match a.view() {
+        ArgView::Type(q) => type_externally_visible(ast, q),
+        ArgView::Value { ty, value } => {
+            type_externally_visible(ast, ty) && value_externally_visible(ast, value)
+        }
+        ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. } => {
+            match ast.types.template_name_view(ast.types.canonical_template_name(n)) {
+                TemplateName::Template(t) => !has_internal_linkage(ast, t),
+                _ => true,
+            }
+        }
+        ArgView::Pack(l) => args_externally_visible(ast, l),
+        ArgView::Null | ArgView::Expr { .. } | ArgView::Profile(_) => true,
+    })
+}
+
+/// clang `getLVForValue` for the scalar values kiln has: a pointer or
+/// reference to, or a member pointer naming, an entity without external
+/// linkage is not externally visible. (Class-type values are not walked.)
+fn value_externally_visible(ast: &Ast, value: ConstValueId) -> bool {
+    match ast.consts.get(value) {
+        ConstValue::Scalar(Scalar::Pointer {
+            base: PtrBase::Decl(d) | PtrBase::Function(d),
+            ..
+        }) => {
+            ast.decls.get(d).kind() == DeclKind::TemplateParamObject || !is_internal_symbol(ast, d)
+        }
+        ConstValue::Scalar(Scalar::MemberPtr { member, .. }) => !is_internal_symbol(ast, member),
+        _ => true,
     }
 }
 
 /// clang `Type::getLinkage` is externally visible, for the types kiln
 /// distinguishes: a type built from a class or enumeration without linkage
 /// (an unnamed one without a typedef name for linkage, a local one outside
-/// an inline function, one in an unnamed namespace, or a closure type
-/// without a mangling number) has none.
+/// an inline function, one in an unnamed namespace, a closure type
+/// without a mangling number, or a class template specialization with
+/// such a template argument) has none.
 pub fn type_externally_visible(ast: &Ast, q: QualType) -> bool {
     let t = ast.types.canonical(q);
     match ast.types.canonical_view(t) {
@@ -344,6 +404,13 @@ fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
         return false;
     }
     if in_anon_ns(ast, d) {
+        return false;
+    }
+    // A class template specialization takes the linkage of its template
+    // arguments (clang `getLVForDecl` → `mergeTemplateLV`).
+    if let Some((_, s)) = ast.spec_info(d)
+        && !args_externally_visible(ast, s.args)
+    {
         return false;
     }
     match effective_ctx(ast, d) {
@@ -930,13 +997,20 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// ::std::allocator<char>>` (`Ss`), `::std::basic_{i,o,io}stream<char,
     /// ::std::char_traits<char>>` (`Si`, `So`, `Sd`). Only entities declared
     /// directly in `::std` qualify: libstdc++'s `std::__cxx11::basic_string`
-    /// is `NSt7__cxx1112basic_string...E`.
+    /// is `NSt7__cxx1112basic_string...E`. A template attached to a named
+    /// module gets none (clang's `getOwningModuleForLinkage` check):
+    /// `StS_9allocatorIiE` in module `M`, not `SaIiE`.
     fn std_abbrev(&self, d: DeclId) -> Option<&'static str> {
         let ast = self.ast;
         if !self.parent(d).is_some_and(|p| self.is_std(p)) {
             return None;
         }
+        let module_attached =
+            |t: DeclId| ast.modules.active && ast.module_attachment(ast.first(t)).is_some();
         if ast.decls.get(d).kind() == DeclKind::ClassTemplate {
+            if module_attached(d) {
+                return None;
+            }
             return match decl_name(ast, d).as_str() {
                 "allocator" => Some("Sa"),
                 "basic_string" => Some("Sb"),
@@ -944,7 +1018,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             };
         }
         let (t, args) = self.spec_of(d)?;
-        if ast.decls.get(t).kind() != DeclKind::ClassTemplate {
+        if ast.decls.get(t).kind() != DeclKind::ClassTemplate || module_attached(t) {
             return None;
         }
         let (code, with_alloc) = match decl_name(ast, t).as_str() {
@@ -977,6 +1051,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let Some(rec) = self.ast.types.as_record(ty) else { return false };
         let Some((tmpl, args)) = self.spec_of(rec) else { return false };
         self.parent(rec).is_some_and(|p| self.is_std(p))
+            && !(self.ast.modules.active
+                && self.ast.module_attachment(self.ast.first(tmpl)).is_some())
             && decl_name(self.ast, tmpl) == name
             && matches!(self.ast.types.args(args), [c] if self.is_char_arg(c.view()))
     }
