@@ -5,8 +5,9 @@ unlocks parallel work for the next. Exit criteria are tests in the repo, not
 opinions. Status is tracked in `docs/BACKLOG.md`; this file is the plan.
 
 Targets: `aarch64-unknown-linux-gnu` (dev container) first, `x86_64` second.
-Oracle/backend: clang/LLVM 19. Reference library:
-the libc++ shipped with that LLVM.
+Oracle/backend: clang/LLVM 22 (since WP-355; clang/LLVM 19 stays installed as
+the second oracle and the frozen M3 gate). Reference library: the libc++
+shipped with that LLVM.
 
 ## M0 — Bootstrap — DONE 2026-10-28
 - Cargo workspace with every crate stubbed, `forbid(unsafe_code)`, clippy +
@@ -128,7 +129,9 @@ static initialization order, inline variables.
   libc++ test checkout move from clang/llvm 19 to clang/llvm 22 (both are in the
   sandbox). The M3 gate is frozen on 19 so its numbers stay comparable; M4+ gates run
   on 22 in `-std=c++26`. Steps A/B (the `KILN_ORACLE` and `-fclang-compat`
-  knobs, default 19) landed early (WP-262/263); C–E are WP-355 (started 2026-11-02).
+  knobs) landed early (WP-262/263); C–E landed as WP-355 (2026-11-02): `KILN_ORACLE`
+  defaults to 22, CI also runs `KILN_ORACLE=19 cargo xtask ci --quick`, and the
+  M4 libc++ baseline is in `docs/status/libcxx.md` (`docs/status/wp-184-oracle-switch.md`).
 - Exit: every C++23 row is `done`; every clang-22 C++26 row is `done` or has a
   written reason; `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>`, `<expected>`, `<mdspan>`,

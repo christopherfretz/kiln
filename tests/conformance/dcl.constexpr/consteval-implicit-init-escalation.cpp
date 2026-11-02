@@ -7,26 +7,28 @@
 // is then reported. A user-provided constructor reports the call itself.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 34:25 error "call to consteval function 'B::B' is not a constant expression"
-//@ diag: 31:37 note "read of non-const variable 'g' is not allowed in a constant expression"
-//@ diag: 34:25 note "in call to 'B()'"
-//@ diag: 30:5 note "declared here"
-//@ diag: 36:5 error "call to immediate function 'E::E' is not a constant expression"
-//@ diag: 32:8 note "'E' is an immediate constructor because the default initializer of 'b' contains a call to a consteval constructor 'B' and that call is not a constant expression"
-//@ diag: 31:37 note "read of non-const variable 'g' is not allowed in a constant expression"
-//@ diag: 32:8 note "in call to 'B()'"
-//@ diag: 36:5 note "in call to 'E()'"
-//@ diag: 30:5 note "declared here"
-//@ diag: 37:6 error "call to immediate function 'E2::E2' is not a constant expression"
-//@ diag: 33:8 note "'E2' is an immediate constructor because its body contains a call to a consteval constructor 'B' and that call is not a constant expression"
-//@ diag: 31:37 note "read of non-const variable 'g' is not allowed in a constant expression"
-//@ diag: 33:8 note "in call to 'B()'"
-//@ diag: 37:6 note "in call to 'E2()'"
-//@ diag: 30:5 note "declared here"
-//@ diag: 42:18 error "call to immediate function 'N::N' is not a constant expression"
-//@ diag: 41:8 note "'N' is an immediate constructor because the default initializer of 'm' contains a call to a consteval constructor 'M' and that call is not a constant expression"
-//@ diag: 42:21 note "function parameter 'n' with unknown value cannot be used in a constant expression"
-//@ diag: 42:11 note "declared here"
+//@ diag: 36:25 error "call to consteval function 'B::B' is not a constant expression"
+//@ diag: 33:37 note "read of non-const variable 'g' is not allowed in a constant expression"
+//@ diag: 36:25 note "in call to 'B()'"
+//@ diag: 32:5 note "declared here"
+//@ diag: 38:5 error "call to immediate function 'E::E' is not a constant expression"
+//@ diag: 34:8 note "'E' is an immediate constructor because the default initializer of 'b' contains a call to a consteval constructor 'B' and that call is not a constant expression"
+//@ diag: 33:37 note "read of non-const variable 'g' is not allowed in a constant expression"
+//@ diag: 34:8 note "in call to 'B()'"
+//@ diag: 38:5 note "in call to 'E()'"
+//@ diag: 32:5 note "declared here"
+//@ diag: 39:6 error "call to immediate function 'E2::E2' is not a constant expression"
+//@ diag: 35:8 note "'E2' is an immediate constructor because its body contains a call to a consteval constructor 'B' and that call is not a constant expression"
+//@ diag: 33:37 note "read of non-const variable 'g' is not allowed in a constant expression"
+//@ diag: 35:8 note "in call to 'B()'"
+//@ diag: 39:6 note "in call to 'E2()'"
+//@ diag: 32:5 note "declared here"
+//@ diag: 44:18 error "call to immediate function 'N::N' is not a constant expression"
+//@ diag: 43:8 note "'N' is an immediate constructor because the default initializer of 'm' contains a call to a consteval constructor 'M' and that call is not a constant expression"
+//@ diag: 44:21 note "function parameter 'n' with unknown value cannot be used in a constant expression"
+//@ diag: 44:11 note "declared here"
+//@ requires: clang<22
+// clang 22 emits error: call to immediate function 'N::N' is not a constant expression; WP-355 residual
 int g;
 struct B { int v; consteval B() : v(g) {} };
 struct E { B b; };

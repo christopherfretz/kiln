@@ -291,20 +291,20 @@ struct Outcome {
 
 fn run_case(name: &str, file: &Path, triple: &str) -> Result<Option<Outcome>, String> {
     let ir = kiln_ir(file, triple)?;
-    let Some(v) = opt(&ir) else { return Ok(None) };
+    let Some(checked) = opt(&ir) else { return Ok(None) };
     let (opt_name, clang_name) = (opt_tool(), clang_tool());
-    let ours = v.map_err(|e| format!("{opt_name} rejects kiln IR:\n{e}\n{ir}"))?;
-    let Some(c) = clang_ir(file, triple) else { return Ok(None) };
-    let c = c.map_err(|e| format!("{clang_name} failed: {e}"))?;
-    let theirs = opt(&c)
+    let ours = checked.map_err(|e| format!("{opt_name} rejects kiln IR:\n{e}\n{ir}"))?;
+    let Some(clang) = clang_ir(file, triple) else { return Ok(None) };
+    let clang = clang.map_err(|e| format!("{clang_name} failed: {e}"))?;
+    let theirs = opt(&clang)
         .unwrap_or_else(|| panic!("{opt_name} present"))
         .map_err(|e| format!("{opt_name} rejects clang IR: {e}"))?;
     let (a, b) = (ir_norm::base(&ours), ir_norm::base(&theirs));
     let (sa, sb) = (ir_norm::structural(&ours), ir_norm::structural(&theirs));
     let (aa, ab) = (ir_norm::abi_slice(&ours), ir_norm::abi_slice(&theirs));
     if std::env::var("KILN_CASE").is_ok_and(|c| c == name) {
-        let (x, y) = if mode() == Mode::Exact { (&a, &b) } else { (&sa, &sb) };
-        eprintln!("==== kiln ({triple}) ====\n{x}\n==== clang ({triple}) ====\n{y}");
+        let (k, o) = if mode() == Mode::Exact { (&a, &b) } else { (&sa, &sb) };
+        eprintln!("==== kiln ({triple}) ====\n{k}\n==== clang ({triple}) ====\n{o}");
     }
     let exact = a == b;
     let structural = sa == sb;

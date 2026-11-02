@@ -25,6 +25,7 @@ DelegatingCtorCycles = "delegating-ctor-cycles" [];
 DeleteIncomplete = "delete-incomplete" [];
 DeprecatedBuiltins = "deprecated-builtins" [];
 DeprecatedDeclarations = "deprecated-declarations" [];
+DeprecatedLiteralOperator = "deprecated-literal-operator" [];
 DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
 DeprecatedThisCapture = "deprecated-this-capture" [];
 DivisionByZero = "division-by-zero" [];

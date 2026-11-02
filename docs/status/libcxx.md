@@ -41,6 +41,29 @@ Only failures are printed; cluster them with
 The log elides symbols as `…`; reproduce a cluster with `kiln++ -fsyntax-only`
 and the harness flags (`spec/libcxx.md`).
 
+## M4 baseline: libc++ 22 (WP-355)
+
+First run of the M4 gate (`cargo xtask libcxx --gate m4`, contract in
+`spec/libcxx.md` "Gates" and "Toolchain") on the libc++ 22.1.8 tests
+(`llvmorg-22.1.8`) and headers (`_LIBCPP_VERSION` 220108, the extracted
+`.toolchain/libcxx-22-root`), `-std=c++26 -fclang-compat=22`, on WP-355's
+`0d6ebb48`, harness kiln, `-j 3 --timeout 20 --mem-limit 3072`, 622 s wall,
+peak RSS 384 MiB.
+
+| Scope | total | pass | fail | unsupported (driver) | pass rate |
+|---|---:|---:|---:|---:|---:|
+| 21 M4 directories (`<array>`…`<flat_map>`, see the gate list) | 2661 | 290 | 2281 | 90 (7) | **11.3%** |
+
+The number is low for two reasons, not hundreds: 1826 first failures (2080
+in all) are libc++ 22's `pointer_traits` rebind `static_assert` ("Cannot
+rebind pointer; did you forget to add a rebind member to your pointer?"),
+reached from every container/allocator test; 332 first (2132 in all) are
+`expected '…'` parse errors at libc++ 22's `_Nonnull`/`_Nullable`-annotated
+declarations. The next 91 are a requires-expression pack expansion
+("pack expansion does not contain any unexpanded parameter packs",
+`tuple.rel`). These three clusters are the first M4 libc++ work packages;
+`std/utilities/meta` (91.1%) and `std/numerics/bit` (93.8%) already pass.
+
 ## Environment
 
 What `cargo xtask libcxx` detects about the host, and what stays

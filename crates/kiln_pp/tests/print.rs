@@ -11,7 +11,8 @@ use kiln_lex::{Interner, Std};
 use kiln_pp::{MemoryResolver, PpOptions, Preprocessor, PrintOptions, print_macros};
 use kiln_source::SourceManager;
 
-const MARKERS: PrintOptions = PrintOptions { line_markers: true, line_directives: false, ucn_as_utf8: false };
+const MARKERS: PrintOptions =
+    PrintOptions { line_markers: true, line_directives: false, ucn_as_utf8: false };
 
 fn headers() -> MemoryResolver {
     MemoryResolver::new()

@@ -3,6 +3,8 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ args: -Wno-deprecated-array-compare
-//@ diag: 8:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 8:19 note "comparison of addresses of literals has unspecified value"
+//@ diag: 10:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 10:19 note "comparison of addresses of literals has unspecified value"
+//@ requires: clang<22
+// clang 22 emits error: comparison between two arrays is ill-formed in C++26; to compare array addr...; WP-355 residual
 static_assert("a" == "a");

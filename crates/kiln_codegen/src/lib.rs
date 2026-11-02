@@ -66,6 +66,9 @@ pub struct CodegenOptions {
     /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
     /// `LangOptions::ComplexRange`).
     pub complex_range: ComplexRange,
+    /// The clang version whose diagnostic text codegen's warnings follow
+    /// (`-fclang-compat=`; spec/driver.md).
+    pub clang_compat: u32,
 }
 
 /// clang's `LangOptions::ComplexRangeKind` (spec/abi.md §8.17): the
@@ -108,6 +111,7 @@ impl Default for CodegenOptions {
             ident: String::new(),
             outline_atomics: true,
             complex_range: ComplexRange::Full,
+            clang_compat: 19,
         }
     }
 }

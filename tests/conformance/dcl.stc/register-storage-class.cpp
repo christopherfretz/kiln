@@ -8,18 +8,20 @@
 // storage-class error instead (WP-293).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 24:8 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 25:8 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 26:27 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 27:15 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 31:3 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 32:3 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 33:8 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 26:8 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 27:8 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 28:27 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 29:15 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 33:3 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 34:3 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
 //@ diag: 35:8 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 35:8 error "loop variable 'e' may not be declared 'register'"
-//@ diag: 36:3 error "decomposition declaration cannot be declared 'register'"
-//@ diag: 36:3 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 38:7 error "type name does not allow storage class to be specified"
+//@ diag: 37:8 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 37:8 error "loop variable 'e' may not be declared 'register'"
+//@ diag: 38:3 error "decomposition declaration cannot be declared 'register'"
+//@ diag: 38:3 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 40:7 error "type name does not allow storage class to be specified"
+//@ requires: clang<22
+// clang 22 emits error: structured binding declaration cannot be declared 'register'; WP-355 residual
 
 void f(register int x);
 void g(register int);

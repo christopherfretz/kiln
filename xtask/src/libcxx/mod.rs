@@ -135,10 +135,7 @@ fn resolve_tag(
     gate: Option<&str>,
     env: Option<&str>,
 ) -> Result<String, String> {
-    let tag = flag
-        .or(gate.map(gate_tag))
-        .or(env.filter(|v| !v.is_empty()))
-        .unwrap_or(TESTS_TAG);
+    let tag = flag.or(gate.map(gate_tag)).or(env.filter(|v| !v.is_empty())).unwrap_or(TESTS_TAG);
     check_tag(tag)?;
     Ok(tag.to_owned())
 }
@@ -331,7 +328,10 @@ fn tag_major(tag: &str) -> Option<u32> {
 /// itself), else an extracted Debian package tree
 /// `.toolchain/libcxx-N-root` of this or the main checkout (spec/libcxx.md
 /// "Toolchain": `libc++-N-dev` cannot be installed beside `libc++-19-dev`).
-fn libcxx_install(root: &Path, toolchain: crate::oracle::Oracle) -> Result<Option<LibcxxTree>, String> {
+fn libcxx_install(
+    root: &Path,
+    toolchain: crate::oracle::Oracle,
+) -> Result<Option<LibcxxTree>, String> {
     if toolchain.libcxx_include().is_dir() {
         return Ok(None);
     }

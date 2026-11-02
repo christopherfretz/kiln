@@ -150,11 +150,7 @@ fn seed_corpus_passes_with_clang() {
         let src = std::fs::read_to_string(&c.path).unwrap();
         let s = directives::parse(&src, c.lang).unwrap();
         seen.insert(s.expect.as_str().to_owned());
-        let mut flag = |cond: bool, name: &str| {
-            if cond {
-                seen.insert(name.to_owned());
-            }
-        };
+        let mut flag = |cond: bool, name: &str| _ = cond && seen.insert(name.to_owned());
         flag(src.contains("//@ std:"), "std");
         flag(!s.args.is_empty(), "args");
         flag(s.diags.iter().any(|d| d.severity == directives::Severity::Note), "diag-note");
@@ -191,8 +187,8 @@ fn seed_corpus_passes_with_clang() {
         flag(s.ast_implicit, "ast-implicit");
         flag(s.inst_report.is_some(), "inst-report");
         flag(s.requires_target.is_some(), "requires");
-        flag(s.requires_clang.is_some(), "requires-clang");
-        flag(s.requires_clang_below.is_some(), "requires-clang-below");
+        let clang_req = s.requires_clang.is_some() || s.requires_clang_below.is_some();
+        flag(clang_req, "requires-clang");
     }
     let want = [
         "args",
@@ -220,7 +216,6 @@ fn seed_corpus_passes_with_clang() {
         "placeholder",
         "requires",
         "requires-clang",
-        "requires-clang-below",
         "run",
         "run-args",
         "run-stdin",

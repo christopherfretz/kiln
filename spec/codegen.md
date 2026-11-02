@@ -1328,8 +1328,10 @@ clang 19 `CGAtomic` at -O0, mirrored:
   accesses), at the expression's start, `cg_atomic_misaligned` (size,
   pointer alignment) when the pointer's alignment is not a multiple of
   the size, then `cg_atomic_oversized` (size, max inline width: 16 on
-  aarch64, 8 on x86_64) when the size exceeds it; clang's texts, the
-  latter with its double space before "bytes".
+  aarch64, 8 on x86_64) when the size exceeds it; clang's texts. At
+  `-fclang-compat=19` the latter is `cg_atomic_oversized_19`, clang 19's
+  text with its double space before "bytes" (clang 22 has one;
+  `CodegenOptions::clang_compat`, WP-355).
 - **Validation:** `tests/codegen/atomic_{builtins,orders,lvalues,wide,
   qualifier,libcall,lv_libcall,padded,aggregate,bool_inc,alignment}.cpp` exact on
   aarch64 and x86_64; `run` tests under `tests/conformance/ext.c11.atomic/`

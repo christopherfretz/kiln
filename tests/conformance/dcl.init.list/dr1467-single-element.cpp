@@ -4,12 +4,14 @@
 // is considered: copy-initialized for copy-list-initialization (explicit
 // constructors are not candidates), direct-initialized for direct-list.
 //@ expect: compile-fail
-//@ diag: 18:25 error "no matching constructor for initialization of 'X'"
-//@ diag: 15:39 note "no known conversion from 'const X' to"
-//@ diag: 15:26 note "explicit constructor is not a candidate"
-//@ diag: 15:12 note "requires 0 arguments, but 1 was provided"
-//@ diag: 25:18 error "call to deleted constructor of 'Z'"
-//@ diag: 24:17 note "'Z' has been explicitly marked deleted here"
+//@ diag: 20:25 error "no matching constructor for initialization of 'X'"
+//@ diag: 17:39 note "no known conversion from 'const X' to"
+//@ diag: 17:26 note "explicit constructor is not a candidate"
+//@ diag: 17:12 note "requires 0 arguments, but 1 was provided"
+//@ diag: 27:18 error "call to deleted constructor of 'Z'"
+//@ diag: 26:17 note "'Z' has been explicitly marked deleted here"
+//@ requires: clang<22
+// clang 22 no longer emits error: no matching constructor for initialization of 'X'; WP-355 residual
 #include "Inputs/initializer_list.h"
 
 struct X { X(); explicit X(const X&); X(std::initializer_list<int>); };

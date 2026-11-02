@@ -7,10 +7,12 @@
 // conversion fails reports that. A viable overload is still chosen.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 23:10 error "no matching function for call to 'f'"
-//@ diag: 22:18 note "candidate template ignored: substitution failure [with T = int]: type 'int' cannot be used prior to '::' because it has no members"
-//@ diag: 27:10 error "no matching function for call to 'h'"
-//@ diag: 26:6 note "candidate function template not viable: no known conversion from 'std::nullptr_t' to 'int' for 2nd argument"
+//@ diag: 25:10 error "no matching function for call to 'f'"
+//@ diag: 24:18 note "candidate template ignored: substitution failure [with T = int]: type 'int' cannot be used prior to '::' because it has no members"
+//@ diag: 29:10 error "no matching function for call to 'h'"
+//@ diag: 28:6 note "candidate function template not viable: no known conversion from 'std::nullptr_t' to 'int' for 2nd argument"
+//@ requires: clang<22
+// clang 22 emits error: no matching function for call to 'f'; WP-355 residual
 template <class T> constexpr bool small = sizeof(T) < 2;
 // `p(1)`: the template fails substitution, the non-template is chosen.
 

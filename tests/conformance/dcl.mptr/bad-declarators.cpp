@@ -4,18 +4,20 @@
 // namespace or enumeration.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 23:5 error "'I' (aka 'int') is not a class, namespace, or enumeration"
-//@ diag: 24:5 error "'p2' does not point into a class"
-//@ diag: 25:5 error "'p3' does not point into a class"
-//@ diag: 26:6 error "'p4' declared as a member pointer to a reference of type 'int &'"
-//@ diag: 27:6 error "'p5' declared as a member pointer to void"
-//@ diag: 28:7 error "'p6' declared as a member pointer to a reference of type 'int &'"
-//@ diag: 29:5 error "use of undeclared identifier 'nope'"
-//@ diag: 30:21 error "'type name' does not point into a class"
-//@ diag: 31:22 error "'type name' declared as a member pointer to a reference of type 'int &'"
-//@ diag: 32:12 error "'type name' does not point into a class"
-//@ diag: 33:13 error "'type name' declared as a member pointer to void"
-//@ diag: 34:16 error "cannot form pointer to 'decltype(auto)'"
+//@ diag: 25:5 error "'I' (aka 'int') is not a class, namespace, or enumeration"
+//@ diag: 26:5 error "'p2' does not point into a class"
+//@ diag: 27:5 error "'p3' does not point into a class"
+//@ diag: 28:6 error "'p4' declared as a member pointer to a reference of type 'int &'"
+//@ diag: 29:6 error "'p5' declared as a member pointer to void"
+//@ diag: 30:7 error "'p6' declared as a member pointer to a reference of type 'int &'"
+//@ diag: 31:5 error "use of undeclared identifier 'nope'"
+//@ diag: 32:21 error "'type name' does not point into a class"
+//@ diag: 33:22 error "'type name' declared as a member pointer to a reference of type 'int &'"
+//@ diag: 34:12 error "'type name' does not point into a class"
+//@ diag: 35:13 error "'type name' declared as a member pointer to void"
+//@ diag: 36:16 error "cannot form pointer to 'decltype(auto)'"
+//@ requires: clang<22
+// clang 22 emits error: member pointer does not point into a class; WP-355 residual
 struct C { int m; };
 typedef int I;
 enum E { e1 };

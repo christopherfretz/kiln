@@ -1296,6 +1296,7 @@ fn all_dumps() -> Vec<String> {
             filter: None,
             sources: Some(&sm),
             main_file: Some(main),
+            written_tags: false,
         };
         for x in &fixtures {
             out.push(x.dump_with(&opts));

@@ -4,18 +4,20 @@
 // `t7::Q`) and bare through an unqualified placeholder or typedef (`pr`).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 22:12 error "no matching function for call to 'f'"
-//@ diag: 21:25 note "candidate template ignored: could not match 'mp' against 's::pr'"
-//@ diag: 22:51 error "no matching function for call to 'f'"
-//@ diag: 21:25 note "candidate template ignored: could not match 'mp' against 's::pr'"
-//@ diag: 22:76 error "no matching function for call to 'f'"
-//@ diag: 21:25 note "candidate template ignored: could not match 'mp' against 'pr'"
-//@ diag: 28:13 error "no matching function for call to 'f7'"
-//@ diag: 27:25 note "candidate template ignored: could not match 'mp7' against 'pr'"
-//@ diag: 28:22 error "no matching function for call to 'f7'"
-//@ diag: 27:25 note "candidate template ignored: could not match 'mp7' against 't7::pr'"
-//@ diag: 28:54 error "no matching function for call to 'f7'"
-//@ diag: 27:25 note "candidate template ignored: could not match 'mp7' against 's7::pr'"
+//@ diag: 24:12 error "no matching function for call to 'f'"
+//@ diag: 23:25 note "candidate template ignored: could not match 'mp' against 's::pr'"
+//@ diag: 24:51 error "no matching function for call to 'f'"
+//@ diag: 23:25 note "candidate template ignored: could not match 'mp' against 's::pr'"
+//@ diag: 24:76 error "no matching function for call to 'f'"
+//@ diag: 23:25 note "candidate template ignored: could not match 'mp' against 'pr'"
+//@ diag: 30:13 error "no matching function for call to 'f7'"
+//@ diag: 29:25 note "candidate template ignored: could not match 'mp7' against 'pr'"
+//@ diag: 30:22 error "no matching function for call to 'f7'"
+//@ diag: 29:25 note "candidate template ignored: could not match 'mp7' against 't7::pr'"
+//@ diag: 30:54 error "no matching function for call to 'f7'"
+//@ diag: 29:25 note "candidate template ignored: could not match 'mp7' against 's7::pr'"
+//@ requires: clang<22
+// clang 22 emits error: no matching function for call to 'f'; WP-355 residual
 namespace s { template <class A, class B> struct pr { pr(A, B); }; }
 template <class K> struct mp {};
 template <class K> void f(mp<K>);

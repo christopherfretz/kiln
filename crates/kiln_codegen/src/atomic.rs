@@ -608,7 +608,13 @@ impl Cg<'_> {
         }
         let max = u64::from(self.target.types.max_atomic_inline_bytes);
         if size > max {
-            self.diags.push(Diag::new(DiagId::cg_atomic_oversized, span).arg(size).arg(max));
+            // clang 22 dropped clang 19's doubled space before `bytes)`.
+            let id = if self.opts.clang_compat >= 22 {
+                DiagId::cg_atomic_oversized
+            } else {
+                DiagId::cg_atomic_oversized_19
+            };
+            self.diags.push(Diag::new(id, span).arg(size).arg(max));
         }
     }
 

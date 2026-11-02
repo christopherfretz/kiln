@@ -16,7 +16,7 @@ use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TagKeyword;
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
-use kiln_lex::{Punct, TokKind, Token};
+use kiln_lex::{Punct, TokFlags, TokKind, Token};
 use kiln_sema::DeclSite;
 use kiln_sema::{
     BaseSpecInfo, Chunk, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId,
@@ -1718,6 +1718,20 @@ impl Parser<'_, '_> {
     /// A destructor or operator-function-id / conversion-function-id
     /// declarator-id ([class.dtor]/1, [over.oper.general]/1,
     /// [class.conv.fct]/1), at `~` or `operator`. Sets `d.special`.
+    /// CWG2521 ([over.literal]/1, [depr.lit]): the suffix identifier of
+    /// `operator "" _x`, preceded by whitespace, is deprecated; clang 22
+    /// warns by default (`-fclang-compat=22` only).
+    fn warn_spaced_literal_suffix(&mut self) {
+        let t = self.tok();
+        if self.s.clang_compat >= 22
+            && (t.has(TokFlags::LEADING_SPACE) || t.has(TokFlags::START_OF_LINE))
+        {
+            let name = self.spelling_of(&t);
+            let m = self.s.diag(DiagId::sema_deprecated_literal_operator_id, t.span.lo).arg(name);
+            self.s.emit(m);
+        }
+    }
+
     pub(crate) fn parse_special_declarator_id(&mut self, d: &mut Declarator) {
         let loc = self.loc();
         if self.at(Punct::Tilde) {
@@ -1791,6 +1805,7 @@ impl Parser<'_, '_> {
             let suffix = if ud.is_some() {
                 ud
             } else if let Some(n) = self.ident() {
+                self.warn_spaced_literal_suffix();
                 self.bump();
                 Some(n)
             } else {

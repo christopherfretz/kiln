@@ -19,7 +19,10 @@ Columns:
   Seeded on 2026-11-01 (WP-185) from a corpus run through kiln.
 - **Corpus tests**: paths under `tests/`. `*-probe.cpp` files are WP-185's
   one-per-paper probes; a probe marked `xfail(clang)` names the clang
-  versions that lack the feature in its reason.
+  versions that lack the feature in its reason. Since the oracle switch
+  (WP-355) a probe that only clang 19 lacks says `requires: clang>=22`
+  instead, so it is a real two-compiler test under the clang 22 oracle and
+  runs kiln at `-fclang-compat=22` under the clang 19 one.
 
 ## C++23
 
@@ -38,7 +41,7 @@ Columns:
 | P2718R0 | Lifetime extension in range-based `for` | `__cpp_range_based_for` 202211L / 202211L | done | `conformance/stmt.ranged/p2718-order.cpp`<br>`conformance/stmt.ranged/p2718-constexpr.cpp` | |
 | P2448R2 | Relaxing some constexpr restrictions | — | done | `conformance/dcl.constexpr/p2448-probe.cpp` | `__cpp_constexpr` 202207L; that macro is recorded on P2747, its latest bump. |
 | P2242R3 | Non-literal variables, labels and `goto` in constexpr functions | — | done | `conformance/dcl.constexpr/p2242-probe.cpp` | `__cpp_constexpr` 202110L (see P2747). |
-| P2280R4 | Unknown references in constant expressions | — | todo | `conformance/expr.const/p2280-probe.cpp` | DR. clang 19 lacks it (probe `xfail(clang)`); clang 20+ accepts. |
+| P2280R4 | Unknown references in constant expressions | — | todo | `conformance/expr.const/p2280-probe.cpp` | DR. clang 19 lacks it (probe `xfail(clang)`); clang 20+ accepts, so the probe XPASSes under the clang 22 oracle (WP-357 owns it; WP-355 residual). |
 | P2647R1 | `static constexpr` variables in constexpr functions | — | done | `conformance/dcl.constexpr/p2647-probe.cpp` | `__cpp_constexpr` 202211L (see P2747). |
 | P2582R1 | CTAD from inherited constructors | — | done | `conformance/over.match.class.deduct/p2582-probe.cpp`<br>`conformance/over.match.class.deduct/p2582-inherited-guides.cpp`<br>`conformance/over.match.class.deduct/p2582-not-deducible.cpp`<br>`conformance/over.match.class.deduct/run-p2582.cpp` | Neither clang implements it (clang 19 and 22 reject the paper's examples; probe `xfail(clang)`, the other tests `skip(clang)`). Its macro bump, `__cpp_deduction_guides` 202207L, is absent from both clangs (201703L) and kiln keeps 201703L to match them. Not yet: `using G::F::F` naming the base through the injected-class-name, guides the base itself inherited, and an alias template of an inheriting class (spec/sema-templates.md §6.6.1). |
 | P2324R2 | Labels at the end of compound statements | — | done | `conformance/stmt.label/p2324-probe.cpp` | ROADMAP M4 cites this as "P2360 labels at the end of blocks"; P2324 is the labels paper. |
@@ -69,8 +72,8 @@ Columns:
 | P2169R4 | Placeholder variables `_` | `__cpp_placeholder_variables` 202306L / 202306L | todo | `conformance/basic.scope.scope/p2169-probe.cpp` | kiln advertises the macro without the feature (Macro gaps). |
 | P2573R2 | `= delete("reason")` | `__cpp_deleted_function` 202403L / 202403L | done | `conformance/dcl.fct.def.delete/redeclaration.cpp`<br>`conformance/dcl.fct.def.delete/templates.cpp`<br>`conformance/dcl.fct.def.delete/uses.cpp` | |
 | P2741R3 | User-generated `static_assert` messages | `__cpp_static_assert` 202306L / 202306L | todo | `conformance/dcl.pre/p2741-probe.cpp` | kiln advertises the macro without the feature (Macro gaps). |
-| P2893R3 | Variadic friends | `__cpp_variadic_friend` 202403L / 202403L | done | `conformance/class.friend/p2893-probe.cpp`<br>`conformance/class.friend/p2893-variadic-friend.cpp`<br>`conformance/class.friend/p2893-access-errors.cpp`<br>`conformance/class.friend/p2893-diags.cpp`<br>`conformance/class.friend/p2893-ext.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`; kiln defines the macro in every C++ mode, as clang 22 does. |
-| P2747R2 | `constexpr` placement new | `__cpp_constexpr` 202306L / 202406L | todo | `conformance/expr.new/p2747-probe.cpp`<br>`conformance/expr.new/constexpr-placement.cpp` | clang 19: 202306L, the P2738 level, with no P2747 (probe `xfail(clang)`). `constexpr-placement.cpp` pins clang 19's pre-P2747 rejection; flip it at the oracle switch (WP-184). |
+| P2893R3 | Variadic friends | `__cpp_variadic_friend` 202403L / 202403L | done | `conformance/class.friend/p2893-probe.cpp`<br>`conformance/class.friend/p2893-variadic-friend.cpp`<br>`conformance/class.friend/p2893-access-errors.cpp`<br>`conformance/class.friend/p2893-diags.cpp`<br>`conformance/class.friend/p2893-ext.cpp` | clang 19 lacks it: macro not defined; the probe `requires: clang>=22` (WP-355). kiln defines the macro in every C++ mode, as clang 22 does. |
+| P2747R2 | `constexpr` placement new | `__cpp_constexpr` 202306L / 202406L | todo | `conformance/expr.new/p2747-probe.cpp`<br>`conformance/expr.new/constexpr-placement.cpp` | clang 19: 202306L, the P2738 level, with no P2747 (probe `xfail(clang)`). `constexpr-placement.cpp` pins clang 19's pre-P2747 rejection; WP-357 owns flipping both tests (they XPASS / fail under the clang 22 oracle, WP-355 residual). |
 | P3068R6 | `constexpr` exceptions | `__cpp_constexpr_exceptions` — / — | todo | `conformance/expr.throw/p3068-probe.cpp`<br>`conformance/expr.throw/constexpr-throw.cpp` | Not in clang 22: written reason for the M4 exit. `constexpr-throw.cpp` pins the pre-P3068 rejection. |
 | P2738R1 | `constexpr` cast from `void*` | — | done | `conformance/expr.static.cast/p2738-probe.cpp` | `__cpp_constexpr` 202306L (see P2747). |
 | P1967R14 | `#embed` | `__cpp_pp_embed` — / — | done | `conformance/cpp.embed/p1967-probe.cpp`<br>`differential/pp/torture/cpp.embed-params.cpp` | Neither clang defines `__cpp_pp_embed`; use `__has_embed`. clang reports `#embed` in C++ as a C23 extension (`-Wc23-extensions`), and kiln matches. |
@@ -78,15 +81,15 @@ Columns:
 | P1061R10 | Structured bindings can introduce a pack | `__cpp_structured_bindings` 202411L / 202411L | done | `conformance/dcl.struct.bind/pack.cpp`<br>`conformance/dcl.struct.bind/pack-positive.cpp`<br>`conformance/dcl.struct.bind/pack-errors.cpp`<br>`conformance/dcl.struct.bind/pack-ext.cpp`<br>`conformance/dcl.struct.bind/run-pack-fold.cpp` | clang 19 lacks it (202403L, the P0609 level); kiln raises the macro to 202411L wherever it is defined (C++17 on), as clang 22 does. |
 | P0609R3 | Attributes for structured bindings | — | done | `conformance/dcl.struct.bind/p0609-probe.cpp` | Supplies `__cpp_structured_bindings` 202403L, now superseded by P1061's 202411L. |
 | P2795R5 | Erroneous behaviour for uninitialized reads | — | todo | `conformance/dcl.attr.indet/p2795-probe.cpp` | Not in clang 22 (no `[[indeterminate]]`): written reason for the M4 exit. |
-| P2786R13 | Trivial relocatability | `__cpp_trivial_relocatability` — / 202502L | partial | `conformance/class.prop/p2786-probe.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`. kiln has `__builtin_is_cpp_trivially_relocatable` (clang 22 semantics, WP-263); the macro stays undefined. Check its standing in the C++26 draft before investing (reportedly pulled at Kona 2025). |
+| P2786R13 | Trivial relocatability | `__cpp_trivial_relocatability` — / 202502L | partial | `conformance/class.prop/p2786-probe.cpp` | clang 19 lacks it: macro not defined; the probe `requires: clang>=22` (WP-355). kiln has `__builtin_is_cpp_trivially_relocatable` (clang 22 semantics, WP-263) and, at `-fclang-compat=22`, clang 22's `-Wdeprecated-builtins` warning on `__is_trivially_relocatable` (`conformance/ext.traits/is-trivially-relocatable-deprecated.cpp`); the macro stays undefined. Check its standing in the C++26 draft before investing (reportedly pulled at Kona 2025). |
 | P1306R5 | Expansion statements | `__cpp_expansion_statements` — / — | todo | `conformance/stmt.expand/p1306-probe.cpp` | Not in clang 22: written reason for the M4 exit. |
 | P2361R6 | Unevaluated strings | — | done | `conformance/lex.string.uneval/unevaluated-string-macro.cpp` | |
 | P2864R2 | Removing deprecated arithmetic conversion on enumerations | — | done | `conformance/expr.arith.conv/p2864-probe.cpp` | |
 | P2748R5 | Disallow binding a returned glvalue to a temporary | — | done | `conformance/class.temporary/return-dangling.cpp`<br>`conformance/stmt.return/stack-address-temporary.cpp` | |
 | P3144R2 | Deleting a pointer to an incomplete type is ill-formed | — | done | `conformance/expr.delete/delete-incomplete.cpp` | |
 | P2963R3 | Ordering of constraints involving fold expressions | — | done | `conformance/templates/concepts/temp.constr.fold-expanded.cpp` | |
-| P2865R6 | Removing deprecated array comparisons | — | todo | `conformance/expr.eq/p2865-probe.cpp` | clang 19 only warns (probe `xfail(clang)`). |
-| P3176R1 | The Oxford variadic comma | — | todo | `conformance/dcl.fct/p3176-probe.cpp` | clang 19 lacks the deprecation (probe `xfail(clang)`). |
+| P2865R6 | Removing deprecated array comparisons | — | todo | `conformance/expr.eq/p2865-probe.cpp` | clang 19 only warns (probe `xfail(clang)`); clang 22 errors, so the probe XPASSes under the clang 22 oracle (sibling-owned; WP-355 residual). Corpus tests that compare arrays in constant expressions (`expr.const/5.24/string-literals.cpp`, `5.8/cmp-string-literals.cpp`) are `requires: clang<22`. |
+| P3176R1 | The Oxford variadic comma | — | todo | `conformance/dcl.fct/p3176-probe.cpp` | clang 19 lacks the deprecation (probe `xfail(clang)`); clang 22 has it, so the probe XPASSes under the clang 22 oracle (sibling-owned; WP-355 residual). |
 
 ## DR-level papers
 

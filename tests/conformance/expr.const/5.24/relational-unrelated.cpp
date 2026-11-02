@@ -2,7 +2,9 @@
 // Mirrors crates/kiln_oven/tests/expr_const.rs `expr_const_5_24_relational_unrelated`.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 8:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 8:18 note "comparison between '&a' and '&b' has unspecified value"
+//@ diag: 10:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 10:18 note "comparison between '&a' and '&b' has unspecified value"
+//@ requires: clang<22
+// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
 constexpr int a = 1, b = 2;
 static_assert(&a < &b);

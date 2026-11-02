@@ -7,19 +7,21 @@
 //@ expect: compile-fail
 //@ args: -ferror-limit=0
 //@ strict-diags
-//@ diag: 24:9 error "type 'int' cannot be used prior to '::' because it has no members"
-//@ diag: 27:9 note "in instantiation of function template specialization 'f<int>' requested here"
-//@ diag: 29:9 error "type 'int' cannot be used prior to '::' because it has no members"
-//@ diag: 32:9 note "in instantiation of function template specialization 'g<int>' requested here"
-//@ diag: 34:31 error "base specifier must name a class"
-//@ diag: 38:8 note "in instantiation of template class 'C<int>' requested here"
-//@ diag: 35:9 error "type 'int' cannot be used prior to '::' because it has no members"
-//@ diag: 36:18 error "type 'int' cannot be used prior to '::' because it has no members"
-//@ diag: 40:37 error "using declaration refers into 'X::', which is not a base class of 'D<X>'"
-//@ diag: 42:6 note "in instantiation of template class 'D<X>' requested here"
-//@ diag: 43:34 error "base specifier must name a class"
-//@ diag: 46:8 note "in instantiation of template class 'G<int>' requested here"
-//@ diag: 44:9 error "type 'int' cannot be used prior to '::' because it has no members"
+//@ diag: 26:9 error "type 'int' cannot be used prior to '::' because it has no members"
+//@ diag: 29:9 note "in instantiation of function template specialization 'f<int>' requested here"
+//@ diag: 31:9 error "type 'int' cannot be used prior to '::' because it has no members"
+//@ diag: 34:9 note "in instantiation of function template specialization 'g<int>' requested here"
+//@ diag: 36:31 error "base specifier must name a class"
+//@ diag: 40:8 note "in instantiation of template class 'C<int>' requested here"
+//@ diag: 37:9 error "type 'int' cannot be used prior to '::' because it has no members"
+//@ diag: 38:18 error "type 'int' cannot be used prior to '::' because it has no members"
+//@ diag: 42:37 error "using declaration refers into 'X::', which is not a base class of 'D<X>'"
+//@ diag: 44:6 note "in instantiation of template class 'D<X>' requested here"
+//@ diag: 45:34 error "base specifier must name a class"
+//@ diag: 48:8 note "in instantiation of template class 'G<int>' requested here"
+//@ diag: 46:9 error "type 'int' cannot be used prior to '::' because it has no members"
+//@ requires: clang<22
+// clang 22 emits error: using declaration refers into 'X', which is not a base class of 'D<X>'; WP-355 residual
 template <class T> int f() {
   using T::member;
   return 0;

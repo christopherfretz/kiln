@@ -45,8 +45,7 @@ pub fn base(s: &str) -> String {
 
 /// Flags on instructions and constant expressions that releases add or
 /// infer (LLVM 19 → 22: `nuw` on struct GEPs, `samesign`, `nneg`, ...).
-const FLAGS: &[&str] =
-    &["inbounds", "nuw", "nsw", "nusw", "exact", "nneg", "disjoint", "samesign"];
+const FLAGS: &[&str] = &["inbounds", "nuw", "nsw", "nusw", "exact", "nneg", "disjoint", "samesign"];
 
 /// Parameter, return and function attributes that do not change the ABI.
 const NON_ABI_ATTRS: &[&str] = &[
@@ -137,7 +136,9 @@ fn is_dropped_word(core: &str) -> bool {
     FLAGS.contains(&core)
         || NON_ABI_ATTRS.contains(&core)
         || NON_ABI_CALL_ATTRS.iter().any(|p| core.starts_with(p) && core.ends_with(')'))
-        || (core.starts_with('#') && core.len() > 1 && core[1..].bytes().all(|b| b.is_ascii_digit()))
+        || (core.starts_with('#')
+            && core.len() > 1
+            && core[1..].bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Removes metadata attachments (`, !srcloc !5`, `!llvm.loop !7`): they
@@ -151,10 +152,10 @@ fn strip_md_attachments(toks: &mut Vec<String>) {
             break;
         }
         toks.truncate(n - 2);
-        if let Some(last) = toks.last_mut() {
-            if last.ends_with(',') {
-                last.pop();
-            }
+        if let Some(last) = toks.last_mut()
+            && last.ends_with(',')
+        {
+            last.pop();
         }
     }
 }
@@ -381,9 +382,9 @@ pub fn abi_slice(s: &str) -> String {
     let mut out = String::new();
     for line in base(s).lines() {
         let line = strip_comment(line).trim_end();
-        let kept = if line.starts_with("target triple") {
-            Some(line.to_owned())
-        } else if line.starts_with('%') && line.contains(" = type ") {
+        let kept = if line.starts_with("target triple")
+            || (line.starts_with('%') && line.contains(" = type "))
+        {
             Some(line.to_owned())
         } else if line.starts_with("declare ") && line.contains(" @llvm.") {
             // Intrinsics are not calls through the ABI.

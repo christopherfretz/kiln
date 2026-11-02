@@ -318,8 +318,7 @@ impl Sema<'_, '_> {
         let mut args = Self::outer_levels(tmpl, depth);
         // clang 19 substitutes an alias with the canonical arguments: the
         // aliased type of `Ptr<I>` is `int *`, not `I *`.
-        let subst_args =
-            if sugared { conv.sugared } else { self.alias_subst_args(conv.sugared) };
+        let subst_args = if sugared { conv.sugared } else { self.alias_subst_args(conv.sugared) };
         args.push(subst_args, tmpl, LevelMode::Substitute);
         if !self.push_inst_frame(FrameKind::AliasTemplate, pattern, tmpl, loc) {
             return Err(());
