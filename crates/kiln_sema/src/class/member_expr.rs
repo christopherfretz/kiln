@@ -553,6 +553,32 @@ impl Sema<'_, '_> {
             self.type_named_by(&found)
         });
         let (t1, named) = (self.injected_named(t1), self.injected_named(named));
+        // `p.F::~T()` with `p` a pointer to `T`: "use '->'" and the access
+        // goes on as `p->F::~T()`, the scope type then checked against
+        // `T` (clang `BuildPseudoDestructorExpr` checks the destroyed type
+        // first; see `finish_member_destructor`).
+        if let (Some((t, td)), Some((f, fd))) = (named, t1)
+            && !arrow
+            && !dependent
+            && let Some(p) = self.ast.types.pointee(obj.ty)
+            && !self.is_dependent_type(t)
+            && self.same_unqual(p, t)
+        {
+            let msg = self
+                .diag(DiagId::sema_member_reference_suggestion, op_loc)
+                .arg(self.ty_arg(obj.ty))
+                .arg("0");
+            self.emit(msg);
+            if !self.is_dependent_type(f) && !self.same_unqual(p, f) {
+                let msg =
+                    self.diag(DiagId::sema_pseudo_dtor_type_mismatch, floc).diff_args(self, p, f);
+                self.emit(msg);
+            }
+            self.mark_type_referenced(fd);
+            self.mark_type_referenced(td);
+            let pb = conv::decay(self, obj.b);
+            return self.builder().pseudo_destructor_q(pb, true, true, t, loc);
+        }
         let mut bad = false;
         for (n, at, ty) in [(name, loc, named), (fname, floc, t1)] {
             match ty {
@@ -775,7 +801,12 @@ impl Sema<'_, '_> {
         };
         if self.ast.types.is_dependent(obj_ty) || self.ast.types.is_dependent(destroyed) {
             let qualified = !matches!(qual, DtorQual::None);
-            return self.builder().pseudo_destructor_q(b, arrow, qualified, destroyed, loc);
+            let e = self.builder().pseudo_destructor_q(b, arrow, qualified, destroyed, loc);
+            // The `.`/`->`, where an instantiation diagnoses the access.
+            if op_loc != loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
+            return e;
         }
         let same = self.same_unqual(obj_ty, destroyed);
         if let Some(def) = def
@@ -844,7 +875,10 @@ impl Sema<'_, '_> {
             // `p.~T()` with `p` a pointer to `T`: a pseudo-destructor of
             // the pointer only when the name denotes the pointer type
             // ([expr.prim.id.dtor]/2, [expr.ref]/2); naming the pointee
-            // suggests `->` (clang `BuildPseudoDestructorExpr`).
+            // suggests `->` (clang `BuildPseudoDestructorExpr`), and the
+            // access goes on as `p->~T()`: the call is a `void`
+            // expression whatever the pointee (a class too, as clang
+            // recovers it).
             if !arrow
                 && self.ast.types.is_pointer(obj_ty)
                 && self.ast.types.pointee(obj_ty).is_some_and(|p| self.same_unqual(p, destroyed))
@@ -854,7 +888,9 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(obj_ty))
                     .arg("0");
                 self.emit(msg);
-                return self.recover_err(&[base], loc);
+                let qualified = !matches!(qual, DtorQual::None);
+                let p = conv::decay(self, b);
+                return self.builder().pseudo_destructor_q(p, true, qualified, destroyed, loc);
             }
             let msg = self
                 .diag(DiagId::sema_pseudo_dtor_type_mismatch, loc)

@@ -2086,7 +2086,14 @@ access, out-of-line declarator scope.**
   iterator types; WP-339); only when the destructor name denotes the
   pointee (`p.~S()`) does `finish_member_destructor` report clang's
   "member reference type 'S *' is a pointer; did you mean to use '->'?"
-  (clang `BuildPseudoDestructorExpr`).
+  (clang `BuildPseudoDestructorExpr`) and then recovers as clang does: the
+  access is taken as `->` and the result is a void pseudo-destructor
+  call on the decayed pointer, so `p.~S()` is a well-typed expression
+  with no further error of its own (`int a = p.~S();` then reports the
+  `void` initializer, as clang).
+  The qualified form `p.N::~S()` recovers the same way, after the
+  type-name check against the pointee (`act_on_member_destructor_q`;
+  WP-352, `tests/conformance/expr.prim.id.dtor/pointer-dot-dtor-arrow-recovery.cpp`).
 - *Member not found* ([expr.ref]/7.4, [class.member.lookup]/1): "no
   member named 'm' in 'C'" names the object's class without its
   cv-qualifiers (`member_access`; clang prints the record, so a
