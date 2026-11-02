@@ -1735,7 +1735,18 @@ impl Sema<'_, '_> {
                     *pos += 1;
                     let at = self.begin_loc(e);
                     self.check_narrowing(e, ty, ty);
-                    self.init_from_expr(ty, e, ConvCtx::Initialization, at)
+                    let x = self.init_from_expr(ty, e, ConvCtx::Initialization, at);
+                    // A class element converted by a conversion function:
+                    // the second standard conversion narrows too
+                    // ([dcl.init.list]/7, `bool a[1] = {X()}` with
+                    // `X::operator void*`), as for a scalar list.
+                    if self.ast.types.as_record(ety).is_some() && self.is_scalar(ty) {
+                        let inner = self.ignore_paren_imp_casts(x);
+                        if inner != x {
+                            self.check_narrowing(inner, ty, ty);
+                        }
+                    }
+                    x
                 }
             }
         }
