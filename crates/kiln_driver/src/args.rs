@@ -177,6 +177,10 @@ pub struct PredefArgs {
     pub rtti: Option<bool>,
     /// `-f[no-]char8_t`.
     pub char8_t: Option<bool>,
+    /// `-fsigned-char` / `-funsigned-char` (and their `-fno-` inverses,
+    /// last wins): the signedness of plain `char` (\[basic.fundamental]/7);
+    /// `None` keeps the target's (signed on x86-64, unsigned on `AArch64`).
+    pub char_signed: Option<bool>,
     /// `-f[no-]pic`, `-f[no-]PIC`, `-f[no-]pie`, `-f[no-]PIE` (last wins).
     pub pic: Option<PicModel>,
     /// `-f[no-]fast-math`.
@@ -683,6 +687,8 @@ impl Args {
             "-fno-rtti" => p.rtti = Some(false),
             "-fchar8_t" => p.char8_t = Some(true),
             "-fno-char8_t" => p.char8_t = Some(false),
+            "-fsigned-char" | "-fno-unsigned-char" => p.char_signed = Some(true),
+            "-funsigned-char" | "-fno-signed-char" => p.char_signed = Some(false),
             "-fpic" => p.pic = Some(PicModel::Pic(1)),
             "-fPIC" => p.pic = Some(PicModel::Pic(2)),
             "-fpie" => p.pic = Some(PicModel::Pie(1)),

@@ -65,6 +65,7 @@ starting with `-` are inputs.
 | `-f[no-]dollars-in-identifiers` | `$` in identifiers (default on) |
 | `-O*` | also selects `llc`'s level and is passed to the link (see "Code generation") |
 | `-O*`, `-f[no-]exceptions`, `-f[no-]cxx-exceptions`, `-f[no-]rtti`, `-f[no-]char8_t`, `-f[no-]pic/PIC/pie/PIE`, `-f[no-]fast-math`, `-ffreestanding`, `-fhosted`, `-pthread`, `-f[no-]threadsafe-statics`, `-f[no-]sized-deallocation` | change predefined macros only (see "Predefines") |
+| `-fsigned-char`, `-funsigned-char` (`-fno-unsigned-char`, `-fno-signed-char` are their synonyms; the last one wins) | the signedness of plain `char` ([basic.fundamental]/7), overriding the target's (signed on x86-64, unsigned on AArch64): it sets `TargetTypes::char_signed` of the `kiln_abi::Target` the parser, sema, the Oven and codegen use, the `#if` evaluator's character type ([cpp.cond]), and adds or removes `__CHAR_UNSIGNED__` as clang 19 does (see "Predefines") |
 | `-fclang-compat=<major>` | kiln: which clang release's predefined macros and `__has_*` answers to reproduce, `19` (default) or `22`; any other value is an error (spec/pp.md "clang compatibility level") |
 | `-W...`, `-w`, `-pedantic`, `-ferror-limit=`, `-fdiagnostics-format=`, `-f[no-]color-diagnostics`, `-f[no-]caret-diagnostics`, ... | diagnostic options, validated and applied by `kiln_diag::DiagOptions` (`spec/diag.md`) |
 | `-fkiln-reproducible-time` | see "Reproducible time" |
@@ -184,6 +185,7 @@ The `<built-in>` buffer is `kiln_pp::build_predefines(base, cfg, -D/-U)`.
   - `-O` levels;
   - exceptions and RTTI;
   - char8_t;
+  - plain `char` signedness (`__CHAR_UNSIGNED__`);
   - PIC/PIE (Debian default PIE 2);
   - fast-math;
   - freestanding;
