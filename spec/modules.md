@@ -193,6 +193,32 @@ are always visible. A non-exported function of the module's interface is
 not found by an importer's ADL: clang 22 reads "in the interface of M" as
 "exported", and kiln follows it (`module.interface/visibility.cpp`).
 
+**Missing imports.** When a lookup finds nothing visible, it is redone
+ignoring visibility (`Sema::module_hidden_lookup`) at the sites that would
+report the failure: an id-expression (qualified or not), an unqualified
+call after ADL, and a type-name in a decl-specifier (qualified or not;
+only a type is offered there). What it finds is reachable but not
+visible, and is reported as clang 22's `diagnoseMissingImport` does:
+
+- a declaration in the purview of module `M` (exported from a unit or
+  partition that is not imported, or with module linkage):
+  `declaration of 'x' must be imported from module 'M' before it is
+  required`; a partition's declaration names the primary module;
+- a global-module declaration (an imported unit's GMF):
+  `missing '#include'; 'x' must be declared before it is used`;
+- either way with `note: declaration here is not visible` at the
+  declaration.
+
+An unqualified lookup does not offer a module-linkage declaration of
+another module: that stays `use of undeclared identifier` / `unknown type
+name` (clang 22 does too until a qualified lookup has loaded the
+namespace's declarations from the BMI, an artifact kiln does not model).
+The use then recovers with the declaration found; for an exported one its
+unit (and what that re-exports) becomes visible for the rest of the unit,
+so it is reported once (clang's `createImplicitModuleImportForErrorRecovery`),
+while a GMF or module-linkage declaration is reported at every use
+(`module.reach/missing-import.cpp`).
+
 Redeclaration matching ([basic.link]/8) excludes non-exported purview
 declarations of another named module (a declaration with module linkage of
 another module is a different entity); internal-linkage declarations of
@@ -365,11 +391,8 @@ and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
    importers of one such interface fail to link with a duplicate
    `vtable for G`; kiln follows the Itanium key-function rule instead
    (`module.global.frag/gmf-dup-run.cpp`).
-8. A non-visible module declaration found by lookup is reported as a plain
-   lookup failure (`use of undeclared identifier`, `no type named ...`);
-   clang 22 says `declaration of 'x' must be imported from module 'M'
-   before it is required` / `missing '#include'; 'x' must be declared
-   before it is used`.
+8. (Retired: a reachable but non-visible declaration is reported as a
+   missing import, §5.)
 9. A named module's `thread_local` variables are defined (with their
    `__tls_init`, `_ZTH` aliases and `weak_odr` `_ZTW` wrappers,
    spec/codegen.md §7p) by the unit that owns them only; an importer
@@ -389,6 +412,9 @@ and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
   `cpp.module/`: preamble, export and attachment diagnostics
   (strict-diags, clang 22 wording; single-file tests run under clang too,
   `requires: clang>=22` where clang 19's wording differs).
+- `module.reach/missing-import.cpp` (+ kiln_driver
+  `module_missing_import_notes` for its notes): the missing-import
+  errors (§5), identical to clang 22's output.
 - `module.interface/export-run.cpp`, `visibility.cpp`,
   `module.unit/partitions-run.cpp`, `module.private.frag/private-run.cpp`,
   `module.import/export-import-run.cpp`: multi-unit programs whose module

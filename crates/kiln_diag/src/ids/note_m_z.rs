@@ -18,6 +18,7 @@ note_misplaced_ellipsis_vararg_existing_ellipsis = Note (0) "preceding '...' dec
 note_module_add_export = Note (0) "add 'export' here if this is intended to be a module interface unit";
 note_module_add_gmf = Note (0) "add 'module;' to the start of the file to introduce a global module fragment";
 note_module_anon_ns_begins = Note (0) "anonymous namespace begins here";
+note_module_decl_not_visible = Note (0) "declaration here is not visible";
 note_module_export_block_begins = Note (0) "export block begins here";
 note_module_previous_decl = Note (0) "previous module declaration is here";
 note_module_private_begins = Note (0) "private module fragment begins here";

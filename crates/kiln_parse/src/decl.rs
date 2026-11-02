@@ -1222,6 +1222,23 @@ impl Parser<'_, '_> {
                 if !self.unknown_type_follows(end, ctx) {
                     return false;
                 }
+                // A reachable type that is not visible ([module.reach]):
+                // the missing-import error, then the type is used.
+                if let Some(NameClass::Type(ty, d)) = self.s.module_hidden_type(name, None, loc) {
+                    self.bump();
+                    self.s.mark_type_referenced(d);
+                    let kind = self.s.ast.decls.get(d).kind();
+                    let ty = if kiln_sema::lookup::is_tag_kind(kind) {
+                        self.s.elaborated_tag_type(d, TagKeyword::None)
+                    } else {
+                        ty
+                    };
+                    if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                        ds.invalid = true;
+                        self.spec_error(&e, loc);
+                    }
+                    return true;
+                }
                 let text = self.s.ast.symbols().as_str(name).to_owned();
                 let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
                 self.emit(d);
