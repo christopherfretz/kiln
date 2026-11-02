@@ -2764,6 +2764,41 @@ clang 19's C99/GNU complex support in C++:
   `diagnoseInstanceReference` wording ("call to non-static member
   function without an object argument").
 
+### 5.18 Variadic arguments (`expr.rs`, WP-311)
+- An argument for the ellipsis gets the default argument promotions
+  ([expr.call]/12) and is then checked once the call is built (clang
+  `checkVariadicArgument`; the call is still formed):
+  - an argument of type `void` (`g(1, f())` for `void f()`) is an error,
+    "cannot pass expression of type 'void' to variadic function";
+  - an object of class type with a non-trivial copy constructor, move
+    constructor or destructor (conditionally-supported, [expr.call]/12)
+    is the error-by-default warning `-Wnon-pod-varargs`, "cannot pass
+    object of non-trivial type 'T' through variadic function; call will
+    abort at runtime". It is a run-time behavior diagnostic: dropped in an
+    unevaluated operand, a constant-evaluated context, and the initializer
+    of a constexpr variable (local or not) or of a static data member's
+    first non-inline declaration (clang `DiagIfReachable` without a
+    statement reads the initializer's `ManglingContextDecl`); otherwise
+    emitted at once (`diag_runtime_behavior_now`);
+  - a braced-init-list is an error, "cannot pass initializer list to
+    variadic function" (§6), and the call is not formed.
+
+  Each points at the argument's begin. The callee is named as clang's
+  `getVariadicCallType` does: `constructor` for a constructor, `method`
+  for a non-static member function (a lambda's call operator included)
+  or a call through a bound member (`(x.*pmf)(...)`), `function`
+  otherwise.
+- In a dependent context the checks are not made (clang `checkCall`
+  returns for a dependent context); an instantiation makes them. A call
+  whose arguments are all non-dependent is shared by the instantiation
+  (spec/sema-templates.md §5.4) rather than rebuilt, so the definition
+  records each argument it would diagnose (`vararg_recheck`), and the
+  walk over a shared expression (§5.10's `mark_shared_expr_referenced`)
+  checks those arguments of the calls in it again, under the
+  instantiation's context notes.
+- Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
+  `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
@@ -3000,7 +3035,8 @@ clang 19's C99/GNU complex support in C++:
     except that a single class-type element for a non-class parameter
     notes the element's own conversion ([over.ics.list]/10: `no known
     conversion from 'N' to 'int' for 1st argument`).
-  - A list for the ellipsis of a variadic function is an error.
+  - A list for the ellipsis of a variadic function is an error (the
+    callee named as in §5.18).
 - **`return {...};`** ([stmt.return]/2, `act_on_return_list`):
   copy-list-initialization of the returned object.
 - **`x = {...}`** ([expr.assign]/8, `act_on_assign_list`): the list

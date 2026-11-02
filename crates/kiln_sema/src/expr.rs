@@ -3962,7 +3962,8 @@ impl Sema<'_, '_> {
         for (i, &a) in args.iter().enumerate() {
             if let Some(l) = braced[i].take() {
                 if i >= n {
-                    self.braced_variadic_argument(&l);
+                    let kind = self.variadic_call_kind(named.map(|c| c.decl), callee);
+                    self.braced_variadic_argument(&l, kind);
                     return None;
                 }
                 conv_args.push(self.braced_argument(
@@ -4073,7 +4074,81 @@ impl Sema<'_, '_> {
             self.note_default_use(arg, p, call_begin);
             conv_args.push(arg);
         }
+        if have > n {
+            let kind = self.variadic_call_kind(named.map(|c| c.decl), callee);
+            self.check_variadic_args(&conv_args[n..have], kind);
+        }
         Some(conv_args)
+    }
+
+    /// How clang names the callee of a variadic call in its argument
+    /// diagnostics (`getVariadicCallType`, the `{function|block|method|
+    /// constructor}` select): 3 for a constructor, 2 for an instance
+    /// member function or a call through a bound member (`(x.*pmf)(...)`),
+    /// 0 otherwise.
+    pub(crate) fn variadic_call_kind(&self, decl: Option<DeclId>, callee: ExprId) -> u8 {
+        match decl {
+            Some(d) if self.kind_of(d) == DeclKind::CXXConstructor => 3,
+            Some(d) if self.is_instance_member(d) => 2,
+            Some(_) => 0,
+            None if self.ety(callee) == QualType::BOUND_MEMBER => 2,
+            None => 0,
+        }
+    }
+
+    /// The checks of the promoted arguments `args` passed for the
+    /// ellipsis ([expr.call]/12, clang `checkVariadicArgument`), made
+    /// once the call is built (neither stops it): an argument of type
+    /// `void` is an error ("cannot pass expression of type 'void' to
+    /// variadic ..."); an object of class type with a non-trivial copy
+    /// constructor, move constructor or destructor (conditionally-
+    /// supported) is the `-Wnon-pod-varargs` error-by-default warning, a
+    /// runtime-behavior diagnostic (not in an unevaluated operand or a
+    /// constant-evaluated context). Both point at the argument's begin;
+    /// `kind` is [`Sema::variadic_call_kind`]'s. clang skips the checks
+    /// in a dependent context and makes them when the template is
+    /// instantiated: an argument that would be diagnosed is recorded in
+    /// `vararg_recheck`, and an instantiation that shares its call checks
+    /// it then ([`Sema::mark_shared_expr_referenced`]).
+    pub(crate) fn check_variadic_args(&mut self, args: &[ExprId], kind: u8) {
+        let defer = self.in_template();
+        for &a in args {
+            if self.is_err_expr(a) || self.expr_is_type_dependent(a) {
+                continue;
+            }
+            let t = self.ety(a);
+            if defer {
+                if self.ast.types.is_void(t) || self.vararg_non_trivial(t) {
+                    let _ = self.vararg_recheck.insert(a, kind);
+                }
+                continue;
+            }
+            if self.ast.types.is_void(t) {
+                let msg = self
+                    .diag(DiagId::sema_cannot_pass_to_vararg, self.begin_loc(a))
+                    .arg(self.ty_arg(t))
+                    .arg(kind);
+                self.emit(msg);
+            } else if self.vararg_non_trivial(t) {
+                let msg = self
+                    .diag(DiagId::sema_non_pod_vararg, self.begin_loc(a))
+                    .arg(self.ty_arg(t))
+                    .arg(kind);
+                self.diag_runtime_behavior_now(msg);
+            }
+        }
+    }
+
+    /// clang `isValidVarArgType` returning `VAK_Undefined` in C++11 and
+    /// later: a complete class with a non-trivial copy constructor, move
+    /// constructor or destructor.
+    fn vararg_non_trivial(&self, t: QualType) -> bool {
+        use crate::class::SpecialKind as K;
+        let Some(r) = self.ast.types.as_record(t) else { return false };
+        let Some(r) = self.ast.definition(r) else { return false };
+        !self.has_trivial(r, K::CopyCtor)
+            || (self.has_special(r, K::MoveCtor) && !self.has_trivial(r, K::MoveCtor))
+            || !self.has_trivial(r, K::Dtor)
     }
 
     /// The type and value category of a call returning `ret`

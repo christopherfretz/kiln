@@ -10,7 +10,8 @@
 //! their immediate invocations evaluated again, and so are its own
 //! immediate invocations that failed at the definition, and the
 //! null dereferences the definition warned about are warned about again
-//! (spec/sema.md §5.15). Unevaluated operands and lambda bodies are not
+//! (spec/sema.md §5.15), and so are the arguments of its variadic calls
+//! that the definition did not check (`Sema::check_variadic_args`). Unevaluated operands and lambda bodies are not
 //! entered.
 
 use kiln_ast::ExprId;
@@ -20,14 +21,17 @@ use crate::Sema;
 
 impl Sema<'_, '_> {
     /// Marks the functions that the shared expression `e` odr-uses
-    /// referenced (which defines or instantiates them on use), and warns
-    /// again about its null dereferences ([`Sema::reissue_null_derefs`]).
+    /// referenced (which defines or instantiates them on use), warns
+    /// again about its null dereferences ([`Sema::reissue_null_derefs`]),
+    /// and checks the variadic arguments of its calls that the template
+    /// definition recorded ([`Sema::check_variadic_args`]).
     pub(crate) fn mark_shared_expr_referenced(&mut self, e: ExprId) {
         if self.unevaluated > 0 || self.in_template() {
             return;
         }
         let rewarn = self.null_deref_rewarn_active();
         let mut derefs = Vec::new();
+        let mut varargs = Vec::new();
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             let kind = self.ast.exprs.get(x).kind();
@@ -92,6 +96,11 @@ impl Sema<'_, '_> {
                 _ => None,
             };
             if let Some(at) = at {
+                if !self.vararg_recheck.is_empty() && kind != ExprKind::InitListExpr {
+                    varargs.extend(
+                        kids.iter().filter_map(|k| self.vararg_recheck.get(k).map(|&c| (*k, c))),
+                    );
+                }
                 for &k in &kids {
                     match self.ast.exprs.get(k).kind() {
                         ExprKind::CXXDefaultArgExpr => {
@@ -108,6 +117,9 @@ impl Sema<'_, '_> {
         }
         if !derefs.is_empty() {
             self.reissue_null_derefs(&derefs);
+        }
+        for (a, kind) in varargs {
+            self.check_variadic_args(&[a], kind);
         }
     }
 }

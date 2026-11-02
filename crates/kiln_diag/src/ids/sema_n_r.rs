@@ -31,6 +31,7 @@ sema_non_bool_atomic_constraint = Error (1) "atomic constraint must be of type '
 sema_non_constant_constraint = Error (0) "substitution into constraint expression resulted in a non-constant expression";
 sema_non_extern_extern = Error (1) "non-extern declaration of '{0}' follows extern declaration";
 sema_non_object_not_modifiable = Error (1) "non-object type {0} is not assignable";
+sema_non_pod_vararg = WarningError [NonPodVarargs] (2) "cannot pass object of non-trivial type {0} through variadic {1:function|block|method|constructor}; call will abort at runtime";
 sema_non_static_static = Error (1) "non-static declaration of '{0}' follows static declaration";
 sema_nonconst_member_fn_ptr = Error (0) "cannot create a non-constant pointer to member function";
 sema_nonlocal_sizeless = Error (1) "non-local variable with sizeless type {0}";

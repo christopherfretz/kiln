@@ -265,6 +265,12 @@ impl Substituter<'_, '_, '_> {
                     self.sema.error(DiagId::sema_param_with_void_type, loc);
                     return Err(SubstFail);
                 }
+                // [dcl.fct]/5: a parameter that became an array or a
+                // function type is adjusted to a pointer, as a written
+                // one is (clang `BuildFunctionType`:
+                // `getAdjustedParameterType`).
+                let out: Vec<QualType> =
+                    out.into_iter().map(|t| self.sema.adjust_param_type(t)).collect();
                 let exc = match self.sema.ast.types.exc_spec(&p) {
                     ExcSpec::NoexceptExpr {
                         expr,

@@ -17,6 +17,7 @@ sema_call_too_few_args_one = Error (1) "too few arguments to function call, sing
 sema_call_too_many_args = Error (2) "too many arguments to function call, expected {0}, have {1}";
 sema_call_too_many_args_at_most = Error (2) "too many arguments to function call, expected at most {0}, have {1}";
 sema_call_too_many_args_one = Error (2) "too many arguments to function call, expected single argument '{0}', have {1} arguments";
+sema_cannot_pass_to_vararg = Error (2) "cannot pass expression of type {0} to variadic {1:function|block|method|constructor}";
 sema_capture_class_member = Error (1) "class member '{0}' cannot appear in capture list as it is not a variable";
 sema_capture_more_than_once = Error (1) "'{0}' can appear only once in a capture list";
 sema_capture_not_automatic = Error (1) "'{0}' cannot be captured because it does not have automatic storage duration";
