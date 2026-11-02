@@ -526,7 +526,16 @@ Redeclaration and linkage rules:
   default argument on parameter` error (`merge_default_args` with
   `trailing == false`); a call that would need the invalid default
   argument is then measured against the redeclaration's arity. Test:
-  `dcl.fct.default/invalid-cast-default-arg.cpp`.
+  `dcl.fct.default/invalid-cast-default-arg.cpp`. A non-template
+  function invalid only because of an invalid parameter
+  (`Sema::invalid_by_param`) is still named and called normally (WP-373;
+  clang resolves the call through its overload set): the call's
+  arguments are converted and their errors diagnosed (`m(1, {2})`
+  through an explicit constructor), and only then is the call itself
+  erroneous and silent (a recovery expression, never constant-evaluated).
+  A function invalid for another reason (its instantiated body failed)
+  keeps the earlier silent recovery. Test:
+  `dcl.fct.default/invalid-default-arg-still-callable.cpp`.
 - **`register`** ([dcl.stc]/1; removed in C++17 by P0001R1, clang's
   `ext_register_storage_class`). `register` is `ISO C++17 does not allow
   'register' storage class specifier` (`sema_register_storage_class`,
@@ -1272,6 +1281,12 @@ and returns the scope it names:
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
+- **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
+  `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
+  `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
+  `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
+  `always_inline` with the GNU flag. Test:
+  `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
   - GNU `visibility`, `section` and `format`: `'x' attribute ignored`
     (a written `format` is not stored; only the printf builtins' implicit
     one is, §5.4)

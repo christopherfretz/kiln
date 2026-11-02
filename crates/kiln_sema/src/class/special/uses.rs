@@ -33,6 +33,11 @@ pub(crate) struct PendingDeleted {
     pub decl: DeclId,
     /// The name's location.
     pub loc: Loc,
+    /// A function template-id resolved without a call or target
+    /// ([`Sema::resolve_single_template_id`]): clang keeps it an
+    /// overload set until its use, so the entry follows the enclosing
+    /// parentheses and `&` and is diagnosed at their start.
+    pub template_id: bool,
 }
 
 impl Sema<'_, '_> {
@@ -78,7 +83,12 @@ impl Sema<'_, '_> {
             return;
         }
         if unqualified && self.kind_of(d) == DeclKind::Function {
-            self.special.pending_deleted.push(PendingDeleted { expr: e, decl: d, loc });
+            self.special.pending_deleted.push(PendingDeleted {
+                expr: e,
+                decl: d,
+                loc,
+                template_id: false,
+            });
             return;
         }
         self.diagnose_deleted_use(d, loc);
@@ -101,6 +111,33 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
+    /// The function template-id `e` resolved to the deleted `d` at
+    /// `loc` (its start): diagnosed at its use, see [`PendingDeleted`].
+    pub(crate) fn defer_deleted_template_id(&mut self, d: DeclId, e: ExprId, loc: Loc) {
+        self.special.pending_deleted.push(PendingDeleted {
+            expr: e,
+            decl: d,
+            loc,
+            template_id: true,
+        });
+    }
+
+    /// `outer`, a parenthesized expression or `&` built around `inner`:
+    /// a pending deleted function template-id `inner` moves to `outer`,
+    /// diagnosed at its start (clang resolves the overload set at the
+    /// use of the whole operand).
+    pub(crate) fn widen_pending_template_id(&mut self, inner: ExprId, outer: ExprId) {
+        let Some(i) =
+            self.special.pending_deleted.iter().position(|p| p.template_id && p.expr == inner)
+        else {
+            return;
+        };
+        let loc = self.begin_loc(outer);
+        let p = &mut self.special.pending_deleted[i];
+        p.expr = outer;
+        p.loc = loc;
+    }
+
     /// At a call whose callee is `callee`: a pending deleted function
     /// named by it is diagnosed as `call to deleted function` unless
     /// `dependent` (or `invalid`, an argument being in error).
@@ -110,6 +147,24 @@ impl Sema<'_, '_> {
         };
         let p = self.special.pending_deleted.swap_remove(i);
         if dependent || invalid {
+            return;
+        }
+        if p.template_id
+            && let Some((_, info)) = self.ast.spec_info(p.decl)
+        {
+            // clang names the template-id's name and notes the
+            // specialization's bindings (`candidate function [with N = 2]`).
+            let kind = format!("function {}", self.deduced_args_desc(info.template, info.args));
+            let msg = self
+                .diag(DiagId::sema_call_deleted_function, p.loc)
+                .arg(self.decl_arg(info.template))
+                .arg(self.delete_message_suffix(p.decl))
+                .with_note(
+                    self.diag(DiagId::note_ovl_candidate_deleted, self.ast.decls.get(p.decl).loc())
+                        .arg(kind)
+                        .arg(0u8),
+                );
+            self.emit(msg);
             return;
         }
         // clang's candidate note names the declaration found; on a

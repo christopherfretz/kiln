@@ -239,7 +239,14 @@ impl Sema<'_, '_> {
         let nns = self.ast.templates.expr_nns.get(e).copied();
         let loc = self.ast.exprs.get(e).loc();
         let r = self.finish_overload_ref(d, f, naming, loc, nns, e, false);
-        self.note_function_name_use(d, r, loc, nns.is_none());
+        // A deleted specialization waits for its use, qualified or not
+        // (spec/sema-overload.md "Locations").
+        if self.is_deleted_fn(d) && !self.is_err_expr(r) && !self.is_class_member_ref(d) {
+            let at = self.begin_loc(e);
+            self.defer_deleted_template_id(d, r, at);
+        } else {
+            self.note_function_name_use(d, r, loc, nns.is_none());
+        }
         let _ = self.ovl.template_id_refs.insert(r, e);
         r
     }

@@ -2,7 +2,6 @@
 //@ expect: run
 //@ run-stdin-file: Inputs/numbers.txt
 //@ stdout: 12
-//@ xfail(kiln): libstdc++ headers do not parse yet: function overloading (c++config.h) and templates
 #include <iostream>
 
 int main() {

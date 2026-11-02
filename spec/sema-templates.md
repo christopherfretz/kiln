@@ -5086,6 +5086,21 @@ explicit specialization errors remain. The blockers are:
   `aka`-worthy (`print.rs::should_aka`), so a member of `V<s::pl>`
   takes 'W<plain>' with no `aka` (WP-366). Test:
   `tests/conformance/temp.arg.explicit/explicit-arg-sugar-nondependent-param.cpp`.
+  Deduced arguments are not substituted as written (WP-373, checked
+  against clang 19 and 22): clang 19's `FinishTemplateArgumentDeduction`
+  substitutes the canonical deduced list, so `f(x, 1)` of `f(T, typename
+  id<W<T>>::type)` with `x` an `s::pl` notes 'typename id<W<plain>>::type'
+  (aka 'W<s::plain>'), as kiln does; clang 22 substitutes the deduced list
+  `Final` but deduces `T` from the call argument's canonical type, so
+  only its printing differs (`id<W<s::plain>>`, the clang-22 scoped
+  printing of a bare class, left to the clang-22 switch). The
+  specialization's own arguments are canonical in both (clang's
+  `TemplateArgumentList` comes from the canonical builder), so a
+  candidate note naming it binds them canonically, `[with T = s::plain,
+  U = int]` for `f<s::pl>(x, i, 1)` with `i` a `myint`
+  (`overload/diag.rs` `spec_desc`), while a failed deduction's
+  bindings keep the argument's sugar (`'myint' (aka 'int')`). Test:
+  `tests/conformance/temp.deduct.call/specialization-binding-canonical.cpp`.
   `deduce_explicit_only` is the same pipeline with no call: it is used
   for a function template-id that is not called ([over.over]/3,
   `Sema::resolve_single_template_id`). Mismatch notes print P as
