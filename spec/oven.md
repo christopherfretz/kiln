@@ -1301,7 +1301,8 @@ it yet; the unit tests exercise it.
 **Not rolled back.** These effects are all either independent of the trial
 or idempotent:
 - thawed globals and the provisional-resolution cache, which are reverted at
-  the next outermost evaluation;
+  the next outermost evaluation (the provisional objects themselves are
+  kept and reused, "Unknown references");
 - the memo cache, which holds only pure calls with scalar parameters and no
   heap operations, so its entries do not depend on context;
 - constants interned into the AST store, which are deduplicated by content;
@@ -1876,6 +1877,26 @@ the object's own address is constant and with null is not
 (`expr.const/p2280-ok.cpp`, `p2280-errors.cpp`). *Deviation:* a
 reference to an object of 4 GiB or more stays external (naming it is
 diagnosed as before C++23); clang accepts it.
+
+**Provisional globals (WP-378).** A variable with no initializer yet
+(`extern const int &r;` before its definition, `extern const int n;`)
+may get one later in the translation unit, so its resolution
+(`GState::Resolved`) holds for one outermost evaluation only: it is
+listed in `Oven::provisional` and reset to `Unresolved` by the next
+`begin_outermost`. Its *object* is owned by the translation unit:
+`Oven::provisional_objs` keeps, per global, the object it resolved to and
+its `OTy`, and the next resolution reuses that object while the variable
+still has no initializer, is `NotEvaluated` or `NotConstant`, its type
+interns to the same `OTy` and the object is live. So a provisional global
+costs one static slot (an unbacked one, or a reference's pointer slot
+bound to its `Origin::Unknown` object) per translation unit however many
+evaluations name it, and its address is the same in each
+(`tests/stress/p2280-provisional-globals.cpp`: 20 000 evaluations,
+`static_bytes<=16`; `kiln_oven` test `provisional_globals_do_not_grow`:
+footprint flat over 10 000 evaluations). Once a definition gives it an
+initializer, the next resolution is a fresh one (the old object stays, at
+most one per variable, since a frozen result may still point to it)
+(`expr.const/p2280-provisional-global.cpp`).
 
 ### Reflection runtime (M6; WP-267 spike behind `-freflection`)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's

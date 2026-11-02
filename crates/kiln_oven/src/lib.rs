@@ -436,6 +436,11 @@ pub struct Oven {
     /// Globals resolved to an unknown value because they had no
     /// initializer yet: re-resolved by the next evaluation.
     pub(crate) provisional: Vec<u32>,
+    /// The object each provisional global was last resolved to, with its
+    /// type: reused while the variable still has no initializer, so a
+    /// provisional global costs one static slot per translation unit, not
+    /// one per evaluation (spec/oven.md "Unknown references").
+    pub(crate) provisional_objs: FxHashMap<u32, (ty::OTy, u64)>,
     /// Globals whose resolution depends on the lax mode
     /// ([`value::VarInfo::lax`]), and the mode they were resolved in.
     pub(crate) lax_globals: Vec<u32>,
@@ -506,6 +511,7 @@ impl Oven {
             globals: Vec::new(),
             global_map: FxHashMap::default(),
             provisional: Vec::new(),
+            provisional_objs: FxHashMap::default(),
             lax_globals: Vec::new(),
             lax_resolved: false,
             lit_exprs: FxHashMap::default(),
@@ -748,6 +754,7 @@ impl Oven {
             + cap(&self.globals)
             + map(&self.global_map)
             + cap(&self.provisional)
+            + map(&self.provisional_objs)
             + cap(&self.lax_globals)
             + map(&self.lit_exprs)
             + map(&self.thawed)
