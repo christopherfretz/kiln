@@ -399,6 +399,13 @@ type parameter named `auto:N`, as in clang's dump.
   `act_on_finish_template_decl` pops such invented heads (WP-169,
   `temp.mem/out-of-line-abbreviated.cpp`).
 - `C auto` attaches the type-constraint `C<auto:N>`.
+- When the first invented parameter opens a new head, the named
+  parameters of the same clause declared before it (`int c` in
+  `f(int c, auto& x)`) get `DEPENDENT_CTX` (`DeclArena::mark_dependent_param`):
+  they are parameters of the template, and instantiation maps their uses to
+  the specialization's parameters ([temp.inst]/3; WP-298, libc++
+  formatter.handle.pass.cpp; `dcl.fct/abbreviated-leading-param-run.cpp`,
+  `tests/codegen/abbreviated_template_leading_param.cpp`).
 - Generic lambdas use the same routine (WP-075).
 
 ### 2.7 Pack expansions by context ([temp.variadic]/5)

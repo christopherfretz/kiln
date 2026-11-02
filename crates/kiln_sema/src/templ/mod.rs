@@ -1114,6 +1114,14 @@ impl Sema<'_, '_> {
             });
             self.ast.templates.dependent_depth += 1;
             self.templ.invented = 0;
+            // The parameters before this one were declared outside the
+            // template the declarator now turns out to be ([dcl.fct]/22).
+            if let Some(f) = self.prototype_params.last() {
+                let before: Vec<DeclId> = f.params.iter().map(|&(_, d)| d).collect();
+                for d in before {
+                    self.ast.decls.mark_dependent_param(d);
+                }
+            }
         }
         self.templ.invented += 1;
         let (depth, index) = (self.cur_depth(), self.next_param_index());
