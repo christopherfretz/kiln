@@ -979,7 +979,8 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   is the static pointee type of the placement argument before its
   conversion to `void *` (`bi::DYN` when it was `void *` already). As in
   clang 22's `HandlePlacementNew`, the designated object is the `stat`
-  subobject at `p` (for `bi::DYN`, the outermost object there; inside
+  subobject at `p` (for `bi::DYN`, the subobject the `void *` was made
+  from, below, else the outermost object there; inside
   `std::construct_at` and libc++'s `std::__construct_at` the compiler
   passes `T` instead of `bi::DYN`, since [specialized.construct]/2
   constructs `*location` and libc++ hands the placement a `void *` from
@@ -995,6 +996,23 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   (`new_aux::BOUND`). It then
   begins the lifetime of `sizeof(T)` bytes, marks them uninitialized, and
   the initializer runs as for any `new` (a constructor call for a class).
+  The designator survives a `void *` that a user function returns
+  (WP-378): a conversion of a non-null `T *` (`T` not `void`) to `void
+  *` lowers to `VoidCast [dst, p, T]` aux `kbc::VOID_TAG`, which records
+  `T` (+ 1) in bits 64..96 of the pointer register, and `Placement`
+  with `bi::DYN` designates the `T` subobject at `p` when there is one.
+  `constexpr void *f(S &s) { return &s.first; }` then makes `new (f(s))
+  int(5)` construct `s.first`, a base `static_cast<B *>(&d)` a `B`, and
+  `new (f(s)) S{}` is "... from 'int' to 'S'", as in clang 22, whose
+  `void *` keeps the full lvalue designator; a `void *` made from `&s`
+  designates `s` (`expr.new/p2747-placement-voidified-subobject*.cpp`).
+  The tag rides registers only: copies, calls, returns and register
+  locals keep it; every pointer operation reads the low 64 bits; a
+  store to memory (a `void *` member, a `void *` local whose address is
+  taken) and a cast back to `T *` drop it, so such a `void *` falls back
+  to the outermost object. Deviation: the tag is a type, not a path, so
+  two subobjects of one type at one offset (empty bases,
+  `[[no_unique_address]]`) are not told apart.
   A placement new allocates nothing: constructing and destroying objects
   in one storage in a loop holds that storage only
   (`expr.new/p2747-placement-churn.cpp`, 100000 objects, one heap

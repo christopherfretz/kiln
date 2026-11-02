@@ -3356,7 +3356,12 @@ impl Compiler<'_> {
                             && self.cur_fn.is_some_and(|f| {
                                 new_delete::std_allocator_elem(self.ast(), f, "allocate").is_some()
                             });
-                        if tvoid || fp == tp || in_allocate {
+                        if tvoid && !fvoid {
+                            // `T *` to `void *` keeps the designated
+                            // subobject's type for a later placement new
+                            // (spec/oven.md "Construction").
+                            self.emit(Op::VoidCast, crate::kbc::VOID_TAG, &[dst, r, fp.0]);
+                        } else if tvoid || fp == tp || in_allocate {
                             self.emit(Op::Mov, 0, &[dst, r]);
                         } else if fvoid && ek != ExprKind::CXXReinterpretCastExpr {
                             self.emit_at(Op::VoidCast, 0, &[dst, r, tp.0], e);

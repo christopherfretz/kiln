@@ -153,7 +153,8 @@ ops! {
     Ret = 1,
     // [dst, global]
     GlobalAddr = 2,
-    // [dst, p, target pointee type]
+    // [dst, p, target pointee type]; aux = `VOID_TAG`: [dst, p, source
+    // pointee type], a `T *` to `void *` conversion that tags `p`
     VoidCast = 3,
     // [dst, type, count, origin, explicit inits]: a transient allocation
     // (spec/oven.md "Transient allocation"), uninitialized unless aux has
@@ -282,6 +283,13 @@ ops! {
 
 /// `Op::Throw` operand: the exception object has no destructor to run.
 pub(crate) const NO_DTOR: u32 = u32::MAX;
+
+/// `VoidCast` aux: the conversion of a non-null `T *` to `void *`, which
+/// records `T` (+ 1) in bits 64..96 of the pointer register, the
+/// designator a placement new of the `void *` reads (spec/oven.md
+/// "Construction"). Pointer operations read the low 64 bits only, and a
+/// store to memory drops the tag.
+pub(crate) const VOID_TAG: u32 = 1;
 
 /// The kinds of `Builtin` and their operands.
 pub(crate) mod bi {
