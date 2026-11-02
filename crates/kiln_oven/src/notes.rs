@@ -163,13 +163,18 @@ impl Oven {
         let (loc, msg) = match fault {
             Fault::Uncaught { .. } => (site.loc, String::new()),
             Fault::NoexceptExit => (site.loc, "uncaught exception in noexcept function".into()),
-            Fault::RethrowNone => (site.loc, "rethrow with no active exception".into()),
+            Fault::RethrowNone => (site.loc, "there is no active exception to rethrow".into()),
             Fault::ThrowWhileActive { prev } => {
                 extra.push(Note::new(
                     self.site(prev as usize).loc,
                     "currently active exception thrown here",
                 ));
-                (site.loc, "throw while another exception is already active".into())
+                (
+                    site.loc,
+                    "exception thrown out of an object destructor while unrolling another \
+                     exception"
+                        .into(),
+                )
             }
             Fault::Trap(i) => {
                 let t = &self.traps[i as usize];
@@ -826,8 +831,8 @@ impl Oven {
     /// throw-expression (`W` the `what()` string of a class derived from
     /// `std::exception`), else "unhandled exception of type 'T' with
     /// content V thrown from here" at its operand (`V` the object's value
-    /// as clang's `APValue` prints it), without the content for a class
-    /// holding no data. The type is named as the throw-expression's
+    /// as clang's `APValue` prints it), without the content when the
+    /// operand's type has size 1 (an empty class, a `char`, a `bool`). The type is named as the throw-expression's
     /// operand's (as written, `site.e` the throw-expression).
     fn uncaught_note(
         &self,
@@ -849,7 +854,7 @@ impl Oven {
             .map(|x| ast.exprs.get(x).ty())
             .filter(|&q| ast.types.canonical(q).without_quals() == self.types.info(ty).q)
             .map_or_else(|| self.tname(ast, ty), |q| Self::qname(ast, q.without_quals()));
-        if self.types.holds_no_data(ty) {
+        if self.types.size(ty) == 1 {
             return (loc, format!("unhandled exception of type '{name}' thrown from here"));
         }
         let mut v = String::new();

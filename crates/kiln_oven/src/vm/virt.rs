@@ -31,6 +31,8 @@ pub(crate) struct Sub {
     /// A virtual base or one of its subobjects (offset relative to a
     /// complete object of the class only).
     pub virt: bool,
+    /// A virtual base class subobject itself.
+    pub vbase: bool,
     /// The class is polymorphic (has a vptr slot at `off`).
     pub poly: bool,
     /// The subobject this one is a direct base of (itself for 0).
@@ -154,6 +156,7 @@ impl Oven {
                 cls: cty,
                 decl: s.class,
                 virt,
+                vbase: s.is_virtual,
                 poly,
                 parent: s.parent.index() as u16,
                 public,
@@ -478,6 +481,94 @@ impl Oven {
             j = usize::from(subs[j].parent);
         }
         Some((s.off, s.virt))
+    }
+
+    /// [conv.ptr]/3 of the non-null pointer `raw` to class `cls` into a
+    /// pointer to its unambiguous base `base` that is (in) a virtual base
+    /// of `cls`: the virtual base's offset is the most derived object's
+    /// ([class.mi]/4), so the pointer's (sub)object is located in the
+    /// object model first (`base_owner`). `None` when it cannot be: a
+    /// pointer past the end, or a `cls` subobject inside a virtual base
+    /// of an enclosing object (whose class has no constexpr constructor;
+    /// P3533 constexpr virtual inheritance is not implemented).
+    pub(crate) fn vbase_ptr(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        raw: u64,
+        cls: OTy,
+        base: OTy,
+    ) -> Option<u64> {
+        let p = Ptr::decode(raw);
+        if p.past {
+            return None;
+        }
+        let root = self.alloc_any(p)?.ty;
+        let (md, at) = self.base_owner(b, root, u64::from(p.off), 0, true, cls)?;
+        // `base` relative to the nearest virtual base `w` above it in
+        // `cls`'s graph (the path from `w` down is non-virtual).
+        let i = self.poly_info(b, cls) as usize;
+        let subs = &self.virt.infos[i].subs;
+        let j = subs.iter().position(|s| s.cls == base)?;
+        let mut w = j;
+        while !subs[w].vbase {
+            if w == 0 {
+                return None;
+            }
+            w = usize::from(subs[w].parent);
+        }
+        let (within, wcls) = (subs[j].off - subs[w].off, subs[w].cls);
+        let k = self.poly_info(b, md) as usize;
+        let wo = self.virt.infos[k].subs.iter().find(|s| s.vbase && s.cls == wcls)?.off;
+        Some(Ptr::with_off(raw, at + wo + within, false))
+    }
+
+    /// The most derived object (its type and offset in the allocation)
+    /// one of whose subobjects of class `cls` lies at byte `rel` of the
+    /// object of type `t` at offset `abs`: `t` itself when `cand` (a
+    /// complete object, member or array element), else, descending through
+    /// array elements, members and non-virtual bases, the innermost such
+    /// object containing the byte.
+    fn base_owner(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        t: OTy,
+        rel: u64,
+        abs: u64,
+        cand: bool,
+        cls: OTy,
+    ) -> Option<(OTy, u64)> {
+        match self.types.kind(t) {
+            TyKind::Array { elem, n } => {
+                let es = self.types.size(elem);
+                if es == 0 || rel / es >= n {
+                    return None;
+                }
+                self.base_owner(b, elem, rel % es, abs + rel / es * es, true, cls)
+            }
+            TyKind::Record { union, .. } => {
+                if cand && !union {
+                    let i = self.poly_info(b, t) as usize;
+                    if self.virt.infos[i].subs.iter().any(|s| s.off == rel && s.cls == cls) {
+                        return Some((t, abs));
+                    }
+                }
+                let fields: Vec<_> = self
+                    .types
+                    .fields(t)
+                    .iter()
+                    .filter(|f| {
+                        f.width.is_none()
+                            && rel >= f.offset
+                            && rel < f.offset + self.types.size(f.ty).max(1)
+                    })
+                    .copied()
+                    .collect();
+                fields.into_iter().find_map(|f| {
+                    self.base_owner(b, f.ty, rel - f.offset, abs + f.offset, !f.base, cls)
+                })
+            }
+            _ => None,
+        }
     }
 
     /// The subobjects of a complete `cls` object: offset, class (type and
