@@ -229,6 +229,17 @@ impl<'a> Cg<'a> {
         self.target.triple.arch == Arch::X86_64
     }
 
+    /// The functions' frame-pointer kind (spec/codegen.md "Frame
+    /// pointer").
+    pub fn frame_pointer(&self) -> crate::FramePointer {
+        crate::FramePointer::resolve(
+            self.is_x86(),
+            self.opts.optimize,
+            self.opts.omit_frame_pointer,
+            self.opts.omit_leaf_frame_pointer,
+        )
+    }
+
     // ---- driving -------------------------------------------------------
 
     /// Emits the whole translation unit; also returns the warnings
@@ -1439,10 +1450,8 @@ impl<'a> Cg<'a> {
 
     /// The target-dependent function attributes.
     pub fn target_attrs(&self, out: &mut Vec<Attr>) {
-        if self.is_x86() {
-            out.push(Attr::string("frame-pointer", "all"));
-        } else {
-            out.push(Attr::string("frame-pointer", "non-leaf"));
+        if let Some(fp) = self.frame_pointer().attr() {
+            out.push(Attr::string("frame-pointer", fp));
         }
         out.push(Attr::string("no-trapping-math", "true"));
         out.push(Attr::string("stack-protector-buffer-size", "8"));
@@ -2000,17 +2009,16 @@ impl<'a> Cg<'a> {
     // ---- module trailer ------------------------------------------------
 
     fn trailer(&mut self) {
+        let fp = self.frame_pointer().module_flag();
         let m = &mut self.m;
         m.add_named_metadata("llvm.linker.options", &[]);
         m.add_module_flag_i32(1, "wchar_size", 4);
         m.add_module_flag_i32(8, "PIC Level", 2);
         m.add_module_flag_i32(7, "PIE Level", 2);
         m.add_module_flag_i32(7, "uwtable", 2);
-        m.add_module_flag_i32(
-            7,
-            "frame-pointer",
-            if self.target.triple.arch == Arch::X86_64 { 2 } else { 1 },
-        );
+        if let Some(v) = fp {
+            m.add_module_flag_i32(7, "frame-pointer", v);
+        }
         m.add_ident(&self.opts.ident);
     }
 }

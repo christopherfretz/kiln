@@ -81,6 +81,76 @@ pub struct CodegenOptions {
     /// `KILN_LLVM_DIR`; spec/driver.md): selects the intrinsic signatures
     /// that changed between the supported versions (19 and 22).
     pub llvm_major: u32,
+    /// The last of `-fomit-frame-pointer` (`Some(true)`) and
+    /// `-fno-omit-frame-pointer` (`Some(false)`); `None` is the target's
+    /// default ([`FramePointer::resolve`]).
+    pub omit_frame_pointer: Option<bool>,
+    /// The last of `-momit-leaf-frame-pointer` (`Some(true)`) and
+    /// `-mno-omit-leaf-frame-pointer` (`Some(false)`); `None` is the
+    /// target's default.
+    pub omit_leaf_frame_pointer: Option<bool>,
+}
+
+/// Which functions keep a frame pointer: the `"frame-pointer"` function
+/// attribute and the `frame-pointer` module flag (clang's
+/// `CodeGenOptions::FramePointerKind`; spec/codegen.md "Frame pointer").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FramePointer {
+    /// No function keeps one: neither the attribute nor the flag is
+    /// emitted.
+    None,
+    /// Every function but a leaf keeps one (`"non-leaf"`, flag 1).
+    NonLeaf,
+    /// Every function keeps one (`"all"`, flag 2).
+    All,
+}
+
+impl FramePointer {
+    /// clang's driver rule (`getFramePointerKind`): the frame pointer is
+    /// omitted when `-fomit-frame-pointer` is last, kept when
+    /// `-fno-omit-frame-pointer` is, and otherwise by the target's
+    /// default: x86-64 Linux omits it when optimizing (any `-O` above
+    /// `-O0`), `AArch64` Linux always keeps it. A kept frame pointer is
+    /// omitted in leaf functions when `-momit-leaf-frame-pointer` is
+    /// last, kept with `-mno-omit-leaf-frame-pointer`, and by default
+    /// omitted on `AArch64` and kept on x86-64.
+    #[must_use]
+    pub fn resolve(
+        x86_64: bool,
+        optimize: bool,
+        omit: Option<bool>,
+        omit_leaf: Option<bool>,
+    ) -> FramePointer {
+        if omit.unwrap_or(x86_64 && optimize) {
+            FramePointer::None
+        } else if omit_leaf.unwrap_or(!x86_64) {
+            FramePointer::NonLeaf
+        } else {
+            FramePointer::All
+        }
+    }
+
+    /// The `"frame-pointer"` attribute value, `None` when none is
+    /// emitted.
+    #[must_use]
+    pub fn attr(self) -> Option<&'static str> {
+        match self {
+            FramePointer::None => None,
+            FramePointer::NonLeaf => Some("non-leaf"),
+            FramePointer::All => Some("all"),
+        }
+    }
+
+    /// The `frame-pointer` module flag value, `None` when none is
+    /// emitted.
+    #[must_use]
+    pub fn module_flag(self) -> Option<i32> {
+        match self {
+            FramePointer::None => None,
+            FramePointer::NonLeaf => Some(1),
+            FramePointer::All => Some(2),
+        }
+    }
 }
 
 /// clang's `LangOptions::ComplexRangeKind` (spec/abi.md §8.17): the
@@ -126,6 +196,8 @@ impl Default for CodegenOptions {
             optimize: false,
             clang_compat: 19,
             llvm_major: 19,
+            omit_frame_pointer: None,
+            omit_leaf_frame_pointer: None,
         }
     }
 }
@@ -173,4 +245,41 @@ pub fn emit_with_diags(
     let folds = fold::prepass(ast, oven, target);
     let void_ptr = ast.types.pointer_to(kiln_ast::QualType::VOID);
     module::Cg::new(&*ast, &folds, target, opts, void_ptr).run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FramePointer::{self, All, NonLeaf, None as Omit};
+
+    /// clang 19 and 22's `"frame-pointer"` for each target, `-O0`/`-O1+`
+    /// and flag combination (probed with `--target=` each Linux triple;
+    /// spec/codegen.md "Frame pointer").
+    #[test]
+    fn frame_pointer_matches_clang() {
+        let r = FramePointer::resolve;
+        // (x86-64, optimize, -f[no-]omit, -m[no-]omit-leaf) -> kind.
+        let rows = [
+            (true, false, None, None, All),
+            (true, true, None, None, Omit),
+            (true, true, Some(false), None, All),
+            (true, false, Some(true), None, Omit),
+            (true, false, None, Some(true), NonLeaf),
+            (true, true, None, Some(true), Omit),
+            (true, true, None, Some(false), Omit),
+            (true, true, Some(false), Some(true), NonLeaf),
+            (true, false, Some(true), Some(false), Omit),
+            (false, false, None, None, NonLeaf),
+            (false, true, None, None, NonLeaf),
+            (false, true, Some(false), None, NonLeaf),
+            (false, true, Some(true), None, Omit),
+            (false, false, None, Some(false), All),
+            (false, true, Some(true), Some(false), Omit),
+        ];
+        for (x86, opt, omit, leaf, want) in rows {
+            assert_eq!(r(x86, opt, omit, leaf), want, "{x86} {opt} {omit:?} {leaf:?}");
+        }
+        assert_eq!((All.attr(), All.module_flag()), (Some("all"), Some(2)));
+        assert_eq!((NonLeaf.attr(), NonLeaf.module_flag()), (Some("non-leaf"), Some(1)));
+        assert_eq!((Omit.attr(), Omit.module_flag()), (None, None));
+    }
 }

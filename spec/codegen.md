@@ -750,8 +750,7 @@ The normative description is spec/driver.md "Code generation". In short:
   `inlinehint` (`Cg::inline_specified`). `constexpr` and in-class
   definitions are implicitly inline but not inline-specified, so they
   get neither. Tests: `tests/codegen/noinline_matrix_o{0,1,2}.cpp`
-  (exact under oracle 19; on x86_64 above `-O0` only structural, see
-  "Deviations").
+  (exact under oracle 19 on both targets).
 - A template parameter object is emitted `linkonce_odr` with a comdat
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
@@ -815,12 +814,9 @@ The normative description is spec/driver.md "Code generation". In short:
   oracle-19 `Structure` deviation. Following them under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
   "Residual").
-- **x86_64 frame pointer above `-O0` (WP-397).** clang omits
-  `"frame-pointer"="all"` and the `frame-pointer` module flag on x86_64
-  at `-O1` and above; kiln keeps them (`target_attrs`), so
-  `noinline_matrix_o1`/`_o2` are `Allow::Structure` there under oracle
-  19. clang 22 also drops the comdat of an internal template parameter
-  object (`linkage_internal_nttp`, oracle 22, `Allow::Structure`).
+- **clang 22 internal template parameter objects.** clang 22 drops the
+  comdat of an internal template parameter object
+  (`linkage_internal_nttp`, oracle 22, `Allow::Structure`).
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
@@ -2160,6 +2156,29 @@ call is moved to guard the deallocation (clang `CallCoroDelete`
 remembers the last one); the promise's address passes through a
 `bitcast ptr %promise to ptr` before `coro.id`; an ignored empty-class
 return gets clang's `retval` temporary, erased when unused.
+
+### Frame pointer (WP-405)
+`FramePointer::resolve` follows clang's driver (`getFramePointerKind`) for
+Linux targets; `Cg::frame_pointer` applies it.
+- The kind is `none` when `-fomit-frame-pointer` is in effect, or by
+  default on x86-64 when optimizing (`-O1` and above, `-Os`, `-Oz`,
+  `-Og`); AArch64 keeps the frame pointer at every level. Otherwise it
+  is `non-leaf` when the leaf frame pointer is omitted, `all` when kept.
+  The leaf default is to omit on AArch64 and keep on x86-64.
+- `-fomit-frame-pointer` / `-fno-omit-frame-pointer` and
+  `-momit-leaf-frame-pointer` / `-mno-omit-leaf-frame-pointer`: the last
+  of each pair wins (`kiln_driver::args`, `CodegenOptions::
+  omit_frame_pointer` / `omit_leaf_frame_pointer`); the leaf flags only
+  matter when the frame pointer is kept.
+- `all` and `non-leaf` give every function the `"frame-pointer"` string
+  attribute and the module flag `!{i32 7, !"frame-pointer", i32 N}` with
+  N = 2 / 1; `none` gives neither.
+- clang 22 spells AArch64's default `"non-leaf-no-reserve"` (flag 4);
+  kiln emits clang 19's `"non-leaf"` (oracle 22 compares structurally).
+- Tests: `kiln_codegen` unit `frame_pointer_matches_clang` (the matrix),
+  `kiln_driver` `frame_pointer_flags_last_win`,
+  `tests/codegen/frame_pointer_*.cpp` and `noinline_matrix_o{1,2}.cpp`
+  (exact under oracle 19 on both targets).
 
 ## 7p. Landed (WP-370): optimization-dependent IR
 
