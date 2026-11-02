@@ -887,7 +887,9 @@ impl Parser<'_, '_> {
             return false;
         }
         match self.tok_at(p + 1).kind {
-            TokKind::Punct(Punct::ColonColon) => false,
+            // A pack-index-specifier is no type-name: "expected a
+            // qualified name after 'typename'".
+            TokKind::Punct(Punct::ColonColon | Punct::Ellipsis) => false,
             TokKind::Punct(Punct::Less) => match self.skip_template_args(p + 1) {
                 Some((close, false)) => {
                     self.tok_at(close + 1).kind != TokKind::Punct(Punct::ColonColon)
@@ -903,6 +905,16 @@ impl Parser<'_, '_> {
     /// `typename nested-name-specifier template? name (< args >)?`
     /// ([temp.res.general]/3) at `typename`.
     pub(crate) fn parse_typename_specifier(&mut self) -> Option<QualType> {
+        self.parse_typename_specifier_in(None)
+    }
+
+    /// [`Self::parse_typename_specifier`] in the decl-specifier-seq of a
+    /// declaration in context `ctx`, which selects clang's recovery from
+    /// an unqualified name (spec/parse.md, typename-specifiers).
+    pub(crate) fn parse_typename_specifier_in(
+        &mut self,
+        ctx: Option<DeclaratorContext>,
+    ) -> Option<QualType> {
         self.bump();
         if self.at_splice() {
             return self.parse_splice_type();
@@ -915,10 +927,45 @@ impl Parser<'_, '_> {
             return None;
         };
         let Some(q) = qual else {
-            let d = self.s.diag(DiagId::parse_expected_qualified_after_typename, self.loc());
+            let at = self.loc();
+            let d = self.s.diag(DiagId::parse_expected_qualified_after_typename, at);
             self.emit(d);
-            if self.ident().is_some() {
+            self.ident()?;
+            let pack_index = self.peek_is(1, Punct::Ellipsis) && self.peek_is(2, Punct::LSquare);
+            if ctx == Some(DeclaratorContext::Prototype)
+                && let Some(first) = self.param_recovery
+                && (pack_index || first)
+            {
+                // clang's tentative parse of the first parameter reports
+                // the name once more; the parameter list ends at it.
+                if first {
+                    let d = self.s.diag(DiagId::parse_expected_qualified_after_typename, at);
+                    self.emit(d.allow_duplicate());
+                }
+                self.param_abort = true;
+                return None;
+            }
+            self.bump();
+            if pack_index {
+                // clang consumes the pack-index-specifier `T...[i]` with
+                // the name.
                 self.bump();
+                let mut depth = 0usize;
+                while !self.at_eof() {
+                    let p = Self::punct_of(self.tok());
+                    self.bump();
+                    match p {
+                        Some(Punct::LSquare | Punct::LParen | Punct::LBrace) => depth += 1,
+                        Some(Punct::RSquare | Punct::RParen | Punct::RBrace) => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                self.typename_pack_index = Some((at, self.expected_loc()));
             }
             return None;
         };

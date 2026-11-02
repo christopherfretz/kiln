@@ -189,6 +189,13 @@ impl Sema<'_, '_> {
         shadow: Option<DeclId>,
         nns: Option<kiln_ast::NnsId>,
     ) -> ExprId {
+        // As `member_ref_without_object`: an invalid field (`Ts m;`,
+        // [temp.variadic]/12) names nothing, silently.
+        if self.ast.decls.get(d).has(DeclFlags::INVALID)
+            && !self.ast.decls.get(d).kind().is_function()
+        {
+            return self.recover_err(&[], loc);
+        }
         let qualified = nns.is_some();
         if let Some(class) = self.implicit_object_class(d)
             && let Some((this_ty, _)) = self.this_class()

@@ -114,7 +114,7 @@ kiln's `__cpp_*` set under `-std=c++26` is clang 19's, plus the P0847, P1061 and
 
 | Macro | kiln (= clang 19) | clang 22 | Row | Action |
 |---|---|---|---|---|
-| `__cpp_trivial_relocatability` | — | 202502L | P2786 (todo) | Add with the feature. |
+| `__cpp_trivial_relocatability` | — | 202502L | P2786 (partial) | None: P2786R13 was removed from C++26 at Kona (Nov 2025), so kiln stays at clang's value (undefined) and the macro is exempt from the M4 C++26 exit (see the P2786 row). |
 
 kiln no longer advertises a macro without the feature: `__cpp_auto_cast` (P0849),
 `__cpp_placeholder_variables` (P2169) and `__cpp_static_assert` 202306L (P2741),
