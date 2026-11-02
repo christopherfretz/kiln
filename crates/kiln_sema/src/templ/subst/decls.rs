@@ -207,7 +207,14 @@ impl Substituter<'_, '_, '_> {
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
         self.copy_begin_loc(d, v, ty);
         self.locals.insert(d, DeclOrPack::Decl(v));
-        self.var_align_attrs(v, d);
+        if ctx == DeclaratorContext::Member {
+            // A static data member's attributes, `[[deprecated]]` among
+            // them ([dcl.attr.deprecated]/4 warns a use of
+            // `C<int>::x`; clang `InstantiateAttrs`).
+            self.class_attrs(v, d);
+        } else {
+            self.var_align_attrs(v, d);
+        }
         // A constrained placeholder's diagnostics point at its
         // type-constraint, as in the pattern.
         if let Some(&l) = self.sema.inst.concepts.placeholder_locs.get(&d) {
@@ -319,6 +326,7 @@ impl Substituter<'_, '_, '_> {
         let Some(v) = v else { return Err(SubstFail) };
         self.copy_begin_loc(d, v, ty);
         self.locals.insert(d, DeclOrPack::Decl(v));
+        self.class_attrs(v, d);
         if self.sema.kind_of(v) == DeclKind::Var {
             self.sema.inst.deferred_inits.insert(v);
         }

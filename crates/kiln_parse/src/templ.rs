@@ -955,6 +955,16 @@ impl Parser<'_, '_> {
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             let ctx = self.s.qualifier_desc(q.ctx);
+            if self.at(Punct::Less) && class == NameClass::Undeclared {
+                // `std::codecvt_utf8<wchar_t> c;` with no such member
+                // ([temp.names]/3: only a template name is followed by
+                // `<`): clang's `DiagnoseUnknownTypeName` "no template
+                // named 'X' in 'N'", then its argument list is skipped.
+                let d = self.s.diag(DiagId::sema_no_member_template, name_loc).arg(text).arg(ctx);
+                self.emit(d);
+                let _ = self.parse_template_arg_list();
+                return None;
+            }
             let d =
                 self.s.diag(DiagId::sema_typename_nested_not_found, name_loc).arg(text).arg(ctx);
             self.emit(d);

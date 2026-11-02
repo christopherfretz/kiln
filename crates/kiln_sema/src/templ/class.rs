@@ -1335,6 +1335,16 @@ impl Substituter<'_, '_, '_> {
         let sub = self;
         let (specs, mut invalid) = sub.class_bases(def);
         sub.sema.act_on_base_specifiers(spec, &specs);
+        // clang `CheckBaseSpecifier`: "if the base class is invalid the
+        // derived class is as well" (`underlying_type<E>` deriving from an
+        // `__underlying_type_impl<E>` whose `type` failed: a later
+        // `underlying_type<E>::type` is quiet).
+        invalid |= specs.iter().any(|b| {
+            sub.sema.ast.types.as_record(b.ty).is_some_and(|r| {
+                let d = sub.sema.ast.definition(r).unwrap_or(r);
+                sub.sema.ast.decls.get(d).has(DeclFlags::INVALID)
+            })
+        });
         let members: Vec<DeclId> = sub.sema.ast.decls.members(def).collect();
         let mut nsdmis = Vec::new();
         // clang `InstantiateClass`: a base that fails to substitute, an

@@ -743,6 +743,9 @@ impl Substituter<'_, '_, '_> {
             ExprKind::CXXUnresolvedConstructExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 let l = kiln_ast::ids::ListId::new(n.a());
+                if n.aux() != 0 && self.invalid_class_braced_cast(ty, loc) {
+                    return Err(SubstFail);
+                }
                 if n.aux() != 0 {
                     let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
                     // `T{...}` keeps its braced list as the one argument.
@@ -2043,5 +2046,20 @@ impl Substituter<'_, '_, '_> {
             .collect();
         let out = self.init_items(&items)?;
         Ok(InitList { items: out, lbrace, rbrace })
+    }
+}
+
+impl Substituter<'_, '_, '_> {
+    /// Whether the substituted `T{...}` names a class whose definition is
+    /// invalid (a failed `static_assert` in its instantiation, say): the
+    /// expression is then dropped without a second diagnostic, as clang
+    /// rebuilds no `CXXUnresolvedConstructExpr` list-initialization of an
+    /// invalid class (`std::numbers::e_v<int>` reports only the
+    /// `static_assert`, spec/sema.md §5.22).
+    fn invalid_class_braced_cast(&mut self, ty: QualType, loc: Loc) -> bool {
+        let Some(r) = self.sema.ast.types.as_record(ty) else { return false };
+        let _ = self.sema.require_complete(ty, loc);
+        let def = self.sema.ast.definition(r).unwrap_or(r);
+        self.sema.ast.decls.get(def).has(kiln_ast::decl::DeclFlags::INVALID)
     }
 }

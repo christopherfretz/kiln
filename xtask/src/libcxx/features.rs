@@ -9,9 +9,13 @@
 //! deliberate differences:
 //!
 //! - no compiler-identity features (`clang`, `clang-19`, `gcc`,
-//!   `apple-clang`, `msvc`, `gcc-style-warnings`, ...): kiln is none of
-//!   them, so a `// XFAIL: clang` must not hide a kiln result, and a
-//!   `// UNSUPPORTED: gcc` must not hide a test; `kiln` is added instead;
+//!   `apple-clang`, `msvc`, ...): kiln is none of them, so a
+//!   `// XFAIL: clang` must not hide a kiln result, and a
+//!   `// UNSUPPORTED: gcc` must not hide a test; `kiln` is added instead.
+//!   `gcc-style-warnings` is not an identity: lit derives it for any
+//!   compiler that understands `-Wno-<group>` (unlike `cl.exe`), which
+//!   kiln does, and libc++ 19 uses it only to gate
+//!   `ADDITIONAL_COMPILE_FLAGS(gcc-style-warnings): -Wno-...`;
 //! - target capabilities that lit probes by compiling a snippet
 //!   (`has-unix-headers`, `has-64-bit-atomics`) are taken as clang 19 sees
 //!   this machine, not as kiln does today, so the set does not move when
@@ -44,6 +48,9 @@ const FEATURES: &[&str] = &[
     "stdlib=llvm-libc++",
     // Flags kiln accepts (lit probes them with hasCompileFlag).
     "-fsized-deallocation",
+    // kiln understands `-Wno-<group>` (features.py `_isAnyClangOrGCC`);
+    // see the module doc.
+    "gcc-style-warnings",
     "has-fconstexpr-steps",
     // `hasCompileFlag("-Xclang -verify-ignore-unexpected")` (spec/libcxx.md
     // ".verify.cpp").
@@ -92,7 +99,7 @@ mod tests {
         for f in &all {
             for bad in ["clang", "gcc", "msvc", "apple-clang"] {
                 assert!(
-                    f != bad && !f.starts_with(&format!("{bad}-")),
+                    f == "gcc-style-warnings" || (f != bad && !f.starts_with(&format!("{bad}-"))),
                     "compiler-identity feature `{f}` in the static set"
                 );
             }

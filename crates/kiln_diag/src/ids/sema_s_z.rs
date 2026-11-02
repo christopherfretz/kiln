@@ -138,6 +138,7 @@ sema_undeclared_use = Error (1) "use of undeclared '{0}'";
 sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
 // ----- WP-220 (-Wundefined-var-template; clang `InstantiateVariableDefinition`)
 sema_undefined_var_template = Warning [UndefinedVarTemplate] (1) "instantiation of variable '{0}' required here, but no definition is available";
+sema_underlying_type_of_incomplete_enum = Error (1) "cannot determine underlying type of incomplete enumeration type {0}";
 sema_unexpanded_pack = Error (2) "{0} contains unexpanded parameter pack{1}";
 sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
 sema_unimplemented_template_feature = Error (1) "kiln: not yet implemented: {0}";

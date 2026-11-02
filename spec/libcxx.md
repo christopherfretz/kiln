@@ -203,11 +203,16 @@ The feature set is static. It describes the configuration below and is
 defined in `xtask/src/libcxx/features.rs`. There is no compiler-identity
 feature (`clang`, `gcc`, `clang-19`, `apple-clang`), so tests that XFAIL or
 skip one particular compiler run normally under kiln. `kiln` itself is in
-the set.
+the set. `gcc-style-warnings` is in the set although its name says `gcc`:
+lit derives it for every compiler that understands `-Wno-<group>` flags
+(clang and GCC, not `cl.exe`), and libc++ 19 uses it only in
+`ADDITIONAL_COMPILE_FLAGS(gcc-style-warnings): -Wno-...` lines, which kiln
+accepts (`depr.numeric.limits.has.denorm/deprecated.verify.cpp` needs its
+`-Wno-unused-value`).
 
 `c++26`, `c++experimental`, `large_tests`, `long_tests`,
 `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`,
-`-fsized-deallocation`, `has-fconstexpr-steps`, `verify-support`,
+`-fsized-deallocation`, `gcc-style-warnings`, `has-fconstexpr-steps`, `verify-support`,
 `libcpp-abi-version=1`, `libcpp-hardening-mode=none`,
 `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`,
 `buildhost=linux`, `linux`, `can-create-symlinks`, `has-64-bit-atomics`,

@@ -106,7 +106,27 @@ impl Sema<'_, '_> {
                     self.error(DiagId::sema_only_enums_have_underlying, loc);
                     return None;
                 }
+                // [meta.trans.other]: an enumeration without a fixed
+                // underlying type is incomplete until its closing brace
+                // ([dcl.enum]/6), and its underlying type is not yet
+                // determined (clang `BuiltinEnumUnderlyingType`).
                 if !self.require_complete(t, loc) {
+                    let ty = self.ty_arg(t);
+                    let d = self.diag(DiagId::sema_underlying_type_of_incomplete_enum, loc).arg(ty);
+                    let d = match self.ast.types.as_enum(t) {
+                        Some(e) => {
+                            let at = self.ast.latest(e);
+                            let note = self
+                                .diag(
+                                    DiagId::note_forward_declaration,
+                                    self.ast.decls.get(at).loc(),
+                                )
+                                .arg(format!("'{}'", self.qualified_decl_name(e)));
+                            d.with_note(note)
+                        }
+                        None => d,
+                    };
+                    self.emit(d);
                     return None;
                 }
                 crate::conv::rank::enum_data(self, t).and_then(|d| d.int_type)?
