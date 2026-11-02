@@ -638,15 +638,6 @@ impl Sema<'_, '_> {
     /// The named module `d` is attached to ([module.unit]/7): its purview's
     /// module unless it is in a linkage specification.
     fn module_attachment(&self, d: DeclId) -> Option<String> {
-        let m = self.ast.modules.purview_module(d)?;
-        let mut c = self.ast.decls.get(d).ctx();
-        while let Some(x) = c {
-            match self.ast.decls.get(x).kind() {
-                DeclKind::LinkageSpec => return None,
-                DeclKind::Export | DeclKind::Namespace => c = self.ast.decls.get(x).ctx(),
-                _ => break,
-            }
-        }
-        Some(m.to_owned())
+        self.ast.module_attachment(d).map(str::to_owned)
     }
 }

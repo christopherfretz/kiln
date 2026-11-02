@@ -167,6 +167,9 @@ enum Sub {
     /// A template template parameter `(depth, index)`, as a template
     /// argument or as the template of a dependent specialization.
     TemplateParm(u32, u32),
+    /// A <module-name> prefix (`W1AW1B`), by index into
+    /// `Mangler::modnames`.
+    Module(u32),
 }
 
 /// The constructor or destructor variant of a symbol ([abi:mangling]
@@ -263,8 +266,10 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
 
             let q = ast.types.canonical(n.ty().unwrap_or(QualType::INT));
             let is_const = ast.types.effective_quals(q).is_const() || const_array(ast, q);
+            // [basic.link]/3.2: an exported `const` variable has linkage.
             is_const
                 && !v.spec.is_inline()
+                && !ast.modules.owner(first).exported
                 && v.spec.storage() != VarStorage::Extern
                 && !is_extern_c(ast, first)
                 && !matches!(v.templ.get(), Some((TemplLinkKind::Specialization, _)))
@@ -485,6 +490,7 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
                 && !is_local(ast, d)
                 && !has_internal_linkage(ast, d)
                 && ast.spec_info(ast.first(d)).is_none()
+                && (!ast.modules.active || ast.module_attachment(ast.first(d)).is_none())
         }
         _ => false,
     }
@@ -779,6 +785,8 @@ struct Mangler<'a, 'b> {
     anon: &'b mut AnonIds,
     out: String,
     subs: Vec<Sub>,
+    /// The module-name prefixes seen (`A`, `A.B`), for [`Sub::Module`].
+    modnames: Vec<&'a str>,
     /// A structor comdat name: the base-object variant is `C5`/`D5`.
     comdat: bool,
     /// Template parameters mangle with their declared depth (`TL0__`):
@@ -801,6 +809,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             anon,
             out: String::from(prefix),
             subs: Vec::new(),
+            modnames: Vec::new(),
             comdat: false,
             real_depth: false,
             head_only: false,
@@ -1173,6 +1182,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// <unqualified-name>: operator, constructor, destructor, conversion
     /// or literal-operator names, else the <source-name>.
     fn unqualified(&mut self, d: DeclId, v: Structor) {
+        self.module_prefix(d);
         if constrained_friend_class(self.ast, d).is_some() {
             self.out.push('F');
         }
@@ -1184,6 +1194,53 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.source_name(t);
             }
         }
+    }
+
+    /// `[<module-name>]` before the unqualified name of a namespace-scope
+    /// entity with linkage attached to a named module (clang
+    /// `mangleModuleName`; spec/modules.md §7). Partitions do not appear.
+    fn module_prefix(&mut self, d: DeclId) {
+        let ast = self.ast;
+        if !ast.modules.active
+            || !is_file_context(ast, d)
+            || ast.closure_lambda(d).is_some()
+            || ast.decls.get(d).kind() == DeclKind::Namespace
+        {
+            return;
+        }
+        let first = ast.first(d);
+        let Some(m) = ast.module_attachment(first) else { return };
+        if has_internal_linkage(ast, first) {
+            return;
+        }
+        self.module_name(m);
+    }
+
+    /// <module-name> ::= <module-name>? W <source-name> | <substitution>;
+    /// every prefix is a substitution candidate.
+    fn module_name(&mut self, name: &'a str) {
+        if let Some(i) = self.modnames.iter().position(|&n| n == name)
+            && self.try_sub(Sub::Module(i as u32))
+        {
+            return;
+        }
+        let last = match name.rsplit_once('.') {
+            Some((p, l)) => {
+                self.module_name(p);
+                l
+            }
+            None => name,
+        };
+        self.out.push('W');
+        self.source_name(last);
+        let i = match self.modnames.iter().position(|&n| n == name) {
+            Some(i) => i,
+            None => {
+                self.modnames.push(name);
+                self.modnames.len() - 1
+            }
+        };
+        self.subs.push(Sub::Module(i as u32));
     }
 
     fn unqualified_untagged(&mut self, d: DeclId, v: Structor) {
