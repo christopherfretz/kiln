@@ -67,6 +67,7 @@ impl Sema<'_, '_> {
     /// operands of the same real floating type `T` give a `_Complex T`.
     pub(crate) fn builtin_complex(
         &mut self,
+        callee: ExprId,
         args: &[ExprId],
         rparen: Loc,
     ) -> Option<(Vec<ExprId>, QualType)> {
@@ -105,14 +106,16 @@ impl Sema<'_, '_> {
             return None;
         }
         let el = conv::strip_cv(self, rt);
+        // clang 19 rejects the half types at the callee (clang 22 accepts
+        // them, as it accepts `__bf16`: spec/sema.md "GNU complex").
         let spelled = match self.ast.types.builtin(el) {
+            _ if self.clang_compat >= 22 => None,
             Some(BuiltinType::Float16) => Some("_Float16"),
             Some(BuiltinType::Half) => Some("half"),
             _ => None,
         };
         if let Some(name) = spelled {
-            let msg =
-                self.diag(DiagId::sema_invalid_complex_spec, self.begin_loc(args[0])).arg(name);
+            let msg = self.diag(DiagId::sema_invalid_complex_spec, self.begin_loc(callee)).arg(name);
             self.emit(msg);
             return None;
         }

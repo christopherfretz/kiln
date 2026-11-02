@@ -3580,8 +3580,12 @@ clang 19's C99/GNU complex support in C++:
   `__real` keeps the operand's value category. `__imag` does for a
   complex operand, and is a zero prvalue otherwise.
 - **`__builtin_complex(re, im)`**: two operands of the same real floating
-  type `T` give `_Complex T`. Other operand types are diagnosed as clang
-  does.
+  type `T` give `_Complex T`, including `__bf16` (`_Complex __bf16`,
+  which clang 19/22 also give though they reject the spelled type).
+  `_Float16` and `__fp16` are rejected at the callee ("'_Complex
+  _Float16' is invalid", "'_Complex half' is invalid") below
+  `-fclang-compat=22` and accepted from 22, as the matching clang does
+  (WP-380). Other operand types are diagnosed as clang does.
 - **List initialization** (clang `CheckComplexType`): `{re, im}`
   initializes the parts, each converted as a list element with narrowing
   checked. A third clause is excess. One clause initializes from a

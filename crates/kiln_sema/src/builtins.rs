@@ -511,7 +511,7 @@ impl Sema<'_, '_> {
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
-            builtin::COMPLEX => self.builtin_complex(args, rparen),
+            builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
             builtin::VA_START => self.builtin_va_start(callee, args, rparen),
             // WP-156: the vector reductions (vector_ops.rs).
