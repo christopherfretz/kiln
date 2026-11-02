@@ -2071,6 +2071,11 @@ access, out-of-line declarator scope.**
   `rebuild_member_destructor` with the destructor's (instantiated)
   class, qualified as written; access is then checked in the
   instantiated member (WP-336).
+  Test for the injected-class-name case:
+  `tests/conformance/expr.prim.id.dtor/libstdcxx-injected-class-name-dtor-in-template.cpp`
+  (libstdc++ shared_ptr_base.h:625, WP-332). A dependent qualifier
+  (`this->B<T>::~B()`) is still `templ_unimplemented` ("a dependent
+  destructor name").
   A pseudo-destructor on a scalar or dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object

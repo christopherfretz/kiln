@@ -1544,6 +1544,13 @@ and returns the scope it names:
   - A failed comparison adds `expression evaluates to 'L op R'` at the
     operator, underlining the whole comparison (clang
     `DiagnoseStaticAssertDetails`).
+  - In a template definition (`in_template()`, or a context flagged
+    `DEPENDENT_CTX`) the condition is not evaluated, even when it is not
+    value-dependent (P2593R1, a DR; clang's
+    `CurContext->isDependentContext()`): `else static_assert(false);` in
+    a discarded branch is fine, and the instantiation that keeps it
+    fails (libstdc++ ranges:9507; WP-332). Test:
+    `dcl.pre/static-assert-false-in-template-definition.cpp`.
   - On failure it reports
     `static assertion failed due to requirement '…'`, with the
     condition printed by `TypeNames::write_expr`, plus the message if
@@ -2407,6 +2414,24 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   printf builtins an implicit `format(printf, F, A)` attribute
   (`builtin::printf_format`, WP-282) and an implicit `NoThrow`
   attribute, in clang's order. Later lookups find that declaration.
+- **One declaration per builtin** (WP-332): every implicit use looks
+  the name up first, as clang does. The memberwise copy of a trivially
+  copyable array member (spec/sema-class.md §4.5, clang
+  `buildMemcpyForAssignmentOp`) does an ordinary lookup of
+  `__builtin_memcpy` in the translation unit and calls what it finds
+  (the lazily created builtin of an earlier written call, or a user
+  redeclaration); only when nothing is found does it call
+  `lazily_create_builtin`, and later written calls then find that
+  declaration. A user redeclaration with the builtin's type
+  (`extern "C" void *__builtin_memcpy(void *, const void *, size_t)`)
+  is a redeclaration of the implicit one, before or after it. A
+  redeclaration inherits the builtin id, and a first declaration of a
+  builtin's name at file scope with C linkage and the builtin's type
+  (ignoring the exception specification) is recognized as the builtin
+  (`recognize_builtin_decl`; clang `BuiltinAttr`), so a call through it
+  still lowers as the builtin. Tests:
+  `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-written-first.cpp`,
+  `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-implicit-first.cpp`.
 - **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
   placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
 - **Calls:** `act_on_call` converts the callee with
@@ -3619,6 +3644,13 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   included (stl_tree.h:2107). Tests:
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return.cpp`,
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return-args.cpp`.
+  A qualifier `typename X<P...>::template M<A...>::m` (or the type
+  `X<P...>::template M<A...>` itself) is rebuilt as the specialization
+  `M<A...>` of the member class or alias template `M` of the current
+  instantiation, as the in-class `typename M<A...>::m` names it
+  (`rebuild_ci_member_template_id`; libstdc++ valarray:1100
+  `valarray<_Tp>::template _UnaryOp<_Name>::_Rt`, WP-332). Test:
+  `tests/conformance/temp.dep.type/libstdcxx-out-of-line-member-template-qualifier.cpp`.
 - **Member template-ids with non-template overloads**
   ([temp.arg.explicit]/4, [over.match.call.general]/1): an unqualified
   function template-id `f<A>(args)` names the whole overload set that
