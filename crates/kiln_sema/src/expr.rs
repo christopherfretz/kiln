@@ -1092,6 +1092,9 @@ impl Sema<'_, '_> {
                     _ => Some((DiagId::sema_unused_expr, loc, Vec::new())),
                 }
             }
+            // clang `isUnusedResultAWarning`'s default case: a void
+            // result is never unused (`static_cast<void>(x);`).
+            ExprKind::CXXStaticCastExpr if self.ast.types.is_void(n.ty()) => None,
             ExprKind::CXXStaticCastExpr => {
                 // Always unused, but a constructor conversion reports a
                 // nodiscard constructor or class (clang
