@@ -1446,6 +1446,19 @@ impl Substituter<'_, '_, '_> {
         {
             return Ok(Some(Initializer::List(self.init_list(peeled)?)));
         }
+        // A list whose elements bind temporaries is under its
+        // full-expression (`T a[] = {{1}}` with `T(const int&)`).
+        let init = match self.sema.ast.exprs.get(init).kind() {
+            ExprKind::ExprWithCleanups
+                if matches!(
+                    self.sema.ast.exprs.get(self.sema.ast.exprs.operand(init)).kind(),
+                    ExprKind::InitListExpr | ExprKind::ParenListExpr
+                ) =>
+            {
+                self.sema.ast.exprs.operand(init)
+            }
+            _ => init,
+        };
         let n = *self.sema.ast.exprs.get(init);
         Ok(Some(match n.kind() {
             ExprKind::ParenListExpr => {

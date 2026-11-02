@@ -1485,7 +1485,11 @@ recomputed exactly as for non-template code (clang's
   declaration's parameter name.
 - **Variables** keep the pattern's form of initialization (`cinit`,
   `callinit`, `listinit`): `T v{a, b}` stays direct-list-initialization,
-  which may choose an explicit constructor.
+  which may choose an explicit constructor. A braced list is redone as a
+  list even when the pattern's full-expression (`ExprWithCleanups`) wraps
+  it, as when its elements' constructors bind temporaries: `T a[] = {{1}}`
+  with `T(const int&)` (WP-278;
+  `tests/conformance/dcl.init.aggr/array-of-class-from-list-in-template.cpp`).
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
