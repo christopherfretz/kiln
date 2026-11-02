@@ -103,3 +103,4 @@ parse_unknown_attribute = Warning [UnknownAttributes] (1) "unknown attribute '{0
 parse_unsupported = Error (1) "{0} is not supported yet";
 parse_using_enum_requires_name = Error (0) "using enum requires an enum or typedef name";
 parse_vexing_parse = Warning [VexingParse] (0) "parentheses were disambiguated as a function declaration";
+parse_virt_specifier_outside_class = Error (1) "'{0}' specifier is not allowed outside a class definition";
