@@ -139,10 +139,7 @@ impl Sema<'_, '_> {
         // [class.friend]/6: a function may be defined in a friend
         // declaration only of a non-local class (clang
         // `err_friend_def_in_local_class`, for a valid declaration).
-        if local
-            && def
-            && !self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID)
-        {
+        if local && def && !self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID) {
             self.error(DiagId::sema_friend_def_in_local_class, d.name_loc());
         }
         if ds.invalid || d.invalid {

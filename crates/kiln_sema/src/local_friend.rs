@@ -74,8 +74,9 @@ impl Sema<'_, '_> {
     /// whose parameters are similar ("local declaration nearly matches",
     /// or the first parameter whose type differs), or, when no block
     /// declares it, the namespace function typo correction finds
-    /// ([`Sema::local_friend_correction`]). An operator friend gets the
-    /// plain error.
+    /// ([`Sema::local_friend_correction`]). An operator friend matches
+    /// the blocks' operator declarations (`Scope.local_ops`) and gets no
+    /// typo correction.
     pub(crate) fn check_local_friend(
         &mut self,
         dname: DeclName,
@@ -154,44 +155,51 @@ impl Sema<'_, '_> {
             // An operator: typo correction suggests nothing.
             self.diag(DiagId::sema_no_matching_local_friend, loc)
         } else {
-            let mut msg = self.diag(DiagId::sema_no_matching_local_friend, loc);
-            for f in fns {
-                if self.kind_of(f) == DeclKind::FunctionTemplate {
-                    continue;
-                }
-                let Some(similar) = self.similar_params(f, new.ty) else { continue };
-                let note = match similar {
-                    Similar::Same => {
-                        self.diag(DiagId::note_local_decl_close_match, self.decl_loc(f))
-                    }
-                    Similar::Differs(i, local, friend) => {
-                        let params: Vec<DeclId> = self
-                            .ast
-                            .decls
-                            .function(f)
-                            .map(|fd| self.ast.lists.iter::<DeclId>(fd.params).collect())
-                            .unwrap_or_default();
-                        // The first type-specifier (clang `getTypeSpecStartLoc`).
-                        let ploc = params.get(i).map_or(self.decl_loc(f), |&p| {
-                            let begin = self.ast.decls.cold.begin_loc.get(p).copied();
-                            self.type_spec_locs
-                                .get(&p)
-                                .copied()
-                                .or(begin)
-                                .unwrap_or(self.decl_loc(p))
-                        });
-                        self.diag(DiagId::note_local_decl_close_param_match, ploc)
-                            .arg(crate::expr::ordinal(i + 1))
-                            .arg(self.ty_arg(local))
-                            .arg(self.ty_arg(friend))
-                    }
-                };
-                msg = msg.with_note(note);
-            }
-            msg
+            let msg = self.diag(DiagId::sema_no_matching_local_friend, loc);
+            self.local_friend_near_matches(msg, fns, new)
         };
         self.emit(msg);
         LocalFriend::Invalid
+    }
+
+    /// Clang's near-match notes on "no matching function found in local
+    /// scope": each function of `fns` whose parameters are similar to the
+    /// friend's gets "local declaration nearly matches", or the first
+    /// parameter whose type differs.
+    fn local_friend_near_matches(
+        &mut self,
+        mut msg: kiln_diag::Diag,
+        fns: Vec<DeclId>,
+        new: NewFn,
+    ) -> kiln_diag::Diag {
+        for f in fns {
+            if self.kind_of(f) == DeclKind::FunctionTemplate {
+                continue;
+            }
+            let Some(similar) = self.similar_params(f, new.ty) else { continue };
+            let note = match similar {
+                Similar::Same => self.diag(DiagId::note_local_decl_close_match, self.decl_loc(f)),
+                Similar::Differs(i, local, friend) => {
+                    let params: Vec<DeclId> = self
+                        .ast
+                        .decls
+                        .function(f)
+                        .map(|fd| self.ast.lists.iter::<DeclId>(fd.params).collect())
+                        .unwrap_or_default();
+                    // The first type-specifier (clang `getTypeSpecStartLoc`).
+                    let ploc = params.get(i).map_or(self.decl_loc(f), |&p| {
+                        let begin = self.ast.decls.cold.begin_loc.get(p).copied();
+                        self.type_spec_locs.get(&p).copied().or(begin).unwrap_or(self.decl_loc(p))
+                    });
+                    self.diag(DiagId::note_local_decl_close_param_match, ploc)
+                        .arg(crate::expr::ordinal(i + 1))
+                        .arg(self.ty_arg(local))
+                        .arg(self.ty_arg(friend))
+                }
+            };
+            msg = msg.with_note(note);
+        }
+        msg
     }
 
     /// [class.friend]/11 with [class.local]: the redeclaration lookup of
