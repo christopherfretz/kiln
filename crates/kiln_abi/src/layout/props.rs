@@ -70,7 +70,7 @@ fn const_int(ast: &Ast, v: ConstValueId) -> Option<u128> {
 
 /// The largest alignment, in bits, requested for `d` by `alignas` /
 /// `__attribute__((aligned))` on any of its declarations (clang
-/// `Decl::getMaxAlignment`); 0 if none. Encoding (spec/abi.md §4.1):
+/// `Decl::getMaxAlignment`); 0 if none. Encoding (spec/abi.md §3.1):
 /// an `ALIGNED` attribute's `a` is the argument `ExprId` (0 = no
 /// argument: the target's biggest alignment) and `b` a raw `QualType` for
 /// `alignas(type-id)`; `DeclArena::cold.alignment` holds further

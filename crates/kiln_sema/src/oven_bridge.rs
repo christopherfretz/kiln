@@ -70,7 +70,7 @@ impl SemaBridge for Bridge<'_, '_, '_> {
             .map_or((0, 1), |(size, align)| (size, u32::try_from(align).unwrap_or(1)))
     }
 
-    // clang `getDeclAlign(D, /*ForAlignof=*/false)` (spec/abi.md §4.1).
+    // clang `getDeclAlign(D, /*ForAlignof=*/false)` (spec/abi.md §3.2).
     fn decl_align(&mut self, d: DeclId) -> u64 {
         let s = &*self.sema;
         kiln_abi::layout::decl_align(&s.ast, d, &s.abi, false)

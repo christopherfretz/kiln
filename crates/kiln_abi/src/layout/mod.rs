@@ -373,7 +373,7 @@ pub fn decl_max_align(ast: &Ast, d: DeclId, target: &Target) -> u64 {
 }
 
 /// The alignment in bytes of the object declared by `d` (clang
-/// `ASTContext::getDeclAlign(d, for_alignof)`; spec/abi.md §4.1):
+/// `ASTContext::getDeclAlign(d, for_alignof)`; spec/abi.md §3.2):
 ///
 /// - a variable with an `alignas` / `aligned` attribute: the attribute's
 ///   alignment alone ([dcl.align]/5; `aligned` may lower it);

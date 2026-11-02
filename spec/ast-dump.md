@@ -476,6 +476,11 @@ type>'`:
     dependent `N::v<T>` carries it over (WP-300).
   - `T(a, b)` for an unresolved construct, `sizeof...(Ts)`, and folds as
     `(... + xs)`.
+  - `sizeof e` / `alignof e` with an expression operand print the
+    keyword, a space and the operand as written, adding no parentheses
+    (`alignof((g))` stays `alignof((g))`, `sizeof x` stays `sizeof x`;
+    WP-312, `tests/conformance/dcl.pre/static-assert-alignof-operand.cpp`).
+  - `v.xy` for an ext-vector element access.
 
 Known gaps:
 - A `DependentScopeDeclRefExpr` does not store the `template` keyword.

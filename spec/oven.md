@@ -1577,8 +1577,13 @@ stays `Opaque`: it has no value model yet. The operations are in
   at the expression's begin, as clang 19 does: a subscript `v[i]`,
   `__builtin_reduce_*`, and a bit cast from a vector to a scalar of a
   different class.
+- **Ext-vector element access** (`ext_elt_regs`, WP-312): on a prvalue
+  vector (a compound literal, an operator result, a call) the selected
+  lanes are taken from the operand's registers, for one lane (a scalar)
+  and for a swizzle (a vector), as clang 19 folds them.
 - **Rejected without a note** (clang 19 fails silently): a `?:` with a
-  vector condition, and ext-vector element access `.x`.
+  vector condition, and ext-vector element access on a vector object
+  (`v.x` for a variable `v`, the error at the expression's begin).
 - clang 20+ folds subscripts, reductions and vector-condition `?:`. The
   boundary moves with the oracle at the clang 22 switch (M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
@@ -1829,7 +1834,9 @@ to glvalues); arrays, structs, unions, bit-fields; all C control flow (if,
 loops, switch incl. fallthrough, break/continue, return); labels and
 `goto` (diagnosed as clang does); calls and recursion; constexpr variables
 and functions; `static_assert`; compound assignment, comma, conditional,
-casts, `sizeof`/`alignof` (of a reference type: the referred type's);
+casts, `sizeof`/`alignof` (of a reference type: the referred type's;
+`alignof e` naming a variable or data member is its declared alignment,
+`SemaBridge::alignof_decl`, clang `GetAlignOfExpr`, spec/abi.md §3.2);
 string literals (each evaluation of a `StringLiteral` is a distinct object;
 frozen pointers keep it through `PtrBase::StringLit { lit, origin }`, so
 `p + 1 != q` for `constexpr const char *p = "ab", *q = "ab";` is rejected
