@@ -106,6 +106,7 @@ pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
+pub use template_id_typo::TemplateIdTypo;
 
 /// A delayed-typo diagnostic held for the end of its full-expression
 /// ([`Sema::begin_delayed_typos`]): its sequence number and the recovery
@@ -115,6 +116,23 @@ struct HeldTypo {
     seq: u32,
     expr: ExprId,
     diag: Diag,
+    /// A speculative correction: `expr` is the corrected expression.
+    spec: Option<Box<TypoSpec>>,
+}
+
+/// clang 19's typo correction of a template-id, tried ahead of its
+/// correction point ([`Sema::speculate_template_id_typo`], WP-399): the
+/// expression goes on with the corrected name while the diagnostics wait
+/// ([`kiln_diag::DiagEngine::hold`]), and the correction stands if no
+/// error came of an expression built on it.
+#[derive(Debug)]
+struct TypoSpec {
+    /// The first held diagnostic issued after the correction.
+    start: usize,
+    /// Where the template-id's name is.
+    loc: Loc,
+    /// The diagnostic of the correction ("did you mean").
+    suggest: Diag,
 }
 
 /// The semantic-analysis state of one translation unit (spec/sema.md §1).
@@ -552,6 +570,15 @@ pub struct Sema<'a, 'sm> {
     /// such a `TypoExpr` and reports it at the end of the translation
     /// unit (WP-330).
     dropped_typos: Vec<Diag>,
+    /// How many [`TypoSpec`]s are open (each holds the engine once).
+    open_specs: u32,
+    /// While specs are open: each recovery expression built, with the
+    /// held-diagnostic count then (an error is the failure of the first
+    /// recovery expression built after it).
+    spec_failures: Vec<(ExprId, usize)>,
+    /// While specs are open: the held diagnostics that are typo
+    /// corrections themselves, never a failure of a speculation.
+    spec_exempt: kiln_source::fx::FxHashSet<usize>,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -820,6 +847,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             typo_count: 0,
             typo_exprs: kiln_source::fx::FxHashSet::default(),
             dropped_typos: Vec::new(),
+            open_specs: 0,
+            spec_failures: Vec::new(),
+            spec_exempt: kiln_source::fx::FxHashSet::default(),
             range_for_outer_depth: None,
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
@@ -996,9 +1026,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub fn end_delayed_typos(&mut self, mark: usize) {
         self.typo_delay = self.typo_delay.saturating_sub(1);
         if self.typo_delay == 0 {
-            for t in self.take_held_typos(mark) {
-                self.emit(t.diag);
-            }
+            let held = self.take_held_typos(mark);
+            self.emit_typos(held, false);
         }
     }
 
@@ -1013,9 +1042,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// Emits now the typos held since `mark` (a [`Sema::typo_mark`]),
     /// without ending a scope.
     pub fn flush_typos_from(&mut self, mark: usize) {
-        for t in self.take_held_typos(mark) {
-            self.emit(t.diag);
-        }
+        let held = self.take_held_typos(mark);
+        self.emit_typos(held, false);
     }
 
     /// The current typo mark: typos reported from here on have a
@@ -1031,7 +1059,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub fn drop_delayed_typos(&mut self, mark: usize) {
         self.typo_delay = self.typo_delay.saturating_sub(1);
         let held = self.take_held_typos(mark);
-        self.dropped_typos.extend(held.into_iter().map(|t| t.diag));
+        self.emit_typos(held, true);
     }
 
     /// clang's `CorrectDelayedTyposInExpr(e)` as the parser calls it on a
@@ -1064,10 +1092,142 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             .into_iter()
             .partition(|t| found.contains(&t.expr));
         self.delayed_typos = keep;
-        for t in now {
-            self.emit(t.diag);
-        }
+        self.emit_typos(now, false);
         true
+    }
+
+    /// Reports the delayed typos `batch` at their correction point, in
+    /// order (into [`Sema::emit_dropped_typos`]'s list if `dropped`).
+    /// The speculative corrections among them ([`TypoSpec`]) stand
+    /// together or not at all, as clang's `CorrectDelayedTyposInExpr`
+    /// rebuilds the whole expression: one that an error came of
+    /// ([`Sema::spec_failed_errors`]) makes them all report the typo
+    /// uncorrected, and those errors are dropped (clang never built the
+    /// failing expression). A dropped expression is never corrected.
+    fn emit_typos(&mut self, batch: Vec<HeldTypo>, dropped: bool) {
+        let specs = batch.iter().filter(|t| t.spec.is_some()).count();
+        let mut failed = dropped;
+        if specs > 0 {
+            let mut errors = Vec::new();
+            for t in &batch {
+                if let Some(s) = &t.spec {
+                    errors.extend(self.spec_failed_errors(s.loc, s.start));
+                }
+            }
+            failed |= !errors.is_empty();
+            for i in errors {
+                self.diags.drop_held(i);
+            }
+        }
+        for t in batch {
+            let d = match t.spec {
+                Some(s) if !failed => s.suggest,
+                _ => t.diag,
+            };
+            if dropped {
+                self.dropped_typos.push(d);
+            } else {
+                if self.open_specs > 0 {
+                    self.spec_exempt.insert(self.diags.held_len());
+                }
+                self.emit(d);
+            }
+        }
+        for _ in 0..specs {
+            self.open_specs = self.open_specs.saturating_sub(1);
+            self.diags.release();
+        }
+        if self.open_specs == 0 {
+            self.spec_failures.clear();
+            self.spec_exempt.clear();
+        }
+    }
+
+    /// The held errors issued since `start` that come of an expression
+    /// built on the speculative correction at `loc`: not the parser's,
+    /// not a typo's, and either the failure of a recovery expression over
+    /// the correction (an expression at `loc`: the reference, or what it
+    /// was converted to) or of no recovery expression at all (a failed
+    /// initialization).
+    fn spec_failed_errors(&self, loc: Loc, start: usize) -> Vec<usize> {
+        let mut out = Vec::new();
+        for (i, id) in self.diags.held_errors_from(start) {
+            if id.name().starts_with("parse_") || self.spec_exempt.contains(&i) {
+                continue;
+            }
+            let node = self.spec_failures.iter().find(|&&(_, n)| n > i).map(|&(e, _)| e);
+            if node.is_none_or(|n| self.expr_contains_at(n, loc)) {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    /// Whether `e` holds a delayed typo (clang's `TypoExpr`, which is
+    /// type-dependent: clang 19 diagnoses an unused result before it
+    /// corrects the typos, so a corrected `val<int>;` is not "unused").
+    pub(crate) fn holds_typo_expr(&self, e: ExprId) -> bool {
+        if self.typo_exprs.is_empty() {
+            return false;
+        }
+        let mut stack = vec![e];
+        let mut budget = 1usize << 16;
+        while let Some(x) = stack.pop() {
+            if self.typo_exprs.contains(&x) {
+                return true;
+            }
+            if budget == 0 {
+                return false;
+            }
+            budget -= 1;
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        false
+    }
+
+    /// Whether `e` or an expression under it is at `loc` (a bounded walk).
+    fn expr_contains_at(&self, e: ExprId, loc: Loc) -> bool {
+        let mut stack = vec![e];
+        let mut budget = 1usize << 16;
+        while let Some(x) = stack.pop() {
+            if self.ast.exprs.get(x).loc() == loc {
+                return true;
+            }
+            if budget == 0 {
+                return false;
+            }
+            budget -= 1;
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        false
+    }
+
+    /// Opens the speculative correction `u` of a delayed typo whose
+    /// uncorrected diagnostic is `plain` and corrected one `suggest`
+    /// ([`TypoSpec`]): the engine holds every diagnostic until its
+    /// correction point.
+    pub(crate) fn hold_typo_spec(&mut self, plain: Diag, suggest: Diag, u: ExprId, loc: Loc) {
+        let seq = self.typo_count;
+        self.typo_count = self.typo_count.wrapping_add(1);
+        self.typo_exprs.insert(u);
+        if self.open_specs == 0 {
+            self.spec_failures.clear();
+            self.spec_exempt.clear();
+        }
+        self.open_specs += 1;
+        self.diags.hold();
+        let start = self.diags.held_len();
+        let spec = Some(Box::new(TypoSpec { start, loc, suggest }));
+        self.delayed_typos.push(HeldTypo { seq, expr: u, diag: plain, spec });
+    }
+
+    /// Records the recovery expression `e` just built while a
+    /// speculative correction is open ([`Sema::spec_failed_errors`]).
+    pub(crate) fn note_spec_recovery(&mut self, e: ExprId) {
+        if self.open_specs > 0 {
+            let n = self.diags.held_len();
+            self.spec_failures.push((e, n));
+        }
     }
 
     /// Starts a new full-expression context inside an expression (a
@@ -1094,6 +1254,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// translation unit after the pending instantiations, as clang
     /// (WP-330).
     pub(crate) fn emit_dropped_typos(&mut self) {
+        // A speculative correction left open (no correction point
+        // reached) reports uncorrected.
+        let (open, keep): (Vec<HeldTypo>, Vec<HeldTypo>) =
+            std::mem::take(&mut self.delayed_typos).into_iter().partition(|t| t.spec.is_some());
+        self.delayed_typos = keep;
+        self.emit_typos(open, true);
+        while self.open_specs > 0 {
+            self.open_specs -= 1;
+            self.diags.release();
+        }
         for d in std::mem::take(&mut self.dropped_typos) {
             self.emit(d);
         }
@@ -1109,7 +1279,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             self.typo_exprs.insert(e);
         }
         if self.typo_delay > 0 && self.inst.stack.is_empty() {
-            self.delayed_typos.push(HeldTypo { seq, expr: e, diag: d });
+            self.delayed_typos.push(HeldTypo { seq, expr: e, diag: d, spec: None });
         } else {
             self.emit(d);
         }

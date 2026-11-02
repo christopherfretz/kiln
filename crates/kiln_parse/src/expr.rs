@@ -1105,19 +1105,36 @@ impl Parser<'_, '_> {
                     };
                     let Some(args) = args else {
                         // `ParseExpressionList` corrects what it parsed,
-                        // then the base.
+                        // then the base. The subscript is `ExprError`
+                        // and its `]` is matched (WP-399).
                         self.s.flush_delayed_typos(mark);
                         self.s.correct_delayed_typos_in(e);
-                        return None;
+                        let _ = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
+                        self.expr_invalid = true;
+                        e = self.s.act_on_error_expr(&[e], loc);
+                        continue;
                     };
                     self.s.correct_delayed_typos_in(e);
-                    if self.at(Punct::RSquare) {
-                        self.s.end_delayed_typos(mark);
-                    } else {
+                    if !self.at(Punct::RSquare) {
+                        // clang's `ParsePostfixExpressionSuffix`: no `]`
+                        // after the list makes the subscript `ExprError`
+                        // with no Sema action (WP-399).
                         self.s.drop_delayed_typos(mark);
+                        let _ = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
+                        self.expr_invalid = true;
+                        e = self.s.act_on_error_expr(&[e], loc);
+                        continue;
                     }
+                    self.s.end_delayed_typos(mark);
                     let rsquare = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
+                    // A subscript whose Sema action fails is `ExprError`
+                    // (`i[1]` on an `int`): an expression-list skips to
+                    // its `,` (WP-399).
+                    let errors = self.s.diags.error_count();
                     e = self.s.act_on_subscript_args(e, &args, loc, rsquare);
+                    if self.s.diags.error_count() > errors && self.s.is_error_expr(e) {
+                        self.expr_invalid = true;
+                    }
                 }
                 Some(Punct::LParen) => {
                     self.bump();
@@ -1189,6 +1206,29 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// `p->~T()` / `x.~T()` / `p->~X<T>()` after `.`/`->`, at the `~`
+    /// ([expr.prim.id.dtor]).
+    fn parse_member_destructor_name(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
+        let tl = self.bump().span.lo;
+        let Some(name) = self.ident() else {
+            self.error_here(DiagId::parse_destructor_tilde_identifier);
+            return None;
+        };
+        let nl = self.bump().span.lo;
+        if self.at(Punct::Less) {
+            // `p->~X<T>()`: the simple-template-id names the destroyed
+            // class type.
+            let class = self.s.classify_name(name, None);
+            return match self.parse_template_id_rest(class, name, nl) {
+                Ok(TemplateIdRef::Type(t)) => {
+                    Some(self.s.rebuild_member_destructor(e, t, false, nl, loc, arrow))
+                }
+                _ => None,
+            };
+        }
+        Some(self.s.act_on_member_destructor(e, name, tl, nl, loc, arrow))
+    }
+
     /// The member designator after `.`/`->` (the operator token at `loc`
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
@@ -1244,25 +1284,7 @@ impl Parser<'_, '_> {
             ));
         }
         if self.at(Punct::Tilde) {
-            // `p->~T()` / `x.~T()`.
-            let tl = self.bump().span.lo;
-            let Some(name) = self.ident() else {
-                self.error_here(DiagId::parse_destructor_tilde_identifier);
-                return None;
-            };
-            let nl = self.bump().span.lo;
-            if self.at(Punct::Less) {
-                // `p->~X<T>()` ([expr.prim.id.dtor]): the simple-template-id
-                // names the destroyed class type.
-                let class = self.s.classify_name(name, None);
-                return match self.parse_template_id_rest(class, name, nl) {
-                    Ok(TemplateIdRef::Type(t)) => {
-                        Some(self.s.rebuild_member_destructor(e, t, false, nl, loc, arrow))
-                    }
-                    _ => None,
-                };
-            }
-            return Some(self.s.act_on_member_destructor(e, name, tl, nl, loc, arrow));
+            return self.parse_member_destructor_name(e, loc, arrow);
         }
         let nl = self.loc();
         let name = if self.at_kw(Kw::Operator) {
@@ -1302,6 +1324,21 @@ impl Parser<'_, '_> {
             let (args, _, _) = self.parse_template_arg_list()?;
             let l = self.s.ast.types.arg_list(&args);
             e = self.s.act_on_dependent_member_template_args(e, l);
+        } else if self.at(Punct::Less)
+            && let Some(sym) = name.as_ident()
+            && let Some(found) = self.s.member_named_non_template(e)
+            && let Some(close) = self.potential_angle_close()
+        {
+            // `a.g<int>(1)` with `g` no template: the template argument
+            // list is skipped and the access is an error (clang's
+            // `checkPotentialAngleBracket` after a member access).
+            while self.pos() < close {
+                let _ = self.bump();
+            }
+            let _ = self.split_greater();
+            self.s.diagnose_expr_intended_as_template_name(sym, found, nl);
+            self.expr_invalid = true;
+            return Some(self.s.act_on_error_expr(&[e], nl));
         }
         Some(e)
     }
@@ -1459,19 +1496,26 @@ impl Parser<'_, '_> {
     /// `close` ([expr.post.general]). clang's `ParseExpressionList`
     /// recovery (spec/parse.md "Expression-list recovery"): an invalid
     /// initializer-clause skips to the next `,` or `)` (brackets balanced,
-    /// past `;`, before an unmatched closer) and the list goes on, so a
-    /// later clause's errors are reported too; after an invalid clause the
-    /// list is `None`, its `close` taken (or skipped to, stopping at `;`:
-    /// the callers' `SkipUntil(close, StopAtSemi)`).
+    /// before an unmatched closer, stopping at `;` under clang 22 and past
+    /// it under clang 19) and the list goes
+    /// on, so a later clause's errors are reported too; after an invalid
+    /// clause the list is `None`, its `)` taken (or skipped to, stopping
+    /// at `;`: the callers' `SkipUntil(close, StopAtSemi)`) but its `]`
+    /// left to the subscript. A clause is invalid when it fails to parse
+    /// or leaves `expr_invalid` set (clang's `ExprError`).
     pub(crate) fn parse_expr_list(&mut self, close: Punct) -> Option<Vec<ExprId>> {
         let mut args = Vec::new();
         let mut saw_error = false;
+        let outer_invalid = std::mem::replace(&mut self.expr_invalid, false);
         loop {
             let a = if self.at(Punct::LBrace) {
                 self.parse_init_list().ok().map(|l| self.s.act_on_braced_arg(l))
             } else {
                 self.parse_assignment_expr()
             };
+            // An argument the parser went on past as clang's `ExprError`
+            // (`expr_invalid`: `i[1] 5`, `f(1 2)`) failed too.
+            let a = a.filter(|_| !std::mem::replace(&mut self.expr_invalid, false));
             let ellipsis = self.eat(Punct::Ellipsis);
             if let Some(a) = a {
                 let a = match ellipsis {
@@ -1481,14 +1525,20 @@ impl Parser<'_, '_> {
                 args.push(a);
             } else {
                 saw_error = true;
-                self.skip_until(&[Punct::Comma, Punct::RParen], false, false);
+                // clang 22 stops at a `;` (`f(u<int> 7; x)`), clang 19
+                // skips past it.
+                let semi = self.s.clang_compat >= 22;
+                self.skip_until(&[Punct::Comma, Punct::RParen], semi, false);
             }
             if self.eat(Punct::Comma).is_none() {
                 break;
             }
         }
+        self.expr_invalid = outer_invalid;
         if saw_error {
-            if self.eat(close).is_none() {
+            // A subscript's `]` is the caller's (clang's `consumeClose`,
+            // which reports a missing one).
+            if close != Punct::RSquare && self.eat(close).is_none() {
                 self.skip_until(&[close], true, true);
             }
             return None;
@@ -1708,17 +1758,19 @@ impl Parser<'_, '_> {
         if self.s.clang_compat < 22 {
             // clang 19: a delayed typo on an expression parsing goes on
             // around ("expected ')'" / "expected ';'" may follow).
-            return Some(self.s.act_on_undeclared_template_id_typo(name, nl));
+            return Some(self.s.act_on_undeclared_template_id_typo(name, &args, nl));
         }
-        if functions {
-            if let Some(e) = self.s.correct_function_template_id(name, &args, nl) {
-                return Some(e);
+        match self.s.correct_template_id_typo(name, &args, nl) {
+            kiln_sema::TemplateIdTypo::Recovered(e) => return Some(e),
+            kiln_sema::TemplateIdTypo::Suggested => {}
+            kiln_sema::TemplateIdTypo::Uncorrected if functions => {
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::sema_undeclared_var_use, nl).arg(text);
+                self.emit(d);
             }
-            let text = self.s.ast.symbols().as_str(name).to_owned();
-            let d = self.s.diag(DiagId::sema_undeclared_var_use, nl).arg(text);
-            self.emit(d);
-        } else {
-            let _ = self.s.act_on_id_expression(name, nl, None);
+            kiln_sema::TemplateIdTypo::Uncorrected => {
+                let _ = self.s.act_on_id_expression(name, nl, None);
+            }
         }
         let goes_on = self.cur_binop().is_some()
             || [
@@ -1731,6 +1783,9 @@ impl Parser<'_, '_> {
             ]
             .iter()
             .any(|&p| self.at(p));
+        // The template-id is clang's `ExprError`: an expression-list
+        // skips past it (`a[u<int>], x` skips to the `,`; WP-399).
+        self.expr_invalid |= goes_on;
         goes_on.then(|| self.s.act_on_error_expr(&[], nl))
     }
 

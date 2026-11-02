@@ -669,8 +669,10 @@ impl Oven {
             return self.try_fold(bridge, e);
         }
         self.run.lax = true;
+        self.mem.lax = true;
         let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
         self.run.lax = false;
+        self.mem.lax = false;
         r
     }
 
