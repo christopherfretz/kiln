@@ -5276,10 +5276,7 @@ impl Sema<'_, '_> {
                     // instantiates a member class ([temp.explicit]/3).
                     if qualifier.is_none() || !self.act_on_explicit_member_class_inst(p, nloc) {
                         self.check_redeclared_class_head(p);
-                        if head.is_some() {
-                            let latest = self.ast.latest(p);
-                            let _ = self.templ.class_redecl_loc.insert(latest, nloc);
-                        }
+                        self.note_class_template_redecl(p, head.is_some(), nloc);
                     }
                     return p;
                 }
@@ -5325,6 +5322,16 @@ impl Sema<'_, '_> {
             self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
+    }
+
+    /// Records the name of a class template redeclaration that created no
+    /// decl (`templ.class_redecl_loc`), for notes naming the declaration
+    /// lookup finds.
+    fn note_class_template_redecl(&mut self, p: DeclId, template: bool, nloc: Loc) {
+        if template {
+            let latest = self.ast.latest(p);
+            let _ = self.templ.class_redecl_loc.insert(latest, nloc);
+        }
     }
 
     /// The elaborated-type-specifier of `friend class X;`

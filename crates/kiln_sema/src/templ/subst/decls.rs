@@ -402,19 +402,7 @@ impl Substituter<'_, '_, '_> {
                         );
                         self.sema.unowned_params.insert(np);
                         self.locals.insert(p, DeclOrPack::Decl(np));
-                        out.push(ParamInfo {
-                            name,
-                            ty,
-                            original_ty: None,
-                            loc,
-                            attrs: Vec::new(),
-                            invalid: false,
-                            default_arg: DefaultArg::None,
-                            range: (loc, loc),
-                            type_loc: loc,
-                            decl: Some(np),
-                            explicit_object: None,
-                        });
+                        out.push(pack_param_info(name, ty, loc, np));
                         continue;
                     }
                 };
@@ -428,19 +416,7 @@ impl Substituter<'_, '_, '_> {
                     decls.push(np);
                     // The elements share the pack's name (carried by
                     // `np`); it is not a redefinition ([temp.variadic]/5).
-                    out.push(ParamInfo {
-                        name: None,
-                        ty,
-                        loc,
-                        original_ty: None,
-                        attrs: Vec::new(),
-                        invalid: false,
-                        default_arg: DefaultArg::None,
-                        range: (loc, loc),
-                        type_loc: loc,
-                        decl: Some(np),
-                        explicit_object: None,
-                    });
+                    out.push(pack_param_info(None, ty, loc, np));
                 }
                 let l = self.sema.ast.lists.push(&decls);
                 self.locals.insert(p, DeclOrPack::Pack(l));
@@ -1394,5 +1370,23 @@ impl Substituter<'_, '_, '_> {
             &params,
             requires,
         ))
+    }
+}
+
+/// The parameter info of a parameter formed from a function parameter
+/// pack (an element, or the pack kept unexpanded).
+fn pack_param_info(name: Option<(Symbol, Loc)>, ty: QualType, loc: Loc, np: DeclId) -> ParamInfo {
+    ParamInfo {
+        name,
+        ty,
+        original_ty: None,
+        loc,
+        attrs: Vec::new(),
+        invalid: false,
+        default_arg: DefaultArg::None,
+        range: (loc, loc),
+        type_loc: loc,
+        decl: Some(np),
+        explicit_object: None,
     }
 }

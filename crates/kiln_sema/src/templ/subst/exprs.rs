@@ -1000,7 +1000,8 @@ impl Substituter<'_, '_, '_> {
         decls: &[DeclId],
         targs: Option<ArgListId>,
     ) -> SubstResult<ExprId> {
-        if let (Some(&d), Some(q)) = (decls.first(), self.sema.ast.templates.expr_nns.get(c).copied())
+        if let (Some(&d), Some(q)) =
+            (decls.first(), self.sema.ast.templates.expr_nns.get(c).copied())
             && self.in_dependent_specialization(d, n.loc())?
         {
             // A member of a class template pattern whose substituted class

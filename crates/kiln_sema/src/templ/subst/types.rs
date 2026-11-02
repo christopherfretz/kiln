@@ -74,9 +74,13 @@ impl Substituter<'_, '_, '_> {
     ) -> SubstResult<()> {
         // Still a template template parameter (an outer one): its own
         // parameters are checked when it is substituted.
-        if self.sema.ast.types.template_decl(name).is_none_or(|d| {
-            self.sema.kind_of(d) == DeclKind::TemplateTemplateParm
-        }) {
+        if self
+            .sema
+            .ast
+            .types
+            .template_decl(name)
+            .is_none_or(|d| self.sema.kind_of(d) == DeclKind::TemplateTemplateParm)
+        {
             return Ok(());
         }
         let Some(list) = self.sema.ast.template_parm(ttp).and_then(|x| x.params) else {
@@ -519,12 +523,11 @@ impl Substituter<'_, '_, '_> {
                 let loc = self.written(WrittenKey::Type(q), loc);
                 let d = self.member_template_named(n, name, loc)?;
                 let underlying = self.sema.template_name_for(d);
-                let tn =
-                    self.sema.ast.types.template_name(TemplateName::Qualified {
-                        nns: n,
-                        template_kw: true,
-                        underlying,
-                    });
+                let tn = self.sema.ast.types.template_name(TemplateName::Qualified {
+                    nns: n,
+                    template_kw: true,
+                    underlying,
+                });
                 let v = self.sema.ast.types.args(args).to_vec();
                 let Ok(TemplateIdRef::Type(t)) = self.sema.act_template_id(tn, &v, loc, loc) else {
                     return Err(SubstFail);
