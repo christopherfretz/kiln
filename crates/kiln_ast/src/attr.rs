@@ -139,6 +139,17 @@ impl AttrNode {
     /// (`[[clang::fallthrough]]`, `[[gnu::fallthrough]]`), so not a C++17
     /// extension before C++17 (clang `handleFallThroughAttr`).
     pub const FALLTHROUGH_SCOPED: u8 = 4;
+    /// Flag (bit 3, any kind): written with the `gnu::` attribute scope
+    /// (`[[gnu::noreturn]]`). With `AttrSyntax::Gnu` it selects the GNU
+    /// spelling of `NODISCARD` (`warn_unused_result`) and `NORETURN`, and
+    /// after a function declarator it makes a misplaced attribute a
+    /// warning rather than an error (clang `isGNUScope`).
+    pub const GNU_SCOPED: u8 = 8;
+
+    /// True for the GNU spelling: `__attribute__((x))` or `[[gnu::x]]`.
+    pub const fn is_gnu_spelling(&self) -> bool {
+        matches!(self.syntax, AttrSyntax::Gnu) || self.flags & Self::GNU_SCOPED != 0
+    }
 }
 
 /// Attribute nodes and the declaration → attributes map.
@@ -181,6 +192,12 @@ impl AttrArena {
     /// The attribute `a`.
     pub fn get(&self, a: AttrId) -> &AttrNode {
         &self.nodes[a.index() as usize]
+    }
+
+    /// Sets the flag bits `flags` on attribute `a` (while it is being
+    /// built, before it is attached).
+    pub fn set_flags(&mut self, a: AttrId, flags: u8) {
+        self.nodes[a.index() as usize].flags |= flags;
     }
 
     /// The number of attributes.

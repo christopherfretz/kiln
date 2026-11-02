@@ -2464,7 +2464,9 @@ impl Sema<'_, '_> {
         }
         self.check_using_shadow_conflict(td, DeclName::ident(name));
         if !attrs.is_empty() {
-            self.check_alignas_subject(td, &mut attrs);
+            // The declarator's subject table ([dcl.attr], spec/sema.md
+            // §4.5): an alias-declaration declares a typedef-name.
+            self.check_decl_attrs(td, &mut attrs);
             let _ = self.builder().attach_attrs(td, &attrs);
         }
         td
@@ -7151,6 +7153,22 @@ impl Sema<'_, '_> {
         args: &[AttrArg],
         loc: Loc,
     ) -> Option<AttrId> {
+        let a = self.attribute_node(syntax, scope, name, args, loc)?;
+        if scope.is_some_and(|s| sym_str(self, s) == "gnu") {
+            self.ast.attrs.set_flags(a, AttrNode::GNU_SCOPED);
+        }
+        Some(a)
+    }
+
+    /// [`Sema::act_on_attribute`] without the scope flag.
+    fn attribute_node(
+        &mut self,
+        syntax: AttrSyntax,
+        scope: Option<Symbol>,
+        name: Symbol,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
         let raw = sym_str(self, name);
         let scope_s = scope.map(|s| sym_str(self, s));
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
@@ -7426,64 +7444,6 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Checks attributes against the declaration they appertain to,
-    /// dropping the `alignas` specifiers that cannot apply to it
-    /// ([`Sema::check_alignas_subject`]).
-    pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
-        self.check_alignas_subject(d, attrs);
-        let kind = self.ast.decls.get(d).kind();
-        for &a in attrs.iter() {
-            let node = *self.ast.attrs.get(a);
-            if node.kind == AttrKind::ASSUME {
-                // [dcl.attr.assume]/1: a statement attribute.
-                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg("assume");
-                self.emit(msg);
-                continue;
-            }
-            let bad = match node.kind {
-                AttrKind::NODISCARD => {
-                    // Every function kind, constructors included
-                    // ([dcl.attr.nodiscard]/1, /2 since P1771).
-                    (!(kind.is_function() || matches!(kind, DeclKind::CXXRecord | DeclKind::Enum)))
-                        .then_some("functions, classes, or enumerations")
-                }
-                AttrKind::NORETURN => {
-                    (!kind.is_function()).then_some("functions, classes, or enumerations")
-                }
-                AttrKind::PACKED => (kind != DeclKind::Field && kind != DeclKind::CXXRecord)
-                    .then_some("structs, unions, classes and fields"),
-                AttrKind::MALLOC if !kind.is_function() => Some("functions"),
-                AttrKind::FLAG_ENUM | AttrKind::ENUM_EXTENSIBILITY if kind != DeclKind::Enum => {
-                    Some("enums")
-                }
-                AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN if !kind.is_function() => {
-                    Some("non-K&R-style functions")
-                }
-                AttrKind::MALLOC | AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN => {
-                    self.check_alloc_attr(d, node);
-                    None
-                }
-                _ => None,
-            };
-            if let Some(what) = bad {
-                let name = match node.kind {
-                    AttrKind::NODISCARD => "'nodiscard'",
-                    AttrKind::NORETURN => "'noreturn'",
-                    AttrKind::PACKED => "'packed'",
-                    AttrKind::MALLOC => "'malloc'",
-                    AttrKind::ALLOC_SIZE => "'alloc_size'",
-                    AttrKind::ALLOC_ALIGN => "'alloc_align'",
-                    AttrKind::FLAG_ENUM => "'flag_enum'",
-                    AttrKind::ENUM_EXTENSIBILITY => "'enum_extensibility'",
-                    _ => "'alignas'",
-                };
-                let msg =
-                    self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc).arg(name).arg(what);
-                self.emit(msg);
-            }
-        }
-    }
-
     /// [dcl.align]/1: an `alignas` specifier applies to a variable that
     /// is not a function parameter, a `catch` variable or declared
     /// `register`, to a non-bit-field data member, or to a class; clang
@@ -7545,33 +7505,12 @@ impl Sema<'_, '_> {
         });
     }
 
-    /// `alignas` specifiers written where only type attributes may
-    /// appear: at the end of a decl-specifier-seq (`char alignas(8) c;`),
-    /// after a ptr-operator or after an array declarator. An
-    /// alignment-specifier is not a type attribute ([dcl.align]/1, clang
-    /// `err_attribute_not_type_attr`); the parser drops them.
-    pub fn act_on_type_position_attrs(&mut self, attrs: &[AttrId]) {
-        for &a in attrs {
-            let node = *self.ast.attrs.get(a);
-            if node.kind == AttrKind::ALIGNED && node.syntax == AttrSyntax::Keyword {
-                let msg = self.diag(DiagId::sema_alignas_type_attr, node.loc).arg("'alignas'");
-                self.emit(msg);
-            }
-        }
-    }
-
-    /// True if `a` is an alignment-specifier (`alignas`).
-    pub fn is_alignas_attr(&self, a: AttrId) -> bool {
-        let node = self.ast.attrs.get(a);
-        node.kind == AttrKind::ALIGNED && node.syntax == AttrSyntax::Keyword
-    }
-
     /// GNU `malloc` / `alloc_size` / `alloc_align` on function `d`: the
     /// return type must be a pointer (`alloc_align`: or a reference), and
     /// the indices (one-based; index 1 of an implicit object member
     /// function is `this`) must name integer parameters (clang
     /// `handleRestrictAttr` / `handleAllocSizeAttr` / `AddAllocAlignAttr`).
-    fn check_alloc_attr(&mut self, d: DeclId, node: AttrNode) {
+    pub(crate) fn check_alloc_attr(&mut self, d: DeclId, node: AttrNode) {
         let Some(proto) = self.ast.decls.get(d).ty().and_then(|t| self.ast.types.proto(t)) else {
             return;
         };
@@ -7759,6 +7698,7 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("likely", true, _) => AttrKind::LIKELY,
         ("unlikely", true, _) => AttrKind::UNLIKELY,
         ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
+        ("carries_dependency", true, _) => AttrKind::CARRIES_DEPENDENCY,
         ("aligned", _, true) | ("alignas", _, _) => AttrKind::ALIGNED,
         ("packed", _, true) => AttrKind::PACKED,
         ("used", _, true) => AttrKind::USED,

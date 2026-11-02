@@ -698,8 +698,9 @@ impl Parser<'_, '_> {
                 // At the end of the decl-specifier-seq the attributes
                 // appertain to the type ([dcl.spec.general]/1): an
                 // alignment-specifier is no type attribute.
-                self.s.act_on_type_position_attrs(&attrs);
-                ds.attrs.extend(attrs.into_iter().filter(|&a| !self.s.is_alignas_attr(a)));
+                let mut attrs = attrs;
+                self.s.act_on_type_position_attrs(&mut attrs, false);
+                ds.attrs.extend(attrs);
             } else {
                 self.s.error(DiagId::parse_attributes_not_allowed, at);
             }
@@ -1528,7 +1529,7 @@ impl Parser<'_, '_> {
     fn skip_type_position_attrs(&mut self) {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
-        self.s.act_on_type_position_attrs(&attrs);
+        self.s.act_on_type_position_attrs(&mut attrs, false);
     }
 
     /// The cv-qualifiers (and attributes) after a `*`.
@@ -1709,6 +1710,14 @@ impl Parser<'_, '_> {
                     ambiguous = amb;
                 }
                 self.parse_function_suffix(d, ambiguous);
+                // [dcl.fct]/1: an attribute-specifier-seq after the
+                // parameter clause appertains to the function type.
+                if self.at_cxx11_attr() {
+                    let mut attrs = Vec::new();
+                    self.parse_attributes(&mut attrs);
+                    self.s.act_on_type_position_attrs(&mut attrs, true);
+                    d.attrs.extend(attrs);
+                }
             } else {
                 break;
             }

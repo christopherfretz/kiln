@@ -25,6 +25,7 @@ mod consteval;
 pub mod constfold;
 pub mod conv;
 pub mod decl;
+mod decl_attrs;
 pub mod declspec;
 mod deduce;
 mod deprecated;
