@@ -2761,6 +2761,19 @@ takes its initializer's dependence without `UNEXPANDED_PACK`
     `sema_unexpanded_pack`; WP-302) is the reusable collector and
     diagnostic for the remaining sites.
 
+**By-copy captures of template-local classes** ([expr.prim.lambda.capture]/10,
+/15, [temp.dep.type]/7, WP-332). In a template definition, a local class
+of the template or a member class of the current instantiation
+(`DEPENDENT_CTX`) declares no implicit special members (clang
+`CanDeclareSpecialMemberFunction`). A by-copy capture (simple or
+implicit) or a structured binding of an object of such a class keeps the
+plain reference as its initializer (`init_subobject_from`), and an
+init-capture of such a dependent class type keeps its initializer
+unconverted, as a variable does (`defer_dependent_init`). The copy is
+selected and checked when the template is instantiated. Test:
+`expr.prim.lambda/libstdcxx-copy-capture-local-class-in-template.cpp`
+(libstdc++ pstl/algorithm_impl.h:1978).
+
 ### 7.2 Expansion: `expand(pattern, site) -> Result<Expansion, SubstFail>`
 
 1. **Collect the unexpanded packs** in `pattern`, pruning on

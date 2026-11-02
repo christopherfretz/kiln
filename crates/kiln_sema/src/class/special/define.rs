@@ -937,6 +937,14 @@ impl Sema<'_, '_> {
         }
         if let Some(r) = self.ast.types.as_record(ty) {
             let c = self.ast.definition(r).ok_or(())?;
+            // A class of a template definition (a local or member class
+            // of a template) declares its special members only when
+            // instantiated (clang `CanDeclareSpecialMemberFunction`): a
+            // by-copy capture or structured binding of it in the pattern
+            // is initialized when the template is instantiated.
+            if self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX) {
+                return Ok(arg);
+            }
             let k = if self.ast.exprs.get(arg).value_category() == ValueCategory::XValue {
                 SpecialKind::MoveCtor
             } else {
