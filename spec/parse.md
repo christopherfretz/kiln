@@ -270,7 +270,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - In `X<args>::name` the arguments are not converted: `name` is
   classified by the primary template's pattern, and, when the pattern
   lacks it, by the explicit and then the partial specializations
-  (`Sema::classify_template_member`, WP-130).
+  (`Sema::classify_template_member`, WP-130). With `X` an alias template
+  the alias's pattern is followed (through further alias templates) to
+  the class template it specializes, whose member is classified the same
+  way (`Sema::classify_alias_template_member`, WP-278), so
+  `S<A<int>::type>` is a type-id; an alias template whose pattern names
+  no class template (`decltype(...)`) is parsed ahead like an
+  unresolved specialization scope (`annotate_template_scope`)
+  (`tests/conformance/temp.alias/alias-template-id-qualified-type-as-template-argument.cpp`).
 - A typedef qualifier `T::name` whose `T` names a class template
   specialization that is not instantiated yet (and is not an explicit
   specialization) is classified the same way, by the specialization's

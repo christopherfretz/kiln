@@ -108,10 +108,9 @@ impl Sema<'_, '_> {
                 }
                 k if k.is_function() => {
                     ec.functions.push(self.ast.first(c));
-                    cur = if n.misc().friend() == FriendKind::None {
-                        n.ctx()
-                    } else {
-                        self.ast.decls.lexical_ctx(c).or(n.ctx())
+                    cur = match self.friend_decl_of(c) {
+                        Some(f) => self.ast.decls.lexical_ctx(f).or(n.ctx()),
+                        None => n.ctx(),
                     };
                 }
                 DeclKind::TranslationUnit | DeclKind::Namespace => break,
@@ -119,6 +118,27 @@ impl Sema<'_, '_> {
             }
         }
         ec
+    }
+
+    /// The friend declaration function `f` takes its lexical context
+    /// from: `f` itself, or for a specialization of a friend function
+    /// template, that template (or its pattern). A friend defined in a
+    /// class is in the scope of that class ([class.friend]/7), so its
+    /// effective context continues there, into the enclosing classes
+    /// (clang's `EffectiveContext` walks `getLexicalDeclContext`).
+    fn friend_decl_of(&self, f: DeclId) -> Option<DeclId> {
+        let is_friend = |d: DeclId| self.ast.decls.get(d).misc().friend() != FriendKind::None;
+        // A specialization is marked friend too, but declared at
+        // namespace scope: the template's own declaration is the one in
+        // the class.
+        if let Some((_, s)) = self.ast.spec_info(f) {
+            let t = s.template;
+            let from = std::iter::once(t).chain(self.pattern_of(t)).find(|&d| is_friend(d));
+            if from.is_some() {
+                return from;
+            }
+        }
+        is_friend(f).then_some(f)
     }
 
     /// True if `a` is `b` or derived from it.
