@@ -1749,7 +1749,7 @@ impl Parser<'_, '_> {
         if self.s.clang_compat < 22 {
             // clang 19: a delayed typo on an expression parsing goes on
             // around ("expected ')'" / "expected ';'" may follow).
-            return Some(self.s.act_on_undeclared_template_id_typo(name, nl));
+            return Some(self.s.act_on_undeclared_template_id_typo(name, &args, nl));
         }
         match self.s.correct_template_id_typo(name, &args, nl) {
             kiln_sema::TemplateIdTypo::Recovered(e) => return Some(e),

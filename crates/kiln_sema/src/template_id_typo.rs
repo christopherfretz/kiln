@@ -58,18 +58,78 @@ enum Correction {
 }
 
 impl Sema<'_, '_> {
-    /// clang 19's undeclared template-id `name<...>` at `loc` (not
+    /// clang 19's undeclared template-id `name<args>` at `loc` (not
     /// called, not a nested-name-specifier): "use of undeclared
     /// identifier" through delayed typo correction, on an erroneous
     /// expression the enclosing expression goes on parsing around
     /// (clang 19's `TypoExpr`; [`Sema::correct_delayed_typos_in`] finds it,
-    /// so a call missing its `)` skips to it quietly).
-    pub fn act_on_undeclared_template_id_typo(&mut self, name: Symbol, loc: Loc) -> ExprId {
+    /// so a call missing its `)` skips to it quietly). A name ordinary
+    /// lookup found one function for is corrected to that function
+    /// qualified by its namespace when the expression rebuilt on it is
+    /// valid ([`Sema::speculate_template_id_typo`]).
+    pub fn act_on_undeclared_template_id_typo(
+        &mut self,
+        name: Symbol,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> ExprId {
         let text = sym_str(self, name);
         let msg = self.diag(DiagId::sema_undeclared_var_use, loc).arg(text);
+        if let Some((u, suggest)) = self.speculate_template_id_typo(name, args, loc) {
+            self.hold_typo_spec(msg, suggest, u, loc);
+            return u;
+        }
         let e = self.recover_err(&[], loc);
         self.emit_delayed_typo(msg, e);
         e
+    }
+
+    /// clang 19's correction of the undeclared template-id `name<args>`:
+    /// its `TypoExpr` consumer offers only `name` qualified by the
+    /// namespace that declares it (`val<int>` with `int val(int)`:
+    /// `::val`), and only for one non-member function (not an overload
+    /// set, not a near name); the template arguments are dropped. The
+    /// correction holds if the expression rebuilt on it at the correction
+    /// point is valid, which kiln finds out by going on with the
+    /// correction: a reference to the function, with the corrected
+    /// diagnostic ("did you mean '::val'?" and its note). Only inside a
+    /// delayed-typo scope outside an instantiation (otherwise there is no
+    /// correction point to decide at), and not with dependent arguments.
+    fn speculate_template_id_typo(
+        &mut self,
+        name: Symbol,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> Option<(ExprId, kiln_diag::Diag)> {
+        if self.typo_delay == 0 || !self.inst.stack.is_empty() {
+            return None;
+        }
+        if args.iter().any(|&a| Self::dependent_flags(self.ast.types.arg_flags(a))) {
+            return None;
+        }
+        let c = self.best_template_id_typo(name)?;
+        let typo = sym_str(self, name);
+        let (&[decl], &[shown]) = (c.decls.as_slice(), c.found.as_slice()) else {
+            return None;
+        };
+        let d = self.ast.strip_shadow(decl);
+        if !c.qualified
+            || self.kind_of(d) != DeclKind::Function
+            || c.text.rsplit("::").next() != Some(typo.as_str())
+        {
+            return None;
+        }
+        let note = self
+            .diag(DiagId::note_entity_declared_here, self.typo_note_loc(shown))
+            .arg(format!("'{}'", c.text));
+        let msg = self
+            .diag(DiagId::sema_undeclared_var_use_suggest, loc)
+            .arg(typo)
+            .arg(c.text)
+            .with_note(note);
+        // clang's `BuildDeclarationNameExpr` on the one function.
+        let u = self.build_decl_ref_via(d, loc, (decl != d).then_some(decl));
+        Some((u, msg))
     }
 
     /// clang 22's typo correction (`CorrectTypo` from `DiagnoseEmptyLookup`)
@@ -207,9 +267,10 @@ impl Sema<'_, '_> {
     /// correction to those functions would be.
     fn template_id_class_member(&mut self, name: Symbol, loc: Loc) -> Option<TemplateIdTypo> {
         let decls = self.diagnose_member_found_in_class(name, loc, true)?;
-        let member = decls.iter().map(|&d| self.ast.strip_shadow(d)).find(|&d| {
-            self.kind_of(d) == DeclKind::CXXMethod && !self.is_static_method(d)
-        });
+        let member = decls
+            .iter()
+            .map(|&d| self.ast.strip_shadow(d))
+            .find(|&d| self.kind_of(d) == DeclKind::CXXMethod && !self.is_static_method(d));
         if let Some(m) = member {
             self.typo_member_not_called(m, true, loc);
             return Some(TemplateIdTypo::Recovered(self.recover_err(&[], loc)));
@@ -269,8 +330,8 @@ impl Sema<'_, '_> {
         }
         let class = self.ast.first(class);
         let first = self.ast.strip_shadow(decls[0]);
-        let own = !picked
-            && self.ast.decls.get(first).ctx().is_some_and(|p| self.ast.first(p) == class);
+        let own =
+            !picked && self.ast.decls.get(first).ctx().is_some_and(|p| self.ast.first(p) == class);
         let method = self.ast.decls.get(self.ctx).ctx().map(|p| self.ast.first(p));
         let instance = !picked
             && self.func.as_ref().is_some_and(|f| f.this_ty.is_some())
@@ -322,11 +383,8 @@ impl Sema<'_, '_> {
     fn typo_member_not_called(&mut self, m: DeclId, implicit: bool, loc: Loc) {
         let in_method = implicit && self.implicit_this_available();
         let msg = if in_method {
-            let no_args = self
-                .ast
-                .decls
-                .function(m)
-                .is_some_and(|f| self.ast.lists.get(f.params).is_empty());
+            let no_args =
+                self.ast.decls.function(m).is_some_and(|f| self.ast.lists.get(f.params).is_empty());
             self.diag(DiagId::sema_bound_member_not_called, loc).arg(u8::from(no_args))
         } else {
             self.diag(DiagId::sema_member_call_without_object, loc)
@@ -400,9 +458,11 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 // A data member of another class is no correction.
-                if found.decls.iter().any(|&d| {
-                    matches!(self.kind_of(d), DeclKind::Field | DeclKind::IndirectField)
-                }) {
+                if found
+                    .decls
+                    .iter()
+                    .any(|&d| matches!(self.kind_of(d), DeclKind::Field | DeclKind::IndirectField))
+                {
                     continue;
                 }
                 let (qual, q) = self.typo_qualifier(scope, &cur);
@@ -423,7 +483,9 @@ impl Sema<'_, '_> {
         // The same entity at the same distance counts once (the lesser
         // spelling).
         cands.sort_by(|a, b| a.ed.cmp(&b.ed).then_with(|| a.text.cmp(&b.text)));
-        let key = |s: &Self, c: &Candidate| c.decls.iter().map(|&d| s.ast.first(s.ast.strip_shadow(d))).min();
+        let key = |s: &Self, c: &Candidate| {
+            c.decls.iter().map(|&d| s.ast.first(s.ast.strip_shadow(d))).min()
+        };
         let mut best: Option<Candidate> = None;
         for c in cands {
             match &best {
@@ -472,12 +534,49 @@ impl Sema<'_, '_> {
     /// `static_assert` always.
     fn typo_keywords(&self) -> Vec<&'static str> {
         let mut k = vec![
-            "char", "const", "double", "enum", "float", "int", "long", "short", "signed",
-            "struct", "union", "unsigned", "void", "volatile", "_Complex", "_Imaginary",
-            "extern", "inline", "static", "typedef", "bool", "class", "typename", "wchar_t",
-            "char16_t", "char32_t", "constexpr", "decltype", "thread_local", "const_cast",
-            "dynamic_cast", "reinterpret_cast", "static_cast", "sizeof", "false", "true",
-            "delete", "new", "operator", "throw", "typeid", "alignof", "nullptr",
+            "char",
+            "const",
+            "double",
+            "enum",
+            "float",
+            "int",
+            "long",
+            "short",
+            "signed",
+            "struct",
+            "union",
+            "unsigned",
+            "void",
+            "volatile",
+            "_Complex",
+            "_Imaginary",
+            "extern",
+            "inline",
+            "static",
+            "typedef",
+            "bool",
+            "class",
+            "typename",
+            "wchar_t",
+            "char16_t",
+            "char32_t",
+            "constexpr",
+            "decltype",
+            "thread_local",
+            "const_cast",
+            "dynamic_cast",
+            "reinterpret_cast",
+            "static_cast",
+            "sizeof",
+            "false",
+            "true",
+            "delete",
+            "new",
+            "operator",
+            "throw",
+            "typeid",
+            "alignof",
+            "nullptr",
         ];
         match self.func.as_ref() {
             Some(f) => {
@@ -604,10 +703,6 @@ impl Sema<'_, '_> {
             let n = self.ast.decls.get(r).name();
             cur.iter().any(|&c| self.ast.decls.get(c).name() == n)
         });
-        if global {
-            (format!("::{}", spell(&chain)), chain.len())
-        } else {
-            (spell(rel), rel.len())
-        }
+        if global { (format!("::{}", spell(&chain)), chain.len()) } else { (spell(rel), rel.len()) }
     }
 }

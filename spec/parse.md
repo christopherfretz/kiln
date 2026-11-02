@@ -1219,6 +1219,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   full-expression. Elsewhere (a declaration's initializer, a condition, a
   `return`, a template instantiation) and for an unqualified name or a
   member access (`s.nomember`) it is reported where it is written.
+  Under `-fclang-compat=19` (WP-399) a `return` operand, a declaration's
+  `=`/`(`/`{` initializer, an expression condition and a `decltype`
+  operand are scopes too, ended where clang 19 corrects them: the
+  `return` operand before its `;` and the return's checks, the
+  initializer after the initialization, the condition and the
+  `decltype` operand right after the expression (the correction points
+  of spec/sema.md "Clang 19 correction to the qualified function").
   Scopes nest: an inner scope's held typos stay held while an outer
   one is open (`end_delayed_typos`), and each held typo records the
   recovery expression that stands for clang's `TypoExpr`

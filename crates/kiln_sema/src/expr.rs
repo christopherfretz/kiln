@@ -225,9 +225,13 @@ impl Sema<'_, '_> {
             } else {
                 ValueCategory::XValue
             };
-            return self.builder().recovery(Some(r), vk, kids, loc);
+            let e = self.builder().recovery(Some(r), vk, kids, loc);
+            self.note_spec_recovery(e);
+            return e;
         }
-        self.builder().recovery(Some(ty), ValueCategory::PRValue, kids, loc)
+        let e = self.builder().recovery(Some(ty), ValueCategory::PRValue, kids, loc);
+        self.note_spec_recovery(e);
+        e
     }
 
     /// A `RecoveryExpr` of error type over `kids`.
@@ -834,7 +838,11 @@ impl Sema<'_, '_> {
         // does not warn in the template definition). Nothing is unused in
         // an unevaluated operand (clang `DiagnoseUnusedExprResult`'s
         // `isUnevaluatedContext()`: a statement expression in `decltype`).
-        if self.unevaluated > 0 || self.is_err_expr(e) || self.expr_is_type_dependent(e) {
+        if self.unevaluated > 0
+            || self.is_err_expr(e)
+            || self.expr_is_type_dependent(e)
+            || self.holds_typo_expr(e)
+        {
             return;
         }
         if let Some(w) = self.unused_warning(e) {
@@ -847,7 +855,11 @@ impl Sema<'_, '_> {
     /// comma whose value is unused. Not in an unevaluated operand, and the
     /// generic warning not in a SFINAE context.
     pub(crate) fn diagnose_comma_lhs(&mut self, l: ExprId) {
-        if self.unevaluated > 0 || self.is_err_expr(l) || self.expr_is_type_dependent(l) {
+        if self.unevaluated > 0
+            || self.is_err_expr(l)
+            || self.expr_is_type_dependent(l)
+            || self.holds_typo_expr(l)
+        {
             return;
         }
         if let Some(w) = self.unused_warning(l) {

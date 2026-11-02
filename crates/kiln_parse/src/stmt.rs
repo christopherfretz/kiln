@@ -428,7 +428,14 @@ impl Parser<'_, '_> {
     /// declaration, a reference to the variable -- not yet converted.
     fn parse_condition(&mut self) -> Option<Cond> {
         if !self.is_cxx_condition_declaration() {
-            return self.parse_expression().map(|e| (None, e));
+            // clang 19 corrects the condition's delayed typos when it
+            // finishes the condition's full-expression (WP-399).
+            let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
+            let e = self.parse_expression();
+            if let Some(m) = typos {
+                self.s.end_delayed_typos(m);
+            }
+            return e.map(|e| (None, e));
         }
         let ctx = DeclaratorContext::Condition;
         let mut ds = self.parse_decl_specifiers(ctx);
@@ -1121,7 +1128,17 @@ impl Parser<'_, '_> {
             return Some(s);
         }
         if !self.at(Punct::Semi) {
-            let Some(e) = self.parse_expression() else {
+            // clang 19's `ActOnReturnStmt` corrects the delayed typos of
+            // the operand first, before the `;` and the return's own
+            // checks (`return val<int>;` with `int val(int)` in `int f()`:
+            // "did you mean '::val'?", then "cannot initialize return
+            // object", WP-399).
+            let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
+            let parsed = self.parse_expression();
+            if let Some(m) = typos {
+                self.s.end_delayed_typos(m);
+            }
+            let Some(e) = parsed else {
                 self.skip_until(&[Punct::RBrace], true, false);
                 self.eat(Punct::Semi);
                 return None;
