@@ -36,7 +36,7 @@ mod ttarg;
 pub mod var;
 pub(crate) mod written;
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::templates::{SpecKind, is_template_kind};
@@ -552,7 +552,7 @@ impl Sema<'_, '_> {
         }
         let d = self.builder().non_type_template_parm(h, ty, depth, index, pack);
         if !self.check_nttp_type(ty, p.loc) {
-            self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
+            self.ast.decls.set_flags(d, DeclFlags::INVALID);
         }
         self.push_template_param(d);
         d
@@ -949,6 +949,13 @@ impl Sema<'_, '_> {
             self.check_template_param_list(kind, list, prev);
         }
         let t = self.builder().template_decl(kind, pattern, list, prev);
+        // clang `ActOnFunctionDeclarator`: an invalid function makes its
+        // template invalid, which lookup then ignores beside other
+        // declarations (`LookupResult::resolveKind`, WP-308).
+        if kind == DeclKind::FunctionTemplate && self.ast.decls.get(pattern).has(DeclFlags::INVALID)
+        {
+            self.ast.decls.set_flags(t, DeclFlags::INVALID);
+        }
         if prev.is_some() {
             self.merge_template_defaults(t);
         }
@@ -1171,8 +1178,7 @@ impl Sema<'_, '_> {
             }
             None => self.intern(&format!("auto:{}", u32::from(index) + 1)),
         };
-        let h = DeclHead::new(self.ctx, DeclName::ident(name), loc)
-            .flags(kiln_ast::decl::DeclFlags::IMPLICIT);
+        let h = DeclHead::new(self.ctx, DeclName::ident(name), loc).flags(DeclFlags::IMPLICIT);
         let p = self.builder().template_type_parm(h, depth, index, pack, false);
         if let Some(head) = self.templ.heads.last_mut() {
             head.params.push(p);

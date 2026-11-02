@@ -94,6 +94,11 @@ pub enum Tdk {
     InstantiationDepth,
     /// Any other failure (no note).
     MiscellaneousDeductionFailure,
+    /// The template's declaration is invalid (a parameter or return type
+    /// that failed to resolve, `template <class T> void f(T, u);` with
+    /// undeclared `u`): never viable and never noted (clang's
+    /// `TemplateDeductionResult::Invalid`, WP-308).
+    Invalid,
 }
 
 /// What a failed deduction reports (clang's `TemplateDeductionInfo`).

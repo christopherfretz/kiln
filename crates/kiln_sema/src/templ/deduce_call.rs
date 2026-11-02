@@ -6,7 +6,7 @@
 //! [`DeductionFailure`] the overload candidate keeps for its note
 //! (§10.4).
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::types::{ArgView, TemplateArg, TypeView};
@@ -248,6 +248,14 @@ impl Sema<'_, '_> {
         let Some(templated) = self.templated_function(ft) else {
             return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
         };
+        // clang `DeduceTemplateArguments`: an invalid template (its
+        // function has an invalid parameter or return type, already
+        // reported) deduces nothing.
+        if self.ast.decls.get(templated).has(DeclFlags::INVALID)
+            || self.ast.decls.get(ft).has(DeclFlags::INVALID)
+        {
+            return Err(DeductionFailure::new(Tdk::Invalid, d));
+        }
         let is_pack = |s: &Self, p: DeclId| s.ast.template_parm(p).is_some_and(|x| x.pack);
         // [temp.arg.explicit]/9: a template parameter pack anywhere in the
         // list (`template <class... A, class T>`) takes every remaining

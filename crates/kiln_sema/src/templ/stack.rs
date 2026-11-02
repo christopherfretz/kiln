@@ -528,6 +528,14 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The number of errors the innermost SFINAE context has captured so
+    /// far (0 outside one). A substitution that returns `Ok` while this
+    /// count grew failed all the same (a narrowing conversion diagnosed
+    /// inside a `decltype`): its result must not be memoized as valid.
+    pub(crate) fn sfinae_errors(&self) -> u32 {
+        self.inst.sfinae.borrow().last().map_or(0, |s| s.errors)
+    }
+
     /// Records the arguments converted so far on the innermost frame.
     pub(crate) fn set_frame_args(&mut self, args: ArgListId) {
         if let Some(f) = self.inst.stack.frames.last_mut() {
