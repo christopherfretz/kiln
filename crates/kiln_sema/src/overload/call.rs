@@ -183,12 +183,17 @@ impl Sema<'_, '_> {
     /// A call `f<args>(…)` whose `f` ordinary lookup did not find (only
     /// argument-dependent lookup found its templates, [temp.names]/3) is
     /// a C++20 feature: before C++20 clang's `ext_adl_only_template_id`
-    /// at the name, after the call's own diagnostics (`ActOnCallExpr`).
+    /// at the name, after the call's own diagnostics (`ActOnCallExpr`);
+    /// from C++20 its `-Wpre-c++20-compat` counterpart
+    /// (`warn_cxx17_compat_adl_only_template_id`, off by default).
     pub(crate) fn diagnose_adl_only_template_id(&mut self, loc: Loc) {
-        if self.std < kiln_lex::Std::Cxx20 {
-            let w = self.diag(DiagId::sema_ext_adl_only_template_id, loc).per_instantiation();
-            self.emit(w);
-        }
+        let id = if self.std < kiln_lex::Std::Cxx20 {
+            DiagId::sema_ext_adl_only_template_id
+        } else {
+            DiagId::sema_cxx17_compat_adl_only_template_id
+        };
+        let w = self.diag(id, loc).per_instantiation();
+        self.emit(w);
     }
 
     /// Adds function template `ft` (found as `found`) to `set`: its

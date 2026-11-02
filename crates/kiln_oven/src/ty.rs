@@ -972,6 +972,12 @@ impl Types {
 
     /// Whether an object of type `p` lives at byte `off` of an object of
     /// type `root` (C++26 [expr.static.cast]/14 for `void*` casts).
+    /// The direct non-virtual empty bases (type, offset) of class `t`,
+    /// which are not in [`Types::fields`].
+    pub fn empty_bases(&self, t: OTy) -> &[(OTy, u64)] {
+        self.empty_bases.get(&t).map_or(&[], Vec::as_slice)
+    }
+
     pub fn has_subobject(&self, root: OTy, off: u64, p: OTy) -> bool {
         if off == 0 && self.same_class(p, root) {
             return true;
