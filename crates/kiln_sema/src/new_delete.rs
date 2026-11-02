@@ -479,6 +479,13 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         };
         pass_align = with_align;
+        // A class's own allocation function must be accessible
+        // ([expr.new]/19; clang's `CheckAllocationAccess`).
+        if let Some(naming) = alloc.naming
+            && !self.check_member_access(op_new, naming, None, loc)
+        {
+            return self.recover_err(&kids, loc);
+        }
         if self.is_deleted_fn(op_new) {
             let own = self.ast.decls.function(op_new).is_some_and(|x| x.spec.is_deleted());
             let note = self
@@ -1417,6 +1424,15 @@ impl Sema<'_, '_> {
         }
         let op_delete = usual.map(|u| u.0);
         let sized = usual.is_some_and(|u| u.1);
+        // A class's own deallocation function must be accessible
+        // ([expr.delete]/12; clang's `CheckAllocationAccess`): a
+        // substitution failure in SFINAE context (libc++'s
+        // `__can_be_deleted`, constraining `shared_ptr(Y*)`).
+        if let (Some(f), Some(naming)) = (op_delete, found.naming)
+            && !self.check_member_access(f, naming, None, loc)
+        {
+            return self.recover_err(&[operand], loc);
+        }
         if let Some(f) = op_delete {
             self.mark_used(f);
         }
