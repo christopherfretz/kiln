@@ -746,6 +746,27 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   and `insert ',' before '...' to silence this warning` at the `...`.
   Tests: `dcl.fct/p3176-ambiguous-ellipsis.cpp` (C++23),
   `dcl.fct/p3176-variadic-comma.cpp` (C++26, clang >= 22).
+- **Misplaced pack ellipsis** ([dcl.decl.general]/4, [temp.variadic]/5,
+  WP-374, clang `DiagnoseMisplacedEllipsisInDeclarator`): a `...` after
+  a parameter's complete declarator whose (unadjusted, non-placeholder)
+  type names an unexpanded pack — `Ts a...`, `Ts (*)()...`, `Ts[2]...`,
+  `Ts......a` — is consumed and diagnosed at the `...`:
+  `parse_misplaced_ellipsis_in_declaration`, `'...' must immediately
+  precede declared identifier` (named) or `'...' must be innermost
+  component of anonymous pack declaration` (abstract). The parameter
+  becomes the pack (unless it already has its own `...`), so calls and
+  template arguments then work without further errors. Exceptions,
+  where the `...` stays the varargs `...` above: a function parameter
+  whose declarator has its own `...` and the `...` is followed by `)`
+  (`(Ts......)`), and in a lambda any `...` followed by `)`
+  (`[](Ts a...)`) — clang's observable split. For a non-type template
+  parameter (no varargs there) every such `...` is the error, unexpanded
+  pack or not (`template<int a...>`); `Ts......a` then fails at `a`
+  (`expected ')'` / `expected ',' or '>' in template-parameter-list`).
+  clang emits the error inside the declarator, kiln right after the
+  parameter's Sema action (any type diagnostic of the parameter comes
+  first). Tests: `dcl.fct/misplaced-pack-ellipsis.cpp` (function,
+  member, friend and lambda parameters), `temp.param/misplaced-pack-ellipsis.cpp`.
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
