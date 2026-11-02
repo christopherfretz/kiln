@@ -1865,7 +1865,17 @@ argument substitution in `deduce_call`):
   `argument may not have 'void' type` at the substituted type, clang's
   `err_param_with_void_type`; a SFINAE failure with the usual
   `substitution failure [with ...]` note. A function type substituted
-  to have a `void` parameter (`void (*)(T)`) fails the same way.
+  to have a `void` parameter (`void (*)(T)`) fails the same way; outside
+  deduction (an alias `template<class T> using F = void(T);` used as
+  `F<void>`, a member `void f(T)` of `W<void>`) it is a hard error at the
+  alias's or member's parameter, with the instantiation note.
+- **Parameter adjustment** ([dcl.fct]/5): every parameter of a substituted
+  function type is adjusted after substitution exactly as a written one
+  (`adjust_param_type`: array of `T` to pointer to `T`, function to
+  pointer to function, top-level cv dropped), so `F<int[3]>` is
+  `void(int*)` and `F<int()>` is `void(int(*)())` (clang
+  `BuildFunctionType`; test
+  `temp.alias/function-type-parameter-adjustment.cpp`, WP-311).
 - **Array of `void`, of a function or of a reference**: clang's
   `BuildArrayType` wording, `array has incomplete element type 'void'`
   (also for a non-template `void x[3]`, which no longer uses the old
