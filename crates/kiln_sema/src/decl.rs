@@ -7836,7 +7836,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<AttrId> {
         let a = self.attribute_node(syntax, scope, name, args, loc)?;
-        if scope.is_some_and(|s| sym_str(self, s) == "gnu") {
+        if scope.is_some_and(|s| norm_attr_scope(&sym_str(self, s)) == "gnu") {
             self.ast.attrs.set_flags(a, AttrNode::GNU_SCOPED);
         }
         Some(a)
@@ -7853,7 +7853,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<AttrId> {
         let raw = sym_str(self, name);
-        let scope_s = scope.map(|s| sym_str(self, s));
+        let scope_s = scope.map(|s| norm_attr_scope(&sym_str(self, s)).to_owned());
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
         let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;
@@ -8434,6 +8434,17 @@ impl Sema<'_, '_> {
 /// The attribute `n` (its `__` affixes removed) names, given whether it
 /// was written as a standard (`std`), GNU (`gnu`) or `clang::` attribute;
 /// `None` for an unknown or ignored one.
+/// An attribute scope as clang normalizes it (`normalizeAttrScopeName`):
+/// the reserved spellings `__gnu__` and `_Clang` name `gnu` and `clang`
+/// (`[[__gnu__::__always_inline__]]` is `[[gnu::always_inline]]`).
+fn norm_attr_scope(s: &str) -> &str {
+    match s {
+        "__gnu__" => "gnu",
+        "_Clang" => "clang",
+        _ => s,
+    }
+}
+
 fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<AttrKind> {
     Some(match (n, std, gnu) {
         ("nodiscard", true, _) | ("warn_unused_result", _, true) => AttrKind::NODISCARD,
