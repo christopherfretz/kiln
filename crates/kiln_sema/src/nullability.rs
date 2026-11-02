@@ -154,17 +154,18 @@ impl Sema<'_, '_> {
                 && kind == existing
             {
                 let at = self.ast.decls.get(decl).loc();
-                d = d.with_note(self.diag(DiagId::note_nullability_here, at).arg(spelling(existing)));
+                d = d.with_note(
+                    self.diag(DiagId::note_nullability_here, at).arg(spelling(existing)),
+                );
             }
             self.emit(d);
             return ty;
         }
-        let array = allow_array && self.ast.types.kind(self.ast.types.canonical(desugared).ty()).is_array();
+        let array =
+            allow_array && self.ast.types.kind(self.ast.types.canonical(desugared).ty()).is_array();
         if !self.can_have_nullability(desugared) && !array {
-            let d = self
-                .diag(DiagId::sema_nullability_nonpointer, n.loc)
-                .arg(sp)
-                .arg(self.ty_arg(ty));
+            let d =
+                self.diag(DiagId::sema_nullability_nonpointer, n.loc).arg(sp).arg(self.ty_arg(ty));
             self.emit(d);
             return ty;
         }
@@ -242,9 +243,8 @@ impl Sema<'_, '_> {
                 base = self.apply_nullability(base, n, allow);
                 continue;
             }
-            let target = Self::nullability_target(d).filter(|&(i, _)| {
-                !d.nullability.iter().chain(moved.iter()).any(|&(j, _)| j == i)
-            });
+            let target = Self::nullability_target(d)
+                .filter(|&(i, _)| !d.nullability.iter().chain(moved.iter()).any(|&(j, _)| j == i));
             match target {
                 Some((i, pk)) => {
                     let d = self

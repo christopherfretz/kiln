@@ -11,12 +11,12 @@
 //! (every pack belongs to a retained level) yields the substituted
 //! pattern, still an expansion.
 
-use kiln_ast::ExprId;
 use kiln_ast::DeclId;
-use kiln_ast::templates::Requirement;
+use kiln_ast::ExprId;
 use kiln_ast::QualType;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::RawId;
+use kiln_ast::templates::Requirement;
 use kiln_ast::types::{ArgView, TemplateArg, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
