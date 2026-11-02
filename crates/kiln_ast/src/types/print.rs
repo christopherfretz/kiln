@@ -693,6 +693,11 @@ fn should_aka(ctx: &TypeContext, q: QualType, depth: u32) -> bool {
                 cur = base;
                 continue;
             }
+            // clang substitutes canonical template arguments, so nothing
+            // under a non-dependent substitution is sugar: an explicit or
+            // deduced argument written as a typedef (`mk<s::pl>()`'s
+            // `W<T>`) prints `'W<plain>'` with no `aka` (WP-366).
+            TypeView::SubstTemplateTypeParm { .. } if !ctx.is_dependent(cur) => return false,
             TypeView::Elaborated { .. }
             | TypeView::Using { .. }
             | TypeView::Paren(_)

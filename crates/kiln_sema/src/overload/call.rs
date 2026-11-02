@@ -30,7 +30,16 @@ impl Sema<'_, '_> {
         nns: Option<kiln_ast::NnsId>,
         loc: Loc,
     ) -> ExprId {
-        let e = self.builder().unresolved_lookup(name, decls, adl, nns, None, loc);
+        // [temp.dep.expr]/3: a set with a function of dependent type (a
+        // static member `key(const node<K>*)` of a class template beside
+        // `key(const nb*)`, libstdc++ `_Rb_tree::_S_key`) is type-dependent,
+        // and the call is resolved at instantiation (clang's
+        // `OverloadExpr` of decls in a dependent context; WP-366).
+        let dependent = decls.iter().any(|&d| {
+            self.kind_of(d) != DeclKind::FunctionTemplate
+                && self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_dependent(t))
+        });
+        let e = self.builder().unresolved_lookup_in(name, decls, adl, nns, None, dependent, loc);
         if naming.is_some() || found.iter().zip(decls).any(|(f, d)| f != d) {
             self.ovl.ule_found.insert(e, UleFound { found: found.to_vec(), naming });
         }
