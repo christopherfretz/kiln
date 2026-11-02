@@ -8,7 +8,7 @@
 
 use kiln_ast::QualType;
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::ids::ArgListId;
+use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ExcSpec, NoexceptValue, TypeView};
 use kiln_ast::{DeclId, ExprId};
@@ -1139,6 +1139,61 @@ impl Sema<'_, '_> {
             Some(l) => self.act_on_member_template_args(e, l),
             None => e,
         }
+    }
+
+    /// [temp.names]/3.2: whether the dependent member access `e`
+    /// (`this->f`, an unqualified name that lookup in the current
+    /// instantiation finds with more than one declaration, so the access
+    /// stays dependent) names a member template, so a `<` after it starts
+    /// a template argument list without `template` (libstdc++ variant's
+    /// `this->emplace<__index>(...)`).
+    pub fn dependent_member_names_template(&self, e: ExprId) -> bool {
+        let n = self.ast.exprs.get(e);
+        if n.kind() != kiln_ast::expr::ExprKind::CXXDependentScopeMemberExpr
+            || n.aux() & 2 != 0
+            || self.ast.templates.expr_targs.get(e).is_some()
+            || self.ast.templates.expr_nns.get(e).is_some()
+        {
+            return false;
+        }
+        let Some(base) = ExprId::from_raw(n.a()) else { return false };
+        let bt = self.ety(base);
+        let obj = if n.aux() & 1 != 0 {
+            if !self.ast.types.is_pointer(bt) {
+                return false;
+            }
+            self.pointee_sugared(bt)
+        } else {
+            Some(bt)
+        };
+        let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o)) else { return false };
+        let name = self.ast.dependent_member_name(e);
+        self.lookup_in_class_dn(rec, name, crate::lookup::LookupKind::Ordinary).decls.iter().any(
+            |&d| {
+                matches!(
+                    self.kind_of(d),
+                    DeclKind::FunctionTemplate
+                        | DeclKind::ClassTemplate
+                        | DeclKind::VarTemplate
+                        | DeclKind::TypeAliasTemplate
+                )
+            },
+        )
+    }
+
+    /// The dependent member access `e` (see
+    /// [`Self::dependent_member_names_template`]) with the template
+    /// arguments `targs`: formed again, lookup and all, at instantiation.
+    pub fn act_on_dependent_member_template_args(&mut self, e: ExprId, targs: ArgListId) -> ExprId {
+        let n = self.ast.exprs.get(e);
+        let (base, arrow, loc) = (ExprId::from_raw(n.a()), n.aux() & 1 != 0, n.loc());
+        let name = self.ast.dependent_member_name(e);
+        let op = self.ast.templates.member_op_loc.get(e).copied();
+        let x = self.builder().dependent_member(base, arrow, name, false, None, Some(targs), loc);
+        if let Some(op) = op {
+            let _ = self.ast.templates.member_op_loc.insert(x, op);
+        }
+        x
     }
 
     /// The member template-id `e<targs>` of the overloaded member access

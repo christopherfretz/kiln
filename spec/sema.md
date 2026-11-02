@@ -1764,8 +1764,21 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     `using enum requires an enum or typedef name`.
   - An incomplete enumeration ([enum.udecl]/2): `enumeration 'E' is
     incomplete`, with a note; the `UsingEnum` declaration is made and marked invalid.
+  - A dependent type ([enum.udecl]/1: the declarator designates a
+    non-dependent type), such as a member enumeration of the current
+    instantiation or a local enumeration of a function template:
+    `using-enum cannot name a dependent type`, and no declaration is made.
   - Otherwise a `UsingEnum` declaration names the definition, and each
-    enumerator gets a `UsingShadow`, with the conflict checks above.
+    enumerator gets a `UsingShadow`, with the conflict checks above
+    (`using_enum_of`).
+  - At block scope in a template (WP-323), the instantiation maps the
+    named enumeration through `find_instantiated_decl` (it stays itself
+    unless it is a local or member of the pattern) and redoes
+    `using_enum_of` in the instantiation's block scope, so the
+    enumerators are visible in the instantiated block (clang
+    `TemplateDeclInstantiator::VisitUsingEnumDecl`). Tests:
+    `tests/conformance/enum.udecl/libstdcxx-local-using-enum-template.cpp`,
+    `tests/conformance/enum.udecl/libstdcxx-using-enum-dependent.cpp`.
 - **Namespace aliases** ([namespace.alias]):
   `act_on_namespace_alias(name, name_loc, qual, target, target_loc)`.
   - The target is looked up with `LookupKind::Nested` and must be a
@@ -3250,6 +3263,64 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   instantiation's context notes.
 - Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
   `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`.
+
+### 5.21 Template rules from the libstdc++ clusters (WP-323)
+- **Default arguments in dependent template-ids** ([temp.arg.general]/9,
+  [temp.over.link]/5): a dependent class template-id that leaves
+  parameters to their defaults (`enable_if<B>`) gets a canonical type
+  carrying the substituted defaults (`enable_if<B, void>`); the written
+  arguments stay the sugar (`template_id`, `dependent_spec_full_args`).
+  So an alias template's expansion and the written form are the same
+  type, and redeclarations through either match (`std::swap`:
+  type_traits:2824 vs move.h:226). Defaults are not added when a
+  parameter is a pack, an argument is a pack expansion, or a dependent
+  default fails to substitute. Tests:
+  `tests/conformance/temp.over.link/libstdcxx-alias-equivalent-redecl.cpp`,
+  `tests/conformance/temp.over.link/libstdcxx-default-arg-equivalent-redecl.cpp`.
+- **`this->f<A>(...)` for an overloaded member template**
+  ([temp.names]/3): a member of the current instantiation that names an
+  overload set stays a `CXXDependentScopeMemberExpr`. When lookup in the
+  pattern finds a member template under that name, `<` begins a
+  template-argument-list (`dependent_member_names_template`,
+  `act_on_dependent_member_template_args`; variant:1526). Test:
+  `tests/conformance/temp.names/libstdcxx-this-member-template.cpp`.
+- **Access through a dependent base** ([class.protected]/1,
+  [class.access.base]/5): in `has_access`, a class that does not
+  (yet) derive from the naming class but has a dependent base anywhere
+  in its hierarchy (`has_dependent_bases_in`) may derive from it after
+  instantiation. The check is deferred (`speculative_friend`) and
+  replayed per instantiation (`replay_dependent_access`), where it
+  either passes or reports `'m' is a protected member of 'B'` under the
+  instantiation note (messages_members.h:107). Tests:
+  `tests/conformance/class.protected/libstdcxx-protected-static-dependent-base.cpp`,
+  `tests/conformance/class.protected/libstdcxx-protected-static-dependent-base-recheck.cpp`.
+- **Current-instantiation template arguments in an out-of-line return
+  type** ([temp.dep.type]/1, [temp.over.link]/5):
+  `rebuild_in_current_instantiation` also rebuilds the type arguments of
+  a class template-id (`pair<typename tree<K, V>::base_ptr, ...>`). When
+  the rebuilt arguments are no longer dependent (the member is a
+  non-dependent typedef), the specialization is formed from their
+  canonical types, keeping the written arguments as sugar, so it is the
+  type the in-class declaration named. When they are still dependent,
+  the template-id is formed again from the rebuilt arguments, defaults
+  included (stl_tree.h:2107). Tests:
+  `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return.cpp`,
+  `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return-args.cpp`.
+- **Member template-ids with non-template overloads**
+  ([temp.arg.explicit]/4, [over.match.call.general]/1): an unqualified
+  function template-id `f<A>(args)` names the whole overload set that
+  lookup finds, member functions (`CXXMethod`) and using-shadows
+  included. The non-template members are not viable with explicit
+  template arguments (`widen_function_template_id`; bitset:1358
+  `to_string`). Test:
+  `tests/conformance/temp.arg.explicit/libstdcxx-member-template-id-overload-set.cpp`.
+- **`T x({a, b})` in a template** ([dcl.init.general]/16,
+  [temp.dep.expr]/3): a parenthesized initializer with a braced-init-list
+  argument is kept as a `ParenListExpr` for instantiation in two cases:
+  the variable's type is dependent (the list has no type of its own), or
+  an element of the list is type-dependent (`braced_arg_type_dependent`).
+  This is `defer_dependent_init` (<format>:439 `_Utf32_view`). Test:
+  `tests/conformance/dcl.init.general/libstdcxx-paren-braced-init-dependent.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
