@@ -930,9 +930,7 @@ impl Parser<'_, '_> {
             let at = self.loc();
             let d = self.s.diag(DiagId::parse_expected_qualified_after_typename, at);
             self.emit(d);
-            if self.ident().is_none() {
-                return None;
-            }
+            self.ident()?;
             let pack_index = self.peek_is(1, Punct::Ellipsis) && self.peek_is(2, Punct::LSquare);
             if ctx == Some(DeclaratorContext::Prototype)
                 && let Some(first) = self.param_recovery

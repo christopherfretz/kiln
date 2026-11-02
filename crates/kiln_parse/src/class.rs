@@ -1394,8 +1394,8 @@ impl Parser<'_, '_> {
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
             // clang forms each member declarator's type anew: every one
             // without a type is reported (`static y, z;`).
-            if !first && !ds.has_type_specifier() && !ds.invalid && !d.invalid && d.special.is_none()
-            {
+            let untyped = !ds.has_type_specifier() && !ds.invalid;
+            if !first && untyped && !d.invalid && d.special.is_none() {
                 self.s.error(DiagId::parse_missing_type_specifier, d.name_loc());
             }
             let is_fn = d.is_function_declarator();

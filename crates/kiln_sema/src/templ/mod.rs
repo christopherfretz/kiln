@@ -575,9 +575,7 @@ impl Sema<'_, '_> {
             self.diagnose_unexpanded_declarator(ty, "non-type template parameter type", at)
         };
         self.declarator_type_invalid = false;
-        if unexpanded {
-            self.ast.decls.set_flags(d, DeclFlags::INVALID);
-        } else if !self.check_nttp_type(ty, p.loc) {
+        if unexpanded || !self.check_nttp_type(ty, p.loc) {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
         }
         self.push_template_param(d);
@@ -624,6 +622,7 @@ impl Sema<'_, '_> {
     /// The default argument `= arg` of parameter `p`
     /// ([temp.param]/10-12).
     pub fn act_on_template_param_default(&mut self, p: DeclId, arg: TemplateArg, loc: Loc) {
+        use crate::templ::pack::PackOperand;
         if self.ast.template_parm(p).is_some_and(|x| x.pack) {
             // [temp.param]/11 ("template parameter pack cannot have a
             // default argument") is diagnosed by clang; kiln drops it.
@@ -633,7 +632,6 @@ impl Sema<'_, '_> {
         // [temp.variadic]/12: `class U = Ts` is reported at the
         // parameter's name, `int N = sizeof(Ts)` at the argument (clang's
         // `ActOn{Type,NonType}TemplateParameter`); the default is dropped.
-        use crate::templ::pack::PackOperand;
         let op = match arg.view() {
             ArgView::Type(t) => Some((PackOperand::Type(t), self.ast.decls.get(p).loc())),
             ArgView::Expr { expr, .. } => Some((PackOperand::Expr(expr), self.begin_loc(expr))),

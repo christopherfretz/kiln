@@ -2813,6 +2813,15 @@ impl Parser<'_, '_> {
         ds.lead_cxx11 = None;
     }
 
+    /// True at a declarator that may follow an empty decl-specifier-seq
+    /// in context `ctx`: a special member's, or at namespace scope `y;`,
+    /// a declarator without a type declared as an invalid `int` (clang's
+    /// `err_missing_type_specifier`).
+    fn at_declarator_without_specifiers(&self, ctx: DeclaratorContext) -> bool {
+        self.at_special_declarator(ctx)
+            || (ctx == DeclaratorContext::File && self.at_implicit_int_declarator())
+    }
+
     fn parse_simple_declaration_delayed(
         &mut self,
         ctx: DeclaratorContext,
@@ -2833,12 +2842,7 @@ impl Parser<'_, '_> {
             self.s.end_delayed_access_to(level, ds.tag);
             return decls;
         }
-        // `y;` at namespace scope: a declarator without a type, declared
-        // as an invalid `int` (clang's `err_missing_type_specifier`).
-        if ds.is_empty()
-            && !self.at_special_declarator(ctx)
-            && !(ctx == DeclaratorContext::File && self.at_implicit_int_declarator())
-        {
+        if ds.is_empty() && !self.at_declarator_without_specifiers(ctx) {
             self.error_here(DiagId::parse_expected_unqualified_id);
             self.skip_to_semi();
             return decls;

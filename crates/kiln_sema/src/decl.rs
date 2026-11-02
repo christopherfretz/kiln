@@ -242,21 +242,26 @@ impl Sema<'_, '_> {
             }
             _ => base,
         };
-        let mut cv = ds.cv;
+        let cv = self.declspec_quals(ds, base);
+        if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
+    }
+
+    /// The cv-qualifiers of `ds` for the type `base`. C99 6.7.3p2 (clang
+    /// `BuildQualifiedType`, `err_typecheck_invalid_restrict_not_pointer`):
+    /// only a pointer or reference may be restrict-qualified; the
+    /// qualifier is dropped (`__restrict int h();`, WP-371).
+    fn declspec_quals(&mut self, ds: &DeclSpec, base: QualType) -> Quals {
+        let cv = ds.cv;
         if let Some(rloc) = ds.cv_locs[2]
             && cv.contains(Quals::RESTRICT)
             && !self.restrict_ok(base)
         {
-            // C99 6.7.3p2 (clang `BuildQualifiedType`,
-            // `err_typecheck_invalid_restrict_not_pointer`): only a pointer
-            // or reference may be restrict-qualified; the qualifier is
-            // dropped (`__restrict int h();`, WP-371).
             let msg = self.diag(DiagId::sema_typecheck_invalid_restrict_not_pointer, rloc);
             let msg = msg.arg(self.ty_arg(base));
             self.emit(msg);
-            cv = cv - Quals::RESTRICT;
+            return cv - Quals::RESTRICT;
         }
-        if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
+        cv
     }
 
     /// True if `restrict` may qualify `ty`: a pointer, reference or
