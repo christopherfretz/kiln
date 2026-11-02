@@ -1,0 +1,10 @@
+# Tests that get the long run timeout (`--run-timeout-long`, default 240 s)
+# although they do not carry `REQUIRES: long_tests` (spec/libcxx.md
+# "Timeouts and retries"). Tests with `REQUIRES: long_tests` get it anyway
+# and are not listed here.
+#
+# One test per line: its path relative to libcxx/test, then the reason.
+# Sorted by path (unit test `slow_tests_list`). A test joins only after it
+# is shown to pass with the long limit and time out with `--timeout`.
+std/thread/thread.semaphore/lost_wakeup.pass.cpp  10k threads x 1000 acquire/release rounds; ~60 s at -O0 on a loaded host
+std/utilities/charconv/charconv.msvc/test.pass.cpp  MSVC STL's exhaustive to_chars/from_chars sweep; ~45 s at -O0

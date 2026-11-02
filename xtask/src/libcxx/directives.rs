@@ -1,7 +1,7 @@
 //! Test classification by file name and the lit keywords of a libc++ test
 //! (`spec/libcxx.md` "Classification" and "Directives").
 
-use super::boolexpr::Expr;
+use super::boolexpr::{Expr, Piece};
 
 /// What a test file asks for, from its suffix (libc++'s `format.py`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -106,6 +106,8 @@ pub struct Directives {
     pub module_dependencies: Vec<String>,
     /// The file has a `RUN:` line (a custom script).
     pub has_run: bool,
+    /// `ALLOW_RETRIES: N`: a failing run is retried up to `N` more times.
+    pub allow_retries: u32,
 }
 
 /// The keywords recognized. lit finds a keyword anywhere on a line; here it
@@ -118,6 +120,7 @@ const KEYWORDS: &[&str] = &[
     "ADDITIONAL_COMPILE_FLAGS(",
     "FILE_DEPENDENCIES:",
     "MODULE_DEPENDENCIES:",
+    "ALLOW_RETRIES:",
     "RUN:",
     "END.",
 ];
@@ -127,6 +130,7 @@ impl Directives {
     /// unterminated conditional keyword is an error (the test is an ERROR).
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut d = Self::default();
+        let mut retries_seen = false;
         'lines: for line in text.lines() {
             let mut search = 0;
             while let Some((at, kw)) = find_keyword(line, search) {
@@ -169,6 +173,16 @@ impl Directives {
                     "MODULE_DEPENDENCIES:" => {
                         d.module_dependencies.extend(rest.split_whitespace().map(str::to_owned));
                     }
+                    // lit's `ParserKind.INTEGER`, at most once per test.
+                    "ALLOW_RETRIES:" => {
+                        if retries_seen {
+                            return Err("more than one `ALLOW_RETRIES:` line".to_owned());
+                        }
+                        retries_seen = true;
+                        d.allow_retries = rest.trim().parse().map_err(|_| {
+                            format!("`ALLOW_RETRIES:` wants a number, got `{}`", rest.trim())
+                        })?;
+                    }
                     _ => unreachable!("keyword {kw} is in KEYWORDS"),
                 }
             }
@@ -188,6 +202,21 @@ impl Directives {
                 .map(|(_, flag)| flag.clone()),
         );
         v
+    }
+
+    /// Whether a `REQUIRES:` expression names the feature `name` (as a
+    /// plain identifier anywhere in it): `REQUIRES: long_tests` marks a
+    /// long test.
+    pub fn requires_feature(&self, name: &str) -> bool {
+        fn names(e: &Expr, name: &str) -> bool {
+            match e {
+                Expr::True => false,
+                Expr::Ident(p) => matches!(p.as_slice(), [Piece::Lit(l)] if l == name),
+                Expr::Not(a) => names(a, name),
+                Expr::And(a, b) | Expr::Or(a, b) => names(a, name) || names(b, name),
+            }
+        }
+        self.requires.iter().any(|(_, e)| names(e, name))
     }
 
     /// lit's verdict before running: `Err(reason)` when the test is
@@ -379,6 +408,24 @@ int main(int, char**) { return 0; }
         // A malformed expression is an error.
         assert!(Directives::parse("// UNSUPPORTED: c++03 &&").is_err());
         assert!(Directives::parse("// ADDITIONAL_COMPILE_FLAGS(foo -x").is_err());
+    }
+
+    #[test]
+    fn allow_retries_and_long_tests() {
+        let d = Directives::parse("// REQUIRES: long_tests\n// ALLOW_RETRIES: 2\n").unwrap();
+        assert_eq!(d.allow_retries, 2);
+        assert!(d.requires_feature("long_tests"));
+        assert!(!d.requires_feature("long"));
+        let d = Directives::parse("// REQUIRES: linux && (long_tests || c++26)").unwrap();
+        assert!(d.requires_feature("long_tests"));
+        assert_eq!(d.allow_retries, 0);
+        // `UNSUPPORTED: long_tests` and a regex do not mark a test long.
+        let d = Directives::parse("// UNSUPPORTED: long_tests\n// REQUIRES: {{long_.*}}").unwrap();
+        assert!(!d.requires_feature("long_tests"));
+        // lit: an integer, at most once.
+        assert!(Directives::parse("// ALLOW_RETRIES: two").is_err());
+        assert!(Directives::parse("// ALLOW_RETRIES: 2\n// ALLOW_RETRIES: 3").is_err());
+        assert!(Directives::parse("// END.\n// ALLOW_RETRIES: x").is_ok());
     }
 
     #[test]
