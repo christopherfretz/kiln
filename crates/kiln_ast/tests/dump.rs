@@ -268,7 +268,7 @@ impl Fx {
     }
 
     /// clang 22's implicit `__size_t` sugar for `unsigned long`, the type
-    /// of `sizeof` (kiln_sema `declare_size_t_sugar`; spec/ast-dump.md §2).
+    /// of `sizeof` (`kiln_sema::Sema::declare_size_t_sugar`; spec/ast-dump.md §2).
     fn size_t(&mut self) -> QualType {
         let h =
             DeclHead::new(self.ast.tu, DeclName::ident(self.ast.symbols().intern("__size_t")), L)
