@@ -638,8 +638,54 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             if self.levels_retained(self.sema.ctx_template_levels(parent)) {
                 return Ok(d);
             }
-            return self.unimplemented("reference to a member of a dependent context", loc);
+            // A member of a class template pattern named where no
+            // instantiation of it is being built (the constructor
+            // signature of an implicit deduction guide,
+            // [over.match.class.deduct]/1): the qualifier is the
+            // pattern's injected-class-name `X<P...>`; substituting it
+            // names the specialization, whose member is found again
+            // (clang's `FindInstantiatedDecl` on a deduction guide).
+            let Some(spec) = self.pattern_specialization(parent, loc)? else {
+                return self.unimplemented("reference to a member of a dependent context", loc);
+            };
+            return self.member_of_instantiation(d, spec, loc);
         }
+        self.member_of_instantiation(d, inst_parent, loc)
+    }
+
+    /// The specialization that class pattern (or partial specialization)
+    /// `parent` names under this substitution: its injected-class-name
+    /// type substituted. `None` if `parent` is not a class template's
+    /// pattern or the substituted type is no class.
+    fn pattern_specialization(&mut self, parent: DeclId, loc: Loc) -> SubstResult<Option<DeclId>> {
+        if self.sema.kind_of(parent) != DeclKind::CXXRecord {
+            return Ok(None);
+        }
+        let first = self.sema.ast.first(parent);
+        let inj = if let Some(t) = self.sema.ast.described_template(first) {
+            self.sema.injected_type_of(t)
+        } else if self.sema.ast.partial_spec_info(first).is_some() {
+            self.sema.partial_injected_type(first)
+        } else {
+            None
+        };
+        let Some(inj) = inj else { return Ok(None) };
+        let t = self.ty(inj, loc)?;
+        if self.sema.is_dependent_type(t) {
+            return Ok(None);
+        }
+        Ok(self.sema.ast.types.as_record(t).filter(|&r| self.sema.ast.first(r) != first))
+    }
+
+    /// Member `d` of a class or enumeration pattern as instantiated in
+    /// `inst_parent` (completed first, [temp.inst]/3).
+    fn member_of_instantiation(
+        &mut self,
+        d: DeclId,
+        inst_parent: DeclId,
+        loc: Loc,
+    ) -> SubstResult<DeclId> {
+        let node = *self.sema.ast.decls.get(d);
         if self.sema.kind_of(inst_parent) == DeclKind::CXXRecord {
             let ty = self.sema.tag_type(inst_parent);
             let _ = self.sema.require_complete_silent(ty, loc);

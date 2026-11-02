@@ -2096,6 +2096,13 @@ the guide's arguments into such a typedef substitutes its underlying type
 and keeps the typedef as sugar, without instantiating the class
 (`Substituter::class_not_instantiated`). clang's guide transform clones
 the typedef instead.
+Any other member of the pattern that a guide's parameter types name (a
+static data member or enumerator, `span<O, rank_>` in libc++'s
+`layout_stride::mapping`, or a member of a member class) is found in the
+specialization the substituted injected-class-name `X<P...>` names: that
+class is completed and the member instantiated from the pattern member
+is used ([temp.inst]/3; `Substituter::pattern_specialization`, clang's
+`FindInstantiatedDecl` on a deduction guide; WP-302).
 
 A template template parameter named alone (`C(args)`, `C{args}`,
 `C x(args);`) is a placeholder for a deduced class type as in clang

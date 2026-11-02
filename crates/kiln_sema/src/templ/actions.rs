@@ -1497,7 +1497,7 @@ impl Sema<'_, '_> {
 
     /// `X<A...>` for partial specialization `p`'s own arguments `A`, as
     /// an `InjectedClassNameType` ([temp.local]/1).
-    fn partial_injected_type(&mut self, p: DeclId) -> Option<QualType> {
+    pub(crate) fn partial_injected_type(&mut self, p: DeclId) -> Option<QualType> {
         let (_, info) = self.ast.partial_spec_info(p)?;
         let (tmpl, args) = (info.template, info.args);
         let name = self.template_name_for(tmpl);
