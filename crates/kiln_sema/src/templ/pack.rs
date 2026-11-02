@@ -624,7 +624,8 @@ impl Substituter<'_, '_, '_> {
         &mut self,
         f: impl FnOnce(&mut Self) -> SubstResult<T>,
     ) -> SubstResult<T> {
-        let saved = std::mem::replace(&mut self.pack, PackState { keep: true, ..PackState::default() });
+        let saved =
+            std::mem::replace(&mut self.pack, PackState { keep: true, ..PackState::default() });
         let saved_index = self.pack_index.take();
         let r = f(self);
         self.pack = saved;

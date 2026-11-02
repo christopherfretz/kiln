@@ -1948,15 +1948,14 @@ impl Sema<'_, '_> {
             // defining-type-id only when all of it was deduced.
             Some(&(alias, _)) => {
                 let ty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
-                Some((alias, self.ast.types.proto_of(ty.ty()).map_or(QualType::ERROR, FuncProto::ret)))
+                Some((
+                    alias,
+                    self.ast.types.proto_of(ty.ty()).map_or(QualType::ERROR, FuncProto::ret),
+                ))
             }
             // A guide from an inherited constructor returns `CC<R>::type`
             // (§6.6.1); its constraint names `R`.
-            None => self
-                .templ
-                .ctad_inherited
-                .get(&g)
-                .and_then(|i| Some((i.class, i.source_ret?))),
+            None => self.templ.ctad_inherited.get(&g).and_then(|i| Some((i.class, i.source_ret?))),
         };
         if let Some((alias, ret)) = deducible {
             let n = self.decl_name_str(self.ast.decls.get(alias).name());

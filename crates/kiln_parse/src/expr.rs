@@ -1728,7 +1728,10 @@ impl Parser<'_, '_> {
     /// `...[ constant-expression ]` (shared by the expression and type
     /// forms) after a pack name beginning at `begin`: `Err` on a parse
     /// error, `Ok(None)` without `...[`.
-    pub(crate) fn parse_pack_index(&mut self, begin: Loc) -> Result<Option<(Loc, ExprId, Loc)>, ()> {
+    pub(crate) fn parse_pack_index(
+        &mut self,
+        begin: Loc,
+    ) -> Result<Option<(Loc, ExprId, Loc)>, ()> {
         if !(self.at(Punct::Ellipsis) && self.peek_is(1, Punct::LSquare)) {
             return Ok(None);
         }
