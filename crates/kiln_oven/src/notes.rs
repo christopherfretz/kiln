@@ -129,6 +129,9 @@ impl Oven {
             // erroneous expression); no note, no call stack.
             return Vec::new();
         }
+        if matches!(fault, Fault::Quiet) {
+            return Vec::new();
+        }
         let ast = b.ast();
         let mut site = self.site(pc);
         if let Fault::Trap(i) = fault
@@ -253,6 +256,7 @@ impl Oven {
                 )
             }
             Fault::Invalid => (site.loc, "subexpression not valid in a constant expression".into()),
+            Fault::Quiet => (site.loc, String::new()),
             Fault::PtrSub => {
                 (site.loc, "subtracted pointers are not elements of the same array".into())
             }
