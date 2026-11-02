@@ -761,7 +761,9 @@ unless `--compiler` is given, then checks:
   of them go through one `xtask test` runner invocation (`test::execute`, as
   `ci` uses it), with the default oracle and limits;
 - (c) on a `done` row with a macro, kiln's `-dM -E` value equals the table's
-  CLANG22 value. On every row with a macro, the KILN value must be what kiln
+  CLANG22 value, unless clang 22 does not define the macro (a C++26 feature
+  kiln ships ahead of clang 22, such as P3068; the row's Notes carry the
+  written reason). On every row with a macro, the KILN value must be what kiln
   defines today, so that column cannot go stale.
 
 It prints `N rows: D done, P partial, T todo`, then one `FAIL  <paper>

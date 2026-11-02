@@ -12,7 +12,8 @@ Columns:
   CLANG22 is `clang++-22 -std=c++26 -dM -E -x c++ /dev/null` (22.1.8). `—` means
   the macro is not defined; a bare `—` means the paper has no `__cpp_*` macro of
   its own. Where clang 19 differs from clang 22, its value is in Notes (kiln's
-  predefines are generated from clang 19, so they match it everywhere).
+  predefines are generated from clang 19, so they match it except for the
+  values kiln's own features set: `KILN_FEATURES` in `crates/kiln_pp/src/predef.rs`).
 - **Status**: `done` = kiln passes corpus tests covering the core forms;
   `partial` = some pass, or some are `xfail(kiln)`; `todo` = nothing passes.
   Seeded on 2026-11-01 (WP-185) from a corpus run through kiln.
@@ -37,7 +38,7 @@ Columns:
 | P2718R0 | Lifetime extension in range-based `for` | `__cpp_range_based_for` 202211L / 202211L | done | `conformance/stmt.ranged/p2718-order.cpp`<br>`conformance/stmt.ranged/p2718-constexpr.cpp` | |
 | P2448R2 | Relaxing some constexpr restrictions | — | done | `conformance/dcl.constexpr/p2448-probe.cpp` | `__cpp_constexpr` 202207L; that macro is recorded on P2747, its latest bump. |
 | P2242R3 | Non-literal variables, labels and `goto` in constexpr functions | — | done | `conformance/dcl.constexpr/p2242-probe.cpp` | `__cpp_constexpr` 202110L (see P2747). |
-| P2280R4 | Unknown references in constant expressions | — | todo | `conformance/expr.const/p2280-probe.cpp` | DR. clang 19 lacks it (probe `xfail(clang)`); clang 20+ accepts. |
+| P2280R4 | Unknown references in constant expressions | — | done | `conformance/expr.const/p2280-probe.cpp`<br>`conformance/expr.const/p2280-unknown-reference.cpp`<br>`conformance/expr.const/p2280-unknown-reference-invalid.cpp`<br>`conformance/expr.const/p2280-unknown-reference-cxx20.cpp` | DR, applied from C++23 as clang does (C++20 keeps the old rule). clang 19 lacks it (`requires: clang>=22`). WP-357. |
 | P2647R1 | `static constexpr` variables in constexpr functions | — | done | `conformance/dcl.constexpr/p2647-probe.cpp` | `__cpp_constexpr` 202211L (see P2747). |
 | P2582R1 | CTAD from inherited constructors | — | todo | `conformance/over.match.class.deduct/p2582-probe.cpp` | Neither clang implements it (probe `xfail(clang)`). Its macro bump, `__cpp_deduction_guides` 202207L, is absent from both (both 201703L). |
 | P2324R2 | Labels at the end of compound statements | — | done | `conformance/stmt.label/p2324-probe.cpp` | ROADMAP M4 cites this as "P2360 labels at the end of blocks"; P2324 is the labels paper. |
@@ -69,8 +70,8 @@ Columns:
 | P2573R2 | `= delete("reason")` | `__cpp_deleted_function` 202403L / 202403L | done | `conformance/dcl.fct.def.delete/redeclaration.cpp`<br>`conformance/dcl.fct.def.delete/templates.cpp`<br>`conformance/dcl.fct.def.delete/uses.cpp` | |
 | P2741R3 | User-generated `static_assert` messages | `__cpp_static_assert` 202306L / 202306L | todo | `conformance/dcl.pre/p2741-probe.cpp` | kiln advertises the macro without the feature (Macro gaps). |
 | P2893R3 | Variadic friends | `__cpp_variadic_friend` — / 202403L | todo | `conformance/class.friend/p2893-probe.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`. |
-| P2747R2 | `constexpr` placement new | `__cpp_constexpr` 202306L / 202406L | todo | `conformance/expr.new/p2747-probe.cpp`<br>`conformance/expr.new/constexpr-placement.cpp` | clang 19: 202306L, the P2738 level, with no P2747 (probe `xfail(clang)`). `constexpr-placement.cpp` pins clang 19's pre-P2747 rejection; flip it at the oracle switch (WP-184). |
-| P3068R6 | `constexpr` exceptions | `__cpp_constexpr_exceptions` — / — | todo | `conformance/expr.throw/p3068-probe.cpp`<br>`conformance/expr.throw/constexpr-throw.cpp` | Not in clang 22: written reason for the M4 exit. `constexpr-throw.cpp` pins the pre-P3068 rejection. |
+| P2747R2 | `constexpr` placement new | `__cpp_constexpr` 202406L / 202406L | done | `conformance/expr.new/p2747-probe.cpp`<br>`conformance/expr.new/p2747-placement-new.cpp`<br>`conformance/expr.new/constexpr-placement.cpp` | clang 19: 202306L, the P2738 level, with no P2747 (tests `requires: clang>=22`). WP-357. |
+| P3068R6 | `constexpr` exceptions | `__cpp_constexpr_exceptions` 202411L / — | done | `conformance/expr.throw/p3068-probe.cpp`<br>`conformance/expr.throw/constexpr-exceptions.cpp`<br>`conformance/expr.throw/constexpr-exceptions-template.cpp`<br>`conformance/expr.throw/constexpr-uncaught.cpp`<br>`conformance/expr.throw/constexpr-throw-churn.cpp`<br>`conformance/except.handle/constexpr-handler-match.cpp`<br>`conformance/except.handle/constexpr-function-try-block.cpp`<br>`conformance/expr.throw/constexpr-throw.cpp` | Not in clang 22: written reason for the M4 exit; the tests are `skip(clang)`. `constexpr-throw.cpp` pins the pre-P3068 rejection at C++23. Language part only: `std::current_exception`, `std::uncaught_exceptions` and `__builtin_uncaught_exceptions` are not constexpr; libc++ 22 marks no `<exception>` member constexpr and does not test the macro. WP-357; spec/oven.md "Exceptions". |
 | P2738R1 | `constexpr` cast from `void*` | — | done | `conformance/expr.static.cast/p2738-probe.cpp` | `__cpp_constexpr` 202306L (see P2747). |
 | P1967R14 | `#embed` | `__cpp_pp_embed` — / — | done | `conformance/cpp.embed/p1967-probe.cpp`<br>`differential/pp/torture/cpp.embed-params.cpp` | Neither clang defines `__cpp_pp_embed`; use `__has_embed`. clang reports `#embed` in C++ as a C23 extension (`-Wc23-extensions`), and kiln matches. |
 | P0963R3 | Structured binding declaration as a condition | — | partial | `conformance/dcl.struct.bind/condition.cpp` | Accepted, but with clang 19's "C++17 extension" warning, which C++26 should not emit. Its `__cpp_structured_bindings` bump (202406L) is subsumed by P1061's. |
@@ -105,12 +106,11 @@ Not tabulated:
 
 ## Macro gaps
 
-kiln's `__cpp_*` set under `-std=c++26` is clang 19's, so it differs from clang 22 as follows:
+kiln's `__cpp_*` set under `-std=c++26` is clang 19's, plus `__cpp_constexpr` 202406L (P2747) and `__cpp_constexpr_exceptions` 202411L (P3068, which clang 22 does not define), so it differs from clang 22 as follows:
 
 | Macro | kiln (= clang 19) | clang 22 | Row | Action |
 |---|---|---|---|---|
 | `__cpp_explicit_this_parameter` | — | 202110L | P0847 (partial) | Add it once lambdas with an explicit object parameter work. Adding it changes which libc++/libstdc++ code kiln parses (`<variant>` and `<format>` `visit` members, libstdc++ ranges and `std::function`), so it needs a gate run. |
-| `__cpp_constexpr` | 202306L | 202406L | P2747 (todo) | Bump with P2747. |
 | `__cpp_structured_bindings` | 202403L | 202411L | P1061 (todo) | Bump with P0963 (202406L) and P1061. |
 | `__cpp_variadic_friend` | — | 202403L | P2893 (todo) | Add with the feature. |
 | `__cpp_trivial_relocatability` | — | 202502L | P2786 (todo) | Add with the feature. |
