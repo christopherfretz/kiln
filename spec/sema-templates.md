@@ -1101,6 +1101,11 @@ errors.
      that already has attributes. `[[deprecated]]` names a function
      template specialization with its arguments (`'f<int>' is
      deprecated`, clang `getNameForDiagnostic`).
+   - A member typedef or alias-declaration gets the pattern's `aligned`
+     attributes, a dependent operand substituted (`var_align_attrs` in
+     `typedef_decl_in`; clang `InstantiateAttrs`; WP-335): libc++'s
+     `atomic_ref` names its object through `typedef _Tp _Aligned_Tp
+     __attribute__((aligned(required_alignment)))`.
    - **member declarations**. [temp.inst]/3 decides what happens to each
      kind of member:
 
@@ -3143,7 +3148,14 @@ whose head the notes name. It evaluates:
     constraint that stays value-dependent after substitution",
     `sat_atom_uncached` in `templ/concepts/sat.rs`), and the fix for any
     reachable case is in the substitution, not this guard. No known
-    program reaches it (libc++ M3 gate, WP-325).
+    program reaches it (libc++ M3 gate, WP-325). One did (WP-335,
+    libc++'s pstl `__cpp17_destructible` = `requires(_Tp __v) {
+    __v.~_Tp(); }`): an implicit member of a non-template class
+    declared while a template definition was being parsed (`S x;` in a
+    function template body declares `S::~S()`) took `DEPENDENT_CTX`
+    from the ambient `dependent_depth`, so `v.~S()` was
+    instantiation-dependent after substitution. Implicit members now
+    follow their class's dependence (`declare_implicit`, spec/sema-class.md §8).
 - **`And` and `Or`** short-circuit from left to right.
 - **Context.** Atomic constraints are substituted in the context of the
   constrained entity's declaration (its semantic `DeclContext`, via
@@ -3319,7 +3331,7 @@ trait of its own.
 | `__is_convertible(F,T)` / `__is_nothrow_convertible(F,T)` | `conv_check(F,T).ok` (and `.nothrow`). WP-131 landed them (and `__is_convertible_to`): `To` void is true only for `From` void; `To` function or array, or `From` void, is false; otherwise the copy-initialization of a `To` from an opaque `declval<From>()` operand under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `conv_check` |
 | `__is_constructible(T,A…)` / `__is_trivially_constructible` / `__is_nothrow_constructible` | `init_check(T, A…, Direct)`: `.ok`, `.ok && .trivial`, `.ok && .nothrow`. A reference `T` takes exactly one argument; it still counts as constructible when the reference binds to a temporary created by an implicit conversion (clang 19; only `__reference_constructs_from_temporary` excludes that). WP-131 landed `__is_constructible` and `__is_nothrow_constructible`: a temporary's direct-initialization (value-initialization for no arguments) built on opaque `declval` operands under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `init_check` |
 | `__is_assignable(T,U)` / `__is_trivially_assignable` / `__is_nothrow_assignable` | `declval<T>() = declval<U>()` is well-formed (unevaluated), and is trivial / cannot throw. `__is_nothrow_assignable` landed in WP-131 (`!can_throw` of the WP-130 assignment) | `init_check(Assign)` |
-| `__is_destructible(T)` / `__is_nothrow_destructible(T)` / `__is_trivially_destructible(T)` | [meta.unary.prop] (`void`, functions and arrays of unknown bound are false) | `cls.dtor` |
+| `__is_destructible(T)` / `__is_nothrow_destructible(T)` / `__is_trivially_destructible(T)` | [meta.unary.prop] (`void`, functions and arrays of unknown bound are false); the destructor's uninstantiated noexcept-specifier is instantiated first ([temp.inst]/14, WP-335) | `cls.dtor` |
 
 Two more behave the same way but are only probed, not used, by the M3
 headers. They are implemented in M3 because they cost one row each:

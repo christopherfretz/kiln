@@ -620,6 +620,18 @@ Redeclaration and linkage rules:
   placeholder under pointer and reference declarators (`auto *`,
   `const auto &`, `auto &&`) is deduced as for a function call
   ([temp.deduct.call]/2-4) with `auto` as the template parameter.
+  A type-constraint on the placeholder (`C<A> decltype(auto) x = e;`)
+  is checked against the deduced placeholder type
+  ([dcl.type.auto.deduct]/2.2, /4), not the variable's type: the
+  `const` that `constexpr` adds ([dcl.constexpr]/10) is not part of it,
+  so `constexpr same_as<const bool> decltype(auto) r = X::v;` (with
+  `decltype(X::v)` = `const bool`) is satisfied and `constexpr
+  same_as<const int> decltype(auto) d = 1;` is `deduced type 'int' does
+  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335). The
+  variable's type still carries that `const` unless `decltype(e)` is a
+  reference: `constexpr decltype(auto) b = 1;` is `const int`,
+  `constexpr decltype(auto) r = (g);` is `const int &` for a `constexpr
+  int g` (`deduce_placeholder`).
   A copy-list-initializer (`auto l = {...}`, and the range of a
   range-based `for` over a braced list) deduces `std::initializer_list<U>`
   from each element; a nested braced-init-list element is a non-deduced
@@ -2203,7 +2215,13 @@ diagnostics and IR.
     type `T` only when `T` is a non-class, non-dependent type; a class
     (or dependent) result keeps its cv-qualifiers, so `decltype(f())`
     for `const X f()` is `const X` ([expr.type]/2, clang
-    `getNonLValueExprType`; WP-276)
+    `getNonLValueExprType`; WP-276). The callee must be a function
+    lvalue or a pointer to function ([expr.call]/1): a pointer to
+    member function is not callable without an object (`(o.*pmf)(a)`),
+    so `pmf(a)` is `called object type 'P' (aka 'int (S::*)(int)') is
+    not a function or function pointer` (a substitution failure in a
+    requires-expression: libc++'s `invocable<int (S::*)(int), int>` is
+    false; WP-335)
   - **member access:** `.` and `->` on records and through
     `IndirectField`; members found in base classes, static members,
     enumerators and member functions, implicit `this->`, `this`,
@@ -2303,17 +2321,26 @@ diagnostics and IR.
     pointers, otherwise (a non-null integer, `nullptr` as a non-null
     operand of a different kind) `invalid operands`.
   Not yet: the composite type that needs a cv-union of both sides
-  (`const int B::*` vs `volatile int D::*`; [expr.type]/4.6) and
-  constant evaluation of the comparison (WP-076).
+  for comparisons (`const int B::*` vs `volatile int D::*`;
+  [expr.type]/4.6) and constant evaluation of the comparison (WP-076).
 - **Composite pointer type** ([expr.type]/4; `composite_pointer` in
   `expr.rs`, used by `==`, `<`, `<=>` and `?:`): after the null,
   same-type and one-way-conversion cases, `cv_combined_pointer` tries a
   pointer to either side's unqualified pointee with the cv-qualifiers of
   both (`void *` vs `const B *` is `const void *`; `B *` vs `const D *`
   is `const B *`), taking the first that both operands reach by a
-  standard conversion (WP-155). Not yet: multi-level cv-combination
-  (`int **` vs `const int **` is `const int *const *`) and the member
-  pointer case above.
+  standard conversion (WP-155). Member pointers take the same path
+  ([expr.type]/4.6, WP-335): a null pointer constant against a member
+  pointer converts to it, and two member pointers combine to a member
+  pointer of the cv-combined pointee in either side's class (`int S::*`
+  vs `const int S::*` is `const int S::*`; `int S::*` vs `int D::*` is
+  `int D::*`; a pointer to `noexcept` member function converts to the
+  plain one). Unrelated classes have no composite type (`incompatible
+  operand types ('int A::*' and 'int B::*')` for `?:`). This is what
+  libc++'s `common_with`, `common_reference` and
+  `equality_comparable_with` see through `decltype(b ? x : y)`. Not
+  yet: multi-level cv-combination (`int **` vs `const int **` is
+  `const int *const *`).
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -2940,8 +2967,15 @@ and aggregate element types.
   array cannot have dynamic size` (see the gaps below).
 - **Allocation function** ([expr.new]/12-19): `PASS_ALIGN` when
   `alignof(T)` exceeds `__STDCPP_DEFAULT_NEW_ALIGNMENT__` (16 on both
-  targets, `kiln_abi::Target::default_new_align`). Global lookup only
-  (class-scope `operator new` is `todo(WP-068b)`): the candidates whose
+  targets, `kiln_abi::Target::default_new_align`). Lookup is in the
+  allocated class first, then global (`::new` only global;
+  [expr.new]/12, `alloc_fns`). A class-scope
+  `operator new` / `operator delete` (`AllocFns::naming` is its class)
+  is access-checked from the context of the expression ([expr.new]/19,
+  [expr.delete]/12, clang `CheckAllocationAccess`): `'operator new' is
+  a private member of 'P'` with the `declared private here` note, a
+  substitution failure in a requires-expression (libc++
+  `shared_ptr_Y.pass.cpp`; WP-335). Among the candidates: those whose
   leading parameters are `size_t` (and `align_val_t` when aligned) and
   that accept the placement arguments, preferring the most exact
   matches; with `PASS_ALIGN` a second round without the alignment
@@ -3600,6 +3634,68 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   an element of the list is type-dependent (`braced_arg_type_dependent`).
   This is `defer_dependent_init` (<format>:439 `_Utf32_view`). Test:
   `tests/conformance/dcl.init.general/libstdcxx-paren-braced-init-dependent.cpp`.
+
+### 5.22 Rules from the libc++ `.verify` cluster B (WP-338)
+- **An out-of-line constructor stays explicit** ([dcl.fct.spec]/4,
+  [over.match.copy]/1.1): the explicit-specifier belongs to the first
+  declaration (it is allowed only in the class). An out-of-line
+  definition or member-template definition without `explicit`
+  inherits the flag and any `explicit(expr)` operand from the previous
+  declaration (`class/special/declare.rs`). Copy-initialization does
+  not consider it, and the "explicit constructor is not a candidate"
+  note points at the first declaration (`overload/diag.rs`). This
+  covers `complex<float> cf = cd;`. Test:
+  `tests/conformance/over.match.copy/explicit-ctor-out-of-line-definition.cpp`.
+- **The underlying type of an incomplete enumeration** ([dcl.enum]/5,
+  [meta.trans.other]): `__underlying_type(E)` for an enumeration
+  without a fixed underlying type, before its `}`, is an error.
+  The message is "cannot determine underlying type of incomplete
+  enumeration type 'E'" (`sema_underlying_type_of_incomplete_enum`),
+  with a "forward declaration of" note at `E`
+  (`templ/builtins/transforms.rs`). Inside a class template
+  instantiation the error is located at the declarator, not at the
+  `__underlying_type` keyword. Types carry no locations, so tests give
+  only the line. Test:
+  `tests/conformance/dcl.enum/underlying-type-incomplete-enum.cpp`.
+- **An invalid base makes the derived specialization invalid**
+  ([class.derived]/2, clang `CheckBaseSpecifier`): instantiating a
+  class whose base specialization is invalid, for example because a
+  member typedef failed to substitute, marks the class invalid
+  (`templ/class.rs` `class_body_with`). `underlying_type<E>::type`
+  after the error is then quiet. Test:
+  `tests/conformance/class.derived/invalid-base-makes-derived-invalid.cpp`.
+- **An erroneous template argument is diagnosed once**
+  ([temp.arg.general]/1): an argument that is an error expression,
+  such as an undeclared name, is rejected for a type parameter without
+  a second "must be a type" error (`templ/args.rs`
+  `check_template_arg`, clang's `RecoveryExpr`). Test:
+  `tests/conformance/temp.arg.general/erroneous-argument-single-diagnostic.cpp`.
+- **`T{...}` of an invalid class in an instantiation**
+  ([temp.inst]/2, [expr.type.conv]): when substituting a braced
+  functional cast names a class whose instantiation is invalid (for
+  example a failed `static_assert`), the expression fails silently
+  (`templ/subst/exprs.rs` `invalid_class_braced_cast`). Only the
+  `static_assert` is reported, with no "no viable conversion"
+  (`std::numbers::e_v<int>`). `T()` and a non-template `I<char>{}`
+  still diagnose, as in clang. Test:
+  `tests/conformance/temp.inst/invalid-class-braced-cast.cpp`.
+- **Attributes of instantiated static data members**
+  ([dcl.attr.deprecated]/4, [temp.inst]/3): a static data member
+  instantiated with its class, deferred in-class initializer or not,
+  gets all of the pattern's attributes (`class_attrs`), not only
+  `alignas`. So `numeric_limits<T>::has_denorm` warns at each use, and
+  the out-of-line definition without the attribute inherits it
+  through the redeclaration chain. Test:
+  `tests/conformance/dcl.attr.deprecated/static-data-member-instantiation.cpp`.
+- **"no template named 'X' in 'N'"** ([temp.names]/3): at namespace
+  or class scope, a decl-specifier `N::X<...>` whose `X` is not a
+  member of the non-dependent `N` gets `sema_no_member_template`
+  (clang `DiagnoseUnknownTypeName` with `IsTemplateName`). The argument
+  list is skipped and the declarators are not diagnosed again
+  (`kiln_parse` `qualified_unknown_type_follows`,
+  `parse_qualified_type_rest`). At block scope the statement is
+  parsed as an expression, as clang does. Test:
+  `tests/conformance/temp.names/no-template-named-qualified.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

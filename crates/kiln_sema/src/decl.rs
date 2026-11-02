@@ -4609,7 +4609,22 @@ impl Sema<'_, '_> {
             None => match self.deduce_auto(declared, &items, kind) {
                 Ok(t) => {
                     let at = self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or(loc);
-                    return Some(if self.check_placeholder_constraint(declared, t, at) {
+                    // `constexpr C decltype(auto) x = e;`: the constraint
+                    // is checked against `decltype(e)`, before `constexpr`
+                    // adds its `const` ([dcl.type.auto.deduct]/2,/5).
+                    let (checked, ct) = match self.ast.types.canonical_view(declared) {
+                        TypeView::Auto { keyword: AutoKeyword::DecltypeAuto, .. }
+                            if !self.ast.types.canonical(declared).quals().is_empty() =>
+                        {
+                            let unq = self.ast.types.unqualified(declared);
+                            match self.deduce_auto(unq, &items, kind) {
+                                Ok(t0) => (unq, t0),
+                                Err(_) => (declared, t),
+                            }
+                        }
+                        _ => (declared, t),
+                    };
+                    return Some(if self.check_placeholder_constraint(checked, ct, at) {
                         t
                     } else {
                         QualType::ERROR

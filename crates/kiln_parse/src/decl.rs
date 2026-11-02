@@ -1095,8 +1095,7 @@ impl Parser<'_, '_> {
                     && self.unknown_type_follows(end, ctx))
                     || (end > start + 1
                         && self.unresolved_scope_name(start)
-                        && (ctx == DeclaratorContext::Block
-                            || self.unknown_type_follows(end, ctx))) =>
+                        && self.qualified_unknown_type_follows(end, ctx)) =>
             {
                 if let Ok(Some(q)) = self.parse_nested_name_nns() {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
@@ -1153,6 +1152,20 @@ impl Parser<'_, '_> {
                     Self::punct_of(next),
                     Some(Punct::LParen | Punct::ColonColon | Punct::Less)
                 ))
+    }
+
+    /// True if an unknown qualified name in a decl-specifier, ending
+    /// before token `end`, was meant as a type: at block scope the
+    /// statement disambiguation chose a declaration already, elsewhere a
+    /// declarator follows ([`Parser::unknown_type_follows`]) or, at
+    /// namespace or class scope, `<` (a class template:
+    /// `std::codecvt_utf8<wchar_t> c;`, clang's `ParseImplicitInt` with
+    /// `IsTemplateName`; at block scope `N::f<int> x;` is an expression).
+    fn qualified_unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
+        ctx == DeclaratorContext::Block
+            || self.unknown_type_follows(end, ctx)
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                && Self::punct_of(self.tok_at(end)) == Some(Punct::Less))
     }
 
     // -- class and enum specifiers ----------------------------------------------------
