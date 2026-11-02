@@ -2456,24 +2456,7 @@ impl Parser<'_, '_> {
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
-            // The declspec's type is formed once the first declarator is
-            // known: clang reports a missing type specifier at its name.
-            // Constructors, destructors and conversion functions have
-            // none ([class.ctor.general]/1, [class.dtor]/1,
-            // [class.conv.fct]/1).
-            let untyped = !ds.has_type_specifier() && is_untyped_special(&d);
-            let base = *base_ty.get_or_insert_with(|| {
-                if untyped && is_deduction_guide(&d) {
-                    self.s.plain_auto_type()
-                } else if untyped {
-                    QualType::VOID
-                } else if d.invalid && !ds.has_type_specifier() {
-                    QualType::ERROR
-                } else {
-                    let t = self.s.type_from_declspec_at(&ds, d.name_loc());
-                    self.s.rebuild_in_current_instantiation(t, &d)
-                }
-            });
+            let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
             // a malformed one drops the declarator.
             let Ok(label) = self.parse_asm_label() else {
@@ -2547,6 +2530,25 @@ impl Parser<'_, '_> {
         }
         self.expect_declaration_semi(ctx);
         decls
+    }
+
+    /// The type of decl-specifier-seq `ds`, formed once the first
+    /// declarator `d` of its group is known: clang reports a missing type
+    /// specifier at its name. Constructors, destructors and conversion
+    /// functions have none ([class.ctor.general]/1, [class.dtor]/1,
+    /// [class.conv.fct]/1).
+    fn group_base_type(&mut self, ds: &DeclSpec, d: &Declarator) -> QualType {
+        let untyped = !ds.has_type_specifier() && is_untyped_special(d);
+        if untyped && is_deduction_guide(d) {
+            self.s.plain_auto_type()
+        } else if untyped {
+            QualType::VOID
+        } else if d.invalid && !ds.has_type_specifier() {
+            QualType::ERROR
+        } else {
+            let t = self.s.type_from_declspec_at(ds, d.name_loc());
+            self.s.rebuild_in_current_instantiation(t, d)
+        }
     }
 
     /// A virt-specifier-seq after function declarator `d` outside a

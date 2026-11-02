@@ -1074,10 +1074,8 @@ impl Parser<'_, '_> {
                         // the `)` (stopping at a `;`) with no "expected ')'"
                         // for the unmatched `(` (WP-318).
                         let at = self.loc();
-                        match self.skip_until(&[Punct::RParen], true, false) {
-                            true => self.eat(Punct::RParen).unwrap_or(at),
-                            false => at,
-                        }
+                        self.skip_until(&[Punct::RParen], true, false);
+                        self.eat(Punct::RParen).unwrap_or(at)
                     } else {
                         self.expect_closing(Punct::RParen, Punct::LParen, loc)
                     };
