@@ -2985,7 +2985,7 @@ impl Sema<'_, '_> {
             && tl != d.name_loc()
             && self.ast.types.proto(ty).is_some_and(|p| {
                 self.ast.types.is_dependent(p.ret())
-                    || self.ast.types.params(&p).iter().any(|&q| self.ast.types.is_dependent(q))
+                    || self.ast.types.params(p).iter().any(|&q| self.ast.types.is_dependent(q))
             })
         {
             self.type_spec_locs.insert(f, tl);

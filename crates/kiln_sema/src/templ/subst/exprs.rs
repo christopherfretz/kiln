@@ -1005,9 +1005,10 @@ impl Substituter<'_, '_, '_> {
                 let l = self.args(targs, n.loc())?;
                 let args = self.sema.ast.types.args(l).to_vec();
                 let name = self.sema.template_name_for(d);
-                let e = match self.sema.act_template_id(name, &args, n.loc(), n.loc()) {
-                    Ok(crate::templ::actions::TemplateIdRef::Value(e)) => e,
-                    _ => return Err(SubstFail),
+                let Ok(crate::templ::actions::TemplateIdRef::Value(e)) =
+                    self.sema.act_template_id(name, &args, n.loc(), n.loc())
+                else {
+                    return Err(SubstFail);
                 };
                 // `ns::v<T>` keeps its written qualifier (printed).
                 if let Some(q) = self.sema.ast.templates.expr_nns.get(c).copied() {
