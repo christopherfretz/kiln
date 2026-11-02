@@ -1038,7 +1038,8 @@ impl Parser<'_, '_> {
             {
                 self.s.mark_type_referenced(d);
                 let kind = self.s.ast.decls.get(d).kind();
-                let named = if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
+                let named =
+                    if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
                 return Some(self.s.ast.types.elaborated(kw, Some(q.nns), named));
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();

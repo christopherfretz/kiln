@@ -205,7 +205,15 @@ visible, and is reported as clang 22's `diagnoseMissingImport` does:
   `declaration of 'x' must be imported from module 'M' before it is
   required`; a partition's declaration names the primary module;
 - a global-module declaration (an imported unit's GMF):
-  `missing '#include'; 'x' must be declared before it is used`;
+  `missing '#include'; 'x' must be declared before it is used`, or
+  `missing '#include <h>'; ...` when a header is known (clang
+  `getHeaderToIncludeForDiagnostics`): walking out from the declaration's
+  file along its `#include`s (stopping at the module unit), the first
+  include-guarded file (a controlling macro; not `#pragma once`), named as
+  kiln_pp suggested (spec/pp.md `suggest_include`). Deviations: clang 22
+  does not strip a *relative* search directory from a BMI's header (it
+  falls back to the main file's directory or the full path) where kiln
+  does; an `#include` written with a macro ends kiln's walk;
 - either way with `note: declaration here is not visible` at the
   declaration.
 
@@ -414,7 +422,11 @@ and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
   `requires: clang>=22` where clang 19's wording differs).
 - `module.reach/missing-import.cpp` (+ kiln_driver
   `module_missing_import_notes` for its notes): the missing-import
-  errors (§5), identical to clang 22's output.
+  errors (§5), identical to clang 22's output;
+  `module.reach/missing-include.cpp`: the header named in
+  `missing '#include <h>'` (guarded, nested, `#pragma once`, unguarded
+  and system headers), and `module.import/import-std-hidden.cpp`
+  (`<__memory/pointer_traits.h>` through `import std;`).
 - `module.interface/export-run.cpp`, `visibility.cpp`,
   `module.unit/partitions-run.cpp`, `module.private.frag/private-run.cpp`,
   `module.import/export-import-run.cpp`: multi-unit programs whose module

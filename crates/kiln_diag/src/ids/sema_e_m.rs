@@ -240,6 +240,7 @@ sema_module_private_redefined = Error (0) "private module fragment redefined";
 sema_module_redecl_attachment = Error (3) "declaration of '{0}' in {1} follows declaration in {2}";
 sema_module_unimported_use = Error (2) "declaration of '{0}' must be imported from module '{1}' before it is required";
 sema_module_unimported_use_header = Error (1) "missing '#include'; '{0}' must be declared before it is used";
+sema_module_unimported_use_header_name = Error (2) "missing '#include {1}'; '{0}' must be declared before it is used";
 sema_mptr_in_nonclass = Error (1) "'{0}' does not point into a class";
 sema_mptr_to_reference = Error (2) "'{0}' declared as a member pointer to a reference of type {1}";
 sema_mptr_to_void = Error (1) "'{0}' declared as a member pointer to void";

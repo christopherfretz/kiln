@@ -643,14 +643,43 @@ impl Sema<'_, '_> {
             .and_then(|u| u.module.clone());
         let exported = scope.is_some_and(|s| o.exported || mt.owner(self.ast.first(s)).exported);
         let msg = match module {
-            Some(m) => {
-                self.diag(DiagId::sema_module_unimported_use, loc).arg(text).arg(m)
-            }
-            None => self.diag(DiagId::sema_module_unimported_use_header, loc).arg(text),
+            Some(m) => self.diag(DiagId::sema_module_unimported_use, loc).arg(text).arg(m),
+            None => match self.module_header_hint(self.ast.decls.get(d).loc()) {
+                Some(h) => {
+                    self.diag(DiagId::sema_module_unimported_use_header_name, loc).arg(text).arg(h)
+                }
+                None => self.diag(DiagId::sema_module_unimported_use_header, loc).arg(text),
+            },
         };
         self.emit(msg.with_note(note));
         if o.purview && exported {
             self.module_make_visible(usize::from(o.unit));
+        }
+    }
+
+    /// The header to suggest including for a declaration at `decl` (clang
+    /// `Preprocessor::getHeaderToIncludeForDiagnostics`): walking out from
+    /// the file holding `decl` along its `#include`s, the first
+    /// include-guarded file, named as the preprocessor suggested
+    /// ([`SourceManager::include_guarded_suggestion`]). The walk stops at
+    /// the module unit (its "include location" is the `import`).
+    ///
+    /// [`SourceManager::include_guarded_suggestion`]:
+    ///     kiln_source::SourceManager::include_guarded_suggestion
+    fn module_header_hint(&self, decl: Loc) -> Option<Box<str>> {
+        let sm = self.diags.sm();
+        let mut loc = sm.expansion_loc(decl);
+        loop {
+            let inc = sm.include_loc(loc);
+            let (f, off) = sm.offset_of(inc)?;
+            if !sm.text(f).get(off as usize..)?.starts_with(['<', '"']) {
+                return None;
+            }
+            let (file, _) = sm.offset_of(loc)?;
+            if let Some(h) = sm.include_guarded_suggestion(file) {
+                return Some(h);
+            }
+            loc = inc;
         }
     }
 
