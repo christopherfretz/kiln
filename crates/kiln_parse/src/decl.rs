@@ -43,6 +43,8 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Double
             | Kw::Int128
             | Kw::Float128
+            | Kw::Float16
+            | Kw::Fp16
             | Kw::Complex
             | Kw::Auto
             | Kw::Const
@@ -600,6 +602,8 @@ impl Parser<'_, '_> {
                 Kw::Float => ds.set_base(TypeSpecKind::Float, None, loc),
                 Kw::Double => ds.set_base(TypeSpecKind::Double, None, loc),
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
+                Kw::Float16 => ds.set_base(TypeSpecKind::Float16, None, loc),
+                Kw::Fp16 => ds.set_base(TypeSpecKind::Fp16, None, loc),
                 Kw::Complex => {
                     // clang `ext_c99_feature` on the keyword.
                     self.s.error(DiagId::parse_c99_complex, loc);

@@ -12,7 +12,7 @@
 //! `}` ([`Sema::finish_captures`]).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, VarSpec};
-use kiln_ast::expr::UnaryOp;
+use kiln_ast::expr::{ExprDeps, UnaryOp};
 use kiln_ast::ids::{ExprId, LambdaId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaCapture};
 use kiln_ast::names::DeclName;
@@ -494,13 +494,18 @@ impl Sema<'_, '_> {
                 if self.is_error_expr(init) {
                     continue;
                 }
-                if names.iter().any(|&(s, _, _)| s == sym) {
+                // An instantiated init-capture (`var` names the
+                // pattern's variable, templ/subst/lambda.rs) was checked
+                // in the pattern; the elements of an expanded
+                // init-capture pack `...xs = init` share a name.
+                if c.var.is_none() && names.iter().any(|&(s, _, _)| s == sym) {
                     let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                     self.emit(msg);
                     continue;
                 }
-                names.push((sym, true, None));
-                self.add_init_capture(id, sym, nloc, c.kind == CaptureKind::ByRef, init);
+                names.push((sym, true, c.var));
+                let by_ref = c.kind == CaptureKind::ByRef;
+                self.add_init_capture(id, sym, nloc, by_ref, c.ellipsis, init);
                 continue;
             }
             let default = intro.default;
@@ -575,17 +580,50 @@ impl Sema<'_, '_> {
     /// The init-capture `name = init` (`&name = init` when `by_ref`) of
     /// lambda `id` ([expr.prim.lambda.capture]/6): its type is deduced as
     /// for `auto name = init;` (`auto &name = init;`); the variable is
-    /// declared when the body opens.
+    /// declared when the body opens. With `ellipsis`, an init-capture
+    /// pack `...name = init` ([expr.prim.lambda.capture]/17): `init` is
+    /// the pattern, which must name an unexpanded pack, and the variable
+    /// is a pack of type `auto...` (clang `buildLambdaInitCaptureInitialization`
+    /// with an ellipsis), expanded when the enclosing template is
+    /// instantiated.
     fn add_init_capture(
         &mut self,
         id: LambdaId,
         name: Symbol,
         loc: Loc,
         by_ref: bool,
+        ellipsis: Option<Loc>,
         init: ExprId,
     ) {
         let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
         let declared = if by_ref { self.ast.types.lvalue_ref_to(auto) } else { auto };
+        let ellipsis = ellipsis.filter(|&l| {
+            let packs = self.ast.exprs.get(init).deps().contains(ExprDeps::UNEXPANDED_PACK);
+            if !packs {
+                self.error(DiagId::sema_pack_expansion_without_packs, l);
+            }
+            packs
+        });
+        if let Some(l) = ellipsis {
+            // The pattern stays as written; each element is deduced and
+            // initialized when the pack is expanded.
+            let ty = self.ast.types.pack_expansion(declared, None);
+            let index = self.ast.exprs.lambdas.get(id).captures.len();
+            let c = LambdaCapture {
+                kind: if by_ref { CaptureKind::ByRef } else { CaptureKind::ByCopy },
+                var: None,
+                field: None,
+                loc,
+                ellipsis: l,
+                implicit: false,
+                init: true,
+            };
+            self.add_capture(id, c, ty);
+            if let Some(s) = self.lambda_scope_mut(id) {
+                s.init_caps.push(InitCapture { index, name, loc, ty, init });
+            }
+            return;
+        }
         let ty = if let Some(t) = self.deduce_from(declared, init) {
             t
         } else {
