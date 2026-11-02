@@ -2401,7 +2401,8 @@ impl Parser<'_, '_> {
     /// (clang `DiagnoseMisplacedEllipsis`).
     pub(crate) fn misplaced_declarator_ellipsis(&mut self, pd: &Declarator, ellipsis: Loc) {
         let anonymous = if pd.name.is_some() { "0" } else { "1" };
-        let e = self.s.diag(DiagId::parse_misplaced_ellipsis_in_declaration, ellipsis).arg(anonymous);
+        let e =
+            self.s.diag(DiagId::parse_misplaced_ellipsis_in_declaration, ellipsis).arg(anonymous);
         self.emit(e);
     }
 
