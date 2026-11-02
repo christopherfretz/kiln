@@ -824,14 +824,11 @@ impl Sema<'_, '_> {
         if !stored.contains(DefinitionBits::COMPLETE) {
             return;
         }
-        let flags = self.ast.decls.get(d).flags();
-        // A specialization, or a member or local class instantiated
-        // from a template, made invalid by its members still has its
-        // special members (clang `CanDeclareSpecialMemberFunction`).
-        let invalid = flags.contains(DeclFlags::INVALID)
-            && self.ast.spec_info(d).is_none()
-            && self.ast.instantiated_from(d).is_none();
-        if flags.contains(DeclFlags::DEPENDENT_CTX) || invalid {
+        // A class made invalid by its members or bases ([class.mem])
+        // still has its special members (clang
+        // `CanDeclareSpecialMemberFunction` asks only for a complete,
+        // non-dependent class).
+        if self.ast.decls.get(d).flags().contains(DeclFlags::DEPENDENT_CTX) {
             return;
         }
         if self.needs_implicit(d, k) {

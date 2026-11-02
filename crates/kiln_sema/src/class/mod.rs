@@ -228,7 +228,10 @@ impl Sema<'_, '_> {
     /// virtual bases WP-078a). Called once per class definition, after
     /// `act_on_start_record_definition` and before any member, with an
     /// empty slice when there is no base-clause. Invalid specifiers are
-    /// diagnosed and dropped; the class stays valid.
+    /// diagnosed and dropped; one that fails clang's `CheckBaseSpecifier`
+    /// (not a class, a union, incomplete, `final`, or itself invalid)
+    /// makes the class invalid (spec/sema-class.md §2.6), a duplicate or
+    /// unresolved base name does not.
     pub fn act_on_base_specifiers(&mut self, r: DeclId, specs: &[BaseSpecInfo]) {
         let _ = self.attach_bases(r, specs);
     }

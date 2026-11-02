@@ -14,6 +14,7 @@ pub(crate) mod props;
 mod record;
 mod subobject;
 
+use kiln_ast::decl::DeclFlags;
 use kiln_ast::types::{BuiltinType, RecordLayout, TypeView, VectorKind};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -74,6 +75,30 @@ pub(crate) struct RecordFacts {
 }
 
 impl RecordFacts {
+    /// An invalid class `def`: size, data size and every alignment 1
+    /// (clang `getASTRecordLayout`'s invalid-decl path). clang records
+    /// no offsets; every field and direct base gets offset 0 here so a
+    /// consumer indexing them stays total.
+    fn invalid(ast: &Ast, def: DeclId) -> RecordFacts {
+        let mut f = RecordFacts::degenerate();
+        let n = props::fields(ast, def).len();
+        f.layout.size = 1;
+        f.layout.data_size = 1;
+        f.layout.nv_size = 1;
+        f.layout.fields = vec![0; n].into_boxed_slice();
+        let (mut bases, mut vbases) = (Vec::new(), Vec::new());
+        for b in ast.decls.bases(def, &ast.lists) {
+            if let Some(r) = props::as_record(ast, b.ty) {
+                if b.is_virtual { vbases.push((r, 0)) } else { bases.push((r, 0)) }
+            }
+        }
+        f.layout.bases = bases.into_boxed_slice();
+        f.layout.vbases = vbases.into_boxed_slice();
+        f.field_targets = vec![FieldTarget::None; n].into_boxed_slice();
+        f.is_pod = false;
+        f
+    }
+
     fn degenerate() -> RecordFacts {
         RecordFacts {
             layout: RecordLayout {
@@ -223,6 +248,12 @@ impl<'a> Layouter<'a> {
         let Some(def) = self.ast.definition(first) else { return RecordFacts::degenerate() };
         if self.ast.decls.record(def).is_none() {
             return RecordFacts::degenerate();
+        }
+        // clang `getASTRecordLayout`: an invalid class (an invalid field,
+        // base or member subobject; spec/abi.md §4) has size, data size
+        // and alignment 1, so no follow-on layout diagnostic fires.
+        if self.ast.decls.get(def).has(DeclFlags::INVALID) {
+            return RecordFacts::invalid(self.ast, def);
         }
         record::layout_record(self, def)
     }

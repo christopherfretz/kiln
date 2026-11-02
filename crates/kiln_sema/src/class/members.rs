@@ -495,12 +495,14 @@ impl Sema<'_, '_> {
             }
             let Some(b) = self.ast.types.as_record(s.ty) else {
                 self.error(DiagId::sema_base_not_class, s.loc);
+                self.invalidate_defining(r);
                 dropped = true;
                 continue;
             };
             let btag = self.ast.decls.record(b).map_or(TagKind::Struct, |x| x.tag);
             if btag == TagKind::Union {
                 self.error(DiagId::sema_base_is_union, s.loc);
+                self.invalidate_defining(r);
                 dropped = true;
                 continue;
             }
@@ -508,27 +510,26 @@ impl Sema<'_, '_> {
             // whose instantiation fails here is dropped, quietly; lookup
             // in the derived class does not find its members.
             if self.instantiation_fails(s.ty, s.loc) {
+                self.invalidate_defining(r);
                 dropped = true;
                 continue;
             }
             if !self.require_complete(s.ty, s.loc) {
                 let msg = self.diag(DiagId::sema_base_incomplete, s.loc);
+                // A class being defined gets clang's "not complete until
+                // the closing '}'" note from `incomplete_note`.
                 let msg = self.incomplete_note(msg, s.ty);
-                let msg = match self.ast.definition(b) {
-                    Some(def) if self.defining.contains(&def) => msg.with_note(
-                        self.diag(
-                            DiagId::note_definition_not_complete,
-                            self.ast.decls.get(def).loc(),
-                        )
-                        .arg(format!("'{}'", self.qualified_decl_name(def))),
-                    ),
-                    _ => msg,
-                };
                 self.emit(msg);
+                self.invalidate_defining(r);
                 dropped = true;
                 continue;
             }
             let def = self.ast.definition(b).unwrap_or(b);
+            // clang `CheckBaseSpecifier`: "if the base class is invalid
+            // the derived class is as well" (spec/sema-class.md §2.6).
+            if self.ast.decls.get(def).has(kiln_ast::decl::DeclFlags::INVALID) {
+                self.invalidate_defining(r);
+            }
             if self.ast.decls.record(def).is_some_and(|x| x.defn.contains(DefinitionBits::FINAL)) {
                 let n = format!("'{}'", self.decl_name(def));
                 let msg = self.diag(DiagId::sema_base_final, s.loc).arg(n.clone());
@@ -537,6 +538,7 @@ impl Sema<'_, '_> {
                         .arg(n),
                 );
                 self.emit(msg);
+                self.invalidate_defining(r);
                 dropped = true;
                 continue;
             }
