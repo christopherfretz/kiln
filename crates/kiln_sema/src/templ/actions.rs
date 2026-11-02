@@ -488,10 +488,16 @@ impl Sema<'_, '_> {
         self.builder().unresolved_lookup(DeclName::ident(name), &decls, false, nns, targs, n.loc())
     }
 
-    /// The qualified function template-id `e` named at `loc` begins at
-    /// its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`).
+    /// The qualified function or variable template-id `e` named at `loc`
+    /// begins at its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`,
+    /// `DeclRefExpr::getBeginLoc`).
     pub fn set_template_id_begin(&mut self, e: ExprId, begin: Loc, loc: Loc) {
-        if begin != loc && self.ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr {
+        if begin != loc
+            && matches!(
+                self.ast.exprs.get(e).kind(),
+                ExprKind::UnresolvedLookupExpr | ExprKind::DeclRefExpr
+            )
+        {
             let _ = self.ast.templates.expr_begin.insert(e, begin);
         }
     }
@@ -500,8 +506,14 @@ impl Sema<'_, '_> {
     /// template-id or concept-id `e` (an `UnresolvedLookupExpr` or
     /// `ConceptSpecializationExpr`); dependent signatures and
     /// requires-clauses mangle it (`clsr3stdE7declvalIT_EE`,
-    /// `Qsr3stdE7same_asIT_iE`, spec/abi.md §8.15–§8.16).
+    /// `Qsr3stdE7same_asIT_iE`, spec/abi.md §8.15–§8.16). A variable
+    /// template specialization (`DeclRefExpr`) records it as its qualifier
+    /// (the requirement of a failed `static_assert` prints `ns::v<int>`).
     pub fn set_template_id_qualifier(&mut self, e: ExprId, nns: NnsId) {
+        if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr {
+            let _ = self.ast.exprs.set_decl_ref_qualifier(e, nns);
+            return;
+        }
         if matches!(
             self.ast.exprs.get(e).kind(),
             ExprKind::UnresolvedLookupExpr | ExprKind::ConceptSpecializationExpr

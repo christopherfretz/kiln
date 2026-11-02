@@ -479,7 +479,12 @@ impl Substituter<'_, '_, '_> {
                     let args = self.sema.ast.types.args(l).to_vec();
                     let tn = self.sema.template_name_for(t);
                     return match self.sema.act_template_id(tn, &args, loc, loc) {
-                        Ok(crate::templ::actions::TemplateIdRef::Value(x)) => Ok(x),
+                        Ok(crate::templ::actions::TemplateIdRef::Value(x)) => {
+                            // Printed with its substituted qualifier.
+                            self.sema.set_template_id_begin(x, begin, loc);
+                            self.sema.set_template_id_qualifier(x, nns);
+                            Ok(x)
+                        }
                         // Not called, a function template-id names its
                         // one specialization, as for an unresolved
                         // lookup (above): `return D<I>::template f<F>;`
@@ -1000,10 +1005,16 @@ impl Substituter<'_, '_, '_> {
                 let l = self.args(targs, n.loc())?;
                 let args = self.sema.ast.types.args(l).to_vec();
                 let name = self.sema.template_name_for(d);
-                return match self.sema.act_template_id(name, &args, n.loc(), n.loc()) {
-                    Ok(crate::templ::actions::TemplateIdRef::Value(e)) => Ok(e),
-                    _ => Err(SubstFail),
+                let e = match self.sema.act_template_id(name, &args, n.loc(), n.loc()) {
+                    Ok(crate::templ::actions::TemplateIdRef::Value(e)) => e,
+                    _ => return Err(SubstFail),
                 };
+                // `ns::v<T>` keeps its written qualifier (printed).
+                if let Some(q) = self.sema.ast.templates.expr_nns.get(c).copied() {
+                    let q = self.nns(q, n.loc())?;
+                    self.sema.set_template_id_qualifier(e, q);
+                }
+                return Ok(e);
             }
             let nns = match self.sema.ast.templates.expr_nns.get(c).copied() {
                 Some(q) => Some(self.nns(q, n.loc())?),

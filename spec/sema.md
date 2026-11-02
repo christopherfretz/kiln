@@ -1019,8 +1019,17 @@ and returns the scope it names:
     `static assertion failed due to requirement '…'`, with the
     condition printed by `TypeNames::write_expr`, plus the message if
     there is one. A variable template-id prints its explicit arguments
-    (`is_v<ND>`, clang `VisitDeclRefExpr`); its qualifier is not yet
-    kept on the `DeclRefExpr` (clang prints `!std::is_same_v<…>`).
+    (`is_v<ND>`, clang `VisitDeclRefExpr`) after its qualifier as
+    written (`ns::S::z<char>`, `::ns::f<int *>`): the parser and the
+    instantiation of a qualified or `T::template` variable template-id
+    record the nested-name-specifier on the `DeclRefExpr`
+    (`set_template_id_qualifier` → `ExprArena::set_decl_ref_qualifier`)
+    and its begin (the diagnostic's column) at the qualifier. In an
+    instantiation the qualifier is substituted: `A::` in the pattern of
+    `A` names the specialization (`A<int>::y`), and a substituted
+    parameter head prints its canonical replacement without scope
+    (`T::y` with `T = ns::S` prints `S::y`, clang's
+    `NestedNameSpecifier::print` `SuppressScope`) (WP-302).
   - Evaluation notes follow (§8).
 
 ### 4.7 Exception specifications (`except.rs`)

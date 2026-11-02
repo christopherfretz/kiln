@@ -1522,6 +1522,7 @@ impl Parser<'_, '_> {
                 }
                 Ok(TemplateIdRef::Value(e)) => {
                     if let Some(q) = qual {
+                        self.s.set_template_id_begin(e, begin, nl);
                         self.s.set_template_id_qualifier(e, q.nns);
                     }
                     Some(e)

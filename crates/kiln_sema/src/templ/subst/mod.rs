@@ -493,6 +493,17 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     pub fn nns(&mut self, n: NnsId, loc: Loc) -> SubstResult<NnsId> {
         let flags = self.sema.ast.types.nns_flags(n);
         if !flags.intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK) {
+            // `A::y` in the pattern of `A` names the specialization being
+            // instantiated: `A<int>::` (clang's `TransformNestedNameSpecifierLoc`
+            // over the injected-class-name; printed).
+            if let Nns::Type { prefix, ty, template_kw } = self.sema.ast.types.nns_view(n)
+                && let kiln_ast::types::TypeView::InjectedClassName { pattern, .. }
+                | kiln_ast::types::TypeView::Record(pattern) = self.sema.ast.types.view(ty.ty())
+                && let Some(&(_, i)) = self.pairs.iter().rev().find(|p| p.0 == pattern)
+            {
+                let ty = self.sema.tag_type(i);
+                return Ok(self.sema.ast.types.nns(Nns::Type { prefix, ty, template_kw }));
+            }
             return Ok(n);
         }
         let v = self.sema.ast.types.nns_view(n);
