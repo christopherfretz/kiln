@@ -189,8 +189,11 @@ fn stmt_if_consteval() {
 /// initializer reports it where it is written (WP-308).
 #[test]
 fn delayed_no_member_after_missing_semi() {
-    let p = parse("struct S {};\nnamespace N {}\nvoid g() {\n  S::nom()\n  N::nom()\n  int a = S::none\n}\n");
-    let errs: Vec<&str> = p.diags.iter().map(String::as_str).filter(|d| d.contains("error")).collect();
+    let p = parse(
+        "struct S {};\nnamespace N {}\nvoid g() {\n  S::nom()\n  N::nom()\n  int a = S::none\n}\n",
+    );
+    let errs: Vec<&str> =
+        p.diags.iter().map(String::as_str).filter(|d| d.contains("error")).collect();
     assert_eq!(
         errs,
         [
