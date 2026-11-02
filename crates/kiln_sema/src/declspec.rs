@@ -6,7 +6,7 @@
 //! a declaration.
 
 use kiln_ast::names::{DeclName, OverloadedOperator};
-use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword};
+use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -196,6 +196,9 @@ pub struct DeclSpec {
     /// The C11 `_Atomic` type qualifier (no parenthesis; a clang
     /// extension in C++) written at.
     pub atomic_qual: Option<Loc>,
+    /// The clang nullability qualifiers (`_Nonnull`, ...) written among
+    /// the decl-specifiers, in order (spec/sema.md §3.6).
+    pub nullability: Vec<NullSpec>,
     /// The GNU `_Complex` specifier written at.
     pub complex: Option<Loc>,
     /// `short`/`long`.
@@ -261,6 +264,7 @@ impl DeclSpec {
             && self.thread_local.is_none()
             && self.cv.is_empty()
             && self.atomic_qual.is_none()
+            && self.nullability.is_empty()
             && self.consteval.is_none()
             && self.virtual_.is_none()
             && self.explicit.is_none()
@@ -531,6 +535,16 @@ pub enum DefaultArg {
     Unparsed(Loc, Loc),
 }
 
+/// A clang nullability qualifier as written (`_Nonnull`, `_Nullable`,
+/// `_Null_unspecified`, `_Nullable_result`; spec/sema.md §3.6).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct NullSpec {
+    /// Which one (a nullability [`TypeAttrKind`]).
+    pub kind: TypeAttrKind,
+    /// The keyword.
+    pub loc: Loc,
+}
+
 /// One declarator operator ([dcl.meaning]), clang's `DeclaratorChunk`.
 #[derive(Clone, Debug)]
 pub enum Chunk {
@@ -670,6 +684,10 @@ pub struct Declarator {
     /// ref-qualifier are ("explicit object member function cannot have
     /// '...' qualifier" points at the first and quotes them in order).
     pub fn_qual_locs: [Option<Loc>; 3],
+    /// The nullability qualifiers after a ptr-operator, with the index
+    /// in `chunks` of the pointer, member-pointer or reference chunk
+    /// they follow, in order (spec/sema.md §3.6).
+    pub nullability: Vec<(usize, NullSpec)>,
     /// The declarator-id is an operator-function-id (`operator new`):
     /// `name` then holds the `operator` keyword and its location.
     pub op_name: Option<OverloadedOperator>,
@@ -849,6 +867,7 @@ impl Declarator {
             late_noexcept: None,
             explicit_object: None,
             fn_qual_locs: [None; 3],
+            nullability: Vec::new(),
             op_name: None,
             lit_suffix: None,
             ellipsis: None,
@@ -861,6 +880,14 @@ impl Declarator {
             typedef: false,
             trailing_constraint: Loc::INVALID,
         }
+    }
+
+    /// Pushes the ptr-operator `chunk` with the nullability qualifiers
+    /// written after it.
+    pub fn push_chunk(&mut self, chunk: Chunk, nulls: Vec<NullSpec>) {
+        let i = self.chunks.len();
+        self.nullability.extend(nulls.into_iter().map(|n| (i, n)));
+        self.chunks.push(chunk);
     }
 
     /// True if the declarator has a declarator-id (an identifier or a

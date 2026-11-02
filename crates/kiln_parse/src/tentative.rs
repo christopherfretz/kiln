@@ -250,6 +250,10 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Const
                 | Kw::Volatile
                 | Kw::Restrict
+                | Kw::Nonnull
+                | Kw::Nullable
+                | Kw::NullUnspecified
+                | Kw::NullableResult
                 | Kw::Complex
                 | Kw::Alignas
                 | Kw::Attribute
@@ -482,7 +486,15 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     /// clang's `isCXXDeclarationSpecifierAType`.
     fn decl_specifier_is_type(&self) -> bool {
         match self.kw() {
-            Some(Kw::Const | Kw::Volatile | Kw::Restrict) => false,
+            Some(
+                Kw::Const
+                | Kw::Volatile
+                | Kw::Restrict
+                | Kw::Nonnull
+                | Kw::Nullable
+                | Kw::NullUnspecified
+                | Kw::NullableResult,
+            ) => false,
             Some(Kw::Atomic) if self.punct_at(self.i + 1) != Some(Punct::LParen) => false,
             Some(k) => crate::decl::is_type_specifier_kw(k),
             None => {
@@ -569,7 +581,18 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 return Tpr::Ambiguous;
             }
             loop {
-                if matches!(self.kw(), Some(Kw::Const | Kw::Volatile | Kw::Restrict)) {
+                if matches!(
+                    self.kw(),
+                    Some(
+                        Kw::Const
+                            | Kw::Volatile
+                            | Kw::Restrict
+                            | Kw::Nonnull
+                            | Kw::Nullable
+                            | Kw::NullUnspecified
+                            | Kw::NullableResult
+                    )
+                ) {
                     self.i += 1;
                 } else if self.at_cxx11_attr() || self.kw() == Some(Kw::Attribute) {
                     if !self.skip_attributes() {

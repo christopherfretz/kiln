@@ -243,7 +243,8 @@ impl Sema<'_, '_> {
             _ => base,
         };
         let cv = self.declspec_quals(ds, base);
-        if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
+        let ty = if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) };
+        if ds.nullability.is_empty() { ty } else { self.declspec_nullability(ds, ty) }
     }
 
     /// The cv-qualifiers of `ds` for the type `base`. C99 6.7.3p2 (clang
@@ -832,6 +833,8 @@ impl Sema<'_, '_> {
         if d.ctx == DeclaratorContext::TypeName && d.site != DeclSite::New {
             self.warn_redundant_parens(None, d);
         }
+        // Decl-specifier nullability qualifiers that belong to a chunk.
+        let (base, moved) = self.declarator_nullability(base, spec_loc, d);
         // [dcl.type.class.deduct]/2.
         let ty = self.ctad_declarator_check(base, spec_loc, d);
         // [dcl.spec.auto.general]/2-5.
@@ -1083,6 +1086,9 @@ impl Sema<'_, '_> {
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
+            }
+            if !d.nullability.is_empty() || !moved.is_empty() {
+                ty = self.chunk_nullability(ty, i, d, &moved);
             }
         }
         ty

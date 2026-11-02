@@ -90,6 +90,10 @@ keywords! {
     New = "new";
     Noexcept = "noexcept";
     Nullptr = "nullptr";
+    Nonnull = "_Nonnull";
+    Nullable = "_Nullable";
+    NullUnspecified = "_Null_unspecified";
+    NullableResult = "_Nullable_result";
     GnuNull = "__null";
     Operator = "operator";
     Private = "private";
