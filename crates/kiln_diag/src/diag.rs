@@ -144,6 +144,9 @@ pub struct Diag {
     /// emitted in (sema's instantiation stack; 0 = none). The same
     /// `(id, span)` under two contexts prints twice.
     pub(crate) context: u64,
+    /// A note printed (and counted) as an error: clang's evaluation notes
+    /// that carry an `err_` id (spec/diag.md §3.3).
+    pub(crate) error_note: bool,
 }
 
 impl Diag {
@@ -160,6 +163,7 @@ impl Diag {
             allow_duplicate: false,
             per_instantiation: false,
             context: 0,
+            error_note: false,
         }
     }
 
@@ -203,6 +207,18 @@ impl Diag {
         };
         self.notes.push(n);
         self
+    }
+
+    /// Adds a free-text note at `span` printed and counted as an error
+    /// (clang emits an evaluation note with an `err_` id at its own
+    /// severity, e.g. a `-1` `__builtin_shufflevector` index in a
+    /// constant expression).
+    pub fn error_note(self, text: impl Into<String>, span: Span) -> Diag {
+        let mut d = self.note(NoteMsg::Text(text.into()), span);
+        if let Some(n) = d.notes.last_mut() {
+            n.error_note = true;
+        }
+        d
     }
 
     /// Adds a fully built note (for note ids with arguments, ranges or
@@ -331,7 +347,7 @@ impl Diagnostic {
     pub(crate) fn from_note(n: &Diag) -> Diagnostic {
         Diagnostic {
             id: n.id,
-            level: Level::Note,
+            level: if n.error_note { Level::Error } else { Level::Note },
             message: n.message(),
             span: n.span,
             labels: n.labels.clone(),

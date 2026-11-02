@@ -402,6 +402,9 @@ impl Cg<'_> {
                 };
                 let a = self.emit_scalar(x)?;
                 let b = self.emit_scalar(y)?;
+                if subs.len() == 2 {
+                    return Ok(Some(self.shuffle_by_mask(a, b)));
+                }
                 self.shuffle(a, Some(b), mask)
             }
             ExprKind::ConvertVectorExpr => {

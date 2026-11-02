@@ -2640,7 +2640,14 @@ impl<'a> AstBuilder<'a> {
             for (i, e) in inits.into_iter().enumerate() {
                 // A capture pack (`ts...`, `...xs = init`) expands the
                 // packs of its initializer ([expr.prim.lambda.capture]/17).
-                let expands = self.ast.exprs.lambdas.get(id).captures.get(i).is_some_and(|c| c.ellipsis.is_valid());
+                let expands = self
+                    .ast
+                    .exprs
+                    .lambdas
+                    .get(id)
+                    .captures
+                    .get(i)
+                    .is_some_and(|c| c.ellipsis.is_valid());
                 let d = self.deps(e);
                 deps |= if expands { d.without(ExprDeps::UNEXPANDED_PACK) } else { d };
             }

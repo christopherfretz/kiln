@@ -570,7 +570,9 @@ literal is one instruction and one step, not an interpreted loop.
   concatenates the two operands' lanes and picks by index; a -1 lane is
   the note `index for __builtin_shufflevector not within the bounds of
   the input vectors; index of -1 found at position N is not permitted in
-  a constexpr context`. The `*f128` builtins with a `long double` twin
+  a constexpr context`, which clang emits as an error-level note
+  (`Note::is_error`, spec/diag.md §6). The two-argument mask form is not
+  a constant (generic note; clang 19 crashes on it). The `*f128` builtins with a `long double` twin
   evaluate as the twin (quad-precision `softfloat` arithmetic);
   `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
   trap "subexpression not valid", as clang 19. **Divergences:** clang

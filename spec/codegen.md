@@ -325,7 +325,11 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       only for debug info) (`builtins_powi.cpp`).
       `__builtin_shufflevector` (a `ShuffleVectorExpr`) is one
       `shufflevector` with a constant mask, -1 a `poison` lane
-      (`builtins_shufflevector.cpp`). A `*f128` builtin with a `long
+      (`builtins_shufflevector.cpp`). The two-argument mask form is
+      clang's `EmitShuffleVector` loop (`shuffle_by_mask`): the mask is
+      ANDed with a splat of `NextPowerOf2(n - 1) - 1`, then each lane is
+      an `extractelement` from the mask and from `v1`, then an
+      `insertelement` into a `poison` result. A `*f128` builtin with a `long
       double` twin (`builtin::f128_twin`) is lowered as the twin on its
       `fp128` operands (intrinsic or constant); `roundevenf128` is
       `llvm.roundeven`; the others call the function of the builtin's

@@ -348,7 +348,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// `d` with the notes explaining the failed evaluation `f` (the
     /// reason, the call stack and supporting notes, in clang's order).
     pub(crate) fn with_failure_notes(d: Diag, f: EvalFailure) -> Diag {
-        f.notes.into_iter().fold(d, |d, n| d.note(n.msg, Span::empty(n.loc)))
+        f.notes.into_iter().fold(d, |d, n| {
+            if n.is_error() {
+                d.error_note(n.msg, Span::empty(n.loc))
+            } else {
+                d.note(n.msg, Span::empty(n.loc))
+            }
+        })
     }
 
     /// The constant evaluator of this translation unit.

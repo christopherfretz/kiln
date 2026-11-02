@@ -16,10 +16,10 @@ use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_source::Loc;
 
 use super::{DeclOrPack, SubstFail, SubstResult, Substituter};
-use crate::templ::pack::Expansion;
 use crate::declspec::{Chunk, Declarator, DeclaratorContext};
 use crate::init::Initializer;
 use crate::lambda::{LambdaCaptureSpec, LambdaIntroducer, LambdaSpecifiers};
+use crate::templ::pack::Expansion;
 
 impl Substituter<'_, '_, '_> {
     /// The lambda-expression `e` of the pattern.

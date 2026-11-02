@@ -366,6 +366,13 @@ impl<'sm> DiagEngine<'sm> {
             }
             Level::Remark | Level::Note => {}
         }
+        let error_notes = record.notes.iter().filter(|n| n.level == Level::Error).count();
+        let error_notes = u32::try_from(error_notes).unwrap_or(u32::MAX);
+        if error_notes != 0 {
+            self.errors.fetch_add(error_notes, Ordering::AcqRel);
+            self.uncompilable.fetch_add(error_notes, Ordering::AcqRel);
+            self.unrecoverable.fetch_add(error_notes, Ordering::AcqRel);
+        }
         st.sink.emit(self.sm, &record);
     }
 }

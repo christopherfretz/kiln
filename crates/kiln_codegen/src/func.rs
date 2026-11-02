@@ -1513,6 +1513,31 @@ impl Cg<'_> {
         self.f.fir.push(Op::ShuffleVector { a, b, mask }, rt)
     }
 
+    /// The unary `__builtin_shufflevector(v, mask)` (clang
+    /// `ScalarExprEmitter::VisitShuffleVectorExpr` with two operands): the
+    /// mask's lanes are masked to the next power of two of `v`'s length,
+    /// then each result lane is extracted from `v` and inserted in turn.
+    pub fn shuffle_by_mask(&mut self, v: V, mask: V) -> V {
+        let vt = self.f.fir.ty(&self.m, v);
+        let mt = self.f.fir.ty(&self.m, mask);
+        let (et, n) = self.m.types.vector_info(vt).map_or((LTy::I8, 0), |x| (x.0, x.1));
+        let (mi, mn) = self.m.types.vector_info(mt).map_or((LTy::I32, 0), |x| (x.0, x.1));
+        // llvm `NextPowerOf2(n - 1) - 1`.
+        let bits = i128::from(n.max(1).next_power_of_two()) - 1;
+        let k = self.m.const_int(mi, bits);
+        let splat = self.m.const_vector(&vec![k; mn as usize]).map_or(V::C(k), V::C);
+        let mask = self.bin(BinOp::And, Flags::NONE, mask, splat);
+        let rt = self.m.types.vector(et, mn);
+        let mut out = V::C(self.m.const_poison(rt));
+        for i in 0..mn {
+            let ii = V::C(self.m.const_int(LTy::I64, i128::from(i)));
+            let idx = self.extract_elt(mask, ii);
+            let elt = self.extract_elt(v, idx);
+            out = self.insert_elt(out, elt, ii);
+        }
+        out
+    }
+
     /// `IRBuilder::CreateVectorSplat`: a constant splat folds.
     pub fn splat(&mut self, v: V, n: u32) -> V {
         let et = self.f.fir.ty(&self.m, v);
