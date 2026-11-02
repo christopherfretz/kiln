@@ -38,8 +38,10 @@ impl Compiler<'_> {
     /// A try-block ([except.pre], [except.handle]): its handlers are
     /// registered for the compound statement; an exception unwound to
     /// them is matched against each in order, and resumes unwinding when
-    /// none matches.
-    pub(super) fn try_stmt(&mut self, s: StmtId) {
+    /// none matches. `rethrow` is set for the function-try-block of a
+    /// constructor or destructor: reaching the end of one of its handlers
+    /// rethrows the handled exception ([except.handle]/15).
+    pub(super) fn try_stmt(&mut self, s: StmtId, rethrow: bool) {
         let ast = self.ast();
         let block = ast.stmts.try_block(s);
         if !self.b.cxx26() {
@@ -60,7 +62,7 @@ impl Compiler<'_> {
         self.emit(Op::ScopeExit, 0, &[mark]);
         let mut ends = Vec::with_capacity(handlers.len());
         for h in handlers {
-            ends.push(self.handler(h));
+            ends.push(self.handler(h, rethrow));
         }
         self.emit_loc(Op::Throw, 2, &[0, 0, 0], try_loc);
         for j in ends {
@@ -72,7 +74,7 @@ impl Compiler<'_> {
 
     /// One handler: matches the in-flight exception ([except.handle]/3)
     /// and runs, or falls through to the next. Returns its exit jump.
-    fn handler(&mut self, h: StmtId) -> usize {
+    fn handler(&mut self, h: StmtId, rethrow: bool) -> usize {
         let m = self.next;
         let ast = self.ast();
         let var = ast.stmts.catch_var(h);
@@ -118,6 +120,10 @@ impl Compiler<'_> {
             }
         }
         self.stmt(body);
+        if rethrow {
+            let end = self.ast().stmts.rbrace(body);
+            self.emit_loc(Op::Throw, 1, &[0, 0, 0], end);
+        }
         self.close_scope();
         let end = self.jmp();
         self.patch_here(next);
