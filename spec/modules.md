@@ -123,10 +123,19 @@ declaration (never inside one). Sema tracks the current unit's phase:
 | [module.import]/1 imports before other declarations | `imports must immediately follow the module declaration` |
 | [module.import] partitions | `module partition imports must be within a module purview` |
 | [module.interface]/1 | `export declaration can only be used within a module interface`; `export declaration appears within another export declaration`; `export declaration appears within anonymous namespace`; `anonymous namespaces cannot be exported` |
-| [module.interface]/3 (C++20 wording) | `declaration of 'x' with internal linkage cannot be exported` |
+| [module.interface]/3 (C++20 wording) | `declaration of 'x' with internal linkage cannot be exported`; `cannot export redeclaration 'x' here since the previous declaration has module linkage`; `using declaration referring to 'x' with internal linkage cannot be exported` / `... with module linkage ...` (+ note `target of using declaration`) |
+| [cpp.module]/2 (P3034) | `module name component 'X' cannot be an object-like macro` (clang 19 and 22 expand the macro instead) |
 | import at top level only | `import of module 'M' appears within namespace` |
 | missing module | `module 'M' not found` (fatal) |
 | [basic.link]/11 | `declaration of 'x' in module M follows declaration in the global module`, `... in the global module follows declaration in module M`, `... in module N follows declaration in module M` |
+
+Locations follow clang 22: preamble errors (`module declaration must
+occur ...`, `multiple module declarations` and its note) are at the
+`module` keyword; a missing module at its name; unnamed-namespace errors and
+notes at the namespace's `{`; `export block begins here` is attached only
+when the export is a `{ ... }` block. P2615 (meaningful exports): `export
+static_assert(...)`, `export using namespace n;`, `export { ; }`, exported
+explicit specializations and instantiations are accepted, as clang 22.
 
 Imports are allowed at the start of the private module fragment
 ([module.import]/1, "and of the private-module-fragment"), as clang does.
@@ -134,9 +143,11 @@ Imports are allowed at the start of the private module fragment
 `export` declarations build `DeclKind::Export` contexts (transparent, like
 linkage specifications). `export import M;` re-exports `M`.
 
-`__cpp_modules` is defined as `1` from C++20 on: clang 22's value (it does
-not claim `201907L` while its implementation is incomplete; kiln follows
-the reference compiler). clang 19 does not define it.
+`__cpp_modules` is defined as `1` from C++20 on: clang 22's value
+(verified with `clang++-22 -std=c++20 -dM -E`; it does not claim `201907L`
+while its implementation is incomplete; kiln follows the reference
+compiler). clang 19 does not define it, and no libc++ or libstdc++ header
+tests it.
 
 ## 5. Ownership and visibility
 
@@ -171,10 +182,13 @@ A using-declaration is filtered by its own owner, not its target's: `export
 namespace std { using std::vector; }` makes `std::vector` visible to an
 importer although the class template, declared in std's GMF, is not.
 
-ADL ([basic.lookup.argdep]/4) uses the same predicate plus: a function
-declared in the purview of the named module an associated entity is
-attached to is visible (exported or not), and hidden friends of associated
-classes are always visible.
+ADL ([basic.lookup.argdep]/4) uses the same predicate plus: an *exported*
+function declared in the purview of the named module an associated entity
+is attached to is visible even when that unit is only reachable (not
+imported by the current unit), and hidden friends of associated classes
+are always visible. A non-exported function of the module's interface is
+not found by an importer's ADL: clang 22 reads "in the interface of M" as
+"exported", and kiln follows it (`module.interface/visibility.cpp`).
 
 Redeclaration matching ([basic.link]/8) excludes non-exported purview
 declarations of another named module (a declaration with module linkage of
@@ -214,8 +228,12 @@ Each namespace-scope declaration parsed while modules are active records
 location. At the start of a namespace-scope declaration, if a record from
 **another unit** has the same start key, and the token `count - 1` ahead
 has the same end key, the declaration is skipped (its tokens consumed, its
-pragma events still processed) and the record's DeclId range is merged into
-the current unit (visible as if declared there). Re-parsing the same text
+pragma events still processed) and the DeclId range of **every** record
+from another unit with the same start key, end key and length is merged
+into the current unit (visible as if declared there). Merging all of them
+matters when one text was parsed several times, as `<stddef.h>`'s
+`__need_size_t` sections are under std.compat: lookup can find any of the
+resulting redeclarations. Re-parsing the same text
 in the *same* unit is never skipped, so genuine redefinitions are still
 diagnosed.
 
@@ -228,12 +246,15 @@ ODR merging would accept it. Both are documented deviations.
 
 ## 7. Code generation and mangling
 
-Codegen treats a declaration owned by an imported named-module unit (not a
-header unit) like clang treats one from a BMI: a non-inline function or
-variable definition with external linkage is emitted as a declaration only
-(the module's own object file defines it); inline functions, templates
-and internal-linkage entities are emitted on use as usual. Compiling the
-module unit itself emits everything.
+Codegen treats a declaration owned by the **purview** of an imported
+named-module unit (not a header unit, not a global module fragment) like
+clang treats one from a BMI: a non-inline function, variable, constructor
+or destructor definition is emitted as a declaration only (the module's
+own object file defines it); inline functions, templates and
+internal-linkage entities are emitted on use as usual. Compiling the
+module unit itself emits everything. A non-inline definition in an
+imported unit's global module fragment is emitted in the importer too
+(deviation 7).
 
 Module initializers (`_ZGIW...`) are not emitted or called in part A
 (follow-up for part B, needed to link against clang-built module objects).
@@ -244,6 +265,10 @@ unqualified name (`_ZW1AW1B1fv`, `_ZN2nsW1M1kEv`, class members through
 their class: `_ZNW1M1S1mEv`); each module-name prefix is a substitution
 candidate. Partitions do not appear in entity names. Entities in
 `extern "C++"` and internal-linkage entities carry no module name.
+Variables attached to a module are always mangled, and a `const` variable
+attached to a named module has module linkage (P2788), so it is
+`_ZW1M1c`, not `_ZL1c`. `kiln_abi::mangle_module_initializer` gives the
+initializer's name, `_ZGIW1M` / `_ZGIW1MWP1P` (spec/abi.md §8.18).
 
 ## 8. `import std;` (libc++)
 
@@ -252,6 +277,12 @@ candidate. Partitions do not appear in entity names. Entities in
 `std.compat.cppm` has its own GMF (deduplicated against std's, §6), then
 `export import std;` and the `::` re-exports. Both work under `-std=c++20`
 and later. The libc++ 22 layout adds partitions-free `std.cppm` too.
+
+Cost (debug kiln++, aarch64): `import std;` plus a small `main` takes about
+12 s and 100 MiB to compile, roughly the cost of including every standard
+header once. libc++'s own modules tests (`std/modules/`,
+`libcxx/selftest/modules/`, 6 tests) went from 6 UNSUPPORTED to 2 PASS
+and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
 
 ## 9. Part B hooks
 
@@ -270,12 +301,38 @@ and later. The libc++ 22 layout adds partitions-free `std.cppm` too.
 4. No module initializer functions (§7).
 5. `#include` is never translated into an import (§3).
 6. Attributes on module / import declarations are ignored (§3).
+7. Non-inline definitions in an imported unit's global module fragment are
+   emitted by the importer as well (a duplicate symbol if the module unit
+   is linked into the same program); a vtable whose key function is
+   defined in a module unit is also emitted by importers.
+8. A non-visible module declaration found by lookup is reported as a plain
+   lookup failure (`use of undeclared identifier`, `no type named ...`);
+   clang 22 says `declaration of 'x' must be imported from module 'M'
+   before it is required` / `missing '#include'; 'x' must be declared
+   before it is used`.
+9. `thread_local` is not lowered by codegen at all (a pre-existing gap,
+   not specific to modules), so module `thread_local` variables are plain
+   globals with no `_ZTW` wrapper.
 
 ## Tests
 
-`tests/conformance/module.*/` (strict-diags and run tests, one per rule,
-named by section); `tests/conformance/module.import/import-std-*.cpp`
-(`import std;` with vector, format/println, ranges; `oracle: none`, because
-clang needs a two-step BMI build the harness does not drive);
-`tests/codegen/check-x86_64/module-mangling*.cpp` goldens for `_ZW`
-names; libc++'s `std/modules/` through the harness.
+- `tests/conformance/module.unit/`, `module.global.frag/`,
+  `module.private.frag/`, `module.interface/`, `basic.link/module-*`,
+  `cpp.module/`: preamble, export and attachment diagnostics
+  (strict-diags, clang 22 wording; single-file tests run under clang too,
+  `requires: clang>=22` where clang 19's wording differs).
+- `module.interface/export-run.cpp`, `visibility.cpp`,
+  `module.unit/partitions-run.cpp`, `module.private.frag/private-run.cpp`,
+  `module.import/export-import-run.cpp`: multi-unit programs whose module
+  sources are in `Inputs/` (passed as extra inputs and with
+  `-fmodule-file`); `skip(clang)` because clang needs a two-step BMI
+  build the harness does not drive.
+- `module.import/header-unit*.cpp`: header units (macros visible).
+- `module.import/import-std-{vector,format,ranges,compat,hidden}.cpp`:
+  `import std;` / `import std.compat;` under C++20, 23 and 26
+  (self-checking `run` tests; `skip(clang)` for the same reason).
+- `module.import/import-identifier*.cpp`, `import-not-found.cpp`,
+  `import-order.cpp`: [cpp.pre] tokenisation and import rules.
+- `tests/mangle/modules.cpp`, `module_partition.cpp`: `_ZW` names,
+  differential against clang (spec/abi.md §8.18).
+- libc++'s `std/modules/` through `cargo xtask libcxx` (§8).

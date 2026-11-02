@@ -907,6 +907,21 @@ those diagnostics were errors.
 - The problem count is the number of entries, plus one for "no expected
   directives found".
 
+### 11.7 Module diagnostics (WP-363)
+
+The C++20 modules diagnostics follow clang 22's wording and locations,
+not clang 19's (spec/modules.md §4 lists them by rule). The ids live in
+the usual area tables: `pp_module_cycle`, `pp_module_expected_name`,
+`pp_module_expected_semi`, `pp_module_not_found` (fatal, at the module
+name) in `ids/pp.rs`; `sema_module_*` (preamble order, export placement and
+linkage, imports, private fragment, `sema_module_redecl_attachment`) in
+`ids/sema_e_m.rs`; `note_module_*` in `ids/note_m_z.rs`. Preamble errors
+are reported at the `module` keyword, unnamed-namespace errors at the
+namespace's `{`, and `export block begins here` is attached only for an
+`export { ... }` block, as clang 22 does. Where clang 19 words a module
+diagnostic differently (`... within a module purview`), the corpus test is
+`requires: clang>=22`.
+
 ## 12. Deviations from clang 19
 
 | # | Deviation | Why |
