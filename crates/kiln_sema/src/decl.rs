@@ -2393,6 +2393,7 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
+        self.check_optnone_conflicts(decl, &mut attrs);
         self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
         self.recognize_builtin_decl(decl, &mut attrs);
@@ -2445,6 +2446,9 @@ impl Sema<'_, '_> {
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
+        }
+        self.check_optnone_conflicts(decl, &mut attrs);
+        if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
         Some(decl)
@@ -5634,6 +5638,7 @@ impl Sema<'_, '_> {
     /// Finishes the definition of `f` with `body`.
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
+        self.check_naked_body(f, body);
         let body = self.end_function_body(body, rbrace);
         // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
         if let Some(fty) = self.ast.decls.get(f).ty() {
@@ -8209,13 +8214,15 @@ impl Sema<'_, '_> {
                         | "enum_extensibility"
                         | "preferred_name"
                         | "coro_only_destroy_when_complete"
+                        | "optnone"
+                        | "minsize"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
             self.emit(msg);
             return None;
         }
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope) else {
+        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax == AttrSyntax::Gnu) else {
             let id = if gnu && matches!(n.as_str(), "visibility" | "section" | "format") {
                 DiagId::parse_attribute_ignored
             } else {
@@ -8261,9 +8268,16 @@ impl Sema<'_, '_> {
         // [dcl.attr.assume]/1: exactly one argument (clang's
         // `ActOnCXXAssumeAttr`).
         if args.len() > takes || (kind == AttrKind::ASSUME && args.is_empty()) {
+            // clang 22 names a `[[scope::x]]` attribute with its scope.
+            let name = if syntax == AttrSyntax::Cxx11 && scope.is_some() && self.clang_compat >= 22
+            {
+                shown.clone()
+            } else {
+                n.clone()
+            };
             let msg = self
                 .diag(DiagId::parse_attribute_wrong_arg_count, loc)
-                .arg(n.clone())
+                .arg(name)
                 .arg(if takes == 0 { "0" } else { "1" });
             self.emit(msg);
             return None;
@@ -8785,7 +8799,13 @@ pub(crate) fn norm_attr_scope(s: &str) -> &str {
     }
 }
 
-fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<AttrKind> {
+fn attr_kind_of(
+    n: &str,
+    std: bool,
+    gnu: bool,
+    clang_scope: bool,
+    gnu_syntax: bool,
+) -> Option<AttrKind> {
     Some(match (n, std, gnu) {
         ("nodiscard", true, _) | ("warn_unused_result", _, true) => AttrKind::NODISCARD,
         ("maybe_unused", true, _) => AttrKind::MAYBE_UNUSED,
@@ -8808,6 +8828,11 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("pure", _, true) => AttrKind::PURE,
         ("cold", _, true) => AttrKind::COLD,
         ("hot", _, true) => AttrKind::HOT,
+        ("naked", _, true) => AttrKind::NAKED,
+        // clang `Clang<"optnone">` / `Clang<"minsize">` spellings:
+        // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
+        ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
+        ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,

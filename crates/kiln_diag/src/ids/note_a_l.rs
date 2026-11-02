@@ -23,6 +23,7 @@ note_asm_input_duplicate_first = Note (1) "constraint '{0}' is already present h
 note_asm_missing_constraint_modifier = Note (1) "use constraint modifier \"{0}\"";
 note_atomic_constraint_false = Note (2) "{0:and|because} '{1}' evaluated to false";
 note_atomic_constraint_false_elaborated = Note (5) "{0:and|because} '{1}' ({2} {3} {4}) evaluated to false";
+note_attribute = Note (0) "attribute is here";
 note_await_ready_no_bool_conversion = Note (0) "return type of 'await_ready' is required to be contextually convertible to 'bool'";
 note_bitfield_decl = Note (0) "bit-field is declared here";
 note_building_deduction_guide_here = Note (0) "while building implicit deduction guide first needed here";
