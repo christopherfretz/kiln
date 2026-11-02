@@ -103,7 +103,11 @@ impl Sema<'_, '_> {
                     &mut name,
                 );
             } else if self.ast.decls.function(d).is_some() {
-                kiln_ast::types::write_arg_list_scoped_of(types, &names, d, i.args, &mut name);
+                // clang's function template specialization keeps the
+                // canonical arguments (`CanonicalBuilder`); the deduced
+                // ones carry the call arguments' sugar.
+                let args = types.canonical_args(i.args);
+                kiln_ast::types::write_arg_list_scoped_of(types, &names, d, args, &mut name);
             }
         }
         name

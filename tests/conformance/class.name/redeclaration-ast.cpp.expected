@@ -1,0 +1,29 @@
+TranslationUnitDecl
+|-CXXRecordDecl struct N
+|-CXXRecordDecl struct N
+|-CXXRecordDecl struct N definition
+| `-FieldDecl x 'int'
+|-CXXRecordDecl referenced struct N
+|-VarDecl p 'N *'
+|-VarDecl a 'struct N *'
+|-FunctionDecl f 'void ()'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-CXXRecordDecl struct L
+|   |-DeclStmt
+|   | `-CXXRecordDecl struct L
+|   |-DeclStmt
+|   | `-CXXRecordDecl referenced struct L definition
+|   `-DeclStmt
+|     `-VarDecl l 'L *'
+|-ClassTemplateDecl TT
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-CXXRecordDecl struct TT definition
+| | |-CXXRecordDecl struct I
+| | `-CXXRecordDecl struct I definition
+| `-ClassTemplateSpecializationDecl struct TT definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-CXXRecordDecl struct I
+|   `-CXXRecordDecl struct I
+`-VarDecl tt 'TT<int>' callinit
+  `-CXXConstructExpr 'TT<int>' 'void () noexcept'

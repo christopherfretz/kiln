@@ -8,7 +8,7 @@
 
 use kiln_ast::QualType;
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::ids::ArgListId;
+use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ExcSpec, NoexceptValue, TypeView};
 use kiln_ast::{DeclId, ExprId};
@@ -18,7 +18,7 @@ use kiln_ast::names::DeclName;
 use kiln_diag::DiagId;
 
 use crate::Sema;
-use crate::declspec::{DeclSpec, Declarator};
+use crate::declspec::{DeclSpec, Declarator, DeclaratorContext};
 use crate::templ::args::ConvertedArgs;
 use crate::templ::subst::Substituter;
 use crate::type_diff::DiffArgs as _;
@@ -120,16 +120,48 @@ impl Sema<'_, '_> {
     /// clang's template argument binding string, `[with T = int, N = 3]`,
     /// for the parameters of `tmpl` and the arguments `args`.
     pub(crate) fn template_args_desc(&self, tmpl: DeclId, args: ArgListId) -> String {
+        self.args_desc(tmpl, args, false)
+    }
+
+    /// [`Sema::template_args_desc`] for arguments a deduction produced
+    /// (the failed-candidate notes): a canonical type, deduced from inside
+    /// a template-id or a base class, prints fully scoped as clang prints
+    /// a bare `RecordType` (`_Container = std::deque<int>`); a type named
+    /// in the call or the explicit arguments carries its written sugar
+    /// ([`Sema::written_bare`]).
+    pub(crate) fn deduced_args_desc(&self, tmpl: DeclId, args: ArgListId) -> String {
+        self.args_desc(tmpl, args, true)
+    }
+
+    fn args_desc(&self, tmpl: DeclId, args: ArgListId, deduced: bool) -> String {
         let params = self.template_params(tmpl);
         let list = self.ast.types.args(args).to_vec();
         let mut parts = Vec::with_capacity(params.len());
-        for (p, a) in params.iter().zip(list) {
-            if matches!(a.view(), kiln_ast::types::ArgView::Null) {
-                continue;
-            }
-            parts.push(format!("{} = {}", self.decl_name(*p), self.binding_arg_str(a)));
+        for (i, (p, a)) in params.iter().zip(list).enumerate() {
+            let arg = match a.view() {
+                kiln_ast::types::ArgView::Null => continue,
+                kiln_ast::types::ArgView::Type(q)
+                    if deduced && self.ast.types.canonical(q) == q =>
+                {
+                    let names = crate::names::SemaNames::new(self);
+                    let opts = kiln_ast::types::PrintOptions {
+                        full_scope: true,
+                        ..kiln_ast::types::PrintOptions::SUGARED
+                    };
+                    kiln_ast::types::print_type(&self.ast.types, &names, q, opts)
+                }
+                _ => self.binding_arg_str(a),
+            };
+            parts.push(format!("{} = {}", self.binding_param_name(*p, i), arg));
         }
         format!("[with {}]", parts.join(", "))
+    }
+
+    /// Template parameter `p` (the `i`th) as a binding names it: its
+    /// name, `$i` when unnamed (clang's `getTemplateArgumentBindingsText`).
+    fn binding_param_name(&self, p: DeclId, i: usize) -> String {
+        let n = self.decl_name(p);
+        if n.is_empty() { format!("${i}") } else { n }
     }
 
     /// The parameter types of `f`'s function type (`ERROR`s for a
@@ -320,6 +352,26 @@ impl Sema<'_, '_> {
             return Ok(None);
         }
         let name_loc = d.name_loc();
+        // [temp.expl.spec]/2, [temp.dep.general]: a class-scope explicit
+        // specialization in a dependent class with no member function
+        // template of the name (clang's
+        // `CheckDependentFunctionTemplateSpecialization`; WP-330). The
+        // declaration is dropped.
+        if inst.is_none()
+            && d.ctx == DeclaratorContext::Member
+            && d.qualifier.is_none()
+            && self.in_template()
+        {
+            let found = self.current_scope_with_inline_dn(dname);
+            if self.function_templates_in(&found).is_empty() {
+                self.dependent_spec_no_candidate(
+                    DiagId::sema_dependent_member_spec_no_candidate,
+                    &found,
+                    name_loc,
+                );
+                return Ok(None);
+            }
+        }
         if inst.is_none()
             && d.qualifier.is_none()
             && d.spec_id.is_none()
@@ -1139,6 +1191,61 @@ impl Sema<'_, '_> {
             Some(l) => self.act_on_member_template_args(e, l),
             None => e,
         }
+    }
+
+    /// [temp.names]/3.2: whether the dependent member access `e`
+    /// (`this->f`, an unqualified name that lookup in the current
+    /// instantiation finds with more than one declaration, so the access
+    /// stays dependent) names a member template, so a `<` after it starts
+    /// a template argument list without `template` (libstdc++ variant's
+    /// `this->emplace<__index>(...)`).
+    pub fn dependent_member_names_template(&self, e: ExprId) -> bool {
+        let n = self.ast.exprs.get(e);
+        if n.kind() != kiln_ast::expr::ExprKind::CXXDependentScopeMemberExpr
+            || n.aux() & 2 != 0
+            || self.ast.templates.expr_targs.get(e).is_some()
+            || self.ast.templates.expr_nns.get(e).is_some()
+        {
+            return false;
+        }
+        let Some(base) = ExprId::from_raw(n.a()) else { return false };
+        let bt = self.ety(base);
+        let obj = if n.aux() & 1 != 0 {
+            if !self.ast.types.is_pointer(bt) {
+                return false;
+            }
+            self.pointee_sugared(bt)
+        } else {
+            Some(bt)
+        };
+        let Some(rec) = obj.and_then(|o| self.ast.types.as_record(o)) else { return false };
+        let name = self.ast.dependent_member_name(e);
+        self.lookup_in_class_dn(rec, name, crate::lookup::LookupKind::Ordinary).decls.iter().any(
+            |&d| {
+                matches!(
+                    self.kind_of(d),
+                    DeclKind::FunctionTemplate
+                        | DeclKind::ClassTemplate
+                        | DeclKind::VarTemplate
+                        | DeclKind::TypeAliasTemplate
+                )
+            },
+        )
+    }
+
+    /// The dependent member access `e` (see
+    /// [`Self::dependent_member_names_template`]) with the template
+    /// arguments `targs`: formed again, lookup and all, at instantiation.
+    pub fn act_on_dependent_member_template_args(&mut self, e: ExprId, targs: ArgListId) -> ExprId {
+        let n = self.ast.exprs.get(e);
+        let (base, arrow, loc) = (ExprId::from_raw(n.a()), n.aux() & 1 != 0, n.loc());
+        let name = self.ast.dependent_member_name(e);
+        let op = self.ast.templates.member_op_loc.get(e).copied();
+        let x = self.builder().dependent_member(base, arrow, name, false, None, Some(targs), loc);
+        if let Some(op) = op {
+            let _ = self.ast.templates.member_op_loc.insert(x, op);
+        }
+        x
     }
 
     /// The member template-id `e<targs>` of the overloaded member access

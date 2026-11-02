@@ -511,7 +511,15 @@ impl Sema<'_, '_> {
             .decls
             .iter()
             .copied()
-            .filter(|&d| matches!(self.kind_of(d), DeclKind::FunctionTemplate | DeclKind::Function))
+            .filter(|&d| {
+                // A member function is a candidate too: libstdc++
+                // `bitset::to_string(char, char)` calls the overloaded
+                // member template `to_string<char, ...>(z, o)`.
+                matches!(
+                    self.kind_of(self.ast.strip_shadow(d)),
+                    DeclKind::FunctionTemplate | DeclKind::Function | DeclKind::CXXMethod
+                )
+            })
             .collect();
         if decls.len() < 2 || decls.len() != found.decls.len() {
             return e;
@@ -520,6 +528,34 @@ impl Sema<'_, '_> {
         let nns = self.ast.templates.expr_nns.get(e).copied();
         let targs = self.ast.templates.expr_targs.get(e).copied();
         self.builder().unresolved_lookup(DeclName::ident(name), &decls, false, nns, targs, n.loc())
+    }
+
+    /// True if the unqualified `name`, followed by `<`, is assumed to name
+    /// a function template ([temp.names]/3, P0846): ordinary lookup finds
+    /// nothing (and it is no builtin) or only non-member functions.
+    pub fn is_assumed_template_name(&self, name: Symbol) -> bool {
+        let found = self.lookup_name(name, LookupKind::Ordinary);
+        if found.decls.is_empty() {
+            return !self.is_builtin_name(name);
+        }
+        found.decls.iter().all(|&d| self.kind_of(self.ast.strip_shadow(d)) == DeclKind::Function)
+    }
+
+    /// The template-id `name<args>` for a name assumed to be a template
+    /// ([temp.names]/3): an `UnresolvedLookupExpr` with the explicit
+    /// arguments over the functions ordinary lookup found, to be
+    /// completed by argument-dependent lookup at the call
+    /// ([basic.lookup.argdep]; at instantiation when dependent).
+    pub fn act_on_assumed_template_id(
+        &mut self,
+        name: Symbol,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> ExprId {
+        let found = self.lookup_name(name, LookupKind::Ordinary);
+        let decls: Vec<DeclId> = found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
+        let list = self.ast.types.arg_list(args);
+        self.builder().unresolved_lookup(DeclName::ident(name), &decls, true, None, Some(list), loc)
     }
 
     /// The qualified function or variable template-id `e` named at `loc`
@@ -618,6 +654,77 @@ impl Sema<'_, '_> {
         Ok(())
     }
 
+    /// [temp.arg.general]/9 with [temp.over.link]/5: the canonical form
+    /// of the dependent specialization `name<args>` of class template
+    /// `tmpl` carries the default arguments of the parameters not
+    /// written, so `enable_if<B>` and `enable_if<B, void>` (an alias
+    /// template's expansion) are the same type; the written arguments
+    /// stay as sugar (clang's converted arguments). `None` when nothing
+    /// is defaulted.
+    fn dependent_spec_canon(
+        &mut self,
+        name: TemplateNameId,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        l: Loc,
+    ) -> Option<QualType> {
+        let full = self.dependent_spec_full_args(tmpl, args, l)?;
+        let full = self.ast.types.arg_list(&full);
+        let full = self.profile_value_args(full);
+        Some(self.ast.types.template_specialization(name, full, None, false))
+    }
+
+    /// The arguments of the dependent specialization `tmpl<args>` of class
+    /// template `tmpl` completed with the default arguments of the
+    /// parameters not written ([temp.arg.general]/9), each substituted
+    /// with the arguments before it; `None` when nothing is missing, when
+    /// a pack is involved, or when a default cannot be substituted yet
+    /// (the specialization then stands as written).
+    fn dependent_spec_full_args(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        l: Loc,
+    ) -> Option<Vec<TemplateArg>> {
+        let head = self.head_template(tmpl);
+        let params = self.template_params(head);
+        if args.len() >= params.len()
+            || params.iter().any(|&p| self.ast.template_parm(p).is_some_and(|x| x.pack))
+            || args.iter().any(|&a| self.is_pack_expansion_arg(a))
+        {
+            return None;
+        }
+        let depth = self.template_param_depth(head);
+        let first = self.ast.first(tmpl);
+        let mut out = args.to_vec();
+        for &p in &params[args.len()..] {
+            let def = self.template_default(p)?;
+            let dependent = self
+                .ast
+                .types
+                .arg_flags(def)
+                .intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK);
+            if !dependent {
+                out.push(def);
+                continue;
+            }
+            let levels = self.prior_levels(first, depth, &out);
+            let so_far = self.ast.types.arg_list(&out);
+            let (r, failed) = self.in_sfinae(
+                crate::templ::stack::FrameKind::DefaultTemplateArg,
+                first,
+                Some(so_far),
+                l,
+                |s| crate::templ::subst::Substituter::new(s, &levels).template_arg(def, l),
+            )?;
+            match (r, failed) {
+                (Ok(a), Ok(())) => out.push(a),
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
     /// `name < args >` ([temp.names]): what the template-id names, by the
     /// kind of the template. Dependent specializations are built as
     /// written; non-dependent class and alias template specializations
@@ -690,8 +797,9 @@ impl Sema<'_, '_> {
                     return Ok(TemplateIdRef::Type(t));
                 }
                 let list = if ttp { list } else { self.profile_value_args(list) };
+                let canon = if ttp { None } else { self.dependent_spec_canon(name, d, args, l) };
                 Ok(TemplateIdRef::Type(
-                    self.ast.types.template_specialization(name, list, None, false),
+                    self.ast.types.template_specialization(name, list, canon, false),
                 ))
             }
             DeclKind::TypeAliasTemplate => {
@@ -1561,6 +1669,21 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// The class template whose parameters spell the injected-class-name
+    /// of class template pattern `c`: clang builds that type once, when
+    /// the first declaration is seen, and caches it in the redeclaration
+    /// chain's common data, so the first declaration's parameter names
+    /// print. A friend declared in a templated class does not count: clang
+    /// links it into the chain only at instantiation.
+    pub(crate) fn injected_params_template(&self, c: DeclId) -> Option<DeclId> {
+        let own =
+            self.ast.redecls_of(c).filter_map(|d| self.ast.described_template(d)).filter(|&t| {
+                self.ast.decls.get(t).misc().friend() == FriendKind::None
+                    || !self.in_templated_class(self.ast.decls.lexical_ctx(t))
+            });
+        own.last().or_else(|| self.ast.described_template(c))
+    }
+
     /// The injected-class-name of class template `tmpl` used without
     /// arguments inside its own definition ([temp.local]/1): `X<P...>`
     /// for its parameters `P`, as an `InjectedClassNameType`. `None`
@@ -1571,16 +1694,8 @@ impl Sema<'_, '_> {
         }
         let c = self.injected_class_for(tmpl)?;
         let first = self.ast.first(c);
-        if let Some(ft) = self.ast.described_template(first) {
-            // The parameters of the first declaration (clang caches the
-            // type in the redeclaration chain's common data), unless that
-            // is a friend's: then those of the template whose definition
-            // this is.
-            let own = if self.ast.decls.get(ft).misc().friend() == FriendKind::None {
-                ft
-            } else {
-                self.ast.described_template(c).unwrap_or(tmpl)
-            };
+        if self.ast.described_template(first).is_some() {
+            let own = self.injected_params_template(c).unwrap_or(tmpl);
             return self.injected_type_of(own);
         }
         if self.ast.partial_spec_info(first).is_some() {

@@ -10,6 +10,7 @@ use kiln_source::Loc;
 
 use crate::Sema;
 use crate::declspec::{DeclSpec, Declarator};
+use crate::local_friend::LocalFriendMember;
 use crate::lookup::LookupKind;
 
 /// A friend function template specialization in a dependent context
@@ -112,7 +113,38 @@ impl Sema<'_, '_> {
         if head.is_some() {
             self.mark_pattern_next();
         }
+        // An unqualified friend of a local class may redeclare a member
+        // of an enclosing local class ([class.friend]/11): declared as
+        // if qualified by that class.
+        let local = d.qualifier.is_none() && self.is_local_class(record);
+        // A definition being parsed (not one instantiated meanwhile).
+        let def = self.templ.fn_def_next && self.inst.stack.is_empty();
+        let member_d;
+        let d = if local && head.is_none() {
+            let dname = d.fn_decl_name(name);
+            match self.local_friend_member(dname, ty, d.trailing_requires, d.name_loc()) {
+                LocalFriendMember::None => d,
+                LocalFriendMember::Member(class) => {
+                    let mut q = d.clone();
+                    q.qualifier = Some(class);
+                    member_d = q;
+                    &member_d
+                }
+                LocalFriendMember::Invalid => {
+                    self.templ.cur = None;
+                    return None;
+                }
+            }
+        } else {
+            d
+        };
         let f = self.act_on_function(ds, ty, d, name, true);
+        // [class.friend]/6: a function may be defined in a friend
+        // declaration only of a non-local class (clang
+        // `err_friend_def_in_local_class`, for a valid declaration).
+        if local && def && !self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID) {
+            self.error(DiagId::sema_friend_def_in_local_class, d.name_loc());
+        }
         if ds.invalid || d.invalid {
             self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::INVALID);
         }
@@ -150,7 +182,11 @@ impl Sema<'_, '_> {
         let templates = self.function_templates_in(&found);
         if self.in_template() {
             if templates.is_empty() {
-                self.friend_spec_no_candidate(&found, loc);
+                self.dependent_spec_no_candidate(
+                    DiagId::sema_dependent_friend_spec_no_candidate,
+                    &found,
+                    loc,
+                );
                 return None;
             }
             let target = FriendTarget::Type { ty, owned_tag: None };
@@ -228,7 +264,11 @@ impl Sema<'_, '_> {
     ) {
         if self.in_template() {
             let found = self.friend_spec_lookup(name, qualifier);
-            self.friend_spec_no_candidate(&found, loc);
+            self.dependent_spec_no_candidate(
+                DiagId::sema_dependent_friend_spec_no_candidate,
+                &found,
+                loc,
+            );
         } else {
             let n = self.decl_name_str(name);
             let e = self.diag(DiagId::sema_fn_template_spec_no_match, loc).arg(n);
@@ -236,8 +276,11 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn friend_spec_no_candidate(&mut self, found: &[DeclId], loc: Loc) {
-        let mut e = self.diag(DiagId::sema_dependent_friend_spec_no_candidate, loc);
+    /// clang's `err_dependent_function_template_spec_no_match` (`id`: the
+    /// friend or member form) at `loc`, with "candidate ignored: not a
+    /// function template" at each declaration `found`.
+    pub(crate) fn dependent_spec_no_candidate(&mut self, id: DiagId, found: &[DeclId], loc: Loc) {
+        let mut e = self.diag(id, loc);
         for &f in found {
             let n =
                 self.diag(DiagId::note_dependent_spec_not_template, self.ast.decls.get(f).loc());

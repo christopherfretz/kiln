@@ -79,6 +79,11 @@ pub enum FrameKind {
     /// `PriorTemplateArgumentSubstitution`). The entity is the
     /// parameter; the frame's `args` are the prior arguments.
     PriorArgSubstitution,
+    /// Building a class template's implicit deduction guides
+    /// ([over.match.class.deduct]/1; clang `BuildingDeductionGuides`).
+    /// Not an instantiation; the point is the template name of the
+    /// placeholder that first needed them.
+    BuildingDeductionGuides,
 }
 
 impl FrameKind {
@@ -93,6 +98,7 @@ impl FrameKind {
                 | FrameKind::ConstraintSubstitution
                 | FrameKind::BindingInit
                 | FrameKind::PriorArgSubstitution
+                | FrameKind::BuildingDeductionGuides
         )
     }
 
@@ -126,6 +132,7 @@ impl FrameKind {
             FrameKind::ConceptCheck => DiagId::note_checking_concept_here,
             FrameKind::ConstraintSubstitution => DiagId::note_constraint_substitution_here,
             FrameKind::BindingInit => DiagId::note_in_binding_decl_init,
+            FrameKind::BuildingDeductionGuides => DiagId::note_building_deduction_guide_here,
         }
     }
 
@@ -154,6 +161,7 @@ impl FrameKind {
             FrameKind::ConceptCheck => "concept",
             FrameKind::ConstraintSubstitution => "constraint-subst",
             FrameKind::BindingInit => "binding-init",
+            FrameKind::BuildingDeductionGuides => "deduction-guides",
         }
     }
 }

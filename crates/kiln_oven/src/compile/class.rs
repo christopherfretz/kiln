@@ -712,6 +712,19 @@ impl Compiler<'_> {
             if refs.get(i).copied().unwrap_or(false) {
                 self.bind_ref(a, slot);
             } else if self.o.types.is_aggregate(aty) {
+                let q = self.ast().exprs.get(a).ty().without_quals();
+                if !super::is_literal_type(self.ast(), q) {
+                    // clang `EvaluateCallArg` -> `EvaluateInPlace` ->
+                    // `CheckLiteralType`: a by-value argument (to a
+                    // declared or a variadic parameter) is a prvalue
+                    // initializing a parameter object, never the object
+                    // of the evaluated declaration.
+                    let t = crate::Oven::type_name(self.ast(), q);
+                    self.trap(
+                        a,
+                        &format!("non-literal type '{t}' cannot be used in a constant expression"),
+                    );
+                }
                 self.alloc(slot, aty, Origin::Temp(a), false, a);
                 self.init(a, slot, aty);
                 let at = self.begin(a);

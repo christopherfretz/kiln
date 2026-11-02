@@ -24,6 +24,7 @@ use crate::overload::{
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::deduce::{DeducedArgs, Tdk};
 use crate::templ::pack::Expansion;
+use crate::templ::stack::FrameKind;
 use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
 
 /// How the object whose type is a deduced class template specialization
@@ -215,8 +216,17 @@ impl Sema<'_, '_> {
     }
 
     /// The undeduced placeholder `X` / `nns::X` for class template `d`
-    /// ([dcl.type.class.deduct]).
-    pub fn ctad_placeholder(&mut self, d: DeclId, nns: Option<NnsId>) -> QualType {
+    /// ([dcl.type.class.deduct]), its type-specifier at `locs.0` and the
+    /// template name at `locs.1`.
+    pub fn ctad_placeholder(
+        &mut self,
+        d: DeclId,
+        nns: Option<NnsId>,
+        locs: (Loc, Loc),
+    ) -> QualType {
+        if locs.0.is_valid() && locs.1.is_valid() {
+            let _ = self.templ.ctad_name_locs.insert(locs.0, locs.1);
+        }
         let mut name = self.template_name_for(d);
         if let Some(nns) = nns {
             name = self.ast.types.template_name(TemplateName::Qualified {
@@ -239,6 +249,11 @@ impl Sema<'_, '_> {
         d: &Declarator,
         template: DeclId,
     ) -> Option<DeclId> {
+        // clang forms the placeholder `X` for the guide's declarator name
+        // while parsing it, which fixes the spelling every later deduced
+        // `X` type prints with (`TypeContext::deduced_template_specialization`).
+        let placeholder_name = self.template_name_for(template);
+        let _ = self.ast.types.deduced_template_specialization(placeholder_name, None);
         let sloc = d.special.map_or(d.loc, |(_, l)| l);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
@@ -358,19 +373,44 @@ impl Sema<'_, '_> {
     /// ([over.match.class.deduct]/1.1-1.3): one per constructor of its
     /// definition (or one from a hypothetical `C()`), and the copy
     /// deduction candidate. Formed once per defined template; they are
-    /// template decls that join no member list or lookup table.
-    fn implicit_guides(&mut self, tmpl: DeclId) -> Vec<DeclId> {
+    /// template decls that join no member list or lookup table. A
+    /// diagnostic while forming them notes `name_loc`, the template name
+    /// that first needed them (clang `BuildingDeductionGuides`).
+    fn implicit_guides(&mut self, tmpl: DeclId, name_loc: Loc) -> Vec<DeclId> {
         let first = self.ast.first(tmpl);
         if let Some(v) = self.templ.ctad_guides.get(&first) {
             return v.clone();
         }
+        if !self.push_inst_frame(FrameKind::BuildingDeductionGuides, tmpl, tmpl, name_loc) {
+            return Vec::new();
+        }
+        let out = self.form_implicit_guides(tmpl, first);
+        self.pop_inst_frame();
+        out
+    }
+
+    /// The injected-class-name type `C<P...>` an implicit guide of class
+    /// template `owner` returns (and its copy guide takes): clang builds
+    /// it once from the first declaration's template parameters, so their
+    /// names print (`vector<_Tp, _Alloc>` from `<__fwd/vector.h>`, and
+    /// `map<type-parameter-0-0, ...>` from an unnamed `template <class,
+    /// class, class, class> class map;`); see
+    /// [`Sema::injected_params_template`].
+    fn guide_injected_type(&mut self, owner: DeclId) -> Option<QualType> {
+        let own =
+            self.pattern_of(owner).and_then(|p| self.injected_params_template(p)).unwrap_or(owner);
+        self.injected_type_of(own)
+    }
+
+    /// [`Sema::implicit_guides`] once the frame is pushed.
+    fn form_implicit_guides(&mut self, tmpl: DeclId, first: DeclId) -> Vec<DeclId> {
         let Some(pat) = self.pattern_of(tmpl) else { return Vec::new() };
         let def = self.ast.definition(pat);
         // The template decl whose parameters the definition uses.
         let owner = def.and_then(|d| self.ast.described_template(d)).unwrap_or(tmpl);
         let Some(info) = self.ast.template_info(owner).copied() else { return Vec::new() };
         let Some(TypeView::InjectedClassName { injected, .. }) =
-            self.injected_type_of(owner).map(|q| self.ast.types.view(q.ty()))
+            self.guide_injected_type(owner).map(|q| self.ast.types.view(q.ty()))
         else {
             return Vec::new();
         };
@@ -422,7 +462,9 @@ impl Sema<'_, '_> {
             }
         }
         if !any_ctor {
-            let loc = self.ast.decls.get(first).loc();
+            // clang's `buildSimpleDeductionGuide` sits at the template
+            // whose definition this is, like the copy guide.
+            let loc = self.ast.decls.get(owner).loc();
             out.extend(self.implicit_guide(ctx, name, injected, info.params, None, loc));
         }
         // [over.match.class.deduct]/1.3: `C(C<T...>) -> C<T...>`.
@@ -833,7 +875,7 @@ impl Sema<'_, '_> {
         let owner = self.ast.described_template(def).unwrap_or(tmpl);
         let info = self.ast.template_info(owner).copied()?;
         let Some(TypeView::InjectedClassName { injected, .. }) =
-            self.injected_type_of(owner).map(|q| self.ast.types.view(q.ty()))
+            self.guide_injected_type(owner).map(|q| self.ast.types.view(q.ty()))
         else {
             return None;
         };
@@ -1014,18 +1056,19 @@ impl Sema<'_, '_> {
         tmpl: DeclId,
         init: Option<&Initializer>,
         level: u32,
+        name_loc: Loc,
     ) -> Option<Vec<DeclId>> {
         if self.kind_of(tmpl) == DeclKind::TypeAliasTemplate {
             let (target, rhs) = self.alias_ctad_target(tmpl)?;
             if level > 64 {
                 return Some(Vec::new());
             }
-            let inner = self.ctad_guides(target, init, level + 1)?;
+            let inner = self.ctad_guides(target, init, level + 1, name_loc)?;
             return Some(
                 inner.into_iter().filter_map(|g| self.alias_guide(tmpl, rhs, g)).collect(),
             );
         }
-        let mut guides = self.implicit_guides(tmpl);
+        let mut guides = self.implicit_guides(tmpl, name_loc);
         let user = self.user_guides(tmpl);
         // [over.match.class.deduct]/1.5: only when C has no
         // deduction-guides.
@@ -1458,6 +1501,11 @@ impl Sema<'_, '_> {
         init: Option<&Initializer>,
         loc: Loc,
     ) -> Option<QualType> {
+        // The template name of the placeholder, for the note of an error
+        // building the implicit guides: the type-specifier is the
+        // variable's (`ctad_site`) or at `loc`.
+        let site = self.templ.ctad_site.take().unwrap_or(loc);
+        let name_loc = self.templ.ctad_name_locs.get(&site).copied().unwrap_or(loc);
         let (name, tmpl) = self.undeduced_ctad(declared)?;
         let with_quals = |s: &mut Self, t: QualType| {
             let d = s.ast.types.deduced_template_specialization(name, Some(t));
@@ -1480,7 +1528,7 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        let Some(guides) = self.ctad_guides(tmpl, init, 0) else {
+        let Some(guides) = self.ctad_guides(tmpl, init, 0, name_loc) else {
             // [dcl.type.class.deduct]/2: an alias template whose
             // defining-type-id is not a simple-template-id.
             let at = self.alias_guide_loc(tmpl);
@@ -1766,16 +1814,46 @@ impl Sema<'_, '_> {
             let pname = self.decl_name_str(self.ast.decls.get(p).name());
             match self.kind_of(p) {
                 DeclKind::TemplateTypeParm => {
-                    // clang prints a re-depthed type-constraint `C<>`.
+                    // clang prints a re-depthed type-constraint with its
+                    // written arguments substituted, `<>` when there are
+                    // none (`One<> R`, `Compat<T> R`). The concept's
+                    // written qualifier is not kept on the expression.
                     let concept = pi.and_then(|x| x.constraint).and_then(|c| {
-                        let n = self.ast.exprs.get(c);
+                        let mut n = self.ast.exprs.get(c);
+                        // A constrained pack's constraint is the fold
+                        // `(C<Q> && ...)`.
+                        if n.kind() == kiln_ast::expr::ExprKind::CXXFoldExpr {
+                            n = self
+                                .ast
+                                .exprs
+                                .get(<ExprId as kiln_ast::ids::RawId>::from_raw(n.a())?);
+                        }
                         (n.kind() == kiln_ast::expr::ExprKind::ConceptSpecializationExpr)
-                            .then(|| <DeclId as kiln_ast::ids::RawId>::from_raw(n.a()))
+                            .then(|| {
+                                let d = <DeclId as kiln_ast::ids::RawId>::from_raw(n.a())?;
+                                Some((d, <ArgListId as kiln_ast::ids::RawId>::from_raw(n.b())))
+                            })
                             .flatten()
                     });
-                    if let Some(c) = concept {
+                    if let Some((c, args)) = concept {
                         out.push_str(&self.decl_name_str(self.ast.decls.get(c).name()));
-                        out.push_str("<>");
+                        out.push('<');
+                        let mut written = Vec::new();
+                        for &a in args.map_or(&[][..], |l| self.ast.types.args(l)).iter().skip(1) {
+                            match a.view() {
+                                ArgView::Pack(l) => {
+                                    written.extend(self.ast.types.args(l).iter().copied());
+                                }
+                                _ => written.push(a),
+                            }
+                        }
+                        for (k, &a) in written.iter().enumerate() {
+                            if k > 0 {
+                                out.push_str(", ");
+                            }
+                            out.push_str(&self.arg_str(a));
+                        }
+                        out.push('>');
                     } else {
                         out.push_str(if pi.is_some_and(|x| x.typename_kw) {
                             "typename"
@@ -1960,6 +2038,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return None;
         }
+        self.templ.ctad_site = self.templ.ctad_var_type_locs.get(&v).copied();
         let t = self.deduce_ctad(ty, &[], &[], CtadInit::Direct, loc).unwrap_or(QualType::ERROR);
         self.ast.decls.set_ty(v, t);
         if self.is_error_type(t) {
@@ -1967,6 +2046,21 @@ impl Sema<'_, '_> {
             return None;
         }
         Some(t)
+    }
+
+    /// Deduces variable `v`'s placeholder type `ty` from `init`, the
+    /// diagnostics citing the placeholder as `v`'s declaration wrote it
+    /// (`ctad_var_type_locs`); the error type after a diagnostic.
+    pub(crate) fn ctad_for_var(
+        &mut self,
+        v: DeclId,
+        ty: QualType,
+        init: &Initializer,
+        direct: bool,
+        loc: Loc,
+    ) -> QualType {
+        self.templ.ctad_site = self.templ.ctad_var_type_locs.get(&v).copied();
+        self.ctad_for_initializer(ty, init, direct, loc).unwrap_or(QualType::ERROR)
     }
 
     /// Whether `ty` is a class template placeholder to deduce.

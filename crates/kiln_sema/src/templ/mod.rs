@@ -194,6 +194,16 @@ pub struct TemplState {
     /// The implicit deduction guides of each class template (first
     /// declaration), formed on first use ([over.match.class.deduct]/1).
     pub(crate) ctad_guides: kiln_source::fx::FxHashMap<DeclId, Vec<DeclId>>,
+    /// The template-name location of each placeholder for a deduced
+    /// class type, by the location of its type-specifier (the
+    /// `while building implicit deduction guide` note's point).
+    pub(crate) ctad_name_locs: kiln_source::fx::FxHashMap<Loc, Loc>,
+    /// The type-specifier location of each variable declared with a
+    /// placeholder for a deduced class type.
+    pub(crate) ctad_var_type_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// The type-specifier location of the variable whose type is being
+    /// deduced now; taken by [`Sema::deduce_ctad`].
+    pub(crate) ctad_site: Option<Loc>,
     /// What each implicit guide among them (template decl) was formed
     /// from ([over.match.class.deduct]/1, [over.match.best.general]/2.12-13).
     pub(crate) ctad_origin: kiln_source::fx::FxHashMap<DeclId, ctad::GuideOrigin>,
@@ -967,7 +977,40 @@ impl Sema<'_, '_> {
         if prev.is_some() {
             self.merge_template_defaults(t);
         }
+        if let (Some(old), true) = (old, heads_match) {
+            self.record_inherited_defaults(list, old);
+        }
         Some(t)
+    }
+
+    /// Records on the AST the default arguments the parameters of head
+    /// `new` inherit from the previous declaration's head `old`
+    /// ([temp.param]/12; clang `CheckTemplateParameterList`'s
+    /// `setInheritedDefaultArgument`): a parameter with no default of its
+    /// own inherits its counterpart's, owned by the parameter that wrote
+    /// it, which `-ast-dump` prints as `inherited from`. Only earlier
+    /// declarations pass defaults on; [`Self::merge_template_defaults`]
+    /// keeps the union that instantiation reads.
+    fn record_inherited_defaults(&mut self, new: TemplateParamListId, old: TemplateParamListId) {
+        let params = |l: TemplateParamListId| -> Vec<DeclId> {
+            let list = self.ast.templates.param_list(l);
+            self.ast.lists.iter::<DeclId>(list.params).collect()
+        };
+        let (new, old) = (params(new), params(old));
+        let tt = &self.ast.templates;
+        let owners: Vec<(DeclId, DeclId)> = new
+            .iter()
+            .zip(&old)
+            .filter(|&(&q, _)| tt.defaults.get(q).is_none())
+            .filter_map(|(&q, &o)| {
+                let owner =
+                    if tt.defaults.get(o).is_some() { o } else { *tt.inherited_defaults.get(o)? };
+                Some((q, owner))
+            })
+            .collect();
+        for (q, owner) in owners {
+            let _ = self.builder().set_inherited_template_default(q, owner);
+        }
     }
 
     /// Shares the default template arguments across the declarations of

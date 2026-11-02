@@ -203,7 +203,10 @@ clang's `Parser` over `Preprocessor::Lex`.
   Once a decl-specifier names no type (`DeclSpec::type_error`), the
   later declarators of the group are skipped up to the `;`, as clang's
   `ParseDeclGroup`, so `u5 &x1, &x2;` and `S::c &x3, &x4;` report once
-  (WP-318, `tests/conformance/stmt.ambig/unknown-type-before-ptr-operator.cpp`).
+  (WP-318, `tests/conformance/stmt.ambig/unknown-type-before-ptr-operator.cpp`);
+  `X<int>::t f, &g;` with `X` undefined reports the undefined template
+  once for the declaration, not per declarator (clang's second print is
+  the per-declaration repeat of spec/diag.md §7.4.1, WP-330).
   A qualified name that its non-dependent scope does not declare,
   followed by an identifier (`S::nom x`), is not a type in a type-id or
   a declaration-specifier scan (clang returns `False` for an
@@ -986,23 +989,47 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   full-expression. Elsewhere (a declaration's initializer, a condition, a
   `return`, a template instantiation) and for an unqualified name or a
   member access (`s.nomember`) it is reported where it is written.
-  Nested in a larger expression statement (WP-318): when call arguments
-  held a delayed typo and the `)` is missing (`f(S::nom x);`,
-  `a = f(S::nom x);`, `g(1, S::nom x);`), the parser skips to the `)`
-  (stopping at `;`) and reports no "expected ')'", as clang's
-  `ParsePostfixExpressionSuffix` (`Sema::typo_count` tells it a typo
-  was held); in a parenthesized expression (`(S::nom x);`) "expected
-  ')'" and its note come first. Kept deviations: a delayed typo in a
-  subscript (`arr[S::nom x]`) is reported when the statement ends
-  (clang flushes it only at the end of the function; same set, other
-  order), and a full-expression nested in an expression statement (a
-  declaration in a lambda body) is held until the outer statement ends
-  (clang ends it sooner); both need a general per-full-expression
-  delayed-diagnostic scope
-  (`tests/conformance/stmt.expr/delayed-no-member-after-missing-semi.cpp`,
+  Scopes nest: an inner scope's held typos stay held while an outer
+  one is open (`end_delayed_typos`), and each held typo records the
+  recovery expression that stands for clang's `TypoExpr`
+  (`Sema::correct_delayed_typos_in` finds them in a subexpression).
+  The points where clang's parser corrects a subexpression's typos
+  early (WP-318, WP-330; `ParsePostfixExpressionSuffix`,
+  `ParseExpressionList`):
+  - A call whose `)` is missing (`f(S::nom x);`, `S::nom(1;`,
+    `g(1, S::nom x);`) reports the callee's and the arguments' typos at
+    once, before what follows (`a = g(S::nom x) + ;` reports the typo,
+    then "expected expression"); if there were any, the parser skips to
+    the `)` (stopping at `;`) with no "expected ')'", and the
+    expression is invalid (clang's `ExprError`; `Parser::expr_invalid`):
+    an expression statement missing its `;` after it (`a = g(S::nom x)`
+    then a newline) skips to the next `;` with no "expected ';' after
+    expression", as clang's `ParseExprStatement`. In a
+    parenthesized expression (`(S::nom x);`) "expected ')'" and its note
+    come first.
+  - A subscript's base is corrected at the `]` (`S::nom[1 2]` reports
+    the typo before "expected ']'"). Its index list is a scope of its
+    own: with the `]` present it ends normally; with the `]` missing
+    the index is dropped and its typos are kept
+    (`Sema::drop_delayed_typos`) until the end of the translation unit,
+    after the pending instantiations and before the
+    `ActOnEndOfTranslationUnit` checks (`act_on_end_of_translation_unit`),
+    as clang, which never corrects a dropped `TypoExpr` before then;
+    this holds in a declaration's initializer too (`int v = arr[S::nom
+    x];`).
+  - An expression list that fails to parse (a call's or a
+    subscript's) reports the typos of what it parsed, then the
+    callee's or base's, after the syntax error.
+  - A lambda body and a statement expression suspend the enclosing
+    scopes (`Sema::suspend_delayed_typos`): their statements and
+    declarations end their own full-expressions, so `[] { int v =
+    S::nom; }(), 1 +;` reports the typo before "expected expression".
+  Tests: `tests/conformance/stmt.expr/delayed-no-member-after-missing-semi.cpp`,
   `tests/conformance/stmt.expr/delayed-no-member-nested-full-expression.cpp`,
-  kiln_parse `delayed_no_member_after_missing_semi`,
-  `delayed_no_member_nested_in_expression_statement`).
+  `tests/conformance/stmt.expr/delayed-typo-correction-points.cpp`
+  (kiln_parse `delayed_no_member_after_missing_semi`,
+  `delayed_no_member_nested_in_expression_statement`,
+  `delayed_typo_correction_points`).
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed
@@ -1073,21 +1100,80 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   - after the declarator-id (`int x alignas(8);`, [dcl.decl.general]/4,
     [class.mem.general]/1), for the declaration; `alignas` there may be
     followed by a bit-width (`int b alignas(8) : 3`, then rejected by
-    sema on the bit-field) (WP-312)
+    sema on the bit-field) (WP-312). After a member's bit-width or asm
+    label, or a member function declarator with virt-specifiers, an
+    attribute-specifier-seq is not allowed ([class.mem.general]/1):
+    each run of `[[...]]`/`alignas` specifiers is parsed, dropped and
+    reported once as `an attribute list cannot appear here` at its
+    start (clang `DiagnoseAndSkipCXX11Attributes`); GNU attributes
+    between them are kept (`parse_member_tail_attrs`; WP-324)
   - between decl-specifiers (clang `ProhibitAttributes` in
     `ParseDeclarationSpecifiers`), at the end of the decl-specifier-seq
-    ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1) or after
-    an array declarator ([dcl.array]/1): attributes there appertain to a
-    type; kiln does not attach them, and sema reports an `alignas` among
-    them as `'alignas' attribute cannot be applied to types`
-    (`skip_type_position_attrs`, `Sema::act_on_type_position_attrs`;
-    WP-312)
-  - before a namespace-definition, a static_assert-declaration, or (for
-    `alignas`; `[[...]] using` is an extension) a using-declaration or
-    alias-declaration at file scope: `an attribute list cannot appear
-    here`, and the list is dropped
-    (`discard_attrs_before_unattributed_decl`; WP-312). Not yet: the
-    same check in class and block scope.
+    ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1), after
+    an array declarator ([dcl.array]/1) or after a function declarator
+    ([dcl.fct]/1, parsed after `parse_function_suffix`): attributes
+    there appertain to a type. The parser hands each list to
+    `Sema::act_on_type_position_attrs`, which reports and removes the
+    declaration attributes (spec/sema.md §4.5, type-position
+    attributes). The rest are attached to the declaration at the end of
+    the decl-specifier-seq and after a function declarator, and dropped
+    after a ptr-operator or array declarator
+    (`skip_type_position_attrs`; WP-312, WP-324)
+  - leading, before a declaration whose grammar has no
+    attribute-specifier-seq ([dcl.pre]/5, clang `ProhibitAttributes`):
+    `an attribute list cannot appear here` at the list's start, and the
+    list is dropped. At namespace scope (file scope or inside a
+    namespace) this covers a namespace-definition or
+    namespace-alias-definition, static_assert-declaration,
+    template-declaration, explicit instantiation or specialization,
+    linkage-specification, asm-declaration and export-declaration
+    (`discard_attrs_before_unattributed_decl`); in a block, a
+    static_assert-declaration and namespace-alias-definition
+    (`parse_statement_after_attrs`, `prohibit_attrs_at`); in a
+    member-specification, a `friend` declaration that is not a
+    definition (`prohibit_friend_lead_attrs`). The list's start is
+    recorded as `DeclSpec::lead_cxx11` (WP-324).
+  - before `using` ([namespace.udir]/1, [namespace.udecl]/1,
+    [enum.udecl]/1, [dcl.typedef]/2; `parse_using_leading`, in every
+    scope): before a using-directive the attributes are the
+    directive's (subject-checked by sema); before an alias-declaration
+    `an attribute list cannot appear here` and they are dropped (they
+    belong after the alias name); before a using-declaration or
+    using-enum-declaration each `[[...]]`/`alignas` gets clang's
+    `ext_cxx11_attr_placement` warning `ISO C++ does not allow an
+    attribute list to appear here` at the attribute (the scope token of
+    a scoped one), and a using-declaration's are then checked on each
+    declared using-declaration.
+  - before a declaration that declares only a tag (`[[x]] struct S
+    { };`, `alignas(4) struct S;`, [dcl.pre]/5: the attributes would
+    appertain to the declared entities, and there are none): at file
+    or namespace scope, `misplaced attributes; expected attributes
+    here` at the end of the class-key (`err_attributes_misplaced`);
+    `[[x]] int;` gets `an attribute list cannot appear here`
+    (file or block scope). Either way the leading C++11 attributes are
+    dropped (`prohibit_free_standing_lead_attrs`, `drop_lead_cxx11`);
+    GNU attributes stay. In a member-specification no error; sema's
+    place-it warning (spec/sema.md §4.5) covers both.
+  - before a statement that is not a declaration (`[[nodiscard]]
+    return;`, [stmt.pre]/1): the non-statement attributes are reported
+    by sema `act_on_stmt_decl_attrs` (`'X' attribute cannot be applied
+    to a statement`; on a block-scope asm-declaration clang's `'X'
+    attribute ignored` warning). `alignas` may also start such a list.
+  - an attribute-declaration (`[[x]];`, `alignas(4);`, [dcl.pre]/1):
+    at namespace scope its attributes are subject-checked against
+    nothing (sema `act_on_decl_attrs` on the enclosing context); in a
+    member-specification it is `declaration does not declare anything`.
+  - after the class-name of a class-head (`struct S [[x]] { };`,
+    `struct S alignas(4) final : B { };`, `struct S [[x]];`,
+    `template<> struct A<int> [[x]] { };`, [class.pre]/1): `an
+    attribute list cannot appear here`, and the attributes are moved
+    onto the class (`parse_class_head_attrs`); after `final` (`struct S
+    final [[x]] { };`) the same error and they are dropped
+    (`parse_class_virt_specifiers`). A reference (`struct S [[x]] *p;`)
+    keeps them as type-position attributes.
+  - before an enumerator (`enum E { [[x]] e };`, [dcl.enum]/1: they
+    follow its name): `expected identifier`, then parsing resumes at
+    the next `,` (clang `ParseEnumBody`).
 - **`[[assume(e)]]` (WP-160):** `parse_assume_arg` parses a
   conditional-expression. If the next token is not `)`, it reparses the
   full expression, reports `use of this expression in an 'assume'

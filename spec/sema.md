@@ -57,6 +57,9 @@ Constructors:
     (`AstBuilder::register_name`).
   - Local names live in the scope's own `locals`, which plays the
     role of clang's `DeclsInScope` and `IdResolver` together.
+    Block-scope operator function declarations live in `local_ops`
+    instead, which only a local class's friend redeclaration searches
+    (sema-class.md, friend functions of a local class; WP-329).
   - Context scopes also record their `using namespace` directives.
 - **Who pushes which scope:**
   - **Function:** pushed by `act_on_start_function`. It holds the
@@ -106,6 +109,13 @@ Constructors:
   using-directives.
 - **Qualified lookup** ([basic.lookup.qual]) searches one context's
   table, plus that namespace's using-directives.
+- **The name before `::`** ([basic.lookup.qual]/1) is looked up for
+  namespaces, types and type templates only (`LookupKind::Nested`). The
+  parser's lookahead classifies such a component with
+  `Sema::classify_nested_name` (in `scan_name_qual_at` and the
+  member-pointer scan), so a variable does not hide the namespace or
+  class: `std::ifstream fs(fs::path("x"))` with a namespace alias `fs`
+  is a functional cast (WP-336).
 - **Argument-dependent lookup** ([basic.lookup.argdep]; WP-068a,
   `overload/adl.rs`, spec/sema-overload.md §2.2): a call's unqualified,
   unparenthesized callee whose ordinary lookup found only namespace-scope
@@ -161,7 +171,17 @@ Constructors:
   diagnosed as [stmt.pre]/5 requires.
 - **Block-scope `extern` declarations** are recorded in `local_externs`.
   A later namespace-scope declaration of the same name redeclares them,
-  per [basic.link]/6 and clang's local extern decls.
+  per [basic.link]/6 and clang's local extern decls. A declaration in a
+  function template pattern is not recorded: only its instantiations
+  redeclare the entity ([temp.spec.general]/2), so the pattern's `extern
+  T e;` is never the previous declaration of `extern int e;` in
+  `f<int>`, and a namespace-scope declaration after the pattern does not
+  conflict with it. The pattern itself still looks its name up, so a
+  non-dependent `extern int g;` in it conflicts with an earlier `extern
+  char g;`. A block-scope redeclaration whose type (or the earlier
+  declaration's type) is dependent is checked only at instantiation
+  (clang's `MergeVarDeclTypes` for a local variable). Test:
+  tests/conformance/basic.link/local-extern-template-pattern.cpp (WP-330).
 - **`classify_name`** gives the parser a name's category: type,
   namespace, value, or undeclared.
   Landed (WP-140): a non-dependent typedef or alias qualifier is
@@ -289,7 +309,8 @@ Redeclaration and linkage rules:
      when the block's declaration has none: `redefinition of 'x' as
      different kind of symbol`;
   2. differing types (as above; skipped when the earlier declaration is
-     invalid, e.g. `static Q(a);` of incomplete `Q`);
+     invalid, e.g. `static Q(a);` of incomplete `Q`, or when either type
+     is dependent);
   3. `static` after an `extern`: `static declaration of 'x' follows
      non-static declaration`;
   4. non-`static` after `static` (unless an `extern` redeclaring a
@@ -942,11 +963,37 @@ and returns the scope it names:
   alias template's guide substitutes the alias's arguments into that
   sugar; its `__is_deducible(A, R)` prints the guide's sugared return
   type `R` (WP-311; test
-  `over.match.class.deduct/guide-signature-as-written.cpp`). Not
-  printed yet: clang's `while building implicit deduction guide first
-  needed here` frame note, at the placeholder's template-name location,
-  for an error substituting a member template's constructors (the
-  placeholder's name location is not recorded).
+  `over.match.class.deduct/guide-signature-as-written.cpp`).
+- **Guide printing** (WP-320), as clang:
+  - The injected class type of an implicit guide (`-> vector<_Tp,
+    _Alloc>`) uses the template parameters of the class template's
+    first declaration (`injected_params_template`): a forward
+    declaration's names, `type-parameter-0-N` for unnamed ones. A friend
+    declaration inside a templated class does not count (clang links it
+    only at instantiation); one in a non-template class does.
+  - A type-constraint prints with its written arguments in the guide's
+    parameter names (`template <Compat<T> R>`, `Var<T, int>`), not as
+    `Compat<>`.
+  - The simple `C() -> C<T>` guide and the copy guide sit at the class
+    template's definition.
+  - Tests `over.match.class.deduct/implicit-guide-constraint-args.cpp`,
+    `implicit-guide-first-declaration-params.cpp`,
+    `implicit-guide-locations-init-list.cpp`.
+  - Gap: a qualified concept name in a type-constraint loses its
+    qualifier (`template <NC R>` where clang prints `N::NC R`).
+- **Building the implicit guides** runs under a
+  `FrameKind::BuildingDeductionGuides` frame (not an instantiation;
+  clang `BuildingDeductionGuides`), so an error forming them (the
+  enclosing arguments substituted into a member template's
+  constructor) is followed by `while building implicit deduction guide
+  first needed here` at the template name of the placeholder that first
+  needed them. The parser records each placeholder's template-name
+  location by its type-specifier location (`ctad_placeholder`,
+  `TemplState::ctad_name_locs`); a variable's type-specifier location is
+  kept per variable (`ctad_var_type_locs`), and an expression form
+  (functional cast, new-expression) deduces at its type-specifier. A
+  variable instantiated from a template notes the variable instead.
+  Test `over.match.class.deduct/building-guides-note.cpp`.
 - **Array new.** `new X[n]{…}` with a placeholder element type is
   `sema_ctad_compound_type` ("cannot form array of deduced class
   template specialization type") at the innermost bound, as clang.
@@ -985,8 +1032,17 @@ and returns the scope it names:
     explicit specialization or instantiation is "forward declaration
     of struct cannot have a nested name specifier" at the qualifier
     ([dcl.type.elab]/1, [dcl.enum]/1), reported before the lookup.
-  - A declaration redeclares the tag in the current scope.
+  - A declaration redeclares the tag in the current scope. A class
+    redeclaration `struct N; struct N;` ([class.name]/2) is a new
+    CXXRecordDecl in N's chain (clang `ActOnTag`; the dump's `prev`), as
+    a class template redeclaration is, and a later definition joins
+    that chain. An enumeration redeclaration creates no decl. Test:
+    class.name/redeclaration-ast.cpp.
   - A definition checks for redefinition and kind mismatch.
+  - A type name marks referenced only the declaration lookup found (the
+    latest in its chain; clang `isThisDeclarationReferenced`). An
+    elaborated-type-specifier that finds a tag (`struct N *a`) marks
+    nothing (clang `ActOnTag`).
 - **Enumerations** ([dcl.enum]):
   - enumerators are typed as clang types them
   - a fixed underlying type gets converted-constant-expression checks
@@ -998,13 +1054,29 @@ and returns the scope it names:
   - an unfixed one gets its type from the enumerators' range (the best
     type), and the enumerators are then retyped to the enumeration
   - `replace_enumerator_init` records the converted initializer
-- **Bit-fields** ([class.bit]):
+- **Bit-fields** ([class.bit]; `bit_width`, clang `VerifyBitField`):
+  - a named bit-field's type must be integral or an enumeration, checked
+    even when the width is value-dependent (`bit-field 'f' has
+    non-integral type 'float'`, underlining the width)
   - the width must be an integral constant expression; one that folds
-    laxly is accepted (`fold_not_ice`, below)
+    laxly is accepted (`fold_not_ice`, below). A width whose type is not
+    integral or an unscoped enumeration (`2.0`, `SE::a`, `nullptr`) is
+    `integral constant expression must have integral or unscoped
+    enumeration type, not 'T'` at the width. A width whose
+    full-expression reported an error (a member named without an
+    object) is dropped without a further error
   - it must not be negative
-  - it must not be zero-width with a name
-  - it must not exceed the type's width
+  - it must not be zero-width with a name (underlining the width)
+  - it must not exceed the type's width (`-Wbitfield-width`; never for
+    `bool`)
+  - a member declarator with a width that declares no field
+    (`non_field_bit_width`, [class.bit]/3) is `static member 's' cannot
+    be a bit-field`, `typedef member 'td' cannot be a bit-field`, or the
+    non-integral error for a function; the member becomes invalid
   - `mark_bitfield` records the width
+  - Tests `class.bit/width-and-member-kinds.cpp`; the underlines are
+    checked by `kiln_driver` test
+    `bit_width_and_static_assert_ranges_like_clang` (WP-320).
 - **Anonymous unions and structs** ([class.union.anon]):
   - `act_on_decl_spec_only` creates the unnamed member, or the implicit
     variable outside a class, and returns it.
@@ -1012,6 +1084,16 @@ and returns the scope it names:
   - Conflicts are diagnosed (`member of anonymous union redeclares 'x'`).
   - Anonymous unions outside a class must be `static` at namespace
     scope.
+  - An anonymous union or struct with no member (no `Field`; an unnamed
+    bit-field counts as one) declares no name ([dcl.pre]/5,
+    [class.mem.general]/3). That is "declaration does not declare
+    anything" [-Wmissing-declarations] at the decl-specifier-seq, after
+    the scope errors above (clang `BuildAnonymousStructOrUnion`). Its
+    range covers the specifiers written before the class-key (`static
+    const`), read from the source (`specifiers_before_type`). A
+    template's pattern is diagnosed when it is parsed, and an
+    instantiation is not diagnosed again. Test:
+    class.union.anon/empty-anonymous-record-declares-nothing.cpp.
   - An anonymous struct outside a class is an error.
   - `act_on_finish_record_definition(r, then_semi)` sets `ANONYMOUS`
     and `HAS_VARIANT_MEMBERS`.
@@ -1204,15 +1286,72 @@ and returns the scope it names:
     `'alignas' attribute only applies to variables, data members and
     tag types`; in an attribute-declaration (`alignas(8);`) it
     appertains to nothing. The specifier is dropped. Written where only
-    type attributes may appear (the end of a decl-specifier-seq,
-    `char alignas(8) c;`, after a ptr-operator or array declarator) it
-    is `'alignas' attribute cannot be applied to types`
-    (`act_on_type_position_attrs`; clang `err_attribute_not_type_attr`).
-    Before a namespace-definition, a static_assert-declaration, a
-    using-declaration or an alias-declaration, a leading
-    attribute-specifier-seq containing `alignas` is `an attribute list
-    cannot appear here` (parser `discard_attrs_before_unattributed_decl`;
-    file scope only). Tests: `tests/conformance/dcl.align/alignas-*.cpp`.
+    type attributes may appear (`char alignas(8) c;`) it is `'alignas'
+    attribute cannot be applied to types` (the type-position rule
+    below).
+    A leading `alignas` follows the same placement rules as any C++11
+    attribute (spec/parse.md, attribute placement): `an attribute list
+    cannot appear here` before a namespace-definition, static_assert,
+    alias-declaration and the rest, in every scope; before a
+    using-directive or using-declaration it is subject-checked like any
+    other attribute. Tests: `tests/conformance/dcl.align/alignas-*.cpp`,
+    `tests/conformance/dcl.attr.grammar/leading-attribute-placement*.cpp`.
+  - Leading attributes on declarations without declarators
+    ([dcl.pre]/5, [dcl.attr.grammar]/5; WP-324):
+    - attribute-declaration at namespace scope (`[[x]];`):
+      `act_on_decl_attrs` checks the attributes against the enclosing
+      context, so `alignas(4);` is the alignas subject error and
+      `[[noreturn]];` the noreturn one; no `declaration does not
+      declare anything`.
+    - a declaration that declares only a named tag (`[[x]] struct S
+      { };`, `struct S { } [[x]];`): each named attribute gets
+      `attribute 'X' is ignored, place it after "struct" to apply
+      attribute to type declaration` (`-Wignored-attributes`,
+      `warn_free_standing_tag_attrs`; the keyword is `struct`, `class`,
+      `union`, `enum`, `enum class` or `enum struct`), after the
+      parser's error for the position, if any. Not for an anonymous
+      record.
+    - on a non-declaration statement: `'X' attribute cannot be applied
+      to a statement` per declaration attribute
+      (`act_on_stmt_decl_attrs`); on a block-scope asm-declaration
+      clang's `'X' attribute ignored` warning instead.
+    - `[[deprecated]]` on a using-declaration: `'deprecated' currently
+      has no effect on a using declaration` (`-Wignored-attributes`),
+      dropped.
+  - Alignment across redeclarations ([dcl.align]/6, `align_redecl.rs`
+    `merge_aligned_redecl`, clang `mergeAlignedAttrs`; WP-324), for
+    variables, data members and classes. The old declaration's
+    alignment attributes are its own plus those it inherited
+    (`Sema::inherited_aligned`). When both the old and the new
+    declaration carry an `alignas` and their largest requests differ
+    (`alignas(0)` counts as the natural alignment), it is `redeclaration
+    has different alignment requirement (N vs M)` (new, old) at the new
+    `alignas`, with `previous declaration is here` at the old one. A
+    definition without `alignas` after a declaration with one is
+    `'alignas' must be specified on definition if it is specified on any
+    declaration` at the definition's name, with `declared with 'alignas'
+    attribute here` at the old `alignas`; so is an `alignas` added on a
+    redeclaration after a definition that had none (the attribute is
+    then dropped). A redeclaration without `alignas` after one with it is
+    fine and inherits the old `alignas`, and one with a weaker request
+    inherits the strictest. A class redeclaration that names an existing
+    class (`struct alignas(8) S;`) is checked against it
+    (`merge_aligned_folded_redecl`). A dependent request skips the
+    check. Test: `tests/conformance/dcl.align/redecl-alignment-diag.cpp`.
+  - Under-alignment ([dcl.align]/5, `check_alignas_underalignment`,
+    clang `CheckAlignasUnderalignment`; WP-324): when a declaration has
+    an `alignas` (own or inherited) and the largest requested alignment
+    (`alignas` and GNU `aligned`, whose bare form is the target's
+    biggest alignment; `alignas(0)` requests nothing) is nonzero and
+    less than the natural alignment of its type, it is `requested
+    alignment is less than minimum alignment of N for type 'T'` at the
+    last `alignas`. Checked for a variable or data member when its
+    declarator is finished (`finish_decl_alignment`) and for a class or
+    union when its definition completes, including one written in a
+    typedef or alias-declaration and a class template specialization
+    (at the pattern's `alignas`, with the instantiation note); the
+    type's natural alignment ignores the request itself. Test:
+    `tests/conformance/dcl.align/underalignment-diag.cpp`.
   - `alignof` of an expression ([expr.alignof]/1 takes a type-id) is
     the GNU extension `'alignof' applied to an expression is a GNU
     extension` (`-Wgnu-alignof-expression`, in `-Wgnu`, at the keyword;
@@ -1223,6 +1362,71 @@ and returns the scope it names:
     [class.mem.general]/8). Test:
     `tests/conformance/dcl.align/alignof-expression-diag.cpp`.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
+  - **Attribute subjects** ([dcl.attr.grammar]/5, `decl_attrs.rs`
+    `check_decl_attrs`, clang `diagAppertainsToDecl` and the per-kind
+    handlers; WP-324). One table, applied to the attributes of every
+    declarator (variables, functions, data members, typedefs), every
+    alias-declaration (`using X [[a]] = T;` appertains to the
+    typedef-name, [dcl.typedef]/2) and every class-head and enum-head.
+    An attribute the subject rejects is diagnosed at its token and
+    dropped:
+    - `nodiscard`/`warn_unused_result` ([dcl.attr.nodiscard]/1): the
+      subject must be a class, an enumeration, a typedef, or a
+      declaration whose type is a function type or a pointer or
+      reference to one; otherwise `'X' attribute only applies to
+      Objective-C methods, enums, structs, unions, classes, functions,
+      function pointers, and typedefs` (warning). Then, in order: a
+      function type returning `void` (not a constructor) is `attribute
+      'X' cannot be applied to functions without return value`
+      (warning); the standard `[[nodiscard]]` on a variable or parameter
+      is `'nodiscard' attribute only applies to functions, classes, or
+      enumerations` (warning); a non-GNU spelling on a typedef is
+      `'X' attribute ignored when applied to a typedef; consider using
+      '__attribute__((warn_unused_result))' or
+      '[[clang::warn_unused_result]]' instead` (warning;
+      `__attribute__((warn_unused_result))` there is kept). The GNU
+      spellings (`__attribute__`, `[[gnu::...]]`) are told apart by
+      `AttrNode::is_gnu_spelling` (the `GNU_SCOPED` flag).
+    - The standard `[[noreturn]]` ([dcl.attr.noreturn]/1) on anything
+      but a function is `'noreturn' attribute only applies to
+      functions` (error). The GNU `noreturn` is accepted on a function
+      and on a variable, data member or typedef whose type is a
+      function type, a pointer, reference or member pointer to one, or
+      dependent; on another such declaration it is `'noreturn' only
+      applies to function types; type here is 'T'`, on anything else
+      `'noreturn' attribute only applies to functions and methods`
+      (warnings).
+    - `no_unique_address` ([dcl.attr.nouniqueaddr]/1): only a
+      non-bit-field non-static data member (error `... only applies to
+      non-bit-field non-static data members`). `carries_dependency`:
+      only a function or parameter (error `... only applies to
+      parameters, Objective-C methods, and functions`). `packed`: a
+      class, an enumeration or a data member; otherwise `'packed'
+      attribute ignored` (warning).
+    - `fallthrough`, `likely`, `unlikely` and `assume` are statement
+      attributes: on any declaration `'X' attribute cannot be applied to
+      a declaration` (error).
+    - `alignas`: the `alignas` subjects rule above.
+    - `deprecated`, `maybe_unused` and the GNU attributes kiln models
+      are accepted on all of these (a deprecated alias warns at its
+      uses).
+    Not yet: parameters (`act_on_param_declarator` only checks
+    `alignas`) and namespace-definitions are not run through the table.
+    Test: `tests/conformance/dcl.attr.grammar/attribute-subjects.cpp`.
+  - **Type-position attributes** ([dcl.spec.general]/1, [dcl.ptr]/1,
+    [dcl.array]/1, [dcl.fct]/1; `act_on_type_position_attrs`, clang
+    `err_attribute_not_type_attr`; WP-312, WP-324). An
+    attribute-specifier-seq at the end of a decl-specifier-seq or of an
+    alias-declaration's type-id (`using X = int [[deprecated]];`), after
+    a ptr-operator or array declarator, or after a function declarator
+    (`void f() [[noreturn]];`) appertains to a type. A declaration
+    attribute written there in `[[...]]` or `alignas` syntax is `'X'
+    attribute cannot be applied to types` (error), except that after a
+    function declarator a `[[gnu::X]]` one is `attribute 'X' ignored,
+    because it cannot be applied to a type` (warning); either way it is
+    dropped. `__attribute__((...))` there, and the type attributes
+    (`vector_size`, `ext_vector_type`, `mode`, ...), are kept (spec/parse.md
+    says where they attach).
 
 ### 4.6 Namespaces, linkage specifications, static_assert
 - **Namespaces:**
@@ -1301,6 +1505,9 @@ and returns the scope it names:
   variable becomes invalid and the initializer is dropped.
 - **`static_assert`** ([dcl.pre]/10) requires a converted constant
   expression of type `bool`.
+  - A failed comparison adds `expression evaluates to 'L op R'` at the
+    operator, underlining the whole comparison (clang
+    `DiagnoseStaticAssertDetails`).
   - On failure it reports
     `static assertion failed due to requirement '…'`, with the
     condition printed by `TypeNames::write_expr`, plus the message if
@@ -1635,8 +1842,6 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     noexcept-specifiers deferred like any class. clang 19 substitutes
     them with the class (`no member 'y' in 'L'; it has not yet been
     instantiated`).
-  - A friend declared in a local class is not diagnosed (clang: `no
-    matching function found in local scope`).
 
 ### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
 - **Using-declarators** ([namespace.udecl]):
@@ -1764,8 +1969,21 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     `using enum requires an enum or typedef name`.
   - An incomplete enumeration ([enum.udecl]/2): `enumeration 'E' is
     incomplete`, with a note; the `UsingEnum` declaration is made and marked invalid.
+  - A dependent type ([enum.udecl]/1: the declarator designates a
+    non-dependent type), such as a member enumeration of the current
+    instantiation or a local enumeration of a function template:
+    `using-enum cannot name a dependent type`, and no declaration is made.
   - Otherwise a `UsingEnum` declaration names the definition, and each
-    enumerator gets a `UsingShadow`, with the conflict checks above.
+    enumerator gets a `UsingShadow`, with the conflict checks above
+    (`using_enum_of`).
+  - At block scope in a template (WP-323), the instantiation maps the
+    named enumeration through `find_instantiated_decl` (it stays itself
+    unless it is a local or member of the pattern) and redoes
+    `using_enum_of` in the instantiation's block scope, so the
+    enumerators are visible in the instantiated block (clang
+    `TemplateDeclInstantiator::VisitUsingEnumDecl`). Tests:
+    `tests/conformance/enum.udecl/libstdcxx-local-using-enum-template.cpp`,
+    `tests/conformance/enum.udecl/libstdcxx-using-enum-dependent.cpp`.
 - **Namespace aliases** ([namespace.alias]):
   `act_on_namespace_alias(name, name_loc, qual, target, target_loc)`.
   - The target is looked up with `LookupKind::Nested` and must be a
@@ -1836,6 +2054,9 @@ diagnostics and IR.
     `ArrayInitLoopExpr` (`decomp_array_type`, `init_decomposition_array`,
     clang's `TryArrayCopy`).
   - Otherwise `e` is deduced and initialized as an ordinary variable.
+    `auto [a, b]{x}` is direct-list-initialization, so `e` deduces the
+    type of `x`; instantiation (`decomp_declare`) keeps the pattern's
+    initialization style for that (WP-336).
 
   `complete_decomposition` (clang's
   `CheckCompleteDecompositionDeclaration`) then gives every binding a
@@ -1971,7 +2192,14 @@ diagnostics and IR.
   - **subscripts:** either operand order
   - **`sizeof`/`alignof`:** of types and expressions, using
     `kiln_abi` layout; `alignof` of an expression naming a variable or
-    data member uses its declared alignment (§4.5)
+    data member uses its declared alignment (§4.5). An invalid operand
+    (function type, incomplete type, sizeless type, bit-field) is
+    diagnosed as clang `CheckUnaryExprOrTypeTraitOperand`: a type
+    operand at the keyword with the `( type-id )` range (the whole
+    expression when rebuilt by an instantiation), an expression operand
+    at its expression location (`getExprLoc`: its begin, a member call's
+    member name) with its range (the bit-field error without one;
+    WP-320, test `expr.sizeof/incomplete-operand-location.cpp`)
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
     `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
@@ -2080,6 +2308,13 @@ Names there are not odr-used.
   - Every other queued variable is marked `used`.
 - Names inside unevaluated operands are marked
   `non_odr_use_unevaluated`.
+- A default template argument substituted during deduction
+  ([temp.param]/14) is its own full-expression: `default_template_arg`
+  sets the caller's queue aside and appends its own leftovers back, so
+  its `act_on_full_expr` cannot resolve the enclosing call's pending
+  uses early (a constexpr local `Size` passed from a lambda,
+  `h<T, N = sizeof(T)>(1, Size)`, stays a non-odr-use and needs no
+  capture; WP-336).
 - The dump reads `used` and `referenced` from the first declaration.
 
 ### 5.3 The `noexcept` operator (`except.rs`)
@@ -2312,11 +2547,19 @@ for them.
   cast written `(void*)` (exactly, not through a typedef) warns
   `expression result unused; should this cast be to 'void'?`
   (-Wunused-value, clang `warn_unused_voidptr`) with only the fix-it
-  removing the `*` as its range (WP-203). The warning's location is the
-  expression's begin location, so an unused qualified name (`N::x;`,
+  removing the `*` as its range (WP-203). An unused name is reported at
+  its begin location, so a qualified name (`N::x;`,
   `::N::x;`, `N::v<int>;`) points at the start of its
   nested-name-specifier, as clang's `DeclRefExpr::getBeginLoc` (WP-318,
   `tests/conformance/expr.prim.id.qual/unused-value-qualified-name-column.cpp`).
+  - **Locations**: a built-in subscript `a[i]` is reported at its `]`
+    (clang `getRBracketLoc`; also as a comma's left operand and inside
+    parentheses, where the parentheses are looked through), a unary
+    operator at the operator, a member access at the member name, a
+    binary operator at the operator; a subscript yielding a `volatile`
+    glvalue, `(void)e` and a call of an overloaded `operator[]` returning
+    a reference are not warned (WP-324; conformance test
+    `stmt.expr/unused-value-subscript.cpp`).
   - `emit_unused` (WP-182) follows clang's order: a comparison is
     `-Wunused-comparison` only when it is the unused expression itself
     (`top_comparison`: not parenthesized, not a comma's right operand or
@@ -2693,6 +2936,12 @@ and aggregate element types.
   scalar (more than one argument is clang's `excess elements in scalar
   initializer`); `{...}` is list-initialization (§6) of
   `T` or of the array `T[n]`, with an `array_filler` for the tail.
+  A `const` class array is fine when the element class is
+  const-default-constructible ([dcl.init.general]/7: a user-provided
+  default constructor, or every member initialized;
+  `CAN_CONST_DEFAULT_INIT` once the class is complete), so `new const
+  A[n]` with `A() {}` is accepted and `new const P[n]` for an aggregate
+  `P { int x; }` is the error above (WP-336).
   Class element types report "not supported yet" for default- and
   parenthesized initialization (they need `CXXConstructExpr`,
   WP-067b); braced aggregate initialization works.
@@ -2707,6 +2956,19 @@ and aggregate element types.
   without destructors), aligned when over-aligned. Class element types
   with a non-trivial destructor are unsupported (WP-067b / WP-076);
   class-scope `operator delete` is `todo(WP-068b)`.
+- **Destroying operator delete** ([expr.delete]/7, /10,
+  [basic.stc.dynamic.deallocation]/5; WP-336): for a single-object
+  `delete p` on a class `C`, a member `operator delete(C*,
+  std::destroying_delete_t[, size_t][, std::align_val_t])`
+  (`Ast::is_destroying_operator_delete`: a member named `operator
+  delete` whose second parameter is the class `std::destroying_delete_t`)
+  is preferred: once one is viable only destroying candidates are kept
+  (`usual_delete(.., destroying)`; the new-expression's matching
+  deallocation never takes one). Without a virtual destructor the operand
+  is converted to the first parameter's type. Codegen calls it with an
+  empty tag temporary and runs no destructor; the destructor is still
+  selected (and access-checked) as clang does. A destroying delete through
+  a virtual destructor is a codegen "not supported yet" error.
 - The element class's destructor ([expr.delete]/6, and for `new T[n]`
   [expr.new]/27) is selected (`mark_element_dtor_referenced`, skipped
   for an invalid or dependent class): a deleted one (such as a union's
@@ -3248,8 +3510,72 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   walk over a shared expression (§5.10's `mark_shared_expr_referenced`)
   checks those arguments of the calls in it again, under the
   instantiation's context notes.
+- In constant evaluation an argument of non-literal class type, for the
+  ellipsis or a declared by-value parameter, stops the evaluation at the
+  argument with clang's `CheckLiteralType` note "non-literal type 'T'
+  cannot be used in a constant expression" (spec/oven.md, call frames;
+  WP-320), before any constructor or destructor of it runs.
 - Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
-  `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`.
+  `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`,
+  `tests/conformance/expr.const/non-literal-argument.cpp`.
+
+### 5.21 Template rules from the libstdc++ clusters (WP-323)
+- **Default arguments in dependent template-ids** ([temp.arg.general]/9,
+  [temp.over.link]/5): a dependent class template-id that leaves
+  parameters to their defaults (`enable_if<B>`) gets a canonical type
+  carrying the substituted defaults (`enable_if<B, void>`); the written
+  arguments stay the sugar (`template_id`, `dependent_spec_full_args`).
+  So an alias template's expansion and the written form are the same
+  type, and redeclarations through either match (`std::swap`:
+  type_traits:2824 vs move.h:226). Defaults are not added when a
+  parameter is a pack, an argument is a pack expansion, or a dependent
+  default fails to substitute. Tests:
+  `tests/conformance/temp.over.link/libstdcxx-alias-equivalent-redecl.cpp`,
+  `tests/conformance/temp.over.link/libstdcxx-default-arg-equivalent-redecl.cpp`.
+- **`this->f<A>(...)` for an overloaded member template**
+  ([temp.names]/3): a member of the current instantiation that names an
+  overload set stays a `CXXDependentScopeMemberExpr`. When lookup in the
+  pattern finds a member template under that name, `<` begins a
+  template-argument-list (`dependent_member_names_template`,
+  `act_on_dependent_member_template_args`; variant:1526). Test:
+  `tests/conformance/temp.names/libstdcxx-this-member-template.cpp`.
+- **Access through a dependent base** ([class.protected]/1,
+  [class.access.base]/5): in `has_access`, a class that does not
+  (yet) derive from the naming class but has a dependent base anywhere
+  in its hierarchy (`has_dependent_bases_in`) may derive from it after
+  instantiation. The check is deferred (`speculative_friend`) and
+  replayed per instantiation (`replay_dependent_access`), where it
+  either passes or reports `'m' is a protected member of 'B'` under the
+  instantiation note (messages_members.h:107). Tests:
+  `tests/conformance/class.protected/libstdcxx-protected-static-dependent-base.cpp`,
+  `tests/conformance/class.protected/libstdcxx-protected-static-dependent-base-recheck.cpp`.
+- **Current-instantiation template arguments in an out-of-line return
+  type** ([temp.dep.type]/1, [temp.over.link]/5):
+  `rebuild_in_current_instantiation` also rebuilds the type arguments of
+  a class template-id (`pair<typename tree<K, V>::base_ptr, ...>`). When
+  the rebuilt arguments are no longer dependent (the member is a
+  non-dependent typedef), the specialization is formed from their
+  canonical types, keeping the written arguments as sugar, so it is the
+  type the in-class declaration named. When they are still dependent,
+  the template-id is formed again from the rebuilt arguments, defaults
+  included (stl_tree.h:2107). Tests:
+  `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return.cpp`,
+  `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return-args.cpp`.
+- **Member template-ids with non-template overloads**
+  ([temp.arg.explicit]/4, [over.match.call.general]/1): an unqualified
+  function template-id `f<A>(args)` names the whole overload set that
+  lookup finds, member functions (`CXXMethod`) and using-shadows
+  included. The non-template members are not viable with explicit
+  template arguments (`widen_function_template_id`; bitset:1358
+  `to_string`). Test:
+  `tests/conformance/temp.arg.explicit/libstdcxx-member-template-id-overload-set.cpp`.
+- **`T x({a, b})` in a template** ([dcl.init.general]/16,
+  [temp.dep.expr]/3): a parenthesized initializer with a braced-init-list
+  argument is kept as a `ParenListExpr` for instantiation in two cases:
+  the variable's type is dependent (the list has no type of its own), or
+  an element of the list is type-dependent (`braced_arg_type_dependent`).
+  This is `defer_dependent_init` (<format>:439 `_Utf32_view`). Test:
+  `tests/conformance/dcl.init.general/libstdcxx-paren-braced-init-dependent.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -4327,7 +4653,6 @@ the P2996R13 wording.
     object from anything but a braced list
 - **Rules not checked yet:**
   - jumps past initialization ([stmt.dcl]/3)
-  - [dcl.align]/6, that `alignas` must be on the definition
   - full [basic.def.odr] for inline functions and variables across
     redeclarations
 - **Using-declarations** (§4.8):

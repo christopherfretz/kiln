@@ -191,6 +191,10 @@ pub struct PrintOptions {
     /// parentheses): clang's `desugarForDiagnostic` looks through it
     /// without counting it for an `aka` (WP-191).
     pub no_parens: bool,
+    /// clang's `SplitTemplateClosers` (the C policy, no C++11): a space
+    /// between two `>` closers (`P<P<int> >`), as
+    /// `-fdump-record-layouts` prints.
+    pub split_closers: bool,
 }
 
 impl PrintOptions {
@@ -201,6 +205,7 @@ impl PrintOptions {
         full_scope: false,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
     };
     /// The canonical type with every name scoped (the `aka` string).
@@ -210,6 +215,7 @@ impl PrintOptions {
         full_scope: true,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
     };
     /// The top-level-desugared type (the AST dump's second string).
@@ -219,6 +225,7 @@ impl PrintOptions {
         full_scope: false,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
     };
     /// The canonical type as clang's policy-less `QualType::getAsString()`
@@ -229,6 +236,7 @@ impl PrintOptions {
         full_scope: true,
         suppress_tag: false,
         c_policy: true,
+        split_closers: false,
         no_parens: false,
     };
 }
@@ -291,6 +299,7 @@ pub fn write_declarator(
         scope,
         suppress_tag: opts.suppress_tag,
         c_policy: opts.c_policy,
+        split_closers: opts.split_closers,
         no_parens: opts.no_parens,
         inside_cc_attr: false,
         diag_desugar: false,
@@ -314,6 +323,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         scope: false,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
@@ -341,6 +351,7 @@ pub fn write_nns_resolved(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, ou
         scope: true,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
@@ -388,6 +399,7 @@ pub fn write_arg_list_canonical(
         scope: true,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
@@ -446,6 +458,7 @@ fn arg_list_with_scope(
         scope,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
@@ -471,6 +484,39 @@ pub fn write_arg_list_of(
     arg_list_with_scope(ctx, names, l, false, Some(template), out);
 }
 
+/// The arguments `l` of class template specialization `template` as
+/// clang prints a specialization's name under the C policy
+/// (`QualType::getAsString()` of its canonical type, as
+/// `-fdump-record-layouts` does): canonical, scoped, tag types with
+/// their keyword, `> >` between closers (`<struct ns::Q, P<int> >`).
+pub fn write_arg_list_c(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    template: DeclId,
+    l: ArgListId,
+    out: &mut String,
+) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: true,
+        suppress_tag: false,
+        c_policy: true,
+        split_closers: true,
+        no_parens: false,
+        inside_cc_attr: false,
+        diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
+        canon_args: true,
+        depth: 0,
+    };
+    p.arg_list_prefix(l, false, usize::MAX, Some(template), false);
+    *out = p.out;
+}
+
 /// [`write_arg_list`] of the first `len` arguments of `l` (`<>` when
 /// `len` is 0): a name printed without its trailing default arguments.
 pub fn write_arg_list_prefix(
@@ -488,6 +534,7 @@ pub fn write_arg_list_prefix(
         scope: false,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
@@ -516,6 +563,7 @@ pub fn write_template_arg(
         scope: false,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
@@ -525,6 +573,36 @@ pub fn write_template_arg(
         depth: 0,
     };
     p.arg(a.view());
+    *out = p.out;
+}
+
+/// Writes template name `n` as written (clang's `TemplateName::print`
+/// with `Qualified::AsWritten`): `nns::[template] X` keeps its qualifier,
+/// a bare name stays bare.
+pub fn write_template_name(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    n: TemplateNameId,
+    out: &mut String,
+) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: false,
+        suppress_tag: false,
+        c_policy: false,
+        split_closers: false,
+        no_parens: false,
+        inside_cc_attr: false,
+        diag_desugar: false,
+        in_tst_args: false,
+        scoped_args: false,
+        canon_args: false,
+        depth: 0,
+    };
+    p.template_name(n, Qual::AsWritten);
     *out = p.out;
 }
 
@@ -581,6 +659,7 @@ fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -
         scope: true,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: true,
@@ -790,6 +869,8 @@ struct Printer<'a> {
     suppress_tag: bool,
     /// [`PrintOptions::c_policy`].
     c_policy: bool,
+    /// [`PrintOptions::split_closers`].
+    split_closers: bool,
     /// [`PrintOptions::no_parens`].
     no_parens: bool,
     /// clang's `InsideCCAttribute`.
@@ -1339,7 +1420,7 @@ impl Printer<'_> {
                 self.space_before_ph();
             }
             TypeView::DeducedTemplateSpecialization { name, deduced: None } => {
-                self.template_name(name, Qual::AsWritten);
+                self.template_name(self.ctx.dtst_display_name(name), Qual::AsWritten);
                 self.space_before_ph();
             }
             TypeView::Attributed { kind, modified, .. } => {
@@ -1881,6 +1962,11 @@ impl Printer<'_> {
             }
         }
         if !is_pack {
+            // clang's `SplitTemplateClosers`, set by the C policy (no
+            // C++11): `P<P<char> >` ([`PrintOptions::split_closers`]).
+            if self.split_closers && self.out.ends_with('>') {
+                self.push(" ");
+            }
             self.push(">");
         }
         self.depth -= 1;

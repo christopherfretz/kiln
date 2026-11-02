@@ -68,6 +68,10 @@ struct Replay {
 
 /// A recursive-descent parser over the preprocessor's token stream,
 /// driving [`Sema`].
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent parse-state flags, as clang's Parser"
+)]
 pub struct Parser<'a, 'sm> {
     /// Semantic analysis.
     pub(crate) s: Sema<'a, 'sm>,
@@ -108,6 +112,12 @@ pub struct Parser<'a, 'sm> {
     /// compound statement (clang's `ParsedStmtContext::InStmtExpr`); taken
     /// by `parse_statement`, passed on through labels.
     pub(crate) in_stmt_expr: bool,
+    /// The expression being parsed is invalid as clang's `ExprError`
+    /// though the parser goes on past it: a call whose `)` is missing
+    /// after a delayed typo (clang's `ParsePostfixExpressionSuffix` sets
+    /// `LHS = ExprError()`). An expression statement then skips to its
+    /// `;` with no "expected ';'" (`parse_expression_statement`).
+    pub(crate) expr_invalid: bool,
     /// False while parsing a template argument: a `>` or `>>` ends the
     /// argument instead of being an operator ([temp.names]/4, clang's
     /// `GreaterThanIsOperator`). Brackets restore it: see
@@ -154,6 +164,8 @@ pub struct Parser<'a, 'sm> {
     /// The attributes `parse_decl_specifiers` starts its seq with (a
     /// declaration statement's leading ones).
     pub(crate) lead_decl_attrs: Vec<kiln_ast::AttrId>,
+    /// Where `stmt_attrs` / `lead_decl_attrs` start (`[[` or `alignas`).
+    pub(crate) stmt_attrs_loc: Option<Loc>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -253,6 +265,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             #[cfg(test)]
             trace: Vec::new(),
             in_stmt_expr: false,
+            expr_invalid: false,
             greater_is_op: true,
             greater_off_depth: 0,
             pack_hint: false,
@@ -264,6 +277,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             template_delay_level: None,
             stmt_attrs: Vec::new(),
             lead_decl_attrs: Vec::new(),
+            stmt_attrs_loc: None,
         };
         p.handle_events(0);
         p
@@ -798,7 +812,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 i += 1;
             }
             let name = self.ident_of(self.tok_at(i))?;
-            let mut class = self.s.classify_name(name, qual);
+            // A name before `::` is looked up for a scope only
+            // ([basic.lookup.qual]/1).
+            let mut class = if self.tok_at(i + 1).kind == TokKind::Punct(Punct::ColonColon) {
+                self.s.classify_nested_name(name, qual)
+            } else {
+                self.s.classify_name(name, qual)
+            };
             if dep_tid && matches!(class, NameClass::Type(..)) {
                 class = NameClass::Dependent;
             }

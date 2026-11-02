@@ -1,0 +1,21 @@
+// [expr.const]/10, [basic.types.general]/10: a by-value argument of non-literal
+// class type (to a declared or a variadic parameter) is a prvalue initializing
+// a parameter object, not the object the evaluated declaration initializes:
+// clang `CheckLiteralType` stops the evaluation there, with no note about the
+// constructor or destructor it would have run.
+//@ expect: compile-fail
+//@ strict-diags
+//@ diag: 19:15 error "constexpr variable 'a' must be initialized by a constant expression"
+//@ diag: 19:24 note "non-literal type 'NL' cannot be used in a constant expression"
+//@ diag: 20:15 error "constexpr variable 'b' must be initialized by a constant expression"
+//@ diag: 20:21 note "non-literal type 'NL' cannot be used in a constant expression"
+//@ diag: 21:15 error "constexpr variable 'c' must be initialized by a constant expression"
+//@ diag: 21:27 note "non-literal type 'NL' cannot be used in a constant expression"
+struct NL { constexpr NL() {} constexpr NL(const NL &) {} ~NL() {} };
+struct L { int x = 0; };
+constexpr int v(int, ...) { return 1; }
+constexpr int h(NL) { return 1; }
+constexpr int lit = v(1, L());
+constexpr int a = v(1, NL());
+constexpr int b = h(NL());
+constexpr int c = v(1, 2, (NL()));
