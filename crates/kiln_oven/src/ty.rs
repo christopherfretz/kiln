@@ -244,9 +244,9 @@ impl Types {
             if union {
                 return first;
             }
-            fs[i + 1..].iter().fold(first, |best, f| {
-                if f.offset > best.offset && sized(&f) { f } else { best }
-            })
+            fs[i + 1..]
+                .iter()
+                .fold(first, |best, f| if f.offset > best.offset && sized(&f) { f } else { best })
         });
         found
             .or_else(|| {
