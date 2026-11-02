@@ -3790,10 +3790,11 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
 - Each class template redeclaration is its own `ClassTemplateDecl`
   (with its own parameter list and pattern record) linked into the
   chain, as clang's (WP-311). `merge_template_defaults` gives every
-  redeclaration's parameters the defaults of the others, but in
-  `Sema::inherited_defaults`, not on the AST: the dump prints no
-  `inherited from`. `check_template_param_list` takes the location of a
-  repeated default from whichever earlier redeclaration gave it.
+  redeclaration's parameters the defaults of the others in
+  `Sema::inherited_defaults`, which instantiation reads. That is the
+  union over all declarations, so it also reaches earlier ones.
+  `check_template_param_list` takes the location of a repeated default
+  from whichever earlier redeclaration gave it.
   `tests/conformance/temp.class/redeclaration-diags.cpp`,
   `tests/conformance/temp.class/redeclaration-ast.cpp`.
 - A template template parameter's inner list is not order-checked.
@@ -5025,8 +5026,14 @@ requires-clause scope.**
   class template naming an existing template is a redeclaration in that
   group and does not make the original dependent.
 - *Inherited default arguments* ([temp.param]/12):
-  `Sema.inherited_defaults`, filled by `merge_template_defaults`; they
-  are not dumped (a gap). Deduction completes a dependent `P` with its
+  `Sema.inherited_defaults`, filled by `merge_template_defaults`. The
+  AST records, separately, what clang records:
+  `record_inherited_defaults` gives each parameter of a redeclaration
+  that has no default of its own the parameter owning its counterpart's
+  default in the previous declaration (`TemplateTables::
+  inherited_defaults`, clang `setInheritedDefaultArgument`). It runs
+  only when the heads match. The dump prints it as `inherited from`
+  (spec/ast-dump.md). Deduction completes a dependent `P` with its
   defaulted arguments (`complete_dependent_args`, [temp.deduct.type]).
   The parameters and defaults, and the defaults' depth, are the head
   declaration's (`head_template`, §6.2; WP-286, WP-295, WP-296).

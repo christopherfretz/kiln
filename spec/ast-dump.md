@@ -449,6 +449,18 @@ sketch above (WP-071/072).
 - `TemplateArgument type '<type>' | expr | template`. A pack-expansion
   argument prints its pattern, without the `...` (`type 'Ts'`); this
   matches clang.
+- A template parameter of a redeclaration that inherits its default
+  from an earlier declaration ([temp.param]/12) prints the inherited
+  `TemplateArgument` as its default child. That line's first child is
+  `inherited from <Kind> '<name>' ['<type>']`, naming the parameter
+  that wrote the default (`TemplateTypeParm 'T'`,
+  `NonTypeTemplateParm 'N' 'int'`, `TemplateTemplateParm 'TT'`; with
+  `ids`, its `#dN`). The rest of the argument's children follow. This
+  is clang's `getInheritedFrom`. Only earlier declarations pass a
+  default on, from the immediately previous declaration's parameter
+  (`TemplateTables::inherited_defaults`). clang's `previous` label (a
+  default merged across modules) has no kiln equivalent, and the
+  normalizer rejects it. Test: temp.param/inherited-default-ast.cpp.
 
 The dependent expressions use clang's dependent type, `'<dependent
 type>'`:

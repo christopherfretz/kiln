@@ -147,6 +147,14 @@ enum Node {
     /// A template argument (`TemplateArgument type 'int'`): a default
     /// argument or an argument of a concept-id / template-id.
     Arg(TemplateArg),
+    /// The default template argument template parameter `p` inherits
+    /// from an earlier declaration ([temp.param]/12): the owner's
+    /// argument, with an `inherited from` child (clang's
+    /// `dumpTemplateArgumentLoc` with `getInheritedFrom`).
+    InheritedArg(DeclId),
+    /// `inherited from <decl-ref>`: the parameter that owns an inherited
+    /// default argument.
+    InheritedFrom(DeclId),
     /// Requirement `i` of `RequiresExpr` `e` (`SimpleRequirement`, ...).
     Req(ExprId, u32),
     /// An explicit specialization or instantiation listed under its
@@ -445,6 +453,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 Node::Overrides(d) => self.overrides_line(d),
                 Node::Fixed(text) => self.line.push_str(text),
                 Node::Arg(a) => self.arg_line(a),
+                Node::InheritedArg(p) => {
+                    if let Some(&a) = self.inherited_default(p) {
+                        self.arg_line(a);
+                    }
+                }
+                Node::InheritedFrom(o) => {
+                    self.line.push_str("inherited from ");
+                    self.decl_ref(o);
+                }
                 Node::Req(e, i) => self.req_line(e, i),
                 Node::SpecRef(d) => {
                     self.line.push_str(self.class_name(d));
@@ -508,6 +525,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             Node::Arg(a) => self.arg_children(a, kids),
+            Node::InheritedArg(p) => {
+                if let Some(o) = self.ast.templates.inherited_defaults.get(p).copied() {
+                    kids.push((Node::InheritedFrom(o), None));
+                }
+                if let Some(&a) = self.inherited_default(p) {
+                    self.arg_children(a, kids);
+                }
+            }
             Node::Req(e, i) => self.req_children(e, i, kids),
             Node::Attr(a) => {
                 // `CXXAssumeAttr`: the assumption.
@@ -518,7 +543,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(e), None));
                 }
             }
-            Node::Base(..) | Node::Overrides(_) | Node::Fixed(_) | Node::SpecRef(_) => {}
+            Node::Base(..)
+            | Node::Overrides(_)
+            | Node::Fixed(_)
+            | Node::SpecRef(_)
+            | Node::InheritedFrom(_) => {}
         }
         // A nested immediate invocation has no wrapper in clang.
         for (k, _) in kids.iter_mut() {
@@ -1529,7 +1558,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
         if let Some(&a) = ast.templates.defaults.get(d) {
             kids.push((Node::Arg(a), None));
+        } else if self.inherited_default(d).is_some() {
+            kids.push((Node::InheritedArg(d), None));
         }
+    }
+
+    /// The default argument template parameter `p` inherits: its owner's
+    /// ([`crate::templates::TemplateTables::inherited_defaults`]).
+    fn inherited_default(&self, p: DeclId) -> Option<&'a TemplateArg> {
+        let o = *self.ast.templates.inherited_defaults.get(p)?;
+        self.ast.templates.defaults.get(o)
     }
 
     /// ` [class|typename] ['ty'] depth D index I [...] [name]`.

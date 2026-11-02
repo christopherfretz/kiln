@@ -2094,16 +2094,14 @@ impl<'a> Printer<'a, '_> {
     /// told from a pack expansion of one; it is accepted only as a template
     /// template parameter's default (`ttp_default`).
     fn template_arg(&mut self, n: &'a Json, ttp_default: bool) -> Res<Tree> {
-        const KEYS: &[&str] = &["kind", "range", "inner", "type", "isExpr"];
+        const KEYS: &[&str] = &["kind", "range", "inner", "type", "isExpr", "inherited from"];
         if let Some((key, _)) =
             n.as_obj().unwrap_or(&[]).iter().find(|(key, _)| !KEYS.contains(&key.as_str()))
         {
             return Err(match key.as_str() {
-                "inherited from" | "previous" => {
-                    "clang-ast: unsupported inherited default template argument (kiln prints \
-                     a default on the declaring parameter only)"
-                        .into()
-                }
+                "previous" => "clang-ast: unsupported `previous` default template argument (a \
+                               default merged from another module)"
+                    .into(),
                 _ => format!(
                     "clang-ast: `TemplateArgument` attribute `{key}` is not in the mapping \
                      table (only type, expression and template arguments as written are)"
@@ -2111,6 +2109,15 @@ impl<'a> Printer<'a, '_> {
             });
         }
         let mut t = Tree { line: String::from("TemplateArgument"), kids: Vec::new() };
+        // An inherited default ([temp.param]/12): `inherited from` and the
+        // parameter owning it, first child (clang's `dumpDeclRef`).
+        if let Some(from) = n.get("inherited from") {
+            let mut line = format!("inherited from {}", bare_ref(from)?);
+            if let Some(ty) = from.get("type") {
+                push_word(&mut line, &type_pair(Some(ty), "inherited from")?);
+            }
+            t.kids.push(Tree { line, kids: Vec::new() });
+        }
         if let Some(ty) = n.get("type") {
             push_word(&mut t.line, "type");
             push_word(&mut t.line, &type_pair(Some(ty), "TemplateArgument")?);
