@@ -419,7 +419,16 @@ Redeclaration and linkage rules:
   `act_on_start_this_scope(member, quals)` / `act_on_end_this_scope`
   bracket a member function's exception specification and trailing
   return type, where `this` has type `cv X*`; member access into the
-  class being defined is allowed there.
+  class being defined is allowed there (and in NSDMIs, default
+  arguments and bodies, which run after `}`). Anywhere else before the
+  class's `}` (a static data member initializer, an array bound, an
+  alias, a `decltype` member type, a `static_assert`) `((S*)0)->m()`
+  is `member access into incomplete type 'S'` with the note
+  `definition of 'S' is not complete until the closing '}'` (clang's
+  `isThisOutsideMemberFunctionBody`; `Sema::this_outside_member_body`;
+  WP-280; test `expr.ref/member-access-class-being-defined.cpp`).
+  Divergence: clang reports nothing further in a class after its first
+  error there, kiln keeps diagnosing (e.g. a later `S s;` member).
 - **`-Wvexing-parse`**: a function declarator the parser chose over a
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses

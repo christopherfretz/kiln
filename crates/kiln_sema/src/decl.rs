@@ -2104,7 +2104,15 @@ impl Sema<'_, '_> {
             }
         }
         let Some(rec) = self.ast.types.as_record(t) else { return msg };
-        if self.ast.definition(rec).is_some() {
+        if let Some(def) = self.ast.definition(rec) {
+            // Still being defined (clang `RequireCompleteType` on a tag
+            // that `isBeingDefined`).
+            if self.defining.contains(&def) {
+                let note = self
+                    .diag(DiagId::note_definition_not_complete, self.ast.decls.get(def).loc())
+                    .arg(format!("'{}'", self.qualified_decl_name(def)));
+                return msg.with_note(note);
+            }
             return msg;
         }
         if self.inst.undefined_diagnosed.get() == Some(rec) {

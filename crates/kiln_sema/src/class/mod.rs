@@ -535,6 +535,21 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether a member access into class `r` may treat it as complete
+    /// although it is still being defined: `this` may appear here outside
+    /// a member function body (a trailing return type or
+    /// noexcept-specifier, [expr.prim.this]/2) and `r` is being defined
+    /// (clang `isThisOutsideMemberFunctionBody`). Elsewhere before the
+    /// class's `}` (a member's type, a static member's initializer, an
+    /// array bound), [expr.ref]/4 needs a complete class:
+    /// `member access into incomplete type`.
+    pub(crate) fn this_outside_member_body(&self, r: DeclId) -> bool {
+        let first = self.ast.first(r);
+        let this_scope = !self.nsdmi_this.is_empty()
+            || self.func.as_ref().is_some_and(|f| f.this_override.is_some());
+        this_scope && self.defining.iter().any(|&d| self.ast.first(d) == first)
+    }
+
     /// The type of `this` where an expression is being analysed, if
     /// `this` may appear there ([expr.prim.this]/2-3).
     pub(crate) fn current_this(&self) -> Option<QualType> {
