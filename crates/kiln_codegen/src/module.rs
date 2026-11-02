@@ -176,14 +176,16 @@ impl<'a> Cg<'a> {
         opts: &'a CodegenOptions,
         void_ptr: QualType,
     ) -> Self {
+        // clang 20+'s AArch64 data layout at compat 22 (spec/codegen.md §6a).
         let spec = match target.triple.arch {
+            Arch::AArch64 if opts.clang_compat >= 22 => kiln_llvm::AARCH64_LINUX_GNU_22,
             Arch::AArch64 => kiln_llvm::AARCH64_LINUX_GNU,
             Arch::X86_64 => kiln_llvm::X86_64_LINUX_GNU,
         };
         Cg {
             ast,
             folds,
-            tys: IrTypes::new(ast, target),
+            tys: IrTypes::new(ast, target).with_clang_compat(opts.clang_compat),
             target,
             opts,
             m: Module::with_target(&opts.source_filename, spec),
@@ -231,13 +233,24 @@ impl<'a> Cg<'a> {
 
     /// The functions' frame-pointer kind (spec/codegen.md "Frame
     /// pointer").
+    /// The kind is clang 22's `"non-leaf-no-reserve"` (module flag 4) for
+    /// `non-leaf` at compat 22 with an LLVM 22 backend (LLVM 19 rejects the
+    /// value; spec/codegen.md §6a, "Frame pointer").
     pub fn frame_pointer(&self) -> crate::FramePointer {
-        crate::FramePointer::resolve(
+        let fp = crate::FramePointer::resolve(
             self.is_x86(),
             self.opts.optimize,
             self.opts.omit_frame_pointer,
             self.opts.omit_leaf_frame_pointer,
-        )
+        );
+        if fp == crate::FramePointer::NonLeaf
+            && self.opts.clang_compat >= 22
+            && self.opts.llvm_major >= 22
+        {
+            crate::FramePointer::NonLeafNoReserve
+        } else {
+            fp
+        }
     }
 
     // ---- driving -------------------------------------------------------
@@ -1433,6 +1446,15 @@ impl<'a> Cg<'a> {
                     s.push(Attr::ByVal(t));
                     s.push(Attr::Align(*align));
                 }
+                // clang 21+: the callee owns an indirect argument the caller
+                // does not destroy (spec/codegen.md §6a; LLVM 21+ syntax).
+                ArgKind::Indirect { byval: false, .. }
+                    if self.opts.clang_compat >= 22
+                        && self.opts.llvm_major >= 21
+                        && self.destructed_class(sig.params[i]).is_none() =>
+                {
+                    s.push(Attr::Flag(AttrKind::DeadOnReturn));
+                }
                 ArgKind::Direct { align: Some(n), .. } => s.push(Attr::AlignStack(*n)),
                 ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
                     for _ in 1..fs.len() {
@@ -2011,7 +2033,10 @@ impl<'a> Cg<'a> {
     fn trailer(&mut self) {
         let fp = self.frame_pointer().module_flag();
         let m = &mut self.m;
-        m.add_named_metadata("llvm.linker.options", &[]);
+        // clang 20+ emits no empty `!llvm.linker.options`.
+        if self.opts.clang_compat < 22 {
+            m.add_named_metadata("llvm.linker.options", &[]);
+        }
         m.add_module_flag_i32(1, "wchar_size", 4);
         m.add_module_flag_i32(8, "PIC Level", 2);
         m.add_module_flag_i32(7, "PIE Level", 2);

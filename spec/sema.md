@@ -199,6 +199,14 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (`conv::implicit_convert`, `Sema::names_invalid_function`) recover
     silently, with no "cannot initialize" after the first error
     (WP-379, `expr.unary.op/address-of-invalid-member-function.cpp`).
+    `&` of a parenthesized member name ([expr.unary.op]/4, WP-392,
+    clang `CheckAddressOfOperand`): `&(C::f)` / `&(f)` naming an
+    instance member function (or an overload set of them) is "call to
+    non-static member function without an object argument" at the
+    name, and `&b.f` / `&this->f` (a bound member function) is "cannot
+    create a non-constant pointer to member function" at the `&`; both
+    recover silently, with no "cannot take the address of an rvalue"
+    (`expr.unary.op/addr-of-parenthesized-member-function.cpp`).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
@@ -730,9 +738,14 @@ Redeclaration and linkage rules:
   `volatile-qualified return type T is deprecated`
   [-Wdeprecated-volatile] (`sema_deprecated_volatile_return`, in
   `-Wdeprecated`), at the same location as the array/function return
-  check. Not re-checked after template substitution (clang warns for
-  `T f()` with `T = volatile int`). Tests:
-  `depr.volatile.type/volatile-return{,-cxx17}.cpp`.
+  check. After template substitution (WP-392, `check_volatile_return`)
+  a return type that became volatile warns at the return type's begin:
+  at the class template's instantiation for a member, at the alias's
+  use, and for a function template specialization formed by deduction
+  at its first use (held back by SFINAE and replayed, sema-templates.md
+  §5.7). A non-dependent volatile return type is not re-warned, and a
+  deduced `auto` / `decltype(auto)` return never warns. Tests:
+  `depr.volatile.type/volatile-return{,-cxx17,-subst,-subst-19}.cpp`.
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.

@@ -77,9 +77,9 @@ pub struct CodegenOptions {
     /// The clang version whose diagnostic text codegen's warnings follow
     /// (`-fclang-compat=`; spec/driver.md).
     pub clang_compat: u32,
-    /// The major version of the LLVM that consumes the IR (the driver's
-    /// `KILN_LLVM_DIR`; spec/driver.md): selects the intrinsic signatures
-    /// that changed between the supported versions (19 and 22).
+    /// The major version of the LLVM that consumes the IR (`llvm-config
+    /// --version` of the driver's `KILN_LLVM_DIR`; spec/driver.md): selects
+    /// the IR that changed between the supported versions (19 and 22).
     pub llvm_major: u32,
     /// The last of `-fomit-frame-pointer` (`Some(true)`) and
     /// `-fno-omit-frame-pointer` (`Some(false)`); `None` is the target's
@@ -101,6 +101,9 @@ pub enum FramePointer {
     None,
     /// Every function but a leaf keeps one (`"non-leaf"`, flag 1).
     NonLeaf,
+    /// clang 22's spelling of `NonLeaf`: the frame-pointer register is
+    /// not reserved in leaf functions (`"non-leaf-no-reserve"`, flag 4).
+    NonLeafNoReserve,
     /// Every function keeps one (`"all"`, flag 2).
     All,
 }
@@ -137,6 +140,7 @@ impl FramePointer {
         match self {
             FramePointer::None => None,
             FramePointer::NonLeaf => Some("non-leaf"),
+            FramePointer::NonLeafNoReserve => Some("non-leaf-no-reserve"),
             FramePointer::All => Some("all"),
         }
     }
@@ -148,6 +152,7 @@ impl FramePointer {
         match self {
             FramePointer::None => None,
             FramePointer::NonLeaf => Some(1),
+            FramePointer::NonLeafNoReserve => Some(4),
             FramePointer::All => Some(2),
         }
     }

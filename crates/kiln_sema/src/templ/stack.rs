@@ -526,8 +526,9 @@ impl Sema<'_, '_> {
                 Some(l) => self.spec_name(f.template, l),
                 None => self.qualified_decl_name(f.template),
             },
+            // clang streams the `FunctionTemplateDecl` itself: unqualified.
             FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution => {
-                let name = self.qualified_decl_name(f.template);
+                let name = self.decl_name(f.template);
                 match f.args {
                     Some(l) => format!("'{name}' {}", self.template_args_desc(f.template, l)),
                     None => format!("'{name}'"),
@@ -574,6 +575,41 @@ impl Sema<'_, '_> {
         self.inst.sfinae.borrow().last().map_or(0, |s| s.errors)
     }
 
+    /// The number of warnings the innermost SFINAE context holds back.
+    pub(crate) fn sfinae_warnings(&self) -> usize {
+        self.inst.sfinae.borrow().last().map_or(0, |s| s.warnings.len())
+    }
+
+    /// The warnings the innermost SFINAE context held back after the
+    /// first `from`, taken out of it.
+    pub(crate) fn take_sfinae_warnings(&self, from: usize) -> Vec<Diag> {
+        let mut st = self.inst.sfinae.borrow_mut();
+        match st.last_mut() {
+            Some(s) if s.warnings.len() > from => s.warnings.split_off(from),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Reports the warnings held back while function template
+    /// specialization `d`'s signature was substituted, at its first use
+    /// (clang `DiagnoseUseOfDecl`; §5.7).
+    pub(crate) fn emit_suppressed_diags(&mut self, d: DeclId) {
+        if self.templ.suppressed_diags.is_empty() {
+            return;
+        }
+        if let Some(ds) = self.templ.suppressed_diags.remove(&d) {
+            for x in ds {
+                // From clang 22 on they carry their own context notes and
+                // take none of the use's.
+                if self.clang_compat >= 22 && !self.inst.stack.is_sfinae() {
+                    x.emit(self.diags);
+                } else {
+                    self.emit(x);
+                }
+            }
+        }
+    }
+
     /// Records the arguments converted so far on the innermost frame.
     pub(crate) fn set_frame_args(&mut self, args: ArgListId) {
         if let Some(f) = self.inst.stack.frames.last_mut() {
@@ -590,6 +626,10 @@ pub struct SfinaeState {
     pub first: Option<Diag>,
     /// Number of errors captured.
     pub errors: u32,
+    /// The warnings held back, each with its context notes from clang 22
+    /// on (§5.7): a specialization that is formed keeps them for its
+    /// first use ([`Sema::emit_suppressed_diags`]).
+    pub warnings: Vec<Diag>,
 }
 
 #[cfg(test)]

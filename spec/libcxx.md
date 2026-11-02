@@ -69,7 +69,7 @@ cargo xtask libcxx [options] [<dir>...]
 | `--tag <tag>` | The release whose checkout to use (above). Default the gate's tag, else `$KILN_LIBCXX_TAG`, else `llvmorg-19.1.7`. |
 | `--libcxx-tests <dir>` | The `llvm-project` checkout. |
 | `--profile <p>` | The cargo profile the implicit build uses: `debug` (cargo's `dev`), `harness` (default) or `release` (see "Build profiles"). Anything else is a usage error. |
-| `--compiler <path>` | kiln binary. Default: `cargo build --profile <p> -p kiln_driver`, then `<target>/<p>/kiln++`. |
+| `--compiler <path>` | kiln binary. Default: `cargo build --profile <p> -p kiln_driver`, then `<target>/<p>/kiln++`. A clang (by its `--version`) selects clang mode (see "Clang mode"). |
 | `--filter <s>` | Keep only tests whose path (relative to `libcxx/test`) contains `<s>`. |
 | `--list` | Print each selected test's kind and pre-run verdict (`run`, `run (XFAIL: …)`, `UNSUPPORTED (…)`). Nothing is compiled. |
 | `-j, --jobs <n>` | Tests in parallel. Default 2. |
@@ -171,7 +171,7 @@ with `.` is not a test.
 | `.link.fail.cpp` | link.fail | `-c`, then link | the compile succeeds and the link fails |
 | `.pass.cpp` | pass | `-c`, link, run | the binary exits 0 |
 | `.verify.cpp` | verify | `%{verify}`: `-fsyntax-only -Wno-error -Xclang -verify -Xclang -verify-ignore-unexpected=note` (`run.rs` `VERIFY_FLAGS`) | it exits 0: every `expected-*` comment matched (spec/diag.md §11) |
-| `.sh.<ext>` | sh | — | UNSUPPORTED (`driver: RUN lines`) |
+| `.sh.<ext>` | sh | its `RUN:` commands (see "RUN lines") | every command exits 0; a test without `RUN:` lines is UNSUPPORTED (`driver: .sh test without RUN lines`) |
 | `.gen.<ext>` | gen | — | UNSUPPORTED (`driver: generated tests`) |
 | `.pass.mm`, `.compile.pass.mm` | objective-c++ | — | UNSUPPORTED (`driver: objective-c++`) |
 
@@ -190,7 +190,7 @@ A keyword must not directly follow a letter, a digit or `_`.
 | `FILE_DEPENDENCIES: a, b` | Each file, relative to the test's directory, is copied into the scratch directory. A missing file, a glob or a `%{…}` makes the test UNSUPPORTED (`driver: FILE_DEPENDENCIES`). |
 | `MODULE_DEPENDENCIES:` | `std` and `std.compat` need nothing: kiln builds them in-process from libc++'s module sources (spec/modules.md §2). Any other module makes the test UNSUPPORTED (`driver: modules`). |
 | `ALLOW_RETRIES: N` | A failing run step is retried up to `N` more times (see "Timeouts and retries"). `N` must be an integer, and the keyword may appear once; otherwise the test is an ERROR (lit's `ParserKind.INTEGER`). |
-| any `RUN:` | UNSUPPORTED (`driver: RUN lines`). Custom scripts are not interpreted. |
+| `RUN:` | Read only in `.sh.<ext>` tests, where they are the steps (see "RUN lines"); a line ending in `\` continues on the next `RUN:` line. Elsewhere `format.py` ignores them, and so does the driver. |
 
 If a flag contains a `%{…}` substitution, the test is UNSUPPORTED (`driver:
 substitution`). No substitutions are expanded.
@@ -199,12 +199,75 @@ A malformed expression, or an `ADDITIONAL_COMPILE_FLAGS(` without `):`,
 makes the test an ERROR.
 
 **`lit.local.cfg`.** Every `lit.local.cfg` from `libcxx/test` down to the
-test's directory is read. Only one pattern is understood: a series of
-`if "<feature>" [not] in config.available_features:` lines, each followed by
-`config.unsupported = True`. `#` comments and blank lines are allowed. When
-a condition holds, the test is UNSUPPORTED (`lit.local.cfg: [missing ]<feature>`).
-A file with anything else makes its whole subtree UNSUPPORTED (`driver:
-lit.local.cfg`). No `lit.local.cfg` exists under the M3 gate directories.
+test's directory is read (WP-386 widened the subset; `LocalCfg` in
+`directives.rs`). Understood statements, with `#` comments and blank
+lines:
+- `if "<feature>" [not] in config.available_features:` followed by
+  `config.unsupported = True`: when the condition holds the test is
+  UNSUPPORTED (`lit.local.cfg: [missing ]<feature>`);
+- `config.available_features.add("<feature>")`: the feature holds for
+  `REQUIRES:`/`UNSUPPORTED:`/`XFAIL:` of the tests below;
+- `config.substitutions.append(("%{name}", <value>))`: a string-literal
+  value defines `%{name}` for the `RUN:` lines below; any other value
+  (`shlex.quote(sys.executable)`, the `%{python}` of the selftests) is
+  recorded as unresolved, so only a test whose `RUN:` lines use it is
+  UNSUPPORTED (`driver: substitution %{name}`);
+- `import ...` and `<identifier> = <expression>` (Python locals, which can
+  only matter through the statements above);
+- `config.load_from_path(localConfig, lit_config)`, the idiom of the
+  `libcxx/` directories that mirror `std/`: the `lit.local.cfg` of the
+  same path under `std/` is applied as well (a missing one is opaque).
+
+A file with any other statement makes its whole subtree UNSUPPORTED
+(`driver: lit.local.cfg`). No `lit.local.cfg` exists under the M3 gate
+directories. With this subset none of libc++ 19's `libcxx/` subtree is
+opaque: of its 807 tests 487 run, 292 are configuration-UNSUPPORTED
+(`REQUIRES:`/`UNSUPPORTED:`), 8 by a `lit.local.cfg` condition, 13 are
+`.gen` tests, 4 need an unresolved substitution and 3 a module build
+(`--list`; before WP-386 all 807 were `driver: lit.local.cfg`).
+
+### RUN lines
+
+A `.sh.<ext>` test's `RUN:` commands (`script.rs`, WP-386) run in order in
+the test's scratch directory, named like lit's `%T` (`t<index>-<file
+name>.dir`, since a test may print or compare it); the first that fails
+decides the outcome. Substitutions are expanded as lit does: `%{name}`
+until nothing changes (at most 10 rounds, lit's `recursiveExpansionLimit`; past that the test is an ERROR), then
+`%s`, `%S`, `%p`, `%t` (`<scratch>/t`), `%T` and `%%` in one pass. The
+built-in `%{name}`s are `format.py`'s: `%{cxx}` (the compiler),
+`%{flags}` (empty), `%{compile_flags}` (the base flags and the test's
+`ADDITIONAL_COMPILE_FLAGS`), `%{link_flags}`, `%{exec}` (empty: tests run
+locally), `%{build}` (`%{cxx} %s %{flags} %{compile_flags} %{link_flags}
+-o %t.exe`), `%{run}` (`%{exec} %t.exe`) and `%{verify}` (`%{cxx} %s
+%{flags} %{compile_flags}` with the `.verify.cpp` flags), plus the
+resolved `lit.local.cfg` substitutions. Each expanded command runs as a
+`bash` program with `set -o pipefail` and lit's `not` (`not() { !
+"$@"; }`), so libc++'s idioms (`%{build}` then `%{run}`, output
+redirected and `diff`ed, `echo %{compile_flags} | grep ...`) work. A
+command that starts with `%{cxx}` and names a source (`%s`, `-c`,
+`-fsyntax-only`) or uses `%{build}`/`%{verify}` is limited like a compile
+step (a failure is FAIL (compile)); one with only objects like a link;
+anything else like the run step, retried under `ALLOW_RETRIES:`. stdout
+joins stderr in the failure detail. UNSUPPORTED instead: a `%{name}`
+that is neither built in nor resolved (`driver: substitution %{name}`;
+`%{python}`, the install-layout `%{lib-dir}`/`%{include-dir}`,
+`%{gdb}`), and `RUN:` lines in a test with `MODULE_DEPENDENCIES:`
+(`driver: RUN lines with MODULE_DEPENDENCIES (format.py --precompile)`:
+`format.py` precompiles the modules into BMIs for them, which the driver
+does not reproduce).
+
+### Clang mode
+
+`--compiler <clang>` (any compiler whose `--version` names clang, e.g.
+`clang++-22`) runs the suite under clang as a self-check of the harness
+(WP-386): the base flags drop kiln's own (`-resource-dir`,
+`-fclang-compat`) and pin the tag's libc++ headers with `-nostdinc++
+-isystem <include/c++/v1>` (the checkout's, else the LLVM installation's),
+so clang compiles the same headers kiln does. The report's profile row
+reads `clang (--compiler)` and the summary line ends `; clang`. A test
+that passes under kiln and fails under clang is a clang difference or a
+harness bug; the reverse is a kiln bug. The stratum A delta is in
+docs/status/libcxx.md.
 
 **Boolean grammar** (lit's `BooleanExpression`):
 
@@ -534,14 +597,19 @@ and that test's raw message.
 Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 - `boolexpr.rs`: grammar, precedence, regex subset, parse errors.
 - `directives.rs`: classification table, keywords, verdicts, `END.`,
-  `lit.local.cfg`.
+  `lit.local.cfg`; `local_cfg_substitutions_and_features`,
+  `local_cfg_mirror`, `run_lines` (WP-386).
+- `script.rs`: `expansion`, `checks`, `line_kinds`, `quoting` (WP-386).
 - `cluster.rs`: normalization, message extraction, counting, crash keys.
 - `run.rs`: verdict order, outcome rules; `env_exclusions` (the lists
   are sorted, the root reason, `Uid:` parsing); `slow_tests_list`
   (`slow_tests.txt` is sorted, every entry has a reason, which tests are
   long); `allow_retries_reruns_the_binary` (a fake compiler whose test
   script fails twice, then passes: PASS with 2 retries, FAIL with 1; a
-  timeout is retried under the given limit).
+  timeout is retried under the given limit); `preparation_of_scripts`
+  (`.sh.cpp` idioms) and its `ETXTBSY` regression loop (fake scripts are
+  written by a child `cp`/`chmod`, never held open for writing by this
+  process, while another thread forks); `clang_mode_flags`.
 - `report.rs`: counts, page rendering (with the `kiln build profile` row
   and the two peak-RSS rows, measured and unavailable), marker splicing.
 - `mod.rs`: options, discovery, `lit.local.cfg` lookup;
