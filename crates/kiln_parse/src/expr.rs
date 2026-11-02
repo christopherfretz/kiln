@@ -453,7 +453,11 @@ impl Parser<'_, '_> {
             return None;
         }
         let scope = self.s.act_on_start_stmt_expr();
+        // As a lambda body: its statements end their own full-expressions
+        // (WP-330).
+        let typos = self.s.suspend_delayed_typos();
         let (body, _) = self.parse_compound_in(true, true);
+        self.s.resume_delayed_typos(typos);
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
         Some(self.s.act_on_stmt_expr(scope, body, lparen, rparen))
     }
@@ -1058,29 +1062,67 @@ impl Parser<'_, '_> {
                     }
                     self.bump();
                     // C++23 [expr.sub]: an expression-list (possibly
-                    // empty, possibly braced-init-lists).
+                    // empty, possibly braced-init-lists). Its delayed
+                    // typos are held (WP-330): clang's
+                    // `ParsePostfixExpressionSuffix` corrects the base's at
+                    // the `]` and drops the index of a subscript missing
+                    // its `]`, whose typos then wait for the end of the
+                    // translation unit.
+                    let mark = self.s.begin_delayed_typos();
                     let args = if self.at(Punct::RSquare) {
-                        Vec::new()
+                        Some(Vec::new())
                     } else {
-                        self.with_greater_op(true, |p| p.parse_expr_list(Punct::RSquare))?
+                        self.with_greater_op(true, |p| p.parse_expr_list(Punct::RSquare))
                     };
+                    let Some(args) = args else {
+                        // `ParseExpressionList` corrects what it parsed,
+                        // then the base.
+                        self.s.flush_delayed_typos(mark);
+                        self.s.correct_delayed_typos_in(e);
+                        return None;
+                    };
+                    self.s.correct_delayed_typos_in(e);
+                    if self.at(Punct::RSquare) {
+                        self.s.end_delayed_typos(mark);
+                    } else {
+                        self.s.drop_delayed_typos(mark);
+                    }
                     let rsquare = self.expect_closing(Punct::RSquare, Punct::LSquare, loc);
                     e = self.s.act_on_subscript_args(e, &args, loc, rsquare);
                 }
                 Some(Punct::LParen) => {
                     self.bump();
-                    let typos = self.s.typo_count();
-                    let args = self.with_greater_op(true, Self::parse_call_args)?;
-                    let rparen = if !self.at(Punct::RParen) && self.s.typo_count() != typos {
-                        // clang's `ParsePostfixExpressionSuffix`: arguments
-                        // that held a delayed typo (`f(S::nom x)`) skip to
-                        // the `)` (stopping at a `;`) with no "expected ')'"
-                        // for the unmatched `(` (WP-318).
-                        let at = self.loc();
-                        self.skip_until(&[Punct::RParen], true, false);
-                        self.eat(Punct::RParen).unwrap_or(at)
-                    } else {
+                    let mark = self.s.typo_mark();
+                    let Some(args) = self.with_greater_op(true, Self::parse_call_args) else {
+                        // clang's `ParseExpressionList` corrects the
+                        // arguments it parsed after an error, then
+                        // `ParsePostfixExpressionSuffix` the callee
+                        // (WP-330).
+                        self.s.flush_typos_from(mark);
+                        self.s.correct_delayed_typos_in(e);
+                        return None;
+                    };
+                    let rparen = if self.at(Punct::RParen) {
                         self.expect_closing(Punct::RParen, Punct::LParen, loc)
+                    } else {
+                        // clang's `ParsePostfixExpressionSuffix` corrects
+                        // the delayed typos of the callee and the
+                        // arguments now, before what follows (WP-330); if
+                        // there were any (`f(S::nom x)`, `S::nom(1`), it
+                        // skips to the `)` (stopping at a `;`) with no
+                        // "expected ')'" for the unmatched `(` (WP-318).
+                        let mut had_typo = self.s.correct_delayed_typos_in(e);
+                        for &a in &args {
+                            had_typo |= self.s.correct_delayed_typos_in(a);
+                        }
+                        if had_typo {
+                            self.expr_invalid = true;
+                            let at = self.loc();
+                            self.skip_until(&[Punct::RParen], true, false);
+                            self.eat(Punct::RParen).unwrap_or(at)
+                        } else {
+                            self.expect_closing(Punct::RParen, Punct::LParen, loc)
+                        }
                     };
                     e = self.s.act_on_call(e, &args, loc, rparen);
                 }
@@ -1607,6 +1649,21 @@ impl Parser<'_, '_> {
                 }
                 Err(()) => Some(self.s.act_on_error_expr(&[], nl)),
             };
+        }
+        // [temp.names]/3 (P0846): an unqualified name that lookup finds
+        // nothing or only functions for, followed by `<`, is a
+        // template-name; ADL finds the template at the call
+        // (`get<0>(c)` for `std::complex`). Only taken when a
+        // template-argument-list closed by `>(` follows.
+        if qual.is_none()
+            && self.at(Punct::Less)
+            && matches!(class, NameClass::Undeclared | NameClass::Value(_))
+            && let Some((close, false)) = self.skip_template_args(self.pos())
+            && self.tok_at(close + 1).kind == TokKind::Punct(Punct::LParen)
+            && self.s.is_assumed_template_name(name)
+        {
+            let (args, _, _) = self.parse_template_arg_list()?;
+            return Some(self.s.act_on_assumed_template_id(name, &args, nl));
         }
         if qual.is_none()
             && class == NameClass::Undeclared

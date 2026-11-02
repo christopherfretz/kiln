@@ -526,7 +526,7 @@ impl Sema<'_, '_> {
     /// In a cleanup context of its own: the temporaries of the default are
     /// not those of the full-expression whose overload resolution uses it
     /// (clang `SubstDefaultTemplateArgument` enters a `ConstantEvaluated`
-    /// context; spec/sema-class.md §5.3).
+    /// context; spec/sema-class.md §5.3), with its own pending odr-uses.
     pub(crate) fn default_template_arg(
         &mut self,
         tmpl: DeclId,
@@ -537,7 +537,14 @@ impl Sema<'_, '_> {
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
         self.push_cleanups();
+        // Nor are the pending odr-use checks of that full-expression its
+        // own: a name the call's arguments use, such as a constexpr local
+        // named in a lambda, is resolved at the end of the call's
+        // full-expression ([basic.def.odr]/5), not here.
+        let outer_odr = std::mem::take(&mut self.pending_odr);
         let r = self.default_template_arg_in(tmpl, depth, p, def, loc, prior);
+        let inner = std::mem::replace(&mut self.pending_odr, outer_odr);
+        self.pending_odr.extend(inner);
         self.pop_cleanups();
         r
     }

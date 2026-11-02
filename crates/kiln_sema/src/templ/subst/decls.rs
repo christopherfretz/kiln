@@ -241,6 +241,14 @@ impl Substituter<'_, '_, '_> {
         let ty = self.named_decl_ty(d, t, loc)?;
         let ds = self.pattern_declspec(d, ty);
         let mut dr = Declarator::new(ctx, loc);
+        // `auto [a, b]{x}` is direct-list-initialized: `e` deduces the
+        // type of `x`, not `std::initializer_list` ([dcl.struct.bind]/1,
+        // [dcl.type.auto.deduct]/2.1).
+        if let Some(x) = self.sema.ast.decls.var(d)
+            && x.init.is_some()
+        {
+            dr.init_style = Some(x.spec.init_style());
+        }
         let old = self.sema.decomp_binding_list(d);
         let ids = old
             .iter()
