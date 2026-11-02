@@ -322,7 +322,10 @@ impl Sema<'_, '_> {
             .filter(|&c| set.cand(c).kind != CandidateKind::Builtin || set.cand(c).viable)
             // Nor is an invalid function template (`Tdk::Invalid`).
             .filter(|&c| {
-                set.cand(c).deduction.as_ref().is_none_or(|d| d.tdk != crate::templ::deduce::Tdk::Invalid)
+                set.cand(c)
+                    .deduction
+                    .as_ref()
+                    .is_none_or(|d| d.tdk != crate::templ::deduce::Tdk::Invalid)
             })
             // An inherited copy/move constructor excluded by
             // [over.match.funcs]/8 is not listed (clang
