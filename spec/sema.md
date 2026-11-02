@@ -1127,6 +1127,17 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   replayed. A redeclaration written without a spec then takes
   `merge_missing_exc_spec` (`'m' is missing exception specification
   'noexcept(S::x)'`), and otherwise gets the mismatch error.
+- *A class template's friend redeclaring a function* (WP-280): when
+  the class is instantiated, the friend's lazy spec is instantiated at
+  once (`function_decl` in `templ/subst/decls.rs`) and checked against
+  the function's *first* declaration, which clang's note names. So a
+  later friend is not measured against an earlier friend that was
+  already diagnosed as mismatched. Test:
+  `temp.friend/friend-redecl-exception-spec-at-instantiation.cpp`.
+  Divergences (follow-ups): clang also checks at template definition
+  time a friend whose type is not dependent; kiln checks only at
+  instantiation. Kiln also matches a later namespace-scope declaration
+  against the pattern friend, where clang waits for the instantiation.
 - *Unparsed through the redeclaration chain*: `exc_unparsed(f)` is true
   when `f`, its first declaration, or the pattern it waits on is in
   `unparsed_exc`. Both `resolve_exc_for_type` and
