@@ -362,7 +362,8 @@ impl Compiler<'_> {
         let poly = record_bits(self.ast(), rdef).contains(DefinitionBits::POLYMORPHIC);
         if kind == DeclKind::CXXConstructor {
             let inits: Vec<CtorInit> = self.ast().ctor_inits(def).copied().collect();
-            let mut vptr = poly && !inits.iter().any(|c| c.kind == CtorInitKind::Delegating);
+            let delegating = inits.iter().any(|c| c.kind == CtorInitKind::Delegating);
+            let mut vptr = poly && !delegating;
             let loc = self.ast().decls.get(def).loc();
             // The subobjects completed so far: `done` entries of `fields`.
             let mut done = 0;
@@ -387,8 +388,10 @@ impl Compiler<'_> {
             if vptr {
                 self.emit(Op::SetVptr, 0, &[this, cls.0]);
             }
-            let n = self.o.types.fields(cls).len();
-            self.unwind_subobjects(this, cls, union, done..n, loc);
+            if !delegating {
+                let n = self.o.types.fields(cls).len();
+                self.unwind_subobjects(this, cls, union, done..n, loc);
+            }
             return;
         }
         if poly {
