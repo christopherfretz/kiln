@@ -826,7 +826,30 @@ and returns the scope it names:
   carries `ctad_alias[g'] = (alias, rhs)`, and `deduce_call` checks
   clang's `__is_deducible(A, R)` on the deduced return type
   (`note_alias_not_deducible`). An RHS that is not a simple-template-id
-  is `sema_ctad_non_deducible_template`.
+  is `sema_ctad_non_deducible_template`. Details (WP-311):
+  - The deduction of `g`'s return type from the RHS may fail part way
+    (`pair<A, B>`'s `tuple<A, B>` against `tuple<int, T...>`: `B` against
+    the expansion `T...`); as clang 19, the guide is still formed with what
+    was deduced, and `__is_deducible` decides at the call.
+  - The alias parameters used are those the deductions name (clang
+    `MarkUsedTemplateParameters`, `params_named`): each element of a
+    deduced pack, an element that is an expansion by its pattern, probed
+    by deducing it from itself. So `tuple<T..., U>` uses both `T` and `U`
+    although its list is a non-deduced context.
+  - A function parameter pack of `g` whose template parameter pack was
+    deduced as a list with an expansion element (`const U&...` with
+    `U = <int, T...>`) expands to `const int&, const T&...`: the
+    expansion element is substituted as its pattern and the result
+    re-formed as an expansion (`expand_pattern_rewrap`).
+  - The guide keeps `g`'s implicitness: one formed from a user-declared
+    guide is not implicit, so it beats the alias guide of the matching
+    constructor ([over.match.best.general]/2.11) rather than tying with
+    it. Every alias guide's notes include `note_implicit_deduction_guide`,
+    whose `requires __is_deducible(A, R)` names the guide's return type
+    `R` (clang `NoteImplicitDeductionGuide`).
+  - Tests: `over.match.class.deduct/alias-pack.cpp`,
+    `alias-pack-non-trailing.cpp`; `std::tuple` through
+    `template<class... T> using TT = std::tuple<int, T...>` deduces.
 - **Resolution.** The usual candidate machinery with `deduce_call`, then
   `order_template_candidates` and `best_viable`.
   - List-initialization runs [over.match.list] phase 1 first (WP-134):
@@ -851,7 +874,18 @@ and returns the scope it names:
   `implicit deduction guide declared as '<sig>'`
   (`implicit_guide_signature`; parameter names as clang's DeclPrinter
   places them, `Ts ...xs`, and an inherited default argument as
-  `= <null expr>`).
+  `= <null expr>`). Parameter types print as the constructor wrote
+  them (member typedefs, `typename X<T>::type`,
+  `typename T::template rebind<int>::other`): a guide's function type
+  is built from the sugared prototype (`TypeTable::proto_of`), and an
+  alias template's guide substitutes the alias's arguments into that
+  sugar; its `__is_deducible(A, R)` prints the guide's sugared return
+  type `R` (WP-311; test
+  `over.match.class.deduct/guide-signature-as-written.cpp`). Not
+  printed yet: clang's `while building implicit deduction guide first
+  needed here` frame note, at the placeholder's template-name location,
+  for an error substituting a member template's constructors (the
+  placeholder's name location is not recorded).
 - **Array new.** `new X[n]{…}` with a placeholder element type is
   `sema_ctad_compound_type` ("cannot form array of deduced class
   template specialization type") at the innermost bound, as clang.
@@ -2964,6 +2998,41 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
 - Tests: `ext.vector/ext-vector-access.cpp` (run, including templates),
   `ext.vector/ext-vector-access-diagnostics.cpp` (strict-diags).
 
+### 5.20 Variadic arguments (`expr.rs`, WP-311)
+- An argument for the ellipsis gets the default argument promotions
+  ([expr.call]/12) and is then checked once the call is built (clang
+  `checkVariadicArgument`; the call is still formed):
+  - an argument of type `void` (`g(1, f())` for `void f()`) is an error,
+    "cannot pass expression of type 'void' to variadic function";
+  - an object of class type with a non-trivial copy constructor, move
+    constructor or destructor (conditionally-supported, [expr.call]/12)
+    is the error-by-default warning `-Wnon-pod-varargs`, "cannot pass
+    object of non-trivial type 'T' through variadic function; call will
+    abort at runtime". It is a run-time behavior diagnostic: dropped in an
+    unevaluated operand, a constant-evaluated context, and the initializer
+    of a constexpr variable (local or not) or of a static data member's
+    first non-inline declaration (clang `DiagIfReachable` without a
+    statement reads the initializer's `ManglingContextDecl`); otherwise
+    emitted at once (`diag_runtime_behavior_now`);
+  - a braced-init-list is an error, "cannot pass initializer list to
+    variadic function" (§6), and the call is not formed.
+
+  Each points at the argument's begin. The callee is named as clang's
+  `getVariadicCallType` does: `constructor` for a constructor, `method`
+  for a non-static member function (a lambda's call operator included)
+  or a call through a bound member (`(x.*pmf)(...)`), `function`
+  otherwise.
+- In a dependent context the checks are not made (clang `checkCall`
+  returns for a dependent context); an instantiation makes them. A call
+  whose arguments are all non-dependent is shared by the instantiation
+  (spec/sema-templates.md §5.4) rather than rebuilt, so the definition
+  records each argument it would diagnose (`vararg_recheck`), and the
+  walk over a shared expression (§5.10's `mark_shared_expr_referenced`)
+  checks those arguments of the calls in it again, under the
+  instantiation's context notes.
+- Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
+  `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
@@ -3220,7 +3289,8 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
     except that a single class-type element for a non-class parameter
     notes the element's own conversion ([over.ics.list]/10: `no known
     conversion from 'N' to 'int' for 1st argument`).
-  - A list for the ellipsis of a variadic function is an error.
+  - A list for the ellipsis of a variadic function is an error (the
+    callee named as in §5.19).
 - **`return {...};`** ([stmt.return]/2, `act_on_return_list`):
   copy-list-initialization of the returned object.
 - **`x = {...}`** ([expr.assign]/8, `act_on_assign_list`): the list

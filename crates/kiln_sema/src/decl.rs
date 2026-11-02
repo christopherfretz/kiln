@@ -5234,24 +5234,6 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// The template head of a class template redeclaration that creates
-    /// no new decl (`template<class T> struct C;` again): equivalent to
-    /// the template's ([temp.over.link]/6), then checked for default
-    /// arguments ([temp.param]/12, /14).
-    fn check_redeclared_class_head(&mut self, p: DeclId) {
-        if let Some(list) = self.templ.cur.take()
-            && let Some(t) = self.ast.described_template(p)
-            && let Some(old) = self
-                .head_comparable_decl(t)
-                .and_then(|c| self.ast.template_info(c))
-                .map(|i| i.params)
-            && self.check_template_heads_match(list, old)
-        {
-            self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
-            self.inherit_redeclared_defaults(t, list);
-        }
-    }
-
     /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2).
     fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) {
         if let Some(f) = fixed {
@@ -5448,19 +5430,19 @@ impl Sema<'_, '_> {
                     // decl (below), which an incomplete-type note names.
                     && !member_class_spec
                 {
-                    // A redeclaration creates no new decl (a deviation:
-                    // clang adds a `ClassTemplateDecl` per redeclaration),
-                    // but its template head is still checked against the
-                    // template's ([temp.param]/12, /14). One of a class
-                    // only a friend declaration introduced makes it
-                    // visible ([namespace.memdef]/3): a new decl (below).
                     // `[extern] template struct C<args>::I;` explicitly
                     // instantiates a member class ([temp.explicit]/3).
-                    if qualifier.is_none() || !self.act_on_explicit_member_class_inst(p, nloc) {
-                        self.check_redeclared_class_head(p);
-                        self.note_class_template_redecl(p, head.is_some(), nloc);
+                    let inst =
+                        qualifier.is_some() && self.act_on_explicit_member_class_inst(p, nloc);
+                    // A class template redeclaration is a new decl with a
+                    // `ClassTemplateDecl` of its own (clang
+                    // `CheckClassTemplate`; `finish_template_pattern`
+                    // checks its head, [temp.param]/12, /14). A class
+                    // redeclaration creates none, unless only a friend
+                    // declaration introduced it ([namespace.memdef]/3).
+                    if inst || head.is_none() {
+                        return p;
                     }
-                    return p;
                 }
             } else if let Some(q) = qualifier {
                 self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
@@ -5504,16 +5486,6 @@ impl Sema<'_, '_> {
             self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
-    }
-
-    /// Records the name of a class template redeclaration that created no
-    /// decl (`templ.class_redecl_loc`), for notes naming the declaration
-    /// lookup finds.
-    fn note_class_template_redecl(&mut self, p: DeclId, template: bool, nloc: Loc) {
-        if template {
-            let latest = self.ast.latest(p);
-            let _ = self.templ.class_redecl_loc.insert(latest, nloc);
-        }
     }
 
     /// The elaborated-type-specifier of `friend class X;`
