@@ -61,6 +61,14 @@ pub trait TypeNames {
         None
     }
 
+    /// All the converted template arguments of class template
+    /// specialization `decl`, trailing defaults included (`None` for
+    /// other records): clang's `getTemplateArgs()`, which a failed
+    /// `static_assert` requirement prints ([`write_nns_resolved`]).
+    fn converted_args(&self, decl: DeclId) -> Option<ArgListId> {
+        self.specialization_args(decl)
+    }
+
     /// The keyword of class `decl` (`struct`, `class` or `union`), for
     /// [`PrintOptions::c_policy`].
     fn tag_keyword(&self, decl: DeclId) -> &'static str {
@@ -277,6 +285,7 @@ pub fn write_declarator(
         no_parens: opts.no_parens,
         inside_cc_attr: false,
         diag_desugar: false,
+        canon_args: false,
         depth: 0,
     };
     p.print(q, placeholder);
@@ -297,9 +306,85 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        canon_args: false,
         depth: 0,
     };
     p.nns(n);
+    *out = p.out;
+}
+
+/// [`write_nns`] as clang's `FailedBooleanConditionPrinterHelper`
+/// prints a failed `static_assert` requirement's qualifier
+/// (`NestedNameSpecifier::print` with `PrintCanonicalTypes` and
+/// `ResolveTemplateArguments`): template arguments print canonical, and
+/// a last type component naming a class template specialization prints
+/// as its name with its converted arguments (`is_conv<int, bool>::`).
+pub fn write_nns_resolved(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    n: NnsId,
+    out: &mut String,
+) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: true,
+        suppress_tag: false,
+        c_policy: false,
+        no_parens: false,
+        inside_cc_attr: false,
+        diag_desugar: false,
+        canon_args: true,
+        depth: 0,
+    };
+    let view = ctx.nns_view(n);
+    let resolved = match view {
+        Nns::Type { ty, .. } => match ctx.view(ctx.canonical(ty).ty()) {
+            TypeView::Record(d) => names.converted_args(d).map(|l| (d, l)),
+            _ => None,
+        },
+        _ => None,
+    };
+    match (resolved, view) {
+        (Some((d, args)), Nns::Type { prefix, .. }) => {
+            if let Some(pre) = prefix {
+                p.nns(pre);
+            }
+            names.write_decl_name(d, false, &mut p.out);
+            p.arg_list_prefix(ctx.canonical_args(args), false, usize::MAX, Some(d), false);
+            p.push("::");
+        }
+        _ => p.nns(n),
+    }
+    *out = p.out;
+}
+
+/// [`write_arg_list_of`] with every argument canonical (clang printing
+/// explicit template arguments with `PrintCanonicalTypes`): `<int>` for
+/// `<X>` with `using X = int`.
+pub fn write_arg_list_canonical(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    out: &mut String,
+) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: true,
+        suppress_tag: false,
+        c_policy: false,
+        no_parens: false,
+        inside_cc_attr: false,
+        diag_desugar: false,
+        canon_args: true,
+        depth: 0,
+    };
+    p.arg_list(l, false);
     *out = p.out;
 }
 
@@ -352,6 +437,7 @@ fn arg_list_with_scope(
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        canon_args: false,
         depth: 0,
     };
     p.arg_list_prefix(l, false, usize::MAX, template, false);
@@ -391,6 +477,7 @@ pub fn write_arg_list_prefix(
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        canon_args: false,
         depth: 0,
     };
     p.arg_list_prefix(l, false, len, None, false);
@@ -416,6 +503,7 @@ pub fn write_template_arg(
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
+        canon_args: false,
         depth: 0,
     };
     p.arg(a.view());
@@ -478,6 +566,7 @@ fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: true,
+        canon_args: false,
         depth: 0,
     };
     p.print(q, "");
@@ -690,6 +779,9 @@ struct Printer<'a> {
     /// template specialization's name, which prints unqualified with its
     /// arguments desugared.
     diag_desugar: bool,
+    /// Print template arguments canonical (clang's `PrintCanonicalTypes`
+    /// in `TemplateArgument::print`), with their scope.
+    canon_args: bool,
     depth: u32,
 }
 
@@ -827,6 +919,7 @@ impl Printer<'_> {
         }
         self.depth += 1;
         let q = if self.diag_desugar { self.diag_strip(q) } else { q };
+        let q = if self.canon_args { self.ctx.canonical(q) } else { q };
         let (t, mut quals) = split(self.ctx, q);
         if self.ctx.kind(t) == TypeKind::SubstTemplateTypeParm {
             // cv1 T where T was substituted by cv2 U: print cv1 - cv2 here.
@@ -843,6 +936,7 @@ impl Printer<'_> {
         }
         self.depth += 1;
         let q = if self.diag_desugar { self.diag_strip(q) } else { q };
+        let q = if self.canon_args { self.ctx.canonical(q) } else { q };
         let (t, _) = split(self.ctx, q);
         self.after_node(t);
         self.depth -= 1;
@@ -931,7 +1025,14 @@ impl Printer<'_> {
                     self.push(" ");
                 }
                 self.decl(d, self.scope);
-                if let Some(args) = self.names.specialization_args(d) {
+                // clang's `printTo` keeps trailing default arguments
+                // under `PrintCanonicalTypes`.
+                let args = if self.canon_args {
+                    self.names.converted_args(d).map(|l| self.ctx.canonical_args(l))
+                } else {
+                    self.names.specialization_args(d)
+                };
+                if let Some(args) = args {
                     self.arg_list_prefix(args, false, usize::MAX, Some(d), false);
                 }
                 self.space_before_ph();
@@ -1715,6 +1816,7 @@ impl Printer<'_> {
             ArgView::Type(q) => self.print(q, ""),
             ArgView::Value { ty, value } => {
                 let names = self.names;
+                let ty = if self.canon_args { self.ctx.canonical(ty) } else { ty };
                 names.write_value(ty, value, &mut self.out);
             }
             ArgView::Template(n) => self.template_name(n, Qual::Fully),

@@ -1656,9 +1656,12 @@ impl Sema<'_, '_> {
         loc: Loc,
         extra: Option<kiln_ast::expr::DeclRefExtra>,
     ) -> ExprId {
-        let shadow = extra
-            .and_then(|x| x.found_decl)
-            .filter(|_| extra.is_some_and(|x| x.template_args.is_none()));
+        // A variable template specialization records its template as the
+        // found decl, which is no using-shadow.
+        let shadow = extra.and_then(|x| x.found_decl).filter(|&f| {
+            extra.is_some_and(|x| x.template_args.is_none())
+                || self.kind_of(f) != DeclKind::VarTemplate
+        });
         let n = *self.ast.decls.get(d);
         match n.kind() {
             // [dcl.struct.bind]/1: a binding is not usable before its
