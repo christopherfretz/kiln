@@ -3453,6 +3453,68 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   This is `defer_dependent_init` (<format>:439 `_Utf32_view`). Test:
   `tests/conformance/dcl.init.general/libstdcxx-paren-braced-init-dependent.cpp`.
 
+### 5.22 Rules from the libc++ `.verify` cluster B (WP-338)
+- **An out-of-line constructor stays explicit** ([dcl.fct.spec]/4,
+  [over.match.copy]/1.1): the explicit-specifier belongs to the first
+  declaration (it is allowed only in the class). An out-of-line
+  definition or member-template definition without `explicit`
+  inherits the flag and any `explicit(expr)` operand from the previous
+  declaration (`class/special/declare.rs`). Copy-initialization does
+  not consider it, and the "explicit constructor is not a candidate"
+  note points at the first declaration (`overload/diag.rs`). This
+  covers `complex<float> cf = cd;`. Test:
+  `tests/conformance/over.match.copy/explicit-ctor-out-of-line-definition.cpp`.
+- **The underlying type of an incomplete enumeration** ([dcl.enum]/5,
+  [meta.trans.other]): `__underlying_type(E)` for an enumeration
+  without a fixed underlying type, before its `}`, is an error.
+  The message is "cannot determine underlying type of incomplete
+  enumeration type 'E'" (`sema_underlying_type_of_incomplete_enum`),
+  with a "forward declaration of" note at `E`
+  (`templ/builtins/transforms.rs`). Inside a class template
+  instantiation the error is located at the declarator, not at the
+  `__underlying_type` keyword. Types carry no locations, so tests give
+  only the line. Test:
+  `tests/conformance/dcl.enum/underlying-type-incomplete-enum.cpp`.
+- **An invalid base makes the derived specialization invalid**
+  ([class.derived]/2, clang `CheckBaseSpecifier`): instantiating a
+  class whose base specialization is invalid, for example because a
+  member typedef failed to substitute, marks the class invalid
+  (`templ/class.rs` `class_body_with`). `underlying_type<E>::type`
+  after the error is then quiet. Test:
+  `tests/conformance/class.derived/invalid-base-makes-derived-invalid.cpp`.
+- **An erroneous template argument is diagnosed once**
+  ([temp.arg.general]/1): an argument that is an error expression,
+  such as an undeclared name, is rejected for a type parameter without
+  a second "must be a type" error (`templ/args.rs`
+  `check_template_arg`, clang's `RecoveryExpr`). Test:
+  `tests/conformance/temp.arg.general/erroneous-argument-single-diagnostic.cpp`.
+- **`T{...}` of an invalid class in an instantiation**
+  ([temp.inst]/2, [expr.type.conv]): when substituting a braced
+  functional cast names a class whose instantiation is invalid (for
+  example a failed `static_assert`), the expression fails silently
+  (`templ/subst/exprs.rs` `invalid_class_braced_cast`). Only the
+  `static_assert` is reported, with no "no viable conversion"
+  (`std::numbers::e_v<int>`). `T()` and a non-template `I<char>{}`
+  still diagnose, as in clang. Test:
+  `tests/conformance/temp.inst/invalid-class-braced-cast.cpp`.
+- **Attributes of instantiated static data members**
+  ([dcl.attr.deprecated]/4, [temp.inst]/3): a static data member
+  instantiated with its class, deferred in-class initializer or not,
+  gets all of the pattern's attributes (`class_attrs`), not only
+  `alignas`. So `numeric_limits<T>::has_denorm` warns at each use, and
+  the out-of-line definition without the attribute inherits it
+  through the redeclaration chain. Test:
+  `tests/conformance/dcl.attr.deprecated/static-data-member-instantiation.cpp`.
+- **"no template named 'X' in 'N'"** ([temp.names]/3): at namespace
+  or class scope, a decl-specifier `N::X<...>` whose `X` is not a
+  member of the non-dependent `N` gets `sema_no_member_template`
+  (clang `DiagnoseUnknownTypeName` with `IsTemplateName`). The argument
+  list is skipped and the declarators are not diagnosed again
+  (`kiln_parse` `unknown_template_follows`,
+  `parse_qualified_type_rest`). At block scope the statement is
+  parsed as an expression, as clang does. Test:
+  `tests/conformance/temp.names/no-template-named-qualified.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
