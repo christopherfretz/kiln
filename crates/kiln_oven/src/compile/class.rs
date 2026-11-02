@@ -55,6 +55,14 @@ pub(super) fn has_this(ast: &Ast, d: DeclId) -> bool {
 }
 
 impl Compiler<'_> {
+    /// Whether clang's `CheckLiteralType` on a local variable or by-value
+    /// argument is skipped: clang 22 drops it from C++23 (P2448), where a
+    /// non-literal object is only rejected through the non-constexpr
+    /// function its construction calls; clang 19 still checks it.
+    pub(super) fn literal_check_relaxed(&self) -> bool {
+        self.o.clang_compat >= 22 && self.b.cxx23()
+    }
+
     /// The current `this`: the object a default member initializer is
     /// initializing, else the `this` a lambda captured, else the implicit
     /// object parameter.
@@ -723,7 +731,11 @@ impl Compiler<'_> {
     /// object (or array of objects) of type `ty` at `p`.
     pub(super) fn construct(&mut self, e: ExprId, p: u32, ty: OTy) {
         let ast = self.ast();
-        if self.cur_fn.is_some() && self.has_virtual_bases(e) && !self.constructs_literal(e) {
+        if self.cur_fn.is_some()
+            && !self.literal_check_relaxed()
+            && self.has_virtual_bases(e)
+            && !self.constructs_literal(e)
+        {
             // clang `CheckLiteralType`: an object of a class with a
             // virtual base (not a literal type) cannot be created in a
             // function called during evaluation; only the object being
@@ -944,7 +956,7 @@ impl Compiler<'_> {
                 self.bind_ref(a, slot);
             } else if self.o.types.is_aggregate(aty) {
                 let q = self.ast().exprs.get(a).ty().without_quals();
-                if !super::is_literal_type(self.ast(), q) {
+                if !self.literal_check_relaxed() && !super::is_literal_type(self.ast(), q) {
                     // clang `EvaluateCallArg` -> `EvaluateInPlace` ->
                     // `CheckLiteralType`: a by-value argument (to a
                     // declared or a variadic parameter) is a prvalue

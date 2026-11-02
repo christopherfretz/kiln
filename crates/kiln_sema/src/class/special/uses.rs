@@ -252,7 +252,13 @@ impl Sema<'_, '_> {
                         self.ast.decls.mark_var(v, VarSpec::new().with_init_style(InitStyle::Call));
                     }
                 }
-                None => ok = false,
+                None => {
+                    // clang `InitializationSequence::Diagnose` makes the
+                    // variable invalid: a constant evaluation reaching its
+                    // definition fails with no note (spec/oven.md).
+                    self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
+                    ok = false;
+                }
             }
         }
         if ok

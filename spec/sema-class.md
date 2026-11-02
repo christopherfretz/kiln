@@ -821,7 +821,44 @@ on all implicit members of non-virtual-base classes, absent on
 not `constexpr` when a member's selected ctor is not). `HAS_CONSTEXPR_CTOR` and
 `LITERAL` are computed from these. `DEFAULTED_DEFAULT_CTOR_CONSTEXPR` records
 the default ctor's answer before it is declared.
-WP-067a implements the C++23+ rule only; the C++20 rule is open.
+
+WP-400 models clang's `DefaultedDefaultConstructorIsConstexpr` and
+`defaultedSpecialMemberIsConstexpr` (`defaulted_is_constexpr`):
+- From C++23 every defaulted special member of a class without a virtual
+  base is constexpr (C++26: with one too, P3533); a non-constexpr member or
+  base constructor fails only when an evaluation reaches it, with the
+  defaulted constructor in the call stack.
+- Before C++23 the per-subobject rule holds: each base's and each member's
+  selected constructor (default, copy or move as the member requires) or
+  assignment must be constexpr, a member without an initializer and a union
+  are fine (P1331), and a virtual base makes it non-constexpr.
+- An explicitly `constexpr`/`consteval` defaulted member that the rule says
+  is not constexpr is an error at the specifier before C++23: "defaulted
+  definition of {default constructor|copy constructor|...} cannot be marked
+  {constexpr|consteval} before C++23"; with a virtual base it is the
+  [dcl.constexpr]/4 error instead (§4.10). A destructor is never consteval.
+- The pending defaulted members of a class are checked destructor first,
+  then in declaration order (clang `CheckCompletedCXXClass`).
+- A defaulted comparison declared `constexpr`/`consteval` before C++23
+  whose synthesized body would call a non-constexpr comparison is an error
+  at the specifier ("defaulted definition of {equality|three-way|relational}
+  comparison operator cannot be declared constexpr because it invokes a
+  non-constexpr comparison function", clang 19 with a trailing space: `_19`
+  row), with clang's `ExplainConstexpr` notes for the first such callee
+  ("non-constexpr comparison function would be used to compare {member
+  X|base class X}" at the subobject, omitted for a secondary comparison of
+  the complete object, then "... declared here"). A defaulted `<=>` checks
+  its implicit `operator==` too, reported at the `<=>` ("because for which
+  the corresponding implicit 'operator=='  invokes ..."). A class template
+  specialization is checked when instantiated, at the pattern's specifier.
+- Tests: `tests/conformance/class.default.ctor/constexpr-defaulted-cxx{20,23}.cpp`,
+  `tests/conformance/dcl.fct.def.default/consteval-special-cxx{20,23}.cpp`,
+  `tests/conformance/dcl.fct.def.default/cmp-constexpr-mismatch{,-cxx23}.cpp`.
+- Open: the C++20 `-Winvalid-constexpr` "constexpr constructor never
+  produces a constant expression" for an implicit or unspecified defaulted
+  default constructor used in a constant expression; clang 14-17's
+  acceptance of a vbase class with an invalid constexpr constructor as
+  literal (not mirrored; tests pin C++20 and later).
 
 ### 4.7 Constructors, destructors, conversion functions (declarations)
 Constructor: no return type (`constructor cannot have a return type`), not

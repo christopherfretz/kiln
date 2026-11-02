@@ -2226,11 +2226,14 @@ impl Compiler<'_> {
         let q = n.ty().unwrap_or(QualType::INT);
         if let Some(init) = v.init
             && self.cur_fn.is_some()
+            && !self.literal_check_relaxed()
             && !is_literal_type(ast, q)
         {
             // clang `CheckLiteralType` (from `EvaluateInPlace`): a local
             // variable of non-literal type, named with its initializer's
-            // whole (array) type.
+            // whole (array) type. Clang 22 skips the check from C++23
+            // (P2448: [basic.types.general]/10 no longer constrains
+            // constant evaluation), so the constructor call itself fails.
             let t = Oven::type_name(ast, ast.exprs.get(init).ty().without_quals());
             self.trap(
                 init,

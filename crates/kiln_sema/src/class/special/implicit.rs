@@ -1251,7 +1251,7 @@ impl Sema<'_, '_> {
     /// checked once `r` is complete (clang `CheckCompletedCXXClass` →
     /// `CheckExplicitlyDefaultedSpecialMember`).
     pub(crate) fn check_pending_defaulted(&mut self, r: DeclId) {
-        let (mine, rest): (Vec<_>, Vec<_>) =
+        let (mut mine, rest): (Vec<_>, Vec<_>) =
             std::mem::take(&mut self.special.defaulted).into_iter().partition(|&(f, _)| {
                 let ctx = if self.cmp_kind(f).is_some() {
                     self.ast.decls.lexical_ctx(f)
@@ -1261,6 +1261,10 @@ impl Sema<'_, '_> {
                 ctx.map(|c| self.class_def(c)) == Some(r)
             });
         self.special.defaulted = rest;
+        // The destructor first: whether it is constexpr decides whether
+        // the class is literal, which the other members' checks read
+        // (clang `CheckCompletedCXXClass`).
+        mine.sort_by_key(|&(f, _)| self.kind_of(f) != DeclKind::CXXDestructor);
         // [class.compare.default]: the secondary comparisons after the
         // primary ones (and the implicit `operator==`s, declared last),
         // whose deletedness they may depend on (clang

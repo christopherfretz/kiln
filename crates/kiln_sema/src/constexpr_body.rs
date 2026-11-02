@@ -97,7 +97,9 @@ impl Sema<'_, '_> {
     /// non-dependent, non-literal type.
     fn is_non_literal_local(&self, v: DeclId) -> bool {
         let node = self.ast.decls.get(v);
-        if node.kind() != DeclKind::Var || node.has(DeclFlags::INVALID) {
+        // An invalid declaration (no viable constructor, say) is checked
+        // too, as clang's.
+        if node.kind() != DeclKind::Var {
             return false;
         }
         if self.ast.decls.var(v).is_some_and(|x| x.spec.storage() == VarStorage::Extern) {

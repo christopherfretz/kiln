@@ -789,7 +789,11 @@ impl Substituter<'_, '_, '_> {
             } else if s.defaulted() == kiln_ast::decl::Defaulted::Explicit
                 && (friend.is_none() || self.sema.cmp_kind(f).is_some())
             {
-                self.sema.act_on_defaulted(f, loc);
+                // A comparison's synthesized body is located at the
+                // pattern's `default` keyword.
+                let first = self.sema.ast.first(d);
+                let at = self.sema.special.cmp.default_loc.get(&first).map_or(loc, |&(_, l)| l);
+                self.sema.act_on_defaulted(f, at);
             }
         }
         Ok(r)

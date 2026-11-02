@@ -65,6 +65,9 @@ struct Cx {
     rd: DeclId,
     from: DeclId,
     diagnose: bool,
+    /// clang's `ExplainConstexpr`: the notes for the first callee that is
+    /// not `constexpr` (and no deletion notes).
+    explain_constexpr: bool,
     notes: Vec<Diag>,
     floc: Loc,
     /// The name of `f` (`operator==`), unquoted.
@@ -87,10 +90,51 @@ impl Sema<'_, '_> {
         let saved = self.special.cmp.exclude.replace((first, self.ctx));
         let floc = self.ast.decls.get(f).loc();
         let fname = self.decl_name(f);
-        let mut cx = Cx { f, k, rd, from, diagnose, notes: Vec::new(), floc, fname };
+        let mut cx = Cx {
+            f,
+            k,
+            rd,
+            from,
+            diagnose,
+            explain_constexpr: false,
+            notes: Vec::new(),
+            floc,
+            fname,
+        };
         let r = self.analyze_top(&mut cx);
         self.special.cmp.exclude = saved;
         (r, cx.notes)
+    }
+
+    /// The notes explaining why defaulted comparison `f` is not
+    /// `constexpr` (clang `DefaultedComparisonAnalyzer::ExplainConstexpr`):
+    /// the subobject and the declaration of the first non-`constexpr`
+    /// function it calls.
+    pub(crate) fn explain_cmp_not_constexpr(
+        &mut self,
+        f: DeclId,
+        k: CmpKind,
+        rd: DeclId,
+        from: DeclId,
+    ) -> Vec<Diag> {
+        let first = self.ast.first(f);
+        let saved = self.special.cmp.exclude.replace((first, self.ctx));
+        let floc = self.ast.decls.get(f).loc();
+        let fname = self.decl_name(f);
+        let mut cx = Cx {
+            f,
+            k,
+            rd,
+            from,
+            diagnose: false,
+            explain_constexpr: true,
+            notes: Vec::new(),
+            floc,
+            fname,
+        };
+        let _ = self.analyze_top(&mut cx);
+        self.special.cmp.exclude = saved;
+        cx.notes
     }
 
     fn analyze_top(&mut self, cx: &mut Cx) -> CmpAnalysis {
@@ -322,6 +366,22 @@ impl Sema<'_, '_> {
                 let deducing =
                     op == OO::Spaceship && self.contains_deduced(self.declared_ret(cx.f));
                 if let Some(fd) = cand.decl {
+                    if cx.explain_constexpr
+                        && self.fn_spec(fd).constexpr_kind() == ConstexprKind::None
+                    {
+                        if sub.kind != 0 {
+                            let d = self
+                                .diag(DiagId::note_defaulted_cmp_not_constexpr, sub.loc)
+                                .arg(sub.kind)
+                                .arg(&sub.decl);
+                            cx.notes.push(d);
+                        }
+                        let here = self.ast.decls.get(fd).loc();
+                        cx.notes.push(self.diag(DiagId::note_defaulted_cmp_not_constexpr_here, here));
+                        // Explained: no further notes.
+                        self.end_set(set);
+                        return CmpAnalysis::DELETED;
+                    }
                     r.constexpr &= self.fn_spec(fd).constexpr_kind() != ConstexprKind::None;
                     if deducing {
                         let mut ret = self.fn_ret(fd);

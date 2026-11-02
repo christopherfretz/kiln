@@ -1867,6 +1867,14 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   class type, to a declared or a variadic parameter (clang
   `EvaluateCallArg` → `EvaluateInPlace`): a non-literal one traps at the
   argument before it is initialized (WP-320, sema.md §5.20).
+  At `-fclang-compat=22` from C++23 none of these `CheckLiteralType`
+  traps is made (clang 22 dropped it with P2448): a non-literal object
+  fails only at the non-constexpr constructor its creation calls
+  (`literal_check_relaxed`, WP-400).
+- A local variable that sema marked invalid (its initialization was
+  already diagnosed) traps silently when its declaration is evaluated,
+  so the enclosing constant expression reports only its own error
+  (clang's invalid-declaration evaluation failure; WP-400).
 - Covariant return adjustment through a pointer to member function:
   `Fault::Invalid` (stub, follow-up of WP-077).
 - Freezing a pointer to a `typeid` object (`constexpr auto *p =
