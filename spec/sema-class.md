@@ -648,7 +648,11 @@ by selecting each direct base's and class field's member as clang
 `SpecialMemberIsTrivial`: `{ P1 m; }` has a trivial move ctor because P1's
 copy ctor is selected); an
 `= default` on first declaration gets it at `}` (`mark_function`, already
-`LATE`). Eligibility ([special]/6) of constrained special members is WP-073's;
+`LATE`), by the same selection when the class has `NEEDS_OVL_*` for it (WP-292:
+`{ M m; S(S&&) = default; }` with `M` declaring only a defaulted copy is
+trivially move-constructible). When an implicit copy/move member of a class
+with `NEEDS_OVL_*` is declared eagerly while the class is finishing, its
+triviality updates the finishing `TRIVIAL_*` and `TRIVIALLY_COPYABLE` bits. Eligibility ([special]/6) of constrained special members is WP-073's;
 for non-template classes every non-deleted declared special member is eligible.
 
 ### 4.4 `= default`, `= delete`, user-provided
