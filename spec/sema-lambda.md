@@ -326,6 +326,15 @@ own. The substituter replays the lambda through the parser's actions:
 Uses of `this` in a rebuilt body capture it again (`note_this_use`);
 `note_shared_this` keeps the enclosing lambda's `this` capture in step.
 
+A specialization of a generic lambda's call operator does not rebuild the
+closure: its body (and the body of a generic lambda nested in it) names
+the init-capture variables the closure already has
+([expr.prim.lambda.capture]/6). `find_instantiated_decl` maps an
+init-capture variable that the current substitution has not rebuilt (a
+rebuilt one is in `locals`, step 1) to itself, as clang's
+`addInstantiatedCapturesToScope` does (WP-286;
+`tests/conformance/expr.prim.lambda/run-generic-init-capture.cpp`).
+
 ## 10. Tests
 
 - `tests/conformance/expr.prim.lambda/`: 46 tests (45 pass, 1 xfail:
