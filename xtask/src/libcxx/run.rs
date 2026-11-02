@@ -867,31 +867,52 @@ mod tests {
         assert_eq!(is_long("std/a/b.pass.cpp", &long), Some("REQUIRES: long_tests"));
     }
 
+    /// Writes an executable script at `path` without this process ever
+    /// holding it open for writing. `cargo test` runs tests on threads, and
+    /// a child forked by another thread inherits every open descriptor
+    /// until its `exec`; executing a file such a child still holds open for
+    /// writing fails with `ETXTBSY` ("Text file busy"), however promptly
+    /// this thread closed its own handle. So the text goes to a side file
+    /// that is never executed, and a child process (`cp`, then `chmod`)
+    /// creates the executable itself.
+    #[cfg(unix)]
+    fn write_script(path: &Path, text: &str) {
+        let side = path.with_extension("txt");
+        std::fs::write(&side, text).unwrap();
+        let ok = Command::new("sh")
+            .args(["-c", "cp \"$1\" \"$2\" && chmod 755 \"$2\"", "sh"])
+            .arg(&side)
+            .arg(path)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "cannot create {}", path.display());
+    }
+
     /// A fake compiler: `-c -o t.o` writes the object, the link step writes
     /// `t.exe` as a copy of the test source (a shell script), so the run
     /// step runs the test's own script.
     #[cfg(unix)]
     fn fake_run(script: &str, run: RunLimits) -> TestResult {
-        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
         let base = std::env::temp_dir().join(format!(
             "kiln-libcxx-retry-{}-{}",
             std::process::id(),
-            script.len()
+            SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let kiln = base.join("fake-kiln");
         let src = base.join("t.pass.cpp");
-        std::fs::write(
+        write_script(
             &kiln,
-            format!(
+            &format!(
                 "#!/bin/sh\nfor a; do case \"$a\" in -c) exec touch t.o;; esac; done\n\
                  cp {} t.exe && chmod +x t.exe\n",
                 src.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&kiln, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         std::fs::write(&src, script).unwrap();
         let cfg = Config {
             kiln,
@@ -944,6 +965,34 @@ mod tests {
         let r = fake_run(slow, RunLimits { timeout: Duration::from_millis(300), retries: 1 });
         assert_eq!(r.outcome, Outcome::Timeout(Stage::Run));
         assert!(r.wall < Duration::from_secs(4), "{:?}", r.wall);
+    }
+
+    /// Regression for the `ETXTBSY` flake: fake compilers are written and
+    /// executed in a loop while another thread keeps forking children.
+    #[test]
+    #[cfg(unix)]
+    fn fresh_scripts_execute_while_other_threads_fork() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let forkers: Vec<_> = (0..4)
+            .map(|_| {
+                let stop = std::sync::Arc::clone(&stop);
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        let _ = Command::new("true").status();
+                    }
+                })
+            })
+            .collect();
+        let secs = Duration::from_secs(20);
+        for _ in 0..50 {
+            let r = fake_run("#!/bin/sh\nexit 0\n", RunLimits { timeout: secs, retries: 0 });
+            assert_eq!(r.outcome, Outcome::Pass, "{}", r.detail);
+        }
+        stop.store(true, Ordering::Relaxed);
+        for f in forkers {
+            f.join().unwrap();
+        }
     }
 
     #[test]
