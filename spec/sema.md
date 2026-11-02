@@ -1910,6 +1910,11 @@ for them.
   - The type is that of the last non-null statement, looking through
     labels, when that is an expression statement; otherwise `void`.
     The result is always a prvalue.
+  - Dependence (clang `computeDependence(StmtExpr*, TemplateDepth)`):
+    the type's dependence, plus the result expression's, plus value-
+    and instantiation-dependence whenever it appears in a dependent
+    context (`Sema::in_template`), less unexpanded-pack (a pack is
+    not expanded across a statement expression).
   - An unused statement expression warns as clang's
     `isUnusedResultAWarning` does.
 - **Unused results** (`unused_warning`, clang `isUnusedResultAWarning`

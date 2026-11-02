@@ -1565,6 +1565,27 @@ recomputed exactly as for non-template code (clang's
 
   A non-list `CXXConstructExpr` operand with zero or two or more
   arguments outside an initializer still gives the NYI diagnostic.
+- (WP-301) GNU forms ([sema] §5.8):
+  - a binary conditional `a ?: b` substitutes its common operand once
+    and its false operand, then runs `act_on_binary_conditional` again
+    (the common operand is evaluated once, [expr.cond] as extended);
+  - a statement expression `({ ... })` opens `act_on_start_stmt_expr`,
+    substitutes its compound body in a new block scope, re-runs
+    `act_on_stmt_expr_result` on the substituted last expression
+    statement (`Substituter::stmt_expr_result`) and finishes with
+    `act_on_stmt_expr`. Because a statement expression in a dependent
+    context is always value- and instantiation-dependent (below), its
+    body is never shared with the pattern.
+
+  Every other expression or statement kind without an arm reaches the
+  generic catch-all, which gives the NYI diagnostic `substitution into
+  <kind>` and never panics. A census over the libc++ 19 10% sample
+  (790 tests, `-fsyntax-only`) found no kind reaching it; the kinds left
+  are unreachable today because their construct is rejected or
+  unimplemented before substitution: coroutine expressions and
+  statements, `template for`, computed `goto`, `contract_assert`,
+  `__builtin_choose_expr`, a dependent `__builtin_offsetof` and
+  ext-vector element access.
 
 ### 5.5 Statements
 

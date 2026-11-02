@@ -252,6 +252,30 @@ impl Substituter<'_, '_, '_> {
                 let f = self.expr(f)?;
                 Ok(self.sema.act_on_conditional(c, t, f, loc))
             }
+            // GNU `x ?: y` (clang `TransformBinaryConditionalOperator`):
+            // the common operand and the false arm, built again.
+            ExprKind::BinaryConditionalOperator => {
+                let [common, _, _, f] =
+                    self.sema.ast.exprs.binary_conditional_operands(e, &self.sema.ast.lists);
+                let common = self.expr(common)?;
+                let f = self.expr(f)?;
+                Ok(self.sema.act_on_binary_conditional(common, f, loc, loc))
+            }
+            // GNU `({ ... })` (clang `TransformStmtExpr`): the body is
+            // rebuilt in a block scope of its own and its last expression
+            // statement yields the value again.
+            ExprKind::StmtExpr => {
+                let body = ex(self).stmt_expr_body(e);
+                let rparen = self.sema.ast.exprs.end_loc(e).unwrap_or(loc);
+                let scope = self.sema.act_on_start_stmt_expr();
+                let result = self.sema.stmt_expr_result(body);
+                let saved = std::mem::replace(&mut self.stmt_expr_result, result);
+                self.sema.push_scope(crate::scope::ScopeKind::Block);
+                let b = self.body(body);
+                self.sema.pop_scope();
+                self.stmt_expr_result = saved;
+                Ok(self.sema.act_on_stmt_expr(scope, b, loc, rparen))
+            }
             ExprKind::ArraySubscriptExpr => {
                 let [b, i] = ex(self).operands(e);
                 let b = self.expr(b)?;
