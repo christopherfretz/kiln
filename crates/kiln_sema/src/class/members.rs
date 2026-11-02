@@ -324,7 +324,8 @@ impl Sema<'_, '_> {
         // clang streams the `CXXRecordDecl` (`getNameForDiagnostic`), not its type.
         let rd = format!("'{}'", self.name_for_diagnostic(def));
         let def_loc = self.ast.decls.get(def).loc();
-        if bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+        // Not a reason in C++26 (P3533R2).
+        if self.vbases_forbid_constexpr(bits) {
             let vbases = self.virtual_bases(def);
             let tag = 2 * u8::from(rec.tag == TagKind::Class);
             msg = msg.with_note(
@@ -600,8 +601,10 @@ impl Sema<'_, '_> {
     /// ([basic.lookup.unqual]/1: names after the declarator-id of an
     /// out-of-line member or qualified definition are looked up in the
     /// scopes of its class and namespaces), outermost first, and the
-    /// implicit `inline` of a function defined in its class
-    /// ([class.mfct]/1). Returns how many scopes were pushed.
+    /// implicit `inline` of a function defined in its class when it is
+    /// attached to the global module ([class.mfct]/1, [class.friend]/7;
+    /// one attached to a named module is not inline, spec/modules.md §7).
+    /// Returns how many scopes were pushed.
     pub(crate) fn enter_definition_scopes(&mut self, f: DeclId) -> usize {
         let Some(ctx) = self.ast.decls.get(f).ctx() else { return 0 };
         let lexical = self.ast.decls.lexical_ctx(f).unwrap_or(ctx);
@@ -614,6 +617,7 @@ impl Sema<'_, '_> {
                     | DeclKind::CXXDestructor
                     | DeclKind::CXXConversion
             )
+            && self.ast.module_attachment(lexical).is_none()
         {
             self.ast
                 .decls

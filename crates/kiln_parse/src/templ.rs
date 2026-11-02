@@ -1184,6 +1184,19 @@ impl Parser<'_, '_> {
             if let Some(t) = self.s.act_unknown_specialization_type(q, name, kw, name_loc) {
                 return Some(t);
             }
+            // A reachable type that is not visible ([module.reach]): the
+            // missing-import error, then the type is used.
+            if class == NameClass::Undeclared
+                && !self.at(Punct::Less)
+                && let Some(NameClass::Type(t, d)) =
+                    self.s.module_hidden_type(name, Some(q.ctx), name_loc)
+            {
+                self.s.mark_type_referenced(d);
+                let kind = self.s.ast.decls.get(d).kind();
+                let named =
+                    if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
+                return Some(self.s.ast.types.elaborated(kw, Some(q.nns), named));
+            }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             let ctx = self.s.qualifier_desc(q.ctx);
             if self.at(Punct::Less) && class == NameClass::Undeclared {

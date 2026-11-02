@@ -521,7 +521,8 @@ literal is one instruction and one step, not an interpreted loop.
 - **GCC's implicit library builtins (WP-380):** a direct call of a
   function with no builtin id but a `gnu_lib_twin` (spec/sema.md §5.4:
   the C library `ceil`/`floor`/`trunc`/`round`/`fabs`/`fmin`/`fmax`/
-  `copysign` and their `f`/`l` variants under `-stdlib=libstdc++`) is
+  `copysign`, and since WP-393 `sqrt`, with their `f`/`l` variants under
+  `-stdlib=libstdc++`) is
   lowered as a call of the twin `__builtin_` function, so it folds with
   the twin's rules; under `-stdlib=libc++` such a call is a call of a
   non-constexpr function, as in clang.
@@ -552,8 +553,8 @@ literal is one instruction and one step, not an interpreted loop.
   through it.
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
   constant expression", as clang 19): the math functions outside the
-  P0533 set below (`sqrt`, `sin`, `exp`, `pow`, ...: `builtin::is_libm`
-  minus `p0533_base`); `__builtin_unreachable` when
+  P0533 set below (`sin`, `exp`, `pow`, `cbrt`, `hypot`, ...:
+  `builtin::is_libm` minus `p0533_base`); `__builtin_unreachable` when
   reached; `__builtin_operator_new`/`_delete` outside
   `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
   untyped-memory note; inside them they allocate, "Transient
@@ -565,8 +566,10 @@ literal is one instruction and one step, not an interpreted loop.
   `fdim`, `fma`, `frexp`/`ldexp`/`scalbn`/`scalbln`/`ilogb`/`logb`/`modf`,
   `nextafter`/`nexttoward`, `nextafterf16`/`f16b`, `signbit`, the six
   comparison macros (`isgreater` ... `isunordered`, quiet: false on NaN)
-  and integer `abs`/`labs`/`llabs` (`bi::IABS`), each in its plain, `f`,
-  `l` and `f128` spellings (`kiln_ast` `builtin::p0533_base`), evaluate
+  and integer `abs`/`labs`/`llabs` (`bi::IABS`), and P1383's `sqrt`
+  (WP-393, `bi::SQRT`), each in its plain, `f`, `l` and `f128` spellings
+  (`kiln_ast` `builtin::p0533_base`; `sqrt` also clang's `__fp16`
+  `__builtin_sqrtf16`), evaluate
   exactly in the operand's format: binary16, bfloat16, binary32,
   binary64, x87 80-bit and binary128 all go through the integer
   significand code in `softfloat` (no host libm, no host float
@@ -593,6 +596,21 @@ literal is one instruction and one step, not an interpreted loop.
   nearest-even), rejects `fmod(x, inf)` (= x here) and any infinite
   operand to its MPFR folders (`fma`, `fdim`, `ldexp`), and does not fold
   the pointer-output `*f128` calls.
+  **`sqrt`** (WP-393, IEEE 754-2019 §5.4.1 squareRoot, C23 F.10.4.5) is
+  correctly rounded in the operand's format: binary32 and binary64 use
+  Rust's `f32::sqrt`/`f64::sqrt` (IEEE squareRoot, correctly rounded on
+  every host; the one place the P0533 code uses host float arithmetic),
+  the other formats `softfloat::math::sqrt_fin`, a digit-by-digit integer
+  root of the significand to 125 bits plus a sticky bit, rounded once by
+  `pack` (unit tests check it against the host for binary32/binary64).
+  `sqrt(-0)` is -0; a negative finite operand, -inf or a signaling NaN
+  raises invalid and is not a constant; `sqrt(+inf)` is +inf and a quiet
+  NaN is returned (no exception, so constants by [library.c]/3).
+  **Divergences:** g++ 14 also rejects `sqrt(+inf)` and `sqrt(qNaN)`;
+  clang 19 and 22 evaluate no `sqrt` form (`__has_constexpr_builtin`
+  answers 0 at both levels; codegen keeps the call, as for the rest of
+  the set). Tests: `tests/conformance/c.math/constexpr-sqrt*.cpp`,
+  `gnu-lib-sqrt.cpp`.
 - **Bits** (`bi::CLZ`/`CTZ`/`POPCOUNT`/`BSWAP`): any width up to 128; a
   zero operand to `clz`/`ctz` without the `g` forms' fallback is not a
   constant (no note, as clang).
@@ -755,6 +773,32 @@ literal is one instruction and one step, not an interpreted loop.
   "subexpression not valid", as clang 19. **Divergences:** for the
   object-size comma rule a call with arguments counts as a read (its
   callee reads them) and one without as none, whatever the callee reads.
+
+#### `_Float32x`/`_Float64x` math builtins (WP-393)
+
+GCC spells its TS 18661-3 math builtins for `_Float32x` (double's
+format) and `_Float64x` (long double's) with `f32x`/`f64x` suffixes.
+kiln provides the set clang 22 provides plus those g++ 14 provides that
+libstdc++'s headers reference under kiln's flags. Both are empty:
+`clang++-22` and `clang++-19` answer `__has_builtin` 0 for every name
+below (and have no `_Float32x` type), libstdc++ 14 names none of them,
+and glibc's `<math.h>` (`bits/floatn-common.h`), which names the
+constant forms, maps them to the `double`/`long double` builtins because
+kiln reports clang's `__GNUC__` 4. So kiln declares none, and code
+reaches the formats through the `double`/`long double` forms by
+conversion, as for `_Float32`/`_Float64` above.
+
+| Family (each `__builtin_<f>f32x` and `__builtin_<f>f64x`) | kiln |
+|---|---|
+| `fabs`, `copysign`, `fmax`, `fmin` | not provided (clang 22 doesn't either) |
+| `ceil`, `floor`, `trunc`, `round`, `rint`, `nearbyint` | not provided (clang 22 doesn't either) |
+| `sqrt` | not provided (clang 22 doesn't either) |
+| `nan`, `nans`, `inf`, `huge_val` | not provided (clang 22 doesn't either); glibc's `HUGE_VAL_F32X`, `SNANF64X`, ... macros use the `double`/`long double` forms |
+| `fma`, `fmod`, `frexp`, `ldexp`, `nextafter` and the rest of GCC's set | not provided (clang 22 doesn't either) |
+
+`__builtin_isnan`/`isinf`/`isfinite` and the other type-generic builtins
+take `_Float32x`/`_Float64x` operands directly. Test:
+`tests/conformance/basic.extended.fp/float-nx-builtins.cpp`.
 
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,
@@ -1257,7 +1301,8 @@ has no usable default constructor ([class.base.init]/9, clang's
 `err_missing_default_ctor`); clang's evaluator still runs the
 constructor, leaving the base subobject without a value. A
 non-delegating constructor's prologue (`member_prologue`) emits
-`EndLife` aux 8 for each such base that holds data: `Memory::set_unconstructed`
+`EndLife` aux 8 for each such direct non-virtual base that holds data (a
+virtual base is the most derived constructor's alone, "Virtual bases"): `Memory::set_unconstructed`
 tracks the allocation in any space (a `constexpr` variable's static
 storage too), marks the base's `copy_size` bytes uninitialized and
 outside their lifetime, sets `life_frame` and records the base in
@@ -1505,13 +1550,16 @@ perform. The WP-135 progress note has the site table.
 (construction, destruction, temporaries), `compile/mptr.rs` and
 `memptr.rs` (member pointers), `compile/new_delete.rs` (class `new`/
 `delete`), `vm.rs` (cleanups, downcasts) and `value.rs` (constant
-destruction, static temporaries). Virtual dispatch, virtual bases,
-`dynamic_cast` and `typeid` are WP-077's; builtins are WP-088's.
+destruction, static temporaries). Virtual dispatch, `dynamic_cast` and
+`typeid` are WP-077's, virtual bases WP-388's ("Virtual bases" below);
+builtins are WP-088's.
 
 **Object model.** A class object is one allocation of its record type;
 `ty.rs` lays a record out as its direct non-virtual base subobjects
-(`Field::base`, in declaration order, before the members) and then its
-fields, at the offsets of kiln_abi's record layout, so a subobject is a
+(`Field::base`, in declaration order, before the members), then its
+fields, and then, for a class with virtual bases, one base field per
+non-empty virtual base ("Virtual bases"), at the offsets of kiln_abi's
+record layout, so a subobject is a
 byte offset plus a type, and a pointer to it is the allocation plus that
 offset (no `SubobjectId` is materialized: the path is recovered from the
 offset with `Types::has_subobject`/the most-derived-object walk when a
@@ -1710,7 +1758,7 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
 **Left for later (owners).**
 - Virtual calls, virtual calls through member pointers, `dynamic_cast`,
   `typeid`, `delete` through a base with a virtual destructor: landed in
-  WP-077 (below). Virtual bases still trap with a `kiln:` note.
+  WP-077 (below). Virtual bases: WP-388 ("Virtual bases").
 - `std::construct_at`/`destroy_at`/`std::allocator`: landed in WP-212
   ("Transient allocation").
 - Class assignment (`a = b` of class type) is a call of `operator=`
@@ -1734,8 +1782,9 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
   temporary used at run time) is WP-079's ("pointers to lifetime-extended
   temporaries are not supported yet").
 - Spec gap: `SubobjectId` (spec/sema-class.md §3.5) is not used by the
-  Oven; offsets suffice until virtual bases (WP-077) make the path
-  dynamic.
+  Oven; offsets suffice for non-virtual paths, and a path through a
+  virtual base is an index into `Virt`'s subobject list (`Op::VBase`,
+  "Virtual bases").
 
 ### Dynamic types — Landed (WP-077)
 
@@ -1823,7 +1872,8 @@ arrays of class type are list-initialized (`Holder h{}` with a `C
 cs[2]` member); `ensure_body` defines implicit virtual destructors.
 
 **Left for later (owners).**
-- Virtual bases: a class with a virtual base is not a literal type
+- Virtual bases: landed in WP-388 ("Virtual bases"). Before C++26 a
+  class with a virtual base is not a literal type
   ([basic.types.general]/10), so constructing one is never a constant
   expression: `construct` traps first with clang's `CheckLiteralType` note
   `non-literal type 'X' cannot be used in a constant expression`, also
@@ -1833,12 +1883,6 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   class type, to a declared or a variadic parameter (clang
   `EvaluateCallArg` → `EvaluateInPlace`): a non-literal one traps at the
   argument before it is initialized (WP-320, sema.md §5.20).
-  The remaining `VIRTUAL_UNSUPPORTED` traps (a `VirtualBase` ctor-init, a
-  class cast through a virtual base) are therefore unreachable from
-  valid code, so dispatch,
-  `dynamic_cast` and `typeid` never meet one; the subobject list marks
-  virtual subobjects and phase 2 treats one as `Fault::Invalid`. Owner:
-  a follow-up WP (object layout of virtual bases in `ty.rs`).
 - Covariant return adjustment through a pointer to member function:
   `Fault::Invalid` (stub, follow-up of WP-077).
 - Freezing a pointer to a `typeid` object (`constexpr auto *p =
@@ -1850,6 +1894,118 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
 - A virtual call on a member subobject whose own base is still being
   constructed reports the lifetime note where clang reports CWG1517
   (`no_dynamic` keys on the running constructor's object and class).
+
+### Virtual bases — Landed (WP-388)
+
+*Status:* P3533R2 (C++26): objects with virtual base classes are
+constructed, converted, dispatched on and destroyed in constant
+evaluation. Implemented in `crates/kiln_oven/src/ty.rs` (layout),
+`compile/class.rs` (construction variants, `Op::VBase`),
+`compile.rs`/`lib.rs` (base-object entry points) and `vm/virt.rs`
+(addresses, dynamic-type words, dispatch, `dynamic_cast`, `base_owner`).
+Sema: before C++26 a class with a virtual base is not literal and its
+constexpr constructors/destructors and constexpr defaulted special
+members are rejected (`vbases_forbid_constexpr`, sema-class.md §4.10);
+from C++26 they are constexpr as any other.
+
+**Object model.** A class `C` with virtual bases has two record types:
+the complete object (`C` itself) and its base-subobject view
+(`Types::nv_view(C)`, `nv_size`/`nv_align`, mapped back by
+`Types::class_of`/`same_class`). The view's fields are the non-virtual
+bases then the members; the complete type has the same fields followed by
+one `base: true` field per non-empty virtual base, in `layout.vbases`
+order at kiln_abi's offsets, each typed as that virtual base's own view
+(`Types::vbase_start(C)` is the index of the first). A base class
+subobject is laid out with the view of its class, so it holds no virtual
+base: every virtual base of the most derived object is stored once,
+in the most derived object, and shared by every path to it
+([class.mi]/4).
+
+**Construction and destruction.** A constructor or destructor of a class
+with virtual bases compiles to two functions, as the Itanium C1/C2 and
+D1/D2: the complete-object one (`Oven::func_index`) and the base-object
+one (`Oven::func_index_base`, `Func::base_obj`, built from
+`Oven::base_funcs`; a base-class initializer or destructor call is
+`Callee::Base`). The complete-object constructor initializes the virtual
+bases first, in `vbases()` order (sema lists their `VirtualBase`
+initializers first), and registers each for destruction on an exception
+([except.ctor]/3); the base-object constructor skips them
+([class.base.init]/7). The complete-object destructor alone destroys the
+virtual bases, after everything else, in the reverse order
+([class.dtor]/13). A class without virtual bases has one function, used
+for both.
+
+**Dynamic-type words.** `SetVptr` with aux 1 (a base-object constructor
+or destructor) writes, into a slot inside one of the class's virtual
+bases, a *relative* word (`REL` bit set): the high word is the signed
+distance from the class's own start to the slot, as the virtual base is
+the most derived object's and at no fixed offset in the class. `locate`
+resolves a relative word by trying each virtual subobject of that class
+through `sub_addr` from the object's start. Plain words are as in
+"Dynamic types".
+
+**Addresses.** `Virt::subs` lists every subobject of a polymorphic or
+vbase-bearing class (offset, class, `virt` when in or below a virtual
+base, `top` = the virtual base above it). `sub_addr(raw, cls, k)` adds
+the offset for a non-virtual subobject; for a virtual one it finds the
+most derived object (`owner`: `base_owner` from the allocation's root,
+cached per object and per virtual-base top) and adds that object's
+offset of the virtual base (`PolyInfo::vbase_at`). A derived-to-base
+conversion whose path crosses a virtual base compiles to `Op::VBase
+[dst, p, class, sub]` (`path_sub`; aux 1 = null stays null), which is
+`sub_addr`; `Oven::vbase_ptr` is the same for a known base class.
+`static_cast` (and the implicit conversions) from a virtual base to a
+derived class is ill-formed and rejected by sema ("cannot cast ... via
+virtual base"); `dynamic_cast` reaches it through the complete object.
+
+**Dispatch and `dynamic_cast`.** A virtual call through a virtual base
+subobject reads its word and dispatches on the complete object's dynamic
+type (`locate`, then the final overrider's subobject through
+`sub_addr`); `dynamic_cast` and `typeid` find the most derived object and
+the target the same way (`cast_target`, `PolyInfo::vvptrs`/`at`).
+`covariance` returns `None` (`Fault::Invalid`) for a covariant return
+adjustment into a virtual base.
+
+**`base_owner`.** The search for the most derived object (used by
+`sub_addr` and by the exception handler match of a thrown pointer to a
+subobject, "Exceptions") descends through array elements, members and
+base fields, the virtual-base fields included, so a subobject inside an
+enclosing object's virtual base is found.
+
+**Tests.** `tests/conformance/class.mi/constexpr-virtual-*`
+(C++23 rejection with clang's notes, C++26 acceptance, diamond and
+nested `_run` tests with a construction/destruction log),
+`class.derived/virtual-base-downcast.cpp`,
+`class.derived/constexpr-virtual-base-conversions*.cpp`,
+`class.inhctor.init/constexpr-vbase-run.cpp`,
+`except.handle/constexpr-catch-in-virtual-base-storage.cpp`; stress
+`tests/stress/constexpr-virtual-deep-diamond.cpp` (a diamond over a
+64-deep chain of virtual bases, 66 shared virtual base subobjects,
+allocated, converted, dispatched on and deleted 256 times: 1072 bytes
+peak, 1536 arena, no growth per round).
+
+**Interface changes.** `Op::VBase`; `SetVptr` aux 1;
+`Func::base_obj`, `Oven::func_index_base`, `Oven::base_funcs`,
+`Callee::Base`; `Virt::subs`; `Types::{nv_view, class_of, same_class,
+vbase_start}`; `covariance` returns `Option<i64>`. Sema: a rejected
+constexpr defaulted special member (C++23) is marked invalid, as clang's
+`setInvalidDecl`.
+
+**Left for later.**
+- clang 19/22 in C++23 accept some defaulted constexpr special members
+  of classes with virtual bases (its `DefaultedDefaultConstructorIsConstexpr`
+  / `DefaultedDestructorIsConstexpr` flags are last-write-wins over the
+  subobjects); kiln rejects them (it rejected them before, as
+  unsupported).
+- Covariant return adjustment into a virtual base (`Fault::Invalid`).
+- `base_owner` in a union takes the first member in which the search
+  succeeds, not the active one.
+- Codegen of a constant global of a class with virtual bases.
+- Sema's final-overrider and used-virtual-member walks are exponential in
+  the depth of a virtual lattice (`class/virtual/graph.rs`,
+  `class/virtual/used.rs`).
+- `vcall` caches neither relative words nor overriders found in a virtual
+  base.
 
 ### Vectors — Landed (WP-173)
 GNU `vector_size` and clang `ext_vector_type` values are stored as an
@@ -2010,10 +2166,12 @@ follow clang trunk's P3068 branch.
   pointer designates), and the base's offset is that object's virtual
   base's plus the base's non-virtual offset in it
   (`except.handle/constexpr-catch-virtual-base-ptr.cpp`,
-  `constexpr-catch-virtual-base-ptr-subobject.cpp`). A pointer the model
-  cannot place (a subobject of a virtual base of an enclosing object,
-  which no constant evaluation creates before P3533) is "subexpression
-  not valid in a constant expression".
+  `constexpr-catch-virtual-base-ptr-subobject.cpp`). `base_owner` also
+  searches the virtual-base storage of each candidate object, so a
+  subobject inside an enclosing object's virtual base (P3533R2) is placed
+  too (`constexpr-catch-in-virtual-base-storage.cpp`, WP-388); a pointer
+  the model still cannot place is "subexpression not valid in a constant
+  expression".
   A `const T&` handler
   with `T` a pointer type matches as aux 2 and binds to a temporary
   holding the converted pointer; any other reference handler of pointer
@@ -2416,9 +2574,10 @@ failure is rolled back; see "Trial evaluation — Landed (WP-135)".
 Implemented (C++26, WP-357): P2747 placement new (single objects and
 arrays, "Transient allocation"), P3068 exceptions ("Exceptions — Landed
 (WP-357)") and P2280 unknown references ("Unknown references — Landed
-(WP-357)"); WP-368 closed the WP-357 leftovers. Remaining there: a
-pointer handler converting a pointer to a base-class subobject to a
-virtual base of its most derived object.
+(WP-357)"); WP-368 closed the WP-357 leftovers, WP-383 the pointer
+handler converting a pointer to a base-class subobject to a virtual base
+of its most derived object. P3533 virtual inheritance: WP-388 ("Virtual
+bases").
 
 Remaining (each traps with a `kiln:` note today):
 - Lifetime of objects outside `std::allocator` storage (double

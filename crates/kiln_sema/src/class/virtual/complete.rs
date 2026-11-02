@@ -51,11 +51,13 @@ impl Sema<'_, '_> {
             bits = bits.with(DefinitionBits::POLYMORPHIC);
         }
         if vbases {
-            // [basic.types.general]/10.5: no virtual base classes.
-            bits = bits
-                .with(DefinitionBits::HAS_VIRTUAL_BASES)
-                .without(DefinitionBits::LITERAL)
-                .without(DefinitionBits::STRUCTURAL);
+            // [basic.types.general]/10.5: no virtual base classes before
+            // C++26 (a constexpr destructor could not have one; P3533R2
+            // lifted that, and `literal_bits` decides).
+            bits = bits.with(DefinitionBits::HAS_VIRTUAL_BASES).without(DefinitionBits::STRUCTURAL);
+            if self.std < kiln_lex::Std::Cxx26 {
+                bits = bits.without(DefinitionBits::LITERAL);
+            }
         }
         if polymorphic || vbases {
             for b in [
@@ -287,6 +289,9 @@ impl Sema<'_, '_> {
             if let Some(k) = key {
                 let _ = self.ast.decls.cold.key_function.insert(r, k);
             }
+        }
+        if polymorphic {
+            self.mark_module_vtable_used(r);
         }
     }
 

@@ -411,9 +411,8 @@ impl Collect<'_> {
             _ => {}
         }
         if ast.decls.get(d).kind() == DeclKind::Var {
-            let is_static = ast.decls.var(d).is_some_and(|v| {
-                v.spec.storage() == VarStorage::Static || v.spec.storage() == VarStorage::Extern
-            });
+            let is_static = is_static_local(ast, d)
+                || ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::Extern);
             self.var(d, is_static);
         }
     }
@@ -628,6 +627,16 @@ pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
     }
     let q = ast.types.effective_quals(ty);
     q.is_const() && !q.is_volatile()
+}
+
+/// Whether local variable `d` has static or thread storage duration
+/// (a function-local `static` or `thread_local`; [basic.stc.thread]/1:
+/// block-scope `thread_local` implies `static`).
+pub(crate) fn is_static_local(ast: &Ast, d: DeclId) -> bool {
+    is_local(ast, d)
+        && ast.decls.var(d).is_some_and(|v| {
+            v.spec.storage() == VarStorage::Static || v.spec.tls() != kiln_ast::decl::TlsKind::None
+        })
 }
 
 /// Whether `d` is a variable declared in a function body.

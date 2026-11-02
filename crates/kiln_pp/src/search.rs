@@ -238,6 +238,47 @@ pub fn parent_dir(name: &str) -> &str {
     if p.is_empty() { "/" } else { p }
 }
 
+/// `p` made absolute against `cwd` with `.` and `..` components removed
+/// lexically (clang `make_absolute` + `remove_dots(.., true)`).
+pub fn normalize_path(p: &str, cwd: &str) -> String {
+    if p.starts_with('/') { normalize(p) } else { normalize(&join_path(cwd, p)) }
+}
+
+/// The header name to suggest for including `file` (clang
+/// `HeaderSearch::suggestPathToFileForDiagnostics`): `file` relative to
+/// the search directory (`dirs`: path, whether a system directory) that
+/// is its longest path prefix, spelled `<...>` for a system directory and
+/// `"..."` otherwise; failing that, relative to `main_dir` (the main
+/// file's directory), or the whole normalized path, both quoted. Paths
+/// are compared after [`normalize_path`] against `cwd`.
+pub fn suggest_include_name<'a>(
+    file: &str,
+    dirs: impl IntoIterator<Item = (&'a str, bool)>,
+    main_dir: Option<&str>,
+    cwd: &str,
+) -> String {
+    let f = normalize_path(file, cwd);
+    let under = |d: &str| {
+        let d = normalize_path(d, cwd);
+        let n = if d == "/" { 1 } else { d.len() + 1 };
+        (f.len() > n && f.starts_with(&d) && f.as_bytes()[n - 1] == b'/').then_some(n)
+    };
+    let mut best: Option<(usize, bool)> = None;
+    for (d, system) in dirs {
+        if let Some(n) = under(d)
+            && best.is_none_or(|(b, _)| n > b)
+        {
+            best = Some((n, system));
+        }
+    }
+    let best = best.or_else(|| main_dir.and_then(under).map(|n| (n, false)));
+    match best {
+        Some((n, true)) => format!("<{}>", &f[n..]),
+        Some((n, false)) => format!("\"{}\"", &f[n..]),
+        None => format!("\"{f}\""),
+    }
+}
+
 /// The file system as header search sees it. [`RealFs`] is the disk;
 /// [`MemoryFs`] is a virtual tree for tests.
 pub trait HeaderFs {
@@ -405,5 +446,18 @@ mod tests {
         assert_eq!(normalize("/usr/lib/../include"), "/usr/include");
         assert_eq!(normalize("../a"), "../a");
         assert_eq!(normalize("."), ".");
+    }
+
+    #[test]
+    fn suggest_include_name_follows_clang() {
+        let dirs = [("inc", false), ("/sys/inc", true), ("/sys", true)];
+        let s = |f: &str, main: Option<&str>| suggest_include_name(f, dirs, main, "/w");
+        // Longest matching search directory; angled for a system one.
+        assert_eq!(s("/sys/inc/a/b.h", None), "<a/b.h>");
+        assert_eq!(s("inc/./x/../g.h", None), "\"g.h\"");
+        // Else the main file's directory, else the whole path.
+        assert_eq!(s("/w/t/Inputs/g.h", Some("t")), "\"Inputs/g.h\"");
+        assert_eq!(s("/elsewhere/g.h", Some("t")), "\"/elsewhere/g.h\"");
+        assert_eq!(normalize_path("../a//./b", "/w/x"), "/w/a/b");
     }
 }

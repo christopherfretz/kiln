@@ -18,6 +18,7 @@ note_misplaced_ellipsis_vararg_existing_ellipsis = Note (0) "preceding '...' dec
 note_module_add_export = Note (0) "add 'export' here if this is intended to be a module interface unit";
 note_module_add_gmf = Note (0) "add 'module;' to the start of the file to introduce a global module fragment";
 note_module_anon_ns_begins = Note (0) "anonymous namespace begins here";
+note_module_decl_not_visible = Note (0) "declaration here is not visible";
 note_module_export_block_begins = Note (0) "export block begins here";
 note_module_previous_decl = Note (0) "previous module declaration is here";
 note_module_private_begins = Note (0) "private module fragment begins here";
@@ -35,6 +36,7 @@ note_not_structural_mutable_field = Note (1) "{0} is not a structural type becau
 note_not_structural_non_public = Note (2) "{0} is not a structural type because it has a {1:non-static data member|base class} that is not public";
 note_not_structural_rvalue_ref_field = Note (1) "{0} is not a structural type because it has a non-static data member of rvalue reference type";
 note_not_structural_subobject = Note (3) "{0} is not a structural type because it has a {1:non-static data member|base class} of non-structural type {2}";
+note_nullability_here = Note (1) "'{0}' specified here";
 note_operator_arrow_depth = Note (0) "use -foperator-arrow-depth=N to increase 'operator->' limit";
 note_operator_arrow_here = Note (1) "'operator->' declared here produces an object of type {0}";
 note_operator_arrows_suppressed = Note (2) "(skipping {0} 'operator->'{1:|s} in backtrace)";

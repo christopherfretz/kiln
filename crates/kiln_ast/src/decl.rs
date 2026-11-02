@@ -3712,11 +3712,11 @@ pub mod builtin {
     /// `round`, `fabs`, `fmin`, `fmax` and `copysign`, each with its
     /// `f`/`l` variant (`ceil` -> `__builtin_ceil`). Left out: `rint` and
     /// `nearbyint` (GCC does not fold them: the result depends on the
-    /// rounding mode) and `sqrt` (GCC folds it; the Oven has no
-    /// `__builtin_sqrt`, which clang does not fold either).
+    /// rounding mode). WP-393 adds `sqrt` (GCC folds it; the Oven
+    /// evaluates `__builtin_sqrt` correctly rounded).
     pub fn gnu_lib_twin(name: &str) -> Option<u32> {
         const BASES: &[&str] =
-            &["ceil", "floor", "trunc", "round", "fabs", "fmin", "fmax", "copysign"];
+            &["ceil", "floor", "trunc", "round", "fabs", "fmin", "fmax", "copysign", "sqrt"];
         let base = name.strip_suffix(['f', 'l']).filter(|b| BASES.contains(b)).unwrap_or(name);
         if !BASES.contains(&base) || lib_by_name(name).is_none() {
             return None;
@@ -3889,6 +3889,8 @@ pub mod builtin {
         row(1117, "__builtin_sqrt", "dd", N),
         row(1115, "__builtin_sqrtf", "ff", N),
         row(1119, "__builtin_sqrtl", "LdLd", N),
+        // WP-393: clang's `__fp16` form (a call of the library `sqrtf16`).
+        row(1121, "__builtin_sqrtf16", "hh", N),
         row(1302, "__builtin_tan", "dd", N),
         row(1300, "__builtin_tanf", "ff", N),
         row(1310, "__builtin_tanh", "dd", N),
@@ -4671,7 +4673,7 @@ pub mod builtin {
 
     /// WP-365: the `<cmath>` function of the P0533 builtin `id` (the
     /// rounding, remainder, `fdim`/`fma`, exponent and `nextafter`
-    /// families): its name without the `__builtin_` prefix and the `f`,
+    /// families, and WP-393's `sqrt`): its name without the `__builtin_` prefix and the `f`,
     /// `l`, `f128`, `f16` or `f16b` suffix (`"ceil"` for
     /// `__builtin_ceilf128`); the Oven evaluates these and clang 19 does
     /// not.
@@ -4702,6 +4704,8 @@ pub mod builtin {
             "modf",
             "nextafter",
             "nexttoward",
+            // WP-393: P1383's `sqrt`, correctly rounded.
+            "sqrt",
         ];
         let name = info(id)?.name.strip_prefix("__builtin_")?;
         BASES.iter().copied().find(|base| {

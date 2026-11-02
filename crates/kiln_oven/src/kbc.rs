@@ -116,6 +116,11 @@ ops! {
     // base subobject is at `p` (`offset` bytes into it); aux 1 = a null
     // pointer stays null
     Downcast = 4,
+    // [dst, p, class, sub]: the address of subobject `sub` (an index into
+    // the class's subobject graph, in or below a virtual base) of the
+    // `class` object at `p`, through the most derived object
+    // ([class.mi]/4, P3533R2); aux 1 = a null pointer stays null
+    VBase = 4,
     // [dst, p, type]; aux = access kind
     Load = 3,
     // [p, src, type]; aux = access kind
@@ -206,7 +211,9 @@ ops! {
     // [p, class]: the object at `p` of `class` (under construction or
     // destruction) has dynamic type `class` from now on ([class.cdtor]/4):
     // writes the dynamic-type word of each of its polymorphic subobjects
-    // (spec/oven.md "Dynamic types", WP-077)
+    // (spec/oven.md "Dynamic types", WP-077); aux 1 = it is a base class
+    // subobject (a base-object constructor or destructor): the slots in
+    // its virtual bases get relative words (P3533R2)
     SetVptr = 2,
     // [method, arg base, class, adj]: a virtual call of `method` (first
     // declaration, a member of `class`) on the object argument of the
@@ -450,7 +457,7 @@ pub(crate) mod bi {
 
     // WP-365: P0533 constexpr <cmath>.
     /// A `<cmath>` operation on `a` (`b`, `c`) in the float kind of sub's
-    /// low 4 bits: sub = float kind | `CEIL`..`CMP` << 4 | [`SECOND`]
+    /// low 4 bits: sub = float kind | `CEIL`..`SQRT` << 4 | [`SECOND`]
     /// (`softfloat::math`; IEEE-exact, GCC's folding rules: an invalid,
     /// overflowing, inexact-underflowing or signaling-NaN case is not a
     /// constant).
@@ -495,6 +502,8 @@ pub(crate) mod bi {
     /// `LE`, `NE` (`islessgreater`) or [`UNORDERED`]; quiet, never
     /// faults.
     pub const CMP: u32 = 20;
+    /// `sqrt(a)`, correctly rounded (WP-393).
+    pub const SQRT: u32 = 21;
     /// `t1` of `FP_MATH` `CMP`: `isunordered`.
     pub const UNORDERED: u32 = 6;
 }

@@ -333,23 +333,6 @@ impl Job<'_> {
     }
 }
 
-/// P0533 builtins the Oven folds (WP-365) that clang 22's `Constexpr`
-/// table adds and the staging table's clang 19 Oven column marks `No`:
-/// the clang table answers for them (0 below `-fclang-compat=22`, 1 from
-/// 22; spec/pp.md "clang compatibility level", WP-380).
-const OVEN_FOLDS_FROM_22: &[&str] = &[
-    "__builtin_abs",
-    "__builtin_labs",
-    "__builtin_llabs",
-    "__builtin_signbit",
-    "__builtin_isgreater",
-    "__builtin_isgreaterequal",
-    "__builtin_isless",
-    "__builtin_islessequal",
-    "__builtin_islessgreater",
-    "__builtin_isunordered",
-];
-
 /// clang 19's feature answers with kiln's builtin staging applied
 /// (spec/sema-templates.md §13.3): `__has_builtin` and
 /// `__has_constexpr_builtin` answer 0 for a trait, transform, builtin
@@ -377,9 +360,7 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
 
     fn has_constexpr_builtin(&self, name: &str) -> bool {
         self.0.has_constexpr_builtin(name)
-            && (OVEN_FOLDS_FROM_22.contains(&name)
-                || kiln_sema::templ::builtins::table::has_constexpr_builtin_staged(name)
-                    != Some(false))
+            && kiln_sema::templ::builtins::table::has_constexpr_builtin_staged(name) != Some(false)
     }
 
     fn has_attribute(&self, name: &str) -> u32 {

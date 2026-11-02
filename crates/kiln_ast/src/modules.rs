@@ -115,14 +115,18 @@ impl ModuleTable {
         self.units.get(usize::from(o.unit))?.module.as_deref()
     }
 
-    /// True if `d` was declared in the purview of an imported named
-    /// module unit (not the main file, not a header unit, not a global
-    /// module fragment): its definition belongs to that unit's object.
-    pub fn is_imported_module_decl(&self, d: DeclId) -> bool {
+    /// The unit whose preprocessor key is `key`.
+    pub fn unit_by_key(&self, key: &str) -> Option<u16> {
+        let i = self.units.iter().position(|u| u.key == key)?;
+        u16::try_from(i).ok()
+    }
+
+    /// True if `d` is owned by an imported named-module unit, in its
+    /// purview or its global module fragment: a non-inline definition
+    /// belongs to that unit's object file (spec/modules.md §7).
+    pub fn is_imported_named_unit_decl(&self, d: DeclId) -> bool {
         let o = self.owner(d);
-        o.purview
-            && o.unit != 0
-            && self.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
+        o.unit != 0 && self.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
     }
 
     /// Heap bytes.
@@ -142,13 +146,16 @@ impl crate::Ast {
     pub fn module_attachment(&self, d: DeclId) -> Option<&str> {
         use crate::decl::DeclKind;
         let m = self.modules.purview_module(d)?;
+        // [module.unit]/7: a declaration within a linkage-specification
+        // (at any depth: a member of a class or a local class in one)
+        // is attached to the global module. Walk lexical contexts so an
+        // out-of-line definition is judged by where it is written.
         let mut c = self.decls.lexical_ctx(d);
         while let Some(x) = c {
-            match self.decls.get(x).kind() {
-                DeclKind::LinkageSpec => return None,
-                DeclKind::Export | DeclKind::Namespace => c = self.decls.lexical_ctx(x),
-                _ => break,
+            if self.decls.get(x).kind() == DeclKind::LinkageSpec {
+                return None;
             }
+            c = self.decls.lexical_ctx(x);
         }
         Some(m)
     }

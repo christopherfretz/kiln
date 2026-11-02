@@ -65,6 +65,25 @@ declarations. The next 91 are a requires-expression pack expansion
 `tuple.rel`). These three clusters are the first M4 libc++ work packages;
 `std/utilities/meta` (91.1%) and `std/numerics/bit` (93.8%) already pass.
 
+**After WP-398** (nullability as type sugar, requires-expression pack
+dependence, injected-class-name as a template template argument,
+canonical template-id dependence, mutually recursive constexpr
+instantiation), same flags at `-j 4`, 924 s wall:
+
+| Scope | total | pass | fail | unsupported (driver) | pass rate |
+|---|---:|---:|---:|---:|---:|
+| 21 M4 directories | 2661 | 2448 | 130 | 83 (7) | **95.0%** |
+
+From the WP-398 start (302 / 2276 / 83, 11.7%, on main 4603daf9). The
+remaining clusters: 83 `expected '…'` at libc++ 22's `bitset:884`
+`static_cast<unsigned _BitInt(_Size)>` (kiln_parse has no `_BitInt`; the
+types exist in kiln_ast); 8 `no matching function` in `pstl.sort` /
+`stable_sort` (the mutual-recursion fix landed after this run); 6 P2418
+`no matching constructor` at `__format/buffer.h:362`, a class template's
+static member function converted to a function pointer in a base braced
+mem-initializer; then 4 `substitution into InitListExpr` and 4
+`non-type template argument of this kind` (`not yet implemented`).
+
 ## Environment
 
 What `cargo xtask libcxx` detects about the host, and what stays
