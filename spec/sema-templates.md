@@ -445,7 +445,7 @@ type parameter named `auto:N`, as in clang's dump.
 | mem-initializer-list | `D() : B<T>(0)... {}` | ctor-initializer (WP-065) | yes |
 | template-argument-list | `X<T...>` | §2.2 | yes |
 | using-declarator-list | `using B<T>::f...;` | using-decl (WP-062) | yes |
-| alignment-specifier | `alignas(T...)` | attributes | yes |
+| alignment-specifier | `alignas(T...)`, `alignas(N...)` | `parse_alignas`; one `ALIGNED` per element at instantiation (spec/sema.md §4.5, WP-302) | yes |
 | lambda capture | `[t...]`, `[...x = t]` | WP-075 | yes |
 | `sizeof...` | `sizeof...(T)` | primary expression | yes |
 | fold-expression | `(t + ...)` | parenthesized primary | yes |
@@ -2312,6 +2312,13 @@ the guide's arguments into such a typedef substitutes its underlying type
 and keeps the typedef as sugar, without instantiating the class
 (`Substituter::class_not_instantiated`). clang's guide transform clones
 the typedef instead.
+Any other member of the pattern that a guide's parameter types name (a
+static data member or enumerator, `span<O, rank_>` in libc++'s
+`layout_stride::mapping`, or a member of a member class) is found in the
+specialization the substituted injected-class-name `X<P...>` names: that
+class is completed and the member instantiated from the pattern member
+is used ([temp.inst]/3; `Substituter::pattern_specialization`, clang's
+`FindInstantiatedDecl` on a deduction guide; WP-302).
 
 The guide of a constructor template may also name other members of the
 class template in its signature or template parameters: a member class,
@@ -2560,10 +2567,12 @@ takes its initializer's dependence without `UNEXPANDED_PACK`
     pattern init-capture maps positionally to its new variables.
   - Gap: an init-capture `[x = ts]` whose initializer names an
     unexpanded pack outside an expansion is not diagnosed ("initializer
-    contains unexpanded parameter pack"). Nor is any other site: the
-    unexpanded-pack check described above is not implemented
-    (`sema_unexpanded_pack` has no emitter; `T x;`, `ts;` in a variadic
-    template are accepted).
+    contains unexpanded parameter pack"). Nor is any other site except
+    an `alignas` operand: the general unexpanded-pack check described
+    above is not implemented (`T x;`, `ts;` in a variadic template are
+    accepted). `Sema::diagnose_unexpanded_pack` (`templ/pack.rs`, emits
+    `sema_unexpanded_pack`; WP-302) is the reusable collector and
+    diagnostic for the remaining sites.
 
 ### 7.2 Expansion: `expand(pattern, site) -> Result<Expansion, SubstFail>`
 

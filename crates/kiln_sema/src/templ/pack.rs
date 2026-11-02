@@ -666,3 +666,147 @@ impl Substituter<'_, '_, '_> {
         Ok(self.int_literal(st, len as i128, loc))
     }
 }
+
+/// An operand checked for unexpanded packs ([temp.variadic]/12).
+#[derive(Clone, Copy)]
+pub(crate) enum PackOperand {
+    Expr(ExprId),
+    Type(QualType),
+}
+
+impl Sema<'_, '_> {
+    /// [temp.variadic]/12: an operand that names a pack outside any
+    /// expansion is ill-formed. Reports "`what` contains unexpanded
+    /// parameter pack 'Ts'" at `at` (clang's `DiagnoseUnexpandedParameterPack`,
+    /// reported at the operand's begin) and returns true.
+    pub(crate) fn diagnose_unexpanded_pack(
+        &mut self,
+        op: PackOperand,
+        what: &'static str,
+        at: Loc,
+    ) -> bool {
+        let unexpanded = match op {
+            PackOperand::Expr(e) => {
+                self.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
+            }
+            PackOperand::Type(t) => self.has_unexpanded_pack(t),
+        };
+        if !unexpanded {
+            return false;
+        }
+        let mut names = Vec::new();
+        match op {
+            PackOperand::Expr(e) => self.expr_packs(e, &mut names, 0),
+            PackOperand::Type(t) => self.type_packs(t, &mut names, 0),
+        }
+        let quoted: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
+        let list = match quoted.as_slice() {
+            [] => String::new(),
+            [a] => format!(" {a}"),
+            [a, b] => format!("s {a} and {b}"),
+            [a, b, ..] => format!("s {a}, {b}, ..."),
+        };
+        let d = self.diag(DiagId::sema_unexpanded_pack, at).arg(what).arg(list);
+        self.emit(d);
+        true
+    }
+
+    /// The packs expression `e` names outside expansions, in order.
+    fn expr_packs(&self, e: ExprId, out: &mut Vec<String>, depth: u32) {
+        use kiln_ast::expr::ExprDeps;
+        let n = self.ast.exprs.get(e);
+        if depth > 256 || !n.deps().contains(ExprDeps::UNEXPANDED_PACK) {
+            return;
+        }
+        match n.kind() {
+            ExprKind::PackExpansionExpr
+            | ExprKind::CXXFoldExpr
+            | ExprKind::SizeOfPackExpr
+            | ExprKind::PackIndexingExpr => return,
+            ExprKind::DeclRefExpr => {
+                let d = self.ast.exprs.decl(e);
+                if self.is_pack_decl(d) {
+                    let name = self.decl_name(d);
+                    if !out.contains(&name) {
+                        out.push(name);
+                    }
+                }
+                return;
+            }
+            ExprKind::UnaryExprOrTypeTraitExpr => {
+                if let Some(t) = self.ast.exprs.trait_type_arg(e) {
+                    self.type_packs(t, out, depth + 1);
+                }
+            }
+            k if k.is_cast() => {
+                if let Some(t) = self.ast.exprs.cast_written_type(e) {
+                    self.type_packs(t, out, depth + 1);
+                }
+            }
+            _ => {}
+        }
+        let before = out.len();
+        for k in self.ast.exprs.children(e, &self.ast.lists) {
+            self.expr_packs(k, out, depth + 1);
+        }
+        if out.len() == before {
+            // A written type the node keeps as its own (`Ts()`).
+            self.type_packs(n.ty(), out, depth + 1);
+        }
+    }
+
+    /// The packs type `q` names outside expansions, in order.
+    fn type_packs(&self, q: QualType, out: &mut Vec<String>, depth: u32) {
+        if depth > 256 || !self.has_unexpanded_pack(q) {
+            return;
+        }
+        let t = &self.ast.types;
+        match t.view(q.ty()) {
+            TypeView::TemplateTypeParm(d) => {
+                let name = self.decl_name(d);
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+            TypeView::Pointer(x)
+            | TypeView::LValueRef(x)
+            | TypeView::RValueRef(x)
+            | TypeView::IncompleteArray(x)
+            | TypeView::Paren(x)
+            | TypeView::Complex(x)
+            | TypeView::Atomic(x)
+            | TypeView::Elaborated { named: x, .. }
+            | TypeView::ExtQual { base: x, .. }
+            | TypeView::Attributed { modified: x, .. }
+            | TypeView::MemberPointer { pointee: x, .. }
+            | TypeView::Vector { elem: x, .. }
+            | TypeView::ConstantArray(kiln_ast::types::ConstArray { elem: x, .. }) => {
+                self.type_packs(x, out, depth + 1);
+            }
+            TypeView::VariableArray { elem, size } => {
+                self.type_packs(elem, out, depth + 1);
+                self.expr_packs(size, out, depth + 1);
+            }
+            TypeView::DependentSizedArray { elem: x, .. }
+            | TypeView::DependentVector { elem: x, .. } => self.type_packs(x, out, depth + 1),
+            TypeView::Function(p) => {
+                self.type_packs(p.ret(), out, depth + 1);
+                for &x in t.params(&p) {
+                    self.type_packs(x, out, depth + 1);
+                }
+            }
+            TypeView::TemplateSpecialization { args, .. }
+            | TypeView::DependentTemplateSpecialization { args, .. } => {
+                for &a in t.args(args) {
+                    match a.view() {
+                        ArgView::Type(x) => self.type_packs(x, out, depth + 1),
+                        ArgView::Expr { expr, .. } => self.expr_packs(expr, out, depth + 1),
+                        _ => {}
+                    }
+                }
+            }
+            TypeView::Decltype { expr, .. } => self.expr_packs(expr, out, depth + 1),
+            _ => {}
+        }
+    }
+}

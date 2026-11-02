@@ -489,8 +489,8 @@ impl Sema<'_, '_> {
     }
 
     /// The qualified function or variable template-id `e` named at `loc`
-    /// begins at its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`
-    /// / `DeclRefExpr::getBeginLoc`).
+    /// begins at its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`,
+    /// `DeclRefExpr::getBeginLoc`).
     pub fn set_template_id_begin(&mut self, e: ExprId, begin: Loc, loc: Loc) {
         if begin != loc
             && matches!(
@@ -1517,7 +1517,7 @@ impl Sema<'_, '_> {
 
     /// `X<A...>` for partial specialization `p`'s own arguments `A`, as
     /// an `InjectedClassNameType` ([temp.local]/1).
-    fn partial_injected_type(&mut self, p: DeclId) -> Option<QualType> {
+    pub(crate) fn partial_injected_type(&mut self, p: DeclId) -> Option<QualType> {
         let (_, info) = self.ast.partial_spec_info(p)?;
         let (tmpl, args) = (info.template, info.args);
         let name = self.template_name_for(tmpl);

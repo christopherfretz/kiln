@@ -1716,6 +1716,17 @@ impl Printer<'_> {
                     self.depth -= 1;
                     return;
                 }
+                // A substituted parameter (`T::` with `T = ns::S`) prints
+                // its canonical replacement under the same `SuppressScope`
+                // policy: `S::` (clang's `NestedNameSpecifier::print`).
+                let ty = match self.ctx.view(ty.ty()) {
+                    TypeView::SubstTemplateTypeParm { replacement, .. }
+                        if !self.ctx.is_dependent(replacement) =>
+                    {
+                        self.ctx.canonical(replacement)
+                    }
+                    _ => ty,
+                };
                 let saved_tag = self.suppress_tag;
                 self.suppress_tag = true;
                 self.with_scope(false, |p| p.print(ty, ""));

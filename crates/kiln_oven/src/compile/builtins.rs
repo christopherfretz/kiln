@@ -56,16 +56,94 @@ fn strip_pointer_casts(ast: &Ast, e: ExprId) -> ExprId {
     strip_pointer_casts(ast, sub)
 }
 
-/// Whether `e`, through parentheses, is a comma operator.
-fn is_comma(ast: &Ast, e: ExprId) -> bool {
-    let e = skip_parens(ast, e);
-    ast.exprs.get(e).kind() == ExprKind::BinaryOperator && ast.exprs.binary_op(e) == BinaryOp::Comma
-}
-
-/// Whether `e` is an array-to-pointer decay.
-fn is_decay(ast: &Ast, e: ExprId) -> bool {
-    ast.exprs.get(e).kind().is_cast()
-        && ast.exprs.cast_kind(e) == kiln_ast::expr::CastKind::ArrayToPointerDecay
+/// The left operands of the commas in an object-size operand that its
+/// trial skips (clang `tryEvaluateBuiltinObjectSize`, WP-302). clang
+/// evaluates the operand ignoring side effects: a comma's left operand is
+/// an ignored value whose failure is noted as a side effect, after which
+/// any lvalue-to-rvalue read fails, and so does a call with arguments
+/// (its callee reads them). A left operand with no read after it
+/// in evaluation order (outside the skipped ones) is therefore skipped;
+/// the others are evaluated with the operand. Commas at any depth count:
+/// `(x, (y, arr))`, `&a[(f(), 1)]`, `(char *)(f(), p) + 1`.
+fn skipped_comma_lhs(ast: &Ast, e: ExprId) -> Vec<ExprId> {
+    use kiln_ast::expr::CastKind;
+    enum Item {
+        Node(ExprId, Option<usize>),
+        /// The end of a comma's left operand.
+        Mark(usize),
+        /// A read, once its operand is evaluated.
+        Read(Option<usize>),
+    }
+    let exprs = &ast.exprs;
+    // (left operand, innermost enclosing left operand, sequence point)
+    let mut commas: Vec<(ExprId, Option<usize>, u32)> = Vec::new();
+    // (sequence point, innermost enclosing left operand)
+    let mut reads: Vec<(u32, Option<usize>)> = Vec::new();
+    let mut seq = 0u32;
+    let mut stack = vec![Item::Node(e, None)];
+    while let Some(it) = stack.pop() {
+        let (x, par) = match it {
+            Item::Mark(i) => {
+                commas[i].2 = seq;
+                seq += 1;
+                continue;
+            }
+            Item::Read(par) => {
+                reads.push((seq, par));
+                seq += 1;
+                continue;
+            }
+            Item::Node(x, par) => (x, par),
+        };
+        let n = exprs.get(x);
+        match n.kind() {
+            ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::RequiresExpr => continue,
+            ExprKind::BinaryOperator if exprs.binary_op(x) == BinaryOp::Comma => {
+                let [a, b] = exprs.operands(x);
+                commas.push((a, par, 0));
+                let i = commas.len() - 1;
+                stack.extend([Item::Node(b, par), Item::Mark(i), Item::Node(a, Some(i))]);
+                continue;
+            }
+            k if k.is_cast() && exprs.cast_kind(x) == CastKind::LValueToRValue => {
+                stack.push(Item::Read(par));
+            }
+            // A called function reads its parameters (clang fails those
+            // reads too); a call without arguments reads nothing here.
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+                if exprs.children(x, &ast.lists).len() > 1 =>
+            {
+                stack.push(Item::Read(par));
+            }
+            ExprKind::CXXConstructExpr if !exprs.children(x, &ast.lists).is_empty() => {
+                stack.push(Item::Read(par));
+            }
+            _ => {}
+        }
+        stack.extend(exprs.children(x, &ast.lists).into_iter().rev().map(|c| Item::Node(c, par)));
+    }
+    // Later commas first: whether a read counts depends on the left
+    // operands enclosing it, all of which end after it.
+    let mut order: Vec<usize> = (0..commas.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(commas[i].2));
+    let mut skipped = vec![false; commas.len()];
+    for i in order {
+        let inside_skipped = |mut p: Option<usize>| {
+            while let Some(j) = p {
+                if skipped[j] {
+                    return true;
+                }
+                p = commas[j].1;
+            }
+            false
+        };
+        let read_after = reads.iter().any(|&(s, p)| s > commas[i].2 && !inside_skipped(p));
+        skipped[i] = !read_after;
+    }
+    commas.iter().zip(skipped).filter(|&(_, s)| s).map(|(c, _)| c.0).collect()
 }
 
 /// Whether `e` calls a function not declared `const` or `pure` (the part
@@ -128,9 +206,17 @@ fn is_pure_call(ast: &Ast, e: ExprId) -> bool {
 /// a called function is evaluated, and a failure in it makes the result
 /// 0). `__builtin_constant_p` of such an argument is 0 without evaluating it.
 fn has_side_effects(ast: &Ast, e: ExprId) -> bool {
+    side_effects_outside(ast, e, &[])
+}
+
+/// [`has_side_effects`] outside the subexpressions `skip`.
+fn side_effects_outside(ast: &Ast, e: ExprId, skip: &[ExprId]) -> bool {
     let exprs = &ast.exprs;
     let mut stack = vec![e];
     while let Some(x) = stack.pop() {
+        if skip.contains(&x) {
+            continue;
+        }
         match exprs.get(x).kind() {
             ExprKind::UnaryOperator if exprs.unary_op(x).is_inc_dec() => return true,
             ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator
@@ -489,40 +575,22 @@ impl Compiler<'_> {
             // clang `tryEvaluateBuiltinObjectSize` (WP-292): the pointer
             // without its pointer casts, evaluated speculatively. clang
             // fails any modification of an object from before the trial
-            // and ignores a failing comma operand: the left operands of
-            // top-level commas (also under a decay) are skipped as clang's
-            // ignored values, and a remaining side effect gives the
-            // default. Otherwise the pointer runs as a trial; its failure
-            // gives the default when the operand has side effects (calls
-            // included, clang `HasSideEffects`), else an invalid
-            // subexpression at the call.
+            // and ignores a failing comma operand: the comma left operands
+            // of `skipped_comma_lhs` are skipped (any depth, WP-302), and a
+            // remaining side effect gives the default. Otherwise the
+            // pointer runs as a trial; its failure gives the default when
+            // the operand has side effects (calls included, clang
+            // `HasSideEffects`), else an invalid subexpression at the call.
             id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE => {
                 let (p, t) = (arg(0)?, arg(1)?);
                 let ast = self.ast();
-                let mut p = strip_pointer_casts(ast, p);
+                let p = strip_pointer_casts(ast, p);
                 let des = designator_type(ast, p);
                 let side = has_side_effects(ast, p) || has_calls(ast, p);
-                let mut decay = false;
-                loop {
-                    if is_comma(ast, p) {
-                        p = strip_pointer_casts(ast, ExprId::new(ast.exprs.get(p).b()));
-                    } else if !decay && is_decay(ast, p) && is_comma(ast, ast.exprs.operand(p)) {
-                        // `(x, arr)` decays as the array operand alone.
-                        decay = true;
-                        p = skip_parens(ast, ast.exprs.operand(p));
-                        p = ExprId::new(ast.exprs.get(p).b());
-                    } else if decay && is_comma(ast, p) {
-                        p = ExprId::new(ast.exprs.get(p).b());
-                    } else {
-                        break;
-                    }
-                }
-                let still = has_side_effects(ast, p);
+                let skip = skipped_comma_lhs(ast, p);
+                let still = side_effects_outside(ast, p, &skip);
                 let ty = des.map_or(bi::DYN, |q| self.ty(q).0);
                 let b = self.rv(t);
-                let addr = |c: &mut Self| {
-                    if decay { c.lv_mem(p, crate::compile::Access::Addr) } else { c.rv(p) }
-                };
                 let (a, ok) = if still {
                     let ok = self.reg();
                     self.konst(ok, 0);
@@ -530,7 +598,9 @@ impl Compiler<'_> {
                 } else {
                     let ok = self.reg();
                     let pc = self.emit(Op::Speculate, 0, &[ok, 0, 0]);
-                    let v = addr(self);
+                    let saved = std::mem::replace(&mut self.skip_effects, skip);
+                    let v = self.rv(p);
+                    self.skip_effects = saved;
                     self.emit(Op::Ret, 1, &[v]);
                     let end = self.here();
                     self.patch(pc + 2, v);

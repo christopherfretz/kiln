@@ -519,7 +519,12 @@ impl Substituter<'_, '_, '_> {
                     let args = self.sema.ast.types.args(l).to_vec();
                     let tn = self.sema.template_name_for(t);
                     return match self.sema.act_template_id(tn, &args, loc, loc) {
-                        Ok(crate::templ::actions::TemplateIdRef::Value(x)) => Ok(x),
+                        Ok(crate::templ::actions::TemplateIdRef::Value(x)) => {
+                            // Printed with its substituted qualifier.
+                            self.sema.set_template_id_begin(x, begin, loc);
+                            self.sema.set_template_id_qualifier(x, nns);
+                            Ok(x)
+                        }
                         // Not called, a function template-id names its
                         // one specialization, as for an unresolved
                         // lookup (above): `return D<I>::template f<F>;`
