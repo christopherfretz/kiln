@@ -3,8 +3,8 @@
 // inside a larger expression statement. clang keeps "no member named" as a
 // delayed typo: inside call arguments it skips to the `)` and reports no
 // "expected ')'"; in a parenthesized expression it reports "expected ')'"
-// first (the name is not taken as a type, so `(S::nom x)` is no cast); in
-// a subscript the delayed typo is only flushed at the end of the function.
+// first (`(S::nom x)` is no cast); a subscript missing its `]` keeps the
+// delayed typo until the end of the translation unit.
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 35:8 error "no member named 'nom' in 'S'"

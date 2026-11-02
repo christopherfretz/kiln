@@ -915,6 +915,12 @@ impl<'a> AstNames<'a> {
                 let (open, close) = if list { ('{', '}') } else { ('(', ')') };
                 self.expr_list(exprs.construct_args(e), open, close, d, out);
             }
+            // clang's `VisitCXXScalarValueInitExpr`: `int()`, the written
+            // type with the substituted arguments.
+            ExprKind::CXXScalarValueInitExpr => {
+                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                out.push_str("()");
+            }
             // clang's `VisitCXXConstructExpr`: the arguments (braced for a
             // list-initialization).
             ExprKind::CXXConstructExpr => {

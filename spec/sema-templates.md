@@ -2720,6 +2720,19 @@ For `template<> R f<args>(params)` or `template<> R f(params)`, and for
    returns `Err(())`, WP-318): a later call resolves to it and reports
    nothing more
    (`tests/conformance/temp.expl.spec/no-matching-template-declares-function.cpp`).
+6. A class-scope explicit specialization in a dependent class (an
+   unqualified member declarator inside a template parameter scope) whose
+   lookup finds no member function template of the name reports clang's
+   `err_dependent_function_template_spec_no_match`, "no candidate
+   function template was found for dependent member function template
+   specialization", at the declarator-id, with "candidate ignored: not a
+   function template" at each declaration found; the declaration is
+   dropped (`sema_dependent_member_spec_no_candidate`, WP-330;
+   `tests/conformance/temp.expl.spec/dependent-member-spec-no-candidate.cpp`).
+   The friend form is the `FriendSpec` entry of §11.2. When candidates exist,
+   kiln still matches in the pattern, where clang defers the match to
+   the class's instantiation (kept deviation: a mismatch is reported at
+   the definition, without the "in instantiation of" note).
 
 The `SpecKind` transitions are those of §4.5.
 

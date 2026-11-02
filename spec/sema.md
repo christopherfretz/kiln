@@ -164,7 +164,17 @@ Constructors:
   diagnosed as [stmt.pre]/5 requires.
 - **Block-scope `extern` declarations** are recorded in `local_externs`.
   A later namespace-scope declaration of the same name redeclares them,
-  per [basic.link]/6 and clang's local extern decls.
+  per [basic.link]/6 and clang's local extern decls. A declaration in a
+  function template pattern is not recorded: only its instantiations
+  redeclare the entity ([temp.spec.general]/2), so the pattern's `extern
+  T e;` is never the previous declaration of `extern int e;` in
+  `f<int>`, and a namespace-scope declaration after the pattern does not
+  conflict with it. The pattern itself still looks its name up, so a
+  non-dependent `extern int g;` in it conflicts with an earlier `extern
+  char g;`. A block-scope redeclaration whose type (or the earlier
+  declaration's type) is dependent is checked only at instantiation
+  (clang's `MergeVarDeclTypes` for a local variable). Test:
+  tests/conformance/basic.link/local-extern-template-pattern.cpp (WP-330).
 - **`classify_name`** gives the parser a name's category: type,
   namespace, value, or undeclared.
   Landed (WP-140): a non-dependent typedef or alias qualifier is
@@ -292,7 +302,8 @@ Redeclaration and linkage rules:
      when the block's declaration has none: `redefinition of 'x' as
      different kind of symbol`;
   2. differing types (as above; skipped when the earlier declaration is
-     invalid, e.g. `static Q(a);` of incomplete `Q`);
+     invalid, e.g. `static Q(a);` of incomplete `Q`, or when either type
+     is dependent);
   3. `static` after an `extern`: `static declaration of 'x' follows
      non-static declaration`;
   4. non-`static` after `static` (unless an `extern` redeclaring a

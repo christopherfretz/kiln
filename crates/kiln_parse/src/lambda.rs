@@ -104,7 +104,11 @@ impl Parser<'_, '_> {
         }
         self.s.act_on_lambda_declarator(id, d, &specs);
         let saved_stmt_expr = std::mem::replace(&mut self.in_stmt_expr, false);
+        // The body's statements are full-expressions of their own: their
+        // delayed typos are not held for the enclosing statement (WP-330).
+        let typos = self.s.suspend_delayed_typos();
         let (body, rbrace) = self.with_greater_op(true, |p| p.parse_compound(false));
+        self.s.resume_delayed_typos(typos);
         self.in_stmt_expr = saved_stmt_expr;
         self.sync_attr_macros();
         Some(self.s.act_on_lambda_end(id, body, rbrace))

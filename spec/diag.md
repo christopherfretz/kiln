@@ -548,6 +548,11 @@ location. kiln follows clang in two ways:
   completes the qualifier for the nested-name-specifier and again for the
   declaration,
   `tests/conformance/temp.inst/undefined-template-qualifier-dup.cpp`).
+  The repeat is per declaration, not per declarator: `X<int>::t f, &g;`
+  and `static X<int>::t a, *b;` are two prints from clang and one from
+  kiln, and a block-scope `X<int>::t a, &b;` (scope annotated by the
+  statement disambiguation) is one from both (WP-330,
+  `tests/conformance/temp.inst/undefined-template-qualifier-declarators.cpp`).
   New cases are added to this list with their test.
 
 `-verify` has no such suffix: clang `expected-*` counts there are
