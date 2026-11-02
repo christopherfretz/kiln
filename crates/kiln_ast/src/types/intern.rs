@@ -148,7 +148,7 @@ mod tests {
     }
 
     /// Keys that differ only in their second `u32` (one 64-bit word,
-    /// FxHash's last) spread over the low bits the table buckets by
+    /// `FxHash`'s last) spread over the low bits the table buckets by
     /// (spec/types.md §7.1, WP-313); unfolded, they all share one bucket.
     #[test]
     fn second_word_reaches_the_low_bits() {
