@@ -54,6 +54,7 @@ LiteralRange = "literal-range" [];
 ManyBracesAroundScalarInit = "many-braces-around-scalar-init" [];
 MissingConstinit = "missing-constinit" [];
 MissingDeclarations = "missing-declarations" [];
+MissingExceptionSpec = "missing-exception-spec" [];
 NonPodVarargs = "non-pod-varargs" [];
 NullDereference = "null-dereference" [];
 OverloadedVirtual = "overloaded-virtual" [];

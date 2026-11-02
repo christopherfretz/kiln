@@ -1056,6 +1056,12 @@ impl Sema<'_, '_> {
             }
             return Tdk::Success;
         }
+        // Not yet instantiated (a member template of a class template
+        // specialization, [temp.inst]/14): compared once known, as a
+        // dependent one.
+        if matches!(pexc, ExcSpec::Deferred(_)) {
+            return Tdk::Success;
+        }
         if pexc.is_nothrow() == a_nothrow
             || (flags.contains(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE) && a_nothrow)
         {

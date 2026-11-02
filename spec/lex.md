@@ -66,8 +66,8 @@ pub fn lookup_char_name(name: &str) -> Option<NameMatch>; // \N{} names; never a
 pub mod literal;                                         // see "Literals" below
 pub fn dump(sm, &LexOptions, &[Token]) -> String; pub fn dump_source(text, LexOptions) -> String;
 ```
-`Punct` covers every [lex.operators] token plus `^^`, `[:`, `:]` (C++26,
-P2996). `Punct::as_str()` is the primary spelling, `name()` clang's kind name.
+`Punct` covers every [lex.operators] token plus `^^`, `[:`, `:]` (C++26
+with `LexOptions::reflection`, P2996). `Punct::as_str()` is the primary spelling, `name()` clang's kind name.
 
 ### Allocation
 `next()` does not allocate except: interning a new identifier spelling;
@@ -103,8 +103,10 @@ not NFC_QC=Yes (full normalization); recording a diagnostic. `spelling()` borrow
 - Maximal munch, with the standard's exceptions:
   - `<::` not followed by `:` or `>` is `<` `::` (C++11+).
   - C++26: `[::` not followed by `:` is `[` `::`; `[:>` is `[` `:>`; `[:`
-    and `:]` are splice brackets; `^^` is one token. Before C++26 these
-    lex as their components.
+    and `:]` are splice brackets; `^^` is one token — only with
+    `LexOptions::reflection` (`-freflection`, WP-267), as in clang and
+    GCC 16. Before C++26, or without the option, these lex as their
+    components.
   - `<=>` is one token from C++20; before, `<=` `>` with `SpaceshipCompat`.
   - Raw strings: prefix `R`, `LR`, `u8R`, `uR`, `UR` (C++11+); delimiter of
     ≤16 d-chars (C++26 adds `$ @ \``) — too long or invalid char: diagnose,

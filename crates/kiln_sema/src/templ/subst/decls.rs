@@ -520,12 +520,7 @@ impl Substituter<'_, '_, '_> {
             _ => self.param_infos(d),
         };
         let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
-        // A friend defined in its class (a hidden friend) waits too: its
-        // `noexcept` may name members declared after it (clang instantiates
-        // every friend's as `EST_Uninstantiated`; WP-274). A friend
-        // redeclaring a namespace function compares its specification now.
-        let hidden_friend = self.sema.ast.decls.function(d).is_some_and(|x| x.body.is_some());
-        let lazy_exc = (friend.is_none() || hidden_friend) && self.sema.lazy_exc_spec(d, p);
+        let lazy_exc = self.sema.lazy_exc_spec(d, p, friend.is_some());
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
             let ret = match early_ret {
@@ -590,6 +585,9 @@ impl Substituter<'_, '_, '_> {
         }
         ds.friend = friend;
         let mut dr = self.pattern_declarator(d, ctx)?;
+        if friend.is_some() {
+            dr.qualifier = self.sema.friend_qualifiers.get(&d).copied();
+        }
         if matches!(
             self.sema.ast.decls.get(d).name().kind(),
             DeclNameKind::Constructor | DeclNameKind::Destructor | DeclNameKind::Conversion
@@ -667,7 +665,18 @@ impl Substituter<'_, '_, '_> {
         }
         if lazy_exc {
             let first = self.sema.ast.first(f);
-            self.sema.uninstantiated_exc.insert(first, d);
+            if first == f {
+                self.sema.uninstantiated_exc.insert(first, d);
+            } else {
+                // A friend redeclaring a function: [except.spec]/5 makes
+                // its specification the earlier declaration's.
+                self.sema.delayed_exc_equiv.retain(|&(n, _)| n != f);
+                let pexc = self.sema.declared_fn_type(first).map(|t| self.sema.written_exc_spec(t));
+                if let (Some(pexc), Some(ty)) = (pexc, self.sema.ast.decls.get(f).ty()) {
+                    let t = self.sema.with_exc_spec(ty, pexc);
+                    self.sema.ast.decls.set_ty(f, t);
+                }
+            }
         }
         if requires.is_some() {
             self.sema.inst.concepts.member_constraints.insert(f, (d, self.args.clone()));
@@ -741,10 +750,38 @@ impl Substituter<'_, '_, '_> {
         let sig = params.and_then(|params| {
             let ret = self.ty(p.ret(), loc)?;
             self.check_return_type(ret, loc)?;
-            let exc = self.exc_spec(&p, loc)?;
+            // DR1330 ([temp.inst]/14): a dependent `noexcept(expr)` is
+            // not part of deduction; it is substituted when needed (clang
+            // `InitFunctionInstantiation` -> `EST_Uninstantiated`), from
+            // the specialization's own context. A local-scope pattern's is
+            // substituted now, as clang.
+            let exc = if matches!(
+                self.sema.ast.types.exc_spec(&p),
+                kiln_ast::types::ExcSpec::NoexceptExpr {
+                    value: kiln_ast::types::NoexceptValue::Dependent(_),
+                    ..
+                }
+            ) && !self.sema.decl_in_local_scope(pat)
+            {
+                self.sema.uninstantiated_exc.insert(spec, pat);
+                kiln_ast::types::ExcSpec::Deferred(spec)
+            } else {
+                self.exc_spec(&p, loc)?
+            };
             Ok((params, ret, exc))
         });
         self.sema.act_on_end_this_scope(this);
+        // A pattern whose specification waits (a member template's
+        // redeclared pattern, or one awaiting its complete-class context):
+        // so does the specialization's ([`Sema::defer_spec_exception_spec`]).
+        let sig = sig.map(|(params, ret, exc)| match exc {
+            kiln_ast::types::ExcSpec::Deferred(_)
+                if self.sema.defer_spec_exception_spec(pat, spec) =>
+            {
+                (params, ret, kiln_ast::types::ExcSpec::Deferred(spec))
+            }
+            _ => (params, ret, exc),
+        });
         let (params, ret, exc) = match sig {
             Ok(x) => x,
             Err(e) => {

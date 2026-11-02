@@ -166,7 +166,9 @@ impl Substituter<'_, '_, '_> {
         }
         self.sema.scopes.push(s);
         self.sema.ast.templates.dependent_depth += 1;
+        let saved = std::mem::replace(&mut self.sema.instantiating_friend_template, true);
         let r = self.function_decl(pattern, DeclaratorContext::Member, Some(loc));
+        self.sema.instantiating_friend_template = saved;
         self.sema.act_on_finish_template_decl();
         self.sema.templ.cur = None;
         let fd = r?;

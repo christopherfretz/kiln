@@ -354,6 +354,12 @@ impl Sema<'_, '_> {
             ));
         }
         match self.ast.consts.scalar(v)? {
+            // A `std::meta::info` argument (-freflection spike): the
+            // reflect-expression designating the same entity.
+            Scalar::Reflection { id, .. } => {
+                let r = self.ast.reflections.get(id);
+                Some(self.builder().reflect_expr(r, ty, loc, loc))
+            }
             Scalar::Null { .. } => {
                 let n = self.builder().nullptr_literal(QualType::NULLPTR, loc);
                 if self.is_nullptr_type(ty) {

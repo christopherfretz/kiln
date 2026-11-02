@@ -16,6 +16,7 @@ mod lambda;
 mod new_delete;
 mod parser;
 mod pragma;
+mod reflect;
 mod stmt;
 mod templ;
 mod tentative;
@@ -59,6 +60,9 @@ pub struct ParseOptions {
     pub inst_limits: kiln_sema::templ::stack::InstLimits,
     /// `-fkiln-instantiation-report[=all|json]`.
     pub inst_report: kiln_sema::templ::report::ReportFormat,
+    /// `-freflection` (P2996 spike): `^^`, type splices and the kiln
+    /// reflection intrinsics ([`kiln_sema::Sema::reflection`]).
+    pub reflection: bool,
 }
 
 impl Default for ParseOptions {
@@ -71,6 +75,7 @@ impl Default for ParseOptions {
             gnu: false,
             inst_limits: kiln_sema::templ::stack::InstLimits::default(),
             inst_report: kiln_sema::templ::report::ReportFormat::Off,
+            reflection: false,
         }
     }
 }
@@ -149,7 +154,9 @@ pub fn parse_tu<'sm>(
     opts: &ParseOptions,
     limits: ConstexprLimits,
 ) -> ParsedTu {
-    let mut pp = Preprocessor::new(sm, diags, interner, PpOptions::new(opts.std));
+    let mut ppo = PpOptions::new(opts.std);
+    ppo.reflection = opts.reflection;
+    let mut pp = Preprocessor::new(sm, diags, interner, ppo);
     pp.enter_main_file(file);
     parse_preprocessed(pp, Arc::clone(interner), diags, target, opts, limits).0
 }
@@ -182,6 +189,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
     s.exceptions = opts.exceptions;
     s.rtti = opts.rtti;
+    s.reflection = opts.reflection;
     s.gnu = opts.gnu;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;

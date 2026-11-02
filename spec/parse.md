@@ -409,9 +409,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     is `err_stmt_expr_in_default_arg`, skipped to `,`/`)`). In a member
     declarator whose function chunk applies to the name directly,
     default arguments and a parenthesized *noexcept-specifier* are
-    saved instead (§2.4): the parameter gets `DefaultArg::Unparsed(=)`,
-    the declarator `late_noexcept`, and the chunk `ExcSpec::None` until
-    replay. The
+    saved instead (§2.4): the parameter gets `DefaultArg::Unparsed(=,
+    arg)` (the `=` and the argument's first token), the declarator
+    `late_noexcept`, and the chunk `ExcSpec::None` until replay. A friend
+    function or friend template declared in the class has its
+    *noexcept-specifier* saved too (WP-269); a qualified friend
+    (`friend void N::f() noexcept(...)`) does not. The
     parameter-declaration-clause brackets `act_on_start_prototype` /
     `act_on_prototype_param` / `act_on_end_prototype` (closed after the
     trailing return type): each parameter is declared at its point of
@@ -753,6 +756,25 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   suffix for recovery (except `[`/`(`/`++`/`--` at the start of a line,
   where the caller's `expected ';'` is better).
 
+### 5.2 Reflection (`reflect.rs`, WP-267 spike, `-freflection`)
+- The tokens `^^`, `[:` and `:]` exist only when `ParseOptions::reflection`
+  is set and the standard is C++26 (spec/lex.md Phase 3). Without the
+  flag, `^^x` is `^` `^x` and gets clang 19's errors
+  (`tests/conformance/reflection/flag-off.cpp`).
+- **`^^` operand** ([expr.reflect]). If the operand can be a type-id (the
+  test is the trailing-return-type one, so `void (*)(int)` is a type), it
+  is parsed as a type-id → `act_on_reflect_type`. Otherwise it is an
+  optional nested-name-specifier and an identifier →
+  `act_on_reflect_name`. A template-id operand is
+  "unsupported: reflection of a template-id".
+- **Splice brackets.** `typename [: e :]` in a type position, and `[: e :]`
+  as a template argument ([temp.arg.general]/3; the spike always treats it
+  as a type), parse `e` as a constant-expression and pass it to
+  `act_on_splice_type`. `splice_end` finds the matching `:]` (nested
+  splices balance), and the tentative-parse scanner and template-argument
+  scan use it to skip a splice as one unit. An expression splice is
+  "unsupported: expression splice".
+
 ## 6. Statements and attributes
 
 ### 6.1 Statements (`stmt.rs`)
@@ -944,7 +966,8 @@ in `kiln_diag` for now; nothing emits them.
   - qualified member access `e.N::m` (reported "qualified member
     access is not supported yet": `act_on_member` takes no
     nested-name-specifier)
-  - reflection (`^^`, `[: :]`)
+  - reflection beyond the `-freflection` spike (§5.2): expression,
+    dependent and template splices, `^^` of a template-id
   - `co_await`/`co_yield`
 - **Statements:** range-based `for`, `co_return`, contracts.
 

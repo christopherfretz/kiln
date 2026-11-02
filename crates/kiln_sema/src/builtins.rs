@@ -165,35 +165,10 @@ impl Sema<'_, '_> {
     /// ([`Sema::can_throw`]) and `nounwind` in IR, as in clang; no
     /// `BuiltinAttr` is attached, so a call stays an ordinary call.
     pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
-        if self.kind_of(f) != DeclKind::Function || self.ast.prev(f).is_some() {
+        if self.ast.prev(f).is_some() {
             return;
         }
-        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
-            let r = self.ast.redecl_context(c);
-            matches!(self.kind_of(r), DeclKind::TranslationUnit | DeclKind::Namespace)
-        });
-        if !file_ctx || !kiln_abi::mangle::is_extern_c(&self.ast, f) {
-            return;
-        }
-        let Some(name) = self.ast.decls.get(f).name().as_ident() else { return };
-        let Some(info) = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied() else {
-            return;
-        };
-        let Some(ty) = self.ast.decls.get(f).ty() else { return };
-        let (ret, params, variadic) = self.builtin_signature(info.sig);
-        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
-            return;
-        }
-        let want = self.ast.types.function(
-            ret,
-            &params,
-            FuncInfo::new().with_variadic(variadic),
-            ExcSpec::None,
-        );
-        let have = self.with_exc_spec(ty, ExcSpec::None);
-        if !self.ast.types.same_type(want, have) {
-            return;
-        }
+        let Some(info) = self.lib_builtin_info(f) else { return };
         let loc = self.ast.decls.get(f).loc();
         for (bit, kind) in [
             (builtin::attr::NOTHROW, AttrKind::NOTHROW),
@@ -205,6 +180,42 @@ impl Sema<'_, '_> {
                 attrs.push(self.ast.attrs.push(n));
             }
         }
+    }
+
+    /// The [`builtin::LIB`] row declaration `f` is recognized as (clang's
+    /// library-builtin recognition in `ActOnFunctionDeclarator`, which
+    /// gives it a builtin id): a `Function` in a namespace-scope context
+    /// with C language linkage, named in the table and with the row's type
+    /// ignoring the exception specification.
+    pub(crate) fn lib_builtin_info(&mut self, f: DeclId) -> Option<builtin::Info> {
+        if self.kind_of(f) != DeclKind::Function {
+            return None;
+        }
+        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
+            let r = self.ast.redecl_context(c);
+            matches!(self.kind_of(r), DeclKind::TranslationUnit | DeclKind::Namespace)
+        });
+        if !file_ctx || !kiln_abi::mangle::is_extern_c(&self.ast, f) {
+            return None;
+        }
+        let name = self.ast.decls.get(f).name().as_ident()?;
+        let info = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied()?;
+        let ty = self.ast.decls.get(f).ty()?;
+        let (ret, params, variadic) = self.builtin_signature(info.sig);
+        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
+            return None;
+        }
+        let want = self.ast.types.function(
+            ret,
+            &params,
+            FuncInfo::new().with_variadic(variadic),
+            ExcSpec::None,
+        );
+        let have = self.with_exc_spec(ty, ExcSpec::None);
+        if !self.ast.types.same_type(want, have) {
+            return None;
+        }
+        Some(info)
     }
 
     /// Declares the builtin function `name` (first used at `loc`) if it
@@ -330,6 +341,7 @@ impl Sema<'_, '_> {
             t = match c {
                 b'C' => self.ast.types.qualify(t, Quals::CONST),
                 b'D' => self.ast.types.qualify(t, Quals::VOLATILE),
+                b'R' => self.ast.types.qualify(t, Quals::RESTRICT),
                 b'*' => self.ast.types.pointer_to(t),
                 b'&' => self.ast.types.lvalue_ref_to(t),
                 _ => break,
@@ -377,6 +389,10 @@ impl Sema<'_, '_> {
         let r = match id {
             builtin::CLZG | builtin::CTZG => self.builtin_count_zeros_generic(args, rparen),
             builtin::POPCOUNTG => self.builtin_popcountg(args, rparen),
+            // WP-270: the generic checked-arithmetic builtins.
+            builtin::ADD_OVERFLOW | builtin::SUB_OVERFLOW | builtin::MUL_OVERFLOW => {
+                self.builtin_overflow(args, rparen)
+            }
             builtin::ISFINITE
             | builtin::ISINF
             | builtin::ISNAN
@@ -604,7 +620,85 @@ impl Sema<'_, '_> {
                 return false;
             }
         }
+        if id == builtin::ALLOCA_WITH_ALIGN
+            && let Some(&a) = args.get(1)
+            && !self.expr_is_value_dependent(a)
+        {
+            return self.check_alloca_align(callee, a);
+        }
         true
+    }
+
+    /// The alignment of `__builtin_alloca_with_align`, in bits (clang
+    /// `BuiltinAllocaWithAlign`): a power of 2, at least `CHAR_BIT`, at
+    /// most `INT32_MAX`; reported at the call's start.
+    fn check_alloca_align(&mut self, callee: ExprId, a: ExprId) -> bool {
+        let Some(v) = self.fold_int(a) else { return true };
+        let id = if v <= 0 || (v & (v - 1)) != 0 {
+            (DiagId::sema_alignment_not_power_of_two, None)
+        } else if v < 8 {
+            (DiagId::sema_alignment_too_small, Some("8"))
+        } else if v > i128::from(i32::MAX) {
+            (DiagId::sema_alignment_too_big_bits, Some("2147483647"))
+        } else {
+            return true;
+        };
+        let mut d = self.diag(id.0, self.begin_loc(callee));
+        if let Some(n) = id.1 {
+            d = d.arg(n.to_string());
+        }
+        self.emit(d);
+        false
+    }
+
+    /// `__builtin_{add,sub,mul}_overflow(a, b, r)` (clang's
+    /// `BuiltinOverflow`; WP-270): `a` and `b` integer (`bool`, an
+    /// unscoped enumeration) after the decay / lvalue-to-rvalue
+    /// conversions and without promotion, `r` a pointer to a non-const
+    /// integer type; the call is a `bool` prvalue. Each failure is
+    /// reported at the argument's start; the first one stops the check.
+    fn builtin_overflow(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 3, rparen) {
+            return None;
+        }
+        let mut out = Vec::with_capacity(3);
+        for (i, &a) in args.iter().enumerate() {
+            let a = conv::decay(self, a);
+            let t = self.ety(a);
+            if t == QualType::ERROR {
+                return None;
+            }
+            let (ok, id) = if i < 2 {
+                (self.is_integer_type(t), DiagId::sema_overflow_builtin_int)
+            } else {
+                let p = self.ast.types.pointee(t).filter(|_| self.ast.types.is_pointer(t));
+                let ok = p.is_some_and(|p| {
+                    self.is_integer_type(p) && !self.ast.types.effective_quals(p).is_const()
+                });
+                (ok, DiagId::sema_overflow_builtin_ptr_int)
+            };
+            if !ok {
+                let msg = self.diag(id, self.begin_loc(a)).arg(self.ty_arg(t));
+                self.emit(msg);
+                return None;
+            }
+            out.push(a);
+        }
+        Some((out, QualType::BOOL))
+    }
+
+    /// clang's `isIntegerType`: an integral type (`bool`, the character
+    /// types, `_BitInt`) or a complete unscoped enumeration.
+    fn is_integer_type(&self, q: QualType) -> bool {
+        if self.ast.types.as_enum(q).is_some() {
+            return conv::rank::is_unscoped_enum(self, q)
+                && conv::rank::int_width(self, q).is_some();
+        }
+        self.ast.types.is_integral(q)
     }
 
     /// `__builtin_isfpclass(x, mask)` (clang's `BuiltinFPClassification`
@@ -1075,7 +1169,7 @@ impl Sema<'_, '_> {
     /// `operator new` (`delete`) `f`: `(std::size_t` (`void*`), then
     /// optionally a `std::size_t` size (deallocation only), a
     /// `std::align_val_t` and a `const std::nothrow_t&`, in that order.
-    fn is_replaceable_global_alloc(&self, f: DeclId, delete: bool) -> bool {
+    pub(crate) fn is_replaceable_global_alloc(&self, f: DeclId, delete: bool) -> bool {
         let Some((ps, variadic)) = self.fn_params(f) else { return false };
         if variadic || ps.is_empty() {
             return false;
@@ -1569,7 +1663,7 @@ impl Sema<'_, '_> {
 
     /// The `const char *` value pointing to the string literal object
     /// holding `s` (one object per content).
-    fn srcloc_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
+    pub(crate) fn srcloc_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
         let lit =
             self.ast.strings.intern(kiln_ast::strings::StringEncoding::Ordinary, s.as_bytes());
         let origin = if let Some(&e) = self.srcloc.strings.get(&lit) {

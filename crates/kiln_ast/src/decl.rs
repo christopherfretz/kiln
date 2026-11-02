@@ -3167,7 +3167,7 @@ pub mod builtin {
         /// `b` bool, `c` char, `w` `wchar_t`, `s` short, `i` int, `f`
         /// float, `d` double, `z` `size_t`; prefixes `U` unsigned, `L`
         /// long (`LL` long long, `Ld` long double); suffixes `*` pointer,
-        /// `&` lvalue reference, `C` const, `D` volatile; `A` is a
+        /// `&` lvalue reference, `C` const, `D` volatile, `R` restrict; `A` is a
         /// `__builtin_va_list` parameter (a reference to it, or the decayed
         /// pointer when it is an array), `a` a `__builtin_va_list` (decayed
         /// when it is an array), `P` the `FILE` type ([`LIB`] only). An `I`
@@ -4063,6 +4063,118 @@ pub mod builtin {
 
     // ---- end WP-154 ----
 
+    // ---- WP-270: checked arithmetic, alloca, printf-family builtins ----
+
+    /// `bool __builtin_add_overflow(...) noexcept` (custom type-checking:
+    /// two integer operands and a pointer to a non-const integer result;
+    /// clang `BuiltinOverflow`).
+    pub const ADD_OVERFLOW: u32 = 113;
+    /// `__builtin_sub_overflow` (as [`ADD_OVERFLOW`]).
+    pub const SUB_OVERFLOW: u32 = 1187;
+    /// `__builtin_mul_overflow` (as [`ADD_OVERFLOW`]).
+    pub const MUL_OVERFLOW: u32 = 887;
+    /// `__builtin_sadd_overflow` (`biCiCi*`).
+    pub const SADD_OVERFLOW: u32 = 1062;
+    /// `__builtin_saddl_overflow` (`bLiCLiCLi*`).
+    pub const SADDL_OVERFLOW: u32 = 1063;
+    /// `__builtin_saddll_overflow` (`bLLiCLLiCLLi*`).
+    pub const SADDLL_OVERFLOW: u32 = 1064;
+    /// `__builtin_uadd_overflow` (`bUiCUiCUi*`).
+    pub const UADD_OVERFLOW: u32 = 1340;
+    /// `__builtin_uaddl_overflow` (`bULiCULiCULi*`).
+    pub const UADDL_OVERFLOW: u32 = 1341;
+    /// `__builtin_uaddll_overflow` (`bULLiCULLiCULLi*`).
+    pub const UADDLL_OVERFLOW: u32 = 1342;
+    /// `__builtin_ssub_overflow` (`biCiCi*`).
+    pub const SSUB_OVERFLOW: u32 = 1123;
+    /// `__builtin_ssubl_overflow` (`bLiCLiCLi*`).
+    pub const SSUBL_OVERFLOW: u32 = 1124;
+    /// `__builtin_ssubll_overflow` (`bLLiCLLiCLLi*`).
+    pub const SSUBLL_OVERFLOW: u32 = 1125;
+    /// `__builtin_usub_overflow` (`bUiCUiCUi*`).
+    pub const USUB_OVERFLOW: u32 = 1349;
+    /// `__builtin_usubl_overflow` (`bULiCULiCULi*`).
+    pub const USUBL_OVERFLOW: u32 = 1350;
+    /// `__builtin_usubll_overflow` (`bULLiCULLiCULLi*`).
+    pub const USUBLL_OVERFLOW: u32 = 1351;
+    /// `__builtin_smul_overflow` (`biCiCi*`).
+    pub const SMUL_OVERFLOW: u32 = 1110;
+    /// `__builtin_smull_overflow` (`bLiCLiCLi*`).
+    pub const SMULL_OVERFLOW: u32 = 1111;
+    /// `__builtin_smulll_overflow` (`bLLiCLLiCLLi*`).
+    pub const SMULLL_OVERFLOW: u32 = 1112;
+    /// `__builtin_umul_overflow` (`bUiCUiCUi*`).
+    pub const UMUL_OVERFLOW: u32 = 1343;
+    /// `__builtin_umull_overflow` (`bULiCULiCULi*`).
+    pub const UMULL_OVERFLOW: u32 = 1344;
+    /// `__builtin_umulll_overflow` (`bULLiCULLiCULLi*`).
+    pub const UMULLL_OVERFLOW: u32 = 1345;
+    /// `void *__builtin_alloca(size_t) noexcept` (`v*z`).
+    pub const ALLOCA: u32 = 123;
+    /// `void *__builtin_alloca_with_align(size_t, size_t) noexcept`
+    /// (`v*zIz`; the alignment is in bits, a constant power of 2 in
+    /// [8, 2^31 - 1]).
+    pub const ALLOCA_WITH_ALIGN: u32 = 127;
+    /// `__builtin_vsnprintf` (`ic*RzcC*Ra`; lowered to `vsnprintf`).
+    pub const VSNPRINTF: u32 = 1375;
+    /// `__builtin_snprintf` (`ic*RzcC*R.`; lowered to `snprintf`).
+    pub const SNPRINTF: u32 = 1113;
+    /// `__builtin_sprintf` (`ic*RcC*R.`; lowered to `sprintf`).
+    pub const SPRINTF: u32 = 1057;
+
+    /// WP-270: the checked-arithmetic builtins (clang 19 `Builtins.td`
+    /// `__builtin_*_overflow`; all constant-evaluated), `alloca` and the
+    /// `printf`-family library builtins libstdc++ names (lowered to the
+    /// libc function; never constant-evaluated). `R` is `restrict`.
+    pub const CHECKED: &[Info] = &[
+        row(ADD_OVERFLOW, "__builtin_add_overflow", "b.", N | T),
+        row(SUB_OVERFLOW, "__builtin_sub_overflow", "b.", N | T),
+        row(MUL_OVERFLOW, "__builtin_mul_overflow", "b.", N | T),
+        row(SADD_OVERFLOW, "__builtin_sadd_overflow", "biCiCi*", N),
+        row(SADDL_OVERFLOW, "__builtin_saddl_overflow", "bLiCLiCLi*", N),
+        row(SADDLL_OVERFLOW, "__builtin_saddll_overflow", "bLLiCLLiCLLi*", N),
+        row(UADD_OVERFLOW, "__builtin_uadd_overflow", "bUiCUiCUi*", N),
+        row(UADDL_OVERFLOW, "__builtin_uaddl_overflow", "bULiCULiCULi*", N),
+        row(UADDLL_OVERFLOW, "__builtin_uaddll_overflow", "bULLiCULLiCULLi*", N),
+        row(SSUB_OVERFLOW, "__builtin_ssub_overflow", "biCiCi*", N),
+        row(SSUBL_OVERFLOW, "__builtin_ssubl_overflow", "bLiCLiCLi*", N),
+        row(SSUBLL_OVERFLOW, "__builtin_ssubll_overflow", "bLLiCLLiCLLi*", N),
+        row(USUB_OVERFLOW, "__builtin_usub_overflow", "bUiCUiCUi*", N),
+        row(USUBL_OVERFLOW, "__builtin_usubl_overflow", "bULiCULiCULi*", N),
+        row(USUBLL_OVERFLOW, "__builtin_usubll_overflow", "bULLiCULLiCULLi*", N),
+        row(SMUL_OVERFLOW, "__builtin_smul_overflow", "biCiCi*", N),
+        row(SMULL_OVERFLOW, "__builtin_smull_overflow", "bLiCLiCLi*", N),
+        row(SMULLL_OVERFLOW, "__builtin_smulll_overflow", "bLLiCLLiCLLi*", N),
+        row(UMUL_OVERFLOW, "__builtin_umul_overflow", "bUiCUiCUi*", N),
+        row(UMULL_OVERFLOW, "__builtin_umull_overflow", "bULiCULiCULi*", N),
+        row(UMULLL_OVERFLOW, "__builtin_umulll_overflow", "bULLiCULLiCULLi*", N),
+        row(ALLOCA, "__builtin_alloca", "v*z", N),
+        row(ALLOCA_WITH_ALIGN, "__builtin_alloca_with_align", "v*zIz", N),
+        row(VSNPRINTF, "__builtin_vsnprintf", "ic*RzcC*Ra", N),
+        row(SNPRINTF, "__builtin_snprintf", "ic*RzcC*R.", N),
+        row(SPRINTF, "__builtin_sprintf", "ic*RcC*R.", N),
+    ];
+
+    /// The operation and signedness of a checked-arithmetic builtin:
+    /// `(op, typed)` with `op` 0 add, 1 sub, 2 mul; `typed` is false for
+    /// the generic forms.
+    pub fn checked_op(id: u32) -> Option<(u8, bool)> {
+        Some(match id {
+            ADD_OVERFLOW => (0, false),
+            SUB_OVERFLOW => (1, false),
+            MUL_OVERFLOW => (2, false),
+            SADD_OVERFLOW | SADDL_OVERFLOW | SADDLL_OVERFLOW | UADD_OVERFLOW | UADDL_OVERFLOW
+            | UADDLL_OVERFLOW => (0, true),
+            SSUB_OVERFLOW | SSUBL_OVERFLOW | SSUBLL_OVERFLOW | USUB_OVERFLOW | USUBL_OVERFLOW
+            | USUBLL_OVERFLOW => (1, true),
+            SMUL_OVERFLOW | SMULL_OVERFLOW | SMULLL_OVERFLOW | UMUL_OVERFLOW | UMULL_OVERFLOW
+            | UMULLL_OVERFLOW => (2, true),
+            _ => return None,
+        })
+    }
+
+    // ---- end WP-270 ----
+
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
         ALL.iter()
@@ -4070,13 +4182,20 @@ pub mod builtin {
             .chain(LIBM)
             .chain(ATOMIC)
             .chain(CORO)
+            .chain(CHECKED)
             .find(|e| e.name == name)
             .map(|e| e.id)
     }
 
     /// The table row of builtin `id`.
     pub fn info(id: u32) -> Option<&'static Info> {
-        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).chain(CORO).find(|e| e.id == id)
+        ALL.iter()
+            .chain(INT_MEM)
+            .chain(LIBM)
+            .chain(ATOMIC)
+            .chain(CORO)
+            .chain(CHECKED)
+            .find(|e| e.id == id)
     }
 
     /// The parameters of builtin `id` that must be integer constant
@@ -4089,7 +4208,7 @@ pub mod builtin {
         for &c in e.sig.as_bytes() {
             match c {
                 b'I' => ice = true,
-                b'U' | b'L' | b'C' | b'D' | b'*' | b'&' => {}
+                b'U' | b'L' | b'C' | b'D' | b'R' | b'*' | b'&' => {}
                 b'.' => break,
                 _ => {
                     if ice && idx > 0 {

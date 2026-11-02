@@ -1324,8 +1324,9 @@ impl Parser<'_, '_> {
                 return self.with_greater_op(true, |p| p.parse_paren_rest(loc));
             }
             TokKind::Punct(Punct::LSquare) => return self.parse_lambda_expr(),
-            TokKind::Punct(Punct::CaretCaret | Punct::SpliceOpen) => {
-                self.unsupported("reflection", loc);
+            TokKind::Punct(Punct::CaretCaret) => return self.parse_reflect_expr(),
+            TokKind::Punct(Punct::SpliceOpen) => {
+                self.unsupported("expression splice", loc);
                 return None;
             }
             _ => {}

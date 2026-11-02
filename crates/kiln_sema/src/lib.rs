@@ -51,6 +51,7 @@ mod packed;
 mod predefined;
 mod qualified_decl;
 mod range_for;
+mod reflect;
 mod rtti;
 pub mod scope;
 mod self_ref;
@@ -118,6 +119,10 @@ pub struct Sema<'a, 'sm> {
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
     /// `typeid` is an error otherwise.
     pub rtti: bool,
+    /// `-freflection` (P2996 spike, WP-267; default off): `^^`, type
+    /// splices and the kiln reflection intrinsics (spec/sema.md
+    /// "Reflection (spike, -freflection)").
+    pub reflection: bool,
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
@@ -232,6 +237,16 @@ pub struct Sema<'a, 'sm> {
     /// that is a function or array is diagnosed there (clang's
     /// `FunctionTypeLoc` begin; [dcl.fct]/11, WP-222, WP-241).
     pub(crate) type_spec_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// The namespace named by the qualifier of each friend function (or
+    /// function template pattern) declared with a qualified name in a
+    /// templated class (`friend void N::f(T);`): its instantiation is
+    /// declared with the same qualifier, so it redeclares `N::f`
+    /// ([dcl.meaning.general]/2.3, [temp.friend]/1; WP-273).
+    pub(crate) friend_qualifiers: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// A friend function template of a class template is being
+    /// instantiated (`friend_function_template`): a qualified one that
+    /// matches no template is not diagnosed (clang).
+    pub(crate) instantiating_friend_template: bool,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
@@ -399,6 +414,17 @@ pub struct Sema<'a, 'sm> {
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
     pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
+    /// Redeclarations whose exception specification was not known when
+    /// they were declared (a friend's, saved for its complete-class
+    /// context or left uninstantiated), paired with the previous
+    /// declaration: compared once it is (clang's
+    /// `DelayedEquivalentExceptionSpecChecks`, spec/sema.md §4.7).
+    pub(crate) delayed_exc_equiv: Vec<(DeclId, DeclId)>,
+    /// Parameters whose default argument waits for its complete-class
+    /// context, with the argument's location: a use before then is
+    /// clang's "use of default argument to function ... that is declared
+    /// later in class" ([class.mem.general]/7).
+    pub(crate) unparsed_default_args: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// Members of class template specializations whose dependent
     /// *noexcept-specifier* is instantiated when needed ([temp.inst]/14,
     /// clang's `EST_Uninstantiated`): the first declaration maps to its
@@ -491,6 +517,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             pragma_packs: Vec::new(),
             exceptions: true,
             rtti: true,
+            reflection: false,
             range_lifetime_extension: false,
             gnu: false,
             pack: (0, Vec::new()),
@@ -526,6 +553,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
+            friend_qualifiers: kiln_source::fx::FxHashMap::default(),
+            instantiating_friend_template: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),
             empty_loop_bodies: kiln_source::fx::FxHashMap::default(),
@@ -571,6 +600,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_for_outer_depth: None,
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
+            delayed_exc_equiv: Vec::new(),
+            unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),

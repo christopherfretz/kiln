@@ -2,11 +2,11 @@
 //! declarators ([except.spec]) and the `noexcept` operator
 //! ([expr.unary.noexcept]) (spec/sema.md §5.3).
 
-use kiln_ast::ExprId;
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::types::{BuiltinType, ExcSpec, NoexceptValue};
+use kiln_ast::{DeclId, ExprId};
 use kiln_ast::{QualType, expr::ValueCategory};
-use kiln_diag::DiagId;
+use kiln_diag::{DiagId, FixIt};
 use kiln_oven::EvalContext;
 use kiln_source::Loc;
 
@@ -250,7 +250,7 @@ impl Sema<'_, '_> {
 
     /// Whether function `f`'s type has a non-throwing exception
     /// specification (an unresolved one counts as throwing).
-    fn decl_is_nothrow(&self, f: kiln_ast::DeclId) -> bool {
+    fn decl_is_nothrow(&self, f: DeclId) -> bool {
         let t = &self.ast.types;
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         t.proto(ty).is_some_and(|p| t.exc_spec(p).is_nothrow())
@@ -306,7 +306,7 @@ impl Sema<'_, '_> {
     /// spec/sema-class.md §2.7): `f`'s type carries `ExcSpec::Deferred(f)`
     /// and `f` sits in `unparsed_exc` until
     /// [`Sema::act_on_exception_spec`].
-    pub(crate) fn defer_late_noexcept(&mut self, f: kiln_ast::DeclId, d: &Declarator) {
+    pub(crate) fn defer_late_noexcept(&mut self, f: DeclId, d: &Declarator) {
         if d.late_noexcept.is_none() {
             return;
         }
@@ -319,25 +319,83 @@ impl Sema<'_, '_> {
         self.unparsed_exc.insert(f);
     }
 
-    /// The replayed exception specification `spec` of member function `f`
-    /// (spec/sema-class.md §2.7): `f`'s type takes it as written.
-    pub(crate) fn set_member_exception_spec(&mut self, f: kiln_ast::DeclId, spec: ExcSpec) {
+    /// The replayed exception specification `spec` of member (or friend)
+    /// function `f` (spec/sema-class.md §2.7): `f`'s type takes it as
+    /// written. The declarations still waiting for it are `f` alone (a
+    /// friend's earlier declarations keep their own), which is then
+    /// compared with them ([`Sema::check_delayed_exc_equiv`]).
+    pub(crate) fn set_member_exception_spec(&mut self, f: DeclId, spec: ExcSpec) {
         if !self.unparsed_exc.remove(&f) {
             return;
         }
-        let redecls: Vec<kiln_ast::DeclId> = self.ast.redecls_of(f).collect();
+        let redecls: Vec<DeclId> = self.ast.redecls_of(f).collect();
         for d in redecls {
             let Some(ty) = self.ast.decls.get(d).ty() else { continue };
+            if self.written_exc_spec(ty) != ExcSpec::Deferred(f) {
+                continue;
+            }
             let t = self.with_exc_spec(ty, spec);
             self.ast.decls.set_ty(d, t);
+        }
+        self.check_delayed_exc_equiv(f);
+    }
+
+    /// [except.spec]/5 for the delayed pairs naming `f`, a redeclaration
+    /// or previous declaration whose specification was unknown when the
+    /// redeclaration was declared (clang `CheckDelayedMemberExceptionSpecs`
+    /// → `CheckEquivalentExceptionSpec`): it must match the previous
+    /// declaration's, `exception specification in declaration does not
+    /// match previous declaration` at `f`.
+    pub(crate) fn check_delayed_exc_equiv(&mut self, f: DeclId) {
+        let mut pending = Vec::new();
+        self.delayed_exc_equiv.retain(|&(n, p)| {
+            if n == f || p == f {
+                pending.push((n, p));
+                false
+            } else {
+                true
+            }
+        });
+        for (n, p) in pending {
+            let (Some(nty), Some(pty)) = (self.declared_fn_type(n), self.declared_fn_type(p))
+            else {
+                continue;
+            };
+            let (ne, pe) = (self.written_exc_spec(nty), self.written_exc_spec(pty));
+            let unknown = |e: ExcSpec| {
+                matches!(
+                    e,
+                    ExcSpec::Deferred(_)
+                        | ExcSpec::DependentNoexcept(_)
+                        | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
+                )
+            };
+            if unknown(ne) || unknown(pe) {
+                // The other one is still to come: check again then.
+                self.delayed_exc_equiv.push((n, p));
+                continue;
+            }
+            if ne.is_nothrow() == pe.is_nothrow() {
+                continue;
+            }
+            let loc = self.ast.decls.get(n).loc();
+            if ne == ExcSpec::None {
+                // Written without one: clang's missing-specification path.
+                let name = self.decl_name(n);
+                let _ = self.merge_missing_exc_spec(p, pty, nty, (loc, &name, None), false);
+                continue;
+            }
+            let msg = self.diag(DiagId::sema_exception_spec_mismatch, loc);
+            let msg = self.note_prev(msg, p, false);
+            self.emit(msg);
         }
     }
 
     /// Resolves the exception specification of function `f` before an
     /// expression takes its type at `loc` (C++17: it is part of the type).
     /// A specification not yet parsed is left to [`Sema::exc_spec_needed`].
-    pub(crate) fn resolve_exc_for_type(&mut self, f: kiln_ast::DeclId, loc: Loc) {
-        if !self.in_template() && !self.unparsed_exc.contains(&self.ast.first(f)) {
+    pub(crate) fn resolve_exc_for_type(&mut self, f: DeclId, loc: Loc) {
+        if !self.in_template() && !self.exc_unparsed(f) {
             self.resolve_exception_spec(f, loc);
         }
     }
@@ -348,46 +406,86 @@ impl Sema<'_, '_> {
     /// still awaiting its complete-class context. Uses in an unevaluated
     /// operand call this directly; evaluated ones through
     /// `mark_function_referenced`.
-    pub(crate) fn exc_spec_needed(&mut self, f: kiln_ast::DeclId, loc: Loc) {
+    pub(crate) fn exc_spec_needed(&mut self, f: DeclId, loc: Loc) {
         if !self.in_template() && !self.diagnose_unparsed_exc_spec(f, loc) {
             self.resolve_exception_spec(f, loc);
         }
     }
 
-    /// Whether member `d` of a class template, being instantiated now,
-    /// keeps its dependent `noexcept(expr)` uninstantiated until needed
-    /// ([temp.inst]/14; clang's `EST_Uninstantiated`). A member template's
-    /// pattern, and a member of a still-dependent specialization, are
-    /// substituted at once.
+    /// Whether function `d` of a class template, being instantiated now
+    /// as a member or `friend`, keeps its dependent `noexcept(expr)`
+    /// uninstantiated until needed ([temp.inst]/14; clang's
+    /// `EST_Uninstantiated`, which `InitFunctionInstantiation` gives every
+    /// instantiated declaration). A member template's (or a friend
+    /// template's) redeclared pattern waits too: its specializations
+    /// substitute the original pattern's with all their levels
+    /// ([`Sema::defer_spec_exception_spec`]). A member of a
+    /// still-dependent specialization, and a friend template only
+    /// declared in the class, are substituted at once.
     pub(crate) fn lazy_exc_spec(
         &self,
-        d: kiln_ast::DeclId,
+        d: DeclId,
         p: &kiln_ast::types::FuncProto,
+        friend: bool,
     ) -> bool {
+        let tmpl = self.ast.described_template(d).is_some();
         matches!(
             self.ast.types.exc_spec(p),
             ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
-        ) && !self.in_template()
-            && self.ast.described_template(d).is_none()
+        ) && self.ast.templates.dependent_depth <= u32::from(tmpl)
+            && !(tmpl && friend && self.ast.decls.function(d).is_none_or(|x| x.body.is_none()))
             && !self.ast.decls.get(self.ctx).has(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
     }
 
-    /// Instantiates the deferred `noexcept(expr)` of `f`, a member of a
-    /// class template specialization, from its pattern at `poi` (clang's
-    /// `InstantiateExceptionSpec`): substituted in the member's context,
-    /// with its parameters and `this`. A substitution failure leaves `f`
-    /// potentially throwing, as clang (`EST_None`).
-    pub(crate) fn instantiate_exception_spec(&mut self, f: kiln_ast::DeclId, poi: Loc) {
-        let Some(pattern) = self.uninstantiated_exc.remove(&f) else { return };
+    /// The exception specification of function template specialization
+    /// `spec` of pattern `pat`, whose own is `Deferred`: still awaiting its
+    /// complete-class context (a friend template of a class being
+    /// defined), or a member template's redeclared pattern
+    /// ([`Sema::lazy_exc_spec`]). `spec` waits too, to be substituted
+    /// from the original pattern with all its levels when needed. Returns
+    /// whether it does.
+    pub(crate) fn defer_spec_exception_spec(&mut self, pat: DeclId, spec: DeclId) -> bool {
+        let first = self.ast.first(pat);
+        let origin = match self.uninstantiated_exc.get(&first) {
+            Some(&o) => o,
+            None if self.exc_unparsed(pat) => pat,
+            None => return false,
+        };
+        self.uninstantiated_exc.insert(spec, origin);
+        true
+    }
+
+    /// Instantiates the deferred `noexcept(expr)` of `f`, a member or
+    /// friend of a class template specialization or a function template
+    /// specialization, from its pattern at `poi` (clang's
+    /// `InstantiateExceptionSpec`): substituted in `f`'s context, with
+    /// its parameters and `this`. A substitution failure leaves `f`
+    /// potentially throwing, as clang (`EST_None`). A pattern still
+    /// awaiting its complete-class context leaves `f` waiting.
+    pub(crate) fn instantiate_exception_spec(&mut self, f: DeclId, poi: Loc) {
+        let Some(&pattern) = self.uninstantiated_exc.get(&f) else { return };
+        if self.exc_unparsed(pattern) {
+            return;
+        }
+        self.uninstantiated_exc.remove(&f);
         let pty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
         let Some(pp) = self.sugared_proto(pty) else { return };
-        let ExcSpec::NoexceptExpr { expr, .. } = self.ast.types.exc_spec(&pp) else { return };
-        let quals = pp.info().this_quals();
-        let resolved = self.substitute_exception_spec(f, pattern, expr, quals, poi);
-        let spec = resolved.unwrap_or(ExcSpec::None);
-        let redecls: Vec<kiln_ast::DeclId> = self.ast.redecls_of(f).collect();
+        let spec = match self.ast.types.exc_spec(&pp) {
+            ExcSpec::NoexceptExpr { expr, value: NoexceptValue::Dependent(_) } => {
+                let quals = pp.info().this_quals();
+                let resolved = self.substitute_exception_spec(f, pattern, expr, quals, poi);
+                resolved.unwrap_or(ExcSpec::None)
+            }
+            ExcSpec::Deferred(_) => return,
+            // Known once the pattern's complete-class context was parsed.
+            other => other,
+        };
+        let redecls: Vec<DeclId> = self.ast.redecls_of(f).collect();
         for d in redecls {
             let Some(ty) = self.ast.decls.get(d).ty() else { continue };
+            if !matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_)) {
+                continue;
+            }
             let t = self.with_exc_spec(ty, spec);
             self.ast.decls.set_ty(d, t);
         }
@@ -398,44 +496,63 @@ impl Sema<'_, '_> {
     /// found.
     fn substitute_exception_spec(
         &mut self,
-        f: kiln_ast::DeclId,
-        pattern: kiln_ast::DeclId,
+        f: DeclId,
+        pattern: DeclId,
         expr: ExprId,
         quals: kiln_ast::types::Quals,
         poi: Loc,
     ) -> Option<ExcSpec> {
         use crate::templ::stack::FrameKind;
         use crate::templ::subst::Substituter;
-        let spec = self.inst_owner(f)?;
-        let (tmpl, args) = self.spec_args(spec)?;
-        let pclass = self.spec_pattern_class(spec, tmpl)?;
-        let mut pairs = self.inst_context_pairs(spec);
-        if pairs.first().is_none_or(|&(_, x)| x != spec) {
-            pairs.insert(0, (pclass, spec));
-        }
+        // The specialization whose arguments substitute it: `f` itself (a
+        // function template specialization, all its levels), or the class
+        // template specialization `f` is a member or friend of.
+        let (spec, args, pairs, frame_args) = if self.is_function_spec(f) {
+            let (tmpl, args) = self.spec_args(f)?;
+            let pairs = self.inst_context_pairs(self.spec_pairs_ctx(f, tmpl));
+            (f, args, pairs, self.ast.spec_info(f).map(|(_, i)| i.args))
+        } else {
+            let spec = self.inst_owner(f)?;
+            let (tmpl, args) = self.spec_args(spec)?;
+            let pclass = self.spec_pattern_class(spec, tmpl)?;
+            let mut pairs = self.inst_context_pairs(spec);
+            if pairs.first().is_none_or(|&(_, x)| x != spec) {
+                pairs.insert(0, (pclass, spec));
+            }
+            (spec, args, pairs, None)
+        };
         if !self.push_inst_frame(FrameKind::ExceptionSpec, f, pattern, poi) {
             return None;
         }
-        let params = |s: &Self, d: kiln_ast::DeclId| -> Vec<kiln_ast::DeclId> {
+        if let Some(l) = frame_args {
+            self.set_frame_args(l);
+        }
+        let params = |s: &Self, d: DeclId| -> Vec<DeclId> {
             s.ast
                 .decls
                 .function(d)
-                .map(|x| s.ast.lists.iter::<kiln_ast::DeclId>(x.params).collect())
+                .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
                 .unwrap_or_default()
         };
         let (pp, fp) = (params(self, pattern), params(self, f));
         let method = self.kind_of(f) == kiln_ast::decl::DeclKind::CXXMethod;
         let at = self.ast.exprs.get(expr).loc();
         let start = self.begin_loc(expr);
-        // A hidden friend's names are checked in the befriending class
-        // ([class.friend]/7 lexical scope; its access is the friend's).
-        let n = self.ast.decls.get(f);
-        let ctx = if n.misc().friend() == kiln_ast::decl::FriendKind::None {
-            n.ctx()
+        // A friend's is in its class ([class.friend]/7), whose members it
+        // may name. A function template specialization takes its template's
+        // (the friend template declared in the class specialization).
+        let lex = if self.is_function_spec(f) {
+            self.spec_args(f).and_then(|(t, _)| self.templated_function(t)).unwrap_or(f)
         } else {
-            self.ast.decls.lexical_ctx(f).or(n.ctx())
-        }
-        .unwrap_or(self.ast.tu);
+            f
+        };
+        let ctx = self
+            .ast
+            .decls
+            .lexical_ctx(lex)
+            .filter(|&c| self.kind_of(c) == kiln_ast::decl::DeclKind::CXXRecord)
+            .or_else(|| self.ast.decls.get(f).ctx())
+            .unwrap_or(self.ast.tu);
         let r = self.in_inst_context(ctx, |s| {
             let this = s.act_on_start_this_scope(method, quals);
             let mut sub = Substituter::new(s, &args);
@@ -455,13 +572,22 @@ impl Sema<'_, '_> {
     /// *noexcept-specifier* is needed ([except.spec]/13) before the
     /// complete-class context it is parsed in: `exception specification is
     /// not available until end of class definition`. Returns true then.
-    pub(crate) fn diagnose_unparsed_exc_spec(&mut self, f: kiln_ast::DeclId, loc: Loc) -> bool {
-        let first = self.ast.first(f);
-        if !self.unparsed_exc.contains(&first) {
+    pub(crate) fn diagnose_unparsed_exc_spec(&mut self, f: DeclId, loc: Loc) -> bool {
+        if !self.exc_unparsed(f) {
             return false;
         }
         self.error(DiagId::sema_exception_spec_not_parsed, loc);
         true
+    }
+
+    /// Whether the declaration `f` names (or its first declaration) still
+    /// waits for its *noexcept-specifier*'s complete-class context: a
+    /// friend redeclaration may wait while an earlier declaration does not.
+    pub(crate) fn exc_unparsed(&self, f: DeclId) -> bool {
+        let first = self.ast.first(f);
+        self.unparsed_exc.contains(&f)
+            || self.unparsed_exc.contains(&first)
+            || self.uninstantiated_exc.get(&first).is_some_and(|p| self.unparsed_exc.contains(p))
     }
 
     /// `throw` / `throw e` ([expr.throw]): a prvalue of type `void`. The
@@ -529,4 +655,88 @@ impl Sema<'_, '_> {
             }
         }
     }
+}
+
+impl Sema<'_, '_> {
+    /// [except.spec]/5 for a redeclaration of type `ty` (named `fname` at
+    /// `loc`) that writes no exception specification where the previous
+    /// declaration `p`, of type `pty`, has an incompatible one: clang 19's
+    /// missing-specification path of `CheckEquivalentExceptionSpec`
+    /// (spec/sema.md §3, "Exception specifications on redeclarations").
+    /// Returns `ty` with the specification it inherits and whether the
+    /// redeclaration is an error (and so invalid). `replaceable` says
+    /// whether it declares a replaceable global allocation function;
+    /// `fix_at` is where clang's fix-it inserts the specification.
+    ///
+    /// - `p` non-throwing, with C language linkage, and in a system header
+    ///   (or a builtin, or without a location): silently `throw()`, since
+    ///   C libraries may add non-throwing specifications.
+    /// - a replaceable global allocation function: the `ExtWarn`
+    ///   `-Wmissing-exception-spec`, inheriting the specification.
+    /// - otherwise the error, still inheriting a non-dependent
+    ///   specification, as clang updates the invalid declaration's type.
+    pub(crate) fn merge_missing_exc_spec(
+        &mut self,
+        p: DeclId,
+        pty: QualType,
+        ty: QualType,
+        (loc, fname, fix_at): (Loc, &str, Option<Loc>),
+        replaceable: bool,
+    ) -> (QualType, bool) {
+        let old = self.written_exc_spec(pty);
+        let first = self.ast.redecls_of(p).last().unwrap_or(p);
+        let ploc = self.ast.decls.get(p).loc();
+        if old.is_nothrow()
+            && kiln_abi::mangle::is_extern_c(&self.ast, first)
+            && (!ploc.is_valid()
+                || self.diags.sm().is_in_system_header(ploc)
+                || self.ast.decls.builtin_id(first).is_some()
+                || self.lib_builtin_info(first).is_some())
+        {
+            return (self.with_exc_spec(ty, ExcSpec::DynamicNone), false);
+        }
+        let inherited = match old {
+            ExcSpec::NoexceptExpr { value: NoexceptValue::True, .. } => {
+                Some(ExcSpec::BasicNoexcept)
+            }
+            ExcSpec::NoexceptExpr { value: NoexceptValue::False, .. } => Some(ExcSpec::None),
+            ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
+            | ExcSpec::DependentNoexcept(_)
+            | ExcSpec::Deferred(_) => None,
+            e => Some(e),
+        };
+        let ty = inherited.map_or(ty, |e| self.with_exc_spec(ty, e));
+        let error = !(replaceable && inherited.is_some());
+        let id = if error {
+            DiagId::sema_missing_exception_spec
+        } else {
+            DiagId::sema_missing_exception_spec_ext
+        };
+        let spelled = self.exc_spec_spelling(old);
+        let mut msg = self.diag(id, loc).arg(fname).arg(spelled.clone());
+        if let Some(at) = fix_at {
+            msg = msg.fixit(FixIt::insert(at, format!(" {spelled}")));
+        }
+        let msg = self.note_prev(msg, p, false);
+        self.emit(msg);
+        (ty, error)
+    }
+}
+
+/// Where clang's missing-exception-specification fix-it inserts the
+/// specification: just past the `)` of the function declarator `d`
+/// (`getLocForEndOfToken(FTLoc.getLocalRangeEnd())`). None with a trailing
+/// return type (clang gives none) and, as kiln does not record where a
+/// cv- or ref-qualifier ends, after either; none for a `)` from a macro.
+pub(crate) fn missing_exc_spec_fixit_loc(d: &Declarator) -> Option<Loc> {
+    d.chunks.iter().find_map(|c| match c {
+        crate::declspec::Chunk::Function { rparen, quals, ref_qual, trailing, .. } => Some(
+            (trailing.is_none()
+                && quals.is_empty()
+                && *ref_qual == kiln_ast::types::RefQual::None
+                && rparen.is_file())
+            .then(|| rparen.with_offset(1)),
+        ),
+        _ => None,
+    })?
 }

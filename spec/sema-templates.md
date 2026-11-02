@@ -1073,6 +1073,26 @@ class name" at `B`
 - A friend template, or a friend specialization (`friend void f<>(T)`),
   is substituted and then matched against the namespace-scope templates
   when it is instantiated.
+- A friend function or function template declared with a qualified name
+  in a templated class (`template<class U> friend R N::f(X<U>);`,
+  `friend R N::g(T);`) whose template head or type is dependent is not
+  matched when the class template is defined: its own parameters are a
+  level deeper than `N::f`'s and the match may depend on the class's
+  arguments ([temp.friend]/1, [temp.over.link]/6). It is kept as a hidden
+  pattern (like an unqualified one) and its qualifier recorded
+  (`Sema::friend_qualifiers`); each instantiation of the class declares it
+  again with that qualifier, so the substituted friend (now at `N::f`'s
+  depth, parameters compared by position) redeclares the namespace member
+  and befriends it, wherever the class itself lives. A non-template
+  friend that matches nothing then is "friend declaration of 'g' does not
+  match any declaration in namespace 'N'" with the instantiation note
+  (clang adds a candidate note kiln does not emit); a friend template
+  that matches no template is accepted silently, as clang does
+  (`Sema::instantiating_friend_template`). At definition, a qualified
+  name that finds nothing at all is diagnosed at once (clang), as is a
+  mismatch in a non-template class or of a non-dependent friend
+  (WP-273; `temp.friend/qualified-friend-template-*.cpp`,
+  `qualified-friend-mismatch-at-instantiation.cpp`).
 - A friend class (`friend class B<T>;`) is substituted and grants access
   (S3C). A dependent friend specialization (`friend struct X<T>;`,
   `friend class Y<T*>;`, `friend class ns::Z<T...>;`) is kept in the
@@ -2693,6 +2713,9 @@ records it in `TABLE`.
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
 | complex math (WP-237) | `__builtin_cabs`/`carg`/`cacos`/`cacosh`/`casin`/`casinh`/`catan`/`catanh`/`ccos`/`ccosh`/`cexp`/`clog`/`cpow`/`cproj`/`csin`/`csinh`/`csqrt`/`ctan`/`ctanh`, each with the `f` and `l` forms (`builtin::LIBM`; the signature prefix `X` is `_Complex` of the type after it; `cproj` is `const`) | no (clang 19) | libcall through the complex call ABI (spec/abi.md §8.17) |
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
+| checked arithmetic (WP-270) | `__builtin_add_overflow`†, `__builtin_sub_overflow`†, `__builtin_mul_overflow`† (generic: two integer operands of any types, a pointer to a non-const integer result); the typed `__builtin_{s,u}{add,sub,mul}_overflow` with `l`/`ll` forms (fixed `int`/`long`/`long long` parameters, signed or unsigned) | yes | `llvm.{s,u}{add,sub,mul}.with.overflow` in clang's encompassing width (spec/codegen.md §3) |
+| stack allocation (WP-270) | `__builtin_alloca`, `__builtin_alloca_with_align` (the alignment an `I` argument in bits: a power of two, at least 8, at most `INT_MAX`) | no ("subexpression not valid") | dynamic `alloca i8` where the call is |
+| printf family (WP-270) | `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf` (signature letter `R`: `restrict`) | no | libcall |
 
 **Landed (WP-088).** Every row above is implemented in sema, the Oven
 and codegen, with these exceptions, each matching clang 19:
@@ -2725,6 +2748,31 @@ not counted in the 143 header builtins of §13.3, which are the M3
 headers' own uses; `TABLE` now holds 91 function rows. Tests:
 `tests/conformance/expr.const/builtins-str{,-errors,-run}.cpp`,
 `tests/codegen/builtins_str.cpp`.
+
+**Landed (WP-270): checked arithmetic, alloca, printf builtins.**
+`builtin::CHECKED` holds the 26 rows (clang 19 ids; `checked_op` maps
+an overflow id to its operation and whether it is a typed form). The
+generic overflow builtins are custom-checked (`builtin_overflow`, clang
+`SemaBuiltinOverflow`): exactly three arguments (the usual count
+errors); each argument is decayed; an operand must be an integer type
+(integral, `bool`, or an unscoped enumeration; a scoped enumeration,
+floating or class type is `operand argument to overflow builtin must be
+an integer type ('T' invalid)` at the operand); the result must be a
+pointer to a non-const integer type, volatile allowed (`result argument
+to overflow builtin must be a pointer to a non-const integer type ('T'
+invalid)`, also for `nullptr` and `0`). The call is a `bool` prvalue and
+the arguments keep their own types. The typed forms are ordinary calls
+(conversion errors as for any parameter). `__builtin_alloca_with_align`'s
+alignment, after the integer-constant check, must be a power of two
+(`requested alignment is not a power of 2`), at least 8 (`requested
+alignment must be 8 or greater`) and at most 2147483647 (`requested
+alignment must be 2147483647 or smaller`), reported at the callee
+(`check_alloca_align`, clang `SemaBuiltinAllocaWithAlign`). clang's
+implicit `format` attributes on the printf rows are not modelled (see
+§5.4 of spec/sema.md). Tests: `tests/conformance/ext.gnu.builtins/`
+(`overflow-args`, `overflow-constexpr`, `overflow-constexpr-invalid`,
+`overflow-run`, `alloca-args`, `alloca-run`, `printf-builtins-run`,
+`libstdcxx-gnu-builtins`), `tests/codegen/builtins_{overflow,alloca,printf_lib}.cpp`.
 
 **Source location.** Sema computes the values once, when it builds the
 `SourceLocExpr` (spec/ast.md §5.8): `LINE`/`COLUMN` from the presumed
@@ -4196,6 +4244,19 @@ explicit specialization errors remain. The blockers are:
     enclosing class's parameter ([temp.friend]/9, `requires C<T>` on
     `template<class U> friend int f(X, U)`) sees that specialization's
     arguments (WP-231);
+  - an atom of such a clause is substituted with the pattern classes
+    mapped to their instantiations ([`Sema::inst_context_pairs`]) from
+    the member's class, or for a friend (whose semantic context is the
+    namespace) from its lexical class (`inst_lexical_class`,
+    [temp.friend]/1): a hidden friend of a member class or member class
+    template of a class template (`view<V>::iterator`, libc++'s
+    `filter_view::__iterator`, `join_view::__iterator<Const>`) names
+    that member class, a member of the enclosing specialization, in its
+    parameter types and constraints ([temp.dep.type]/1), and without the
+    mapping `find_instantiated_decl` found no instantiated parent ("not
+    yet implemented: reference to a member of a dependent context"),
+    including when the friend is found only by argument-dependent lookup
+    inside a concept's requires-expression (WP-272);
   - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate
