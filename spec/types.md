@@ -226,13 +226,23 @@ table (ids from 2000; clang's ids end at 1392), which libstdc++'s
 through `f128_twin`), and `__builtin_nextafterf16`/`f16b` (WP-365:
 IEEE nextafter in binary16/bfloat16, constant-evaluated by the Oven's
 P0533 path, spec/oven.md, and lowered to an inline select sequence on
-the `i16` bits, as there is no libm entry point: x == y gives y, a NaN
-operand gives the NaN `fptrunc(fpext x + fpext y)`, zero steps to the
+the `i16` bits, as there is no libm entry point: a NaN operand gives it
+quieted (x's first), x == y (or two zeros) gives y, zero steps to the
 least subnormal with y's sign, otherwise the bits step by one away from
-or toward zero; clang 19 lacks both builtins, GCC 14 calls an undefined
+or toward zero, the direction from an integer compare of the
+sign-magnitude keys; after one bitcast of each operand the sequence is
+integer-only, because LLVM 19's x86-64 backend loses a `bfloat`'s sign
+bit when its `bitcast` to `i16` shares an operand with an `fpext`/`fcmp`;
+clang 19 lacks both builtins, GCC 14 calls an undefined
 `nextafterf16`). The `*f128`
 builtins stay clang's `__float128` ones; their result converts to
-`_Float128` without a rank diagnostic (same value set).
+`_Float128` without a rank diagnostic (same value set). GCC's
+`<complex.h>` forms `__builtin_c{abs,acos,acosh,arg,asin,asinh,atan,
+atanh,cos,cosh,exp,log,pow,proj,sin,sinh,sqrt,tan,tanh}f128` (WP-365;
+clang 19 has none) take and return `_Complex __float128` (`cabs`/`carg`
+return `__float128`) and are calls of the glibc function they name;
+libstdc++ 14's `<complex>` uses them where `_Float128` is not
+`long double` (x86-64).
 
 ### 5.2 Structural kinds
 | kind | k | c | payload | notes |

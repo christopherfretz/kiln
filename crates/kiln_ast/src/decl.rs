@@ -4480,6 +4480,29 @@ pub mod builtin {
         row(1315, "__builtin_tanhf128", "LLdLLd", N),
         row(1324, "__builtin_tgammaf128", "LLdLLd", N),
         row(TRUNCF128, "__builtin_truncf128", "LLdLLd", N | C),
+        // WP-365: GCC's `<complex.h>` `f128` forms (clang 19 has none),
+        // which libstdc++'s `<complex>` names where `_Float128` is not
+        // `long double` (x86-64); kiln-private ids, library calls of the
+        // glibc function the builtin names.
+        row(2015, "__builtin_cabsf128", "LLdXLLd", N),
+        row(2016, "__builtin_cacosf128", "XLLdXLLd", N),
+        row(2017, "__builtin_cacoshf128", "XLLdXLLd", N),
+        row(2018, "__builtin_cargf128", "LLdXLLd", N),
+        row(2019, "__builtin_casinf128", "XLLdXLLd", N),
+        row(2020, "__builtin_casinhf128", "XLLdXLLd", N),
+        row(2021, "__builtin_catanf128", "XLLdXLLd", N),
+        row(2022, "__builtin_catanhf128", "XLLdXLLd", N),
+        row(2023, "__builtin_ccosf128", "XLLdXLLd", N),
+        row(2024, "__builtin_ccoshf128", "XLLdXLLd", N),
+        row(2025, "__builtin_cexpf128", "XLLdXLLd", N),
+        row(2026, "__builtin_clogf128", "XLLdXLLd", N),
+        row(2027, "__builtin_cpowf128", "XLLdXLLdXLLd", N),
+        row(2028, "__builtin_cprojf128", "XLLdXLLd", N),
+        row(2029, "__builtin_csinf128", "XLLdXLLd", N),
+        row(2030, "__builtin_csinhf128", "XLLdXLLd", N),
+        row(2031, "__builtin_csqrtf128", "XLLdXLLd", N),
+        row(2032, "__builtin_ctanf128", "XLLdXLLd", N),
+        row(2033, "__builtin_ctanhf128", "XLLdXLLd", N),
     ];
 
     /// WP-361: the P1467 `_Float16` (`x`), `_Float32` (kiln `k`),
