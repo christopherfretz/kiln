@@ -69,3 +69,7 @@ constexpr long r10() { char b[6] = {}; int i = 0; return __builtin_object_size((
 static_assert(r10() == 50);
 constexpr long r11() { char b[6] = {}; return __builtin_object_size(&b[(ext(), cx())], 0); }
 static_assert(r11() == 5);
+// A called function reads its parameters.
+constexpr char *id(char *q) { return q; }
+constexpr long r12() { char b[6] = {}; return __builtin_object_size((ext(), id(b)), 0); }
+static_assert(r12() == -1);

@@ -568,7 +568,7 @@ literal is one instruction and one step, not an interpreted loop.
   designates `s`) and evaluated speculatively (`Op::Speculate`). clang
   evaluates it ignoring side effects: a comma's left operand is an
   ignored value whose failure is noted, after which any lvalue-to-rvalue
-  read fails. So the left operands of commas at any depth (WP-302:
+  read fails (and a call with arguments). So the left operands of commas at any depth (WP-302:
   `(x, (y, arr))`, `&a[(f(), 1)]`, `b + (f(), 2)`) with no read after
   them in evaluation order (reads in skipped left operands not counted)
   are skipped (`skipped_comma_lhs`; the compiler's `skip_effects`), and
@@ -601,12 +601,9 @@ literal is one instruction and one step, not an interpreted loop.
   a constant (generic note; clang 19 crashes on it). The `*f128` builtins with a `long double` twin
   evaluate as the twin (quad-precision `softfloat` arithmetic);
   `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
-  trap "subexpression not valid", as clang 19. **Divergences:** an
-  object-size comma left operand that is evaluated (a read follows) and
-  fails makes the trial fail even when it has no side effect (clang
-  notes the failure and fails only at the read: the same result unless
-  nothing is read in between, which the static order check rules out);
-  reads inside called functions are not counted.
+  trap "subexpression not valid", as clang 19. **Divergences:** for the
+  object-size comma rule a call with arguments counts as a read (its
+  callee reads them) and one without as none, whatever the callee reads.
 
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,

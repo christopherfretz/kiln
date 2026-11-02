@@ -60,7 +60,8 @@ fn strip_pointer_casts(ast: &Ast, e: ExprId) -> ExprId {
 /// trial skips (clang `tryEvaluateBuiltinObjectSize`, WP-302). clang
 /// evaluates the operand ignoring side effects: a comma's left operand is
 /// an ignored value whose failure is noted as a side effect, after which
-/// any lvalue-to-rvalue read fails. A left operand with no read after it
+/// any lvalue-to-rvalue read fails, and so does a call with arguments
+/// (its callee reads them). A left operand with no read after it
 /// in evaluation order (outside the skipped ones) is therefore skipped;
 /// the others are evaluated with the operand. Commas at any depth count:
 /// `(x, (y, arr))`, `&a[(f(), 1)]`, `(char *)(f(), p) + 1`.
@@ -108,6 +109,16 @@ fn skipped_comma_lhs(ast: &Ast, e: ExprId) -> Vec<ExprId> {
                 continue;
             }
             k if k.is_cast() && exprs.cast_kind(x) == CastKind::LValueToRValue => {
+                stack.push(Item::Read(par));
+            }
+            // A called function reads its parameters (clang fails those
+            // reads too); a call without arguments reads nothing here.
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+                if exprs.children(x, &ast.lists).len() > 1 =>
+            {
+                stack.push(Item::Read(par));
+            }
+            ExprKind::CXXConstructExpr if !exprs.children(x, &ast.lists).is_empty() => {
                 stack.push(Item::Read(par));
             }
             _ => {}
