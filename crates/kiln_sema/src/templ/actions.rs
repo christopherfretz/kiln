@@ -1071,11 +1071,7 @@ impl Sema<'_, '_> {
     /// (an `InitListExpr` of type `void`, as [`Self::dependent_init_list`])
     /// under a `PackExpansionExpr`; instantiation expands it into one
     /// braced-init-list per element (spec/sema-templates.md §5.3).
-    pub fn act_pack_expansion_list(
-        &mut self,
-        l: &crate::init::InitList,
-        ellipsis: Loc,
-    ) -> ExprId {
+    pub fn act_pack_expansion_list(&mut self, l: &crate::init::InitList, ellipsis: Loc) -> ExprId {
         let e = self.dependent_init_list(l);
         self.act_pack_expansion(e, ellipsis)
     }

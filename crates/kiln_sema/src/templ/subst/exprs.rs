@@ -107,8 +107,7 @@ impl Substituter<'_, '_, '_> {
     /// keeps it as written, [`crate::Sema::dependent_init_list`]).
     fn call_arg_list(&mut self, l: kiln_ast::ids::ListId) -> SubstResult<Vec<ExprId>> {
         let v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-        if !v.iter().any(|&x| self.braced_source(x).is_some() || self.braced_pattern(x).is_some())
-        {
+        if !v.iter().any(|&x| self.braced_source(x).is_some() || self.braced_pattern(x).is_some()) {
             return self.expr_list(l);
         }
         let mut out = Vec::with_capacity(v.len());
@@ -1398,7 +1397,13 @@ impl Substituter<'_, '_, '_> {
             return Ok(None);
         };
         if self.sema.kind_of(ft) != DeclKind::FunctionTemplate
-            || !self.sema.ast.decls.get(ft).flags().contains(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
+            || !self
+                .sema
+                .ast
+                .decls
+                .get(ft)
+                .flags()
+                .contains(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
         {
             return Ok(None);
         }

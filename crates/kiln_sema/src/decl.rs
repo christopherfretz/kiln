@@ -6567,8 +6567,8 @@ impl Sema<'_, '_> {
         // and so does any condition in a template definition (P2593R1,
         // a DR: `else static_assert(false);` in a discarded branch;
         // clang's `CurContext->isDependentContext()`).
-        let in_definition = self.in_template()
-            || self.ast.decls.get(self.ctx).has(DeclFlags::DEPENDENT_CTX);
+        let in_definition =
+            self.in_template() || self.ast.decls.get(self.ctx).has(DeclFlags::DEPENDENT_CTX);
         if !self.has_errors_in(c) && !self.expr_is_value_dependent(c) && !in_definition {
             match self.eval_const(c, EvalContext::new(EvalKind::StaticAssert, loc)) {
                 Ok(v) if self.const_truth(v) != Some(false) => {}

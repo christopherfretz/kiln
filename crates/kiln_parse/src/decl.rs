@@ -1192,6 +1192,45 @@ impl Parser<'_, '_> {
 
     /// class-specifier, enum-specifier or elaborated-type-specifier
     /// ([class.pre], [dcl.enum], [dcl.type.elab]).
+    /// `class-key T::X` with a dependent qualifier ([dcl.type.elab],
+    /// [temp.dep.type]/6): a dependent name type with the class-key as its
+    /// keyword, resolved (and its tag kind checked) at instantiation, as
+    /// clang's `ActOnDependentTag`; with `friend`, a friend type
+    /// ([class.friend]/3, libstdc++ generator:684
+    /// `friend struct _Erased_promise::_Subyield_state;`).
+    fn dependent_tag_reference(
+        &mut self,
+        ds: &mut DeclSpec,
+        nns: kiln_ast::NnsId,
+        (name, name_loc): (Symbol, Loc),
+        keyword: TagKeyword,
+        kw_loc: Loc,
+    ) {
+        let ty = self.s.act_dependent_name_at(nns, name, None, keyword, name_loc);
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
+            ds.invalid = true;
+            self.spec_error(&e, kw_loc);
+        }
+    }
+
+    /// An optional enum-base `: type-specifier-seq` ([dcl.enum]/2); the
+    /// fixed underlying type, or `None` if absent or not a type.
+    fn parse_enum_base(&mut self) -> Option<QualType> {
+        if !self.at(Punct::Colon) {
+            return None;
+        }
+        self.bump();
+        let base = self.parse_decl_specifiers(DeclaratorContext::TypeName);
+        if !base.has_type_specifier() {
+            self.error_here(DiagId::parse_expected_type);
+            return None;
+        }
+        let ty = self.s.type_from_declspec(&base);
+        // [dcl.enum]/2, [dcl.spec.auto.general]/5.
+        let at = base.type_loc.unwrap_or(base.loc);
+        Some(self.s.type_specifier_placeholder_check(ty, at))
+    }
+
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let keyword = match k {
@@ -1224,19 +1263,7 @@ impl Parser<'_, '_> {
             self.error_here(DiagId::parse_expected_unqualified_id);
             ds.invalid = true;
         }
-        let mut fixed = None;
-        if keyword == TagKeyword::Enum && self.at(Punct::Colon) {
-            self.bump();
-            let base = self.parse_decl_specifiers(DeclaratorContext::TypeName);
-            if base.has_type_specifier() {
-                let ty = self.s.type_from_declspec(&base);
-                // [dcl.enum]/2, [dcl.spec.auto.general]/5.
-                let at = base.type_loc.unwrap_or(base.loc);
-                fixed = Some(self.s.type_specifier_placeholder_check(ty, at));
-            } else {
-                self.error_here(DiagId::parse_expected_type);
-            }
-        }
+        let fixed = if keyword == TagKeyword::Enum { self.parse_enum_base() } else { None };
         let is_class = keyword != TagKeyword::Enum;
         if is_class
             && self.at(Punct::Less)
@@ -1266,17 +1293,7 @@ impl Parser<'_, '_> {
         if let (Some(q), Some((n, nloc)), TagUse::Reference | TagUse::Friend) = (qual, name, use_)
             && self.s.is_dependent_ctx(q.ctx)
         {
-            // `class-key T::X` with a dependent qualifier ([dcl.type.elab],
-            // [temp.dep.type]/6): a dependent name type with the class-key
-            // as its keyword, resolved (and its tag kind checked) at
-            // instantiation, as clang's `ActOnDependentTag`; with `friend`,
-            // a friend type ([class.friend]/3, libstdc++ generator:684
-            // `friend struct _Erased_promise::_Subyield_state;`).
-            let ty = self.s.act_dependent_name_at(q.nns, n, None, keyword, nloc);
-            if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
-                ds.invalid = true;
-                self.spec_error(&e, kw_loc);
-            }
+            self.dependent_tag_reference(ds, q.nns, (n, nloc), keyword, kw_loc);
             return;
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);

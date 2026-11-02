@@ -30,8 +30,8 @@ use kiln_source::fx::FxHashMap;
 use super::SpecialKind;
 use super::deletion::Selected;
 use crate::Sema;
-use crate::lookup::LookupKind;
 use crate::conv::{self, ConvCtx};
+use crate::lookup::LookupKind;
 use crate::type_diff::DiffArgs as _;
 
 /// An implicit special member being defined (clang's
