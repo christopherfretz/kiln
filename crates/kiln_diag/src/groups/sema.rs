@@ -11,6 +11,7 @@ AtomicMemoryOrdering = "atomic-memory-ordering" [];
 BindingInCondition = "binding-in-condition" [];
 BitfieldWidth = "bitfield-width" [];
 BracedScalarInit = "braced-scalar-init" [];
+BuiltinAssumeAlignedAlignment = "builtin-assume-aligned-alignment" [];
 C2yExtensions = "c2y-extensions" [];
 C99Designator = "c99-designator" [];
 CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
@@ -33,6 +34,8 @@ ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
 ExternInitializer = "extern-initializer" [];
 // ----- WP-197 (DR482 namespace extra qualification)
 ExtraQualification = "extra-qualification" [];
+FormatExtraArgs = "format-extra-args" [];
+FormatInsufficientArgs = "format-insufficient-args" [];
 GnuDesignator = "gnu-designator" [];
 GnuFoldingConstant = "gnu-folding-constant" [];
 GnuImaginaryConstant = "gnu-imaginary-constant" [];

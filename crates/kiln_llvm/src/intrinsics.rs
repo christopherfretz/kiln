@@ -397,6 +397,23 @@ pub fn fp_op(m: &mut Module, base: &str, ty: TypeId, arity: usize) -> FuncId {
     declare(m, &name, ty, &params, &[], Shape::Pure)
 }
 
+/// `T @llvm.powi.T.I(T, I)`: a floating-point `T` raised to an integer
+/// power of type `exp` (WP-282, `__builtin_powi`).
+pub fn powi(m: &mut Module, ty: TypeId, exp: TypeId) -> FuncId {
+    let name = overloaded_name(m, "llvm.powi", &[ty, exp]);
+    declare(m, &name, ty, &[(ty, &[]), (exp, &[])], &[], Shape::Pure)
+}
+
+/// `R @llvm.objectsize.R.p0(ptr, i1 immarg min, i1 immarg nullunknown,
+/// i1 immarg dynamic)` for an integer result `R` (WP-282,
+/// `__builtin_object_size`).
+pub fn objectsize(m: &mut Module, ret: TypeId) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.objectsize", &[ret, p]);
+    let imm: &[Attr] = &[Attr::Flag(ImmArg)];
+    declare(m, &name, ret, &[(p, &[]), (TypeId::I1, imm), (TypeId::I1, imm), (TypeId::I1, imm)], &[], Shape::Pure)
+}
+
 /// `i1 @llvm.is.fpclass.T(T, i32 immarg test)` for a floating-point `T`.
 pub fn is_fpclass(m: &mut Module, ty: TypeId) -> FuncId {
     let name = overloaded_name(m, "llvm.is.fpclass", &[ty]);

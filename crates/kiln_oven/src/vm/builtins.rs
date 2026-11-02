@@ -275,12 +275,44 @@ impl Oven {
                 })
             }
             bi::OVERFLOW => Ok(checked(sub, a, b)),
+            bi::OBJECT_SIZE => self.bi_object_size(sub, a as u64, b, t1),
             bi::BIT_CAST => {
                 let (to_mem, read) = (sub == bi::TO_MEM, sub == bi::READ_ONLY);
                 self.bit_cast(ast, a as u64, b as u64, OTy(t1), OTy(t2), to_mem, read)
             }
             _ => Err(Fault::Invalid),
         }
+    }
+
+    /// `bi::OBJECT_SIZE` (WP-282): a pointer that designates no object (a
+    /// null or function pointer, an unknown object) is not a constant.
+    fn bi_object_size(&self, sub: u32, p: u64, ty: u128, t: u32) -> Result<u128, Fault> {
+        let ty = (ty & 3) as u32;
+        if sub & bi::SIDE != 0 {
+            return Ok(if ty & 2 != 0 { 0 } else { u128::from(u64::MAX) });
+        }
+        let ptr = Ptr::decode(p);
+        if p == 0 || ptr.is_fn() {
+            return Err(Fault::Invalid);
+        }
+        let Some(a) = self.alloc_any(ptr) else { return Err(Fault::Invalid) };
+        // An object of incomplete type (`extern char a[];`) has no known size.
+        if matches!(self.types.kind(a.ty), TyKind::Opaque) {
+            return Err(Fault::Invalid);
+        }
+        let off = u64::from(ptr.off);
+        let size = u64::from(a.size);
+        let end = if ty & 1 == 0 {
+            size
+        } else {
+            let elem = self.designated(p, t)?;
+            let es = self.types.size(elem);
+            match self.types.extent(a.ty, off, ptr.past, elem) {
+                Some((start, n, _)) if es > 0 => start + n * es,
+                _ => size,
+            }
+        };
+        Ok(u128::from(end.saturating_sub(off)))
     }
 
     /// The type of the object `p` designates: `t`, or (`bi::DYN`, a
