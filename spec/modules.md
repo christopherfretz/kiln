@@ -193,8 +193,7 @@ predicate plus: a function that is *exported*, attached to a named module
 `M` and only reachable (its unit is not imported by the current one) is
 visible when it has the same innermost enclosing non-inline namespace as
 an associated entity attached to `M` (an associated class or enumeration;
-clang 22 considers classes only, a deviation in kiln's favour of the
-standard); hidden friends of associated classes are always visible. The
+clang 22 and 19 consider classes only: deviation 10); hidden friends of associated classes are always visible. The
 standard's /5 example: `f(x)` finds `R::f` through `R::X`, `f(x, S::Z())`
 does not consider `S::f` although `S` is associated
 (`basic.lookup.argdep/module-example.cpp`, `module-enum.cpp`). `R::f(x)`
@@ -454,6 +453,24 @@ part B (§9).
    module unit and an importer fails to link (`multiple definition of
    x@tm`); kiln follows the Itanium rule
    (`basic.stc.thread/module-tls-run.cpp`).
+10. **Deliberate, at every compat level (WP-396).** Module ADL
+    ([basic.lookup.argdep]/4) counts an associated *enumeration* attached
+    to `M`, as the standard says. clang 22 and 19 count associated
+    classes only. Both clangs agree, and spec/sema.md §1.1 keeps the
+    accepted language the same at every level, so there is no compat
+    gate. The difference is observable:
+    - `basic.lookup.argdep/module-enum.cpp`: `h(get_en())`, where `h` is
+      reachable through a scoped `P::En` of a non-visible module E, is
+      `use of undeclared identifier 'h'` in clang.
+    - `basic.lookup.argdep/module-enum-overload.cpp`: with an unscoped
+      `P::Un` and a visible `::h(int)`, kiln calls the exact match
+      `P::h(Un)` and exits 1, which is the standard's result. clang
+      calls `::h(int)` and exits 7. The same shape changes which
+      operator a flag enumeration's `|` uses in a module consumed
+      transitively.
+    - libc++ is unaffected: the `std` module exports declarations of its
+      global module fragment, which are attached to the global module,
+      so the /4 rule does not apply to them.
 
 ## Tests
 
