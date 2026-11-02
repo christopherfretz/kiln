@@ -2004,8 +2004,9 @@ impl Oven {
         init: bool,
         full: Option<&kiln_ast::Ast>,
     ) -> Result<(), Fault> {
-        // An empty class copies no byte (see `Op::ZeroInit`).
-        let size = if self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
+        // An empty class copies no byte (see `Op::ZeroInit`), a class
+        // no tail padding.
+        let size = if self.types.holds_no_data(ty) { 0 } else { self.types.copy_size(ty) };
         let (ss, sa, sa_alloc) = self.mem.check(src, size, false).map_err(|f| Fault::Mem {
             f,
             ak: ak::READ,

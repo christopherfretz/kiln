@@ -888,6 +888,11 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   'S(s)'" at the construct expression, "in call to 't.operator=(s)'" at
   the call), the call stack, and "subobject declared here" (WP-224,
   `tests/conformance/expr.const/constexpr-trivial-copy-uninit.cpp`).
+  `Copy` of a class writes its `dsize` bytes (`Types::copy_size`), not
+  its `sizeof`: a derived class's members may live in a base's tail
+  padding, and copying a base subobject must leave them alone; a
+  `memcpy`/`memmove` of class elements copies each the same way (WP-276,
+  `tests/conformance/class.copy.assign/trivial-copy-base-tail-padding.cpp`).
 
 **Object lifetime outside `std::allocator` storage — landed (WP-222).**
 `EndLife` aux 2 on a frame or `new` allocation not yet tracked makes it

@@ -110,6 +110,9 @@ pub(crate) struct Types {
     /// differently qualified elements (`const E[3]`, `E[3]`) are one
     /// type, as clang's `getUnqualifiedArrayType` makes them.
     const_arrays: FxHashMap<(OTy, u64), OTy>,
+    /// The `dsize` of each class whose data ends before its size (its
+    /// tail padding may hold a derived class's members).
+    data_sizes: FxHashMap<OTy, u64>,
 }
 
 /// Evaluates an integral constant already checked by sema (bit-field
@@ -178,6 +181,15 @@ impl Types {
 
     pub fn size(&self, t: OTy) -> u64 {
         self.infos[t.0 as usize].size
+    }
+
+    /// The bytes a trivial copy of an object of type `t` writes: a
+    /// class's `dsize`, without the tail padding a derived class may
+    /// reuse ([class.copy.ctor]/14 copies the base subobject, not the
+    /// derived members laid out in its padding; clang's
+    /// `handleTrivialCopy` copies the value); any other type's size.
+    pub fn copy_size(&self, t: OTy) -> u64 {
+        self.data_sizes.get(&t).copied().unwrap_or_else(|| self.size(t))
     }
 
     pub fn fields(&self, t: OTy) -> &[FieldInfo] {
@@ -529,6 +541,7 @@ impl Types {
             .collect();
         let layout = bridge.ensure_layout(def);
         let (size, align) = (layout.size, layout.align);
+        let dsize = layout.data_size;
         let offs: Vec<u64> = layout.fields.to_vec();
         let boffs: Vec<u64> = bdecls
             .iter()
@@ -539,6 +552,9 @@ impl Types {
         // Reserve the slot first so self-referential pointers terminate.
         let me = self.simple(c, size, align.max(1), TyKind::Opaque);
         self.map.insert(c, me);
+        if dsize < size && !union {
+            let _ = self.data_sizes.insert(me, dsize);
+        }
         let mut fields = Vec::with_capacity(fdecls.len());
         let (mut has_union, mut has_ptr) = (union, false);
         let mut has_vptr = poly;
