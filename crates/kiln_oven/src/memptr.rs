@@ -86,7 +86,11 @@ impl Oven {
 
     /// The offset of the direct base `base` in `cls` (0 for an empty one).
     fn direct_base(&self, cls: OTy, base: OTy) -> u64 {
-        self.types.fields(cls).iter().find(|f| f.base && f.ty == base).map_or(0, |f| f.offset)
+        let vb = self.types.vbase_start(cls);
+        self.types.fields(cls)[..vb]
+            .iter()
+            .find(|f| f.base && self.types.same_class(f.ty, base))
+            .map_or(0, |f| f.offset)
     }
 
     /// Interns the member pointer to `member` (a field or member

@@ -5222,7 +5222,7 @@ impl Sema<'_, '_> {
     /// applies it to every non-static member function): a `constexpr`
     /// member function defined outside an instantiation, in a class with
     /// virtual bases, is an error with a note per virtual base; the
-    /// function is invalid.
+    /// function is invalid. Before C++26 only (P3533R2).
     fn check_constexpr_virtual_base(&mut self, f: DeclId) {
         let kind = self.kind_of(f);
         let member = matches!(
@@ -5232,7 +5232,9 @@ impl Sema<'_, '_> {
                 | DeclKind::CXXDestructor
                 | DeclKind::CXXConversion
         );
+        // P3533R2 lifts the restriction in C++26.
         if !member
+            || self.std >= kiln_lex::Std::Cxx26
             || self.is_static_method(f)
             || !self.inst.stack.frames.is_empty()
             || self.ast.decls.get(f).has(DeclFlags::INVALID)

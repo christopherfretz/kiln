@@ -41,6 +41,7 @@ sema_static_assert_not_ice = Error (0) "static assertion expression is not an in
 sema_static_assert_requirement_failed = Error (1) "static assertion failed due to requirement '{0}'";
 sema_static_assert_requirement_failed_msg = Error (2) "static assertion failed due to requirement '{0}': {1}";
 sema_static_block_func = Error (0) "function declared in block scope cannot have 'static' storage class";
+sema_static_downcast_via_virtual = Error (3) "cannot cast {0} to {1} via virtual base {2}";
 sema_static_float_init = WarningError [StaticFloatInit] (1) "in-class initializer for static data member of type {0} requires 'constexpr' specifier";
 sema_static_member_anon_class = Error (2) "static data member '{0}' not allowed in anonymous {1}";
 sema_static_member_bad_init = Error (1) "static data member of type {0} must be initialized out of line";
