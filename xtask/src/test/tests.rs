@@ -189,6 +189,7 @@ fn seed_corpus_passes_with_clang() {
         flag(s.inst_report.is_some(), "inst-report");
         flag(s.requires_target.is_some(), "requires");
         flag(s.requires_clang.is_some(), "requires-clang");
+        flag(s.requires_clang_below.is_some(), "requires-clang-below");
     }
     let want = [
         "args",
@@ -216,6 +217,7 @@ fn seed_corpus_passes_with_clang() {
         "placeholder",
         "requires",
         "requires-clang",
+        "requires-clang-below",
         "run",
         "run-args",
         "run-stdin",
