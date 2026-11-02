@@ -175,9 +175,11 @@ impl Sema<'_, '_> {
                     .namespace(self.ast.first(ns))
                     .is_some_and(kiln_ast::decl::NamespaceData::is_inline);
                 if anonymous || !inline {
-                    let d = self
-                        .diag(DiagId::sema_abi_tag_namespace, attr.loc)
-                        .arg(if anonymous { 1u32 } else { 0 });
+                    let d = self.diag(DiagId::sema_abi_tag_namespace, attr.loc).arg(if anonymous {
+                        1u32
+                    } else {
+                        0
+                    });
                     self.emit(d);
                     continue;
                 }
