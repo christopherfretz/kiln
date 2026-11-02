@@ -125,7 +125,8 @@ pub(crate) fn unary_oper(op: UnaryOp) -> Option<OO> {
         U::Minus => OO::Minus,
         U::Not => OO::Tilde,
         U::LNot => OO::Exclaim,
-        U::Real | U::Imag | U::Extension | U::Coawait => return None,
+        U::Coawait => OO::Coawait,
+        U::Real | U::Imag | U::Extension => return None,
     })
 }
 

@@ -182,6 +182,52 @@ pub struct RangeForData {
     pub colon: Loc,
 }
 
+/// Side record of a `CoroutineBodyStmt` ([dcl.fct.def.coroutine]/5;
+/// clang's `CoroutineBodyStmt` slots): the function body as written and
+/// the statements and expressions Sema builds around it. Built only for
+/// a coroutine that is not a template pattern.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CoroutineBodyData {
+    /// The function body as written.
+    pub body: StmtId,
+    /// The promise object `__promise`.
+    pub promise: DeclId,
+    /// The `DeclStmt` declaring [`Self::promise`].
+    pub promise_stmt: StmtId,
+    /// `co_await __promise.initial_suspend()` (an implicit `CoawaitExpr`,
+    /// a full-expression).
+    pub init_suspend: ExprId,
+    /// `co_await __promise.final_suspend()`.
+    pub final_suspend: ExprId,
+    /// `__promise.unhandled_exception();` (an `ExprStmt`), run by the
+    /// implicit `catch (...)` around the body; `None` without exceptions.
+    pub on_exception: Option<StmtId>,
+    /// The implicit `co_return;` when the promise has `return_void`.
+    pub on_fallthrough: Option<StmtId>,
+    /// The allocation call `operator new(__builtin_coro_size(), ...)`.
+    pub allocate: ExprId,
+    /// The deallocation call `operator delete(__builtin_coro_free(
+    /// __builtin_coro_frame()), ...)`.
+    pub deallocate: ExprId,
+    /// `__promise.get_return_object()`: the initializer of the returned
+    /// object (converted to the return type when it is initialized
+    /// directly, [`Self::result_decl`] `None`).
+    pub return_value: ExprId,
+    /// The `__coro_gro` variable holding the result of
+    /// `get_return_object()` when its type is not the return type.
+    pub result_decl: Option<DeclId>,
+    /// The return to the caller at the first suspension: `return
+    /// __coro_gro;` (converted to the return type) with a
+    /// [`Self::result_decl`], `return get_return_object();` when its type
+    /// is the return type, `None` when the function returns `void`.
+    pub return_stmt: Option<StmtId>,
+    /// `return P::get_return_object_on_allocation_failure();`.
+    pub return_on_alloc_failure: Option<StmtId>,
+    /// The parameter copies ([dcl.fct.def.coroutine]/13): a `ListId` of
+    /// `DeclStmt`s, one per parameter, in parameter order.
+    pub param_moves: ListId,
+}
+
 /// One operand of a `GCCAsmStmt` ([dcl.asm], GNU extended asm): an
 /// output or input `[name] "constraint" (expr)`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -247,6 +293,7 @@ pub struct StmtArena {
     range_fors: Vec<RangeForData>,
     asms: Vec<AsmData>,
     asm_operands: Vec<AsmOperand>,
+    coros: Vec<CoroutineBodyData>,
 }
 
 impl Default for StmtArena {
@@ -288,6 +335,22 @@ impl Default for StmtArena {
                 srclocs: ListId::EMPTY,
             }],
             asm_operands: Vec::new(),
+            coros: vec![CoroutineBodyData {
+                body: ds,
+                promise: DeclId::new(DeclId::MAX_INDEX),
+                promise_stmt: ds,
+                init_suspend: de,
+                final_suspend: de,
+                on_exception: None,
+                on_fallthrough: None,
+                allocate: de,
+                deallocate: de,
+                return_value: de,
+                result_decl: None,
+                return_stmt: None,
+                return_on_alloc_failure: None,
+                param_moves: ListId::EMPTY,
+            }],
         }
     }
 }
@@ -344,6 +407,9 @@ impl StmtArena {
     pub(crate) fn push_range_for(&mut self, x: RangeForData) -> u32 {
         push_side(&mut self.range_fors, x)
     }
+    pub(crate) fn push_coro(&mut self, x: CoroutineBodyData) -> u32 {
+        push_side(&mut self.coros, x)
+    }
     pub(crate) fn push_asm(&mut self, mut x: AsmData, ops: &[AsmOperand]) -> u32 {
         x.operands = self.asm_operands.len() as u32;
         assert!(
@@ -396,6 +462,30 @@ impl StmtArena {
     /// The side record of a `CXXForRangeStmt`.
     pub fn range_for_data(&self, s: StmtId) -> &RangeForData {
         &self.range_fors[self.expect(s, &[StmtKind::CXXForRangeStmt]).a as usize]
+    }
+
+    /// The side record of a `CoroutineBodyStmt`.
+    pub fn coroutine_body(&self, s: StmtId) -> &CoroutineBodyData {
+        &self.coros[self.expect(s, &[StmtKind::CoroutineBodyStmt]).a as usize]
+    }
+
+    /// The operand of a `CoreturnStmt` as written (`None` for
+    /// `co_return;`).
+    pub fn coreturn_operand(&self, s: StmtId) -> Option<ExprId> {
+        ExprId::from_raw(self.expect(s, &[StmtKind::CoreturnStmt]).a)
+    }
+
+    /// The promise call of a `CoreturnStmt` (`__promise.return_value(e)`
+    /// or `__promise.return_void()`); `None` in a template pattern or
+    /// after an error.
+    pub fn coreturn_promise_call(&self, s: StmtId) -> Option<ExprId> {
+        ExprId::from_raw(self.expect(s, &[StmtKind::CoreturnStmt]).b)
+    }
+
+    /// Whether a `CoreturnStmt` is the implicit `co_return;` at the end
+    /// of a coroutine body.
+    pub fn coreturn_is_implicit(&self, s: StmtId) -> bool {
+        self.expect(s, &[StmtKind::CoreturnStmt]).aux & 1 != 0
     }
 
     /// The side record of a `GCCAsmStmt`.
@@ -490,7 +580,7 @@ impl StmtArena {
         self.rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn rows(&self) -> [VecDims; 8] {
+    fn rows(&self) -> [VecDims; 9] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("ifs", &self.ifs),
@@ -500,6 +590,7 @@ impl StmtArena {
             VecDims::of("range_fors", &self.range_fors),
             VecDims::of("asms", &self.asms),
             VecDims::of("asm_operands", &self.asm_operands),
+            VecDims::of("coros", &self.coros),
         ]
     }
 }

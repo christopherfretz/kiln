@@ -260,8 +260,19 @@ ourselves is what makes our text canonical): `memcpy`, `memmove`, `memset`,
 `lifetime_start`/`_end`, `trap`, `debugtrap`, `with_overflow` (six ops),
 `va_start`/`va_end`/`va_copy`, `ptrmask` (`llvm.ptrmask.p0.i64`), `stacksave`/`stackrestore`,
 `threadlocal_address`, `eh_typeid_for`, `expect`, `assume`, `abs`, `ctlz`,
-`cttz`, `ctpop`, `bswap`, `fabs`, `dbg_declare`/`dbg_value`. Each helper
-returns the existing declaration if present.
+`cttz`, `ctpop`, `bswap`, `fabs`, `dbg_declare`/`dbg_value`, and the
+switched-resume coroutine set (`coro(m, Coro::*, size_ty)`, WP-351):
+`llvm.coro.id`, `.alloc`, `.size.iN`, `.align.iN`, `.begin`, `.frame`,
+`.save`, `.suspend`, `.end`, `.free`, `.resume`, `.destroy`, `.done`,
+`.promise`, `.noop`, with clang 19's parameter attributes and attribute
+sets. Each helper returns the existing declaration if present.
+
+A module that uses the coroutine intrinsics is **pre-split** IR: it
+verifies and is an `opt -S` fixed point like any other (§7), but `llc`
+cannot code-generate it; LLVM's CoroEarly, CoroSplit and CoroCleanup
+passes must run first (spec/driver.md "Coroutine lowering"). Functions
+holding `llvm.coro.id` carry the `presplitcoroutine` flag attribute,
+which CoroSplit removes.
 
 The generic `intrinsic(m, name, fn_ty)` declares any other intrinsic but
 cannot know its attributes; the caller must set `attrs` to LLVM's
