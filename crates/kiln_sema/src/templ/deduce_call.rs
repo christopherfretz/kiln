@@ -117,9 +117,11 @@ impl Sema<'_, '_> {
         for &t in tys {
             let Some(pat) = crate::templ::pack::type_pattern(self, t) else { continue };
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
-                let mut sub = Substituter::new(s, levels);
-                sub.partial_pack = Some(partial);
-                let _ = sub.expand_pattern_at(None, |sub| sub.ty(pat, loc));
+                s.in_template_context(ft, |s| {
+                    let mut sub = Substituter::new(s, levels);
+                    sub.partial_pack = Some(partial);
+                    let _ = sub.expand_pattern_at(None, |sub| sub.ty(pat, loc));
+                });
             });
             if let Some(((), Err(Some(diag)))) = r
                 && diag.id() == Some(DiagId::sema_pack_length_mismatch_partial)
@@ -392,38 +394,40 @@ impl Sema<'_, '_> {
             }
             let sugared_levels = self.prior_levels(ft, depth, &sugared);
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
-                let mut sub = Substituter::new(s, &sugared_levels);
-                sub.final_subst = true;
-                // A function parameter pack keeps its pattern: the
-                // explicitly given prefix may be extended by deduction.
-                // A non-trailing one is a non-deduced context
-                // ([temp.deduct.type]/5.7): its explicit elements are
-                // all of it (clang keeps the expansion, unexpanded, in
-                // the parameter count).
-                let mut v = Vec::with_capacity(tys.len());
-                let mut kept = 0usize;
-                for (j, &t) in tys.iter().enumerate() {
-                    let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
-                        let t = sub.ty(t, loc)?;
-                        v.push(sub.param_type(t, loc)?);
-                        continue;
-                    };
-                    if j + 1 == tys.len() {
-                        v.push(t);
-                        continue;
-                    }
-                    match sub.expand_pattern_at(None, |sub| sub.ty(pat, loc))? {
-                        crate::templ::pack::Expansion::Elements(e) => {
-                            for t in e {
-                                v.push(sub.param_type(t, loc)?);
-                            }
-                            kept += 1;
+                s.in_template_context(ft, |s| {
+                    let mut sub = Substituter::new(s, &sugared_levels);
+                    sub.final_subst = true;
+                    // A function parameter pack keeps its pattern: the
+                    // explicitly given prefix may be extended by deduction.
+                    // A non-trailing one is a non-deduced context
+                    // ([temp.deduct.type]/5.7): its explicit elements are
+                    // all of it (clang keeps the expansion, unexpanded, in
+                    // the parameter count).
+                    let mut v = Vec::with_capacity(tys.len());
+                    let mut kept = 0usize;
+                    for (j, &t) in tys.iter().enumerate() {
+                        let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
+                            let t = sub.ty(t, loc)?;
+                            v.push(sub.param_type(t, loc)?);
+                            continue;
+                        };
+                        if j + 1 == tys.len() {
+                            v.push(t);
+                            continue;
                         }
-                        crate::templ::pack::Expansion::Unexpanded(_) => v.push(t),
+                        match sub.expand_pattern_at(None, |sub| sub.ty(pat, loc))? {
+                            crate::templ::pack::Expansion::Elements(e) => {
+                                for t in e {
+                                    v.push(sub.param_type(t, loc)?);
+                                }
+                                kept += 1;
+                            }
+                            crate::templ::pack::Expansion::Unexpanded(_) => v.push(t),
+                        }
                     }
-                }
-                let f = if whole { Some(sub.ty(pfn, loc)?) } else { None };
-                Ok::<_, crate::templ::subst::SubstFail>((v, f, kept))
+                    let f = if whole { Some(sub.ty(pfn, loc)?) } else { None };
+                    Ok::<_, crate::templ::subst::SubstFail>((v, f, kept))
+                })
             });
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
