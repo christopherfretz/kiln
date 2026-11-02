@@ -32,6 +32,20 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         &self.sema.ast
     }
 
+    fn cxx_year(&self) -> u32 {
+        use kiln_lex::Std;
+        match self.sema.std {
+            Std::Cxx98 => 1998,
+            Std::Cxx03 => 2003,
+            Std::Cxx11 => 2011,
+            Std::Cxx14 => 2014,
+            Std::Cxx17 => 2017,
+            Std::Cxx20 => 2020,
+            Std::Cxx23 => 2023,
+            Std::Cxx26 => 2026,
+        }
+    }
+
     fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
         // Write-once: a re-evaluation of the same initializer (a fold,
         // then the check) computes the same value.
@@ -57,6 +71,14 @@ impl SemaBridge for Bridge<'_, '_, '_> {
             return self.sema.defined_body(f);
         }
         self.sema.instantiate_for_oven(f, oven)
+    }
+
+    fn is_nothrow(&mut self, f: DeclId, oven: &mut Oven) -> bool {
+        if let Some(n) = self.sema.known_nothrow(f) {
+            return n;
+        }
+        let at = self.sema.inst.eval_loc.unwrap_or_else(|| self.sema.ast.decls.get(f).loc());
+        self.sema.lend_oven(oven, |s| s.resolve_nothrow(f, at))
     }
 
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout {

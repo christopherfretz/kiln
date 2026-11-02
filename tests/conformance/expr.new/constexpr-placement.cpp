@@ -1,15 +1,12 @@
-// [expr.const]/5.20: only a replaceable global allocation function may be
-// called in a constant evaluation. A placement 'operator new' is not one
-// (clang 19 does not implement P2747), and clang 19 does not support an
-// alignment argument either.
+// [expr.const]/5.18 (C++26, P2747R2): the reserved placement 'operator new'
+// may be evaluated (clang 22's VisitCXXNewExpr); any other placement form,
+// here an alignment argument, is not supported in a constant expression.
 //@ expect: compile-fail
+//@ requires: clang>=22
 //@ strict-diags
-//@ diag: 23:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 20:12 note "call to placement 'operator new'"
-//@ diag: 23:15 note "in call to 'place()'"
-//@ diag: 29:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 26:12 note "this placement new expression is not yet supported in constant expressions"
-//@ diag: 29:15 note "in call to 'aligned()'"
+//@ diag: 26:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 23:12 note "this placement new expression is not supported in constant expressions "
+//@ diag: 26:15 note "in call to 'aligned()'"
 void *operator new(unsigned long, void *p) noexcept { return p; }
 namespace std {
 enum class align_val_t : unsigned long {};

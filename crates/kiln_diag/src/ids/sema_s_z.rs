@@ -74,10 +74,14 @@ sema_subscript_value = Error (0) "subscripted value is not an array, pointer, or
 sema_sve_type_without_sve = Error (1) "SVE vector type {0} cannot be used in a target without sve";
 sema_switch_bool_condition = Warning [SwitchBool] (0) "switch condition has boolean value";
 sema_switch_def_missing_case = WarningOff [SwitchEnum] (5) "{0:enumeration value {1} not explicitly handled in switch|enumeration values {1} and {2} not explicitly handled in switch|enumeration values {1}, {2}, and {3} not explicitly handled in switch|{4} enumeration values not explicitly handled in switch: {1}, {2}, {3}...}";
+// [stmt.switch]/2, [conv.general]/5 (WP-364)
+sema_switch_explicit_conversion = Error (2) "switch condition type {0} requires explicit conversion to {1}";
+sema_switch_incomplete_class_type = Error (1) "switch condition has incomplete class type {0}";
 sema_switch_into_protected_scope = Error (0) "cannot jump from switch statement to this case label";
 sema_switch_missing_case = Warning [Switch] (5) "{0:enumeration value {1} not handled in switch|enumeration values {1} and {2} not handled in switch|enumeration values {1}, {2}, and {3} not handled in switch|{4} enumeration values not handled in switch: {1}, {2}, {3}...}";
 sema_switch_missing_case_for_condition = Warning (1) "no case matching constant switch condition '{0}'";
 sema_switch_missing_default = WarningOff [SwitchDefault] (0) "'switch' missing 'default' label";
+sema_switch_multiple_conversions = Error (1) "multiple conversions from switch condition type {0} to an integral or enumeration type";
 sema_switch_not_in_enum = Warning [Switch] (1) "case value not in enumerated type {0}";
 sema_switch_unreachable_default = WarningOff [CoveredSwitchDefault] (0) "default label in switch which covers all enumeration values";
 sema_temp_dtor_access = Error (2) "temporary of type {0} has {1:private|protected} destructor";

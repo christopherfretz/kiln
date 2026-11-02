@@ -231,6 +231,17 @@ const P1467_STDCPP: &[&str] = &[
     "__STDCPP_FLOAT64_T__",
 ];
 
+/// Feature-test macros for what kiln implements beyond clang 19's
+/// predefines (docs/status/cxx-features.md, spec/pp.md "clang
+/// compatibility level"): (minimum `__cplusplus`, name, value). Applied in
+/// C++ at every compatibility level.
+const KILN_FEATURES: &[(u64, &str, &str)] = &[
+    // P2747 constexpr placement new (WP-357).
+    (202_400, "__cpp_constexpr", "202406L"),
+    // P3068 constexpr exceptions (WP-357); withdrawn with -fno-exceptions.
+    (202_400, "__cpp_constexpr_exceptions", "202411L"),
+];
+
 /// The driver-injected `-D` that clang's driver appends after the user's
 /// (it follows the unwind-table defaults on Linux).
 const DRIVER_DEFINES: &[&str] = &["__GCC_HAVE_DWARF2_CFI_ASM"];
@@ -317,6 +328,25 @@ fn apply_p1467(m: &mut BTreeMap<String, String>) {
 
 /// Applies the dialect and flag deltas (measured against clang 19; see
 /// `resource/README.md`).
+/// The feature-test macros of features kiln implements beyond clang 19
+/// (docs/status/cxx-features.md), before the flags that remove them:
+/// P1061 structured binding packs (C++17 on) and P2893 variadic friends
+/// (every C++ mode) at clang 22's values in the same modes, and
+/// `KILN_FEATURES` (P2747, P3068) by `__cplusplus`.
+fn kiln_features(m: &mut BTreeMap<String, String>) {
+    let cplusplus =
+        m.get("__cplusplus").and_then(|v| v.trim_end_matches('L').parse::<u64>().ok()).unwrap_or(0);
+    for &(min, n, v) in KILN_FEATURES {
+        if cplusplus >= min {
+            set(m, n, v);
+        }
+    }
+    if m.contains_key("__cpp_structured_bindings") {
+        set(m, "__cpp_structured_bindings", "202411L");
+    }
+    set(m, "__cpp_variadic_friend", "202403L");
+}
+
 fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     if cfg.gnu {
         m.remove("__STRICT_ANSI__");
@@ -345,9 +375,11 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         }
     }
     if cfg.cplusplus {
+        kiln_features(m);
         if !cfg.exceptions {
             m.remove("__EXCEPTIONS");
             m.remove("__cpp_exceptions");
+            m.remove("__cpp_constexpr_exceptions");
         }
         if !cfg.rtti {
             m.remove("__GXX_RTTI");
@@ -387,14 +419,6 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
             set(m, "__cpp_explicit_this_parameter", "202110L");
         }
         apply_p1467(m);
-        // Features kiln implements beyond clang 19, at clang 22's values
-        // in the same modes (docs/status/cxx-features.md): P1061
-        // structured binding packs (C++17 on) and P2893 variadic friends
-        // (every C++ mode).
-        if m.contains_key("__cpp_structured_bindings") {
-            set(m, "__cpp_structured_bindings", "202411L");
-        }
-        set(m, "__cpp_variadic_friend", "202403L");
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {
         m.remove(n);
@@ -544,6 +568,28 @@ mod tests {
         ] {
             assert!(s.contains(&format!("#define {here}\n")), "{here}");
         }
+    }
+
+    /// kiln's own feature-test macros (P2747, P3068) at C++26, at every
+    /// compatibility level, and not before C++26 or without exceptions.
+    #[test]
+    fn kiln_constexpr_feature_macros() {
+        let b26 = "#define __cplusplus 202400L\n#define __cpp_constexpr 202306L\n";
+        let b23 = "#define __cplusplus 202302L\n#define __cpp_constexpr 202211L\n";
+        let mut cfg = PredefConfig::new(true);
+        for compat in [ClangCompat::Clang19, ClangCompat::Clang22] {
+            cfg.clang_compat = compat;
+            let s = build_predefines(b26, &cfg, &[]);
+            assert!(s.contains("#define __cpp_constexpr 202406L\n"), "{s}");
+            assert!(s.contains("#define __cpp_constexpr_exceptions 202411L\n"), "{s}");
+        }
+        let s = build_predefines(b23, &cfg, &[]);
+        assert!(s.contains("#define __cpp_constexpr 202211L\n"), "{s}");
+        assert!(!s.contains("__cpp_constexpr_exceptions"), "{s}");
+        cfg.exceptions = false;
+        let s = build_predefines(b26, &cfg, &[]);
+        assert!(!s.contains("__cpp_constexpr_exceptions"), "{s}");
+        assert!(s.contains("#define __cpp_constexpr 202406L\n"), "{s}");
     }
 
     /// `-fsigned-char` removes `__CHAR_UNSIGNED__` (the `AArch64` default),

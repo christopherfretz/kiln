@@ -2,20 +2,22 @@
 // constant destruction: its destruction, evaluated at the end of the
 // initialization, must be a constant expression. The destructor runs with
 // the object no longer const (it may modify the members).
+// Pinned to C++23: in C++26 a caught or uncaught throw is evaluated (P3068).
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 22:13 error "constexpr variable 'a1' must have constant destruction"
-//@ diag: 20:45 note "a constant expression cannot modify an object that is visible outside that expression"
-//@ diag: 22:13 note "in call to 'a1.~A()'"
-//@ diag: 28:13 error "constexpr variable 'arr' must have constant destruction"
-//@ diag: 20:45 note "a constant expression cannot modify an object that is visible outside that expression"
-//@ diag: 28:13 note "in call to 'arr[1].~A()'"
-//@ diag: 36:13 error "constexpr variable 'y1' must have constant destruction"
-//@ diag: 34:47 note "subexpression not valid in a constant expression"
-//@ diag: 36:13 note "in call to 'y1.~Y()'"
-//@ diag: 37:33 error "constexpr variable 'yy' must have constant destruction"
-//@ diag: 34:47 note "subexpression not valid in a constant expression"
-//@ diag: 37:33 note "in call to 'yy.~Y()'"
+//@ diag: 24:13 error "constexpr variable 'a1' must have constant destruction"
+//@ diag: 22:45 note "a constant expression cannot modify an object that is visible outside that expression"
+//@ diag: 24:13 note "in call to 'a1.~A()'"
+//@ diag: 30:13 error "constexpr variable 'arr' must have constant destruction"
+//@ diag: 22:45 note "a constant expression cannot modify an object that is visible outside that expression"
+//@ diag: 30:13 note "in call to 'arr[1].~A()'"
+//@ diag: 38:13 error "constexpr variable 'y1' must have constant destruction"
+//@ diag: 36:47 note "subexpression not valid in a constant expression"
+//@ diag: 38:13 note "in call to 'y1.~Y()'"
+//@ diag: 39:33 error "constexpr variable 'yy' must have constant destruction"
+//@ diag: 36:47 note "subexpression not valid in a constant expression"
+//@ diag: 39:33 note "in call to 'yy.~Y()'"
 int g;
 struct A { int n; constexpr ~A() { if (n) g = 1; } };
 constexpr A a0{0};

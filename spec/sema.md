@@ -2110,10 +2110,12 @@ diagnostics and IR.
     condition, then `emit_binding_vars`, clang
     `MaybeEmitDeferredVarDeclInit`) and the Oven (`cond_bindings`) emit
     a tuple-like binding's holding variable (its `get` call) after the
-    test, for `if`, `while` and `for`, whatever the outcome. A `switch`
-    condition of class type is not supported (no class-to-integral
-    conversion in `act_on_start_switch`). Tests:
-    `dcl.struct.bind/p0963-binding-condition*.cpp`.
+    test, for `if`, `while`, `for` and `switch`, whatever the outcome.
+    A `switch` condition is `e` converted to an integral or enumeration
+    type by its conversion function (the class-type rule under
+    `switch` in §7, WP-364), likewise before the bindings. Tests:
+    `dcl.struct.bind/p0963-binding-condition*.cpp`,
+    `dcl.struct.bind/p0963-switch-condition.cpp`.
   - Only `static`, `thread_local`, `auto` and cv are allowed
     ([dcl.pre]/6). Another storage class, `constexpr`, `consteval`,
     `constinit` or `inline` is `decomposition declaration cannot be
@@ -3772,6 +3774,19 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `parse_qualified_type_rest`). At block scope the statement is
   parsed as an expression, as clang does. Test:
   `tests/conformance/temp.names/no-template-named-qualified.cpp`.
+  An unqualified decl-specifier `X<...>` whose `X` is undeclared is a
+  template-name by [temp.names]/3.3 (P0846: an unqualified-id followed by
+  `<` whose lookup finds nothing), so it gets clang's "no template named
+  'X'" (`sema_no_template_named`; clang `ParseImplicitInt`) instead of
+  "expected unqualified-id": at namespace or class scope always, at block
+  scope when a declarator follows the argument list
+  (`undeclared<int> x;`; the tentative parse takes `X<...> ident` as a
+  declaration). The argument list is parsed and dropped, the type is
+  `int` with the specifier marked invalid, and the declarators are not
+  diagnosed again (`kiln_parse` `undeclared_template_type`,
+  `undeclared_template_id_before_ident`; libc++
+  `locale.stdcvt/remove.verify.cpp`, WP-358). Test:
+  `tests/conformance/temp.names/undeclared-template-id-type.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.
@@ -3843,6 +3858,16 @@ Each rule names the libc++ test it fixed and its corpus test.
     (`TypeNames::preferred_name`, `Ast::preferred_name_of`), with scope
     unless printed among a written template-id's arguments. This applies
     in C++ printing only.
+  - Attachment (clang): a specialization takes the attribute only when
+    it is instantiated from a primary template that has it
+    (`instantiate_class`), or when a template-id names it while it is
+    still undeclared after the attribute exists (`class_template_type`).
+    Until then it prints as the template-id: a typedef written before
+    the attribute does not attach it, so an uninstantiated
+    `basic_string<char>` prints `s::basic_string<char>`.
+    `TemplateTables::mark_preferred_named` records the attachment;
+    `Ast::preferred_name_of` reads it (WP-366). Test:
+    `tests/conformance/dcl.attr/preferred-name-attach-rule.cpp`.
   
   The pair/array NTTP tests print `std::string`. Test:
   `tests/conformance/dcl.attr/preferred-name.cpp`.
@@ -3964,6 +3989,15 @@ Each rule names the libc++ test it fixed and its corpus test.
     return value; an argument adds its "passing argument" note), no
     `-Wbraced-scalar-init`, and narrowing checked on the user
     conversion's result
+  - a non-aggregate class parameter copy-list-initialized from a braced
+    argument (`f({1})`, a default argument, a member call) is constructed
+    from the list; when the constructor chosen is explicit ("chosen
+    constructor is explicit in copy-initialization" + "explicit
+    constructor declared here") or deleted, the error ends with the
+    "passing argument to parameter 'p' here" note (clang
+    `PrintInitLocationNote`; `list_param_note`, taken by the outermost
+    list constructor call only, so an element's own construction does
+    not carry it; WP-366)
 - **Designators** (WP-192; clang `SemaInit.cpp`). The parser reads
   `.name`, nested `.a.b`, `[i]` (C99), the GNU range `[a ... b]`
   (WP-193; `-Wgnu-designator`, an Extension shown under `-pedantic`, at
@@ -4259,6 +4293,38 @@ Each rule names the libc++ test it fixed and its corpus test.
     are substituted the same way at instantiation.
 - **`switch`:**
   - integral promotion of the condition
+  - a condition of class type ([stmt.switch]/2, [conv.general]/5;
+    `switch_conv.rs`, clang `PerformContextualImplicitConversion`
+    with the C++14 rules, WP-364) is contextually implicitly converted
+    before promotion. All diagnostics are at the `switch` keyword:
+    1. An incomplete class (after instantiating a specialization) is
+       `switch condition has incomplete class type 'T'` with the
+       `forward declaration` note.
+    2. The visible conversion functions (`conversion_functions_all`)
+       whose non-reference result type is integral or enumeration
+       (scoped included) are collected; a conversion function template
+       is kept but contributes no target type. Explicit ones are set
+       aside.
+    3. The non-explicit, non-template ones must agree on one
+       cv-unqualified target `T`; otherwise `multiple conversions from
+       switch condition type 'C' to an integral or enumeration type`
+       with one `conversion to {integral|enumeration} type 'U'` note per
+       conversion function (at its name).
+    4. Overload resolution ([over.match.conv]) among the non-explicit
+       matching ones (templates deduced against `T`) picks the function
+       called (`call_conversion_function`), then a standard conversion
+       to `T` (so a `const int&` result is read). An ambiguity is the
+       same `multiple conversions` error.
+    5. With none viable (none, deleted, only templates, a non-viable
+       object qualifier) and exactly one explicit matching non-template
+       conversion function: `switch condition type 'C' requires
+       explicit conversion to 'U'` plus the note, and that function is
+       called (recovery). Otherwise the generic `statement requires
+       expression of integer type ('C' invalid)`.
+    The converted condition then gets `-Wswitch-bool` and promotion
+    like any other, and `-Wswitch` sees an enumeration result. Codegen
+    and the Oven evaluate it once. Tests:
+    `stmt.switch/class-condition-{diags,run}.cpp`.
   - duplicate `case` values (with a note)
   - multiple `default` labels
   - `case` values converted to the promoted type
@@ -4954,6 +5020,23 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     (`is_constant_initialized`).
 
   A reference is usable when it binds to a static lvalue.
+
+  From C++23 on (P2280, a DR; WP-357) a reference that is not usable
+  (a parameter named outside its call, an `extern` reference, one with a
+  non-constant initializer) may still be *named* in a constant
+  expression: the Oven binds it to an object of unknown value and
+  diagnoses only accesses of that object, its dynamic type, address
+  comparisons and a constant result referring to it (spec/oven.md
+  "Unknown references"). Sema passes the language mode through
+  `SemaBridge::cxx_year`.
+- **Exceptions** (C++26, P3068; WP-357): a throw-expression and
+  try-blocks are evaluated by the Oven (spec/oven.md "Exceptions"). An
+  exception leaving a non-throwing function ends the evaluation; the
+  Oven asks `SemaBridge::is_nothrow(f)`, which answers from the resolved
+  exception specification (`Sema::known_nothrow`) and otherwise resolves
+  a deferred or uninstantiated one first (`Sema::resolve_nothrow`, at the
+  evaluation's location, lending the Oven for nested evaluation of a
+  `noexcept(expr)`).
 - **Failures:**
   - The primary diagnostic is sema's, at the site, as clang reports it
     (for example `static assertion expression is not an integral

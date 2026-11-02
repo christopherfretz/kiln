@@ -1030,9 +1030,12 @@ impl Sema<'_, '_> {
                 if call.reject_explicit && self.fn_spec(m).is_explicit() {
                     let note =
                         self.diag(DiagId::note_explicit_ctor_here, self.ast.decls.get(m).loc());
-                    let msg = self
+                    let mut msg = self
                         .diag(DiagId::sema_ctor_explicit_copy_list, sites.deleted)
                         .with_note(note);
+                    if let DeletedAs::Param(n) = sites.deleted_as {
+                        msg = msg.with_note(n);
+                    }
                     self.emit(msg);
                     return None;
                 }

@@ -1068,6 +1068,7 @@ impl Parser<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per name class; the arms delegate
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
@@ -1167,6 +1168,11 @@ impl Parser<'_, '_> {
                 let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
                 true
             }
+            Some((end, NameClass::Undeclared, name))
+                if end == start + 1 && self.undeclared_template_type(end, ctx) =>
+            {
+                self.undeclared_template_spec(ds, name, loc)
+            }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
                 if !self.unknown_type_follows(end, ctx) {
                     return false;
@@ -1214,6 +1220,36 @@ impl Parser<'_, '_> {
                     Self::punct_of(next),
                     Some(Punct::LParen | Punct::ColonColon | Punct::Less)
                 ))
+    }
+
+    /// `foo<args> x` with `foo` undeclared ([`Parser::undeclared_template_type`]):
+    /// "no template named", the arguments parsed and dropped, and an
+    /// invalid `int` specifier (clang's `ParseImplicitInt` with
+    /// `IsTemplateName`).
+    fn undeclared_template_spec(&mut self, ds: &mut DeclSpec, name: Symbol, loc: Loc) -> bool {
+        let text = self.s.ast.symbols().as_str(name).to_owned();
+        let d = self.s.diag(DiagId::sema_no_template_named, loc).arg(text);
+        self.emit(d);
+        self.bump();
+        let _ = self.parse_template_arg_list();
+        ds.invalid = true;
+        ds.type_error = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
+        true
+    }
+
+    /// True if the undeclared unqualified name before token `end` starts
+    /// a template-id meant as a type ([temp.names]/3.3: lookup finding
+    /// nothing before `<` makes it a template-name): at namespace or
+    /// class scope only a declaration can follow, elsewhere a declarator
+    /// follows the argument list ([`Parser::unknown_type_follows`]).
+    fn undeclared_template_type(&self, end: usize, ctx: DeclaratorContext) -> bool {
+        if Self::punct_of(self.tok_at(end)) != Some(Punct::Less) {
+            return false;
+        }
+        let Some((close, false)) = self.skip_template_args(end) else { return false };
+        matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+            || self.unknown_type_follows(close + 1, ctx)
     }
 
     /// True if an unknown qualified name in a decl-specifier, ending
@@ -2240,6 +2276,7 @@ impl Parser<'_, '_> {
                 }
             }
             p.range = (start, self.prev_end());
+            let pack_like = pd.ellipsis.is_some() || self.s.has_unexpanded_pack(p.ty);
             params.push(p);
             if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
                 // [dcl.fct]/3, [depr.ellipsis.comma] (C++26, P3176): a
@@ -2251,6 +2288,9 @@ impl Parser<'_, '_> {
                         .diag(DiagId::parse_deprecated_missing_comma_before_ellipsis, ellipsis);
                     self.emit(w);
                 }
+                if pack_like {
+                    self.misplaced_ellipsis_vararg(&pd, ellipsis);
+                }
                 variadic = true;
                 break;
             }
@@ -2259,6 +2299,28 @@ impl Parser<'_, '_> {
             }
         }
         (params, variadic)
+    }
+
+    /// [dcl.fct]/3 (P3176): the varargs `...` at `ellipsis` follows a
+    /// parameter that declares, or looks like it was meant to declare, a
+    /// function parameter pack (`Ts......`): clang's
+    /// `-Wambiguous-ellipsis` with a note at the pack's own `...` (or
+    /// where it would go) and the insert-a-comma note.
+    fn misplaced_ellipsis_vararg(&mut self, pd: &Declarator, ellipsis: Loc) {
+        let mut w = self
+            .s
+            .diag(DiagId::parse_misplaced_ellipsis_vararg, ellipsis)
+            .arg(if pd.ellipsis.is_some() { "1" } else { "0" });
+        let note = if let Some(at) = pd.ellipsis {
+            self.s.diag(DiagId::note_misplaced_ellipsis_vararg_existing_ellipsis, at)
+        } else {
+            let (sel, at) = pd.name.map_or(("1", pd.loc), |(_, at)| ("0", at));
+            self.s.diag(DiagId::note_misplaced_ellipsis_vararg_add_ellipsis, at).arg(sel)
+        };
+        w = w.with_note(note);
+        let w =
+            w.with_note(self.s.diag(DiagId::note_misplaced_ellipsis_vararg_add_comma, ellipsis));
+        self.emit(w);
     }
 
     /// The placeholders of parameter `ds pd` (which started at `start`):

@@ -152,9 +152,25 @@ impl Oven {
             // function, at the member name.
             site.loc = ast.exprs.get(m).loc();
         }
+        if let Fault::Uncaught { obj, ty, what } = &fault {
+            // At the exception's throw, without a call stack (clang's
+            // `note_constexpr_uncaught_exception`; P3068).
+            let note = self.uncaught_note(ast, site.e, *obj, *ty, what.as_deref());
+            return vec![Note::new(site.loc, note)];
+        }
         let mut extra = Vec::new();
         let mut frame = None;
         let (loc, msg) = match fault {
+            Fault::Uncaught { .. } => (site.loc, String::new()),
+            Fault::NoexceptExit => (site.loc, "uncaught exception in noexcept function".into()),
+            Fault::RethrowNone => (site.loc, "rethrow with no active exception".into()),
+            Fault::ThrowWhileActive { prev } => {
+                extra.push(Note::new(
+                    self.site(prev as usize).loc,
+                    "currently active exception thrown here",
+                ));
+                (site.loc, "throw while another exception is already active".into())
+            }
             Fault::Trap(i) => {
                 let t = &self.traps[i as usize];
                 extra.extend(t.extra.iter().cloned());
@@ -239,6 +255,15 @@ impl Oven {
                 site.loc,
                 format!(
                     "comparison between '{}' and '{}' has unspecified value",
+                    self.ptr_string(ast, p, pointee),
+                    self.ptr_string(ast, q, pointee)
+                ),
+            ),
+            // clang note_constexpr_pointer_comparison_unspecified (P2280).
+            Fault::PtrCmpUnknown { p, q, pointee } => (
+                site.loc,
+                format!(
+                    "comparison between pointers to unrelated objects '{}' and '{}' has unspecified value",
                     self.ptr_string(ast, p, pointee),
                     self.ptr_string(ast, q, pointee)
                 ),
@@ -796,6 +821,39 @@ impl Oven {
         }
     }
 
+    /// "uncaught exception of type 'T': 'V'": `V` the `what()` string of
+    /// a class derived from `std::exception`, else the exception
+    /// object's value.
+    /// The type is named as the throw-expression's operand's (as written,
+    /// `e` the throw-expression).
+    fn uncaught_note(
+        &self,
+        ast: &Ast,
+        e: Option<ExprId>,
+        obj: u64,
+        ty: OTy,
+        what: Option<&str>,
+    ) -> String {
+        let mut v = String::new();
+        match what {
+            Some(w) => v.push_str(w),
+            None if self.types.is_aggregate(ty) => {
+                self.write_value(ast, &mut v, ty, u128::from(obj), 0);
+            }
+            None => match self.load(obj, ty, ak::READ) {
+                Ok(x) => self.write_value(ast, &mut v, ty, x, 0),
+                Err(_) => v.push_str("<unknown>"),
+            },
+        }
+        let name = e
+            .filter(|&e| ast.exprs.get(e).kind() == ExprKind::CXXThrowExpr)
+            .and_then(|e| ast.exprs.throw_operand(e))
+            .map(|x| ast.exprs.get(x).ty())
+            .filter(|&q| ast.types.canonical(q).without_quals() == self.types.info(ty).q)
+            .map_or_else(|| self.tname(ast, ty), |q| Self::qname(ast, q.without_quals()));
+        format!("uncaught exception of type '{name}': '{v}'")
+    }
+
     fn write_object(&self, ast: &Ast, s: &mut String, t: OTy, raw: u64, depth: u32) {
         if depth > 8 {
             s.push_str("{...}");
@@ -909,7 +967,7 @@ impl Oven {
         let Some(a) = self.alloc_any(p) else { return "&<dead object>".into() };
         let mut s = String::from("&");
         match a.origin {
-            Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
+            Origin::Var(d) | Origin::Global(d) | Origin::External(d) | Origin::Unknown(d) => {
                 s.push_str(&name_of(ast, d));
             }
             Origin::Str(id, _) => ast.strings.write_literal(id, &mut s),
@@ -1180,6 +1238,11 @@ impl Oven {
                     "{verb} temporary is not allowed in a constant expression outside the expression that created the temporary"
                 )
             }
+            // clang note_constexpr_access_unknown_variable (P2280).
+            MemFault::Unknown(d) => {
+                extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
+                format!("{verb} variable '{}' whose value is not known", name_of(ast, d))
+            }
             MemFault::External(d, false) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 let name = name_of(ast, d);
@@ -1222,7 +1285,10 @@ impl Oven {
             MemFault::NotHeap => {
                 if let Some(a) = self.alloc_any(Ptr::decode(p)) {
                     match a.origin {
-                        Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
+                        Origin::Var(d)
+                        | Origin::Global(d)
+                        | Origin::External(d)
+                        | Origin::Unknown(d) => {
                             extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                         }
                         Origin::Temp(e) | Origin::Str(_, Some(e)) => {

@@ -377,8 +377,23 @@ impl Sema<'_, '_> {
                 tys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
             let whole =
                 matches!(target, DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_)) && !fn_has_pack;
+            // clang substitutes the explicit arguments as written
+            // (`SubstituteExplicitTemplateArguments` is `Final`): a
+            // parameter they make non-dependent keeps their sugar, so
+            // `f<s::string>(1, 2)` of `f(W<T>, int)` notes
+            // `'W<s::string>' (aka 'W<basic_string<char>>')`.
+            let mut sugared = d.args.clone();
+            for (a, &w) in sugared.iter_mut().zip(&written) {
+                if let (ArgView::Type(c), ArgView::Type(wt)) = (a.view(), w.view())
+                    && self.ast.types.canonical(c) == self.ast.types.canonical(wt)
+                {
+                    *a = TemplateArg::ty(wt);
+                }
+            }
+            let sugared_levels = self.prior_levels(ft, depth, &sugared);
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
-                let mut sub = Substituter::new(s, &levels);
+                let mut sub = Substituter::new(s, &sugared_levels);
+                sub.final_subst = true;
                 // A function parameter pack keeps its pattern: the
                 // explicitly given prefix may be extended by deduction.
                 // A non-trailing one is a non-deduced context
@@ -655,7 +670,7 @@ impl Sema<'_, '_> {
         let canonical = self.ast.types.canonical_args(sugared);
         let conv = ConvertedArgs { sugared, canonical };
         let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(sugared), loc, |s| {
-            s.get_function_spec(ft, &conv, loc)
+            s.get_function_spec_signature(ft, conv, loc)
         });
         match r {
             None => Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
@@ -674,6 +689,27 @@ impl Sema<'_, '_> {
                         f.args = Some(sugared);
                         f.sat = Some(sat);
                         return Err(f);
+                    }
+                }
+                // The explicit-specifier, once the constraints are
+                // satisfied (clang `instantiateExplicitSpecifierDeferred`).
+                if self.templ.explicit_pending.contains(&spec) {
+                    let r = self.in_sfinae(
+                        FrameKind::DeducedArgSubstitution,
+                        ft,
+                        Some(sugared),
+                        loc,
+                        |s| s.finish_function_spec_explicit(spec),
+                    );
+                    match r {
+                        None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
+                        Some((Ok(()), Ok(()))) => {}
+                        Some((_, failed)) => {
+                            let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+                            f.args = Some(sugared);
+                            f.diag = failed.err().flatten();
+                            return Err(f);
+                        }
                     }
                 }
                 if let Some((i, deduced_a, a)) = self.original_arg_mismatch(spec, &originals) {

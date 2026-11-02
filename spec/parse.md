@@ -708,8 +708,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `parse_deprecated_missing_comma_before_ellipsis`
   (`-Wdeprecated-missing-comma-variadic-parameter`, in `-Wdeprecated`)
   at the `...`. A lone `(...)`, `(int, ...)` and a function parameter
-  pack are not deprecated. Before C++26, nothing. clang's separate
-  `-Wambiguous-ellipsis` (`(Ts......)`) is not implemented.
+  pack are not deprecated. Before C++26, nothing.
+  In every mode, when the parameter before that `...` has its own pack
+  `...` (`(Ts......)`, `(Ts...a...)`) or a type naming an unexpanded
+  pack, clang's `-Wambiguous-ellipsis` follows (WP-364, clang
+  `warn_misplaced_ellipsis_vararg`, after the deprecation in C++26):
+  `'...' in this location creates a C-style varargs function` at the
+  `...` (`, not a function parameter pack` appended when the parameter
+  has no `...` of its own), a note `preceding '...' declares a function
+  parameter pack` at the pack's `...` (or `place '...' immediately
+  before declared identifier` / `here` at the name or the declarator),
+  and `insert ',' before '...' to silence this warning` at the `...`.
+  Tests: `dcl.fct/p3176-ambiguous-ellipsis.cpp` (C++23),
+  `dcl.fct/p3176-variadic-comma.cpp` (C++26, clang >= 22).
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
@@ -806,8 +817,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `mem-initializer-id ( expression-list ) | braced-init-list [...]`,
   separated by `,` (a missing one between two initializers is `missing
   ',' between base or member initializers`). The id is a `MemInitId`:
-  an identifier, or a type for a qualified class name; qualified
-  non-types and `decltype` ids are unsupported. All initializers go to
+  an identifier, or a type for a qualified class name or a
+  decltype-specifier (`decltype(e)(args)`, class-or-decltype; a dependent
+  one is resolved at instantiation, and a type that is not a class is
+  `constructor initializer ... does not name a class` in sema;
+  `decltype(auto)` is `'decltype(auto)' not allowed here` and counts as
+  a failed initializer, `QualType::ERROR`); qualified non-types are
+  unsupported. All initializers go to
   one `act_on_mem_initializers(ctor, inits, colon)`; a constructor
   without a ctor-initializer gets an empty slice at its `{`. A
   ctor-initializer on a non-constructor is `only constructors take base
@@ -1317,7 +1333,7 @@ in `kiln_diag` for now; nothing emits them.
   linkage, `clang diagnostic` to the diagnostic engine; `weak` and the
   other unsupported pragmas of §2.3.
 - **Classes** (parsed by WP-065; their Sema is WP-066b):
-  - qualified non-type and `decltype` mem-initializer-ids, braced
+  - qualified non-type mem-initializer-ids, braced
     default arguments
   - literal operators (`operator""`)
   - pragma events inside saved tokens (they fire at capture)
