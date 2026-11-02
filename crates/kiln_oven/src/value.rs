@@ -433,7 +433,10 @@ impl Oven {
                     )]));
                 }
             },
-            TyKind::Ptr(pointee) => self.ptr_of(b, info.q, pointee, v as u64, loc)?,
+            TyKind::Ptr(pointee) => {
+                let desig = self.void_designated(pointee, (v >> 64) as u32);
+                self.ptr_of(b, info.q, pointee, v as u64, desig, loc)?
+            }
             _ => {
                 return Err(Freeze::Notes(vec![Note::new(
                     loc,
@@ -474,12 +477,22 @@ impl Oven {
         ]))
     }
 
+    /// The designated type a frozen `void *` keeps ([`Scalar::Pointer`]
+    /// `designated`): the type its `kbc::VOID_TAG` tag bits `tag`
+    /// recorded, for a pointer to `void`.
+    fn void_designated(&self, pointee: OTy, tag: u32) -> Option<QualType> {
+        let t = OTy(tag.checked_sub(1)?);
+        let named = self.types.kind(pointee) == TyKind::Void && !self.types.is_synthetic_array(t);
+        named.then(|| self.types.info(t).q)
+    }
+
     fn ptr_of(
         &mut self,
         b: &mut dyn SemaBridge,
         q: QualType,
         pointee: OTy,
         raw: u64,
+        designated: Option<QualType>,
         loc: Loc,
     ) -> Result<Scalar<'static>, Freeze> {
         if raw == 0 {
@@ -491,7 +504,12 @@ impl Oven {
                 Some(d) => {
                     let r = b.ast().types.is_reference(q);
                     self.check_not_immediate(b, d, r, loc)?;
-                    Ok(Scalar::Pointer { ty: q, base: PtrBase::Function(d), offset: 0 })
+                    Ok(Scalar::Pointer {
+                        ty: q,
+                        base: PtrBase::Function(d),
+                        offset: 0,
+                        designated: None,
+                    })
                 }
                 None => Err(Freeze::Fault(FailKind::NotConstant)),
             };
@@ -553,7 +571,7 @@ impl Oven {
                 Origin::TypeInfo(t) => PtrBase::TypeInfo(t),
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
-            return Ok(Scalar::Pointer { ty: q, base, offset });
+            return Ok(Scalar::Pointer { ty: q, base, offset, designated });
         }
         // A temporary extended by the variable being initialized
         // ([class.temporary]/6): its value is frozen with the result.
@@ -569,14 +587,19 @@ impl Oven {
             if !self.let_pending.iter().any(|&(x, _)| x == t) {
                 self.let_pending.push((t, Ptr::with_off(raw, 0, false)));
             }
-            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Temporary(t), offset });
+            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Temporary(t), offset, designated });
         }
         if let (Origin::Var(d), Some(o)) = (a.origin, self.run.object)
             && d == o
             && a.live
         {
             let ast = b.ast();
-            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Decl(ast.first(d)), offset });
+            return Ok(Scalar::Pointer {
+                ty: q,
+                base: PtrBase::Decl(ast.first(d)),
+                offset,
+                designated,
+            });
         }
         if self.run.silent {
             return Err(Freeze::Fault(FailKind::NotConstant));
@@ -742,7 +765,8 @@ impl Oven {
                 if !sp.is_init(abs, info.size) {
                     return Err(self.uninit(b, field, t, loc));
                 }
-                let v = sp.read(abs, info.size);
+                // A `void *` keeps the designated type of its tag.
+                let v = sp.read(abs, info.size) | u128::from(self.mem.void_tag(st, abs)) << 64;
                 let sc = self.scalar_of(b, t, v, loc)?;
                 let id =
                     b.consts().push_scalar(sc).map_err(|_| Freeze::Fault(FailKind::NotConstant))?;
@@ -1068,21 +1092,42 @@ impl Oven {
     fn resolve_var(&mut self, b: &mut dyn SemaBridge, g: u32, d: DeclId, top: u32) -> u64 {
         let info = var_info(b.ast(), d);
         if !info.lax {
-            return self.resolve_var_in(b, g, d, top, None);
+            return self.resolve_var_in(b, g, d, top, None, false);
         }
-        // Resolved differently by strict and lax evaluations: reset when
-        // the mode changes (`Oven::begin_outermost`), and then remade in
-        // the object it resolved to before (`lax_objs`), so alternating
-        // modes costs no static space and the variable keeps one address.
-        self.lax_globals.push(g);
+        // A lax variable with a constant value (stored, or its initializer
+        // evaluated strictly): one object in both modes, holding the value,
+        // which only a lax fold may read (`mem::LAX_READ`), so a pointer to
+        // it held by a usable variable (`constexpr const double *p = &d;`,
+        // resolved strictly) reads it in a lax fold (spec/oven.md "Lax
+        // folds").
+        if let VarEvalState::Value(cv) = info.state {
+            let ty = self.types.intern(b, info.ty);
+            let size = self.types.size(ty);
+            let fl = flags::EXTERNAL | flags::CONST | self.static_flags(ty);
+            let p =
+                self.mem.alloc_static_in(ty, size, fl, Origin::External(d), crate::mem::LAX_READ);
+            self.globals[g as usize].state = GState::Resolved(p);
+            self.thaw_into(b, cv, p, top);
+            return p;
+        }
+        // Otherwise resolved differently by strict and lax evaluations:
+        // reset when the mode changes (`Oven::begin_outermost`), and then
+        // remade in the object it resolved to before (`lax_objs`), so
+        // alternating modes costs no static space and the variable keeps
+        // one address.
         let ty = self.types.intern(b, info.ty);
         let old = self.lax_objs.get(&g).copied().filter(|&p| {
             self.mem
                 .alloc_of(Ptr::decode(p))
                 .is_ok_and(|a| a.ty == ty && a.flags & flags::RESOLVING == 0)
         });
-        let p = self.resolve_var_in(b, g, d, top, old);
-        self.lax_objs.insert(g, p);
+        let p = self.resolve_var_in(b, g, d, top, old, !self.run.lax);
+        if self.mem.alloc_of(Ptr::decode(p)).is_ok_and(|a| a.frame == crate::mem::LAX_READ) {
+            self.lax_objs.remove(&g);
+        } else {
+            self.lax_globals.push(g);
+            self.lax_objs.insert(g, p);
+        }
         p
     }
 
@@ -1116,7 +1161,9 @@ impl Oven {
     }
 
     /// [`Oven::resolve_var`]; `old` is the object a lax global resolved to
-    /// before, remade rather than allocating another.
+    /// before, remade rather than allocating another. `lax_read`: a lax
+    /// global resolved strictly, whose initializer still runs (strictly);
+    /// a value makes a [`crate::mem::LAX_READ`] object.
     fn resolve_var_in(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -1124,10 +1171,11 @@ impl Oven {
         d: DeclId,
         top: u32,
         old: Option<u64>,
+        lax_read: bool,
     ) -> u64 {
         let info = var_info(b.ast(), d);
         let ty = self.types.intern(b, info.ty);
-        if !(info.usable || info.lax && self.run.lax) {
+        if !(info.usable || info.lax && (self.run.lax || lax_read)) {
             return self.external_obj(b, old, ty, d);
         }
         let hu = self.static_flags(ty);
@@ -1201,8 +1249,14 @@ impl Oven {
                 // The placeholder's storage now belongs to the variable.
                 self.globals[g as usize].slot = 0;
                 let a = self.mem.alloc_of_mut(Ptr::decode(p));
+                a.frame = 0;
                 if let Ok(cv) = r {
                     a.flags = a.flags & !flags::RESOLVING | hu;
+                    if lax_read {
+                        a.flags |= flags::EXTERNAL;
+                        a.origin = Origin::External(d);
+                        a.frame = crate::mem::LAX_READ;
+                    }
                     self.thaw_into(b, cv, p, top);
                 } else {
                     a.flags = flags::EXTERNAL | flags::CONST;
@@ -1287,9 +1341,8 @@ impl Oven {
                 self.mem.stat.write(base + at, 8, v);
                 continue;
             }
-            let raw = self.thaw_ptr(b, r.value, ty, top);
-            self.mem.stat.write(base + at, 8, u128::from(raw));
-            self.mem.stat.set_ptr(base + at, 8, raw != 0);
+            let v = self.thaw_ptr(b, r.value, ty, top);
+            self.put_thawed_ptr(base + at, v);
         }
         for u in unions {
             let at = u64::from(u.at);
@@ -1323,21 +1376,56 @@ impl Oven {
             Some(Scalar::Reflection { id, .. }) => (u128::from(id.bits()), false),
             _ => (0, false),
         };
-        let v = if is_ptr { u128::from(self.thaw_ptr(b, cv, ty, top)) } else { v };
+        if is_ptr {
+            let v = self.thaw_ptr(b, cv, ty, top);
+            self.mem.stat.set_init(base, len, true);
+            self.put_thawed_ptr(base, v);
+            return;
+        }
         self.mem.stat.write(base, len, v);
         self.mem.stat.set_init(base, len, true);
-        self.mem.stat.set_ptr(base, len, is_ptr && v != 0);
+        self.mem.stat.set_ptr(base, len, false);
     }
 
-    /// The VM pointer for stored pointer value `cv` of type `ty`.
+    /// Writes thawed pointer register value `v` (tag bits included) to
+    /// static byte `abs`, with its pointer mark.
+    fn put_thawed_ptr(&mut self, abs: u64, v: u128) {
+        let mark = match (v as u64, (v >> 64) as u32) {
+            (0, _) => 0,
+            (_, tag) => self.mem.set_void_tag(crate::mem::Sp::Static, abs, tag),
+        };
+        self.mem.stat.write(abs, 8, u128::from(v as u64));
+        self.mem.stat.set_ptr_mark(abs, 8, mark);
+    }
+
+    /// The VM pointer register value for stored pointer value `cv` of type
+    /// `ty`: a `void *` that keeps its designated type gets it back as
+    /// its `kbc::VOID_TAG` tag bits (spec/oven.md "Construction").
     pub(crate) fn thaw_ptr(
         &mut self,
         b: &mut dyn SemaBridge,
         cv: ConstValueId,
         ty: OTy,
         top: u32,
+    ) -> u128 {
+        let Some(Scalar::Pointer { base, offset, designated, .. }) = b.consts().scalar(cv) else {
+            return 0;
+        };
+        let tag = match designated {
+            Some(d) => u128::from(self.types.intern(b, d).0 + 1) << 64,
+            None => 0,
+        };
+        u128::from(self.thaw_ptr_raw(b, base, offset, ty, top)) | tag
+    }
+
+    fn thaw_ptr_raw(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        base: PtrBase,
+        offset: u64,
+        ty: OTy,
+        top: u32,
     ) -> u64 {
-        let Some(Scalar::Pointer { base, offset, .. }) = b.consts().scalar(cv) else { return 0 };
         let pointee = match self.types.kind(ty) {
             TyKind::Ptr(p) => Some(p),
             _ => None,

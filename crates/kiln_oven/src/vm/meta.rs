@@ -45,7 +45,7 @@ impl Oven {
                     let cur = self.stack[self.stack.len() - 1].func;
                     let top = fb + self.funcs[cur as usize].nregs as usize + 1;
                     let top = u32::try_from(top).map_err(|_| Fault::Invalid)?;
-                    return Ok(u128::from(self.thaw_ptr(b, cv, OTy(t2), top)));
+                    return Ok(self.thaw_ptr(b, cv, OTy(t2), top));
                 }
                 Err(n) => Err(n),
             },
