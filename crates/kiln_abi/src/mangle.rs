@@ -1051,7 +1051,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let Some(rec) = self.ast.types.as_record(ty) else { return false };
         let Some((tmpl, args)) = self.spec_of(rec) else { return false };
         self.parent(rec).is_some_and(|p| self.is_std(p))
-            && !(self.ast.modules.active && self.ast.module_attachment(self.ast.first(tmpl)).is_some())
+            && !(self.ast.modules.active
+                && self.ast.module_attachment(self.ast.first(tmpl)).is_some())
             && decl_name(self.ast, tmpl) == name
             && matches!(self.ast.types.args(args), [c] if self.is_char_arg(c.view()))
     }

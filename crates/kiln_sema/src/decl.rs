@@ -6774,11 +6774,8 @@ impl Sema<'_, '_> {
     /// is returned.
     fn check_namespace_inline_mismatch(&mut self, prev: DeclId, inline: bool, loc: Loc) -> bool {
         let first = self.ast.first(prev);
-        let orig = self
-            .ast
-            .decls
-            .namespace(first)
-            .is_some_and(kiln_ast::decl::NamespaceData::is_inline);
+        let orig =
+            self.ast.decls.namespace(first).is_some_and(kiln_ast::decl::NamespaceData::is_inline);
         if orig != inline {
             let id = if orig {
                 DiagId::sema_inline_namespace_reopened_noninline

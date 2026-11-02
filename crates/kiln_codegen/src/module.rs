@@ -788,7 +788,9 @@ impl<'a> Cg<'a> {
     fn has_fn_attr(&self, d: DeclId, k: kiln_ast::attr::AttrKind) -> bool {
         let ast = self.ast;
         ast.redecls_of(d).any(|r| {
-            ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r)).any(|a| ast.attrs.get(a).kind == k)
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .any(|a| ast.attrs.get(a).kind == k)
         })
     }
 
@@ -1512,7 +1514,8 @@ impl<'a> Cg<'a> {
 
     /// The function attributes of a definition.
     pub fn def_fn_attrs(&mut self, f: DefFnAttrs) -> AttrSetId {
-        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn, inline, extra } = f;
+        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn, inline, extra } =
+            f;
         let mut a = Vec::new();
         if inline == DefInline::Always {
             a.push(Attr::Flag(AttrKind::AlwaysInline));
