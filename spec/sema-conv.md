@@ -103,6 +103,10 @@ template specialization is derived first completes it with
 `require_complete_silent`, as clang's `isCompleteType` does
 ([temp.inst]/2). The callers that do this are: the derived-to-base pointer
 conversion (`pointer_conversion`), reference-relatedness (`ref_related`),
+reference binding (`bind_reference`, which completes the initializer's
+class as clang's `CompareReferenceRelationship` does, so `S<int>& r = d;`
+instantiates a `D<int>` named so far only through references or pointers;
+WP-381, `tests/conformance/dcl.init.ref/derived-to-base-instantiates-derived.cpp`),
 and static_cast up and down (`class_relation`, `static_downcast`).
 
 ## 4. Ranking (`compare_standard_conversions`)

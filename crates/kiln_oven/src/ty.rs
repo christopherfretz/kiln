@@ -842,33 +842,6 @@ impl Types {
         }
     }
 
-    /// Whether a complete object of type `p` (the object `root` itself,
-    /// an array element or a member subobject, not a base class
-    /// subobject) lives at byte `off` of an object of type `root`: its
-    /// virtual bases are where `p`'s layout puts them ([class.mi]/4).
-    pub fn has_complete_object(&self, root: OTy, off: u64, p: OTy) -> bool {
-        self.complete_object_in(root, off, p, false)
-    }
-
-    fn complete_object_in(&self, root: OTy, off: u64, p: OTy, base: bool) -> bool {
-        if p == root && off == 0 && !base {
-            return true;
-        }
-        match self.kind(root) {
-            TyKind::Array { elem, n } => {
-                let es = self.size(elem);
-                es != 0 && off / es < n && self.complete_object_in(elem, off % es, p, false)
-            }
-            TyKind::Record { .. } => self.fields(root).iter().any(|f| {
-                f.width.is_none()
-                    && off >= f.offset
-                    && off < f.offset + self.size(f.ty).max(1)
-                    && self.complete_object_in(f.ty, off - f.offset, p, f.base)
-            }),
-            _ => false,
-        }
-    }
-
     /// Whether the storage unit of a bit-field of type `p` lies at `off`
     /// inside `root` (a bit-field is not a subobject that a pointer can
     /// designate, but its accesses still go through the unions above it).

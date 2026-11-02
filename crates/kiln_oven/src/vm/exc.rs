@@ -378,18 +378,13 @@ impl Oven {
                     return Ok(Some(0));
                 }
                 if virt {
-                    // The offset of a virtual base is `ept`'s layout's
-                    // when the pointer designates a complete `ept`
-                    // object; in a base class subobject it depends on the
-                    // most derived object (not yet evaluated).
-                    let p = Ptr::decode(v as u64);
-                    let complete = !p.past
-                        && self.alloc_any(p).is_some_and(|a| {
-                            self.types.has_complete_object(a.ty, u64::from(p.off), ept)
-                        });
-                    if !complete {
-                        return Err(Fault::Invalid);
-                    }
+                    // Through the most derived object's virtual base
+                    // ([class.mi]/4): the pointer may designate a base
+                    // class subobject.
+                    return self
+                        .vbase_ptr(b, v as u64, ept, tpt)
+                        .map(|p| Some(u128::from(p)))
+                        .ok_or(Fault::Invalid);
                 }
                 let raw = v as u64;
                 Ok(Some(u128::from(Ptr::with_off(
