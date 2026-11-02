@@ -231,7 +231,8 @@ impl Parser<'_, '_> {
     fn parse_namespace(&mut self) {
         let inline = self.eat_kw(Kw::Inline).is_some();
         let ns_loc = self.bump().span.lo;
-        self.skip_attributes();
+        let mut attrs = Vec::new();
+        self.parse_attributes(&mut attrs);
         if let Some(name) = self.ident()
             && self.peek_is(1, Punct::Equal)
         {
@@ -257,7 +258,7 @@ impl Parser<'_, '_> {
                 names.push((n, l, inl));
             }
         }
-        self.skip_attributes();
+        self.parse_attributes(&mut attrs);
         let Some(open) = self.expect(Punct::LBrace) else {
             self.skip_unsupported_declaration();
             return;
@@ -268,6 +269,9 @@ impl Parser<'_, '_> {
         }
         for (n, l, inl) in names {
             opened.push(self.s.act_on_start_namespace(Some((n, l)), inl, ns_loc));
+        }
+        if let Some(&ns) = opened.last() {
+            self.s.act_on_namespace_attrs(ns, &attrs);
         }
         while !self.at(Punct::RBrace) && !self.at_eof() {
             self.parse_external_declaration();
@@ -341,6 +345,7 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return Vec::new();
             };
+            self.s.act_on_namespace_name_use(ns, nl);
             let d = self.s.act_on_using_directive(ns, loc);
             self.expect_semi_after("namespace name");
             return vec![d];
@@ -1022,7 +1027,7 @@ impl Parser<'_, '_> {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
                 }
                 ds.invalid = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
+                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
                 true
             }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
@@ -1034,7 +1039,7 @@ impl Parser<'_, '_> {
                 self.emit(d);
                 self.bump();
                 ds.invalid = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
+                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
                 true
             }
             _ => false,

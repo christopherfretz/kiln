@@ -232,10 +232,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `tests/codegen/ext_vector_element.cpp`): the base vector's lvalue
     (a prvalue base is stored to a temporary first; a glvalue access
     chain `v.even.y` composes its lanes onto the root vector). One lane
-    is a vector-element lvalue (`extractelement`/`insertelement` with an
-    `i64` index); several are an `LV::swz` lvalue: a load is a
-    one-operand `shufflevector` of the loaded vector, a store
-    (`store_ext_vector_elts`, clang
+    is a vector-element lvalue (`VecLane::Index`, `extractelement`/
+    `insertelement` with an `i64` index); several are a
+    `VecLane::Swizzle` lvalue: a load is a one-operand `shufflevector`
+    of the loaded vector, a store (`store_swizzle`, clang
     `EmitStoreThroughExtVectorComponentLValue`) shuffles the value into
     the loaded vector, widening it first when the vector is longer than
     the swizzle, and stores the whole vector back.

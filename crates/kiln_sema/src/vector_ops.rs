@@ -43,89 +43,6 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// `base.name` on an `ext_vector_type` `base` (clang
-    /// `CheckExtVectorComponent`, spec/sema.md §5.8): the components are
-    /// one set of `xyzw`, `rgba`, or `s`/`S` and hex digits, or one of
-    /// `hi`/`lo`/`even`/`odd` (half the lanes, rounded up). One component
-    /// is the element; more are an ext vector, named by the first
-    /// `ext_vector_type` typedef of that type. Errors at the `.`.
-    pub(crate) fn act_on_ext_vector_member(
-        &mut self,
-        base: ExprId,
-        name: kiln_source::symbol::Symbol,
-        loc: Loc,
-        op_loc: Loc,
-    ) -> ExprId {
-        use kiln_ast::expr::ext_vector_accessor_idx as idx;
-        let bt = self.ety(base);
-        let Some(p) = self.vector_parts(bt) else { return self.recover_err(&[base], loc) };
-        let s = self.ast.symbols().as_str(name).to_owned();
-        let b = s.as_bytes();
-        let halving = matches!(s.as_str(), "hi" | "lo" | "even" | "odd");
-        let hex = matches!(b, [b's' | b'S', _, ..]);
-        if !halving {
-            let rgba = |c: u8| matches!(c, b'r' | b'g' | b'b' | b'a');
-            let mut rest = b;
-            match b.first() {
-                Some(&c0) if !hex && idx(c0, false).is_some() => {
-                    while let [c, tail @ ..] = rest
-                        && idx(*c, false).is_some()
-                        && rgba(*c) == rgba(c0)
-                    {
-                        rest = tail;
-                    }
-                }
-                _ => {
-                    if hex {
-                        rest = &rest[1..];
-                    }
-                    while let [c, tail @ ..] = rest
-                        && idx(*c, true).is_some()
-                    {
-                        rest = tail;
-                    }
-                }
-            }
-            if let Some(&c) = rest.first() {
-                let msg = self
-                    .diag(DiagId::sema_ext_vector_component_name_illegal, op_loc)
-                    .arg(char::from(c).to_string());
-                self.emit(msg);
-                return self.recover_err(&[base], loc);
-            }
-            let comps = if hex { &b[1..] } else { b };
-            if comps.iter().any(|&c| idx(c, hex).is_none_or(|i| i >= p.count)) {
-                let msg = self
-                    .diag(DiagId::sema_ext_vector_component_exceeds_length, op_loc)
-                    .arg(self.ty_arg(bt));
-                self.emit(msg);
-                return self.recover_err(&[base], loc);
-            }
-        }
-        let n = if halving {
-            p.count.div_ceil(2)
-        } else {
-            u32::try_from(b.len()).unwrap_or(u32::MAX) - u32::from(hex)
-        };
-        let ty = if n == 1 {
-            p.elem
-        } else {
-            let vt = self.ast.types.vector(p.elem, n, VectorKind::Ext);
-            let canon = self.ast.types.canonical(vt);
-            let named = self.ext_vector_decls.iter().find_map(|&td| {
-                let u = self.ast.decls.get(td).ty()?;
-                (self.ast.types.canonical(u) == canon).then_some((td, u))
-            });
-            match named {
-                Some((td, u)) => self.ast.types.typedef_type(td, u).into(),
-                None => vt,
-            }
-        };
-        let quals = self.ast.types.canonical(bt).quals();
-        let ty = self.ast.types.qualify(ty, quals);
-        self.builder().ext_vector_element(base, name, ty, loc)
-    }
-
     /// True if `q` is a (non-dependent) vector type.
     pub(crate) fn is_vector_type(&self, q: QualType) -> bool {
         self.vector_parts(q).is_some()
@@ -1093,5 +1010,107 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<QualType> {
         self.check_vector_operands(t, f, loc, false, false, true)
+    }
+}
+
+impl Sema<'_, '_> {
+    /// The ext vector type `v.name` / `p->name` accesses: `base`'s type,
+    /// or for `->` its pointee (clang `LookupMemberExpr` handles an ext
+    /// vector before any class lookup).
+    pub(crate) fn ext_vector_base(&self, base: ExprId, arrow: bool) -> Option<QualType> {
+        let t = self.ety(base);
+        let v = if arrow {
+            if !self.ast.types.is_pointer(t) {
+                return None;
+            }
+            self.pointee_sugared(t)?
+        } else {
+            t
+        };
+        self.vector_parts(v).is_some_and(VecParts::is_ext).then_some(v)
+    }
+
+    /// `base.name` or `base->name` on an ext vector `vt` (clang
+    /// `CheckExtVectorComponent` and `ExtVectorElementExpr`): the
+    /// selected lane, or a vector of the selected lanes named by the
+    /// first ext-vector typedef of that type. An lvalue for `->`, else of
+    /// `base`'s value category; `base`'s qualifiers carry over. `op_loc`
+    /// (the `.` or `->`) is where a bad accessor is diagnosed.
+    pub(crate) fn ext_vector_member(
+        &mut self,
+        base: ExprId,
+        vt: QualType,
+        name: kiln_source::symbol::Symbol,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        let parts = self.vector_parts(vt).expect("an ext vector");
+        let text = self.ast.symbols().as_str(name).to_owned();
+        let lanes = match kiln_ast::expr::ext_vector_access(&text, parts.count) {
+            kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } => lanes,
+            kiln_ast::expr::ExtVectorAccess::Illegal(c) => {
+                let d = self
+                    .diag(DiagId::sema_ext_vector_component_name_illegal, op_loc)
+                    .arg(c.to_string());
+                self.emit(d);
+                return self.recover_err(&[base], loc);
+            }
+            kiln_ast::expr::ExtVectorAccess::Exceeds => {
+                let d = self
+                    .diag(DiagId::sema_ext_vector_component_exceeds_length, op_loc)
+                    .arg(self.ty_arg(vt));
+                self.emit(d);
+                return self.recover_err(&[base], loc);
+            }
+        };
+        // The element as written in the vector type (`vecType->getElementType()`).
+        let top = self.ast.types.desugar_top(vt);
+        let elem = match self.ast.types.view(top.ty()) {
+            TypeView::Vector { elem, .. } => elem,
+            _ => parts.elem,
+        };
+        let n = u32::try_from(lanes.len()).unwrap_or(u32::MAX);
+        let mut ty = if n == 1 {
+            elem
+        } else {
+            let v = self.ast.types.vector(elem, n, VectorKind::Ext);
+            self.ext_vector_typedefs
+                .iter()
+                .copied()
+                .find(|&td| self.ast.decls.typedef(td).is_some_and(|x| x.underlying == v))
+                .and_then(|td| self.ast.decls.get(td).ty())
+                .unwrap_or(v)
+        };
+        let cv = self.ast.types.effective_quals(self.ast.types.canonical(vt));
+        if !cv.is_empty() {
+            ty = self.ast.types.qualify(ty, cv);
+        }
+        let (base, vk) = if arrow {
+            (conv::decay(self, base), ValueCategory::LValue)
+        } else {
+            (base, self.ast.exprs.get(base).value_category())
+        };
+        self.builder().ext_vector_element(base, name, ty, vk, arrow, loc)
+    }
+
+    /// Whether `e` (looking through parentheses) is an ext-vector element
+    /// access that selects some lane twice: not assignable (clang
+    /// `CM_DuplicateVectorComponents`).
+    pub(crate) fn has_duplicate_vector_lanes(&self, e: ExprId) -> bool {
+        let e = self.ignore_parens(e);
+        if self.ast.exprs.get(e).kind() != kiln_ast::expr::ExprKind::ExtVectorElementExpr {
+            return false;
+        }
+        let base = self.ast.exprs.operand(e);
+        let arrow = self.ast.exprs.get(e).has(ExprFlags::ARROW);
+        let Some(p) = self.ext_vector_base(base, arrow).and_then(|v| self.vector_parts(v)) else {
+            return false;
+        };
+        let name = self.ast.symbols().as_str(self.ast.exprs.ext_vector_accessor(e));
+        matches!(
+            kiln_ast::expr::ext_vector_access(name, p.count),
+            kiln_ast::expr::ExtVectorAccess::Lanes { repeated: true, .. }
+        )
     }
 }

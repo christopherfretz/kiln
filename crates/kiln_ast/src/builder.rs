@@ -1758,30 +1758,79 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
-    /// `v.xy` on an `ext_vector_type` `v` (clang `ExtVectorElementExpr`):
-    /// `a` = the base, `b` = the accessor's symbol, `loc` = the accessor.
-    /// `ty` is the element type for one component, else an ext vector of
-    /// the component count; the value category is the base's, and a
-    /// glvalue designates a vector component (clang `OK_VectorComponent`).
+    /// `__builtin_choose_expr(cond, lhs, rhs)` (clang `ChooseExpr`):
+    /// `chosen` is `Some(true)` when the constant condition picked `lhs`,
+    /// `Some(false)` for `rhs`, `None` while the condition is dependent.
+    /// The chosen operand gives the type, value and object kind and the
+    /// type/value dependence (clang `computeDependence(ChooseExpr*)`).
+    pub fn choose_expr(
+        &mut self,
+        cond: ExprId,
+        lhs: ExprId,
+        rhs: ExprId,
+        chosen: Option<bool>,
+        loc: Loc,
+    ) -> ExprId {
+        let all = self.deps(cond) | self.deps(lhs) | self.deps(rhs);
+        let side = self.ast.exprs.push_cond_arms(lhs, rhs);
+        let Some(pick) = chosen else {
+            return self.simple(
+                ExprKind::ChooseExpr,
+                ValueCategory::PRValue,
+                all | ExprDeps::TYPE_VALUE_INST,
+                0,
+                QualType::DEPENDENT,
+                loc,
+                cond.raw(),
+                side,
+            );
+        };
+        let active = if pick { lhs } else { rhs };
+        let n = *self.ast.exprs.get(active);
+        let tv = ExprDeps::TYPE.with(ExprDeps::VALUE);
+        // The active operand's type/value bits, every other bit of all three.
+        let d = n.deps();
+        let deps = d.without(d.without(tv)) | all.without(tv);
+        let aux = if pick { 1 } else { 2 };
+        self.push_expr(
+            ExprKind::ChooseExpr,
+            n.value_category(),
+            n.object_kind(),
+            ExprFlags::NONE,
+            deps,
+            aux,
+            n.ty(),
+            loc,
+            cond.raw(),
+            side,
+        )
+    }
+
+    /// An ext-vector element access `base.accessor` or `base->accessor`
+    /// (clang `ExtVectorElementExpr`): of type `ty` and value category
+    /// `vk`; a glvalue designates a vector component. `base` is the
+    /// vector, or for `->` the pointer to it. `loc` is the accessor.
     pub fn ext_vector_element(
         &mut self,
         base: ExprId,
         accessor: Symbol,
         ty: QualType,
+        vk: ValueCategory,
+        arrow: bool,
         loc: Loc,
     ) -> ExprId {
-        let vk = self.vk(base);
         let ok = if vk == ValueCategory::PRValue {
             ObjectKind::Ordinary
         } else {
             ObjectKind::VectorComponent
         };
         let deps = self.deps(base) | self.type_deps(ty);
+        let flags = if arrow { ExprFlags::ARROW } else { ExprFlags::NONE };
         self.push_expr(
             ExprKind::ExtVectorElementExpr,
             vk,
             ok,
-            ExprFlags::NONE,
+            flags,
             deps,
             0,
             ty,
@@ -2780,6 +2829,52 @@ impl<'a> AstBuilder<'a> {
             offset,
         );
         self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// A value-dependent `__builtin_offsetof(operand, comps...)` in a
+    /// template (clang's dependent `OffsetOfExpr`): a `std::size_t`
+    /// (`ty`) prvalue, never type-dependent, value-dependent through the
+    /// operand type or an index. The designator is kept as written for
+    /// instantiation; the index expressions are its children.
+    pub fn dependent_offsetof(
+        &mut self,
+        ty: QualType,
+        operand: QualType,
+        comps: &[crate::expr::OffsetofComponent],
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        use crate::expr::OffsetofComponent;
+        let mut deps = self.type_deps(ty) | self.type_deps(operand).without(ExprDeps::TYPE);
+        let mut indices = Vec::new();
+        for c in comps {
+            if let OffsetofComponent::Index { index, .. } = *c {
+                deps |= self.deps(index).without(ExprDeps::TYPE);
+                indices.push(index);
+            }
+        }
+        if deps.intersects(ExprDeps::TYPE_VALUE_INST) {
+            deps |= ExprDeps::VALUE_INST;
+        }
+        let list = self.ast.lists.push(&indices);
+        let e = self.simple(
+            ExprKind::OffsetOfExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            list.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast
+            .exprs
+            .cold
+            .offsetof_pattern
+            .insert(e, (operand, comps.into()))
+            .expect("fresh expression");
         e
     }
 

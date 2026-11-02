@@ -465,8 +465,16 @@ type>'`:
 - **Expressions inside type names.** Wherever a type spells an
   expression (`decltype(e)`, an array bound, `I<e>`), the expression
   prints as clang's `printPretty`:
-  - `T::value` and `T::template m<int>`, the latter printed `T::m<int>`;
-    see "Known gaps" below.
+  - `T::value` and `T::template m<int>`.
+  - A `template` keyword written after a nested-name-specifier prints
+    as written (`N::template v<T>`, `S::template w<T>`), as clang's
+    `hasTemplateKeyword`, for a `DeclRefExpr`, an
+    `UnresolvedLookupExpr` and a `DependentScopeDeclRefExpr`. The parser
+    records it (`TemplateTables::template_kw`, set by
+    `Sema::set_template_kw`). Substitution keeps it on a name that is
+    still unresolved, and drops it once the name resolves to a
+    `DeclRefExpr` (clang: `N::v<S>`). A substituted `T::template w<U>`
+    keeps its substituted qualifier (`S::template w<U>`) (WP-308).
   - `t.x` and `t->template y<1>`.
   - `f<T>` with the qualifier and arguments as written.
   - `N::v<int>`, a variable template specialization named through a
@@ -483,7 +491,10 @@ type>'`:
   - `v.xy` for an ext-vector element access.
 
 Known gaps:
-- A `DependentScopeDeclRefExpr` does not store the `template` keyword.
+- A member function template of an implicit class instantiation
+  declared with a trailing return type prints its leading form
+  (`decltype(e) (U)`; clang: `auto (U) -> decltype(e)`): the
+  substituted declarator does not keep the trailing-return bit.
 - A function parameter named inside its own declarator's trailing
   return type (`auto f(T t) -> decltype(t.x)`) is unsupported, so the
   type prints with `...` for the expression.

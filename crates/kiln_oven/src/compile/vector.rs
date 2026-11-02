@@ -17,7 +17,7 @@
 //! a bit cast of a vector to a scalar with the generic note.
 
 use kiln_ast::ExprId;
-use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp};
 
 use super::{Access, Compiler, Place, cmp_of, float_code, int_of, int_op, skip_parens};
 use crate::kbc::{Op, ak, bi, int_aux};
@@ -191,12 +191,23 @@ impl Compiler<'_> {
     /// (`.x`, `.wzyx`, `.s3`, `.hi`, ...; clang 19 folds these on a
     /// prvalue vector, e.g. a compound literal, but not on an object).
     pub(super) fn ext_elt_regs(&mut self, e: ExprId) -> Vec<u32> {
-        let et = self.ety(e);
-        let count = self.lanes(et).map_or(1, |(_, n)| n);
         let ast = self.ast();
         let base = ast.exprs.operand(e);
+        if ast.exprs.get(e).has(ExprFlags::ARROW) {
+            // `p->x` is a glvalue: not folded (clang 19).
+            self.unsupported(e);
+            return Vec::new();
+        }
+        let bt = self.ety(base);
+        let count = self.lanes(bt).map_or(0, |(_, n)| u32::try_from(n).unwrap_or(0));
+        let ast = self.ast();
         let acc = ast.symbols().as_str(ast.exprs.ext_vector_accessor(e));
-        let lanes = kiln_ast::expr::ext_vector_lanes(acc, u32::try_from(count).unwrap_or(0));
+        let kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } =
+            kiln_ast::expr::ext_vector_access(acc, count)
+        else {
+            self.unsupported(e);
+            return Vec::new();
+        };
         let src = self.vec_regs(base);
         if src.is_empty() {
             return Vec::new();

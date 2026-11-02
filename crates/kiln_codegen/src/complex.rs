@@ -116,6 +116,9 @@ impl Cg<'_> {
         let q = n.ty();
         match n.kind() {
             ExprKind::ParenExpr => self.emit_cx(ast.exprs.operand(e), ign),
+            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
+                self.emit_cx(ast.exprs.choose_chosen(e).expect("guarded"), ign)
+            }
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
                 let r = self.emit_cx(self.sub(e), ign);
@@ -780,7 +783,7 @@ impl Cg<'_> {
             return Ok(lv);
         }
         let addr = self.cx_part_addr(lv.addr, lv.q, u32::from(imag));
-        Ok(LV { addr, q, bf: None, vidx: None, swz: None })
+        Ok(LV { addr, q, bf: None, vidx: None })
     }
 
     /// clang `EmitCompare` on complex operands (`==` and `!=` only).

@@ -386,7 +386,7 @@ Names are clang's (the dump prints them). (M2) marks the M2 subset.
 | lambdas, packs | `LambdaExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr` (P2662), `CXXUnresolvedConstructExpr` |
 | coroutines | `CoawaitExpr`, `DependentCoawaitExpr`, `CoyieldExpr` |
 | constant | `ConstantExpr` (M2; caches the value, §9.2) |
-| GNU / builtins | `StmtExpr` (M2), `ChooseExpr`, `VAArgExpr` (WP-171: `a` = the `va_list` operand, `b` = the written type, `cold.trait_rhs_loc` = the type's begin, `cold.end_loc` = the `)`; the node type is the written type without references, always a prvalue; accessor `ExprArena::va_arg`), `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`; WP-154: `aux` = the builtin id (`ExprArena::atomic_op`), `a` = a list of the operands in clang's order `ptr`, `order`, `val1`, `order_fail`, `val2`, `weak`, only those the op takes (`atomic_subs`); the per-op shape is `kiln_ast::decl::builtin::atomic`), `ShuffleVectorExpr` (`__builtin_shufflevector`; WP-282: `a` = a list of the operands as written, the two vectors then the indices (`shuffle_subs`); `aux` bit 0 = the mask is known, then `b` = a raw list of the `u32` lane indices, `u32::MAX` for -1 (`shuffle_mask`); `cold.end_loc` = the `)`; dumped and printed as clang), `ConvertVectorExpr`, `ExtVectorElementExpr` (WP-312: `a` = the base vector (`operand`), `b` = the accessor's `Symbol` (`ext_vector_accessor`); the value category is the base's, a glvalue with `ObjectKind::VectorComponent`; built by `Builder::ext_vector_element`; `kiln_ast::expr::ext_vector_lanes` decodes the accessor to lane numbers as clang's `getEncodedElementAccess`; dumped `ExtVectorElementExpr '<type>' <accessor>`) |
+| GNU / builtins | `StmtExpr` (M2), `ChooseExpr`, `VAArgExpr` (WP-171: `a` = the `va_list` operand, `b` = the written type, `cold.trait_rhs_loc` = the type's begin, `cold.end_loc` = the `)`; the node type is the written type without references, always a prvalue; accessor `ExprArena::va_arg`), `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`; WP-154: `aux` = the builtin id (`ExprArena::atomic_op`), `a` = a list of the operands in clang's order `ptr`, `order`, `val1`, `order_fail`, `val2`, `weak`, only those the op takes (`atomic_subs`); the per-op shape is `kiln_ast::decl::builtin::atomic`), `ShuffleVectorExpr` (`__builtin_shufflevector`; WP-282: `a` = a list of the operands as written, the two vectors then the indices (`shuffle_subs`); `aux` bit 0 = the mask is known, then `b` = a raw list of the `u32` lane indices, `u32::MAX` for -1 (`shuffle_mask`); `cold.end_loc` = the `)`; dumped and printed as clang), `ConvertVectorExpr`, `ExtVectorElementExpr` (WP-307/312: `a` = the base vector, or for `->` (`ExprFlags::ARROW`) the pointer to it (`operand`), `b` = the accessor's `Symbol` (`ext_vector_accessor`); for `.` the value category is the base's, a glvalue with `ObjectKind::VectorComponent`; built by `Builder::ext_vector_element`; `kiln_ast::expr::ext_vector_access` decodes the accessor to lane numbers as clang's `getEncodedElementAccess`; dumped `ExtVectorElementExpr '<type>' <accessor>`) |
 | reflection (M6) | `CXXReflectExpr` (`^^`: operand type/decl/namespace/expr → `ReflectionId` when non-dependent), `CXXSpliceExpr` (`[: e :]` in expression position; designated entity once evaluated) |
 | recovery | `RecoveryExpr` (children kept; `ERROR` dependence; type if known) |
 
@@ -910,8 +910,14 @@ context-free defaults (`NoEnv`):
   - `Cast` gives `(short)5`.
   - `Char(enc)` gives `'a'` or `u8'a'`, using the string escapes, with
     `'` escaped.
-  - `Enum` gives the enumerator `E::X`, or `(E)7` when no enumerator
-    matches.
+  - `Enum` gives the enumerator, fully qualified by its scope (clang
+    `printQualifiedName`; an unscoped enumeration adds no component:
+    `n::E::X`, `n::ub`), or `(n::E)7` when no enumerator matches. A
+    cast prints the canonical type with every name scoped
+    (`PrintEnv::arg_type_name`; `A<(n::E)5>` for `(n::EE)5`). Sema's
+    `TypeNames::write_value` uses this style for every integer, so
+    diagnostics print `S<n::E::b>` and `Ch<'x'>`, not `S<1>` and
+    `Ch<120>` (WP-303).
 - **References** print without `&` (`x`).
 - **Class values** print as `S{1, 2}`.
 - Everything else prints as in the dump.

@@ -2293,7 +2293,6 @@ impl Sema<'_, '_> {
             let _ = s;
             self.error(DiagId::sema_storage_class_on_typedef, loc);
         }
-        let ext_vector = std::mem::take(&mut self.ext_vector_applied);
         let (ctx, lexical) = self.decl_contexts(d);
         // An earlier redefinition that was diagnosed is not the previous
         // declaration (as in clang, which does not chain invalid
@@ -2375,6 +2374,14 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let td = self.builder().typedef(h, kind, underlying, prev_ok);
+        if underlying.quals().is_empty()
+            && matches!(
+                self.ast.types.view(underlying.ty()),
+                TypeView::Vector { kind: kiln_ast::types::VectorKind::Ext, .. }
+            )
+        {
+            self.ext_vector_typedefs.push(td);
+        }
         // The decl-specifiers' start: an instantiation finds the type's
         // dependent names from there (§5.8), as in `typedef int
         // (*f)(typename T::type);`.
@@ -2392,9 +2399,6 @@ impl Sema<'_, '_> {
         }
         if let Some(t) = anon_tag {
             let _ = self.ast.decls.set_typedef_for_anon(t, td);
-        }
-        if ext_vector {
-            self.ext_vector_decls.push(td);
         }
         self.register_local(name, td);
         td
@@ -4115,6 +4119,13 @@ impl Sema<'_, '_> {
             }
             return;
         }
+        // clang `AddInitializerToDecl`: the initializer of an invalid
+        // variable is not checked against its type (`S::name &r = 1;`
+        // with no `S::name`: the type recovered to `int`, WP-308).
+        if vn.has(DeclFlags::INVALID) {
+            self.discard_initializer(&init);
+            return;
+        }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
         if self.extern_init_redefines(v, spec, loc) {
@@ -4570,7 +4581,10 @@ impl Sema<'_, '_> {
             return;
         }
         let vn = *self.ast.decls.get(v);
-        if vn.kind() != DeclKind::Var || vn.has(DeclFlags::INVALID) {
+        if vn.kind() != DeclKind::Var {
+            return;
+        }
+        if self.uninit_array_or_reference(v) || vn.has(DeclFlags::INVALID) {
             return;
         }
         // An in-class static data member declaration is not a definition
@@ -4671,6 +4685,50 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_default_init_const, loc).arg(self.ty_arg(ty));
             self.emit(msg);
         }
+    }
+
+    /// clang's `ActOnUninitializedDecl` checks before it stops at an
+    /// invalid declaration or a dependent type, for a variable definition
+    /// without an initializer: an array of unknown bound ([dcl.array]/5,
+    /// "definition of variable with array type needs an explicit size or
+    /// an initializer"; a `constexpr` one is "must be initialized by a
+    /// constant expression"), which makes it invalid; and, for an invalid
+    /// variable, a reference type, so `S::name &r;` with no `S::name`
+    /// (whose type recovers to `int`, [dcl.type.simple]) reports
+    /// "declaration of reference variable 'r' requires an initializer"
+    /// after "no type named 'name' in 'S'" (WP-308). True if it reported.
+    fn uninit_array_or_reference(&mut self, v: DeclId) -> bool {
+        let vn = *self.ast.decls.get(v);
+        let Some(ty) = vn.ty() else { return false };
+        let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
+        if spec.storage() == VarStorage::Extern
+            || !self.is_var_definition(v)
+            || self.is_error_type(ty)
+            || self.contains_undeduced_auto(ty)
+        {
+            return false;
+        }
+        if matches!(self.ast.types.canonical_view(ty), TypeView::IncompleteArray(_)) {
+            let msg = if spec.is_constexpr() {
+                let name = self.decl_name(v);
+                self.diag(DiagId::sema_constexpr_var_non_constant, vn.loc()).arg(name)
+            } else {
+                self.diag(DiagId::sema_typecheck_incomplete_array_needs_initializer, vn.loc())
+            };
+            self.emit(msg);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return true;
+        }
+        if !vn.has(DeclFlags::INVALID)
+            || self.ast.types.is_dependent(ty)
+            || !self.ast.types.is_reference(ty)
+        {
+            return false;
+        }
+        let name = self.decl_name(v);
+        let msg = self.diag(DiagId::sema_reference_var_requires_init, vn.loc()).arg(name);
+        self.emit(msg);
+        true
     }
 
     // -- function definitions ----------------------------------------------------

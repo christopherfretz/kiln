@@ -60,7 +60,28 @@ impl Substituter<'_, '_, '_> {
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
         let r = self.expr_node(e)?;
-        if self.sema.is_err_expr(r) { Err(SubstFail) } else { Ok(r) }
+        if self.sema.is_err_expr(r) {
+            return Err(SubstFail);
+        }
+        self.keep_template_kw(e, r);
+        Ok(r)
+    }
+
+    /// A name written `N::template x<A>` that is still unresolved after
+    /// substitution keeps its `template` keyword (clang's
+    /// `TransformDependentScopeDeclRefExpr` / `TransformUnresolvedLookupExpr`
+    /// pass the `TemplateKWLoc` on); a resolved `DeclRefExpr` does not
+    /// (WP-308).
+    fn keep_template_kw(&mut self, e: ExprId, r: ExprId) {
+        if r != e
+            && let Some(&kw) = self.sema.ast.templates.template_kw.get(e)
+            && matches!(
+                self.sema.ast.exprs.get(r).kind(),
+                ExprKind::UnresolvedLookupExpr | ExprKind::DependentScopeDeclRefExpr
+            )
+        {
+            let _ = self.sema.ast.templates.template_kw.insert(r, kw);
+        }
     }
 
     /// Substitutes into an optional expression.
@@ -650,6 +671,43 @@ impl Substituter<'_, '_, '_> {
                 let list = self.expr(list)?;
                 Ok(self.sema.act_on_va_arg(list, ty, ty_loc, loc, end))
             }
+            // clang `TransformChooseExpr`: all three operands, then
+            // `ActOnChooseExpr` again.
+            ExprKind::ChooseExpr => {
+                let [c, l, r] = ex(self).choose_operands(e);
+                let c = self.expr(c)?;
+                let l = self.expr(l)?;
+                let r = self.expr(r)?;
+                Ok(self.sema.act_on_choose_expr(loc, c, l, r, loc))
+            }
+            // clang `TransformExtVectorElementExpr`: the base, then the
+            // member access again (`RebuildExtVectorElementExpr`).
+            ExprKind::ExtVectorElementExpr => {
+                let b = self.expr(ex(self).operand(e))?;
+                let name = ex(self).ext_vector_accessor(e);
+                let arrow = n.has(ExprFlags::ARROW);
+                Ok(self.sema.act_on_member(b, name, loc, loc, arrow))
+            }
+            // clang `TransformOffsetOfExpr`: the operand type and the
+            // index expressions, then `BuildBuiltinOffsetOf` again.
+            ExprKind::OffsetOfExpr => {
+                let Some((operand, comps)) = ex(self).offsetof_pattern(e) else {
+                    return Ok(e);
+                };
+                let comps = comps.to_vec();
+                let operand = self.ty(operand, loc)?;
+                let mut out = Vec::with_capacity(comps.len());
+                for c in comps {
+                    out.push(match c {
+                        crate::OffsetofComponent::Index { index, start, end } => {
+                            let index = self.expr(index)?;
+                            crate::OffsetofComponent::Index { index, start, end }
+                        }
+                        f @ crate::OffsetofComponent::Field { .. } => f,
+                    });
+                }
+                Ok(self.sema.act_on_builtin_offsetof(loc, operand, &out, end))
+            }
             ExprKind::ShuffleVectorExpr => {
                 // clang `TransformShuffleVectorExpr`: the operands, rebuilt
                 // (and re-checked) as the builtin call.
@@ -660,13 +718,6 @@ impl Substituter<'_, '_, '_> {
                     args.push(self.expr(s)?);
                 }
                 Ok(self.sema.act_on_shufflevector(&args, loc, end))
-            }
-            ExprKind::ExtVectorElementExpr => {
-                // clang `TransformExtVectorElementExpr`: the base, then the
-                // member access rebuilt on it.
-                let acc = ex(self).ext_vector_accessor(e);
-                let b = self.expr(ex(self).operand(e))?;
-                Ok(self.sema.act_on_member(b, acc, loc, loc, false))
             }
             ExprKind::ConvertVectorExpr => {
                 let ty = self.ty(n.ty(), loc)?;
@@ -1260,6 +1311,9 @@ impl Substituter<'_, '_, '_> {
             let r = self.qualified_callee(c, &n, name, &decls, targs);
             if let (Ok(r), Some(b)) = (&r, begin) {
                 let _ = self.sema.ast.templates.expr_begin.insert(*r, b);
+            }
+            if let Ok(r) = r {
+                self.keep_template_kw(c, r);
             }
             return r;
         }
@@ -1911,7 +1965,27 @@ impl Substituter<'_, '_, '_> {
         if let [a] = args.as_slice() {
             return self.expr(*a);
         }
-        self.unimplemented("substitution into this CXXConstructExpr", loc)
+        // No or several written arguments: the constructor call is
+        // direct-initialization of the (substituted) class from the
+        // substituted arguments, redone ([dcl.init.general]/16.6.2; clang
+        // `TransformCXXConstructExpr` rebuilds the call). With none, a
+        // zero-initializing one is value-initialization
+        // ([dcl.init.general]/9), else default-initialization.
+        let (pty, zeroing, end) = (ex.get(e).ty(), ex.construct_info(e).zeroing, ex.end_loc(e));
+        let ty = self.ty(pty, loc)?;
+        let args = self.call_arg_list(self.sema.ast.exprs.construct_args(e))?;
+        if args.is_empty() && zeroing {
+            return Ok(self
+                .sema
+                .value_init_class(ty, loc)
+                .unwrap_or_else(|| self.sema.recover(ty, &[], loc)));
+        }
+        let mut site = crate::class::ConstructSite::at(loc);
+        site.rparen = end;
+        Ok(self
+            .sema
+            .construct_class(ty, &args, crate::class::InitStyle::Direct, site)
+            .unwrap_or_else(|| self.sema.recover(ty, &args, loc)))
     }
 
     /// Whether construct expression `e` has a written argument (one that

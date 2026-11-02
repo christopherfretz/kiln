@@ -342,6 +342,7 @@ impl Sema<'_, '_> {
         // declaration's `using` (spec/sema-templates.md §4.10).
         let at = self.templ.alias_using_loc.get(&pattern).copied().unwrap_or(loc);
         let checks = self.access_checks;
+        let trapped = self.sfinae_errors();
         let r = self.in_inst_context(ctx, |s| {
             s.access_ctx = access_ctx;
             let mut sub = Substituter::new(s, &args);
@@ -355,8 +356,11 @@ impl Sema<'_, '_> {
             return Err(());
         };
         // A substitution that checked access depends on the context it
-        // was used from: redone at every use, as clang does.
-        if self.access_checks == checks {
+        // was used from: redone at every use, as clang does. One whose
+        // error a SFINAE context captured (a narrowing list element in a
+        // `decltype`) is redone too, so every use fails
+        // ([temp.deduct.general]/8).
+        if self.access_checks == checks && self.sfinae_errors() == trapped {
             let _ = self.inst.alias_cache.insert((tmpl, conv.canonical), u);
         }
         Ok(self.ast.types.template_specialization(name, list, Some(u), true))

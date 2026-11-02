@@ -76,6 +76,9 @@ impl Sema<'_, '_> {
         if d.dropped {
             return None;
         }
+        // `friend void f(auto);` is an abbreviated friend function
+        // template ([dcl.fct]/22): its invented head is the friend's.
+        self.finish_invented_head();
         let head = self.take_template_head(d.qualifier);
         let op_d = self.operator_declarator(d);
         let d = op_d.as_ref().unwrap_or(d);

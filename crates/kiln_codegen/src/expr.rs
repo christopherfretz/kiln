@@ -45,12 +45,18 @@ pub(crate) struct LV {
     pub addr: Addr,
     pub q: QualType,
     pub bf: Option<BitFieldInfo>,
-    /// An element of the vector at `addr` (clang `LValue::MakeVectorElt`).
-    pub vidx: Option<V>,
-    /// The components of the vector at `addr` an `ExtVectorElementExpr`
-    /// of several lanes selects (clang `LValue::MakeExtVectorElt`); one
-    /// lane is a [`Self::vidx`].
-    pub swz: Option<ExprId>,
+    /// An element, or a swizzle, of the vector at `addr` (clang
+    /// `LValue::MakeVectorElt` / `MakeExtVectorElt`).
+    pub vidx: Option<VecLane>,
+}
+
+/// The part of a vector an [`LV`] designates.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum VecLane {
+    /// One element, by a (possibly non-constant) index.
+    Index(V),
+    /// The lanes the `ExtVectorElementExpr` names (`v.xz`).
+    Swizzle(ExprId),
 }
 
 fn low_mask(bits: u32) -> u128 {
@@ -155,6 +161,10 @@ impl Cg<'_> {
         let q = n.ty();
         Ok(Some(match n.kind() {
             ExprKind::ParenExpr => return self.emit_scalar_opt(ast.exprs.operand(e)),
+            // clang `getChosenSubExpr`: only the chosen operand is emitted.
+            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
+                return self.emit_scalar_opt(ast.exprs.choose_chosen(e).expect("guarded"));
+            }
             // clang `ScalarExprEmitter::VisitCompoundLiteralExpr`: a load
             // of the literal's temporary.
             ExprKind::CompoundLiteralExpr => {
@@ -399,6 +409,22 @@ impl Cg<'_> {
                 let sq = ast.exprs.get(src).ty();
                 self.convert_vector(v, sq, q)
             }
+            // clang `EmitExtVectorElementExpr` of a prvalue vector (`(v +
+            // v).x`): the vector is stored to a temporary, then loaded as
+            // an element (`extractelement`) or swizzle (`shufflevector`).
+            ExprKind::ExtVectorElementExpr if !self.is_glvalue(e) => {
+                let base = ast.exprs.operand(e);
+                let lanes = self.swizzle_lanes(e, false)?;
+                let bq = ast.exprs.get(base).ty();
+                let v = self.emit_scalar(base)?;
+                let tmp = self.temp(bq);
+                self.store(v, tmp.v, tmp.align, false);
+                let vidx = match lanes.as_slice() {
+                    [l] => VecLane::Index(self.icn(LTy::I64, i128::from(*l))),
+                    _ => VecLane::Swizzle(e),
+                };
+                self.load_lv(LV { addr: tmp, q, bf: None, vidx: Some(vidx) })
+            }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
@@ -415,16 +441,18 @@ impl Cg<'_> {
 
     /// clang `EmitLoadOfLValue` for scalars.
     pub(crate) fn load_lv(&mut self, lv: LV) -> V {
-        if let Some(idx) = lv.vidx {
-            let vec = self.vec_elt_load(lv);
-            return self.extract_elt(vec, idx);
-        }
-        // clang `EmitLoadOfExtVectorElementLValue`: a one-operand
-        // `shufflevector` of the loaded vector.
-        if let Some(e) = lv.swz {
-            let vec = self.vec_elt_load(lv);
-            let lanes = self.ext_vector_lanes(e);
-            return self.shuffle(vec, None, lanes);
+        match lv.vidx {
+            Some(VecLane::Index(idx)) => {
+                let vec = self.vec_elt_load(lv);
+                return self.extract_elt(vec, idx);
+            }
+            Some(VecLane::Swizzle(e)) => {
+                let vec = self.vec_elt_load(lv);
+                // Sema accepted the accessor; a malformed one reads poison.
+                let lanes = self.swizzle_lanes(e, true).unwrap_or_default();
+                return self.swizzle_value(vec, &lanes);
+            }
+            None => {}
         }
         let Some(bf) = lv.bf else {
             if let Some(vq) = self.ast.types.as_atomic(lv.q) {
@@ -465,9 +493,15 @@ impl Cg<'_> {
     pub(crate) fn store_lv(&mut self, v: V, lv: LV, want: bool) -> V {
         // clang `EmitStoreThroughLValue` of a vector element: read,
         // `insertelement`, write (a `bool` vector through `<P x i1>`).
-        if let Some(idx) = lv.vidx {
+        if let Some(lane) = lv.vidx {
             let vec = self.vec_elt_load(lv);
-            let ins = self.insert_elt(vec, v, idx);
+            let ins = match lane {
+                VecLane::Index(idx) => self.insert_elt(vec, v, idx),
+                VecLane::Swizzle(e) => {
+                    let lanes = self.swizzle_lanes(e, true).unwrap_or_default();
+                    self.store_swizzle(v, vec, &lanes)
+                }
+            };
             let raw = if self.m.types.int_width(lv.addr.ty).is_some() {
                 self.cast(CastOp::BitCast, ins, lv.addr.ty)
             } else {
@@ -475,10 +509,6 @@ impl Cg<'_> {
             };
             let vol = self.is_volatile(lv.q);
             self.store(raw, lv.addr.v, lv.addr.align, vol);
-            return v;
-        }
-        if let Some(e) = lv.swz {
-            self.store_ext_vector_elts(v, lv, e);
             return v;
         }
         let Some(bf) = lv.bf else {
@@ -1642,7 +1672,6 @@ impl Cg<'_> {
                     q,
                     bf: None,
                     vidx: None,
-                    swz: None,
                 })
             }
             // clang `EmitDeclRefLValue`: a structured binding is its
@@ -1682,7 +1711,7 @@ impl Cg<'_> {
                     return Ok(self.ref_lvalue(p, q));
                 }
                 if let Some(&a) = self.f.locals.get(&d) {
-                    return Ok(LV { addr: a, q, bf: None, vidx: None, swz: None });
+                    return Ok(LV { addr: a, q, bf: None, vidx: None });
                 }
                 let ty = self.mty(q);
                 let st = ast.decls.var(d).map(|v| v.spec.storage());
@@ -1694,26 +1723,14 @@ impl Cg<'_> {
                     self.get_gvar(d)?
                 };
                 let align = self.var_align(d);
-                Ok(LV {
-                    addr: Addr { v: V::C(gval(g)), ty, align },
-                    q,
-                    bf: None,
-                    vidx: None,
-                    swz: None,
-                })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             DeclKind::TemplateParamObject => {
                 let g = self.param_object_global(d)?;
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 let ty = self.mty(dq);
                 let align = self.global_align(dq);
-                Ok(LV {
-                    addr: Addr { v: V::C(gval(g)), ty, align },
-                    q,
-                    bf: None,
-                    vidx: None,
-                    swz: None,
-                })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
@@ -1767,7 +1784,7 @@ impl Cg<'_> {
     pub(crate) fn ref_lvalue(&mut self, p: V, q: QualType) -> LV {
         let ty = if self.ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
         let (_, align) = self.pointee_layout(q);
-        LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None, swz: None }
+        LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None }
     }
 
     /// clang `EmitLValue`.
@@ -1777,6 +1794,9 @@ impl Cg<'_> {
         let q = n.ty();
         match n.kind() {
             ExprKind::ParenExpr => self.emit_lvalue(ast.exprs.operand(e)),
+            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
+                self.emit_lvalue(ast.exprs.choose_chosen(e).expect("guarded"))
+            }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {
                     let saved = self.enter_default_arg(e);
@@ -1821,17 +1841,11 @@ impl Cg<'_> {
                 let g = self.lit_global(ast.exprs.string_lit(e));
                 let ty = self.m.global(g).value_type();
                 let align = self.m.global(g).align.unwrap_or(1);
-                Ok(LV {
-                    addr: Addr { v: V::C(gval(g)), ty, align },
-                    q,
-                    bf: None,
-                    vidx: None,
-                    swz: None,
-                })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             ExprKind::MemberExpr => self.member_lvalue(e),
+            ExprKind::ExtVectorElementExpr => self.ext_vector_lvalue(e, q),
             ExprKind::ArraySubscriptExpr => self.subscript_lvalue(e),
-            ExprKind::ExtVectorElementExpr => self.ext_vector_elt_lvalue(e),
             ExprKind::UnaryOperator => self.unary_lvalue(e, q),
             ExprKind::BinaryOperator => self.binary_lvalue(e, q),
             ExprKind::CompoundAssignOperator => Ok(self.emit_compound_assign(e)?.0),
@@ -1894,7 +1908,7 @@ impl Cg<'_> {
         };
         let ty = self.m.global(g).value_type();
         let align = self.m.global(g).align.unwrap_or(1);
-        Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None, swz: None })
+        Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
     }
 
     /// clang `EmitUnaryOpLValue`: `*p`, `++x`/`--x`, `__real`/`__imag`
@@ -1906,7 +1920,7 @@ impl Cg<'_> {
                 let p = self.emit_scalar(ast.exprs.operand(e))?;
                 let ty = if ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
                 let align = self.natural_align(q);
-                Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None, swz: None })
+                Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None })
             }
             op @ (UnaryOp::PreInc | UnaryOp::PreDec) => {
                 let lv = self.emit_lvalue(ast.exprs.operand(e))?;
@@ -1948,7 +1962,7 @@ impl Cg<'_> {
                     self.emit_agg(r, t, false)?;
                     self.f.slot_volatile = false;
                     self.atomic_agg_store(t, lv);
-                    return Ok(LV { addr: t, q, bf: None, vidx: None, swz: None });
+                    return Ok(LV { addr: t, q, bf: None, vidx: None });
                 }
                 if self.is_complex(q) {
                     return Ok(self.cx_assign(e)?.0);
@@ -1981,7 +1995,7 @@ impl Cg<'_> {
         let (tmp, needs_init) =
             if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
         if !needs_init {
-            return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, swz: None });
+            return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None });
         }
         if self.is_aggregate(sq) {
             // clang `EmitAnyExprToMem`: a materialized temporary is
@@ -2018,7 +2032,7 @@ impl Cg<'_> {
         } else if n.kind() == ExprKind::MaterializeTemporaryExpr {
             self.push_temporary_cleanup(e, tmp);
         }
-        Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, swz: None })
+        Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
     }
 
     /// clang `EmitCompoundLiteralLValue` for a scalar, vector or complex
@@ -2036,7 +2050,7 @@ impl Cg<'_> {
             let v = self.emit_scalar(init)?;
             self.store_scalar(v, tmp, q);
         }
-        Ok(LV { addr: tmp, q, bf: None, vidx: None, swz: None })
+        Ok(LV { addr: tmp, q, bf: None, vidx: None })
     }
 
     /// clang `EmitCastLValue`.
@@ -2063,7 +2077,7 @@ impl Cg<'_> {
                 let (vb, off) = self.base_path(e, derived)?;
                 let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
                 let ty = self.mty(q);
-                Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, swz: None })
+                Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
             }
             // clang `EmitCastLValue` `CK_BaseToDerived`: never null-checked.
             CastKind::BaseToDerived => {
@@ -2095,13 +2109,7 @@ impl Cg<'_> {
                 let dq = ast.exprs.get(dead).ty();
                 let ty = self.mty(dq);
                 let v = V::C(self.m.const_undef(LTy::PTR));
-                return Ok(LV {
-                    addr: Addr { v, ty, align: 1 },
-                    q: dq,
-                    bf: None,
-                    vidx: None,
-                    swz: None,
-                });
+                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None, vidx: None });
             }
             return self.emit_lvalue(live);
         }
@@ -2137,7 +2145,6 @@ impl Cg<'_> {
             q: ast.exprs.get(e).ty(),
             bf: None,
             vidx: None,
-            swz: None,
         })
     }
 
@@ -2225,13 +2232,7 @@ impl Cg<'_> {
                 align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
             }
             let st = self.m.types.int(bf.storage_size);
-            return Ok(LV {
-                addr: Addr { v, ty: st, align },
-                q,
-                bf: Some(bf),
-                vidx: None,
-                swz: None,
-            });
+            return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf), vidx: None });
         }
         let fq = ast.decls.get(field).ty().unwrap_or(q);
         if let Some(referee) = self.referee(fq) {
@@ -2241,13 +2242,7 @@ impl Cg<'_> {
             let p = self.load(LTy::PTR, slot.addr.v, slot.addr.align, false);
             let (_, align) = self.pointee_layout(referee);
             let ty = self.mty(referee);
-            return Ok(LV {
-                addr: Addr { v: p, ty, align },
-                q: referee,
-                bf: None,
-                vidx: None,
-                swz: None,
-            });
+            return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None, vidx: None });
         }
         self.field_lvalue_init(base, field, q)
     }
@@ -2286,7 +2281,6 @@ impl Cg<'_> {
                 q,
                 bf: None,
                 vidx: None,
-                swz: None,
             });
         }
         let Some(i) = idx else {
@@ -2295,11 +2289,11 @@ impl Cg<'_> {
             let off = self.field_byte_offset(field)?;
             let v = if off == 0 { base.v } else { self.byte_offset(base.v, off) };
             let align = min_align(base.align, off);
-            return Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, swz: None });
+            return Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None });
         };
         let v = self.struct_gep(rty, base.v, i);
         let align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
-        Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, swz: None })
+        Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
     }
 
     /// The array operand of a simple array-to-pointer decay.
@@ -2392,100 +2386,128 @@ impl Cg<'_> {
         }
     }
 
-    /// The lanes of the root vector the `ExtVectorElementExpr` `e`
-    /// selects, composed through glvalue element-access bases (clang
-    /// `EmitExtVectorElementExpr` on an `ExtVectorElt` base lvalue:
-    /// `v.even.y` is lane 2 of `v`).
-    fn ext_vector_lanes(&self, e: ExprId) -> Vec<u32> {
+    /// clang `EmitExtVectorElementExpr`: the base vector's address (the
+    /// pointer's pointee for `->`) and the named lanes.
+    fn ext_vector_lvalue(&mut self, e: ExprId, q: QualType) -> R<LV> {
         let ast = self.ast;
-        let own = |x: ExprId| {
-            let n = self.vec_of(ast.exprs.get(x).ty()).map_or(1, |v| v.1);
-            let acc = ast.symbols().as_str(ast.exprs.ext_vector_accessor(x));
-            kiln_ast::expr::ext_vector_lanes(acc, n)
-        };
-        let mut lanes = own(e);
-        let mut cur = e;
-        loop {
-            let base = ast.exprs.operand(cur);
-            if ast.exprs.get(base).kind() != ExprKind::ExtVectorElementExpr
-                || !self.is_glvalue(base)
-            {
-                return lanes;
-            }
-            let outer = own(base);
-            for l in &mut lanes {
-                *l = outer.get(*l as usize).copied().unwrap_or(*l);
-            }
-            cur = base;
+        // `v.wzyx.x`: a swizzle of a swizzle lvalue is one swizzle of
+        // the innermost vector (the lanes compose in `swizzle_lanes`).
+        let mut inner = e;
+        while let Some(b) = self.swizzle_lvalue_base(inner) {
+            inner = b;
         }
-    }
-
-    /// The vector operand under a chain of glvalue element accesses.
-    fn ext_vector_root(&self, e: ExprId) -> ExprId {
-        let ast = self.ast;
-        let mut base = ast.exprs.operand(e);
-        while ast.exprs.get(base).kind() == ExprKind::ExtVectorElementExpr && self.is_glvalue(base)
-        {
-            base = ast.exprs.operand(base);
-        }
-        base
-    }
-
-    /// clang `EmitExtVectorElementExpr`: the base vector's lvalue (a
-    /// prvalue base is stored to a temporary first), then one lane as a
-    /// vector element or several as an ext-vector component lvalue.
-    fn ext_vector_elt_lvalue(&mut self, e: ExprId) -> R<LV> {
-        let ast = self.ast;
-        let q = ast.exprs.get(e).ty();
-        let base = self.ext_vector_root(e);
-        let blv = if self.is_glvalue(base) {
-            self.emit_lvalue(base)?
+        let base = ast.exprs.operand(inner);
+        let addr = if ast.exprs.get(inner).has(ExprFlags::ARROW) {
+            let p = self.emit_scalar(base)?;
+            let Some(vq) = ast.types.pointee(ast.exprs.get(base).ty()) else {
+                return err(self.loc_of(inner), "malformed ExtVectorElementExpr");
+            };
+            Addr { v: p, ty: self.mty(vq), align: self.natural_align(vq) }
         } else {
-            let bq = ast.exprs.get(base).ty();
-            let v = self.emit_scalar(base)?;
-            let tmp = self.temp(bq);
-            self.store(v, tmp.v, tmp.align, false);
-            LV { addr: tmp, q: bq, bf: None, vidx: None, swz: None }
+            self.emit_lvalue(base)?.addr
         };
-        let lanes = self.ext_vector_lanes(e);
-        if self.vec_of(q).is_none() {
-            let i = self.i64c(i128::from(lanes.first().copied().unwrap_or(0)));
-            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(i), swz: None });
-        }
-        Ok(LV { addr: blv.addr, q, bf: None, vidx: None, swz: Some(e) })
+        let lanes = self.swizzle_lanes(e, true)?;
+        let vidx = match lanes.as_slice() {
+            // clang's `SizeTy` index.
+            [l] => VecLane::Index(self.icn(LTy::I64, i128::from(*l))),
+            _ => VecLane::Swizzle(e),
+        };
+        Ok(LV { addr, q, bf: None, vidx: Some(vidx) })
     }
 
-    /// clang `EmitStoreThroughExtVectorComponentLValue` for several lanes:
-    /// `v` shuffled into the loaded vector, which is stored back.
-    fn store_ext_vector_elts(&mut self, v: V, lv: LV, e: ExprId) {
-        let lanes = self.ext_vector_lanes(e);
-        let vec = self.vec_elt_load(lv);
+    /// The `ExtVectorElementExpr` lvalue (through parentheses) that the
+    /// `.` access `e` swizzles further, if any.
+    fn swizzle_lvalue_base(&self, e: ExprId) -> Option<ExprId> {
+        let ast = self.ast;
+        if ast.exprs.get(e).has(ExprFlags::ARROW) || !self.is_glvalue(e) {
+            return None;
+        }
+        let mut b = ast.exprs.operand(e);
+        while ast.exprs.get(b).kind() == ExprKind::ParenExpr {
+            b = ast.exprs.operand(b);
+        }
+        (ast.exprs.get(b).kind() == ExprKind::ExtVectorElementExpr).then_some(b)
+    }
+
+    /// The lanes of its base vector an `ExtVectorElementExpr` selects;
+    /// with `compose`, of the innermost vector of a swizzle-of-swizzle
+    /// lvalue (a lane past the end stays past it).
+    fn swizzle_lanes(&self, e: ExprId, compose: bool) -> R<Vec<u32>> {
+        let ast = self.ast;
+        let base = ast.exprs.operand(e);
+        let mut bq = ast.exprs.get(base).ty();
+        if ast.exprs.get(e).has(ExprFlags::ARROW) {
+            bq = ast.types.pointee(bq).unwrap_or(bq);
+        }
+        let Some((_, count)) = self.vec_of(bq) else {
+            return err(self.loc_of(e), "ExtVectorElementExpr of a non-vector");
+        };
+        let name = ast.symbols().as_str(ast.exprs.ext_vector_accessor(e));
+        let kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } =
+            kiln_ast::expr::ext_vector_access(name, count)
+        else {
+            return err(self.loc_of(e), "invalid vector component name");
+        };
+        match self.swizzle_lvalue_base(e) {
+            Some(b) if compose => {
+                let outer = self.swizzle_lanes(b, true)?;
+                Ok(lanes
+                    .iter()
+                    .map(|&l| outer.get(l as usize).copied().unwrap_or(u32::MAX))
+                    .collect())
+            }
+            _ => Ok(lanes),
+        }
+    }
+
+    /// `lanes` of the vector value `v`: one lane is `extractelement`,
+    /// several a one-operand `shufflevector` (a lane past the end is
+    /// poison).
+    fn swizzle_value(&mut self, v: V, lanes: &[u32]) -> V {
+        let count = self.vec_lane_count(v);
+        if let [l] = lanes {
+            let i = self.icn(LTy::I32, i128::from(*l));
+            return self.extract_elt(v, i);
+        }
+        let mask =
+            lanes.iter().map(|&l| if l < count { l } else { kiln_llvm::SHUFFLE_POISON }).collect();
+        self.shuffle(v, None, mask)
+    }
+
+    /// clang `EmitStoreThroughExtVectorComponentLValue`: `v` shuffled
+    /// into `lanes` of the loaded vector `vec`. A source as long as the
+    /// vector is one shuffle; a shorter one is widened first, then
+    /// shuffled into `vec` (an odd vector's `.hi`/`.odd` names one lane
+    /// past its end, which is dropped).
+    fn store_swizzle(&mut self, v: V, vec: V, lanes: &[u32]) -> V {
         let src_n = u32::try_from(lanes.len()).unwrap_or(0);
-        let dst_n = self.m.types.vector_info(lv.addr.ty).map_or(0, |x| x.1);
-        let out = if dst_n == src_n {
+        let dst_n = self.vec_lane_count(vec);
+        if dst_n == src_n {
             let mut mask = vec![0; dst_n as usize];
             for (i, &l) in lanes.iter().enumerate() {
                 if let Some(m) = mask.get_mut(l as usize) {
                     *m = i as u32;
                 }
             }
-            self.shuffle(v, None, mask)
-        } else {
-            let mut ext: Vec<u32> = (0..src_n).collect();
-            ext.resize(dst_n as usize, kiln_llvm::SHUFFLE_POISON);
-            let wide = self.shuffle(v, None, ext);
-            let mut mask: Vec<u32> = (0..dst_n).collect();
-            // An odd vector's `.hi`/`.odd` names one lane past its end.
-            let used = if lanes.last() == Some(&dst_n) { lanes.len() - 1 } else { lanes.len() };
-            for (i, &l) in lanes.iter().enumerate().take(used) {
-                if let Some(m) = mask.get_mut(l as usize) {
-                    *m = i as u32 + dst_n;
-                }
+            return self.shuffle(v, None, mask);
+        }
+        let mut ext: Vec<u32> = (0..src_n).collect();
+        ext.resize(dst_n as usize, kiln_llvm::SHUFFLE_POISON);
+        let wide = self.shuffle(v, None, ext);
+        let mut mask: Vec<u32> = (0..dst_n).collect();
+        let used = if lanes.last() == Some(&dst_n) { lanes.len() - 1 } else { lanes.len() };
+        for (i, &l) in lanes.iter().enumerate().take(used) {
+            if let Some(m) = mask.get_mut(l as usize) {
+                *m = i as u32 + dst_n;
             }
-            self.shuffle(vec, Some(wide), mask)
-        };
-        let vol = self.is_volatile(lv.q);
-        self.store(out, lv.addr.v, lv.addr.align, vol);
+        }
+        self.shuffle(vec, Some(wide), mask)
+    }
+
+    /// The element count of the vector value `v`.
+    fn vec_lane_count(&mut self, v: V) -> u32 {
+        let t = self.f.fir.ty(&self.m, v);
+        self.m.types.vector_info(t).map_or(0, |x| x.1)
     }
 
     /// clang `EmitArraySubscriptExpr`.
@@ -2497,7 +2519,7 @@ impl Cg<'_> {
         if let Some((base, idx)) = self.vec_subscript(e) {
             let blv = self.emit_lvalue(base)?;
             let i = self.emit_scalar(idx)?;
-            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(i), swz: None });
+            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(VecLane::Index(i)) });
         }
         let [l, r] = ast.exprs.operands(e);
         let swapped =
@@ -2553,7 +2575,7 @@ impl Cg<'_> {
             None => min_align(addr.align, esz),
         };
         let v = self.gep(addr.ty, addr.v, indices, true);
-        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None, swz: None })
+        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None })
     }
 
     // ---- statement expressions -----------------------------------------
@@ -3209,6 +3231,9 @@ impl Cg<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
+            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
+                self.agg_visit(ast.exprs.choose_chosen(e).expect("guarded"), dest, zeroed)
+            }
             // clang `AggExprEmitter::VisitCXXRewrittenBinaryOperator`: the
             // semantic form (`(y <=> x)` reversed, or `0 <=> (y <=> x)`).
             ExprKind::CXXRewrittenBinaryOperator => {
@@ -3759,13 +3784,7 @@ impl Cg<'_> {
         }
         self.f.array_index.push(phi);
         let sc = self.begin_scope(false);
-        let lv = LV {
-            addr: Addr { v: el, ty: ety, align: ealign },
-            q: eq,
-            bf: None,
-            vidx: None,
-            swz: None,
-        };
+        let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
         let r = if inner {
             self.array_init_loop(sub, lv.addr, Some(outer))
         } else {
@@ -3876,13 +3895,8 @@ impl Cg<'_> {
                 }
                 el
             };
-            let lv = LV {
-                addr: Addr { v: el, ty: ety, align: ealign },
-                q: eq,
-                bf: None,
-                vidx: None,
-                swz: None,
-            };
+            let lv =
+                LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
             self.init_to_lvalue(init, lv, zeroed)?;
         }
         let trivial = match filler {
@@ -3904,13 +3918,8 @@ impl Cg<'_> {
             let body = self.f.fir.create_block();
             self.emit_block(body, false);
             let cur = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(el, entry)] }, LTy::PTR);
-            let lv = LV {
-                addr: Addr { v: cur, ty: ety, align: ealign },
-                q: eq,
-                bf: None,
-                vidx: None,
-                swz: None,
-            };
+            let lv =
+                LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
             // [class.temporary]/5: the temporaries of each element's
             // initialization are destroyed before the next one starts.
             let sc = self.begin_scope(false);
@@ -4059,7 +4068,7 @@ impl Cg<'_> {
         }
         if ast.types.as_atomic(q).is_some() {
             // clang `EmitExprAsInit` -> `EmitAtomicInit` (WP-165).
-            return self.atomic_init(init, LV { addr, q, bf: None, vidx: None, swz: None });
+            return self.atomic_init(init, LV { addr, q, bf: None, vidx: None });
         }
         let fold = self.folds.get(init);
         if self.is_aggregate(q) {
