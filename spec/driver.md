@@ -387,7 +387,13 @@ the current directory (standard input is `-`). `-o -` is standard output.
   The pass run writes bitcode, which a second `opt -discard-value-names
   -S` reads back so the local value names the passes made are dropped,
   as in clang's release pipeline (`opt` refuses `-discard-value-names`
-  for textual input). `-disable-llvm-passes` (a cc1 option, usually
+  for textual input). For an object (`-c`, or the objects of a link)
+  the second run is skipped and `llc` reads the bitcode directly
+  (WP-397): value names do not reach an object, it saves a process and
+  a text round trip (about half the `-O0` always-inliner's cost,
+  spec/codegen.md §6 "Always-inliner"), and the bitcode's preserved
+  use-list order makes `llc`'s output match clang's in-process codegen.
+  `-S -emit-llvm`, `-c -emit-llvm` and `-S` keep both runs. `-disable-llvm-passes` (a cc1 option, usually
   spelled `-Xclang -disable-llvm-passes`) skips both runs, so
   `-emit-llvm` writes the frontend's IR (pre-split coroutines). `-v`
   prints the `opt` commands before the `llc` one; `-###` does not show
