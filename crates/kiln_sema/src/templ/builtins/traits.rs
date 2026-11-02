@@ -1115,10 +1115,21 @@ impl Sema<'_, '_> {
                 .into_iter()
                 .map(|f| self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR)),
         );
+        // The subobject's destructor itself, whatever its access: a
+        // protected base destructor (libc++'s `__list_imp`) is usable by
+        // the derived class's ([except.spec]/8 names the invoked
+        // destructor, not `is_nothrow_destructible`).
         subs.into_iter().all(|q| {
-            self.ast.types.is_reference(q)
-                || self.element_record(q).is_none()
-                || self.is_destructible(TypeTrait::IsNothrowDestructible, q)
+            if self.ast.types.is_reference(q) {
+                return true;
+            }
+            let Some(sr) = self.element_record(q) else { return true };
+            match self.select_special(sr, SpecialKind::Dtor, Quals::default(), Quals::default()) {
+                Selected::Found(sd) => self.dtor_nothrow(sr, sd),
+                // A deleted or ambiguous one deletes this destructor
+                // instead ([class.dtor]/7).
+                _ => true,
+            }
         })
     }
 
