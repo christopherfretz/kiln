@@ -308,10 +308,15 @@ impl Sema<'_, '_> {
     pub(crate) fn ignore_parens(&self, e: ExprId) -> ExprId {
         let mut e = e;
         for _ in 0..256 {
-            if self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-                e = self.ast.exprs.operand(e);
-            } else {
-                break;
+            // clang `IgnoreParensSingleStep` also looks through a
+            // `__builtin_choose_expr` to its chosen operand.
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                ExprKind::ChooseExpr => match self.ast.exprs.choose_chosen(e) {
+                    Some(c) => e = c,
+                    None => break,
+                },
+                _ => break,
             }
         }
         e
@@ -360,6 +365,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXMemberCallExpr
                 | ExprKind::CXXPseudoDestructorExpr
                 | ExprKind::DesignatedInitUpdateExpr
+                | ExprKind::ExtVectorElementExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
                 ExprKind::CXXRewrittenBinaryOperator => {
@@ -1355,13 +1361,16 @@ impl Sema<'_, '_> {
                 return self.act_dependent_scope_ref(n, name, None, b, loc);
             }
             let text = self.decl_name_str(name);
-            let msg = match qualifier {
-                Some(q) => {
-                    self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q))
-                }
-                None => self.diag(Self::undeclared_use_id(name), loc).arg(text),
-            };
-            self.emit(msg);
+            if let Some(q) = qualifier {
+                // clang reports it through delayed typo correction, at the
+                // end of the full-expression.
+                let msg =
+                    self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q));
+                self.emit_delayed_typo(msg);
+            } else {
+                let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
+                self.emit(msg);
+            }
             return self.recover_err(&[], loc);
         };
         if found.decls.len() > 1
@@ -1372,7 +1381,27 @@ impl Sema<'_, '_> {
             // resolved at instantiation, like a lone one (below).
             return self.builder().dependent_member(None, true, name, false, nns, None, loc);
         }
+        // clang `LookupResult::resolveKind`: an invalid function template
+        // (one declared with a parameter type that names no type) is
+        // ignored beside other declarations, so `t3` naming an invalid
+        // template and a valid function is that function (WP-308).
+        let bad = |s: &Self, x: DeclId| {
+            s.kind_of(x) == DeclKind::FunctionTemplate && s.ast.decls.get(x).has(DeclFlags::INVALID)
+        };
+        let mut found = found;
         let mut d = d;
+        if found.decls.len() > 1 && found.decls.iter().any(|&x| !bad(self, x)) {
+            let keep: Vec<bool> = found.decls.iter().map(|&x| !bad(self, x)).collect();
+            if keep.contains(&false) {
+                let mut k = keep.iter();
+                found.decls.retain(|_| k.next().copied().unwrap_or(true));
+                if found.found.len() == keep.len() {
+                    let mut k = keep.iter();
+                    found.found.retain(|_| k.next().copied().unwrap_or(true));
+                }
+                d = found.decls[0];
+            }
+        }
         let any_tmpl = found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
         if any_tmpl
             && found.decls.iter().all(|&x| {
@@ -1669,9 +1698,12 @@ impl Sema<'_, '_> {
         loc: Loc,
         extra: Option<kiln_ast::expr::DeclRefExtra>,
     ) -> ExprId {
-        let shadow = extra
-            .and_then(|x| x.found_decl)
-            .filter(|_| extra.is_some_and(|x| x.template_args.is_none()));
+        // A variable template specialization records its template as the
+        // found decl, which is no using-shadow.
+        let shadow = extra.and_then(|x| x.found_decl).filter(|&f| {
+            extra.is_some_and(|x| x.template_args.is_none())
+                || self.kind_of(f) != DeclKind::VarTemplate
+        });
         let n = *self.ast.decls.get(d);
         match n.kind() {
             // [dcl.struct.bind]/1: a binding is not usable before its
@@ -2166,11 +2198,21 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_not_assignable, loc);
             return false;
         }
+        if self.has_duplicate_vector_lanes(e) {
+            self.error(DiagId::sema_duplicate_vector_components_not_mlvalue, loc);
+            return false;
+        }
         if self.ast.types.effective_quals(t).is_const() {
             let mut base = self.ignore_parens(e);
             // clang classifies a vector element through its vector.
             while self.ast.exprs.get(base).object_kind() == ObjectKind::VectorComponent
-                && self.ast.exprs.get(base).kind() == ExprKind::ArraySubscriptExpr
+                && match self.ast.exprs.get(base).kind() {
+                    ExprKind::ArraySubscriptExpr => true,
+                    ExprKind::ExtVectorElementExpr => {
+                        !self.ast.exprs.get(base).has(ExprFlags::ARROW)
+                    }
+                    _ => false,
+                }
             {
                 let v = ExprId::new(self.ast.exprs.get(base).a());
                 base = self.ignore_parens(v);
@@ -4255,6 +4297,13 @@ impl Sema<'_, '_> {
         } else {
             (base, arrow)
         };
+        // clang `LookupMemberExpr`: `v.xy` / `p->xy` on an ext vector.
+        if qual.is_none()
+            && let Some(id) = name.as_ident()
+            && let Some(vt) = self.ext_vector_base(base, arrow)
+        {
+            return self.ext_vector_member(base, vt, id, loc, op_loc, arrow);
+        }
         let (b, obj_ty) = if arrow {
             // clang `LookupMemberExpr`: the pointee or element type, or a
             // function type as written.

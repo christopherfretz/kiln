@@ -1305,10 +1305,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             if !template_kw && next == TokKind::Punct(Punct::ColonColon) {
                 let stop = limit == Some(self.pos + 1);
                 let loc = self.bump().span.lo;
+                let cc = self.tok().span.lo;
                 if !stop {
                     self.bump();
                 }
-                qual = Some(self.s.act_on_nested_name_component(qual, name, loc).ok_or(())?);
+                let q = self.s.act_on_nested_name_component(qual, name, loc).ok_or(())?;
+                self.s.act_on_nns_component_use(q.1, cc);
+                qual = Some(q);
                 if stop {
                     break;
                 }
@@ -1343,17 +1346,14 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     .arg(text);
                 self.emit(d);
             }
-            if template_kw {
-                self.bump();
-            }
+            let kw = if template_kw { Some(self.bump().span.lo) } else { None };
             let loc = self.bump().span.lo;
             let Some((args, _, _)) = self.parse_template_arg_list() else { return Err(()) };
             let stop = limit == Some(self.pos);
             if !stop {
                 self.expect(Punct::ColonColon);
             }
-            qual =
-                Some(self.nested_name_template_id(class, qual, name, &args, template_kw, loc)?);
+            qual = Some(self.nested_name_template_id(class, qual, name, &args, kw, loc)?);
             if stop {
                 break;
             }
@@ -1361,16 +1361,21 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
     }
 
-    /// The `name<args>::` component of a nested-name-specifier after `qual`.
+    /// The `name<args>::` component of a nested-name-specifier after `qual`,
+    /// with the location of its `template` keyword (`kw`) if one is written.
     fn nested_name_template_id(
         &mut self,
         class: NameClass,
         qual: Option<(DeclId, NnsId)>,
         name: Symbol,
         args: &[kiln_ast::types::TemplateArg],
-        template_kw: bool,
+        kw: Option<Loc>,
         loc: Loc,
     ) -> Result<(DeclId, NnsId), ()> {
+        let template_kw = kw.is_some();
+        // The component begins at its `template` keyword, if any (clang's
+        // last-qualifier-name location).
+        let head = kw.unwrap_or(loc);
         let dep_prefix = qual.is_some_and(|(c, _)| self.s.is_dependent_ctx(c));
         let prefix_nns = qual.map(|q| q.1);
         Ok(match (class, qual) {
@@ -1385,7 +1390,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     return Err(());
                 };
                 self.s
-                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, loc)
+                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, head)
                     .ok_or(())?
             }
             (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
@@ -1397,7 +1402,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     kiln_ast::types::TagKeyword::None,
                     loc,
                 );
-                self.s.act_on_nested_name_template_id(Some(pn), c, ty, template_kw, loc).ok_or(())?
+                self.s
+                    .act_on_nested_name_template_id(Some(pn), c, ty, template_kw, head)
+                    .ok_or(())?
             }
             _ => {
                 let text = self.s.ast.symbols().as_str(name).to_owned();

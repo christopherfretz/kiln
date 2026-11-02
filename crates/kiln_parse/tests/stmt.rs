@@ -182,3 +182,29 @@ fn stmt_if_consteval() {
     let p = parse("void f() { if consteval {} else return; }");
     p.assert_diag("expected { after else");
 }
+
+/// [stmt.expr]/1: a qualified name lookup does not find is reported at the
+/// end of its full-expression (clang's delayed typo correction), so a
+/// missing `;` after the expression statement comes first; a declaration's
+/// initializer reports it where it is written (WP-308).
+#[test]
+fn delayed_no_member_after_missing_semi() {
+    let p = parse(
+        "struct S {};\nnamespace N {}\nvoid g() {\n  S::nom()\n  N::nom()\n  int a = S::none\n}\n",
+    );
+    let errs: Vec<&str> =
+        p.diags.iter().map(String::as_str).filter(|d| d.contains("error")).collect();
+    assert_eq!(
+        errs,
+        [
+            "4:11 error: expected ';' after expression",
+            "4:6 error: no member named 'nom' in 'S'",
+            "5:11 error: expected ';' after expression",
+            "5:6 error: no member named 'nom' in namespace 'N'",
+            "6:14 error: no member named 'none' in 'S'",
+            "6:18 error: expected ';' at end of declaration",
+        ],
+        "{:?}",
+        p.diags
+    );
+}
