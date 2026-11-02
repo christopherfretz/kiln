@@ -1045,9 +1045,22 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   division's operands to the next type with twice the exponent range,
   warning when none exists) is rejected with "unsupported argument";
   clang's `-Woverriding-option` warnings between complex-range flags are
-  not issued. `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`);
-  `_Complex __bf16` is rejected as clang rejects it, and `_Complex` of
-  `_Float32`, `_Float64` or `_Float128` is not tested (GCC 14 accepts it). `__float128` is not diagnosed on
+  not issued. `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`).
+  `_Complex __bf16` (spelled directly or through a type-name, as
+  libstdc++ `<complex>` writes `__complex__ decltype(0.0bf16)` under
+  `__STDCPP_BFLOAT16_T__`) is accepted as GCC 14 accepts it, where clang
+  rejects it ("'_Complex type-name' is invalid"; WP-365): a pair of
+  `__bf16` (`{ bfloat, bfloat }`, size 4, align 2), passed like
+  `_Complex _Float16` (AArch64 an HFA of two `bfloat`, x86-64
+  `<2 x bfloat>` in one SSE register), mangled `Cu6__bf16` / `CDF16b`.
+  Its `+ - * /` and compound assignments, like `_Complex _Float16`'s on
+  x86-64 (clang `EmitPromotedComplexBinaryOperator`, the element types
+  `f16_excess` names), are computed in `_Complex float` (`__mulsc3`,
+  `__divsc3`; nested operands stay in `float`) and truncated once, which
+  is what GCC 14 emits for `_Complex __bf16`
+  (`ext.complex/complex-bf16.cpp`, `libstdcxx-complex-bf16.cpp`).
+  `_Complex` of `_Float32`, `_Float64` or `_Float128` is not tested (GCC
+  14 accepts it). `__float128` is not diagnosed on
   AArch64, where clang 19 rejects it ("__float128 is not supported on
   this target"; `Target::has_float128` is false there but unread): kiln
   accepts it as binary128.
