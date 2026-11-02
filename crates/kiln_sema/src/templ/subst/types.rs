@@ -5,7 +5,9 @@
 //! written).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeFlags, TypeOfOperand, TypeView};
+use kiln_ast::types::{
+    ArgView, ExcSpec, ExprOperand, TemplateArg, TemplateName, TypeFlags, TypeOfOperand, TypeView,
+};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -15,7 +17,7 @@ use crate::Sema;
 use crate::declspec::{Chunk, Declarator, DeclaratorContext};
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
-use crate::templ::args::ArgLookup;
+use crate::templ::args::{ArgLookup, LevelMode};
 use crate::templ::written::WrittenKey;
 
 impl Substituter<'_, '_, '_> {
@@ -66,6 +68,58 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn check_param_types(&mut self, params: &[QualType], loc: Loc) -> SubstResult<()> {
         if params.iter().any(|&p| self.sema.is_fp16_arg_disallowed(p)) {
             return self.fp16_arg_error(false, loc);
+        }
+        Ok(())
+    }
+
+    /// `TT<args>` for template template parameter `TT`, substituted with a
+    /// template `name`: the arguments `TT`'s own default template
+    /// arguments supply ([temp.param]/14, [temp.arg.template]/3: the
+    /// template-id is checked against `TT`'s parameters, so a default
+    /// argument of `TT`'s parameter is used even when the argument
+    /// template has none). Each default is substituted with the
+    /// enclosing levels and the arguments before it.
+    fn ttp_default_args(
+        &mut self,
+        ttp: DeclId,
+        name: kiln_ast::ids::TemplateNameId,
+        v: &mut Vec<TemplateArg>,
+        loc: Loc,
+    ) -> SubstResult<()> {
+        // Still a template template parameter (an outer one): its own
+        // parameters are checked when it is substituted.
+        if self
+            .sema
+            .ast
+            .types
+            .template_decl(name)
+            .is_none_or(|d| self.sema.kind_of(d) == DeclKind::TemplateTemplateParm)
+        {
+            return Ok(());
+        }
+        let Some(list) = self.sema.ast.template_parm(ttp).and_then(|x| x.params) else {
+            return Ok(());
+        };
+        let pl = *self.sema.ast.templates.param_list(list);
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(pl.params).collect();
+        if v.len() >= params.len()
+            || params.iter().any(|&p| self.sema.ast.template_parm(p).is_some_and(|x| x.pack))
+            || v.iter().any(|&a| self.sema.is_pack_expansion_arg(a))
+        {
+            return Ok(());
+        }
+        let depth = usize::from(pl.depth);
+        for &p in &params[v.len()..] {
+            let Some(def) = self.sema.template_default(p) else { break };
+            let mut levels = self.args.clone();
+            levels.levels.truncate(depth);
+            while levels.depth() < depth {
+                levels.push(kiln_ast::ids::ArgListId::EMPTY, ttp, LevelMode::Retain);
+            }
+            let prior = self.sema.ast.types.arg_list(v);
+            levels.push(prior, ttp, LevelMode::Substitute);
+            let a = Substituter::new(self.sema, &levels).template_arg(def, loc)?;
+            v.push(a);
         }
         Ok(())
     }
@@ -184,6 +238,11 @@ impl Substituter<'_, '_, '_> {
                 if t.is_void(e) || t.is_function(e) || t.is_reference(e) {
                     return self.chunk(e, Chunk::Array { size: None, loc }, loc);
                 }
+                // [temp.deduct.general]/11.1: an array of abstract class
+                // type (clang `BuildArrayType`).
+                if self.sema.require_non_abstract_element(loc, e) {
+                    return Err(SubstFail);
+                }
                 // clang rebuilds the array (`BuildArrayType`): a zero
                 // bound is an error in a SFINAE context (see decl.rs).
                 if a.size == 0 && self.sema.inst.stack.is_sfinae() {
@@ -224,6 +283,12 @@ impl Substituter<'_, '_, '_> {
                 let out = self.expand_types(&params, loc);
                 self.type_begin = outer;
                 let out = out?;
+                // [temp.deduct.general]/11.10: a `void` parameter (clang
+                // `BuildFunctionType`).
+                if out.iter().any(|&t| self.sema.ast.types.is_void(t)) {
+                    self.sema.error(DiagId::sema_param_with_void_type, loc);
+                    return Err(SubstFail);
+                }
                 self.check_param_types(&out, self.type_begin.unwrap_or(loc))?;
                 let exc = match self.sema.ast.types.exc_spec(&p) {
                     ExcSpec::NoexceptExpr {
@@ -285,9 +350,16 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::TemplateSpecialization { name, args, underlying, alias } => {
                 let _ = (underlying, alias);
+                let ttp = match self.sema.ast.types.template_name_view(name) {
+                    TemplateName::TemplateTemplateParm { decl, .. } => Some(decl),
+                    _ => None,
+                };
                 let name = self.template_name(name, loc)?;
                 let args = self.args(args, loc)?;
-                let v = self.sema.ast.types.args(args).to_vec();
+                let mut v = self.sema.ast.types.args(args).to_vec();
+                if let Some(ttp) = ttp {
+                    self.ttp_default_args(ttp, name, &mut v, loc)?;
+                }
                 let l = self.written(WrittenKey::Type(q), loc);
                 match self.sema.act_template_id(name, &v, l, l) {
                     Ok(TemplateIdRef::Type(t)) => Ok(t),
@@ -309,6 +381,12 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.decl_type(i))
             }
             TypeView::Record(d) | TypeView::Enum(d) => {
+                // A member class of a pattern whose substituted class is
+                // still dependent: `typename X<A...>::name`.
+                if let Some((nns, name)) = self.dependent_member_nns(d, loc)? {
+                    let kw = kiln_ast::types::TagKeyword::Typename;
+                    return Ok(self.sema.ast.types.dependent_name(kw, nns, name));
+                }
                 let i = self.find_instantiated_decl(d, loc)?;
                 Ok(self.sema.tag_type(i))
             }
@@ -472,12 +550,11 @@ impl Substituter<'_, '_, '_> {
                 let loc = self.written(WrittenKey::Type(q), loc);
                 let d = self.member_template_named(n, name, loc)?;
                 let underlying = self.sema.template_name_for(d);
-                let tn =
-                    self.sema.ast.types.template_name(kiln_ast::types::TemplateName::Qualified {
-                        nns: n,
-                        template_kw: true,
-                        underlying,
-                    });
+                let tn = self.sema.ast.types.template_name(TemplateName::Qualified {
+                    nns: n,
+                    template_kw: true,
+                    underlying,
+                });
                 let v = self.sema.ast.types.args(args).to_vec();
                 let Ok(TemplateIdRef::Type(t)) = self.sema.act_template_id(tn, &v, loc, loc) else {
                     return Err(SubstFail);
