@@ -389,6 +389,18 @@ impl Sema<'_, '_> {
         out
     }
 
+    /// The injected-class-name type `C<P...>` an implicit guide of class
+    /// template `owner` returns (and its copy guide takes): clang builds
+    /// it once from the first declaration's template parameters, so their
+    /// names print (`vector<_Tp, _Alloc>` from `<__fwd/vector.h>`, and
+    /// `map<type-parameter-0-0, ...>` from an unnamed `template <class,
+    /// class, class, class> class map;`); see
+    /// [`Sema::injected_params_template`].
+    fn guide_injected_type(&mut self, owner: DeclId) -> Option<QualType> {
+        let own = self.pattern_of(owner).and_then(|p| self.injected_params_template(p)).unwrap_or(owner);
+        self.injected_type_of(own)
+    }
+
     /// [`Sema::implicit_guides`] once the frame is pushed.
     fn form_implicit_guides(&mut self, tmpl: DeclId, first: DeclId) -> Vec<DeclId> {
         let Some(pat) = self.pattern_of(tmpl) else { return Vec::new() };
@@ -397,7 +409,7 @@ impl Sema<'_, '_> {
         let owner = def.and_then(|d| self.ast.described_template(d)).unwrap_or(tmpl);
         let Some(info) = self.ast.template_info(owner).copied() else { return Vec::new() };
         let Some(TypeView::InjectedClassName { injected, .. }) =
-            self.injected_type_of(owner).map(|q| self.ast.types.view(q.ty()))
+            self.guide_injected_type(owner).map(|q| self.ast.types.view(q.ty()))
         else {
             return Vec::new();
         };
@@ -860,7 +872,7 @@ impl Sema<'_, '_> {
         let owner = self.ast.described_template(def).unwrap_or(tmpl);
         let info = self.ast.template_info(owner).copied()?;
         let Some(TypeView::InjectedClassName { injected, .. }) =
-            self.injected_type_of(owner).map(|q| self.ast.types.view(q.ty()))
+            self.guide_injected_type(owner).map(|q| self.ast.types.view(q.ty()))
         else {
             return None;
         };
