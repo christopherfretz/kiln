@@ -1045,12 +1045,14 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// specialization it cannot look into: a class template (`X<A>::`,
     /// looked up in the primary pattern), or a typedef naming a
     /// specialization that is not instantiated yet (`hours::period` with
-    /// `typedef duration<long, ratio<3600>> hours`).
+    /// `typedef duration<long, ratio<3600>> hours`), or an alias template
+    /// whose pattern names no class template it can follow (`A<R>::` with
+    /// `template<class T> using A = decltype(f(T()))`).
     fn unresolved_specialization_scope(&self, q: DeclId) -> bool {
         use kiln_ast::decl::DeclKind;
         let ast = &self.s.ast;
         match ast.decls.get(q).kind() {
-            DeclKind::ClassTemplate => true,
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => true,
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 let ty = ast.decls.get(q).ty().unwrap_or(kiln_ast::QualType::ERROR);
                 ast.types.as_record(ty).is_some_and(|r| {

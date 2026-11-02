@@ -143,7 +143,7 @@ accessible at `R` named in `B`. "As a member of `N`" follows each base path
 with [class.access.base]/1 (private members of a base are inaccessible; a
 protected base demotes public to protected; a private base demotes to private);
 the most permissive path wins. Members of `X` include nested and local classes
-of `X` and their members ([class.local]/2). [class.protected]: for a non-static
+of `X` and their members ([class.local]/2). A friend function defined in a class `C` is in `C`'s scope ([class.friend]/7): its effective context continues from `C` outward, so it shares the access of `C` and of every enclosing class, including friendship granted to them; this holds for each specialization of a friend function template (the template's in-class declaration, not the namespace-scope specialization, names the lexical class). A friend defined outside the class gets none of this (WP-278; libc++ `join_view::__sentinel`'s `operator==` calling `__iterator::__get_outer()`; `tests/conformance/class.friend/friend-template-in-nested-class-access.cpp`). [class.protected]: for a non-static
 protected member named through an object expression or `&P::m`, when only (c)
 via `P` grants access the object's class must be `P` or derived from `P` (`'p'
 is a protected member of 'S'` + note `can only access this member on an object

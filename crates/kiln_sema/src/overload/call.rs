@@ -92,7 +92,12 @@ impl Sema<'_, '_> {
         let plain =
             cands.iter().filter(|&&(d, _)| self.kind_of(d) != DeclKind::FunctionTemplate).count();
         let nns = self.ast.templates.expr_nns.get(ule).copied();
-        if plain == 1 && !templates && !only_invalid {
+        // A constrained function found by argument-dependent lookup goes
+        // through overload resolution, as clang's `BuildOverloadedCallExpr`
+        // for an ADL lookup: unsatisfied, it is a non-viable candidate
+        // ([over.match.viable]/3), not an invalid reference.
+        let adl_constrained = adl && self.ast.templates.trailing_requires.get(cands[0].0).is_some();
+        if plain == 1 && !templates && !adl_constrained && !only_invalid {
             // One candidate: the direct path's conversions and
             // diagnostics are clang's for a one-candidate set.
             let (d, f) = cands[0];
@@ -332,6 +337,14 @@ impl Sema<'_, '_> {
             // A non-static member without an object: `&C::f`, or "call to
             // non-static member function without an object argument".
             return self.implicit_member_ref(d, loc, shadow, nns);
+        }
+        // The only candidate's constraints first ([expr.prim.id.general]/4,
+        // clang `DiagnoseUseOfDecl` before `BuildDeclRefExpr`): a function
+        // whose constraints are not satisfied is never needed, so its
+        // deferred *noexcept-specifier* is not instantiated
+        // ([temp.inst]/14).
+        if single && self.diagnose_unsatisfied_use(d, loc) {
+            return self.recover_err(&[], loc);
         }
         let e = self.build_decl_ref_qualified(d, loc, shadow, nns);
         if let Some(&b) = self.ast.templates.expr_begin.get(ule)
