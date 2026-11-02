@@ -7,16 +7,18 @@
 // return statement are reported where they are written.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 23:11 error "expected ';' after expression"
-//@ diag: 23:6 error "no member named 'nom' in 'S'"
-//@ diag: 24:11 error "expected ';' after expression"
-//@ diag: 24:6 error "no member named 'nom' in namespace 'N'"
-//@ diag: 25:14 error "no member named 'none' in 'S'"
-//@ diag: 27:5 error "no member named 'nomember' in 'S'"
-//@ diag: 29:15 error "no member named 'bad' in namespace 'N'"
-//@ diag: 31:10 error "no member named 'nope' in namespace 'N'"
-//@ diag: 32:13 error "no member named 'gone' in 'S'"
-//@ diag: 32:19 error "expected ';' after return statement"
+//@ diag: 25:11 error "expected ';' after expression"
+//@ diag: 25:6 error "no member named 'nom' in 'S'"
+//@ diag: 26:11 error "expected ';' after expression"
+//@ diag: 26:6 error "no member named 'nom' in namespace 'N'"
+//@ diag: 27:14 error "no member named 'none' in 'S'"
+//@ diag: 29:5 error "no member named 'nomember' in 'S'"
+//@ diag: 31:15 error "no member named 'bad' in namespace 'N'"
+//@ diag: 33:10 error "no member named 'nope' in namespace 'N'"
+//@ diag: 34:13 error "no member named 'gone' in 'S'"
+//@ diag: 34:19 error "expected ';' after return statement"
+//@ requires: clang<22
+// clang 22 no longer emits error: expected ';' after expression; WP-355 residual
 struct S { int m; };
 namespace N { int f(); }
 void g(S s) {

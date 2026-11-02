@@ -732,17 +732,30 @@ impl<'a> Cg<'a> {
     /// instantiation declaration (`extern template`), itself or through
     /// its enclosing class specialization ([temp.explicit]/14: no
     /// definition is provided; at -O0 clang emits none, even for inline
-    /// members, which would be `available_externally`). An
-    /// `always_inline` function is the exception: clang emits it
-    /// `available_externally` even at -O0 and its always-inliner removes
-    /// every call, since the library provides no symbol for it (libstdc++'s
-    /// `std::allocator<char>::deallocate`). kiln has no always-inliner yet,
-    /// so it emits the definition as an ordinary implicit instantiation
-    /// (spec/codegen.md §7h).
+    /// members, which would be `available_externally`). An inline
+    /// function carrying `always_inline` is the exception: clang emits it
+    /// `available_externally` at every level and always inlines it, so the
+    /// program never references its symbol (libstdc++'s
+    /// `std::allocator<char>::allocate` is not exported). kiln runs no
+    /// inliner, so it emits such a function as an implicit instantiation
+    /// (`linkonce_odr`), which also needs no external definition
+    /// (spec/codegen.md "Explicit instantiation declarations").
     pub(crate) fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
         self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
-            && (self.ast.decls.function(first).is_none()
-                || self.fn_attr(first, kiln_ast::attr::AttrKind::ALWAYS_INLINE).is_none())
+            && !self.is_always_inline_fn(first)
+    }
+
+    /// An inline function with the `always_inline` attribute (on any
+    /// redeclaration; an instantiation carries its pattern's attributes).
+    fn is_always_inline_fn(&self, first: DeclId) -> bool {
+        let ast = self.ast;
+        ast.decls.function(first).is_some()
+            && self.fn_is_inline(first)
+            && ast.redecls_of(first).any(|r| {
+                ast.lists
+                    .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                    .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::ALWAYS_INLINE)
+            })
     }
 
     /// Whether variable or function `first` is under an explicit

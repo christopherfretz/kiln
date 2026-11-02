@@ -1,20 +1,32 @@
-// [temp.explicit]/12 with GNU `always_inline` (WP-384): an inline member
-// of a class under an explicit instantiation declaration whose library
-// exports no symbol for it (libstdc++'s `[[__gnu__::__always_inline__]]
-// std::allocator<char>::deallocate`, `extern template class
-// allocator<char>`) is defined in this TU, as clang's -O0 always-inliner
-// makes it; `__gnu__::` is the `gnu::` scope (clang
-// `normalizeAttrScopeName`). No explicit instantiation definition exists,
-// so the program links only if both members are emitted here.
+// [temp.explicit]/12 (explicit instantiation declarations do not suppress
+// the implicit instantiation of inline functions), [dcl.attr.grammar]:
+// an `always_inline` inline member of a class template under `extern
+// template` is odr-used, but no translation unit provides its definition
+// (the reduction of libstdc++'s `extern template class allocator<char>`,
+// whose `allocate`/`deallocate` libstdc++.so does not export). clang
+// inlines it at every optimization level; kiln emits it `linkonce_odr`.
+// Either way the program links. `[[__gnu__::__always_inline__]]` is the
+// reserved spelling of `[[gnu::always_inline]]`.
 //@ expect: run
-//@ stdout: 3
-extern "C" int printf(const char*, ...);
-template <class T> struct A {
-  [[__gnu__::__always_inline__]] constexpr T twice(T v) { return v + v; }
-  __attribute__((__always_inline__)) A() {}
+//@ strict-diags
+//@ stdout: 3 abc 7 9
+extern "C" int printf(const char *, ...);
+
+template <class T> struct Alloc {
+  __attribute__((__always_inline__)) constexpr T *allocate(unsigned long n) {
+    return new T[n];
+  }
+  [[__gnu__::__always_inline__]] constexpr void deallocate(T *p) { delete[] p; }
+  [[gnu::always_inline]] inline int seven() const;
+  template <class U> [[gnu::always_inline]] U conv(U u) const { return u + 2; }
 };
-extern template struct A<int>;
+template <class T> int Alloc<T>::seven() const { return 7; }
+extern template struct Alloc<char>;
+
 int main() {
-  A<int> a;
-  printf("%d\n", a.twice(1) + 1);
+  Alloc<char> a;
+  char *p = a.allocate(4);
+  p[0] = 'a', p[1] = 'b', p[2] = 'c', p[3] = 0;
+  printf("%d %s %d %d\n", 3, p, a.seven(), a.conv(7));
+  a.deallocate(p);
 }

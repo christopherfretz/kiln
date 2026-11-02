@@ -134,6 +134,31 @@ type   := "'" printed-type "'" [":'" desugared "'"]     -- only when the strings
   contains them is a kiln bug.
 - Floats and other values print per ast.md §9.3.
 - Types print per spec/types.md §12 (as clang).
+- **clang 22 printing (`-fclang-compat=22`, WP-355).** The goldens are
+  clang 22's (spec/harness.md "Two-oracle policy"), and at level 22 the
+  dumper follows its type printer; level 19 keeps the rules above:
+  - a tag type as written is not sugar: the second half of a pair stops
+    at it and prints it as written (unscoped `'S'`), while a tag reached
+    through canonicalizing sugar (substituted template parameter, deduced
+    type, `decltype`, `UsingType`, specialization name) prints scoped
+    (`'T':'q::S'`); the implicit `__builtin_va_list` typedef's tag prints
+    scoped (`PrintOptions::written_tags`);
+  - `sizeof`/`alignof`/`new` bounds and pointer differences carry the
+    `__size_t` / `__signed_size_t` / `__ptrdiff_t` sugar
+    (`'__size_t':'unsigned long'`);
+  - an alias template keeps its arguments as written and a sugared
+    substitution prints as is (`'Ptr<I>':'I *'`, not 19's desugared
+    `'type-parameter-0-0 **'`); a `PackExpansionExpr` prints its pattern's
+    type; a member pointer's class prints as written (`int P::*`);
+  - a synthesized `<=>`/`==` (class.compare.default) casts each operand
+    `DerivedToBase` to the cv-qualified base; `std::tuple_element`'s index
+    in a structured binding is the literal `0UL` (spec/sema.md
+    "Structured bindings"); a captured binding referenced in a
+    non-mutable lambda is `const` ([expr.prim.id.unqual]/3).
+  These rules change only how types print; tree differences between the
+  levels come from sema's compat-22 rules (spec/sema.md).
+  Known gaps are `xfail(kiln)` goldens listed in
+  docs/status/wp-184-oracle-switch.md.
 
 ## 3. M2 node lines (normative)
 Every decl line starts `Class [parent] [implicit] [used|referenced]

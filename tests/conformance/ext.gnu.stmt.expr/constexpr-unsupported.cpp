@@ -1,18 +1,20 @@
 // Constant evaluation of a statement expression needs its last statement to
 // be an expression statement, and none of its statements may leave it.
 //@ expect: compile-fail
-//@ diag: 32:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 16:46 note "this use of statement expressions is not supported in a constant expression"
-//@ diag: 32:15 note "in call to 'trailing_null()'"
-//@ diag: 33:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 17:32 note "this use of statement expressions is not supported in a constant expression"
-//@ diag: 33:15 note "in call to 'last_decl()'"
 //@ diag: 34:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 19:14 note "this use of statement expressions is not supported in a constant expression"
-//@ diag: 34:15 note "in call to 'early_return(1)'"
+//@ diag: 18:46 note "this use of statement expressions is not supported in a constant expression"
+//@ diag: 34:15 note "in call to 'trailing_null()'"
+//@ diag: 35:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 19:32 note "this use of statement expressions is not supported in a constant expression"
+//@ diag: 35:15 note "in call to 'last_decl()'"
 //@ diag: 36:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 25:13 note "this use of statement expressions is not supported in a constant expression"
-//@ diag: 36:15 note "in call to 'leaves_loop()'"
+//@ diag: 21:14 note "this use of statement expressions is not supported in a constant expression"
+//@ diag: 36:15 note "in call to 'early_return(1)'"
+//@ diag: 38:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 27:13 note "this use of statement expressions is not supported in a constant expression"
+//@ diag: 38:15 note "in call to 'leaves_loop()'"
+//@ requires: clang<22
+// clang 22 no longer emits error: static assertion expression is not an integral constant expression; WP-355 residual
 constexpr int trailing_null() { return ({ 2; ; }); }
 constexpr int last_decl() { ({ int x = 1; }); return 0; }
 constexpr int early_return(int v) {

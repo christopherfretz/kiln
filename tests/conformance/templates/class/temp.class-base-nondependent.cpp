@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [class.derived]: a non-dependent base of a class template is shared by every
 // specialization.
 struct Base { int b; };

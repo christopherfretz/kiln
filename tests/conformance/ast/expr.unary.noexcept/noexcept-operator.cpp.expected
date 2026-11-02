@@ -53,7 +53,7 @@ TranslationUnitDecl
 |       `-DeclRefExpr 'void (*)() noexcept' lvalue Var 'pw' 'void (*)() noexcept' non_odr_use_unevaluated
 |-VarDecl g 'const bool' constexpr cinit value=true
 | `-CXXNoexceptExpr 'bool'
-|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof
 |     `-ParenExpr 'int'
 |       `-CallExpr 'int'
 |         `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>

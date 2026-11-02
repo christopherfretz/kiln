@@ -8,10 +8,8 @@ TranslationUnitDecl
 | | |-TemplateArgument type 'long'
 | | `-CXXConstructorDecl used S 'void (long)'
 | |   `-ParmVarDecl 'long'
-| |-ClassTemplateSpecializationDecl struct S
-| | `-TemplateArgument type 'short'
 | `-ClassTemplateSpecializationDecl struct S
-|   `-TemplateArgument type 'int'
+|   `-TemplateArgument type 'short'
 |-FunctionTemplateDecl <deduction guide for S>
 | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
 | `-CXXDeductionGuideDecl <deduction guide for S> 'auto (T *) -> S<T>'
@@ -32,15 +30,12 @@ TranslationUnitDecl
 | | | `-CXXConstructorDecl P<T, U> 'void (T, U)'
 | | |   |-ParmVarDecl 'T'
 | | |   `-ParmVarDecl 'U'
-| | |-ClassTemplateSpecializationDecl struct P definition implicit_instantiation
-| | | |-TemplateArgument type 'float'
-| | | |-TemplateArgument type 'float'
-| | | `-CXXConstructorDecl used P 'void (float, float)'
-| | |   |-ParmVarDecl 'float'
-| | |   `-ParmVarDecl 'float'
-| | `-ClassTemplateSpecializationDecl struct P
-| |   |-TemplateArgument type 'double'
-| |   `-TemplateArgument type 'double'
+| | `-ClassTemplateSpecializationDecl struct P definition implicit_instantiation
+| |   |-TemplateArgument type 'float'
+| |   |-TemplateArgument type 'float'
+| |   `-CXXConstructorDecl used P 'void (float, float)'
+| |     |-ParmVarDecl 'float'
+| |     `-ParmVarDecl 'float'
 | |-FunctionTemplateDecl <deduction guide for P>
 | | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
 | | `-CXXDeductionGuideDecl <deduction guide for P> 'auto (T *, T) -> P<T, int>'
@@ -61,12 +56,10 @@ TranslationUnitDecl
 | | |-CXXRecordDecl struct I definition
 | | | `-CXXConstructorDecl I<T> 'void (T)'
 | | |   `-ParmVarDecl 'T'
-| | |-ClassTemplateSpecializationDecl struct I definition implicit_instantiation
-| | | |-TemplateArgument type 'int'
-| | | `-CXXConstructorDecl used I 'void (int)'
-| | |   `-ParmVarDecl 'int'
-| | `-ClassTemplateSpecializationDecl struct I
-| |   `-TemplateArgument type 'bool'
+| | `-ClassTemplateSpecializationDecl struct I definition implicit_instantiation
+| |   |-TemplateArgument type 'int'
+| |   `-CXXConstructorDecl used I 'void (int)'
+| |     `-ParmVarDecl 'int'
 | `-CXXDeductionGuideDecl used <deduction guide for I> 'auto (bool) -> I<int>'
 |   `-ParmVarDecl 'bool'
 `-VarDecl i 'O::I<int>' callinit

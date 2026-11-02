@@ -156,7 +156,7 @@ impl Cg<'_> {
     }
 
     /// The first attribute of kind `kind` on any declaration of `d`.
-    pub(crate) fn fn_attr(
+    fn fn_attr(
         &self,
         d: DeclId,
         kind: kiln_ast::attr::AttrKind,

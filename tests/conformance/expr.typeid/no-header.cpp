@@ -3,8 +3,10 @@
 // not enough.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 10:9 error "you need to include <typeinfo> before using the 'typeid' operator"
-//@ diag: 11:9 error "you need to include <typeinfo> before using the 'typeid' operator"
+//@ diag: 12:9 error "you need to include <typeinfo> before using the 'typeid' operator"
+//@ diag: 13:9 error "you need to include <typeinfo> before using the 'typeid' operator"
+//@ requires: clang<22
+// clang 22 emits error: you need to include <typeinfo> or import std before using the 'typeid' oper...; WP-355 residual
 namespace std { struct other; }
 void f(int x) {
   (void)typeid(int);

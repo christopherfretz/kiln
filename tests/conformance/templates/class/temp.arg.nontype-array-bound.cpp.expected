@@ -10,4 +10,4 @@ TranslationUnitDecl
 |   `-FieldDecl words 'int[5]'
 `-VarDecl sz 'int' cinit
   `-ImplicitCastExpr 'int' <IntegralCast>
-    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Buf<8>'
+    `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Buf<8>'

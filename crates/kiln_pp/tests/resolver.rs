@@ -41,7 +41,7 @@ fn run_with(
     let mut out = String::new();
     print_preprocessed(
         &mut pp,
-        PrintOptions { line_markers: markers, line_directives: false },
+        PrintOptions { line_markers: markers, line_directives: false, ucn_as_utf8: false },
         &mut out,
     );
     drop(pp);

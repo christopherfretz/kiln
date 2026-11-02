@@ -69,6 +69,15 @@ pub trait TypeNames {
         self.specialization_args(decl)
     }
 
+    /// Whether typedef `decl` is implicit (`__builtin_va_list`): its
+    /// underlying type was made by the implementation, not written, so
+    /// clang 22 prints a tag there with its scope
+    /// ([`PrintOptions::written_tags`]).
+    fn implicit_typedef(&self, decl: DeclId) -> bool {
+        let _ = decl;
+        false
+    }
+
     /// The type a class template specialization `decl` prints as, from
     /// its template's `preferred_name` attribute (clang
     /// `PreferredNameAttr`, `printRecordBefore`): the typedef type that
@@ -195,6 +204,9 @@ pub struct PrintOptions {
     /// between two `>` closers (`P<P<int> >`), as
     /// `-fdump-record-layouts` prints.
     pub split_closers: bool,
+    /// With [`Self::desugar`]: clang 22's rule that a tag type as written
+    /// (`S`, `struct q::S`) is not sugar ([`desugar_top_written`]).
+    pub written_tags: bool,
 }
 
 impl PrintOptions {
@@ -207,6 +219,7 @@ impl PrintOptions {
         c_policy: false,
         split_closers: false,
         no_parens: false,
+        written_tags: false,
     };
     /// The canonical type with every name scoped (the `aka` string).
     pub const CANONICAL: PrintOptions = PrintOptions {
@@ -217,6 +230,7 @@ impl PrintOptions {
         c_policy: false,
         split_closers: false,
         no_parens: false,
+        written_tags: false,
     };
     /// The top-level-desugared type (the AST dump's second string).
     pub const DESUGARED: PrintOptions = PrintOptions {
@@ -227,6 +241,7 @@ impl PrintOptions {
         c_policy: false,
         split_closers: false,
         no_parens: false,
+        written_tags: false,
     };
     /// The canonical type as clang's policy-less `QualType::getAsString()`
     /// prints it (built-in candidate notes).
@@ -238,6 +253,7 @@ impl PrintOptions {
         c_policy: true,
         split_closers: false,
         no_parens: false,
+        written_tags: false,
     };
 }
 
@@ -281,7 +297,13 @@ pub fn write_declarator(
         q = ctx.canonical(q);
     }
     let mut scope = opts.full_scope;
-    if opts.desugar {
+    if opts.desugar && opts.written_tags {
+        let (d, canonical) = desugar_top_written(ctx, names, q);
+        q = d;
+        if canonical {
+            scope = true;
+        }
+    } else if opts.desugar {
         q = desugar_top_for_print(ctx, q);
         let (t, _) = split(ctx, q);
         // clang prints a bare RecordType (what desugaring an
@@ -306,6 +328,7 @@ pub fn write_declarator(
         in_tst_args: false,
         scoped_args: false,
         canon_args: false,
+        written_tags: opts.written_tags,
         depth: 0,
     };
     p.print(q, placeholder);
@@ -330,6 +353,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         in_tst_args: false,
         scoped_args: false,
         canon_args: false,
+        written_tags: false,
         depth: 0,
     };
     p.nns(n);
@@ -358,6 +382,7 @@ pub fn write_nns_resolved(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, ou
         in_tst_args: false,
         scoped_args: false,
         canon_args: true,
+        written_tags: false,
         depth: 0,
     };
     let view = ctx.nns_view(n);
@@ -406,6 +431,7 @@ pub fn write_arg_list_canonical(
         in_tst_args: false,
         scoped_args: false,
         canon_args: true,
+        written_tags: false,
         depth: 0,
     };
     p.arg_list(l, false);
@@ -465,6 +491,7 @@ fn arg_list_with_scope(
         in_tst_args: false,
         scoped_args: scope,
         canon_args: false,
+        written_tags: false,
         depth: 0,
     };
     p.arg_list_prefix(l, false, usize::MAX, template, false);
@@ -511,6 +538,7 @@ pub fn write_arg_list_c(
         in_tst_args: false,
         scoped_args: false,
         canon_args: true,
+        written_tags: false,
         depth: 0,
     };
     p.arg_list_prefix(l, false, usize::MAX, Some(template), false);
@@ -541,6 +569,7 @@ pub fn write_arg_list_prefix(
         in_tst_args: false,
         scoped_args: false,
         canon_args: false,
+        written_tags: false,
         depth: 0,
     };
     p.arg_list_prefix(l, false, len, None, false);
@@ -570,6 +599,7 @@ pub fn write_template_arg(
         in_tst_args: false,
         scoped_args: false,
         canon_args: false,
+        written_tags: false,
         depth: 0,
     };
     p.arg(a.view());
@@ -600,6 +630,7 @@ pub fn write_template_name(
         in_tst_args: false,
         scoped_args: false,
         canon_args: false,
+        written_tags: false,
         depth: 0,
     };
     p.template_name(n, Qual::AsWritten);
@@ -666,6 +697,7 @@ fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -
         in_tst_args: false,
         scoped_args: false,
         canon_args: false,
+        written_tags: false,
         depth: 0,
     };
     p.print(q, "");
@@ -835,6 +867,51 @@ fn desugar_top_for_print(ctx: &TypeContext, mut q: QualType) -> QualType {
     }
 }
 
+/// clang 22's top-level desugaring (`-fclang-compat=22`): since clang 22
+/// a tag type carries its written keyword and qualifier and is not sugar,
+/// so desugaring stops at a tag as written (kiln: an `Elaborated` node
+/// naming a record or enumeration, or a bare record or enumeration
+/// reached through written sugar such as a typedef), which then prints
+/// as written. The second value says the tag was reached through
+/// canonicalizing sugar (a substituted template parameter, a deduced
+/// type, `decltype`, a using-declaration's `UsingType`, a template
+/// specialization's name), whose replacement clang stores canonical and
+/// prints with its scope (`'T':'q::S'`, `'S<int>':'q::S<int>'`).
+fn desugar_top_written(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    mut q: QualType,
+) -> (QualType, bool) {
+    let mut canonical = false;
+    loop {
+        if matches!(ctx.view(q.ty()), TypeView::Auto { deduced: Some(d), .. } if d == QualType::DEPENDENT)
+        {
+            return (q, canonical);
+        }
+        let view = ctx.view(split(ctx, q).0);
+        if let TypeView::Elaborated { mut named, .. } = view {
+            // `typename S` wraps the written `S` (itself `Elaborated`).
+            while let TypeView::Elaborated { named: inner, .. } = ctx.view(split(ctx, named).0) {
+                named = inner;
+            }
+            if matches!(ctx.kind(split(ctx, named).0), TypeKind::Record | TypeKind::Enum) {
+                return (q, false);
+            }
+        }
+        let n = ctx.desugar_once(q);
+        if n == q {
+            return (q, canonical);
+        }
+        match view {
+            TypeView::Typedef { decl, .. } => canonical = names.implicit_typedef(decl),
+            TypeView::Elaborated { .. } => canonical = false,
+            TypeView::Paren(_) | TypeView::Attributed { .. } | TypeView::QualifiedArray { .. } => {}
+            _ => canonical = true,
+        }
+        q = n;
+    }
+}
+
 /// Nesting beyond this prints `...` instead of recursing (no stack
 /// exhaustion on adversarial types).
 const MAX_DEPTH: u32 = 400;
@@ -897,6 +974,8 @@ struct Printer<'a> {
     /// Print template arguments canonical (clang's `PrintCanonicalTypes`
     /// in `TemplateArgument::print`), with their scope.
     canon_args: bool,
+    /// [`PrintOptions::written_tags`].
+    written_tags: bool,
     depth: u32,
 }
 
@@ -927,8 +1006,13 @@ impl Printer<'_> {
     /// `RecordType` that leaves scoped: `'view<int>::iterator<false>'`
     /// (WP-287). A dependent replacement (a partial substitution) keeps
     /// its parameter names.
+    ///
+    /// clang 22 keeps a sugared replacement (an alias template's
+    /// arguments as written, `'Ptr<I>':'I *'`) and prints it as it is.
     fn subst(&mut self, replacement: QualType, f: fn(&mut Self, QualType)) {
-        if self.ctx.is_dependent(replacement) {
+        if self.ctx.is_dependent(replacement)
+            || (self.written_tags && self.ctx.canonical(replacement) != replacement)
+        {
             f(self, replacement);
         } else {
             let r = self.ctx.canonical(replacement);
@@ -1145,8 +1229,10 @@ impl Printer<'_> {
                 if self.is_array_node(pointee) {
                     self.push("(");
                 }
-                // clang prints the class as a bare (scoped) type.
-                self.with_scope(true, |p| p.print(QualType::unqual(class), ""));
+                // clang 19 prints the class as a bare (scoped) type; clang
+                // 22 as its written qualifier (`int P::*`).
+                let scope = !self.written_tags || self.scope;
+                self.with_scope(scope, |p| p.print(QualType::unqual(class), ""));
                 self.push("::*");
                 self.empty_ph = saved;
             }

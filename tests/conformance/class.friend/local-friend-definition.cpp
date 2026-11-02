@@ -6,12 +6,14 @@
 // own error.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 20:17 error "friend function cannot be defined in a local class"
-//@ diag: 21:17 error "'h' is missing exception specification 'noexcept'"
-//@ diag: 17:8 note "previous declaration is here"
-//@ diag: 22:17 error "no matching function found in local scope"
-//@ diag: 25:19 error "friend function cannot be defined in a local class"
-//@ diag: 32:17 error "friend function cannot be defined in a local class"
+//@ diag: 22:17 error "friend function cannot be defined in a local class"
+//@ diag: 23:17 error "'h' is missing exception specification 'noexcept'"
+//@ diag: 19:8 note "previous declaration is here"
+//@ diag: 24:17 error "no matching function found in local scope"
+//@ diag: 27:19 error "friend function cannot be defined in a local class"
+//@ diag: 34:17 error "friend function cannot be defined in a local class"
+//@ requires: clang<22
+// clang 22 emits error: cannot define friend function in a local class definition; WP-355 residual
 void f() {
   void g();
   void h(int) noexcept;

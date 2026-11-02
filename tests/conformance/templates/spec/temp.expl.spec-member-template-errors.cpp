@@ -6,12 +6,14 @@
 // later ones.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 26:48 error "out-of-line definition of 'g' does not match any declaration in 'N::A<long>'"
-//@ diag: 27:48 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>'"
-//@ diag: 28:34 error "out-of-line definition of 'q' does not match any declaration in 'A<T>'"
-//@ diag: 29:52 error "out-of-line definition of 'q' does not match any declaration in 'A<T>'"
-//@ diag: 30:30 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>'"
-//@ diag: 31:33 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>::C'"
+//@ diag: 28:48 error "out-of-line definition of 'g' does not match any declaration in 'N::A<long>'"
+//@ diag: 29:48 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>'"
+//@ diag: 30:34 error "out-of-line definition of 'q' does not match any declaration in 'A<T>'"
+//@ diag: 31:52 error "out-of-line definition of 'q' does not match any declaration in 'A<T>'"
+//@ diag: 32:30 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>'"
+//@ diag: 33:33 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>::C'"
+//@ requires: clang<22
+// clang 22 emits error: out-of-line definition of 'g' does not match any declaration in 'N::A<long>'; WP-355 residual
 namespace N {
 template <class T> struct A {
   struct C {

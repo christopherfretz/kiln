@@ -852,8 +852,8 @@ member's definition: `X4<int>::X4<int>(int)` is untagged when the
 out-of-line `template<class T> template<class U> X4<T>::X4(U){}` is). Tags mangle as `B<source-name>`
 each, after the unqualified name (identifiers, `C2`/`D2`, operator codes),
 and a tagged namespace-scope variable is mangled (`_Z1vB1x`) rather than
-emitted under its plain name. Namespace tags, implicit tags from return
-and variable types, and the standard substitutions: §8.20.
+emitted under its plain name. Standard substitutions: §8.20; namespace tags and implicit tags
+from return and variable types: §8.21.
 
 **Dependent signature types** (`mangle/dep.rs`, clang `CXXNameMangler`):
 a dependent template specialization is the unscoped template name plus
@@ -1096,28 +1096,30 @@ a named module has module linkage, not internal (P2788).
 `tests/mangle/modules.cpp` and `tests/mangle/module_partition.cpp`
 (target-neutral; no `check-x86_64` golden is needed).
 
-### 8.20 Landed (WP-384): standard substitutions and implicit abi tags
+### 8.20 Landed (WP-373): standard abbreviations, tagged inline namespaces
+- **Standard abbreviations** (Itanium `<substitution>`, clang
+  `mangleStandardSubstitution`; `Mangler::std_abbrev`): for an entity
+  whose parent is `::std` itself (not a nested or inline namespace),
+  the template `allocator` is `Sa` and `basic_string` is `Sb`, and the
+  specializations `basic_string<char, char_traits<char>,
+  allocator<char>>` is `Ss`, `basic_istream<char, char_traits<char>>`
+  `Si`, `basic_ostream<...>` `So` and `basic_iostream<...>` `Sd`. They
+  are tried before the substitution table and before `St`, wherever a
+  prefix, template prefix, unscoped template, template name or class
+  type is mangled; they are never candidates themselves (the
+  specialization `SaIcE` is). `std::__cxx11::basic_string` stays
+  spelled out.
+- **Tagged inline namespaces**: a namespace's own `abi_tag` is not
+  mangled (`St7__cxx11`, not `St7__cxx11B5cxx11`); its tags are
+  implied by its name.
+### 8.21 Landed (WP-384): implicit abi tags, namespace tags
 Checked symbol for symbol against clang 19 and 22 (`tests/mangle/
 std_substitutions.cpp`, `std_cxx11_abi_tag.cpp`, `std_libcxx_spelling.cpp`,
 `abi_tag_implicit.cpp`) and by linking libstdc++ programs
 (`tests/conformance/temp.explicit/libstdcxx-locale-name-run.cpp`).
-- **Standard substitutions** ([abi.mangling] 5.1.5 "Compression", clang
-  `mangleStandardSubstitution`): `Sa` is the class template
-  `::std::allocator` and `Sb` `::std::basic_string`, declared *directly*
-  in `::std` and not attached to a named module
-  (`Mangler::std_template_subst`); `Ss` is the specialization
-  `::std::basic_string<char, ::std::char_traits<char>,
-  ::std::allocator<char>>`, `Si`/`So`/`Sd` `basic_istream`/
-  `basic_ostream`/`basic_iostream<char, ::std::char_traits<char>>`
-  (exactly that argument count; `char` unqualified, not `signed char` /
-  `unsigned char`; `Mangler::std_spec_subst`). They are tried before the
-  substitution table wherever a template name (unscoped template,
-  template prefix, template template argument) or a class is mangled
-  (`prefix`, `tag`) and never enter the table: `_ZNSaIcEC2Ev`,
-  `_Z2f1SsSsSaIcERSiRSoRSd`, `_Z2f32TTISaE`. libstdc++'s
-  `std::__cxx11::basic_string` and libc++'s `std::__1::*` are not in
-  `::std` itself, so none applies to them
-  (`_Z4takeNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE`).
+- Standard abbreviations: §8.20 (libc++'s `std::__1` spelling, which
+  none applies to, in
+  `tests/mangle/std_libcxx_spelling.cpp`).
 - **Namespace tags.** A namespace's `abi_tag` is never written: it marks
   the namespace's tags as already used (clang `AbiTagState`), so they are
   not repeated as implicit tags of names inside it. Only the first
@@ -1152,11 +1154,6 @@ std_substitutions.cpp`, `std_cxx11_abi_tag.cpp`, `std_libcxx_spelling.cpp`,
   set restarts from the tags the enclosing encoding emitted
   (`_ZZ5localB5cxx11vE1sB5cxx11`). Constructors, destructors and
   conversion functions have no return-type tags.
-- **Codegen consequence** (spec/codegen.md §7h): libstdc++'s
-  `[[__gnu__::__always_inline__]]` `std::allocator<char>` members under
-  `extern template class allocator<char>` are defined in the TU (the
-  library exports no symbol for them); `__gnu__::` is the `gnu::`
-  attribute scope.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

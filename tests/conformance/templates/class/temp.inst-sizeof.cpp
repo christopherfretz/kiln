@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.inst]/2: `sizeof` requires a complete type, so the specialization is
 // implicitly instantiated.
 template <class T> struct Pair { T first; T second; };

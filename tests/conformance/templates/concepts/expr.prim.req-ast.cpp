@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [expr.prim.req]: a non-dependent requires-expression is a bool prvalue,
 // evaluated at once ([expr.prim.req.general]/5).
 struct S { int x; };

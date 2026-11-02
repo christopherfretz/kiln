@@ -56,6 +56,10 @@ struct AtomicOps {
     order_fail: Option<V>,
     weak: Option<V>,
     volatile: bool,
+    /// A cmpxchg whose `expected` operand was copied into an atomic-sized
+    /// temporary: the original object (pointer, alignment) and its size in
+    /// bytes, written back from the old value on failure.
+    expected_back: Option<(V, u64, u64)>,
     /// `AtomicExpr::getValueType` (the `_Atomic` value type, or the
     /// pointee of a GNU builtin's pointer).
     value_q: QualType,
@@ -218,6 +222,7 @@ impl Cg<'_> {
             order_fail: None,
             weak: None,
             volatile,
+            expected_back: None,
             value_q,
         };
         let need = |i: usize| -> R<ExprId> {
@@ -294,13 +299,26 @@ impl Cg<'_> {
             // clang `AtomicInfo::convertToAtomicIntPointer`: an operand
             // whose memory type is not as wide as the atomic one is copied
             // into an atomic-sized temporary first.
+            // The padding is zeroed first (clang 22; clang 19 left it
+            // uninitialized, so a padded compare-exchange could fail on
+            // garbage).
             let abits = size * 8;
-            for (slot, q) in [(&mut ops.val1, src[0]), (&mut ops.val2, src[1])] {
+            let is_cx = matches!(form, Form::C11CmpXchg | Form::GnuCmpXchg);
+            for (i, (slot, q)) in
+                [(&mut ops.val1, src[0]), (&mut ops.val2, src[1])].into_iter().enumerate()
+            {
                 let (Some(a), Some(q)) = (*slot, q) else { continue };
                 let bits = self.mem_bits(q);
                 if bits != abits {
                     let t = self.temp(atomic_q);
-                    self.memcpy(t, a.v, a.align, abits.min(bits) / 8, false);
+                    let n = abits.min(bits) / 8;
+                    if bits < abits {
+                        self.memset(t, 0, abits / 8, false);
+                    }
+                    self.memcpy(t, a.v, a.align, n, false);
+                    if is_cx && i == 0 {
+                        ops.expected_back = Some((a.v, a.align, n));
+                    }
                     *slot = Some(Addr { ty: op_ty, ..t });
                 }
             }
@@ -540,7 +558,16 @@ impl Cg<'_> {
         let cont = self.block_at_end();
         self.cond_br(ok, cont, store_expected);
         self.f.fir.set_cur(Some(store_expected));
-        self.store(old, expected.v, expected.align, false);
+        if let Some((orig, align, n)) = ops.expected_back {
+            // C11 7.17.7.4p2: a failed compare-exchange loads the object's
+            // value into `*expected` itself, not only into the atomic-sized
+            // copy (clang 22; clang 19 wrote the copy only).
+            let t = self.f.fir.alloca(expected.ty, expected.align);
+            self.store(old, t, expected.align, false);
+            self.memcpy(Addr { v: orig, ty: expected.ty, align }, t, expected.align, n, false);
+        } else {
+            self.store(old, expected.v, expected.align, false);
+        }
         self.br(cont);
         self.f.fir.set_cur(Some(cont));
         let r = ops.dest.expect("cmpxchg.bool");
@@ -581,7 +608,13 @@ impl Cg<'_> {
         }
         let max = u64::from(self.target.types.max_atomic_inline_bytes);
         if size > max {
-            self.diags.push(Diag::new(DiagId::cg_atomic_oversized, span).arg(size).arg(max));
+            // clang 22 dropped clang 19's doubled space before `bytes)`.
+            let id = if self.opts.clang_compat >= 22 {
+                DiagId::cg_atomic_oversized
+            } else {
+                DiagId::cg_atomic_oversized_19
+            };
+            self.diags.push(Diag::new(id, span).arg(size).arg(max));
         }
     }
 

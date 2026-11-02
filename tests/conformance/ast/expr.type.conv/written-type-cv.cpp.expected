@@ -76,6 +76,6 @@ TranslationUnitDecl
 `-FunctionDecl m 'void ()'
   `-CompoundStmt
     `-CStyleCastExpr 'void' <ToVoid>
-      `-CXXStaticCastExpr 'struct V':'V' static_cast<struct V> <NoOp>
+      `-CXXStaticCastExpr 'struct V' static_cast<struct V> <NoOp>
         `-CXXTemporaryObjectExpr 'V' 'void (int)' list
           `-IntegerLiteral 'int' 2

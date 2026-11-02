@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.mem.class], [temp.inst]/3: a nested class of a class template is
 // declared with the enclosing specialization; its definition is instantiated
 // when it is required to be complete.

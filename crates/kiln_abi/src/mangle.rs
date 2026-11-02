@@ -921,99 +921,74 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 .is_none_or(|p| self.ast.decls.get(p).kind() == DeclKind::TranslationUnit)
     }
 
-    /// Whether `d`'s (effective) context is the namespace `::std` and
-    /// `d` is not attached to a named module (clang
-    /// `mangleStandardSubstitution`'s preconditions).
-    fn directly_in_std(&self, d: DeclId) -> bool {
-        self.parent(d).is_some_and(|p| self.is_std(p))
-            && self.ast.module_attachment(self.ast.first(d)).is_none()
-    }
-
-    /// The standard substitution of class template `t` ([abi:mangling]
-    /// 5.1.7 <substitution>): `Sa` for `::std::allocator`, `Sb` for
-    /// `::std::basic_string`. Only the templates declared directly in
-    /// `std` qualify, so libstdc++'s `std::__cxx11::basic_string` and
-    /// libc++'s `std::__1::allocator` mangle by name.
-    fn std_template_subst(&self, t: DeclId) -> Option<&'static str> {
-        if self.ast.decls.get(t).kind() != DeclKind::ClassTemplate || !self.directly_in_std(t) {
+    /// The Itanium standard abbreviation of `d` ([abi:mangling.compression],
+    /// clang `mangleStandardSubstitution`), never itself a substitution
+    /// candidate: the class templates `::std::allocator` (`Sa`) and
+    /// `::std::basic_string` (`Sb`), and the specializations
+    /// `::std::basic_string<char, ::std::char_traits<char>,
+    /// ::std::allocator<char>>` (`Ss`), `::std::basic_{i,o,io}stream<char,
+    /// ::std::char_traits<char>>` (`Si`, `So`, `Sd`). Only entities declared
+    /// directly in `::std` qualify: libstdc++'s `std::__cxx11::basic_string`
+    /// is `NSt7__cxx1112basic_string...E`.
+    fn std_abbrev(&self, d: DeclId) -> Option<&'static str> {
+        let ast = self.ast;
+        if !self.parent(d).is_some_and(|p| self.is_std(p)) {
             return None;
         }
-        match decl_name(self.ast, t).as_str() {
-            "allocator" => Some("Sa"),
-            "basic_string" => Some("Sb"),
-            _ => None,
+        if ast.decls.get(d).kind() == DeclKind::ClassTemplate {
+            return match decl_name(ast, d).as_str() {
+                "allocator" => Some("Sa"),
+                "basic_string" => Some("Sb"),
+                _ => None,
+            };
         }
-    }
-
-    /// The standard substitution of class template specialization `d`:
-    /// `Ss` for `::std::basic_string<char, ::std::char_traits<char>,
-    /// ::std::allocator<char>>`, `Si` / `So` / `Sd` for
-    /// `::std::basic_istream` / `basic_ostream` / `basic_iostream<char,
-    /// ::std::char_traits<char>>` (clang `isStdCharSpecialization`).
-    fn std_spec_subst(&self, d: DeclId) -> Option<&'static str> {
         let (t, args) = self.spec_of(d)?;
-        if !self.directly_in_std(d) {
+        if ast.decls.get(t).kind() != DeclKind::ClassTemplate {
             return None;
         }
-        let (code, alloc) = match decl_name(self.ast, t).as_str() {
+        let (code, with_alloc) = match decl_name(ast, t).as_str() {
             "basic_string" => ("Ss", true),
             "basic_istream" => ("Si", false),
             "basic_ostream" => ("So", false),
             "basic_iostream" => ("Sd", false),
             _ => return None,
         };
-        let args = self.ast.types.args(args);
-        if args.len() != 2 + usize::from(alloc) || !self.is_char_arg(args[0].view()) {
-            return None;
-        }
-        let ok = self.is_std_char_spec(args[1].view(), "char_traits")
-            && (!alloc || self.is_std_char_spec(args[2].view(), "allocator"));
+        let args = ast.types.args(args);
+        let ok = args.len() == if with_alloc { 3 } else { 2 }
+            && self.is_char_arg(args[0].view())
+            && self.is_std_char_spec(args[1].view(), "char_traits")
+            && (!with_alloc || self.is_std_char_spec(args[2].view(), "allocator"));
         ok.then_some(code)
     }
 
-    /// Emits the standard substitution of class template `t`, if it has
-    /// one (it is not a substitution candidate).
-    fn std_template(&mut self, t: DeclId) -> bool {
-        let Some(c) = self.std_template_subst(t) else { return false };
-        self.out.push_str(c);
-        true
-    }
-
-    /// Emits the standard substitution of specialization `d`, if it has
-    /// one.
-    fn std_spec(&mut self, d: DeclId) -> bool {
-        let Some(c) = self.std_spec_subst(d) else { return false };
-        self.out.push_str(c);
-        true
-    }
-
-    /// Whether template argument `a` is the type `char` (clang
-    /// `isCharType`: canonical, unqualified).
+    /// True if `a` is the type `char` (clang `isCharType`).
     fn is_char_arg(&self, a: ArgView) -> bool {
         let ArgView::Type(q) = a else { return false };
-        let q = self.ast.types.canonical(q);
-        q.quals_bits() == 0
-            && matches!(
-                self.ast.types.canonical_view(q),
-                TypeView::Builtin(BuiltinType::Char)
-            )
+        matches!(
+            self.ast.types.canonical_view(self.ast.types.canonical(q)),
+            TypeView::Builtin(BuiltinType::Char)
+        )
     }
 
-    /// Whether template argument `a` is `::std::<name><char>` (clang
-    /// `isCharSpecialization`).
+    /// True if `a` is `::std::<name><char>` (clang `isCharSpecialization`).
     fn is_std_char_spec(&self, a: ArgView, name: &str) -> bool {
-        let ArgView::Type(q) = a else { return false };
-        let q = self.ast.types.canonical(q);
-        if q.quals_bits() != 0 {
-            return false;
+        let ArgView::Type(ty) = a else { return false };
+        let Some(rec) = self.ast.types.as_record(ty) else { return false };
+        let Some((tmpl, args)) = self.spec_of(rec) else { return false };
+        self.parent(rec).is_some_and(|p| self.is_std(p))
+            && decl_name(self.ast, tmpl) == name
+            && matches!(self.ast.types.args(args), [c] if self.is_char_arg(c.view()))
+    }
+
+    /// Writes `d`'s standard abbreviation, if it has one.
+    fn try_std_abbrev(&mut self, d: DeclId) -> bool {
+        match self.std_abbrev(d) {
+            Some(code) => {
+                self.out.push_str(code);
+                true
+            }
+            None => false,
         }
-        let TypeView::Record(d) = self.ast.types.canonical_view(q) else { return false };
-        let Some((t, args)) = self.spec_of(d) else { return false };
-        if !self.directly_in_std(d) || decl_name(self.ast, t) != name {
-            return false;
-        }
-        let args = self.ast.types.args(args);
-        args.len() == 1 && self.is_char_arg(args[0].view())
     }
 
     // ---- encodings -----------------------------------------------------
@@ -1430,7 +1405,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.out.push_str("St");
             return;
         }
-        if self.std_spec(dc) {
+        if self.try_std_abbrev(dc) {
             return;
         }
         let key = Sub::Decl(ast.first(dc));
@@ -1455,7 +1430,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// `v` is the structor variant of a constructor template
     /// specialization (`C1`/`C2`).
     fn template_prefix(&mut self, t: DeclId, stop: Option<DeclId>, v: Structor) {
-        if self.std_template(t) {
+        if self.try_std_abbrev(t) {
             return;
         }
         let key = Sub::Template(self.ast.first(t));
@@ -1475,7 +1450,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     /// <unscoped-template-name> of template `t` (`St`-prefixed in `std`).
     fn unscoped_template(&mut self, t: DeclId, std: bool) {
-        if self.std_template(t) {
+        if self.try_std_abbrev(t) {
             return;
         }
         let key = Sub::Template(self.ast.first(t));
@@ -1862,7 +1837,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let n = ast.types.canonical_template_name(n);
         match ast.types.template_name_view(n) {
             TemplateName::Template(t) => {
-                if self.std_template(t) {
+                if self.try_std_abbrev(t) {
                     return;
                 }
                 let key = Sub::Template(ast.first(t));
@@ -2381,7 +2356,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     /// A tag type: its name (a candidate keyed by the declaration).
     fn tag(&mut self, d: DeclId) {
-        if self.std_spec(d) {
+        if self.try_std_abbrev(d) {
             return;
         }
         let key = Sub::Decl(self.ast.first(d));

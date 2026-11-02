@@ -193,6 +193,9 @@ sema_depr_array_comparison = Warning [DeprecatedArrayCompare] (0) "comparison be
 sema_deprecated = Warning [DeprecatedDeclarations] (1) "'{0}' is deprecated";
 sema_deprecated_anonymous_namespace = Warning [IgnoredAttributes] (0) "'deprecated' attribute on anonymous namespace ignored";
 sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is deprecated; use {1} instead";
+// clang 22 (CWG2521, [over.literal]/1, [depr.lit]): default-on; emitted at
+// -fclang-compat=22 only (clang 19 has it DefaultIgnore).
+sema_deprecated_literal_operator_id = Warning [DeprecatedLiteralOperator] (1) "identifier '{0}' preceded by whitespace in a literal operator declaration is deprecated";
 sema_deprecated_msg = Warning [DeprecatedDeclarations] (2) "'{0}' is deprecated: {1}";
 sema_deprecated_this_capture = Warning [DeprecatedThisCapture] (0) "implicit capture of 'this' with a capture default of '=' is deprecated";
 sema_dereference_incomplete_type = Error (1) "dereference of pointer to incomplete type {0}";

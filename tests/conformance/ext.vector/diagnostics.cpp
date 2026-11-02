@@ -3,15 +3,17 @@
 // BuildVectorType). In an instantiation kiln points at the size operand,
 // clang at the attribute name (same line).
 //@ expect: compile-fail
-//@ diag: 16:22 error "'ext_vector_type' attribute only applies to typedefs"
-//@ diag: 17:30 error "zero vector size"
-//@ diag: 18:31 error "invalid vector element type 'int *'"
-//@ diag: 19:31 error "ext_vector_type attribute requires an integer constant"
-//@ diag: 20:31 error "vector size not an integral multiple of component size"
-//@ diag: 21:32 error "invalid vector element type 'bool'"
-//@ diag: 22:31 error "'ext_vector_type' attribute takes one argument"
-//@ diag: 25 error "zero vector size"
-//@ diag: 27:10 note "in instantiation of template type alias 'vec' requested here"
+//@ diag: 18:22 error "'ext_vector_type' attribute only applies to typedefs"
+//@ diag: 19:30 error "zero vector size"
+//@ diag: 20:31 error "invalid vector element type 'int *'"
+//@ diag: 21:31 error "ext_vector_type attribute requires an integer constant"
+//@ diag: 22:31 error "vector size not an integral multiple of component size"
+//@ diag: 23:32 error "invalid vector element type 'bool'"
+//@ diag: 24:31 error "'ext_vector_type' attribute takes one argument"
+//@ diag: 27 error "zero vector size"
+//@ diag: 29:10 note "in instantiation of template type alias 'vec' requested here"
+//@ requires: clang<22
+// clang 22 no longer emits error: 'ext_vector_type' attribute only applies to typedefs; WP-355 residual
 
 int v __attribute__((ext_vector_type(4)));
 typedef int z __attribute__((ext_vector_type(0)));

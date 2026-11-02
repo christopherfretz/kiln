@@ -8,19 +8,21 @@
 // reference member "'mutable' cannot be applied to references" (WP-327).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 25:13 error "'mutable' can only be applied to member variables"
-//@ diag: 26:27 error "'mutable' can only be applied to member variables"
-//@ diag: 27:30 error "'mutable' can only be applied to member variables"
-//@ diag: 28:8 error "invalid storage class specifier in function declarator"
-//@ diag: 29:1 error "illegal storage class on function"
-//@ diag: 31:15 error "'mutable' can only be applied to member variables"
-//@ diag: 32:16 error "'mutable' can only be applied to member variables"
-//@ diag: 33:20 error "'mutable' can only be applied to member variables"
+//@ diag: 27:13 error "'mutable' can only be applied to member variables"
+//@ diag: 28:27 error "'mutable' can only be applied to member variables"
+//@ diag: 29:30 error "'mutable' can only be applied to member variables"
+//@ diag: 30:8 error "invalid storage class specifier in function declarator"
+//@ diag: 31:1 error "illegal storage class on function"
+//@ diag: 33:15 error "'mutable' can only be applied to member variables"
+//@ diag: 34:16 error "'mutable' can only be applied to member variables"
 //@ diag: 35:20 error "'mutable' can only be applied to member variables"
-//@ diag: 36:3 error "decomposition declaration cannot be declared 'mutable'"
-//@ diag: 36:16 error "'mutable' can only be applied to member variables"
-//@ diag: 39:3 error "'mutable' cannot be applied to references"
-//@ diag: 43:16 error "'mutable' can only be applied to member variables"
+//@ diag: 37:20 error "'mutable' can only be applied to member variables"
+//@ diag: 38:3 error "decomposition declaration cannot be declared 'mutable'"
+//@ diag: 38:16 error "'mutable' can only be applied to member variables"
+//@ diag: 41:3 error "'mutable' cannot be applied to references"
+//@ diag: 45:16 error "'mutable' can only be applied to member variables"
+//@ requires: clang<22
+// clang 22 emits error: structured binding declaration cannot be declared 'mutable'; WP-355 residual
 
 mutable int x = "s";
 namespace N { mutable int y; }

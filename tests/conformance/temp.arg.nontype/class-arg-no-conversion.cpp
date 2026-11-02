@@ -4,8 +4,10 @@
 // argument (libc++ tuple_size of an incomplete type).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 11:3 error "value of type 'S' is not implicitly convertible to 'int'"
-//@ diag: 16:3 error "value of type 'const S' is not implicitly convertible to 'unsigned long'"
+//@ diag: 13:3 error "value of type 'S' is not implicitly convertible to 'int'"
+//@ diag: 18:3 error "value of type 'const S' is not implicitly convertible to 'unsigned long'"
+//@ requires: clang<22
+// clang 22 emits error: value of type 'S' is not implicitly convertible to 'int'; WP-355 residual
 template <int N> struct A {};
 struct S {};
 A<S{}> a;

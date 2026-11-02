@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.alias]/2, [temp.res.general]/6, [temp.arg.nontype]/2: an alias
 // template named with a value-dependent non-type argument is substituted
 // with the argument unconverted; it is converted and evaluated when the

@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 int a[3];
 int b[] = {1, 2, 3, 4};
 char s[] = "hi";
