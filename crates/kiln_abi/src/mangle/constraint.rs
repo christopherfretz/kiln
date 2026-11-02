@@ -341,22 +341,32 @@ impl Mangler<'_, '_> {
     }
 
     /// A reference to a function or requires-expression parameter in a
-    /// requires-clause: `fp [<cv>] [<index - 1>] _` at nesting 0, else
-    /// `fL <nesting - 1> p ...` (clang `mangleFunctionParam`).
+    /// requires-clause, or to a function parameter in a `decltype` of
+    /// the signature: `fp [<cv>] [<index - 1>] _` at nesting 0, else
+    /// `fL <nesting - 1> p ...` (clang `mangleFunctionParam`). Outside a
+    /// requires-clause the parameter is taken to be the encoded
+    /// function's (function-scope depth 0).
     pub(super) fn function_param_ref(&mut self, d: DeclId) -> bool {
         let ast = self.ast;
-        let Some(ctx) = self.req.as_ref() else { return false };
         let Some(pd) = ast.decls.param(d) else { return false };
         let index = u32::from(pd.index);
-        let owner = ast.decls.get(d).ctx();
-        let depth = match owner {
-            Some(b) if ast.decls.get(b).kind() == DeclKind::RequiresExprBody => {
-                let pos = ctx.scopes.iter().position(|&s| s == b).unwrap_or(0);
-                u32::from(ctx.trailing) + pos as u32
+        let nesting = if let Some(ctx) = self.req.as_ref() {
+            let owner = ast.decls.get(d).ctx();
+            let depth = match owner {
+                Some(b) if ast.decls.get(b).kind() == DeclKind::RequiresExprBody => {
+                    let pos = ctx.scopes.iter().position(|&s| s == b).unwrap_or(0);
+                    u32::from(ctx.trailing) + pos as u32
+                }
+                _ => 0,
+            };
+            1u32.saturating_sub(depth).saturating_sub(u32::from(ctx.in_result))
+        } else {
+            let (depth, in_result) = self.fn_depth;
+            if depth == 0 {
+                return false;
             }
-            _ => 0,
+            depth - u32::from(in_result)
         };
-        let nesting = 1u32.saturating_sub(depth).saturating_sub(u32::from(ctx.in_result));
         if nesting == 0 {
             self.out.push_str("fp");
         } else {
