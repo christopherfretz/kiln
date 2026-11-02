@@ -545,11 +545,8 @@ impl Sema<'_, '_> {
                 })
                 .collect();
             let cl = self.ast.types.arg_list(&canon);
-            let still_dependent = self
-                .ast
-                .types
-                .arg_list_flags(cl)
-                .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
+            let still_dependent =
+                self.ast.types.arg_list_flags(cl).intersects(TypeFlags::DEPENDENT_INSTANTIATION);
             let args = if still_dependent { &out } else { &canon };
             let Ok(crate::templ::actions::TemplateIdRef::Type(t)) =
                 self.act_template_id(name, args, loc, loc)
