@@ -2754,6 +2754,14 @@ clang 19's C99/GNU complex support in C++:
   - character arrays from string literals: the bound is deduced, and
     an over-long string is an error
     (`initializer-string for char array is too long`, two arguments)
+  - an array from an expression that is not a braced list or (for a
+    character array) a string literal ([dcl.init.general]/16.5) is
+    `array initializer must be an initializer list`, at the entity: the
+    declarator name of a variable, the initializer of a default member
+    initializer (WP-300). The suffix follows clang's element-type test:
+    ` or string literal` for (signed/unsigned) `char`, ` or wide string
+    literal` for unqualified `wchar_t`/`char16_t`/`char32_t`, none
+    otherwise (`char8_t`, `const wchar_t`)
   - aggregates, with brace elision, designators (C++20, in order) and
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived
@@ -2831,7 +2839,14 @@ clang 19's C99/GNU complex support in C++:
     designated member). Lists nested in an updater fill with
     `NoInitExpr` too (`Sub::update`, clang `FillWithNoInit`), except a
     braced value, which value-initializes, and a merged prior list,
-    which keeps its own fill (`is_update_list`). The next designator
+    which keeps its own fill (`is_update_list`). A designator path that
+    ends at an aggregate whose value is an expression (`.m = 1` for
+    `int m[2]`) starts a brace-elided list whose first clause is that
+    value with its designator consumed (`Sub::direct`, clang
+    `CheckSubElementType` with `DirectlyDesignated`); the positional
+    clauses that follow continue it, and it warns `brace elision for
+    designated initializer is a C99 extension` (`-Wc99-designator`) at
+    the value. The next designator
     warns `initializer partially overrides prior initialization of
     this subobject` with the old initializer noted; keeping the old
     object of a class with a non-trivial destructor is an error

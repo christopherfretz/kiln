@@ -724,10 +724,20 @@ impl Sema<'_, '_> {
             {
                 return self.check_string_init(ty, s, e);
             }
-            let which = if self.is_char_type(elem) { "1" } else { "0" };
-            let msg = self
-                .diag(DiagId::sema_array_init_not_init_list, self.ast.exprs.get(e).loc())
-                .arg(which);
+            // clang `isCharType` / `IsWideCharCompatible` (which
+            // compares qualifiers too) pick the suggested literal; none
+            // for `char8_t` or `const wchar_t`.
+            let which = {
+                use kiln_ast::types::BuiltinType as B;
+                let c = self.ast.types.canonical(elem);
+                match self.ast.types.builtin(c.without_quals()) {
+                    Some(B::Char | B::SChar | B::UChar) => "1",
+                    Some(B::WChar | B::Char16 | B::Char32) if c.quals_bits() == 0 => "2",
+                    _ => "0",
+                }
+            };
+            // clang reports it at the entity (`int a[2] = 1;` at `a`).
+            let msg = self.diag(DiagId::sema_array_init_not_init_list, at).arg(which);
             self.emit(msg);
             return e;
         }
@@ -1730,7 +1740,22 @@ impl Sema<'_, '_> {
                 if elide && self.is_vector_type(ty) {
                     self.elided_vector_init(ty, items, pos, at)
                 } else if elide {
-                    self.check_aggregate(ty, items, pos, false, at, at)
+                    // A designated clause whose designator names the
+                    // aggregate itself (`.m = 1`) starts a brace-elided
+                    // list without its designator (clang
+                    // `CheckSubElementType` with `DirectlyDesignated`,
+                    // `ext_designated_init_brace_elision`).
+                    let direct = !items[*pos].designator.is_empty();
+                    if direct {
+                        let r = self.expr_range(e);
+                        let msg = self
+                            .diag(DiagId::sema_designated_init_brace_elision, self.begin_loc(e))
+                            .range(r);
+                        self.emit_designator_warning(msg);
+                    }
+                    let sub =
+                        Sub { braced: false, entry: None, prior: None, update: false, direct };
+                    self.check_aggregate_in(ty, items, pos, sub, at, at)
                 } else {
                     *pos += 1;
                     let at = self.begin_loc(e);
@@ -1753,7 +1778,7 @@ impl Sema<'_, '_> {
         lbrace: Loc,
         rbrace: Loc,
     ) -> ExprId {
-        let sub = Sub { braced, entry: None, prior: None, update: false };
+        let sub = Sub { braced, entry: None, prior: None, update: false, direct: false };
         self.check_aggregate_in(ty, items, pos, sub, lbrace, rbrace)
     }
 
@@ -1833,10 +1858,12 @@ impl Sema<'_, '_> {
             }
         }
         let mut entry = sub.entry;
+        let mut direct = sub.direct;
         let mut cur = 0usize;
         while *pos < items.len() {
             let item = &items[*pos];
             let k = match entry.take() {
+                _ if std::mem::take(&mut direct) => None,
                 Some(k) => Some(k),
                 None if item.designator.is_empty() => None,
                 None if !sub.braced => break,
@@ -2093,10 +2120,12 @@ impl Sema<'_, '_> {
             return self.recover(ty, &[], lbrace);
         }
         let mut entry = sub.entry;
+        let mut direct = sub.direct;
         let mut cur: u64 = 0;
         while *pos < items.len() {
             let item = &items[*pos];
             let k = match entry.take() {
+                _ if std::mem::take(&mut direct) => None,
                 Some(k) => Some(k),
                 None if item.designator.is_empty() => None,
                 None if !sub.braced => break,
@@ -2470,7 +2499,7 @@ impl Sema<'_, '_> {
                 None => update,
                 Some(l) => self.is_update_list(l),
             };
-        let s = Sub { braced: false, entry: Some(k2), prior, update };
+        let s = Sub { braced: false, entry: Some(k2), prior, update, direct: false };
         let e = self.check_aggregate_in(ty, items, pos, s, at, at);
         match base {
             Some(b) => self.builder().designated_init_update(ty, b, e),
@@ -2595,4 +2624,8 @@ struct Sub {
     /// The list is the updater of a `DesignatedInitUpdateExpr`: what no
     /// clause initializes is a `NoInitExpr`, not a filler.
     update: bool,
+    /// The first clause's designator named this subaggregate itself
+    /// (`.m = 1` under brace elision): the clause is not designated
+    /// within it.
+    direct: bool,
 }
