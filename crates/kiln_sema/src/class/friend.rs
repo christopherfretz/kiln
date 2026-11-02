@@ -49,35 +49,7 @@ impl Sema<'_, '_> {
         let record = self.current_class()?.record;
         let owned = self.friend_tag.take();
         let Some(d) = d else {
-            // `template<class U> friend class X;` ([temp.friend]/1): the
-            // befriended class template (declared, hidden, by
-            // `act_on_friend_tag`).
-            if let Some(t) = self.friend_class_template.take() {
-                let loc = ds.type_loc.unwrap_or(friend_loc);
-                let fd = self.builder().friend(record, loc, FriendTarget::Decl(t));
-                let first = self.ast.first(t);
-                self.push_friend(first);
-                return Some(fd);
-            }
-            // `friend T;` / `friend class X;` ([class.friend]/3). A pack
-            // outside an expansion is ill-formed ([temp.variadic]/12).
-            if self.diagnose_unexpanded_pack(PackOperand::Type(base), "friend declaration", friend_loc)
-            {
-                return None;
-            }
-            let loc = ds.type_loc.unwrap_or(friend_loc);
-            let target = FriendTarget::Type { ty: base, owned_tag: owned };
-            let fd = self.builder().friend(record, loc, target);
-            // `friend class X<T>;` naming the current instantiation
-            // befriends the pattern too ([temp.dep.type]/1): its own
-            // members are checked against it before instantiation.
-            let rec =
-                self.ast.types.as_record(base).or_else(|| self.friend_current_instantiation(base));
-            if let Some(c) = rec {
-                let c = self.ast.first(c);
-                self.push_friend(c);
-            }
-            return Some(fd);
+            return self.declare_friend_type(ds, base, record, owned, friend_loc);
         };
         // Constructor, destructor, conversion and operator names
         // (WP-067a/WP-068b) are still stubs; report them by name.
@@ -111,7 +83,8 @@ impl Sema<'_, '_> {
         }
         // [temp.variadic]/12: `friend void f(Ts);` (clang reports it at
         // the declarator-id).
-        if self.diagnose_unexpanded_pack(PackOperand::Type(ty), "friend declaration", d.name_loc()) {
+        if self.diagnose_unexpanded_pack(PackOperand::Type(ty), "friend declaration", d.name_loc())
+        {
             self.templ.cur = None;
             return None;
         }
@@ -173,6 +146,47 @@ impl Sema<'_, '_> {
         let fd = self.builder().friend(record, d.name_loc(), FriendTarget::Decl(target));
         let first = self.ast.first(target);
         self.push_friend(first);
+        Some(fd)
+    }
+
+    /// `friend T;`, `friend class X;` and `template<class U> friend class
+    /// X;`: [`Sema::declare_friend`] without a declarator.
+    fn declare_friend_type(
+        &mut self,
+        ds: &DeclSpec,
+        base: QualType,
+        record: DeclId,
+        owned: Option<DeclId>,
+        friend_loc: Loc,
+    ) -> Option<DeclId> {
+        // `template<class U> friend class X;` ([temp.friend]/1): the
+        // befriended class template (declared, hidden, by
+        // `act_on_friend_tag`).
+        if let Some(t) = self.friend_class_template.take() {
+            let loc = ds.type_loc.unwrap_or(friend_loc);
+            let fd = self.builder().friend(record, loc, FriendTarget::Decl(t));
+            let first = self.ast.first(t);
+            self.push_friend(first);
+            return Some(fd);
+        }
+        // `friend T;` / `friend class X;` ([class.friend]/3). A pack
+        // outside an expansion is ill-formed ([temp.variadic]/12).
+        if self.diagnose_unexpanded_pack(PackOperand::Type(base), "friend declaration", friend_loc)
+        {
+            return None;
+        }
+        let loc = ds.type_loc.unwrap_or(friend_loc);
+        let target = FriendTarget::Type { ty: base, owned_tag: owned };
+        let fd = self.builder().friend(record, loc, target);
+        // `friend class X<T>;` naming the current instantiation
+        // befriends the pattern too ([temp.dep.type]/1): its own
+        // members are checked against it before instantiation.
+        let rec =
+            self.ast.types.as_record(base).or_else(|| self.friend_current_instantiation(base));
+        if let Some(c) = rec {
+            let c = self.ast.first(c);
+            self.push_friend(c);
+        }
         Some(fd)
     }
 

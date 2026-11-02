@@ -56,7 +56,8 @@ impl Sema<'_, '_> {
                 continue;
             };
             let Some(base) = self.ast.types.template_decl(name) else { continue };
-            if self.kind_of(base) != DeclKind::ClassTemplate || !self.alias_deducible(tmpl, rhs, rhs)
+            if self.kind_of(base) != DeclKind::ClassTemplate
+                || !self.alias_deducible(tmpl, rhs, rhs)
             {
                 continue;
             }
@@ -228,4 +229,3 @@ impl Sema<'_, '_> {
         }
     }
 }
-
