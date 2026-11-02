@@ -246,15 +246,37 @@ ODR merging would accept it. Both are documented deviations.
 
 ## 7. Code generation and mangling
 
-Codegen treats a declaration owned by the **purview** of an imported
-named-module unit (not a header unit, not a global module fragment) like
-clang treats one from a BMI: a non-inline function, variable, constructor
-or destructor definition is emitted as a declaration only (the module's
-own object file defines it); inline functions, templates and
-internal-linkage entities are emitted on use as usual. Compiling the
-module unit itself emits everything. A non-inline definition in an
-imported unit's global module fragment is emitted in the importer too
-(deviation 7).
+Codegen treats a declaration owned by an imported named-module unit
+(its purview or its global module fragment; not a header unit) like
+clang treats one from a BMI: a non-inline function, variable,
+constructor or destructor definition is emitted as a declaration only
+(the owning unit's object file defines it, so two importers of one
+interface link without duplicate symbols); inline functions, templates
+and internal-linkage entities are emitted on use as usual. Compiling the
+module unit itself emits everything, its global module fragment
+included.
+
+**Classes attached to a named module** ([class.mfct]/1,
+[class.friend]/7): a member or friend function defined in the class
+definition is implicitly inline only when the class is attached to the
+global module (`kiln_sema` `enter_definition_scopes`), so a purview
+class's in-class definitions are ordinary definitions: the owning unit
+emits them strongly, used or not, right after the namespace-scope class
+that contains them (in member order, nested classes in place; clang
+`HandleInlineFunctionDefinition` / `EmitDeferredDecls`), and importers
+only declare them. Defaulted functions and implicit members stay inline.
+**Vtables** (clang `ActOnTagFinishDefinition`, `isVTableExternal`): a
+dynamic class completed in the purview of an interface or partition unit
+has its vtable used there even when nothing uses it (`kiln_sema`
+`mark_module_vtable_used`, which also defines its virtual members, so
+a defaulted virtual destructor is emitted `linkonce_odr`), and that
+unit's vtable is strong whether or not the class has a key function;
+every other unit declares it `external`. A global-module-fragment class
+with a key function gets its vtable from the unit defining the key
+function, the module unit itself (deviation 7). The implicit global
+`operator new`/`operator delete` declarations are attached to the global
+module ([basic.stc.dynamic.general]/2) even when the first use is in a
+purview, so they are never `_ZW`-mangled.
 
 **Module initializers** (Itanium ABI §3.2.6, clang 22
 `EmitCXXModuleInitFunc`; `kiln_codegen/src/module_init.rs` and
@@ -333,10 +355,13 @@ and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
 4. (Retired: module initializers are emitted, §7.)
 5. `#include` is never translated into an import (§3).
 6. Attributes on module / import declarations are ignored (§3).
-7. Non-inline definitions in an imported unit's global module fragment are
-   emitted by the importer as well (a duplicate symbol if the module unit
-   is linked into the same program); a vtable whose key function is
-   defined in a module unit is also emitted by importers.
+7. A class in a module unit's global module fragment whose key function
+   that unit defines has its vtable emitted by that unit, and importers
+   declare it external (§7). clang 22 does the opposite (the module unit
+   omits it and every importer defines it strongly), so two clang
+   importers of one such interface fail to link with a duplicate
+   `vtable for G`; kiln follows the Itanium key-function rule instead
+   (`module.global.frag/gmf-dup-run.cpp`).
 8. A non-visible module declaration found by lookup is reported as a plain
    lookup failure (`use of undeclared identifier`, `no type named ...`);
    clang 22 says `declaration of 'x' must be imported from module 'M'
@@ -370,6 +395,14 @@ and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
 - `basic.start.dynamic/module-init-run.cpp`: four module units and an
   importer; the order and once-only property of their dynamic
   initialization ([basic.start.dynamic]/5, §7).
+- `module.global.frag/gmf-dup-run.cpp`: an interface with GMF and
+  purview definitions (a function, a variable, a key-function class,
+  in-class non-inline members, a defaulted virtual destructor) linked
+  with two importers that both use them: no duplicate symbol, one
+  variable ([module.global.frag]/1, [class.mfct]/1, §7).
+- `tests/codegen/module_class_defs.cpp`: IR golden of a module
+  interface's in-class definitions (order, strong linkage), its unused
+  vtables and the global `operator delete` against clang 22.
 - `tests/codegen/module_init_*.cpp`: IR goldens of the module
   initializers against clang 22 (interface, partition, empty, importer,
   import-only, implementation unit), using the IR-diff corpus's

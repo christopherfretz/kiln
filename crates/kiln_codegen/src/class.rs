@@ -534,7 +534,7 @@ impl Cg<'_> {
             }
             if !self.discardable_fn(d) {
                 // spec/modules.md §7: the module's object defines it.
-                if !ast.modules.is_imported_module_decl(d) {
+                if !ast.modules.is_imported_named_unit_decl(d) {
                     self.emit_structor_def(d, v)?;
                 }
                 continue;
