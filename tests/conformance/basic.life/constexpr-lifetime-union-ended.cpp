@@ -5,13 +5,12 @@
 // spec/oven.md "Object lifetime outside std::allocator storage".
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): the lifetime bits cannot tell a destroyed union from one whose active member was destroyed; SetActive re-begins the union's lifetime (WP-222 deviation)
-//@ diag: 17:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 16:49 note "assignment to object outside its lifetime is not allowed in a constant expression"
-//@ diag: 17:15 note "in call to 'whole_union()'"
-//@ diag: 22:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 21:57 note "assignment to object outside its lifetime is not allowed in a constant expression"
-//@ diag: 22:15 note "in call to 'member_of_ended()'"
+//@ diag: 16:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 15:49 note "assignment to object outside its lifetime is not allowed in a constant expression"
+//@ diag: 16:15 note "in call to 'whole_union()'"
+//@ diag: 21:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 20:57 note "assignment to object outside its lifetime is not allowed in a constant expression"
+//@ diag: 21:15 note "in call to 'member_of_ended()'"
 union V { int a; float b; };
 constexpr int whole_union() { V v{1}; v.~V(); v.b = 2; return 1; }
 static_assert(whole_union() == 1);

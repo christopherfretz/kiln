@@ -1073,21 +1073,80 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   - after the declarator-id (`int x alignas(8);`, [dcl.decl.general]/4,
     [class.mem.general]/1), for the declaration; `alignas` there may be
     followed by a bit-width (`int b alignas(8) : 3`, then rejected by
-    sema on the bit-field) (WP-312)
+    sema on the bit-field) (WP-312). After a member's bit-width or asm
+    label, or a member function declarator with virt-specifiers, an
+    attribute-specifier-seq is not allowed ([class.mem.general]/1):
+    each run of `[[...]]`/`alignas` specifiers is parsed, dropped and
+    reported once as `an attribute list cannot appear here` at its
+    start (clang `DiagnoseAndSkipCXX11Attributes`); GNU attributes
+    between them are kept (`parse_member_tail_attrs`; WP-324)
   - between decl-specifiers (clang `ProhibitAttributes` in
     `ParseDeclarationSpecifiers`), at the end of the decl-specifier-seq
-    ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1) or after
-    an array declarator ([dcl.array]/1): attributes there appertain to a
-    type; kiln does not attach them, and sema reports an `alignas` among
-    them as `'alignas' attribute cannot be applied to types`
-    (`skip_type_position_attrs`, `Sema::act_on_type_position_attrs`;
-    WP-312)
-  - before a namespace-definition, a static_assert-declaration, or (for
-    `alignas`; `[[...]] using` is an extension) a using-declaration or
-    alias-declaration at file scope: `an attribute list cannot appear
-    here`, and the list is dropped
-    (`discard_attrs_before_unattributed_decl`; WP-312). Not yet: the
-    same check in class and block scope.
+    ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1), after
+    an array declarator ([dcl.array]/1) or after a function declarator
+    ([dcl.fct]/1, parsed after `parse_function_suffix`): attributes
+    there appertain to a type. The parser hands each list to
+    `Sema::act_on_type_position_attrs`, which reports and removes the
+    declaration attributes (spec/sema.md §4.5, type-position
+    attributes). The rest are attached to the declaration at the end of
+    the decl-specifier-seq and after a function declarator, and dropped
+    after a ptr-operator or array declarator
+    (`skip_type_position_attrs`; WP-312, WP-324)
+  - leading, before a declaration whose grammar has no
+    attribute-specifier-seq ([dcl.pre]/5, clang `ProhibitAttributes`):
+    `an attribute list cannot appear here` at the list's start, and the
+    list is dropped. At namespace scope (file scope or inside a
+    namespace) this covers a namespace-definition or
+    namespace-alias-definition, static_assert-declaration,
+    template-declaration, explicit instantiation or specialization,
+    linkage-specification, asm-declaration and export-declaration
+    (`discard_attrs_before_unattributed_decl`); in a block, a
+    static_assert-declaration and namespace-alias-definition
+    (`parse_statement_after_attrs`, `prohibit_attrs_at`); in a
+    member-specification, a `friend` declaration that is not a
+    definition (`prohibit_friend_lead_attrs`). The list's start is
+    recorded as `DeclSpec::lead_cxx11` (WP-324).
+  - before `using` ([namespace.udir]/1, [namespace.udecl]/1,
+    [enum.udecl]/1, [dcl.typedef]/2; `parse_using_leading`, in every
+    scope): before a using-directive the attributes are the
+    directive's (subject-checked by sema); before an alias-declaration
+    `an attribute list cannot appear here` and they are dropped (they
+    belong after the alias name); before a using-declaration or
+    using-enum-declaration each `[[...]]`/`alignas` gets clang's
+    `ext_cxx11_attr_placement` warning `ISO C++ does not allow an
+    attribute list to appear here` at the attribute (the scope token of
+    a scoped one), and a using-declaration's are then checked on each
+    declared using-declaration.
+  - before a declaration that declares only a tag (`[[x]] struct S
+    { };`, `alignas(4) struct S;`, [dcl.pre]/5: the attributes would
+    appertain to the declared entities, and there are none): at file
+    or namespace scope, `misplaced attributes; expected attributes
+    here` at the end of the class-key (`err_attributes_misplaced`);
+    `[[x]] int;` gets `an attribute list cannot appear here`
+    (file or block scope). Either way the leading C++11 attributes are
+    dropped (`prohibit_free_standing_lead_attrs`, `drop_lead_cxx11`);
+    GNU attributes stay. In a member-specification no error; sema's
+    place-it warning (spec/sema.md §4.5) covers both.
+  - before a statement that is not a declaration (`[[nodiscard]]
+    return;`, [stmt.pre]/1): the non-statement attributes are reported
+    by sema `act_on_stmt_decl_attrs` (`'X' attribute cannot be applied
+    to a statement`; on a block-scope asm-declaration clang's `'X'
+    attribute ignored` warning). `alignas` may also start such a list.
+  - an attribute-declaration (`[[x]];`, `alignas(4);`, [dcl.pre]/1):
+    at namespace scope its attributes are subject-checked against
+    nothing (sema `act_on_decl_attrs` on the enclosing context); in a
+    member-specification it is `declaration does not declare anything`.
+  - after the class-name of a class-head (`struct S [[x]] { };`,
+    `struct S alignas(4) final : B { };`, `struct S [[x]];`,
+    `template<> struct A<int> [[x]] { };`, [class.pre]/1): `an
+    attribute list cannot appear here`, and the attributes are moved
+    onto the class (`parse_class_head_attrs`); after `final` (`struct S
+    final [[x]] { };`) the same error and they are dropped
+    (`parse_class_virt_specifiers`). A reference (`struct S [[x]] *p;`)
+    keeps them as type-position attributes.
+  - before an enumerator (`enum E { [[x]] e };`, [dcl.enum]/1: they
+    follow its name): `expected identifier`, then parsing resumes at
+    the next `,` (clang `ParseEnumBody`).
 - **`[[assume(e)]]` (WP-160):** `parse_assume_arg` parses a
   conditional-expression. If the next token is not `)`, it reparses the
   full expression, reports `use of this expression in an 'assume'

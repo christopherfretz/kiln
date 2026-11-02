@@ -1356,8 +1356,10 @@ impl Substituter<'_, '_, '_> {
             }
             // A friend function defined in the class is a member of the
             // list as well as its `FriendDecl`'s target; the
-            // `FriendDecl` redeclares it.
-            if n.kind() == DeclKind::Function
+            // `FriendDecl` redeclares it. So is a local class's friend
+            // redeclaring a member of an enclosing local class
+            // ([class.friend]/11).
+            if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod)
                 && n.misc().friend() != kiln_ast::decl::FriendKind::None
             {
                 continue;

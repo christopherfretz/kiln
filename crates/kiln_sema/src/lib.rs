@@ -15,6 +15,7 @@
 )]
 
 mod absolute_value;
+mod align_redecl;
 mod asm;
 mod bitfield_constant;
 mod builtins;
@@ -24,6 +25,7 @@ mod consteval;
 pub mod constfold;
 pub mod conv;
 pub mod decl;
+mod decl_attrs;
 pub mod declspec;
 mod deduce;
 mod deprecated;
@@ -526,6 +528,11 @@ pub struct Sema<'a, 'sm> {
     /// their templates per specialization.
     pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
     pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
+    /// The `alignas` / `aligned` attributes a variable or class
+    /// declaration inherits from its previous declaration (clang
+    /// `mergeAlignedAttrs`' inherited clones; [dcl.align]/6), in front of
+    /// its own ([`crate::align_redecl`]).
+    pub(crate) inherited_aligned: kiln_source::fx::FxHashMap<DeclId, Vec<kiln_ast::AttrId>>,
     /// The inheriting constructors declared, by (derived class, base
     /// constructor) (WP-114, clang `findInheritingConstructor`'s lookup).
     pub(crate) inh_ctors: kiln_source::fx::FxHashMap<(DeclId, DeclId), DeclId>,
@@ -697,6 +704,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_tag: None,
             friend_class_template: None,
             inherited_defaults: kiln_source::fx::FxHashMap::default(),
+            inherited_aligned: kiln_source::fx::FxHashMap::default(),
             inh_ctors: kiln_source::fx::FxHashMap::default(),
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),

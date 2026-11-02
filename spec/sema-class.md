@@ -141,11 +141,38 @@ nothing, and so does a winner the friend would not redeclare (another
 parameter list or return type, or a non-throwing against a potentially
 throwing exception specification): `no matching function 'f' found in local
 scope; did you mean 'N::f'?` + `'N::f' declared here`. A using-declarator's
-target is found as a namespace function. Operator friends get the plain
-error (block-scope operator declarations are not recorded in
-`Scope.locals`). Tests: `class.friend/local-class-friend-no-prior.cpp`,
+target is found as a namespace function. Operator friends (WP-329) match
+block-scope operator declarations, which are recorded in `Scope.local_ops`
+(`push_local_operator`; operator names are not in `Scope.locals`), get the
+same near-match notes, and get no typo correction (the plain error when no
+block declares the operator). Tests: `class.friend/local-class-friend-no-prior.cpp`,
 `local-friend-near-match.cpp`, `local-friend-typo-correction.cpp`,
-`local-friend-typo-correction-qualifiers.cpp`.
+`local-friend-typo-correction-qualifiers.cpp`,
+`local-friend-block-scope-operator.cpp`, `local-friend-access-run.cpp`.
+
+Before the block is searched, the friend's redeclaration lookup (clang
+`LookupLocalFriendName`, WP-329, `local_friend_member`) searches the
+friend's own class and then each local class enclosing it, innermost
+first ([class.friend]/11, [class.local]): each class's own members only
+(`lookup_in_dn`; no base classes, nothing declared after the friend). The
+first class declaring the name decides. A corresponding member function
+(`pick_prev_function`) is befriended: the friend is declared as if
+qualified by that class. A data member or other non-function gives
+`redefinition of 'x' as different kind of symbol` at the friend's name +
+`previous definition is here`. Any other overload set gives `no matching
+function found in local scope` with no notes. Either error makes the
+friend declare nothing. A class template's instantiation skips such a
+friend in its member list, as it skips hidden friend definitions
+(`class_body_with`). Test: `class.local/local-friend-enclosing-class-member.cpp`.
+
+A friend function defined in a local class ([class.friend]/6, WP-329) gives
+`friend function cannot be defined in a local class` at its name, after
+the declaration is processed and only if the declaration is valid: not
+after `no matching function found in local scope` or a mismatched
+exception specification. The parser marks a friend definition
+(`act_function_def_next` around `act_on_member`). In a function template
+the error comes once, at the definition. Test:
+`class.friend/local-friend-definition.cpp`.
 
 Out-of-line member definitions (`void S::f() {}`): `act_on_declarator` with a
 qualified declarator-id looks up the name in `S` only and picks the declaration
