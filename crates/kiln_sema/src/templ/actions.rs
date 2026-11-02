@@ -350,7 +350,7 @@ impl Sema<'_, '_> {
         let own = params.len() == written.len()
             && params.iter().zip(&written).all(|(&p, &a)| self.arg_names_param(p, a));
         let pat = if own {
-            self.pattern_of(tmpl)?
+            self.own_args_partial(tmpl, args, &list).unwrap_or(self.pattern_of(tmpl)?)
         } else {
             let canonical = self.ast.types.canonical_args(args);
             let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
@@ -366,6 +366,37 @@ impl Sema<'_, '_> {
             return None;
         }
         Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// The partial specialization `X<P...>` of `tmpl` with the primary's
+    /// own arguments, more constrained than the primary
+    /// ([temp.spec.partial.general]/9), that the out-of-line member
+    /// declaration being entered names: its template head's
+    /// requires-clause is the partial specialization's and not the
+    /// primary's (`primary`, clang's `findPartialSpecialization` by
+    /// arguments and template parameters). libstdc++ ranges:6380
+    /// `template<view _Vp> requires forward_range<_Vp> template<bool>
+    /// class chunk_view<_Vp>::_Iterator`.
+    fn own_args_partial(
+        &self,
+        tmpl: DeclId,
+        args: ArgListId,
+        primary: &kiln_ast::templates::TemplateParamList,
+    ) -> Option<DeclId> {
+        if !self.templ.entering_context {
+            return None;
+        }
+        let canonical = self.ast.types.canonical_args(args);
+        let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
+        let partial = self.ast.templates.partial(i)?.partial;
+        let (_, ps) = self.ast.partial_spec_info(partial)?;
+        let plist = *self.ast.templates.param_list(ps.params);
+        let depth = self.template_param_depth(self.head_template(tmpl));
+        let head = self.templ.heads.iter().rev().find(|h| !h.taken && h.depth == depth)?;
+        let hlist = *self.ast.templates.param_list(head.list?);
+        (self.opt_exprs_equivalent(hlist.requires, plist.requires)
+            && !self.opt_exprs_equivalent(hlist.requires, primary.requires))
+        .then_some(partial)
     }
 
     /// Whether the class scope of pattern `pat` was entered for the rest
@@ -1062,6 +1093,17 @@ impl Sema<'_, '_> {
         self.builder().pack_expansion_expr(pattern, ellipsis)
     }
 
+    /// `{a, b}...`: a braced-init-list as the pattern of an
+    /// initializer-list pack expansion ([temp.variadic]/5.4, whose
+    /// pattern is an *initializer-clause*). The list is kept unanalyzed
+    /// (an `InitListExpr` of type `void`, as [`Self::dependent_init_list`])
+    /// under a `PackExpansionExpr`; instantiation expands it into one
+    /// braced-init-list per element (spec/sema-templates.md §5.3).
+    pub fn act_pack_expansion_list(&mut self, l: &crate::init::InitList, ellipsis: Loc) -> ExprId {
+        let e = self.dependent_init_list(l);
+        self.act_pack_expansion(e, ellipsis)
+    }
+
     /// `T...` as a type ([temp.variadic]/5).
     pub fn act_pack_expansion_type(&mut self, pattern: QualType, ellipsis: Loc) -> QualType {
         if !self.ast.types.flags(pattern.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
@@ -1304,9 +1346,11 @@ impl Sema<'_, '_> {
         if style == crate::expr::CastStyle::Functional {
             return self.builder().unresolved_construct(ty, &[e], false, loc, rparen);
         }
-        let vk = match self.ast.types.view(ty.ty()) {
-            TypeView::LValueRef(_) => ValueCategory::LValue,
-            TypeView::RValueRef(_) => ValueCategory::XValue,
+        // Through sugar: `static_cast<result_type>(b)` with a member
+        // `typedef X<R>& result_type;` is an lvalue (libstdc++ future:751).
+        let vk = match self.ast.types.canonical_kind(ty) {
+            TypeKind::LValueRef => ValueCategory::LValue,
+            TypeKind::RValueRef => ValueCategory::XValue,
             _ => ValueCategory::PRValue,
         };
         let to = self.non_reference(ty);
@@ -1641,7 +1685,7 @@ impl Sema<'_, '_> {
     /// injected-class-name names class template `tmpl` ([temp.local]/1):
     /// its pattern, one of its partial specializations or one of its
     /// specializations.
-    fn injected_class_for(&self, tmpl: DeclId) -> Option<DeclId> {
+    pub(crate) fn injected_class_for(&self, tmpl: DeclId) -> Option<DeclId> {
         let tmpl = self.ast.first(tmpl);
         // Lexically enclosing classes (a friend defined in its class),
         // then semantically enclosing ones (an out-of-line member

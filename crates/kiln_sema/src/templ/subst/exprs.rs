@@ -107,13 +107,26 @@ impl Substituter<'_, '_, '_> {
     /// keeps it as written, [`crate::Sema::dependent_init_list`]).
     fn call_arg_list(&mut self, l: kiln_ast::ids::ListId) -> SubstResult<Vec<ExprId>> {
         let v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-        if !v.iter().any(|&x| self.braced_source(x).is_some()) {
+        if !v.iter().any(|&x| self.braced_source(x).is_some() || self.braced_pattern(x).is_some()) {
             return self.expr_list(l);
         }
         let mut out = Vec::with_capacity(v.len());
         for x in v {
             if self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultArgExpr {
                 break;
+            }
+            if let Some(p) = self.braced_pattern(x) {
+                let ellipsis = self.sema.ast.exprs.get(x).loc();
+                match self.expand_pattern_at(Some(ellipsis), |s| s.init_list(p))? {
+                    crate::templ::pack::Expansion::Elements(ls) => {
+                        out.extend(ls.into_iter().map(|il| self.sema.act_on_braced_arg(il)));
+                    }
+                    crate::templ::pack::Expansion::Unexpanded(il) => {
+                        let e = self.sema.act_on_braced_arg(il);
+                        out.push(self.sema.act_pack_expansion(e, ellipsis));
+                    }
+                }
+                continue;
             }
             match self.braced_source(x) {
                 Some(b) => {
@@ -124,6 +137,14 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(out)
+    }
+
+    /// The braced-init-list pattern of `x` when `x` is the pack expansion
+    /// `{a, b}...` ([temp.variadic]/5.4: the pattern of an
+    /// initializer-list expansion is an *initializer-clause*).
+    fn braced_pattern(&self, x: ExprId) -> Option<ExprId> {
+        crate::templ::pack::expr_pattern(self.sema, x)
+            .filter(|&p| self.sema.ast.exprs.get(p).kind() == ExprKind::InitListExpr)
     }
 
     /// The braced-init-list an analyzed operand `x` was initialized from
@@ -222,6 +243,9 @@ impl Substituter<'_, '_, '_> {
                     let name = self.sema.ast.decls.get(d).name();
                     let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                     return Ok(self.sema.act_dependent_scope_ref(nns, name, None, begin, loc));
+                }
+                if let Some(r) = self.respecialized_member_template(d, loc)? {
+                    return Ok(r);
                 }
                 let i = self.find_instantiated_decl(d, loc)?;
                 // The qualifier as written survives ([temp.inst]; clang's
@@ -1323,7 +1347,7 @@ impl Substituter<'_, '_, '_> {
             }
             _ => None,
         };
-        if !adl {
+        if !adl || self.retained_static_members(&decls) {
             // `N::g(p)` keeps its written begin (the qualifier) for the
             // call-site notes that report it ([expr.const]).
             let begin = self.sema.ast.templates.expr_begin.get(c).copied();
@@ -1387,6 +1411,81 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(r)
+    }
+
+    /// `d`, a specialization of a member function template of a class
+    /// template pattern that the pattern already selected (`ok<int>()`
+    /// in a requires-clause, resolved at the definition): the same
+    /// specialization of the member template of the instantiated class
+    /// (clang keeps the call dependent and resolves it then). `None`
+    /// when `d` is no such specialization or its template stays.
+    fn respecialized_member_template(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+    ) -> SubstResult<Option<ExprId>> {
+        let Some((ft, args)) = self.sema.ast.spec_info(d).map(|(_, s)| (s.template, s.args)) else {
+            return Ok(None);
+        };
+        if self.sema.kind_of(ft) != DeclKind::FunctionTemplate
+            || !self
+                .sema
+                .ast
+                .decls
+                .get(ft)
+                .flags()
+                .contains(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
+        {
+            return Ok(None);
+        }
+        let it = self.find_instantiated_decl(ft, loc)?;
+        if it == ft {
+            return Ok(None);
+        }
+        let l = self.args(args, loc)?;
+        let ty = &self.sema.ast.types;
+        let flat: Vec<TemplateArg> = ty
+            .args(l)
+            .iter()
+            .flat_map(|&a| match a.view() {
+                ArgView::Pack(p) => ty.args(p).to_vec(),
+                _ => vec![a],
+            })
+            .collect();
+        let tn = self.sema.template_name_for(it);
+        match self.sema.act_template_id(tn, &flat, loc, loc) {
+            Ok(crate::templ::actions::TemplateIdRef::Value(x)) => Ok(Some(x)),
+            Ok(crate::templ::actions::TemplateIdRef::Overload(x)) => {
+                Ok(Some(self.sema.resolve_single_template_id(x)))
+            }
+            _ => Err(SubstFail),
+        }
+    }
+
+    /// Whether `decls` are static member functions (or function
+    /// templates) of a class template pattern, named outside the class or
+    /// while its own level is kept: the deduction guide of a constructor template
+    /// ([over.match.class.deduct]/1.2) naming `ok<U...>()` in its
+    /// requires-clause. They are kept as found (clang's
+    /// `TransformUnresolvedLookupExpr` transforms each declaration), not
+    /// looked up again from the guide's namespace scope, and are found in
+    /// the deduced specialization when the guide's constraints are
+    /// checked (libstdc++ tuple:980 `__disambiguating_constraint`).
+    fn retained_static_members(&mut self, decls: &[DeclId]) -> bool {
+        let Some(&d0) = decls.first() else { return false };
+        let Some(parent) = self.sema.ast.decls.get(d0).ctx() else { return false };
+        if !self.is_class_pattern(parent) {
+            return false;
+        }
+        decls.iter().all(|&d| {
+            let d = self.sema.ast.strip_shadow(d);
+            let f = match self.sema.kind_of(d) {
+                DeclKind::FunctionTemplate => self.sema.templated_function(d),
+                _ => Some(d),
+            };
+            self.sema.ast.decls.get(d).ctx() == Some(parent)
+                && f.is_some_and(|f| self.sema.is_static_method(f))
+        })
     }
 
     /// Whether `d`, found by an unqualified lookup at a template's
@@ -1660,17 +1759,26 @@ impl Substituter<'_, '_, '_> {
         let mut out = Vec::with_capacity(items.len());
         for &x in items {
             match crate::templ::pack::expr_pattern(self.sema, x) {
-                Some(p) if self.sema.ast.exprs.get(p).kind() == ExprKind::DesignatedInitExpr => {
+                Some(p)
+                    if matches!(
+                        self.sema.ast.exprs.get(p).kind(),
+                        ExprKind::DesignatedInitExpr | ExprKind::InitListExpr
+                    ) =>
+                {
                     // `.m = e...`: one designated clause per element
-                    // (clang expands the whole `DesignatedInitExpr`).
+                    // (clang expands the whole `DesignatedInitExpr`);
+                    // `{a, b}...`: one braced-init-list per element
+                    // ([temp.variadic]/5.4).
                     let ellipsis = self.sema.ast.exprs.get(x).loc();
                     match self.expand_pattern_at(Some(ellipsis), |s| s.init_value(p))? {
                         crate::templ::pack::Expansion::Elements(v) => out.extend(v),
                         crate::templ::pack::Expansion::Unexpanded(mut it) => {
-                            if let InitValue::Expr(y) = it.value {
-                                it.value =
-                                    InitValue::Expr(self.sema.act_pack_expansion(y, ellipsis));
-                            }
+                            it.value = InitValue::Expr(match it.value {
+                                InitValue::Expr(y) => self.sema.act_pack_expansion(y, ellipsis),
+                                InitValue::List(l) => {
+                                    self.sema.act_pack_expansion_list(&l, ellipsis)
+                                }
+                            });
                             out.push(it);
                         }
                     }
@@ -1752,10 +1860,41 @@ impl Substituter<'_, '_, '_> {
 
     /// A braced-init-list as the parser built it (a mem-initializer's).
     fn written_list(&mut self, l: &InitList) -> SubstResult<InitList> {
+        /// The elements of the expansion `{a, b}...` (`e`), each a
+        /// braced-init-list item with `designator`.
+        fn out_lists(
+            s: &mut Substituter<'_, '_, '_>,
+            e: ExprId,
+            designator: &[crate::init::Designator],
+            items: &mut Vec<InitItem>,
+        ) -> SubstResult<()> {
+            let Some(p) = s.braced_pattern(e) else { return Ok(()) };
+            let ellipsis = s.sema.ast.exprs.get(e).loc();
+            match s.expand_pattern_at(Some(ellipsis), |s| s.init_list(p))? {
+                crate::templ::pack::Expansion::Elements(ls) => {
+                    for n in ls {
+                        items.push(InitItem {
+                            designator: designator.to_vec(),
+                            value: InitValue::List(n),
+                        });
+                    }
+                }
+                crate::templ::pack::Expansion::Unexpanded(n) => {
+                    let value = InitValue::Expr(s.sema.act_pack_expansion_list(&n, ellipsis));
+                    items.push(InitItem { designator: designator.to_vec(), value });
+                }
+            }
+            Ok(())
+        }
         let mut items = Vec::with_capacity(l.items.len());
         for it in &l.items {
             let designator = self.written_designators(&it.designator)?;
             let value = match &it.value {
+                InitValue::Expr(e) if self.braced_pattern(*e).is_some() => {
+                    // `{a, b}...`: one braced-init-list per element.
+                    out_lists(self, *e, &designator, &mut items)?;
+                    continue;
+                }
                 InitValue::Expr(e) if crate::templ::pack::expr_pattern(self.sema, *e).is_some() => {
                     // `.m = e...` repeats the designators per element.
                     for y in self.expand_exprs(&[*e])? {
