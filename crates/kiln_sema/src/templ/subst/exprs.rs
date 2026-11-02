@@ -451,6 +451,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.act_on_template_member_q(base, qual, name, targs, kw, loc, op, arrow))
             }
             ExprKind::DependentScopeDeclRefExpr => {
+                let callee = std::mem::take(&mut self.as_callee);
                 let Some(nns) = kiln_ast::ids::NnsId::try_new(n.a()) else {
                     return Err(SubstFail);
                 };
@@ -478,10 +479,22 @@ impl Substituter<'_, '_, '_> {
                     let args = self.sema.ast.types.args(l).to_vec();
                     let tn = self.sema.template_name_for(t);
                     return match self.sema.act_template_id(tn, &args, loc, loc) {
-                        Ok(
-                            crate::templ::actions::TemplateIdRef::Value(x)
-                            | crate::templ::actions::TemplateIdRef::Overload(x),
-                        ) => Ok(x),
+                        Ok(crate::templ::actions::TemplateIdRef::Value(x)) => Ok(x),
+                        // Not called, a function template-id names its
+                        // one specialization, as for an unresolved
+                        // lookup (above): `return D<I>::template f<F>;`
+                        // with a deduced return type (libc++ variant's
+                        // `__make_dispatch`, [over.over]/3,
+                        // [temp.arg.explicit]/4).
+                        Ok(crate::templ::actions::TemplateIdRef::Overload(x)) => {
+                            // With the other overloads of the name and its
+                            // qualifier, as the parser forms `C::f<A>`.
+                            let ctx = self.nns_context(nns, begin)?;
+                            let x = self.sema.widen_function_template_id(x, name, Some(ctx));
+                            self.sema.set_template_id_begin(x, begin, loc);
+                            self.sema.set_template_id_qualifier(x, nns);
+                            Ok(if callee { x } else { self.sema.resolve_single_template_id(x) })
+                        }
                         Ok(crate::templ::actions::TemplateIdRef::Type(_)) => {
                             self.unimplemented("a type template-id as an expression", loc)
                         }
@@ -1064,6 +1077,13 @@ impl Substituter<'_, '_, '_> {
             {
                 let o = ex.operand(c);
                 return self.expr(o);
+            }
+            if n.kind() == ExprKind::DependentScopeDeclRefExpr {
+                // `T::template f<A>(x)`: the call deduces the rest.
+                self.as_callee = true;
+                let r = self.expr(c);
+                self.as_callee = false;
+                return r;
             }
             return self.expr(c);
         }
