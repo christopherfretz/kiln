@@ -1151,6 +1151,8 @@ impl Sema<'_, '_> {
         }
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
+        // [dcl.align]/1: not on a function parameter.
+        self.reject_alignas(&mut attrs, 0);
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
         let declared = ty;
         ty = self.adjust_param_type(ty);
@@ -1992,7 +1994,7 @@ impl Sema<'_, '_> {
             self.check_using_shadow_conflict(decl, dn);
         }
         if !attrs.is_empty() {
-            self.check_decl_attrs(decl, &attrs);
+            self.check_decl_attrs(decl, &mut attrs);
         }
         self.add_known_function_attrs(decl, &mut attrs);
         if !attrs.is_empty() {
@@ -2042,7 +2044,7 @@ impl Sema<'_, '_> {
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
-            self.check_decl_attrs(decl, &attrs);
+            self.check_decl_attrs(decl, &mut attrs);
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
         Some(decl)
@@ -2448,6 +2450,7 @@ impl Sema<'_, '_> {
         }
         self.check_using_shadow_conflict(td, DeclName::ident(name));
         if !attrs.is_empty() {
+            self.check_alignas_subject(td, &mut attrs);
             let _ = self.builder().attach_attrs(td, &attrs);
         }
         td
@@ -6434,6 +6437,16 @@ impl Sema<'_, '_> {
             }
             return None;
         }
+        if ds.is_empty() && !ds.attrs.is_empty() {
+            // An attribute-declaration (`alignas(8);`, [dcl.pre]/1): an
+            // alignment-specifier there appertains to nothing.
+            let mut attrs = ds.attrs.clone();
+            let n = attrs.len();
+            self.reject_alignas(&mut attrs, u8::MAX);
+            if attrs.len() != n {
+                return None;
+            }
+        }
         if !ds.invalid {
             self.error(DiagId::sema_no_declarators, ds.loc);
         }
@@ -7298,14 +7311,18 @@ impl Sema<'_, '_> {
         if attrs.is_empty() {
             return;
         }
-        self.check_decl_attrs(d, attrs);
-        let _ = self.builder().attach_attrs(d, attrs);
+        let mut attrs = attrs.to_vec();
+        self.check_decl_attrs(d, &mut attrs);
+        let _ = self.builder().attach_attrs(d, &attrs);
     }
 
-    /// Checks attributes against the declaration they appertain to.
-    pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
+    /// Checks attributes against the declaration they appertain to,
+    /// dropping the `alignas` specifiers that cannot apply to it
+    /// ([`Sema::check_alignas_subject`]).
+    pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        self.check_alignas_subject(d, attrs);
         let kind = self.ast.decls.get(d).kind();
-        for &a in attrs {
+        for &a in attrs.iter() {
             let node = *self.ast.attrs.get(a);
             if node.kind == AttrKind::ASSUME {
                 // [dcl.attr.assume]/1: a statement attribute.
@@ -7324,11 +7341,7 @@ impl Sema<'_, '_> {
                     (!kind.is_function()).then_some("functions, classes, or enumerations")
                 }
                 AttrKind::ALIGNED => {
-                    if matches!(kind, DeclKind::Function | DeclKind::Typedef | DeclKind::TypeAlias)
-                        && node.syntax == AttrSyntax::Keyword
-                    {
-                        Some("variables, data members and tag types")
-                    } else if node.b != 0 || node.a != 0 {
+                    if node.b != 0 || node.a != 0 {
                         self.check_underaligned(d, node);
                         None
                     } else {
@@ -7367,6 +7380,90 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+
+    /// [dcl.align]/1: an `alignas` specifier applies to a variable that
+    /// is not a function parameter, a `catch` variable or declared
+    /// `register`, to a non-bit-field data member, or to a class; clang
+    /// rejects it (an error, and the specifier is dropped) elsewhere: on
+    /// any other kind of declaration "only applies to variables, data
+    /// members and tag types" (`diagAppertainsToDecl` for the keyword),
+    /// on the excluded variables, bit-fields and enumerations "cannot be
+    /// applied to ..." (`validateAlignasAppliedType`).
+    pub(crate) fn check_alignas_subject(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        let kind = self.ast.decls.get(d).kind();
+        let which = match kind {
+            DeclKind::Var
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::VarTemplatePartialSpecialization => {
+                self.ast.decls.var(d).and_then(|v| {
+                    if v.spec.is_exception_var() {
+                        Some(2u8)
+                    } else if v.spec.storage() == VarStorage::Register {
+                        Some(1)
+                    } else {
+                        None
+                    }
+                })
+            }
+            DeclKind::ParmVar => Some(0),
+            DeclKind::Field => {
+                self.ast.decls.field(d).is_some_and(|f| f.bit_width.is_some()).then_some(3)
+            }
+            DeclKind::Enum => Some(4),
+            DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization => None,
+            _ => Some(u8::MAX),
+        };
+        if let Some(which) = which {
+            self.reject_alignas(attrs, which);
+        }
+    }
+
+    /// Drops (and reports) the `alignas` specifiers in `attrs`: `which`
+    /// selects the "cannot be applied to" subject of
+    /// `sema_alignas_wrong_decl_type`, `u8::MAX` the "only applies to"
+    /// error.
+    fn reject_alignas(&mut self, attrs: &mut Vec<AttrId>, which: u8) {
+        attrs.retain(|&a| {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::ALIGNED || node.syntax != AttrSyntax::Keyword {
+                return true;
+            }
+            let msg = if which == u8::MAX {
+                self.diag(DiagId::sema_attribute_wrong_decl_type_error, node.loc)
+                    .arg("'alignas'")
+                    .arg("variables, data members and tag types")
+            } else {
+                self.diag(DiagId::sema_alignas_wrong_decl_type, node.loc)
+                    .arg("'alignas'")
+                    .arg(which)
+            };
+            self.emit(msg);
+            false
+        });
+    }
+
+    /// `alignas` specifiers written where only type attributes may
+    /// appear: at the end of a decl-specifier-seq (`char alignas(8) c;`),
+    /// after a ptr-operator or after an array declarator. An
+    /// alignment-specifier is not a type attribute ([dcl.align]/1, clang
+    /// `err_attribute_not_type_attr`); the parser drops them.
+    pub fn act_on_type_position_attrs(&mut self, attrs: &[AttrId]) {
+        for &a in attrs {
+            let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::ALIGNED && node.syntax == AttrSyntax::Keyword {
+                let msg = self.diag(DiagId::sema_alignas_type_attr, node.loc).arg("'alignas'");
+                self.emit(msg);
+            }
+        }
+    }
+
+    /// True if `a` is an alignment-specifier (`alignas`).
+    pub fn is_alignas_attr(&self, a: AttrId) -> bool {
+        let node = self.ast.attrs.get(a);
+        node.kind == AttrKind::ALIGNED && node.syntax == AttrSyntax::Keyword
     }
 
     /// GNU `malloc` / `alloc_size` / `alloc_align` on function `d`: the

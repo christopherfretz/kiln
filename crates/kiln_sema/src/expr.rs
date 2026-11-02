@@ -4470,6 +4470,11 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[e], loc);
         }
+        if matches!(kind, TraitKind::AlignOf | TraitKind::PreferredAlignOf)
+            && self.alignof_member_of_incomplete_class(e)
+        {
+            return self.recover_err(&[e], loc);
+        }
         if self.check_overload_use(e) {
             return self.recover_err(&[e], loc);
         }
@@ -4487,6 +4492,37 @@ impl Sema<'_, '_> {
         }
         let st = self.size_type();
         self.builder().trait_of_expr(kind, e, st, loc)
+    }
+
+    /// clang `CheckAlignOfExpr`: `alignof` of a data member (named,
+    /// ignoring parentheses) needs its class's layout, so the class must
+    /// be complete (`struct U { int i; static_assert(alignof(i) == 4); }`
+    /// is an error at the operand; [class.mem.general]/8: a
+    /// static_assert is not a complete-class context).
+    fn alignof_member_of_incomplete_class(&mut self, e: ExprId) -> bool {
+        // clang reports at the operand's own exprLoc (a ParenExpr: its `(`).
+        let inner = self.ignore_parens(e);
+        let n = *self.ast.exprs.get(inner);
+        if n.is_type_dependent()
+            || !matches!(n.kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+        {
+            return false;
+        }
+        let d = self.ast.exprs.decl(inner);
+        if self.ast.decls.get(d).kind() != DeclKind::Field {
+            return false;
+        }
+        let Some(parent) = self.ast.decls.get(d).ctx() else { return false };
+        let incomplete = self
+            .ast
+            .decls
+            .record(parent)
+            .is_some_and(|r| !r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE));
+        if incomplete {
+            let msg = self.diag(DiagId::sema_alignof_member_of_incomplete_class, self.eloc(e));
+            self.emit(msg);
+        }
+        incomplete
     }
 
     // -- casts -------------------------------------------------------------------

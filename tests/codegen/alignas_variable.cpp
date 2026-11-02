@@ -19,3 +19,13 @@ char arr[20];
 int fa() { return alignof(arr) + arr[0]; }
 void thrower();
 int c() { try { thrower(); } catch (int e) { alignas(16) int k = e; return k; } return 0; }
+// Variable templates and static data members of class templates: the
+// specialization takes the pattern's (substituted) alignas.
+template <class T> alignas(16) T tv;
+template <class T> struct X { alignas(32) static T s; alignas(8) T m; };
+template <class T> alignas(32) T X<T>::s;
+template <int N> alignas(N) char tn;
+char* vt1() { return &tv<char>; }
+char* vt2() { return &X<char>::s; }
+char* vt3() { return &tn<64>; }
+int vt4() { X<char> x; return __alignof(tv<char>) + __alignof(X<char>::s) + __alignof(x.m) + __alignof(tn<64>); }
