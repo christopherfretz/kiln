@@ -92,6 +92,11 @@ impl AttrKind {
     /// `EnumExtensibilityAttr`): `a` is 1 for `open` (values outside the
     /// enumerators are expected), 0 for `closed` (WP-230).
     pub const ENUM_EXTENSIBILITY: AttrKind = AttrKind(103);
+    /// `clang::coro_only_destroy_when_complete` on a class (clang
+    /// `CoroOnlyDestroyWhenCompleteAttr`): a coroutine returning it is
+    /// only destroyed once suspended at its final suspend point, so its
+    /// LLVM function carries `coro_only_destroy_when_complete` (WP-370).
+    pub const CORO_ONLY_DESTROY_WHEN_COMPLETE: AttrKind = AttrKind(104);
 }
 
 /// Attribute syntax.

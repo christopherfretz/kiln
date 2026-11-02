@@ -35,6 +35,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "flag_enum"
             | "enum_extensibility"
             | "preferred_name"
+            | "coro_only_destroy_when_complete"
     )
 }
 
@@ -226,6 +227,19 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// A C++11 attribute-specifier-seq (`[[...]]` and `alignas(...)`
+    /// specifiers, no GNU attributes) into `out` (clang
+    /// `MaybeParseCXX11Attributes`).
+    pub(crate) fn parse_cxx11_attr_seq(&mut self, out: &mut Vec<AttrId>) {
+        while self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
+            if self.at_kw(Kw::Alignas) {
+                self.parse_alignas(out);
+            } else {
+                self.parse_cxx11_attributes(out);
+            }
+        }
+    }
+
     /// clang `DiagnoseAndSkipCXX11Attributes`: a `[[...]]` / `alignas(...)`
     /// specifier-seq where none may appear is reported once, at its
     /// start ("an attribute list cannot appear here"), and skipped.
@@ -235,13 +249,7 @@ impl Parser<'_, '_> {
         }
         let at = self.loc();
         let mut attrs = Vec::new();
-        while self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
-            if self.at_kw(Kw::Alignas) {
-                self.parse_alignas(&mut attrs);
-            } else {
-                self.parse_cxx11_attributes(&mut attrs);
-            }
-        }
+        self.parse_cxx11_attr_seq(&mut attrs);
         self.s.error(DiagId::parse_attributes_not_allowed, at);
     }
 
@@ -251,10 +259,16 @@ impl Parser<'_, '_> {
     /// or after them is reported and dropped.
     pub(crate) fn parse_member_tail_attrs(&mut self, out: &mut Vec<AttrId>) {
         self.diagnose_and_skip_cxx11_attrs();
+        self.parse_gnu_attr_seq(out);
+        self.diagnose_and_skip_cxx11_attrs();
+    }
+
+    /// A run of GNU `__attribute__((...))` specifiers into `out` (clang
+    /// `MaybeParseGNUAttributes`), as after a declarator.
+    pub(crate) fn parse_gnu_attr_seq(&mut self, out: &mut Vec<AttrId>) {
         while self.at_kw(Kw::Attribute) {
             self.parse_gnu_attributes(out);
         }
-        self.diagnose_and_skip_cxx11_attrs();
     }
 
     /// True at any attribute-specifier.
@@ -325,6 +339,7 @@ impl Parser<'_, '_> {
 
     /// `[[ attribute-list ]]` ([dcl.attr.grammar]).
     fn parse_cxx11_attributes(&mut self, out: &mut Vec<AttrId>) {
+        let before = self.prev_lo();
         let open = self.bump().span.lo;
         self.bump();
         let mut default_scope = None;
@@ -403,6 +418,8 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::RSquare], false, true);
             self.eat(Punct::RSquare);
         }
+        let start = if before == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { before };
+        self.cxx11_attr_run = (start, self.prev_lo());
     }
 
     /// `__attribute__(( gnu-attribute-list ))`.
@@ -437,6 +454,7 @@ impl Parser<'_, '_> {
         }
         self.expect_closing(Punct::RParen, Punct::LParen, l2);
         self.expect_closing(Punct::RParen, Punct::LParen, l1);
+        self.gnu_attr_end = self.prev_lo();
     }
 
     /// The arguments of attribute `name`, if any: `Some(args)`, or `None`

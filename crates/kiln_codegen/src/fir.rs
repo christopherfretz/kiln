@@ -7,6 +7,8 @@
 //! first built here — a small mutable mirror of the instructions codegen
 //! emits — and lowered into the module once it is final ([`Fir::lower`]).
 
+mod mem2reg;
+
 use kiln_llvm::{
     BinOp, BlockId, CallOpts, CastOp, Clause, CmpXchgOpts, FastMath, Flags, FloatPredicate, FuncId,
     GepFlags, IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module,
@@ -281,6 +283,41 @@ impl Op {
                 std::iter::once(*c).chain(cases.iter().map(|x| x.0)).collect()
             }
             Op::Ret { v } => v.iter().copied().collect(),
+        }
+    }
+
+    /// The operands of the instruction, mutably (in [`Op::operands`] order).
+    fn operands_mut(&mut self) -> Vec<&mut V> {
+        match self {
+            Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable | Op::Fence { .. } => Vec::new(),
+            Op::AtomicRmw { ptr, val, .. } => vec![ptr, val],
+            Op::CmpXchg { ptr, cmp, new, .. } => vec![ptr, cmp, new],
+            Op::ExtractValue { agg, .. } => vec![agg],
+            Op::InsertValue { agg, val, .. } => vec![agg, val],
+            Op::ExtractElement { vec, idx } => vec![vec, idx],
+            Op::InsertElement { vec, elt, idx } => vec![vec, elt, idx],
+            Op::ShuffleVector { a, b, .. } => vec![a, b],
+            Op::Load { ptr, .. } => vec![ptr],
+            Op::DynAlloca { count, .. } => vec![count],
+            Op::Store { val, ptr, .. } => vec![val, ptr],
+            Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![l, r],
+            Op::FNeg { v } | Op::Cast { v, .. } => vec![v],
+            Op::Gep { base, idx, .. } => std::iter::once(base).chain(idx.iter_mut()).collect(),
+            Op::Phi { inc, .. } => inc.iter_mut().map(|x| &mut x.0).collect(),
+            Op::Select { c, t, f } => vec![c, t, f],
+            Op::Call { callee, args, .. }
+            | Op::Invoke { callee, args, .. }
+            | Op::CallBr { callee, args, .. } => {
+                std::iter::once(callee).chain(args.iter_mut()).collect()
+            }
+            Op::AssumeBundle { args, .. } => args.iter_mut().collect(),
+            Op::LandingPad { clauses, .. } => clauses.iter_mut().collect(),
+            Op::Resume { v } => vec![v],
+            Op::CondBr { c, .. } => vec![c],
+            Op::Switch { c, cases, .. } => {
+                std::iter::once(c).chain(cases.iter_mut().map(|x| &mut x.0)).collect()
+            }
+            Op::Ret { v } => v.iter_mut().collect(),
         }
     }
 }
@@ -639,6 +676,19 @@ impl Fir {
         let pos = insts.iter().position(|&x| x == at).expect("instruction in its block");
         insts.insert(pos, n);
         V::I(n)
+    }
+
+    /// Moves instruction `i` immediately before instruction `at` (LLVM
+    /// `moveBefore`).
+    pub fn move_before(&mut self, i: u32, at: u32) {
+        if let Some(b) = self.insts[i as usize].block {
+            self.blocks[b.0 as usize].insts.retain(|&x| x != i);
+        }
+        let b = self.insts[at as usize].block.expect("move before a live instruction");
+        let insts = &mut self.blocks[b.0 as usize].insts;
+        let pos = insts.iter().position(|&x| x == at).expect("instruction in its block");
+        insts.insert(pos, i);
+        self.insts[i as usize].block = Some(b);
     }
 
     /// Redirects every edge of terminator `i` to `from` to `to`

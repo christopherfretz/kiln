@@ -1964,6 +1964,8 @@ impl Parser<'_, '_> {
         {
             self.parse_special_declarator_id(d);
             self.parse_declarator_id_attrs(d);
+        } else if abstract_ok && d.abstract_at.is_none() {
+            d.abstract_at = Some(self.loc());
         }
         self.parse_declarator_suffixes(d, abstract_ok);
         self.s.act_on_exit_declarator_scope(entered);
@@ -2024,9 +2026,11 @@ impl Parser<'_, '_> {
                 self.parse_function_suffix(d, ambiguous);
                 // [dcl.fct]/1: an attribute-specifier-seq after the
                 // parameter clause appertains to the function type.
-                if self.at_cxx11_attr() {
+                // GNU attributes after it are the declarator's (parsed
+                // by the caller; clang `ParseFunctionDeclarator`).
+                if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
                     let mut attrs = Vec::new();
-                    self.parse_attributes(&mut attrs);
+                    self.parse_cxx11_attr_seq(&mut attrs);
                     self.s.act_on_type_position_attrs(&mut attrs, true);
                     d.attrs.extend(attrs);
                 }
@@ -2231,18 +2235,21 @@ impl Parser<'_, '_> {
     /// the `)`: the parameters and whether `...` ends the list. With
     /// `delay_args`, default arguments are saved in `late_fn`.
     /// An abstract declarator's identifier location is where the name
-    /// would be (clang `ParseDirectDeclarator`): the first array bound,
-    /// else the token after the declarator. Named declarators keep theirs.
+    /// would be (clang `ParseDirectDeclarator`): the token at its
+    /// innermost position (`(*)` gives the `)`), else the first array
+    /// bound, else the token after the declarator. Named declarators keep
+    /// theirs.
     pub(crate) fn set_abstract_loc(&self, d: &mut Declarator) {
         if d.name.is_none() && d.special.is_none() && d.decomp.is_none() {
-            d.loc = d
-                .chunks
-                .iter()
-                .find_map(|c| match c {
-                    Chunk::Array { loc, .. } => Some(*loc),
-                    _ => None,
-                })
-                .unwrap_or_else(|| self.loc());
+            d.loc = d.abstract_at.unwrap_or_else(|| {
+                d.chunks
+                    .iter()
+                    .find_map(|c| match c {
+                        Chunk::Array { loc, .. } => Some(*loc),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| self.loc())
+            });
         }
     }
 
@@ -2316,8 +2323,8 @@ impl Parser<'_, '_> {
             if self.at_attr() {
                 self.parse_attributes(&mut pd.attrs);
             }
+            self.misplaced_param_pack_ellipsis(&ds, &mut pd, site);
             let mut p = self.s.act_on_param_declarator(&ds, &pd);
-            self.misplaced_param_pack_ellipsis(&ds, &mut pd, &mut p, site);
             // The point of declaration: before the default argument
             // ([basic.scope.pdecl]/1).
             self.s.act_on_prototype_param(&mut p);
@@ -2360,27 +2367,31 @@ impl Parser<'_, '_> {
         (params, variadic)
     }
 
-    /// A `...` after parameter `pd` (`p` as sema built it) whose
-    /// declarator names an unexpanded pack is a misplaced pack ellipsis
-    /// ([dcl.decl.general]/4: the `...` of a declarator-id or
-    /// abstract-pack-declarator comes first): clang 22's "'...' must
-    /// immediately precede declared identifier" (named) or "must be
-    /// innermost component of anonymous pack declaration" (abstract), and
-    /// the parameter becomes the pack (`Ts a...`, `Ts (*)()...`,
-    /// `Ts......a`). Not when `)` follows a declarator that already has its
-    /// `...` (`Ts......`), or in a lambda one without (`[](Ts a...)`):
-    /// those are the varargs `...` of -Wambiguous-ellipsis. A placeholder
-    /// type names no pack yet.
+    /// A `...` after parameter declarator `pd` that names an unexpanded
+    /// pack is a misplaced pack ellipsis ([dcl.decl.general]/4: the `...`
+    /// of a declarator-id or abstract-pack-declarator comes first):
+    /// clang 22's "'...' must immediately precede declared identifier"
+    /// (named) or "must be innermost component of anonymous pack
+    /// declaration" (abstract), and the parameter becomes the pack (`Ts
+    /// a...`, `Ts (*)()...`, `Ts......a`). As in clang
+    /// (`DiagnoseMisplacedEllipsisInDeclarator` in the parser), this is
+    /// decided syntactically and reported before the parameter's Sema
+    /// action, so it precedes any type diagnostic of the parameter, and a
+    /// parameter whose type became invalid is then "type 'int' of function
+    /// parameter pack does not contain any unexpanded parameter packs".
+    /// Not when `)` follows a declarator that already has its `...`
+    /// (`Ts......`), or in a lambda one without (`[](Ts a...)`): those are
+    /// the varargs `...` of -Wambiguous-ellipsis. A placeholder type names
+    /// no pack yet.
     fn misplaced_param_pack_ellipsis(
         &mut self,
         ds: &DeclSpec,
         pd: &mut Declarator,
-        p: &mut ParamInfo,
         site: DeclSite,
     ) {
         if !self.at(Punct::Ellipsis)
             || matches!(ds.base, TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto)
-            || !self.s.declarator_has_unexpanded_pack(p.original_ty.unwrap_or(p.ty))
+            || !self.s.declarator_has_unexpanded_pack(ds, pd)
         {
             return;
         }
@@ -2393,7 +2404,6 @@ impl Parser<'_, '_> {
         self.misplaced_declarator_ellipsis(pd, ellipsis);
         if pd.ellipsis.is_none() {
             pd.ellipsis = Some(ellipsis);
-            self.s.make_param_pack(p, ellipsis);
         }
     }
 
@@ -2926,9 +2936,10 @@ impl Parser<'_, '_> {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
+            self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
-            if self.parse_asm_label_and_attrs(&mut d, declarators == 0).is_err() {
+            if self.parse_asm_label_and_gnu_attrs(&mut d, declarators == 0).is_err() {
                 self.skip_until(&[], true, false);
                 break;
             }
@@ -2954,6 +2965,9 @@ impl Parser<'_, '_> {
                     self.skip_unsupported_declaration();
                     return decls;
                 }
+                if self.missing_fn_body_before_cxx11_attrs(ctx) {
+                    return decls;
+                }
             }
             // clang's `ParseDeclGroup`: a later declarator of a
             // decl-specifier that named no type is parsed, not declared,
@@ -2969,6 +2983,7 @@ impl Parser<'_, '_> {
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
+            self.record_declarator_end(v, &d);
             // A declarator without a type is invalid too (`static y, z;`).
             type_invalid |= self.s.take_declarator_type_invalid()
                 || (!ds.has_type_specifier() && !is_untyped_special(&d));
@@ -3000,6 +3015,71 @@ impl Parser<'_, '_> {
         }
         self.expect_declaration_semi(ctx);
         decls
+    }
+
+    /// Sets `d.end` right after `parse_declarator` (and a trailing
+    /// requires-clause): the start of its last token (clang's
+    /// `PrevTokLocation` once `ParseDeclarator` returns), not counting a
+    /// trailing C++11 attribute-specifier-seq. An asm label, GNU
+    /// attributes and virt-specifiers extend it later.
+    pub(crate) fn set_declarator_end(&self, d: &mut Declarator) {
+        let e = self.prev_lo();
+        d.end = if e == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { e };
+    }
+
+    /// Records the end of bodiless function declaration `f`'s declarator
+    /// `d`, where notes about it point (`ColdDeclData::declarator_end`).
+    pub(crate) fn record_declarator_end(&mut self, f: Option<DeclId>, d: &Declarator) {
+        if let Some(f) = f
+            && d.end != Loc::INVALID
+            && self.s.ast.decls.function(f).is_some_and(|x| x.body.is_none())
+        {
+            let _ = self.s.ast.decls.cold.declarator_end.insert(f, d.end);
+        }
+    }
+
+    /// The GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`;
+    /// `Err` when malformed, which drops the declarator) and GNU
+    /// attributes after a non-member declarator; both extend `d.end`.
+    /// Only GNU attributes follow (clang's `MaybeParseGNUAttributes` in
+    /// `ParseDeclGroup`): a C++11 attribute-specifier-seq here ends the
+    /// declarator, and the `;` (or function body) expected there is
+    /// reported by the caller.
+    fn parse_asm_label_and_gnu_attrs(
+        &mut self,
+        d: &mut Declarator,
+        first: bool,
+    ) -> Result<(), ()> {
+        self.gnu_attr_end = Loc::INVALID;
+        if first && d.is_function_declarator() {
+            self.parse_gnu_attr_seq(&mut d.attrs);
+        }
+        let label = self.parse_asm_label()?;
+        if label.is_some() {
+            d.end = self.prev_lo();
+            self.gnu_attr_end = Loc::INVALID;
+        }
+        d.asm_label = label;
+        self.parse_gnu_attr_seq(&mut d.attrs);
+        if self.gnu_attr_end != Loc::INVALID {
+            d.end = self.gnu_attr_end;
+        }
+        Ok(())
+    }
+
+    /// clang `ParseDeclGroup`: at namespace scope, a first function
+    /// declarator followed by neither a declaration's continuation nor a
+    /// function body, here a C++11 attribute-specifier-seq after its GNU
+    /// attributes (`void f() __attribute__((cold)) [[nodiscard]];`), is
+    /// reported as a missing body; the declaration is skipped through its
+    /// `;` and declares nothing (true).
+    fn missing_fn_body_before_cxx11_attrs(&mut self, ctx: DeclaratorContext) -> bool {
+        if ctx != DeclaratorContext::File || !(self.at_cxx11_attr() || self.at_kw(Kw::Alignas)) {
+            return false;
+        }
+        self.error_here(DiagId::parse_expected_fn_body);
+        self.skip_to_semi();
+        true
     }
 
     /// The type of decl-specifier-seq `ds`, formed once the first
@@ -3039,25 +3119,6 @@ impl Parser<'_, '_> {
             let diag = self.s.diag(DiagId::parse_virt_specifier_outside_class, loc).arg(sp);
             self.emit(diag);
         }
-    }
-
-    /// The GNU asm label after a non-member declarator (clang's
-    /// `ParseAsmAttributesAfterDeclarator`; `Err` when malformed, which
-    /// drops the declarator) and the attributes after it. The first
-    /// declarator of a group, when it declares a function, takes GNU
-    /// attributes before its label as well (clang's `ParseDeclGroup`:
-    /// `void f() __attribute__((x)) asm("l");`).
-    fn parse_asm_label_and_attrs(&mut self, d: &mut Declarator, first: bool) -> Result<(), ()> {
-        if first && d.is_function_declarator() {
-            while self.at_kw(Kw::Attribute) {
-                self.parse_gnu_attributes(&mut d.attrs);
-            }
-        }
-        d.asm_label = self.parse_asm_label()?;
-        if self.at_attr() {
-            self.parse_attributes(&mut d.attrs);
-        }
-        Ok(())
     }
 
     /// The `;` ending a simple-declaration.

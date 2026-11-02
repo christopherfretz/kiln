@@ -5,7 +5,6 @@
 //@ expect: run
 //@ args: -stdlib=libstdc++
 //@ stdout: 1 x
-//@ xfail(kiln): needs WP-381's local namespace alias instantiation (PR #119); remove once it lands
 #include <cstdio>
 #include <string>
 #include <variant>

@@ -1593,6 +1593,11 @@ pub struct ColdDeclData {
     pub instantiated_from: ColdMap<DeclId, DeclId>,
     /// Injection points of `define_aggregate` members (§10).
     pub injection_point: ColdMap<DeclId, Loc>,
+    /// A bodiless member function declaration → the start of the last
+    /// token of its declarator, asm label and GNU attributes (clang's
+    /// `FunctionDecl::getEndLoc` before a body is attached), where
+    /// "must be declared with 'noexcept'" points.
+    pub declarator_end: ColdMap<DeclId, Loc>,
     /// Builtin function ids of implicit builtin `Function` decls (§5.3).
     pub builtin_id: ColdMap<DeclId, u32>,
     /// The typedef that names an unnamed class or enumeration for linkage
@@ -1653,6 +1658,7 @@ impl Default for ColdDeclData {
             deprecation: ColdMap::new("deprecation"),
             instantiated_from: ColdMap::new("instantiated_from"),
             injection_point: ColdMap::new("injection_point"),
+            declarator_end: ColdMap::new("declarator_end"),
             builtin_id: ColdMap::new("builtin_id"),
             typedef_for_anon: ColdMap::new("typedef_for_anon"),
             decomp_bindings: ColdMap::new("decomp_bindings"),
@@ -1669,7 +1675,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 28] {
+    fn rows(&self) -> [MemRow; 29] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1688,6 +1694,7 @@ impl ColdDeclData {
             self.deprecation.mem_row(),
             self.instantiated_from.mem_row(),
             self.injection_point.mem_row(),
+            self.declarator_end.mem_row(),
             self.builtin_id.mem_row(),
             self.typedef_for_anon.mem_row(),
             self.decomp_bindings.mem_row(),
@@ -4389,7 +4396,8 @@ pub mod builtin {
     /// `__builtin_nansf16b` (GCC; `__bf16`).
     pub const NANSF16B: u32 = 2012;
     /// `__builtin_nextafterf16` (GCC; named in an `if consteval` branch
-    /// of libstdc++'s `<cmath>`; not a constant expression in kiln).
+    /// of libstdc++'s `<cmath>`; evaluated by the Oven's P0533 path and
+    /// lowered inline, as there is no libm entry point).
     pub const NEXTAFTERF16: u32 = 2013;
     /// `__builtin_nextafterf16b` (GCC; as [`NEXTAFTERF16`]).
     pub const NEXTAFTERF16B: u32 = 2014;
@@ -4479,6 +4487,29 @@ pub mod builtin {
         row(1315, "__builtin_tanhf128", "LLdLLd", N),
         row(1324, "__builtin_tgammaf128", "LLdLLd", N),
         row(TRUNCF128, "__builtin_truncf128", "LLdLLd", N | C),
+        // WP-365: GCC's `<complex.h>` `f128` forms (clang 19 has none),
+        // which libstdc++'s `<complex>` names where `_Float128` is not
+        // `long double` (x86-64); kiln-private ids, library calls of the
+        // glibc function the builtin names.
+        row(2015, "__builtin_cabsf128", "LLdXLLd", N),
+        row(2016, "__builtin_cacosf128", "XLLdXLLd", N),
+        row(2017, "__builtin_cacoshf128", "XLLdXLLd", N),
+        row(2018, "__builtin_cargf128", "LLdXLLd", N),
+        row(2019, "__builtin_casinf128", "XLLdXLLd", N),
+        row(2020, "__builtin_casinhf128", "XLLdXLLd", N),
+        row(2021, "__builtin_catanf128", "XLLdXLLd", N),
+        row(2022, "__builtin_catanhf128", "XLLdXLLd", N),
+        row(2023, "__builtin_ccosf128", "XLLdXLLd", N),
+        row(2024, "__builtin_ccoshf128", "XLLdXLLd", N),
+        row(2025, "__builtin_cexpf128", "XLLdXLLd", N),
+        row(2026, "__builtin_clogf128", "XLLdXLLd", N),
+        row(2027, "__builtin_cpowf128", "XLLdXLLdXLLd", N),
+        row(2028, "__builtin_cprojf128", "XLLdXLLd", N),
+        row(2029, "__builtin_csinf128", "XLLdXLLd", N),
+        row(2030, "__builtin_csinhf128", "XLLdXLLd", N),
+        row(2031, "__builtin_csqrtf128", "XLLdXLLd", N),
+        row(2032, "__builtin_ctanf128", "XLLdXLLd", N),
+        row(2033, "__builtin_ctanhf128", "XLLdXLLd", N),
     ];
 
     /// WP-361: the P1467 `_Float16` (`x`), `_Float32` (kiln `k`),
@@ -4597,6 +4628,47 @@ pub mod builtin {
     /// Whether builtin `id` is a [`CORO`] builtin.
     pub fn is_coro(id: u32) -> bool {
         CORO.iter().any(|e| e.id == id)
+    }
+
+    /// WP-365: the `<cmath>` function of the P0533 builtin `id` (the
+    /// rounding, remainder, `fdim`/`fma`, exponent and `nextafter`
+    /// families): its name without the `__builtin_` prefix and the `f`,
+    /// `l`, `f128`, `f16` or `f16b` suffix (`"ceil"` for
+    /// `__builtin_ceilf128`); the Oven evaluates these and clang 19 does
+    /// not.
+    pub fn p0533_base(id: u32) -> Option<&'static str> {
+        const BASES: &[&str] = &[
+            "ceil",
+            "floor",
+            "trunc",
+            "round",
+            "roundeven",
+            "rint",
+            "nearbyint",
+            "lround",
+            "llround",
+            "lrint",
+            "llrint",
+            "fmod",
+            "remainder",
+            "remquo",
+            "fdim",
+            "fma",
+            "frexp",
+            "ldexp",
+            "scalbn",
+            "scalbln",
+            "ilogb",
+            "logb",
+            "modf",
+            "nextafter",
+            "nexttoward",
+        ];
+        let name = info(id)?.name.strip_prefix("__builtin_")?;
+        BASES.iter().copied().find(|base| {
+            name.strip_prefix(base)
+                .is_some_and(|s| matches!(s, "" | "f" | "l" | "f128" | "f16" | "f16b"))
+        })
     }
 
     /// Whether builtin `id` is a [`LIBM`] function.

@@ -202,7 +202,35 @@ impl Sema<'_, '_> {
         let mut ok = true;
         let arg_loc = |i: usize| arg_locs.get(i).copied().unwrap_or(loc);
         let mut wi = 0usize;
+        let mut open_expansion = false;
         for (pi, &p) in params.iter().enumerate() {
+            if let Some(tys) = self.expanded_pack_types(p) {
+                // An expanded parameter pack takes one argument per
+                // element type ([temp.variadic]/5); a pack expansion
+                // argument takes the rest, checked once substituted.
+                let mut elems = Vec::new();
+                let mut open = false;
+                let mut taken = 0usize;
+                while wi < written.len() && (open || taken < tys.len()) {
+                    open |= self.is_pack_expansion_arg(written[wi]);
+                    let at = arg_loc(wi);
+                    let ty = tys.get(taken).copied().filter(|_| !open);
+                    taken += 1;
+                    match self.check_expanded_pack_arg(tmpl, depth, p, written[wi], at, &out, ty) {
+                        Ok(a) => elems.push(a),
+                        Err(()) => ok = false,
+                    }
+                    wi += 1;
+                }
+                open_expansion |= open;
+                if !open && taken < tys.len() {
+                    self.diag_template_arity(tmpl, false, loc);
+                    return Err(());
+                }
+                let l = self.ast.types.arg_list(&elems);
+                out.push(TemplateArg::pack(l));
+                continue;
+            }
             let pack = self.ast.template_parm(p).is_some_and(|x| x.pack);
             if pack {
                 let mut elems = Vec::new();
@@ -230,6 +258,11 @@ impl Sema<'_, '_> {
                 continue;
             }
             let _ = pi;
+            // After a pack expansion argument the remaining parameters'
+            // arguments are known only once it is substituted.
+            if open_expansion {
+                break;
+            }
             let Some(def) = self.template_default(p) else {
                 self.diag_template_arity(tmpl, false, loc);
                 return Err(());
@@ -247,6 +280,49 @@ impl Sema<'_, '_> {
         let sugared = self.ast.types.arg_list(&out);
         let canonical = self.ast.types.canonical_args(sugared);
         Ok(ConvertedArgs { sugared, canonical })
+    }
+
+    /// The element types of expanded non-type parameter pack `p`
+    /// ([temp.variadic]/5; §3.2), or `None` for any other parameter.
+    pub(crate) fn expanded_pack_types(&self, p: DeclId) -> Option<Vec<QualType>> {
+        let l = *self.templ.expanded_packs.get(&p)?;
+        Some(
+            self.ast
+                .types
+                .args(l)
+                .iter()
+                .map(|a| match a.view() {
+                    ArgView::Type(t) => t,
+                    _ => QualType::ERROR,
+                })
+                .collect(),
+        )
+    }
+
+    /// Checks argument `a` for an element of expanded parameter pack `p`
+    /// whose type is `ty` (`None` for an argument whose element is not
+    /// known yet: after a pack expansion argument, or past the end).
+    #[allow(clippy::too_many_arguments, reason = "check_template_arg plus the element type")]
+    pub(crate) fn check_expanded_pack_arg(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        a: TemplateArg,
+        at: Loc,
+        prior: &[TemplateArg],
+        ty: Option<QualType>,
+    ) -> Result<TemplateArg, ()> {
+        let Some(ty) = ty else {
+            return match a.view() {
+                ArgView::Expr { expr, .. } if !self.is_err_expr(expr) => Ok(a),
+                _ => self.check_template_arg(tmpl, depth, p, a, at, prior),
+            };
+        };
+        let saved = self.templ.nttp_elem.replace(ty);
+        let r = self.check_template_arg(tmpl, depth, p, a, at, prior);
+        self.templ.nttp_elem = saved;
+        r
     }
 
     pub(crate) fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
@@ -430,8 +506,11 @@ impl Sema<'_, '_> {
         // A type substituted from prior arguments is substituted under a
         // frame and checked at the parameter (clang `CheckTemplateArgument`:
         // `CheckNonTypeTemplateParameterType(NTTPType, NTTP->getLocation())`).
-        let declared = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let substituted = self.ast.types.is_dependent(declared);
+        // An element of an expanded pack has its own, known type.
+        let elem = self.templ.nttp_elem.take();
+        let declared =
+            elem.unwrap_or_else(|| self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR));
+        let substituted = elem.is_none() && self.ast.types.is_dependent(declared);
         if substituted {
             let poi = self.inst.template_id_loc.unwrap_or(at);
             if !self.push_inst_frame(FrameKind::PriorArgSubstitution, p, tmpl, poi) {
@@ -440,7 +519,7 @@ impl Sema<'_, '_> {
             let l = self.ast.types.arg_list(prior);
             self.set_frame_args(l);
         }
-        let r = self.nttp_type(tmpl, depth, p, prior, at).and_then(|t| {
+        let r = elem.map_or_else(|| self.nttp_type(tmpl, depth, p, prior, at), Ok).and_then(|t| {
             if substituted && !self.is_error_type(t) && !self.ast.types.is_dependent(t) {
                 let ploc = self.ast.decls.get(p).loc();
                 let _ = self.require_complete_silent(t, ploc);
@@ -649,9 +728,19 @@ impl Sema<'_, '_> {
         let args = self.prior_levels(tmpl, depth, prior);
         // Errors point into the default argument, as clang's do.
         let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
-        let r = {
-            let mut s = Substituter::new(self, &args);
-            s.template_arg(def, at)
+        // [temp.dep.candidate], [temp.res.general]: the default's names
+        // were looked up from the template's scope, and a name substitution
+        // looks up again (`declval<T>()` with explicit arguments) is too,
+        // as for the template's signature and body, not from the scope of
+        // the use that needs the default (`n::f<int>()` outside `n`;
+        // clang `SubstDefaultTemplateArgument` enters the template's
+        // context). A template in a local scope keeps the use's scopes:
+        // they are the only ones that hold its function's names.
+        let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
+        let r = if self.decl_in_local_scope(tmpl) {
+            Substituter::new(self, &args).template_arg(def, at)
+        } else {
+            self.in_inst_context(ctx, |s| Substituter::new(s, &args).template_arg(def, at))
         };
         let r = match r {
             Ok(a) => self.check_template_arg(tmpl, depth, p, a, at, prior),
