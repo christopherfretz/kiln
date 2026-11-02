@@ -1448,7 +1448,9 @@ impl<'a> Cg<'a> {
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
         }
-        a.push(Attr::Flag(AttrKind::NoInline));
+        if !self.opts.optimize {
+            a.push(Attr::Flag(AttrKind::NoInline));
+        }
         if is_main {
             a.push(Attr::Flag(AttrKind::NoRecurse));
         }
@@ -1458,7 +1460,9 @@ impl<'a> Cg<'a> {
         if nounwind {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
-        a.push(Attr::Flag(AttrKind::OptimizeNone));
+        if !self.opts.optimize {
+            a.push(Attr::Flag(AttrKind::OptimizeNone));
+        }
         a.extend(extra);
         a.push(Attr::UwTable(UwTableKind::Async));
         self.target_attrs(&mut a);

@@ -67,6 +67,10 @@ pub struct CodegenOptions {
     /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
     /// `LangOptions::ComplexRange`).
     pub complex_range: ComplexRange,
+    /// The IR will be optimized (`-O1` and above): definitions are
+    /// emitted without the `-O0` `noinline optnone` pair (clang
+    /// `CodeGenOpts.OptimizationLevel > 0`; spec/codegen.md §7p).
+    pub optimize: bool,
 }
 
 /// clang's `LangOptions::ComplexRangeKind` (spec/abi.md §8.17): the
@@ -109,6 +113,7 @@ impl Default for CodegenOptions {
             ident: String::new(),
             outline_atomics: true,
             complex_range: ComplexRange::Full,
+            optimize: false,
         }
     }
 }

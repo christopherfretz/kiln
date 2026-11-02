@@ -183,6 +183,10 @@ pub(crate) struct Fx {
     /// The coroutine being emitted (clang `CurCoro`, spec/codegen.md
     /// §7o).
     pub coro: Option<Box<crate::coro::CoroData>>,
+    /// In an `await_suspend` wrapper: the frame pointer parameter, the
+    /// value of `__builtin_coro_frame()` (clang
+    /// `CurAwaitSuspendWrapper.FramePtr`).
+    pub await_frame: Option<V>,
 }
 
 impl Fx {
@@ -229,6 +233,7 @@ impl Fx {
             vla_sizes: FxHashMap::default(),
             did_stack_save: false,
             coro: None,
+            await_frame: None,
         }
     }
 }

@@ -264,8 +264,9 @@ ourselves is what makes our text canonical): `memcpy`, `memmove`, `memset`,
 switched-resume coroutine set (`coro(m, Coro::*, size_ty)`, WP-351):
 `llvm.coro.id`, `.alloc`, `.size.iN`, `.align.iN`, `.begin`, `.frame`,
 `.save`, `.suspend`, `.end`, `.free`, `.resume`, `.destroy`, `.done`,
-`.promise`, `.noop`, with clang 19's parameter attributes and attribute
-sets. Each helper returns the existing declaration if present.
+`.promise`, `.noop`, and (WP-370) `.await.suspend.void`/`.bool`/`.handle`
+(no attributes: they may throw), with clang 19's parameter attributes
+and attribute sets. Each helper returns the existing declaration if present.
 
 A module that uses the coroutine intrinsics is **pre-split** IR: it
 verifies and is an `opt -S` fixed point like any other (§7), but `llc`

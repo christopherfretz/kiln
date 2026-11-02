@@ -371,6 +371,10 @@ pub struct Args {
     pub link: Vec<LinkOpt>,
     /// The last `-O<level>` as written (`-O2`, `-Os`, ...).
     pub opt_flag: Option<String>,
+    /// `-disable-llvm-passes` (a cc1 option, usually behind `-Xclang`):
+    /// no `opt` pass runs on the IR, which is written as the frontend
+    /// emits it (pre-split coroutines; spec/driver.md "IR optimization").
+    pub disable_llvm_passes: bool,
     /// `-###`: print the commands instead of running them.
     pub print_commands: bool,
     /// `-m[no-]outline-atomics` (the last wins): `AArch64`'s
@@ -534,6 +538,7 @@ impl Args {
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
             "-###" => self.print_commands = true,
+            "-disable-llvm-passes" => self.disable_llvm_passes = true,
             "-moutline-atomics" => self.outline_atomics = Some(true),
             "-mno-outline-atomics" => self.outline_atomics = Some(false),
             // Debug information is not generated (spec/codegen.md §5).
