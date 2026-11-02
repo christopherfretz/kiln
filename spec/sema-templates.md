@@ -2670,9 +2670,21 @@ guides.
    deducing f2's params from f1's synthesized types succeeds for every
    pair. Packs follow /8–11. The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
-5. **Constraints.** If both directions succeed and the template-heads are
-   equivalent, the more constrained one wins
-   ([temp.func.order]/6, P2113; subsumption §8.4).
+5. **Constraints.** If both directions succeed, the more constrained one
+   wins ([temp.func.order]/6, P2113; subsumption §8.4), but only when the
+   constraints are comparable (`constraints_comparable`, clang
+   `getMoreSpecializedTemplate`; WP-339): the template-parameter-lists
+   and the function parameter lists (all declared parameters, after the
+   /3 object parameter and reversal) have the same length (/6.1), the
+   corresponding template parameters are equivalent ignoring their
+   type-constraints (same kind, packness, non-type parameter type,
+   template template parameter head) and the positionally corresponding
+   parameter types are the same ignoring top-level cv (/6.2.2), and, for
+   a conversion, the conversion types are the same. Otherwise neither is
+   more specialized: for CTAD the later [over.match.best]/2.11-2.13
+   tie-breakers decide (a constrained constructor guide
+   `zt(const tp<D>&) requires C` against the user guide `zt(tp<D>)` of a
+   two-parameter class template: the user guide wins).
 6. **Result.** `Some(winner)` or `None` (ambiguous).
 
 `po_cache: (f1, f2, ctx, nargs) → Option<DeclId>` is valid because

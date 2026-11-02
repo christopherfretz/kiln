@@ -27,7 +27,7 @@ use crate::declspec::{
     Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign,
     SpecialName, StorageSpec, TypeSpecKind, Width,
 };
-use crate::init::{InitValue, Initializer};
+use crate::init::Initializer;
 use crate::local_friend::LocalFriend;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
@@ -4657,22 +4657,19 @@ impl Sema<'_, '_> {
         direct: bool,
     ) -> Option<QualType> {
         use crate::templ::auto::{AutoFail, AutoInit};
-        let list_items = |l: &crate::init::InitList| -> Vec<Option<ExprId>> {
-            l.items
-                .iter()
-                .map(|it| match it.value {
-                    InitValue::Expr(e) if it.designator.is_empty() => Some(e),
-                    _ => None,
-                })
-                .collect()
-        };
         let (items, kind, lbrace) = match init {
             Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
             Initializer::Paren(es, ..) => {
                 (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
             }
-            Initializer::List(l) if direct => (list_items(l), AutoInit::DirectList, Some(l.lbrace)),
-            Initializer::List(l) => (list_items(l), AutoInit::CopyList, Some(l.lbrace)),
+            Initializer::List(l) if direct => (
+                crate::templ::auto::auto_list_items(l, false),
+                AutoInit::DirectList,
+                Some(l.lbrace),
+            ),
+            Initializer::List(l) => {
+                (crate::templ::auto::auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace))
+            }
         };
         // [temp.deduct.call]/6: every member of an overload set deduces
         // `auto`, so nothing is deduced (a placeholder in a function
@@ -6644,6 +6641,15 @@ impl Sema<'_, '_> {
         }
         if let Some(s) = self.scopes.iter_mut().rev().find(|s| !s.is_transparent()) {
             s.using_dirs.push(nominated);
+            // A namespace-scope directive outlives the scope instance: it
+            // is seen from every later reopening of the namespace, from
+            // instantiations, and through qualified lookup and other
+            // directives ([namespace.udir]/4, [namespace.qual]/2).
+            if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit)
+                && let Some(e) = s.entity
+            {
+                self.ast.add_using_directive(e, nominated);
+            }
         }
         d
     }
