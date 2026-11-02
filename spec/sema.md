@@ -1206,6 +1206,13 @@ and returns the scope it names:
     [-Wignored-attributes]; an argument already in error drops it
     silently. They change only the switch checks (§7 Statements). Not
     yet: -Wflag-enum (an enumerator out of range of the flags).
+  - `coro_only_destroy_when_complete` (GNU syntax or `clang::`,
+    `AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE`, WP-370), on classes and
+    unions, class template patterns included (it is copied onto each
+    specialization with the other class attributes); elsewhere `'x'
+    attribute only applies to classes` [-Wignored-attributes]; takes no
+    arguments. A coroutine whose return type's class carries it gets the
+    LLVM function attribute of that name (spec/codegen.md §7o).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.

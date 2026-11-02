@@ -764,10 +764,21 @@ impl Cg<'_> {
         Ok(BuiltinCall::Emitted((!void).then_some(r)))
     }
 
-    /// The `presplitcoroutine` attribute of a coroutine definition.
-    pub(crate) fn coro_fn_attrs(&self, extra: &mut Vec<Attr>) {
-        if self.f.coro.is_some() {
-            extra.push(Attr::Flag(AttrKind::PresplitCoroutine));
+    /// The `presplitcoroutine` attribute of coroutine definition `d`,
+    /// and `coro_only_destroy_when_complete` when its return type is a
+    /// class marked `[[clang::coro_only_destroy_when_complete]]` (clang
+    /// `CodeGenFunction::EmitCoroutineBody`).
+    pub(crate) fn coro_fn_attrs(&self, d: DeclId, extra: &mut Vec<Attr>) {
+        if self.f.coro.is_none() {
+            return;
+        }
+        extra.push(Attr::Flag(AttrKind::PresplitCoroutine));
+        let ast = self.ast;
+        let ret = ast.decls.get(d).ty().and_then(|t| ast.types.proto(t)).map(|p| p.ret());
+        if ret.and_then(|r| ast.types.as_record(r)).is_some_and(|r| {
+            self.fn_attr(r, kiln_ast::attr::AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE).is_some()
+        }) {
+            extra.push(Attr::Flag(AttrKind::CoroDestroyOnlyWhenComplete));
         }
     }
 }

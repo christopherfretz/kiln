@@ -557,7 +557,7 @@ impl Cg<'_> {
         // Attributes.
         let mut extra = Vec::new();
         let const_pure = crate::builtins::const_pure_attrs(self.ast, d, &sig, &mut extra);
-        self.coro_fn_attrs(&mut extra);
+        self.coro_fn_attrs(d, &mut extra);
         let nothrow_def = sig.nothrow
             || const_pure
             || self.ast.has_nothrow_attr(d)

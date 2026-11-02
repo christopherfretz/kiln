@@ -35,6 +35,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "flag_enum"
             | "enum_extensibility"
             | "preferred_name"
+            | "coro_only_destroy_when_complete"
     )
 }
 
