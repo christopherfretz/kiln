@@ -1099,11 +1099,35 @@ and returns the scope it names:
     type attributes may appear (`char alignas(8) c;`) it is `'alignas'
     attribute cannot be applied to types` (the type-position rule
     below).
-    Before a namespace-definition, a static_assert-declaration, a
-    using-declaration or an alias-declaration, a leading
-    attribute-specifier-seq containing `alignas` is `an attribute list
-    cannot appear here` (parser `discard_attrs_before_unattributed_decl`;
-    file scope only). Tests: `tests/conformance/dcl.align/alignas-*.cpp`.
+    A leading `alignas` follows the same placement rules as any C++11
+    attribute (spec/parse.md, attribute placement): `an attribute list
+    cannot appear here` before a namespace-definition, static_assert,
+    alias-declaration and the rest, in every scope; before a
+    using-directive or using-declaration it is subject-checked like any
+    other attribute. Tests: `tests/conformance/dcl.align/alignas-*.cpp`,
+    `tests/conformance/dcl.attr.grammar/leading-attribute-placement*.cpp`.
+  - Leading attributes on declarations without declarators
+    ([dcl.pre]/5, [dcl.attr.grammar]/5; WP-324):
+    - attribute-declaration at namespace scope (`[[x]];`):
+      `act_on_decl_attrs` checks the attributes against the enclosing
+      context, so `alignas(4);` is the alignas subject error and
+      `[[noreturn]];` the noreturn one; no `declaration does not
+      declare anything`.
+    - a declaration that declares only a named tag (`[[x]] struct S
+      { };`, `struct S { } [[x]];`): each named attribute gets
+      `attribute 'X' is ignored, place it after "struct" to apply
+      attribute to type declaration` (`-Wignored-attributes`,
+      `warn_free_standing_tag_attrs`; the keyword is `struct`, `class`,
+      `union`, `enum`, `enum class` or `enum struct`), after the
+      parser's error for the position, if any. Not for an anonymous
+      record.
+    - on a non-declaration statement: `'X' attribute cannot be applied
+      to a statement` per declaration attribute
+      (`act_on_stmt_decl_attrs`); on a block-scope asm-declaration
+      clang's `'X' attribute ignored` warning instead.
+    - `[[deprecated]]` on a using-declaration: `'deprecated' currently
+      has no effect on a using declaration` (`-Wignored-attributes`),
+      dropped.
   - Alignment across redeclarations ([dcl.align]/6, `align_redecl.rs`
     `merge_aligned_redecl`, clang `mergeAlignedAttrs`; WP-324), for
     variables, data members and classes. The old declaration's
