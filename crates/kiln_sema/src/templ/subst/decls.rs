@@ -624,11 +624,14 @@ impl Substituter<'_, '_, '_> {
         });
         let fs = self.sema.ast.decls.function(d).map(|x| x.spec);
         if let Some(s) = fs {
+            // Where the pattern's specifiers were written, when its
+            // override control was deferred (`virt_spec_locs`).
+            let (ol, fl) = self.sema.virt_spec_locs.get(&d).copied().unwrap_or_default();
             if s.is_override() {
-                dr.virt_override = Some(loc);
+                dr.virt_override = Some(ol.unwrap_or(loc));
             }
             if s.is_final() {
-                dr.virt_final = Some(loc);
+                dr.virt_final = Some(fl.unwrap_or(loc));
             }
             // The pure-specifier: declared again so the instantiation is
             // created pure (`is_pure` is not a late bit; [class.abstract]/2).
