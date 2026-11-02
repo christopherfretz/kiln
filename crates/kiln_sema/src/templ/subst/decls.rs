@@ -1338,16 +1338,37 @@ impl Substituter<'_, '_, '_> {
         }
         match self.sema.ast.decls.friend_target(d) {
             FriendTarget::Type { ty, owned_tag } => {
-                if owned_tag.is_some() {
+                // `friend struct Z;` that first declared `Z` in the
+                // enclosing namespace: the instantiation befriends the
+                // same class (not dependent). A tag declared in a local
+                // scope would need its instantiated declaration.
+                if let Some(t) = owned_tag
+                    && !self.sema.ast.decls.get(t).ctx().is_some_and(|c| {
+                        matches!(
+                            self.sema.kind_of(c),
+                            DeclKind::Namespace | DeclKind::TranslationUnit
+                        )
+                    })
+                {
                     return self.unimplemented("friend class declared in a class template", loc);
                 }
-                let ty = self.ty(ty, loc)?;
-                let mut ds = DeclSpec::new(loc);
-                ds.base = TypeSpecKind::Named;
-                ds.named = Some(ty);
-                ds.type_loc = Some(loc);
-                ds.friend = Some(loc);
-                Ok(self.sema.act_on_friend(&ds, ty, None, loc))
+                // `friend Ts...;` ([class.friend]/3, P2893): one friend
+                // per element of the expansion.
+                let tys = if crate::templ::pack::type_pattern(self.sema, ty).is_some() {
+                    self.expand_types(&[ty], loc)?
+                } else {
+                    vec![self.ty(ty, loc)?]
+                };
+                let mut last = None;
+                for ty in tys {
+                    let mut ds = DeclSpec::new(loc);
+                    ds.base = TypeSpecKind::Named;
+                    ds.named = Some(ty);
+                    ds.type_loc = Some(loc);
+                    ds.friend = Some(loc);
+                    last = self.sema.act_on_friend(&ds, ty, None, loc).or(last);
+                }
+                Ok(last)
             }
             FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::ClassTemplate => {
                 // `template<class U> friend class X;` names a namespace

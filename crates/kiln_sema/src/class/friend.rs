@@ -12,6 +12,7 @@ use crate::Sema;
 use crate::declspec::{DeclSpec, Declarator};
 use crate::local_friend::LocalFriendMember;
 use crate::lookup::LookupKind;
+use crate::templ::pack::PackOperand;
 
 /// A friend function template specialization in a dependent context
 /// (`friend bool operator==<>(const X&, const X&);` in a class
@@ -58,7 +59,12 @@ impl Sema<'_, '_> {
                 self.push_friend(first);
                 return Some(fd);
             }
-            // `friend T;` / `friend class X;` ([class.friend]/3).
+            // `friend T;` / `friend class X;` ([class.friend]/3). A pack
+            // outside an expansion is ill-formed ([temp.variadic]/12).
+            if self.diagnose_unexpanded_pack(PackOperand::Type(base), "friend declaration", friend_loc)
+            {
+                return None;
+            }
             let loc = ds.type_loc.unwrap_or(friend_loc);
             let target = FriendTarget::Type { ty: base, owned_tag: owned };
             let fd = self.builder().friend(record, loc, target);
@@ -101,6 +107,12 @@ impl Sema<'_, '_> {
             if !self.is_error_type(ty) {
                 self.error(DiagId::sema_friend_not_class_or_fn, d.name_loc());
             }
+            return None;
+        }
+        // [temp.variadic]/12: `friend void f(Ts);` (clang reports it at
+        // the declarator-id).
+        if self.diagnose_unexpanded_pack(PackOperand::Type(ty), "friend declaration", d.name_loc()) {
+            self.templ.cur = None;
             return None;
         }
         if head.is_none()
