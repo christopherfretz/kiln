@@ -2275,20 +2275,13 @@ impl Parser<'_, '_> {
             .s
             .diag(DiagId::parse_misplaced_ellipsis_vararg, ellipsis)
             .arg(if pd.ellipsis.is_some() { "1" } else { "0" });
-        w = match pd.ellipsis {
-            Some(at) => w.with_note(
-                self.s.diag(DiagId::note_misplaced_ellipsis_vararg_existing_ellipsis, at),
-            ),
-            None => {
-                let (sel, at) = match pd.name {
-                    Some((_, at)) => ("0", at),
-                    None => ("1", pd.loc),
-                };
-                w.with_note(
-                    self.s.diag(DiagId::note_misplaced_ellipsis_vararg_add_ellipsis, at).arg(sel),
-                )
-            }
+        let note = if let Some(at) = pd.ellipsis {
+            self.s.diag(DiagId::note_misplaced_ellipsis_vararg_existing_ellipsis, at)
+        } else {
+            let (sel, at) = pd.name.map_or(("1", pd.loc), |(_, at)| ("0", at));
+            self.s.diag(DiagId::note_misplaced_ellipsis_vararg_add_ellipsis, at).arg(sel)
         };
+        w = w.with_note(note);
         let w =
             w.with_note(self.s.diag(DiagId::note_misplaced_ellipsis_vararg_add_comma, ellipsis));
         self.emit(w);

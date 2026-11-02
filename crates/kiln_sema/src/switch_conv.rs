@@ -137,12 +137,11 @@ impl Sema<'_, '_> {
             return call;
         }
         let to = conv::strip_cv(self, to);
-        match conv::implicit_convert(self, call, to, ConvCtx::Initialization) {
-            Ok(e) => e,
-            Err(_) => {
-                let loc = self.eloc(call);
-                self.recover_err(&[call], loc)
-            }
+        if let Ok(e) = conv::implicit_convert(self, call, to, ConvCtx::Initialization) {
+            e
+        } else {
+            let loc = self.eloc(call);
+            self.recover_err(&[call], loc)
         }
     }
 

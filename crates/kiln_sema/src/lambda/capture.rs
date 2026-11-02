@@ -25,6 +25,7 @@ use kiln_source::symbol::Symbol;
 use super::{LambdaIntroducer, LambdaScope};
 use crate::Sema;
 use crate::class::InitEntity;
+use crate::conv::bases::{BaseSearch, ambiguous_paths_string, find_base};
 use crate::init::Initializer;
 use crate::lookup::LookupKind;
 
@@ -392,11 +393,12 @@ impl Sema<'_, '_> {
                         .is_some_and(|t| self.ast.types.is_dependent(t));
                 let data = self.ast.exprs.lambdas.get(l);
                 if dependent {
-                    match data.captures.iter().find(|x| x.var == Some(d)) {
-                        Some(x) if x.kind == CaptureKind::ByCopy => return true,
-                        Some(_) => {}
-                        None if data.default == CaptureDefault::ByCopy => return true,
-                        None => {}
+                    let by_copy = match data.captures.iter().find(|x| x.var == Some(d)) {
+                        Some(x) => x.kind == CaptureKind::ByCopy,
+                        None => data.default == CaptureDefault::ByCopy,
+                    };
+                    if by_copy {
+                        return true;
                     }
                 }
                 let Some(p) = self.lambda_parent(l) else { return false };
@@ -460,7 +462,6 @@ impl Sema<'_, '_> {
         if self.ast.first(r) == self.ast.first(closure) {
             return true;
         }
-        use crate::conv::bases::{BaseSearch, ambiguous_paths_string, find_base};
         let closure_ty = QualType::unqual(self.ast.types.record_type(closure));
         match find_base(self, r, closure) {
             BaseSearch::NotDerived => self.lambda_object_not_derived(t, loc),
