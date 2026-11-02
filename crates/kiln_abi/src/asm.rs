@@ -437,6 +437,19 @@ pub fn global_register_size_mismatch(arch: Arch, name: &str, size_bits: u64) -> 
     Some(size_bits != reg_bits)
 }
 
+/// clang 22's `AArch64TargetInfo::validateGlobalRegisterVariable` also
+/// requires an `x`/`w` register to be reserved: register 0 always, x18
+/// only on targets that reserve it by default (none of kiln's Linux
+/// targets), others only under `+reserve-xN` (which kiln does not accept).
+/// clang 19 accepts every `x`/`w` register. `true` when `name` (already a
+/// size-checked global register) may hold a variable at clang 22.
+pub fn global_register_reserved_22(arch: Arch, name: &str) -> bool {
+    match arch {
+        Arch::AArch64 => name == "sp" || name == "x0" || name == "w0",
+        Arch::X86_64 => true,
+    }
+}
+
 /// `StringRef::getAsInteger(0, n)`: decimal, `0x` hex, `0b` binary or a
 /// leading `0` octal.
 fn parse_c_integer(s: &str) -> Option<u64> {

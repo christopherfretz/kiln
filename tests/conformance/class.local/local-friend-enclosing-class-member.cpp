@@ -7,14 +7,14 @@
 // not found.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 30:19 error "no matching function found in local scope"
+//@ diag: 30:19 error "cannot define friend function in a local class definition"
 //@ diag: 32:19 error "redefinition of 'data' as different kind of symbol"
 //@ diag: 26:9 note "previous definition is here"
-//@ diag: 33:19 error "no matching function found in local scope"
-//@ diag: 35:19 error "no matching function found in local scope"
-//@ diag: 49:19 error "no matching function found in local scope"
-//@ requires: clang<22
-// clang 22 emits error: cannot define friend function in a local class definition; WP-355 residual
+//@ diag: 33:19 error "cannot define friend function in a local class definition"
+//@ diag: 35:19 error "cannot define friend function in a local class definition"
+//@ diag: 49:19 error "cannot define friend function in a local class definition"
+//@ requires: clang>=22
+// kiln at -fclang-compat=22 (WP-377); clang 19 wording: "no matching function found in local scope"
 struct B {
   void inherited();
 };

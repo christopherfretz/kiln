@@ -997,6 +997,27 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   token with `to match this '('`, then, unless already at a closing
   bracket, the parser skips to the closer and takes it (clang's
   `BalancedDelimiterTracker::diagnoseMissingClose`).
+- **Expression-list recovery** (`parse_expr_list`, clang's
+  `ParseExpressionList`; WP-391): an argument that fails to parse is
+  skipped to the next `,` or the closing `)` without taking it, nested
+  `()`/`[]`/`{}` skipped whole (`SkipUntil(comma, r_paren,
+  StopBeforeMatch)`), and parsing goes on after the `,`: in
+  `f(undeclared<int> 7, "a"*2)` the second argument is diagnosed too. A
+  `...` after an argument is taken even when the argument failed. A list
+  with a failed argument then takes its `)` (skipping to it, stopping at
+  `;`) and is invalid. Its call is then a parse error under clang 19 and
+  a recovery expression over the callee under clang 22, which goes on
+  with what follows. A call whose last valid argument is not followed by
+  `,` or `)` (`f(1 2)`) reports "expected ')'" and is an error expression
+  with no overload resolution. The skip to the `)` is quiet instead when
+  the callee or an argument holds a delayed typo (clang 19,
+  `correct_delayed_typos_in`), or contains an error expression (clang 22,
+  `Sema::contains_errors`, clang's `containsErrors`). Tests:
+  `tests/conformance/expr.call/expression-list-recovery-22.cpp`,
+  `expression-list-recovery-19.cpp`. Not modelled: clang's
+  `ExprError` for a subscript or other expression whose Sema action
+  failed (kiln builds a recovery expression), so `f(1 [2, 3] 4, "a"*2)`
+  does not yet skip to the `,`.
 - **Literals:**
   - Integer, floating and character literals are classified by
     `kiln_lex::literal` and typed by `kiln_sema::literal`

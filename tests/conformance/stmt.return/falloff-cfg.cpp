@@ -20,7 +20,7 @@
 //@ diag: 64:51 warning "non-void function does not return a value in all control paths"
 //@ diag: 65:11 note "in instantiation of function template specialization 'tt<int>' requested here"
 //@ requires: clang<22
-// clang 22 emits warning: enumeration value 'C' not handled in switch; WP-355 residual
+// clang 19 spelling; falloff-cfg-clang22.cpp has clang 22's (WP-377).
 void g();
 [[noreturn]] void ab();
 int ret();

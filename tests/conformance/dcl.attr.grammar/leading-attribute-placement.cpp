@@ -92,7 +92,7 @@
 //@ diag: 174:11 error "an attribute list cannot appear here"
 //@ diag: 175:10 error "an attribute list cannot appear here"
 //@ requires: clang<22
-// clang 22 emits error: 'nodiscard' attribute cannot be applied to a statement; WP-355 residual
+// clang 19 spelling; leading-attribute-placement-clang22.cpp has clang 22's (WP-377).
 namespace N { void f(); struct B { void g(); void h(); }; template <class T> struct ST {}; }
 [[nodiscard]] namespace N1 {}
 alignas(8) using X0 = int;

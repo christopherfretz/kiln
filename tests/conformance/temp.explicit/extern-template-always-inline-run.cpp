@@ -3,10 +3,11 @@
 // an `always_inline` inline member of a class template under `extern
 // template` is odr-used, but no translation unit provides its definition
 // (the reduction of libstdc++'s `extern template class allocator<char>`,
-// whose `allocate`/`deallocate` libstdc++.so does not export). clang
-// inlines it at every optimization level; kiln emits it `linkonce_odr`.
-// Either way the program links. `[[__gnu__::__always_inline__]]` is the
-// reserved spelling of `[[gnu::always_inline]]`.
+// whose `allocate`/`deallocate` libstdc++.so does not export). Like
+// clang, kiln emits it `available_externally` and the O0 pipeline's
+// always-inliner inlines every call, so the program links.
+// `[[__gnu__::__always_inline__]]` is the reserved spelling of
+// `[[gnu::always_inline]]`.
 //@ expect: run
 //@ strict-diags
 //@ stdout: 3 abc 7 9

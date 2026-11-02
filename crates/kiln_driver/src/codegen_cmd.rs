@@ -432,10 +432,22 @@ pub fn needs_coro_lowering(ir: &str) -> bool {
     ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
 }
 
+/// Whether the IR defines an `always_inline` function (an attribute
+/// group holds `alwaysinline`; kiln puts it on definitions only). clang's
+/// O0 pipeline (`AlwaysInlinerPass`) inlines every call to one, deleting
+/// a discardable one left unused, before `-emit-llvm` writes the module.
+pub fn needs_always_inline(ir: &str) -> bool {
+    ir.lines().any(|l| {
+        l.starts_with("attributes #") && l.split_ascii_whitespace().any(|w| w == "alwaysinline")
+    })
+}
+
 /// The `opt` runs between the frontend and the IR's consumer, if any:
 /// at `-O1` and above the default pipeline of the level (which places
 /// `CoroEarly`, `CoroSplit`, `CoroElide` and `CoroCleanup` where clang's does);
-/// at `-O0` clang's O0 coroutine lowering (`CoroConditionalWrapper` in
+/// at `-O0` clang's whole O0 pipeline when the module defines an
+/// `always_inline` function (`AlwaysInlinerPass`, then the coroutine
+/// lowering), else clang's O0 coroutine lowering (`CoroConditionalWrapper` in
 /// `buildO0DefaultPipeline`: `CoroEarly`, `CoroSplit`, `CoroCleanup`,
 /// then `GlobalDCE`), only for a module that needs it. The first run
 /// writes bitcode, which the second reads back discarding the local
@@ -447,6 +459,7 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<[Command; 2]> {
     }
     let passes = match opt_pipeline(args.opt_flag.as_deref()) {
         Some(p) => p,
+        None if needs_always_inline(ir) => "default<O0>",
         None if needs_coro_lowering(ir) => "coro-early,cgscc(coro-split),coro-cleanup,globaldce",
         None => return None,
     };
@@ -681,6 +694,13 @@ mod tests {
         assert!(needs_coro_lowering("declare ptr @llvm.coro.noop() #1\n"));
         assert!(!needs_coro_lowering("define void @\"llvm.coro.id\"() {\n}\n"));
         assert!(!needs_coro_lowering("declare void @f() #0\n"));
+    }
+
+    #[test]
+    fn always_inline_detection() {
+        assert!(needs_always_inline("attributes #1 = { alwaysinline mustprogress nounwind }\n"));
+        assert!(!needs_always_inline("attributes #0 = { mustprogress noinline optnone }\n"));
+        assert!(!needs_always_inline("define void @alwaysinline() #0 {\n}\n"));
     }
 
     #[test]

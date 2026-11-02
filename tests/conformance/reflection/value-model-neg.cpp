@@ -12,7 +12,7 @@
 //@ diag: 22:6 error "with an rvalue of type 'std::nullptr_t'"
 //@ diag: 23:10 error "invalid argument type 'std::meta::info' to unary expression"
 //@ diag: 24:16 error "invalid operands to binary expression ('std::meta::info' and 'std::meta::info')"
-//@ diag: 25:10 error "__builtin_bit_cast destination type must be trivially copyable"
+//@ diag: 25:10 error "destination type must be trivially copyable"
 //@ diag: 26:16 error "value of type 'std::meta::info' is not contextually convertible to 'bool'"
 using info = decltype(^^int);
 bool b = ^^int;

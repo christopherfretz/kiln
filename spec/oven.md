@@ -169,7 +169,10 @@ the evaluator's flattened type table.
   arguments rendered as clang prints them; more than 10 frames elide the
   middle with clang's "(skipping N calls in backtrace; ...)" line), then
   any "declared here"/"temporary created here" notes. Wording is clang
-  19's, byte for byte.
+  19's, byte for byte, or clang 22's at `-fclang-compat=22`: the level is
+  an Oven option (`Oven::set_clang_compat`, set by sema from its own
+  level before every evaluation), never a global (WP-377). The level-22
+  rewordings are listed in the "Compat-22 note wording" rows below.
 - Note locations follow clang: an lvalue-to-rvalue read is reported at the
   begin of the read expression (leftmost token); a float-to-integer
   overflow at the begin of the cast operand; `p->m` with `p` null at the
@@ -224,6 +227,18 @@ the evaluator's flattened type table.
   memory faults, uninitialized subobjects and mutable reads alike
   (`tests/conformance/expr.const/call-note-argument-values.cpp`,
   `call-note-constructor.cpp`, `call-note-temporary-arguments.cpp`).
+- Compat-22 note wording (WP-377; each 19 row stays in force below 22):
+  | level-19 note | level-22 note |
+  |---|---|
+  | "read of dereferenced null pointer ..." at the access, for `*p` with `p` null | "dereferencing a null pointer is not allowed in a constant expression" at the `*` (the lvalue `*p` is checked when formed, `Fault::NullDeref`) |
+  | `(*p).m` with `p` null: "read of dereferenced null pointer" | "dereferencing a null pointer" at the `*` |
+  | `p->*pm` with `p` null and a data member: "read of/assignment to dereferenced null pointer" | "cannot access field of null pointer" at the operator |
+  | `p - q` across objects: "subexpression not valid in a constant expression" | "arithmetic involving unrelated objects 'P' and 'Q' has unspecified value" (`Fault::PtrArith`) |
+  | compare across objects: "comparison between 'P' and 'Q' has unspecified value" | "comparison between pointers to unrelated objects 'P' and 'Q' has unspecified value" |
+  | literal-address equality: "comparison of addresses of literals has unspecified value" | "comparison of addresses of potentially overlapping literals has unspecified value" |
+  Corpus: `tests/conformance/expr.const/5.8/*null*`, `ptr-sub-*`,
+  `5.24/relational-unrelated.cpp`, `5.24/string-literals.cpp`,
+  `expr.mptr.oper/constexpr-faults.cpp`.
 - `-fconstexpr-backtrace-limit=N` (`Oven::set_backtrace_limit`) sets the
   frame limit; 0 shows every frame.
 - `try_fold`, `is_constant_initialized` and `fold_constant_init` never

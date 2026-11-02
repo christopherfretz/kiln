@@ -19,8 +19,9 @@
 //!   no exception edges;
 //! - labels and loop conditions reached by a later `goto` or back edge
 //!   are found by iterating to a fixed point;
-//! - an `if consteval` anywhere in the body: clang builds no CFG and
-//!   checks nothing.
+//! - an `if consteval` anywhere in the body: clang 19 builds no CFG and
+//!   checks nothing; clang 22 (`-fclang-compat=22`) branches on an
+//!   unknown condition.
 //!
 //! The same walk, in fall-off mode (`fall_off_kind`), classifies the
 //! live predecessors of the exit as clang `CheckFallThrough` does: a
@@ -710,7 +711,11 @@ impl Sema<'_, '_> {
     }
 
     fn reach_if(&mut self, s: StmtId, mut live: bool, r: &mut Reach) -> bool {
-        if matches!(self.ast.stmts.if_kind(s), IfKind::Consteval | IfKind::NotConsteval) {
+        // clang 22 builds the CFG of an `if consteval` as a branch on an
+        // unknown condition; clang 19 builds none.
+        if self.clang_compat < 22
+            && matches!(self.ast.stmts.if_kind(s), IfKind::Consteval | IfKind::NotConsteval)
+        {
             r.no_cfg = true;
             return live;
         }

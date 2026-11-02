@@ -25,7 +25,7 @@
 //@ diag: 45:44 note "in instantiation of function template specialization 'g<5, 9>' requested here"
 //@ diag: 42:45 note "previous case defined here"
 //@ requires: clang<22
-// clang 22 emits warning: case ranges are a GNU extension; WP-355 residual
+// clang 19 spelling; gnu-case-range-clang22.cpp has clang 22's (WP-377).
 int f(int x) {
   switch (x) {
   case 1 ... 3: return 1;

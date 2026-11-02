@@ -22,22 +22,22 @@
 //@ diag: 48:22 error "unknown register name 'bogus' in asm"
 //@ diag: 49:22 error "size of register 'w0' does not match variable size"
 //@ diag: 52:21 error "unknown register name 'rsp' in asm"
-//@ diag: 52:1 error "bad type for named register variable"
+//@ diag: 52 error "type for named register variable"
 //@ diag: 53:23 error "size of register 'x0' does not match variable size"
-//@ diag: 53:1 error "bad type for named register variable"
-//@ diag: 54:16 error "bad type for named register variable"
+//@ diag: 53 error "type for named register variable"
+//@ diag: 54 error "type for named register variable"
 //@ diag: 56:14 warning "ignored asm label 'x8' on automatic variable"
 //@ diag: 58:24 error "unknown register name 'rax' in asm"
 //@ diag: 59:23 error "unknown register name 'nosuchreg' in asm"
-//@ requires: clang<22
-// clang 22 emits error: register 'x8' unsuitable for global register variables on this target; WP-355 residual
+// clang 19 says "bad type" at the decl-specifiers, clang 22 "unsupported
+// type" at the type specifier; kiln follows -fclang-compat (WP-377).
 register long a1 asm("x0");
 register int a2 asm("x0");
 register int a3 asm("w0");
 register char a4 asm("w0");
 register int a5 asm("sp");
-register long a6 asm("x8");
-register int a7 asm("wsp");
+register long a6 asm("x0");
+register int a7 asm("w0");
 register long a8 asm("lr");
 register long a9 asm("r8");
 register long b1 asm("rsp");

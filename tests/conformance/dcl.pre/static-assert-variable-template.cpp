@@ -16,7 +16,7 @@
 //@ diag: 40:54 error "static assertion failed due to requirement 'S::z<ns::S>'"
 //@ diag: 40:87 error "static assertion failed due to requirement 'S::y'"
 //@ requires: clang<22
-// clang 22 emits error: static assertion failed due to requirement 'ns::S::z<ns::S>'; WP-355 residual
+// clang 19 spelling; static-assert-variable-template-clang22.cpp has clang 22's (WP-377).
 namespace ns {
 template <class T> constexpr bool f = false;
 struct S {

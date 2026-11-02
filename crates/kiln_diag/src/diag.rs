@@ -295,6 +295,33 @@ impl Diag {
         engine.emit(self);
     }
 
+    /// Replaces the ids of this diagnostic and its notes by the ones that
+    /// report them at clang compatibility level `level`
+    /// ([`DiagId::for_compat`]).
+    pub(crate) fn set_compat(&mut self, level: u32) {
+        if level >= 22 {
+            return;
+        }
+        if let Some(id) = self.id {
+            self.id = Some(id.for_compat(level));
+        }
+        for n in &mut self.notes {
+            n.set_compat(level);
+        }
+    }
+
+    /// The rendered message at clang compatibility level `level`
+    /// ([`DiagId::for_compat`]; what the engine prints for this
+    /// diagnostic, for a message embedded in another one).
+    pub fn message_at(&self, level: u32) -> String {
+        match (&self.text, self.id) {
+            (None, Some(id)) if level < 22 => {
+                template::render(id.for_compat(level).template(), &self.args)
+            }
+            _ => self.message(),
+        }
+    }
+
     /// The rendered message.
     pub fn message(&self) -> String {
         match (&self.text, self.id) {

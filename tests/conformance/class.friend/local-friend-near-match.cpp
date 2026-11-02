@@ -16,22 +16,22 @@
 //@ diag: 40:7 note "previous declaration is here"
 //@ diag: 46:17 error "'n' is missing exception specification 'noexcept'"
 //@ diag: 41:8 note "previous declaration is here"
-//@ diag: 47:17 error "no matching function found in local scope"
-//@ diag: 48:14 error "no matching function found in local scope"
-//@ diag: 49:17 error "no matching function found in local scope"
-//@ diag: 60:19 error "no matching function found in local scope"
+//@ diag: 47:17 error "cannot define friend function in a local class definition"
+//@ diag: 48:14 error "cannot define friend function in a local class definition"
+//@ diag: 49:17 error "cannot define friend function in a local class definition"
+//@ diag: 60:19 error "cannot define friend function in a local class definition"
 //@ diag: 53:8 note "local declaration nearly matches"
-//@ diag: 61:19 error "no matching function found in local scope"
-//@ diag: 62:19 error "no matching function found in local scope"
+//@ diag: 61:19 error "cannot define friend function in a local class definition"
+//@ diag: 62:19 error "cannot define friend function in a local class definition"
 //@ diag: 53:10 note "type of 1st parameter of local declaration does not match definition ('int' vs 'int &')"
-//@ diag: 63:19 error "no matching function found in local scope"
-//@ diag: 64:19 error "no matching function found in local scope"
+//@ diag: 63:19 error "cannot define friend function in a local class definition"
+//@ diag: 64:19 error "cannot define friend function in a local class definition"
 //@ diag: 55:16 note "type of 1st parameter of local declaration does not match definition ('const S &' vs 'T::S')"
-//@ diag: 65:19 error "no matching function found in local scope"
+//@ diag: 65:19 error "cannot define friend function in a local class definition"
 //@ diag: 54:10 note "type of 1st parameter of local declaration does not match definition ('S *' vs 'S')"
-//@ diag: 66:19 error "no matching function found in local scope"
-//@ requires: clang<22
-// clang 22 emits error: cannot define friend function in a local class definition; WP-355 residual
+//@ diag: 66:19 error "cannot define friend function in a local class definition"
+//@ requires: clang>=22
+// kiln at -fclang-compat=22 (WP-377); clang 19 wording: "no matching function found in local scope"
 
 struct S {};
 namespace T { struct S {}; }
