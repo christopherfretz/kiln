@@ -1039,8 +1039,8 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The first-parameter options of constructor (or constructor
-    /// template) `f`, found as `fd`, under `opts`: with
+    /// The first-parameter options of constructor `f`, found as `fd`,
+    /// under `opts`: with
     /// [`IcsOptions::DIRECT_COPY_CTOR`], a first parameter of type
     /// (reference to) cv `C`, the class `fd` is a member of, also allows
     /// explicit conversion functions: the temporary bound to it in a
@@ -1053,24 +1053,27 @@ impl Sema<'_, '_> {
             return opts;
         }
         let opts = IcsOptions(opts.0 & !IcsOptions::DIRECT_COPY_CTOR.0);
-        let ctor = if self.kind_of(f) == DeclKind::FunctionTemplate {
-            let Some(p) = self.pattern_of(f) else { return opts };
-            p
-        } else {
-            f
-        };
-        let mut params = Vec::new();
-        self.fn_param_types(ctor, &mut params);
-        let (Some(&p), Some(class)) = (params.first(), self.ast.decls.get(fd).ctx()) else {
+        if self.kind_of(f) != DeclKind::CXXConstructor {
+            // clang: not for a constructor template (its FIXME), nor an
+            // inherited constructor.
             return opts;
-        };
-        let p = self.ast.types.canonical(self.non_reference(p));
-        match self.ast.types.as_record(p) {
-            Some(r) if self.ast.first(r) == self.ast.first(class) => {
+        }
+        match self.ast.decls.get(fd).ctx() {
+            Some(class) if self.copy_or_move_ctor_param(f, class) => {
                 opts.with(IcsOptions::EXPLICIT_REF_CONV)
             }
             _ => opts,
         }
+    }
+
+    /// clang `hasCopyOrMoveCtorParam`: constructor `f`'s first parameter
+    /// is (a reference to) cv `class`.
+    pub(crate) fn copy_or_move_ctor_param(&self, f: DeclId, class: DeclId) -> bool {
+        let mut params = Vec::new();
+        self.fn_param_types(f, &mut params);
+        let Some(&p) = params.first() else { return false };
+        let p = self.ast.types.canonical(self.non_reference(p));
+        self.ast.types.as_record(p).is_some_and(|r| self.ast.first(r) == self.ast.first(class))
     }
 
     /// [over.match.funcs.general]/8 (clang `AddOverloadCandidate`): an
@@ -1469,8 +1472,11 @@ impl Sema<'_, '_> {
             // initialization) only when it yields the target type up to
             // a qualification conversion (clang
             // `isAllowableExplicitConversion`); in a copy-initialization
-            // it is then "not a candidate".
-            if !matches!(set.kind, SetKind::ConvToRef { .. })
+            // it is then "not a candidate". [over.match.ref]/1.1 has the
+            // same rule for the explicit functions a direct-
+            // initialization admits.
+            if (!matches!(set.kind, SetKind::ConvToRef { .. })
+                || opts.contains(IcsOptions::ALLOW_EXPLICIT))
                 && !self.allowable_explicit_conversion(ret, to)
             {
                 self.ovl.stats.candidates -= 1;
@@ -1552,7 +1558,7 @@ impl Sema<'_, '_> {
     /// candidate keeping the deduction failure for its note. A template
     /// whose pattern is explicit is not a candidate where explicit
     /// conversions are not allowed (clang `isNonDependentlyExplicit`).
-    fn add_conversion_template_candidate(
+    pub(crate) fn add_conversion_template_candidate(
         &mut self,
         set: &mut super::OverloadCandidateSet,
         ft: DeclId,
@@ -1579,8 +1585,9 @@ impl Sema<'_, '_> {
         let loc = set.loc;
         match self.deduce_conversion(ft, to, loc) {
             Ok(spec) => {
+                let n = set.cands.len();
                 self.add_conversion_candidate(set, spec, found, to, opts);
-                if let Some(c) = set.cands.last_mut() {
+                if let Some(c) = set.cands.get_mut(n) {
                     c.template = Some(ft);
                 }
             }

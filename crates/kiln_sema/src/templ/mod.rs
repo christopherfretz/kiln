@@ -1035,9 +1035,7 @@ impl Sema<'_, '_> {
         let Some(p) = self.pattern_of(t) else { return first };
         self.ast
             .redecls_of(p)
-            .filter(|&x| {
-                self.ast.decls.get(x).misc().friend() == kiln_ast::decl::FriendKind::None
-            })
+            .filter(|&x| self.ast.decls.get(x).misc().friend() == kiln_ast::decl::FriendKind::None)
             .find_map(|x| self.ast.described_template(x))
             .unwrap_or(first)
     }

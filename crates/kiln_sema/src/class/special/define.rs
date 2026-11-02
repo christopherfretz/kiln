@@ -157,6 +157,12 @@ pub(crate) struct CtorCall<'a> {
     pub narrowing: bool,
     /// `explicit` makes the initialization ill-formed (copy-list-init).
     pub reject_explicit: bool,
+    /// A direct-initialization: the one argument of a copy or move
+    /// constructor binds its reference through explicit conversion
+    /// functions too ([over.match.copy]/1.2, [over.match.ref]/1.1; the
+    /// candidate's sequence was formed so by
+    /// [`crate::overload::IcsOptions::DIRECT_COPY_CTOR`]).
+    pub direct: bool,
 }
 
 impl<'a> CtorCall<'a> {
@@ -170,6 +176,7 @@ impl<'a> CtorCall<'a> {
             rparen: None,
             narrowing: false,
             reject_explicit: false,
+            direct: false,
         }
     }
 }
@@ -1054,7 +1061,12 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 self.mark_function_referenced(m, loc);
-                let args = self.ctor_args(am, call.args, call.narrowing, loc)?;
+                let explicit_first = call.direct
+                    && bc.is_none()
+                    && call.args.len() == 1
+                    && !self.is_function_spec(m)
+                    && self.copy_or_move_ctor_param(m, class);
+                let args = self.ctor_args(am, call.args, call.narrowing, explicit_first, loc)?;
                 let zeroing = call.info.zeroing || call.value_init && !self.is_user_provided(m);
                 let info = ConstructInfo { zeroing, ..call.info };
                 let e = match call.temp_end {
@@ -1247,6 +1259,7 @@ impl Sema<'_, '_> {
         m: DeclId,
         args: &[ExprId],
         narrowing: bool,
+        explicit_first: bool,
         loc: Loc,
     ) -> Option<Vec<ExprId>> {
         let params = self.param_decls(m);
@@ -1260,7 +1273,14 @@ impl Sema<'_, '_> {
             if narrowing && !self.ast.types.is_reference(pty) {
                 self.check_list_narrowing(a, pty);
             }
-            let e = self.convert_for_init(a, pty, ConvCtx::Argument);
+            // [over.match.ref]/1.1: the reference of a direct-
+            // initialization's copy or move constructor.
+            let ctx = if explicit_first && i == 0 && self.ast.types.is_reference(pty) {
+                ConvCtx::DirectInitialization
+            } else {
+                ConvCtx::Argument
+            };
+            let e = self.convert_for_init(a, pty, ctx);
             if self.is_err_expr(e) {
                 return None;
             }
