@@ -3,7 +3,8 @@
 //! Every `tests/codegen/*.cpp` is compiled in-process by the kiln driver,
 //! as `kiln++` (`kiln_driver::run`), with
 //! `-S -emit-llvm -O0 -std=c++26 --target=<triple>` for each triple in
-//! [`TRIPLES`], and by `clang++-N` with the same flags. Both outputs go
+//! [`TRIPLES`], and by `clang++-N` with the same flags; kiln also gets
+//! `-fclang-compat=N` (its codegen follows clang N, spec/codegen.md §6a). Both outputs go
 //! through `opt-N -S -passes=verify` and are compared in the oracle's
 //! comparison mode ([`Mode`], spec/codegen.md §6 "Comparison modes"):
 //! byte-identical after [`ir_norm::base`] for oracle 19 (kiln's IR is
@@ -79,20 +80,6 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // every compat level, as clang 22 does; clang 19 did neither.
     ("atomic_padded", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
     ("atomic_padded", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
-    // clang 20+ passes an AArch64 empty class by value as `i64` (GCC's
-    // convention; `-fclang-abi-compat=19` keeps the old `i8`). kiln follows
-    // clang 19 until codegen honours `-fclang-compat=22` (WP-184 residual).
-    ("abi_decls", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("assign_rhs_first", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("dependent_signature", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("empty_base_copy", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("empty_copy_std_builtin_constexpr", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("global_init_count_new", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("global_init_static_local", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("namespace_reopen_inline", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("template_out_of_line", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("udc_conversions", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("virtual_template_out_of_line", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     // LLVM 20+ passes x86-64 `__int128` as `i128` instead of `{ i64, i64 }`
     // / two `i64`s (the same registers and stack slots: SysV §3.2.3).
     ("abi_decls", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
@@ -134,16 +121,13 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("builtins_math", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("builtins_math", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 22 instruction-selection changes that kiln has not followed:
-    // `alloca` of the atomic flag / order temporaries, P0528 padding
-    // clearing (`memset`) of atomic objects, `i1` (19: `i8`) overflow-result
+    // `alloca` of the atomic flag / order temporaries, `i1` (19: `i8`) overflow-result
     // truncation, `undef` (19: `poison`) ext-vector widening shuffles,
     // `select` for vector `?:`, constant-folded vector reductions, and the
     // block order of `delete`'s null check.
     ("atomic_builtins", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("atomic_orders", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("atomic_orders", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
-    ("atomic_padded", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("atomic_padded", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("builtins_overflow", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("builtins_shufflevector", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("builtins_shufflevector", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
@@ -230,20 +214,26 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
         stderr: SharedWriter::new(err.clone()),
         stdin: Box::new(std::io::empty()),
     };
-    let args: Vec<String> =
-        ["-S", "-emit-llvm", "-O0", "-std=c++26", &format!("--target={triple}"), "-o", "-"]
-            .iter()
-            .chain(pinned_flags(triple))
-            .map(|s| (*s).to_owned())
-            .chain(std::iter::once(format!("-fclang-compat={}", oracle_version())))
-            .chain(extra_flags(file))
-            .chain(
-                module_inputs(file)
-                    .into_iter()
-                    .map(|(n, p)| format!("-fmodule-file={n}={}", p.display())),
-            )
-            .chain(std::iter::once(file.display().to_string()))
-            .collect();
+    let compat = format!("-fclang-compat={}", oracle_version());
+    let args: Vec<String> = [
+        "-S",
+        "-emit-llvm",
+        "-O0",
+        "-std=c++26",
+        &format!("--target={triple}"),
+        &compat,
+        "-o",
+        "-",
+    ]
+    .iter()
+    .chain(pinned_flags(triple))
+    .map(|s| (*s).to_owned())
+    .chain(extra_flags(file))
+    .chain(
+        module_inputs(file).into_iter().map(|(n, p)| format!("-fmodule-file={n}={}", p.display())),
+    )
+    .chain(std::iter::once(file.display().to_string()))
+    .collect();
     let code = run(&args, io);
     if code != 0 {
         return Err(format!("kiln exited {code}:\n{}", err.contents()));

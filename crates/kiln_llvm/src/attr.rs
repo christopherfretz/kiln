@@ -35,6 +35,7 @@ attr_kinds! {
     Cold = "cold",
     Convergent = "convergent",
     CoroDestroyOnlyWhenComplete = "coro_only_destroy_when_complete",
+    DeadOnReturn = "dead_on_return",
     DeadOnUnwind = "dead_on_unwind",
     DisableSanitizerInstrumentation = "disable_sanitizer_instrumentation",
     FnRetThunkExtern = "fn_ret_thunk_extern",

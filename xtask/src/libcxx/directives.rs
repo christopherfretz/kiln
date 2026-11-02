@@ -83,7 +83,6 @@ impl Kind {
     /// Why the driver cannot run this kind, if it cannot.
     pub fn unsupported(self) -> Option<&'static str> {
         match self {
-            Self::Sh => Some("driver: RUN lines"),
             Self::Gen => Some("driver: generated tests"),
             Self::ObjCxx => Some("driver: objective-c++"),
             _ => None,
@@ -106,6 +105,9 @@ pub struct Directives {
     pub module_dependencies: Vec<String>,
     /// The file has a `RUN:` line (a custom script).
     pub has_run: bool,
+    /// The `RUN:` commands in order, a line ending in `\\` joined with the
+    /// next `RUN:` line (lit's `ParserKind.COMMAND`).
+    pub run: Vec<String>,
     /// `ALLOW_RETRIES: N`: a failing run is retried up to `N` more times.
     pub allow_retries: u32,
 }
@@ -131,6 +133,8 @@ impl Directives {
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut d = Self::default();
         let mut retries_seen = false;
+        // A `RUN:` command continued with `\\` on the next `RUN:` line.
+        let mut run_cont: Option<String> = None;
         'lines: for line in text.lines() {
             let mut search = 0;
             while let Some((at, kw)) = find_keyword(line, search) {
@@ -138,7 +142,18 @@ impl Directives {
                 search = line.len();
                 match kw {
                     "END." => break 'lines,
-                    "RUN:" => d.has_run = true,
+                    "RUN:" => {
+                        d.has_run = true;
+                        let piece = rest.trim();
+                        let mut cmd = run_cont.take().unwrap_or_default();
+                        if let Some(head) = piece.strip_suffix('\\') {
+                            cmd.push_str(head);
+                            run_cont = Some(cmd);
+                        } else {
+                            cmd.push_str(piece);
+                            d.run.push(cmd);
+                        }
+                    }
                     "REQUIRES:" | "UNSUPPORTED:" | "XFAIL:" => {
                         for item in rest.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                             let e = if kw == "XFAIL:" && item == "*" {
@@ -186,6 +201,9 @@ impl Directives {
                     _ => unreachable!("keyword {kw} is in KEYWORDS"),
                 }
             }
+        }
+        if let Some(cmd) = run_cont {
+            return Err(format!("`RUN:` line ends in a continuation: `{cmd}\\`"));
         }
         Ok(d)
     }
@@ -262,21 +280,47 @@ fn find_keyword(line: &str, from: usize) -> Option<(usize, &'static str)> {
     best
 }
 
-/// A `lit.local.cfg` in the subset this driver understands: each
-/// statement is `if "<feature>" [not] in config.available_features:`
-/// followed by `config.unsupported = True`. Anything else makes the whole
-/// directory UNSUPPORTED (it cannot be evaluated without lit).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LocalCfg {
+/// A `lit.local.cfg` in the subset this driver understands
+/// (spec/libcxx.md "lit.local.cfg"). The statements are:
+/// - `import <modules>` (ignored);
+/// - `if "<feature>" [not] in config.available_features:` followed by
+///   `config.unsupported = True`;
+/// - `config.available_features.add("<feature>")`;
+/// - `config.substitutions.append(("%{name}", <value>))`, where a value
+///   that is not a string literal (`shlex.quote(sys.executable)`) is
+///   recorded as unresolved: only a test whose `RUN:` lines use it is
+///   UNSUPPORTED;
+/// - `<identifier> = <expression>` (a Python local; it can only matter
+///   through one of the statements above);
+/// - `config.load_from_path(localConfig, lit_config)`, the `libcxx/` idiom
+///   that loads the `lit.local.cfg` of the same directory under `std/`
+///   ([`LocalCfg::mirror_std`], resolved by the caller).
+///
+/// Anything else makes the whole directory UNSUPPORTED (it cannot be
+/// evaluated without lit).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalCfg {
     /// The directory is unsupported when any `(feature, negated)` holds.
-    Conditions(Vec<(String, bool)>),
-    /// The file has statements outside the subset.
-    Opaque,
+    pub conditions: Vec<(String, bool)>,
+    /// Features the file adds for the tests below it.
+    pub add_features: Vec<String>,
+    /// `(name, value)` substitutions; `None` when the value is an
+    /// expression the driver cannot evaluate.
+    pub substitutions: Vec<(String, Option<String>)>,
+    /// The file loads its `std/` counterpart's configuration.
+    pub mirror_std: bool,
+    /// The file has a statement outside the subset.
+    pub opaque: bool,
 }
 
 impl LocalCfg {
+    /// A configuration the driver cannot evaluate.
+    pub fn opaque() -> Self {
+        Self { opaque: true, ..Self::default() }
+    }
+
     pub fn parse(text: &str) -> Self {
-        let mut conds = Vec::new();
+        let mut c = Self::default();
         let mut pending: Option<(String, bool)> = None;
         for raw in text.lines() {
             let line = raw.split('#').next().unwrap_or("").trim();
@@ -285,43 +329,103 @@ impl LocalCfg {
             }
             if let Some(cond) = pending.take() {
                 if line == "config.unsupported = True" {
-                    conds.push(cond);
+                    c.conditions.push(cond);
                     continue;
                 }
-                return Self::Opaque;
+                return Self::opaque();
             }
-            let Some(body) = line.strip_prefix("if ").and_then(|l| l.strip_suffix(':')) else {
-                return Self::Opaque;
-            };
-            let (feature, negated) =
-                if let Some(f) = body.strip_suffix(" not in config.available_features") {
-                    (f, true)
-                } else if let Some(f) = body.strip_suffix(" in config.available_features") {
-                    (f, false)
-                } else {
-                    return Self::Opaque;
+            if line.starts_with("import ") {
+                continue;
+            }
+            if line == "config.load_from_path(localConfig, lit_config)" {
+                c.mirror_std = true;
+                continue;
+            }
+            if let Some(arg) = call_arg(line, "config.available_features.add") {
+                let Some(f) = string_literal(arg) else { return Self::opaque() };
+                c.add_features.push(f.to_owned());
+                continue;
+            }
+            if let Some(arg) = call_arg(line, "config.substitutions.append") {
+                let Some((name, value)) =
+                    arg.strip_prefix('(').and_then(|a| a.strip_suffix(')')).and_then(|a| {
+                        let (n, v) = a.split_once(',')?;
+                        Some((string_literal(n.trim())?, v.trim()))
+                    })
+                else {
+                    return Self::opaque();
                 };
-            let Some(feature) = feature.trim().strip_prefix('"').and_then(|f| f.strip_suffix('"'))
-            else {
-                return Self::Opaque;
-            };
-            pending = Some((feature.to_owned(), negated));
+                c.substitutions.push((name.to_owned(), string_literal(value).map(str::to_owned)));
+                continue;
+            }
+            if let Some(body) = line.strip_prefix("if ").and_then(|l| l.strip_suffix(':')) {
+                let (feature, negated) =
+                    if let Some(f) = body.strip_suffix(" not in config.available_features") {
+                        (f, true)
+                    } else if let Some(f) = body.strip_suffix(" in config.available_features") {
+                        (f, false)
+                    } else {
+                        return Self::opaque();
+                    };
+                let Some(feature) = string_literal(feature.trim()) else {
+                    return Self::opaque();
+                };
+                pending = Some((feature.to_owned(), negated));
+                continue;
+            }
+            // A local binding: `name = expression`.
+            if let Some((lhs, _)) = line.split_once('=')
+                && !lhs.ends_with(['=', '!', '<', '>'])
+                && !lhs.trim().is_empty()
+                && lhs.trim().bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            {
+                continue;
+            }
+            return Self::opaque();
         }
-        if pending.is_some() { Self::Opaque } else { Self::Conditions(conds) }
+        if pending.is_some() { Self::opaque() } else { c }
+    }
+
+    /// Adds the `std/` counterpart's configuration (`mirror`, parsed) for a
+    /// [`LocalCfg::mirror_std`] file: its conditions and features apply
+    /// here too. A missing counterpart (`None`) is opaque.
+    pub fn resolve_mirror(&mut self, mirror: Option<Self>) {
+        if !self.mirror_std {
+            return;
+        }
+        self.mirror_std = false;
+        match mirror {
+            Some(m) if !m.opaque && !m.mirror_std => {
+                self.conditions.extend(m.conditions);
+                self.add_features.extend(m.add_features);
+                self.substitutions.extend(m.substitutions);
+            }
+            _ => self.opaque = true,
+        }
     }
 
     /// `Some(reason)` when the configuration makes the directory unsupported.
     pub fn unsupported(&self, features: &[&str]) -> Option<String> {
-        match self {
-            Self::Opaque => Some("driver: lit.local.cfg".to_owned()),
-            Self::Conditions(c) => c
-                .iter()
-                .find(|(f, negated)| features.contains(&f.as_str()) != *negated)
-                .map(|(f, negated)| {
-                    format!("lit.local.cfg: {}{f}", if *negated { "missing " } else { "" })
-                }),
+        if self.opaque || self.mirror_std {
+            return Some("driver: lit.local.cfg".to_owned());
         }
+        self.conditions.iter().find(|(f, negated)| features.contains(&f.as_str()) != *negated).map(
+            |(f, negated)| format!("lit.local.cfg: {}{f}", if *negated { "missing " } else { "" }),
+        )
     }
+}
+
+/// The argument text of `callee(<arg>)` when `line` is exactly that call.
+fn call_arg<'a>(line: &'a str, callee: &str) -> Option<&'a str> {
+    line.strip_prefix(callee)?.strip_prefix('(')?.strip_suffix(')').map(str::trim)
+}
+
+/// The contents of a Python string literal without escapes (`"x"` or
+/// `'x'`).
+fn string_literal(s: &str) -> Option<&str> {
+    let q = s.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let inner = s.strip_prefix(q)?.strip_suffix(q)?;
+    (!inner.contains(q) && !inner.contains('\\')).then_some(inner)
 }
 
 #[cfg(test)]
@@ -433,20 +537,81 @@ int main(int, char**) { return 0; }
         let ok = "# comment\nif \"c++experimental\" not in config.available_features:\n    config.unsupported = True\n\nif \"no-localization\" in config.available_features:\n    config.unsupported = True\n";
         let c = LocalCfg::parse(ok);
         assert_eq!(
-            c,
-            LocalCfg::Conditions(vec![
-                ("c++experimental".into(), true),
-                ("no-localization".into(), false)
-            ])
+            c.conditions,
+            vec![("c++experimental".into(), true), ("no-localization".into(), false)]
         );
+        assert!(!c.opaque);
         assert_eq!(c.unsupported(&["c++experimental"]), None);
         assert_eq!(c.unsupported(&[]), Some("lit.local.cfg: missing c++experimental".into()));
         assert_eq!(
             c.unsupported(&["c++experimental", "no-localization"]),
             Some("lit.local.cfg: no-localization".into())
         );
-        assert_eq!(LocalCfg::parse("config.substitutions.append(('%{x}', 'y'))"), LocalCfg::Opaque);
-        assert_eq!(LocalCfg::parse("if \"x\" in config.available_features:\n"), LocalCfg::Opaque);
-        assert_eq!(LocalCfg::Opaque.unsupported(&[]), Some("driver: lit.local.cfg".into()));
+        assert!(LocalCfg::parse("if \"x\" in config.available_features:\n").opaque);
+        assert!(LocalCfg::parse("config.name = 'x'").opaque);
+        assert!(LocalCfg::parse("if x == y:\n  pass").opaque);
+        assert_eq!(LocalCfg::opaque().unsupported(&[]), Some("driver: lit.local.cfg".into()));
+    }
+
+    /// libc++ 19's `libcxx/lit.local.cfg` and selftest configurations
+    /// (spec/libcxx.md "lit.local.cfg").
+    #[test]
+    fn local_cfg_substitutions_and_features() {
+        let c = LocalCfg::parse(
+            "import shlex\nimport sys\n\
+             config.substitutions.append((\"%{python}\", shlex.quote(sys.executable)))\n",
+        );
+        assert!(!c.opaque);
+        assert_eq!(c.substitutions, vec![("%{python}".into(), None)]);
+        assert_eq!(c.unsupported(&[]), None);
+        let c = LocalCfg::parse("config.substitutions.append(('%{x}', 'y z'))");
+        assert_eq!(c.substitutions, vec![("%{x}".into(), Some("y z".into()))]);
+        let c = LocalCfg::parse("config.available_features.add(\"some-defined-feature\")");
+        assert_eq!(c.add_features, vec!["some-defined-feature".to_owned()]);
+        let c = LocalCfg::parse(
+            "import base64, lit.util, pickle\n\
+             base64Encode = lambda s: lit.util.to_string(base64.b64encode(lit.util.to_bytes(s)))\n\
+             escapedSubstitutions = base64Encode(pickle.dumps(config.substitutions))\n\
+             config.substitutions.append((\"%{substitutions}\", escapedSubstitutions))\n",
+        );
+        assert!(!c.opaque);
+        assert_eq!(c.substitutions, vec![("%{substitutions}".into(), None)]);
+        assert!(LocalCfg::parse("config.substitutions.append(x)").opaque);
+        assert!(LocalCfg::parse("config.available_features.add(name)").opaque);
+    }
+
+    /// The `libcxx/` directories that load their `std/` counterpart.
+    #[test]
+    fn local_cfg_mirror() {
+        let text = "import os\n\
+            inLibcxx = os.path.join(\"libcxx\", \"test\", \"libcxx\")\n\
+            inStd = os.path.join(\"libcxx\", \"test\", \"std\")\n\
+            localConfig = os.path.normpath(os.path.realpath(__file__)).replace(inLibcxx, inStd)\n\
+            config.load_from_path(localConfig, lit_config)\n";
+        let mut c = LocalCfg::parse(text);
+        assert!(c.mirror_std && !c.opaque);
+        assert_eq!(c.unsupported(&[]), Some("driver: lit.local.cfg".into()));
+        let std = LocalCfg::parse(
+            "if \"no-localization\" in config.available_features:\n  config.unsupported = True",
+        );
+        c.resolve_mirror(Some(std));
+        assert_eq!(c.unsupported(&[]), None);
+        assert_eq!(
+            c.unsupported(&["no-localization"]),
+            Some("lit.local.cfg: no-localization".into())
+        );
+        let mut c = LocalCfg::parse(text);
+        c.resolve_mirror(None);
+        assert!(c.opaque);
+    }
+
+    #[test]
+    fn run_lines() {
+        let d = Directives::parse(
+            "// RUN: %{build}\n// RUN: %{cxx} a \\\n// RUN:   b\n//RUN: %{run}  \n",
+        )
+        .unwrap();
+        assert_eq!(d.run, ["%{build}", "%{cxx} a b", "%{run}"]);
+        assert!(Directives::parse("// RUN: a \\\n").is_err());
     }
 }

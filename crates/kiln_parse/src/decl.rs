@@ -22,6 +22,7 @@ use kiln_source::{Loc, Span};
 
 use crate::keywords::Kw;
 use crate::parser::{ParamTypename, Parser};
+use crate::templ::TemplateDeclKind;
 
 /// True for a keyword that can begin a type-specifier-seq ([dcl.type]).
 pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
@@ -3042,6 +3043,20 @@ impl Parser<'_, '_> {
             || (ctx == DeclaratorContext::File && self.at_implicit_int_declarator())
     }
 
+    /// [temp.explicit]/3: declarator `d` of an explicit instantiation
+    /// (`function`: before a function body) is followed by a definition
+    /// or initializer (`Sema::act_explicit_inst_with_definition`).
+    fn explicit_inst_with_definition(
+        &mut self,
+        kind: Option<TemplateDeclKind>,
+        d: &Declarator,
+        function: bool,
+    ) {
+        if kind == Some(TemplateDeclKind::ExplicitInstantiation) {
+            self.s.act_explicit_inst_with_definition(d, self.loc(), function);
+        }
+    }
+
     fn parse_simple_declaration_delayed(
         &mut self,
         ctx: DeclaratorContext,
@@ -3050,12 +3065,8 @@ impl Parser<'_, '_> {
     ) -> Vec<DeclId> {
         let tmpl_kind = self.template_decl_kind.take();
         let mut ds = self.parse_decl_specifiers(ctx);
-        let mut decls = Vec::new();
-        if ds.tag_declares
-            && let Some(t) = ds.tag
-        {
-            decls.push(t);
-        }
+        let mut tmpl_group = self.template_group(tmpl_kind);
+        let mut decls: Vec<DeclId> = ds.tag.filter(|_| ds.tag_declares).into_iter().collect();
         if self.at(Punct::Semi) {
             self.prohibit_free_standing_lead_attrs(&mut ds, ctx);
             self.bump();
@@ -3100,6 +3111,7 @@ impl Parser<'_, '_> {
             // `isDeclarationAfterDeclarator`, `isStartOfFunctionDefinition`).
             if declarators == 0 && d.is_function_declarator() && d.asm_label.is_none() {
                 if allow_fn_def && self.at_function_definition_start() {
+                    self.explicit_inst_with_definition(tmpl_kind, &d, true);
                     self.parse_function_definition_after_declarator(
                         &ds, base, &d, &mut decls, level,
                     );
@@ -3127,6 +3139,9 @@ impl Parser<'_, '_> {
             }
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
+            if !self.at(Punct::Semi) {
+                self.explicit_inst_with_definition(tmpl_kind, &d, false);
+            }
             let v = self.s.act_on_declarator(&ds, base, &d);
             self.record_declarator_end(v, &d);
             // A declarator without a type is invalid too (`static y, z;`).
@@ -3148,7 +3163,7 @@ impl Parser<'_, '_> {
                 return decls;
             }
             decls.extend(v);
-            if !self.next_declarator(tmpl_kind) {
+            if !self.next_declarator(&mut tmpl_group) {
                 break;
             }
         }

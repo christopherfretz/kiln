@@ -20,6 +20,7 @@ use kiln_source::{Loc, Span};
 
 use crate::Sema;
 use crate::decl::TagUse;
+use crate::declspec::Declarator;
 use crate::templ::deduce::{DeducedArgs, Tdk};
 
 /// A declarator-id `v<args>` naming variable template `template` after a
@@ -111,6 +112,41 @@ impl Sema<'_, '_> {
         self.templ.explicit_depth = self.inst.stack.len();
     }
 
+    /// [temp.explicit]/3: an explicit instantiation of a function or
+    /// variable has no definition. The parser met declarator `d` of one
+    /// (`function`: a function declarator) followed by `at`, which is not
+    /// its `;` (a body, an initializer, or a `,`; clang's
+    /// `ParseDeclarationAfterDeclaratorAndAttributes` and
+    /// `ParseFunctionDefinition`). For a template-id declarator-id,
+    /// "explicit template instantiation cannot have a definition" at the
+    /// name, recovering as an explicit specialization (`template<>`);
+    /// otherwise "function/variable cannot be defined in an explicit
+    /// instantiation" at `at`, recovering as a plain declaration (the
+    /// `template` is ignored).
+    pub fn act_explicit_inst_with_definition(&mut self, d: &Declarator, at: Loc, function: bool) {
+        let Some((_, template_loc)) = self.templ.explicit_inst else { return };
+        if !self.at_explicit_head() {
+            return;
+        }
+        self.templ.explicit_inst = None;
+        let template_range = Span::new(template_loc, template_loc.with_offset(8));
+        if d.spec_id.is_some() {
+            let e = self
+                .diag(DiagId::parse_explicit_instantiation_with_definition, d.name_loc())
+                .range(template_range)
+                .fixit(FixIt::insert(template_loc.with_offset(8), "<>"));
+            self.emit(e);
+            self.templ.explicit_spec = Some(template_loc);
+        } else {
+            let e = self
+                .diag(DiagId::parse_template_defn_explicit_instantiation, at)
+                .arg(if function { 0u8 } else { 2u8 })
+                .range(template_range)
+                .fixit(FixIt::remove(template_range));
+            self.emit(e);
+        }
+    }
+
     /// The explicit instantiation ended.
     pub fn act_explicit_inst_end(&mut self) {
         self.templ.explicit_inst = None;
@@ -143,8 +179,21 @@ impl Sema<'_, '_> {
         let declares = matches!(use_, TagUse::Definition | TagUse::Declaration);
         let form = if !declares {
             TagForm::Reference
-        } else if let Some((ext, _)) = self.templ.explicit_inst.take() {
-            TagForm::ExplicitInst { declaration: ext.is_some() }
+        } else if let Some((ext, template_loc)) = self.templ.explicit_inst.take() {
+            if use_ == TagUse::Definition {
+                // [temp.explicit]/3: clang's
+                // `err_explicit_instantiation_with_definition`, recovering
+                // as an explicit specialization.
+                let at = template_loc.with_offset(8);
+                let d = self
+                    .diag(DiagId::parse_explicit_instantiation_with_definition, name_loc)
+                    .range(Span::new(template_loc, at))
+                    .fixit(FixIt::insert(at, "<>"));
+                self.emit(d);
+                TagForm::ExplicitSpec
+            } else {
+                TagForm::ExplicitInst { declaration: ext.is_some() }
+            }
         } else if self.templ.explicit_spec.take().is_some() {
             TagForm::ExplicitSpec
         } else if self.take_template_head(qualifier).is_some() {

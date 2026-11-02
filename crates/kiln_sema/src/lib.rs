@@ -207,6 +207,11 @@ pub struct Sema<'a, 'sm> {
     /// ending is a manifestly constant-evaluated constant-expression (no
     /// runtime-behavior warnings, clang's `ConstantEvaluated` context).
     pub(crate) constant_full_expr: u32,
+    /// Inside the full-expressions of an initializer dropped after its
+    /// diagnostic: an unexpanded pack in them is not reported again
+    /// (clang's `AddInitializerToDecl` returns for an invalid variable;
+    /// likewise a for-range-initializer, `ActOnCXXForRangeStmt`).
+    pub(crate) discarding_init: bool,
     /// The language standard (set by the parser; spellings in notes).
     pub(crate) std: kiln_lex::Std,
     /// `DeclRefExpr`s of the current full-expression that are potential
@@ -732,6 +737,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             agg_list_end: None,
             immediate: 0,
             constant_full_expr: 0,
+            discarding_init: false,
             std: kiln_lex::Std::Cxx26,
             pending_odr: Vec::new(),
             misaligned: Vec::new(),
@@ -941,6 +947,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                     s.errors += 1;
                     if s.first.is_none() {
                         s.first = Some(d);
+                    }
+                } else if sev < kiln_diag::Severity::Error && self.diags.would_emit(&d) {
+                    // A warning waits for the use of what the substitution
+                    // forms (§5.7); clang 22 keeps the context notes with it
+                    // (clang 19 none).
+                    if self.clang_compat >= 22 {
+                        d.prepend_notes(self.inst_context_notes());
+                    }
+                    if let Some(s) = self.inst.sfinae.borrow_mut().last_mut() {
+                        s.warnings.push(d);
                     }
                 }
                 return;
