@@ -336,7 +336,13 @@ impl Sema<'_, '_> {
                 self.retained_by_ref(ex.operand(e), w, depth + 1);
             }
             ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
-                if self.kind_of(ex.decl(e)) == DeclKind::Field {
+                // A reference member denotes what it was bound to, not a
+                // subobject of the base ([class.temporary]/6 does not reach
+                // through it): `make().first` with `int &first` returns no
+                // temporary.
+                let d = ex.decl(e);
+                let field_ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                if self.kind_of(d) == DeclKind::Field && !self.ast.types.is_reference(field_ty) {
                     self.retained_by_ref(ex.operand(e), w, depth + 1);
                 }
             }

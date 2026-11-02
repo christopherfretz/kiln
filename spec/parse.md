@@ -278,6 +278,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   no class template (`decltype(...)`) is parsed ahead like an
   unresolved specialization scope (`annotate_template_scope`)
   (`tests/conformance/temp.alias/alias-template-id-qualified-type-as-template-argument.cpp`).
+- A typedef qualifier `T::name` whose `T` names a class template
+  specialization that is not instantiated yet (and is not an explicit
+  specialization) is classified the same way, by the specialization's
+  template: the lookahead cannot instantiate, and an undefined class has
+  no members to find (`typedef X<int> T; W<T::rebind<float>, int>`,
+  WP-276).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp

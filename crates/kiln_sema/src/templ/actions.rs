@@ -362,7 +362,13 @@ impl Sema<'_, '_> {
             return None;
         };
         let written = self.ast.types.args(args).to_vec();
-        let unconverted = |a: &TemplateArg| matches!(a.view(), ArgView::Expr { profile: None, .. });
+        // A non-dependent expression argument (profiled by
+        // `profile_value_args`).
+        let unconverted = |a: &TemplateArg| match a.view() {
+            ArgView::Expr { profile: None, .. } => true,
+            ArgView::Expr { expr, profile: Some(_) } => self.ast.exprs.get(expr).deps().is_none(),
+            _ => false,
+        };
         if !written.iter().any(unconverted) {
             return None;
         }
@@ -370,6 +376,28 @@ impl Sema<'_, '_> {
         let i = self.ast.templates.find_partial(self.ast.first(tmpl), conv.canonical)?;
         let pat = self.ast.templates.partial(i)?.partial;
         Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// `list` with each non-dependent expression argument given its
+    /// canonical profile: a dependent specialization `X<T, 1>` is not
+    /// converted ([temp.arg]), so its non-type arguments compare as
+    /// expressions ([temp.over.link]/5) and two declarations writing the
+    /// same `X<T, 1>` name the same type.
+    fn profile_value_args(&mut self, list: ArgListId) -> ArgListId {
+        let args = self.ast.types.args(list).to_vec();
+        if !args.iter().any(|a| matches!(a.view(), ArgView::Expr { profile: None, .. })) {
+            return list;
+        }
+        let out: Vec<TemplateArg> = args
+            .iter()
+            .map(|&a| match a.view() {
+                ArgView::Expr { expr, profile: None } => {
+                    TemplateArg::expr(expr, Some(self.ast.profile_expr(expr)))
+                }
+                _ => a,
+            })
+            .collect();
+        self.ast.types.arg_list(&out)
     }
 
     /// Whether `d` is a template parameter of `p`'s kind at `p`'s depth
@@ -597,6 +625,7 @@ impl Sema<'_, '_> {
                     let t = self.class_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
                 }
+                let list = if ttp { list } else { self.profile_value_args(list) };
                 Ok(TemplateIdRef::Type(
                     self.ast.types.template_specialization(name, list, None, false),
                 ))
