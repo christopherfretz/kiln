@@ -226,6 +226,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         self.p.splice_end(self.i + 1).or_else(|| self.p.scan_name(self.i + 1).map(|n| n.0))
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per decl-specifier keyword")]
     fn decl_specifier(&self, braced: Tpr) -> Tpr {
         if let Some(k) = self.kw() {
             return match k {

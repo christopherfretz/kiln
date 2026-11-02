@@ -33,7 +33,6 @@ pub(crate) fn builtin_width(s: &Sema<'_, '_>, b: BuiltinType) -> u32 {
         | BuiltinType::Char32
         | BuiltinType::Float
         | BuiltinType::Float32 => 32,
-        BuiltinType::Float64 => 64,
         BuiltinType::Int128
         | BuiltinType::UInt128
         | BuiltinType::Float128
@@ -43,6 +42,7 @@ pub(crate) fn builtin_width(s: &Sema<'_, '_>, b: BuiltinType) -> u32 {
             FloatFormat::X87Extended => 80,
             _ => 128,
         },
+        // `Long`, `ULong`, `LongLong`, `ULongLong`, `Double`, `Float64`.
         _ => 64,
     }
 }

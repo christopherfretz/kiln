@@ -674,6 +674,7 @@ impl BuiltinType {
     /// `_Float32` → `float`, `_Float64` → `double`, `_Float128` →
     /// `__float128` (clang/GCC lower and pass them identically,
     /// spec/abi.md §2); every other builtin is its own twin.
+    #[must_use]
     pub const fn abi_twin(self) -> BuiltinType {
         match self {
             BuiltinType::Float32 => BuiltinType::Float,

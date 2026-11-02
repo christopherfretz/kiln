@@ -4492,19 +4492,14 @@ pub mod builtin {
     /// `float` / `double` twin of a [`FLOATN`] builtin.
     pub fn f128_twin(id: u32) -> Option<u32> {
         Some(match id {
-            HUGE_VALF16 => HUGE_VALF,
-            INFF16 => INFF,
-            NANF16 => NANF,
-            NANSF16 => NANSF,
-            HUGE_VALF32 => HUGE_VALF,
-            INFF32 => INFF,
-            NANF32 => NANF,
-            NANSF32 => NANSF,
+            HUGE_VALF16 | HUGE_VALF32 => HUGE_VALF,
+            INFF16 | INFF32 => INFF,
+            NANF16 | NANF32 => NANF,
+            NANSF16 | NANSF32 | NANSF16B => NANSF,
             HUGE_VALF64 => HUGE_VAL,
             INFF64 => INF,
             NANF64 => NAN,
             NANSF64 => NANS,
-            NANSF16B => NANSF,
             CEILF128 => CEILL,
             COPYSIGNF128 => COPYSIGNL,
             FABSF128 => FABSL,

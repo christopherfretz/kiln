@@ -300,6 +300,21 @@ fn set(m: &mut BTreeMap<String, String>, n: &str, v: &str) {
     m.insert(n.to_owned(), v.to_owned());
 }
 
+/// P1467 ([basic.extended.fp], [cpp.predefined]/2): GCC 14's limit
+/// macros in every C++ mode, the `__STDCPP_*_T__` ones from C++23.
+fn apply_p1467(m: &mut BTreeMap<String, String>) {
+    for &(n, v) in P1467_LIMITS {
+        set(m, n, v);
+    }
+    let cplusplus: u64 =
+        m.get("__cplusplus").map_or(0, |v| v.trim_end_matches('L').parse().unwrap_or(0));
+    if cplusplus >= 202_302 {
+        for n in P1467_STDCPP {
+            set(m, n, "1");
+        }
+    }
+}
+
 /// Applies the dialect and flag deltas (measured against clang 19; see
 /// `resource/README.md`).
 fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
@@ -361,16 +376,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
-        for &(n, v) in P1467_LIMITS {
-            set(m, n, v);
-        }
-        let cplusplus: u64 =
-            m.get("__cplusplus").map_or(0, |v| v.trim_end_matches('L').parse().unwrap_or(0));
-        if cplusplus >= 202_302 {
-            for n in P1467_STDCPP {
-                set(m, n, "1");
-            }
-        }
+        apply_p1467(m);
         // Features kiln implements beyond clang 19, at clang 22's values
         // in the same modes (docs/status/cxx-features.md): P1061
         // structured binding packs (C++17 on) and P2893 variadic friends
