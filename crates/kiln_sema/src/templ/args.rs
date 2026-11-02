@@ -458,6 +458,27 @@ impl Sema<'_, '_> {
         if t.is_reference(pty) {
             return self.convert_ref_nttp_arg(pty, e, at);
         }
+        // clang `CheckConvertedConstantExpression`: an argument with no
+        // implicit conversion sequence to the parameter's type
+        // ([temp.arg.nontype]/2, [expr.const]/12) is diagnosed as such.
+        if ety != QualType::OVERLOAD && !t.is_dependent(ety) {
+            let info = self.arg_info(e);
+            let ics =
+                self.try_implicit_conversion(&info, pty, crate::overload::IcsOptions::NONE);
+            if ics.is_bad() {
+                // At the argument (`From->getBeginLoc()`), also when the
+                // template-id is substituted.
+                let from = self.begin_loc(e);
+                let from = if from.is_valid() { from } else { at };
+                let d = self
+                    .diag(DiagId::sema_cce_not_implicitly_convertible, from)
+                    .arg(self.ty_arg(ety))
+                    .arg(self.ty_arg(pty));
+                self.emit(d);
+                return Err(());
+            }
+        }
+        let t = &self.ast.types;
         if t.is_array(ety) && !t.is_pointer(pty) {
             self.templ_unimplemented("non-type template parameter of class or reference type", at);
             return Err(());
