@@ -121,6 +121,20 @@ pub fn llc_opt_level(flag: Option<&str>) -> &'static str {
     }
 }
 
+/// The `opt` pipeline of an `-O` flag (clang's `PassBuilder` default
+/// pipelines): `None` at `-O0`, where only a coroutine module is lowered
+/// (spec/driver.md "IR optimization").
+pub fn opt_pipeline(flag: Option<&str>) -> Option<&'static str> {
+    match flag {
+        None | Some("-O0") => None,
+        Some("-O" | "-O1" | "-Og") => Some("default<O1>"),
+        Some("-O2") => Some("default<O2>"),
+        Some("-Os") => Some("default<Os>"),
+        Some("-Oz") => Some("default<Oz>"),
+        Some(_) => Some("default<O3>"),
+    }
+}
+
 /// The identification string of kiln's modules (`!llvm.ident`).
 pub fn ident() -> String {
     format!("kiln version {}", env!("CARGO_PKG_VERSION"))
@@ -183,6 +197,7 @@ impl CodegenJob<'_> {
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection,
+            coro_aligned_allocation: a.predef.coro_aligned_allocation,
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
             ..ParseOptions::default()
@@ -198,6 +213,7 @@ impl CodegenJob<'_> {
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
                 complex_range: a.complex_range(),
+                optimize: opt_pipeline(a.opt_flag.as_deref()).is_some(),
                 clang_compat: a.predef.clang_compat.major(),
                 llvm_major: job.toolchain.llvm_major(),
             };
@@ -411,18 +427,34 @@ fn plan<'a>(
 /// `llvm.coro.*` intrinsic (clang's `CoroConditionalWrapper` test,
 /// `coro::declaresAnyIntrinsic`). Every `presplitcoroutine` function
 /// calls `llvm.coro.id`; a `__builtin_coro_noop` alone needs it too
-/// (spec/driver.md "Coroutine lowering").
+/// (spec/driver.md "IR optimization").
 pub fn needs_coro_lowering(ir: &str) -> bool {
     ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
 }
 
-/// `opt` running clang's O0 coroutine lowering (`CoroConditionalWrapper`
-/// in `buildO0DefaultPipeline`): `CoroEarly`, `CoroSplit`, `CoroCleanup`,
-/// then `GlobalDCE`. Text in, text out.
-fn coro_lowering(tc: &Toolchain) -> Command {
-    let mut cmd = Command::new(tc, Tool::Opt);
-    cmd.arg("-passes=coro-early,cgscc(coro-split),coro-cleanup,globaldce").arg("-S").arg("-");
-    cmd
+/// The `opt` runs between the frontend and the IR's consumer, if any:
+/// at `-O1` and above the default pipeline of the level (which places
+/// `CoroEarly`, `CoroSplit`, `CoroElide` and `CoroCleanup` where clang's does);
+/// at `-O0` clang's O0 coroutine lowering (`CoroConditionalWrapper` in
+/// `buildO0DefaultPipeline`: `CoroEarly`, `CoroSplit`, `CoroCleanup`,
+/// then `GlobalDCE`), only for a module that needs it. The first run
+/// writes bitcode, which the second reads back discarding the local
+/// value names the passes made, as clang's (release) pipeline does
+/// (`opt` refuses `-discard-value-names` for textual input).
+fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<[Command; 2]> {
+    if args.disable_llvm_passes {
+        return None;
+    }
+    let passes = match opt_pipeline(args.opt_flag.as_deref()) {
+        Some(p) => p,
+        None if needs_coro_lowering(ir) => "coro-early,cgscc(coro-split),coro-cleanup,globaldce",
+        None => return None,
+    };
+    let mut run = Command::new(tc, Tool::Opt);
+    run.arg(format!("-passes={passes}")).arg("-o").arg("-").arg("-");
+    let mut names = Command::new(tc, Tool::Opt);
+    names.arg("-discard-value-names").arg("-S").arg("-o").arg("-").arg("-");
+    Some([run, names])
 }
 
 /// `llc` for an assembly or object output.
@@ -519,6 +551,27 @@ fn execute(
         match step {
             Step::Frontend { input, dest } => {
                 ir = frontend(args, tc, input, stdin_text, diag_opts, io);
+                // The IR-level passes run before the IR is written or
+                // piped on (spec/driver.md "IR optimization").
+                if let Some(text) = &ir
+                    && let Some(cmds) = ir_passes(args, tc, text)
+                {
+                    let mut data = text.as_bytes().to_vec();
+                    let mut ok = true;
+                    for cmd in &cmds {
+                        if args.verbose {
+                            let mut err = io.stderr.clone();
+                            let _ = err.write_all(cmd.render(false).as_bytes());
+                        }
+                        let mut out = Vec::new();
+                        ok = cmd.run(Some(&data), &mut out, &io.stderr, drv);
+                        if !ok {
+                            break;
+                        }
+                        data = out;
+                    }
+                    ir = ok.then(|| String::from_utf8_lossy(&data).into_owned());
+                }
                 skip_piped = ir.is_none();
                 failed |= ir.is_none();
                 if let (Some(text), Dest::File(f)) = (&ir, dest)
@@ -541,25 +594,8 @@ fn execute(
                     failed = true;
                     continue;
                 }
-                // A coroutine is lowered first: `llc` does not run the
-                // coroutine passes (spec/driver.md "Coroutine lowering").
-                if cmd.tool == Tool::Llc
-                    && let Some(text) = &ir
-                    && needs_coro_lowering(text)
-                {
-                    let opt = coro_lowering(tc);
-                    if args.verbose {
-                        let mut err = io.stderr.clone();
-                        let _ = err.write_all(opt.render(false).as_bytes());
-                    }
-                    let mut out = Vec::new();
-                    if !opt.run(Some(text), &mut out, &io.stderr, drv) {
-                        failed = true;
-                        continue;
-                    }
-                    ir = Some(String::from_utf8_lossy(&out).into_owned());
-                }
-                failed |= !cmd.run(ir.as_deref(), &mut io.stdout, &io.stderr, drv);
+                failed |=
+                    !cmd.run(ir.as_deref().map(str::as_bytes), &mut io.stdout, &io.stderr, drv);
             }
             Step::External { cmd, piped: false } => {
                 // The link step: only when everything before it worked.
@@ -653,6 +689,12 @@ mod tests {
         assert_eq!(llc_opt_level(Some("-Og")), "-O1");
         assert_eq!(llc_opt_level(Some("-Os")), "-O2");
         assert_eq!(llc_opt_level(Some("-Ofast")), "-O3");
+        assert_eq!(opt_pipeline(None), None);
+        assert_eq!(opt_pipeline(Some("-O0")), None);
+        assert_eq!(opt_pipeline(Some("-O")), Some("default<O1>"));
+        assert_eq!(opt_pipeline(Some("-O2")), Some("default<O2>"));
+        assert_eq!(opt_pipeline(Some("-Oz")), Some("default<Oz>"));
+        assert_eq!(opt_pipeline(Some("-O3")), Some("default<O3>"));
     }
 
     #[test]

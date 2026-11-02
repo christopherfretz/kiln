@@ -64,6 +64,8 @@ pub struct ParseOptions {
     /// `-freflection` (P2996 spike): `^^`, type splices and the kiln
     /// reflection intrinsics ([`kiln_sema::Sema::reflection`]).
     pub reflection: bool,
+    /// `-fcoro-aligned-allocation` ([`kiln_sema::Sema::coro_aligned_allocation`]).
+    pub coro_aligned_allocation: bool,
     /// `-fclang-compat=<major>`: the clang release whose spellings kiln
     /// reproduces where they differ (spec/pp.md "clang compatibility
     /// level"; [`kiln_sema::Sema::clang_compat`]).
@@ -84,6 +86,7 @@ impl Default for ParseOptions {
             inst_limits: kiln_sema::templ::stack::InstLimits::default(),
             inst_report: kiln_sema::templ::report::ReportFormat::Off,
             reflection: false,
+            coro_aligned_allocation: false,
             clang_compat: 19,
             gnu_lib_builtins: false,
         }
@@ -205,6 +208,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.exceptions = opts.exceptions;
     s.rtti = opts.rtti;
     s.reflection = opts.reflection;
+    s.coro_aligned_allocation = opts.coro_aligned_allocation;
     s.gnu = opts.gnu;
     s.clang_compat = opts.clang_compat;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;

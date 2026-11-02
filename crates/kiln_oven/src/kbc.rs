@@ -153,7 +153,8 @@ ops! {
     Ret = 1,
     // [dst, global]
     GlobalAddr = 2,
-    // [dst, p, target pointee type]
+    // [dst, p, target pointee type]; aux = `VOID_TAG`: [dst, p, source
+    // pointee type], a `T *` to `void *` conversion that tags `p`
     VoidCast = 3,
     // [dst, type, count, origin, explicit inits]: a transient allocation
     // (spec/oven.md "Transient allocation"), uninitialized unless aux has
@@ -173,8 +174,10 @@ ops! {
     // (spec/oven.md "Destruction"): the innermost `ScopeExit` or `Ret`
     // whose mark is below it calls the destructor, last registered first.
     // aux = 1: `p` is the first element of a heap array of `type`
-    // (`delete[]`), its count is the allocation's. A null `p` registers
-    // nothing.
+    // (`delete[]`), its count is the allocation's; aux 2 = a subobject
+    // destroyed by a destructor (notes); aux 4 = run only by unwinding
+    // (a subobject of an object under construction, [except.ctor]/3-4),
+    // dropped by any other exit. A null `p` registers nothing.
     PushCleanup = 3,
     // [p]: the complete object at `p` is const from now on (a const
     // object is modifiable during its construction, [class.ctor.general]/5).
@@ -282,6 +285,13 @@ ops! {
 
 /// `Op::Throw` operand: the exception object has no destructor to run.
 pub(crate) const NO_DTOR: u32 = u32::MAX;
+
+/// `VoidCast` aux: the conversion of a non-null `T *` to `void *`, which
+/// records `T` (+ 1) in bits 64..96 of the pointer register, the
+/// designator a placement new of the `void *` reads (spec/oven.md
+/// "Construction"). Pointer operations read the low 64 bits only, and a
+/// store to memory drops the tag.
+pub(crate) const VOID_TAG: u32 = 1;
 
 /// The kinds of `Builtin` and their operands.
 pub(crate) mod bi {
@@ -403,6 +413,11 @@ pub(crate) mod bi {
     /// `Oven::evaluate_chars`): the `a` elements of character type `t1`
     /// that `b` points to, read into the Oven's message buffer.
     pub const MSG_CHARS: u32 = 24;
+    /// `std::uncaught_exceptions()` / `__builtin_uncaught_exceptions()`
+    /// ([except.uncaught]/1, P3068): the number of exceptions thrown and
+    /// not yet caught in this evaluation (a nested evaluation counts its
+    /// own, spec/oven.md "Exceptions").
+    pub const UNCAUGHT: u32 = 29;
     /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
     /// bytes.
     pub const WCHAR: u32 = 2;

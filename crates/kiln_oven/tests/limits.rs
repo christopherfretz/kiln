@@ -290,3 +290,32 @@ static_assert(f(300) == 21);
         assert_eq!((r.steps, r.bytes, r.peak_bytes), (first.steps, first.bytes, first.peak_bytes));
     }
 }
+
+/// [expr.const]/10 (P2280) and spec/oven.md "Unknown references": a
+/// variable with no initializer yet is resolved provisionally, again by
+/// every evaluation, to the same object, so naming it costs one static
+/// slot per translation unit: 10k evaluations hold what the first few did
+/// (the reference case, which holds a pointer, is the corpus's
+/// `tests/stress/p2280-provisional-globals.cpp`).
+#[test]
+fn provisional_globals_do_not_grow() {
+    let src = "\
+extern const int n;
+extern const int m[4];
+constexpr int k(const int *p) { return p ? 1 : 0; }
+static_assert(k(&n) + k(m + 1) == 2);
+";
+    let mut tu = Tu::new(src);
+    let Item::Assert { cond, loc } = tu.items[0] else { panic!("assert") };
+    let mut oven = Oven::new(Budget::default());
+    for _ in 0..16 {
+        tu.eval(&mut oven, cond, loc).expect("ok");
+    }
+    let warm = oven.footprint();
+    for _ in 0..10_000 {
+        tu.eval(&mut oven, cond, loc).expect("ok");
+    }
+    assert_eq!(oven.footprint(), warm, "no growth after warm-up");
+    // Unbacked: neither object holds bytes.
+    assert_eq!(oven.stats().totals().static_bytes, 0);
+}

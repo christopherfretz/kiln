@@ -810,7 +810,17 @@ the running `Substituter` instead.
    declaration's parameters (§4.8.1):
    - matches kinds and arity;
    - fills missing args from defaults, substituting the earlier args into
-     them (frame `DefaultTemplateArgumentInstantiation`);
+     them (frame `DefaultTemplateArgumentInstantiation`). A dependent
+     default is substituted in the template's semantic context
+     (`in_inst_context(ctx of tmpl)`, as clang's
+     `SubstDefaultTemplateArgument` enters `Template->getDeclContext()`),
+     not the scopes of the use: a name the substitution looks up again
+     (an unqualified call with explicit template arguments,
+     `declval<Ts>()`) resolves from the template's namespace or class
+     ([temp.dep.candidate]/1; WP-378,
+     `tests/conformance/temp.param/default-argument-lookup-context.cpp`).
+     A template in a local scope keeps the use's scopes (its function's
+     names live only there);
    - converts NTTP args (converted constant expressions, evaluated by the
      Oven with `EvalKind::TemplateArg`);
    - packs the trailing args into a `Pack`.
@@ -1891,6 +1901,13 @@ recomputed exactly as for non-template code (clang's
   the list is substituted, so the constructor's parameter is
   initialized from it by [over.ics.list] (`call_arg_list`; WP-295,
   `tests/conformance/over.ics.list/dependent-paren-init-braced-arg.cpp`).
+- **Block-scope namespace aliases** ([namespace.alias]; clang
+  `VisitNamespaceAliasDecl`): the target is never dependent, so the
+  alias is declared again in the instantiation's block scope with the
+  same target, or the instantiation's alias when the target is an
+  earlier local alias (`subst/stmts.rs` `local_decl`; WP-370, libstdc++
+  variant:1546,
+  `tests/conformance/namespace.alias/local-alias-in-function-template.cpp`).
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
@@ -4440,6 +4457,22 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   that finds no function template is `no template named 'operator()'`
   (`temp.names/operator-template-id{,-errors}.cpp`). The member-access
   form `x.template operator()<N>()` goes through the member path.
+- From C++20 lookup finding only member functions also makes an
+  unqualified name or operator-function-id followed by `<` an assumed
+  template-name (clang 22; `Sema::is_assumable_function`). A template-id
+  whose lookup and argument-dependent lookup find no function template
+  is diagnosed by `Sema::diagnose_args_for_non_template`: lexically
+  inside a class (a member function body, also through a lambda or an
+  out-of-line definition, a default member initializer; the walk skips
+  functions and closure types) with a non-empty lookup result "'f' does
+  not refer to a template" plus "declared as a non-template here" at the
+  first declaration found, elsewhere as an undeclared name. A class member
+  found suppresses ADL ([basic.lookup.argdep]/3), so a members-only set
+  is diagnosed when the template-id is formed. clang 19 says "member 'f'
+  used before its declaration"; C++17's "does not name a template but is
+  followed by template arguments" is not implemented (`<` stays
+  less-than there). Tests: `temp.names/args-for-non-template-member.cpp`,
+  `temp.names/operator-call-template-member-run.cpp` (WP-374).
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is
   unsupported.

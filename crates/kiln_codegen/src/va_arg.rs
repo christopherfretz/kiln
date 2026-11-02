@@ -28,7 +28,7 @@ impl Cg<'_> {
             let Some(dest) = dest else { return Ok(None) };
             let size = self.size_align(q).0;
             let vol = self.is_volatile(q);
-            self.memcpy(dest, addr.v, addr.align, size, vol);
+            self.agg_copy(q, dest, addr, size, vol);
             return Ok(None);
         }
         Ok(Some(self.load_scalar(addr, q)))

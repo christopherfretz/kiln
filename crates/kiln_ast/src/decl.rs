@@ -1593,6 +1593,11 @@ pub struct ColdDeclData {
     pub instantiated_from: ColdMap<DeclId, DeclId>,
     /// Injection points of `define_aggregate` members (§10).
     pub injection_point: ColdMap<DeclId, Loc>,
+    /// A bodiless member function declaration → the start of the last
+    /// token of its declarator, asm label and GNU attributes (clang's
+    /// `FunctionDecl::getEndLoc` before a body is attached), where
+    /// "must be declared with 'noexcept'" points.
+    pub declarator_end: ColdMap<DeclId, Loc>,
     /// Builtin function ids of implicit builtin `Function` decls (§5.3).
     pub builtin_id: ColdMap<DeclId, u32>,
     /// WP-380: the `__builtin_` twin of a C library function GCC folds
@@ -1657,6 +1662,7 @@ impl Default for ColdDeclData {
             deprecation: ColdMap::new("deprecation"),
             instantiated_from: ColdMap::new("instantiated_from"),
             injection_point: ColdMap::new("injection_point"),
+            declarator_end: ColdMap::new("declarator_end"),
             builtin_id: ColdMap::new("builtin_id"),
             gnu_lib_twin: ColdMap::new("gnu_lib_twin"),
             typedef_for_anon: ColdMap::new("typedef_for_anon"),
@@ -1693,6 +1699,7 @@ impl ColdDeclData {
             self.deprecation.mem_row(),
             self.instantiated_from.mem_row(),
             self.injection_point.mem_row(),
+            self.declarator_end.mem_row(),
             self.builtin_id.mem_row(),
             self.gnu_lib_twin.mem_row(),
             self.typedef_for_anon.mem_row(),

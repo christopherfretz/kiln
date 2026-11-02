@@ -2322,6 +2322,7 @@ impl Parser<'_, '_> {
                 self.parse_attributes(&mut pd.attrs);
             }
             let mut p = self.s.act_on_param_declarator(&ds, &pd);
+            self.misplaced_param_pack_ellipsis(&ds, &mut pd, &mut p, site);
             // The point of declaration: before the default argument
             // ([basic.scope.pdecl]/1).
             self.s.act_on_prototype_param(&mut p);
@@ -2362,6 +2363,52 @@ impl Parser<'_, '_> {
             }
         }
         (params, variadic)
+    }
+
+    /// A `...` after parameter `pd` (`p` as sema built it) whose
+    /// declarator names an unexpanded pack is a misplaced pack ellipsis
+    /// ([dcl.decl.general]/4: the `...` of a declarator-id or
+    /// abstract-pack-declarator comes first): clang 22's "'...' must
+    /// immediately precede declared identifier" (named) or "must be
+    /// innermost component of anonymous pack declaration" (abstract), and
+    /// the parameter becomes the pack (`Ts a...`, `Ts (*)()...`,
+    /// `Ts......a`). Not when `)` follows a declarator that already has its
+    /// `...` (`Ts......`), or in a lambda one without (`[](Ts a...)`):
+    /// those are the varargs `...` of -Wambiguous-ellipsis. A placeholder
+    /// type names no pack yet.
+    fn misplaced_param_pack_ellipsis(
+        &mut self,
+        ds: &DeclSpec,
+        pd: &mut Declarator,
+        p: &mut ParamInfo,
+        site: DeclSite,
+    ) {
+        if !self.at(Punct::Ellipsis)
+            || matches!(ds.base, TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto)
+            || !self.s.declarator_has_unexpanded_pack(p.original_ty.unwrap_or(p.ty))
+        {
+            return;
+        }
+        let before_rparen = self.peek_is(1, Punct::RParen);
+        if before_rparen && (pd.ellipsis.is_some() || site == DeclSite::LambdaParam) {
+            return;
+        }
+        let ellipsis = self.loc();
+        self.bump();
+        self.misplaced_declarator_ellipsis(pd, ellipsis);
+        if pd.ellipsis.is_none() {
+            pd.ellipsis = Some(ellipsis);
+            self.s.make_param_pack(p, ellipsis);
+        }
+    }
+
+    /// Diagnoses the misplaced `...` at `ellipsis` after declarator `pd`
+    /// (clang `DiagnoseMisplacedEllipsis`).
+    pub(crate) fn misplaced_declarator_ellipsis(&mut self, pd: &Declarator, ellipsis: Loc) {
+        let anonymous = if pd.name.is_some() { "0" } else { "1" };
+        let e =
+            self.s.diag(DiagId::parse_misplaced_ellipsis_in_declaration, ellipsis).arg(anonymous);
+        self.emit(e);
     }
 
     /// [dcl.fct]/3 (P3176): the varargs `...` at `ellipsis` follows a

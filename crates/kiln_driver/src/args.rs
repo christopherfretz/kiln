@@ -165,6 +165,7 @@ pub struct PrintArgs {
 }
 
 /// Flags that change predefined macros; `None` keeps clang's default.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PredefArgs {
     /// `-O<n>`.
@@ -193,6 +194,9 @@ pub struct PredefArgs {
     pub threadsafe_statics: Option<bool>,
     /// `-f[no-]sized-deallocation`.
     pub sized_deallocation: Option<bool>,
+    /// `-f[no-]coro-aligned-allocation`: aligned coroutine frame
+    /// allocation (default off, as clang).
+    pub coro_aligned_allocation: bool,
     /// `-f[no-]reflection` (P2996 spike, WP-267): the `^^`/`[: :]` tokens
     /// and the kiln reflection intrinsics. Default off; `__cpp_reflection`
     /// is not defined either way.
@@ -376,6 +380,10 @@ pub struct Args {
     pub link: Vec<LinkOpt>,
     /// The last `-O<level>` as written (`-O2`, `-Os`, ...).
     pub opt_flag: Option<String>,
+    /// `-disable-llvm-passes` (a cc1 option, usually behind `-Xclang`):
+    /// no `opt` pass runs on the IR, which is written as the frontend
+    /// emits it (pre-split coroutines; spec/driver.md "IR optimization").
+    pub disable_llvm_passes: bool,
     /// `-###`: print the commands instead of running them.
     pub print_commands: bool,
     /// `-m[no-]outline-atomics` (the last wins): `AArch64`'s
@@ -539,6 +547,7 @@ impl Args {
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
             "-###" => self.print_commands = true,
+            "-disable-llvm-passes" => self.disable_llvm_passes = true,
             "-moutline-atomics" => self.outline_atomics = Some(true),
             "-mno-outline-atomics" => self.outline_atomics = Some(false),
             // Debug information is not generated (spec/codegen.md §5).
@@ -715,6 +724,8 @@ impl Args {
             "-fno-threadsafe-statics" => p.threadsafe_statics = Some(false),
             "-fsized-deallocation" => p.sized_deallocation = Some(true),
             "-fno-sized-deallocation" => p.sized_deallocation = Some(false),
+            "-fcoro-aligned-allocation" => p.coro_aligned_allocation = true,
+            "-fno-coro-aligned-allocation" => p.coro_aligned_allocation = false,
             _ => return false,
         }
         true

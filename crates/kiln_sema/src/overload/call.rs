@@ -93,7 +93,7 @@ impl Sema<'_, '_> {
         if explicit.is_some() {
             cands.retain(|&(d, _)| self.kind_of(d) == DeclKind::FunctionTemplate);
             if cands.is_empty() {
-                self.templ_unimplemented("explicit template arguments for a non-template", n.loc());
+                self.diagnose_args_for_non_template(name, &decls, n.loc());
                 return None;
             }
         }

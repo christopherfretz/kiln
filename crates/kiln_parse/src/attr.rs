@@ -35,6 +35,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "flag_enum"
             | "enum_extensibility"
             | "preferred_name"
+            | "coro_only_destroy_when_complete"
     )
 }
 
@@ -325,6 +326,7 @@ impl Parser<'_, '_> {
 
     /// `[[ attribute-list ]]` ([dcl.attr.grammar]).
     fn parse_cxx11_attributes(&mut self, out: &mut Vec<AttrId>) {
+        let before = self.prev_lo();
         let open = self.bump().span.lo;
         self.bump();
         let mut default_scope = None;
@@ -403,6 +405,8 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::RSquare], false, true);
             self.eat(Punct::RSquare);
         }
+        let start = if before == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { before };
+        self.cxx11_attr_run = (start, self.prev_lo());
     }
 
     /// `__attribute__(( gnu-attribute-list ))`.
@@ -437,6 +441,7 @@ impl Parser<'_, '_> {
         }
         self.expect_closing(Punct::RParen, Punct::LParen, l2);
         self.expect_closing(Punct::RParen, Punct::LParen, l1);
+        self.gnu_attr_end = self.prev_lo();
     }
 
     /// The arguments of attribute `name`, if any: `Some(args)`, or `None`
