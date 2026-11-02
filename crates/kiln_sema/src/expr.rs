@@ -4581,10 +4581,7 @@ impl Sema<'_, '_> {
         true
     }
 
-    fn with_range(
-        d: Diag,
-        range: Option<kiln_source::Span>,
-    ) -> Diag {
+    fn with_range(d: Diag, range: Option<kiln_source::Span>) -> Diag {
         match range {
             Some(r) => d.range(r),
             None => d,

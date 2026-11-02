@@ -229,6 +229,11 @@ pub struct TypeContext {
     /// Templates declared in a dependent context (members of class
     /// templates): their names are dependent ([temp.dep.type]/9).
     pub(crate) dependent_templates: kiln_source::fx::FxHashSet<DeclId>,
+    /// The template name of the first deduced class template
+    /// specialization type formed for each (canonical template name,
+    /// deduced type) pair: clang uniques `DeducedTemplateSpecializationType`
+    /// on the canonical template, so later spellings reuse the first one.
+    pub(crate) first_dtst_names: kiln_source::fx::FxHashMap<(u32, u32), TemplateNameId>,
     pub(crate) nns: KeyedTable,
     pub(crate) args: ArgTable,
     pub(crate) profiles: ProfileTable,
@@ -278,6 +283,7 @@ impl TypeContext {
             names: KeyedTable::new(),
             name_decls: Vec::new(),
             dependent_templates: kiln_source::fx::FxHashSet::default(),
+            first_dtst_names: kiln_source::fx::FxHashMap::default(),
             nns: KeyedTable::new(),
             args: ArgTable::new(),
             profiles: ProfileTable::new(),
@@ -1069,6 +1075,7 @@ impl TypeContext {
         self.names.memory("names", &mut r);
         r.push(MemRow::of_vec("names.decls", &self.name_decls));
         r.push(MemRow::of_set("names.dependent_templates", &self.dependent_templates));
+        r.push(MemRow::of_map("names.first_dtst", &self.first_dtst_names));
         self.nns.memory("nns", &mut r);
         self.args.memory(&mut r);
         self.profiles.memory(&mut r);

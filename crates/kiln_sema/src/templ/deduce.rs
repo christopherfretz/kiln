@@ -109,6 +109,11 @@ pub struct DeductionInfo {
     pub first: Option<TemplateArg>,
     /// `Inconsistent`: the second deduction; `NonDeducedMismatch`: `A`.
     pub second: Option<TemplateArg>,
+    /// `NonDeducedMismatch` of two template names: `A` named a class
+    /// template specialization without template-id sugar, so its
+    /// template (clang's `TemplateName::Template` kind) prints fully
+    /// qualified; otherwise both names print as written.
+    pub second_from_decl: bool,
 }
 
 /// The arguments deduced so far for the parameters of one template
@@ -1107,6 +1112,23 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The template name of the first template-id in `a`'s sugar (clang's
+    /// `getAs<TemplateSpecializationType>`), as written.
+    fn written_template_name(&self, a: QualType) -> Option<kiln_ast::ids::TemplateNameId> {
+        let t = &self.ast.types;
+        let mut q = a;
+        loop {
+            if let TypeView::TemplateSpecialization { name, .. } = t.view(q.ty()) {
+                return Some(name);
+            }
+            let n = t.desugar_once(q);
+            if n == q {
+                return None;
+            }
+            q = n;
+        }
+    }
+
     /// `TT<args>` or a class template-id against `A` (§6.2).
     fn deduce_template_id(
         &mut self,
@@ -1121,12 +1143,14 @@ impl Sema<'_, '_> {
             d.info.first = None;
             return Tdk::NonDeducedMismatch;
         };
-        let aname = match aname {
-            Some(n) => n,
-            None => self.ast.types.template_name_of(atmpl),
+        let written = self.written_template_name(a);
+        let aname = match (written, aname) {
+            (Some(n), _) | (None, Some(n)) => n,
+            (None, None) => self.ast.types.template_name_of(atmpl),
         };
         let r = self.deduce_template_name(name, aname, d);
         if r != Tdk::Success {
+            d.info.second_from_decl = written.is_none();
             return r;
         }
         let mut ps = self.ast.types.args(args).to_vec();
@@ -1285,6 +1309,17 @@ impl Sema<'_, '_> {
                 // `%diff{$ against $|types}`: two types are template-diffed.
                 let (p, a) = match (p.view(), a.view()) {
                     (ArgView::Type(pt), ArgView::Type(at)) => self.ty_diff(pt, at),
+                    // clang streams the two `TemplateName`s as written: an
+                    // unqualified name bare, `N::A` with its qualifier; a
+                    // template taken from a class (no sugar) fully qualified.
+                    (ArgView::Template(pn), ArgView::Template(an)) => {
+                        let a = if d.info.second_from_decl {
+                            self.arg_str(TemplateArg::template(an))
+                        } else {
+                            self.written_name_str(an)
+                        };
+                        (format!("'{}'", self.written_name_str(pn)), format!("'{a}'"))
+                    }
                     _ => (format!("'{}'", self.arg_str(p)), format!("'{}'", self.arg_str(a))),
                 };
                 Some(self.diag(DiagId::note_deduction_non_deduced_mismatch, loc).arg(p).arg(a))
@@ -1295,6 +1330,15 @@ impl Sema<'_, '_> {
 
     /// One template argument as clang prints it in a note (types without
     /// quotes; used inside a quoted context).
+    /// Template name `n` as written (clang's `TemplateName::print` with
+    /// `Qualified::AsWritten` over a written name).
+    fn written_name_str(&self, n: kiln_ast::ids::TemplateNameId) -> String {
+        let names = crate::names::SemaNames::new(self);
+        let mut s = String::new();
+        kiln_ast::types::write_template_name(&self.ast.types, &names, n, &mut s);
+        s
+    }
+
     pub(crate) fn arg_str(&self, a: TemplateArg) -> String {
         if let ArgView::Type(q) = a.view() {
             return self.ty_str(q);

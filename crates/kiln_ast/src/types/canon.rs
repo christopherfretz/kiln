@@ -1003,12 +1003,38 @@ impl TypeContext {
         t.into()
     }
 
+    /// The template name a deduced class template specialization type for
+    /// `name` and `deduced` carries: clang's `ASTContext` uniques these
+    /// types on the canonical template declaration (`TemplateName::Profile`),
+    /// so the spelling of the first one formed in the translation unit
+    /// (`N::A`, `A`, `::A`, or the bare name of a deduction guide's
+    /// declarator) is printed for every later spelling. Names that do not
+    /// resolve to a template declaration, or that are dependent, are kept.
+    fn first_dtst_name(
+        &mut self,
+        name: TemplateNameId,
+        deduced: Option<QualType>,
+    ) -> TemplateNameId {
+        if self.template_decl(name).is_none() || !self.template_name_flags(name).is_empty() {
+            return name;
+        }
+        let key = (self.canonical_template_name(name).raw(), raw_opt(deduced));
+        *self.first_dtst_names.entry(key).or_insert(name)
+    }
+
     /// A class template argument deduction placeholder `X` (C++17).
     pub fn deduced_template_specialization(
         &mut self,
         name: TemplateNameId,
         deduced: Option<QualType>,
     ) -> QualType {
+        let name = self.first_dtst_name(name, deduced);
+        self.dtst_node(name, deduced)
+    }
+
+    /// The deduced class template specialization node for exactly `name`
+    /// (its canonical node is never respelled).
+    fn dtst_node(&mut self, name: TemplateNameId, deduced: Option<QualType>) -> QualType {
         let t: TypeId = {
             let flags = match deduced {
                 Some(d) => self.qflags(d),
@@ -1021,7 +1047,7 @@ impl TypeContext {
                     Some(ctx.canonical(d))
                 } else {
                     let cn = ctx.canonical_template_name(name);
-                    (cn != name).then(|| Self::uq(ctx.deduced_template_specialization(cn, None)))
+                    (cn != name).then(|| Self::uq(ctx.dtst_node(cn, None)))
                 }
             })
         };

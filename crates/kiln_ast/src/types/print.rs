@@ -505,6 +505,33 @@ pub fn write_template_arg(
     *out = p.out;
 }
 
+/// Writes template name `n` as written (clang's `TemplateName::print`
+/// with `Qualified::AsWritten`): `nns::[template] X` keeps its qualifier,
+/// a bare name stays bare.
+pub fn write_template_name(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    n: TemplateNameId,
+    out: &mut String,
+) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: false,
+        suppress_tag: false,
+        c_policy: false,
+        no_parens: false,
+        inside_cc_attr: false,
+        diag_desugar: false,
+        canon_args: false,
+        depth: 0,
+    };
+    p.template_name(n, Qual::AsWritten);
+    *out = p.out;
+}
+
 /// The diagnostic `aka` string: the canonical type printed with every
 /// name scoped, when it differs textually from the type as written
 /// (`'S' (aka 'ns::S')`).

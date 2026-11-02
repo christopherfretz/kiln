@@ -8,8 +8,8 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
-use kiln_ast::ids::ArgListId;
-use kiln_ast::types::{ArgView, TemplateArg, TypeView};
+use kiln_ast::ids::{ArgListId, NnsId, TemplateNameId};
+use kiln_ast::types::{ArgView, TemplateArg, TemplateName, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -1012,8 +1012,14 @@ impl Sema<'_, '_> {
     /// or what it refers or points to or the element of an array, at any
     /// depth (`S<T>` in `S<T> (&)[3]`).
     fn resugar_mismatch(&mut self, p: QualType, d: &mut DeducedArgs) {
-        let t = &mut self.ast.types;
         let Some(first) = d.info.first else { return };
+        if let ArgView::Template(n) = first.view() {
+            if let Some(w) = self.written_template_in(p, n) {
+                d.info.first = Some(TemplateArg::template(w));
+            }
+            return;
+        }
+        let t = &mut self.ast.types;
         let ArgView::Type(fq) = first.view() else { return };
         let want = t.canonical(fq);
         let mut cur = p;
@@ -1045,8 +1051,15 @@ impl Sema<'_, '_> {
     /// argument type, unqualified, or what it refers or points to or its
     /// element, at any depth, as [`Self::resugar_mismatch`] does for `P`.
     fn resugar_arg_mismatch(&mut self, a: QualType, d: &mut DeducedArgs) {
-        let t = &mut self.ast.types;
         let Some(second) = d.info.second else { return };
+        if let ArgView::Template(n) = second.view() {
+            if let Some(w) = self.written_template_in(a, n) {
+                d.info.second = Some(TemplateArg::template(w));
+                d.info.second_from_decl = false;
+            }
+            return;
+        }
+        let t = &mut self.ast.types;
         let ArgView::Type(sq) = second.view() else { return };
         let want = t.canonical(sq);
         let mut starts = vec![a];
@@ -1093,6 +1106,64 @@ impl Sema<'_, '_> {
                 };
             }
         }
+    }
+
+    /// The template name of `n`'s template as the first template-id
+    /// naming it in `q`'s sugar spells it (clang deduces over sugared
+    /// types and reports the `TemplateName`s as written): `N::A` for a
+    /// template-id under an `N::` qualifier, else the template-id's own
+    /// name. Searches pointees, elements, function parts and type
+    /// template arguments, depth first, a bounded number of nodes.
+    fn written_template_in(&mut self, q: QualType, n: TemplateNameId) -> Option<TemplateNameId> {
+        let t = &self.ast.types;
+        let want = t.template_decl(n).map(|x| self.ast.first(x))?;
+        let mut stack = vec![(q, None::<NnsId>)];
+        let mut found = None;
+        for _ in 0..256 {
+            let Some((cur, nns)) = stack.pop() else { break };
+            let t = &self.ast.types;
+            match t.view(cur.ty()) {
+                TypeView::TemplateSpecialization { name, args, .. } => {
+                    if t.template_decl(name).map(|x| self.ast.first(x)) == Some(want) {
+                        found = Some((name, nns));
+                        break;
+                    }
+                    for a in t.args(args).iter().rev() {
+                        if let ArgView::Type(x) = a.view() {
+                            stack.push((x, None));
+                        }
+                    }
+                }
+                TypeView::Elaborated { nns, named, .. } => stack.push((named, nns)),
+                TypeView::LValueRef(x) | TypeView::RValueRef(x) | TypeView::Pointer(x) => {
+                    stack.push((x, None));
+                }
+                TypeView::ConstantArray(a) => stack.push((a.elem, None)),
+                TypeView::IncompleteArray(e) => stack.push((e, None)),
+                TypeView::Function(f) => {
+                    for &x in t.params(&f).iter().rev() {
+                        stack.push((x, None));
+                    }
+                    stack.push((f.ret(), None));
+                }
+                _ => {
+                    let next = t.desugar_once(cur);
+                    if next != cur {
+                        stack.push((next, None));
+                    }
+                }
+            }
+        }
+        let (name, nns) = found?;
+        let t = &mut self.ast.types;
+        Some(match (nns, t.template_name_view(name)) {
+            (Some(nns), TemplateName::Template(_)) => t.template_name(TemplateName::Qualified {
+                nns,
+                template_kw: false,
+                underlying: name,
+            }),
+            _ => name,
+        })
     }
 
     /// [`Self::resugar_mismatch`] for a function type P: the mismatched

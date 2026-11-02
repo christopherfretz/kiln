@@ -249,6 +249,11 @@ impl Sema<'_, '_> {
         d: &Declarator,
         template: DeclId,
     ) -> Option<DeclId> {
+        // clang forms the placeholder `X` for the guide's declarator name
+        // while parsing it, which fixes the spelling every later deduced
+        // `X` type prints with (`TypeContext::deduced_template_specialization`).
+        let bare = self.template_name_for(template);
+        let _ = self.ast.types.deduced_template_specialization(bare, None);
         let sloc = d.special.map_or(d.loc, |(_, l)| l);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
