@@ -1231,6 +1231,13 @@ and returns the scope it names:
     [-Wignored-attributes]; an argument already in error drops it
     silently. They change only the switch checks (§7 Statements). Not
     yet: -Wflag-enum (an enumerator out of range of the flags).
+  - `coro_only_destroy_when_complete` (GNU syntax or `clang::`,
+    `AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE`, WP-370), on classes and
+    unions, class template patterns included (it is copied onto each
+    specialization with the other class attributes); elsewhere `'x'
+    attribute only applies to classes` [-Wignored-attributes]; takes no
+    arguments. A coroutine whose return type's class carries it gets the
+    LLVM function attribute of that name (spec/codegen.md §7o).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -4877,8 +4884,14 @@ non-throwing (`__builtin_coro_resume` excepted); else `the expression
 'co_await __promise.final_suspend()' is required to be non-throwing`
 with one `must be declared with 'noexcept'` note per offending function,
 at the end of its definition (the closing `}`) or, for a declaration
-without body, at its name (clang: the declarator's end; see Open
-questions).
+without body, at the end of its declarator (clang `getEndLoc`, WP-370):
+the start of its last token, counting cv/ref-qualifiers, the exception
+specification, a trailing return type or requires-clause, an asm label,
+GNU attributes and the last virt-specifier, but not trailing C++11
+attribute-specifiers (`ColdDeclData::declarator_end`, recorded by the
+parser for bodiless member declarations; an instantiated member uses
+its pattern's). A bodiless namespace-scope declaration still points at
+its name (open question).
 
 **`co_await e` ([expr.await]/3-5).** In order:
 
@@ -4943,7 +4956,24 @@ coroutine's body Sema replaces the body with a `CoroutineBodyStmt`
   that fits neither form is `'operator new' provided by <P> is not
   usable with the function signature of '<f>'`;
 - the deallocation: the promise class's usual `operator delete`, else
-  the global one, the sized form `(ptr, size)` preferred.
+  the global one, the sized form `(ptr, size)` preferred;
+- `-fcoro-aligned-allocation` (default off, as clang; P2014R0 option 2,
+  not in the standard): the frame is allocated with its alignment. Each
+  lookup above first tries the `std::align_val_t` form, so a promise's
+  `operator new` is ranked `(size, align, params...)`, `(size, align)`,
+  `(size, params...)`, `(size)`; the alignment argument is
+  `static_cast<std::align_val_t>(__builtin_coro_align())`. When the
+  promise only has unaligned forms the chosen one gets `warning: under
+  -fcoro-aligned-allocation, the non-aligned allocation function for the
+  promise type '<f>' has higher precedence than the global aligned
+  allocation function` (`-Wcoro-non-aligned-allocation-function`) at its
+  declaration; the nothrow form is `(size, align_val_t, nothrow_t)` (the
+  error then names it). The aligned usual `operator delete` is preferred
+  and gets the alignment when it takes one
+  (`dcl.fct.def.coroutine/aligned_frame.cpp`,
+  `aligned_allocation_diags.cpp`, `tests/codegen/coro_aligned_alloc.cpp`).
+  Without the flag an over-aligned frame is allocated with the plain
+  `operator new` and may be misaligned, as in clang 19/22 and GCC 14.
 
 Any failure marks the function invalid and keeps the plain body; codegen
 never sees a half-built coroutine.
@@ -5239,10 +5269,11 @@ the P2996R13 wording.
 - AST goldens under `tests/conformance/ast/`.
 
 ## 12. Open questions
-- **Coroutine note location (WP-351):** the `must be declared with
-  'noexcept'` note of §7.13 points at a bodiless declaration's name;
-  clang points at the declarator's end (the `)` or exception
-  specification), which `FunctionData` does not record.
+- **Coroutine note location (WP-351, WP-370):** the `must be declared
+  with 'noexcept'` note of §7.13 points at the declarator's end for
+  bodiless member declarations only; a namespace-scope one (`aw
+  operator co_await(X);`) still points at its name, pending the same
+  `Declarator::end` bookkeeping in `kiln_parse/src/decl.rs`.
 - **Additive `kiln_ast` APIs added by WP-048:**
   - `label_stmt`/`goto_stmt`
   - `set_non_odr_use`, `replace_enumerator_init`, `mark_bitfield`

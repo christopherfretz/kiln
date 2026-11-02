@@ -63,7 +63,8 @@ starting with `-` are inputs.
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | dependency output (see below) |
 | `-trigraphs`, `-ftrigraphs`, `-fno-trigraphs` | trigraphs (default: on only for strict C and C++ before 17) |
 | `-f[no-]dollars-in-identifiers` | `$` in identifiers (default on) |
-| `-O*` | also selects `llc`'s level and is passed to the link (see "Code generation") |
+| `-O*` | also selects `llc`'s level and the `opt` pipeline, and is passed to the link (see "Code generation") |
+| `-disable-llvm-passes` (usually after `-Xclang`) | no `opt` run: `-emit-llvm` writes the frontend's IR (see "IR optimization") |
 | `-O*`, `-f[no-]exceptions`, `-f[no-]cxx-exceptions`, `-f[no-]rtti`, `-f[no-]char8_t`, `-f[no-]pic/PIC/pie/PIE`, `-f[no-]fast-math`, `-ffreestanding`, `-fhosted`, `-pthread`, `-f[no-]threadsafe-statics`, `-f[no-]sized-deallocation` | change predefined macros only (see "Predefines") |
 | `-fsigned-char`, `-funsigned-char` (`-fno-unsigned-char`, `-fno-signed-char` are their synonyms; the last one wins) | the signedness of plain `char` ([basic.fundamental]/7), overriding the target's (signed on x86-64, unsigned on AArch64): it sets `TargetTypes::char_signed` of the `kiln_abi::Target` the parser, sema, the Oven and codegen use, the `#if` evaluator's character type ([cpp.cond]), and adds or removes `__CHAR_UNSIGNED__` as clang 19 does (see "Predefines") |
 | `-fclang-compat=<major>` | kiln: which clang release's predefined macros and `__has_*` answers to reproduce, `19` (default) or `22`; any other value is an error (spec/pp.md "clang compatibility level") |
@@ -72,6 +73,7 @@ starting with `-` are inputs.
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration" |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | kiln: the P2996 reflection spike (WP-267; default off; the last one wins): `^^`, `[:`, `:]` are lexed (C++26 only), and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
+| `-f[no-]coro-aligned-allocation` | aligned coroutine frame allocation (default off, as clang; the last one wins): sema looks up the `std::align_val_t` forms of the frame's `operator new`/`delete` first (spec/sema.md §7.13). Passed to sema for `-fsyntax-only` and codegen jobs |
 | `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` and every codegen job |
 | `-ftemplate-depth=N`, `-ftemplate-backtrace-limit=N`, `-fkiln-instantiation-report[=all\|json\|text]` | template limits and the instantiation report (spec/sema-templates.md §10.3, §11.3) |
 | `-fkiln-stack-size=N[k\|m\|g]` | kiln: the stack reserved for the compiling thread (default 1 GiB; at least 4 MiB; the last valid value wins). Running out is the fatal "kiln: stack exhausted during …" (spec/sema-templates.md §10.3), never a crash |
@@ -350,22 +352,38 @@ the current directory (standard input is `-`). `-o -` is standard output.
   `-relocation-model=static` with `-fno-pic`/`-fno-pie`, else
   `-relocation-model=pic` (clang's default PIE), then `-filetype=obj`
   unless `-S`.
-- **Coroutine lowering (WP-351).** `llc` does not run LLVM's coroutine
-  passes, so when the IR declares any `llvm.coro.*` intrinsic (a
-  coroutine's `presplitcoroutine` body, or a lone
-  `__builtin_coro_noop`; clang's `CoroConditionalWrapper` test
-  `coro::declaresAnyIntrinsic`), the IR is first piped through
-  `opt -passes=coro-early,cgscc(coro-split),coro-cleanup,globaldce -S -`
-  (the coroutine part of clang 19's O0 pipeline; `opt` is found like
-  the other tools, `opt-19`), and `opt`'s output goes to `llc`. Any
-  other module takes the unchanged `llc`-only path. `-v` prints the
-  `opt` command before the `llc` one; `-S -emit-llvm` and
-  `-c -emit-llvm` write the pre-split IR, as clang's `-O0 -emit-llvm`
-  does; `-###` does not show the step (it depends on the generated IR).
-  An `opt` failure is a driver error like `llc`'s. Cost (WP-351,
-  aarch64, LLVM 19): on libc++'s `end.to.end/generator.pass.cpp`
-  (4.8k lines of IR) `opt` takes 0.02 s and 62 MB RSS, against 2.9 s
-  for the whole debug-build `kiln++ -c`; `go.pass.cpp` 0.01 s.
+- **IR optimization (WP-351, WP-370).** `llc` runs no IR pass that
+  splits coroutines, and kiln emits unoptimized IR, so before the IR is
+  written (`-S -emit-llvm`, `-c -emit-llvm`) or piped to `llc` it goes
+  through `opt` (found like the other tools, `opt-19`):
+  - at `-O1` and above, `-passes=default<O1|O2|O3|Os|Oz>` (`-O`/`-Og`
+    give O1; `-O4`/`-Ofast` O3): clang's default pipeline, which runs
+    CoroEarly, CoroSplit, CoroElide and CoroCleanup in their standard
+    positions, so a coroutine whose frame does not escape its caller is
+    allocated on the caller's stack (`coro_elide_at_o2` in
+    `crates/kiln_driver/tests/codegen.rs`: no `operator new` call and no
+    `llvm.coro.*` call left, as clang 19 `-O2`). Codegen drops the
+    `noinline optnone` pair at these levels (spec/codegen.md §7p);
+  - at `-O0`, only when the IR declares an `llvm.coro.*` intrinsic (a
+    coroutine's `presplitcoroutine` body or a lone
+    `__builtin_coro_noop`; clang's `CoroConditionalWrapper` test
+    `coro::declaresAnyIntrinsic`),
+    `-passes=coro-early,cgscc(coro-split),coro-cleanup,globaldce` (the
+    coroutine part of clang 19's O0 pipeline); any other `-O0` module
+    takes the unchanged `llc`-only path.
+
+  The pass run writes bitcode, which a second `opt -discard-value-names
+  -S` reads back so the local value names the passes made are dropped,
+  as in clang's release pipeline (`opt` refuses `-discard-value-names`
+  for textual input). `-disable-llvm-passes` (a cc1 option, usually
+  spelled `-Xclang -disable-llvm-passes`) skips both runs, so
+  `-emit-llvm` writes the frontend's IR (pre-split coroutines). `-v`
+  prints the `opt` commands before the `llc` one; `-###` does not show
+  them (they depend on the generated IR). An `opt` failure is a driver
+  error like `llc`'s. Cost (WP-351, aarch64, LLVM 19, `-O0`): on
+  libc++'s `end.to.end/generator.pass.cpp` (4.8k lines of IR) `opt`
+  takes 0.02 s and 62 MB RSS, against 2.9 s for the whole debug-build
+  `kiln++ -c`; `go.pass.cpp` 0.01 s.
 - **Link.** `clang++` with `--target=<triple>` (only if given),
   `--sysroot=`, the `-O` flag, `-pthread`, `-stdlib=`, then the objects,
   linker inputs and link options in command-line order, then
@@ -390,8 +408,7 @@ the current directory (standard input is `-`). `-o -` is standard output.
   then 1.
 
 Not implemented: `-MD`/`-MMD` when compiling ("not implemented yet"),
-`-###` with `-E` or `-fsyntax-only` (likewise), debug information, and
-IR-level optimization (spec/codegen.md).
+`-###` with `-E` or `-fsyntax-only` (likewise), and debug information.
 
 ## Modules
 
@@ -559,9 +576,12 @@ Each deviation is covered by a test or a test note.
     process and prints as ` (in-process) frontend "<in>" -> "<out>"`;
     the backend is a separate `llc` (clang runs it inside `cc1`), and
     the assembler is `llc -filetype=obj`, not `cc1as`.
-11. **`-O1` and above do not optimize the IR.** `-S -emit-llvm -O2` emits
-    the `-O0` IR; `-O<n>` only selects
-    `llc`'s level. The IR-diff corpus runs at `-O0`.
+11. **The IR is optimized by a separate `opt` run** of LLVM's default
+    pipeline ("IR optimization" above), not inside the frontend, and
+    kiln's unoptimized IR differs from clang's in places (no lifetime
+    markers outside coroutines, spec/codegen.md §7p), so `-O2` output
+    matches clang's in shape, not bit for bit. The IR-diff corpus runs
+    at `-O0`.
 12. **`.ll` and `.bc` inputs are linker inputs**, not compiled (clang
     would run its backend on them).
 13. **`-MD`/`-MMD` with a codegen action is "not implemented yet"**

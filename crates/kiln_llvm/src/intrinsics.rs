@@ -503,6 +503,15 @@ pub enum Coro {
     Promise,
     /// `ptr @llvm.coro.noop()`.
     Noop,
+    /// `void @llvm.coro.await.suspend.void(ptr, ptr, ptr)`: calls the
+    /// `await_suspend` wrapper (third operand) on the awaiter and the
+    /// frame once the coroutine is suspended (LLVM 19).
+    AwaitSuspendVoid,
+    /// `i1 @llvm.coro.await.suspend.bool(ptr, ptr, ptr)`.
+    AwaitSuspendBool,
+    /// `void @llvm.coro.await.suspend.handle(ptr, ptr, ptr)`: `CoroSplit`
+    /// resumes the handle the wrapper returns with a `musttail` call.
+    AwaitSuspendHandle,
 }
 
 /// Declares (or finds) coroutine intrinsic `which`; `size` is the
@@ -590,5 +599,13 @@ pub fn coro(m: &mut Module, which: Coro, size: TypeId) -> FuncId {
             Shape::NoUnwind(true),
         ),
         Coro::Noop => declare(m, "llvm.coro.noop", p, &[], &[], Shape::NoUnwind(true)),
+        Coro::AwaitSuspendVoid | Coro::AwaitSuspendBool | Coro::AwaitSuspendHandle => {
+            let (name, ret) = match which {
+                Coro::AwaitSuspendVoid => ("llvm.coro.await.suspend.void", TypeId::VOID),
+                Coro::AwaitSuspendBool => ("llvm.coro.await.suspend.bool", TypeId::I1),
+                _ => ("llvm.coro.await.suspend.handle", TypeId::VOID),
+            };
+            declare(m, name, ret, &[(p, &[]), (p, &[]), (p, &[])], &[], Shape::Throws)
+        }
     }
 }

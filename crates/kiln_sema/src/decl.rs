@@ -7942,6 +7942,7 @@ impl Sema<'_, '_> {
                         | "flag_enum"
                         | "enum_extensibility"
                         | "preferred_name"
+                        | "coro_only_destroy_when_complete"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
@@ -8533,6 +8534,9 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,
+        ("coro_only_destroy_when_complete", _, gnu) if gnu || clang_scope => {
+            AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE
+        }
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
