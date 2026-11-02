@@ -2033,6 +2033,18 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   printf builtins an implicit `format(printf, F, A)` attribute
   (`builtin::printf_format`, WP-282) and an implicit `NoThrow`
   attribute, in clang's order. Later lookups find that declaration.
+- **One declaration per builtin** (WP-332): every implicit use looks
+  the name up first, as clang does. The memberwise copy of a trivially
+  copyable array member (spec/sema-class.md §4.5, clang
+  `buildMemcpyForAssignmentOp`) does an ordinary lookup of
+  `__builtin_memcpy` in the translation unit and calls what it finds
+  (the lazily created builtin of an earlier written call, or a user
+  redeclaration); only when nothing is found does it call
+  `lazily_create_builtin`, and later written calls then find that
+  declaration. A user redeclaration with the builtin's type
+  (`extern "C" void *__builtin_memcpy(void *, const void *, size_t)`)
+  is a redeclaration of the implicit one, before or after it. Test:
+  `tests/conformance/over.match.call/builtin-memcpy-single-decl.cpp`.
 - **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
   placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
 - **Calls:** `act_on_call` converts the callee with

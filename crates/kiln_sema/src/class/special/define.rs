@@ -11,10 +11,9 @@
 //! are odr-used. Diagnostics emitted meanwhile carry the note `in
 //! implicit ... for 'T' first required here`.
 
-use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
     Access, BaseSpec, CtorInit, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits,
-    FnSpec, FnStorage, InitStyle, LinkageLang, VarSpec, builtin,
+    InitStyle, VarSpec,
 };
 use kiln_ast::expr::{
     BinaryOp, CastKind, ConstructInfo, ConstructionKind, ExprFlags, ExprKind, NonOdrUse, Radix,
@@ -22,7 +21,7 @@ use kiln_ast::expr::{
 };
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::LoopData;
-use kiln_ast::types::{ExcSpec, FuncInfo, Quals, TypeView};
+use kiln_ast::types::{Quals, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -31,6 +30,7 @@ use kiln_source::fx::FxHashMap;
 use super::SpecialKind;
 use super::deletion::Selected;
 use crate::Sema;
+use crate::lookup::LookupKind;
 use crate::conv::{self, ConvCtx};
 use crate::type_diff::DiffArgs as _;
 
@@ -1606,44 +1606,24 @@ impl Sema<'_, '_> {
         self.builder().expr_stmt(call)
     }
 
-    /// The internal `__builtin_memcpy` declaration (clang declares it on
-    /// first use, as an implicit builtin in an implicit `extern "C"`).
+    /// The `__builtin_memcpy` declaration the memberwise copy calls
+    /// (clang `buildMemcpyForAssignmentOp`: ordinary lookup of the name in
+    /// the translation unit, creating the builtin if nothing is found).
+    /// There is one declaration per builtin (spec/sema.md §5.3): a written
+    /// call and this implicit use share whichever was declared first, and
+    /// a user redeclaration is found the same way.
     fn memcpy_decl(&mut self) -> DeclId {
-        if let Some(f) = self.memcpy_decl {
-            return f;
-        }
-        let loc = Loc::INVALID;
-        let tu = self.ast.tu;
-        let lh = DeclHead::new(tu, DeclName::EMPTY, loc).flags(DeclFlags::IMPLICIT);
-        let ls = self.builder().linkage_spec_head(lh, LinkageLang::C);
-        let vp = self.ast.types.pointer_to(QualType::VOID);
-        let cv = self.ast.types.qualify(QualType::VOID, Quals::CONST);
-        let cvp = self.ast.types.pointer_to(cv);
-        let size_t = self.size_type();
-        let params = [vp, cvp, size_t];
-        let ty = self.ast.types.function(vp, &params, FuncInfo::new(), ExcSpec::BasicNoexcept);
         let name = self.ast.symbols().intern("__builtin_memcpy");
-        let h = DeclHead::new(ls, DeclName::ident(name), loc).flags(DeclFlags::IMPLICIT);
-        let spec = FnSpec::new().with_storage(FnStorage::Extern);
-        let f = self.builder().function(h, DeclKind::Function, ty, spec, None);
-        let _ = self.ast.decls.cold.builtin_id.insert(f, builtin::MEMCPY);
-        let ps: Vec<DeclId> = params
-            .iter()
-            .enumerate()
-            .map(|(i, &t)| {
-                #[allow(clippy::cast_possible_truncation, reason = "three parameters")]
-                self.builder().param(f, DeclName::EMPTY, loc, t, i as u16, 0)
-            })
-            .collect();
-        let _ = self.builder().set_params(f, &ps);
-        let implicit = |kind, a| AttrNode { kind, syntax: AttrSyntax::Gnu, flags: 1, loc, a, b: 0 };
-        let attrs = [
-            self.ast.attrs.push(implicit(AttrKind::BUILTIN, builtin::MEMCPY)),
-            self.ast.attrs.push(implicit(AttrKind::NOTHROW, 0)),
-        ];
-        let _ = self.builder().attach_attrs(f, &attrs);
+        let tu = self.ast.tu;
+        let found = self.lookup_qualified_dn(tu, DeclName::ident(name), LookupKind::Ordinary);
+        let f = match found.decls.as_slice() {
+            &[d] if self.kind_of(d) == DeclKind::Function => Some(d),
+            _ => None,
+        };
+        let f = f
+            .or_else(|| self.lazily_create_builtin(name, Loc::INVALID))
+            .unwrap_or_else(|| unreachable!("__builtin_memcpy is in the builtin table"));
         self.mark_used(f);
-        self.memcpy_decl = Some(f);
         f
     }
 

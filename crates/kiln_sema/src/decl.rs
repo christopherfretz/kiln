@@ -2047,6 +2047,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(decl, &mut attrs);
         }
         self.add_known_function_attrs(decl, &mut attrs);
+        self.recognize_builtin_decl(decl, &mut attrs);
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
