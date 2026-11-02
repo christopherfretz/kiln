@@ -21,7 +21,7 @@ cargo xtask test [options] [paths...]
 | `--pp-compare tokens\|text` | Override every pp test's `pp-compare:` directive (see "pp comparison"). |
 | `--report-parity <file>` | After the run, write a parity table into `<file>` (see "Parity report"). A relative path is relative to the repo root. |
 | `-j, --jobs <N>` | Parallel tests. Default `min(available CPUs, 8)`, capped at the test count. Under an inherited jobserver an upper bound (see "Jobserver"). |
-| `--timeout <secs>` | Run-time limit for test binaries (float seconds, default 10). Compiles have a fixed 120 s limit. Every process runs in its own process group, and a timeout kills the group, so a compiler's subprocess (clang's `cc1`) cannot outlive it. |
+| `--timeout <secs>` | Run-time limit for test binaries (float seconds, default 10). Compiles have a fixed 120 s limit. Every process runs in its own process group, and a timeout kills the group, so a compiler's subprocess (clang's `cc1`) cannot outlive it. `cargo xtask libcxx` takes the same option for its test binaries (default 30 s, `spec/libcxx.md`); a slow libc++ test such as `rand.dist.bern.negbin/eval.pass.cpp` (about 31 s even as clang's `-O0` binary) needs `--timeout 60`. |
 | `--mem-limit <MiB>` | Address-space cap of every process a test runs: compiler, oracle and the built binaries. Default 8192; `0` disables the default cap (a test's `mem<=N` still applies). See "Resource limits". |
 | `-v, --verbose` | Print every result and every command that was run. |
 | `-h, --help` | Usage. |

@@ -63,7 +63,14 @@ impl Sema<'_, '_> {
             let at = self.begin_loc(callee);
             self.adl_lookup_dn(name, args, at, &mut cands);
         }
+        let last = cands.last().copied();
         cands.retain(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID));
+        // Only invalid functions (already diagnosed) were found: clang's
+        // `resolveKind` keeps the last one, and the call is resolved
+        // against it (a redeclaration of an invalid function is invalid,
+        // WP-288).
+        let only_invalid = cands.is_empty() && last.is_some();
+        cands.extend(last.filter(|_| only_invalid));
         let at = self.begin_loc(callee);
         if cands.is_empty() {
             let text = self.decl_name_str(name);
@@ -90,7 +97,7 @@ impl Sema<'_, '_> {
         // for an ADL lookup: unsatisfied, it is a non-viable candidate
         // ([over.match.viable]/3), not an invalid reference.
         let adl_constrained = adl && self.ast.templates.trailing_requires.get(cands[0].0).is_some();
-        if plain == 1 && !templates && !adl_constrained {
+        if plain == 1 && !templates && !adl_constrained && !only_invalid {
             // One candidate: the direct path's conversions and
             // diagnostics are clang's for a one-candidate set.
             let (d, f) = cands[0];
