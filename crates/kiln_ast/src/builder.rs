@@ -2101,7 +2101,8 @@ impl<'a> AstBuilder<'a> {
         ast.lists.iter::<AttrId>(ast.attrs.of_decl(d)).any(|id| {
             let n = ast.attrs.get(id);
             n.kind == crate::attr::AttrKind::ALIGNED
-                && (QualType::from_raw(n.b).is_some_and(|t| self.type_deps(t).intersects(dependent))
+                && (QualType::from_raw(n.b)
+                    .is_some_and(|t| self.type_deps(t).intersects(dependent))
                     || ExprId::from_raw(n.a).is_some_and(|x| self.deps(x).intersects(dependent)))
         })
     }

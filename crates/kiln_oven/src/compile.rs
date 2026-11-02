@@ -817,7 +817,9 @@ impl<'a> Compiler<'a> {
                 ExprKind::BinaryConditionalOperator => {
                     ast.exprs.binary_conditional_operands(e, &ast.lists)[0]
                 }
-                ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => ast.exprs.operand(e),
+                ExprKind::ImplicitCastExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::ExtVectorElementExpr => ast.exprs.operand(e),
                 ExprKind::MemberExpr => {
                     let base = ast.exprs.operand(e);
                     // An implicit `this` has no source of its own; an
@@ -2321,6 +2323,11 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.rv_inner(op, dst);
             }
+            ExprKind::ExtVectorElementExpr => {
+                // A prvalue (so prvalue-based) one-lane access.
+                let r = self.ext_elt_regs(e).first().copied().unwrap_or(dst);
+                self.emit(Op::Mov, 0, &[dst, r]);
+            }
             ExprKind::CXXRewrittenBinaryOperator => {
                 let op = self.ast().exprs.rewritten_semantic(e);
                 self.rv_inner(op, dst);
@@ -3440,7 +3447,8 @@ impl Compiler<'_> {
                 Place::Mem(self.reg())
             }
             ExprKind::ExtVectorElementExpr => {
-                // Nor an ext vector element access, silently.
+                // Nor an ext vector element access of a glvalue vector,
+                // silently (a prvalue one is `ext_elt_regs`).
                 self.trap(e, "");
                 Place::Mem(self.reg())
             }

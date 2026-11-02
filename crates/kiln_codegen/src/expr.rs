@@ -1694,14 +1694,26 @@ impl Cg<'_> {
                     self.get_gvar(d)?
                 };
                 let align = self.var_align(d);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None, swz: None })
+                Ok(LV {
+                    addr: Addr { v: V::C(gval(g)), ty, align },
+                    q,
+                    bf: None,
+                    vidx: None,
+                    swz: None,
+                })
             }
             DeclKind::TemplateParamObject => {
                 let g = self.param_object_global(d)?;
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 let ty = self.mty(dq);
                 let align = self.global_align(dq);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None, swz: None })
+                Ok(LV {
+                    addr: Addr { v: V::C(gval(g)), ty, align },
+                    q,
+                    bf: None,
+                    vidx: None,
+                    swz: None,
+                })
             }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
@@ -1809,7 +1821,13 @@ impl Cg<'_> {
                 let g = self.lit_global(ast.exprs.string_lit(e));
                 let ty = self.m.global(g).value_type();
                 let align = self.m.global(g).align.unwrap_or(1);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None, swz: None })
+                Ok(LV {
+                    addr: Addr { v: V::C(gval(g)), ty, align },
+                    q,
+                    bf: None,
+                    vidx: None,
+                    swz: None,
+                })
             }
             ExprKind::MemberExpr => self.member_lvalue(e),
             ExprKind::ArraySubscriptExpr => self.subscript_lvalue(e),
@@ -2077,7 +2095,13 @@ impl Cg<'_> {
                 let dq = ast.exprs.get(dead).ty();
                 let ty = self.mty(dq);
                 let v = V::C(self.m.const_undef(LTy::PTR));
-                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None, vidx: None, swz: None });
+                return Ok(LV {
+                    addr: Addr { v, ty, align: 1 },
+                    q: dq,
+                    bf: None,
+                    vidx: None,
+                    swz: None,
+                });
             }
             return self.emit_lvalue(live);
         }
@@ -2201,7 +2225,13 @@ impl Cg<'_> {
                 align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
             }
             let st = self.m.types.int(bf.storage_size);
-            return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf), vidx: None, swz: None });
+            return Ok(LV {
+                addr: Addr { v, ty: st, align },
+                q,
+                bf: Some(bf),
+                vidx: None,
+                swz: None,
+            });
         }
         let fq = ast.decls.get(field).ty().unwrap_or(q);
         if let Some(referee) = self.referee(fq) {
@@ -2211,7 +2241,13 @@ impl Cg<'_> {
             let p = self.load(LTy::PTR, slot.addr.v, slot.addr.align, false);
             let (_, align) = self.pointee_layout(referee);
             let ty = self.mty(referee);
-            return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None, vidx: None, swz: None });
+            return Ok(LV {
+                addr: Addr { v: p, ty, align },
+                q: referee,
+                bf: None,
+                vidx: None,
+                swz: None,
+            });
         }
         self.field_lvalue_init(base, field, q)
     }
@@ -2356,12 +2392,43 @@ impl Cg<'_> {
         }
     }
 
-    /// The lanes the `ExtVectorElementExpr` `e` selects.
+    /// The lanes of the root vector the `ExtVectorElementExpr` `e`
+    /// selects, composed through glvalue element-access bases (clang
+    /// `EmitExtVectorElementExpr` on an `ExtVectorElt` base lvalue:
+    /// `v.even.y` is lane 2 of `v`).
     fn ext_vector_lanes(&self, e: ExprId) -> Vec<u32> {
         let ast = self.ast;
-        let n = self.vec_of(ast.exprs.get(e).ty()).map_or(1, |x| x.1);
-        let acc = ast.symbols().as_str(ast.exprs.ext_vector_accessor(e));
-        kiln_ast::expr::ext_vector_lanes(acc, n)
+        let own = |x: ExprId| {
+            let n = self.vec_of(ast.exprs.get(x).ty()).map_or(1, |v| v.1);
+            let acc = ast.symbols().as_str(ast.exprs.ext_vector_accessor(x));
+            kiln_ast::expr::ext_vector_lanes(acc, n)
+        };
+        let mut lanes = own(e);
+        let mut cur = e;
+        loop {
+            let base = ast.exprs.operand(cur);
+            if ast.exprs.get(base).kind() != ExprKind::ExtVectorElementExpr
+                || !self.is_glvalue(base)
+            {
+                return lanes;
+            }
+            let outer = own(base);
+            for l in &mut lanes {
+                *l = outer.get(*l as usize).copied().unwrap_or(*l);
+            }
+            cur = base;
+        }
+    }
+
+    /// The vector operand under a chain of glvalue element accesses.
+    fn ext_vector_root(&self, e: ExprId) -> ExprId {
+        let ast = self.ast;
+        let mut base = ast.exprs.operand(e);
+        while ast.exprs.get(base).kind() == ExprKind::ExtVectorElementExpr && self.is_glvalue(base)
+        {
+            base = ast.exprs.operand(base);
+        }
+        base
     }
 
     /// clang `EmitExtVectorElementExpr`: the base vector's lvalue (a
@@ -2370,7 +2437,7 @@ impl Cg<'_> {
     fn ext_vector_elt_lvalue(&mut self, e: ExprId) -> R<LV> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
-        let base = ast.exprs.operand(e);
+        let base = self.ext_vector_root(e);
         let blv = if self.is_glvalue(base) {
             self.emit_lvalue(base)?
         } else {
@@ -3692,7 +3759,13 @@ impl Cg<'_> {
         }
         self.f.array_index.push(phi);
         let sc = self.begin_scope(false);
-        let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None, swz: None };
+        let lv = LV {
+            addr: Addr { v: el, ty: ety, align: ealign },
+            q: eq,
+            bf: None,
+            vidx: None,
+            swz: None,
+        };
         let r = if inner {
             self.array_init_loop(sub, lv.addr, Some(outer))
         } else {
@@ -3803,8 +3876,13 @@ impl Cg<'_> {
                 }
                 el
             };
-            let lv =
-                LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None, swz: None };
+            let lv = LV {
+                addr: Addr { v: el, ty: ety, align: ealign },
+                q: eq,
+                bf: None,
+                vidx: None,
+                swz: None,
+            };
             self.init_to_lvalue(init, lv, zeroed)?;
         }
         let trivial = match filler {
@@ -3826,8 +3904,13 @@ impl Cg<'_> {
             let body = self.f.fir.create_block();
             self.emit_block(body, false);
             let cur = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(el, entry)] }, LTy::PTR);
-            let lv =
-                LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None, vidx: None, swz: None };
+            let lv = LV {
+                addr: Addr { v: cur, ty: ety, align: ealign },
+                q: eq,
+                bf: None,
+                vidx: None,
+                swz: None,
+            };
             // [class.temporary]/5: the temporaries of each element's
             // initialization are destroyed before the next one starts.
             let sc = self.begin_scope(false);

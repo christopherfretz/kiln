@@ -405,9 +405,7 @@ pub fn decl_align(ast: &Ast, d: DeclId, target: &Target, for_alignof: bool) -> u
     let mut align = if attr != 0 { attr } else { 8 };
     if !attr_only && let Some(ty) = node.ty() {
         let (t, info) = match ast.types.canonical_view(ty) {
-            TypeView::LValueRef(r) | TypeView::RValueRef(r) if for_alignof => {
-                (r, lay.type_info(r))
-            }
+            TypeView::LValueRef(r) | TypeView::RValueRef(r) if for_alignof => (r, lay.type_info(r)),
             TypeView::LValueRef(_) | TypeView::RValueRef(_) => {
                 let p = target.pointer_size * 8;
                 (ty, Info { width: p, align: p })

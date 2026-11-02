@@ -7421,17 +7421,15 @@ impl Sema<'_, '_> {
         let which = match kind {
             DeclKind::Var
             | DeclKind::VarTemplateSpecialization
-            | DeclKind::VarTemplatePartialSpecialization => {
-                self.ast.decls.var(d).and_then(|v| {
-                    if v.spec.is_exception_var() {
-                        Some(2u8)
-                    } else if v.spec.storage() == VarStorage::Register {
-                        Some(1)
-                    } else {
-                        None
-                    }
-                })
-            }
+            | DeclKind::VarTemplatePartialSpecialization => self.ast.decls.var(d).and_then(|v| {
+                if v.spec.is_exception_var() {
+                    Some(2u8)
+                } else if v.spec.storage() == VarStorage::Register {
+                    Some(1)
+                } else {
+                    None
+                }
+            }),
             DeclKind::ParmVar => Some(0),
             DeclKind::Field => {
                 self.ast.decls.field(d).is_some_and(|f| f.bit_width.is_some()).then_some(3)

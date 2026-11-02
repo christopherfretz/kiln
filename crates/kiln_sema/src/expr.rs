@@ -360,6 +360,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXMemberCallExpr
                 | ExprKind::CXXPseudoDestructorExpr
                 | ExprKind::DesignatedInitUpdateExpr
+                | ExprKind::ExtVectorElementExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
                 ExprKind::CXXRewrittenBinaryOperator => {
@@ -1122,6 +1123,11 @@ impl Sema<'_, '_> {
                 })
             }
             ExprKind::StmtExpr => self.unused_stmt_expr(x, loc),
+            // clang's default case, at `getExprLoc` (the base's begin:
+            // `ExtVectorElementExpr` has no location of its own there).
+            ExprKind::ExtVectorElementExpr => {
+                Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
+            }
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
                     None

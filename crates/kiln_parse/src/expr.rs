@@ -653,7 +653,8 @@ impl Parser<'_, '_> {
                 // extension (clang `ext_alignof_expr`, at the keyword,
                 // before the operand is checked). Not `__alignof`.
                 if let Some(sp) = spelling {
-                    let d = self.s.diag(DiagId::sema_alignof_expression, loc).arg(format!("'{sp}'"));
+                    let d =
+                        self.s.diag(DiagId::sema_alignof_expression, loc).arg(format!("'{sp}'"));
                     self.emit(d);
                 }
                 Some(self.s.act_on_trait_expr(kind, e, loc))
