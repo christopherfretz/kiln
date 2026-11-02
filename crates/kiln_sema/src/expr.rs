@@ -2298,7 +2298,9 @@ impl Sema<'_, '_> {
             return false;
         }
         let fty = n.ty().unwrap_or(QualType::ERROR);
-        let Some(ret) = self.ast.types.proto(fty).map(|p| p.ret()) else { return false };
+        let Some(ret) = self.ast.types.proto(fty).map(kiln_ast::types::FuncProto::ret) else {
+            return false;
+        };
         let pointee = match self.ast.types.canonical_view(ret) {
             TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
             _ => ret,

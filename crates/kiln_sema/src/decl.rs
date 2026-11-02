@@ -7486,6 +7486,7 @@ impl Sema<'_, '_> {
     }
 
     /// [`Sema::act_on_attribute`] without the scope flag.
+    #[allow(clippy::too_many_lines)]
     fn attribute_node(
         &mut self,
         syntax: AttrSyntax,
@@ -7825,10 +7826,10 @@ impl Sema<'_, '_> {
             .arg(self.ty_arg(t))
             .arg(format!("'{}'", self.decl_name(tmpl)));
         if let Some(td) = typedef {
-            let note = self
+            let td_note = self
                 .diag(DiagId::note_entity_declared_at, self.ast.decls.get(td).loc())
                 .arg(format!("'{}'", self.decl_name(td)));
-            msg = msg.with_note(note);
+            msg = msg.with_note(td_note);
         }
         self.emit(msg);
         false

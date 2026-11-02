@@ -50,6 +50,7 @@ pub enum DeclOrPack {
 }
 
 /// One substitution (clang's `TemplateInstantiator`, §5.2).
+#[allow(clippy::struct_excessive_bools)]
 pub struct Substituter<'s, 'a, 'sm> {
     /// The semantic analyzer the rebuilt nodes go through.
     pub sema: &'s mut Sema<'a, 'sm>,

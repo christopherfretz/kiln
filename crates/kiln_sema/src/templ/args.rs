@@ -408,6 +408,7 @@ impl Sema<'_, '_> {
     /// `e` converted to the type of non-type parameter `p` as a
     /// converted constant expression ([temp.arg.nontype]/2) and
     /// evaluated: a `Value` argument.
+    #[allow(clippy::too_many_lines)]
     fn convert_nttp_arg(
         &mut self,
         tmpl: DeclId,
