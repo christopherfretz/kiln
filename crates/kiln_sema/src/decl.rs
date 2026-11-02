@@ -490,35 +490,33 @@ impl Sema<'_, '_> {
         if self.kind_of(qual) != DeclKind::CXXRecord {
             return base;
         }
-        self.rebuild_ci_type(base, qual, 0)
+        self.rebuild_ci_type(base, qual, d.loc, 0)
     }
 
     /// [`Sema::rebuild_in_current_instantiation`] of `base`, also through
     /// the type arguments of a template-id (libc++'s
     /// `pair<typename __hash_table<...>::iterator, bool>
     /// __hash_table<...>::__node_insert_unique(...)`).
-    fn rebuild_ci_type(&mut self, base: QualType, qual: DeclId, depth: u32) -> QualType {
+    fn rebuild_ci_type(&mut self, base: QualType, qual: DeclId, loc: Loc, depth: u32) -> QualType {
         if depth > 32 || !self.is_dependent_type(base) {
             return base;
         }
         let view = self.ast.types.view(base.ty());
         if let TypeView::Elaborated { keyword, nns, named } = view {
-            let r = self.rebuild_ci_type(named, qual, depth + 1);
+            let r = self.rebuild_ci_type(named, qual, loc, depth + 1);
             if r == named {
                 return base;
             }
             let t = self.ast.types.elaborated(keyword, nns, r);
             return self.ast.types.qualify(t, base.quals());
         }
-        if let TypeView::TemplateSpecialization { name, args, underlying: None, alias: false } =
-            view
-        {
+        if let TypeView::TemplateSpecialization { name, args, alias: false, .. } = view {
             let list = self.ast.types.args(args).to_vec();
             let mut out = Vec::with_capacity(list.len());
             let mut changed = false;
             for a in list {
                 if let kiln_ast::types::ArgView::Type(t) = a.view() {
-                    let r = self.rebuild_ci_type(t, qual, depth + 1);
+                    let r = self.rebuild_ci_type(t, qual, loc, depth + 1);
                     changed |= r != t;
                     out.push(kiln_ast::types::TemplateArg::ty(r));
                 } else {
@@ -529,7 +527,40 @@ impl Sema<'_, '_> {
                 return base;
             }
             let l = self.ast.types.arg_list(&out);
-            let t = self.ast.types.template_specialization(name, l, None, false);
+            // Once the rebuilt arguments no longer depend on the
+            // template's parameters (`pair<typename X<T>::ptr, int>` with a
+            // non-dependent member `ptr`), this is the class template
+            // specialization the in-class declaration named
+            // ([temp.over.link]/5): formed from the canonical arguments
+            // (the written `typename X<T>::` qualifier keeps the sugar
+            // instantiation-dependent), kept as the written sugar over it.
+            let canon: Vec<_> = out
+                .iter()
+                .map(|&a| match a.view() {
+                    kiln_ast::types::ArgView::Type(t) => {
+                        kiln_ast::types::TemplateArg::ty(self.ast.types.canonical(t))
+                    }
+                    _ => a,
+                })
+                .collect();
+            let cl = self.ast.types.arg_list(&canon);
+            let still_dependent = self
+                .ast
+                .types
+                .arg_list_flags(cl)
+                .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION);
+            let args = if still_dependent { &out } else { &canon };
+            let Ok(crate::templ::actions::TemplateIdRef::Type(t)) =
+                self.act_template_id(name, args, loc, loc)
+            else {
+                return base;
+            };
+            let t = if still_dependent {
+                t
+            } else {
+                let under = self.ast.types.canonical(t);
+                self.ast.types.template_specialization(name, l, Some(under), false)
+            };
             return self.ast.types.qualify(t, base.quals());
         }
         let TypeView::DependentName { keyword, nns, name } = view else {
