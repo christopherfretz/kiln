@@ -1995,8 +1995,8 @@ pub(crate) struct DefFnAttrs {
     pub(crate) mustprogress: bool,
     pub(crate) vector_width: u64,
     pub(crate) noreturn: bool,
-    /// `noinline optnone`, `noinline` or `alwaysinline`
-    /// ([`Cg::def_inline_attrs`]).
+    /// `noinline optnone`, `noinline`, `alwaysinline`, `inlinehint` or
+    /// nothing ([`Cg::def_inline_attrs`]).
     pub(crate) inline: DefInline,
     /// `const` / `pure` attributes (`crate::builtins::const_pure_attrs`).
     pub(crate) extra: Vec<Attr>,
