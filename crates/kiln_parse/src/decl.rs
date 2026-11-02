@@ -1986,7 +1986,8 @@ impl Parser<'_, '_> {
             pd.chunks.iter().any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
         let at = ds.type_loc.unwrap_or(start);
         if (placeholder || decltype_auto) && !ds.invalid && !trailing {
-            if let Some(why) = kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site) {
+            if let Some(why) = kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site)
+            {
                 let int = self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why);
                 ds.auto_constraint = None;
                 ds.base = TypeSpecKind::Named;
@@ -2035,7 +2036,9 @@ impl Parser<'_, '_> {
             let Some((decltype_auto, constraint)) = self.s.trailing_return_placeholder(*t) else {
                 continue;
             };
-            let with = if let Some(why) = kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site) {
+            let with = if let Some(why) =
+                kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site)
+            {
                 self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why)
             } else {
                 let constraint = constraint.map(|(c, a)| (c, a, cloc));

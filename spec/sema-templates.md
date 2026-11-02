@@ -451,7 +451,7 @@ type parameter named `auto:N`, as in clang's dump.
   `auto` in any other clause (a nested function declarator, a function
   type in a type-id, alias, typedef, variable or template parameter) is
   "'auto' not allowed in function prototype that is not a function
-  declaration" at the `auto` (`sema_auto_not_allowed_prototype`), and the
+  declaration" at the `auto` (`sema_auto_not_allowed`, §6.3), and the
   parameter's type becomes `int`. `decltype(auto)` is never a parameter's
   placeholder ("... in function prototype", "... in lambda parameter").
 - A parameter declarator with a trailing return type
@@ -2300,6 +2300,43 @@ there is checked at its type-constraint, both for a variable and for an
 invented parameter (§2.6).
 Tests: `dcl.spec.auto/nested-return-placeholder-run.cpp`,
 `dcl.spec.auto/nested-return-placeholder-diags.cpp`.
+
+**Positions that forbid a placeholder** ([dcl.spec.auto.general]/2-6,
+[expr.prim.req.general]/4; clang `err_auto_not_allowed` from
+`GetDeclSpecTypeForDeclarator`, `templ/ctad_site.rs`). One diagnostic,
+`sema_auto_not_allowed`: "'auto' (or 'decltype(auto)') not allowed
+<position>", with clang's position selector, at the decl-specifier's
+placeholder. The placeholder checked is the decl-specifier's own, or, when
+the declarator's function declarator nearest the name has a trailing return
+type, the one contained in that trailing type (`declarator_placeholder`;
+`using F = auto (*)(int) -> int;` is fine, `-> auto` is not). GNU
+`__auto_type` is not checked here. The position comes from the
+declarator (`auto_declarator_site`):
+
+| Declarator | Position |
+|---|---|
+| any `typedef` declarator | "in typedef" |
+| alias-declaration type-id (`DeclSite::Alias`) | "in type alias" |
+| template argument, type template parameter default (`TemplateArg`, `TypeParamDefault`) | "in template argument" |
+| requires-expression parameter (`RequiresParam`) | "in requires expression parameter" |
+| other type-ids (`sizeof`, `alignof`, casts, `typeid`, `__typeof__`, default-argument operands; `TypeName`/`Plain` without a name) | "here" |
+| non-static data member (struct / union / class) | "in non-static {struct,union,class} member" |
+| handler's exception-declaration | "in exception declaration" |
+| parameter (§2.6 placement) | "in function prototype", "in lambda parameter", "in function prototype that is not a function declaration" |
+
+An enum-base names a type-specifier without a declarator
+(`type_specifier_placeholder_check`, "here"). The declarator recovers as
+the error type (the parameter rule of §2.6 recovers as `int`), so its uses
+do not cascade, and `typeid` of an error type stops before its
+`<typeinfo>` check (clang's `ParseCXXTypeid`). A deduced class template
+in an alias or type template parameter default gives clang's "requires
+template arguments" (its `TemplateTypeArg` context), not "argument
+deduction not allowed". Positions that deduce or invent are unaffected:
+variables, `new`, NTTPs, return types, structured bindings, conditions,
+range-for, conversion functions, generic lambdas and abbreviated templates.
+Tests: `dcl.spec.auto/p5-auto-not-allowed.cpp` (every position above),
+`dcl.spec.auto/p5-auto-allowed.cpp`,
+`expr.prim.req.general/p4-auto-param.cpp`.
 
 **Uses:**
 - variables;
@@ -4207,7 +4244,9 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
     `sema_only_enums_have_underlying`, `sema_pack_index_out_of_bounds`;
   - `sema_integer_seq_*`, `sema_bit_cast_*`;
   - `sema_auto_var_*`, `sema_auto_inconsistent_deduction`,
-    `sema_decltype_auto_*`, `sema_auto_not_allowed_field`,
+    `sema_decltype_auto_*`, `sema_auto_not_allowed` (then
+    `sema_auto_not_allowed_field`; WP-314 merged it with the prototype
+    error into one id with clang's position selector),
     `sema_auto_fn_virtual`;
   - `sema_call_incomplete_return`,
     `sema_call_function_incomplete_return`, `sema_cast_to_incomplete`,

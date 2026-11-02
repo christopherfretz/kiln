@@ -1168,7 +1168,8 @@ impl Sema<'_, '_> {
             if self.ast.types.flags(declared.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
                 ty = self.act_pack_expansion_type(ty, l);
             } else if !self.is_error_type(declared) {
-                let m = self.diag(DiagId::sema_param_pack_without_packs, l).arg(self.ty_arg(declared));
+                let m =
+                    self.diag(DiagId::sema_param_pack_without_packs, l).arg(self.ty_arg(declared));
                 self.emit(m);
             }
         }

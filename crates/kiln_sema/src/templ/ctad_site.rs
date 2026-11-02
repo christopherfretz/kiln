@@ -8,9 +8,9 @@
 //! `GetFullTypeForDeclarator`). Spec: sema-templates.md §6.3.
 
 use kiln_ast::QualType;
-use kiln_ast::types::{AutoKeyword, TypeView};
 use kiln_ast::decl::{DeclKind, TagKind};
 use kiln_ast::ids::TemplateNameId;
+use kiln_ast::types::{AutoKeyword, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -312,8 +312,7 @@ impl Sema<'_, '_> {
         let Some(s) = Self::auto_declarator_site(d) else { return base };
         let Some(kw) = self.declarator_placeholder(base, d) else { return base };
         self.auto_not_allowed(spec_loc, kw, s);
-        let trailing = d.chunks.iter().any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
-        if s == site::REQUIRES_PARAM && !trailing { QualType::INT } else { QualType::ERROR }
+        QualType::ERROR
     }
 
     /// A type-id's type `ty` formed without a declarator (an enum-base)
@@ -321,7 +320,9 @@ impl Sema<'_, '_> {
     /// error type.
     pub fn type_specifier_placeholder_check(&mut self, ty: QualType, loc: Loc) -> QualType {
         match self.ast.types.canonical_view(ty) {
-            TypeView::Auto { keyword, deduced: None, .. } if keyword != AutoKeyword::GnuAutoType => {
+            TypeView::Auto { keyword, deduced: None, .. }
+                if keyword != AutoKeyword::GnuAutoType =>
+            {
                 self.auto_not_allowed(loc, keyword, site::HERE);
                 QualType::ERROR
             }
