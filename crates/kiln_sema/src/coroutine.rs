@@ -1331,7 +1331,7 @@ impl Sema<'_, '_> {
         // findDeleteForPromise: the class's, else the global one; the
         // sized form is preferred.
         let dels = self.alloc_fns(promise_ty, OO::Delete, false, loc);
-        let mut del = self.usual_delete(&dels.fns, false, false, true);
+        let mut del = self.usual_delete(&dels.fns, false, false, true, false);
         if del.is_none() && dels.in_class {
             let rty = self.tag_type(rec);
             self.no_suitable_delete(OO::Delete, rty, &dels.fns, loc);
@@ -1339,7 +1339,7 @@ impl Sema<'_, '_> {
         }
         if del.is_none() {
             let g = self.alloc_fns(promise_ty, OO::Delete, true, loc);
-            del = self.usual_delete(&g.fns, false, false, true);
+            del = self.usual_delete(&g.fns, false, false, true, false);
         }
         let (del, _) = del?;
         self.mark_function_referenced(del, loc);
