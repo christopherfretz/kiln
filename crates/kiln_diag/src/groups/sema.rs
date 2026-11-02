@@ -31,6 +31,7 @@ DeprecatedDeclarations = "deprecated-declarations" [];
 DeprecatedLiteralOperator = "deprecated-literal-operator" [];
 DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
 DeprecatedThisCapture = "deprecated-this-capture" [];
+DeprecatedVolatile = "deprecated-volatile" [];
 DivisionByZero = "division-by-zero" [];
 DynamicExceptionSpec = "dynamic-exception-spec" [];
 EmptyBody = "empty-body" [];

@@ -1092,6 +1092,20 @@ impl Sema<'_, '_> {
                     if fp16_bad {
                         return QualType::ERROR;
                     }
+                    // [depr.volatile.type]/2 (C++20 [dcl.fct]/12): a
+                    // volatile-qualified return type is deprecated, at the
+                    // function declarator's '(' or a trailing return
+                    // type's `auto` (clang's `warn_deprecated_volatile_return`;
+                    // not before C++20).
+                    if self.std >= kiln_lex::Std::Cxx20
+                        && self.ast.types.effective_quals(ty).contains(Quals::VOLATILE)
+                    {
+                        let at = if trailing.is_some() { spec_loc } else { *loc };
+                        let msg = self
+                            .diag(DiagId::sema_deprecated_volatile_return, at)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                    }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }

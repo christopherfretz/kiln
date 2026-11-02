@@ -636,7 +636,18 @@ Redeclaration and linkage rules:
   is diagnosed at that `auto` type-specifier when the return type is
   trailing (the inner `auto` of a nested `auto (*)() -> F`; also after
   substitution), otherwise at the function declarator's `(`, as clang
-  (`dcl.fct/return-function-type-trailing.cpp`).
+  (`dcl.fct/return-function-type-trailing.cpp`). A lambda has no
+  `auto` to point at: its trailing-return checks use the lambda
+  declarator's `(`.
+- **Volatile return types** ([depr.volatile.type]/2, C++20 and later):
+  a function declarator whose return type is volatile-qualified (also
+  through a typedef; not a pointer to volatile) warns
+  `volatile-qualified return type T is deprecated`
+  [-Wdeprecated-volatile] (`sema_deprecated_volatile_return`, in
+  `-Wdeprecated`), at the same location as the array/function return
+  check. Not re-checked after template substitution (clang warns for
+  `T f()` with `T = volatile int`). Tests:
+  `depr.volatile.type/volatile-return{,-cxx17}.cpp`.
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.

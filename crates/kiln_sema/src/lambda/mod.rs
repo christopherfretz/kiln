@@ -277,7 +277,18 @@ impl Sema<'_, '_> {
             }
         }
         let base = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
-        let mut ty = self.type_for_declarator_at(base, lbracket, &d);
+        // A trailing return type's checks (array or function return,
+        // volatile return) point at the lambda declarator's '(' as clang
+        // (there is no `auto` type-specifier to point at).
+        let lparen = d
+            .chunks
+            .iter()
+            .find_map(|c| match c {
+                Chunk::Function { loc, .. } => Some(*loc),
+                _ => None,
+            })
+            .unwrap_or(lbracket);
+        let mut ty = self.type_for_declarator_at(base, lparen, &d);
         // clang `getDummyLambdaType`: with no parameter-declaration-clause
         // the call operator's type is `auto () const -> R`.
         if !specs.explicit_params

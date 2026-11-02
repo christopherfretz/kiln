@@ -280,7 +280,8 @@ impl Parser<'_, '_> {
         if !self.at(Punct::Comma) {
             return false;
         }
-        let d = self.s.diag(DiagId::parse_multiple_template_declarators, self.loc()).arg(kind as u8);
+        let d =
+            self.s.diag(DiagId::parse_multiple_template_declarators, self.loc()).arg(kind as u8);
         self.emit(d);
         self.skip_until(&[Punct::RBrace], true, false);
         true
