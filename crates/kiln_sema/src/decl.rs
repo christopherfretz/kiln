@@ -3965,6 +3965,29 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// The `void` half of [`Sema::act_on_init_inner`]: reports a `void`
+    /// variable unless `reported` at its declaration, invalidates it and
+    /// drops the initializer.
+    fn reject_void_init(
+        &mut self,
+        v: DeclId,
+        ty: QualType,
+        reported: bool,
+        init: &Initializer,
+    ) -> bool {
+        if !self.ast.types.is_void(ty) {
+            return false;
+        }
+        if !reported {
+            let loc = self.ast.decls.get(v).loc();
+            let msg = self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty));
+            self.emit(msg);
+        }
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.discard_initializer(init);
+        true
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -4021,13 +4044,8 @@ impl Sema<'_, '_> {
         // variable was declared ([`Sema::check_void_init_var`]); `auto x =
         // f();` with a `void` f is reported here (clang
         // `err_typecheck_decl_incomplete_type`). `x` gets no initializer.
-        if self.ast.types.is_void(ty) {
-            if !vn.flags().contains(DeclFlags::INVALID) || deduced {
-                let msg = self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty));
-                self.emit(msg);
-            }
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
-            self.discard_initializer(&init);
+        let reported = vn.flags().contains(DeclFlags::INVALID) && !deduced;
+        if self.reject_void_init(v, ty, reported, &init) {
             return;
         }
         if self.constexpr_var_non_literal(v) {

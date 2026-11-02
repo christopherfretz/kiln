@@ -334,16 +334,21 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             // diagnosed by the declaration parser): no expression has a
             // name or a decl-specifier there (clang's
             // `isCXXDeclarationSpecifier` on a dependent `annot_cxxscope`).
-            NameClass::Dependent if end > self.i + 1 => {
-                if self.ident_at(end).is_some() {
-                    return Tpr::True;
-                }
-                let next = Scan { p: self.p, i: end, declared: self.declared.clone() };
-                match next.decl_specifier(Tpr::False) {
-                    Tpr::True | Tpr::Error => Tpr::True,
-                    _ => Tpr::False,
-                }
-            }
+            NameClass::Dependent if end > self.i + 1 => self.after_dependent_name(end),
+            _ => Tpr::False,
+        }
+    }
+
+    /// The `NameClass::Dependent` arm of [`Scan::decl_specifier`]: the
+    /// qualified name ends at `end`; an identifier or a decl-specifier
+    /// after it makes it a (typename-less) type.
+    fn after_dependent_name(&self, end: usize) -> Tpr {
+        if self.ident_at(end).is_some() {
+            return Tpr::True;
+        }
+        let next = Scan { p: self.p, i: end, declared: self.declared.clone() };
+        match next.decl_specifier(Tpr::False) {
+            Tpr::True | Tpr::Error => Tpr::True,
             _ => Tpr::False,
         }
     }
