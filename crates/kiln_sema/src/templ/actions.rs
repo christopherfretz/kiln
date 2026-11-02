@@ -602,6 +602,57 @@ impl Sema<'_, '_> {
         Ok(())
     }
 
+    /// The arguments of the dependent specialization `tmpl<args>` of class
+    /// template `tmpl` completed with the default arguments of the
+    /// parameters not written ([temp.arg.general]/9), each substituted
+    /// with the arguments before it; `None` when nothing is missing, when
+    /// a pack is involved, or when a default cannot be substituted yet
+    /// (the specialization then stands as written).
+    fn dependent_spec_full_args(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        l: Loc,
+    ) -> Option<Vec<TemplateArg>> {
+        let head = self.head_template(tmpl);
+        let params = self.template_params(head);
+        if args.len() >= params.len()
+            || params.iter().any(|&p| self.ast.template_parm(p).is_some_and(|x| x.pack))
+            || args.iter().any(|&a| self.is_pack_expansion_arg(a))
+        {
+            return None;
+        }
+        let depth = self.template_param_depth(head);
+        let first = self.ast.first(tmpl);
+        let mut out = args.to_vec();
+        for &p in &params[args.len()..] {
+            let def = self.template_default(p)?;
+            let dependent = self
+                .ast
+                .types
+                .arg_flags(def)
+                .intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK);
+            if !dependent {
+                out.push(def);
+                continue;
+            }
+            let levels = self.prior_levels(first, depth, &out);
+            let so_far = self.ast.types.arg_list(&out);
+            let (r, failed) = self.in_sfinae(
+                crate::templ::stack::FrameKind::DefaultTemplateArg,
+                first,
+                Some(so_far),
+                l,
+                |s| crate::templ::subst::Substituter::new(s, &levels).template_arg(def, l),
+            )?;
+            match (r, failed) {
+                (Ok(a), Ok(())) => out.push(a),
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
     /// `name < args >` ([temp.names]): what the template-id names, by the
     /// kind of the template. Dependent specializations are built as
     /// written; non-dependent class and alias template specializations
@@ -674,8 +725,20 @@ impl Sema<'_, '_> {
                     return Ok(TemplateIdRef::Type(t));
                 }
                 let list = if ttp { list } else { self.profile_value_args(list) };
+                // [temp.arg.general]/9 with [temp.over.link]/5: the
+                // specialization's canonical form carries the default
+                // arguments of the parameters not written, so
+                // `enable_if<B>` and `enable_if<B, void>` (an alias
+                // template's expansion) are the same type; the written
+                // arguments stay as sugar (clang's converted arguments).
+                let canon = if ttp { None } else { self.dependent_spec_full_args(d, args, l) };
+                let canon = canon.map(|full| {
+                    let full = self.ast.types.arg_list(&full);
+                    let full = self.profile_value_args(full);
+                    self.ast.types.template_specialization(name, full, None, false)
+                });
                 Ok(TemplateIdRef::Type(
-                    self.ast.types.template_specialization(name, list, None, false),
+                    self.ast.types.template_specialization(name, list, canon, false),
                 ))
             }
             DeclKind::TypeAliasTemplate => {
