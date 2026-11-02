@@ -121,6 +121,10 @@ pub(crate) struct LambdaScope {
     /// pack ([temp.variadic]/5; clang's
     /// `LambdaScopeInfo::ContainsUnexpandedParameterPack`).
     has_packs: bool,
+    /// The packs behind `has_packs`: declared outside this lambda
+    /// (clang's `LambdaScopeInfo::LocalPacks` are the complement, which
+    /// are diagnosed in the body; [`Sema::lambda_unexpanded`]).
+    packs: Vec<DeclId>,
     /// `constexpr` was written (the static invoker is then constexpr too).
     explicit_constexpr: bool,
     /// `templ.heads.len()` at the introducer: a deeper head after the
@@ -172,6 +176,7 @@ impl Sema<'_, '_> {
             saved_default_arg: None,
             body_open: false,
             has_packs: false,
+            packs: Vec::new(),
             explicit_constexpr: false,
             heads: self.templ.heads.len(),
             scope_base: self.scopes.len(),
@@ -646,6 +651,9 @@ impl Sema<'_, '_> {
         let ty = self.tag_type(closure);
         let lbracket = self.ast.exprs.lambdas.get(id).lbracket;
         let e = self.builder().lambda_expr(id, ty, top.has_packs, lbracket, rbrace);
+        if !top.packs.is_empty() {
+            self.lambda_packs.insert(id, top.packs);
+        }
         // clang `MaybeBindToTemporary` marks even a trivial destructor
         // referenced, outside a decltype operand.
         let in_decltype = self.decltype_calls.last().is_some_and(|x| x.0 == self.unevaluated);
@@ -663,15 +671,48 @@ impl Sema<'_, '_> {
     }
 
     /// A full-expression or declaration in the innermost lambda's body
-    /// that contains an unexpanded parameter pack: the pack is expanded
-    /// by an expansion enclosing the lambda (`[] { return sizeof(T);
-    /// }()...`; clang `DiagnoseUnexpandedParameterPacks` inside a lambda).
-    pub(crate) fn note_unexpanded_in_lambda(&mut self) {
-        if let Some(top) = self.lambdas.last_mut()
-            && top.body_open
-        {
+    /// that contains an unexpanded parameter pack: a pack declared
+    /// outside the lambda is expanded by an expansion enclosing it
+    /// (`[] { return sizeof(T); }()...`; clang
+    /// `DiagnoseUnexpandedParameterPacks` inside a lambda). The lambda's
+    /// own packs are left to the site's diagnostic.
+    pub(crate) fn note_unexpanded_in_lambda(&mut self, op: crate::templ::pack::PackOperand) {
+        let _ = self.lambda_unexpanded(op);
+    }
+
+    /// [temp.variadic]/12 in the innermost lambda's body ([temp.variadic]/5,
+    /// clang `DiagnoseUnexpandedParameterPacks` with `LocalPacks`): of the
+    /// packs `op` names outside an expansion, those declared in an
+    /// enclosing scope make the lambda-expression contain an unexpanded
+    /// pack (recorded); those declared by the lambda itself (an
+    /// init-capture pack, a parameter pack, a template parameter pack of
+    /// a generic lambda) are returned, for the caller to diagnose. Empty
+    /// outside a lambda body.
+    pub(crate) fn lambda_unexpanded(&mut self, op: crate::templ::pack::PackOperand) -> Vec<DeclId> {
+        let Some(top) = self.lambdas.last() else { return Vec::new() };
+        if !top.body_open {
+            return Vec::new();
+        }
+        let base = top.scope_base;
+        let packs = self.unexpanded_packs(op);
+        let own = |s: &Self, d: DeclId| {
+            s.scopes
+                .get(base..)
+                .is_some_and(|sc| sc.iter().any(|x| x.locals.iter().any(|&(_, l, _)| l == d)))
+        };
+        let (local, outer): (Vec<DeclId>, Vec<DeclId>) =
+            packs.iter().copied().partition(|&d| own(self, d));
+        let flagged = packs.is_empty() && self.operand_has_packs(op);
+        let Some(top) = self.lambdas.last_mut() else { return Vec::new() };
+        if flagged || !outer.is_empty() {
             top.has_packs = true;
         }
+        for d in outer {
+            if !top.packs.contains(&d) {
+                top.packs.push(d);
+            }
+        }
+        local
     }
 
     /// Abandons the innermost lambda (its body failed to parse): the

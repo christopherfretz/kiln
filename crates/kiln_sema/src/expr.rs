@@ -581,7 +581,7 @@ impl Sema<'_, '_> {
         if !self.lambdas.is_empty()
             && self.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
         {
-            self.note_unexpanded_in_lambda();
+            self.note_unexpanded_in_lambda(crate::templ::pack::PackOperand::Expr(e));
         }
         self.check_implicit_conversions(e, cc);
         self.flush_member_refs();

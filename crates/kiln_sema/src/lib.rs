@@ -604,6 +604,11 @@ pub struct Sema<'a, 'sm> {
     /// The lambdas whose bodies are being analysed, innermost last
     /// (spec/sema-lambda.md; WP-075).
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
+    /// The packs of enclosing scopes a finished lambda's body names
+    /// outside an expansion ([`lambda::LambdaScope`]'s `packs`): what
+    /// the lambda-expression's "contains an unexpanded parameter pack"
+    /// diagnostic names.
+    pub(crate) lambda_packs: kiln_source::fx::FxHashMap<kiln_ast::ids::LambdaId, Vec<DeclId>>,
     /// The mangling-number state of closure types (spec/sema-lambda.md).
     pub(crate) lambda_mangle: lambda::ManglingState,
     /// `size_t` as clang 22 spells it: the implicit, unnamed-by-lookup
@@ -768,6 +773,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
             declarator_type_invalid: false,
+            lambda_packs: kiln_source::fx::FxHashMap::default(),
             declspec_restrict_error: None,
             friend_class_template: None,
             inherited_defaults: kiln_source::fx::FxHashMap::default(),

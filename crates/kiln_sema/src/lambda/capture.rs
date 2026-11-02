@@ -321,6 +321,20 @@ impl Sema<'_, '_> {
                 self.add_capture(l, c, cap);
             }
         }
+        // A pack names its pattern ([temp.variadic]/5), as an uncaptured
+        // pack's `DeclRefExpr`: a use of an init-capture pack `xs` of type
+        // `auto...` names an element of a type deduced at instantiation,
+        // a dependent type (clang deduces the pattern's `auto` as
+        // dependent), not `const auto...`.
+        if let kiln_ast::types::TypeView::PackExpansion { pattern, .. } =
+            self.ast.types.view(rf.ty())
+        {
+            rf = if self.contains_undeduced_auto(pattern) {
+                QualType::DEPENDENT
+            } else {
+                self.ast.types.qualify(pattern, rf.quals())
+            };
+        }
         Captured::Yes(rf)
     }
 
