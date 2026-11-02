@@ -2047,7 +2047,7 @@ impl Oven {
         Ok(match info.kind {
             TyKind::Int { width, signed } => canon(v, u32::from(width), signed),
             // A `void *` stored with its tag gets it back (`kbc::VOID_TAG`).
-            TyKind::Ptr(_) if sp.ptr_mark(abs) == crate::mem::PTR_TAGGED => {
+            TyKind::Ptr(_) if sp.ptr_mark(abs) >= crate::mem::PTR_TAGGED => {
                 v | u128::from(self.mem.void_tag(st, abs)) << 64
             }
             _ => v,

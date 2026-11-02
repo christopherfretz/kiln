@@ -12,7 +12,7 @@
 //! Each space keeps, per 8-byte granule, a byte-granular initialization
 //! mask (bit `i` = byte `i` of the granule holds a value) and a pointer
 //! mark (nonzero: the granule holds a pointer, whose bytes are an encoded
-//! [`Ptr`]; [`PTR_TAGGED`]: a `void *` whose designated type is
+//! [`Ptr`]; [`PTR_TAGGED`] and up: a `void *` whose designated type is
 //! [`Memory::void_tag`] of the granule, spec/oven.md "Construction").
 //! Allocations start on a granule boundary.
 //!
@@ -46,9 +46,11 @@ pub(crate) const FN_SLOT: u32 = (1 << 22) - 1;
 /// [`Alloc::base`] of a static allocation that holds no bytes
 /// ([`Memory::alloc_unbacked`]).
 pub(crate) const UNBACKED: u32 = u32::MAX;
-/// The pointer mark of a granule holding a tagged `void *`, whose tag
-/// is in [`Memory::vtags`] ([`Memory::set_void_tag`]).
+/// The first pointer mark of a tagged `void *` ([`Memory::set_void_tag`]).
 pub(crate) const PTR_TAGGED: u8 = 2;
+/// The pointer mark of a tagged `void *` whose type did not fit the
+/// interned marks: its tag is in [`Memory::vspill`].
+pub(crate) const PTR_SPILL: u8 = u8::MAX;
 
 /// A decoded pointer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -266,8 +268,8 @@ pub(crate) struct Space {
     pub bytes: Vec<u8>,
     /// Per granule: bit i = byte i is initialized.
     pub init: Vec<u8>,
-    /// Per granule: holds a pointer (nonzero; [`PTR_TAGGED`]: a tagged
-    /// `void *`, [`Memory::void_tag`]).
+    /// Per granule: holds a pointer (nonzero; [`PTR_TAGGED`] and up: a
+    /// tagged `void *`, [`Memory::void_tag`]).
     pub ptr: Vec<u8>,
     /// Per granule: bit i = byte i is within the lifetime of an object.
     /// Meaningful for [`flags::TRACKED`] allocations only, and empty
@@ -504,13 +506,20 @@ pub(crate) struct Memory {
     /// entry by [`Memory::union_put`].
     pub union_alts: FxHashMap<UKey, u64>,
     /// The designated types of the `void *` values stored to memory
-    /// (`kbc::VOID_TAG`), keyed by granule (`sp << 62 | granule`, as
-    /// [`Trial`]'s `seen`). An entry is meaningful while its granule's
-    /// pointer mark is [`PTR_TAGGED`]; one whose granule was since
-    /// overwritten is stale and harmless (the next tagged store to the
-    /// granule replaces it), so writes never clear it. No cap: any number
-    /// of distinct types (spec/oven.md "Construction").
-    vtags: FxHashMap<u64, OTy>,
+    /// (`kbc::VOID_TAG`), interned: pointer mark `PTR_TAGGED + i` is
+    /// `vtags[i]`. Append-only for the translation unit (a rolled-back or
+    /// copied mark stays valid) and at most `PTR_SPILL - PTR_TAGGED`
+    /// long.
+    vtags: Vec<OTy>,
+    vtag_ix: FxHashMap<OTy, u8>,
+    /// The designated types of the `void *` values stored once
+    /// [`Memory::vtags`] is full (mark [`PTR_SPILL`]), keyed by granule
+    /// (`sp << 62 | granule`, as [`Trial`]'s `seen`): no cap on distinct
+    /// types (spec/oven.md "Construction"). An entry is meaningful while
+    /// its granule's mark is [`PTR_SPILL`]; one whose granule was since
+    /// overwritten is stale and harmless (the next spilled store there
+    /// replaces it), so writes never clear it.
+    vspill: FxHashMap<u64, OTy>,
     /// Bytes allocated (cumulative, granule-rounded; frame and heap).
     pub allocated: u64,
     /// Peak live bytes: `frame.top + heap_live`.
@@ -563,7 +572,9 @@ impl Memory {
             ctx: 0,
             unions: FxHashMap::default(),
             union_alts: FxHashMap::default(),
-            vtags: FxHashMap::default(),
+            vtags: Vec::new(),
+            vtag_ix: FxHashMap::default(),
+            vspill: FxHashMap::default(),
             allocated: 0,
             peak: 0,
             arena_peak: 0,
@@ -575,45 +586,53 @@ impl Memory {
         }
     }
 
-    /// Records the tag bits of a pointer about to be stored at `abs` of
-    /// space `sp` (`v >> 64`, `kbc::VOID_TAG`: a type + 1, or 0) and
-    /// returns the granule's pointer mark: [`PTR_TAGGED`] for a tagged
-    /// `void *`, else 1. The caller logged the granule under the open
-    /// checkpoints (its old entry with it), so this is not logged again.
+    /// The pointer mark of a pointer about to be stored at `abs` of space
+    /// `sp` with register tag bits `tag` (`v >> 64`, `kbc::VOID_TAG`: a
+    /// type + 1, or 0): 1 when untagged, else the tag's interned mark, or
+    /// [`PTR_SPILL`] once every mark is taken, the tag then going to
+    /// [`Memory::vspill`]. The caller logged the granule under the open
+    /// checkpoints (its old spilled tag with it), so this is not logged
+    /// again.
     #[inline]
     pub fn set_void_tag(&mut self, sp: Sp, abs: u64, tag: u32) -> u8 {
         let Some(t) = tag.checked_sub(1).map(OTy) else { return 1 };
-        self.vtags.insert(vkey(sp, abs / GRAN), t);
-        PTR_TAGGED
+        if let Some(&m) = self.vtag_ix.get(&t) {
+            return m;
+        }
+        let m = self.vtags.len() + usize::from(PTR_TAGGED);
+        if m < usize::from(PTR_SPILL) {
+            self.vtags.push(t);
+            self.vtag_ix.insert(t, m as u8);
+            return m as u8;
+        }
+        self.vspill.insert(vkey(sp, abs / GRAN), t);
+        PTR_SPILL
     }
 
     /// The register tag bits (a type + 1, or 0) of the pointer stored at
     /// `abs` of space `sp`.
     #[inline]
     pub fn void_tag(&self, sp: Sp, abs: u64) -> u32 {
-        if self.space(sp).ptr_mark(abs) != PTR_TAGGED {
-            return 0;
+        match self.space(sp).ptr_mark(abs) {
+            0 | 1 => 0,
+            PTR_SPILL => self.spilled(sp, abs / GRAN),
+            m => self.vtags[usize::from(m - PTR_TAGGED)].0 + 1,
         }
-        self.vtags.get(&vkey(sp, abs / GRAN)).map_or(0, |t| t.0 + 1)
     }
 
-    /// The tag of granule `g` of `sp` with pointer mark `mark`: a type
-    /// + 1 when the mark is [`PTR_TAGGED`], else 0.
-    fn gran_vtag(&self, sp: Sp, g: u64, mark: u8) -> u32 {
-        if mark != PTR_TAGGED {
-            return 0;
-        }
-        self.vtags.get(&vkey(sp, g)).map_or(0, |t| t.0 + 1)
+    /// The spilled tag of granule `g` of `sp` (a type + 1, or 0).
+    fn spilled(&self, sp: Sp, g: u64) -> u32 {
+        self.vspill.get(&vkey(sp, g)).map_or(0, |t| t.0 + 1)
     }
 
-    /// Copies the tag entries of the tagged granules among `n` granules
-    /// from granule `sg` of `ssp` to granule `dg` of `dsp`.
-    fn copy_vtags(&mut self, dsp: Sp, dg: u64, ssp: Sp, sg: u64, n: u64) {
+    /// Copies the spilled tags among `n` granules from granule `sg` of
+    /// `ssp` to granule `dg` of `dsp` (different spaces).
+    fn copy_spilled(&mut self, dsp: Sp, dg: u64, ssp: Sp, sg: u64, n: u64) {
         for i in 0..n {
-            if self.space(ssp).ptr[(sg + i) as usize] == PTR_TAGGED
-                && let Some(&t) = self.vtags.get(&vkey(ssp, sg + i))
+            if self.space(ssp).ptr[(sg + i) as usize] == PTR_SPILL
+                && let Some(&t) = self.vspill.get(&vkey(ssp, sg + i))
             {
-                self.vtags.insert(vkey(dsp, dg + i), t);
+                self.vspill.insert(vkey(dsp, dg + i), t);
             }
         }
     }
@@ -635,7 +654,9 @@ impl Memory {
             + self.bins.footprint()
             + self.unions.capacity() * (size_of::<(UKey, u32)>() + 1)
             + self.union_alts.capacity() * (size_of::<(UKey, u64)>() + 1)
-            + self.vtags.capacity() * (size_of::<(u64, OTy)>() + 1)
+            + self.vtags.capacity() * size_of::<OTy>()
+            + self.vtag_ix.capacity() * (size_of::<(OTy, u8)>() + 1)
+            + self.vspill.capacity() * (size_of::<(u64, OTy)>() + 1)
             + self.trial.footprint()
     }
 
@@ -1105,20 +1126,19 @@ impl Memory {
             if src.is_multiple_of(GRAN) && dst.is_multiple_of(GRAN) {
                 let n = len.div_ceil(GRAN);
                 let range = (src / GRAN) as usize..(src / GRAN + n) as usize;
-                let tagged = sp.ptr[range].contains(&PTR_TAGGED);
-                if tagged {
-                    // Before the marks: an overlapping copy reads its
-                    // source entries first.
+                if sp.ptr[range].contains(&PTR_SPILL) {
+                    // Collected first: an overlapping copy reads every
+                    // source entry before writing one.
                     let entries: Vec<(u64, OTy)> = (0..n)
                         .filter_map(|g| {
                             let m = self.space(dst_sp).ptr[(src / GRAN + g) as usize];
-                            (m == PTR_TAGGED)
-                                .then(|| self.vtags.get(&vkey(dst_sp, src / GRAN + g)))
+                            (m == PTR_SPILL)
+                                .then(|| self.vspill.get(&vkey(dst_sp, src / GRAN + g)))
                                 .flatten()
                                 .map(|&t| (vkey(dst_sp, dst / GRAN + g), t))
                         })
                         .collect();
-                    self.vtags.extend(entries);
+                    self.vspill.extend(entries);
                 }
                 let sp = self.space_mut(dst_sp);
                 sp.ptr.copy_within(
@@ -1140,7 +1160,7 @@ impl Memory {
             for g in 0..n {
                 d.ptr[(dst / GRAN + g) as usize] = s.ptr[(src / GRAN + g) as usize];
             }
-            self.copy_vtags(dst_sp, dst / GRAN, src_sp, src / GRAN, n);
+            self.copy_spilled(dst_sp, dst / GRAN, src_sp, src / GRAN, n);
         }
     }
 
@@ -1465,7 +1485,7 @@ struct Checkpoint {
 enum Undo {
     /// A granule of an object that existed at the innermost checkpoint:
     /// bytes and shadow.
-    /// `vtag`: its [`Memory::vtags`] entry when `ptr` is [`PTR_TAGGED`]
+    /// `vtag`: its [`Memory::vspill`] entry when `ptr` is [`PTR_SPILL`]
     /// (a type + 1, else 0).
     Gran { sp: Sp, g: u32, bytes: [u8; 8], init: u8, ptr: u8, life: u8, vtag: u32 },
     /// A union's active-member entry ([`Memory::unions`]).
@@ -1575,7 +1595,7 @@ impl Memory {
             match u {
                 Undo::Gran { sp, g, bytes, init, ptr, life, vtag } => {
                     if let Some(t) = vtag.checked_sub(1) {
-                        self.vtags.insert(vkey(sp, u64::from(g)), OTy(t));
+                        self.vspill.insert(vkey(sp, u64::from(g)), OTy(t));
                     }
                     let s = self.space_mut(sp);
                     let i = g as usize;
@@ -1684,7 +1704,7 @@ impl Memory {
             bytes.copy_from_slice(&s.bytes[i * GRAN as usize..(i + 1) * GRAN as usize]);
             let (init, ptr) = (s.init[i], s.ptr[i]);
             let life = s.life.get(i).copied().unwrap_or(0);
-            let vtag = self.gran_vtag(sp, g, ptr);
+            let vtag = if ptr == PTR_SPILL { self.spilled(sp, g) } else { 0 };
             self.trial.log.push(Undo::Gran { sp, g: g as u32, bytes, init, ptr, life, vtag });
         }
     }
@@ -2222,11 +2242,12 @@ mod tests {
         m.void_tag(sp, abs)
     }
 
-    /// spec/oven.md "Construction" (WP-395): a `void *` tag is kept per
-    /// granule with no cap on the number of distinct types, follows a
-    /// copy, and is restored by a rollback.
+    /// spec/oven.md "Construction" (WP-387, WP-395): `void *` tags
+    /// intern to stable pointer marks and past the mark space spill to a
+    /// per-granule map: no cap on the number of distinct types, and a
+    /// spilled tag follows a copy and is restored by a rollback.
     #[test]
-    fn void_tags_are_per_granule_and_uncapped() {
+    fn void_tags_intern_then_spill() {
         let t = Types::default();
         let mut m = Memory::new(256 * MIB);
         let a = m.alloc(OTy(0), 8 * 400, 0, Origin::None).unwrap();
@@ -2238,6 +2259,13 @@ mod tests {
             put_tagged(&mut m, at(i), i + 1);
         }
         assert!((0..400).all(|i| tag_at(&m, at(i)) == i + 1), "no cliff past 254 types");
+        let mark = |m: &Memory, i: u64| m.space(sp).ptr_mark(abs + 8 * i);
+        assert_eq!((mark(&m, 0), mark(&m, 1), mark(&m, 252)), (PTR_TAGGED, PTR_TAGGED + 1, 254));
+        assert_eq!((mark(&m, 253), mark(&m, 399)), (PTR_SPILL, PTR_SPILL));
+        // An interned type keeps its mark at any granule.
+        put_tagged(&mut m, at(399), 1);
+        assert_eq!((mark(&m, 399), tag_at(&m, at(399))), (PTR_TAGGED, 1));
+        put_tagged(&mut m, at(399), 400);
         // A granule-aligned copy carries the tags (and an overlapping one
         // reads its sources first).
         let (sp, abs, _) = m.check(a, 8, false).unwrap();
@@ -2249,8 +2277,8 @@ mod tests {
         assert_eq!((tag_at(&m, h), tag_at(&m, Ptr::with_off(h, 8, false))), (301, 302));
         // A rollback restores the overwritten tag.
         m.checkpoint(TrialMode::Transactional);
-        put_tagged(&mut m, at(299), 7);
-        assert_eq!(tag_at(&m, at(299)), 7);
+        put_tagged(&mut m, at(299), 450);
+        assert_eq!(tag_at(&m, at(299)), 450);
         m.rollback(&t);
         assert_eq!(tag_at(&m, at(299)), 300);
         // A non-pointer write leaves a stale entry the mark hides.
