@@ -514,12 +514,48 @@ literal is one instruction and one step, not an interpreted loop.
   ill-formed (spec/sema.md §6). Its `NoInitExpr` slots are reached only
   through it.
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
-  constant expression", as clang 19): `__builtin_signbit`, the six
-  ordered comparisons, the math functions; `__builtin_unreachable` when
+  constant expression", as clang 19): the math functions outside the
+  P0533 set below (`sqrt`, `sin`, `exp`, `pow`, ...: `builtin::is_libm`
+  minus `p0533_base`); `__builtin_unreachable` when
   reached; `__builtin_operator_new`/`_delete` outside
   `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
   untyped-memory note; inside them they allocate, "Transient
   allocation", WP-212).
+- **Floating-point math, P0533** (WP-365; `bi::FP_MATH`, sub = float
+  code | op << 4 | `SECOND` for the pointer output; `softfloat::math`):
+  `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`,
+  `lround`/`llround`/`lrint`/`llrint`, `fmod`/`remainder`/`remquo`,
+  `fdim`, `fma`, `frexp`/`ldexp`/`scalbn`/`scalbln`/`ilogb`/`logb`/`modf`,
+  `nextafter`/`nexttoward`, `nextafterf16`/`f16b`, `signbit`, the six
+  comparison macros (`isgreater` ... `isunordered`, quiet: false on NaN)
+  and integer `abs`/`labs`/`llabs` (`bi::IABS`), each in its plain, `f`,
+  `l` and `f128` spellings (`kiln_ast` `builtin::p0533_base`), evaluate
+  exactly in the operand's format: binary16, bfloat16, binary32,
+  binary64, x87 80-bit and binary128 all go through the integer
+  significand code in `softfloat` (no host libm, no host float
+  arithmetic; one rounding, nearest-even, the only mode a constant
+  expression sees). `_Float16`/`__bf16`/`_Float32`/`_Float64` reach the
+  `float`/`double` forms by conversion, as libstdc++'s overloads do.
+  Policy (C23 Annex F, as GCC folds): a call is not a constant
+  (`Fault::Invalid`; "subexpression not valid in a constant expression"
+  inside a function, the bare initializer error at top level) when it
+  raises an IEEE exception other than inexact: invalid (a signaling NaN
+  operand, an out-of-range or NaN `lround`/`lrint` source, `fmod`/
+  `remainder`/`remquo` by zero or of an infinity, inf * 0 or inf - inf in
+  `fma`, `ilogb` of zero/NaN/infinity), overflow (a finite result
+  rounding to infinity in `fma`, `fdim`, `ldexp`, `nextafter`),
+  divide-by-zero (`logb(0)`), or underflow (an inexact subnormal `ldexp`/
+  `fma` result, and every subnormal or zero `nextafter` result, F.10.8.3);
+  `abs` of the most negative value is undefined (a note-less failure,
+  `Fault::Quiet`, so the error lands at the declaration as clang 22's). Exact infinite and NaN
+  results from infinite or quiet-NaN operands are constants. They are
+  evaluated whatever `-fclang-compat` says; codegen's constant-folding
+  prepass leaves them as calls (`clang19_unevaluated`) so the IR still
+  matches clang 19, which evaluates none of them. **Divergences:** GCC
+  14 folds no form of `rint`/`nearbyint`/`lrint` (kiln rounds
+  nearest-even), rejects `fmod(x, inf)` (= x here) and any infinite
+  operand to its MPFR folders (`fma`, `fdim`, `ldexp`), and does not fold
+  the pointer-output `*f128` calls.
 - **Bits** (`bi::CLZ`/`CTZ`/`POPCOUNT`/`BSWAP`): any width up to 128; a
   zero operand to `clz`/`ctz` without the `g` forms' fallback is not a
   constant (no note, as clang).
@@ -676,10 +712,10 @@ literal is one instruction and one step, not an interpreted loop.
   do the GCC `_FloatN` constants libstdc++ `<limits>` names
   (`__builtin_{huge_val,inf,nan,nans}f{16,32,64}`, `__builtin_nansf16b`;
   WP-361, `kiln_ast` `builtin_ids::FLOATN`), converted to the result
-  type; `__builtin_nextafterf16`/`f16b` are declared only and are not
-  constant expressions (nor lowered);
-  `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
-  trap "subexpression not valid", as clang 19. **Divergences:** for the
+  type; `__builtin_nextafterf16`/`f16b` evaluate as the P0533 set above
+  (and lower to an inline bit-level sequence, spec/types.md);
+  `powi`, `verbose_trap` and the non-P0533 `*f128` names trap
+  "subexpression not valid", as clang 19. **Divergences:** for the
   object-size comma rule a call with arguments counts as a read (its
   callee reads them) and one without as none, whatever the callee reads.
 

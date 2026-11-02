@@ -370,6 +370,9 @@ pub(crate) mod bi {
     pub const ROTL: u32 = 4;
     /// `INT_OP`: `__builtin_rotateright*`.
     pub const ROTR: u32 = 5;
+    /// `INT_OP`: `__builtin_abs`/`labs`/`llabs` of the canonical signed
+    /// `a` (WP-365); the most negative value is undefined (a fault).
+    pub const IABS: u32 = 6;
     // WP-270: checked arithmetic.
     /// `__builtin_{add,sub,mul}_overflow` on canonical `a`, `b`: sub = op
     /// (0 add, 1 sub, 2 mul) | `a` signed << 2 | `b` signed << 3 | result
@@ -433,6 +436,56 @@ pub(crate) mod bi {
     pub const FMAX: u32 = 2;
     pub const FMIN: u32 = 3;
     pub const ISINF_SIGN: u32 = 4;
+
+    // WP-365: P0533 constexpr <cmath>.
+    /// A `<cmath>` operation on `a` (`b`, `c`) in the float kind of sub's
+    /// low 4 bits: sub = float kind | `CEIL`..`CMP` << 4 | [`SECOND`]
+    /// (`softfloat::math`; IEEE-exact, GCC's folding rules: an invalid,
+    /// overflowing, inexact-underflowing or signaling-NaN case is not a
+    /// constant).
+    pub const FP_MATH: u32 = 13;
+    /// sub flag of `FP_MATH`: the operation's second result (`frexp`'s
+    /// exponent, `modf`'s integral part, `remquo`'s quotient bits).
+    pub const SECOND: u32 = 1 << 9;
+    /// `FP_MATH` operations: rounding to an integral value of the same
+    /// type.
+    pub const CEIL: u32 = 0;
+    pub const FLOOR: u32 = 1;
+    pub const TRUNC: u32 = 2;
+    pub const ROUND: u32 = 3;
+    pub const ROUNDEVEN: u32 = 4;
+    /// `rint`/`nearbyint`: the default rounding, to nearest even.
+    pub const RINT: u32 = 5;
+    /// `lround`/`llround`, `lrint`/`llrint`: to a signed integer of `t1`
+    /// bits (canonical).
+    pub const LROUND: u32 = 6;
+    pub const LRINT: u32 = 7;
+    pub const FMOD: u32 = 8;
+    pub const REMAINDER: u32 = 9;
+    /// `remquo`: the remainder; with `SECOND` the quotient bits (`int`).
+    pub const REMQUO: u32 = 10;
+    pub const FDIM: u32 = 11;
+    /// `fma(a, b, c)` with one rounding.
+    pub const FMA: u32 = 12;
+    /// `frexp`: the fraction; with `SECOND` the exponent (`int`).
+    pub const FREXP: u32 = 13;
+    /// `ldexp`/`scalbn`/`scalbln(a, b)`, `b` a canonical signed integer.
+    pub const LDEXP: u32 = 14;
+    /// `ilogb(a)` (`int`).
+    pub const ILOGB: u32 = 15;
+    pub const LOGB: u32 = 16;
+    /// `modf`: the fraction; with `SECOND` the integral part.
+    pub const MODF: u32 = 17;
+    /// `nextafter`/`nexttoward(a, b)`, `b` of float kind `t1`.
+    pub const NEXTAFTER: u32 = 18;
+    /// `signbit(a)` (`int` 0 or 1; never faults).
+    pub const SIGNBIT: u32 = 19;
+    /// `isgreater`..`isunordered(a, b)`: `t1` = `cmp::GT`, `GE`, `LT`,
+    /// `LE`, `NE` (`islessgreater`) or [`UNORDERED`]; quiet, never
+    /// faults.
+    pub const CMP: u32 = 20;
+    /// `t1` of `FP_MATH` `CMP`: `isunordered`.
+    pub const UNORDERED: u32 = 6;
 }
 
 /// The aux of `New`.

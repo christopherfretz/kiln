@@ -10,7 +10,7 @@ use kiln_ast::types::TypeView;
 use kiln_ast::{Ast, ExprId, QualType};
 
 use super::{Compiler, float_code, skip_parens};
-use crate::kbc::{Op, ak, bi};
+use crate::kbc::{Op, ak, bi, cmp};
 use crate::softfloat;
 use crate::ty::TyKind;
 
@@ -287,34 +287,30 @@ fn nan_bits(ast: &Ast, mut arg: ExprId, kind: FloatKind, signaling: bool) -> Opt
     Some(softfloat::make_nan(kind, fill, signaling))
 }
 
-/// The builtins lowered to LLVM rounding / fused intrinsics, which clang
-/// 19 does not evaluate.
-fn is_rounding(b: u32) -> bool {
-    matches!(
-        b,
-        id::CEIL
-            | id::CEILF
-            | id::CEILL
-            | id::FLOOR
-            | id::FLOORF
-            | id::FLOORL
-            | id::TRUNC
-            | id::TRUNCF
-            | id::TRUNCL
-            | id::ROUND
-            | id::ROUNDF
-            | id::ROUNDL
-            | id::RINT
-            | id::RINTF
-            | id::RINTL
-            | id::NEARBYINT
-            | id::NEARBYINTF
-            | id::NEARBYINTL
-            | id::FMA
-            | id::FMAF
-            | id::FMAL
-            | id::ROUNDEVENF128
-    )
+/// The `bi::FP_MATH` operation of the P0533 `<cmath>` builtin `b`
+/// (WP-365).
+fn math_op(b: u32) -> Option<u32> {
+    Some(match id::p0533_base(b)? {
+        "ceil" => bi::CEIL,
+        "floor" => bi::FLOOR,
+        "trunc" => bi::TRUNC,
+        "round" => bi::ROUND,
+        "roundeven" => bi::ROUNDEVEN,
+        "rint" | "nearbyint" => bi::RINT,
+        "lround" | "llround" => bi::LROUND,
+        "lrint" | "llrint" => bi::LRINT,
+        "fmod" => bi::FMOD,
+        "remainder" => bi::REMAINDER,
+        "remquo" => bi::REMQUO,
+        "fdim" => bi::FDIM,
+        "fma" => bi::FMA,
+        "frexp" => bi::FREXP,
+        "ldexp" | "scalbn" | "scalbln" => bi::LDEXP,
+        "ilogb" => bi::ILOGB,
+        "logb" => bi::LOGB,
+        "modf" => bi::MODF,
+        _ => bi::NEXTAFTER,
+    })
 }
 
 /// The `bi::INT_OP` operation of the GCC integer builtin `b` (WP-150).
@@ -524,6 +520,7 @@ impl Compiler<'_> {
             | id::COPYSIGN
             | id::COPYSIGNF
             | id::COPYSIGNL
+            | id::COPYSIGNF16
             | id::FMAX
             | id::FMAXF
             | id::FMAXL
@@ -536,7 +533,9 @@ impl Compiler<'_> {
                 };
                 let k = match bid {
                     id::FABS | id::FABSF | id::FABSL => bi::FABS,
-                    id::COPYSIGN | id::COPYSIGNF | id::COPYSIGNL => bi::COPYSIGN,
+                    id::COPYSIGN | id::COPYSIGNF | id::COPYSIGNL | id::COPYSIGNF16 => {
+                        bi::COPYSIGN
+                    }
                     id::FMAX | id::FMAXF | id::FMAXL => bi::FMAX,
                     _ => bi::FMIN,
                 };
@@ -617,16 +616,6 @@ impl Compiler<'_> {
             // Not evaluated by clang 19: the call is not a constant
             // expression, its arguments unevaluated.
             id::UNREACHABLE
-            | id::SIGNBIT
-            | id::ISGREATER
-            | id::ISGREATEREQUAL
-            | id::ISLESS
-            | id::ISLESSEQUAL
-            | id::ISLESSGREATER
-            | id::ISUNORDERED
-            | id::ABS
-            | id::LABS
-            | id::LLABS
             | id::TRAP
             | id::ABORT
             | id::STRRCHR
@@ -645,14 +634,95 @@ impl Compiler<'_> {
             | id::VA_START
             | id::VA_END
             | id::VA_COPY
-            // WP-282: nor `powi`, `copysignf16`, nor `verbose_trap`.
+            // WP-282: nor `powi`, nor `verbose_trap`.
             | id::POWI
             | id::POWIF
             | id::POWIL
-            | id::COPYSIGNF16
             | id::VERBOSE_TRAP => self.trap_loc(begin, INVALID.into()),
-            // The libm functions and the rounding intrinsics.
-            _ if id::is_libm(bid) || is_rounding(bid) => self.trap_loc(begin, INVALID.into()),
+            // WP-365: the P0533 `<cmath>` set, exact in every format.
+            id::SIGNBIT
+            | id::ISGREATER
+            | id::ISGREATEREQUAL
+            | id::ISLESS
+            | id::ISLESSEQUAL
+            | id::ISLESSGREATER
+            | id::ISUNORDERED => {
+                let x = arg(0)?;
+                let Some(fk) = self.float_kind(x) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let (m, c) = match bid {
+                    id::SIGNBIT => (bi::SIGNBIT, 0),
+                    id::ISGREATER => (bi::CMP, cmp::GT),
+                    id::ISGREATEREQUAL => (bi::CMP, cmp::GE),
+                    id::ISLESS => (bi::CMP, cmp::LT),
+                    id::ISLESSEQUAL => (bi::CMP, cmp::LE),
+                    id::ISLESSGREATER => (bi::CMP, cmp::NE),
+                    _ => (bi::CMP, bi::UNORDERED),
+                };
+                let a = self.rv(x);
+                let b = match arg(1) {
+                    Some(y) => self.rv(y),
+                    None => a,
+                };
+                op(self, bi::FP_MATH, float_code(fk) | m << 4, [a, b, dst], [c, 0], begin);
+            }
+            id::ABS | id::LABS | id::LLABS => {
+                let x = arg(0)?;
+                let w = self.int_width(x);
+                let a = self.rv(x);
+                op(self, bi::INT_OP, w | bi::IABS << 8, [a, dst, dst], [0, 0], begin);
+            }
+            _ if math_op(bid).is_some() => {
+                let m = math_op(bid)?;
+                let x = arg(0)?;
+                let Some(fk) = self.float_kind(x) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let sub = float_code(fk) | m << 4;
+                let a = self.rv(x);
+                // The second operand (`fma`: and third); the pointer
+                // operand of `frexp`/`modf`/`remquo`.
+                let (n, out) = match m {
+                    bi::FREXP | bi::MODF => (1, arg(1)),
+                    bi::REMQUO => (2, arg(2)),
+                    bi::FMA => (3, None),
+                    bi::FMOD
+                    | bi::REMAINDER
+                    | bi::FDIM
+                    | bi::LDEXP
+                    | bi::NEXTAFTER => (2, None),
+                    _ => (1, None),
+                };
+                let b = if n >= 2 { self.rv(arg(1)?) } else { a };
+                let c = if n >= 3 { self.rv(arg(2)?) } else { a };
+                let t1 = match m {
+                    bi::LROUND | bi::LRINT => self.int_width(e),
+                    bi::NEXTAFTER => match self.float_kind(arg(1)?) {
+                        Some(k) => float_code(k),
+                        None => float_code(fk),
+                    },
+                    _ => 0,
+                };
+                let p = out.map(|o| (self.rv(o), self.ast().exprs.get(o).ty()));
+                op(self, bi::FP_MATH, sub, [a, b, c], [t1, 0], begin);
+                if let Some((p, pq)) = p {
+                    let rt = self.ty(self.ast().types.pointee(pq)?);
+                    let v = self.reg();
+                    self.emit_site(
+                        Op::Builtin,
+                        bi::FP_MATH | (sub | bi::SECOND) << 8,
+                        &[v, a, b, c, t1, 0],
+                        e,
+                        begin,
+                    );
+                    self.emit_site(Op::Store, ak::ASSIGN, &[p, v, rt.0], e, begin);
+                }
+            }
+            // The other libm functions and the rounding intrinsics.
+            _ if id::is_libm(bid) => self.trap_loc(begin, INVALID.into()),
             // WP-171: clang constant-evaluates no coroutine builtin.
             _ if id::is_coro(bid) => self.trap_loc(begin, INVALID.into()),
             id::STRLEN | id::WCSLEN => {
