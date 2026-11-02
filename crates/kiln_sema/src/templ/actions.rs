@@ -1306,9 +1306,11 @@ impl Sema<'_, '_> {
         if style == crate::expr::CastStyle::Functional {
             return self.builder().unresolved_construct(ty, &[e], false, loc, rparen);
         }
-        let vk = match self.ast.types.view(ty.ty()) {
-            TypeView::LValueRef(_) => ValueCategory::LValue,
-            TypeView::RValueRef(_) => ValueCategory::XValue,
+        // Through sugar: `static_cast<result_type>(b)` with a member
+        // `typedef X<R>& result_type;` is an lvalue (libstdc++ future:751).
+        let vk = match self.ast.types.canonical_kind(ty) {
+            TypeKind::LValueRef => ValueCategory::LValue,
+            TypeKind::RValueRef => ValueCategory::XValue,
             _ => ValueCategory::PRValue,
         };
         let to = self.non_reference(ty);
