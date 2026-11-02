@@ -3456,11 +3456,26 @@ impl Sema<'_, '_> {
         }
         let single = (args.len() == 1 && braced[0].is_none()).then(|| args[0]);
         if kids.iter().any(|&e| self.expr_is_type_dependent(e)) {
-            if let Some(idx) = single {
+            if let Some(idx) =
+                single.filter(|&i| self.ast.exprs.get(i).kind() != ExprKind::PackExpansionExpr)
+            {
                 return self.act_on_subscript(base, idx, loc);
             }
-            self.templ_unimplemented("dependent multi-argument subscripts", loc);
-            return self.recover_err(&kids, loc);
+            // clang `CreateOverloadedArraySubscriptExpr`: several indices
+            // or a pack expansion (`m[is...]`, [expr.sub]/1) make a
+            // dependent `operator[]` call with an empty lookup set,
+            // resolved when instantiated.
+            let name = DeclName::operator(kiln_ast::names::OverloadedOperator::Subscript);
+            let callee = self.builder().unresolved_lookup(name, &[], true, None, None, loc);
+            return self.builder().operator_call(
+                kiln_ast::names::OverloadedOperator::Subscript,
+                callee,
+                &kids,
+                QualType::DEPENDENT,
+                ValueCategory::PRValue,
+                loc,
+                end,
+            );
         }
         let mut br = vec![None];
         br.extend(braced.iter().cloned());

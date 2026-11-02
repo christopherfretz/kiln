@@ -31,8 +31,13 @@ fn operator_call_spelling(n: &Json) -> Option<&str> {
     while text(callee, "kind") == Some("ImplicitCastExpr") {
         callee = callee.get("inner")?.as_arr()?.first()?;
     }
-    let decl = callee.get("referencedDecl")?;
-    Some(text(decl, "name")?.strip_prefix("operator")?.trim_start())
+    // A dependent `operator[]` call (`m[is...]`) names its operator by an
+    // `UnresolvedLookupExpr` with an empty lookup set.
+    let name = match text(callee, "kind") {
+        Some("UnresolvedLookupExpr") => text(callee, "name")?,
+        _ => text(callee.get("referencedDecl")?, "name")?,
+    };
+    Some(name.strip_prefix("operator")?.trim_start())
 }
 
 fn id(n: &Json) -> &str {
