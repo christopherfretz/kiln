@@ -24,6 +24,7 @@ mod complex;
 mod consteval;
 pub mod constfold;
 pub mod conv;
+mod coroutine;
 pub mod decl;
 mod decl_attrs;
 pub mod declspec;

@@ -11,7 +11,7 @@
 //! The closure's members and their initializers are made at the lambda's
 //! `}` ([`Sema::finish_captures`]).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, VarSpec};
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprDeps, UnaryOp};
 use kiln_ast::ids::{ExprId, LambdaId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaCapture};
@@ -264,7 +264,7 @@ impl Sema<'_, '_> {
             let cap = self.capture_type(l, i);
             let data = self.ast.exprs.lambdas.get(l);
             let copy = data.captures[i].kind == CaptureKind::ByCopy;
-            let konst = copy && !data.mutable;
+            let konst = copy && self.lambda_capture_const(l);
             let mut rf = self.non_reference(cap);
             if konst {
                 rf = self.ast.types.qualify(rf, Quals::CONST);
@@ -282,7 +282,7 @@ impl Sema<'_, '_> {
             } else {
                 data.default == CaptureDefault::ByRef
             };
-            let mutable = data.mutable;
+            let mutable = !self.lambda_capture_const(l);
             if by_ref {
                 cap = self.ast.types.lvalue_ref_to(rf);
             } else {
@@ -313,6 +313,95 @@ impl Sema<'_, '_> {
             }
         }
         Captured::Yes(rf)
+    }
+
+    /// Whether a capture by copy of lambda `l` is `const` in its body
+    /// ([expr.prim.id.unqual]/3): with an explicit object parameter, when
+    /// the parameter's (referenced) type is const-qualified; otherwise
+    /// unless the lambda is `mutable` (clang
+    /// `LambdaScopeInfo::lambdaCaptureShouldBeConst`).
+    pub(crate) fn lambda_capture_const(&self, l: LambdaId) -> bool {
+        let data = self.ast.exprs.lambdas.get(l);
+        let obj = data.call_op.filter(|&f| self.has_explicit_object(f)).and_then(|f| {
+            let x = self.ast.decls.function(f)?;
+            self.ast.lists.iter::<DeclId>(x.params).next()
+        });
+        match obj.and_then(|p| self.ast.decls.get(p).ty()) {
+            Some(t) => {
+                let t = self
+                    .ast
+                    .types
+                    .pointee(t)
+                    .filter(|_| self.ast.types.is_reference(t))
+                    .unwrap_or(t);
+                self.ast.types.canonical(t).quals().contains(Quals::CONST)
+            }
+            None => !data.mutable,
+        }
+    }
+
+    /// [expr.prim.lambda.closure]/5 (P0847) for a call at `loc` of `f`:
+    /// [`Self::check_lambda_explicit_object_type`] for a specialization
+    /// of a generic lambda's call operator (a non-template one was
+    /// checked where it was declared). Returns false after an error.
+    pub(crate) fn check_lambda_explicit_object_call(&mut self, f: DeclId, loc: Loc) -> bool {
+        let Some(l) = self.ast.call_op_lambda(f) else { return true };
+        let op = self.ast.exprs.lambdas.get(l).call_op;
+        if op.is_some_and(|op| self.ast.first(op) == self.ast.first(f)) {
+            return true;
+        }
+        self.check_lambda_explicit_object_type(f, loc)
+    }
+
+    /// [expr.prim.lambda.closure]/5 (P0847): the explicit object
+    /// parameter of `f`, the call operator of a lambda with a
+    /// lambda-capture, is of the closure type or of a class publicly and
+    /// unambiguously derived from it (clang
+    /// `DiagnoseInvalidExplicitObjectParameterInLambda`). Reports a
+    /// violation at `loc` and returns false.
+    pub(crate) fn check_lambda_explicit_object_type(&mut self, f: DeclId, loc: Loc) -> bool {
+        if !self.has_explicit_object(f) {
+            return true;
+        }
+        let Some(l) = self.ast.call_op_lambda(f) else { return true };
+        let data = self.ast.exprs.lambdas.get(l);
+        if data.default == CaptureDefault::None && data.captures.is_empty() {
+            return true;
+        }
+        let closure = data.closure;
+        let Some(p) =
+            self.ast.decls.function(f).and_then(|x| self.ast.lists.iter::<DeclId>(x.params).next())
+        else {
+            return true;
+        };
+        let Some(t) = self.ast.decls.get(p).ty() else { return true };
+        let t = self.ast.types.pointee(t).filter(|_| self.ast.types.is_reference(t)).unwrap_or(t);
+        let t = QualType::unqual(self.ast.types.canonical(t).ty());
+        if self.ast.types.is_dependent(t) || t == QualType::ERROR {
+            return true;
+        }
+        let Some(r) = self.ast.types.as_record(t) else {
+            return self.lambda_object_not_derived(t, loc);
+        };
+        if self.ast.first(r) == self.ast.first(closure) {
+            return true;
+        }
+        let paths = crate::conv::bases::base_paths(self, r, closure);
+        let Some(path) = paths.first() else {
+            return self.lambda_object_not_derived(t, loc);
+        };
+        let closure_ty = QualType::unqual(self.ast.types.record_type(closure));
+        self.check_lambda_object_base_access(t, closure_ty, path, loc)
+    }
+
+    /// `the type must be the same as, or derived from the lambda`.
+    fn lambda_object_not_derived(&mut self, t: QualType, loc: Loc) -> bool {
+        let m = self
+            .diag(DiagId::sema_explicit_object_lambda_capture_type, loc)
+            .arg(self.ty_arg(t))
+            .arg(0u8);
+        self.emit(m);
+        false
     }
 
     /// Records capture `c` of open lambda `l` with member type `ty`.
@@ -498,7 +587,17 @@ impl Sema<'_, '_> {
                 // pattern's variable, templ/subst/lambda.rs) was checked
                 // in the pattern; the elements of an expanded
                 // init-capture pack `...xs = init` share a name.
-                if c.var.is_none() && names.iter().any(|&(s, _, _)| s == sym) {
+                // [basic.scope.scope]/5 (P2169): init-captures `_` are
+                // name-independent.
+                let placeholder = self.is_placeholder_name(sym);
+                let repeated = names.iter().any(|&(s, _, _)| s == sym);
+                if c.var.is_none()
+                    && repeated
+                    && placeholder
+                    && names.iter().all(|e| e.0 != sym || e.1)
+                {
+                    self.diagnose_placeholder_redecl(nloc);
+                } else if c.var.is_none() && repeated {
                     let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                     self.emit(msg);
                     continue;
@@ -544,9 +643,12 @@ impl Sema<'_, '_> {
             // The elements of a capture pack instantiated from
             // `ts...` share a name, not a variable (templ/subst/lambda.rs
             // names each one).
-            if let Some(&(_, init, _)) =
-                names.iter().find(|&&(s, _, v)| s == sym && (c.var.is_none() || v == Some(var)))
-            {
+            // A capture of `_` after an init-capture `_` (clang).
+            if let Some(&(_, init, _)) = names.iter().find(|&&(s, i, v)| {
+                s == sym
+                    && (c.var.is_none() || v == Some(var))
+                    && !(i && self.is_placeholder_name(s))
+            }) {
                 let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                 self.emit(msg);
                 if !init {
@@ -665,17 +767,69 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Declares the init-capture variables of lambda `id`, whose call
-    /// operator `f` is opening its body, in the body's scope.
-    pub(crate) fn declare_init_captures(&mut self, id: LambdaId, f: DeclId) {
+    /// The init-capture variables of lambda `id`, at its introducer: in
+    /// scope in the *lambda-declarator* ([expr.prim.lambda.capture]/6,
+    /// P2036, a DR) through [`Sema::lambda_init_captures_named`], in the
+    /// enclosing context until the call operator adopts them
+    /// ([`Sema::declare_init_captures`]).
+    pub(crate) fn create_init_capture_vars(&mut self, id: LambdaId) {
         let caps: Vec<InitCapture> =
             self.lambda_scope_mut(id).map(|s| std::mem::take(&mut s.init_caps)).unwrap_or_default();
+        let ctx = self.ctx;
+        let mut vars = Vec::with_capacity(caps.len());
         for ic in caps {
-            let h = DeclHead::new(f, DeclName::ident(ic.name), ic.loc);
-            let v = self.builder().var(h, ic.ty, VarSpec::new(), None);
+            let independent = self.is_placeholder_name(ic.name);
+            let v = self.builder().init_capture_var(
+                ctx,
+                DeclName::ident(ic.name),
+                ic.loc,
+                ic.ty,
+                independent,
+            );
             let _ = self.builder().set_var_init(v, ic.init);
-            self.push_local(ic.name, v);
             self.ast.exprs.lambdas.get_mut(id).captures[ic.index].var = Some(v);
+            vars.push((ic.name, v));
+        }
+        if let Some(s) = self.lambda_scope_mut(id) {
+            s.init_cap_vars = vars;
+        }
+    }
+
+    /// The init-capture variable named `name` of a lambda whose
+    /// introducer was at scope depth `depth` (found by unqualified lookup
+    /// before the scopes below it, after the lambda's template and
+    /// function parameters).
+    /// Several name-independent init-captures `_` are all found
+    /// ([basic.scope.scope]/5), in declaration order.
+    pub(crate) fn lambda_init_captures_named(&self, depth: usize, name: Symbol) -> Vec<DeclId> {
+        let Some(s) = self
+            .lambdas
+            .iter()
+            .rev()
+            .filter(|s| s.scope_base == depth)
+            .find(|s| s.init_cap_vars.iter().any(|e| e.0 == name))
+        else {
+            return Vec::new();
+        };
+        let mut v: Vec<DeclId> =
+            s.init_cap_vars.iter().filter(|e| e.0 == name).map(|e| e.1).collect();
+        let last = v.len() - 1;
+        if !self.ast.decls.get(v[last]).misc().name_independent() {
+            v.drain(..last);
+        }
+        v
+    }
+
+    /// Declares the init-capture variables of lambda `id`, whose call
+    /// operator `f` is opening its body, in the body's scope: `f`
+    /// adopts the variables [`Sema::create_init_capture_vars`] made.
+    pub(crate) fn declare_init_captures(&mut self, id: LambdaId, f: DeclId) {
+        let vars: Vec<(Symbol, DeclId)> =
+            self.lambda_scope_mut(id).map(|s| s.init_cap_vars.clone()).unwrap_or_default();
+        let dependent = self.ast.templates.dependent_depth > 0;
+        for (name, v) in vars {
+            self.ast.decls.set_init_capture_owner(v, f, dependent);
+            self.push_local(name, v);
         }
     }
 
@@ -692,7 +846,7 @@ impl Sema<'_, '_> {
         let Some(i) = data.captures.iter().position(|c| c.kind == CaptureKind::StarThis) else {
             return outer;
         };
-        let konst = !data.mutable;
+        let konst = self.lambda_capture_const(id);
         let mut t = self.capture_type(id, i);
         if konst {
             t = self.ast.types.qualify(t, Quals::CONST);

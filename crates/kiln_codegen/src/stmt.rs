@@ -31,8 +31,10 @@ impl Cg<'_> {
     /// without a lexical scope of its own).
     pub(crate) fn emit_body(&mut self, body: StmtId) -> R<()> {
         let ast = self.ast;
-        if ast.stmts.get(body).kind() == StmtKind::CompoundStmt {
-            return self.emit_compound_without_scope(body);
+        match ast.stmts.get(body).kind() {
+            StmtKind::CompoundStmt => return self.emit_compound_without_scope(body),
+            StmtKind::CoroutineBodyStmt => return self.emit_coroutine_body(body),
+            _ => {}
         }
         self.emit_stmt(body)
     }
@@ -75,9 +77,17 @@ impl Cg<'_> {
     /// pops the cleanups pushed since `s` began, then pushes the
     /// lifetime-extended ones; a lexical scope rescopes its labels.
     pub(crate) fn end_scope(&mut self, s: Scope) {
+        self.end_scope_reload(s, &mut []);
+    }
+
+    /// `ForceCleanup(ValuesToReload)`: [`Cg::end_scope`], keeping the
+    /// values in `reload` usable at the insertion point when the popped
+    /// cleanups are shared with a branch out of the scope (a `co_await`
+    /// suspension's destroy path, a statement expression's jump).
+    pub(crate) fn end_scope_reload(&mut self, s: Scope, reload: &mut [&mut V]) {
         let labels = if s.lexical { self.f.lex_labels.pop() } else { None };
         self.deactivate_deferred(s.deferred);
-        self.pop_cleanup_blocks_le(s.depth, s.le);
+        self.pop_cleanup_blocks_le_reload(s.depth, s.le, reload);
         self.f.cl.cur_scope = s.old_cur;
         self.f.did_stack_save = s.old_stack_save;
         if let Some(labels) = labels
@@ -294,6 +304,8 @@ impl Cg<'_> {
             }
             StmtKind::CXXTryStmt => self.emit_try_stmt(s),
             StmtKind::GCCAsmStmt => self.emit_asm(s),
+            StmtKind::CoreturnStmt => self.emit_coreturn(s),
+            StmtKind::CoroutineBodyStmt => self.emit_coroutine_body(s),
             k => err(Some(n.loc()), format!("statement {k:?} is not supported yet")),
         }
     }
@@ -317,34 +329,42 @@ impl Cg<'_> {
                 self.store(t, flag, 1, false);
             }
         } else if let Some(e) = rv {
-            let q = ast.exprs.get(e).ty();
-            let ret_ref = self.f.sig.as_ref().is_some_and(|g| self.referee(g.ret).is_some());
-            if ast.types.is_void(q) || self.f.ret_slot.is_none() {
-                self.emit_ignored(e)?;
-            } else if ret_ref {
-                let p = self.emit_ref_binding(e)?;
-                let slot = self.f.ret_slot.expect("return slot");
-                self.store(p, slot.v, slot.align, false);
-            } else if self.is_aggregate(q) || self.is_atomic_aggregate(q) {
-                let slot = self.f.ret_slot.expect("return slot");
-                self.emit_agg_slot(e, slot, false, false)?;
-            } else if self.is_complex(q) {
-                let v = self.emit_complex(e)?;
-                let slot = self.f.ret_slot.expect("return slot");
-                self.cx_store(v, slot, q);
-            } else {
-                let v = self.emit_scalar(e)?;
-                let slot = self.f.ret_slot.expect("return slot");
-                if self.f.ret_kind == RetKind::Sret {
-                    self.store_scalar(v, slot, q);
-                } else {
-                    self.store(v, slot.v, slot.align, false);
-                }
-            }
+            self.store_return_value(e)?;
         }
         self.end_scope(sc);
         let rd = self.f.ret_dest.expect("return destination");
         self.branch_through_cleanup(rd);
+        Ok(())
+    }
+
+    /// Evaluates the returned expression `e` into the return slot
+    /// (clang `EmitReturnStmt` without the branch).
+    pub(crate) fn store_return_value(&mut self, e: ExprId) -> R<()> {
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let ret_ref = self.f.sig.as_ref().is_some_and(|g| self.referee(g.ret).is_some());
+        if ast.types.is_void(q) || self.f.ret_slot.is_none() {
+            self.emit_ignored(e)?;
+        } else if ret_ref {
+            let p = self.emit_ref_binding(e)?;
+            let slot = self.f.ret_slot.expect("return slot");
+            self.store(p, slot.v, slot.align, false);
+        } else if self.is_aggregate(q) || self.is_atomic_aggregate(q) {
+            let slot = self.f.ret_slot.expect("return slot");
+            self.emit_agg_slot(e, slot, false, false)?;
+        } else if self.is_complex(q) {
+            let v = self.emit_complex(e)?;
+            let slot = self.f.ret_slot.expect("return slot");
+            self.cx_store(v, slot, q);
+        } else {
+            let v = self.emit_scalar(e)?;
+            let slot = self.f.ret_slot.expect("return slot");
+            if self.f.ret_kind == RetKind::Sret {
+                self.store_scalar(v, slot, q);
+            } else {
+                self.store(v, slot.v, slot.align, false);
+            }
+        }
         Ok(())
     }
 
@@ -365,11 +385,12 @@ impl Cg<'_> {
         if let Some(i) = d.init {
             self.emit_stmt(i)?;
         }
-        if let Some(v) = d.cond_var {
-            self.emit_var_decl(v)?;
-        }
+        let deferred = match d.cond_var {
+            Some(v) => self.emit_cond_var_decl(v)?.then_some(v),
+            None => None,
+        };
         let cond = d.cond.expect("if condition");
-        if let Some(b) = self.fold_bool(cond) {
+        if let Some(b) = self.fold_bool(cond).filter(|_| deferred.is_none()) {
             let (live, dead) = if b { (d.then, d.els) } else { (d.els, d.then) };
             if kind == IfKind::Constexpr || !dead.is_some_and(|x| self.contains_label(x)) {
                 if let Some(l) = live {
@@ -384,7 +405,13 @@ impl Cg<'_> {
         let then_b = self.f.fir.create_block();
         let end_b = self.f.fir.create_block();
         let else_b = if d.els.is_some() { self.f.fir.create_block() } else { end_b };
-        self.branch_on_bool(cond, then_b, else_b)?;
+        if let Some(v) = deferred {
+            let cv = self.eval_bool(cond)?;
+            self.emit_binding_vars(v)?;
+            self.cond_br(cv, then_b, else_b);
+        } else {
+            self.branch_on_bool(cond, then_b, else_b)?;
+        }
         self.emit_block(then_b, false);
         if let Some(t) = d.then {
             let sc = self.begin_scope(false);
@@ -479,11 +506,15 @@ impl Cg<'_> {
         let end = self.jump_dest_here();
         self.f.jumps.push(Jump { brk: end, cont: Some(header) });
         let cond_scope = self.begin_scope(false);
-        if let Some(v) = d.cond_var {
-            self.emit_var_decl(v)?;
-        }
+        let deferred = match d.cond_var {
+            Some(v) => self.emit_cond_var_decl(v)?.then_some(v),
+            None => None,
+        };
         let cond = d.cond.expect("while condition");
         let cv = self.eval_bool(cond)?;
+        if let Some(v) = deferred {
+            self.emit_binding_vars(v)?;
+        }
         let const_true = matches!(self.cint(cv), Some((_, 1, _)));
         let md = self.new_loop_md(Some(cond), d.body);
         self.f.loops.push(LoopFrame { header: header_b, md });
@@ -571,10 +602,17 @@ impl Cg<'_> {
         };
         self.f.jumps.push(Jump { brk: end, cont });
         if let Some(c) = d.cond {
-            if let Some(v) = d.cond_var {
-                self.emit_var_decl(v)?;
+            let deferred = match d.cond_var {
+                Some(v) => self.emit_cond_var_decl(v)?.then_some(v),
+                None => None,
+            };
+            if d.cond_var.is_some() {
                 cont = Some(if d.inc.is_some() { self.jump_dest_here() } else { cond_d });
                 self.f.jumps.last_mut().expect("loop").cont = cont;
+            }
+            let cv = self.eval_bool(c)?;
+            if let Some(v) = deferred {
+                self.emit_binding_vars(v)?;
             }
             let exit = if self.requires_cleanups(&for_scope) {
                 self.f.fir.create_block()
@@ -582,7 +620,6 @@ impl Cg<'_> {
                 end.blk
             };
             let body_b = self.f.fir.create_block();
-            let cv = self.eval_bool(c)?;
             self.cond_br(cv, body_b, exit);
             if exit != end.blk {
                 self.emit_block(exit, false);

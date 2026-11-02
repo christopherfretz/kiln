@@ -185,10 +185,15 @@ impl Cg<'_> {
                 self.emit_throw(e, true)?;
                 return Ok(None);
             }
+            // clang `ScalarExprEmitter::VisitExprWithCleanups`: the value
+            // survives a shared cleanup block (`ForceCleanup({&V})`).
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
-                let r = self.emit_scalar_opt(self.sub(e));
-                self.end_scope(sc);
+                let mut r = self.emit_scalar_opt(self.sub(e));
+                match &mut r {
+                    Ok(Some(v)) => self.end_scope_reload(sc, &mut [v]),
+                    _ => self.end_scope(sc),
+                }
                 return r;
             }
             ExprKind::CXXThisExpr => self.this_value(),
@@ -318,6 +323,12 @@ impl Cg<'_> {
                 let r = self.emit_conditional(c, a, b);
                 self.f.opaque.remove(&common);
                 return r;
+            }
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                return match self.emit_coawait(e, crate::coro::Want::Scalar)? {
+                    crate::coro::Got::Scalar(v) => Ok(v),
+                    _ => Ok(None),
+                };
             }
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Rv(v)) => return Ok(v),
@@ -1806,10 +1817,15 @@ impl Cg<'_> {
                 }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
+            // clang `EmitLValue` of an `ExprWithCleanups`: the address
+            // survives a shared cleanup block (`ForceCleanup({&V})`).
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
-                let r = self.emit_lvalue(self.sub(e));
-                self.end_scope(sc);
+                let mut r = self.emit_lvalue(self.sub(e));
+                match &mut r {
+                    Ok(lv) => self.end_scope_reload(sc, &mut [&mut lv.addr.v]),
+                    Err(_) => self.end_scope(sc),
+                }
                 r
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
@@ -1858,6 +1874,12 @@ impl Cg<'_> {
                 let r = self.cond_lvalue(e, c, a, b);
                 self.f.opaque.remove(&common);
                 r
+            }
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                match self.emit_coawait(e, crate::coro::Want::Lvalue)? {
+                    crate::coro::Got::Lv(lv) => Ok(lv),
+                    _ => err(self.loc_of(e), "co_await glvalue without a value"),
+                }
             }
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Lv(lv)) => Ok(lv),
@@ -2641,6 +2663,10 @@ impl Cg<'_> {
     pub(crate) fn emit_ignored(&mut self, e: ExprId) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
+        if matches!(ast.exprs.get(e).kind(), ExprKind::CoawaitExpr | ExprKind::CoyieldExpr) {
+            self.emit_coawait(e, crate::coro::Want::Ignored)?;
+            return Ok(());
+        }
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
                 if ast.exprs.get(e).kind() == ExprKind::VAArgExpr {
@@ -3230,6 +3256,10 @@ impl Cg<'_> {
             }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
+            }
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                self.emit_coawait(e, crate::coro::Want::Agg(dest, zeroed))?;
+                Ok(())
             }
             ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
                 self.agg_visit(ast.exprs.choose_chosen(e).expect("guarded"), dest, zeroed)
@@ -3968,6 +3998,22 @@ impl Cg<'_> {
     /// `EmitDecl` of a `DecompositionDecl`).
     pub(crate) fn emit_var_decl(&mut self, d: DeclId) -> R<()> {
         self.emit_one_var_decl(d)?;
+        self.emit_binding_vars(d)
+    }
+
+    /// A condition variable ([stmt.pre]/4): only the variable itself. A
+    /// decomposition's tuple-like bindings are initialized after the
+    /// condition is evaluated (P0963; clang `EmitBranchOnBoolExpr` with
+    /// its `ConditionalDecl`), by [`Self::emit_binding_vars`]; whether
+    /// that is still to do is returned.
+    pub(crate) fn emit_cond_var_decl(&mut self, d: DeclId) -> R<bool> {
+        self.emit_one_var_decl(d)?;
+        Ok(self.ast.decls.decomp_bindings(d).is_some())
+    }
+
+    /// The holding variables of decomposition `d`'s tuple-like bindings
+    /// (clang `MaybeEmitDeferredVarDeclInit`).
+    pub(crate) fn emit_binding_vars(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         if let Some(l) = ast.decls.decomp_bindings(d) {
             for b in ast.lists.iter::<DeclId>(l).collect::<Vec<_>>() {
