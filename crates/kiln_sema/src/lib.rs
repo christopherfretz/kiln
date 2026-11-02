@@ -639,7 +639,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
-        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
+        // A capture (range-for begin/end, sema.md §7.6) holds only what would print:
+        // an error in a SFINAE context nested inside it still makes that
+        // substitution fail.
+        let sfinae = d.id().is_some() && !self.inst.stack.is_empty() && self.inst.stack.is_sfinae();
+        if !sfinae && let Some(held) = self.diag_capture.borrow_mut().as_mut() {
             held.push(d);
             return;
         }
