@@ -886,8 +886,17 @@ and returns the scope it names:
     explicit specialization or instantiation is "forward declaration
     of struct cannot have a nested name specifier" at the qualifier
     ([dcl.type.elab]/1, [dcl.enum]/1), reported before the lookup.
-  - A declaration redeclares the tag in the current scope.
+  - A declaration redeclares the tag in the current scope. A class
+    redeclaration `struct N; struct N;` ([class.name]/2) is a new
+    CXXRecordDecl in N's chain (clang `ActOnTag`; the dump's `prev`), as
+    a class template redeclaration is, and a later definition joins
+    that chain. An enumeration redeclaration creates no decl. Test:
+    class.name/redeclaration-ast.cpp.
   - A definition checks for redefinition and kind mismatch.
+  - A type name marks referenced only the declaration lookup found (the
+    latest in its chain; clang `isThisDeclarationReferenced`). An
+    elaborated-type-specifier that finds a tag (`struct N *a`) marks
+    nothing (clang `ActOnTag`).
 - **Enumerations** ([dcl.enum]):
   - enumerators are typed as clang types them
   - a fixed underlying type gets converted-constant-expression checks

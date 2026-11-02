@@ -5009,24 +5009,10 @@ impl Sema<'_, '_> {
     }
 
     /// Marks a type-name's declaration referenced ([basic.def.odr]: clang's
-    /// `isReferenced` for types).
+    /// `isReferenced` for types): the declaration lookup found, not the
+    /// rest of its chain (clang `isThisDeclarationReferenced`).
     pub fn mark_type_referenced(&mut self, d: DeclId) {
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
-        let first = self.ast.first(d);
-        // (Not a class a friend declaration introduced: clang leaves it
-        // unreferenced once a later declaration makes the name visible.)
-        // (Nor a member of an implicit specialization explicitly
-        // specialized: lookup finds the specialization, [temp.expl.spec]/1.)
-        let explicit_member = self
-            .ast
-            .member_spec_info(first)
-            .is_some_and(|(_, m)| m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization);
-        if first != d
-            && self.ast.decls.get(first).misc().friend() != FriendKind::Undeclared
-            && !explicit_member
-        {
-            self.ast.decls.set_flags(first, DeclFlags::REFERENCED);
-        }
     }
 
     pub(crate) fn tag_kind_of(keyword: TagKeyword) -> TagKind {
@@ -5380,7 +5366,8 @@ impl Sema<'_, '_> {
                     }
                     prev = None;
                 } else if use_ == TagUse::Reference {
-                    self.mark_type_referenced(p);
+                    // (Not marked referenced: clang `ActOnTag` marks no
+                    // declaration an elaborated-type-specifier names.)
                     self.check_name_access_as(n, qualifier, p, nloc, LookupKind::Tag);
                     self.diagnose_type_name_use(p, nloc);
                     return p;
@@ -5409,10 +5396,10 @@ impl Sema<'_, '_> {
                     // A class template redeclaration is a new decl with a
                     // `ClassTemplateDecl` of its own (clang
                     // `CheckClassTemplate`; `finish_template_pattern`
-                    // checks its head, [temp.param]/12, /14). A class
-                    // redeclaration creates none, unless only a friend
-                    // declaration introduced it ([namespace.memdef]/3).
-                    if inst || head.is_none() {
+                    // checks its head, [temp.param]/12, /14), and so is a
+                    // class redeclaration `struct N; struct N;` (clang
+                    // `ActOnTag`): both join `p`'s chain (below).
+                    if inst || head.is_none() && is_enum {
                         return p;
                     }
                 }
