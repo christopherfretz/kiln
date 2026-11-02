@@ -916,6 +916,32 @@ impl Parser {
         true
     }
 
+    /// The `run-stdin`/`run-stdin-file` and `stdout`/`stdout-file`
+    /// pairs, each of which may name only one side.
+    fn take_io(&mut self) -> (Option<StdinInput>, Option<StdoutExpect>) {
+        let stdin = match (self.stdin_lines.take(), self.stdin_file.take()) {
+            (Some(_), Some(_)) => {
+                let line = self.stdin_file_line;
+                self.err(line, "`run-stdin` and `run-stdin-file` are mutually exclusive");
+                None
+            }
+            (Some(s), None) => Some(StdinInput::Inline(s)),
+            (None, Some(p)) => Some(StdinInput::File(p)),
+            (None, None) => None,
+        };
+        let stdout = match (self.stdout_lines.take(), self.stdout_file.take()) {
+            (Some(_), Some(_)) => {
+                let line = self.stdout_file_line;
+                self.err(line, "`stdout` and `stdout-file` are mutually exclusive");
+                None
+            }
+            (Some(s), None) => Some(StdoutExpect::Inline(s)),
+            (None, Some(p)) => Some(StdoutExpect::File(p)),
+            (None, None) => None,
+        };
+        (stdin, stdout)
+    }
+
     fn finish(mut self) -> Result<TestSpec, Vec<DirectiveError>> {
         let expect = self.expect.unwrap_or(Expect::CompileOk);
         if expect != Expect::Run {
@@ -959,26 +985,7 @@ impl Parser {
                 self.err(line, "`oven` does not apply to `pp` tests (nothing is evaluated)");
             }
         }
-        let stdin = match (self.stdin_lines.take(), self.stdin_file.take()) {
-            (Some(_), Some(_)) => {
-                let line = self.stdin_file_line;
-                self.err(line, "`run-stdin` and `run-stdin-file` are mutually exclusive");
-                None
-            }
-            (Some(s), None) => Some(StdinInput::Inline(s)),
-            (None, Some(p)) => Some(StdinInput::File(p)),
-            (None, None) => None,
-        };
-        let stdout = match (self.stdout_lines.take(), self.stdout_file.take()) {
-            (Some(_), Some(_)) => {
-                let line = self.stdout_file_line;
-                self.err(line, "`stdout` and `stdout-file` are mutually exclusive");
-                None
-            }
-            (Some(s), None) => Some(StdoutExpect::Inline(s)),
-            (None, Some(p)) => Some(StdoutExpect::File(p)),
-            (None, None) => None,
-        };
+        let (stdin, stdout) = self.take_io();
         if !self.errors.is_empty() {
             return Err(self.errors);
         }

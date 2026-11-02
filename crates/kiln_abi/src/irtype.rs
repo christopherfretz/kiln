@@ -163,7 +163,7 @@ impl<'a> IrTypes<'a> {
     }
 
     /// Follow clang release `major`'s call lowering (`-fclang-compat`):
-    /// from 20 on, an AArch64 C++ empty class goes by value as `i64`
+    /// from 20 on, an `AArch64` C++ empty class goes by value as `i64`
     /// (spec/abi.md §8.21).
     #[must_use]
     pub fn with_clang_compat(mut self, major: u32) -> Self {

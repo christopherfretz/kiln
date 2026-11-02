@@ -122,15 +122,12 @@ impl Substitutions {
                     let name = &tail[..=end];
                     self.named.iter().rev().find(|(n, _)| n == name).map(|(_, v)| (end, v))
                 });
-                match hit {
-                    Some((end, v)) => {
-                        next.push_str(v);
-                        rest = &tail[end + 1..];
-                    }
-                    None => {
-                        next.push_str("%{");
-                        rest = &tail[2..];
-                    }
+                if let Some((end, v)) = hit {
+                    next.push_str(v);
+                    rest = &tail[end + 1..];
+                } else {
+                    next.push_str("%{");
+                    rest = &tail[2..];
                 }
             }
             next.push_str(rest);

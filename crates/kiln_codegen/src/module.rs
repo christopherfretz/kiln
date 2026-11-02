@@ -1936,7 +1936,7 @@ impl<'a> Cg<'a> {
 
     // ---- module trailer ------------------------------------------------
 
-    /// clang 22's AArch64 `"frame-pointer"="non-leaf-no-reserve"` (module
+    /// clang 22's `AArch64` `"frame-pointer"="non-leaf-no-reserve"` (module
     /// flag 4), at compat 22 with an LLVM 22 backend (LLVM 19 rejects the
     /// value; spec/codegen.md §6a).
     fn fp_no_reserve(&self) -> bool {
