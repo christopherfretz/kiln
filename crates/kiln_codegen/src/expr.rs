@@ -4058,9 +4058,47 @@ impl Cg<'_> {
         let (Some(src), true, true) = (args.next(), trivial, empty) else {
             return false;
         };
-        let src = self.ignore_paren_base_casts(src);
+        let mut src = self.ignore_paren_base_casts(src);
+        // `std::move(ce)` and its kin are the lvalue of their argument
+        // (`is_std_builtin`); clang evaluates through them.
+        while let Some(a) = self.std_builtin_call_arg(src) {
+            src = self.ignore_paren_base_casts(a);
+        }
         !(ast.exprs.get(src).kind() == ExprKind::DeclRefExpr
             && ast.decls.var(ast.exprs.decl(src)).is_some_and(|v| v.spec.is_constexpr()))
+    }
+
+    /// The argument of `e` when `e` is a call of a standard function that
+    /// folds to its argument's lvalue (`std::move`, `forward`, `as_const`,
+    /// ...; [`Cg::is_std_builtin`]).
+    fn std_builtin_call_arg(&self, e: ExprId) -> Option<ExprId> {
+        let ast = self.ast;
+        if ast.exprs.get(e).kind() != ExprKind::CallExpr {
+            return None;
+        }
+        let mut c = ast.exprs.callee(e);
+        loop {
+            match ast.exprs.get(c).kind() {
+                ExprKind::ParenExpr => c = ast.exprs.operand(c),
+                ExprKind::ImplicitCastExpr
+                    if matches!(
+                        ast.exprs.cast_kind(c),
+                        CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr
+                    ) =>
+                {
+                    c = ast.exprs.operand(c);
+                }
+                ExprKind::DeclRefExpr => break,
+                _ => return None,
+            }
+        }
+        let d = ast.exprs.decl(c);
+        let mut args = ast.lists.iter::<ExprId>(ast.exprs.call_args(e));
+        let a = args.next()?;
+        // `addressof` returns a pointer: not an lvalue of the argument.
+        let ret = ast.types.proto(ast.decls.get(d).ty()?)?.ret();
+        (args.next().is_none() && self.is_std_builtin(d) && ast.types.is_reference(ret))
+            .then_some(a)
     }
 
     fn stores_for_constant(&mut self, d: DeclId, at: Addr, k: Value, vol: bool) -> R<()> {

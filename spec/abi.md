@@ -590,6 +590,10 @@ points, thunks and method indices are clang's.
     non-empty class type) is stored as its class's base-subobject type,
     as the layout places it, so later fields may use its tail padding
     (WP-158);
+  - a union whose non-virtual size (its data size) is short of its size
+    also gets a `%union.U.base` type, lowered as the union padded to its
+    data size (clang 19 `lowerUnion(isNonVirtualBaseType)`), which a
+    potentially-overlapping member of that union type uses (WP-289);
   - `IrRecord::base_index` and `vbase_index` map each base to its
     element.
 - **Argument passing** (`call.rs`): `can_pass_in_registers` follows

@@ -285,10 +285,16 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `f`/`l` forms) call the function of the unprefixed name, declared
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
-      call site too). The C function's own declaration, used afterwards,
-      reuses that LLVM function (the same-name rule of §2a) rather than
-      declaring a uniqued `strlen.1` that no library defines (WP-286;
-      `tests/codegen/builtins_lib_redecl.cpp`).
+      call site too). The library function and a program's own
+      declaration of it (`extern "C" double pow(double, double)`, or
+      `strlen` after `__builtin_strlen`; separate declarations to sema)
+      share one `@pow` / `@strlen` in either order, by the same-type reuse
+      of a mangled name above, never a uniqued `@pow.1` / `@strlen.1` that
+      no library defines (WP-288, WP-286;
+      `tests/codegen/lib_builtin_shared_decl.cpp`,
+      `tests/codegen/builtins_lib_redecl.cpp`,
+      `tests/conformance/dcl.link/libcxx-pow-run.cpp`,
+      `tests/conformance/expr.const/builtins-lib-redecl-run.cpp`).
     - checked arithmetic (WP-270, clang `EmitBuiltinExpr`;
       `checked.rs`): the typed forms call `llvm.{s,u}{op}.with.overflow`
       at the parameter type and store the value at the result pointer's
@@ -393,8 +399,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     its initializer folds. The exception is a trivial copy or move of
     an empty class, which reads nothing and so folds whatever its source
     is. Like clang's `isConstantInitializer`, it is constant only when
-    its source names a constexpr variable. `E e2 = std::move(e)` emits
-    nothing;
+    its source names a constexpr variable, looking through casts and
+    the std builtins that are their argument's lvalue (`std::move(ce)`,
+    `forward`, `as_const`, `move_if_noexcept`; WP-289). `E e2 =
+    std::move(e)` of a non-constexpr `e` emits nothing;
   - a non-constant aggregate goes through `EmitAggExpr`, with
     `CheckAggExprForMemSetUse` (size > 16 and nonzero*4 <= size gives a
     memset);
