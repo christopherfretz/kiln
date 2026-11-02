@@ -69,7 +69,7 @@ impl Sema<'_, '_> {
     /// definition; clang `computeDeclContext` returns no context for it).
     /// A type found in it is a dependent qualified name, so it needs
     /// `typename` where [temp.res.general]/4 implies none (spec/sema-
-    /// templates.md §5.9). kiln still looks the name up in `c`.
+    /// templates.md §2.3). kiln still looks the name up in `c`.
     pub fn is_unentered_dependent_class(&self, c: DeclId) -> bool {
         self.kind_of(c) == DeclKind::CXXRecord
             && self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)
