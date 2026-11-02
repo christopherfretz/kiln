@@ -979,7 +979,12 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   is the static pointee type of the placement argument before its
   conversion to `void *` (`bi::DYN` when it was `void *` already). As in
   clang 22's `HandlePlacementNew`, the designated object is the `stat`
-  subobject at `p` (for `bi::DYN`, the outermost object there), and it
+  subobject at `p` (for `bi::DYN`, the outermost object there; inside
+  `std::construct_at` and libc++'s `std::__construct_at` the compiler
+  passes `T` instead of `bi::DYN`, since [specialized.construct]/2
+  constructs `*location` and libc++ hands the placement a `void *` from
+  `__voidify`, so a first member or `optional`/`variant` storage at
+  offset 0 is the designated object, `construct-at-member.cpp`), and it
   may hold the new object when its array extent is at least the new
   type's and their element types are the same: `new (a) int[3]` with
   `int a[3]` decayed designates one `int` ("... from 'int' to
