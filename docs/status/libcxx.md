@@ -10,6 +10,7 @@ passes when run as the compiler under `cargo xtask libcxx` (contract:
 
 | Date | kiln main | Scope | pass | fail | xfail | unsupported | pass rate | wall |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-02 | a812270a | stratum B: disjoint 10% sample (790 tests, offset 5 in sorted order) | 730 | 25 | 3 | 31 (4 driver) | **96.2%** | 28 min, -j 3, debug kiln, 20 s timeout, 1 timeout counted as fail, box loaded (6 implementers) |
 | 2026-11-02 | 68822097 | same 10% sample (790 tests) after WP-268…276, 279, 280, 282, 287 | 724 | 41 | 3 | 22 (3 driver) | **94.3%** | 24 min, -j 3, debug kiln, 20 s timeout |
 | 2026-11-02 | c74c7353 | same 10% sample (790 tests) after WP-286, 288, 289, 291, 295 (#52–#56) | 748 | 17 | 3 | 22 (3 driver) | **97.4%** | 26 min, -j 3, debug kiln, 20 s timeout, box loaded (6 implementers) |
 | 2026-11-01 | 1b340ab5 | 10% stratified sample, 790 `std/` tests (every 10th in sorted order) | 555 | 210 | 3 | 22 (3 driver) | 72.3% | 21 min, -j 3, debug kiln, 20 s timeout |
@@ -30,6 +31,21 @@ Only failures are printed; cluster them with
 `grep "FAIL (" sample.log | sed 's/.* — //' | sed "s/'[^']*'/'X'/g" | sort | uniq -c | sort -rn`.
 The log elides symbols as `…`; reproduce a cluster with `kiln++ -fsyntax-only`
 and the harness flags (`spec/libcxx.md`).
+
+## Failure clusters, 2026-11-02 stratum-B sample on a812270a (25 failures)
+
+Of the 25, 13 were already covered by open work at the time: tuple convert_move
+(#60), mdspan ×2 (#58 + WP-302), `-verify`/run-environment ×7 (WP-297: filesystem
+run assertions, deprecated/`codecvt_byname` verify), value-dependent atomic
+constraint after substitution ×2 (WP-307), variant.visit.member ambiguity
+(WP-303), coroutines ×2 (M4). The remaining 12 were rerun on main 37814e13 with
+`-v`: 2 now pass (counted.iterator conformance, range.take/end), 10 remain:
+
+| Cluster | Tests | WP |
+|---|---|---|
+| ranges/iterator concept satisfaction: `!projectable<…>` static_asserts fail; `<::` digraph not split (`enable_borrowed_range<::BorrowedRange>`); `ranges::to` deduces `void`; `invoke_result` hard error inside a concept check | projected.compile, subrange/ctor.range_size, to_std_containers, ranges_remove_copy | WP-309 |
+| Sema: out-of-class static-member definition makes a second lookup result ("reference to 'oa2' is ambiguous"); `construct_at<Holder<Incomplete>*>` completes `Holder` ("field has incomplete type"); unsigned-`abs` warning missing | random.sample, allocator.traits construct, c.math/abs.verify | WP-310 |
+| Run-time: multimap merge `gConstructed == 8`; any emplace throw path `small::count == 1`; `setp.assert` child did not die; `simd_copy` timeout | merge.pass, emplace.pass, setp.assert, simd_copy | WP-310 |
 
 ## Failure clusters, 2026-11-02 sample on c74c7353 (17 failures)
 
