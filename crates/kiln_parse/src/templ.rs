@@ -651,19 +651,22 @@ impl Parser<'_, '_> {
         self.with_greater_op(false, |s| s.parse_declarator(&mut d));
         self.pack_hint = saved;
         // A `...` after the declarator is misplaced (`T a...`, `Ts......a`):
-        // diagnosed, and the parameter is the pack.
-        let misplaced = self.at(Punct::Ellipsis).then(|| self.loc());
+        // diagnosed before the parameter's Sema action (clang reports it
+        // inside the declarator, ahead of its type diagnostics), and the
+        // parameter is the pack.
         let mut pack = d.ellipsis.take().is_some();
+        let end = self.loc();
+        if self.at(Punct::Ellipsis) {
+            let at = self.loc();
+            self.bump();
+            self.misplaced_declarator_ellipsis(&d, at);
+            pack = true;
+        }
         let mut info = self.s.act_on_param_declarator(&ds, &d);
         // An unnamed parameter is located where its name would be
         // (clang's identifier location of an abstract declarator).
         if info.name.is_none() {
-            info.loc = self.loc();
-        }
-        if let Some(at) = misplaced {
-            self.bump();
-            self.misplaced_declarator_ellipsis(&d, at);
-            pack = true;
+            info.loc = end;
         }
         let p = self.s.act_on_non_type_template_param(&info, pack);
         let mut ok = true;

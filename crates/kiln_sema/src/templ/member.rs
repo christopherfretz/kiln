@@ -244,6 +244,35 @@ impl Substituter<'_, '_, '_> {
         v.ok_or(SubstFail)
     }
 
+    /// The substituted type of a member template's non-type parameter
+    /// declared with type `t`. A pack whose type is an expansion of an
+    /// enclosing level's pack (`template<Ts... a>` in `O<int, char>`) is
+    /// an expanded parameter pack ([temp.variadic]/5, [temp.param]/17;
+    /// clang's `isExpandedParameterPack`): one element type per element
+    /// of `Ts`, returned as a type-argument list; its declared type keeps
+    /// the expansion with the known pack (§5.3).
+    fn nttp_param_ty(
+        &mut self,
+        t: kiln_ast::QualType,
+        pack: bool,
+        loc: kiln_source::Loc,
+    ) -> SubstResult<(kiln_ast::QualType, Option<kiln_ast::ids::ArgListId>)> {
+        use crate::templ::pack::{Expansion, type_pattern};
+        use kiln_ast::types::TemplateArg;
+        let Some(pattern) = type_pattern(self.sema, t).filter(|_| pack) else {
+            return Ok((self.ty(t, loc)?, None));
+        };
+        match self.expand_pattern(|s| s.ty(pattern, loc))? {
+            Expansion::Unexpanded(p) => Ok((self.sema.ast.types.pack_expansion(p, None), None)),
+            Expansion::Elements(v) => {
+                let kept = self.kept_pack_pattern(|s| s.ty(pattern, loc))?;
+                let ty = self.sema.ast.types.pack_expansion(kept, None);
+                let v: Vec<TemplateArg> = v.into_iter().map(TemplateArg::ty).collect();
+                Ok((ty, Some(self.sema.ast.types.arg_list(&v))))
+            }
+        }
+    }
+
     /// Substitutes template parameter list `list` of a member template:
     /// new parameters at their retained depth, mapped from the old ones
     /// in [`Substituter::locals`]; defaults substituted now.
@@ -269,8 +298,13 @@ impl Substituter<'_, '_, '_> {
                 ),
                 DeclKind::NonTypeTemplateParm => {
                     let t = self.decl_ty(p);
-                    let ty = self.ty(t, n.loc())?;
-                    self.sema.builder().non_type_template_parm(h, ty, depth, pi.index, pi.pack)
+                    let (ty, expanded) = self.nttp_param_ty(t, pi.pack, n.loc())?;
+                    let np =
+                        self.sema.builder().non_type_template_parm(h, ty, depth, pi.index, pi.pack);
+                    if let Some(l) = expanded {
+                        self.sema.templ.expanded_packs.insert(np, l);
+                    }
+                    np
                 }
                 DeclKind::TemplateTemplateParm => {
                     let Some(inner) = pi.params else { return Err(SubstFail) };

@@ -1,30 +1,36 @@
 // [expr.const]/10.? (C++26, P3068R6), [except.terminate]: an exception
 // that leaves the constant evaluation, leaves a noexcept function, is
 // rethrown with none handled, or is thrown while another is being unwound
-// makes the expression non-constant (the uncaught exception note is worded
-// as clang's P3068 implementation: what(), else the value at the operand).
+// makes the expression non-constant (uncaught: clang's P3068 note wording,
+// what(), else the value at the operand unless its type has size 1).
 //@ skip(clang): neither clang 19 nor clang 22 implements P3068
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 41:15 error "constexpr variable 'a' must be initialized by a constant expression"
-//@ diag: 40:38 note "unhandled exception of type 'int' with content 12 thrown from here"
-//@ diag: 44:15 error "constexpr variable 'b' must be initialized by a constant expression"
-//@ diag: 43:25 note "unhandled exception: boom"
-//@ diag: 47:15 error "constexpr variable 'c' must be initialized by a constant expression"
-//@ diag: 46:31 note "unhandled exception of type 'S' with content {4} thrown from here"
-//@ diag: 50:15 error "constexpr variable 'd' must be initialized by a constant expression"
-//@ diag: 49:45 note "uncaught exception in noexcept function"
-//@ diag: 50:19 note "in call to 'unwrapped()'"
-//@ diag: 53:15 error "constexpr variable 'e' must be initialized by a constant expression"
-//@ diag: 52:32 note "rethrow with no active exception"
-//@ diag: 53:19 note "in call to 'rethrow_none()'"
-//@ diag: 66:15 error "constexpr variable 'f' must be initialized by a constant expression"
-//@ diag: 56:47 note "throw while another exception is already active"
-//@ diag: 60:18 note "in call to 't.~ThrowsInDtor()'"
-//@ diag: 66:19 note "in call to 'while_active()'"
-//@ diag: 61:5 note "currently active exception thrown here"
-//@ diag: 76:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 71:11 note "unhandled exception of type 'double' with content 1.500000e+00 thrown from here"
+//@ diag: 47:15 error "constexpr variable 'a' must be initialized by a constant expression"
+//@ diag: 46:38 note "unhandled exception of type 'int' with content 12 thrown from here"
+//@ diag: 50:15 error "constexpr variable 'b' must be initialized by a constant expression"
+//@ diag: 49:25 note "unhandled exception: boom"
+//@ diag: 53:15 error "constexpr variable 'c' must be initialized by a constant expression"
+//@ diag: 52:31 note "unhandled exception of type 'S' with content {4} thrown from here"
+//@ diag: 56:15 error "constexpr variable 'd' must be initialized by a constant expression"
+//@ diag: 55:45 note "uncaught exception in noexcept function"
+//@ diag: 56:19 note "in call to 'unwrapped()'"
+//@ diag: 59:15 error "constexpr variable 'e' must be initialized by a constant expression"
+//@ diag: 58:32 note "there is no active exception to rethrow"
+//@ diag: 59:19 note "in call to 'rethrow_none()'"
+//@ diag: 72:15 error "constexpr variable 'f' must be initialized by a constant expression"
+//@ diag: 62:47 note "exception thrown out of an object destructor while unrolling another exception"
+//@ diag: 66:18 note "in call to 't.~ThrowsInDtor()'"
+//@ diag: 72:19 note "in call to 'while_active()'"
+//@ diag: 67:5 note "currently active exception thrown here"
+//@ diag: 82:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 77:11 note "unhandled exception of type 'double' with content 1.500000e+00 thrown from here"
+//@ diag: 93:15 error "constexpr variable 'g' must be initialized by a constant expression"
+//@ diag: 92:37 note "unhandled exception of type 'Empty' thrown from here"
+//@ diag: 95:15 error "constexpr variable 'h' must be initialized by a constant expression"
+//@ diag: 94:34 note "unhandled exception of type 'OneChar' thrown from here"
+//@ diag: 97:15 error "constexpr variable 'i' must be initialized by a constant expression"
+//@ diag: 96:35 note "unhandled exception of type 'TwoChars' with content {120, 121} thrown from here"
 namespace std {
 struct exception {
   constexpr exception() noexcept {}
@@ -74,3 +80,18 @@ constexpr int mismatch() {
   return 0;
 }
 static_assert(mismatch() == 0);
+
+// The content is omitted when the operand's type has size 1, as in
+// clang's P3068 branch: an empty class (with a user-declared member
+// function) and a class with one `char` member alike; two `char`s print.
+struct Empty {
+  constexpr int get() const { return 1; }
+};
+struct OneChar { char c; };
+struct TwoChars { char c, d; };
+constexpr int empty_class() { throw Empty(); }
+constexpr int g = empty_class();
+constexpr int one_char() { throw OneChar{'x'}; }
+constexpr int h = one_char();
+constexpr int two_chars() { throw TwoChars{'x', 'y'}; }
+constexpr int i = two_chars();

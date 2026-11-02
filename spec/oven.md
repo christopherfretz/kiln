@@ -1833,7 +1833,7 @@ follow clang trunk's P3068 branch.
   (`expr.throw/constexpr-throw-ctor-throws.cpp`, a 10000-round loop
   under `oven:` budgets).
   `throw;` is `Throw` aux 1 (the innermost handled exception; none:
-  "rethrow with no active exception").
+  "there is no active exception to rethrow").
 - A try-block executes `TryEnter [handler]`, which pushes a handler
   marker onto the cleanup stack (`Cleanup::func == TRY_MARK`, `this` =
   the handler pc), and pops it with the destructions registered inside
@@ -1847,9 +1847,9 @@ follow clang trunk's P3068 branch.
   `Excs::base` for its duration, so a nested evaluation (a
   `static_assert` in a member instantiated by `ensure_body` while the
   outer evaluation unwinds or is in a handler) has nothing to rethrow
-  ("rethrow with no active exception"), counts no uncaught exception,
-  and may throw without "throw while another exception is already
-  active"; an exception escaping it is uncaught in it
+  ("there is no active exception to rethrow"), counts no uncaught
+  exception, and may throw without "exception thrown out of an object
+  destructor while unrolling another exception"; an exception escaping it is uncaught in it
   (`except.handle/constexpr-nested-evaluation.cpp`). Every frame it leaves is checked first: a
   non-throwing function ([except.spec], `SemaBridge::is_nothrow`,
   resolving a deferred specification) ends the evaluation with
@@ -1871,12 +1871,18 @@ follow clang trunk's P3068 branch.
   public base (`dst` = the (sub)object's address; a by-value handler
   copies it); aux 2 a pointer handler: `nullptr_t` to any pointer, the
   same type, a qualification conversion, a conversion to `void *`
-  (object pointers only), or to an unambiguous public base. A virtual
-  base is reached through the thrown pointer's complete object
-  (`Types::has_complete_object`); a pointer to a base-class subobject
-  whose most derived object holds the virtual base is not yet evaluated
-  ("subexpression not valid in a constant expression"; follow-up)
-  (`except.handle/constexpr-catch-virtual-base-ptr.cpp`).
+  (object pointers only), or to an unambiguous public base. A base
+  that is (in) a virtual base is reached through the most derived object
+  of the thrown pointer's (sub)object ([class.mi]/4, `Oven::vbase_ptr`):
+  the object model locates it (`base_owner`: the complete object, member
+  or array element one of whose subobjects of the pointer's class the
+  pointer designates), and the base's offset is that object's virtual
+  base's plus the base's non-virtual offset in it
+  (`except.handle/constexpr-catch-virtual-base-ptr.cpp`,
+  `constexpr-catch-virtual-base-ptr-subobject.cpp`). A pointer the model
+  cannot place (a subobject of a virtual base of an enclosing object,
+  which no constant evaluation creates before P3533) is "subexpression
+  not valid in a constant expression".
   A `const T&` handler
   with `T` a pointer type matches as aux 2 and binds to a temporary
   holding the converted pointer; any other reference handler of pointer
@@ -1891,16 +1897,18 @@ follow clang trunk's P3068 branch.
   leak and a loop that throws and catches keeps a flat heap (the WP-060
   reclaim rule; `expr.throw/constexpr-throw-churn.cpp` runs a throwing
   loop under the harness `mem<=512` limit).
-- An exception escaping a destructor run by unwinding is "throw while
-  another exception is already active", with "currently active exception
-  thrown here" at the first throw.
+- An exception escaping a destructor run by unwinding is "exception
+  thrown out of an object destructor while unrolling another exception"
+  (the P3068 branch's wording), with "currently active exception thrown
+  here" at the first throw (kiln's addition).
 - An exception that leaves the evaluation (no marker of this evaluation)
   fails it, worded as clang's P3068 branch (`notes::uncaught_note`):
   "unhandled exception: W" at the throw-expression, `W` the `what()`
   string of a class derived from `std::exception` (evaluated silently
   through a virtual call); else, or when that call is not constant,
-  "unhandled exception of type 'T' thrown from here" at the operand for
-  a type holding no data, and "unhandled exception of type 'T' with
+  "unhandled exception of type 'T' thrown from here" at the operand when
+  `T` has size 1 (an empty class, a `char`, a class of one `char`: the
+  branch's `getTypeSizeInChars(T).isOne()`), and "unhandled exception of type 'T' with
   content V thrown from here" otherwise, `V` the value as every other
   note prints it (`12`, `{4}`, `1.500000e+00`). The libc++ 22 `std::exception` constructors and `what()` are not
   `constexpr`, so with the library headers only user exception classes
@@ -1939,9 +1947,7 @@ reference handler of pointer type requires the same type, [except.handle]/3.1);
 a function pointer is not caught by `void *` ([conv.ptr]/2 converts
 object pointers only); a constructor's handler rethrows at its end;
 an uncaught exception's content is printed as every Oven note prints a
-value (a class as `{4}`); the branch's "thrown from here" form without
-content is used for a type that holds no data, where the branch uses it
-for a type of size 1.
+value (a class as `{4}`).
 
 ### Unknown references — Landed (WP-357)
 P2280 (C++23 [expr.const]/10, a DR applied from C++23 on, as clang 20+;
