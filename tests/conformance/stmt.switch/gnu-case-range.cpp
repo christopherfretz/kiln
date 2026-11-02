@@ -6,24 +6,26 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ args: -pedantic
-//@ diag: 29:10 warning "use of GNU case range extension"
-//@ diag: 30:10 warning "use of GNU case range extension"
-//@ diag: 31:11 warning "use of GNU case range extension"
+//@ diag: 31:10 warning "use of GNU case range extension"
+//@ diag: 32:10 warning "use of GNU case range extension"
 //@ diag: 33:11 warning "use of GNU case range extension"
 //@ diag: 35:11 warning "use of GNU case range extension"
-//@ diag: 30:8 warning "empty case range specified"
-//@ diag: 29:8 error "duplicate case value '3'"
+//@ diag: 37:11 warning "use of GNU case range extension"
+//@ diag: 32:8 warning "empty case range specified"
+//@ diag: 31:8 error "duplicate case value '3'"
+//@ diag: 36:8 note "previous case defined here"
+//@ diag: 33:8 error "duplicate case value '15'"
 //@ diag: 34:8 note "previous case defined here"
-//@ diag: 31:8 error "duplicate case value '15'"
-//@ diag: 32:8 note "previous case defined here"
-//@ diag: 33:8 error "duplicate case value '20'"
-//@ diag: 31:8 note "previous case defined here"
-//@ diag: 40:23 warning "use of GNU case range extension"
-//@ diag: 40:21 warning "empty case range specified"
-//@ diag: 43:31 note "in instantiation of function template specialization 'g<9, 8>' requested here"
-//@ diag: 40:21 error "duplicate case value '7'"
-//@ diag: 43:44 note "in instantiation of function template specialization 'g<5, 9>' requested here"
-//@ diag: 40:45 note "previous case defined here"
+//@ diag: 35:8 error "duplicate case value '20'"
+//@ diag: 33:8 note "previous case defined here"
+//@ diag: 42:23 warning "use of GNU case range extension"
+//@ diag: 42:21 warning "empty case range specified"
+//@ diag: 45:31 note "in instantiation of function template specialization 'g<9, 8>' requested here"
+//@ diag: 42:21 error "duplicate case value '7'"
+//@ diag: 45:44 note "in instantiation of function template specialization 'g<5, 9>' requested here"
+//@ diag: 42:45 note "previous case defined here"
+//@ requires: clang<22
+// clang 22 emits warning: case ranges are a GNU extension; WP-355 residual
 int f(int x) {
   switch (x) {
   case 1 ... 3: return 1;

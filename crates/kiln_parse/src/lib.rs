@@ -66,6 +66,10 @@ pub struct ParseOptions {
     pub reflection: bool,
     /// `-fcoro-aligned-allocation` ([`kiln_sema::Sema::coro_aligned_allocation`]).
     pub coro_aligned_allocation: bool,
+    /// `-fclang-compat=<major>`: the clang release whose spellings kiln
+    /// reproduces where they differ (spec/pp.md "clang compatibility
+    /// level"; [`kiln_sema::Sema::clang_compat`]).
+    pub clang_compat: u32,
 }
 
 impl Default for ParseOptions {
@@ -80,6 +84,7 @@ impl Default for ParseOptions {
             inst_report: kiln_sema::templ::report::ReportFormat::Off,
             reflection: false,
             coro_aligned_allocation: false,
+            clang_compat: 19,
         }
     }
 }
@@ -201,6 +206,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.reflection = opts.reflection;
     s.coro_aligned_allocation = opts.coro_aligned_allocation;
     s.gnu = opts.gnu;
+    s.clang_compat = opts.clang_compat;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;

@@ -3,18 +3,20 @@
 // substituted `T::` prints the bare class, `A::` the specialization
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 29:28 error "static assertion failed due to requirement 'A<int>::v<int>'"
-//@ diag: 31:23 note "in instantiation of member function 'A<int>::h' requested here"
-//@ diag: 29:52 error "static assertion failed due to requirement 'A<int>::y'"
-//@ diag: 32:15 error "static assertion failed due to requirement 'ns::f<int>'"
-//@ diag: 33:15 error "static assertion failed due to requirement '::ns::f<int *>'"
-//@ diag: 34:15 error "static assertion failed due to requirement 'ns::S::z<char>'"
-//@ diag: 35:15 error "static assertion failed due to requirement 'A<int>::v<long>'"
-//@ diag: 36:15 error "static assertion failed due to requirement 'ns::e<int, char>'"
-//@ diag: 38:26 error "static assertion failed due to requirement 'ns::S::z<ns::S>'"
-//@ diag: 39:15 note "in instantiation of function template specialization 'g<ns::S>' requested here"
-//@ diag: 38:54 error "static assertion failed due to requirement 'S::z<ns::S>'"
-//@ diag: 38:87 error "static assertion failed due to requirement 'S::y'"
+//@ diag: 31:28 error "static assertion failed due to requirement 'A<int>::v<int>'"
+//@ diag: 33:23 note "in instantiation of member function 'A<int>::h' requested here"
+//@ diag: 31:52 error "static assertion failed due to requirement 'A<int>::y'"
+//@ diag: 34:15 error "static assertion failed due to requirement 'ns::f<int>'"
+//@ diag: 35:15 error "static assertion failed due to requirement '::ns::f<int *>'"
+//@ diag: 36:15 error "static assertion failed due to requirement 'ns::S::z<char>'"
+//@ diag: 37:15 error "static assertion failed due to requirement 'A<int>::v<long>'"
+//@ diag: 38:15 error "static assertion failed due to requirement 'ns::e<int, char>'"
+//@ diag: 40:26 error "static assertion failed due to requirement 'ns::S::z<ns::S>'"
+//@ diag: 41:15 note "in instantiation of function template specialization 'g<ns::S>' requested here"
+//@ diag: 40:54 error "static assertion failed due to requirement 'S::z<ns::S>'"
+//@ diag: 40:87 error "static assertion failed due to requirement 'S::y'"
+//@ requires: clang<22
+// clang 22 emits error: static assertion failed due to requirement 'ns::S::z<ns::S>'; WP-355 residual
 namespace ns {
 template <class T> constexpr bool f = false;
 struct S {

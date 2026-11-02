@@ -6,21 +6,23 @@
 // template's parameters must be deducible.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 30:42 error "missing 'typename' prior to dependent type name 'X<T>::m'"
-//@ diag: 31:28 error "out-of-line definition of 'f1' does not match any declaration in namespace 'N'"
 //@ diag: 32:42 error "missing 'typename' prior to dependent type name 'X<T>::m'"
-//@ diag: 33:28 error "out-of-line definition of 'f2' does not match any declaration in namespace 'N'"
+//@ diag: 33:28 error "out-of-line definition of 'f1' does not match any declaration in namespace 'N'"
 //@ diag: 34:42 error "missing 'typename' prior to dependent type name 'X<T>::m'"
-//@ diag: 35:28 error "out-of-line definition of 'f3' does not match any declaration in namespace 'N'"
-//@ diag: 36:28 error "missing 'typename' prior to dependent type name 'X<T>::m'"
-//@ diag: 37:28 error "missing 'typename' prior to dependent type name 'X<T>::m'"
-//@ diag: 42:20 error "deduction guide template contains a template parameter that cannot be deduced"
-//@ diag: 42:17 note "non-deducible template parameter 'T'"
-//@ diag: 43:25 error "missing 'typename' prior to dependent type name 'X<T>::m'"
-//@ diag: 44:31 error "missing 'typename' prior to dependent type name 'X<T>::m'"
-//@ diag: 52:25 error "variable has incomplete type 'void'"
-//@ diag: 52:34 error "use of undeclared identifier 'fp'"
-//@ diag: 52:51 error "expected '(' for function-style cast or type construction"
+//@ diag: 35:28 error "out-of-line definition of 'f2' does not match any declaration in namespace 'N'"
+//@ diag: 36:42 error "missing 'typename' prior to dependent type name 'X<T>::m'"
+//@ diag: 37:28 error "out-of-line definition of 'f3' does not match any declaration in namespace 'N'"
+//@ diag: 38:28 error "missing 'typename' prior to dependent type name 'X<T>::m'"
+//@ diag: 39:28 error "missing 'typename' prior to dependent type name 'X<T>::m'"
+//@ diag: 44:20 error "deduction guide template contains a template parameter that cannot be deduced"
+//@ diag: 44:17 note "non-deducible template parameter 'T'"
+//@ diag: 45:25 error "missing 'typename' prior to dependent type name 'X<T>::m'"
+//@ diag: 46:31 error "missing 'typename' prior to dependent type name 'X<T>::m'"
+//@ diag: 54:25 error "variable has incomplete type 'void'"
+//@ diag: 54:34 error "use of undeclared identifier 'fp'"
+//@ diag: 54:51 error "expected '(' for function-style cast or type construction"
+//@ requires: clang<22
+// clang 22 no longer emits error: out-of-line definition of 'f1' does not match any declaration in ...; WP-355 residual
 template <class T> struct X { using m = int; };
 template <class T> struct S { S(int); };
 

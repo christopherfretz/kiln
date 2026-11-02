@@ -673,17 +673,55 @@ The normative description is spec/driver.md "Code generation". In short:
   native AArch64 host has and an x86-64 host cross-targeting aarch64 (the
   GitHub runner) does not, so the flag keeps the comparison independent of
   the host. A `//@ args: <opts>` line in a case appends
-  `<opts>` to both command lines after it (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
-  must only verify; every other pair must be identical. `KILN_CASE=<stem>`
-  prints both texts; without `opt-19`/`clang++-19` it is skipped. The
+  `<opts>` to both command lines after it (WP-165). The oracle is
+  `clang++-N`/`opt-N` for `N` = `$KILN_ORACLE` (default 22; spec/harness.md
+  "Oracle toolchain"); both texts go through that `opt-N`. `KILN_CASE=<stem>`
+  prints both texts (in the oracle's mode); without `opt-N`/`clang++-N` it
+  is skipped. Each pair is compared in three ways (WP-355,
+  `crates/kiln_codegen/tests/ir_norm/mod.rs`), and the summary line counts
+  all three:
+  - **Exact**: identical after the normalization above. Required under
+    oracle 19 (kiln's codegen mirrors clang 19 `-O0`).
+  - **Structural**: identical after also removing what clang/LLVM
+    releases change without changing the program: comments, metadata
+    lines and `!name !N` attachments, `attributes #N` groups and `#N`
+    references, the `target datalayout` (LLVM 20+ added the
+    `p270/p271/p272` address spaces on AArch64), `align N` (except a
+    `byval` parameter's), GEP and arithmetic flags (`inbounds`, `nuw`,
+    `nsw`, `nusw`, `exact`, `nneg`, `disjoint`, `samesign`,
+    `inrange(..)`), and the non-ABI parameter/return/function attributes
+    (`noundef`, `nonnull`, `noalias`, `nocapture`, `captures(..)`,
+    `dead_on_return`, `dead_on_unwind`, `writable`,
+    `readonly`/`readnone`/`writeonly`, `returned`, `nofree`, `noinline`,
+    `immarg`, `dereferenceable(N)`, `dereferenceable_or_null(N)`,
+    `initializes(..)`, `range(..)`, `nofpclass(..)`, `memory(..)`,
+    `allocsize(..)`, `allocalign`, `allocptr`, `local_unnamed_addr`);
+    each run of consecutive comdat or global lines is sorted (clang 22
+    emits `_ZTI` before `_ZTS`). Instructions, types, constants, names,
+    linkage and function order stay. Required under any other oracle
+    (22).
+  - **ABI slice**: the `target triple`, every named struct type
+    (`%T = type ...`: the record layouts) and every `define`/`declare`
+    signature except `@llvm.*` intrinsics, reduced to calling convention,
+    return type, mangled name and parameter types with the ABI attributes
+    (`byval(T)` and its `align`, `sret`, `inreg`, `signext`, `zeroext`,
+    `byref`, `inalloca`, `preallocated`, `nest`, `swift*`), compared
+    verbatim. Required under every oracle.
+  A `(case, triple, oracle)` entry in the `DEVIATIONS` table allows
+  `Structure` (the mode's comparison may fail; the ABI slice must match),
+  `Abi` (both may fail; the IR must verify) or `OracleInvalid` (the
+  oracle's IR fails verification; only kiln's is verified). An entry that
+  starts matching is reported for removal. The
   corpus is 226 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
   `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
-  work packages' cases): 449/452 pairs exact; `DEVIATIONS` holds
-  `global_init_array_eh`, `eh_array_destroy_throwing_global` and
-  `array_temporary_global` on aarch64 (§7f, §7m).
+  work packages' cases; 258 at WP-355): under oracle 19, 513/516 pairs
+  exact, `DEVIATIONS` holding `global_init_array_eh`,
+  `eh_array_destroy_throwing_global` and `array_temporary_global` on
+  aarch64 (§7f, §7m); under oracle 22, 465/516 structural and 485/516 ABI
+  slices equal, the rest listed (below, "clang 22 codegen").
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
   are compiled, linked and run by kiln and by clang, and their stdout and
@@ -693,6 +731,24 @@ The normative description is spec/driver.md "Code generation". In short:
   `c++config.h` uses `decltype`, which kiln_parse does not support yet.
 
 ### Deviations
+- **clang 22 codegen (WP-355).** kiln's IR follows clang 19 under every
+  `-fclang-compat`; the oracle-22 `DEVIATIONS` entries record where clang
+  20-22 changed: AArch64 empty classes passed by value as `i64` (19:
+  `i8`; an ABI change, GCC's convention), x86-64 `__int128` as `i128`
+  (19: two `i64`s; the same registers), AArch64 aggregates of pointers
+  coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
+  type names, `llvm.modf`, CWG2137's initializer-list constructor for
+  `B{b}` (a sema change kiln should follow), and `-O0` instruction
+  choices (atomic temporaries, `select` for vector `?:`, constant-folded
+  reductions, `undef` widening shuffles, `delete` block order). clang
+  22's IR for a `bool` vector element store fails verification
+  (`vector_ops`). The exception goes the other way: a padded `_Atomic`
+  operand's padding is zeroed (P0528) and a failed compare-exchange
+  writes the old value back to `*expected` (C11 7.17.7.4p2) at every
+  level, as clang 22 does. clang 19 did neither, so `atomic_padded` is an
+  oracle-19 `Structure` deviation. Following them under
+  `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
+  "Residual").
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
@@ -902,6 +958,16 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   references name the external symbol, structor calls the complete
   variant (D1/C1). Implicitly declared special members are not
   instantiations and are still emitted.
+  An inline function carrying `always_inline` on any redeclaration
+  (`Cg::is_always_inline_fn`) is the exception (WP-373): clang emits it
+  `available_externally` and inlines it even at `-O0`, so its program
+  never references the symbol; kiln runs no inliner, so it emits the
+  definition `linkonce_odr` instead. libstdc++'s
+  `allocator<char>::allocate`/`deallocate` are such members under
+  `extern template class allocator<char>`, and libstdc++.so does not
+  export them. Tests:
+  `tests/conformance/temp.explicit/extern-template-always-inline-run.cpp`,
+  `tests/conformance/class.copy.ctor/libstdcxx-string-copy.cpp`.
 - **Explicit instantiation definitions** ([temp.explicit], WP-170;
   `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
   `GVA_StrongODR`): a function or variable that is an explicit
@@ -1298,8 +1364,10 @@ clang 19 `CGAtomic` at -O0, mirrored:
   accesses), at the expression's start, `cg_atomic_misaligned` (size,
   pointer alignment) when the pointer's alignment is not a multiple of
   the size, then `cg_atomic_oversized` (size, max inline width: 16 on
-  aarch64, 8 on x86_64) when the size exceeds it; clang's texts, the
-  latter with its double space before "bytes".
+  aarch64, 8 on x86_64) when the size exceeds it; clang's texts. At
+  `-fclang-compat=19` the latter is `cg_atomic_oversized_19`, clang 19's
+  text with its double space before "bytes" (clang 22 has one;
+  `CodegenOptions::clang_compat`, WP-355).
 - **Validation:** `tests/codegen/atomic_{builtins,orders,lvalues,wide,
   qualifier,libcall,lv_libcall,padded,aggregate,bool_inc,alignment}.cpp` exact on
   aarch64 and x86_64; `run` tests under `tests/conformance/ext.c11.atomic/`
@@ -1987,9 +2055,21 @@ reloaded after the cleanups (clang `RunCleanupsScope::ForceCleanup(
 ValuesToReload)`; `end_scope_reload` / `pop_cleanup_blocks_reload`).
 
 **`CoroEnd` cleanup (EH only, clang `CallCoroEnd`).** On unwinding,
-`llvm.coro.end(ptr null, i1 true, token none)`: when it returns true
-(the ramp function) the exception is resumed at once; otherwise (the
-resume clone) unwinding continues through the cleanups.
+`llvm.coro.end(ptr null, i1 true, token none)`. For LLVM 19 it returns
+`i1`: true (the ramp function) resumes the exception at once; otherwise
+(the resume clone) unwinding continues through the cleanups.
+
+**LLVM 22 `coro.end` (WP-355).** LLVM 22's `llvm.coro.end` returns
+`void`; whether code runs in the ramp function is
+`i1 @llvm.coro.is_in_ramp()`. The IR follows the backend's version
+(`CodegenOptions::llvm_major`, the driver's `KILN_LLVM_DIR`, not
+`-fclang-compat`), since each LLVM rejects the other's signature. With
+LLVM 22 the `CoroEnd` cleanup is `call void @llvm.coro.end(...)`, then
+`%r = call i1 @llvm.coro.is_in_ramp()`, and the branch is inverted as
+clang 22's: the ramp function continues through the cleanups (freeing
+the frame) and a clone resumes the exception. `__builtin_coro_end`'s
+`bool` result is `is_in_ramp()` there. clang 22 stores the `void` call's
+missing value instead, which is invalid IR.
 
 **Builtins (`emit_coro_builtin`, clang `EmitCoroutineIntrinsic`).**
 `__builtin_coro_resume/destroy/done/promise/noop/size/align/alloc/

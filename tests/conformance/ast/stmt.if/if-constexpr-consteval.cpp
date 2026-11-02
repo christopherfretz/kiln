@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 constexpr int pick(int v) {
   if constexpr (sizeof(int) == 4) {
     v += 1;

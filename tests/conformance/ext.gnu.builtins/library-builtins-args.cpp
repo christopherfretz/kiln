@@ -9,23 +9,25 @@
 // a vector_size vector when the index count differs (BuiltinShuffleVector).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 32:42 error "argument value 4 is outside the valid range [0, 3]"
-//@ diag: 32:72 error "argument to '__builtin_object_size' must be a constant integer"
-//@ diag: 32:102 error "argument value -1 is outside the valid range [0, 3]"
-//@ diag: 33:35 error "argument to __builtin_verbose_trap must not contain $"
-//@ diag: 33:70 error "argument to __builtin_verbose_trap must be a pointer to a constant string"
-//@ diag: 34:33 error "requested alignment is not a power of 2"
-//@ diag: 35:34 error "argument to '__builtin_assume_aligned' must be a constant integer"
-//@ diag: 36:51 error "cannot initialize a parameter of type 'const void *' with an lvalue of type 'int'"
-//@ diag: 37:53 error "too few arguments to function call, expected 2, have 1"
-//@ diag: 38:27 warning "requested alignment must be 4294967296 bytes or smaller; maximum alignment assumed"
-//@ diag: 39:62 error "too many arguments to function call, expected at most 3, have 4"
-//@ diag: 40:33 error "first two arguments to '__builtin_shufflevector' must have the same type"
-//@ diag: 40:73 error "index for __builtin_shufflevector must be a constant integer"
-//@ diag: 40:113 error "index for __builtin_shufflevector must be less than the total number of vector elements"
-//@ diag: 41:34 error "too few arguments to function call, expected at least 2, have 1"
-//@ diag: 41:43 error "first two arguments to '__builtin_shufflevector' must be vectors"
-//@ diag: 42:21 error "cannot initialize return object of type 'v4' (vector of 4 'int' values) with an rvalue of type '__attribute__((__vector_size__(5 * sizeof(int)))) int' (vector of 5 'int' values)"
+//@ diag: 34:42 error "argument value 4 is outside the valid range [0, 3]"
+//@ diag: 34:72 error "argument to '__builtin_object_size' must be a constant integer"
+//@ diag: 34:102 error "argument value -1 is outside the valid range [0, 3]"
+//@ diag: 35:35 error "argument to __builtin_verbose_trap must not contain $"
+//@ diag: 35:70 error "argument to __builtin_verbose_trap must be a pointer to a constant string"
+//@ diag: 36:33 error "requested alignment is not a power of 2"
+//@ diag: 37:34 error "argument to '__builtin_assume_aligned' must be a constant integer"
+//@ diag: 38:51 error "cannot initialize a parameter of type 'const void *' with an lvalue of type 'int'"
+//@ diag: 39:53 error "too few arguments to function call, expected 2, have 1"
+//@ diag: 40:27 warning "requested alignment must be 4294967296 bytes or smaller; maximum alignment assumed"
+//@ diag: 41:62 error "too many arguments to function call, expected at most 3, have 4"
+//@ diag: 42:33 error "first two arguments to '__builtin_shufflevector' must have the same type"
+//@ diag: 42:73 error "index for __builtin_shufflevector must be a constant integer"
+//@ diag: 42:113 error "index for __builtin_shufflevector must be less than the total number of vector elements"
+//@ diag: 43:34 error "too few arguments to function call, expected at least 2, have 1"
+//@ diag: 43:43 error "first two arguments to '__builtin_shufflevector' must be vectors"
+//@ diag: 44:21 error "cannot initialize return object of type 'v4' (vector of 4 'int' values) with an rvalue of type '__attribute__((__vector_size__(5 * sizeof(int)))) int' (vector of 5 'int' values)"
+//@ requires: clang<22
+// clang 22 emits error: non-pointer argument to '__builtin_assume_aligned' is not allowed; WP-355 residual
 typedef int v4 __attribute__((ext_vector_type(4)));
 typedef float f4 __attribute__((ext_vector_type(4)));
 const char *m = "x";

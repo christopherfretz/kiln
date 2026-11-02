@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.inst]/3: a member whose type is another specialization requires that
 // specialization to be complete when the class is instantiated.
 template <class T> struct Inner { T v; };

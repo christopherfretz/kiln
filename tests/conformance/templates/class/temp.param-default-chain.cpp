@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.param]/12-14: a default template argument may refer to earlier
 // parameters; omitted arguments are substituted in order.
 template <class T, class U = T *, int N = sizeof(T)> struct Trip {

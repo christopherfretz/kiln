@@ -34,8 +34,8 @@ FunctionDecl f 'void (int)'
   |     |-IntegerLiteral 'int' 1
   |     `-CXXConstructExpr 'S[2]' 'void ()'
   `-CStyleCastExpr 'void' <ToVoid>
-    `-CXXNewExpr 'S (*)[2]' array Function 'operator new[]' 'void *(unsigned long)'
-      |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    `-CXXNewExpr 'S (*)[2]' array Function 'operator new[]' 'void *(__size_t)'
+      |-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
       | `-ImplicitCastExpr 'int' <LValueToRValue>
       |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
       `-CXXParenListInitExpr 'S[1][2]'

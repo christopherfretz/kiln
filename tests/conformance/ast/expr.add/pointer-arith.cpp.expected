@@ -23,7 +23,7 @@ TranslationUnitDecl
     | |-DeclRefExpr 'int *' lvalue Var 'mid' 'int *'
     | `-IntegerLiteral 'int' 1
     `-ReturnStmt
-      `-BinaryOperator 'long' '-'
+      `-BinaryOperator '__ptrdiff_t':'long' '-'
         |-ImplicitCastExpr 'int *' <LValueToRValue>
         | `-DeclRefExpr 'int *' lvalue ParmVar 'b' 'int *'
         `-ImplicitCastExpr 'int *' <LValueToRValue>

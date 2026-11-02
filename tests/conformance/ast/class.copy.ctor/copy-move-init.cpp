@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: f
+//@ requires: clang>=22
 // [dcl.init.general]/16.6.1-2, [class.copy.ctor]/1, /3, [over.ics.ref],
 // [class.temporary]/2: initializing an object from an object of the same
 // or a derived class calls the copy (lvalue) or move (xvalue) constructor;

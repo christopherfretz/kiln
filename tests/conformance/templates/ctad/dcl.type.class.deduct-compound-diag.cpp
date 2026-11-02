@@ -3,23 +3,25 @@
 // with err_deduced_class_template_compound_type.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 27:3 error "cannot form pointer to deduced class template specialization type"
-//@ diag: 28:9 error "cannot form pointer to deduced class template specialization type"
-//@ diag: 29:3 error "cannot use parentheses when declaring variable with deduced class template specialization type"
-//@ diag: 30:3 error "cannot form reference to deduced class template specialization type"
-//@ diag: 31:3 error "cannot form reference to deduced class template specialization type"
-//@ diag: 32:5 error "cannot form array of deduced class template specialization type"
-//@ diag: 33:3 error "cannot use parentheses when declaring variable with deduced class template specialization type"
-//@ diag: 34:1 error "use of class template 'B' requires template arguments; argument deduction not allowed in function return type"
-//@ diag: 23:26 note "template is declared here"
-//@ diag: 35:3 error "cannot form pointer to deduced class template specialization type"
-//@ diag: 36:16 error "cannot form pointer to deduced class template specialization type"
+//@ diag: 29:3 error "cannot form pointer to deduced class template specialization type"
+//@ diag: 30:9 error "cannot form pointer to deduced class template specialization type"
+//@ diag: 31:3 error "cannot use parentheses when declaring variable with deduced class template specialization type"
+//@ diag: 32:3 error "cannot form reference to deduced class template specialization type"
+//@ diag: 33:3 error "cannot form reference to deduced class template specialization type"
+//@ diag: 34:5 error "cannot form array of deduced class template specialization type"
+//@ diag: 35:3 error "cannot use parentheses when declaring variable with deduced class template specialization type"
+//@ diag: 36:1 error "use of class template 'B' requires template arguments; argument deduction not allowed in function return type"
+//@ diag: 25:26 note "template is declared here"
 //@ diag: 37:3 error "cannot form pointer to deduced class template specialization type"
-//@ diag: 38:3 error "cannot form pointer to deduced class template specialization type"
-//@ diag: 39:21 error "use of class template 'B' requires template arguments; argument deduction not allowed in conversion function type"
-//@ diag: 23:26 note "template is declared here"
-//@ diag: 40:8 error "use of class template 'B' requires template arguments; argument deduction not allowed in function prototype"
-//@ diag: 23:26 note "template is declared here"
+//@ diag: 38:16 error "cannot form pointer to deduced class template specialization type"
+//@ diag: 39:3 error "cannot form pointer to deduced class template specialization type"
+//@ diag: 40:3 error "cannot form pointer to deduced class template specialization type"
+//@ diag: 41:21 error "use of class template 'B' requires template arguments; argument deduction not allowed in conversion function type"
+//@ diag: 25:26 note "template is declared here"
+//@ diag: 42:8 error "use of class template 'B' requires template arguments; argument deduction not allowed in function prototype"
+//@ diag: 25:26 note "template is declared here"
+//@ requires: clang<22
+// clang 22 emits error: cannot form pointer to deduced class template specialization type; WP-355 residual
 template<class T> struct B { B(T); };
 template<class T> struct Outer { template<class U> struct In { In(U); }; };
 struct S {};

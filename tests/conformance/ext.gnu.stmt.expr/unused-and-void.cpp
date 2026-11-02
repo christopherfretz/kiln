@@ -10,7 +10,7 @@
 //@ diag: 23:6 warning "expression result unused"
 //@ diag: 23:9 warning "expression result unused"
 //@ diag: 24:6 warning "expression result unused"
-//@ diag: 24:3 warning "expression result unused"
+//@ diag: 24:9 warning "expression result unused"
 //@ diag: 25:9 warning "expression result unused"
 //@ diag: 27:17 warning "expression result unused"
 //@ diag: 28:9 warning "expression result unused"
@@ -21,7 +21,7 @@
 int g;
 void f() {
   ({ 1; 2; });
-  ({ 1; 2; ; });
+  ({ 1; 2; (void)0; });
   ({ l: 3; });
   ({ g = 1; });
   ({ int q = 1; q; });

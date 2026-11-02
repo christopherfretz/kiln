@@ -17,8 +17,8 @@ CXXMethodDecl used operator< 'bool (const S &) const noexcept(false)' default im
         | |-UnaryOperator 'const S' lvalue prefix '*' cannot overflow
         | | `-CXXThisExpr 'const S *' this
         | `-DeclRefExpr 'const S' lvalue ParmVar '' 'const S &'
-        `-ImplicitCastExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' <ConstructorConversion>
-          `-CXXConstructExpr '_CmpUnspecifiedParam':'std::_CmpUnspecifiedParam' 'void (int std::_CmpUnspecifiedParam::*) noexcept'
-            `-ImplicitCastExpr 'int std::_CmpUnspecifiedParam::*' <NullToMemberPointer>
+        `-ImplicitCastExpr '_CmpUnspecifiedParam' <ConstructorConversion>
+          `-CXXConstructExpr '_CmpUnspecifiedParam' 'void (int _CmpUnspecifiedParam::*) noexcept'
+            `-ImplicitCastExpr 'int _CmpUnspecifiedParam::*' <NullToMemberPointer>
               `-IntegerLiteral 'int' 0
 

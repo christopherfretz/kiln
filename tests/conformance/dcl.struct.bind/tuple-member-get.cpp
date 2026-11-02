@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: test
+//@ requires: clang>=22
 // [dcl.struct.bind]/4 (C++26 /7): a tuple-like type. std::tuple_size<E> is
 // complete, so each binding is a variable of type "reference to
 // std::tuple_element<i, E>::type" initialized from `e.get<i>()` (a member

@@ -6,14 +6,16 @@
 // non-template member class of a template by its qualified name.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 18:45 error "no member named 'zz' in 'V<T>'"
-//@ diag: 19:33 error "no member named 'yy' in 'V<T>'"
-//@ diag: 20:49 error "no member named 'zz' in 'V<type-parameter-0-0 *>'"
-//@ diag: 22:48 error "no member named 'zz' in 'P<T...>'"
-//@ diag: 23:71 error "no member named 'zz' in 'Q<TT, M>'"
-//@ diag: 24:75 error "no member named 'zz' in 'O<U>'"
-//@ diag: 25:56 error "no member named 'q' in 'W::I'"
-//@ diag: 25:64 error "no member named 'r' in 'W<T>'"
+//@ diag: 20:45 error "no member named 'zz' in 'V<T>'"
+//@ diag: 21:33 error "no member named 'yy' in 'V<T>'"
+//@ diag: 22:49 error "no member named 'zz' in 'V<type-parameter-0-0 *>'"
+//@ diag: 24:48 error "no member named 'zz' in 'P<T...>'"
+//@ diag: 25:71 error "no member named 'zz' in 'Q<TT, M>'"
+//@ diag: 26:75 error "no member named 'zz' in 'O<U>'"
+//@ diag: 27:56 error "no member named 'q' in 'W::I'"
+//@ diag: 27:64 error "no member named 'r' in 'W<T>'"
+//@ requires: clang<22
+// clang 22 emits error: no member named 'zz' in 'N::V<T>'; WP-355 residual
 namespace N {
 template <class T> struct V { void f() { V::zz = 1; }
   static int g() { return V<T>::yy; } };

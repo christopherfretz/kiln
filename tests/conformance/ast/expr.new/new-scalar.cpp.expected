@@ -2,37 +2,37 @@ TranslationUnitDecl
 |-FunctionDecl a 'int *()'
 | `-CompoundStmt
 |   `-ReturnStmt
-|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long)'
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(__size_t)'
 |-FunctionDecl b 'int *()'
 | `-CompoundStmt
 |   `-ReturnStmt
-|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long)'
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(__size_t)'
 |       `-IntegerLiteral 'int' 3
 |-FunctionDecl c 'int *()'
 | `-CompoundStmt
 |   `-ReturnStmt
-|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long)'
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(__size_t)'
 |       `-InitListExpr 'int'
 |         `-IntegerLiteral 'int' 4
 |-FunctionDecl d 'int *()'
 | `-CompoundStmt
 |   `-ReturnStmt
-|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(unsigned long)'
+|     `-CXXNewExpr 'int *' Function 'operator new' 'void *(__size_t)'
 |       `-ImplicitValueInitExpr 'int'
 |-FunctionDecl e 'long *()'
 | `-CompoundStmt
 |   `-ReturnStmt
-|     `-CXXNewExpr 'long *' global Function 'operator new' 'void *(unsigned long)'
+|     `-CXXNewExpr 'long *' global Function 'operator new' 'void *(__size_t)'
 |       `-InitListExpr 'long'
 |-FunctionDecl f 'const int *()'
 | `-CompoundStmt
 |   `-ReturnStmt
-|     `-CXXNewExpr 'const int *' Function 'operator new' 'void *(unsigned long)'
+|     `-CXXNewExpr 'const int *' Function 'operator new' 'void *(__size_t)'
 |       `-IntegerLiteral 'int' 5
 `-FunctionDecl g 'int **(int *)'
   |-ParmVarDecl used p 'int *'
   `-CompoundStmt
     `-ReturnStmt
-      `-CXXNewExpr 'int **' Function 'operator new' 'void *(unsigned long)'
+      `-CXXNewExpr 'int **' Function 'operator new' 'void *(__size_t)'
         `-ImplicitCastExpr 'int *' <LValueToRValue>
           `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'

@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.pre]/1: a requires-clause after the template-parameter-list
 template <class T> concept C = true;
 template <class T> requires C<T> struct A {};

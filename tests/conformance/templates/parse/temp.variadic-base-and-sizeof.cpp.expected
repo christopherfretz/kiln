@@ -3,7 +3,7 @@ TranslationUnitDecl
 | |-TemplateTypeParmDecl referenced class depth 0 index 0 ... Ts
 | `-CXXRecordDecl struct Tuple definition
 |   `-VarDecl size 'const unsigned long' static cinit
-|     `-SizeOfPackExpr 'unsigned long' Ts
+|     `-SizeOfPackExpr '__size_t':'unsigned long' Ts
 `-ClassTemplateDecl Seq
   |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 ... Ns
   `-CXXRecordDecl struct Seq definition

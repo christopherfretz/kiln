@@ -83,6 +83,26 @@ impl Cg<'_> {
         coro(&mut self.m, which, LTy::I64)
     }
 
+    /// `llvm.coro.end(args)`: `i1` on LLVM 19, `void` on LLVM 22
+    /// (`CodegenOptions::llvm_major`).
+    fn call_coro_end(&mut self, args: Vec<V>) -> V {
+        let which = if self.opts.llvm_major >= 22 { Coro::EndVoid } else { Coro::End };
+        let fe = self.coro_fn(which);
+        self.intrinsic_call(fe, args)
+    }
+
+    /// Whether the code after `end` (a [`Self::call_coro_end`]) is in the
+    /// ramp function: LLVM 19's `coro.end` result, LLVM 22's
+    /// `llvm.coro.is_in_ramp()`.
+    fn coro_in_ramp(&mut self, end: V) -> V {
+        if self.opts.llvm_major >= 22 {
+            let f = self.coro_fn(Coro::IsInRamp);
+            self.intrinsic_call(f, vec![])
+        } else {
+            end
+        }
+    }
+
     fn coro_data(&mut self) -> &mut CoroData {
         self.f.coro.as_deref_mut().expect("coroutine state")
     }
@@ -243,10 +263,9 @@ impl Cg<'_> {
         self.emit_block(ret_bb, false);
         // `coro.end` precedes the return: the resume and destroy clones
         // end here.
-        let fe = self.coro_fn(Coro::End);
         let f = V::C(self.m.const_bool(false));
         let none = V::C(self.m.const_none_token());
-        self.intrinsic_call(fe, vec![null, f, none]);
+        self.call_coro_end(vec![null, f, none]);
         match (gro, c.return_stmt) {
             (Some(_), Some(r)) => self.emit_stmt(r)?,
             (None, Some(_)) => {
@@ -686,17 +705,23 @@ impl Cg<'_> {
         Ok(())
     }
 
-    /// `CallCoroEnd` (landing-pad model): the ramp function resumes
-    /// unwinding; the resume clone continues with the cleanups.
+    /// `CallCoroEnd` (landing-pad model). LLVM 19: the ramp function
+    /// resumes unwinding, the resume clone continues with the cleanups.
+    /// LLVM 22 (clang 22): the other way round, the ramp function runs the
+    /// remaining cleanups (freeing the frame) and the clones resume.
     pub(crate) fn emit_coro_end_cleanup(&mut self) {
-        let fe = self.coro_fn(Coro::End);
         let null = self.null_ptr();
         let t = V::C(self.m.const_bool(true));
         let none = V::C(self.m.const_none_token());
-        let r = self.intrinsic_call(fe, vec![null, t, none]);
+        let end = self.call_coro_end(vec![null, t, none]);
+        let in_ramp = self.coro_in_ramp(end);
         let resume = self.eh_resume_block();
         let cont = self.f.fir.create_block();
-        self.cond_br(r, resume, cont);
+        if self.opts.llvm_major >= 22 {
+            self.cond_br(in_ramp, cont, resume);
+        } else {
+            self.cond_br(in_ramp, resume, cont);
+        }
         self.emit_block(cont, false);
     }
 
@@ -753,7 +778,12 @@ impl Cg<'_> {
             vals.push(self.emit_scalar(a)?);
         }
         if which == Coro::End {
+            // `__builtin_coro_end` returns whether it is in the ramp
+            // function; on LLVM 22 that is `llvm.coro.is_in_ramp()` (clang
+            // 22 stores the `void` call's non-value instead).
             vals.push(V::C(self.m.const_none_token()));
+            let end = self.call_coro_end(vals);
+            return Ok(BuiltinCall::Emitted(Some(self.coro_in_ramp(end))));
         }
         let f = self.coro_fn(which);
         let r = self.intrinsic_call(f, vals);

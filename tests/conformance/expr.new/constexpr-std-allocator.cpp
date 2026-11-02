@@ -7,21 +7,23 @@
 // name). spec/oven.md "Transient allocation".
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 71:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 67:13 note "cannot allocate untyped memory in a constant expression; use 'std::allocator<T>::allocate' to allocate memory of type 'T'"
-//@ diag: 71:15 note "in call to 'untyped()'"
-//@ diag: 79:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 29:61 note "allocation performed here was not deallocated"
-//@ diag: 87:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 34:69 note "allocated size 5 is not a multiple of size 2 of element type 'short'"
-//@ diag: 84:3 note "in call to 'a.allocate(2)'"
-//@ diag: 87:15 note "in call to 'bad_size()'"
-//@ diag: 97:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 93:11 note "read of object outside its lifetime is not allowed in a constant expression"
-//@ diag: 97:15 note "in call to 'read_unconstructed()'"
-//@ diag: 107:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 105:10 note "read of heap allocated object that has been deleted"
-//@ diag: 107:15 note "in call to 'use_after_free()'"
+//@ diag: 73:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 69:13 note "cannot allocate untyped memory in a constant expression; use 'std::allocator<T>::allocate' to allocate memory of type 'T'"
+//@ diag: 73:15 note "in call to 'untyped()'"
+//@ diag: 81:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 31:61 note "allocation performed here was not deallocated"
+//@ diag: 89:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 36:69 note "allocated size 5 is not a multiple of size 2 of element type 'short'"
+//@ diag: 86:3 note "in call to 'a.allocate(2)'"
+//@ diag: 89:15 note "in call to 'bad_size()'"
+//@ diag: 99:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 95:11 note "read of object outside its lifetime is not allowed in a constant expression"
+//@ diag: 99:15 note "in call to 'read_unconstructed()'"
+//@ diag: 109:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 107:10 note "read of heap allocated object that has been deleted"
+//@ diag: 109:15 note "in call to 'use_after_free()'"
+//@ requires: clang<22
+// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
 using size_t = decltype(sizeof(0));
 void *operator new(size_t, void *p) noexcept { return p; }
 namespace std {

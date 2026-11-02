@@ -3,24 +3,26 @@
 // reports the member pointer operand, or the use of the null object.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 27:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 26:67 note "subexpression not valid in a constant expression"
-//@ diag: 27:15 note "in call to 'null_member()'"
 //@ diag: 29:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 28:80 note "subexpression not valid in a constant expression"
-//@ diag: 29:15 note "in call to 'null_function()'"
+//@ diag: 28:67 note "subexpression not valid in a constant expression"
+//@ diag: 29:15 note "in call to 'null_member()'"
 //@ diag: 31:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 30:91 note "subexpression not valid in a constant expression"
-//@ diag: 31:15 note "in call to 'no_such_member()'"
+//@ diag: 30:80 note "subexpression not valid in a constant expression"
+//@ diag: 31:15 note "in call to 'null_function()'"
 //@ diag: 33:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 32:71 note "read of dereferenced null pointer is not allowed in a constant expression"
-//@ diag: 33:15 note "in call to 'null_read()'"
+//@ diag: 32:91 note "subexpression not valid in a constant expression"
+//@ diag: 33:15 note "in call to 'no_such_member()'"
 //@ diag: 35:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 34:71 note "assignment to dereferenced null pointer is not allowed in a constant expression"
-//@ diag: 35:15 note "in call to 'null_write()'"
+//@ diag: 34:71 note "read of dereferenced null pointer is not allowed in a constant expression"
+//@ diag: 35:15 note "in call to 'null_read()'"
 //@ diag: 37:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 36:87 note "cannot access base class of null pointer"
-//@ diag: 37:15 note "in call to 'null_base()'"
+//@ diag: 36:71 note "assignment to dereferenced null pointer is not allowed in a constant expression"
+//@ diag: 37:15 note "in call to 'null_write()'"
+//@ diag: 39:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 38:87 note "cannot access base class of null pointer"
+//@ diag: 39:15 note "in call to 'null_base()'"
+//@ requires: clang<22
+// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
 struct A { int a = 1; constexpr int fa() const { return a; } };
 struct D : A { int d = 3; };
 constexpr int null_member() { D x; int D::*p = nullptr; return x.*p; }

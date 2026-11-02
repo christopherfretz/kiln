@@ -30,7 +30,7 @@ TranslationUnitDecl
 |-ClassTemplateDecl Z
 | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
 | |-CXXRecordDecl struct Z definition
-| | `-TypeAliasDecl type 'Deep<T, T, long>':'typename M<type-parameter-0-0>::template N<type-parameter-0-0>::template O<long>::type'
+| | `-TypeAliasDecl type 'Deep<T, T, long>':'typename M<T>::template N<T>::template O<long>::type'
 | `-ClassTemplateSpecializationDecl struct Z definition implicit_instantiation
 |   |-TemplateArgument type 'int'
 |   `-TypeAliasDecl referenced type 'Deep<int, int, long>':'long'

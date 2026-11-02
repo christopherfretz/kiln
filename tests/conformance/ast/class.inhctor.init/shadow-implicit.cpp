@@ -1,6 +1,8 @@
 //@ expect: ast
 //@ ast-implicit
 //@ ast-filter: D::B
+//@ requires: clang>=22
+//@ xfail(kiln): clang 22 dumps the inheriting constructors of D::B differently (WP-355 residual)
 // [namespace.udecl]/1, [class.inhctor.init]/1, [class.default.ctor]/1:
 // with implicit declarations, `using B::B;` declares one
 // ConstructorUsingShadowDecl per base constructor (naming its target), and

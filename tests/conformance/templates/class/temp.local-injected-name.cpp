@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.local]/1-2: inside a class template the injected-class-name names
 // the current specialization, both as a type and as a template-name.
 template <class T> struct Node {
