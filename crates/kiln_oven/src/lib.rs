@@ -243,6 +243,29 @@ pub trait SemaBridge {
     /// evaluate nested constant expressions with `oven` meanwhile
     /// (R-OVEN-1: spec/oven.md "Nested evaluation").
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>;
+    /// The translation unit's language standard as its year (1998, 2003,
+    /// 2011, ..., 2026): the rules that depend on the language mode
+    /// (P2747 placement new outside namespace std in C++26; P2280
+    /// unknown references from C++23). The default is C++26.
+    fn cxx_year(&self) -> u32 {
+        2026
+    }
+    /// Whether function `f` is non-throwing ([except.spec]/2), resolving
+    /// its exception specification if needed (which may evaluate nested
+    /// constant expressions with `oven`). An exception leaving it ends a
+    /// constant evaluation (P3068). The default is potentially-throwing.
+    fn is_nothrow(&mut self, f: DeclId, oven: &mut Oven) -> bool {
+        let _ = (f, oven);
+        false
+    }
+    /// Whether the translation unit is C++26 or later.
+    fn cxx26(&self) -> bool {
+        self.cxx_year() >= 2026
+    }
+    /// Whether the translation unit is C++23 or later.
+    fn cxx23(&self) -> bool {
+        self.cxx_year() >= 2023
+    }
     /// The layout of a complete record (via `kiln_abi`).
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout;
     /// `(size, align)` in bytes of a type the Oven has no value model
@@ -423,6 +446,10 @@ pub struct Oven {
     pub(crate) thawed: FxHashMap<ConstValueId, u64>,
     /// The static objects of thawed lifetime-extended temporaries.
     pub(crate) lets: FxHashMap<DeclId, u64>,
+    /// The objects of unknown value that reference variables not usable
+    /// in constant expressions bind to (P2280, C++23 [expr.const]/10:
+    /// "an unspecified object of the referenced type").
+    pub(crate) unknowns: FxHashMap<DeclId, u64>,
     /// The static temporaries a frozen result points to, with their
     /// objects: frozen into `LetData.value` once the result is.
     pub(crate) let_pending: Vec<(DeclId, u64)>,
@@ -433,6 +460,8 @@ pub struct Oven {
     pub(crate) stack: Vec<Frame>,
     /// Registered destructions, innermost last (`Op::PushCleanup`).
     pub(crate) cleanups: Vec<vm::Cleanup>,
+    /// In-flight and handled exceptions (P3068, `vm/exc.rs`).
+    pub(crate) exc: vm::exc::Excs,
     pub(crate) memo: Memo,
     pub(crate) stats: EvalStats,
     pub(crate) run: vm::RunState,
@@ -482,12 +511,14 @@ impl Oven {
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             lets: FxHashMap::default(),
+            unknowns: FxHashMap::default(),
             let_pending: Vec::new(),
             msg_chars: Vec::new(),
             mem: Memory::new(budget.bytes),
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
             cleanups: Vec::new(),
+            exc: vm::exc::Excs::default(),
             memo: Memo::new(budget.memo_entries),
             stats: EvalStats::default(),
             run: vm::RunState::default(),
@@ -721,12 +752,14 @@ impl Oven {
             + map(&self.lit_exprs)
             + map(&self.thawed)
             + map(&self.lets)
+            + map(&self.unknowns)
             + cap(&self.let_pending)
             + cap(&self.msg_chars)
             + self.mem.footprint()
             + cap(&self.regs)
             + cap(&self.stack)
             + cap(&self.cleanups)
+            + self.exc.footprint()
             + self.memo.footprint()
             + self.run.footprint()
             + self.scratch.footprint()
@@ -865,6 +898,7 @@ impl Oven {
         self.mem.reset();
         self.stack.clear();
         self.cleanups.clear();
+        self.exc.clear();
         c
     }
 

@@ -866,13 +866,15 @@ lower to the same two ops: `New` with aux `ARRAY | STD` and `ty = T`
     non-replaceable one is not constant, with "call to placement
     'operator new'" (or "call to class-specific 'operator new'"). Any
     other placement form, including `std::align_val_t`, is "this
-    placement new expression is not yet supported in constant
-    expressions". P2747 (`constexpr` placement new, C++26) is not
-    implemented by clang 19, so the reserved `new (p) T` is not constant
-    in user code (corrected: the earlier text planned it); it comes with
-    the oracle that implements it. Inside a function of namespace `std`
-    (`std::construct_at`) the reserved form is constant, as clang 19
-    allows it there ([expr.const]/5.18; WP-212, below);
+    placement new expression is not supported in constant expressions "
+    (clang 22's wording, trailing space included). The reserved form
+    `new (p) T` / `new (p) T[n]` is constant in C++26 (P2747,
+    `__cpp_constexpr` 202406L, clang 22's `VisitCXXNewExpr`) and,
+    before C++26, inside a function of namespace `std`
+    (`std::construct_at`, [expr.const]/5.18; WP-212, below); elsewhere
+    before C++26 it is "this placement new expression is not supported
+    in constant expressions before C++2c" (WP-357, superseding the
+    clang 19 rule that it was never constant in user code);
   - `PASS_ALIGN` and `operator_delete` are codegen facts and do not
     affect evaluation.
 - `CXXDeleteExpr` (`ty` = `void`): `delete_operand(e)` is the pointer
@@ -902,7 +904,8 @@ them: `&x` for a variable, `&{*new T#n}` for allocation `n`, then
 | Wrong form | "non-array delete used to delete pointer to array object of type 'int[3]'" / "array delete used to delete pointer to non-array object of type 'int'" | "heap allocation performed here" |
 | Array bound ([expr.new]/8) | "cannot allocate array; evaluated array bound N is negative" / "is too large" / "exceeds the limit (L); use '-fconstexpr-steps' to increase this limit" / "is too small to hold K explicitly initialized elements" (at the bound expression) | — |
 | Non-replaceable allocation function | "call to placement 'operator new'" / "call to class-specific 'operator new'" (the `new`; `delete` likewise with 'operator delete') | — |
-| Other placement forms | "this placement new expression is not yet supported in constant expressions" | — |
+| Other placement forms | "this placement new expression is not supported in constant expressions " (clang 22) | — |
+| Reserved placement form before C++26, outside namespace std | "this placement new expression is not supported in constant expressions before C++2c" | — |
 | Default-initialized scalar read | "read of uninitialized object is not allowed in a constant expression" | — |
 
 `delete` of null (either form) is a no-op. A leak is reported as
@@ -950,18 +953,34 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   destroyed) is "read of object outside its lifetime ..." / "assignment
   to ..." / "member call on object outside its lifetime is not allowed in
   a constant expression".
-- *Construction.* A placement `new (p) T(args)` whose allocation function
-  is the reserved placement form (`operator new(size_t, void*)`) is
-  constant only inside a function of namespace `std` (clang's
-  `isStdFunction`: `std::construct_at`, `std::allocator_traits::construct`
-  and the library internals) and not as an array new; elsewhere it stays
-  "call to placement 'operator new'" (C++26 P2747 is not in clang 19).
-  It lowers to `Placement [p, T]`, which checks the storage with the
-  access checks minus the lifetime check (null: "construction of
-  dereferenced null pointer ..."; deleted, out of bounds) and that a
-  `T` object can live at `p`: the most-derived object at that offset of
-  the allocation's type must be `T` or contain a `T` subobject there, else
-  "placement new would change type of storage from 'U' to 'T'". It then
+- *Construction.* A placement `new (p) T(args)` or `new (p) T[n]{...}`
+  whose allocation function is the reserved placement form
+  (`operator new(size_t, void*)` / `operator new[](size_t, void*)`) is
+  constant in C++26 (P2747, WP-357; clang 22) and, in earlier modes,
+  inside a function of namespace `std` (clang's `isStdFunction`:
+  `std::construct_at`, `std::allocator_traits::construct` and the
+  library internals). It lowers to `Placement [p, T, stat, n, k]`, which
+  checks the storage with the access checks minus the lifetime check
+  (null: "construction of dereferenced null pointer ..."; deleted: "...
+  heap allocated object that has been deleted"; one past the end; a
+  `const` object: "modification of object of const-qualified type ...";
+  an object outside the evaluation: "a constant expression cannot modify
+  an object that is visible outside that expression") and that a `T`
+  object can live at `p`: the most-derived object at that offset of the
+  allocation's type must be `T` or contain a `T` subobject there, else
+  "placement new would change type of storage from 'U' to 'T'". `stat`
+  is the static pointee type of the placement argument before its
+  conversion to `void *` (`bi::DYN` when it was `void *` already). As in
+  clang 22's `HandlePlacementNew`, the designated object is the `stat`
+  subobject at `p` (for `bi::DYN`, the outermost object there), and it
+  may hold the new object when its array extent is at least the new
+  type's and their element types are the same: `new (a) int[3]` with
+  `int a[3]` decayed designates one `int` ("... from 'int' to
+  'int[3]'"; `new (&a) int[3]` is the valid spelling), and `new (&a)
+  int[n]` into `int a[2]` with `n == 3` is "... from 'int[2]' to
+  'int[3]'". An array placement (`new_aux::ARRAY`) first checks its
+  bound `n` as an array `new` does, against `k` explicit initializers
+  (`new_aux::BOUND`). It then
   begins the lifetime of `sizeof(T)` bytes, marks them uninitialized, and
   the initializer runs as for any `new` (a constructor call for a class).
   Within `std::allocator<T>::allocate` a cast from `void*` to `T*` (as
@@ -1716,6 +1735,119 @@ a statement expression) is materialized and its parts loaded.
 - Tests: `tests/conformance/ext.complex/constexpr.cpp`,
   `imaginary.cpp`.
 
+### Exceptions — Landed (WP-357)
+P3068 (C++26, `__cpp_constexpr_exceptions` 202411L): a throw-expression,
+try-blocks and handlers are evaluated in a constant evaluation. Before
+C++26 (`SemaBridge::cxx26()` false) the lowering is the C++23 rule:
+an evaluated throw-expression is not constant ("subexpression not valid
+in a constant expression") and a try-block is its compound statement
+(the handlers are never reached). No oracle
+implements P3068 (clang 22 has no macro and rejects every evaluated
+`throw`): the tests are `skip(clang)` with the reason, and the notes
+follow clang trunk's P3068 branch.
+
+*Model* (`compile/except.rs`, `vm/exc.rs`):
+- `throw e` allocates the exception object in the heap as `new T(e)`
+  does (`Op::New`, origin the throw-expression; `T` is the operand's
+  type with references and top-level cv dropped, arrays and functions
+  decayed), initializes it, and executes `Throw [p, T, dtor]`.
+  `throw;` is `Throw` aux 1 (the innermost handled exception; none:
+  "rethrow with no active exception").
+- A try-block executes `TryEnter [handler]`, which pushes a handler
+  marker onto the cleanup stack (`Cleanup::func == TRY_MARK`, `this` =
+  the handler pc), and pops it with the destructions registered inside
+  it on every exit, so `break`/`return`/`goto` out of it need nothing
+  special.
+- A throw finds the innermost marker of the running evaluation (markers
+  below `RunState::entry` belong to an enclosing evaluation and are
+  never used: a nested evaluation cannot catch its caller's exception
+  nor be caught by it). Every frame it leaves is checked first: a
+  non-throwing function ([except.spec], `SemaBridge::is_nothrow`,
+  resolving a deferred specification) ends the evaluation with
+  "uncaught exception in noexcept function" at the call leaving it
+  ([except.terminate]/1.4, std::terminate). It then unwinds: the
+  destructions registered above the marker run innermost first
+  ([except.ctor]/2), each returning to the Oven's single `Op::Unwind`
+  (emitted on first use, never truncated), and the frames above the
+  marker's are popped as by a return (their registered cleanups run).
+- The handler code matches the exception against each handler in order
+  with `Catch [dst, T, next]` ([except.handle]/3): aux 0 is `...`; aux 1
+  an object or reference handler of the same class or of an unambiguous
+  public base (`dst` = the (sub)object's address; a by-value handler
+  copies it); aux 2 a pointer handler: `nullptr_t` to any pointer, the
+  same type, a qualification conversion, a conversion to `void *`
+  (object pointers only), or to an unambiguous public base (a virtual
+  base is not yet evaluated: "subexpression not valid in a constant
+  expression"). A `const T&` handler
+  with `T` a pointer type matches as aux 2 and binds to a temporary
+  holding the converted pointer; any other reference handler of pointer
+  type matches only the same type. The matching handler executes
+  `CatchBegin`: the exception moves from the in-flight to the handled
+  stack and an `EXC_END` sentinel registered in the handler's scope ends
+  that when the handler is left by any path. When nothing matches,
+  `Throw` aux 2 resumes unwinding.
+- The exception object is destroyed (its destructor runs as a cleanup
+  above an `EXC_FREE` sentinel) and freed when the last handler using it
+  exits and it was not rethrown ([except.throw]/4), so it is never a
+  leak and a loop that throws and catches keeps a flat heap (the WP-060
+  reclaim rule; `expr.throw/constexpr-throw-churn.cpp` runs a throwing
+  loop under the harness `mem<=512` limit).
+- An exception escaping a destructor run by unwinding is "throw while
+  another exception is already active", with "currently active exception
+  thrown here" at the first throw.
+- An exception that leaves the evaluation (no marker of this evaluation)
+  fails it with "uncaught exception of type 'T': 'V'" at the
+  throw-expression: `V` is the `what()` string for a class derived from
+  `std::exception` (evaluated silently through a virtual call), else,
+  or when that call is not constant, the object's value as printed in
+  every other note. The libc++ 22 `std::exception` constructors and `what()` are not
+  `constexpr`, so with the library headers only user exception classes
+  are usable today.
+- *Function-try-blocks* ([except.handle]/13-15): a function body that is
+  a `CXXTryStmt` compiles as a try-block around the body; the handlers of
+  a constructor or destructor end with an implicit `throw;`
+  ([except.handle]/15). The mem-initializers of a constructor are not yet
+  inside its try-block (follow-up).
+- A failed evaluation restores the lengths of the in-flight and handled
+  stacks (`Excs::lens`/`truncate`), and `Oven::reset` clears them.
+
+*Deliberate divergences from clang trunk's P3068 branch* (each follows
+the standard): `nullptr` is not caught by a `const int *&` handler (a
+reference handler of pointer type requires the same type, [except.handle]/3.1);
+a function pointer is not caught by `void *` ([conv.ptr]/2 converts
+object pointers only); a constructor's handler rethrows at its end;
+an uncaught class value prints as `{4}`, as the Oven prints class values
+in every note, not `&S{}`.
+
+### Unknown references — Landed (WP-357)
+P2280 (C++23 [expr.const]/10, a DR applied from C++23 on, as clang 20+;
+`SemaBridge::cxx23()`): naming a reference variable that is not usable
+in constant expressions (a parameter of a function outside its call, an
+`extern` reference, a reference whose initializer is not constant) is
+constant; the reference binds to "an unspecified object of the referenced
+type". On first use in an Oven the reference's external object is
+rebound to a static object of origin `Origin::Unknown(d)` (one per
+variable, kept in `Oven::unknowns`, `EXTERNAL | CONST`), so its address
+is a constant and passing it on, binding another reference to it
+(`std::size(a)` of an array reference parameter), and non-virtual member
+calls that do not read it are constant
+(`expr.const/p2280-unknown-reference.cpp`). Diagnosed, with clang 22's notes:
+- reading, assigning or incrementing it: "read of variable 'x' whose
+  value is not known" / "assignment to ..." / "increment of ...", plus
+  "declared here" at the variable;
+- a virtual call or `dynamic_cast`/`typeid` needing its dynamic type:
+  "virtual function called on object 'v' whose dynamic type is not
+  constant";
+- an equality comparison of its address with another object's or null:
+  "comparison between pointers to unrelated objects '&a[4]' and
+  'nullptr' has unspecified value";
+- a constant result referring to it (a namespace-scope reference's
+  initializer): the clang 22 "reference to ... is not a constant
+  expression" form.
+Before C++23 the reference stays external: naming it is "function
+parameter 'x' with unknown value cannot be used in a constant expression"
+as before (`expr.const/p2280-unknown-reference-cxx20.cpp`).
+
 ### Reflection runtime (M6; WP-267 spike behind `-freflection`)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's
   `ReflectionTable` (spec/ast.md §10). It is an 8-byte scalar of
@@ -1987,11 +2119,19 @@ Implemented (M3, WP-135): trial evaluation — checkpoint/commit/rollback
 over an undo log, with `__builtin_constant_p` as a speculative trial whose
 failure is rolled back; see "Trial evaluation — Landed (WP-135)".
 
+Implemented (C++26, WP-357): P2747 placement new (single objects and
+arrays, "Transient allocation"), P3068 exceptions ("Exceptions — Landed
+(WP-357)") and P2280 unknown references ("Unknown references — Landed
+(WP-357)"). Remaining there: mem-initializers inside a constructor's
+function-try-block, a throw from an exception object's constructor
+(the object leaks), try/catch inside a speculative trial, a pointer
+handler converting to a virtual base, and `std::uncaught_exceptions`.
+
 Remaining (each traps with a `kiln:` note today):
 - Lifetime of objects outside `std::allocator` storage (double
   destruction of a local, reads after an explicit destructor call), and
   the other WP-212 deviations listed under "Transient allocation".
-- `delete` through `void*`, and P2747 placement new (see above).
+- `delete` through `void*`.
 - Front-end gaps that keep some forms from reaching the Oven (not
   Oven work): class-specific `operator new`,
   `delete[] (expr)` (parsed as a lambda) and
@@ -2075,6 +2215,13 @@ their registers are kept to the end of the loop statement
   trial's callee writes, unions and allocations, nested trials, kept
   effects of a successful trial, and (kiln only, `oven:` budget) heap
   rollback and memory O(1) in the number of failed trials.
+- `tests/conformance/expr.new/p2747-placement-new*.cpp` (WP-357,
+  `requires: clang>=22`): placement new of objects and arrays, the misuse
+  notes, the pre-C++26 rule; `expr.const/p2280-unknown-reference*.cpp`
+  likewise for P2280. `expr.throw/constexpr-exceptions*.cpp`,
+  `constexpr-uncaught.cpp`, `constexpr-throw-churn.cpp` (`mem<=512`)
+  and `except.handle/constexpr-*.cpp` (WP-357, `skip(clang)`: no
+  released clang implements P3068) for exceptions.
 - `bench.rs` (ignored): the benchmarks above.
 - `common/`: a small recursive-descent C++ subset parser building kiln_ast
   directly (test-only; replaced by the real front end as it lands).

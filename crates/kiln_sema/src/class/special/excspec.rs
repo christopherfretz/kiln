@@ -31,6 +31,24 @@ impl Sema<'_, '_> {
         let _ = self.resolve_exc(f, 0, at);
     }
 
+    /// Whether `f` is non-throwing when that is known without resolving
+    /// or instantiating its exception specification (the Oven's P3068
+    /// check, `kiln_oven::SemaBridge::is_nothrow`).
+    pub(crate) fn known_nothrow(&self, f: DeclId) -> Option<bool> {
+        let first = self.ast.first(f);
+        if self.uninstantiated_exc.contains_key(&first) {
+            return None;
+        }
+        let exc = self.exc_of(first);
+        (!matches!(exc, ExcSpec::Deferred(_))).then(|| exc.is_nothrow())
+    }
+
+    /// Whether `f` is non-throwing, resolving its exception specification
+    /// first (at `at`) if needed.
+    pub(crate) fn resolve_nothrow(&mut self, f: DeclId, at: Loc) -> bool {
+        self.resolve_exc(f, 0, at)
+    }
+
     /// Whether `f` is non-throwing, resolving it first if deferred.
     fn resolve_exc(&mut self, f: DeclId, depth: usize, at: Loc) -> bool {
         let first = self.ast.first(f);

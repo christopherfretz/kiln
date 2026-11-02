@@ -4,8 +4,7 @@
 // rejection. WP-185 feature probe.
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(clang): clang 19 lacks P2747 (clang 20+ accepts)
-//@ xfail(kiln): placement new rejected in constant evaluation
+//@ requires: clang>=22
 namespace std { using size_t = decltype(sizeof 0); }
 constexpr void* operator new(std::size_t, void* p) noexcept { return p; }
 constexpr int place() {
