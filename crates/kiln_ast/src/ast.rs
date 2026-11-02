@@ -373,6 +373,31 @@ impl Ast {
         }
     }
 
+    /// Records a using-directive in namespace or translation unit `ctx`
+    /// nominating namespace `nominated` ([namespace.udir]). The directive
+    /// is also recorded in each enclosing namespace of which `ctx` is an
+    /// inline member ([namespace.def.general]/7: the members, and so the
+    /// using-directives, of an inline namespace are seen from its
+    /// enclosing namespace), so [`LookupTables::using_directives`] of a
+    /// namespace covers its inline namespace set.
+    ///
+    /// [`LookupTables::using_directives`]: crate::lookup::LookupTables::using_directives
+    pub fn add_using_directive(&mut self, ctx: DeclId, nominated: DeclId) {
+        let nominated = self.first(nominated);
+        let mut cur = self.primary_context(self.redecl_context(ctx));
+        for _ in 0..4096 {
+            self.lookup.add_using_directive(cur, nominated);
+            let inline = self
+                .decls
+                .namespace(cur)
+                .is_some_and(crate::decl::NamespaceData::is_inline);
+            match self.decls.get(cur).ctx() {
+                Some(p) if inline => cur = self.primary_context(self.redecl_context(p)),
+                _ => return,
+            }
+        }
+    }
+
     /// The declarations named `name` in context `ctx` (its own table:
     /// no hiding, using-directives or ADL; those rules are sema's). Each
     /// result is the latest declaration of its entity, in order of first

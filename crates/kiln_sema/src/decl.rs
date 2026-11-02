@@ -6472,6 +6472,15 @@ impl Sema<'_, '_> {
         }
         if let Some(s) = self.scopes.iter_mut().rev().find(|s| !s.is_transparent()) {
             s.using_dirs.push(nominated);
+            // A namespace-scope directive outlives the scope instance: it
+            // is seen from every later reopening of the namespace, from
+            // instantiations, and through qualified lookup and other
+            // directives ([namespace.udir]/4, [namespace.qual]/2).
+            if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit)
+                && let Some(e) = s.entity
+            {
+                self.ast.add_using_directive(e, nominated);
+            }
         }
         d
     }
