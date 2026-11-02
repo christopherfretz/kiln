@@ -570,7 +570,12 @@ mod tests {
                 "#define __FLT128_MAX__ 1.18973149535723176508575932662800702e+4932F128\n"
             ));
             assert!(s.contains("#define __BFLT16_DIG__ 2\n"));
-            assert!(!s.contains("__FLT32X_"));
+            // WP-380: GCC's `_Float32x` (binary64) and `_Float64x`.
+            assert!(s.contains("#define __FLT32X_MANT_DIG__ 53\n"));
+            assert!(s.contains(
+                "#define __FLT32X_MAX__ 1.79769313486231570814527423731704357e+308F32x\n"
+            ));
+            assert!(s.contains("#define __FLT64X_MANT_DIG__ "));
         }
         assert!(!c.contains("__FLT64_DIG__"));
         for n in P1467_STDCPP {
