@@ -1046,6 +1046,7 @@ impl Parser<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per name class; the arms delegate
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
@@ -1148,18 +1149,7 @@ impl Parser<'_, '_> {
             Some((end, NameClass::Undeclared, name))
                 if end == start + 1 && self.undeclared_template_type(end, ctx) =>
             {
-                // `foo<args> x` with `foo` undeclared: "no template named"
-                // and the arguments parsed (clang's `ParseImplicitInt`
-                // with `IsTemplateName`).
-                let text = self.s.ast.symbols().as_str(name).to_owned();
-                let d = self.s.diag(DiagId::sema_no_template_named, loc).arg(text);
-                self.emit(d);
-                self.bump();
-                let _ = self.parse_template_arg_list();
-                ds.invalid = true;
-                ds.type_error = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
-                true
+                self.undeclared_template_spec(ds, name, loc)
             }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
                 if !self.unknown_type_follows(end, ctx) {
@@ -1208,6 +1198,22 @@ impl Parser<'_, '_> {
                     Self::punct_of(next),
                     Some(Punct::LParen | Punct::ColonColon | Punct::Less)
                 ))
+    }
+
+    /// `foo<args> x` with `foo` undeclared ([`Parser::undeclared_template_type`]):
+    /// "no template named", the arguments parsed and dropped, and an
+    /// invalid `int` specifier (clang's `ParseImplicitInt` with
+    /// `IsTemplateName`).
+    fn undeclared_template_spec(&mut self, ds: &mut DeclSpec, name: Symbol, loc: Loc) -> bool {
+        let text = self.s.ast.symbols().as_str(name).to_owned();
+        let d = self.s.diag(DiagId::sema_no_template_named, loc).arg(text);
+        self.emit(d);
+        self.bump();
+        let _ = self.parse_template_arg_list();
+        ds.invalid = true;
+        ds.type_error = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
+        true
     }
 
     /// True if the undeclared unqualified name before token `end` starts
