@@ -580,13 +580,17 @@ impl Sema<'_, '_> {
     pub(crate) fn spec_args(&self, spec: DeclId) -> Option<(DeclId, MultiLevelArgs)> {
         let (_, info) = self.ast.spec_info(spec)?;
         let tmpl = info.template;
-        let mut args = self.base_levels(tmpl);
         // Instantiated from a partial specialization: its deduced
         // arguments ([temp.spec.partial.match]/2, [temp.inst]/2).
-        match (info.from_args, self.ast.partial_spec_info(info.from)) {
-            (Some(a), Some((_, p))) => return Some((tmpl, self.partial_levels(tmpl, p.partial, a))),
-            _ => args.push(info.args, tmpl, LevelMode::Substitute),
-        }
+        let args = if let (Some(a), Some((_, p))) =
+            (info.from_args, self.ast.partial_spec_info(info.from))
+        {
+            self.partial_levels(tmpl, p.partial, a)
+        } else {
+            let mut args = self.base_levels(tmpl);
+            args.push(info.args, tmpl, LevelMode::Substitute);
+            args
+        };
         Some((tmpl, args))
     }
 
