@@ -376,7 +376,7 @@ error by default).
 | `std::initializer_list<X>` (or ref) | worst element ICS to `X`; identity if empty; any Bad → `Bad(InitList)` |
 | array `X[N]`/`X[]` | worst element ICS; too many elements → Bad |
 | non-aggregate class | `UserDefined` from [over.match.list] (`list_ctor` if phase 1 won) |
-| aggregate class | `UserDefined{via: Aggregate}` if aggregate init is well-formed |
+| aggregate class | `UserDefined{via: Aggregate}` if aggregate init is well-formed: no subobject designated twice, and no more elements than brace elision reaches ([dcl.init.aggr]/16, `aggregate_list_capacity`): each base and field (a union's first) takes one clause if it is a scalar or non-aggregate class, else its own capacity but at least one, so an empty class, an empty base or libc++'s `std::array<T, 0>` member takes `{}` (WP-304, `tests/conformance/over.ics.list/aggregate-elision-capacity*.cpp`) |
 | reference | as the referenced type, bound to the temporary |
 | non-class, one element / empty | element's ICS (narrowing → `Bad(Narrowing)`) / identity |
 
