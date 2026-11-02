@@ -1125,7 +1125,10 @@ Where the code differs from (or details) the design above:
     overload of the name, `widen_function_template_id`; the qualifier and
     begin, so `&C::template m<A>` is a pointer to member) and resolved
     unless it is a call's callee (`Substituter::as_callee`), where the call
-    deduces the remaining arguments (WP-296).
+    deduces the remaining arguments (WP-296). WP-297 needed the same for
+    libc++ variant's relational operators (`relops_bool_conv.verify.cpp`:
+    the uncalled `__make_dispatch` must resolve for the static_assert to
+    fire; `over.over/qualified-template-id-in-template.cpp`).
   - When no non-template matches the target, `address_template_candidates`
     deduces P (the template's function type) from A (the target type)
     through `deduce_spec(.., target)`. It keeps the specializations that

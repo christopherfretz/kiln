@@ -1134,7 +1134,7 @@ impl Parser<'_, '_> {
             && let NameClass::TypeTemplate(t) = self.s.classify_name(n, qualifier)
             && self.s.ast.decls.get(t).kind() == kiln_ast::decl::DeclKind::ClassTemplate
         {
-            self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, ctx);
+            self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, &attrs);
             return;
         }
         let mut final_loc = None;
@@ -1221,9 +1221,8 @@ impl Parser<'_, '_> {
         qualifier: Option<DeclId>,
         name_loc: Loc,
         kw_loc: Loc,
-        ctx: DeclaratorContext,
+        attrs: &[AttrId],
     ) {
-        let _ = ctx;
         // The template arguments of a partial or explicit specialization's
         // class-head are not access checked ([temp.spec.partial.general]/10,
         // [temp.spec.general]/6); a reference's join the declaration's.
@@ -1253,6 +1252,13 @@ impl Parser<'_, '_> {
             kw_loc,
         );
         let ty = if let Ok((rec, ty)) = r {
+            // A partial or explicit specialization's own attributes
+            // ([class.pre]/1); a reference's appertain to nothing.
+            if use_ != TagUse::Reference
+                && let Some(d) = rec
+            {
+                self.s.act_on_tag_attrs(d, attrs);
+            }
             if use_ == TagUse::Definition {
                 match rec {
                     Some(d) => {
@@ -2213,7 +2219,7 @@ impl Parser<'_, '_> {
             _ => 0,
         };
         // The initializer, with its conversions, is potentially evaluated.
-        let quiet = self.s.enter_var_initializer();
+        let quiet = self.s.enter_var_initializer(v);
         let init = self.parse_initializer(d.init_style, d.is_function_declarator());
         self.s.act_on_exit_declarator_scope(entered);
         let r = self.finish_declarator_initializer(d, v, init);

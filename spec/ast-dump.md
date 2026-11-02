@@ -39,8 +39,11 @@ template instantiations ([temp.spec], [temp.expl.spec], [temp.explicit]):
 - A member of a class template specialization is named by the
   specialization with its arguments (`n::X<int>::N`, `printTemplate
   ArgumentList`), trailing arguments equal to their parameter's default
-  dropped (`SuppressDefaultTemplateArgs`; none when one is a pack); a
-  template template argument prints its (qualified) name, an
+  dropped (`SuppressDefaultTemplateArgs`; none when one is a pack; a
+  non-type argument only when its default is a non-value-dependent
+  integral constant expression of the same value, clang's
+  `isSubstitutedTemplateArgument`, so `= N` and `= Max<L>::value` keep
+  it; WP-297); a template template argument prints its (qualified) name, an
   enumeration argument its enumerator or, naming none, its value
   (`G<K::b>`, `G<7>`). A member of a partial specialization is named by
   its canonical arguments (`X<type-parameter-0-0 *, true>::C`), with the

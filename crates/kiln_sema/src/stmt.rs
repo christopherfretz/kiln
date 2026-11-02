@@ -567,16 +567,22 @@ impl Sema<'_, '_> {
     /// Before a variable's initializer: it is potentially evaluated even
     /// inside a quiet context (clang's `ActOnCXXEnterDeclInitializer`
     /// pushes `PotentiallyEvaluated`). Returns what
-    /// [`Sema::exit_var_initializer`] restores.
-    pub fn enter_var_initializer(&mut self) -> u32 {
-        self.func.as_mut().map_or(0, |f| std::mem::take(&mut f.rt_quiet))
+    /// [`Sema::exit_var_initializer`] restores. A use of a deprecated
+    /// entity in the initializer of `v` is in `v`'s context
+    /// ([dcl.attr.deprecated]; clang delays it to the declarator's
+    /// completion).
+    pub fn enter_var_initializer(&mut self, v: Option<DeclId>) -> (u32, Option<DeclId>) {
+        let quiet = self.func.as_mut().map_or(0, |f| std::mem::take(&mut f.rt_quiet));
+        let depr = std::mem::replace(&mut self.depr_init, v);
+        (quiet, depr)
     }
 
     /// After a variable's initializer.
-    pub fn exit_var_initializer(&mut self, saved: u32) {
+    pub fn exit_var_initializer(&mut self, (quiet, depr): (u32, Option<DeclId>)) {
         if let Some(f) = self.func.as_mut() {
-            f.rt_quiet = saved;
+            f.rt_quiet = quiet;
         }
+        self.depr_init = depr;
     }
 
     /// The value of an `if constexpr` condition `c` as returned by

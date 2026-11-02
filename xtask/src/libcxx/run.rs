@@ -171,6 +171,101 @@ pub struct Job<'a> {
     pub index: usize,
 }
 
+/// Tests this host cannot run as libc++'s CI does: built with clang 19
+/// they fail the same way (spec/libcxx.md "Environment exclusions").
+/// Paths relative to `libcxx/test`, sorted.
+///
+/// Run as root (the agent containers), a test that expects `permissions(
+/// dir, perms::none)` (or a mode-0 file) to make a path inaccessible gets
+/// no `EACCES`: root bypasses permission checks.
+const ROOT_UNSUPPORTED: &[&str] = &[
+    "std/input.output/filesystems/class.directory_entry/directory_entry.cons/path.pass.cpp",
+    "std/input.output/filesystems/class.directory_entry/directory_entry.mods/assign.pass.cpp",
+    "std/input.output/filesystems/class.directory_entry/directory_entry.mods/refresh.pass.cpp",
+    "std/input.output/filesystems/class.directory_entry/directory_entry.mods/replace_filename.pass.cpp",
+    "std/input.output/filesystems/class.directory_entry/directory_entry.obs/file_size.pass.cpp",
+    "std/input.output/filesystems/class.directory_entry/directory_entry.obs/file_type_obs.pass.cpp",
+    "std/input.output/filesystems/class.directory_entry/directory_entry.obs/hard_link_count.pass.cpp",
+    "std/input.output/filesystems/class.directory_entry/directory_entry.obs/last_write_time.pass.cpp",
+    "std/input.output/filesystems/class.rec.dir.itr/rec.dir.itr.members/increment.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.exists/exists.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.is_block_file/is_block_file.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.is_char_file/is_character_file.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.is_directory/is_directory.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.is_empty/is_empty.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.is_fifo/is_fifo.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.is_other/is_other.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.is_regular_file/is_regular_file.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.is_socket/is_socket.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.is_symlink/is_symlink.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.last_write_time/last_write_time.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.status/status.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.symlink_status/symlink_status.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.temp_dir_path/temp_directory_path.pass.cpp",
+];
+
+/// With the scratch directory (`TMPDIR`) on a host-shared filesystem (a
+/// Docker Desktop bind mount): a directory's hard-link count is not
+/// `2 + subdirectories`, and `create_directory(p, attrs)` fails copying
+/// the attributes.
+const HOST_FS_UNSUPPORTED: &[&str] = &[
+    "std/input.output/filesystems/fs.op.funcs/fs.op.create_directory/create_directory_with_attributes.pass.cpp",
+    "std/input.output/filesystems/fs.op.funcs/fs.op.hard_lk_ct/hard_link_count.pass.cpp",
+];
+
+/// Filesystem types of a host-shared bind mount (`/proc/self/mountinfo`).
+const HOST_FS_TYPES: &[&str] = &["fakeowner", "fuse.grpcfuse", "virtiofs"];
+
+/// Why `rel` is UNSUPPORTED on this host, if it is; `scratch` is where its
+/// scratch directory lives.
+pub fn env_unsupported(rel: &str, scratch: &Path) -> Option<String> {
+    if ROOT_UNSUPPORTED.contains(&rel) && running_as_root() {
+        return Some("env: needs EACCES from perms::none; running as root".to_owned());
+    }
+    if HOST_FS_UNSUPPORTED.contains(&rel)
+        && let Some(fs) = mount_fs_type(scratch).filter(|t| HOST_FS_TYPES.contains(&t.as_str()))
+    {
+        return Some(format!("env: TMPDIR is on a host-shared {fs} mount"));
+    }
+    None
+}
+
+/// Whether this process's effective uid is 0 (`/proc/self/status`).
+fn running_as_root() -> bool {
+    static ROOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ROOT.get_or_init(|| {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix("Uid:"))
+            .and_then(|ids| ids.split_whitespace().nth(1))
+            .is_some_and(|euid| euid == "0")
+    })
+}
+
+/// The filesystem type of the mount holding `path` (the longest mount
+/// point above it in `/proc/self/mountinfo`), if known.
+fn mount_fs_type(path: &Path) -> Option<String> {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let info = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    mount_fs_type_in(&info, &path)
+}
+
+fn mount_fs_type_in(info: &str, path: &Path) -> Option<String> {
+    let mut best: Option<(usize, &str)> = None;
+    for line in info.lines() {
+        let Some((pre, post)) = line.split_once(" - ") else { continue };
+        let Some(point) = pre.split(' ').nth(4) else { continue };
+        let Some(fs) = post.split(' ').next() else { continue };
+        // Mount points escape space, tab, newline and backslash as `\ooo`.
+        let point = point.replace("\\040", " ").replace("\\011", "\t").replace("\\134", "\\");
+        if path.starts_with(&point) && best.is_none_or(|(n, _)| point.len() >= n) {
+            best = Some((point.len(), fs));
+        }
+    }
+    best.map(|(_, fs)| fs.to_owned())
+}
+
 /// What lit decides before anything runs: `Err(outcome)` ends the test
 /// (UNSUPPORTED or ERROR), `Ok` carries the directives, flags and the
 /// XFAIL expression that applies, if any.
@@ -226,6 +321,10 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
         wall: Duration::ZERO,
         max_rss_kb: None,
     };
+    if let Some(reason) = env_unsupported(&job.rel, &cfg.scratch) {
+        r.outcome = Outcome::Unsupported(reason);
+        return r;
+    }
     let text = match std::fs::read(&job.path) {
         Ok(b) => String::from_utf8_lossy(&b).into_owned(),
         Err(e) => {
@@ -518,6 +617,35 @@ mod tests {
             Outcome::Unsupported("driver: -verify".into()).to_string(),
             "UNSUPPORTED (driver: -verify)"
         );
+    }
+
+    #[test]
+    fn env_exclusions() {
+        for list in [ROOT_UNSUPPORTED, HOST_FS_UNSUPPORTED] {
+            let mut sorted = list.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted, list);
+        }
+        let tmp = std::env::temp_dir();
+        assert_eq!(env_unsupported("std/utilities/any/any.class/nothing.pass.cpp", &tmp), None);
+        let listed = env_unsupported(ROOT_UNSUPPORTED[0], &tmp);
+        assert_eq!(listed.is_some(), running_as_root());
+        assert!(listed.is_none_or(|r| r.starts_with("env: ")));
+    }
+
+    #[test]
+    fn mount_lookup() {
+        let info = "\
+531 152 0:68 / / rw,relatime - overlay overlay rw
+564 531 0:47 /AgentWork/k /Volumes/AgentWork/k rw,relatime - fakeowner /run/host_mark/Volumes rw
+565 531 0:48 / /a\\040b rw - tmpfs tmpfs rw
+";
+        let fs = |p: &str| mount_fs_type_in(info, Path::new(p));
+        assert_eq!(fs("/Volumes/AgentWork/k/.build/x").as_deref(), Some("fakeowner"));
+        assert_eq!(fs("/Volumes/AgentWork/kx").as_deref(), Some("overlay"));
+        assert_eq!(fs("/a b/c").as_deref(), Some("tmpfs"));
+        assert_eq!(fs("/tmp").as_deref(), Some("overlay"));
     }
 
     #[cfg(unix)]

@@ -972,6 +972,32 @@ and returns the scope it names:
     `BuildMemberReferenceExpr`, WP-203). Unlike clang, a non-dependent
     use in a template is not diagnosed again at instantiation (nor is
     a non-dependent discarded nodiscard call).
+    Type names warn too (WP-297, `deprecated.rs`): a class, enumeration,
+    typedef or alias named as a type (`check_type_name_access`), an
+    elaborated-type-specifier that refers to a class, and a template-id
+    naming a class template specialization (`class_template_type`, at
+    the template-name, on parse and on substitution, the latter with
+    instantiation notes). The deprecation is the decl's own attribute
+    (on any redeclaration), else an undeclared specialization's
+    pattern's (an explicit or partial specialization has its own class-head
+    attributes); a typedef/alias looks through to its class or enum and
+    an enumerator to its enumeration (clang
+    `ShouldDiagnoseAvailabilityOfDecl`), the note naming that entity.
+    A specialization is named with its written arguments plus defaults
+    (`D<N::X, int>` prints `D<N::X>` as clang does). No warning in a
+    deprecated context: the current context or any enclosing semantic
+    context is deprecated (clang `ShouldDiagnoseAvailabilityInContext`).
+    Warnings for uses in a declaration's decl-specifiers, declarator and
+    initializer wait for that declaration (clang's delayed
+    diagnostics): every access delay point is also a deprecation delay
+    point, and the parser opens one alone around a member-declaration's
+    decl-specifiers and first declarator (`begin_delayed_deprecation`);
+    they are dropped when the declared entity is deprecated or in a
+    deprecated context, discarded with a dropped access delay point
+    (specialization class-head arguments), and otherwise join the
+    enclosing point. Delay applies only outside instantiation.
+    Namespace attributes are not parsed yet, so a deprecated namespace
+    is not a deprecated context.
   - `maybe_unused` suppresses unused warnings.
   - `alignas` is validated as a power of two and fed into layout
     (`check_alignment_expr`). `requested alignment is not a power of 2`

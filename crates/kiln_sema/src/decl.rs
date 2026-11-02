@@ -5289,6 +5289,7 @@ impl Sema<'_, '_> {
                 } else if use_ == TagUse::Reference {
                     self.mark_type_referenced(p);
                     self.check_name_access_as(n, qualifier, p, nloc, LookupKind::Tag);
+                    self.diagnose_type_name_use(p, nloc);
                     return p;
                 } else if use_ == TagUse::Definition {
                     if let Some(def) = self.ast.definition(p) {
