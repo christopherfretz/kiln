@@ -271,6 +271,12 @@ pub struct TemplateTables {
     /// Default template arguments, by parameter decl (the cold "template
     /// default args" map, spec/ast.md §8.1).
     pub defaults: ColdMap<DeclId, TemplateArg>,
+    /// A parameter of a template redeclaration without a default of its
+    /// own whose earlier declaration has one ([temp.param]/12): the
+    /// parameter that owns the default it inherits (clang
+    /// `DefaultArgStorage::getInheritedFrom`, `-ast-dump`'s `inherited
+    /// from`).
+    pub inherited_defaults: ColdMap<DeclId, DeclId>,
     /// Trailing requires-clauses of function declarations
     /// ([dcl.decl.general]/2).
     pub trailing_requires: ColdMap<DeclId, ExprId>,
@@ -376,6 +382,7 @@ impl Default for TemplateTables {
             requirements: Vec::new(),
             requires: Vec::new(),
             defaults: ColdMap::new("template_defaults"),
+            inherited_defaults: ColdMap::new("template_inherited_defaults"),
             trailing_requires: ColdMap::new("trailing_requires"),
             expr_targs: ColdMap::new("expr_targs"),
             expr_begin: ColdMap::new("expr_begin"),
@@ -616,6 +623,7 @@ impl HeapSize for TemplateTables {
         r.push(MemRow::of_vec("templ.requirements", &self.requirements));
         r.push(MemRow::of_vec("templ.requires", &self.requires));
         r.push(self.defaults.mem_row());
+        r.push(self.inherited_defaults.mem_row());
         r.push(self.trailing_requires.mem_row());
         r.push(self.expr_targs.mem_row());
         r.push(self.expr_begin.mem_row());
@@ -1077,6 +1085,21 @@ impl AstBuilder<'_> {
         a: TemplateArg,
     ) -> Result<(), crate::slot::AlreadySet> {
         self.ast.templates.defaults.insert(d, a)
+    }
+
+    /// Records that parameter `d` inherits the default argument of
+    /// parameter `from` of an earlier declaration of its template
+    /// ([temp.param]/12); `from` owns the default (it has one in
+    /// [`TemplateTables::defaults`]).
+    ///
+    /// # Errors
+    /// If `d` already inherits one.
+    pub fn set_inherited_template_default(
+        &mut self,
+        d: DeclId,
+        from: DeclId,
+    ) -> Result<(), crate::slot::AlreadySet> {
+        self.ast.templates.inherited_defaults.insert(d, from)
     }
 
     /// Adds a template pattern: pushed like [`AstBuilder::add`] but neither

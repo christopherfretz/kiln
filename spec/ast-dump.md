@@ -450,6 +450,18 @@ sketch above (WP-071/072).
 - `TemplateArgument type '<type>' | expr | template`. A pack-expansion
   argument prints its pattern, without the `...` (`type 'Ts'`); this
   matches clang.
+- A template parameter of a redeclaration that inherits its default
+  from an earlier declaration ([temp.param]/12) prints the inherited
+  `TemplateArgument` as its default child. That line's first child is
+  `inherited from <Kind> '<name>' ['<type>']`, naming the parameter
+  that wrote the default (`TemplateTypeParm 'T'`,
+  `NonTypeTemplateParm 'N' 'int'`, `TemplateTemplateParm 'TT'`; with
+  `ids`, its `#dN`). The rest of the argument's children follow. This
+  is clang's `getInheritedFrom`. Only earlier declarations pass a
+  default on, from the immediately previous declaration's parameter
+  (`TemplateTables::inherited_defaults`). clang's `previous` label (a
+  default merged across modules) has no kiln equivalent, and the
+  normalizer rejects it. Test: temp.param/inherited-default-ast.cpp.
 
 The dependent expressions use clang's dependent type, `'<dependent
 type>'`:
@@ -497,11 +509,14 @@ type>'`:
   clang; the substituted declarator keeps the trailing-return bit and a
   plain `auto` base (`templ/subst/decls.rs` `function_decl`)
   (`tests/conformance/temp.inst/member-trailing-return-ast.cpp`).
-
-Known gaps:
-- A function parameter named inside its own declarator's trailing
-  return type (`auto f(T t) -> decltype(t.x)`) is unsupported, so the
-  type prints with `...` for the expression.
+- **`decltype` expressions in substituted members** (WP-330): a
+  `decltype` trailing return type of a member of an implicit class
+  instantiation prints its substituted expression as clang's
+  `StmtPrinter`: a substituted `T()` (`CXXScalarValueInitExpr`) prints
+  as the type followed by `()` (`decltype(u + int())`), and a parameter
+  named in its own declarator's trailing return type prints by name
+  (`decltype(t.x)`)
+  (`tests/conformance/temp.inst/member-decltype-return-ast.cpp`).
 
 **Implicit class instantiations (landed, WP-070a).** Normative:
 - `ClassTemplateSpecializationDecl <tag> <name>`, plus `definition

@@ -1144,6 +1144,9 @@ impl Sema<'_, '_> {
     /// the checks that need every definition, the delegation cycles of
     /// constructors ([class.base.init]/6).
     pub fn act_on_end_of_translation_unit(&mut self) {
+        // The `TypoExpr`s of expressions the parser dropped come first
+        // (WP-330).
+        self.emit_dropped_typos();
         self.check_delegating_cycles();
         self.diagnose_unused_file_scope_vars();
     }

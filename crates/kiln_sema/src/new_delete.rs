@@ -838,6 +838,18 @@ impl Sema<'_, '_> {
         bits > MAX_BITS
     }
 
+    /// Whether the elements of (array) type `elem` are of a
+    /// const-default-constructible class ([dcl.init.general]/7: a
+    /// user-provided default constructor, or every member has a default
+    /// member initializer or is itself const-default-constructible).
+    fn const_default_constructible(&mut self, elem: QualType, at: Loc) -> bool {
+        let Some(rec) = self.ast.types.as_record(self.base_element(elem)) else { return false };
+        self.instantiate_for_init(rec, at);
+        let Some(def) = self.ast.definition(rec) else { return false };
+        conv::bases::complete_class(self, def)
+            .is_some_and(|c| self.defn_bits(c).contains(DefinitionBits::CAN_CONST_DEFAULT_INIT))
+    }
+
     /// Diagnoses the default-initialization of a const class object
     /// without a user-provided default constructor ([dcl.init.general]/8);
     /// true if one was reported (the node is built without an
@@ -1093,7 +1105,9 @@ impl Sema<'_, '_> {
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
         let found = self.alloc_fns(elem, op, global, loc);
         if !placement {
-            return self.usual_delete(&found.fns, found.in_class, pass_align, true).map(|u| u.0);
+            return self
+                .usual_delete(&found.fns, found.in_class, pass_align, true, false)
+                .map(|u| u.0);
         }
         let vp = self.ast.types.pointer_to(QualType::VOID);
         let mut params = vec![vp];
@@ -1124,8 +1138,11 @@ impl Sema<'_, '_> {
         };
         match init {
             NewInit::None => {
+                // An array of a const-default-constructible class is
+                // default-initialized element by element ([dcl.init.general]/7).
                 if self.ast.types.effective_quals(elem).is_const()
                     && (array_form || self.ast.types.as_record(elem).is_none())
+                    && !(array_form && self.const_default_constructible(elem, at))
                 {
                     // clang names the whole array type (`const int[]`).
                     let ty = if array_form { array_ty(self) } else { elem };
@@ -1410,7 +1427,7 @@ impl Sema<'_, '_> {
         // Unless `::delete`, the class's own `operator delete` is looked
         // up first ([expr.delete]/9).
         let found = self.alloc_fns(elem, op, global || !complete, loc);
-        let usual = self.usual_delete(&found.fns, found.in_class, aligned, want_sized);
+        let usual = self.usual_delete(&found.fns, found.in_class, aligned, want_sized, !array);
         if usual.is_none() && found.in_class {
             self.no_suitable_delete(op, elem, &found.fns, loc);
             return self.recover_err(&[operand], loc);
@@ -1420,7 +1437,29 @@ impl Sema<'_, '_> {
         if let Some(f) = op_delete {
             self.mark_used(f);
         }
-        let c = conv::lvalue_to_rvalue(self, operand);
+        let mut c = conv::lvalue_to_rvalue(self, operand);
+        if let Some(f) = op_delete
+            && self.ast.is_destroying_operator_delete(f)
+            && !self.has_virtual_dtor(elem)
+        {
+            // [expr.delete]/7.1, /11: a destroying operator delete called
+            // non-virtually is passed the operand converted to its first
+            // parameter's type `C*` (clang `ActOnCXXDelete`); the
+            // destructor is not invoked.
+            if let Some((ps, _)) = self.fn_params(f)
+                && let Some(&p0) = ps.first()
+                && !self.ast.types.same_type(self.ety(c), p0)
+            {
+                match conv::implicit_convert(self, c, p0, ConvCtx::Argument) {
+                    Ok(x) => c = x,
+                    Err(err) => {
+                        let msg = err.diag(self, c);
+                        self.emit(msg);
+                        return self.recover_err(&[c], loc);
+                    }
+                }
+            }
+        }
         let op_delete = op_delete.map(|d| self.ast.latest(d));
         self.builder().cxx_delete(c, op_delete, flags, sized, aligned, QualType::VOID, loc)
     }
@@ -1428,6 +1467,14 @@ impl Sema<'_, '_> {
 
 /// The expressions of the top-level clauses of `l`.
 impl Sema<'_, '_> {
+    /// Whether class type `t` has a virtual destructor ([class.dtor]/10).
+    fn has_virtual_dtor(&self, t: QualType) -> bool {
+        let Some(def) = self.ast.types.as_record(t).and_then(|r| self.ast.definition(r)) else {
+            return false;
+        };
+        self.ast.destructor(def).is_some_and(|d| crate::class::is_virtual(&self.ast, d))
+    }
+
     /// Marks the destructor of `elem`'s innermost element class as
     /// referenced (odr-used, [basic.def.odr]/8) when it is non-trivial,
     /// returning whether it is; `None` after diagnosing a deleted
@@ -1514,7 +1561,7 @@ impl Sema<'_, '_> {
         let align = crate::target::size_align(&self.ast, ty, &self.abi).map_or(1, |(_, a)| a);
         let aligned = align > self.abi.default_new_align;
         let found = self.alloc_fns(ty, OverloadedOperator::Delete, false, loc);
-        let usual = self.usual_delete(&found.fns, found.in_class, aligned, true);
+        let usual = self.usual_delete(&found.fns, found.in_class, aligned, true, true);
         if let Some((op, _)) = usual {
             self.mark_function_referenced(op, loc);
             let op = self.ast.latest(op);

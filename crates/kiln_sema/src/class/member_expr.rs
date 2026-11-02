@@ -444,6 +444,7 @@ impl Sema<'_, '_> {
             let found = self.lookup_name(name, LookupKind::Ordinary);
             self.type_named_by(&found)
         });
+        let named = self.injected_named(named);
         let Some((destroyed, td)) = named else {
             let text = self.ast.symbols().as_str(name).to_owned();
             let msg = if self.ast.types.is_dependent(obj.ty) {
@@ -551,6 +552,7 @@ impl Sema<'_, '_> {
             let found = self.lookup_in_class(d, name, LookupKind::Ordinary);
             self.type_named_by(&found)
         });
+        let (t1, named) = (self.injected_named(t1), self.injected_named(named));
         let mut bad = false;
         for (n, at, ty) in [(name, loc, named), (fname, floc, t1)] {
             match ty {
@@ -628,6 +630,7 @@ impl Sema<'_, '_> {
                 let found = self.lookup_name(name, LookupKind::Ordinary);
                 self.type_named_by(&found)
             });
+        let named = self.injected_named(named);
         let Some((destroyed, td)) = named else {
             if self.ast.types.is_dependent(obj.ty) || self.is_dependent_ctx(q.ctx) {
                 self.templ_unimplemented("a dependent destructor name", loc);
@@ -852,6 +855,17 @@ impl Sema<'_, '_> {
         }
         let qualified = !matches!(qual, DtorQual::None);
         self.builder().pseudo_destructor_q(b, arrow, qualified, destroyed, loc)
+    }
+
+    /// A destructor's type-name found as the injected-class-name of a
+    /// class template's pattern or partial specialization, inside it,
+    /// names the injected-class-name type `X<P...>` ([temp.local]/1),
+    /// which instantiation substitutes, not the pattern's own record
+    /// (`this->~X()` in a member of `X<T>`, [expr.prim.id.dtor]/2).
+    fn injected_named(&mut self, n: Option<(QualType, DeclId)>) -> Option<(QualType, DeclId)> {
+        let (ty, d) = n?;
+        let d0 = self.ast.strip_shadow(d);
+        Some((self.injected_tag_type(d0).unwrap_or(ty), d))
     }
 
     /// The type and type declaration a lookup result names, if it names a

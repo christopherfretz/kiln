@@ -530,6 +530,34 @@ impl Sema<'_, '_> {
         self.builder().unresolved_lookup(DeclName::ident(name), &decls, false, nns, targs, n.loc())
     }
 
+    /// True if the unqualified `name`, followed by `<`, is assumed to name
+    /// a function template ([temp.names]/3, P0846): ordinary lookup finds
+    /// nothing (and it is no builtin) or only non-member functions.
+    pub fn is_assumed_template_name(&self, name: Symbol) -> bool {
+        let found = self.lookup_name(name, LookupKind::Ordinary);
+        if found.decls.is_empty() {
+            return !self.is_builtin_name(name);
+        }
+        found.decls.iter().all(|&d| self.kind_of(self.ast.strip_shadow(d)) == DeclKind::Function)
+    }
+
+    /// The template-id `name<args>` for a name assumed to be a template
+    /// ([temp.names]/3): an `UnresolvedLookupExpr` with the explicit
+    /// arguments over the functions ordinary lookup found, to be
+    /// completed by argument-dependent lookup at the call
+    /// ([basic.lookup.argdep]; at instantiation when dependent).
+    pub fn act_on_assumed_template_id(
+        &mut self,
+        name: Symbol,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> ExprId {
+        let found = self.lookup_name(name, LookupKind::Ordinary);
+        let decls: Vec<DeclId> = found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
+        let list = self.ast.types.arg_list(args);
+        self.builder().unresolved_lookup(DeclName::ident(name), &decls, true, None, Some(list), loc)
+    }
+
     /// The qualified function or variable template-id `e` named at `loc`
     /// begins at its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`,
     /// `DeclRefExpr::getBeginLoc`).
@@ -1641,6 +1669,21 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// The class template whose parameters spell the injected-class-name
+    /// of class template pattern `c`: clang builds that type once, when
+    /// the first declaration is seen, and caches it in the redeclaration
+    /// chain's common data, so the first declaration's parameter names
+    /// print. A friend declared in a templated class does not count: clang
+    /// links it into the chain only at instantiation.
+    pub(crate) fn injected_params_template(&self, c: DeclId) -> Option<DeclId> {
+        let own =
+            self.ast.redecls_of(c).filter_map(|d| self.ast.described_template(d)).filter(|&t| {
+                self.ast.decls.get(t).misc().friend() == FriendKind::None
+                    || !self.in_templated_class(self.ast.decls.lexical_ctx(t))
+            });
+        own.last().or_else(|| self.ast.described_template(c))
+    }
+
     /// The injected-class-name of class template `tmpl` used without
     /// arguments inside its own definition ([temp.local]/1): `X<P...>`
     /// for its parameters `P`, as an `InjectedClassNameType`. `None`
@@ -1651,16 +1694,8 @@ impl Sema<'_, '_> {
         }
         let c = self.injected_class_for(tmpl)?;
         let first = self.ast.first(c);
-        if let Some(ft) = self.ast.described_template(first) {
-            // The parameters of the first declaration (clang caches the
-            // type in the redeclaration chain's common data), unless that
-            // is a friend's: then those of the template whose definition
-            // this is.
-            let own = if self.ast.decls.get(ft).misc().friend() == FriendKind::None {
-                ft
-            } else {
-                self.ast.described_template(c).unwrap_or(tmpl)
-            };
+        if self.ast.described_template(first).is_some() {
+            let own = self.injected_params_template(c).unwrap_or(tmpl);
             return self.injected_type_of(own);
         }
         if self.ast.partial_spec_info(first).is_some() {
