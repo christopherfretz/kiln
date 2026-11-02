@@ -185,6 +185,10 @@ pub(crate) enum Fault {
     PtrSub,
     /// clang's generic `Error(E)`: "subexpression not valid".
     Invalid,
+    /// A failure clang reports with no note and no call stack, so the
+    /// error lands at the declaration (clang 22's `__builtin_abs` of the
+    /// most negative value).
+    Quiet,
     PtrCmp {
         p: u64,
         q: u64,
@@ -1002,12 +1006,18 @@ impl Oven {
                     } else {
                         elem
                     };
-                    let stat = arg!(2) as u32;
-                    let stat = (stat != crate::kbc::bi::DYN).then_some(OTy(stat));
-                    if aux & new_aux::BOUND == 0
-                        && let Err(f) = self.placement(reg!(0) as u64, ty, stat, aux)
-                    {
-                        fail!(f);
+                    // A `void *` argument: the subobject type its
+                    // conversion from `T *` recorded (`kbc::VOID_TAG`).
+                    let stat = match arg!(2) as u32 {
+                        crate::kbc::bi::DYN => (reg!(0) >> 64) as u32,
+                        s => s.wrapping_add(1),
+                    };
+                    let stat = stat.checked_sub(1).map(OTy);
+                    if aux & new_aux::BOUND == 0 {
+                        if let Err(f) = self.placement(reg!(0) as u64, ty, stat, aux) {
+                            fail!(f);
+                        }
+                        reg!(0) = u128::from(reg!(0) as u64);
                     }
                     pc += 6;
                 }
@@ -1314,6 +1324,12 @@ impl Oven {
                     };
                     reg!(0) = u128::from(p);
                     pc += 3;
+                }
+                Op::VoidCast if aux == crate::kbc::VOID_TAG => {
+                    let raw = reg!(1) as u64;
+                    let tag = if raw == 0 { 0 } else { u128::from(arg!(2) as u32) + 1 };
+                    reg!(0) = u128::from(raw) | tag << 64;
+                    pc += 4;
                 }
                 Op::VoidCast => {
                     let raw = reg!(1) as u64;
@@ -2327,9 +2343,9 @@ impl Oven {
         let (sp, _, a) = self.mem.check_storage(raw, 0, true).map_err(fault)?;
         let (sp, a) = (sp, *a);
         let off = u64::from(Ptr::decode(raw).off);
-        // The designated object: of the argument's static type, or (a
-        // `void *` argument, whose designator the Oven does not keep) the
-        // outermost object at `off`.
+        // The designated object: of the argument's static type or, for a
+        // `void *` argument, of the type its conversion from `T *`
+        // recorded; failing both, the outermost object at `off`.
         let target = match stat {
             Some(s) if self.types.has_subobject(a.ty, off, s) => s,
             _ => self.outermost_at(a.ty, off).unwrap_or_else(|| self.dynamic_type(a.ty, off)),

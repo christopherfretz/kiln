@@ -3560,11 +3560,15 @@ pointer constant: a zero integer literal, a `std::nullptr_t` value or
   `tests/conformance/temp.inst/null-dereference-rewarn.cpp`.
 ### 5.16 GNU `_Complex` (`complex.rs`, `conv/`, WP-211)
 clang 19's C99/GNU complex support in C++:
-- **Types.** `_Complex` combines with `float`, `double`, `long double`
-  and the integer types (`char` through `long long`, signed or unsigned).
-  Plain `_Complex` is `_Complex double` with a warning. Any other base
-  (`bool`, `void`, `wchar_t`, `char8_t`, `char16_t`, `char32_t`,
-  `__int128`, `auto`, `__bf16`, a typedef name, spelled `'type-name'`) is
+- **Types.** `_Complex` combines with `float`, `double`, `long double`,
+  `__float128`, `_Float16/32/64/128` and the integer types (`char`
+  through `long long`, signed or unsigned). As in GCC 14 (not clang),
+  it also combines with `__bf16`, spelled directly or through a
+  type-name that denotes it (libstdc++ `<complex>`'s `__complex__
+  decltype(0.0bf16)`; WP-365, spec/abi.md §8.17). Plain `_Complex` is
+  `_Complex double` with a warning. Any other base (`bool`, `void`,
+  `wchar_t`, `char8_t`, `char16_t`, `char32_t`, `__int128`, `auto`,
+  another typedef name, spelled `'type-name'`) is
   `sema_invalid_complex_spec`, and the declaration continues with the base
   type (so `_Complex void v;` also reports the incomplete type).
   `-pedantic` warns `'_Complex' is a C99 extension` on each keyword

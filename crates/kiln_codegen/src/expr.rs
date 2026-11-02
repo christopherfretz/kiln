@@ -1125,7 +1125,7 @@ impl Cg<'_> {
     /// clang `ScalarExprEmitter::EmitPromoted` to `float`: `+ - * /` and
     /// unary `-`/`+` of an excess-precision `_Float16` keep their operands
     /// in `float`; anything else is emitted and extended.
-    fn emit_promoted(&mut self, e: ExprId) -> R<V> {
+    pub(crate) fn emit_promoted(&mut self, e: ExprId) -> R<V> {
         let ast = self.ast;
         let e = self.skip_parens(e);
         let n = *ast.exprs.get(e);
