@@ -1995,6 +1995,12 @@ impl Sema<'_, '_> {
         {
             self.act_on_field(ds, ty, d, invalid)
         } else {
+            // [dcl.spec.general]/3, [dcl.type.general]/2: a variable whose
+            // decl-specifier-seq names no type (`const u7;`, the name is
+            // the declarator-id) is invalid after "a type specifier is
+            // required", as clang's `ConvertDeclSpecToType`, so it is not
+            // checked further (no default-initialization error, WP-330).
+            invalid |= !ds.has_type_specifier();
             // [dcl.constexpr]/6: a constexpr object is const.
             let ty = if ds.constexpr.is_some() && !self.ast.types.is_reference(ty) {
                 self.ast.types.qualify(ty, Quals::CONST)
