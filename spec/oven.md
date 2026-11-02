@@ -893,6 +893,11 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   padding, and copying a base subobject must leave them alone; a
   `memcpy`/`memmove` of class elements copies each the same way (WP-276,
   `tests/conformance/class.copy.assign/trivial-copy-base-tail-padding.cpp`).
+  A class holding no data (`Types::holds_no_data`) copies no byte and
+  reads nothing from its source, which is addressed, not read (clang's
+  `isReadByLvalueToRvalueConversion`): copying an `extern const` empty
+  object such as libc++'s `std::placeholders::_1` is a constant (WP-276,
+  `tests/conformance/expr.const/trivial-copy-empty-class-no-read.cpp`).
 
 **Object lifetime outside `std::allocator` storage — landed (WP-222).**
 `EndLife` aux 2 on a frame or `new` allocation not yet tracked makes it
