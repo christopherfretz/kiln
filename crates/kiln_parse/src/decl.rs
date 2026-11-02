@@ -277,6 +277,14 @@ impl Parser<'_, '_> {
                 names.push((n, l, inl));
             }
         }
+        if self.s.clang_compat >= 22 && !names.is_empty() {
+            // clang 22: only GNU attributes may follow the name; a C++11
+            // specifier-seq there is reported and dropped ([namespace.def]
+            // puts it before the name; spec/parse.md "Attributes").
+            self.diagnose_and_skip_cxx11_attrs();
+            self.parse_gnu_attr_seq(&mut attrs);
+            self.diagnose_and_skip_cxx11_attrs();
+        }
         self.parse_attributes(&mut attrs);
         let Some(open) = self.expect(Punct::LBrace) else {
             self.skip_unsupported_declaration();

@@ -478,6 +478,21 @@ impl Oven {
         }
     }
 
+    /// clang 22: the dynamic type of a base subobject of a variable whose
+    /// value is unknown (not usable in constant expressions) is the
+    /// variable's declared class type, a complete object (P2280R4;
+    /// spec/oven.md "Polymorphism").
+    fn declared_dynamic_type(&self, raw: u64, cls: OTy) -> Option<QualType> {
+        if self.clang_compat < 22 {
+            return None;
+        }
+        let p = Ptr::decode(raw);
+        let a = self.mem.alloc_any(p)?;
+        (matches!(a.origin, Origin::External(_))
+            && self.types.has_base_subobject(a.ty, u64::from(p.off), cls))
+        .then(|| self.types.info(a.ty).q)
+    }
+
     /// The live or dead (same generation) allocation `p` designates.
     pub(crate) fn alloc_any(&self, p: Ptr) -> Option<&Alloc> {
         self.mem.alloc_any(p)
@@ -1227,8 +1242,14 @@ impl Oven {
                         };
                         self.type_info(q, ti)
                     } else {
-                        match self.type_info_dyn(b.ast(), reg!(1) as u64, OTy(arg!(3) as u32), ti) {
+                        let (raw, cls) = (reg!(1) as u64, OTy(arg!(3) as u32));
+                        match self.type_info_dyn(b.ast(), raw, cls, ti) {
                             Ok(r) => r,
+                            Err(Fault::UnknownDynamic { .. })
+                                if let Some(q) = self.declared_dynamic_type(raw, cls) =>
+                            {
+                                self.type_info(q, ti)
+                            }
                             Err(f) => fail!(f),
                         }
                     };

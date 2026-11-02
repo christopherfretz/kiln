@@ -3339,6 +3339,7 @@ impl Sema<'_, '_> {
             || ty.as_complex(t).is_some()
             || self.vector_parts(t).is_some()
             || (ty.as_record(t).is_some() && self.clang_compat < 22)
+            || self.is_nullptr_type(t)
             || self.is_dependent_type(t)
         {
             return;

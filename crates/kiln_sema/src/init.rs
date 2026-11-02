@@ -1007,6 +1007,25 @@ impl Sema<'_, '_> {
         self.builder().implicit_value_init(ty)
     }
 
+    /// Whether member `d` is lexically inside a class still being defined
+    /// (its default member initializers are not parsed yet).
+    fn in_class_being_defined(&self, d: DeclId) -> bool {
+        let mut c = self.ast.decls.get(d).ctx();
+        for _ in 0..256 {
+            let Some(r) = c else { return false };
+            if self
+                .ast
+                .decls
+                .record(r)
+                .is_some_and(|x| x.defn.contains(DefinitionBits::BEING_DEFINED))
+            {
+                return true;
+            }
+            c = self.ast.decls.lexical_ctx(r);
+        }
+        false
+    }
+
     /// A field with no initializer in an aggregate initialization: its
     /// default member initializer ([dcl.init.aggr]/5.1, a
     /// `CXXDefaultInitExpr`), else the value-initializing [`Sema::filler`].
@@ -1019,6 +1038,7 @@ impl Sema<'_, '_> {
             // default member initializer that is not parsed yet, even
             // after the field was invalidated (spec/sema.md §1.1).
             if self.clang_compat >= 22
+                && self.in_class_being_defined(f)
                 && self.field_has_nsdmi(f)
                 && self.ast.decls.field(f).and_then(|x| x.init).is_none()
                 && !self.inst.deferred_nsdmis.contains_key(&f)

@@ -50,12 +50,10 @@ impl Substituter<'_, '_, '_> {
                     self.stmt_failed = true;
                 }
                 // clang 22 drops a `return` whose operand is an error of
-                // the pattern: a constant evaluation goes on past it
-                // (spec/sema-templates.md §5.5).
-                if !reported
-                    && self.sema.clang_compat >= 22
-                    && self.sema.ast.stmts.get(s).kind() == StmtKind::ReturnStmt
-                {
+                // the pattern (its definition has no such statement): a
+                // constant evaluation goes on past it (spec/sema-templates.md
+                // §5.5).
+                if !reported && self.sema.clang_compat >= 22 && self.erroneous_return(s) {
                     return self.sema.act_on_null_stmt(loc);
                 }
                 let e = self.sema.recover_err(&[], loc);
@@ -63,6 +61,17 @@ impl Substituter<'_, '_, '_> {
             }
             Err(SubstFail) => self.sema.act_on_null_stmt(loc),
         }
+    }
+
+    /// Whether pattern statement `s` is a `return` whose operand has an
+    /// error of the definition (clang's `containsErrors()`).
+    fn erroneous_return(&self, s: StmtId) -> bool {
+        let ast = &self.sema.ast;
+        ast.stmts.get(s).kind() == StmtKind::ReturnStmt
+            && ast.stmts.return_value(s).is_some_and(|v| {
+                let n = ast.exprs.get(v);
+                n.kind() == ExprKind::RecoveryExpr || n.deps().contains(ExprDeps::ERROR)
+            })
     }
 
     /// A sub-statement: a statement that is not compound gets a block
