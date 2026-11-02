@@ -231,6 +231,22 @@ impl TypeNames for SemaNames<'_> {
         self.ast.spec_print_args(decl)
     }
 
+    fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
+        let (_, info) = self.ast.spec_info(decl)?;
+        let pattern = self.ast.template_info(info.template)?.pattern?;
+        let me = self.ast.first(decl);
+        self.ast.redecls_of(pattern).find_map(|r| {
+            self.ast.lists.iter::<kiln_ast::AttrId>(self.ast.attrs.of_decl(r)).find_map(|a| {
+                let n = self.ast.attrs.get(a);
+                let t = (n.kind == kiln_ast::attr::AttrKind::PREFERRED_NAME)
+                    .then(|| QualType::from_raw(n.b))
+                    .flatten()?;
+                let r = self.ast.types.as_record(t)?;
+                (self.ast.first(r) == me).then_some(t)
+            })
+        })
+    }
+
     fn tag_keyword(&self, decl: DeclId) -> &'static str {
         self.ast.decls.record(decl).map_or("struct", |r| r.tag.keyword())
     }

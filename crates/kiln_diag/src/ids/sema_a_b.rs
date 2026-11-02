@@ -113,6 +113,7 @@ sema_attribute_param_integers_only = Error (1) "{0} attribute argument may only 
 sema_attribute_param_not_ice = Error (2) "{0} attribute requires parameter {1} to be an integer constant";
 sema_attribute_param_not_ident = Error (2) "{0} attribute requires parameter {1} to be an identifier";
 sema_attribute_param_out_of_bounds = Error (2) "{0} attribute parameter {1} is out of bounds";
+sema_attribute_preferred_name_arg_invalid = Error (2) "argument {0} to 'preferred_name' attribute is not a typedef for a specialization of {1}";
 sema_attribute_pointers_only = Warning [IgnoredAttributes] (1) "{0} attribute only applies to return values that are pointers";
 sema_attribute_pointers_refs_only = Warning [IgnoredAttributes] (1) "{0} attribute only applies to return values that are pointers or references";
 sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an integer constant";

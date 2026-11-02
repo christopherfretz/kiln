@@ -69,6 +69,15 @@ pub trait TypeNames {
         self.specialization_args(decl)
     }
 
+    /// The type a class template specialization `decl` prints as, from
+    /// its template's `preferred_name` attribute (clang
+    /// `PreferredNameAttr`, `printRecordBefore`): the typedef type that
+    /// names `decl`. `None` for other records.
+    fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
+        let _ = decl;
+        None
+    }
+
     /// The keyword of class `decl` (`struct`, `class` or `union`), for
     /// [`PrintOptions::c_policy`].
     fn tag_keyword(&self, decl: DeclId) -> &'static str {
@@ -842,6 +851,27 @@ impl Printer<'_> {
         }
     }
 
+    /// clang `printRecordBefore`'s `UsePreferredNames`: a specialization
+    /// named by its template's `preferred_name` typedef prints as that
+    /// typedef (with its scope, as a bare `TypedefType`). Not with
+    /// canonical arguments (`PrintCanonicalTypes`), nor in C.
+    fn preferred_name(&mut self, d: DeclId) -> bool {
+        if self.canon_args || self.c_policy {
+            return false;
+        }
+        let Some(mut t) = self.names.preferred_name(d) else { return false };
+        loop {
+            match self.ctx.view(t.ty()) {
+                TypeView::Elaborated { named, .. } => t = named,
+                TypeView::Typedef { decl, .. } => {
+                    self.decl(decl, self.scope);
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+    }
+
     fn with_scope(&mut self, scope: bool, f: impl FnOnce(&mut Self)) {
         let saved = self.scope;
         self.scope = scope;
@@ -1040,6 +1070,10 @@ impl Printer<'_> {
             | TypeView::DependentSizedArray { elem: e, .. } => self.before(e),
             TypeView::Function(_) => self.function_before(t),
             TypeView::Record(d) => {
+                if self.preferred_name(d) {
+                    self.space_before_ph();
+                    return;
+                }
                 if self.c_policy {
                     let names = self.names;
                     self.push(names.tag_keyword(d));
