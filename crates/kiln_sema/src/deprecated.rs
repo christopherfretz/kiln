@@ -97,7 +97,7 @@ impl Sema<'_, '_> {
             if self.ast.decls.record(d).is_some() {
                 kiln_ast::types::write_arg_list_scoped_of(types, &names, d, i.print_args, &mut name);
             } else if self.ast.decls.function(d).is_some() {
-                kiln_ast::types::write_arg_list_of(types, &names, d, i.args, &mut name);
+                kiln_ast::types::write_arg_list_scoped_of(types, &names, d, i.args, &mut name);
             }
         }
         name

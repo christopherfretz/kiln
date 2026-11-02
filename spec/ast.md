@@ -910,8 +910,14 @@ context-free defaults (`NoEnv`):
   - `Cast` gives `(short)5`.
   - `Char(enc)` gives `'a'` or `u8'a'`, using the string escapes, with
     `'` escaped.
-  - `Enum` gives the enumerator `E::X`, or `(E)7` when no enumerator
-    matches.
+  - `Enum` gives the enumerator, fully qualified by its scope (clang
+    `printQualifiedName`; an unscoped enumeration adds no component:
+    `n::E::X`, `n::ub`), or `(n::E)7` when no enumerator matches. A
+    cast prints the canonical type with every name scoped
+    (`PrintEnv::arg_type_name`; `A<(n::E)5>` for `(n::EE)5`). Sema's
+    `TypeNames::write_value` uses this style for every integer, so
+    diagnostics print `S<n::E::b>` and `Ch<'x'>`, not `S<1>` and
+    `Ch<120>` (WP-303).
 - **References** print without `&` (`x`).
 - **Class values** print as `S{1, 2}`.
 - Everything else prints as in the dump.
