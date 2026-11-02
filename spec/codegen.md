@@ -153,6 +153,8 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
 ## 3. Expressions (clang CGExprScalar/CGExprAgg/CGDecl rules mirrored)
 `expr.rs` mirrors clang's `ScalarExprEmitter`, `EmitLValue`,
 `AggExprEmitter`, `EmitBranchOnBoolExpr` and `EmitAutoVarDecl`.
+A `CXXRewrittenBinaryOperator` emits its semantic form in every one of
+them, the aggregate path included (a reversed `<=>` with a class result).
 - Conversions follow `EmitScalarConversion`:
   - to bool: `icmp ne 0`, `fcmp une 0.0` or `icmp ne null`;
   - integer to integer: cast by source signedness;

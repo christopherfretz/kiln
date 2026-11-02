@@ -2938,6 +2938,11 @@ impl Cg<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
+            // clang `AggExprEmitter::VisitCXXRewrittenBinaryOperator`: the
+            // semantic form (`(y <=> x)` reversed, or `0 <=> (y <=> x)`).
+            ExprKind::CXXRewrittenBinaryOperator => {
+                self.agg_visit(ast.exprs.rewritten_semantic(e), dest, zeroed)
+            }
             // clang `VisitCompoundLiteralExpr`: `EmitAggExpr` of the
             // initializer into the slot (C++: not destroyed here).
             ExprKind::CompoundLiteralExpr => {
