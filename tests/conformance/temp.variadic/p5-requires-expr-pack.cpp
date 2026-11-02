@@ -71,3 +71,12 @@ static_assert(!cmp<int, N>);
 template <class... Ts>
 constexpr bool local = requires(const Ts&... t) { (t, ...); };
 static_assert(local<int, N>);
+
+// A requirement that fails at the enclosing template's instantiation
+// settles the value even though a local parameter still depends on the
+// generic lambda's own (retained) level.
+template <class... Ts> constexpr auto gen() {
+  return [](auto u) { return requires(Ts... t, decltype(u) v) { (t + ... + 0); }; };
+}
+static_assert(gen<int, long>()(N{}));
+static_assert(!gen<N, int>()(0));
