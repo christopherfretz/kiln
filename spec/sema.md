@@ -995,7 +995,9 @@ and returns the scope it names:
   - On failure it reports
     `static assertion failed due to requirement '…'`, with the
     condition printed by `TypeNames::write_expr`, plus the message if
-    there is one.
+    there is one. A variable template-id prints its explicit arguments
+    (`is_v<ND>`, clang `VisitDeclRefExpr`); its qualifier is not yet
+    kept on the `DeclRefExpr` (clang prints `!std::is_same_v<…>`).
   - Evaluation notes follow (§8).
 
 ### 4.7 Exception specifications (`except.rs`)

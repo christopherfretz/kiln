@@ -1029,6 +1029,13 @@ Later uses of it are silent. As in clang's `InstantiateClass`, the class
 body's own failures do so too (`class_body_with`): a failed base
 specifier, an invalid data member (field or static data member) of the
 pattern, which is skipped, or a data member whose instantiation fails.
+A `static_assert` member that fails (its condition is false, not a
+constant expression, or does not convert; `static_assert_checked`) also
+stops the body: the members after it are not instantiated
+(clang's `InstantiateClass` bails out on `isFailed`), so libc++'s
+`optional<char[20]>` reports only its assertion. Other invalid members
+(a member function whose type fails) do not stop it
+(tests/conformance/temp.inst/failed-static-assert-stops-instantiation.cpp).
 The specialization is then still completed with its implicit special
 members (`ensure_implicit` exempts invalid specializations), its default
 member initializers are not instantiated, and the use that required the

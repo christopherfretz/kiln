@@ -6003,10 +6003,24 @@ impl Sema<'_, '_> {
 
     /// `static_assert(cond, msg);` ([dcl.pre]/10).
     pub fn act_on_static_assert(&mut self, cond: ExprId, msg: Option<ExprId>, loc: Loc) -> DeclId {
+        self.static_assert_checked(cond, msg, loc).0
+    }
+
+    /// [`Sema::act_on_static_assert`], with whether the declaration failed
+    /// (clang `StaticAssertDecl::isFailed`: the condition does not convert,
+    /// is not a constant expression, or is `false`).
+    pub(crate) fn static_assert_checked(
+        &mut self,
+        cond: ExprId,
+        msg: Option<ExprId>,
+        loc: Loc,
+    ) -> (DeclId, bool) {
+        let mut failed = false;
         let c = match conv::contextually_convert_to_bool(self, cond) {
             Ok(c) => c,
             Err(err) => {
                 self.emit_conv_error(err, self.ast.exprs.get(cond).loc());
+                failed = true;
                 cond
             }
         };
@@ -6017,6 +6031,7 @@ impl Sema<'_, '_> {
             match self.eval_const(c, EvalContext::new(EvalKind::StaticAssert, loc)) {
                 Ok(v) if self.const_truth(v) != Some(false) => {}
                 Ok(_) => {
+                    failed = true;
                     let text = msg.and_then(|m| self.string_literal_text(m));
                     // clang's `findFailedBooleanCondition`: the failing
                     // conjunct, printed unless it is a literal.
@@ -6042,7 +6057,7 @@ impl Sema<'_, '_> {
                         let d = notes.into_iter().fold(d, kiln_diag::Diag::with_note);
                         self.emit(d);
                         let ctx = self.ctx;
-                        return self.builder().static_assert(ctx, loc, c, msg);
+                        return (self.builder().static_assert(ctx, loc, c, msg), true);
                     }
                     let d = if lit {
                         match text {
@@ -6071,6 +6086,7 @@ impl Sema<'_, '_> {
                     self.emit(d);
                 }
                 Err(mut f) => {
+                    failed = true;
                     let at = Self::fold_lone_invalid(&mut f, cloc);
                     let d = self.diag(DiagId::sema_static_assert_not_ice, at);
                     let d = Self::with_failure_notes(d, f);
@@ -6079,7 +6095,7 @@ impl Sema<'_, '_> {
             }
         }
         let ctx = self.ctx;
-        self.builder().static_assert(ctx, loc, c, msg)
+        (self.builder().static_assert(ctx, loc, c, msg), failed)
     }
 
     /// The conjunct of the failed condition `c` that evaluates to false
