@@ -684,7 +684,7 @@ impl Cg<'_> {
         let memcpyize = self.is_defaulted(d)
             && matches!(self.special_of(d), Some(Special::CopyCtor | Special::MoveCtor));
         let rd = self.f.this_class.expect("constructor class");
-        let mut run: Vec<(DeclId, Option<(u64, u64)>)> = Vec::new();
+        let mut run: Vec<(DeclId, u64, u64)> = Vec::new();
         // InitializeVTablePointers runs after the base initializers and
         // before the member initializers (not in delegating constructors).
         let delegating = inits.iter().any(|ci| ci.kind == CtorInitKind::Delegating);
@@ -755,7 +755,7 @@ impl Cg<'_> {
                         && ci.kind == CtorInitKind::Field
                         && let Some(span) = self.memcpyable_field(rd, field, ci.init)
                     {
-                        run.push((field, span));
+                        run.push((field, span.0, span.1));
                         continue;
                     }
                     self.flush_memcpy_run(d, &mut run)?;
@@ -799,18 +799,13 @@ impl Cg<'_> {
         self.push_cleanup_kind(c, false, true);
     }
 
-    /// `Some(span)` if clang's `ConstructorMemcpyizer` may copy field
-    /// `field` of `rd` with a memcpy: `span` is its byte range
-    /// `[first, last)`, or `None` for a field that is empty for layout
-    /// (clang `addMemcpyableField` joins it to the run but copies none of
-    /// its bytes: an empty `[[no_unique_address]]` member shares its offset
-    /// with a non-empty one).
-    fn memcpyable_field(
-        &mut self,
-        rd: DeclId,
-        field: DeclId,
-        init: ExprId,
-    ) -> Option<Option<(u64, u64)>> {
+    /// The byte range `[first, last)` of field `field` of `rd` if clang's
+    /// `ConstructorMemcpyizer` may copy it with a memcpy. A field that is
+    /// empty for layout has an empty range: clang `addMemcpyableField`
+    /// joins it to the run but copies none of its bytes (an empty
+    /// `[[no_unique_address]]` member shares its offset with a non-empty
+    /// one).
+    fn memcpyable_field(&mut self, rd: DeclId, field: DeclId, init: ExprId) -> Option<(u64, u64)> {
         let ast = self.ast;
         let q = ast.decls.get(field).ty()?;
         if ast.types.effective_quals(q).is_volatile() {
@@ -839,16 +834,16 @@ impl Cg<'_> {
         if self.tys.record(def).bitfields.contains_key(&field) {
             return None;
         }
+        let start = bit / 8;
         if self.tys.is_empty_record_for_layout(q) {
-            return Some(None);
+            return Some((start, start));
         }
         let (s, _) = self.size_align(q);
         let size = match ast.types.as_record(q).and_then(|r| self.class_def(r)) {
             Some(r) if self.array_elem(q).is_none() => self.tys.layouter().record(r).data_size,
             _ => s,
         };
-        let start = bit / 8;
-        Some(Some((start, start + size)))
+        Some((start, start + size))
     }
 
     /// The declaration-order index of field `field` in `def`.
@@ -878,18 +873,14 @@ impl Cg<'_> {
     /// normally. The memcpy spans from the lowest-offset non-empty field
     /// to the end of the highest-offset one (`addNextField`), and a run of
     /// only empty fields copies nothing.
-    fn flush_memcpy_run(
-        &mut self,
-        ctor: DeclId,
-        run: &mut Vec<(DeclId, Option<(u64, u64)>)>,
-    ) -> R<()> {
+    fn flush_memcpy_run(&mut self, ctor: DeclId, run: &mut Vec<(DeclId, u64, u64)>) -> R<()> {
         let ast = self.ast;
         if run.is_empty() {
             return Ok(());
         }
         let items = std::mem::take(run);
         if items.len() == 1 {
-            let (field, _) = items[0];
+            let (field, _, _) = items[0];
             let ci = ast
                 .ctor_inits(ctor)
                 .find(|c| c.kind == CtorInitKind::Field && DeclId::new(c.target) == field)
@@ -900,26 +891,22 @@ impl Cg<'_> {
         // clang `addInitialField` / `addNextField`.
         let mut first: Option<(DeclId, u64)> = None;
         let mut last: Option<(u64, u64)> = None;
-        for &(f, span) in &items {
-            let Some((s, e)) = span else { continue };
-            match (first, last) {
-                (Some((_, fs)), Some((ls, _))) => {
-                    if s < fs {
-                        first = Some((f, s));
-                    } else if s >= ls {
-                        last = Some((s, e));
-                    }
-                }
-                _ => {
+        for &(f, s, e) in items.iter().filter(|&&(_, s, e)| e > s) {
+            if let (Some((_, fs)), Some((ls, _))) = (first, last) {
+                if s < fs {
                     first = Some((f, s));
+                } else if s >= ls {
                     last = Some((s, e));
                 }
+            } else {
+                first = Some((f, s));
+                last = Some((s, e));
             }
         }
         // clang `ConstructorMemcpyizer::pushEHDestructors`, before the
         // memcpy.
         if self.opts.exceptions {
-            for &(f, _) in &items {
+            for &(f, _, _) in &items {
                 let q = ast.decls.get(f).ty().expect("field type");
                 if self.destructed_class(q).is_some() {
                     let this = self.this_addr();
