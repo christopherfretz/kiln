@@ -85,21 +85,73 @@ impl Substituter<'_, '_, '_> {
     /// keeps it as written, [`crate::Sema::dependent_init_list`]).
     fn call_arg_list(&mut self, l: kiln_ast::ids::ListId) -> SubstResult<Vec<ExprId>> {
         let v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-        if !v.iter().any(|&x| self.sema.ast.exprs.get(x).kind() == ExprKind::InitListExpr) {
+        if !v.iter().any(|&x| self.braced_source(x).is_some()) {
             return self.expr_list(l);
         }
         let mut out = Vec::with_capacity(v.len());
         for x in v {
-            match self.sema.ast.exprs.get(x).kind() {
-                ExprKind::CXXDefaultArgExpr => break,
-                ExprKind::InitListExpr => {
-                    let il = self.init_list(x)?;
+            if self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultArgExpr {
+                break;
+            }
+            match self.braced_source(x) {
+                Some(b) => {
+                    let il = self.braced_list(b)?;
                     out.push(self.sema.act_on_braced_arg(il));
                 }
-                _ => out.extend(self.expand_exprs(&[x])?),
+                None => out.extend(self.expand_exprs(&[x])?),
             }
         }
         Ok(out)
+    }
+
+    /// The braced-init-list an analyzed operand `x` was initialized from
+    /// ([dcl.init.list]/1), seen through the implicit nodes semantic
+    /// analysis added: an `InitListExpr`, the backing array of a
+    /// `std::initializer_list` (`CXXStdInitializerListExpr`,
+    /// [dcl.init.list]/5) or a list-initializing `CXXConstructExpr`. The
+    /// rebuilt operand is that list again, initialized anew (clang
+    /// `TransformInitializer` reverting to the syntactic form).
+    pub(crate) fn braced_source(&self, mut x: ExprId) -> Option<ExprId> {
+        let ex = &self.sema.ast.exprs;
+        loop {
+            match ex.get(x).kind() {
+                ExprKind::ExprWithCleanups
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ImplicitCastExpr => x = ex.operand(x),
+                ExprKind::CXXStdInitializerListExpr => x = ex.operand(ex.operand(x)),
+                ExprKind::InitListExpr => return Some(x),
+                ExprKind::CXXConstructExpr if ex.construct_info(x).list => return Some(x),
+                _ => return None,
+            }
+        }
+    }
+
+    /// The braced-init-list of [`Self::braced_source`] result `b`.
+    pub(crate) fn braced_list(&mut self, b: ExprId) -> SubstResult<InitList> {
+        let ex = &self.sema.ast.exprs;
+        if ex.get(b).kind() == ExprKind::CXXConstructExpr {
+            let at = ex.get(b).loc();
+            let end = ex.end_loc(b).unwrap_or(at);
+            return self.construct_list(b, at, end);
+        }
+        self.init_list(b)
+    }
+
+    /// A parenthesized aggregate initialization `T(a, b)` ([dcl.init.general]
+    /// /16.6.2.2, P0960) as an operand: formed again as the explicit type
+    /// conversion of `ty` from the substituted explicit initializers
+    /// ([expr.type.conv]/2), which redoes the initialization (the
+    /// resolved one is not reused: an instantiation-dependent operand may
+    /// convert differently).
+    fn paren_list_init(&mut self, p: ExprId, ty: QualType, loc: Loc, end: Loc) -> SubstResult<ExprId> {
+        let args = self.call_arg_list(self.sema.ast.exprs.paren_list_inits(p))?;
+        Ok(match args.as_slice() {
+            [a] if !self.sema.is_braced_arg(*a) => {
+                self.sema.act_on_cast(CastStyle::Functional, ty, *a, loc, end)
+            }
+            _ => self.sema.act_on_paren_list_cast(ty, &args, loc, end),
+        })
     }
 
     #[allow(clippy::too_many_lines, reason = "one arm per expression kind, as TreeTransform")]
@@ -237,7 +289,18 @@ impl Substituter<'_, '_, '_> {
                 use kiln_ast::names::OverloadedOperator as OO;
                 let op = ex(self).operator_call_op(e);
                 let args = ex(self).call_args(e);
-                let args = self.expr_list(args)?;
+                // `x = {…}` through an assignment operator function
+                // ([expr.assign]/8, [over.match.oper]): the list is
+                // assigned again.
+                if let Some(b) = binary_of(op).filter(|b| b.is_assignment())
+                    && let [l, r] = self.sema.ast.lists.iter::<ExprId>(args).collect::<Vec<_>>()[..]
+                    && let Some(src) = self.braced_source(r)
+                {
+                    let l = self.expr(l)?;
+                    let il = self.braced_list(src)?;
+                    return Ok(self.sema.act_on_assign_list(b, l, &il, loc));
+                }
+                let args = if op == OO::Call { self.call_arg_list(args)? } else { self.expr_list(args)? };
                 match (op, args.as_slice()) {
                     (OO::Call, [f, rest @ ..]) => {
                         let lparen = self.sema.begin_loc(*f);
@@ -462,6 +525,17 @@ impl Substituter<'_, '_, '_> {
                 };
                 let ty = self.ty(written, loc)?;
                 let o = ex(self).operand(e);
+                // `A(a, b)` of an aggregate `A`: the no-op functional cast
+                // over the parenthesized aggregate initialization.
+                if style == CastStyle::Functional {
+                    let mut p = o;
+                    while ex(self).get(p).kind() == ExprKind::CXXBindTemporaryExpr {
+                        p = ex(self).operand(p);
+                    }
+                    if ex(self).get(p).kind() == ExprKind::CXXParenListInitExpr {
+                        return self.paren_list_init(p, ty, loc, end);
+                    }
+                }
                 if self.sema.ast.exprs.get(o).kind() == ExprKind::InitListExpr {
                     let l = self.init_list(o)?;
                     return Ok(self.sema.act_on_list_cast(ty, &l, loc));
@@ -649,6 +723,19 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.act_on_cxx_delete(global, array, loc, o, cxx26))
             }
             ExprKind::RecoveryExpr => self.recovery_expr(e, loc),
+            ExprKind::CXXParenListInitExpr => {
+                let ty = self.ty(n.ty(), loc)?;
+                self.paren_list_init(e, ty, loc, end)
+            }
+            // `std::initializer_list<E>` over its backing array
+            // ([dcl.init.list]/5): the list initializes the (substituted)
+            // `std::initializer_list` type again.
+            ExprKind::CXXStdInitializerListExpr => {
+                let ty = self.ty(n.ty(), loc)?;
+                let b = self.braced_source(e).ok_or(SubstFail)?;
+                let l = self.braced_list(b)?;
+                Ok(self.sema.init_from_list_at(ty, &l, Some(l.lbrace)))
+            }
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
     }

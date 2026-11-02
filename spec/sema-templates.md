@@ -1487,6 +1487,24 @@ recomputed exactly as for non-template code (clang's
   the same way. An unknown field in a requirement is a substitution
   failure. The aggregate checks of spec/sema.md §6 run on the
   instantiated type.
+- **Analyzed initializations as operands** (WP-296). An operand that is
+  only instantiation-dependent (it names a local of the template) was
+  analyzed at definition; its resolved initialization is not reused but
+  formed again from the substituted operands (clang
+  `TransformInitializer` reverting to the syntactic form):
+  - a parenthesized aggregate initialization (`CXXParenListInitExpr`,
+    [dcl.init.general]/16.6.2.2), alone or under its no-op functional
+    cast, becomes `act_on_cast` (one operand) or `act_on_paren_list_cast`
+    of the substituted type from its explicit initializers
+    ([expr.type.conv]/2);
+  - a braced list behind implicit nodes (`Substituter::braced_source`:
+    an `InitListExpr`, the backing array of a `CXXStdInitializerListExpr`
+    or a list-initializing `CXXConstructExpr`) is that list again: a
+    braced call argument (also of an `operator()` call), the right
+    operand of an assignment operator function (`act_on_assign_list`,
+    [expr.assign]/8), a returned list and a for-range-initializer;
+    elsewhere a `CXXStdInitializerListExpr` list-initializes its
+    substituted `std::initializer_list` type ([dcl.init.list]/5).
 
 ### 5.5 Statements
 

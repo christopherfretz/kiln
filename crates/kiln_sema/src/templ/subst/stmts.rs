@@ -152,23 +152,13 @@ impl Substituter<'_, '_, '_> {
             }
             StmtKind::ReturnStmt => {
                 let v = self.sema.ast.stmts.return_value(s);
-                if let Some(v) = v
-                    && self.sema.ast.exprs.get(v).kind() == ExprKind::InitListExpr
-                {
-                    let l = self.init_list(v)?;
+                // `return {...};`: the braced list, as written, or as the
+                // analyzed pattern holds it (a list-initializing
+                // construction, WP-067b; a `std::initializer_list` over its
+                // backing array).
+                if let Some(b) = v.and_then(|v| self.braced_source(v)) {
+                    let l = self.braced_list(b)?;
                     return Ok(self.sema.act_on_return_list(&l, loc));
-                }
-                // `return {...};` of a class type: a list-initializing
-                // construction (WP-067b) goes back to its braced list.
-                if let Some(v) = v {
-                    let c = self.peel_initializer(v);
-                    let ex = &self.sema.ast.exprs;
-                    if ex.get(c).kind() == ExprKind::CXXConstructExpr && ex.construct_info(c).list {
-                        let at = ex.get(c).loc();
-                        let end = ex.end_loc(c).unwrap_or(at);
-                        let l = self.construct_list(c, at, end)?;
-                        return Ok(self.sema.act_on_return_list(&l, loc));
-                    }
                 }
                 let v = self.opt_expr(v)?;
                 Ok(self.sema.act_on_return(v, loc))
@@ -517,8 +507,11 @@ impl Substituter<'_, '_, '_> {
         let r = (|| {
             let init = self.opt_stmt(d.init);
             let collect = self.sema.begin_for_range_init(self.sema.range_lifetime_extension);
-            let range = if self.sema.ast.exprs.get(range_init).kind() == ExprKind::InitListExpr {
-                self.init_list(range_init).map(crate::RangeInit::List)
+            // `for (x : {a, b})`: the braced list, which the analyzed
+            // pattern holds as a `std::initializer_list` over its backing
+            // array once it is not type-dependent.
+            let range = if let Some(b) = self.braced_source(range_init) {
+                self.braced_list(b).map(crate::RangeInit::List)
             } else {
                 self.expr(range_init).map(crate::RangeInit::Expr)
             };
