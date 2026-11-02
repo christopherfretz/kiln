@@ -53,9 +53,7 @@ impl Sema<'_, '_> {
         if let Some(a) = self.find_attr(self.ast.latest(d), AttrKind::DEPRECATED) {
             return Some(a);
         }
-        if self.ast.decls.record(d).is_none() {
-            return None;
-        }
+        self.ast.decls.record(d)?;
         let (_, info) = self.ast.spec_info(d)?;
         if info.kind != SpecKind::Undeclared {
             return None;

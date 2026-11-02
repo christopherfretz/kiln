@@ -20,10 +20,10 @@ mod types;
 
 pub(crate) use local::LocalMethod;
 
-use kiln_ast::{DeclId, ExprId};
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, ListId, NnsId, QualType};
 use kiln_ast::types::{ArgView, Nns, TemplateArg, TemplateName, TypeFlags};
+use kiln_ast::{DeclId, ExprId};
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 use kiln_source::symbol::Symbol;
