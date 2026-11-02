@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 
+use kiln_ast::decl::DeclKind;
 use kiln_ast::types::UnaryTransformKind;
 use kiln_ast::{DeclId, ExprId, NnsId};
 use kiln_diag::{Diag, DiagId};
@@ -30,6 +31,10 @@ pub(crate) enum ParamTypename {
     Implicit,
     /// It is not: a missing `typename` is diagnosed.
     Required,
+    /// It was not, and a missing `typename` was diagnosed: the function
+    /// declaration is invalid (clang), so a later out-of-line definition
+    /// does not match it.
+    Missing,
 }
 
 /// The bracket kinds whose nesting [`Parser::bump`] tracks.
@@ -766,8 +771,16 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             return None;
         }
         let mut qual: Option<DeclId> = None;
+        // A qualifier component was a class template named with dependent
+        // arguments outside its own scope ([temp.dep.type]/6): a type
+        // found in it by lookahead is a member of an unknown specialization.
+        let mut dep_tid = false;
         if let Some(d) = self.decltype_scope_at(i) {
-            qual = Some(d.qual?.0);
+            let q = d.qual?.0;
+            // A parsed-ahead `X<T>::` that is not the current
+            // instantiation stays the class template (a dependent marker).
+            dep_tid = self.s.ast.decls.get(q).kind() == DeclKind::ClassTemplate;
+            qual = Some(q);
             i += 1;
         } else if self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon) {
             qual = Some(self.s.ast.tu);
@@ -780,11 +793,23 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
             let name = self.ident_of(self.tok_at(i))?;
             let mut class = self.s.classify_name(name, qual);
+            if dep_tid && matches!(class, NameClass::Type(..)) {
+                class = NameClass::Dependent;
+            }
             let mut end = i + 1;
             if (template_kw || is_template_class(class))
                 && self.tok_at(end).kind == TokKind::Punct(Punct::Less)
             {
                 let (close, split) = self.skip_template_args(end)?;
+                if let NameClass::TypeTemplate(d) = class
+                    && !split
+                    && self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon)
+                    && self.s.ast.decls.get(d).kind() == DeclKind::ClassTemplate
+                    && self.template_args_dependent(end, close)
+                    && !self.s.may_name_current_instantiation(d)
+                {
+                    dep_tid = true;
+                }
                 class = type_if_args(class);
                 if split {
                     return Some((close, true, class, name, qual));
@@ -806,6 +831,36 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
             return Some((end, false, class, name, qual));
         }
+    }
+
+    /// Whether the template argument list between `<` at `lt` and its
+    /// closer at `close` names a template parameter or a dependent name
+    /// ([temp.dep.type]/7): lookahead approximation by the unqualified
+    /// identifiers in it.
+    fn template_args_dependent(&self, lt: usize, close: usize) -> bool {
+        (lt + 1..close).any(|j| {
+            let Some(name) = self.ident_of(self.tok_at(j)) else { return false };
+            if matches!(
+                Self::punct_of(self.tok_at(j - 1)),
+                Some(Punct::ColonColon | Punct::Period | Punct::Arrow)
+            ) {
+                return false;
+            }
+            let kind = |d: DeclId| self.s.ast.decls.get(d).kind();
+            let dep_ty = |d: DeclId| {
+                self.s.ast.decls.get(d).ty().is_some_and(|t| self.s.is_dependent_type(t))
+            };
+            match self.s.classify_name(name, None) {
+                NameClass::Dependent => true,
+                NameClass::Type(t, d) => {
+                    matches!(kind(d), DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm)
+                        || self.s.is_dependent_type(t)
+                }
+                NameClass::Value(d) => kind(d) == DeclKind::NonTypeTemplateParm || dep_ty(d),
+                NameClass::TypeTemplate(d) => kind(d) == DeclKind::TemplateTemplateParm,
+                _ => false,
+            }
+        })
     }
 
     /// Skips the template argument list whose `<` is at index `i`

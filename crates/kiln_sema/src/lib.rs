@@ -189,6 +189,10 @@ pub struct Sema<'a, 'sm> {
     /// linkage (clang pushes the invalid out-of-line declaration on the
     /// block's scope chain; WP-235).
     pub(crate) dropped_qualified_locals: kiln_source::fx::FxHashSet<DeclId>,
+    /// Functions declared with a parameter that needed the missing-
+    /// `typename` recovery: no qualified redeclaration matches them
+    /// (spec/sema-templates.md, clang's invalid declaration).
+    pub(crate) missing_typename_fns: kiln_source::fx::FxHashSet<DeclId>,
     /// The latest namespace-scope declaration of each function or
     /// variable with C language linkage, by name ([dcl.link]/6; clang's
     /// extern "C" context, `extern_c.rs`).
@@ -561,6 +565,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             enums: Vec::new(),
             local_externs: Vec::new(),
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
+            missing_typename_fns: kiln_source::fx::FxHashSet::default(),
             extern_c: kiln_source::fx::FxHashMap::default(),
             oven: Some(Oven::new(Budget::default())),
             global_ops: new_delete::GlobalOps::default(),

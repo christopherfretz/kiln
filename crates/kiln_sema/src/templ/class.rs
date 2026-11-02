@@ -1335,6 +1335,16 @@ impl Substituter<'_, '_, '_> {
                 // Injected by its anonymous struct or union.
                 continue;
             }
+            // clang `InstantiateClass`: a failed static_assert makes the
+            // specialization invalid and stops its instantiation (the
+            // later members are not declared).
+            if n.kind() == DeclKind::StaticAssert && local.is_none() {
+                if matches!(sub.static_assert_decl(m), Ok((_, true))) {
+                    invalid = true;
+                    break;
+                }
+                continue;
+            }
             // An anonymous struct or union of a local class has no
             // member functions of its own: it is instantiated as in a
             // class template, declaring its member object.

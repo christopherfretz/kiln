@@ -606,7 +606,7 @@ impl Substituter<'_, '_, '_> {
                 self.locals.insert(d, super::DeclOrPack::Decl(x));
                 Ok(x)
             }
-            DeclKind::StaticAssert => self.static_assert_decl(d),
+            DeclKind::StaticAssert => self.static_assert_decl(d).map(|x| x.0),
             DeclKind::Using | DeclKind::UnresolvedUsingValue => self.local_using_decl(d, loc),
             // A block-scope using-directive ([namespace.udir]): the
             // nominated namespace is never dependent; redone in the
