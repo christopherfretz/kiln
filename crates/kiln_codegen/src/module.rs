@@ -1344,21 +1344,8 @@ impl<'a> Cg<'a> {
     /// Declares the function `name` for declaration `first` with
     /// signature `sig` (the declaration attributes of
     /// `GetOrCreateLLVMFunction`).
-    ///
-    /// clang `GetOrCreateLLVMFunction` looks the mangled name up first: a
-    /// function another declaration already declared under `name` with the
-    /// same type is reused, so one symbol gets one `declare` (a library
-    /// builtin's `getBuiltinLibFunction` declaration of `pow` and the C
-    /// library's `extern "C" double pow(double, double)`, which sema does
-    /// not link as redeclarations, would otherwise become `pow` and
-    /// `pow.1`).
     pub(crate) fn declare_fn(&mut self, name: &str, first: DeclId, sig: &Sig) -> R<FuncId> {
         let ast = self.ast;
-        if let Some(f) = self.m.get_function(name)
-            && self.m.func(f).ty() == sig.fn_ty
-        {
-            return Ok(f);
-        }
         let f = match self.m.add_function(name, sig.fn_ty) {
             Ok(f) => f,
             Err(e) => {

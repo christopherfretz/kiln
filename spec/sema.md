@@ -173,8 +173,9 @@ Constructors:
   of a class template specialization, `typedef L<int>::P Q; Q::I x;`, or
   of an undefined specialization, `typedef L<int> D; D::P::I x;`),
   `classify_name` cannot instantiate it, so it classifies the name in
-  the pattern (the member class's pattern definition, or the template
-  through `classify_template_member`), as for a template-id qualifier;
+  the pattern (the member class's pattern definition; the template
+  through `classify_template_member` for a specialization, the WP-276
+  rule in spec/parse.md), as for a template-id qualifier;
   parsing the nested-name-specifier then instantiates the class
   ([temp.inst]/2) and the real lookup takes the instantiated member
   (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;

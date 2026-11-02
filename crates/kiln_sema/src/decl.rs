@@ -6249,19 +6249,21 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// [`Sema::classify_name`] of `name` in `q`, a class named through a
-    /// typedef (`typedef L<int>::P Q; Q::I`, `typedef L<int> D; D::P::I`)
-    /// whose definition is not instantiated yet: lookahead cannot
-    /// instantiate ([temp.inst]/2 happens when the nested-name-specifier
-    /// is parsed), so the name is classified in the pattern the class
-    /// will be instantiated from, as a template-id qualifier is
-    /// (`L<int>::P::I`). `None` when `q` is not such a class.
+    /// [`Sema::classify_name`] of `name` in `q`, a member class of a class
+    /// template specialization named through a typedef
+    /// (`typedef L<int>::P Q; Q::I`, `typedef L<int> D; D::P::I`) whose
+    /// definition is not instantiated yet: lookahead cannot instantiate
+    /// ([temp.inst]/2 happens when the nested-name-specifier is parsed),
+    /// so the name is classified in the member's pattern, as a
+    /// template-id qualifier is (`L<int>::P::I`). The specialization
+    /// itself (`D::P`) is the WP-276 case above. `None` when `q` is not
+    /// such a class.
     fn classify_uninstantiated_member(&self, q: DeclId, name: Symbol) -> Option<NameClass> {
-        if self.kind_of(q) != DeclKind::CXXRecord || self.ast.definition(q).is_some() {
+        if self.kind_of(q) != DeclKind::CXXRecord
+            || self.ast.definition(q).is_some()
+            || self.ast.spec_info(q).is_some()
+        {
             return None;
-        }
-        if let Some((_, info)) = self.ast.spec_info(q) {
-            return Some(self.classify_template_member(info.template, name));
         }
         let p = self.ast.instantiated_from(q)?;
         let def = self.ast.definition(p)?;
