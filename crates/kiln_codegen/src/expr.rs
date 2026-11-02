@@ -185,10 +185,15 @@ impl Cg<'_> {
                 self.emit_throw(e, true)?;
                 return Ok(None);
             }
+            // clang `ScalarExprEmitter::VisitExprWithCleanups`: the value
+            // survives a shared cleanup block (`ForceCleanup({&V})`).
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
-                let r = self.emit_scalar_opt(self.sub(e));
-                self.end_scope(sc);
+                let mut r = self.emit_scalar_opt(self.sub(e));
+                match &mut r {
+                    Ok(Some(v)) => self.end_scope_reload(sc, &mut [v]),
+                    _ => self.end_scope(sc),
+                }
                 return r;
             }
             ExprKind::CXXThisExpr => self.this_value(),
@@ -1812,10 +1817,15 @@ impl Cg<'_> {
                 }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
+            // clang `EmitLValue` of an `ExprWithCleanups`: the address
+            // survives a shared cleanup block (`ForceCleanup({&V})`).
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
-                let r = self.emit_lvalue(self.sub(e));
-                self.end_scope(sc);
+                let mut r = self.emit_lvalue(self.sub(e));
+                match &mut r {
+                    Ok(lv) => self.end_scope_reload(sc, &mut [&mut lv.addr.v]),
+                    Err(_) => self.end_scope(sc),
+                }
                 r
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {

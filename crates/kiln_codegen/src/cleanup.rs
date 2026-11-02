@@ -738,17 +738,52 @@ impl Cg<'_> {
 
     /// `PopCleanupBlocks(Old)`.
     pub(crate) fn pop_cleanup_blocks(&mut self, old: Depth) {
+        self.pop_cleanup_blocks_reload(old, &mut []);
+    }
+
+    /// `PopCleanupBlocks(Old, ValuesToReload)`: when a popped cleanup had
+    /// branches (its block is shared, so the current block is no longer
+    /// dominated by the values computed before it), each instruction in
+    /// `reload` is spilled to a `tmp.exprcleanup` temporary right after
+    /// its definition and reloaded at the insertion point.
+    pub(crate) fn pop_cleanup_blocks_reload(&mut self, old: Depth, reload: &mut [&mut V]) {
+        let mut had_branches = false;
         while self.f.cl.depth() != old {
             let d = self.f.cl.depth();
             let fallthrough_is_branch_through = old < self.f.cl.enclosing(d);
+            had_branches |= self.f.cl.stack.last().is_some_and(Scope::has_branches);
             self.pop_cleanup_block(fallthrough_is_branch_through);
+        }
+        if !had_branches || self.f.fir.cur().is_none() {
+            return;
+        }
+        for v in reload.iter_mut() {
+            let V::I(i) = **v else { continue };
+            if matches!(self.f.fir.op(i), Op::Alloca { .. }) || self.f.fir.inst_block(i).is_none() {
+                continue;
+            }
+            let ty = self.f.fir.ty(&self.m, **v);
+            let align = self.pref_align(ty);
+            let tmp = self.f.fir.alloca(ty, align);
+            self.f.fir.insert_after(
+                i,
+                Op::Store { val: **v, ptr: tmp, mem: crate::func::mem(align, false) },
+                LTy::VOID,
+            );
+            **v = self.load(ty, tmp, align, false);
         }
     }
 
     /// `PopCleanupBlocks(Old, OldLifetimeExtendedSize)`: pops to `old`,
     /// then pushes the lifetime-extended cleanups recorded since.
-    pub(crate) fn pop_cleanup_blocks_le(&mut self, old: Depth, old_le: usize) {
-        self.pop_cleanup_blocks(old);
+    /// With `ValuesToReload` ([`Cg::pop_cleanup_blocks_reload`]).
+    pub(crate) fn pop_cleanup_blocks_le_reload(
+        &mut self,
+        old: Depth,
+        old_le: usize,
+        reload: &mut [&mut V],
+    ) {
+        self.pop_cleanup_blocks_reload(old, reload);
         let pending: Vec<_> = self.f.cl.lifetime_extended.drain(old_le..).collect();
         for (c, flag) in pending {
             self.push_cleanup(c);

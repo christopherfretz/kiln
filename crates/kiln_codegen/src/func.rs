@@ -233,7 +233,7 @@ impl Fx {
     }
 }
 
-fn mem(align: u64, volatile: bool) -> MemOpts {
+pub(crate) fn mem(align: u64, volatile: bool) -> MemOpts {
     let mut m = MemOpts::aligned(align);
     m.volatile = volatile;
     m

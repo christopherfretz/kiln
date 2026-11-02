@@ -598,6 +598,34 @@ impl Fir {
         V::I(n)
     }
 
+    /// Inserts `op` where LLVM's `CGBuilderTy(Inst->getParent(),
+    /// std::next(Inst))` would after the instruction `at`: right after it,
+    /// or for an `invoke` at the first insertion point of its normal
+    /// destination (after its phis and landing pad).
+    pub fn insert_after(&mut self, at: u32, op: Op, ty: TypeId) -> V {
+        let (b, pos) = if let Op::Invoke { normal, .. } = self.insts[at as usize].op {
+            let insts = &self.blocks[normal.0 as usize].insts;
+            let pos = insts
+                .iter()
+                .position(|&x| {
+                    !matches!(self.insts[x as usize].op, Op::Phi { .. } | Op::LandingPad { .. })
+                })
+                .unwrap_or(insts.len());
+            (normal, pos)
+        } else {
+            let b = self.insts[at as usize].block.expect("insertion after a live instruction");
+            let insts = &self.blocks[b.0 as usize].insts;
+            (b, insts.iter().position(|&x| x == at).expect("instruction in its block") + 1)
+        };
+        let n = self.insts.len() as u32;
+        for s in op.successors() {
+            self.blocks[s.0 as usize].uses += 1;
+        }
+        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        self.blocks[b.0 as usize].insts.insert(pos, n);
+        V::I(n)
+    }
+
     /// Inserts `op` immediately before instruction `at` (LLVM
     /// `new X(.., InsertBefore)`).
     pub fn insert_before(&mut self, at: u32, op: Op, ty: TypeId) -> V {

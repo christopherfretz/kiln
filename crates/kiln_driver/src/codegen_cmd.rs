@@ -403,10 +403,13 @@ fn plan<'a>(
     steps
 }
 
-/// Whether the IR text defines a coroutine still to be split: an
-/// attribute group holding `presplitcoroutine` (spec/codegen.md §7c).
-pub fn has_presplit_coroutine(ir: &str) -> bool {
-    ir.lines().any(|l| l.starts_with("attributes #") && l.contains(" presplitcoroutine"))
+/// Whether the IR text needs the coroutine lowering: it declares an
+/// `llvm.coro.*` intrinsic (clang's `CoroConditionalWrapper` test,
+/// `coro::declaresAnyIntrinsic`). Every `presplitcoroutine` function
+/// calls `llvm.coro.id`; a `__builtin_coro_noop` alone needs it too
+/// (spec/driver.md "Coroutine lowering").
+pub fn needs_coro_lowering(ir: &str) -> bool {
+    ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
 }
 
 /// `opt` running clang's O0 coroutine lowering (`CoroConditionalWrapper`
@@ -538,7 +541,7 @@ fn execute(
                 // coroutine passes (spec/driver.md "Coroutine lowering").
                 if cmd.tool == Tool::Llc
                     && let Some(text) = &ir
-                    && has_presplit_coroutine(text)
+                    && needs_coro_lowering(text)
                 {
                     let opt = coro_lowering(tc);
                     if args.verbose {
@@ -633,9 +636,11 @@ mod tests {
     }
 
     #[test]
-    fn presplit_detection() {
-        assert!(has_presplit_coroutine("define void @f() #0 {\n}\nattributes #0 = { noinline presplitcoroutine }\n"));
-        assert!(!has_presplit_coroutine("define void @presplitcoroutine() #0 {\n}\nattributes #0 = { noinline }\n"));
+    fn coro_lowering_detection() {
+        assert!(needs_coro_lowering("declare token @llvm.coro.id(i32, ptr, ptr, ptr) #1\n"));
+        assert!(needs_coro_lowering("declare ptr @llvm.coro.noop() #1\n"));
+        assert!(!needs_coro_lowering("define void @\"llvm.coro.id\"() {\n}\n"));
+        assert!(!needs_coro_lowering("declare void @f() #0\n"));
     }
 
     #[test]

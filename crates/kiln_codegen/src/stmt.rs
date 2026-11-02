@@ -77,9 +77,17 @@ impl Cg<'_> {
     /// pops the cleanups pushed since `s` began, then pushes the
     /// lifetime-extended ones; a lexical scope rescopes its labels.
     pub(crate) fn end_scope(&mut self, s: Scope) {
+        self.end_scope_reload(s, &mut []);
+    }
+
+    /// `ForceCleanup(ValuesToReload)`: [`Cg::end_scope`], keeping the
+    /// values in `reload` usable at the insertion point when the popped
+    /// cleanups are shared with a branch out of the scope (a `co_await`
+    /// suspension's destroy path, a statement expression's jump).
+    pub(crate) fn end_scope_reload(&mut self, s: Scope, reload: &mut [&mut V]) {
         let labels = if s.lexical { self.f.lex_labels.pop() } else { None };
         self.deactivate_deferred(s.deferred);
-        self.pop_cleanup_blocks_le(s.depth, s.le);
+        self.pop_cleanup_blocks_le_reload(s.depth, s.le, reload);
         self.f.cl.cur_scope = s.old_cur;
         self.f.did_stack_save = s.old_stack_save;
         if let Some(labels) = labels
