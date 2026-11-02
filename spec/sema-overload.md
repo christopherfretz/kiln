@@ -1064,8 +1064,8 @@ Where the code differs from (or details) the design above:
   `noexcept` ([except.spec]/9).
 - **Gaps (owners).** Reversed and rewritten operator function template
   candidates are not formed (see §10.7). No access
-  check on class `operator new`/`delete`; no destroying
-  `operator delete` (WP-061 follow-up). `x.operator+=(2)` (member access
+  check on class `operator new`/`delete`. Destroying
+  `operator delete` is selected per sema.md §5.9 (WP-336). `x.operator+=(2)` (member access
   naming an operator-function-id) is a parse error: `act_on_member` and
   `member_access` take a `Symbol`, not a `DeclName` (parser follow-up).
   No `note_equality_comparison_to_assign` ("use '=' to turn this equality

@@ -561,6 +561,34 @@ impl Sema<'_, '_> {
         self.builder().unresolved_lookup(DeclName::ident(name), &decls, false, nns, targs, n.loc())
     }
 
+    /// True if the unqualified `name`, followed by `<`, is assumed to name
+    /// a function template ([temp.names]/3, P0846): ordinary lookup finds
+    /// nothing (and it is no builtin) or only non-member functions.
+    pub fn is_assumed_template_name(&self, name: Symbol) -> bool {
+        let found = self.lookup_name(name, LookupKind::Ordinary);
+        if found.decls.is_empty() {
+            return !self.is_builtin_name(name);
+        }
+        found.decls.iter().all(|&d| self.kind_of(self.ast.strip_shadow(d)) == DeclKind::Function)
+    }
+
+    /// The template-id `name<args>` for a name assumed to be a template
+    /// ([temp.names]/3): an `UnresolvedLookupExpr` with the explicit
+    /// arguments over the functions ordinary lookup found, to be
+    /// completed by argument-dependent lookup at the call
+    /// ([basic.lookup.argdep]; at instantiation when dependent).
+    pub fn act_on_assumed_template_id(
+        &mut self,
+        name: Symbol,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> ExprId {
+        let found = self.lookup_name(name, LookupKind::Ordinary);
+        let decls: Vec<DeclId> = found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
+        let list = self.ast.types.arg_list(args);
+        self.builder().unresolved_lookup(DeclName::ident(name), &decls, true, None, Some(list), loc)
+    }
+
     /// The qualified function or variable template-id `e` named at `loc`
     /// begins at its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`,
     /// `DeclRefExpr::getBeginLoc`).
