@@ -115,8 +115,8 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("noinline_matrix_o1", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
     ("noinline_matrix_o2", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
     // clang 22 drops the comdat of an `internal` template parameter
-    // object (kiln does at `-fclang-compat=22`, which this run does not
-    // pass).
+    // object and of the specializations it is an argument of (`fa<Arr{
+    // ...}>`); at `-fclang-compat=22` kiln drops only the object's.
     ("linkage_internal_nttp", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("linkage_internal_nttp", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // clang 22 names members of an unnamed class `(unnamed struct)::N` in
