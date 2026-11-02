@@ -1571,6 +1571,24 @@ recomputed exactly as for non-template code (clang's
   the same way. An unknown field in a requirement is a substitution
   failure. The aggregate checks of spec/sema.md §6 run on the
   instantiated type.
+- **Analyzed initializations as operands** (WP-296). An operand that is
+  only instantiation-dependent (it names a local of the template) was
+  analyzed at definition; its resolved initialization is not reused but
+  formed again from the substituted operands (clang
+  `TransformInitializer` reverting to the syntactic form):
+  - a parenthesized aggregate initialization (`CXXParenListInitExpr`,
+    [dcl.init.general]/16.6.2.2), alone or under its no-op functional
+    cast, becomes `act_on_cast` (one operand) or `act_on_paren_list_cast`
+    of the substituted type from its explicit initializers
+    ([expr.type.conv]/2);
+  - a braced list behind implicit nodes (`Substituter::braced_source`:
+    an `InitListExpr`, the backing array of a `CXXStdInitializerListExpr`
+    or a list-initializing `CXXConstructExpr`) is that list again: a
+    braced call argument (also of an `operator()` call), the right
+    operand of an assignment operator function (`act_on_assign_list`,
+    [expr.assign]/8), a returned list and a for-range-initializer;
+    elsewhere a `CXXStdInitializerListExpr` list-initializes its
+    substituted `std::initializer_list` type ([dcl.init.list]/5).
 
 ### 5.5 Statements
 
@@ -1904,6 +1922,18 @@ formed it:
 3. **Finish** ([temp.deduct.general]/5):
    - an undeduced parameter takes its default (substituted in order); a
      pack takes the empty pack; anything else gives `Incomplete`;
+   - check the argument of each P without deduced template params
+     (step 2's last bullet) for an implicit conversion, with the
+     options `add_candidate` would use (`deduce_call`'s `opts`), before
+     anything is substituted into the function type ([temp.deduct.call]
+     CWG1391, clang `CheckNonDependent`). A bad one fails with
+     `NonDependentConversionFailure` carrying the argument index and
+     its sequence; `add_template_candidate` reports it as the
+     template's `BadConversion` (no `[with ...]`, as before). A later
+     parameter whose substitution would be a hard error (libc++
+     `shared_ptr(nullptr_t, D, enable_if_t<__well_formed_deleter<D,
+     nullptr_t>>)` against an `int*` argument) is thus never
+     substituted (WP-296);
    - substitute everything into the function type under
      `DeducedTemplateArgumentSubstitution`;
    - check that the deduced A is compatible ([temp.deduct.call]/4:
@@ -4660,7 +4690,8 @@ requires-clause scope.**
   `Sema.inherited_defaults`, filled by `merge_template_defaults`; they
   are not dumped (a gap). Deduction completes a dependent `P` with its
   defaulted arguments (`complete_dependent_args`, [temp.deduct.type]).
-  The parameters and defaults are the head declaration's (§6.2).
+  The parameters and defaults, and the defaults' depth, are the head
+  declaration's (`head_template`, §6.2; WP-286, WP-295, WP-296).
 - *Trailing requires-clause* ([basic.scope.param]/1, [expr.prim.this]/2):
   the function parameters (and `this` in a member) are in scope.
   Satisfaction substitutes the pattern's parameters into fresh ones

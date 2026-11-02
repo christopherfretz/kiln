@@ -10,7 +10,7 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use super::{
-    ArgInfo, CandidateKind, IcsOptions, OverloadCandidateSet, OvlOutcome, SetKind, UleFound,
+    ArgInfo, CandidateKind, Ics, IcsOptions, OverloadCandidateSet, OvlOutcome, SetKind, UleFound,
 };
 use crate::Sema;
 use crate::init::InitList;
@@ -168,13 +168,25 @@ impl Sema<'_, '_> {
         // object parameter ([over.match.funcs.general]/4).
         let pattern = self.templated_function(ft).unwrap_or(ft);
         let mut args = Vec::with_capacity(set.args.len() + 1);
-        if (set.oper && kind == CandidateKind::Function || self.has_explicit_object(pattern))
-            && let Some(o) = set.object
-        {
+        // Each argument's conversion options, as `add_candidate` gives
+        // them, for the non-dependent parameters deduction checks.
+        let mut opts = Vec::with_capacity(set.args.len() + 1);
+        let oper_fn = set.oper && kind == CandidateKind::Function;
+        let lead = (oper_fn || self.has_explicit_object(pattern)) && set.object.is_some();
+        if lead && let Some(o) = set.object {
             args.push(o);
+            opts.push(if oper_fn {
+                first_opts.with(IcsOptions::CANDIDATE_ARG)
+            } else {
+                IcsOptions::NONE
+            });
         }
         args.extend_from_slice(&set.args);
-        match self.deduce_call(ft, explicit, &args, loc) {
+        for i in 0..set.args.len() {
+            let o = if i == 0 && !oper_fn { first_opts } else { IcsOptions::NONE };
+            opts.push(o.with(IcsOptions::CANDIDATE_ARG));
+        }
+        match self.deduce_call(ft, explicit, &args, &opts, loc) {
             Ok(spec) => {
                 let nondep = self.templ.explicit_nondep;
                 self.add_candidate(set, spec, found, kind, first_opts);
@@ -185,6 +197,36 @@ impl Sema<'_, '_> {
             }
             Err(fail) => {
                 use crate::templ::deduce::Tdk;
+                if let Some((i, x)) = fail.bad {
+                    // A non-dependent parameter's bad conversion, found
+                    // before the specialization was formed: reported as
+                    // the template's bad conversion (clang
+                    // `ovl_fail_bad_conversion`), in `add_candidate`'s
+                    // sequence slots.
+                    self.ovl.stats.candidates += 1;
+                    let mut c = super::Candidate::new(pattern, found, kind);
+                    let (slot, arg) = if lead {
+                        (
+                            i,
+                            i.checked_sub(1)
+                                .map_or(u16::MAX, |a| u16::try_from(a).unwrap_or(u16::MAX)),
+                        )
+                    } else {
+                        (
+                            i + usize::from(set.object.is_some()),
+                            u16::try_from(i).unwrap_or(u16::MAX),
+                        )
+                    };
+                    let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
+                    set.ics.extend(std::iter::repeat_n(Ics::Ellipsis, slot));
+                    set.ics.push(x);
+                    c.ics = start..u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
+                    c.template = Some(ft);
+                    c.viable = false;
+                    c.failure = super::CandidateFailure::BadConversion { arg };
+                    set.cands.push(c);
+                    return;
+                }
                 if matches!(fail.tdk, Tdk::TooManyArguments | Tdk::TooFewArguments) {
                     self.add_candidate(set, pattern, found, kind, first_opts);
                     if let Some(c) = set.cands.last_mut() {
