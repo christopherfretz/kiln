@@ -78,6 +78,39 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   `__is_trivially_relocatable` warns `-Wdeprecated-builtins` with the
   replacement `__builtin_is_cpp_trivially_relocatable`
   (spec/sema-templates.md §9.1).
+- **Flow and counts** (WP-377). `-Wswitch` counts a deprecated
+  enumerator as one a switch must handle (only `[[maybe_unused]]` ones
+  may be omitted; `switch_enum.rs`), which also decides whether the
+  switch covers every value for `-Wreturn-type`. An `if consteval` is a
+  branch on an unknown condition in the reachability walk (clang 22
+  builds its CFG; clang 19 builds none and checks nothing;
+  `try_stmt/reach.rs`). `array is too large (N elements)` groups N's
+  digits with `'` (`18'446'744'073'709'551'615`;
+  `element_count_text`). Wording-only changes are `_19` diag rows
+  (spec/diag.md §2.5), e.g. `case ranges are a GNU extension`, `you need
+  to include <typeinfo> or import std before using the 'typeid'
+  operator`.
+- **Attributes and `nodiscard`** (WP-377). A `[[scope::name]]`
+  attribute is named in diagnostics as written, with its scope
+  normalized and `__x__` stripped (`'gnu::aligned'`, `'clang::x'`;
+  `attr_shown`, `decl_attrs.rs`); clang 19 prints the bare name. An
+  unused call whose *type* (not the callee) is `[[nodiscard]]`, or an
+  unused temporary of such a type built by a constructor without its own
+  attribute, warns `ignoring {return value|temporary} of type 'T'
+  declared with 'nodiscard' attribute` under `-Wunused-value`
+  (`unused_type_warning`, `expr.rs`), at the operator call's first token
+  for an overloaded operator. Attributes on a block-scope
+  using-declaration or using-directive are diagnosed as statement
+  attributes (`act_on_decl_stmt_attrs`).
+- **Template notes** (WP-377). A conversion error in a non-type template
+  argument (`not implicitly convertible`, `conversion ... is not allowed
+  in a converted constant expression`, `would bind reference to a
+  temporary`; [temp.arg.nontype]/2) is followed by `template parameter
+  is declared here` (`note_nttp_param`, `templ/nttp.rs`). A conversion
+  function template's deduction mismatch ([temp.deduct.conv]) notes the
+  written P (`'T *'`, not `'type-parameter-0-0 *'`). A pack-index
+  expression's pack name is quoted (`for pack 'Ts'`), and a single-argument
+  concept note quotes a non-type argument too.
 - Codegen's `-Watomic-alignment` text follows the level
   (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
 
@@ -1089,6 +1122,21 @@ and returns the scope it names:
     `implicit-guide-locations-init-list.cpp`.
   - Gap: a qualified concept name in a type-constraint loses its
     qualifier (`template <NC R>` where clang prints `N::NC R`).
+  - At `-fclang-compat=22` (WP-377, clang 22): the guide's class type
+    is the injected specialization named by its scope (`-> N::S<T>`,
+    `-> Outer<int>::Q<U>`; inline and anonymous namespaces elided;
+    `guide_class_type`); a default argument the constructor's class
+    template inherits from an earlier declaration is cloned as
+    inherited, so the guide's printed head omits it (`class _Alloc`,
+    only the parameter's own default prints); and a
+    deduced-template-specialization placeholder prints the template
+    name as written at that use, not its first spelling
+    (`TypeContext::dtst_first_spelling`). Tests: the `-clang22.cpp`
+    copies of `building-guides-note`,
+    `implicit-guide-first-declaration-params`,
+    `implicit-guide-locations-init-list`,
+    `dcl.type.class.deduct/placeholder-spelling{,-first-use}` and
+    `templates/ctad/over.match.class.deduct-{member-template-diag,member-template-qualified-diag,no-viable-diag}`.
 - **Building the implicit guides** runs under a
   `FrameKind::BuildingDeductionGuides` frame (not an instantiation;
   clang `BuildingDeductionGuides`), so an error forming them (the
@@ -1662,6 +1710,14 @@ and returns the scope it names:
     prints its explicit arguments canonical (`ok<n::A>(0)`,
     `write_arg_list_canonical`). A call to a function template-id keeps
     the explicit arguments on the resolved `DeclRefExpr`.
+    At `-fclang-compat=22` (clang 22, WP-377) the qualifier's class is
+    printed fully scoped: every enclosing namespace (`(anonymous
+    namespace)::`, inline ones skipped) and class, each class template
+    specialization with all its converted arguments, canonical
+    (`n::tr<n::A, int>::In::w` for `Y::In::w`;
+    `TypeNames::write_converted_scope`, `AstNames::scoped_nns`). Test:
+    `dcl.pre/static-assert-substituted-names-clang22.cpp`,
+    `static-assert-variable-template-clang22.cpp`.
   - Evaluation notes follow (§8).
   - **User-generated messages** ([dcl.pre]/10-12, P2741, WP-356). A
     message that is not a string literal (spec/parse.md §4) must be an

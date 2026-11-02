@@ -69,6 +69,16 @@ pub trait TypeNames {
         self.specialization_args(decl)
     }
 
+    /// Writes the enclosing namespaces and classes of `decl` as clang 22
+    /// prints a failed `static_assert` requirement's qualifier (each
+    /// class template specialization with all its converted arguments,
+    /// canonical: `n::tr<n::A, int>::`, `(anonymous namespace)::q<int>::`).
+    /// Inline namespaces are skipped. Returns whether it is implemented.
+    fn write_converted_scope(&self, decl: DeclId, out: &mut String) -> bool {
+        let _ = (decl, out);
+        false
+    }
+
     /// Whether typedef `decl` is implicit (`__builtin_va_list`): its
     /// underlying type was made by the implementation, not written, so
     /// clang 22 prints a tag there with its scope
@@ -366,7 +376,33 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
 /// `ResolveTemplateArguments`): template arguments print canonical, and
 /// a last type component naming a class template specialization prints
 /// as its name with its converted arguments (`is_conv<int, bool>::`).
-pub fn write_nns_resolved(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut String) {
+///
+/// With `scoped` (clang 22), a type component prints as its canonical
+/// type with every name scoped instead (`n::tr<n::A, int>::In::`).
+pub fn write_nns_resolved(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    n: NnsId,
+    scoped: bool,
+    out: &mut String,
+) {
+    // clang 22 prints the qualifier's record fully scoped, every
+    // enclosing specialization with all its converted arguments.
+    if scoped
+        && let Nns::Type { ty, .. } = ctx.nns_view(n)
+        && let TypeView::Record(d) = ctx.view(ctx.canonical(ty).ty())
+    {
+        let mut s = String::new();
+        if names.write_converted_scope(d, &mut s) {
+            names.write_decl_name(d, false, &mut s);
+            if let Some(args) = names.converted_args(d) {
+                write_arg_list_canonical(ctx, names, args, &mut s);
+            }
+            out.push_str(&s);
+            out.push_str("::");
+            return;
+        }
+    }
     let mut p = Printer {
         ctx,
         names,

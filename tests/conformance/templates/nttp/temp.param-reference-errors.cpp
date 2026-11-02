@@ -12,7 +12,7 @@
 //@ diag: 25:44 note "read of non-const variable 'gi' is not allowed in a constant expression"
 //@ diag: 17:5 note "declared here"
 //@ requires: clang<22
-// clang 22 emits error: conversion from 'int' to 'const int &' in converted constant expression wou...; WP-355 residual
+// clang 19 spelling; temp.param-reference-errors-clang22.cpp has clang 22's (WP-377).
 struct A { int x; };
 int gi = 3;
 template <const int& r> struct R {};

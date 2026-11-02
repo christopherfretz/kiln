@@ -932,6 +932,28 @@ impl Sema<'_, '_> {
         Some(at.with_offset(u32::try_from(i).ok()?))
     }
 
+    /// clang 22 `warn_unused_return_type`: "ignoring {return
+    /// value|temporary} of type 'T' declared with 'nodiscard' attribute",
+    /// with the attribute's message if any.
+    fn unused_type_warning(
+        &self,
+        which: &str,
+        ty: QualType,
+        name: String,
+        text: Option<String>,
+        at: Loc,
+    ) -> (DiagId, Loc, Vec<String>) {
+        let mut args = vec![which.to_owned(), self.ty_arg(ty), name];
+        let id = match text {
+            Some(t) => {
+                args.push(t);
+                DiagId::sema_unused_return_type_msg
+            }
+            None => DiagId::sema_unused_return_type,
+        };
+        (id, at, args)
+    }
+
     /// The `nodiscard` forms of the unused-result warning.
     fn is_nodiscard_warning(id: DiagId) -> bool {
         matches!(
@@ -940,6 +962,8 @@ impl Sema<'_, '_> {
                 | DiagId::sema_unused_result_msg
                 | DiagId::sema_unused_constructor
                 | DiagId::sema_unused_constructor_msg
+                | DiagId::sema_unused_return_type
+                | DiagId::sema_unused_return_type_msg
         )
     }
 
@@ -1054,7 +1078,12 @@ impl Sema<'_, '_> {
                 if self.ast.types.is_void(n.ty()) {
                     return None;
                 }
-                let at = self.begin_loc(callee);
+                // clang 22 reports an operator call at its start.
+                let at = if self.clang_compat >= 22 && n.kind() == ExprKind::CXXOperatorCallExpr {
+                    self.begin_loc(x)
+                } else {
+                    self.begin_loc(callee)
+                };
                 // clang `getUnusedResultAttr`: a nodiscard class or
                 // enumeration returned by value first, then the callee
                 // ([dcl.attr.nodiscard]/2).
@@ -1071,6 +1100,11 @@ impl Sema<'_, '_> {
                     let attr = *self.ast.attrs.get(a);
                     let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
                     let name = "'nodiscard'".to_owned();
+                    // clang 22 `warn_unused_return_type`: a nodiscard
+                    // type is named, under -Wunused-value.
+                    if by_type.is_some() && self.clang_compat >= 22 {
+                        return Some(self.unused_type_warning("0", t, name, text, at));
+                    }
                     return Some(match text {
                         Some(t) => (DiagId::sema_unused_result_msg, at, vec![name, t]),
                         None => (DiagId::sema_unused_result, at, vec![name]),
@@ -1179,12 +1213,17 @@ impl Sema<'_, '_> {
                 // constructor ([dcl.attr.nodiscard]/4, clang
                 // `warn_unused_constructor`).
                 let ctor = self.ast.exprs.constructor(x);
-                let a = self.find_attr(ctor, AttrKind::NODISCARD).or_else(|| {
+                let by_ctor = self.find_attr(ctor, AttrKind::NODISCARD);
+                let a = by_ctor.or_else(|| {
                     let class = self.ast.types.as_record(n.ty())?;
                     self.find_attr(class, AttrKind::NODISCARD)
                 })?;
                 let attr = *self.ast.attrs.get(a);
                 let name = "'nodiscard'".to_owned();
+                if by_ctor.is_none() && self.clang_compat >= 22 {
+                    let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
+                    return Some(self.unused_type_warning("1", n.ty(), name, text, loc));
+                }
                 Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_text(m)) {
                     Some(t) => (DiagId::sema_unused_constructor_msg, loc, vec![name, t]),
                     None => (DiagId::sema_unused_constructor, loc, vec![name]),

@@ -615,7 +615,7 @@ impl Sema<'_, '_> {
             return self.convert_class_nttp_arg(pty, e, at);
         }
         if t.is_reference(pty) {
-            return self.convert_ref_nttp_arg(pty, e, at);
+            return self.convert_ref_nttp_arg(pty, e, at, Some(self.ast.decls.get(p).loc()));
         }
         // clang `CheckConvertedConstantExpression`: an argument with no
         // implicit conversion sequence to the parameter's type
@@ -632,6 +632,7 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_cce_not_implicitly_convertible, from)
                     .arg(self.ty_arg(ety))
                     .arg(self.ty_arg(pty));
+                let d = self.note_nttp_param(d, Some(self.ast.decls.get(p).loc()));
                 self.emit(d);
                 return Err(());
             }
@@ -651,6 +652,7 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_cce_conversion_not_allowed, at)
                 .arg(self.ty_arg(ety))
                 .arg(self.ty_arg(pty));
+            let d = self.note_nttp_param(d, Some(self.ast.decls.get(p).loc()));
             self.emit(d);
             return Err(());
         }

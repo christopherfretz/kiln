@@ -9,7 +9,7 @@
 //@ diag: 62:3 warning "ignoring return value of function declared with 'nodiscard' attribute"
 //@ diag: 63:3 warning "ignoring return value of function declared with 'nodiscard' attribute: why"
 //@ diag: 64:3 warning "ignoring return value of function declared with pure attribute"
-//@ diag: 65:3 warning "ignoring return value of function declared with 'nodiscard' attribute"
+//@ diag: 65:3 warning "declared with 'nodiscard' attribute"
 //@ diag: 66:5 warning "equality comparison result unused"
 //@ diag: 66:5 note "use '=' to turn this equality comparison into an assignment"
 //@ diag: 68:12 warning "ignoring return value of function declared with 'nodiscard' attribute"
@@ -24,7 +24,7 @@
 //@ diag: 74:15 note "in instantiation of function template specialization 't<int>' requested here"
 //@ diag: 63:3 warning "ignoring return value of function declared with 'nodiscard' attribute: why"
 //@ diag: 64:3 warning "ignoring return value of function declared with pure attribute"
-//@ diag: 65:3 warning "ignoring return value of function declared with 'nodiscard' attribute"
+//@ diag: 65:3 warning "declared with 'nodiscard' attribute"
 //@ diag: 66:5 warning "equality comparison result unused"
 //@ diag: 66:5 note "use '=' to turn this equality comparison into an assignment"
 //@ diag: 68:12 warning "ignoring return value of function declared with 'nodiscard' attribute"
@@ -49,8 +49,8 @@
 //@ diag: 82:42 warning "ignoring return value of function declared with 'nodiscard' attribute"
 //@ diag: 82:42 warning "ignoring return value of function declared with 'nodiscard' attribute"
 //@ diag: 83:17 note "in instantiation of member function 'S<int>::m' requested here"
-//@ requires: clang<22
-// clang 22 emits warning: ignoring return value of type 'R' declared with 'nodiscard' attribute; WP-355 residual
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 [[deprecated]] int d();
 [[nodiscard]] int f();
 [[nodiscard("why")]] int fm();

@@ -4,9 +4,9 @@
 //@ strict-diags
 //@ args: -Wno-deprecated-array-compare -Wno-string-compare
 //@ diag: 12:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 11:34 note "comparison of addresses of literals has unspecified value"
+//@ diag: 11:34 note "literals has unspecified value"
 //@ diag: 12:15 note "in call to 'f()'"
-//@ requires: clang<22
-// clang 22 emits note: comparison of addresses of potentially overlapping literals has unspecified value; WP-355 residual
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 constexpr bool f() { return +"x" != "x"; }
 static_assert(f());

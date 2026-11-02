@@ -16,7 +16,7 @@
 //@ diag: 31:69 error "__builtin_bit_cast source size does not equal destination size (4 vs 8)"
 //@ diag: 32:25 note "in instantiation of member function 'BC<long, int>::cast' requested here"
 //@ requires: clang<22
-// clang 22 emits error: '__builtin_bit_cast' source type must be trivially copyable; WP-355 residual
+// clang 19 spelling; builtin.bit-cast-diag-clang22.cpp has clang 22's (WP-377).
 struct I;
 extern I i;
 int a = __builtin_bit_cast(I, 1);

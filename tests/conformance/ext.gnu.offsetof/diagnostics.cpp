@@ -11,7 +11,7 @@
 //@ diag: 36:33 error "array subscript is not an integer"
 //@ diag: 37:35 error "offsetof requires struct, union, or class type, 'int' invalid"
 //@ diag: 38:9 error "no member named 'zz' in 'N'"
-//@ diag: 39:9 warning "offset of on non-standard-layout type 'R'"
+//@ diag: 39:9 warning "on non-standard-layout type 'R'"
 //@ diag: 41:29 error "expected ','"
 //@ diag: 42:31 error "expected identifier"
 //@ diag: 43:34 error "expected ']'"
@@ -21,8 +21,8 @@
 //@ diag: 46:33 error "expected ')'"
 //@ diag: 46:27 note "to match this '('"
 //@ diag: 47:27 error "expected '(' after '__builtin_offsetof'"
-//@ requires: clang<22
-// clang 22 no longer emits warning: offset of on non-standard-layout type 'R'; WP-355 residual
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 struct Inc;
 struct N { int n; };
 struct B { int bf : 3; int a[2]; int m; N s; };

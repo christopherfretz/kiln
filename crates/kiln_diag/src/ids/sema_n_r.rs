@@ -4,7 +4,8 @@
 
 // ----- WP-197 (DR482 namespace extra qualification; ambiguous member types)
 sema_namespace_member_extra_qualification = Warning [ExtraQualification] (1) "extra qualification on member '{0}'";
-sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
+sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> or import std before using the 'typeid' operator";
+sema_need_header_before_typeid_19 = Error (0) "you need to include <typeinfo> before using the 'typeid' operator";
 sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::' because it has no members";
 sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
 sema_new_array_size_unknown = Error (0) "array size must be specified in new expression with no initializer";
@@ -18,8 +19,10 @@ sema_new_reference_type = Error (1) "cannot allocate reference type {0} with new
 sema_no_call_operator = Error (1) "type {0} does not provide a call operator";
 sema_no_declarators = ExtWarn [MissingDeclarations] (0) "declaration does not declare anything";
 sema_no_declarators_error = Error (0) "declaration does not declare anything";
-sema_no_matching_local_friend = Error (0) "no matching function found in local scope";
-sema_no_matching_local_friend_suggest = Error (2) "no matching function '{0}' found in local scope; did you mean '{1}'?";
+sema_no_matching_local_friend = Error (0) "cannot define friend function in a local class definition";
+sema_no_matching_local_friend_19 = Error (0) "no matching function found in local scope";
+sema_no_matching_local_friend_suggest = Error (2) "cannot define friend function '{0}' in a local class definition; did you mean '{1}'?";
+sema_no_matching_local_friend_suggest_19 = Error (2) "no matching function '{0}' found in local scope; did you mean '{1}'?";
 sema_no_member = Error (2) "no member named '{0}' in {1}";
 sema_no_member_template = Error (2) "no template named '{0}' in {1}";
 sema_no_subscript_operator = Error (1) "type {0} does not provide a subscript operator";
@@ -54,7 +57,8 @@ sema_null_in_comparison = Warning [NullArithmetic] (2) "comparison between NULL 
 sema_offsetof_array_type = Error (1) "offsetof requires array type, {0} invalid";
 sema_offsetof_bitfield = Error (1) "cannot compute offset of bit-field '{0}'";
 sema_offsetof_incomplete_type = Error (1) "offsetof of incomplete type {0}";
-sema_offsetof_non_standard_layout = ExtWarn [InvalidOffsetof] (1) "offset of on non-standard-layout type {0}";
+sema_offsetof_non_standard_layout = ExtWarn [InvalidOffsetof] (1) "'offsetof' on non-standard-layout type {0}";
+sema_offsetof_non_standard_layout_19 = ExtWarn [InvalidOffsetof] (1) "offset of on non-standard-layout type {0}";
 sema_offsetof_record_type = Error (1) "offsetof requires struct, union, or class type, {0} invalid";
 sema_only_enums_have_underlying = Error (0) "only enumeration types have underlying types";
 sema_operator_arrow_depth_exceeded = Error (2) "use of 'operator->' on type {0} would invoke a sequence of more than {1} 'operator->' calls";

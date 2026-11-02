@@ -22,9 +22,9 @@
 //@ diag: 28:42 note "declared private here"
 //@ diag: 33:3 error "calling a protected constructor of class 'A'"
 //@ diag: 28:62 note "declared protected here"
-//@ diag: 36:22 error "using declaration refers into 'C::', which is not a base class of 'D'"
-//@ requires: clang<22
-// clang 22 emits error: using declaration refers into 'C', which is not a base class of 'D'; WP-355 residual
+//@ diag: 36:22 error "', which is not a base class of 'D'"
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 struct A { A(int); A(const A&); private: A(char); protected: A(double); };
 struct B : A { using A::A; };
 A a(1);
