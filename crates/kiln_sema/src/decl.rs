@@ -3423,13 +3423,11 @@ impl Sema<'_, '_> {
                     if pspec.is_inline() {
                         spec = spec.with_implicit_inline(true);
                     }
-                    // [dcl.constexpr]/1: every declaration of an immediate
-                    // function is `consteval` (clang's mismatch check; kiln
-                    // applies it only when one side is consteval).
+                    // [dcl.constexpr]/1: if any declaration of a function
+                    // is `constexpr` or `consteval`, every declaration is
+                    // (clang `err_constexpr_redecl_mismatch`).
                     let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
-                    if ok != nk
-                        && (ok == ConstexprKind::Consteval || nk == ConstexprKind::Consteval)
-                    {
+                    if ok != nk {
                         let msg = self
                             .diag(DiagId::sema_constexpr_redecl_mismatch, d.name_loc())
                             .arg(nk as u8)
