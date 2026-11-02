@@ -1191,7 +1191,7 @@ impl Cg<'_> {
             if nr.is_some() {
                 self.f.fir.erase(Fir::last_inst(r));
             }
-            return Some(self.build_fmuladd(rm, l, nr.is_some(), !sub));
+            return Some(self.build_fmuladd(rm, l, sub ^ nr.is_some(), false));
         }
         None
     }
