@@ -118,10 +118,9 @@ impl Parser<'_, '_> {
         // A decl-specifier that is no type-specifier (`new (static int)`)
         // starts no expression: clang `isCXXDeclarationSpecifier` takes it
         // as a type-id, whose storage class is then rejected.
-        if self
-            .kw_of(self.tok_at(i))
-            .is_some_and(|k| crate::decl::is_decl_specifier_kw(k) && !crate::decl::is_type_specifier_kw(k))
-        {
+        if self.kw_of(self.tok_at(i)).is_some_and(|k| {
+            crate::decl::is_decl_specifier_kw(k) && !crate::decl::is_type_specifier_kw(k)
+        }) {
             return true;
         }
         if !self.is_type_id_start(i) {
