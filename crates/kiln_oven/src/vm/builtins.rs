@@ -135,6 +135,7 @@ fn fp_math(sub: u32, a: u128, b: u128, c: u128, t1: u32) -> Option<u128> {
             if second { i } else { f }
         }
         bi::NEXTAFTER => math::nextafter(k, a, float_of(t1), b)?,
+        bi::SQRT => math::sqrt(k, a)?,
         bi::SIGNBIT => u128::from(a & softfloat::sign_bit(k) != 0),
         _ => {
             let o = softfloat::cmp(k, a, b);

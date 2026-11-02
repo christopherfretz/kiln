@@ -457,10 +457,12 @@ takes the same branch it takes under clang. `fabs`, `fmin`, `fmax`,
 `copysign` and the classification builtins answer 1 at both levels; at
 22, `abs`/`labs`/`llabs`, `signbit` and the `isgreater` family answer 1
 too. Under `-fsyntax-only` and code generation the driver also applies
-kiln's builtin staging (spec/sema-templates.md §13.3), whose Oven column
-is clang 19's; the driver exempts those ten clang 22 additions, which the
-Oven folds (`OVEN_FOLDS_FROM_22`, `kiln_driver/src/pp_cmd.rs`).
-Test: `tests/conformance/c.math/has-constexpr-builtin-p0533.cpp`.
+kiln's builtin staging (spec/sema-templates.md §13.3): a row whose Oven
+column is `No` answers 0. The ten clang 22 additions are `Oven::Yes`
+rows (WP-393; the Oven folds them since WP-365), so the clang table
+alone decides their answer, 0 below 22 and 1 from 22.
+Tests: `tests/conformance/c.math/has-constexpr-builtin-p0533.cpp`,
+`has-constexpr-builtin-p0533-19.cpp`.
 
 ### `PpCallbacks`: consumers are WP-014 (`-M`), WP-017 (`-dD`, `-dI`) and phase 7
 
