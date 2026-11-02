@@ -151,6 +151,13 @@ transition.
   stmt-expr trailing null statement, structured-binding index literal and
   captured-binding `const`, `-Wdeprecated-literal-operator` (CWG2521),
   `__is_trivially_relocatable` deprecation, codegen atomic text.
+- Codegen follows the backend LLVM where the two reject each other's IR:
+  coroutines use LLVM 22's `void` `llvm.coro.end` +
+  `llvm.coro.is_in_ramp` when `KILN_LLVM_DIR` is an `llvm-22` tree
+  (`Toolchain::llvm_major`; spec/codegen.md "LLVM 22 `coro.end`").
+  Padded `_Atomic` operands are zeroed and a failed compare-exchange
+  writes `*expected` back at every level (clang 22's behaviour; an
+  oracle-19 `ir_vs_clang` deviation).
 - Tests that skipped clang 19 now `requires: clang>=22` (with
   `xfail(kiln)` where kiln lacks the feature); docs/status/cxx-features.md.
 
