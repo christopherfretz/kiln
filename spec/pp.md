@@ -433,6 +433,22 @@ check both levels; `kiln++ -fclang-compat=22 -dM` differs from
 `clang++-22 -dM` only in `__cpp_*` lines (checked by hand for both
 targets and several standards and flags, WP-263).
 
+**`__has_constexpr_builtin` and the P0533 builtins** (WP-380). kiln
+answers clang's `Constexpr` table at the selected level, not the larger
+set its Oven folds under GCC's policy (spec/oven.md "Floating-point
+math", WP-365): `__builtin_ceil`, `floor`, `trunc`, `round`, `rint`,
+`nearbyint`, `sqrt`, `fmod`, `frexp`, `ldexp`, `logb`, `ilogb`,
+`scalbn`, `modf`, `remainder`, `remquo`, `fdim`, `nextafter` answer 0 at
+both levels, as both clangs do, so library code that probes the operator
+takes the same branch it takes under clang. `fabs`, `fmin`, `fmax`,
+`copysign` and the classification builtins answer 1 at both levels; at
+22, `abs`/`labs`/`llabs`, `signbit` and the `isgreater` family answer 1
+too. Under `-fsyntax-only` and code generation the driver also applies
+kiln's builtin staging (spec/sema-templates.md §13.3), whose Oven column
+is clang 19's; the driver exempts those ten clang 22 additions, which the
+Oven folds (`OVEN_FOLDS_FROM_22`, `kiln_driver/src/pp_cmd.rs`).
+Test: `tests/conformance/c.math/has-constexpr-builtin-p0533.cpp`.
+
 ### `PpCallbacks`: consumers are WP-014 (`-M`), WP-017 (`-dD`, `-dI`) and phase 7
 
 ```rust
