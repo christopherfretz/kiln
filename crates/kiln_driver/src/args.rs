@@ -193,6 +193,9 @@ pub struct PredefArgs {
     pub threadsafe_statics: Option<bool>,
     /// `-f[no-]sized-deallocation`.
     pub sized_deallocation: Option<bool>,
+    /// `-f[no-]coro-aligned-allocation`: aligned coroutine frame
+    /// allocation (default off, as clang).
+    pub coro_aligned_allocation: bool,
     /// `-f[no-]reflection` (P2996 spike, WP-267): the `^^`/`[: :]` tokens
     /// and the kiln reflection intrinsics. Default off; `__cpp_reflection`
     /// is not defined either way.
@@ -708,6 +711,8 @@ impl Args {
             "-fno-threadsafe-statics" => p.threadsafe_statics = Some(false),
             "-fsized-deallocation" => p.sized_deallocation = Some(true),
             "-fno-sized-deallocation" => p.sized_deallocation = Some(false),
+            "-fcoro-aligned-allocation" => p.coro_aligned_allocation = true,
+            "-fno-coro-aligned-allocation" => p.coro_aligned_allocation = false,
             _ => return false,
         }
         true
