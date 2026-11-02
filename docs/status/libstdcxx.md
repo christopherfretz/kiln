@@ -336,10 +336,9 @@ Fixed in WP-332 (each test is under `tests/conformance/`):
 
 None at -std=c++26/c++20. **CY: `co_yield`** (generator:164) was fixed by WP-351 (coroutines); `std::generator<int>` compiles and runs at -std=c++23 (`coro.generator/libstdcxx-generator-int-run.cpp`, WP-370). The three generator errors listed for WP-370 (ranges `_Const`, tuple `__constructible`, `friend struct _Erased_promise::_Subyield_state`) no longer reproduce: clusters N, the tuple CTAD-guide row and the generator:684 row above fixed them.
 
-Beyond the header, instantiating `co_yield std::ranges::elements_of(g)` still fails (WP-370 follow-ups):
+`co_yield std::ranges::elements_of(g)` (a nested generator or a plain range) runs too (`coro.generator/libstdcxx-generator-elements-of-run.cpp`, WP-381). Its blockers were `std::variant` assignment and `emplace` (variant:1552, :730): `__variant::__emplace<N>(*this, ...)` deduces `_Variant_storage<_Triv, _Types...>&` from a class whose base is written through an alias template, now deduced against the canonical base (WP-381, `temp.deduct.call/libstdcxx-variant-assign-emplace-run.cpp`), and the local `namespace __variant = ...;` (variant:1546, WP-370).
 
-- `std::variant::emplace` (variant:1552, :730) calls `__variant::__emplace<N>(*this, ...)`, whose `_Variant_storage<_Triv, _Types...>&` parameter is deduced from a derived class whose base is written through an alias template (`_Variant_storage_alias<_Types...>`): kiln deduces against the written alias specialization instead of its canonical class (`templ/deduce.rs` `deduce_from_bases`; repro `template<class T> using A = S<T>; template<class T> struct D : A<T> {};` then `put(S<T>&)` with a `D<int>`). So any `std::variant` assignment or `emplace` fails with libstdc++.
-- The local `namespace __variant = ...;` in that body (variant:1546) was not instantiated; fixed by WP-370 (`namespace.alias/local-alias-in-function-template.cpp`).
+A `std::variant<int, std::string>` compiles but does not link: kiln's Itanium mangling of libstdc++'s `std::string` misses the standard substitutions (`Sa`, `Ss`, ...) and puts the `cxx11` ABI tag on the inline namespace, so any out-of-line `std::string` member is unresolved (`kiln_abi/src/mangle.rs`; follow-up).
 
 ### Known divergences seen while reducing (not header failures)
 

@@ -58,6 +58,7 @@ note_declared_coroutine_here = Note (1) "function is a coroutine due to use of '
 note_declared_non_template = Note (0) "declared as a non-template here";
 note_deduced_conflicting = Note (4) "candidate template ignored: deduced conflicting {0:types|values|templates} for parameter '{1}' ({2} vs. {3})";
 note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";
+note_deduction_incomplete_pack = Note (3) "candidate template ignored: deduced too few arguments for expanded pack '{0}'; no argument for {1} expanded parameter in deduced argument pack {2}";
 note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match {0} against {1}";
 note_deduction_underqualified = Note (3) "candidate template ignored: cannot deduce a type for '{0}' that would make '{1}' equal '{2}'";
 note_default_arg_declared_here = Note (0) "default argument declared here";

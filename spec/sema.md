@@ -4982,9 +4982,8 @@ the start of its last token, counting cv/ref-qualifiers, the exception
 specification, a trailing return type or requires-clause, an asm label,
 GNU attributes and the last virt-specifier, but not trailing C++11
 attribute-specifiers (`ColdDeclData::declarator_end`, recorded by the
-parser for bodiless member declarations; an instantiated member uses
-its pattern's). A bodiless namespace-scope declaration still points at
-its name (open question).
+parser for bodiless member and namespace- or block-scope function
+declarations, WP-381; an instantiated function uses its pattern's).
 
 **`co_await e` ([expr.await]/3-5).** In order:
 
@@ -5362,11 +5361,6 @@ the P2996R13 wording.
 - AST goldens under `tests/conformance/ast/`.
 
 ## 12. Open questions
-- **Coroutine note location (WP-351, WP-370):** the `must be declared
-  with 'noexcept'` note of §7.13 points at the declarator's end for
-  bodiless member declarations only; a namespace-scope one (`aw
-  operator co_await(X);`) still points at its name, pending the same
-  `Declarator::end` bookkeeping in `kiln_parse/src/decl.rs`.
 - **Additive `kiln_ast` APIs added by WP-048:**
   - `label_stmt`/`goto_stmt`
   - `set_non_odr_use`, `replace_enumerator_init`, `mark_bitfield`
