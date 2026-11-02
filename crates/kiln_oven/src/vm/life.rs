@@ -113,10 +113,26 @@ impl Oven {
     /// ([class.union.general]/6), beginning its lifetime even after an
     /// explicit destruction ended the previous member's.
     pub(super) fn revive_union(&mut self, raw: u64, uty: OTy) {
-        if raw != 0 {
-            // Faults surface in `set_active`, which checks the access.
-            let _ = self.mem.revive(raw, self.types.size(uty));
+        if raw == 0 {
+            return;
         }
+        let size = self.types.size(uty);
+        // A union destroyed itself (or with its enclosing object) has no
+        // entry (`end_life`): assigning its member begins no lifetime
+        // ([class.union.general]/6 needs a union within its lifetime), and
+        // `set_active`'s access check reports it. A union whose active
+        // member alone was destroyed keeps its entry and is revived.
+        if matches!(self.mem.check(raw, size, false), Err(MemFault::Lifetime))
+            && !self.mem.unions.contains_key(&Ptr::union_key(
+                raw,
+                u64::from(Ptr::decode(raw).off),
+                uty,
+            ))
+        {
+            return;
+        }
+        // Faults surface in `set_active`, which checks the access.
+        let _ = self.mem.revive(raw, size);
     }
 
     fn tracked(&self, raw: u64) -> bool {

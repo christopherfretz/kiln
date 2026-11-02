@@ -4041,9 +4041,21 @@ impl Compiler<'_> {
                         | CastKind::LValueToRValue
                         | CastKind::UserDefinedConversion
                         | CastKind::ConstructorConversion
+                        | CastKind::NonAtomicToAtomic
+                        | CastKind::AtomicToNonAtomic
                 ) =>
             {
                 let op = self.ast().exprs.operand(e);
+                // `_Atomic(T)` holds its `T` at the same address (layout in
+                // "Types"): a class `T` converts to or from it by
+                // initializing the `T` (clang's `_Atomic` extension;
+                // libc++'s `__cxx_atomic_base_impl(T)`, WP-334). The
+                // object initialized or copied is the operand's `T`; the
+                // promoted tail of a wider `_Atomic(T)` stays padding.
+                let ty = match self.ast().exprs.cast_kind(e) {
+                    CastKind::NonAtomicToAtomic => self.ety(op),
+                    _ => ty,
+                };
                 if self.node(op).value_category().is_glvalue() {
                     let src = self.lv_mem(op, Access::Read);
                     self.emit_at(Op::Copy, 1, &[p, src, ty.0], e);

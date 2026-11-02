@@ -255,6 +255,28 @@ impl Types {
             .copied()
     }
 
+    /// The member of the non-union record `t` on the path to an object of
+    /// type `p` at byte `off`: [`Types::field_at`]'s member when the object
+    /// is a subobject of it, else the first member that holds it, else
+    /// `field_at`'s. Two members may share an offset when one holds no
+    /// data there ([intro.object]/9: a `[[no_unique_address]]` member whose
+    /// data size is zero, such as a union of empty members, with the next
+    /// member placed at its offset; libc++'s `expected<void, E>` flag), so
+    /// the walk follows the object, not the byte (WP-334).
+    pub fn member_toward(&self, t: OTy, off: u64, p: OTy) -> Option<FieldInfo> {
+        let at = self.field_at(t, off);
+        let reach = |f: &FieldInfo| {
+            f.width.is_none()
+                && off >= f.offset
+                && off < f.offset + self.size(f.ty).max(1)
+                && self.has_subobject(f.ty, off - f.offset, p)
+        };
+        if at.as_ref().is_some_and(reach) {
+            return at;
+        }
+        self.fields(t).iter().find(|f| reach(f)).copied().or(at)
+    }
+
     pub fn unions(&self, t: OTy) -> &[(u64, OTy)] {
         let (a, b) = self.info(t).upos;
         &self.union_pos[a as usize..b as usize]

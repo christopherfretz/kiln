@@ -11,6 +11,7 @@ parse_attribute_forbids_arguments = Error (1) "attribute '{0}' cannot have an ar
 parse_attribute_ignored = Warning [IgnoredAttributes] (1) "'{0}' attribute ignored";
 parse_attribute_requires_string = Error (1) "expected string literal as argument of '{0}' attribute";
 parse_attribute_wrong_arg_count = Error (2) "'{0}' attribute takes {1:no arguments|one argument}";
+parse_attributes_misplaced = Error (0) "misplaced attributes; expected attributes here";
 parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
 parse_bad_pure_specifier = Error (0) "initializer on function does not look like a pure-specifier";
 parse_c99_complex = Extension [C99Extensions] (0) "'_Complex' is a C99 extension";

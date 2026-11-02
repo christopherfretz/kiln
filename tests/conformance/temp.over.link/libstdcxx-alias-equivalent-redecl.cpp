@@ -6,7 +6,6 @@
 // 34 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): call to 'swap' is ambiguous: alias-template redeclaration not recognised as equivalent
 template<bool B, class T = void> struct enable_if {};
 template<class T> struct enable_if<true, T> { using type = T; };
 template<bool B, class T = void> using enable_if_t = typename enable_if<B, T>::type;
