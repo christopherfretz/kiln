@@ -1892,6 +1892,15 @@ formed it:
   `typename`), `act_on_nested_name_component` (a dependent `T::`/`T::N::`
   prefix) and `act_template_id` (a dependent template-id) record the name's
   location.
+- `act_on_nested_name_template_id` records a dependent `X<args>::`
+  component (`WrittenKey::Nns`) at its start: the `template` keyword when
+  one is written (`O<T>::template I<T>::`), else the template name (the
+  last qualifier name, so `::N::H<T>::` records the `H`). Substituting
+  the qualifier of `typename H<T>::type` completes `H<int>` with that
+  location as the point of instantiation, so the "in instantiation of
+  template class" note points there, as clang's
+  `RequireCompleteDeclContext` does, not at the declarator (WP-307;
+  `temp.inst/instantiation-note-template-id-column.cpp`).
 - Recording happens only while parsing (the instantiation stack is
   empty), so instantiation never grows the table.
 - `Substituter::written(key, loc)` returns the recorded location nearest
