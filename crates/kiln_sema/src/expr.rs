@@ -3990,6 +3990,11 @@ impl Sema<'_, '_> {
             let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_))
                 || self.ast.types.is_function(r);
             (r, if lvalue { ValueCategory::LValue } else { ValueCategory::XValue })
+        } else if self.ast.types.as_record(ret).is_some() || self.ast.types.is_dependent(ret) {
+            // [expr.type]/2: only a non-class prvalue loses its
+            // cv-qualifiers; `const X f()` yields a `const X` prvalue
+            // (clang `QualType::getNonLValueExprType`).
+            (ret, ValueCategory::PRValue)
         } else {
             (conv::strip_cv(self, ret), ValueCategory::PRValue)
         };

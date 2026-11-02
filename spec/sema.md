@@ -1400,7 +1400,11 @@ diagnostics and IR.
       clang's DefaultError `-Wincrement-bool` extension and is then
       accepted, `--` is always an error; WP-165)
   - **calls:** argument conversion, arity notes, variadic default
-    promotions
+    promotions. A call returning a non-reference `cv T` is a prvalue of
+    type `T` only when `T` is a non-class, non-dependent type; a class
+    (or dependent) result keeps its cv-qualifiers, so `decltype(f())`
+    for `const X f()` is `const X` ([expr.type]/2, clang
+    `getNonLValueExprType`; WP-276)
   - **member access:** `.` and `->` on records and through
     `IndirectField`; members found in base classes, static members,
     enumerators and member functions, implicit `this->`, `this`,
