@@ -154,6 +154,26 @@ clang's `Parser` over `Preprocessor::Lex`.
     `TentativeCXXTypeIdContext`,
   - `is_cxx_function_declarator(name) -> (bool, bool)`
     ([dcl.ambig.res]/1; the ambiguity flag feeds `-Wvexing-parse`).
+  Dependent qualified names follow clang's `isCXXDeclarationSpecifier`
+  (WP-291). A dependent `N::m` that the scan cannot classify is a
+  decl-specifier when an identifier or another decl-specifier follows it
+  (`T::m const a`, `T::m b, c`: a declaration with a missing
+  `typename`). Otherwise, inside `is_cxx_function_declarator`'s
+  parameter clause only, it is ambiguous with clang's `InvalidAsDeclSpec`
+  flag set (`param_decl_specifier`). A `)` then ends the function
+  declarator only if `&`, `&&`, `[`, `{`, `=`, `->`, a cv-qualifier,
+  `restrict`, `throw`, `noexcept`, `try` or a virt-specifier follows.
+  Otherwise the declarator is a variable with a parenthesized
+  initializer, so `void g(X<T>::m);` and `int g(X<T>::m);` are variables.
+  A qualifier `X<args>::` is a dependent template-id (`template_args_dependent`,
+  scanned in `scan_name_qual_at`) when `X` is a class template, an
+  argument names a template parameter or a dependent entity, and `X` cannot
+  name the current instantiation. Then `X<T>::m` is never classified as the
+  primary template's member type. At statement or condition start such a
+  name (`dependent_template_id_name`) begins an expression whatever
+  follows, as in clang, so `X<T>::m d, e;` is an expression statement.
+  `tests/conformance/dcl.ambig.res/dependent-qualified-param-or-init.cpp`
+  covers this.
   A member-pointer ptr-operator (`member_pointer_end`) is scanned as
   `::`? (`template`? name (`<args>`)? `::`)+ `*`: each component is
   classified in the context of the previous one; template arguments
@@ -866,6 +886,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   | `U(e);`, `U(*p)(int);`, `U(f), g = 1;`, `U(h)[2];` | declarations | same |
   | `(U)a`, `(U(a))`, `U(a) + 1`, `U(a)->m` | expressions | same |
   | `typename U::type(e);` / `U::type(a);` | declaration / call | same |
+  | `X<U>::m d, e;`, `X<U>::m *p;`, `(X<U>::m)0;` | expressions (a dependent template-id qualifier) | same (fixed in WP-291) |
+  | `U::m const a = 0;`, `U::m b, c;` | declarations; `missing 'typename'` | same (fixed in WP-291) |
+  | `void h(U::m);` | variable; `variable has incomplete type 'void'` | same (fixed in WP-291) |
+- **Expression statements** ([stmt.expr]): a missing `;` is `expected ';'
+  after expression` at the end of the expression, and nothing is skipped:
+  the next statement starts at the current token (clang's
+  `ExpectAndConsumeSemi`), so `X<U>::m d, e;` goes on to report `d` and `e`.
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed

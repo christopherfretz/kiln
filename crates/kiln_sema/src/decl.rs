@@ -1521,7 +1521,16 @@ impl Sema<'_, '_> {
         qualifier: Option<DeclId>,
         new: NewFn,
     ) -> Option<DeclId> {
-        let found = self.prev_candidates_dn(dname, qualifier);
+        let mut found = self.prev_candidates_dn(dname, qualifier);
+        if qualifier.is_some() {
+            // A declaration whose parameter needed the missing-`typename`
+            // recovery is invalid: a qualified redeclaration does not
+            // match it (clang).
+            found.retain(|&x| {
+                !self.missing_typename_fns.contains(&x)
+                    && !self.pattern_of(x).is_some_and(|p| self.missing_typename_fns.contains(&p))
+            });
+        }
         if let Some(p) = self.pick_prev_function(&found, new) {
             return Some(p);
         }
@@ -2921,6 +2930,9 @@ impl Sema<'_, '_> {
         if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
         }
+        if d.missing_typename {
+            self.missing_typename_fns.insert(f);
+        }
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         } else if templated_friend {
@@ -3728,6 +3740,7 @@ impl Sema<'_, '_> {
             self.inst.concepts.placeholder_locs.insert(v, ds.constraint_loc);
         }
         self.check_abstract_var(v);
+        self.check_void_init_var(v, d);
         self.check_sizeless_var(v, self.in_local_scope());
         self.record_constinit(v, ds);
         self.check_constexpr_var_literal(v);
@@ -3739,6 +3752,21 @@ impl Sema<'_, '_> {
             self.record_extern_c(name, v);
         }
         v
+    }
+
+    /// [basic.def]/5, [dcl.init.general]/7: a variable with an initializer
+    /// has a complete object type. `void x(1);`, `void v(T::m);` (a
+    /// parenthesized dependent name is an initializer, [dcl.ambig.res]/1)
+    /// are reported when declared, before the initializer is parsed (clang
+    /// `err_typecheck_decl_incomplete_type`); `v` becomes invalid.
+    fn check_void_init_var(&mut self, v: DeclId, d: &Declarator) {
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        if d.init_style.is_none() || !self.ast.types.is_void(ty) {
+            return;
+        }
+        let msg = self.diag(DiagId::sema_void_var, d.name_loc()).arg(self.ty_arg(ty));
+        self.emit(msg);
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
     }
 
     // -- initializers ---------------------------------------------------------
@@ -3942,21 +3970,26 @@ impl Sema<'_, '_> {
                 return;
             }
         }
-        if self.contains_undeduced_auto(ty) {
+        let deduced = self.contains_undeduced_auto(ty);
+        if deduced {
             ty = self.deduce_var_auto(v, ty, &init, loc, direct).unwrap_or(QualType::ERROR);
             self.ast.decls.set_ty(v, ty);
             // `auto x = {...};` deduced `std::initializer_list<U>`; the
             // list initializes it below ([dcl.init.list]/3.6, WP-106).
-            // `auto x = f();` with a `void` f deduces an incomplete
-            // object type (clang `DeduceVariableDeclarationType`, then
-            // `err_typecheck_decl_incomplete_type`); `x` gets no initializer.
-            if self.ast.types.is_void(ty) {
+        }
+        // [basic.def]/5, [dcl.init.general]/7: an initialized variable has
+        // a complete object type. A written `void` was reported when the
+        // variable was declared ([`Sema::check_void_init_var`]); `auto x =
+        // f();` with a `void` f is reported here (clang
+        // `err_typecheck_decl_incomplete_type`). `x` gets no initializer.
+        if self.ast.types.is_void(ty) {
+            if !vn.flags().contains(DeclFlags::INVALID) || deduced {
                 let msg = self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty));
                 self.emit(msg);
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
-                self.discard_initializer(&init);
-                return;
             }
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.discard_initializer(&init);
+            return;
         }
         if self.constexpr_var_non_literal(v) {
             // Reported at the declarator, or here for a deduced type

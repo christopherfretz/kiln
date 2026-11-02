@@ -7,7 +7,7 @@ use kiln_ast::expr::BinaryOp;
 use kiln_ast::ids::{ArgListId, TemplateNameId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{
-    AutoKeyword, ExcSpec, FuncInfo, FuncProto, Quals, TemplateArg, TemplateName, TypeView,
+    ArgView, AutoKeyword, ExcSpec, FuncInfo, FuncProto, Quals, TemplateArg, TemplateName, TypeView,
 };
 use kiln_ast::{DeclHead, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
@@ -22,6 +22,7 @@ use crate::overload::{
     SetKind,
 };
 use crate::templ::args::{LevelMode, MultiLevelArgs};
+use crate::templ::deduce::{DeducedArgs, Tdk};
 use crate::templ::pack::Expansion;
 use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
 
@@ -276,8 +277,63 @@ impl Sema<'_, '_> {
         self.set_member_access(f);
         if let Some(t) = self.finish_template_pattern(f) {
             self.set_member_access(t);
+            if !invalid {
+                self.check_guide_deducible(t, f, sloc);
+            }
         }
         Some(f)
+    }
+
+    /// [temp.deduct.guide]/3 (clang `CheckDeductionGuideTemplate`): every
+    /// template parameter of deduction-guide template `t` is deducible from
+    /// the parameter types of its guide `f`, is a pack, or has a default
+    /// argument; otherwise `S(X<T>::m*) -> S<T>` is ill-formed.
+    fn check_guide_deducible(&mut self, t: DeclId, f: DeclId, loc: Loc) {
+        let params = self.template_params(t);
+        let depth = self.template_param_depth(t);
+        let ptys: Vec<TemplateArg> = self
+            .ast
+            .decls
+            .function(f)
+            .map(|fd| self.ast.lists.iter::<DeclId>(fd.params).collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| TemplateArg::ty(self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR)))
+            .collect();
+        let mut d = DeducedArgs::new(depth, params.len());
+        // Each parameter type against itself: a parameter in a deduced
+        // context binds (to itself), one only in non-deduced contexts
+        // ([temp.deduct.type]/5) stays null.
+        for &p in &ptys {
+            if self.deduce_args(&[p], &[p], true, &mut d, loc) != Tdk::Success {
+                return;
+            }
+        }
+        let missing: Vec<DeclId> = params
+            .iter()
+            .zip(&d.args)
+            .filter(|&(&p, a)| {
+                matches!(a.view(), ArgView::Null)
+                    && !self.is_pack_decl(p)
+                    && self.template_default(p).is_none()
+            })
+            .map(|(&p, _)| p)
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let mut msg = self
+            .diag(DiagId::sema_deduction_guide_not_deducible, loc)
+            .arg(u32::from(missing.len() > 1));
+        for &m in &missing {
+            let note = self
+                .diag(DiagId::note_non_deducible_parameter, self.ast.decls.get(m).loc())
+                .arg(self.decl_name(m));
+            msg = msg.with_note(note);
+        }
+        self.emit(msg);
+        self.ast.decls.set_flags(t, DeclFlags::INVALID);
+        self.ast.decls.set_flags(f, DeclFlags::INVALID);
     }
 
     /// The class template `ty` is an undeduced placeholder for
@@ -998,8 +1054,7 @@ impl Sema<'_, '_> {
             return false;
         }
         d.args.iter().zip(&params).all(|(a, &p)| {
-            !matches!(a.view(), kiln_ast::types::ArgView::Null)
-                || self.ast.template_parm(p).is_some_and(|i| i.pack)
+            !matches!(a.view(), ArgView::Null) || self.ast.template_parm(p).is_some_and(|i| i.pack)
         })
     }
 
@@ -1057,21 +1112,16 @@ impl Sema<'_, '_> {
         // `MarkUsedTemplateParameters`); found as those deducible from
         // the deductions themselves.
         let aps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(al.params).collect();
-        let deduced: Vec<TemplateArg> = d
-            .args
-            .iter()
-            .copied()
-            .filter(|a| !matches!(a.view(), kiln_ast::types::ArgView::Null))
-            .collect();
+        let deduced: Vec<TemplateArg> =
+            d.args.iter().copied().filter(|a| !matches!(a.view(), ArgView::Null)).collect();
         let mut du = DeducedArgs::new(al.depth, aps.len());
         du.expansions = true;
-        let used: Vec<bool> = if self.deduce_args(&deduced, &deduced, true, &mut du, Loc::INVALID)
-            == Tdk::Success
-        {
-            du.args.iter().map(|a| !matches!(a.view(), kiln_ast::types::ArgView::Null)).collect()
-        } else {
-            vec![true; aps.len()]
-        };
+        let used: Vec<bool> =
+            if self.deduce_args(&deduced, &deduced, true, &mut du, Loc::INVALID) == Tdk::Success {
+                du.args.iter().map(|a| !matches!(a.view(), ArgView::Null)).collect()
+            } else {
+                vec![true; aps.len()]
+            };
         let all_used = used.iter().all(|&u| u);
         // The deductions are canonical: name the (used, renumbered) alias
         // template parameters in them again.
@@ -1119,9 +1169,9 @@ impl Sema<'_, '_> {
         for a in &mut d.args {
             let mut s = Substituter::new(self, &resugar);
             *a = match a.view() {
-                kiln_ast::types::ArgView::Null => continue,
+                ArgView::Null => continue,
                 // A deduced pack (its elements may be expansions).
-                kiln_ast::types::ArgView::Pack(l) => {
+                ArgView::Pack(l) => {
                     let l = s.args(l, Loc::INVALID).ok()?;
                     let v: Vec<TemplateArg> = self
                         .ast
@@ -1133,7 +1183,7 @@ impl Sema<'_, '_> {
                     TemplateArg::pack(self.ast.types.arg_list(&v))
                 }
                 // A canonical (profiled) value-dependent expression.
-                kiln_ast::types::ArgView::Profile(p) => {
+                ArgView::Profile(p) => {
                     let e = s.sema.ast.types.profile_expr(p)?;
                     let e = s.expr(e).ok()?;
                     s.sema.ast.builder().template_arg_expr(e)
@@ -1155,7 +1205,7 @@ impl Sema<'_, '_> {
             let mut sargs = d.args.clone();
             let mut moved: Vec<(DeclId, DeclId)> = Vec::new();
             for (i, &p) in gps.iter().enumerate() {
-                if !matches!(sargs[i].view(), kiln_ast::types::ArgView::Null) {
+                if !matches!(sargs[i].view(), ArgView::Null) {
                     continue;
                 }
                 let n = *self.ast.decls.get(p);
@@ -1284,7 +1334,7 @@ impl Sema<'_, '_> {
     /// [`Self::strip_expansion_ty`] for a type argument.
     fn strip_expansion_sugar(&self, a: TemplateArg) -> TemplateArg {
         match a.view() {
-            kiln_ast::types::ArgView::Type(t) => TemplateArg::ty(self.strip_expansion_ty(t)),
+            ArgView::Type(t) => TemplateArg::ty(self.strip_expansion_ty(t)),
             _ => a,
         }
     }

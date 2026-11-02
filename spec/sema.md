@@ -231,6 +231,14 @@ Constructors:
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
    are compatible, and links the redeclaration chain.
+4. A variable of type `void` that has an initializer ([basic.def]/5,
+   [dcl.init.general]/7: `void x(1);`, `void v(T::m);`, `void h(void
+   (*fp)(X<T>::m), int);`) is "variable has incomplete type 'void'" at
+   its name when declared (`check_void_init_var`), before the initializer
+   is parsed, as in clang; the variable is invalid and its initializer is
+   discarded. A `void` deduced from `auto x = f();` is reported when the
+   initializer is attached (WP-291,
+   `tests/conformance/dcl.ambig.res/dependent-qualified-param-or-init.cpp`).
 
 The resulting declaration depends on the declarator:
 

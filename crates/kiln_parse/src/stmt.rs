@@ -267,9 +267,10 @@ impl Parser<'_, '_> {
             self.s.act_on_expr_stmt(e)
         };
         if self.eat(Punct::Semi).is_none() {
+            // clang's `ExpectAndConsumeSemi`: nothing is skipped; the next
+            // statement starts at the current token (`X<T>::m b;` goes on
+            // with `b;`).
             self.s.error(DiagId::parse_expected_semi_after_expr, self.expected_loc());
-            self.skip_until(&[Punct::RBrace], true, false);
-            self.eat(Punct::Semi);
         }
         Some(s)
     }

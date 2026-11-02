@@ -1431,6 +1431,15 @@ impl Sema<'_, '_> {
         self.ast.spec_info(first).map(|(_, s)| s.template)
     }
 
+    /// True inside a class whose injected-class-name names class template
+    /// `tmpl` (its pattern, a partial or explicit specialization) or while
+    /// a declarator scope is being entered: there `tmpl<args>::name` may
+    /// name the current instantiation ([temp.dep.type]/1), so the
+    /// parser's lookahead keeps classifying `name` by lookup in `tmpl`.
+    pub fn may_name_current_instantiation(&self, tmpl: DeclId) -> bool {
+        self.templ.entering_context || self.injected_class_for(tmpl).is_some()
+    }
+
     /// The innermost class enclosing the current context whose
     /// injected-class-name names class template `tmpl` ([temp.local]/1):
     /// its pattern, one of its partial specializations or one of its
