@@ -703,7 +703,7 @@ impl Sema<'_, '_> {
         let class = if ok || self.is_dependent_type(ty0) || t.as_record(ty0).is_none() {
             None
         } else {
-            self.switch_class_condition(cond, loc)
+            self.contextual_class_conversion(crate::switch_conv::ContextualConv::Switch, cond, loc)
         };
         let (cond, cond_ty, invalid) = if self.is_dependent_type(ty0) {
             (cond, ty0, false)
