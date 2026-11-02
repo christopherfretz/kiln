@@ -786,8 +786,12 @@ impl Sema<'_, '_> {
                 }
                 Chunk::Array { size, loc } => {
                     prev_ref = false;
+                    // clang `BuildArrayType`: in C++ an array of `void`
+                    // has an incomplete element type ([dcl.array]/1).
                     if t.is_void(ty) {
-                        let msg = self.diag(DiagId::sema_array_of_void, *loc).arg(&name);
+                        let msg = self
+                            .diag(DiagId::sema_array_incomplete_type, *loc)
+                            .arg(self.ty_arg(ty));
                         self.emit(msg);
                         return QualType::ERROR;
                     }

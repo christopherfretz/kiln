@@ -158,6 +158,11 @@ impl Substituter<'_, '_, '_> {
                 if t.is_void(e) || t.is_function(e) || t.is_reference(e) {
                     return self.chunk(e, Chunk::Array { size: None, loc }, loc);
                 }
+                // [temp.deduct.general]/11.1: an array of abstract class
+                // type (clang `BuildArrayType`).
+                if self.sema.require_non_abstract_element(loc, e) {
+                    return Err(SubstFail);
+                }
                 // clang rebuilds the array (`BuildArrayType`): a zero
                 // bound is an error in a SFINAE context (see decl.rs).
                 if a.size == 0 && self.sema.inst.stack.is_sfinae() {
@@ -198,6 +203,12 @@ impl Substituter<'_, '_, '_> {
                 let out = self.expand_types(&params, loc);
                 self.type_begin = outer;
                 let out = out?;
+                // [temp.deduct.general]/11.10: a `void` parameter (clang
+                // `BuildFunctionType`).
+                if out.iter().any(|&t| self.sema.ast.types.is_void(t)) {
+                    self.sema.error(DiagId::sema_param_with_void_type, loc);
+                    return Err(SubstFail);
+                }
                 let exc = match self.sema.ast.types.exc_spec(&p) {
                     ExcSpec::NoexceptExpr {
                         expr,
