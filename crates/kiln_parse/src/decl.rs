@@ -1852,6 +1852,21 @@ impl Parser<'_, '_> {
     ) -> (Vec<ParamInfo>, bool) {
         let mut params = Vec::new();
         let mut variadic = false;
+        // clang's `FunctionDeclarationScope`: the clause belongs to the
+        // function a declaration declares (`isFunctionDeclaratorA-
+        // FunctionDeclaration`: only grouping parentheses lie between the
+        // name and this function declarator) or to a lambda; `auto` is a
+        // placeholder for an invented template parameter only there
+        // ([dcl.fct]/22, [expr.prim.lambda.closure]/3).
+        let fn_decl = site == DeclSite::LambdaParam
+            || (matches!(
+                d.ctx,
+                DeclaratorContext::File
+                    | DeclaratorContext::Member
+                    | DeclaratorContext::Block
+                    | DeclaratorContext::ForInit
+            ) && !d.typedef
+                && d.chunks.is_empty());
         loop {
             if self.at(Punct::RParen) || self.at_eof() {
                 break;
@@ -1892,6 +1907,7 @@ impl Parser<'_, '_> {
             let mut pd = Declarator::new(DeclaratorContext::Prototype, start);
             pd.site = site;
             pd.explicit_object = this_loc;
+            let decltype_auto = ds.base == TypeSpecKind::DecltypeAuto;
             let placeholder = matches!(ds.base, TypeSpecKind::Auto);
             let hint = placeholder
                 || (ds.base == TypeSpecKind::Named
@@ -1900,21 +1916,39 @@ impl Parser<'_, '_> {
             self.parse_declarator(&mut pd);
             self.pack_hint = saved;
             self.set_abstract_loc(&mut pd);
-            if placeholder && !ds.invalid {
-                // An abbreviated function template's invented parameter
-                // ([dcl.fct]/22).
-                let at = ds.type_loc.unwrap_or(start);
-                let constraint = ds.auto_constraint.take().map(|(c, a)| (c, a, ds.constraint_loc));
-                let pname = pd.name.map(|(n, _)| n);
-                let ty = self.s.act_on_invented_template_param(
-                    at,
-                    pd.ellipsis.is_some(),
-                    constraint,
-                    pname,
-                    d.qualifier,
-                );
-                ds.base = TypeSpecKind::Named;
-                ds.named = Some(ty);
+            // A decl-specifier `auto` of a declarator with a trailing
+            // return type is that function type's `auto`, not a
+            // placeholder for the parameter ([dcl.fct]/2, /22).
+            let trailing = pd
+                .chunks
+                .iter()
+                .any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
+            let at = ds.type_loc.unwrap_or(start);
+            if (placeholder || decltype_auto) && !ds.invalid && !trailing {
+                if let Some(why) = misplaced_param_placeholder(decltype_auto, fn_decl, site) {
+                    let int = self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why);
+                    ds.auto_constraint = None;
+                    ds.base = TypeSpecKind::Named;
+                    ds.named = Some(int);
+                } else {
+                    // An abbreviated function template's invented
+                    // parameter ([dcl.fct]/22).
+                    let constraint =
+                        ds.auto_constraint.take().map(|(c, a)| (c, a, ds.constraint_loc));
+                    let pname = pd.name.map(|(n, _)| n);
+                    let ty = self.s.act_on_invented_template_param(
+                        at,
+                        pd.ellipsis.is_some(),
+                        constraint,
+                        pname,
+                        d.qualifier,
+                    );
+                    ds.base = TypeSpecKind::Named;
+                    ds.named = Some(ty);
+                }
+            }
+            if trailing && !ds.invalid {
+                self.trailing_return_placeholders(&mut pd, at, fn_decl, site, d.qualifier);
             }
             if self.at_attr() {
                 self.parse_attributes(&mut pd.attrs);
@@ -1947,6 +1981,40 @@ impl Parser<'_, '_> {
             }
         }
         (params, variadic)
+    }
+
+    /// The placeholder in a trailing return type of parameter declarator
+    /// `pd` (clang's `GetFullTypeForDeclarator`): `decltype(auto)` and an
+    /// `auto` of a clause that declares no function are reported at the
+    /// decl-specifier `at` and become `int`; any other `auto` is replaced
+    /// by an invented template parameter ([dcl.fct]/22: `void f(auto (*p)()
+    /// -> auto)` is an abbreviated function template). Only placeholders
+    /// under pointer and reference declarators are rewritten.
+    fn trailing_return_placeholders(
+        &mut self,
+        pd: &mut Declarator,
+        at: Loc,
+        fn_decl: bool,
+        site: DeclSite,
+        qualifier: Option<DeclId>,
+    ) {
+        let pname = pd.name.map(|(n, _)| n);
+        let pack = pd.ellipsis.is_some();
+        for c in &mut pd.chunks {
+            let Chunk::Function { trailing: Some((t, tloc)), .. } = c else { continue };
+            let Some((decltype_auto, constraint)) = self.s.trailing_return_placeholder(*t) else {
+                continue;
+            };
+            let with = if let Some(why) = misplaced_param_placeholder(decltype_auto, fn_decl, site)
+            {
+                self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why)
+            } else {
+                let constraint = constraint.map(|(c, a)| (c, a, Loc::INVALID));
+                let loc = if tloc.is_valid() { *tloc } else { at };
+                self.s.act_on_invented_template_param(loc, pack, constraint, pname, qualifier)
+            };
+            *t = self.s.replace_trailing_return_placeholder(*t, with);
+        }
     }
 
     /// `= initializer-clause` after a parameter-declaration
@@ -2287,6 +2355,7 @@ impl Parser<'_, '_> {
         loop {
             let mut d = Declarator::new(ctx, self.loc());
             d.direct_init = direct_init;
+            d.typedef = ds.is_typedef();
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
@@ -2758,4 +2827,19 @@ fn set_flag(slot: &mut Option<Loc>, loc: Loc, spelling: &str) -> Result<(), Spec
     }
     *slot = Some(loc);
     Ok(())
+}
+
+/// Why a parameter's placeholder is ill-formed, as the site argument of
+/// [`kiln_sema::Sema::act_on_misplaced_param_placeholder`] (clang's
+/// `err_auto_not_allowed`): `decltype(auto)` is never a parameter's type
+/// ([dcl.spec.auto.general]/2-3), and `auto` only in the clause of a
+/// function declaration or a lambda (`fn_decl`, [dcl.fct]/22).
+fn misplaced_param_placeholder(decltype_auto: bool, fn_decl: bool, site: DeclSite) -> Option<u8> {
+    if decltype_auto {
+        Some(if site == DeclSite::LambdaParam { 2 } else { 0 })
+    } else if !fn_decl {
+        Some(1)
+    } else {
+        None
+    }
 }

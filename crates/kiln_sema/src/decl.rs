@@ -1376,12 +1376,14 @@ impl Sema<'_, '_> {
             .arg(self.decl_arg(p).trim_matches('\'').to_string())
     }
 
-    /// True if `q` is an undeduced plain `auto` (not `decltype(auto)`).
+    /// True if `q` is an undeduced plain `auto` (not `decltype(auto)`,
+    /// nor a constrained `C auto`: clang's `isConstrained` check for a
+    /// trailing return type, [dcl.fct]/2).
     fn is_plain_auto(&self, q: QualType) -> bool {
         q.quals().is_empty()
             && matches!(
                 self.ast.types.view(q.ty()),
-                TypeView::Auto { keyword: AutoKeyword::Auto, deduced: None, .. }
+                TypeView::Auto { keyword: AutoKeyword::Auto, deduced: None, concept: None, .. }
             )
     }
 

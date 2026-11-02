@@ -647,6 +647,10 @@ pub struct Declarator {
     /// declarator-id may be a template-id naming a specialization of a
     /// function template without a template head ([temp.friend]/1.3).
     pub friend: bool,
+    /// The declarator belongs to a `typedef` declaration (clang's
+    /// `isFunctionDeclarationContext` is false then: its function
+    /// declarator declares no function, [dcl.fct]/22). Set by the parser.
+    pub typedef: bool,
     /// What the declarator declares, beyond `ctx`, where that decides
     /// whether a placeholder for a deduced class type may appear
     /// ([dcl.type.class.deduct]/2; clang's finer `DeclaratorContext`s).
@@ -778,6 +782,7 @@ impl Declarator {
             spec_id: None,
             decomp: None,
             friend: false,
+            typedef: false,
         }
     }
 
