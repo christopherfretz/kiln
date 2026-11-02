@@ -1895,7 +1895,7 @@ impl Sema<'_, '_> {
                 self.templ.cur = None;
             }
         }
-        let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
@@ -1903,7 +1903,11 @@ impl Sema<'_, '_> {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
-            return self.act_on_function_spec_declarator(ds, ty, d, invalid);
+            match self.act_on_function_spec_declarator(ds, ty, d, invalid) {
+                Ok(r) => return r,
+                // No template to specialize: a plain, invalid function.
+                Err(()) => invalid = true,
+            }
         }
         if let Some((ext, _)) = self.templ.explicit_inst.filter(|_| self.at_explicit_head()) {
             self.templ.explicit_inst = None;
