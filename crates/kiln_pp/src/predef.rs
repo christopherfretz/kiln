@@ -364,9 +364,8 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         for &(n, v) in P1467_LIMITS {
             set(m, n, v);
         }
-        let cplusplus: u64 = m.get("__cplusplus").map_or(0, |v| {
-            v.trim_end_matches('L').parse().unwrap_or(0)
-        });
+        let cplusplus: u64 =
+            m.get("__cplusplus").map_or(0, |v| v.trim_end_matches('L').parse().unwrap_or(0));
         if cplusplus >= 202_302 {
             for n in P1467_STDCPP {
                 set(m, n, "1");
@@ -477,7 +476,9 @@ mod tests {
         let c = build_predefines(BASE, &PredefConfig::new(false), &[]);
         for s in [&s17, &s23] {
             assert!(s.contains("#define __FLT32_MANT_DIG__ 24\n"));
-            assert!(s.contains("#define __FLT128_MAX__ 1.18973149535723176508575932662800702e+4932F128\n"));
+            assert!(s.contains(
+                "#define __FLT128_MAX__ 1.18973149535723176508575932662800702e+4932F128\n"
+            ));
             assert!(s.contains("#define __BFLT16_DIG__ 2\n"));
             assert!(!s.contains("__FLT32X_"));
         }

@@ -477,7 +477,10 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
     if floating
         && ud_suffix.is_none()
         && std < Std::Cxx23
-        && matches!(sx.fsuffix, FloatSuffix::F32 | FloatSuffix::F64 | FloatSuffix::F128 | FloatSuffix::BF16)
+        && matches!(
+            sx.fsuffix,
+            FloatSuffix::F32 | FloatSuffix::F64 | FloatSuffix::F128 | FloatSuffix::BF16
+        )
     {
         p.diags.push(LexDiagKind::FloatSuffixExtension, suffix_begin, b.len());
     }

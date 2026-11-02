@@ -364,7 +364,11 @@ fn extended_suffixes_lex_fcon() {
         for (sp, ty, b) in [
             ("0.1f32", "_Float32", single(0.1)),
             ("0.1F64", "_Float64", double(0.1)),
-            ("0.1f128", "_Float128", bits(FloatKind::Quad, 0x3ffb_9999_9999_9999_9999_9999_9999_999a)),
+            (
+                "0.1f128",
+                "_Float128",
+                bits(FloatKind::Quad, 0x3ffb_9999_9999_9999_9999_9999_9999_999a),
+            ),
             ("0.1bf16", "__bf16", bits(FloatKind::BFloat16, 0x3dcd)),
             ("1.003906250931322574615478515625BF16", "__bf16", bits(FloatKind::BFloat16, 0x3f81)),
             ("1.00390625bf16", "__bf16", bits(FloatKind::BFloat16, 0x3f80)),
