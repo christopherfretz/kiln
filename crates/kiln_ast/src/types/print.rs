@@ -1306,7 +1306,7 @@ impl Printer<'_> {
                 self.space_before_ph();
             }
             TypeView::DeducedTemplateSpecialization { name, deduced: None } => {
-                self.template_name(name, Qual::AsWritten);
+                self.template_name(self.ctx.dtst_display_name(name), Qual::AsWritten);
                 self.space_before_ph();
             }
             TypeView::Attributed { kind, modified, .. } => {

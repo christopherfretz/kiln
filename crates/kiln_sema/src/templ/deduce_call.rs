@@ -456,6 +456,10 @@ impl Sema<'_, '_> {
         // [temp.deduct.call]/4: the (argument index, P, adjusted A) of
         // each deduced-from argument, checked against the deduced A.
         let mut originals: Vec<(usize, QualType, QualType)> = Vec::new();
+        // The parameters still to be deduced (not given explicitly): a
+        // deduction from a call argument takes the argument's sugar.
+        let undeduced: Vec<bool> =
+            d.args.iter().map(|x| matches!(x.view(), ArgView::Null)).collect();
         // [temp.deduct.call]/10: the (argument index, P) of each P that
         // takes no part in deduction, checked before substitution.
         let mut nondeduced: Vec<(usize, QualType)> = Vec::new();
@@ -516,6 +520,9 @@ impl Sema<'_, '_> {
                 self.resugar_mismatch(p, &mut d);
                 self.resugar_arg_mismatch(a.ty, &mut d);
                 return Err(DeductionFailure::new(r, d));
+            }
+            if r == Tdk::Success {
+                self.resugar_call_deduction(p, a, &undeduced, &mut d);
             }
             if r == Tdk::Success
                 && self.has_deducible_params(p, &d, false)
@@ -1005,6 +1012,72 @@ impl Sema<'_, '_> {
         }
         flags = flags.union(TdfFlags::DERIVED_CLASS);
         self.deduce(p, at, flags, d)
+    }
+
+    /// [temp.deduct.call]/2-3 as clang deduces over sugared types: a `P`
+    /// that is a template type parameter `cv T` (or a reference to one,
+    /// or a forwarding reference) deduces `T` as the argument type as
+    /// written (`N::H<int>`, not the canonical `H<int>` the canonical
+    /// deduction recorded), so `[with T = ...]` bindings and the
+    /// specialization's type print as clang prints them. Applied only to
+    /// a parameter not given explicitly whose recorded deduction is the
+    /// canonical form of the sugared candidate; the first argument's
+    /// sugar is kept (clang takes the common sugar of all of them).
+    fn resugar_call_deduction(
+        &mut self,
+        p: QualType,
+        a: &ArgInfo,
+        undeduced: &[bool],
+        d: &mut DeducedArgs,
+    ) {
+        if a.list.is_some()
+            || a.expr.is_some_and(|e| !matches!(self.overload_set_arg(e), OverloadArg::NotASet))
+        {
+            return;
+        }
+        let depth = u32::from(d.depth);
+        let t = &mut self.ast.types;
+        let parm = |t: &kiln_ast::types::TypeContext, q: QualType| match t.view(q.ty()) {
+            TypeView::CanonTemplateTypeParm { depth: x, index, pack: false } if x == depth => {
+                Some(index as usize)
+            }
+            _ => None,
+        };
+        let cp = t.canonical(p);
+        let (index, cand) = match t.canonical_view(cp) {
+            TypeView::RValueRef(inner)
+                if a.vk == ValueCategory::LValue && inner.quals().is_empty() =>
+            {
+                let Some(i) = parm(t, t.canonical(inner)) else { return };
+                (i, t.lvalue_ref_to(a.ty))
+            }
+            TypeView::LValueRef(inner) | TypeView::RValueRef(inner) => {
+                let inner = t.canonical(inner);
+                let Some(i) = parm(t, inner) else { return };
+                if t.is_array(a.ty) && !inner.quals().is_empty() {
+                    return;
+                }
+                let aq = t.effective_quals(a.ty).bits() & !inner.quals_bits();
+                let u = t.unqualified(a.ty);
+                (i, t.qualify(u, kiln_ast::types::Quals::from_bits(aq)))
+            }
+            _ => {
+                let Some(i) = parm(t, cp.without_quals()) else { return };
+                if t.is_array(a.ty) || t.is_function(a.ty) {
+                    return;
+                }
+                (i, t.unqualified(a.ty))
+            }
+        };
+        if !undeduced.get(index).copied().unwrap_or(false) {
+            return;
+        }
+        let Some(&cur) = d.args.get(index) else { return };
+        let ArgView::Type(cq) = cur.view() else { return };
+        if t.canonical(cq) != cq || t.canonical(cand) != cq || cand == cq {
+            return;
+        }
+        d.args[index] = TemplateArg::ty(cand);
     }
 
     /// A mismatch in parameter type `p` is noted with the mismatched part

@@ -1003,23 +1003,33 @@ impl TypeContext {
         t.into()
     }
 
-    /// The template name a deduced class template specialization type for
-    /// `name` and `deduced` carries: clang's `ASTContext` uniques these
-    /// types on the canonical template declaration (`TemplateName::Profile`),
-    /// so the spelling of the first one formed in the translation unit
-    /// (`N::A`, `A`, `::A`, or the bare name of a deduction guide's
-    /// declarator) is printed for every later spelling. Names that do not
-    /// resolve to a template declaration, or that are dependent, are kept.
-    fn first_dtst_name(
-        &mut self,
-        name: TemplateNameId,
-        deduced: Option<QualType>,
-    ) -> TemplateNameId {
+    /// Records `name` as the spelling an undeduced placeholder for its
+    /// template prints with, if it is the first: clang's `ASTContext`
+    /// uniques these types on the canonical template declaration
+    /// (`TemplateName::Profile`), so the spelling of the first one formed
+    /// in the translation unit (`N::A`, `A`, `::A`, or the bare name of a
+    /// deduction guide's declarator) is printed for every later spelling.
+    /// Names that do not resolve to a template declaration, or that are
+    /// dependent, are not recorded. The node itself keeps the written
+    /// name: a deduced placeholder prints its deduced type behind that
+    /// qualifier (clang's `ElaboratedType` around the uniqued node).
+    fn note_dtst_spelling(&mut self, name: TemplateNameId) {
+        if self.template_decl(name).is_none() || !self.template_name_flags(name).is_empty() {
+            return;
+        }
+        let key = self.canonical_template_name(name).raw();
+        self.first_dtst_names.entry(key).or_insert(name);
+    }
+
+    /// The spelling an undeduced placeholder written as `name` prints
+    /// with: the first one formed for its template
+    /// ([`Self::deduced_template_specialization`]), else `name`.
+    pub fn dtst_display_name(&self, name: TemplateNameId) -> TemplateNameId {
         if self.template_decl(name).is_none() || !self.template_name_flags(name).is_empty() {
             return name;
         }
-        let key = (self.canonical_template_name(name).raw(), raw_opt(deduced));
-        *self.first_dtst_names.entry(key).or_insert(name)
+        let key = self.canonical_template_name(name).raw();
+        self.first_dtst_names.get(&key).copied().unwrap_or(name)
     }
 
     /// A class template argument deduction placeholder `X` (C++17).
@@ -1028,7 +1038,9 @@ impl TypeContext {
         name: TemplateNameId,
         deduced: Option<QualType>,
     ) -> QualType {
-        let name = self.first_dtst_name(name, deduced);
+        if deduced.is_none() {
+            self.note_dtst_spelling(name);
+        }
         self.dtst_node(name, deduced)
     }
 

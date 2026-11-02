@@ -230,10 +230,10 @@ pub struct TypeContext {
     /// templates): their names are dependent ([temp.dep.type]/9).
     pub(crate) dependent_templates: kiln_source::fx::FxHashSet<DeclId>,
     /// The template name of the first deduced class template
-    /// specialization type formed for each (canonical template name,
-    /// deduced type) pair: clang uniques `DeducedTemplateSpecializationType`
-    /// on the canonical template, so later spellings reuse the first one.
-    pub(crate) first_dtst_names: kiln_source::fx::FxHashMap<(u32, u32), TemplateNameId>,
+    /// specialization type formed for each canonical template name: clang
+    /// uniques `DeducedTemplateSpecializationType` on the canonical
+    /// template, so later undeduced spellings print as the first one.
+    pub(crate) first_dtst_names: kiln_source::fx::FxHashMap<u32, TemplateNameId>,
     pub(crate) nns: KeyedTable,
     pub(crate) args: ArgTable,
     pub(crate) profiles: ProfileTable,

@@ -213,7 +213,9 @@ impl Sema<'_, '_> {
         let d = self
             .diag(DiagId::sema_template_constraints_not_satisfied, loc)
             .arg(sel)
-            .arg(self.qualified_decl_name(tmpl))
+            // clang names the underlying template decl unqualified (the
+            // written qualifier is not part of the checked template name).
+            .arg(self.decl_name_str(self.ast.decls.get(tmpl).name()))
             .arg(self.template_args_desc(tmpl, args));
         let d = self.with_sat_notes(d, sat);
         self.emit(d);
