@@ -90,6 +90,27 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   (spec/diag.md §2.5), e.g. `case ranges are a GNU extension`, `you need
   to include <typeinfo> or import std before using the 'typeid'
   operator`.
+- **Attributes and `nodiscard`** (WP-377). A `[[scope::name]]`
+  attribute is named in diagnostics as written, with its scope
+  normalized and `__x__` stripped (`'gnu::aligned'`, `'clang::x'`;
+  `attr_shown`, `decl_attrs.rs`); clang 19 prints the bare name. An
+  unused call whose *type* (not the callee) is `[[nodiscard]]`, or an
+  unused temporary of such a type built by a constructor without its own
+  attribute, warns `ignoring {return value|temporary} of type 'T'
+  declared with 'nodiscard' attribute` under `-Wunused-value`
+  (`unused_type_warning`, `expr.rs`), at the operator call's first token
+  for an overloaded operator. Attributes on a block-scope
+  using-declaration or using-directive are diagnosed as statement
+  attributes (`act_on_decl_stmt_attrs`).
+- **Template notes** (WP-377). A conversion error in a non-type template
+  argument (`not implicitly convertible`, `conversion ... is not allowed
+  in a converted constant expression`, `would bind reference to a
+  temporary`; [temp.arg.nontype]/2) is followed by `template parameter
+  is declared here` (`note_nttp_param`, `templ/nttp.rs`). A conversion
+  function template's deduction mismatch ([temp.deduct.conv]) notes the
+  written P (`'T *'`, not `'type-parameter-0-0 *'`). A pack-index
+  expression's pack name is quoted (`for pack 'Ts'`), and a single-argument
+  concept note quotes a non-type argument too.
 - Codegen's `-Watomic-alignment` text follows the level
   (spec/codegen.md); the AST dump's type printing, spec/ast-dump.md §2.
 
