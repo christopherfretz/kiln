@@ -143,6 +143,19 @@ pub struct Parser<'a, 'sm> {
     /// namespace or block scope with an unqualified declarator-id), so a
     /// missing `typename` there is diagnosed.
     pub(crate) param_typename: ParamTypename,
+    /// The parameter-declaration whose decl-specifier-seq is being parsed
+    /// is the first of a declarator clang disambiguates tentatively
+    /// (`Some(true)`) or another one (`Some(false)`); `None` outside one.
+    /// Selects clang's recovery for an unqualified `typename T`
+    /// (spec/parse.md, typename-specifiers).
+    pub(crate) param_recovery: Option<bool>,
+    /// Set when an unqualified `typename` ended a parameter's
+    /// decl-specifier-seq without consuming its name: the parameter list
+    /// stops there (clang's "expected ')'").
+    pub(crate) param_abort: bool,
+    /// The name and end of the last `typename T...[i]` whose pack index
+    /// was consumed after "expected a qualified name after 'typename'".
+    pub(crate) typename_pack_index: Option<(Loc, Loc)>,
     /// Memoized [`Parser::skip_template_args`] results (spec/parse.md
     /// §2.5): parsing `A<B<C<...>>>` scans each nested list once, not
     /// once per enclosing level.
@@ -274,6 +287,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             pack_hint: false,
             type_id_constraint: Loc::INVALID,
             param_typename: ParamTypename::Implicit,
+            param_recovery: None,
+            param_abort: false,
+            typename_pack_index: None,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
             decltype_scope: None,

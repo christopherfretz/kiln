@@ -40,7 +40,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::templates::{SpecKind, is_template_kind};
-use kiln_ast::types::{TemplateArg, TypeView};
+use kiln_ast::types::{ArgView, TemplateArg, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_source::Loc;
@@ -568,7 +568,14 @@ impl Sema<'_, '_> {
             ty = self.ast.types.pack_expansion(ty, None);
         }
         let d = self.builder().non_type_template_parm(h, ty, depth, index, pack);
-        if !self.check_nttp_type(ty, p.loc) {
+        // [temp.variadic]/12: `template<Ts N>` (clang reports at the
+        // parameter's name).
+        let unexpanded = !pack && {
+            let at = p.name.map_or(p.loc, |n| n.1);
+            self.diagnose_unexpanded_declarator(ty, "non-type template parameter type", at)
+        };
+        self.declarator_type_invalid = false;
+        if unexpanded || !self.check_nttp_type(ty, p.loc) {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
         }
         self.push_template_param(d);
@@ -615,10 +622,25 @@ impl Sema<'_, '_> {
     /// The default argument `= arg` of parameter `p`
     /// ([temp.param]/10-12).
     pub fn act_on_template_param_default(&mut self, p: DeclId, arg: TemplateArg, loc: Loc) {
+        use crate::templ::pack::PackOperand;
         if self.ast.template_parm(p).is_some_and(|x| x.pack) {
             // [temp.param]/11 ("template parameter pack cannot have a
             // default argument") is diagnosed by clang; kiln drops it.
             self.templ_unimplemented("default argument of a template parameter pack", loc);
+            return;
+        }
+        // [temp.variadic]/12: `class U = Ts` is reported at the
+        // parameter's name, `int N = sizeof(Ts)` at the argument (clang's
+        // `ActOn{Type,NonType}TemplateParameter`); the default is dropped.
+        let op = match arg.view() {
+            ArgView::Type(t) => Some((PackOperand::Type(t), self.ast.decls.get(p).loc())),
+            ArgView::Expr { expr, .. } => Some((PackOperand::Expr(expr), self.begin_loc(expr))),
+            _ => None,
+        };
+        if let Some((op, at)) = op
+            && self.lambdas.is_empty()
+            && self.diagnose_unexpanded_pack(op, "default argument", at)
+        {
             return;
         }
         if self.builder().set_template_default(p, arg).is_err() {

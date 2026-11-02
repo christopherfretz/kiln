@@ -387,12 +387,21 @@ impl Parser<'_, '_> {
                 return Vec::new();
             }
             let tl = self.loc();
+            self.typename_pack_index = None;
             let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::Alias) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
             let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, tl);
             self.s.note_alias_decl_loc(d, loc);
+            // clang reports a `typename T...[i]` type-id as unterminated
+            // (spec/parse.md, typename-specifiers).
+            if let Some((_, end)) = self.typename_pack_index.take()
+                && end == self.expected_loc()
+            {
+                let e = self.s.diag(DiagId::parse_expected_after, end);
+                self.emit(e.arg("alias declaration").arg("';'"));
+            }
             self.expect_semi_after("alias declaration");
             return vec![d];
         }
@@ -755,7 +764,8 @@ impl Parser<'_, '_> {
                     continue;
                 }
                 Kw::Typename => {
-                    let ty = self.parse_typename_specifier();
+                    self.typename_pack_index = None;
+                    let ty = self.parse_typename_specifier_in(Some(ctx));
                     if ty.is_none() {
                         ds.invalid = true;
                     }
@@ -764,6 +774,22 @@ impl Parser<'_, '_> {
                     {
                         ds.invalid = true;
                         self.spec_error(&e, loc);
+                    }
+                    if self.param_abort {
+                        break;
+                    }
+                    // clang ends a namespace-scope or member declaration
+                    // at `typename T...[i]` (spec/parse.md).
+                    let id = match ctx {
+                        DeclaratorContext::File => Some(DiagId::parse_expected_unqualified_id),
+                        DeclaratorContext::Member => Some(DiagId::parse_expected_member_name),
+                        _ => None,
+                    };
+                    if let Some(id) = id
+                        && let Some((at, _)) = self.typename_pack_index.take()
+                    {
+                        self.s.error(id, at);
+                        self.skip_until(&[Punct::Semi], false, false);
                     }
                     continue;
                 }
@@ -1222,6 +1248,10 @@ impl Parser<'_, '_> {
     fn unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
         let next = self.tok_at(end);
         self.ident_of(next).is_some()
+            // A type-specifier keyword: `restrict int f();` (`restrict` is
+            // no keyword in C++; clang's `ParseImplicitInt` default case).
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member | DeclaratorContext::Block)
+                && self.kw_of(next).is_some_and(is_type_specifier_kw))
             || (matches!(
                 ctx,
                 DeclaratorContext::File
@@ -2250,11 +2280,20 @@ impl Parser<'_, '_> {
             let mode =
                 if needs_typename { ParamTypename::Required } else { ParamTypename::Implicit };
             let saved = std::mem::replace(&mut self.param_typename, mode);
+            // clang disambiguates the first parameter of a non-member
+            // declarator tentatively ([dcl.ambig.res]/1).
+            let first = Some(needs_typename && params.is_empty());
+            let saved_recovery = std::mem::replace(&mut self.param_recovery, first);
             let mut ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
+            self.param_recovery = saved_recovery;
             if self.param_typename == ParamTypename::Missing {
                 d.missing_typename = true;
             }
             self.param_typename = saved;
+            if std::mem::take(&mut self.param_abort) {
+                d.invalid = true;
+                break;
+            }
             if ds.is_empty() {
                 let e = self.s.diag(DiagId::parse_expected, self.loc()).arg("parameter declarator");
                 self.emit(e);
@@ -2793,6 +2832,15 @@ impl Parser<'_, '_> {
         ds.lead_cxx11 = None;
     }
 
+    /// True at a declarator that may follow an empty decl-specifier-seq
+    /// in context `ctx`: a special member's, or at namespace scope `y;`,
+    /// a declarator without a type declared as an invalid `int` (clang's
+    /// `err_missing_type_specifier`).
+    fn at_declarator_without_specifiers(&self, ctx: DeclaratorContext) -> bool {
+        self.at_special_declarator(ctx)
+            || (ctx == DeclaratorContext::File && self.at_implicit_int_declarator())
+    }
+
     fn parse_simple_declaration_delayed(
         &mut self,
         ctx: DeclaratorContext,
@@ -2813,7 +2861,7 @@ impl Parser<'_, '_> {
             self.s.end_delayed_access_to(level, ds.tag);
             return decls;
         }
-        if ds.is_empty() && !self.at_special_declarator(ctx) {
+        if ds.is_empty() && !self.at_declarator_without_specifiers(ctx) {
             self.error_here(DiagId::parse_expected_unqualified_id);
             self.skip_to_semi();
             return decls;
@@ -2825,6 +2873,8 @@ impl Parser<'_, '_> {
         // binding declaration is alone in its group.
         let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;
         let mut declarators = 0usize;
+        let _ = self.s.take_declarator_type_invalid();
+        let mut type_invalid = false;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
@@ -2867,7 +2917,9 @@ impl Parser<'_, '_> {
             // clang's `ParseDeclGroup`: a later declarator of a
             // decl-specifier that named no type is parsed, not declared,
             // and takes no initializer (`u1 &a, &b;` reports `a` only).
-            if declarators > 0 && ds.type_error {
+            // So is one after a declarator whose type named an
+            // unexpanded pack (`Ts a, b;` reports `a` only).
+            if declarators > 0 && (ds.type_error || type_invalid) {
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }
@@ -2876,6 +2928,9 @@ impl Parser<'_, '_> {
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
+            // A declarator without a type is invalid too (`static y, z;`).
+            type_invalid |= self.s.take_declarator_type_invalid()
+                || (!ds.has_type_specifier() && !is_untyped_special(&d));
             self.s.end_delayed_access_to(level, v);
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);

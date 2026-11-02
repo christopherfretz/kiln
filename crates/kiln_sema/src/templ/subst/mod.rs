@@ -106,6 +106,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// instantiation's scope: an invalid `VarDecl`, `TypedefNameDecl`,
     /// `UsingDecl`, ...).
     pub(crate) failed_locals: Vec<DeclId>,
+    /// Set when a declaration statement failed because its pattern
+    /// declaration is invalid: the enclosing compound statement stops
+    /// there (clang's `TransformCompoundStmt`).
+    pub(crate) invalid_decl_stmt: bool,
     /// The explicitly specified pack deduction may still extend
     /// ([temp.arg.explicit]/9; clang's partially substituted pack), by
     /// (depth, index): its length is a lower bound, checked against the
@@ -158,6 +162,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             init_failures: 0,
             stmt_expr_result: None,
             failed_locals: Vec::new(),
+            invalid_decl_stmt: false,
             partial_pack: None,
             written_locs: true,
             as_callee: false,
