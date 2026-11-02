@@ -2690,7 +2690,13 @@ after selection and on any odr-use:
 - **`constexpr`, `consteval` or deduced-return specializations** are
   instantiated **immediately**, under the frame `TemplateInstantiation`
   with poi `loc`. This keeps clang's diagnostic order and makes the body
-  ready for the Oven (Q7).
+  ready for the Oven (Q7). A specialization whose definition is already
+  being instantiated further up the instantiation stack (mutually
+  recursive constexpr templates, one forward-declared, as libc++'s
+  `__stable_sort` and `__stable_sort_move`) is not instantiated again:
+  its definition is in progress, as clang's `isDefined` is once
+  `InstantiateFunctionDefinition` has started. Test:
+  `temp.inst/constexpr-mutual-recursion.cpp`.
 - **Every other specialization** is pushed onto `pending`. It is
   instantiated at end of TU, or earlier through `ensure_body`.
 - **Explicit-instantiation-declaration members** are queued only if they
