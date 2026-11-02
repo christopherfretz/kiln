@@ -4160,12 +4160,6 @@ impl Sema<'_, '_> {
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
-        // clang's `AddInitializerToDecl` initializes no invalid variable
-        // (here: a file-scope `register` one, `register int g = "x";`).
-        if spec.storage() == VarStorage::Register && vn.has(DeclFlags::INVALID) {
-            self.discard_initializer(&init);
-            return;
-        }
         if self.extern_init_redefines(v, spec, loc) {
             self.discard_initializer(&init);
             return;
