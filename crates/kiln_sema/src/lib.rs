@@ -391,7 +391,7 @@ pub struct Sema<'a, 'sm> {
     /// Diagnostics held back while a range-based `for` step runs, so
     /// clang's trailing notes (`when looking up 'begin' function...`)
     /// can be attached to the last of them (`range_for.rs`).
-    pub(crate) diag_capture: std::cell::RefCell<Option<Vec<Diag>>>,
+    pub(crate) diag_capture: std::cell::RefCell<Option<range_for::HeldDiags>>,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -667,11 +667,23 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// A range-based `for` step holding its diagnostics back
     /// (`diag_capture`) still lets a SFINAE context deeper in the
     /// instantiation stack capture its errors, and a held diagnostic
-    /// takes its context notes now, at the depth it was raised
-    /// (§5.7; a requires-expression in a member instantiated by
-    /// `__begin != __end`, libc++ `sentinel_wrapper::operator==`).
+    /// raised in an instantiation begun inside the step takes its
+    /// context notes now, at the depth it was raised, without marking
+    /// that depth printed (§5.7; a requires-expression in a member
+    /// instantiated by `__begin != __end`, libc++
+    /// `sentinel_wrapper::operator==`). One raised at the step's own
+    /// depth is held as is and takes them when released.
     pub fn emit(&self, mut d: Diag) {
-        let capturing = self.diag_capture.borrow().is_some();
+        let capture_depth = self.diag_capture.borrow().as_ref().map(|h| h.depth);
+        if let Some(depth) = capture_depth
+            && self.inst.stack.len() <= depth
+        {
+            if let Some(h) = self.diag_capture.borrow_mut().as_mut() {
+                h.diags.push((d, false));
+            }
+            return;
+        }
+        let capturing = capture_depth.is_some();
         if !capturing {
             if self.inst.suppress_next_error.replace(false) {
                 return;
@@ -699,7 +711,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             // Only a diagnostic that will print takes the context notes,
             // which print once per depth (§10.2).
             if self.diags.would_emit(&d) {
+                let printed = self.inst.stack.last_emitted.get();
                 inst_notes = self.inst_context_notes();
+                if capturing {
+                    self.inst.stack.last_emitted.set(printed);
+                }
             }
         }
         // The instantiations begun inside the innermost implicit
@@ -714,18 +730,22 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         inst_notes.extend(synth_notes);
         inst_notes.extend(outer);
         d.prepend_notes(inst_notes);
-        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
-            held.push(d);
+        if let Some(h) = self.diag_capture.borrow_mut().as_mut() {
+            h.diags.push((d, true));
             return;
         }
         d.emit(self.diags);
     }
 
-    /// Emits `d`, held back by a range-based `for` step and already
-    /// carrying its context notes (`emit`).
-    pub(crate) fn emit_held(&self, d: Diag) {
-        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
-            held.push(d);
+    /// Emits `d`, held back by a range-based `for` step; `ctx` when it
+    /// already carries its context notes (`emit`).
+    pub(crate) fn emit_held(&self, d: Diag, ctx: bool) {
+        if !ctx {
+            self.emit(d);
+            return;
+        }
+        if let Some(h) = self.diag_capture.borrow_mut().as_mut() {
+            h.diags.push((d, true));
             return;
         }
         if self.inst.suppress_next_error.replace(false) {
