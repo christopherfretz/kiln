@@ -227,7 +227,24 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     clang `EmitLValueForFieldInitialization` does (WP-286;
     `tests/codegen/bitfield_member_init.cpp`,
     `tests/conformance/class.base.init/bitfield-default-member-init-run.cpp`);
-  - `++`/`--` on bool, integers, floats and pointers, including bit-fields.
+  - `++`/`--` on bool, integers, floats and pointers, including bit-fields;
+  - ext-vector element access (clang `EmitExtVectorElementExpr`, WP-312;
+    `tests/codegen/ext_vector_element.cpp`): the base vector's lvalue
+    (a prvalue base is stored to a temporary first; a glvalue access
+    chain `v.even.y` composes its lanes onto the root vector). One lane
+    is a vector-element lvalue (`VecLane::Index`, `extractelement`/
+    `insertelement` with an `i64` index); several are a
+    `VecLane::Swizzle` lvalue: a load is a one-operand `shufflevector`
+    of the loaded vector, a store (`store_swizzle`, clang
+    `EmitStoreThroughExtVectorComponentLValue`) shuffles the value into
+    the loaded vector, widening it first when the vector is longer than
+    the swizzle, and stores the whole vector back.
+- Variable alignment (clang `getDeclAlign`, WP-312;
+  `tests/codegen/alignas_variable.cpp`): `var_align` is
+  `kiln_abi::layout::decl_align` (spec/abi.md §3.2), so an `alignas` or
+  `aligned` attribute sets the `align` of a global, a static local, a
+  local's or `catch` variable's `alloca`, and of the loads and stores
+  through them.
 - Calls:
   - a call site gets `nounwind` only when the callee's prototype is
     nothrow, or the direct callee has a `NoThrow` attribute (a
@@ -718,8 +735,7 @@ The normative description is spec/driver.md "Code generation". In short:
   throwing one waits for EH. The placement-argument alignment is
   approximated by `pointer_with_align` (declaration alignment for named
   variables, array elements and members; otherwise the pointee type's
-  alignment). Corpus cases do not use `alignas` on globals (ignored by
-  codegen, a pre-existing gap) or `if (c && new T)` (clang folds the
+  alignment). Corpus cases do not use `if (c && new T)` (clang folds the
   non-null `new` in `EmitBranchOnBoolExpr`; kiln emits the branch). The
   `class` vs `struct` `memset` distinction is implemented but not
   covered (access specifiers do not parse yet).

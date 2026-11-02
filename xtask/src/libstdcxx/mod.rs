@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::util::process::{self, MemLimit, RssProbe};
-use crate::util::{build_kiln, repo_root, target_dir};
+use crate::util::{Profile, build_kiln_with, repo_root, target_dir};
 use run::{Config, HeaderResult};
 
 const USAGE: &str = "\
@@ -29,14 +29,16 @@ Contract: spec/libstdcxx.md.
   --std <std>            c++26 (default), c++23, c++20 or c++17
   --headers <dir>        the libstdc++ include directory to enumerate (default:
                          the newest /usr/include/c++/<version>)
-  --compiler <path>      kiln++ binary (default: cargo build -p kiln_driver)
+  --profile <p>          the cargo profile to build kiln++ with: debug, harness
+                         (default) or release (spec/libcxx.md \"Build profiles\")
+  --compiler <path>      kiln++ binary (default: cargo build --profile <p> -p kiln_driver)
   --clang <path>         the reference compiler (default clang++-19)
   --no-clang             skip the reference compiler
   --filter <glob>        only headers whose name matches <glob> (`*`, `?`)
   --list                 list the selected headers and exit
   -j, --jobs <n>         headers in parallel (default 2; an upper bound under a
                          MAKEFLAGS jobserver, see spec/harness.md)
-  --timeout <secs>       per-compile timeout (default 120)
+  --timeout <secs>       per-compile timeout (default 120; --profile debug: 300)
   --mem-limit <MiB>      address-space cap per compile (default 8192; 0: none)
   --report <file.md>     write this standard's generated region of the page
   -v, --verbose          print every header's result
@@ -71,12 +73,14 @@ pub struct Options {
     pub std: String,
     pub headers: Option<PathBuf>,
     pub compiler: Option<PathBuf>,
+    pub profile: Profile,
     pub clang: PathBuf,
     pub no_clang: bool,
     pub filter: Option<String>,
     pub list: bool,
     pub jobs: usize,
-    pub timeout: Duration,
+    /// `--timeout`; `None` is [`Profile::compile_timeout`].
+    pub timeout: Option<Duration>,
     pub mem_limit_mib: u64,
     pub report: Option<PathBuf>,
     pub verbose: bool,
@@ -88,16 +92,24 @@ impl Default for Options {
             std: "c++26".to_owned(),
             headers: None,
             compiler: None,
+            profile: Profile::Harness,
             clang: PathBuf::from("clang++-19"),
             no_clang: false,
             filter: None,
             list: false,
             jobs: 2,
-            timeout: Duration::from_secs(120),
+            timeout: None,
             mem_limit_mib: process::DEFAULT_MEM_LIMIT_MIB,
             report: None,
             verbose: false,
         }
+    }
+}
+
+impl Options {
+    /// The per-compile limit: `--timeout`, else the profile's.
+    pub fn timeout(&self) -> Duration {
+        self.timeout.unwrap_or_else(|| self.profile.compile_timeout())
     }
 }
 
@@ -124,6 +136,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             }
             "--headers" => o.headers = Some(PathBuf::from(value("--headers")?)),
             "--compiler" => o.compiler = Some(PathBuf::from(value("--compiler")?)),
+            "--profile" => o.profile = Profile::parse(&value("--profile")?)?,
             "--clang" => o.clang = PathBuf::from(value("--clang")?),
             "--filter" => o.filter = Some(value("--filter")?),
             "--report" => o.report = Some(PathBuf::from(value("--report")?)),
@@ -139,7 +152,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                     .ok()
                     .filter(|s: &f64| s.is_finite() && *s > 0.0)
                     .ok_or_else(|| format!("bad --timeout `{v}`"))?;
-                o.timeout = Duration::from_secs_f64(secs);
+                o.timeout = Some(Duration::from_secs_f64(secs));
             }
             "--mem-limit" => {
                 let v = value("--mem-limit")?;
@@ -267,7 +280,7 @@ fn execute(opts: &Options) -> Result<(), String> {
     let target = target_dir(&root)?;
     let kiln = match &opts.compiler {
         Some(c) => c.clone(),
-        None => build_kiln(&root, &target, "libstdcxx", false)?,
+        None => build_kiln_with(&root, &target, "libstdcxx", opts.profile)?,
     };
     let clang = if opts.no_clang {
         None
@@ -294,7 +307,7 @@ fn execute(opts: &Options) -> Result<(), String> {
         resource_dir: root.join("resource"),
         headers_dir: headers_dir.clone(),
         std: opts.std.clone(),
-        timeout: opts.timeout,
+        timeout: opts.timeout(),
         mem: MemLimit::from_mib(opts.mem_limit_mib),
         probe: RssProbe::detect(&scratch),
         scratch: scratch.clone(),
@@ -393,6 +406,12 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
     if cfg.clang.is_none() {
         command.push_str(" --no-clang");
     }
+    match &opts.compiler {
+        Some(_) => command.push_str(" --compiler <kiln++>"),
+        None => {
+            let _ = write!(command, " --profile {}", opts.profile.label());
+        }
+    }
     report::RunInfo {
         std: opts.std.clone(),
         kiln_version: version(&cfg.kiln),
@@ -447,7 +466,13 @@ mod tests {
         assert!(parse(&["vector"]).is_err());
         let d = Options::default();
         assert_eq!((d.std.as_str(), d.jobs, d.mem_limit_mib), ("c++26", 2, 8192));
-        assert_eq!(d.timeout, Duration::from_secs(120));
+        assert_eq!(d.timeout(), Duration::from_secs(120));
+        // spec/libcxx.md "Build profiles": the profile sets the default limit.
+        let dbg = parse(&["--profile", "debug"]).unwrap().unwrap();
+        assert_eq!((dbg.profile, dbg.timeout()), (Profile::Debug, Duration::from_secs(300)));
+        let t = parse(&["--profile", "debug", "--timeout", "9"]).unwrap().unwrap();
+        assert_eq!(t.timeout(), Duration::from_secs(9));
+        assert!(parse(&["--profile", "fast"]).is_err());
     }
 
     #[test]

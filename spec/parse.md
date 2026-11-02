@@ -1016,6 +1016,24 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     `parse_decl_specifiers` takes them into the `DeclSpec` (clang's
     `ParseSimpleDeclaration` with `DeclSpecAttrs`), so `[[maybe_unused]]
     int x;` marks `x`.
+  - after the declarator-id (`int x alignas(8);`, [dcl.decl.general]/4,
+    [class.mem.general]/1), for the declaration; `alignas` there may be
+    followed by a bit-width (`int b alignas(8) : 3`, then rejected by
+    sema on the bit-field) (WP-312)
+  - between decl-specifiers (clang `ProhibitAttributes` in
+    `ParseDeclarationSpecifiers`), at the end of the decl-specifier-seq
+    ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1) or after
+    an array declarator ([dcl.array]/1): attributes there appertain to a
+    type; kiln does not attach them, and sema reports an `alignas` among
+    them as `'alignas' attribute cannot be applied to types`
+    (`skip_type_position_attrs`, `Sema::act_on_type_position_attrs`;
+    WP-312)
+  - before a namespace-definition, a static_assert-declaration, or (for
+    `alignas`; `[[...]] using` is an extension) a using-declaration or
+    alias-declaration at file scope: `an attribute list cannot appear
+    here`, and the list is dropped
+    (`discard_attrs_before_unattributed_decl`; WP-312). Not yet: the
+    same check in class and block scope.
 - **`[[assume(e)]]` (WP-160):** `parse_assume_arg` parses a
   conditional-expression. If the next token is not `)`, it reparses the
   full expression, reports `use of this expression in an 'assume'

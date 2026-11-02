@@ -2111,6 +2111,11 @@ impl<'a> AstBuilder<'a> {
         if a.contains(ExprDeps::TYPE) {
             deps |= ExprDeps::VALUE_INST;
         }
+        if matches!(kind, TraitKind::AlignOf | TraitKind::PreferredAlignOf)
+            && self.names_dependently_aligned_decl(arg)
+        {
+            deps |= ExprDeps::VALUE_INST;
+        }
         self.simple(
             ExprKind::UnaryExprOrTypeTraitExpr,
             ValueCategory::PRValue,
@@ -2121,6 +2126,34 @@ impl<'a> AstBuilder<'a> {
             arg.raw(),
             0,
         )
+    }
+
+    /// `alignof e` is value-dependent when `e` (under parentheses) names
+    /// a variable or member whose `alignas` operand is dependent (clang's
+    /// `computeDependence(UnaryExprOrTypeTraitExpr *)`, [temp.dep.constexpr]/2).
+    fn names_dependently_aligned_decl(&self, arg: ExprId) -> bool {
+        let ast = &*self.ast;
+        let mut e = arg;
+        while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
+            e = ast.exprs.operand(e);
+        }
+        if !matches!(ast.exprs.get(e).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr) {
+            return false;
+        }
+        let d = ast.exprs.decl(e);
+        if !ast.decls.get(d).has(DeclFlags::HAS_ATTRS) {
+            return false;
+        }
+        // clang `AlignedAttr::isAlignmentDependent`: a dependent type-id or
+        // a value-dependent expression.
+        let dependent = ExprDeps::TYPE.with(ExprDeps::VALUE);
+        ast.lists.iter::<AttrId>(ast.attrs.of_decl(d)).any(|id| {
+            let n = ast.attrs.get(id);
+            n.kind == crate::attr::AttrKind::ALIGNED
+                && (QualType::from_raw(n.b)
+                    .is_some_and(|t| self.type_deps(t).intersects(dependent))
+                    || ExprId::from_raw(n.a).is_some_and(|x| self.deps(x).intersects(dependent)))
+        })
     }
 
     /// `__builtin_va_arg(list, T)` (clang's `VAArgExpr`): a prvalue of

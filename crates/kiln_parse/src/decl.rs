@@ -145,6 +145,7 @@ impl Parser<'_, '_> {
         // At namespace scope also before an asm-declaration (libstdc++
         // `__extension__ asm(...)`); not in a class or block, as clang.
         self.skip_extension_before(&[Kw::Using, Kw::Template, Kw::Asm]);
+        self.discard_attrs_before_unattributed_decl();
         let loc = self.loc();
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
@@ -352,7 +353,7 @@ impl Parser<'_, '_> {
         if let Some(name) = self.ident()
             && (self.peek_is(1, Punct::Equal)
                 || self.peek_is(1, Punct::LSquare)
-                || self.kw_of(self.peek(1)) == Some(Kw::Attribute))
+                || matches!(self.kw_of(self.peek(1)), Some(Kw::Attribute | Kw::Alignas)))
         {
             let nl = self.bump().span.lo;
             let mut attrs = Vec::new();
@@ -508,12 +509,36 @@ impl Parser<'_, '_> {
     pub(crate) fn parse_decl_specifiers(&mut self, ctx: DeclaratorContext) -> DeclSpec {
         let mut ds = DeclSpec::new(self.name_begin());
         ds.attrs = std::mem::take(&mut self.lead_decl_attrs);
+        // The end of the leading attribute-specifier-seq: attributes there
+        // appertain to the declaration ([dcl.pre]/5).
+        let mut lead_end = self.pos();
+        // A C++11 attribute-specifier-seq (`[[...]]`, `alignas`) after a
+        // decl-specifier: (its position, the token index after it, its
+        // attributes).
+        let mut trailing: Option<(Loc, usize, Vec<AttrId>)> = None;
         loop {
             let loc = self.loc();
+            if let Some((at, end, _)) = &trailing
+                && *end != self.pos()
+            {
+                // More decl-specifiers follow (clang `ProhibitAttributes`
+                // in `ParseDeclarationSpecifiers`).
+                self.s.error(DiagId::parse_attributes_not_allowed, *at);
+                trailing = None;
+            }
             if self.at_attr() || self.at_kw(Kw::Declspec) {
+                let lead = self.pos() == lead_end;
+                let cxx11 = self.at_cxx11_attr() || self.at_kw(Kw::Alignas);
                 let mut attrs = Vec::new();
                 self.parse_attributes(&mut attrs);
-                ds.attrs.extend(attrs);
+                if lead {
+                    lead_end = self.pos();
+                    ds.attrs.extend(attrs);
+                } else if cxx11 {
+                    trailing = Some((loc, self.pos(), attrs));
+                } else {
+                    ds.attrs.extend(attrs);
+                }
                 continue;
             }
             if !ds.has_type_specifier()
@@ -666,6 +691,17 @@ impl Parser<'_, '_> {
                     ds.invalid = true;
                 }
                 self.spec_error(&e, loc);
+            }
+        }
+        if let Some((at, end, attrs)) = trailing {
+            if end == self.pos() {
+                // At the end of the decl-specifier-seq the attributes
+                // appertain to the type ([dcl.spec.general]/1): an
+                // alignment-specifier is no type attribute.
+                self.s.act_on_type_position_attrs(&attrs);
+                ds.attrs.extend(attrs.into_iter().filter(|&a| !self.s.is_alignas_attr(a)));
+            } else {
+                self.s.error(DiagId::parse_attributes_not_allowed, at);
             }
         }
         ds
@@ -1488,6 +1524,16 @@ impl Parser<'_, '_> {
         d.chunks.push(Chunk::MemberPointer { qual, quals, loc });
     }
 
+    /// Attributes appertaining to a type, after a ptr-operator or an
+    /// array declarator ([dcl.ptr]/1, [dcl.array]/1): kiln does not
+    /// attach them, and reports an `alignas` among them (not a type
+    /// attribute, clang `err_attribute_not_type_attr`).
+    fn skip_type_position_attrs(&mut self) {
+        let mut attrs = Vec::new();
+        self.parse_attributes(&mut attrs);
+        self.s.act_on_type_position_attrs(&attrs);
+    }
+
     /// The cv-qualifiers (and attributes) after a `*`.
     pub(crate) fn parse_ptr_cv(&mut self) -> Quals {
         let mut q = Quals::NONE;
@@ -1497,7 +1543,7 @@ impl Parser<'_, '_> {
                 Some(Kw::Volatile) => (Quals::VOLATILE, "volatile"),
                 Some(Kw::Restrict) => (Quals::RESTRICT, "restrict"),
                 _ if self.at_attr() => {
-                    self.skip_attributes();
+                    self.skip_type_position_attrs();
                     continue;
                 }
                 _ => return q,
@@ -1613,12 +1659,15 @@ impl Parser<'_, '_> {
         self.s.act_on_exit_declarator_scope(entered);
     }
 
-    /// `declarator-id attribute-specifier-seq(opt)` ([dcl.decl.general]/4):
+    /// `declarator-id attribute-specifier-seq(opt)` ([dcl.decl.general]/4,
+    /// [class.mem.general]/1):
     /// the attributes appertain to the declared entity, for every kind of
     /// declarator-id (`f [[a]] (int)`, `operator() [[a]] (int)`,
     /// `~S [[a]] ()`).
     fn parse_declarator_id_attrs(&mut self, d: &mut Declarator) {
-        if self.at_cxx11_attr() {
+        // clang `ParseDirectDeclarator` (`MaybeParseCXX11Attributes`):
+        // `alignas` too, so a bit-width may follow (`int b alignas(8) : 3`).
+        if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
             self.parse_attributes(&mut d.attrs);
         }
     }
@@ -1644,8 +1693,8 @@ impl Parser<'_, '_> {
                 // clang `ParseBracketDeclarator` takes only C++11
                 // attributes here; GNU ones after the declarator apply to
                 // the whole declared type (`int b[2] __attribute__((..))`).
-                if self.at_cxx11_attr() {
-                    self.skip_attributes();
+                if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
+                    self.skip_type_position_attrs();
                 }
                 d.chunks.push(Chunk::Array { size, loc: open });
             } else if self.at(Punct::LParen) {
