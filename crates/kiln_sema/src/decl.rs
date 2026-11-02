@@ -2199,6 +2199,12 @@ impl Sema<'_, '_> {
             // Still being defined (clang `RequireCompleteType` on a tag
             // that `isBeingDefined`).
             if self.defining.contains(&def) {
+                // An invalid class (a member of incomplete type) is not
+                // reported again (clang).
+                if self.invalid_defining.contains(&def) {
+                    self.inst.suppress_next_error.set(true);
+                    return msg;
+                }
                 let note = self
                     .diag(DiagId::note_definition_not_complete, self.ast.decls.get(def).loc())
                     .arg(format!("'{}'", self.qualified_decl_name(def)));
@@ -3469,6 +3475,11 @@ impl Sema<'_, '_> {
             let elem = self.field_complete_type(ty);
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
+            // The class becomes invalid: later uses that need it complete
+            // before its `}` are quiet (clang `CheckFieldDecl`).
+            if let Some(&c) = self.defining.last() {
+                let _ = self.invalid_defining.insert(c);
+            }
             // clang marks the field invalid: initialization never
             // descends into it (a field of the class's own type would
             // recurse forever).
@@ -5716,6 +5727,7 @@ impl Sema<'_, '_> {
             None
         };
         self.defining.retain(|&d| d != r);
+        let _ = self.invalid_defining.remove(&r);
         self.ctx = build.as_ref().map_or_else(
             || {
                 self.ast

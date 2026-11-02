@@ -456,8 +456,14 @@ Redeclaration and linkage rules:
   `definition of 'S' is not complete until the closing '}'` (clang's
   `isThisOutsideMemberFunctionBody`; `Sema::this_outside_member_body`;
   WP-280; test `expr.ref/member-access-class-being-defined.cpp`).
-  Divergence: clang reports nothing further in a class after its first
-  error there, kiln keeps diagnosing (e.g. a later `S s;` member).
+  A member of incomplete type (`field has incomplete type`, the class
+  itself or another incomplete class) makes the class invalid
+  (`Sema::invalid_defining`, clang's `CheckFieldDecl` marking the record
+  invalid); until its `}` a later use that needs it complete (member
+  access, another such member, `sizeof`) fails without a diagnostic
+  (`incomplete_note` suppresses it), as in clang. Unrelated errors in the
+  class are still reported (WP-290,
+  `expr.ref/member-access-invalid-class-quiet.cpp`).
 - **`-Wvexing-parse`**: a function declarator the parser chose over a
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses
