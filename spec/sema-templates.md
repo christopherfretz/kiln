@@ -5290,6 +5290,45 @@ one template is more specialized only if it wins some pair and loses
 none. This makes the `DoNotOptimize(T&)` / `DoNotOptimize(const T&)`
 pair of libc++'s `test_macros.h` unambiguous for a non-const lvalue.
 
+### 11.5 Memoized results and their keys (WP-313)
+
+Every memo is keyed by interned ids only (a `DeclId`, a canonical
+`ArgListId` from the type interner, a `NormId`, a partial-spec row
+index), so a key is a few words and equal keys mean equal inputs. The
+tables are arena-owned (they live as long as the TU's `Sema`) and grow
+with the number of distinct keys, never with the number of uses. A hit
+must not change diagnostics: a memo that can record a failure keeps
+what a later use needs to re-diagnose it (`fn_spec_failures`, the
+`atom_cache` records).
+
+| Result | Table | Key |
+|---|---|---|
+| A class, function or variable specialization (its declaration, chosen pattern and `from_args`) | `TemplateTables` spec list, `find_spec` | (first decl of the template, canonical argument list) |
+| The partial specialization a variable or class specialization is instantiated from | `SpecInfo.from` / `from_args` of that specialization | as above: matched once, when the specialization is created (§4.4, §4.11) |
+| An alias template specialization's type | `InstState.alias_cache` | (alias template, canonical argument list) |
+| Partial ordering of two partial specializations | `TemplState.partial_order` | (row index, row index) |
+| A function specialization's first signature-substitution error | `TemplState.fn_spec_failures` | the (invalid) specialization `DeclId` |
+| Constraint satisfaction of an entity | `ConceptState.sat_cache` | (entity, canonical argument list) |
+| An atomic constraint's value and its notes | `ConceptState.atom_cache` | (atom, canonical arguments of each level it names) |
+| Subsumption | `ConceptState.subsume_cache` | (normal form, normal form) |
+| A type's identity (hash-consing) | `TypeContext` intern table | the structural key (spec/types.md §7.1) |
+
+Not memoized, by design: explicit-argument substitution into a function
+template (each call of `std::declval<T>()` substitutes its explicit
+argument again: ~3 report `default` rows per call, 305k in
+`simd_copy.pass.cpp` but under 2% of its instantiation time; caching it
+would need the SFINAE note replayed per use), default template
+arguments (substituted per `check_template_args`, as clang), and
+default function arguments (substituted at each use, [temp.inst]/12;
+`lazy_defaults` only records which are pending).
+
+WP-313 found the `experimental/simd` slowness was not a missing memo but
+two quadratic costs on every lookup and every frame: the intern hash
+left a type's second `u32` out of its bucket bits (fixed by folding
+FxHash, spec/types.md §7.1), and the per-frame memory meter summed every
+lookup overload set (`LookupTables` now keeps the sums as the sets grow,
+O(1) per frame). Instantiation counts are unchanged.
+
 ## 12. Agent parallelization
 
 ```
