@@ -783,6 +783,41 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// An init-capture's variable ([expr.prim.lambda.capture]/6), created
+    /// at the *lambda-introducer* so that it is in scope in the
+    /// *lambda-declarator* (P2036). Its context is provisionally `ctx` (the
+    /// context the lambda appears in) until the call operator adopts it
+    /// ([`crate::decl::DeclArena::set_init_capture_owner`]); like a
+    /// prototype parameter it joins no member list or lookup table.
+    pub fn init_capture_var(
+        &mut self,
+        ctx: DeclId,
+        name: DeclName,
+        loc: Loc,
+        ty: QualType,
+    ) -> DeclId {
+        let h = self.ast.templates.dependent_head(DeclHead::new(ctx, name, loc));
+        let payload = Payload::Var(VarData {
+            redecl: self.redecl_link(None),
+            init: None,
+            spec: VarSpec::new(),
+            eval: VarEval::default(),
+            templ: TemplLink::NONE,
+        });
+        self.ast.decls.push(
+            NewDecl {
+                kind: DeclKind::Var,
+                flags: h.flags,
+                misc: h.misc,
+                name: h.name,
+                ctx: Some(h.ctx),
+                loc: h.loc,
+                ty: Some(ty),
+            },
+            payload,
+        )
+    }
+
     /// A parameter declared by `head` (whose context is the function), for
     /// implicit parameters (`DeclFlags::IMPLICIT`).
     pub fn param_head(&mut self, head: DeclHead, ty: QualType, index: u16, flags: u16) -> DeclId {

@@ -11,7 +11,7 @@
 //! The closure's members and their initializers are made at the lambda's
 //! `}` ([`Sema::finish_captures`]).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, VarSpec};
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprDeps, UnaryOp};
 use kiln_ast::ids::{ExprId, LambdaId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaCapture};
@@ -660,17 +660,49 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Declares the init-capture variables of lambda `id`, whose call
-    /// operator `f` is opening its body, in the body's scope.
-    pub(crate) fn declare_init_captures(&mut self, id: LambdaId, f: DeclId) {
+    /// The init-capture variables of lambda `id`, at its introducer: in
+    /// scope in the *lambda-declarator* ([expr.prim.lambda.capture]/6,
+    /// P2036, a DR) through [`Sema::lambda_init_capture_named`], in the
+    /// enclosing context until the call operator adopts them
+    /// ([`Sema::declare_init_captures`]).
+    pub(crate) fn create_init_capture_vars(&mut self, id: LambdaId) {
         let caps: Vec<InitCapture> =
             self.lambda_scope_mut(id).map(|s| std::mem::take(&mut s.init_caps)).unwrap_or_default();
+        let ctx = self.ctx;
+        let mut vars = Vec::with_capacity(caps.len());
         for ic in caps {
-            let h = DeclHead::new(f, DeclName::ident(ic.name), ic.loc);
-            let v = self.builder().var(h, ic.ty, VarSpec::new(), None);
+            let v = self.builder().init_capture_var(ctx, DeclName::ident(ic.name), ic.loc, ic.ty);
             let _ = self.builder().set_var_init(v, ic.init);
-            self.push_local(ic.name, v);
             self.ast.exprs.lambdas.get_mut(id).captures[ic.index].var = Some(v);
+            vars.push((ic.name, v));
+        }
+        if let Some(s) = self.lambda_scope_mut(id) {
+            s.init_cap_vars = vars;
+        }
+    }
+
+    /// The init-capture variable named `name` of a lambda whose
+    /// introducer was at scope depth `depth` (found by unqualified lookup
+    /// before the scopes below it, after the lambda's template and
+    /// function parameters).
+    pub(crate) fn lambda_init_capture_named(&self, depth: usize, name: Symbol) -> Option<DeclId> {
+        self.lambdas
+            .iter()
+            .rev()
+            .filter(|s| s.scope_base == depth)
+            .find_map(|s| s.init_cap_vars.iter().rev().find(|e| e.0 == name).map(|e| e.1))
+    }
+
+    /// Declares the init-capture variables of lambda `id`, whose call
+    /// operator `f` is opening its body, in the body's scope: `f`
+    /// adopts the variables [`Sema::create_init_capture_vars`] made.
+    pub(crate) fn declare_init_captures(&mut self, id: LambdaId, f: DeclId) {
+        let vars: Vec<(Symbol, DeclId)> =
+            self.lambda_scope_mut(id).map(|s| s.init_cap_vars.clone()).unwrap_or_default();
+        let dependent = self.ast.templates.dependent_depth > 0;
+        for (name, v) in vars {
+            self.ast.decls.set_init_capture_owner(v, f, dependent);
+            self.push_local(name, v);
         }
     }
 

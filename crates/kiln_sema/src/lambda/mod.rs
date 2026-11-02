@@ -135,6 +135,10 @@ pub(crate) struct LambdaScope {
     pub(crate) cap_tys: Vec<QualType>,
     /// The init-captures whose variables the body declares.
     init_caps: Vec<capture::InitCapture>,
+    /// The init-capture variables by name, in scope from the
+    /// introducer on (P2036: in the *lambda-declarator* too; the body
+    /// declares them in its own scope).
+    pub(crate) init_cap_vars: Vec<(Symbol, DeclId)>,
 }
 
 impl Sema<'_, '_> {
@@ -174,8 +178,10 @@ impl Sema<'_, '_> {
             call_template: None,
             cap_tys: Vec::new(),
             init_caps: Vec::new(),
+            init_cap_vars: Vec::new(),
         });
         self.act_on_explicit_captures(id, intro);
+        self.create_init_capture_vars(id);
         id
     }
 

@@ -2361,6 +2361,21 @@ impl DeclArena {
         n.ctx = Some(func);
     }
 
+    /// Moves init-capture variable `v` into call operator `func`
+    /// (`Builder::init_capture_var`), with `DEPENDENT_CTX` when `dependent`
+    /// (the operator is a template pattern).
+    ///
+    /// # Panics
+    /// If `v` is not a `Var`.
+    pub fn set_init_capture_owner(&mut self, v: DeclId, func: DeclId, dependent: bool) {
+        let n = &mut self.nodes[v.index() as usize];
+        assert!(n.kind == DeclKind::Var, "set_init_capture_owner on a {:?}", n.kind);
+        n.ctx = Some(func);
+        if dependent {
+            n.flags = n.flags.with(DeclFlags::DEPENDENT_CTX);
+        }
+    }
+
     /// Names `d` without making the name visible to lookup (a
     /// structured binding's holding variable, `Builder::holding_var`).
     pub fn set_name(&mut self, d: DeclId, name: DeclName) {

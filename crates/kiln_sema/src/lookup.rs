@@ -350,6 +350,18 @@ impl Sema<'_, '_> {
                     return found;
                 }
             }
+            // [expr.prim.lambda.capture]/6 (P2036): a lambda's
+            // init-captures, from its introducer on.
+            if kind != LookupKind::Tag
+                && ident.is_some()
+                && !self.lambdas.is_empty()
+                && let Some(d) = self.lambda_init_capture_named(i + 1, name)
+            {
+                let found = self.filter(vec![d], kind);
+                if !found.is_empty() {
+                    return found;
+                }
+            }
             if s.kind == ScopeKind::TemplateParams {
                 // [temp.local]/6: template parameter names.
                 if kind != LookupKind::Tag
