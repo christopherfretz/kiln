@@ -462,21 +462,17 @@ impl Sema<'_, '_> {
     /// instantiated declaration). A member template's (or a friend
     /// template's) redeclared pattern waits too: its specializations
     /// substitute the original pattern's with all their levels
-    /// ([`Sema::defer_spec_exception_spec`]). A member of a
-    /// still-dependent specialization, and a friend template only
-    /// declared in the class, are substituted at once.
-    pub(crate) fn lazy_exc_spec(
-        &self,
-        d: DeclId,
-        p: &kiln_ast::types::FuncProto,
-        friend: bool,
-    ) -> bool {
+    /// ([`Sema::defer_spec_exception_spec`]), whether it is defined in
+    /// the class or only declared there: the class may still be
+    /// incomplete ([class.mem.general]/7; libc++ `counted_iterator`'s
+    /// `iter_swap`). A member of a still-dependent specialization is
+    /// substituted at once.
+    pub(crate) fn lazy_exc_spec(&self, d: DeclId, p: &kiln_ast::types::FuncProto) -> bool {
         let tmpl = self.ast.described_template(d).is_some();
         matches!(
             self.ast.types.exc_spec(p),
             ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
         ) && self.ast.templates.dependent_depth <= u32::from(tmpl)
-            && !(tmpl && friend && self.ast.decls.function(d).is_none_or(|x| x.body.is_none()))
             && !self.ast.decls.get(self.ctx).has(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
     }
 
