@@ -210,12 +210,7 @@ impl Parser<'_, '_> {
         };
         let head = self.s.act_template_head(requires, r_angle);
         self.trace(|_| "template_head".to_owned());
-        let list = self.s.ast.templates.param_list(head).params;
-        if self.s.ast.lists.is_empty(list) && self.at_plain_tag_decl() {
-            // Every parameter failed (`template<template<class> static
-            // class TT> struct D`): the head is an empty one.
-            self.s.act_on_finish_template_decl();
-            self.extraneous_empty_template_head(loc, ctx);
+        if self.failed_head_as_empty(head, loc, ctx) {
             if delays {
                 self.s.end_delayed_access_to(level, None);
             }
@@ -245,6 +240,24 @@ impl Parser<'_, '_> {
         let t = self.tok_at(self.pos() + 2);
         matches!(Self::punct_of(t), Some(Punct::LBrace | Punct::Colon | Punct::Semi))
             || self.is_final_tok(t)
+    }
+
+    /// Every parameter of `head` failed (`template<template<class> static
+    /// class TT> struct D`) before a plain class declaration: the head is
+    /// an empty one, parsed as `extraneous_empty_template_head`.
+    fn failed_head_as_empty(
+        &mut self,
+        head: kiln_ast::ids::TemplateParamListId,
+        loc: Loc,
+        ctx: DeclaratorContext,
+    ) -> bool {
+        let list = self.s.ast.templates.param_list(head).params;
+        if !self.s.ast.lists.is_empty(list) || !self.at_plain_tag_decl() {
+            return false;
+        }
+        self.s.act_on_finish_template_decl();
+        self.extraneous_empty_template_head(loc, ctx);
+        true
     }
 
     /// An empty template head on a class that is no template-id ([temp.pre]/1

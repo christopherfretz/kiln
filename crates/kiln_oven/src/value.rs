@@ -780,10 +780,8 @@ impl Oven {
             }
             TyKind::Record { union, first, count, decl, .. } => {
                 let (first, count) = (first as usize, count as usize);
-                if !union {
-                    if !self.mem.unconstructed.is_empty() {
-                        self.unconstructed_base(b, raw, t, decl, first..first + count)?;
-                    }
+                if !union && !self.mem.unconstructed.is_empty() {
+                    self.unconstructed_base(b, raw, t, decl, first..first + count)?;
                 }
                 if union {
                     let key = Ptr::union_key(raw, u64::from(p.off), t);
