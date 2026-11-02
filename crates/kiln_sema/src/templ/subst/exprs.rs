@@ -451,7 +451,9 @@ impl Substituter<'_, '_, '_> {
                     let ty = self.sema.tag_type(cls);
                     let qualified = ex(self).decl_ref_extra(e).and_then(|x| x.qualifier).is_some();
                     let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
-                    return Ok(self.sema.rebuild_member_destructor(base, ty, qualified, loc, op, arrow));
+                    return Ok(self
+                        .sema
+                        .rebuild_member_destructor(base, ty, qualified, loc, op, arrow));
                 }
                 let name = self.member_name(name, loc)?;
                 // A member template-id `x.f<args>` (§6.4).
@@ -1335,7 +1337,14 @@ impl Substituter<'_, '_, '_> {
             // `get<0>(c)` assumed a template-name ([temp.names]/3): ADL at
             // the call finds it, with the explicit arguments.
             if let Some(t) = targs {
-                return Ok(self.sema.builder().unresolved_lookup(name, &[], true, None, Some(t), n.loc()));
+                return Ok(self.sema.builder().unresolved_lookup(
+                    name,
+                    &[],
+                    true,
+                    None,
+                    Some(t),
+                    n.loc(),
+                ));
             }
             return Ok(self.sema.act_on_undeclared_call_name_dn(name, n.loc()));
         }

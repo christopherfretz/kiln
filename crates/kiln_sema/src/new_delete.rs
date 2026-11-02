@@ -1105,7 +1105,9 @@ impl Sema<'_, '_> {
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
         let found = self.alloc_fns(elem, op, global, loc);
         if !placement {
-            return self.usual_delete(&found.fns, found.in_class, pass_align, true, false).map(|u| u.0);
+            return self
+                .usual_delete(&found.fns, found.in_class, pass_align, true, false)
+                .map(|u| u.0);
         }
         let vp = self.ast.types.pointer_to(QualType::VOID);
         let mut params = vec![vp];

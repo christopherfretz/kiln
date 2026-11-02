@@ -76,6 +76,10 @@ impl Sema<'_, '_> {
     /// usual too, and when one is found only those are considered
     /// ([expr.delete]/10.1). Returns the function and whether it takes
     /// the size.
+    #[allow(
+        clippy::fn_params_excessive_bools,
+        reason = "clang's resolveDeallocationOverload flags"
+    )]
     pub(crate) fn usual_delete(
         &mut self,
         fns: &[DeclId],

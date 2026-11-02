@@ -1236,9 +1236,13 @@ impl Cg<'_> {
         } else if ast.is_destroying_operator_delete(od) {
             // [expr.delete]/7: a destroying operator delete runs no
             // destructor; it is responsible for destroying the object.
-            let virt = t.as_record(dt).and_then(|r| self.class_def(r)).and_then(|d| ast.destructor(d));
+            let virt =
+                t.as_record(dt).and_then(|r| self.class_def(r)).and_then(|d| ast.destructor(d));
             if virt.is_some_and(|d| ast.decls.function(d).is_some_and(|f| f.spec.is_virtual())) {
-                return err(loc, "destroying delete through a virtual destructor is not supported yet");
+                return err(
+                    loc,
+                    "destroying delete through a virtual destructor is not supported yet",
+                );
             }
         } else if cookie == 0 && self.emit_object_delete(e, arg, p, dt, loc)? {
             self.emit_block(end, false);
