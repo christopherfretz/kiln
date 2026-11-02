@@ -415,7 +415,15 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       double` twin (`builtin::f128_twin`) is lowered as the twin on its
       `fp128` operands (intrinsic or constant); `roundevenf128` is
       `llvm.roundeven`; the others call the function of the builtin's
-      own name (`builtins_f128.cpp`).
+      own name (`builtins_f128.cpp`). A `*f16` builtin (WP-403) is
+      lowered likewise through `builtin::f16_twin` on `half` operands:
+      `ceil`/`floor`/`trunc`/`round`/`rint`/`fabs`/`fma`/`fmax`/`fmin`
+      as their `llvm.*.f16` intrinsics, `roundevenf16`,
+      `canonicalizef16`, `fmaximum_numf16`, `fminimum_numf16` as
+      `llvm.roundeven`/`canonicalize`/`maximumnum`/`minimumnum`,
+      `frexpf16` as `llvm.frexp.f16.i32`, the libm set as calls of the
+      `half` function the builtin names (`sinf16`, `ldexpf16`, ...)
+      (`builtins_f16_libm.cpp`).
   - a call of one of the standard functions clang treats as builtins
     (clang `isStdBuiltin`: `std::move`, `move_if_noexcept`, `forward`,
     `forward_like`, `as_const`, `addressof`, `__addressof`, declared in
