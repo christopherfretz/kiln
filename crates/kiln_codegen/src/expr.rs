@@ -1030,17 +1030,18 @@ impl Cg<'_> {
         }))
     }
 
-    /// clang `TargetInfo::shouldEmitFloat16WithExcessPrecision` and
-    /// `ScalarExprEmitter::getPromotionType`: on x86-64 `_Float16`
-    /// arithmetic is evaluated in `float` (`-ffloat16-excess-precision=
-    /// standard`); AArch64 operates on `half`. `__fp16` is promoted by
-    /// sema.
     /// Whether `q` is the storage-only `__fp16` (clang `isHalfType`; kiln
     /// never enables a native half type, so it converts through float).
     pub(crate) fn is_fp16(&self, q: QualType) -> bool {
         self.ast.types.builtin(self.ast.types.canonical(q))
             == Some(kiln_ast::types::BuiltinType::Half)
     }
+
+    /// clang `TargetInfo::shouldEmitFloat16WithExcessPrecision` and
+    /// `ScalarExprEmitter::getPromotionType`: on x86-64 `_Float16`
+    /// arithmetic is evaluated in `float`
+    /// (`-ffloat16-excess-precision=standard`); AArch64 operates on
+    /// `half`. `__fp16` is promoted by sema.
 
     pub(crate) fn f16_excess(&self, q: QualType) -> bool {
         self.is_x86()

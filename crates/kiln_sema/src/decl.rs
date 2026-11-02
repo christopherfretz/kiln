@@ -5558,7 +5558,8 @@ impl Sema<'_, '_> {
     /// of zero size ([intro.object]/9) that leaves its class empty
     /// ([meta.unary.prop] `is_empty`; clang `FieldDecl::isZeroSize`).
     fn is_zero_size_field(&self, f: DeclId) -> bool {
-        let nua = self.ast.decls.field(f).is_some_and(|x| x.no_unique_address()) || self.has_nua(f);
+        let nua =
+            self.ast.decls.field(f).is_some_and(FieldData::no_unique_address) || self.has_nua(f);
         nua && self
             .ast
             .decls
@@ -5636,8 +5637,8 @@ impl Sema<'_, '_> {
             if anon_union {
                 bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
             }
-            if !(fd.is_some_and(|x| x.bit_width.is_some())
-                && self.ast.decls.get(f).name().is_empty())
+            if (fd.is_none_or(|x| x.bit_width.is_none())
+                || !self.ast.decls.get(f).name().is_empty())
                 && !self.is_zero_size_field(f)
             {
                 any_named = true;
