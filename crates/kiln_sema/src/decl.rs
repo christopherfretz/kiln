@@ -7162,9 +7162,7 @@ impl Sema<'_, '_> {
         begin: Loc,
     ) -> Option<AttrArg> {
         match (arg, ellipsis) {
-            (AttrArg::Type(t), Some(l)) => {
-                Some(AttrArg::Type(self.act_pack_expansion_type(t, l)))
-            }
+            (AttrArg::Type(t), Some(l)) => Some(AttrArg::Type(self.act_pack_expansion_type(t, l))),
             (AttrArg::Expr(e), Some(l)) => Some(AttrArg::Expr(self.act_pack_expansion(e, l))),
             (AttrArg::Type(t), None) => {
                 use crate::templ::pack::PackOperand;

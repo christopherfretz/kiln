@@ -1590,6 +1590,15 @@ extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
   `ArrayToPointerDecay`, clang `DefaultFunctionArrayConversion`). The
   aggregate emitter emits the literal as `EmitAggExpr` of its initializer
   (clang `VisitCompoundLiteralExpr`; C++ literals are not destroyed there).
+- **Scalar, vector and complex compound literals** (`compound_literal_lvalue`,
+  WP-302): in a function, `(int){x}`, `(v4){x, 2}` and `(_Complex double){x}`
+  are clang's `EmitCompoundLiteralLValue`: the initializer is stored into a
+  fresh `alloca` of the literal's type, which the scalar and complex
+  emitters load (`VisitCompoundLiteralExpr` → `EmitLoadOfLValue`) and the
+  lvalue emitter returns, so a materialized or subscripted literal gets a
+  second temporary as in clang (`tests/codegen/compound_literal_scalar.cpp`).
+  A non-constant file-scope literal is rejected by sema (`initializer
+  element is not a compile-time constant`), so none reaches codegen.
 - Oven fixes found on the way: constant array types of differently
   qualified elements (`const E[3]`, `E[3]`) share one `OTy`
   (`Types::const_arrays`, clang `getUnqualifiedArrayType`), and a pointer
