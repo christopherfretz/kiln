@@ -2046,8 +2046,13 @@ subobject reads its word and dispatches on the complete object's dynamic
 type (`locate`, then the final overrider's subobject through
 `sub_addr`); `dynamic_cast` and `typeid` find the most derived object and
 the target the same way (`cast_target`, `PolyInfo::vvptrs`/`at`).
-`covariance` returns `None` (`Fault::Invalid`) for a covariant return
-adjustment into a virtual base.
+A covariant return whose method return class is (in) a virtual base of
+the overrider's return class (WP-400) is `CovAdj::VBase(class, k)` in the
+`adj` register (`cov_word`: high half 1; a plain offset is sign-extended),
+and `CovAdj` converts the returned pointer as `Op::VBase` does, through
+the returned object's most derived object (`sub_addr`), so a more derived
+dynamic type of the returned object is honoured
+(`expr.const/constexpr-covariant-virtual-base-cxx26.cpp`).
 
 **`base_owner`.** The search for the most derived object (used by
 `sub_addr` and by the exception handler match of a thrown pointer to a
@@ -2070,17 +2075,12 @@ peak, 1536 arena, no growth per round).
 **Interface changes.** `Op::VBase`; `SetVptr` aux 1;
 `Func::base_obj`, `Oven::func_index_base`, `Oven::base_funcs`,
 `Callee::Base`; `Virt::subs`; `Types::{nv_view, class_of, same_class,
-vbase_start}`; `covariance` returns `Option<i64>`. Sema: a rejected
+vbase_start}`; `covariance` returns `Option<u128>` (a `cov_word`,
+WP-400). Sema: a rejected
 constexpr defaulted special member (C++23) is marked invalid, as clang's
 `setInvalidDecl`.
 
 **Left for later.**
-- clang 19/22 in C++23 accept some defaulted constexpr special members
-  of classes with virtual bases (its `DefaultedDefaultConstructorIsConstexpr`
-  / `DefaultedDestructorIsConstexpr` flags are last-write-wins over the
-  subobjects); kiln rejects them (it rejected them before, as
-  unsupported).
-- Covariant return adjustment into a virtual base (`Fault::Invalid`).
 - `base_owner` in a union takes the first member in which the search
   succeeds, not the active one.
 - Codegen of a constant global of a class with virtual bases.
