@@ -427,7 +427,20 @@ where hand-written analysis goes. A file without markers gets the region
 appended. The region contains:
 - **Run**: kiln version and commit, tests tag, `_LIBCPP_VERSION`, target,
   command, compile and link flags, features, limits, wall time, and peak RSS
-  (the largest single-process peak, via GNU time, with its test).
+  (the largest single-process peak, via GNU time, with its test; see
+  **Peak RSS** below).
+- **Peak RSS** is over every step of a test, the test binary's run
+  included, so it does not by itself measure kiln. The `REQUIRES:
+  large_tests` tests allocate gigabytes at run time:
+  `stringstream.members/gcount.pass.cpp` (and the `tellp` tests of the same
+  shape) builds a `std::string` of `INT_MAX - 1` characters and writes it
+  into a `std::stringstream`, whose buffer grows past 4 GiB; its run step
+  peaks at 5122 MiB, while kiln's compile of it peaks at about 70 MiB
+  (WP-369; a clang++-19 build of a scaled-down payload peaks within 0.1%
+  of kiln's build). Such a peak is the library test's own, not a breach
+  of the per-process memory budget of kiln.
+  `tests/conformance/stringbuf.virtuals/libcxx-intmax-payload-compile-mem.cpp`
+  keeps the compile of that shape under `mem<=1024`.
 - **Results by directory**: one row per `<dir>`, plus a total. Columns are
   total, pass, fail, xfail, xpass, unsupported (with the driver share),
   killed, timeout, error, and pass rate. Pass rate is PASS / (total −
