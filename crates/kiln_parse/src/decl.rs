@@ -2026,9 +2026,11 @@ impl Parser<'_, '_> {
                 self.parse_function_suffix(d, ambiguous);
                 // [dcl.fct]/1: an attribute-specifier-seq after the
                 // parameter clause appertains to the function type.
-                if self.at_cxx11_attr() {
+                // GNU attributes after it are the declarator's (parsed
+                // by the caller; clang `ParseFunctionDeclarator`).
+                if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
                     let mut attrs = Vec::new();
-                    self.parse_attributes(&mut attrs);
+                    self.parse_cxx11_attr_seq(&mut attrs);
                     self.s.act_on_type_position_attrs(&mut attrs, true);
                     d.attrs.extend(attrs);
                 }
@@ -2934,17 +2936,12 @@ impl Parser<'_, '_> {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
+            self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
-            // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
-            // a malformed one drops the declarator.
-            let Ok(label) = self.parse_asm_label() else {
+            if self.parse_asm_label_and_gnu_attrs(&mut d).is_err() {
                 self.skip_until(&[], true, false);
                 break;
-            };
-            d.asm_label = label;
-            if self.at_attr() {
-                self.parse_attributes(&mut d.attrs);
             }
             if !d.has_name() {
                 if !d.invalid {
@@ -2968,6 +2965,9 @@ impl Parser<'_, '_> {
                     self.skip_unsupported_declaration();
                     return decls;
                 }
+                if self.missing_fn_body_before_cxx11_attrs(ctx) {
+                    return decls;
+                }
             }
             // clang's `ParseDeclGroup`: a later declarator of a
             // decl-specifier that named no type is parsed, not declared,
@@ -2983,6 +2983,7 @@ impl Parser<'_, '_> {
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
+            self.record_declarator_end(v, &d);
             // A declarator without a type is invalid too (`static y, z;`).
             type_invalid |= self.s.take_declarator_type_invalid()
                 || (!ds.has_type_specifier() && !is_untyped_special(&d));
@@ -3014,6 +3015,63 @@ impl Parser<'_, '_> {
         }
         self.expect_declaration_semi(ctx);
         decls
+    }
+
+    /// Sets `d.end` right after `parse_declarator` (and a trailing
+    /// requires-clause): the start of its last token (clang's
+    /// `PrevTokLocation` once `ParseDeclarator` returns), not counting a
+    /// trailing C++11 attribute-specifier-seq. An asm label, GNU
+    /// attributes and virt-specifiers extend it later.
+    pub(crate) fn set_declarator_end(&self, d: &mut Declarator) {
+        let e = self.prev_lo();
+        d.end = if e == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { e };
+    }
+
+    /// Records the end of bodiless function declaration `f`'s declarator
+    /// `d`, where notes about it point (`ColdDeclData::declarator_end`).
+    pub(crate) fn record_declarator_end(&mut self, f: Option<DeclId>, d: &Declarator) {
+        if let Some(f) = f
+            && d.end != Loc::INVALID
+            && self.s.ast.decls.function(f).is_some_and(|x| x.body.is_none())
+        {
+            let _ = self.s.ast.decls.cold.declarator_end.insert(f, d.end);
+        }
+    }
+
+    /// The GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`;
+    /// `Err` when malformed, which drops the declarator) and GNU
+    /// attributes after a non-member declarator; both extend `d.end`.
+    /// Only GNU attributes follow (clang's `MaybeParseGNUAttributes` in
+    /// `ParseDeclGroup`): a C++11 attribute-specifier-seq here ends the
+    /// declarator, and the `;` (or function body) expected there is
+    /// reported by the caller.
+    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator) -> Result<(), ()> {
+        let label = self.parse_asm_label()?;
+        if label.is_some() {
+            d.end = self.prev_lo();
+        }
+        d.asm_label = label;
+        self.gnu_attr_end = Loc::INVALID;
+        self.parse_gnu_attr_seq(&mut d.attrs);
+        if self.gnu_attr_end != Loc::INVALID {
+            d.end = self.gnu_attr_end;
+        }
+        Ok(())
+    }
+
+    /// clang `ParseDeclGroup`: at namespace scope, a first function
+    /// declarator followed by neither a declaration's continuation nor a
+    /// function body, here a C++11 attribute-specifier-seq after its GNU
+    /// attributes (`void f() __attribute__((cold)) [[nodiscard]];`), is
+    /// reported as a missing body; the declaration is skipped through its
+    /// `;` and declares nothing (true).
+    fn missing_fn_body_before_cxx11_attrs(&mut self, ctx: DeclaratorContext) -> bool {
+        if ctx != DeclaratorContext::File || !(self.at_cxx11_attr() || self.at_kw(Kw::Alignas)) {
+            return false;
+        }
+        self.error_here(DiagId::parse_expected_fn_body);
+        self.skip_to_semi();
+        true
     }
 
     /// The type of decl-specifier-seq `ds`, formed once the first

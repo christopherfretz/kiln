@@ -2424,7 +2424,14 @@ This is [temp.deduct.type]. It is a structural recursion over canonical
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the
-result is `MiscellaneousDeductionFailure` (clang).
+result is `MiscellaneousDeductionFailure` (clang). The template of `A` (or
+of a base) is the class template it is a specialization of: alias
+template sugar is looked through ([temp.alias]/2; clang's
+`getLastTemplateSpecType`), so a base written `A<T>` with
+`template<class T> using A = S<T>` deduces against `S<T>`
+(`written_template_name`; WP-381,
+`tests/conformance/temp.deduct.call/base-alias-template-sugar.cpp`;
+libstdc++ `variant::operator=`/`emplace`).
 A non-type argument of `P` that is not a deduced parameter but a value
 already (a written constant, or an explicitly given parameter substituted
 into `P`, [temp.deduct]/2) is compared with `A`'s value during the match:

@@ -1158,13 +1158,17 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The template name of the first template-id in `a`'s sugar (clang's
-    /// `getAs<TemplateSpecializationType>`), as written.
+    /// The template name of the first class template-id in `a`'s sugar
+    /// (clang's `getAs<TemplateSpecializationType>`), as written. An alias
+    /// template-id is looked through to the type it names
+    /// ([temp.alias]/2; clang's `getLastTemplateSpecType`): `A<int>` for
+    /// `template<class T> using A = S<T>` is a template-id of `S`, so a
+    /// base written `A<T>` deduces against `S` ([temp.deduct.call]/4.3).
     fn written_template_name(&self, a: QualType) -> Option<kiln_ast::ids::TemplateNameId> {
         let t = &self.ast.types;
         let mut q = a;
         loop {
-            if let TypeView::TemplateSpecialization { name, .. } = t.view(q.ty()) {
+            if let TypeView::TemplateSpecialization { name, alias: false, .. } = t.view(q.ty()) {
                 return Some(name);
             }
             let n = t.desugar_once(q);
