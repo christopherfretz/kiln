@@ -797,8 +797,21 @@ impl Sema<'_, '_> {
                 match self.contextual_class_conversion(ContextualConv::ArraySize, e, new_loc) {
                     Some(c) if self.is_err_expr(c) => return None,
                     Some(c) => {
+                        let conv_ty = self.ast.exprs.get(c).ty();
+                        if self.std < kiln_lex::Std::Cxx11 {
+                            // C++98 [expr.new]/6 wants an integral or
+                            // enumeration type: clang
+                            // `ext_array_size_conversion`.
+                            let is_enum = self.ast.types.as_enum(conv_ty).is_some();
+                            let msg = self
+                                .diag(DiagId::sema_array_size_conversion, new_loc)
+                                .arg(self.ty_arg(ety))
+                                .arg(if is_enum { "1" } else { "0" })
+                                .arg(self.ty_arg(conv_ty));
+                            self.emit(msg);
+                        }
                         e = c;
-                        ety = self.ast.exprs.get(c).ty();
+                        ety = conv_ty;
                         ok = true;
                     }
                     None => {}
