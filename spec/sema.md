@@ -192,6 +192,14 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (`conv::implicit_convert`, `Sema::names_invalid_function`) recover
     silently, with no "cannot initialize" after the first error
     (WP-379, `expr.unary.op/address-of-invalid-member-function.cpp`).
+    `&` of a parenthesized member name ([expr.unary.op]/4, WP-392,
+    clang `CheckAddressOfOperand`): `&(C::f)` / `&(f)` naming an
+    instance member function (or an overload set of them) is "call to
+    non-static member function without an object argument" at the
+    name, and `&b.f` / `&this->f` (a bound member function) is "cannot
+    create a non-constant pointer to member function" at the `&`; both
+    recover silently, with no "cannot take the address of an rvalue"
+    (`expr.unary.op/addr-of-parenthesized-member-function.cpp`).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
