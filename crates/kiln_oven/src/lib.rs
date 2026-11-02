@@ -424,6 +424,9 @@ pub struct Oven {
     pub(crate) traps: Vec<TrapInfo>,
     pub(crate) funcs: Vec<Func>,
     pub(crate) func_map: FxHashMap<DeclId, u32>,
+    /// The base-object variants of constructors and destructors of
+    /// classes with virtual bases ([`Oven::func_index_base`]).
+    pub(crate) base_funcs: FxHashMap<DeclId, u32>,
     pub(crate) thunks: FxHashMap<ExprId, u32>,
     /// Thunks compiled inside a default argument use (the key's second
     /// half, [`Oven::fold_immediate_in`]): their source-location builtins
@@ -505,6 +508,7 @@ impl Oven {
             traps: Vec::new(),
             funcs: Vec::new(),
             func_map: FxHashMap::default(),
+            base_funcs: FxHashMap::default(),
             thunks: FxHashMap::default(),
             thunks_at: FxHashMap::default(),
             srcloc_root: None,
@@ -749,6 +753,7 @@ impl Oven {
             + cap(&self.traps)
             + cap(&self.funcs)
             + map(&self.func_map)
+            + map(&self.base_funcs)
             + map(&self.thunks)
             + map(&self.thunks_at)
             + cap(&self.globals)

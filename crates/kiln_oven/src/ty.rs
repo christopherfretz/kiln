@@ -124,6 +124,13 @@ pub(crate) struct Types {
     /// naming the slot stay valid and no layout of an incomplete class
     /// is computed or cached (WP-267).
     provisional: Vec<OTy>,
+    /// The base-subobject view of each class with virtual bases: the
+    /// class without its virtual bases (`nv_size`, Itanium C++ ABI 2.4),
+    /// the type of a base field naming that class (P3533R2; spec/oven.md
+    /// "Object model").
+    nv_views: FxHashMap<OTy, OTy>,
+    /// The class each such view belongs to.
+    nv_class: FxHashMap<OTy, OTy>,
 }
 
 /// Evaluates an integral constant already checked by sema (bit-field
@@ -209,6 +216,38 @@ impl Types {
                 &self.fields[first as usize..(first + count) as usize]
             }
             _ => &[],
+        }
+    }
+
+    /// The class type `t` is a view of: the complete class of a
+    /// base-subobject view ([`Types::nv_view`]), else `t`.
+    pub fn class_of(&self, t: OTy) -> OTy {
+        if self.nv_class.is_empty() {
+            return t;
+        }
+        self.nv_class.get(&t).copied().unwrap_or(t)
+    }
+
+    /// The base-subobject view of class `t`: its non-virtual part, the
+    /// type of a base field naming it (`t` itself for a class without
+    /// virtual bases).
+    pub fn nv_view(&self, t: OTy) -> OTy {
+        self.nv_views.get(&t).copied().unwrap_or(t)
+    }
+
+    /// Whether `a` and `b` are the same class (or the same type), either
+    /// possibly a base-subobject view.
+    pub fn same_class(&self, a: OTy, b: OTy) -> bool {
+        a == b || self.class_of(a) == self.class_of(b)
+    }
+
+    /// The index in [`Types::fields`] of the first virtual base field of
+    /// the complete class `t` (its field count if it has none): its
+    /// non-virtual bases and members come first.
+    pub fn vbase_start(&self, t: OTy) -> usize {
+        match self.nv_views.get(&t) {
+            Some(&v) => self.fields(v).len(),
+            None => self.fields(t).len(),
         }
     }
 
@@ -330,7 +369,7 @@ impl Types {
     /// other type is interned unqualified).
     pub fn same_unqualified(&self, mut a: OTy, mut b: OTy) -> bool {
         loop {
-            if a == b {
+            if self.same_class(a, b) {
                 return true;
             }
             match (self.kind(a), self.kind(b)) {
@@ -653,6 +692,23 @@ impl Types {
                 layout.bases.iter().find(|&&(b, _)| b == first).map_or(0, |&(_, o)| o)
             })
             .collect();
+        let (nv_size, nv_align) = (layout.nv_size, layout.nv_align);
+        let vlist: Vec<(DeclId, u64)> = layout.vbases.to_vec();
+        // Every virtual base (direct or indirect) at its offset in the
+        // complete object, as a base field after the members (P3533R2;
+        // empty ones, like empty non-virtual bases, are not laid out).
+        let ast = bridge.ast();
+        let vdecls: Vec<(DeclId, QualType, u64)> = vlist
+            .iter()
+            .filter_map(|&(v, off)| {
+                let vdef = ast.definition(v)?;
+                let r = ast.decls.record(vdef)?;
+                if r.defn.contains(kiln_ast::decl::DefinitionBits::EMPTY) {
+                    return None;
+                }
+                Some((vdef, ast.decls.get(vdef).ty()?, off))
+            })
+            .collect();
         // Reserve the slot first so self-referential pointers terminate.
         let me = match slot {
             Some(t) => {
@@ -676,6 +732,7 @@ impl Types {
         }
         for (&(rd, bq, _), &off) in bdecls.iter().zip(&boffs) {
             let bty = self.intern(bridge, bq);
+            let bty = self.nv_view(bty);
             let bi = *self.info(bty);
             has_union |= bi.has_union;
             has_ptr |= bi.has_ptr;
@@ -728,6 +785,57 @@ impl Types {
                     base: false,
                     mutable,
                 }),
+            }
+        }
+        if !vdecls.is_empty() && !union {
+            // Interned first: interning a class appends its own fields.
+            let vtys: Vec<OTy> = vdecls
+                .iter()
+                .map(|&(_, vq, _)| {
+                    let t = self.intern(bridge, vq);
+                    self.nv_view(t)
+                })
+                .collect();
+            // The base-subobject view: the same fields up to the virtual
+            // bases (a prefix of the complete class's field list).
+            let mut nv_upos = upos.clone();
+            nv_upos.sort_by_key(|&(o, _)| o);
+            let ustart = self.union_pos.len() as u32;
+            self.union_pos.extend(nv_upos);
+            let uend = self.union_pos.len() as u32;
+            let first = self.fields.len() as u32;
+            let view = self.push(TyInfo {
+                q: c,
+                size: nv_size,
+                align: nv_align.max(1),
+                kind: TyKind::Record { decl: def, union, first, count: fields.len() as u32 },
+                has_union,
+                has_ptr,
+                has_vptr,
+                has_mutable,
+                upos: (ustart, uend),
+            });
+            self.nv_views.insert(me, view);
+            self.nv_class.insert(view, me);
+            for (&(vd, _, off), &vty) in vdecls.iter().zip(&vtys) {
+                let vi = *self.info(vty);
+                has_union |= vi.has_union;
+                has_ptr |= vi.has_ptr;
+                has_vptr |= vi.has_vptr;
+                has_mutable |= vi.has_mutable;
+                for k in vi.upos.0..vi.upos.1 {
+                    let (o, u) = self.union_pos[k as usize];
+                    upos.push((off + o, u));
+                }
+                fields.push(FieldInfo {
+                    decl: vd,
+                    ty: vty,
+                    offset: off,
+                    bit: 0,
+                    width: None,
+                    base: true,
+                    mutable: false,
+                });
             }
         }
         let first = self.fields.len() as u32;
@@ -809,7 +917,7 @@ impl Types {
     /// Whether a base class subobject of type `p` lives at byte `off` of
     /// an object of class type `root` (through base classes only).
     pub fn has_base_subobject(&self, root: OTy, off: u64, p: OTy) -> bool {
-        if p == root && off == 0 {
+        if off == 0 && self.same_class(p, root) {
             return true;
         }
         matches!(self.kind(root), TyKind::Record { .. })
@@ -824,7 +932,7 @@ impl Types {
     /// Whether an object of type `p` lives at byte `off` of an object of
     /// type `root` (C++26 [expr.static.cast]/14 for `void*` casts).
     pub fn has_subobject(&self, root: OTy, off: u64, p: OTy) -> bool {
-        if p == root && off == 0 {
+        if off == 0 && self.same_class(p, root) {
             return true;
         }
         match self.kind(root) {

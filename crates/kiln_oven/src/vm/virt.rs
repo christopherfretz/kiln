@@ -47,8 +47,14 @@ pub(crate) struct PolyInfo {
     /// The class (first declaration; `None` for a non-class).
     pub decl: Option<DeclId>,
     pub subs: Vec<Sub>,
-    /// Distinct offsets of the vptr slots `SetVptr` writes.
+    /// Distinct offsets of the vptr slots of the non-virtual polymorphic
+    /// subobjects (`SetVptr` writes them at the object's address plus
+    /// the offset).
     pub vptrs: Vec<u64>,
+    /// The polymorphic subobjects in or below a virtual base, one per
+    /// distinct vptr slot (indices into `subs`): their slots are at the
+    /// complete object's offsets only in a complete object.
+    pub vvptrs: Vec<u16>,
 }
 
 /// A resolved virtual call.
@@ -62,6 +68,10 @@ struct Target {
     /// A covariant return ([class.virtual]/8): the offset of the called
     /// function's return class in the overrider's.
     cov: i64,
+    /// The overrider's subobject (its index in the dynamic type's graph)
+    /// is (in) a virtual base: `delta` holds only in a complete object,
+    /// so the address is found through the most derived object.
+    to: Option<u16>,
 }
 
 /// The Oven's per-class caches (insert-only: the class graph of a
@@ -78,12 +88,19 @@ pub(crate) struct Virt {
 }
 
 impl Virt {
+    /// The subobject graph of the class with [`PolyInfo`] index `i`.
+    pub(crate) fn subs(&self, i: usize) -> &[Sub] {
+        &self.infos[i].subs
+    }
+
     pub fn footprint(&self) -> usize {
         self.map.capacity() * 12
             + self
                 .infos
                 .iter()
-                .map(|i| i.subs.capacity() * 40 + i.vptrs.capacity() * 8)
+                .map(|i| {
+                    i.subs.capacity() * 40 + i.vptrs.capacity() * 8 + i.vvptrs.capacity() * 2
+                })
                 .sum::<usize>()
             + self.dispatch.capacity() * 48
             + self.type_infos.capacity() * 12
@@ -95,6 +112,31 @@ pub(crate) fn word(cls: OTy, off: u64) -> u128 {
     u128::from(cls.0) | u128::from(off) << 32
 }
 
+/// The flag of a dynamic-type word whose offset is relative to this
+/// object (P3533R2): the slot of a subobject in a virtual base of a
+/// class `C` whose base-object constructor or destructor is running, so
+/// `C` is a base class subobject and the virtual base is the most
+/// derived object's, at no fixed offset in `C`. The high word is then
+/// the signed distance from `C`'s start to the slot.
+const REL: u32 = 1 << 31;
+
+/// Encodes a relative dynamic-type word ([`REL`]).
+fn rel_word(cls: OTy, delta: i64) -> u128 {
+    u128::from(cls.0 | REL) | u128::from(delta as i32 as u32) << 32
+}
+
+/// A decoded dynamic-type word.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Dyn {
+    /// The class whose constructor or destructor last ran (or the most
+    /// derived class).
+    pub cls: OTy,
+    /// The slot's offset in it; with `rel`, the signed distance from the
+    /// start of that class's object to the slot.
+    pub off: i64,
+    pub rel: bool,
+}
+
 /// The record type of class declaration `d`.
 pub(crate) fn class_qtype(ast: &Ast, d: DeclId) -> Option<QualType> {
     ast.decls.get(ast.definition(d).unwrap_or(d)).ty()
@@ -103,12 +145,18 @@ pub(crate) fn class_qtype(ast: &Ast, d: DeclId) -> Option<QualType> {
 impl Oven {
     /// The index of class `cls`'s [`PolyInfo`] (computed on first use).
     pub(crate) fn poly_info(&mut self, b: &mut dyn SemaBridge, cls: OTy) -> u32 {
+        let cls = self.types.class_of(cls);
         if let Some(&i) = self.virt.map.get(&cls) {
             return i;
         }
         let TyKind::Record { decl, .. } = self.types.kind(cls) else {
             let i = self.virt.infos.len() as u32;
-            self.virt.infos.push(PolyInfo { decl: None, subs: Vec::new(), vptrs: Vec::new() });
+            self.virt.infos.push(PolyInfo {
+                decl: None,
+                subs: Vec::new(),
+                vptrs: Vec::new(),
+                vvptrs: Vec::new(),
+            });
             self.virt.map.insert(cls, i);
             return i;
         };
@@ -166,31 +214,51 @@ impl Oven {
             subs.iter().filter(|s| s.poly && !s.virt).map(|s| s.off).collect();
         vptrs.sort_unstable();
         vptrs.dedup();
+        let mut vvptrs: Vec<u16> = Vec::new();
+        for (k, s) in subs.iter().enumerate() {
+            if s.poly && s.virt && !vvptrs.iter().any(|&j| subs[usize::from(j)].off == s.off) {
+                vvptrs.push(k as u16);
+            }
+        }
         let i = self.virt.infos.len() as u32;
-        self.virt.infos.push(PolyInfo { decl: Some(first), subs, vptrs });
+        self.virt.infos.push(PolyInfo { decl: Some(first), subs, vptrs, vvptrs });
         self.virt.map.insert(cls, i);
         i
     }
 
     /// `Op::SetVptr`: the object at `raw` (of class `cls`) has dynamic
-    /// type `cls`.
+    /// type `cls`. With `base_obj` it is a base class subobject (a
+    /// base-object constructor or destructor is running): the slots of
+    /// its virtual bases are the most derived object's, and get
+    /// [`REL`] words.
     pub(crate) fn set_vptrs(
         &mut self,
         b: &mut dyn SemaBridge,
         raw: u64,
         cls: OTy,
+        base_obj: bool,
     ) -> Result<(), Fault> {
         let i = self.poly_info(b, cls);
+        let fault = |f| Fault::Mem { f, ak: ak::INIT, ty: cls, p: raw };
+        let start = u64::from(Ptr::decode(raw).off);
         let n = self.virt.infos[i as usize].vptrs.len();
         for k in 0..n {
             let off = self.virt.infos[i as usize].vptrs[k];
-            let p = Ptr::with_off(raw, u64::from(Ptr::decode(raw).off) + off, false);
-            self.write_vptr(p, word(cls, off)).map_err(|f| Fault::Mem {
-                f,
-                ak: ak::INIT,
-                ty: cls,
-                p: raw,
-            })?;
+            let p = Ptr::with_off(raw, start + off, false);
+            self.write_vptr(p, word(cls, off)).map_err(fault)?;
+        }
+        let n = self.virt.infos[i as usize].vvptrs.len();
+        for k in 0..n {
+            let j = self.virt.infos[i as usize].vvptrs[k];
+            let off = self.virt.infos[i as usize].subs[usize::from(j)].off;
+            if !base_obj {
+                let p = Ptr::with_off(raw, start + off, false);
+                self.write_vptr(p, word(cls, off)).map_err(fault)?;
+                continue;
+            }
+            let p = self.sub_addr(b, raw, cls, j).ok_or(Fault::Invalid)?;
+            let delta = i64::from(Ptr::decode(p).off) - start as i64;
+            self.write_vptr(p, rel_word(cls, delta)).map_err(fault)?;
         }
         Ok(())
     }
@@ -230,10 +298,15 @@ impl Oven {
             // of a union is tracked).
             TyKind::Record { union: true, .. } => {}
             TyKind::Record { .. } => {
-                let i = self.poly_info(b, t);
-                let n = self.virt.infos[i as usize].vptrs.len();
-                for k in 0..n {
-                    let off = self.virt.infos[i as usize].vptrs[k];
+                let i = self.poly_info(b, t) as usize;
+                let info = &self.virt.infos[i];
+                let offs: Vec<u64> = info
+                    .vptrs
+                    .iter()
+                    .copied()
+                    .chain(info.vvptrs.iter().map(|&j| info.subs[usize::from(j)].off))
+                    .collect();
+                for off in offs {
                     let s = self.mem.space_mut(sp);
                     s.write(abs + off, 8, word(t, off));
                     s.set_init(abs + off, 8, true);
@@ -272,7 +345,7 @@ impl Oven {
         raw: u64,
         cls: OTy,
         k: u32,
-    ) -> Result<(OTy, u64), Fault> {
+    ) -> Result<Dyn, Fault> {
         let (sp, abs, _) = self.mem.check(raw, 8, false).map_err(|f| match f {
             MemFault::External(..) | MemFault::Unknown(..) | MemFault::Temporary(..) => {
                 Fault::UnknownDynamic { ak: k, p: raw, ty: cls }
@@ -284,7 +357,10 @@ impl Oven {
             return Err(self.no_dynamic(ast, raw, cls, k));
         }
         let w = s.read(abs, 8) as u64;
-        Ok((OTy(w as u32), w >> 32))
+        let lo = w as u32;
+        let rel = lo & REL != 0;
+        let off = if rel { i64::from((w >> 32) as u32 as i32) } else { (w >> 32) as i64 };
+        Ok(Dyn { cls: OTy(lo & !REL), off, rel })
     }
 
     /// The fault of a polymorphic operation (access kind `k`) on the
@@ -302,21 +378,80 @@ impl Oven {
         if constructing { Fault::Invalid } else { Fault::NoDynamic(k) }
     }
 
-    /// The subobject of the dynamic type `c` at offset `ott` whose class
-    /// is `cls`: the subobject `raw` designates, viewed as part of `c`.
+    /// The subobject of the dynamic type `d.cls` whose class is `cls`
+    /// and whose slot the word `d` (read at `raw`) is in: the subobject
+    /// `raw` designates, viewed as part of `d.cls`. A [`REL`] word's is
+    /// the virtual one found at `raw` through the most derived object.
     pub(crate) fn locate(
         &mut self,
         b: &mut dyn SemaBridge,
-        c: OTy,
-        ott: u64,
+        d: Dyn,
         cls: OTy,
+        raw: u64,
     ) -> Option<(u32, u16)> {
-        let i = self.poly_info(b, c);
-        let k = self.virt.infos[i as usize]
-            .subs
-            .iter()
-            .position(|s| !s.virt && s.off == ott && s.cls == cls)?;
-        Some((i, k as u16))
+        let i = self.poly_info(b, d.cls);
+        let subs = &self.virt.infos[i as usize].subs;
+        if !d.rel {
+            let off = u64::try_from(d.off).ok()?;
+            let at = |virt: bool| {
+                subs.iter().position(|s| s.virt == virt && s.off == off && s.cls == cls)
+            };
+            let k = at(false).or_else(|| at(true))?;
+            return Some((i, k as u16));
+        }
+        let cands: Vec<usize> = (0..subs.len()).filter(|&j| subs[j].virt && subs[j].cls == cls).collect();
+        let start = self.rel_start(raw, d);
+        for j in cands {
+            if self.sub_addr(b, start, d.cls, j as u16) == Some(raw) {
+                return Some((i, j as u16));
+            }
+        }
+        None
+    }
+
+    /// The start of the object of class `d.cls` whose [`REL`] word is at
+    /// `raw`.
+    fn rel_start(&self, raw: u64, d: Dyn) -> u64 {
+        let off = i64::from(Ptr::decode(raw).off) - d.off;
+        Ptr::with_off(raw, off as u64, false)
+    }
+
+    /// The address of subobject `k` of the object of class `cls` at
+    /// `raw`: a virtual base (or a subobject of one) is the most derived
+    /// object's ([class.mi]/4), located in the object model
+    /// (`base_owner`) through the nearest virtual base above it. `None`
+    /// when it cannot be: a pointer past the end, or no object of `cls`
+    /// at `raw`.
+    pub(crate) fn sub_addr(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        raw: u64,
+        cls: OTy,
+        k: u16,
+    ) -> Option<u64> {
+        let p = Ptr::decode(raw);
+        let i = self.poly_info(b, cls) as usize;
+        let s = *self.virt.infos[i].subs.get(usize::from(k))?;
+        if !s.virt {
+            return Some(Ptr::with_off(raw, u64::from(p.off) + s.off, false));
+        }
+        if p.past {
+            return None;
+        }
+        let root = self.alloc_any(p)?.ty;
+        let (md, at) = self.base_owner(b, root, u64::from(p.off), 0, true, cls)?;
+        let subs = &self.virt.infos[i].subs;
+        let mut w = usize::from(k);
+        while !subs[w].vbase {
+            if w == 0 {
+                return None;
+            }
+            w = usize::from(subs[w].parent);
+        }
+        let (within, wdecl) = (s.off - subs[w].off, subs[w].decl);
+        let m = self.poly_info(b, md) as usize;
+        let wo = self.virt.infos[m].subs.iter().find(|s| s.vbase && s.decl == wdecl)?.off;
+        Some(Ptr::with_off(raw, at + wo + within, false))
     }
 
     /// `Op::VCall`: the function and adjusted `this` of a virtual call of
@@ -328,48 +463,61 @@ impl Oven {
         cls: OTy,
         raw: u64,
     ) -> Result<(u32, u64, i64), Fault> {
-        let (c, ott) = self.read_vptr(b.ast(), raw, cls, ak::MEMBER_CALL)?;
-        let t = match self.virt.dispatch.get(&(c, ott, method)) {
-            Some(&t) => t,
-            None => {
-                let t = self.resolve(b, method, cls, c, ott)?;
-                self.virt.dispatch.insert((c, ott, method), t);
+        let d = self.read_vptr(b.ast(), raw, cls, ak::MEMBER_CALL)?;
+        let key = (d.cls, d.off as u64, method);
+        let t = match self.virt.dispatch.get(&key) {
+            Some(&t) if !d.rel => t,
+            _ => {
+                let t = self.resolve(b, method, cls, d, raw)?;
+                // A relative word's subobject depends on the most
+                // derived object: not cached.
+                if !d.rel {
+                    self.virt.dispatch.insert(key, t);
+                }
                 t
             }
         };
         if t.pure {
             return Err(Fault::PureVirtual(t.ov));
         }
-        let off = i64::from(Ptr::decode(raw).off) + t.delta;
-        Ok((t.func, Ptr::with_off(raw, off as u64, false), t.cov))
+        let this = match t.to {
+            Some(k) => self.sub_addr(b, self.rel_start(raw, d), d.cls, k).ok_or(Fault::Invalid)?,
+            None => Ptr::with_off(raw, (i64::from(Ptr::decode(raw).off) + t.delta) as u64, false),
+        };
+        Ok((t.func, this, t.cov))
     }
 
+    /// The final overrider of `method` for the subobject (of class `cls`)
+    /// whose dynamic-type word `d` is at `raw`.
     fn resolve(
         &mut self,
         b: &mut dyn SemaBridge,
         method: DeclId,
         cls: OTy,
-        c: OTy,
-        ott: u64,
+        d: Dyn,
+        raw: u64,
     ) -> Result<Target, Fault> {
-        let (i, at) = self.locate(b, c, ott, cls).ok_or(Fault::Invalid)?;
+        let (i, at) = self.locate(b, d, cls, raw).ok_or(Fault::Invalid)?;
         let cdecl = self.virt.infos[i as usize].decl.ok_or(Fault::Invalid)?;
         let (ov, s2) = b.final_overrider(cdecl, SubobjectId(at), method).ok_or(Fault::Invalid)?;
-        let to = self.virt.infos[i as usize].subs.get(s2.index()).copied().ok_or(Fault::Invalid)?;
-        if to.virt {
-            return Err(Fault::Invalid);
-        }
+        let subs = &self.virt.infos[i as usize].subs;
+        let to = subs.get(s2.index()).copied().ok_or(Fault::Invalid)?;
+        let from = subs[usize::from(at)];
         let ast = b.ast();
         let pure = ast.decls.function(ast.first(ov)).is_some_and(|f| f.spec.is_pure());
         let func = self.func_index(ast, ov);
-        let cov = self.covariance(b, method, ov);
-        Ok(Target { func, delta: to.off as i64 - ott as i64, ov, pure, cov })
+        // A covariant return into a virtual base is not adjusted yet.
+        let cov = self.covariance(b, method, ov).ok_or(Fault::Invalid)?;
+        let delta = to.off as i64 - from.off as i64;
+        let to = (to.virt || d.rel).then_some(s2.index() as u16);
+        Ok(Target { func, delta, ov, pure, cov, to })
     }
 
     /// The return adjustment of a call of `method` that runs `ov`: the
     /// offset of the class `method` returns a pointer or reference to in
     /// the class `ov` returns one to (0 if they are the same).
-    fn covariance(&mut self, b: &mut dyn SemaBridge, method: DeclId, ov: DeclId) -> i64 {
+    /// `None` when that class is (in) a virtual base.
+    fn covariance(&mut self, b: &mut dyn SemaBridge, method: DeclId, ov: DeclId) -> Option<i64> {
         let ret_class = |b: &mut dyn SemaBridge, f: DeclId| {
             let ast = b.ast();
             let def = ast.definition(f).unwrap_or(f);
@@ -380,17 +528,18 @@ impl Oven {
             let r = ast.types.pointee(p.ret())?;
             ast.types.as_record(r).map(|_| r)
         };
-        let (Some(rm), Some(ro)) = (ret_class(b, method), ret_class(b, ov)) else { return 0 };
+        let (Some(rm), Some(ro)) = (ret_class(b, method), ret_class(b, ov)) else {
+            return Some(0);
+        };
         let (tm, to) = (self.types.intern(b, rm), self.types.intern(b, ro));
         if tm == to {
-            return 0;
+            return Some(0);
         }
         let i = self.poly_info(b, to);
-        self.virt.infos[i as usize]
-            .subs
-            .iter()
-            .find(|s| s.cls == tm && !s.virt)
-            .map_or(0, |s| s.off as i64)
+        match self.virt.infos[i as usize].subs.iter().find(|s| s.cls == tm) {
+            Some(s) if s.virt => None,
+            s => Some(s.map_or(0, |s| s.off as i64)),
+        }
     }
 
     /// `Op::DynCast`: `dynamic_cast` of the object at `raw` (static class
@@ -409,14 +558,38 @@ impl Oven {
         if raw == 0 && !glvalue {
             return Ok(0);
         }
-        let (c, ott) = self.read_vptr(b.ast(), raw, stat, ak::DYNAMIC_CAST)?;
-        let base = u64::from(Ptr::decode(raw).off) - ott;
-        let at = |off: u64| Ptr::with_off(raw, base + off, false);
-        let Some(t) = target else { return Ok(at(0)) };
-        let (i, k) = self.locate(b, c, ott, stat).ok_or(Fault::Invalid)?;
+        let d = self.read_vptr(b.ast(), raw, stat, ak::DYNAMIC_CAST)?;
+        let (c, start) = (d.cls, self.rel_start(raw, d));
+        let Some(t) = target else { return Ok(start) };
+        let (i, k) = self.locate(b, d, stat, raw).ok_or(Fault::Invalid)?;
+        let j = self.cast_target(i, k, c, t, glvalue);
+        let j = match j {
+            Ok(j) => j,
+            Err(None) => return Ok(0),
+            Err(Some(f)) => return Err(f),
+        };
+        if self.virt.infos[i as usize].subs[j].virt {
+            return self.sub_addr(b, start, c, j as u16).ok_or(Fault::Invalid);
+        }
+        let off = self.virt.infos[i as usize].subs[j].off;
+        Ok(Ptr::with_off(start, u64::from(Ptr::decode(start).off) + off, false))
+    }
+
+    /// The subobject (index) of the dynamic type `c` (info `i`) that the
+    /// `dynamic_cast` of its subobject `k` to class `t` designates;
+    /// `Err(None)` for a null result, `Err(Some(_))` for a fault.
+    fn cast_target(
+        &self,
+        i: u32,
+        k: u16,
+        c: OTy,
+        t: OTy,
+        glvalue: bool,
+    ) -> Result<usize, Option<Fault>> {
         let subs = &self.virt.infos[i as usize].subs;
+        let stat = subs[usize::from(k)].cls;
         let fail = |kind: u8| {
-            if glvalue { Err(Fault::DynCast { kind, stat, dynamic: c, target: t }) } else { Ok(0) }
+            Err(glvalue.then_some(Fault::DynCast { kind, stat, dynamic: c, target: t }))
         };
         // Phase 1: from the operand's subobject up towards the most
         // derived object, across public edges only.
@@ -424,7 +597,7 @@ impl Oven {
         loop {
             let s = subs[cur];
             if s.cls == t {
-                return Ok(at(s.off));
+                return Ok(cur);
             }
             if cur == 0 {
                 break;
@@ -437,21 +610,18 @@ impl Oven {
         }
         // Phase 2: an unambiguous public base of the dynamic type.
         let mut found = subs.iter().enumerate().filter(|(_, s)| s.cls == t);
-        let Some((j, s)) = found.next() else { return fail(1) };
+        let Some((j, _)) = found.next() else { return fail(1) };
         if found.next().is_some() {
             return fail(2);
         }
-        let mut j = j;
-        while j != 0 {
-            if !subs[j].public {
+        let mut p = j;
+        while p != 0 {
+            if !subs[p].public {
                 return fail(3);
             }
-            j = usize::from(subs[j].parent);
+            p = usize::from(subs[p].parent);
         }
-        if s.virt {
-            return Err(Fault::Invalid);
-        }
-        Ok(at(s.off))
+        Ok(j)
     }
 
     /// The offset of the unambiguous public base class `base` in a
@@ -486,11 +656,9 @@ impl Oven {
     /// [conv.ptr]/3 of the non-null pointer `raw` to class `cls` into a
     /// pointer to its unambiguous base `base` that is (in) a virtual base
     /// of `cls`: the virtual base's offset is the most derived object's
-    /// ([class.mi]/4), so the pointer's (sub)object is located in the
-    /// object model first (`base_owner`). `None` when it cannot be: a
-    /// pointer past the end, or a `cls` subobject inside a virtual base
-    /// of an enclosing object (whose class has no constexpr constructor;
-    /// P3533 constexpr virtual inheritance is not implemented).
+    /// ([class.mi]/4), so it is found through it ([`Self::sub_addr`]).
+    /// `None` when it cannot be: a pointer past the end, or no `cls`
+    /// object at `raw`.
     pub(crate) fn vbase_ptr(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -498,28 +666,9 @@ impl Oven {
         cls: OTy,
         base: OTy,
     ) -> Option<u64> {
-        let p = Ptr::decode(raw);
-        if p.past {
-            return None;
-        }
-        let root = self.alloc_any(p)?.ty;
-        let (md, at) = self.base_owner(b, root, u64::from(p.off), 0, true, cls)?;
-        // `base` relative to the nearest virtual base `w` above it in
-        // `cls`'s graph (the path from `w` down is non-virtual).
         let i = self.poly_info(b, cls) as usize;
-        let subs = &self.virt.infos[i].subs;
-        let j = subs.iter().position(|s| s.cls == base)?;
-        let mut w = j;
-        while !subs[w].vbase {
-            if w == 0 {
-                return None;
-            }
-            w = usize::from(subs[w].parent);
-        }
-        let (within, wcls) = (subs[j].off - subs[w].off, subs[w].cls);
-        let k = self.poly_info(b, md) as usize;
-        let wo = self.virt.infos[k].subs.iter().find(|s| s.vbase && s.cls == wcls)?.off;
-        Some(Ptr::with_off(raw, at + wo + within, false))
+        let j = self.virt.infos[i].subs.iter().position(|s| s.cls == base)?;
+        self.sub_addr(b, raw, cls, j as u16)
     }
 
     /// The most derived object (its type and offset in the allocation)
@@ -605,8 +754,8 @@ impl Oven {
         cls: OTy,
         ti: OTy,
     ) -> Result<u64, Fault> {
-        let (c, _) = self.read_vptr(ast, raw, cls, ak::TYPEID)?;
-        let q = self.types.info(c).q;
+        let d = self.read_vptr(ast, raw, cls, ak::TYPEID)?;
+        let q = self.types.info(d.cls).q;
         Ok(self.type_info(q, ti))
     }
 }

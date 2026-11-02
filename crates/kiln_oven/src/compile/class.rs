@@ -10,7 +10,7 @@
 //! by `Op::Downcast`.
 
 use kiln_ast::decl::{CtorInit, CtorInitKind, DeclKind, DefinitionBits, FnStorage};
-use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, StorageDuration, UnaryOp};
+use kiln_ast::expr::{CastKind, ConstructionKind, ExprFlags, ExprKind, StorageDuration, UnaryOp};
 use kiln_ast::{Ast, DeclId, ExprId, QualType, TypeId};
 use kiln_source::Loc;
 
@@ -28,6 +28,9 @@ const NULL_MEMBER_CALL: &str =
 #[derive(Clone, Copy)]
 pub(super) enum Callee {
     Direct(DeclId),
+    /// The base-object variant of a constructor of a class with virtual
+    /// bases ([`crate::compile::Func::base_obj`]).
+    Base(DeclId),
     /// A virtual call of the method (dispatched on the dynamic type of
     /// the object argument), a member of the class.
     Virtual(DeclId, OTy),
@@ -50,10 +53,6 @@ pub(super) fn has_this(ast: &Ast, d: DeclId) -> bool {
         .function(d)
         .is_some_and(|f| f.spec.storage() != FnStorage::Static && !f.spec.has_explicit_object())
 }
-
-/// The note of a construct needing virtual dispatch or virtual bases.
-const VIRTUAL_UNSUPPORTED: &str =
-    "kiln: virtual dispatch and virtual base classes in constant evaluation land with WP-077";
 
 impl Compiler<'_> {
     /// The current `this`: the object a default member initializer is
@@ -87,15 +86,19 @@ impl Compiler<'_> {
     /// The byte offset of the direct, non-virtual base `base` in class
     /// `cls` (an empty base, which is not laid out, is at 0).
     pub(super) fn base_offset(&self, cls: OTy, base: OTy) -> u64 {
-        self.o.types.fields(cls).iter().find(|f| f.base && f.ty == base).map_or(0, |f| f.offset)
+        let t = &self.o.types;
+        t.fields(cls)[..t.vbase_start(cls)]
+            .iter()
+            .find(|f| f.base && t.same_class(f.ty, base))
+            .map_or(0, |f| f.offset)
     }
 
     /// The offset of the base subobject reached from class `from` along
-    /// cast `e`'s base path, and the base's type; `None` through a virtual
-    /// base.
-    fn path_offset(&mut self, e: ExprId, from: OTy) -> Option<(u64, OTy)> {
+    /// cast `e`'s base path up to its first virtual base, the class
+    /// there, and the rest of the path (from that virtual base on).
+    fn path_offset(&mut self, e: ExprId, from: OTy) -> (u64, OTy, Vec<QualType>) {
         let ast = self.ast();
-        let Some(path) = ast.exprs.cast_path(e) else { return Some((0, from)) };
+        let Some(path) = ast.exprs.cast_path(e) else { return (0, from, Vec::new()) };
         let specs: Vec<(QualType, bool)> = ast
             .lists
             .get(path)
@@ -107,15 +110,37 @@ impl Compiler<'_> {
             .collect();
         let mut off = 0;
         let mut cur = from;
-        for (q, virt) in specs {
+        for (i, &(q, virt)) in specs.iter().enumerate() {
             if virt {
-                return None;
+                return (off, cur, specs[i..].iter().map(|s| s.0).collect());
             }
             let b = self.ty(q);
             off += self.base_offset(cur, b);
             cur = b;
         }
-        Some((off, cur))
+        (off, cur, Vec::new())
+    }
+
+    /// The index in the subobject graph of class `cls` of the base
+    /// reached along `rest` (a base path whose first step is to a
+    /// virtual base).
+    fn path_sub(&mut self, cls: OTy, rest: &[QualType]) -> Option<u32> {
+        let i = self.o.poly_info(self.b, cls) as usize;
+        let mut k = 0usize;
+        for (n, &q) in rest.iter().enumerate() {
+            let ast = self.b.ast();
+            let d = ast.first(ast.types.as_record(q)?);
+            let subs = self.o.virt.subs(i);
+            k = if n == 0 {
+                subs.iter().position(|s| s.vbase && s.decl == d)?
+            } else {
+                (1..subs.len()).find(|&j| {
+                    let s = subs[j];
+                    usize::from(s.parent) == k && !s.vbase && s.decl == d
+                })?
+            };
+        }
+        Some(k as u32)
     }
 
     /// A derived-to-base (`down` false) or base-to-derived conversion of
@@ -127,10 +152,26 @@ impl Compiler<'_> {
         let pointee = |q: QualType| ast.types.pointee(q).filter(|_| ptr).unwrap_or(q);
         let (oq, rq) = (pointee(ast.exprs.get(op).ty()), pointee(ast.exprs.get(e).ty()));
         let derived = self.ty(if down { rq } else { oq });
-        let Some((off, _)) = self.path_offset(e, derived) else {
-            self.trap(e, VIRTUAL_UNSUPPORTED);
+        let (off, cur, rest) = self.path_offset(e, derived);
+        if !rest.is_empty() {
+            // [conv.ptr]/3 through a virtual base: its offset is the most
+            // derived object's ([class.mi]/4), found at run time
+            // (`Oven::sub_addr`). A downcast is ill-formed
+            // ([expr.static.cast]/2, /11; sema rejects it).
+            let Some(k) = self.path_sub(cur, &rest).filter(|_| !down) else {
+                self.unsupported(e);
+                return;
+            };
+            let q = if off == 0 {
+                p
+            } else {
+                let r = self.reg();
+                self.emit_at(Op::Field, u32::from(ptr), &[r, p, off as u32], e);
+                r
+            };
+            self.emit_at(Op::VBase, u32::from(ptr), &[dst, q, cur.0, k], e);
             return;
-        };
+        }
         if down {
             self.emit_at(Op::Downcast, u32::from(ptr), &[dst, p, off as u32, derived.0], e);
         } else if off == 0 {
@@ -164,7 +205,22 @@ impl Compiler<'_> {
             return None;
         }
         let d = ast.destructor(decl)?;
+        // A base-subobject view: a base class subobject of a class with
+        // virtual bases, destroyed without them ([class.dtor]/13).
+        if self.o.types.class_of(t) != t {
+            return Some(self.o.func_index_base(self.b.ast(), d));
+        }
         Some(self.o.func_index(self.b.ast(), d))
+    }
+
+    /// Whether constructor or destructor `d` has a base-object variant
+    /// (its class has virtual bases).
+    fn has_base_variant(&self, d: DeclId) -> bool {
+        let ast = self.ast();
+        ast.decls
+            .get(d)
+            .ctx()
+            .is_some_and(|c| record_bits(ast, c).contains(DefinitionBits::HAS_VIRTUAL_BASES))
     }
 
     /// Registers the destruction of the object of type `ty` at `p` with
@@ -367,9 +423,24 @@ impl Compiler<'_> {
             let loc = self.ast().decls.get(def).loc();
             // The subobjects completed so far: `done` entries of `fields`.
             let mut done = 0;
+            let set = u32::from(self.base_obj);
             for ci in inits {
-                if vptr && !matches!(ci.kind, CtorInitKind::Base | CtorInitKind::VirtualBase) {
-                    self.emit(Op::SetVptr, 0, &[this, cls.0]);
+                if ci.kind == CtorInitKind::VirtualBase {
+                    // [class.base.init]/7: only the most derived class's
+                    // constructor initializes the virtual bases (sema
+                    // lists them first, in `vbases()` order); an exception
+                    // after one destroys it ([except.ctor]/3).
+                    if !self.base_obj {
+                        let m = self.next;
+                        if let Some((q, vty)) = self.ctor_init_vbase(&ci, this, cls) {
+                            self.push_cleanup(q, vty, 2 | 4, loc);
+                        }
+                        self.next = m;
+                    }
+                    continue;
+                }
+                if vptr && ci.kind != CtorInitKind::Base {
+                    self.emit(Op::SetVptr, set, &[this, cls.0]);
                     vptr = false;
                 }
                 if let Some(at) = self.init_index(&ci, cls) {
@@ -386,22 +457,34 @@ impl Compiler<'_> {
                 }
             }
             if vptr {
-                self.emit(Op::SetVptr, 0, &[this, cls.0]);
+                self.emit(Op::SetVptr, set, &[this, cls.0]);
             }
             if !delegating {
-                let n = self.o.types.fields(cls).len();
+                let n = self.o.types.vbase_start(cls);
                 self.unwind_subobjects(this, cls, union, done..n, loc);
             }
             return;
         }
         if poly {
-            self.emit(Op::SetVptr, 0, &[this, cls.0]);
+            self.emit(Op::SetVptr, u32::from(self.base_obj), &[this, cls.0]);
         }
         if union {
             // A union's destructor destroys no member.
             return;
         }
         let loc = self.ast().decls.get(def).loc();
+        if !self.base_obj {
+            // The virtual bases, destroyed last, in the reverse of their
+            // construction ([class.dtor]/13): registered first.
+            let vb = self.o.types.vbase_start(cls);
+            let vfields = self.o.types.fields(cls)[vb..].to_vec();
+            for fi in vfields {
+                let m = self.next;
+                let q = self.elem_ptr_loc(this, fi.offset, loc);
+                self.push_cleanup(q, fi.ty, 2, loc);
+                self.next = m;
+            }
+        }
         let ast = self.ast();
         let bases: Vec<(QualType, bool)> =
             ast.decls.bases(rdef, &ast.lists).map(|b| (b.ty, b.is_virtual)).collect();
@@ -411,6 +494,7 @@ impl Compiler<'_> {
             }
             let bty = self.ty(q);
             let off = self.base_offset(cls, bty);
+            let bty = self.o.types.nv_view(bty);
             let m = self.next;
             let q = self.elem_ptr_loc(this, off, loc);
             self.push_cleanup(q, bty, 2, loc);
@@ -445,7 +529,10 @@ impl Compiler<'_> {
         let fd = match ci.kind {
             CtorInitKind::Base => {
                 let bty = self.ty(QualType::unqual(TypeId::new(ci.target)));
-                return self.o.types.fields(cls).iter().position(|f| f.base && f.ty == bty);
+                let t = &self.o.types;
+                return t.fields(cls)[..t.vbase_start(cls)]
+                    .iter()
+                    .position(|f| f.base && t.same_class(f.ty, bty));
             }
             CtorInitKind::Field => DeclId::new(ci.target),
             CtorInitKind::IndirectField => {
@@ -496,6 +583,24 @@ impl Compiler<'_> {
         }
     }
 
+    /// Initializes the virtual base of the complete object at `this` (of
+    /// class `cls`) that ctor-initializer `ci` names, at its offset in
+    /// `cls`; its address and type (a base-subobject view if it has
+    /// virtual bases of its own), `None` for an empty one (not laid out:
+    /// its constructor still runs, on the object's address).
+    fn ctor_init_vbase(&mut self, ci: &CtorInit, this: u32, cls: OTy) -> Option<(u32, OTy)> {
+        let vty = self.ty(QualType::unqual(TypeId::new(ci.target)));
+        let vb = self.o.types.vbase_start(cls);
+        let found = self.o.types.fields(cls)[vb..]
+            .iter()
+            .find(|f| self.o.types.same_class(f.ty, vty))
+            .map(|f| (f.offset, f.ty));
+        let (off, ty) = found.unwrap_or((0, self.o.types.nv_view(vty)));
+        let q = self.elem_ptr(this, off, ci.init);
+        self.init(ci.init, q, ty);
+        found.map(|_| (q, ty))
+    }
+
     /// `p + off` (bytes), the site at `loc`.
     fn elem_ptr_loc(&mut self, p: u32, off: u64, loc: Loc) -> u32 {
         if off == 0 {
@@ -512,9 +617,14 @@ impl Compiler<'_> {
                 let bty = self.ty(QualType::unqual(TypeId::new(ci.target)));
                 let off = self.base_offset(cls, bty);
                 let q = self.elem_ptr(this, off, ci.init);
+                // The base-subobject view: zero-initialization
+                // ([dcl.init.general]/9) stops at its virtual bases.
+                let bty = self.o.types.nv_view(bty);
                 self.init(ci.init, q, bty);
             }
-            CtorInitKind::VirtualBase => self.trap_loc(ci.loc, VIRTUAL_UNSUPPORTED.into()),
+            CtorInitKind::VirtualBase => {
+                let _ = self.ctor_init_vbase(ci, this, cls);
+            }
             CtorInitKind::Field => {
                 let fd = DeclId::new(ci.target);
                 let fields = self.o.types.fields(cls);
@@ -574,7 +684,7 @@ impl Compiler<'_> {
     /// object (or array of objects) of type `ty` at `p`.
     pub(super) fn construct(&mut self, e: ExprId, p: u32, ty: OTy) {
         let ast = self.ast();
-        if self.cur_fn.is_some() && self.has_virtual_bases(e) {
+        if self.cur_fn.is_some() && self.has_virtual_bases(e) && !self.constructs_literal(e) {
             // clang `CheckLiteralType`: an object of a class with a
             // virtual base (not a literal type) cannot be created in a
             // function called during evaluation; only the object being
@@ -608,6 +718,17 @@ impl Compiler<'_> {
             .get(ctor)
             .ctx()
             .is_some_and(|c| record_bits(ast, c).contains(DefinitionBits::HAS_VIRTUAL_BASES))
+    }
+
+    /// The class `e` constructs is a literal type (C++26 lets a class
+    /// with virtual bases be one, P3533R2).
+    fn constructs_literal(&self, e: ExprId) -> bool {
+        let ast = self.ast();
+        let ctor = ast.exprs.constructor(e);
+        ast.decls
+            .get(ctor)
+            .ctx()
+            .is_some_and(|c| record_bits(ast, c).contains(DefinitionBits::LITERAL))
     }
 
     fn construct_obj(&mut self, e: ExprId, p: u32, ty: OTy) {
@@ -667,7 +788,18 @@ impl Compiler<'_> {
         let refs = self.proto_refs(ctor);
         let void = self.ty(QualType::VOID);
         let loc = self.ctor_loc(e);
-        self.call_frame(e, Callee::Direct(ctor), void, None, Some(p), &args, &refs, Some(loc));
+        // A base class subobject (or a delegation from one) is
+        // constructed without its virtual bases ([class.base.init]/7).
+        let callee = match self.ast().exprs.construct_info(e).kind {
+            ConstructionKind::NonVirtualBase | ConstructionKind::VirtualBase
+                if self.has_base_variant(ctor) =>
+            {
+                Callee::Base(ctor)
+            }
+            ConstructionKind::Delegating if self.base_obj => Callee::Base(ctor),
+            _ => Callee::Direct(ctor),
+        };
+        self.call_frame(e, callee, void, None, Some(p), &args, &refs, Some(loc));
     }
 
     /// Where clang reports a constructor call (the call-stack note).
@@ -731,7 +863,11 @@ impl Compiler<'_> {
                 None => self.unsupported(e),
             }
         }
-        let f = self.o.func_index(self.b.ast(), ctor);
+        let f = if self.has_base_variant(ctor) {
+            self.o.func_index_base(self.b.ast(), ctor)
+        } else {
+            self.o.func_index(self.b.ast(), ctor)
+        };
         self.emit_at(Op::Call, 0, &[f, base], e);
         self.next = base + 1;
     }
@@ -810,6 +946,10 @@ impl Compiler<'_> {
         let pc = match callee {
             Callee::Direct(d) => {
                 let f = self.o.func_index(self.b.ast(), d);
+                self.emit_at(Op::Call, 0, &[f, base], e)
+            }
+            Callee::Base(d) => {
+                let f = self.o.func_index_base(self.b.ast(), d);
                 self.emit_at(Op::Call, 0, &[f, base], e)
             }
             Callee::Ind(r) => self.emit_at(Op::CallInd, 0, &[r, base], e),

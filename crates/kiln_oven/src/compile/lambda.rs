@@ -71,7 +71,7 @@ impl Compiler<'_> {
     /// The offset of base class `base` in class `cls`, reached through
     /// non-virtual bases only (depth-first in declaration order).
     fn nv_base_offset(&self, cls: OTy, base: OTy, depth: u32) -> Option<u64> {
-        if cls == base {
+        if self.o.types.same_class(cls, base) {
             return Some(0);
         }
         if depth > 64 {
@@ -79,7 +79,7 @@ impl Compiler<'_> {
         }
         self.o
             .types
-            .fields(cls)
+            .fields(cls)[..self.o.types.vbase_start(cls)]
             .iter()
             .filter(|f| f.base)
             .find_map(|f| self.nv_base_offset(f.ty, base, depth + 1).map(|x| x + f.offset))
