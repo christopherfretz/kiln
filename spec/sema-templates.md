@@ -2940,6 +2940,21 @@ whose head the notes name. It evaluates:
     `EvalContext` kind; Q5).
   - A non-constant result is clang's error "substitution into constraint
     expression resulted in a non-constant expression".
+  - A substituted atom that is still value-dependent is *satisfied* only
+    while the levels themselves are dependent (a retained level or a
+    dependent argument: a partial check during a template definition,
+    checked again at instantiation). With concrete levels it is an
+    **internal error**, not "not satisfied": [temp.constr.atomic]/3
+    gives only substitution failure, `false` and a non-constant result
+    as outcomes, and substitution with concrete arguments always yields
+    a non-dependent expression, so a dependent one means kiln's
+    substituter left the atom incomplete. Treating it as unsatisfied
+    would silently pick another overload or reject a valid program; it
+    is reported as `sema_unimplemented_template_feature` ("an atomic
+    constraint that stays value-dependent after substitution",
+    `sat_atom_uncached` in `templ/concepts/sat.rs`), and the fix for any
+    reachable case is in the substitution, not this guard. No known
+    program reaches it (libc++ M3 gate, WP-325).
 - **`And` and `Or`** short-circuit from left to right.
 - **Context.** Atomic constraints are substituted in the context of the
   constrained entity's declaration (its semantic `DeclContext`, via
@@ -4663,10 +4678,10 @@ explicit specialization errors remain. The blockers are:
   requires-expression stores its value in `ExprNode.aux`
   (`ExprArena::satisfied`/`set_satisfied`), and the Oven folds that.
   The §8.3 `atom_cache` landed with WP-109 (below).
-- Conservative fallbacks (WP-073; tightened by WP-109, below): an atom
-  was treated as *satisfied* when its substitution hit
-  `sema_unimplemented_template_feature`, or when it was still
-  value-dependent after substitution.
+- Conservative fallbacks (WP-073; replaced by WP-109's fallback policy,
+  below, and §8.3): an atom was treated as *satisfied* when its
+  substitution hit `sema_unimplemented_template_feature`, or when it was
+  still value-dependent after substitution.
 - Call sites:
   - `deduce_call.rs` checks the associated constraints after deduction
     (`Tdk::ConstraintsNotSatisfied`, `DeductionFailure::sat`, and the

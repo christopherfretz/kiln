@@ -392,14 +392,15 @@ first, so the counts behind it are lower bounds.
   node_handle.h:238 friend redeclaration). WP: treat `typename
   C<params>::member` in an out-of-line definition as the current
   instantiation's member when comparing it with the declaration.
-- **N — member partial specializations.** `kiln: not yet implemented: an
-  atomic constraint that stays value-dependent after substitution`
-  (iterator_concepts.h:395, chrono:2431); `use of undeclared identifier
+- **N — member partial specializations.** (The earlier `kiln: not yet
+  implemented: an atomic constraint that stays value-dependent after
+  substitution` at iterator_concepts.h:395 and chrono:2431 no longer
+  reproduces for `<iterator>`, `<chrono>` or `<ranges>`, checked in
+  WP-325.) `use of undeclared identifier
   '_Const'` / `'_Rep'` / `'_Iter'` (ranges:1888, chrono:2449,
   stl_list.h:189): partial-spec template parameters are not in scope in
   member bodies. WP: constrained partial specializations of member class
-  templates, including value-dependent atomic constraints and the
-  parameter scope for their members.
+  templates and the parameter scope for their members.
 - **L — protected via dependent base.** `'_S_get_c_name' is a protected member
   of 'facet'` at messages_members.h:107. WP: [class.protected] check against
   the naming class after the dependent base is instantiated.

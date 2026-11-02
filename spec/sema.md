@@ -1146,7 +1146,15 @@ and returns the scope it names:
     - Known clang divergence: clang mangles whichever redeclaration it
       reaches first. Take an entity declared in `A::I::R` and defined in
       the reopening before any use. Clang uses the reopening's `A::R`
-      path and kiln uses `A::I::R`. clang 22 behaves the same.
+      path and kiln uses `A::I::R`. clang 22 behaves the same. This
+      deviation is kept (WP-325): mangling one fixed declaration keeps
+      the symbol independent of declaration and use order. It is pinned
+      to that case only. An entity redeclared or defined in another
+      definition of the same namespace (`namespace A { inline namespace
+      I { namespace R {` again, or `namespace A::inline I::R {`) mangles
+      identically under both compilers (differential run test
+      tests/conformance/namespace.def/redeclaration-mangling.cpp, which
+      links only if kiln emits clang's symbols).
     - Test: tests/codegen/namespace_reopen_inline.cpp (IR diff against
       clang++-19 on both triples).
   - An unnamed namespace is created once per scope and gets an
@@ -3101,6 +3109,20 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived
     class type is initialized from that element ([dcl.init.list]/3.2)
+  - brace elision never enters an aggregate with no elements
+    ([dcl.init.aggr]/2: no direct bases and no members but unnamed
+    bit-fields, or an array of bound 0; `aggregate_has_no_elements`).
+    [dcl.init.aggr]/16 takes no clause for such a subaggregate; clang and
+    GCC reject the unbraced clause instead, and kiln follows them:
+    `initializer for aggregate with no elements requires explicit braces`
+    (`sema_implicit_empty_initializer`) at the clause, which is consumed
+    (the next clause initializes the next element) while the element
+    recovers. With `struct E {};`, `struct D2 { E e; int i; }; D2 d{1, 2};`
+    has one error (at `1`), `struct F { E e[2]; int x; }; F f{1, 2};` has
+    two (one per array element) and `D2 d{{}, 2};` none. The overload
+    viability walk (`aggregate_list_walk`, spec/sema-overload.md) uses
+    the same predicate. Test:
+    tests/conformance/dcl.init.aggr/brace-elision-empty-aggregate.cpp
   - vector members (WP-173, clang `CheckSubElementType`): a GNU vector
     member cannot be initialized from a scalar, so a scalar starts a
     brace-elided list of up to N elements (`elided_vector_init`). A

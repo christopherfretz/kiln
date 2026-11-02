@@ -108,6 +108,7 @@ sema_illegal_storage_class_on_function = Error (0) "illegal storage class on fun
 sema_imaginary_constant = Extension [GnuImaginaryConstant] (0) "imaginary constants are a GNU extension";
 sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
 sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";
+sema_implicit_empty_initializer = Error (0) "initializer for aggregate with no elements requires explicit braces";
 sema_implicit_fallthrough = WarningOff [ImplicitFallthrough] (0) "unannotated fall-through between switch labels";
 sema_inaccessible_base = Warning [InaccessibleBase] (2) "direct base {0} is inaccessible due to ambiguity:{1}";
 sema_incdec_enum = Error (2) "cannot {0:increment|decrement} expression of enum type {1}";
