@@ -399,7 +399,7 @@ error by default).
 | `std::initializer_list<X>` (or ref) | worst element ICS to `X`; identity if empty; any Bad → `Bad(InitList)` |
 | array `X[N]`/`X[]` | worst element ICS; too many elements → Bad |
 | non-aggregate class | `UserDefined` from [over.match.list] (`list_ctor` if phase 1 won) |
-| aggregate class | `UserDefined{via: Aggregate}` if aggregate init is well-formed |
+| aggregate class | `UserDefined{via: Aggregate}` if aggregate init is well-formed (approximated: no more elements than `scalar_leaves`, an upper bound under brace elision in which an empty-class or empty-array subobject still counts one element, and no subobject designated twice) |
 | reference | as the referenced type, bound to the temporary |
 | non-class, one element / empty | element's ICS (narrowing → `Bad(Narrowing)`) / identity |
 

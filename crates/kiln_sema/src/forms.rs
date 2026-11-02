@@ -112,12 +112,15 @@ impl Sema<'_, '_> {
     }
 
     /// The number of scalar subobjects of aggregate `ty` that brace
-    /// elision can reach; `None` when unbounded or unknown.
+    /// elision can reach; `None` when unbounded or unknown. A subobject
+    /// with no scalar leaves (an empty class, an array of them) still
+    /// takes one element of its own ([dcl.init.aggr]/4), so it counts
+    /// as one below the top level.
     pub(crate) fn scalar_leaves(&self, ty: QualType) -> Option<u64> {
         if self.ast.types.is_array(ty) {
             let n = self.ast.types.array_size(ty)?;
             let elem = self.ast.types.element(ty)?;
-            return self.scalar_leaves(elem)?.checked_mul(n);
+            return self.scalar_leaves(elem)?.max(1).checked_mul(n);
         }
         let Some(r) = self.ast.types.as_record(ty) else { return Some(1) };
         let def = self.ast.definition(r).unwrap_or(r);
@@ -126,7 +129,7 @@ impl Sema<'_, '_> {
         let mut total: u64 = 0;
         for f in fields {
             let ft = self.ast.decls.get(f).ty()?;
-            let n = self.scalar_leaves(ft)?;
+            let n = self.scalar_leaves(ft)?.max(1);
             if union {
                 return Some(n);
             }

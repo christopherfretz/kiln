@@ -2956,7 +2956,13 @@ clang 19's C99/GNU complex support in C++:
     parameter.
   - Viability follows [over.ics.list]: a scalar takes at most one
     unbraced, convertible element; an aggregate at most as many
-    elements as brace elision reaches. A non-viable list is clang's
+    elements as brace elision reaches, where a subobject without
+    scalar leaves (an empty class, an array of them: libc++'s
+    `array<T, 0>`) still takes one element below the top level
+    (`tests/conformance/over.ics.list/aggregate-empty-class-member.cpp`).
+    The count is an upper bound, so a list it admits may still fail
+    the initialization itself (a braced element for an array member
+    covers the whole array, which the count does not see). A non-viable list is clang's
     `cannot convert initializer list argument to 'T'` candidate note,
     except that a single class-type element for a non-class parameter
     notes the element's own conversion ([over.ics.list]/10: `no known
