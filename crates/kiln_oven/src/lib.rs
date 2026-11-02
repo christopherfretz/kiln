@@ -250,6 +250,14 @@ pub trait SemaBridge {
     fn cxx_year(&self) -> u32 {
         2026
     }
+    /// Whether function `f` is non-throwing ([except.spec]/2), resolving
+    /// its exception specification if needed (which may evaluate nested
+    /// constant expressions with `oven`). An exception leaving it ends a
+    /// constant evaluation (P3068). The default is potentially-throwing.
+    fn is_nothrow(&mut self, f: DeclId, oven: &mut Oven) -> bool {
+        let _ = (f, oven);
+        false
+    }
     /// Whether the translation unit is C++26 or later.
     fn cxx26(&self) -> bool {
         self.cxx_year() >= 2026
@@ -432,6 +440,8 @@ pub struct Oven {
     pub(crate) stack: Vec<Frame>,
     /// Registered destructions, innermost last (`Op::PushCleanup`).
     pub(crate) cleanups: Vec<vm::Cleanup>,
+    /// In-flight and handled exceptions (P3068, `vm/exc.rs`).
+    pub(crate) exc: vm::exc::Excs,
     pub(crate) memo: Memo,
     pub(crate) stats: EvalStats,
     pub(crate) run: vm::RunState,
@@ -487,6 +497,7 @@ impl Oven {
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
             cleanups: Vec::new(),
+            exc: vm::exc::Excs::default(),
             memo: Memo::new(budget.memo_entries),
             stats: EvalStats::default(),
             run: vm::RunState::default(),
@@ -688,6 +699,7 @@ impl Oven {
             + cap(&self.regs)
             + cap(&self.stack)
             + cap(&self.cleanups)
+            + self.exc.footprint()
             + self.memo.footprint()
             + self.run.footprint()
             + self.scratch.footprint()
@@ -799,6 +811,7 @@ impl Oven {
         self.mem.reset();
         self.stack.clear();
         self.cleanups.clear();
+        self.exc.clear();
         c
     }
 

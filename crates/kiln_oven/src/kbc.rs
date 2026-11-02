@@ -254,7 +254,34 @@ ops! {
     // a member call on it instead: `std::allocator` storage must be
     // within its lifetime.
     EndLife = 2,
+    // [handler]: enters a try-block (P3068, [except.handle]): registers a
+    // handler marker in the cleanup stack (spec/oven.md "Exceptions");
+    // an exception thrown before the marker is popped resumes at
+    // `handler`.
+    TryEnter = 1,
+    // [p, type, dtor]: throws the `type` exception object at `p` (a heap
+    // object; `dtor` its destructor's function, `NO_DTOR` for none);
+    // aux 1 = rethrow the handled exception (`throw;`, operands unused);
+    // aux 2 = resume unwinding the in-flight exception (no handler of a
+    // try-block matched).
+    Throw = 3,
+    // Continues unwinding the in-flight exception (the return point of a
+    // destructor run by unwinding; one per Oven).
+    Unwind = 0,
+    // [dst, type, next]: a handler of a try-block: matches the in-flight
+    // exception against handler type `type` ([except.handle]/3; aux 0 =
+    // `...`, 1 = an object or reference handler: same type or an
+    // unambiguous public base class, `dst` = the (sub)object's address;
+    // 2 = a pointer or pointer-to-member handler by value: the pointer
+    // conversions, `dst` = the converted value), else jumps to `next`.
+    Catch = 3,
+    // The matched handler becomes active: the in-flight exception is the
+    // handled one until the handler's scope exits.
+    CatchBegin = 0,
 }
+
+/// `Op::Throw` operand: the exception object has no destructor to run.
+pub(crate) const NO_DTOR: u32 = u32::MAX;
 
 /// The kinds of `Builtin` and their operands.
 pub(crate) mod bi {

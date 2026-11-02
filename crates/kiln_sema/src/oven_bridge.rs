@@ -73,6 +73,14 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         self.sema.instantiate_for_oven(f, oven)
     }
 
+    fn is_nothrow(&mut self, f: DeclId, oven: &mut Oven) -> bool {
+        if let Some(n) = self.sema.known_nothrow(f) {
+            return n;
+        }
+        let at = self.sema.inst.eval_loc.unwrap_or_else(|| self.sema.ast.decls.get(f).loc());
+        self.sema.lend_oven(oven, |s| s.resolve_nothrow(f, at))
+    }
+
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout {
         let s = &mut *self.sema;
         kiln_abi::ensure_layout(&mut s.ast, record, &s.abi)

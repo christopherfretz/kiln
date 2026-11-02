@@ -451,6 +451,43 @@ impl Oven {
         Ok(at(s.off))
     }
 
+    /// The offset of the unambiguous public base class `base` in a
+    /// complete `cls` object, and whether it is (in) a virtual base
+    /// ([except.handle]/3.2, [conv.ptr]/3).
+    pub(crate) fn public_base(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        cls: OTy,
+        base: OTy,
+    ) -> Option<(u64, bool)> {
+        let rec = |t| matches!(self.types.kind(t), TyKind::Record { union: false, .. });
+        if !rec(cls) || !rec(base) {
+            return None;
+        }
+        let i = self.poly_info(b, cls) as usize;
+        let subs = &self.virt.infos[i].subs;
+        let mut found = subs.iter().enumerate().filter(|(_, s)| s.cls == base);
+        let (mut j, s) = found.next()?;
+        if found.next().is_some() {
+            return None;
+        }
+        while j != 0 {
+            if !subs[j].public {
+                return None;
+            }
+            j = usize::from(subs[j].parent);
+        }
+        Some((s.off, s.virt))
+    }
+
+    /// The subobjects of a complete `cls` object: offset, class (type and
+    /// first declaration) and whether it is polymorphic, the object itself
+    /// first.
+    pub(crate) fn sub_list(&mut self, b: &mut dyn SemaBridge, cls: OTy) -> Vec<(u64, OTy, DeclId, bool)> {
+        let i = self.poly_info(b, cls) as usize;
+        self.virt.infos[i].subs.iter().map(|s| (s.off, s.cls, s.decl, s.poly)).collect()
+    }
+
     /// `Op::TypeId`: the `std::type_info` object (of type `ti`) for the
     /// canonical type `q` ([expr.typeid]/1).
     pub(crate) fn type_info(&mut self, q: QualType, ti: OTy) -> u64 {

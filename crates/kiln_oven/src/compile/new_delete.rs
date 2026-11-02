@@ -458,7 +458,7 @@ pub(crate) fn is_std_named(ast: &Ast, d: DeclId, name: &str) -> bool {
     is_named(ast, d, name) && in_std(ast, d)
 }
 
-fn is_named(ast: &Ast, d: DeclId, name: &str) -> bool {
+pub(crate) fn is_named(ast: &Ast, d: DeclId, name: &str) -> bool {
     ast.decls.get(d).name().as_ident().is_some_and(|s| ast.symbols().as_str(s) == name)
 }
 

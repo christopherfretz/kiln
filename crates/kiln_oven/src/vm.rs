@@ -21,6 +21,7 @@ use crate::{Oven, SemaBridge};
 
 mod bitcast;
 mod builtins;
+pub(crate) mod exc;
 mod life;
 mod meta;
 mod virt;
@@ -294,6 +295,23 @@ pub(crate) enum Fault {
         p: u64,
         ty: OTy,
     },
+    /// An exception no handler of the evaluation catches (P3068): the
+    /// exception object (of type `ty`) and its `what()` string when its
+    /// class derives from `std::exception`. Rendered at its throw.
+    Uncaught {
+        obj: u64,
+        ty: OTy,
+        what: Option<Box<str>>,
+    },
+    /// An exception leaving a non-throwing function ([except.spec]/5).
+    NoexceptExit,
+    /// `throw;` with no handled exception ([expr.throw]/4).
+    RethrowNone,
+    /// An exception leaving a destructor run by unwinding
+    /// ([except.terminate]/1.4); `prev` the active exception's throw.
+    ThrowWhileActive {
+        prev: u32,
+    },
 }
 
 /// Why an array `new` bound is erroneous ([expr.new]/8).
@@ -402,9 +420,11 @@ impl Oven {
         self.run.entry = entry;
         let pend = self.run.pending.len();
         let clean = self.cleanups.len();
+        let excs = self.exc.lens();
         let entry_pc = self.funcs[func as usize].entry as usize;
         let r = self.run_loop(b, func, entry_pc, fb);
         self.cleanups.truncate(clean);
+        self.exc.truncate(excs);
         let out = match r {
             Ok(()) => Ok(()),
             Err((fault, pc)) => {
@@ -495,6 +515,7 @@ impl Oven {
         let saved_entry = self.run.entry;
         let pend = self.run.pending.len();
         let clean = self.cleanups.len();
+        let excs = self.exc.lens();
         let mark = self.mem.mark();
         // The region's `Ret` writes the frame's result slot.
         let slot = self.regs[fb];
@@ -530,6 +551,7 @@ impl Oven {
             }
         };
         self.cleanups.truncate(clean);
+        self.exc.truncate(excs);
         self.stack.truncate(entry);
         self.mem.release(mark, &self.types);
         self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
@@ -999,7 +1021,7 @@ impl Oven {
                     if self.cleanups.len() > (m >> 64) as usize {
                         // Destroy the innermost registered object, then
                         // execute this `ScopeExit` again.
-                        match self.run_cleanup(b, pc, fb) {
+                        match self.run_cleanup(b, pc, pc, fb) {
                             Ok(Some((npc, nfb))) => {
                                 pc = npc;
                                 fb = nfb;
@@ -1229,7 +1251,7 @@ impl Oven {
                     if self.cleanups.last().is_some_and(|c| c.depth as usize == self.stack.len()) {
                         // The frame's objects are destroyed after the
                         // result is initialized ([stmt.return]/3).
-                        match self.run_cleanup(b, pc, fb) {
+                        match self.run_cleanup(b, pc, pc, fb) {
                             Ok(Some((npc, nfb))) => {
                                 pc = npc;
                                 fb = nfb;
@@ -1289,22 +1311,54 @@ impl Oven {
                     }
                     pc += 4;
                 }
+                Op::TryEnter => {
+                    let depth = self.stack.len() as u32;
+                    let (this, at) = (arg!(0) as u64, pc as u32);
+                    let c = Cleanup { this, ty: OTy(0), func: exc::TRY_MARK, pc: at, depth };
+                    self.cleanups.push(c);
+                    pc += 2;
+                }
+                Op::Throw | Op::Unwind => (pc, fb) = self.throw_op(b, op, pc, fb, aux)?,
+                Op::Catch => match self.catch_match(b, aux, OTy(arg!(1) as u32)) {
+                    Ok(Some(v)) => {
+                        reg!(0) = v;
+                        pc += 4;
+                    }
+                    Ok(None) => pc = arg!(2),
+                    Err(f) => fail!(f),
+                },
+                Op::CatchBegin => {
+                    if let Err(f) = self.catch_begin(pc) {
+                        fail!(f);
+                    }
+                    pc += 1;
+                }
             }
         }
     }
 
     /// Pops the innermost registered destruction and enters its
     /// destructor from the instruction at `pc` (which executes again on
-    /// return); the frame of the running function is at `fb`.
+    /// return, or `ret` when unwinding); the frame of the running function
+    /// is at `fb`.
     #[inline(never)]
     fn run_cleanup(
         &mut self,
         b: &mut dyn SemaBridge,
         pc: usize,
+        ret: usize,
         fb: usize,
     ) -> Result<Option<(usize, usize)>, (Fault, usize)> {
-        let Some(c) = self.cleanups.pop() else { return Ok(None) };
-        self.cleanup_life(&c).map_err(|f| (f, pc))?;
+        let Some(mut c) = self.cleanups.pop() else { return Ok(None) };
+        if c.func >= exc::SENTINEL {
+            // A try-block's marker or an exception's end (`vm/exc.rs`).
+            match self.exc_cleanup(c).map_err(|f| (f, pc))? {
+                Some(d) => c = d,
+                None => return Ok(None),
+            }
+        } else {
+            self.cleanup_life(&c).map_err(|f| (f, pc))?;
+        }
         // A const object is modifiable during its destruction
         // ([class.dtor]/5).
         let p = Ptr::decode(c.this);
@@ -1318,7 +1372,7 @@ impl Oven {
         let base = self.funcs[cur as usize].nregs as usize;
         self.grow_regs(fb + base + 2);
         self.regs[fb + base] = u128::from(c.this);
-        self.enter(b, c.func, c.pc as usize, pc, fb, base).map_err(|f| (f, c.pc as usize))
+        self.enter(b, c.func, c.pc as usize, ret, fb, base).map_err(|f| (f, c.pc as usize))
     }
 
     /// `Op::PushCleanup`: registers the destruction of the object (or

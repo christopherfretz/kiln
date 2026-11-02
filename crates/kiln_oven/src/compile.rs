@@ -29,6 +29,7 @@ mod bitcast;
 mod builtins;
 mod class;
 mod complex;
+mod except;
 mod lambda;
 mod mptr;
 mod new_delete;
@@ -36,7 +37,7 @@ mod rtti;
 mod vector;
 
 pub(crate) use builtins::designator_type;
-pub(crate) use new_delete::is_std_named;
+pub(crate) use new_delete::{is_named, is_std_named};
 
 /// `Func::entry` of a function not compiled yet.
 pub(crate) const UNCOMPILED: u32 = u32::MAX;
@@ -664,6 +665,9 @@ pub(crate) struct Compiler<'a> {
     /// conditionals, keyed by the expression (an `OpaqueValueExpr` names
     /// its source).
     opaque: FxHashMap<ExprId, Opaque>,
+    /// The exception object a handler's parameter is being initialized
+    /// from (`compile/except.rs`).
+    catch_obj: Option<u32>,
     /// The function being compiled is `std::is_constant_evaluated`.
     std_ice: bool,
     /// The code reads the evaluation context (`Op::IsConstEval`): the
@@ -718,6 +722,7 @@ impl<'a> Compiler<'a> {
             pending: Vec::new(),
             rmw_loc: None,
             opaque: FxHashMap::default(),
+            catch_obj: None,
             breakables: Vec::new(),
             stmt_exprs: Vec::new(),
             scopes: Vec::new(),
@@ -893,9 +898,9 @@ impl<'a> Compiler<'a> {
         self.trap_loc(loc, msg.to_owned());
     }
 
-    /// [expr.const]/10.22 (as clang 19, before P3068): evaluating a
-    /// throw-expression is not a core constant expression; the generic
-    /// note at the `throw`.
+    /// [expr.const]/10.22 (before C++26 and P3068, as clang 19):
+    /// evaluating a throw-expression is not a core constant expression;
+    /// the generic note at the `throw`.
     fn throw_invalid(&mut self, e: ExprId) {
         self.trap(e, "subexpression not valid in a constant expression");
     }
@@ -1077,8 +1082,13 @@ impl Scan<'_> {
                     self.expr(v, false);
                 }
             }
-            // Only the compound statement is evaluated (see `stmt`).
-            StmtKind::CXXTryStmt => self.stmt(ast.stmts.try_block(s)),
+            StmtKind::CXXTryStmt => {
+                self.stmt(ast.stmts.try_block(s));
+                for h in ast.lists.iter::<StmtId>(ast.stmts.try_handlers(s)) {
+                    ast.stmts.catch_var(h).into_iter().for_each(|x| self.decl(x));
+                    self.stmt(ast.stmts.catch_block(h));
+                }
+            }
             _ => {}
         }
     }
@@ -1640,11 +1650,10 @@ impl Compiler<'_> {
             // charges a step for each: `EvaluateStmt` recurses).
             StmtKind::LabelStmt => self.stmt(StmtId::new(n.b())),
             // [expr.const]/5.25 (C++20, P1002): a try-block is evaluated by
-            // evaluating its compound statement; no exception can be
-            // thrown during constant evaluation (a throw-expression is not
-            // a core constant expression), so no handler is ever entered
-            // (clang `EvaluateStmt`, one step for the try itself).
-            StmtKind::CXXTryStmt => self.stmt(ast.stmts.try_block(s)),
+            // evaluating its compound statement (clang `EvaluateStmt`, one
+            // step for the try itself); from C++26 (P3068) its handlers
+            // catch exceptions thrown in it (`compile/except.rs`).
+            StmtKind::CXXTryStmt => self.try_stmt(s),
             // [dcl.attr.assume]/1, [expr.const]/5.8: an assumption that
             // would evaluate to false is not a core constant expression;
             // one with possible side effects is ignored (clang
@@ -2436,7 +2445,7 @@ impl Compiler<'_> {
                 }
             }
             ExprKind::CXXScalarValueInitExpr => self.konst(dst, 0),
-            ExprKind::CXXThrowExpr => self.throw_invalid(e),
+            ExprKind::CXXThrowExpr => self.throw_expr(e),
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
                 if !n.value_category().is_glvalue() =>
             {
@@ -3332,8 +3341,10 @@ impl Compiler<'_> {
     }
 
     fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
-        let src = self.ast().exprs.opaque_source(e)?;
-        self.opaque.get(&src).copied()
+        match self.ast().exprs.opaque_source(e) {
+            Some(src) => self.opaque.get(&src).copied(),
+            None => self.catch_object().map(Opaque::Lv),
+        }
     }
 
     fn lv_mem(&mut self, e: ExprId, acc: Access) -> u32 {
@@ -3654,7 +3665,7 @@ impl Compiler<'_> {
                 r
             }
             ExprKind::CXXThrowExpr => {
-                self.throw_invalid(e);
+                self.throw_expr(e);
                 Place::Mem(self.reg())
             }
             // A class prvalue used as a glvalue: materialize it, destroyed
@@ -4271,7 +4282,7 @@ impl Compiler<'_> {
             return;
         }
         match n.kind() {
-            ExprKind::CXXThrowExpr => self.throw_invalid(e),
+            ExprKind::CXXThrowExpr => self.throw_expr(e),
             ExprKind::StmtExpr => self.stmt_expr(e, None),
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);

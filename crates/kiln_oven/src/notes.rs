@@ -152,9 +152,25 @@ impl Oven {
             // function, at the member name.
             site.loc = ast.exprs.get(m).loc();
         }
+        if let Fault::Uncaught { obj, ty, what } = &fault {
+            // At the exception's throw, without a call stack (clang's
+            // `note_constexpr_uncaught_exception`; P3068).
+            let note = self.uncaught_note(ast, site.e, *obj, *ty, what.as_deref());
+            return vec![Note::new(site.loc, note)];
+        }
         let mut extra = Vec::new();
         let mut frame = None;
         let (loc, msg) = match fault {
+            Fault::Uncaught { .. } => (site.loc, String::new()),
+            Fault::NoexceptExit => (site.loc, "uncaught exception in noexcept function".into()),
+            Fault::RethrowNone => (site.loc, "rethrow with no active exception".into()),
+            Fault::ThrowWhileActive { prev } => {
+                extra.push(Note::new(
+                    self.site(prev as usize).loc,
+                    "currently active exception thrown here",
+                ));
+                (site.loc, "throw while another exception is already active".into())
+            }
             Fault::Trap(i) => {
                 let t = &self.traps[i as usize];
                 extra.extend(t.extra.iter().cloned());
@@ -803,6 +819,37 @@ impl Oven {
             },
             _ => s.push_str("<unknown>"),
         }
+    }
+
+    /// "uncaught exception of type 'T': 'V'": `V` the `what()` string of
+    /// a class derived from `std::exception`, else the exception
+    /// object's value.
+    /// The type is named as the throw-expression's operand's (as written,
+    /// `e` the throw-expression).
+    fn uncaught_note(
+        &self,
+        ast: &Ast,
+        e: Option<ExprId>,
+        obj: u64,
+        ty: OTy,
+        what: Option<&str>,
+    ) -> String {
+        let mut v = String::new();
+        match what {
+            Some(w) => v.push_str(w),
+            None if self.types.is_aggregate(ty) => self.write_value(ast, &mut v, ty, u128::from(obj), 0),
+            None => match self.load(obj, ty, ak::READ) {
+                Ok(x) => self.write_value(ast, &mut v, ty, x, 0),
+                Err(_) => v.push_str("<unknown>"),
+            },
+        }
+        let name = e
+            .filter(|&e| ast.exprs.get(e).kind() == ExprKind::CXXThrowExpr)
+            .and_then(|e| ast.exprs.throw_operand(e))
+            .map(|x| ast.exprs.get(x).ty())
+            .filter(|&q| ast.types.canonical(q).without_quals() == self.types.info(ty).q)
+            .map_or_else(|| self.tname(ast, ty), |q| Self::qname(ast, q.without_quals()));
+        format!("uncaught exception of type '{name}': '{v}'")
     }
 
     fn write_object(&self, ast: &Ast, s: &mut String, t: OTy, raw: u64, depth: u32) {
