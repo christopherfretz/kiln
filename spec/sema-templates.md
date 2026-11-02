@@ -996,6 +996,14 @@ errors.
 8. `Ast::end_instantiation()`, record the report entry (§11.3), and pop
    the frame.
 
+A member class completed on its own (`instantiate_member_class`) is
+substituted with the arguments of its nearest enclosing specialization.
+Every enclosing pattern class maps to its instantiation, up through
+that specialization and the classes around it
+(`inst_context_pairs`). So `view<V>::outer<C>::value_type` naming
+`inner<C>` (a sibling member template of `view`) finds
+`view<int>::inner` (WP-276).
+
 Any error during instantiation marks the specialization `invalid` (P7).
 Later uses of it are silent. As in clang's `InstantiateClass`, the class
 body's own failures do so too (`class_body_with`): a failed base

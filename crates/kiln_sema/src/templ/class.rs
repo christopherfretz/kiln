@@ -718,6 +718,12 @@ impl Sema<'_, '_> {
             }
             if let Some((_, a)) = self.spec_args(x) {
                 args = Some(a);
+                // The specialization and the classes enclosing it map
+                // too: a member class of a member template's
+                // specialization names a sibling member template of the
+                // outermost class (`view<V>::inner<C>` in
+                // `view<int>::outer<true>::value_type`).
+                outer.extend(self.inst_context_pairs(x));
                 break;
             }
             c = self.ast.decls.get(x).ctx();
