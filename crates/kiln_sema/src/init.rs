@@ -194,6 +194,7 @@ impl Sema<'_, '_> {
         temp_end: Option<Loc>,
         ctor_at: Loc,
     ) -> Option<ExprId> {
+        let param_note = self.list_param_note.take();
         if let Some(r) = self.ast.types.as_record(ty) {
             // Whether it is an aggregate needs its definition.
             self.instantiate_for_init(r, at);
@@ -254,6 +255,9 @@ impl Sema<'_, '_> {
         site.temp_end = temp_end;
         site.loc = ctor_at;
         site.sites.access = ctor_at;
+        if let Some(n) = param_note {
+            site.sites.deleted_as = DeletedAs::Param(n);
+        }
         self.construct_class(ty, &args, style, site)
     }
 
@@ -956,7 +960,7 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return self.perform_init(ty, Initializer::List(l.clone()), entity, false);
         }
-        if let Some(e) = self.class_element_list_init(ty, l, ctx, entity, param) {
+        if let Some(e) = self.class_element_list_init(ty, l, ctx, entity, param.clone()) {
             return e;
         }
         // Scalars only: a class (aggregate or not, complete or not yet
@@ -970,7 +974,20 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_braces_around_init, l.lbrace);
             self.emit(msg);
         }
-        self.init_from_list_at(ty, l, Some(entity))
+        // A non-aggregate class parameter is constructed from the list:
+        // the explicit or deleted constructor error of that call carries
+        // the parameter note (clang `PrintInitLocationNote`).
+        let ctor_param = param.is_some()
+            && self.ast.types.as_record(ty).is_some_and(|r| {
+                self.instantiate_for_init(r, l.lbrace);
+                !self.is_aggregate(ty)
+            });
+        if ctor_param {
+            self.list_param_note = param;
+        }
+        let e = self.init_from_list_at(ty, l, Some(entity));
+        self.list_param_note = None;
+        e
     }
 
     /// A value-initialized member with no initializer: a nested list for a

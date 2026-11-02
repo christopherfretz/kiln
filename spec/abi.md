@@ -95,6 +95,7 @@ form is `<arch>-unknown-linux-gnu`.
 | `long double` | x87 80-bit, 16/16 | IEEE quad, 16/16 |
 | `__float128` | 16/16 | — |
 | `__int128`, `_Float16`, `__bf16`, `__fp16` | 16/16, 2/2, 2/2, 2/2 | same |
+| `_Float32`, `_Float64`, `_Float128` (P1467) | 4/4, 8/8, 16/16 | same |
 | pointer, data member pointer | 8/8 | 8/8 |
 | member function pointer | 16/8 | 16/8 |
 | `max_align_t`, `aligned` (no argument) | 32/16, 16 | 32/16, 16 |
@@ -1044,12 +1045,55 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   division's operands to the next type with twice the exponent range,
   warning when none exists) is rejected with "unsupported argument";
   clang's `-Woverriding-option` warnings between complex-range flags are
-  not issued. `_Complex _Float16` is unsupported: kiln knows neither
-  `_Float16` nor `__bf16` ("unknown type name"; clang itself rejects
-  `_Complex __bf16` as invalid). `__float128` is not diagnosed on
+  not issued. `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`);
+  `_Complex __bf16` is rejected as clang rejects it, and `_Complex` of
+  `_Float32`, `_Float64` or `_Float128` is not tested (GCC 14 accepts it). `__float128` is not diagnosed on
   AArch64, where clang 19 rejects it ("__float128 is not supported on
   this target"; `Target::has_float128` is false there but unread): kiln
   accepts it as binary128.
+
+### 8.18 Landed (WP-361): P1467 extended floating-point types (WP-361)
+The C++23 extended floating-point types (spec/types.md §5.1) are
+classified, passed and laid out as their ABI twin
+(`BuiltinType::abi_twin`; `call.rs` `view`): `_Float32` as `float`,
+`_Float64` as `double`, `_Float128` as `__float128` (x86-64 SSE+SSEUP;
+AArch64 an IEEE quad in a Q register, the same as `long double`), while
+`_Float16` (`half`) and `__bf16` (`bfloat`) were already classified SSE /
+HFA members. Their LLVM types are `float`, `double`, `fp128`, `half`
+and `bfloat`, on both targets; a homogeneous aggregate of them is an
+AArch64 HFA as its twin's is.
+
+| type | x86-64 class | AArch64 | mangling |
+|---|---|---|---|
+| `_Float16` | SSE (`half`) | V reg / HFA | `DF16_` |
+| `__bf16` | SSE (`bfloat`) | V reg / HFA | `DF16b` (x86-64), `u6__bf16` (AArch64, not a substitution candidate, as clang) |
+| `_Float32` | SSE (`float`) | V reg / HFA | `DF32_` |
+| `_Float64` | SSE (`double`) | V reg / HFA | `DF64_` |
+| `_Float128` | SSE+SSEUP (`fp128`) | Q reg / HFA | `DF128_` |
+
+Deviation: on x86-64 a struct holding one `__float128` or `_Float128` is
+passed as the first-class aggregate `%struct.Q` where clang coerces it to
+`fp128`; the machine-level passing is the same. Tests:
+`tests/mangle/extended_fp.cpp`, `tests/codegen/bfloat16_arith.cpp`,
+`tests/conformance/basic.extended.fp/p1467-run.cpp` (calls on both CI
+targets).
+
+### 8.19 Landed (WP-363): module names
+
+`mangle.rs`, clang 22's `mangleModuleName`; the contract is
+spec/modules.md §7. A namespace-scope entity with linkage attached to a
+named module (`Ast::module_attachment`: in a purview and not in a linkage
+specification) gets `W<len><component>` per dotted name component before
+its unqualified name; namespaces, closures and internal-linkage entities
+get none, and partitions never appear. Each module-name prefix is a
+substitution candidate (`Sub::Module`). Module-attached variables are
+always mangled (never the plain C name), and a `const` variable attached to
+a named module has module linkage, not internal (P2788).
+`mangle_module_initializer` gives `_ZGI<module-name>[WP<partition>]`
+(not emitted yet). Tested differentially against clang by
+`crates/kiln_codegen/tests/mangle_vs_clang.rs` over
+`tests/mangle/modules.cpp` and `tests/mangle/module_partition.cpp`
+(target-neutral; no `check-x86_64` golden is needed).
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

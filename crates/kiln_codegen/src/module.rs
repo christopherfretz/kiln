@@ -361,6 +361,11 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         if !self.discardable_fn(d) {
+            // A definition from an imported module's purview belongs to
+            // that module's object file (spec/modules.md §7).
+            if ast.modules.is_imported_module_decl(d) {
+                return Ok(());
+            }
             return self.emit_fn_def(d);
         }
         if let Some(&f) = self.fns.get(&first) {
@@ -451,6 +456,9 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         if !self.discardable_var(d) || self.var_must_emit(d) {
+            if !self.discardable_var(d) && ast.modules.is_imported_module_decl(d) {
+                return Ok(());
+            }
             return self.emit_var_def(d);
         }
         self.note_deferred_init(first, d);

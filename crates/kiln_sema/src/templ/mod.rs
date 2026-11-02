@@ -170,6 +170,10 @@ pub struct TemplState {
     /// substitution-failure note of a later deduction that finds it
     /// memoized (§6.1 step 4).
     pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
+    /// Function template specializations whose explicit-specifier is
+    /// not substituted yet: deduction checks the associated constraints
+    /// first ([`Sema::get_function_spec_signature`], §6.1).
+    pub(crate) explicit_pending: kiln_source::fx::FxHashSet<DeclId>,
     /// The function parameters the last call deduction found
     /// non-dependent once its explicit template arguments were
     /// substituted, as a bit set by index (CWG1391: their conversions
@@ -213,8 +217,8 @@ pub struct TemplState {
     pub(crate) ctad_alias: kiln_source::fx::FxHashMap<DeclId, (DeclId, QualType)>,
     /// Each guide formed from a guide of a base class template whose
     /// constructors the class template inherits ([over.match.class.deduct]/1,
-    /// P2582): that class template and the base as written.
-    pub(crate) ctad_inherited: kiln_source::fx::FxHashMap<DeclId, (DeclId, QualType)>,
+    /// P2582), and each alias template guide formed from one.
+    pub(crate) ctad_inherited: kiln_source::fx::FxHashMap<DeclId, ctad::InheritedGuide>,
     /// The guide formed for (alias template or inheriting class template,
     /// source guide), if any.
     pub(crate) ctad_alias_cache: kiln_source::fx::FxHashMap<(DeclId, DeclId), Option<DeclId>>,

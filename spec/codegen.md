@@ -182,6 +182,18 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     tree and `fptrunc` the result once; a compound assignment computes in
     `float`. AArch64 operates on `half` directly. Complex `_Float16` is
     not promoted.
+  - `__bf16` (`bfloat`; P1467 `std::bfloat16_t`, WP-361) is evaluated
+    with excess precision on **both** targets, as clang 19/22
+    `shouldEmitBFloat16WithExcessPrecision` with the default
+    `-fbfloat16-excess-precision=standard`: the same `EmitPromoted`
+    shape as x86_64 `_Float16` (`Cg::f16_excess`), with one `fptrunc`
+    to `bfloat` at the end; comparisons compare `bfloat` operands
+    directly. An explicit `__bf16` ↔ `_Float16` conversion (P1467
+    [expr.static.cast]/11; clang has none) goes through `float`
+    (`fpext` then `fptrunc`), exact one way and singly rounded the
+    other. `_Float32`, `_Float64` and `_Float128` lower exactly as
+    `float`, `double` and `fp128` (`__float128`). Test:
+    `tests/codegen/bfloat16_arith.cpp`.
   - Constant operands of `half`, `bfloat`, `fp128` and `x86_fp80`
     arithmetic and casts fold as LLVM's `ConstantFolder` does, through
     `kiln_oven::apfloat` (the Oven's correctly rounded soft-float):
@@ -355,6 +367,16 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       the three is; each unsigned type one bit wider then), the
       intrinsic's flag is extracted before its value, and a narrower
       result is truncated, extended back and compared (`icmp ne`, `or`).
+      Deviation (WP-352): a signed `mul` whose encompassing width is
+      above 64 bits is not `llvm.smul.with.overflow` (LLVM lowers that to
+      compiler-rt's `__muloti4`, which libgcc, linked by the GNU driver,
+      lacks on aarch64) but its inline expansion: each operand's sign
+      (`slt 0`) and magnitude (`select` of `sub 0, x` and `x`), `umul`
+      of the magnitudes, `neg = xor` of the signs, overflow `uo or
+      (ur ugt INT_MAX + zext neg)`, value `select neg, (sub 0, ur), ur`
+      (`checked.rs` `wide_signed_mul`; `crates/kiln_codegen/tests/lower.rs`
+      `wide_signed_mul_overflow_is_inline`,
+      `tests/conformance/ext.gnu.builtins/overflow-i128-smul-run.cpp`).
       The value is stored through `EmitToMemory` (an `i1` widened),
       volatile per the pointee. A `select` whose arms are not both
       constants is not folded (IRBuilder `FoldSelect`). The calls are not

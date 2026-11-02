@@ -150,6 +150,23 @@ impl Sema<'_, '_> {
         {
             return r.ok();
         }
+        // `D::X::` with `D` the current instantiation, a dependent base
+        // and nothing named `X` found in it: a member of an unknown
+        // specialization ([temp.dep.type]/6), looked up again at
+        // instantiation (`using G::F::F;`, [over.match.class.deduct]/1's
+        // example).
+        if let Some((p, pn)) = prefix
+            && self.kind_of(p) == DeclKind::CXXRecord
+            && self.has_dependent_bases(p)
+            && self.lookup_qualified(p, name, LookupKind::Nested).decls.is_empty()
+            && self.lookup_qualified(p, name, LookupKind::Ordinary).decls.is_empty()
+            && let Some(un) =
+                self.unknown_specialization_nns(crate::using::Qualifier { ctx: p, nns: pn, loc })
+        {
+            let n = self.ast.types.nns(Nns::Identifier { prefix: Some(un), name });
+            self.note_written_loc(WrittenKey::Nns(n), loc);
+            return Some((self.decltype_scope_marker(), n));
+        }
         let (ctx, spelled) = self.act_on_nested_name_spelled(prefix.map(|p| p.0), name, loc)?;
         let n = self.nns_component(prefix.map(|p| p.1), ctx, spelled);
         if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
@@ -587,6 +604,78 @@ impl Sema<'_, '_> {
         let decls: Vec<DeclId> = found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
         let list = self.ast.types.arg_list(args);
         self.builder().unresolved_lookup(DeclName::ident(name), &decls, true, None, Some(list), loc)
+    }
+
+    /// Whether the operator-function-id `name`, optionally qualified by
+    /// the non-dependent `qualifier`, followed by `<` starts a
+    /// template-id ([temp.names]/3): lookup finds a function template;
+    /// unqualified, also when it finds nothing or only functions (P0846).
+    pub fn operator_names_template(&mut self, name: DeclName, qualifier: Option<DeclId>) -> bool {
+        match qualifier {
+            Some(q) => self.declare_implicit_named(q, name),
+            None => self.declare_implicit_named_in_scope(name),
+        }
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
+            None => self.lookup_name_dn(name, LookupKind::Ordinary),
+        };
+        let kinds: Vec<DeclKind> =
+            found.decls.iter().map(|&d| self.kind_of(self.ast.strip_shadow(d))).collect();
+        kinds.contains(&DeclKind::FunctionTemplate)
+            || (qualifier.is_none() && kinds.iter().all(|&k| k == DeclKind::Function))
+    }
+
+    /// `operator@ < args >`, optionally qualified by the non-dependent
+    /// `qualifier` ([temp.names]/1: an operator-function-id is a
+    /// template-name when it names a function template; `operator()<T>()`
+    /// in a member function, `Q::operator()<T>()`): an
+    /// `UnresolvedLookupExpr` over the functions lookup finds, completed
+    /// by the call as for `f<T>`. Unqualified and `call`ed, a name lookup
+    /// finds nothing or only non-member functions for is assumed to be a
+    /// template, completed by argument-dependent lookup ([temp.names]/3,
+    /// P0846: `operator+<7>(a, b)`). Diagnoses a name that finds no
+    /// function template otherwise.
+    pub fn act_on_operator_template_id(
+        &mut self,
+        name: DeclName,
+        args: &[TemplateArg],
+        loc: Loc,
+        qualifier: Option<DeclId>,
+        call: bool,
+    ) -> ExprId {
+        match qualifier {
+            Some(q) => self.declare_implicit_named(q, name),
+            None => self.declare_implicit_named_in_scope(name),
+        }
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
+            None => self.lookup_name_dn(name, LookupKind::Ordinary),
+        };
+        let decls: Vec<DeclId> = found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
+        let functions = decls.iter().all(|&d| {
+            matches!(
+                self.kind_of(d),
+                DeclKind::FunctionTemplate | DeclKind::Function | DeclKind::CXXMethod
+            )
+        });
+        let list = self.ast.types.arg_list(args);
+        if qualifier.is_none()
+            && call
+            && decls.iter().all(|&d| self.kind_of(d) == DeclKind::Function)
+        {
+            return self.builder().unresolved_lookup(name, &decls, true, None, Some(list), loc);
+        }
+        if decls.is_empty() && qualifier.is_none() {
+            let msg = self.diag(Self::undeclared_use_id(name), loc).arg(self.decl_name_str(name));
+            self.emit(msg);
+            return self.act_on_error_expr(&[], loc);
+        }
+        if !functions || !decls.iter().any(|&d| self.kind_of(d) == DeclKind::FunctionTemplate) {
+            let msg = self.diag(DiagId::sema_no_template_named, loc).arg(self.decl_name_str(name));
+            self.emit(msg);
+            return self.act_on_error_expr(&[], loc);
+        }
+        self.builder().unresolved_lookup(name, &decls, false, None, Some(list), loc)
     }
 
     /// The qualified function or variable template-id `e` named at `loc`
@@ -1128,7 +1217,36 @@ impl Sema<'_, '_> {
             self.error(DiagId::parse_expected_name_of_pack, self.begin_loc(pattern));
             return self.recover_err(&[pattern, index], ellipsis);
         }
+        if !self.pack_index_may_be_constant(index) {
+            // Without the pattern: an error naming no pack.
+            return self.recover_err(&[index], ellipsis);
+        }
         self.builder().pack_indexing_expr(pattern, index, rsquare)
+    }
+
+    /// [expr.prim.pack.index]/1: an index that is not value-dependent is
+    /// checked as a constant expression when the pack index is formed
+    /// (clang's array-size converted constant expression check, "array
+    /// size is not a constant expression"), before the pack's length is
+    /// known. False after that diagnostic. A type pack index
+    /// ([dcl.type.pack.index]) is checked only at instantiation, as clang.
+    fn pack_index_may_be_constant(&mut self, index: ExprId) -> bool {
+        if !self.in_template() || self.expr_is_value_dependent(index) {
+            return true;
+        }
+        let at = self.begin_loc(index);
+        let c = crate::conv::decay(self, index);
+        let c = self.act_on_full_expr(c);
+        let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, at);
+        match self.eval_int(c, ctx) {
+            Ok(_) => true,
+            Err(f) => {
+                let d = self.diag(DiagId::sema_expr_not_cce, at).arg("array size");
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                false
+            }
+        }
     }
 
     /// `T...[index]` as a type (C++26 [dcl.type.pack.index]).

@@ -92,6 +92,7 @@ starting with `-` are inputs.
 | `-g`, `-g0`..`-g3`, `-ggdb`, `-ggdb0`..`-ggdb3` | accepted and ignored (no debug info yet) |
 | `-l<lib>`, `-L<dir>`, `-Wl,<args>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD`, `-dI` | parsed; "not implemented yet" (WP-017) |
+| `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
 
 ## Driver modes
 
@@ -193,7 +194,10 @@ The `<built-in>` buffer is `kiln_pp::build_predefines(base, cfg, -D/-U)`.
   - freestanding;
   - `-pthread`;
   - thread-safe statics;
-  - sized deallocation.
+  - sized deallocation;
+  - `-stdlib=libc++`: no `__STDCPP_FLOAT16_T__` ... `__STDCPP_BFLOAT16_T__`
+    (`std_float_aliases`; libc++ has no `<stdfloat>`, spec/pp.md P1467
+    macros).
 - kiln adds `__KILN__ 1`, `__KILN_MAJOR__` and `__KILN_MINOR__`. kiln
   defines `__clang__` and the clang version macros exactly as clang 19 does,
   so headers take their clang paths.
@@ -405,6 +409,36 @@ the current directory (standard input is `-`). `-o -` is standard output.
 
 Not implemented: `-MD`/`-MMD` when compiling ("not implemented yet"),
 `-###` with `-E` or `-fsyntax-only` (likewise), and debug information.
+
+## Modules
+
+C++20 modules are enabled for `-fsyntax-only` and code generation from
+`-std=c++20` on; `-E` and `-M*` print module and import directives as text
+(spec/modules.md §2). There is no binary module interface: an imported
+module is built in-process from its interface source, so the flags name
+sources, not BMIs. A module (or partition `M:P`) is looked up in this
+order:
+
+1. `-fmodule-file=<name>=<path>` (repeatable; the first one naming the
+   module wins). The path is used as given (relative to the working
+   directory).
+2. `-fprebuilt-module-path=<dir>` (repeatable, in order): `<dir>/<name>.cppm`,
+   `.ixx`, then `.cpp`; a partition `M:P` as `<dir>/M-P.*`.
+3. `std` and `std.compat` only: `<llvm>/share/libc++/v1/std.cppm` /
+   `std.compat.cppm`, where `<llvm>` is the toolchain's LLVM directory
+   (`KILN_LLVM_DIR`, default `/usr/lib/llvm-19`; clang 22's libc++ has the
+   same layout).
+
+A module not found is `fatal error: module 'M' not found` at the module
+name. Header units (`import "h";`, `import <h>;`) are found like
+`#include` and need no flag.
+
+To link a program, every module unit whose non-inline definitions are used
+is also compiled as an input of the same command (or separately with
+`-c`): `kiln++ -std=c++20 -fmodule-file=m=m.cppm m.cppm main.cpp`. An
+importer emits only declarations for the non-inline functions and
+variables of the units it imports. `--precompile`, `-fmodule-output` and
+`-fmodule-header` are not supported (part B, spec/modules.md §9).
 
 ## Dependency output
 

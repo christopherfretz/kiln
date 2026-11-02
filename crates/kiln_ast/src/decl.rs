@@ -4364,6 +4364,43 @@ pub mod builtin {
     /// `__builtin_truncf128`.
     pub const TRUNCF128: u32 = 1339;
 
+    // ---- WP-361: the P1467 `_FloatN` builtins libstdc++'s `<limits>`
+    // names (GCC's; clang 19 has only the `f16` ones). kiln-private ids
+    // above clang's range; each evaluates and lowers as its `float` /
+    // `double` / `long double` twin ([`f128_twin`]), driven by the result
+    // type.
+    /// `__builtin_huge_valf16`.
+    pub const HUGE_VALF16: u32 = 2000;
+    /// `__builtin_inff16`.
+    pub const INFF16: u32 = 2001;
+    /// `__builtin_nanf16`.
+    pub const NANF16: u32 = 2002;
+    /// `__builtin_nansf16`.
+    pub const NANSF16: u32 = 2003;
+    /// `__builtin_huge_valf32`.
+    pub const HUGE_VALF32: u32 = 2004;
+    /// `__builtin_inff32`.
+    pub const INFF32: u32 = 2005;
+    /// `__builtin_nanf32`.
+    pub const NANF32: u32 = 2006;
+    /// `__builtin_nansf32`.
+    pub const NANSF32: u32 = 2007;
+    /// `__builtin_huge_valf64`.
+    pub const HUGE_VALF64: u32 = 2008;
+    /// `__builtin_inff64`.
+    pub const INFF64: u32 = 2009;
+    /// `__builtin_nanf64`.
+    pub const NANF64: u32 = 2010;
+    /// `__builtin_nansf64`.
+    pub const NANSF64: u32 = 2011;
+    /// `__builtin_nansf16b` (GCC; `__bf16`).
+    pub const NANSF16B: u32 = 2012;
+    /// `__builtin_nextafterf16` (GCC; named in an `if consteval` branch
+    /// of libstdc++'s `<cmath>`; not a constant expression in kiln).
+    pub const NEXTAFTERF16: u32 = 2013;
+    /// `__builtin_nextafterf16b` (GCC; as [`NEXTAFTERF16`]).
+    pub const NEXTAFTERF16B: u32 = 2014;
+
     /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
     /// out.
     pub const EXTRA: &[Info] = &[
@@ -4451,10 +4488,40 @@ pub mod builtin {
         row(TRUNCF128, "__builtin_truncf128", "LLdLLd", N | C),
     ];
 
+    /// WP-361: the P1467 `_Float16` (`x`), `_Float32` (kiln `k`),
+    /// `_Float64` (kiln `K`) and `__bf16` (`y`) forms of the builtins
+    /// libstdc++ names.
+    pub const FLOATN: &[Info] = &[
+        row(HUGE_VALF16, "__builtin_huge_valf16", "x", N | C),
+        row(INFF16, "__builtin_inff16", "x", N | C),
+        row(NANF16, "__builtin_nanf16", "xcC*", N | P),
+        row(NANSF16, "__builtin_nansf16", "xcC*", N | P),
+        row(HUGE_VALF32, "__builtin_huge_valf32", "k", N | C),
+        row(INFF32, "__builtin_inff32", "k", N | C),
+        row(NANF32, "__builtin_nanf32", "kcC*", N | P),
+        row(NANSF32, "__builtin_nansf32", "kcC*", N | P),
+        row(HUGE_VALF64, "__builtin_huge_valf64", "K", N | C),
+        row(INFF64, "__builtin_inff64", "K", N | C),
+        row(NANF64, "__builtin_nanf64", "KcC*", N | P),
+        row(NANSF64, "__builtin_nansf64", "KcC*", N | P),
+        row(NANSF16B, "__builtin_nansf16b", "ycC*", N | P),
+        row(NEXTAFTERF16, "__builtin_nextafterf16", "xxx", N),
+        row(NEXTAFTERF16B, "__builtin_nextafterf16b", "yyy", N),
+    ];
+
     /// The `long double` builtin a [`F128`] builtin is lowered and
-    /// evaluated as, if any.
+    /// evaluated as, if any; also the
+    /// `float` / `double` twin of a [`FLOATN`] builtin.
     pub fn f128_twin(id: u32) -> Option<u32> {
         Some(match id {
+            HUGE_VALF16 | HUGE_VALF32 => HUGE_VALF,
+            INFF16 | INFF32 => INFF,
+            NANF16 | NANF32 => NANF,
+            NANSF16 | NANSF32 | NANSF16B => NANSF,
+            HUGE_VALF64 => HUGE_VAL,
+            INFF64 => INF,
+            NANF64 => NAN,
+            NANSF64 => NANS,
             CEILF128 => CEILL,
             COPYSIGNF128 => COPYSIGNL,
             FABSF128 => FABSL,
@@ -4491,6 +4558,7 @@ pub mod builtin {
             .chain(CHECKED)
             .chain(EXTRA)
             .chain(F128)
+            .chain(FLOATN)
             .find(|e| e.name == name)
             .map(|e| e.id)
     }
@@ -4505,6 +4573,7 @@ pub mod builtin {
             .chain(CHECKED)
             .chain(EXTRA)
             .chain(F128)
+            .chain(FLOATN)
             .find(|e| e.id == id)
     }
 

@@ -30,7 +30,16 @@ impl Sema<'_, '_> {
         nns: Option<kiln_ast::NnsId>,
         loc: Loc,
     ) -> ExprId {
-        let e = self.builder().unresolved_lookup(name, decls, adl, nns, None, loc);
+        // [temp.dep.expr]/3: a set with a function of dependent type (a
+        // static member `key(const node<K>*)` of a class template beside
+        // `key(const nb*)`, libstdc++ `_Rb_tree::_S_key`) is type-dependent,
+        // and the call is resolved at instantiation (clang's
+        // `OverloadExpr` of decls in a dependent context; WP-366).
+        let dependent = decls.iter().any(|&d| {
+            self.kind_of(d) != DeclKind::FunctionTemplate
+                && self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_dependent(t))
+        });
+        let e = self.builder().unresolved_lookup_in(name, decls, adl, nns, None, dependent, loc);
         if naming.is_some() || found.iter().zip(decls).any(|(f, d)| f != d) {
             self.ovl.ule_found.insert(e, UleFound { found: found.to_vec(), naming });
         }
@@ -384,7 +393,17 @@ impl Sema<'_, '_> {
         if instance {
             // A non-static member without an object: `&C::f`, or "call to
             // non-static member function without an object argument".
-            return self.implicit_member_ref(d, loc, shadow, nns);
+            let e = self.implicit_member_ref(d, loc, shadow, nns);
+            // The explicit template arguments written on the name
+            // (`pick<X>()` through an implicit `this`) stay on the access,
+            // so an instantiation names the specialization again with
+            // them ([temp.arg.explicit]/1).
+            if let Some(targs) = self.ast.templates.expr_targs.get(ule).copied()
+                && self.ast.exprs.get(e).kind() == ExprKind::MemberExpr
+            {
+                let _ = self.ast.exprs.set_member_template_args(e, targs);
+            }
+            return e;
         }
         // The only candidate's constraints first ([expr.prim.id.general]/4,
         // clang `DiagnoseUseOfDecl` before `BuildDeclRefExpr`): a function

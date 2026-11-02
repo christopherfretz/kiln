@@ -194,6 +194,10 @@ impl Sema<'_, '_> {
             }
             TypeSpecKind::Float128 => QualType::FLOAT128,
             TypeSpecKind::Float16 => QualType::FLOAT16,
+            TypeSpecKind::Float32 => QualType::FLOAT32,
+            TypeSpecKind::Float64 => QualType::FLOAT64,
+            TypeSpecKind::StdFloat128 => QualType::STD_FLOAT128,
+            TypeSpecKind::BFloat16 => QualType::BFLOAT16,
             TypeSpecKind::Fp16 => QualType::HALF,
             // [dcl.type.auto.deduct]/4 (clang
             // `err_decltype_auto_cannot_be_combined`).
@@ -253,6 +257,9 @@ impl Sema<'_, '_> {
                 | TypeSpecKind::Double
                 | TypeSpecKind::Float128
                 | TypeSpecKind::Float16
+                | TypeSpecKind::Float32
+                | TypeSpecKind::Float64
+                | TypeSpecKind::StdFloat128
         );
         if !ok {
             if !ds.invalid && !self.is_error_type(base) {
@@ -4347,6 +4354,18 @@ impl Sema<'_, '_> {
     /// The initializer of variable `v` ([dcl.init]). Its syntax
     /// ([`Declarator::init_style`]) was recorded when `v` was declared.
     pub fn act_on_init(&mut self, v: DeclId, init: Initializer) {
+        let (es, at) = match &init {
+            Initializer::Expr(e) => (vec![*e], None),
+            Initializer::Paren(es, l, _) => (es.clone(), Some(*l)),
+            Initializer::List(l) => (Self::list_exprs(l), Some(l.lbrace)),
+        };
+        // [temp.variadic]/12: "initializer contains unexpanded parameter
+        // pack", at the `(`/`{` of a parenthesized or braced initializer
+        // (clang's ParenListExpr/InitListExpr); the variable becomes
+        // invalid (its initializer dropped).
+        if es.iter().any(|&e| self.diagnose_unexpanded_written(e, "initializer", at)) {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
         self.act_on_init_inner(v, init);
         self.check_constinit(v);
         self.initializing = None;
@@ -5254,12 +5273,21 @@ impl Sema<'_, '_> {
     }
 
     /// True if lexical context `cur` is, or is nested in, a class template
-    /// or partial specialization before any namespace scope.
+    /// or partial specialization before any namespace scope. (A partial
+    /// specialization is a `CXXRecord` with partial-specialization info:
+    /// libstdc++'s `_Node_handle<_Value, _Value, _NodeAlloc>` befriends
+    /// `_Rb_tree` before its definition, and that friend must not spell
+    /// the injected-class-name, WP-366.)
     pub(crate) fn in_templated_class(&self, mut cur: Option<DeclId>) -> bool {
         while let Some(c) = cur {
             match self.kind_of(c) {
                 DeclKind::ClassTemplatePartialSpecialization => return true,
-                DeclKind::CXXRecord if self.ast.described_template(c).is_some() => return true,
+                DeclKind::CXXRecord
+                    if self.ast.described_template(c).is_some()
+                        || self.ast.partial_spec_info(c).is_some() =>
+                {
+                    return true;
+                }
                 DeclKind::TranslationUnit | DeclKind::Namespace => return false,
                 _ => {}
             }
@@ -5899,6 +5927,11 @@ impl Sema<'_, '_> {
         if self.has_pending_head() {
             return self.act_on_friend_class_template(keyword, n, nloc, ns);
         }
+        // [temp.local]/6: `friend class T;` naming a template parameter
+        // redeclares it (clang's `DiagnoseTemplateParameterShadow` in
+        // `ActOnTag`); the friend then declares a new class `T`, so
+        // `friend class Ts...;` expands no pack.
+        self.check_template_param_shadow(n, nloc);
         let found = self.lookup_name(n, LookupKind::Tag).decls;
         let hidden = || {
             self.ast

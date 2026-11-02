@@ -164,7 +164,7 @@ A keyword must not directly follow a letter, a digit or `_`.
 | `ADDITIONAL_COMPILE_FLAGS: f…` | Whitespace-split. Appended to the compile line in file order. |
 | `ADDITIONAL_COMPILE_FLAGS(<feature>): f…` | Appended after the plain flags when `<feature>` is exactly in the feature set. |
 | `FILE_DEPENDENCIES: a, b` | Each file, relative to the test's directory, is copied into the scratch directory. A missing file, a glob or a `%{…}` makes the test UNSUPPORTED (`driver: FILE_DEPENDENCIES`). |
-| `MODULE_DEPENDENCIES:` | UNSUPPORTED (`driver: modules`). |
+| `MODULE_DEPENDENCIES:` | `std` and `std.compat` need nothing: kiln builds them in-process from libc++'s module sources (spec/modules.md §2). Any other module makes the test UNSUPPORTED (`driver: modules`). |
 | `ALLOW_RETRIES: N` | A failing run step is retried up to `N` more times (see "Timeouts and retries"). `N` must be an integer, and the keyword may appear once; otherwise the test is an ERROR (lit's `ParserKind.INTEGER`). |
 | any `RUN:` | UNSUPPORTED (`driver: RUN lines`). Custom scripts are not interpreted. |
 
@@ -201,8 +201,8 @@ ERROR.
 
 ## Feature set
 
-The feature set is static except for the `locale.*` features, which are
-detected (below). It describes the configuration below and is defined in
+The feature set is the static list below plus what is derived from the
+toolchain the run uses (**Derived**, **Locales**). It is defined in
 `xtask/src/libcxx/features.rs`. There is no compiler-identity
 feature (`clang`, `gcc`, `clang-19`, `apple-clang`), so tests that XFAIL or
 skip one particular compiler run normally under kiln. `kiln` itself is in
@@ -216,10 +216,35 @@ accepts (`depr.numeric.limits.has.denorm/deprecated.verify.cpp` needs its
 `c++26`, `c++experimental`, `large_tests`, `long_tests`,
 `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`,
 `-fsized-deallocation`, `gcc-style-warnings`, `has-fconstexpr-steps`, `verify-support`,
-`libcpp-abi-version=1`, `libcpp-hardening-mode=none`,
-`libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`,
+`libcpp-has-thread-api-pthread`,
 `buildhost=linux`, `linux`, `can-create-symlinks`, `has-64-bit-atomics`,
 `has-unix-headers`, `kiln`, `target=aarch64-unknown-linux-gnu`.
+
+What stays static, and why: the parameters (lit's `params.py` defaults);
+compiler-flag probes, which are kiln's answers and change only with kiln;
+snippet-compiling target probes (`has-unix-headers`, `has-64-bit-atomics`),
+taken as clang 19 sees this machine so the set does not move with kiln;
+`libcpp-has-thread-api-pthread`, which `__config` computes from the target
+rather than `__config_site` setting it; and the target triple and host
+features, which would need a probe of the compiler's default target.
+
+**Derived.** `features::detect` reads the libc++ headers of `KILN_ORACLE`
+(`/usr/lib/llvm-N/include/c++/v1`, `spec/harness.md` "Oracle toolchain"):
+- `__config_site` macros, as lit's `features.py` `macros` table maps
+  them: `libcpp-abi-version=<n>` from `_LIBCPP_ABI_VERSION`;
+  `libcpp-hardening-mode=<mode>` from `_LIBCPP_HARDENING_MODE_DEFAULT`
+  (below); and `no-filesystem`, `no-localization`, `no-monotonic-clock`,
+  `no-random-device`, `no-threads`, `no-tzdb`, `no-wide-characters`,
+  `libcpp-has-no-unicode` and `libcpp-has-no-availability-markup` when
+  libc++ 19's `_LIBCPP_HAS_NO_<X>` is defined or libc++ ≥ 20's
+  `_LIBCPP_HAS_<X>` is defined to `0`. Debian's libc++ 19 gives exactly
+  `libcpp-abi-version=1`, `libcpp-hardening-mode=none` and
+  `libcpp-has-no-availability-markup`;
+- `has-no-zdump` when `zdump --version` fails, as in `features.py` (the
+  tzdata validation tests compare against `zdump`);
+- the libc++ version, `_LIBCPP_VERSION` in `__config`
+  (`features::libcxx_version`). lit has no feature for it; the harness
+  uses it to gate the `TZDATA_Z_UNSUPPORTED` exclusion (below).
 
 **Locales.** `locale.<name>` is in the set when `locale -a` lists the
 locale, for the seven names libc++'s `features.py` knows: `cs_CZ.ISO8859-2`,
@@ -243,19 +268,21 @@ Some features are deliberately missing:
 - no `has-1024-bit-atomics`;
 - no `add-latomic-workaround`;
 - no `host-has-gdb`;
-- only `libcpp-hardening-mode=none`, never `fast`, `extensive` or `debug`.
-  lit adds the feature only when its `hardening_mode` parameter is set, and
-  that parameter defaults to undefined. The set includes it anyway because
-  it describes the library that is actually installed: Debian's
-  `__config_site` defines `_LIBCPP_HARDENING_MODE_DEFAULT` as
-  `_LIBCPP_HARDENING_MODE_NONE`. `.assert.pass.cpp` death tests are gated
+- `libcpp-hardening-mode=<mode>` is the installed library's default, not a
+  parameter. lit adds the feature only when its `hardening_mode` parameter
+  is set, and that parameter defaults to undefined. The set includes it
+  anyway because it describes the library that is actually installed:
+  Debian's `__config_site` defines `_LIBCPP_HARDENING_MODE_DEFAULT` as `2`,
+  `_LIBCPP_HARDENING_MODE_NONE` (`1 << 1`; `1 << 2` is `fast`, `1 << 4`
+  `extensive`, `1 << 3` `debug`). `.assert.pass.cpp` death tests are gated
   with `UNSUPPORTED: libcpp-hardening-mode=none` and are skipped, as lit
   would skip them on this library. They cannot pass here under any compiler
   (clang++-19 reports "child did not die" too). `REQUIRES:
   libcpp-hardening-mode=debug` tests stay UNSUPPORTED;
 - no `-fexperimental-library`, `-faligned-allocation` or other flag-probe
   features that kiln does not implement;
-- no `no-*` features: everything libc++ can build is enabled.
+- no `no-*` features with Debian's libc++: everything libc++ can build is
+  enabled (they are derived, above).
 
 The target triple is fixed. The table must be revised on any other host.
 
@@ -278,16 +305,14 @@ also in `--list`), only while the condition holds:
   and `create_directory(p, attrs)` cannot copy the attributes
   (`HOST_FS_UNSUPPORTED`: `fs.op.hard_lk_ct/hard_link_count.pass.cpp`,
   `fs.op.create_directory/create_directory_with_attributes.pass.cpp`).
-- an aarch64 host (`COMPILER_RT_UNSUPPORTED`: `numeric.ops.sat/mul_sat.pass.cpp`):
-  LLVM lowers the signed 128-bit `__builtin_mul_overflow` to a `__muloti4`
-  libcall that only compiler-rt's builtins define, and the GNU link line
-  (clang's and kiln's) links libgcc, which has none; the link fails. x86_64
-  expands the multiply inline.
 - the system tzdata (`/usr/share/zoneinfo/tzdata.zi`, first line
-  `# version YYYYx`) at 2024b or later (`TZDATA_Z_UNSUPPORTED`:
-  `time.zone.members/sys_info.zdump.pass.cpp`): `tzdata.zi` spells numeric
-  abbreviations `%z`, which libc++ 19's tzdb parser keeps verbatim, so
-  `sys_info::abbrev` differs from `zdump`'s.
+  `# version YYYYx`) at 2024b or later, with libc++ older than 20
+  (`TZDATA_Z_UNSUPPORTED`: `time.zone.members/sys_info.zdump.pass.cpp`):
+  `tzdata.zi` spells numeric abbreviations `%z`, which libc++ 19's tzdb
+  parser keeps verbatim, so `sys_info::abbrev` differs from `zdump`'s.
+  libc++ 20 expands `%z`, so the exclusion is dropped automatically when
+  the headers' `_LIBCPP_VERSION` (**Derived**) is 200000 or more (an
+  unreadable version counts as older).
 - glibc's `en_US.UTF-8` groups digits by `3` only (`LC_ALL=en_US.UTF-8
   locale -k grouping` prints exactly `grouping=3`; glibc 2.41 in the
   agent containers), reason `env: glibc en_US.UTF-8 grouping is 3, the
@@ -402,7 +427,20 @@ where hand-written analysis goes. A file without markers gets the region
 appended. The region contains:
 - **Run**: kiln version and commit, tests tag, `_LIBCPP_VERSION`, target,
   command, compile and link flags, features, limits, wall time, and peak RSS
-  (the largest single-process peak, via GNU time, with its test).
+  (the largest single-process peak, via GNU time, with its test; see
+  **Peak RSS** below).
+- **Peak RSS** is over every step of a test, the test binary's run
+  included, so it does not by itself measure kiln. The `REQUIRES:
+  large_tests` tests allocate gigabytes at run time:
+  `stringstream.members/gcount.pass.cpp` (and the `tellp` tests of the same
+  shape) builds a `std::string` of `INT_MAX - 1` characters and writes it
+  into a `std::stringstream`, whose buffer grows past 4 GiB; its run step
+  peaks at 5122 MiB, while kiln's compile of it peaks at about 70 MiB
+  (WP-369; a clang++-19 build of a scaled-down payload peaks within 0.1%
+  of kiln's build). Such a peak is the library test's own, not a breach
+  of the per-process memory budget of kiln.
+  `tests/conformance/stringbuf.virtuals/libcxx-intmax-payload-compile-mem.cpp`
+  keeps the compile of that shape under `mem<=1024`.
 - **Results by directory**: one row per `<dir>`, plus a total. Columns are
   total, pass, fail, xfail, xpass, unsupported (with the driver share),
   killed, timeout, error, and pass rate. Pass rate is PASS / (total −
@@ -493,8 +531,8 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   means kiln's diagnostic differs from clang 19's, not that the library is
   rejected. Whether kiln should match clang's diagnostic text for all of
   these, or only for the ones a test pins, is open.
-- **Static features.** Apart from the locales, the feature set is
-  hand-maintained for one host.
+- **Static features.** Apart from the derived features, the set is
+  hand-maintained for one host (see "What stays static").
   lit derives it by probing the compiler (`features.py`). Probing kiln
   would make the set honest for flags kiln does not implement yet.
 - **Compiler-identity XFAILs.** With no `clang` feature,

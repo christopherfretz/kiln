@@ -38,6 +38,7 @@ use crate::Sema;
 use crate::overload::ics::IcsOptions;
 
 pub use apply::apply_standard_conversion;
+pub(crate) use apply::fp_rank_check;
 pub use arith::{ArithConvKind, usual_arithmetic_conversions_kind};
 pub use bases::{BasePath, BaseSearch, find_base, is_derived_from, path_list};
 pub use narrow::{Narrowing, narrowing_diag, narrowing_kind};

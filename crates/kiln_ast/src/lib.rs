@@ -24,6 +24,7 @@ pub mod lambda;
 pub mod lists;
 pub mod lookup;
 pub mod mem;
+pub mod modules;
 pub mod names;
 pub mod redecl;
 pub mod reflect;

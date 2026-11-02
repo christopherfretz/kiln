@@ -919,6 +919,21 @@ those diagnostics were errors.
 - The problem count is the number of entries, plus one for "no expected
   directives found".
 
+### 11.7 Module diagnostics (WP-363)
+
+The C++20 modules diagnostics follow clang 22's wording and locations,
+not clang 19's (spec/modules.md §4 lists them by rule). The ids live in
+the usual area tables: `pp_module_cycle`, `pp_module_expected_name`,
+`pp_module_expected_semi`, `pp_module_not_found` (fatal, at the module
+name) in `ids/pp.rs`; `sema_module_*` (preamble order, export placement and
+linkage, imports, private fragment, `sema_module_redecl_attachment`) in
+`ids/sema_e_m.rs`; `note_module_*` in `ids/note_m_z.rs`. Preamble errors
+are reported at the `module` keyword, unnamed-namespace errors at the
+namespace's `{`, and `export block begins here` is attached only for an
+`export { ... }` block, as clang 22 does. Where clang 19 words a module
+diagnostic differently (`... within a module purview`), the corpus test is
+`requires: clang>=22`.
+
 ## 12. Deviations from clang 19
 
 | # | Deviation | Why |
@@ -938,6 +953,7 @@ those diagnostics were errors.
 | D13 | *(Resolved by WP-183: `#pragma clang diagnostic` state, §5.5.)* | |
 | D14 | `-verify` sees identical diagnostics at one location once (§7.4), so a test needing two of them with two directives fails under kiln (harness tests encode the known cases with `dup(clang)`, §7.4.1). | Engine deduplication; no libc++ test is known to depend on it. |
 | D15 | A `-verify` report lists at most 10000 missing occurrences per level (§11.5). | Bounds the output of a count like `4000000000`. |
+| D16 | P1467 extended floating-point diagnostics (WP-361) have no clang 19/22 counterpart; their texts follow GCC 14, adapted to kiln's style. `sema_fp_conversion_rank` (ExtWarn, group `float-conversion-rank`, a kiln-only name inside the `narrowing` umbrella; GCC: `-Wnarrowing`/`-Wpedantic`): "ISO C++ does not allow converting to {0} from {1} with {2:greater\|unordered} conversion rank", GCC's words, both types unqualified. `sema_arith_float_unordered` (Error): "invalid {arithmetic between\|bitwise operation between\|comparison of\|conditional expression between\|compound assignment to} floating-point types {1} and {2} with unordered conversion ranks", where GCC 14 says "invalid operands to binary + (have 'float' and 'float')" (its excess-precision types), "invalid operands to binary < (have '_Float16' and '__bf16')" and, for `?:`, "operands to '?:' of types '_Float16' and '__bf16' have unordered conversion rank". `lit_float_suffix_ext` (Extension, `c++23-extensions`): "'{0}' suffix on a floating literal is a C++23 extension"; GCC 14 accepts the suffixes silently before C++23. Tests: `tests/conformance/basic.extended.fp/p1467-conversions.cpp`, `p1467-suffix-ext.cpp`. | GCC 14 is the only reference implementation; spec/sema-conv.md §4, §9.13. |
 
 ## 13. Integration notes and open questions
 

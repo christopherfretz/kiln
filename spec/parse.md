@@ -421,7 +421,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `thread_local` with the combined name when both appear: `'static
   thread_local'`), and both are dropped, so the friend declaration goes
   on (`reject_friend_storage`, WP-293;
-  `class.friend/friend-storage-class.cpp`). A type-specifier-seq takes
+  `class.friend/friend-storage-class.cpp`). The parser records where each
+  cv-qualifier was first written (`DeclSpec::cv_locs`); a friend type
+  declaration (no declarator: `friend const T;`, or an element of a
+  friend-type-specifier-list) reports each of `const`, `volatile`,
+  `restrict`, `_Atomic` as `'const' is invalid in friend declarations` at
+  the qualifier, in that order, and is still declared
+  (`reject_friend_type_quals`, [class.friend]/3, WP-367;
+  `class.friend/friend-type-cv.cpp`). A type-specifier-seq takes
   no storage class ([dcl.type.general]/1; clang
   `ParseSpecifierQualifierList`): in `DeclaratorContext::TypeName` (every
   type-id — casts, `sizeof`, `alignof`, `typeid`, template arguments,
@@ -628,7 +635,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     'final'`. `friend class X;` (or `friend class X` followed by `,` or `...`
     in a friend-type-specifier-list) is `TagUse::Friend`; a friend that
     would define a class is `cannot define a type in a friend
-    declaration` and is skipped.
+    declaration` and is skipped. An unqualified `friend class T;` whose
+    name is a template parameter is `declaration of 'T' shadows template
+    parameter` ([temp.local]/6, `check_template_param_shadow` in
+    `act_on_friend_tag`, WP-367) and declares a new class `T`, so
+    `friend class Ts...;` then expands no pack
+    (`temp.local/p6-friend-class-shadow.cpp`).
   - Then `act_on_tag_attrs` for the class-head or enum-head attributes.
   - Then the body:
     - `parse_record_body` (§4.1) holds the base clause, member
@@ -685,8 +697,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `parse_deprecated_missing_comma_before_ellipsis`
   (`-Wdeprecated-missing-comma-variadic-parameter`, in `-Wdeprecated`)
   at the `...`. A lone `(...)`, `(int, ...)` and a function parameter
-  pack are not deprecated. Before C++26, nothing. clang's separate
-  `-Wambiguous-ellipsis` (`(Ts......)`) is not implemented.
+  pack are not deprecated. Before C++26, nothing.
+  In every mode, when the parameter before that `...` has its own pack
+  `...` (`(Ts......)`, `(Ts...a...)`) or a type naming an unexpanded
+  pack, clang's `-Wambiguous-ellipsis` follows (WP-364, clang
+  `warn_misplaced_ellipsis_vararg`, after the deprecation in C++26):
+  `'...' in this location creates a C-style varargs function` at the
+  `...` (`, not a function parameter pack` appended when the parameter
+  has no `...` of its own), a note `preceding '...' declares a function
+  parameter pack` at the pack's `...` (or `place '...' immediately
+  before declared identifier` / `here` at the name or the declarator),
+  and `insert ',' before '...' to silence this warning` at the `...`.
+  Tests: `dcl.fct/p3176-ambiguous-ellipsis.cpp` (C++23),
+  `dcl.fct/p3176-variadic-comma.cpp` (C++26, clang >= 22).
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
@@ -712,6 +735,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `template` (unsupported).
   - `decl-specifier-seq ;`: `act_on_friend(ds, base, None, loc)` for
     `friend class X;`, else `act_on_decl_spec_only`.
+  - No decl-specifiers and no special declarator (`member_without_type`,
+    WP-367): a non-type name followed by `;`, `=`, `,` or `[` is `a type
+    specifier is required for all declarations` at the name (clang's
+    implicit-int recovery, `err_missing_type_specifier`); `()` is
+    `expected member name or ';' after declaration specifiers` at the
+    `)` (clang's parenthesized declarator), anything else at the token.
+    The declaration is skipped to its `;` (clang declares an invalid
+    `int` member: later uses of the name differ).
+    `class.mem/member-without-type.cpp`.
   - A friend-type-specifier-list ([class.friend]/3, P2893, WP-359): with
     `friend` and the next token `...` or `,`, `parse_friend_type_list`
     takes each friend-type-specifier, an optional `...`, and calls
@@ -720,7 +752,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     Some(friend_loc))`, so `friend` applies to them and an elaborated
     `struct A` before `,` or `...` is `TagUse::Friend`. A specifier with no
     type is `a type specifier is required for all declarations` (skipped
-    to `;`); a missing `;` is `expected ';' after friend declaration`.
+    to `;`); a missing `;` is `expected ';' after friend declaration`,
+    with nothing skipped: the rest is parsed as the next member
+    declaration (clang's `ExpectAndConsume`; `friend A, B int y;` goes on
+    with `y;`, `class.friend/p2893-recovery.cpp`).
     Before C++26 the list warns `parse_ext_variadic_friend` ("variadic
     'friend' declarations are a C++2c extension", `-Wc++26-extensions`)
     at its first `...` or `,`.
@@ -767,8 +802,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `mem-initializer-id ( expression-list ) | braced-init-list [...]`,
   separated by `,` (a missing one between two initializers is `missing
   ',' between base or member initializers`). The id is a `MemInitId`:
-  an identifier, or a type for a qualified class name; qualified
-  non-types and `decltype` ids are unsupported. All initializers go to
+  an identifier, or a type for a qualified class name or a
+  decltype-specifier (`decltype(e)(args)`, class-or-decltype; a dependent
+  one is resolved at instantiation, and a type that is not a class is
+  `constructor initializer ... does not name a class` in sema;
+  `decltype(auto)` is `'decltype(auto)' not allowed here` and counts as
+  a failed initializer, `QualType::ERROR`); qualified non-types are
+  unsupported. All initializers go to
   one `act_on_mem_initializers(ctor, inits, colon)`; a constructor
   without a ctor-initializer gets an empty slice at its `{`. A
   ctor-initializer on a non-constructor is `only constructors take base
@@ -1278,7 +1318,7 @@ in `kiln_diag` for now; nothing emits them.
   linkage, `clang diagnostic` to the diagnostic engine; `weak` and the
   other unsupported pragmas of §2.3.
 - **Classes** (parsed by WP-065; their Sema is WP-066b):
-  - qualified non-type and `decltype` mem-initializer-ids, braced
+  - qualified non-type mem-initializer-ids, braced
     default arguments
   - literal operators (`operator""`)
   - pragma events inside saved tokens (they fire at capture)

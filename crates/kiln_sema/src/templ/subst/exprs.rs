@@ -480,29 +480,21 @@ impl Substituter<'_, '_, '_> {
                         .rebuild_member_destructor(base, ty, qualified, loc, op, arrow));
                 }
                 let name = self.member_name(name, loc)?;
-                // A member template-id `x.f<args>` (§6.4).
-                // A member function template specialization the pattern
-                // already selected (`throw_error<X>()` through an implicit
-                // `this` in a class template, resolved at the definition)
-                // is named again with its arguments: looked up by name
-                // alone, the template could not deduce them.
-                // A pack's elements are written one by one.
-                let resolved = match self.sema.ast.spec_info(m) {
-                    Some((_, s)) if self.sema.kind_of(s.template) == DeclKind::FunctionTemplate => {
-                        let ty = &self.sema.ast.types;
-                        let flat: Vec<TemplateArg> = ty
-                            .args(s.args)
-                            .iter()
-                            .flat_map(|&a| match a.view() {
-                                ArgView::Pack(l) => ty.args(l).to_vec(),
-                                _ => vec![a],
-                            })
-                            .collect();
-                        Some(self.sema.ast.types.arg_list(&flat))
-                    }
-                    _ => None,
-                };
-                let targs = match self.sema.ovl.members.get(&e).and_then(|m| m.targs).or(resolved) {
+                // A member template-id `x.f<args>` (§6.4): the arguments
+                // as written, kept on the resolved access too (the pattern
+                // may have selected the specialization at the definition,
+                // `throw_error<X>()` through an implicit `this` in a class
+                // template). Arguments the pattern only deduced are not
+                // written again: with them every member template of the
+                // name would take them explicitly, and a substitution
+                // failure in the overload set would become a hard error
+                // (`ss.str("")` naming libc++'s `str<char[1]>(const
+                // SAlloc&)` would instantiate `basic_string<char, traits,
+                // char[1]>` for `str(const basic_string<C, T, SAlloc>&)`;
+                // clang `TreeTransform::TransformMemberExpr` passes the
+                // explicit arguments only when written).
+                let written = ex(self).decl_ref_extra(e).and_then(|x| x.template_args);
+                let targs = match self.sema.ovl.members.get(&e).and_then(|m| m.targs).or(written) {
                     Some(l) => Some(self.args(l, loc)?),
                     None => None,
                 };

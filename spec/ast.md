@@ -945,7 +945,13 @@ context-free defaults (`NoEnv`):
   from the specialization or template-id (`write_arg_list_of`,
   `TypeNames::arg_includes_type` / `write_value_typed`). An argument kept
   as an expression prints as written, with its integer-literal suffix
-  (`D<7ul>` written prints `D<7UL>`; WP-292).
+  (`D<7ul>` written prints `D<7UL>`; WP-292). A function template
+  specialization named in a diagnostic (`'f<2U>' has been explicitly
+  marked deleted here`, `'d<9ULL>' is deprecated`) prints every one of its
+  own arguments typed: clang's `FunctionDecl::getNameForDiagnostic` passes
+  no parameter list, so `shouldIncludeTypeForArgument` is true
+  (`SemaNames::typed_args_of`; a nested template-id keeps the rule above;
+  test `temp.param/function-spec-name-typed-args.cpp`, WP-366).
 
 **String escapes** (`StringPool::write_literal`):
 - `\\ \" \n \t \r \0 \a \b \f \v` print as escapes.
@@ -1170,3 +1176,7 @@ Built by `AstBuilder::predefined_expr(kind, ty, name, loc)`.
 `ExprArena::mark_instantiation_dependent(e)` sets
 `ExprDeps::INSTANTIATION` on a `SourceLocExpr` or `CXXDefaultArgExpr`
 whose function name changes per specialization (sema, §5.8).
+`ExprArena::mark_type_dependent(e)` sets `ExprDeps::TYPE_VALUE_INST` on
+a `DeclRefExpr` to a variable captured by copy in a lambda whose
+explicit object parameter has a dependent type ([temp.dep.expr]/3;
+sema-lambda.md §4.4).

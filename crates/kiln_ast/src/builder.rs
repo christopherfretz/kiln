@@ -419,6 +419,9 @@ impl<'a> AstBuilder<'a> {
                 let group = self.ast.decls.redecl(p).expect("prev is not redeclarable").group;
                 let latest = self.ast.redecls.get(group).latest;
                 self.ast.redecls.push_redecl(group, d);
+                if self.ast.modules.active {
+                    self.ast.modules.links.push((d, latest));
+                }
                 Redecl { prev: Some(latest), group }
             }
             None => Redecl { prev: None, group: self.ast.redecls.new_group(d) },
@@ -2895,7 +2898,10 @@ impl<'a> AstBuilder<'a> {
             let inits: Vec<ExprId> = self.ast.lists.iter::<ExprId>(l).collect();
             for (i, e) in inits.into_iter().enumerate() {
                 // A capture pack (`ts...`, `...xs = init`) expands the
-                // packs of its initializer ([expr.prim.lambda.capture]/17).
+                // packs of its initializer ([expr.prim.lambda.capture]/17);
+                // an implicit capture of a pack names it only because the
+                // body does, which `packs` already accounts for (clang's
+                // `LambdaScopeInfo::ContainsUnexpandedParameterPack`).
                 let expands = self
                     .ast
                     .exprs
@@ -2903,7 +2909,7 @@ impl<'a> AstBuilder<'a> {
                     .get(id)
                     .captures
                     .get(i)
-                    .is_some_and(|c| c.ellipsis.is_valid());
+                    .is_some_and(|c| c.ellipsis.is_valid() || c.implicit);
                 let d = self.deps(e);
                 deps |= if expands { d.without(ExprDeps::UNEXPANDED_PACK) } else { d };
             }

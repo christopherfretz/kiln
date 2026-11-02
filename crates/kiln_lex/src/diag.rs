@@ -266,6 +266,9 @@ pub enum LexDiagKind {
     HexFloatExtension,
     /// A `z`/`Z` suffix before C++23 (`ext_cxx23_size_t_suffix`).
     SizeSuffixExtension,
+    /// An `f32`/`f64`/`f128`/`bf16` suffix (any case) before C++23 (GCC's
+    /// pedantic warning; kiln `lit_float_suffix_ext`).
+    FloatSuffixExtension,
     /// An integer literal whose value does not fit any integer type
     /// (`err_integer_literal_too_large`); recorded by callers of
     /// [`crate::literal::IntegerLiteral::value`].
@@ -349,7 +352,8 @@ impl LexDiagKind {
             | K::HeaderNameSpecialChars { .. }
             | K::BinaryLiteralExtension
             | K::HexFloatExtension
-            | K::SizeSuffixExtension => LexSeverity::Extension,
+            | K::SizeSuffixExtension
+            | K::FloatSuffixExtension => LexSeverity::Extension,
         }
     }
 }

@@ -559,6 +559,10 @@ impl Parser<'_, '_> {
                         | Kw::Float
                         | Kw::Float128
                         | Kw::Float16
+                        | Kw::Float32
+                        | Kw::Float64
+                        | Kw::StdFloat128
+                        | Kw::Bf16
                         | Kw::Fp16
                         | Kw::Int
                         | Kw::Int128
@@ -1387,9 +1391,8 @@ impl Parser<'_, '_> {
     /// function is `this->operator()(x)`.
     fn parse_operator_id_expression(&mut self, loc: Loc) -> PExpr {
         let name = self.parse_operator_function_name()?;
-        if self.at(Punct::Less) {
-            self.unsupported("an operator function template-id", loc);
-            return None;
+        if self.at_operator_template_args(name, None, None) {
+            return self.parse_operator_template_id(name, loc, None, None);
         }
         if self.at(Punct::LParen) {
             Some(self.s.act_on_call_name_dn(name, loc))
@@ -1611,10 +1614,9 @@ impl Parser<'_, '_> {
         let template_loc = if qual.is_some() { self.eat_kw(Kw::Template) } else { None };
         let template_kw = template_loc.is_some();
         if let Some(q) = qual
-            && !template_kw
             && self.at_kw(Kw::Operator)
         {
-            return self.parse_qualified_operator_id(q, begin);
+            return self.parse_qualified_operator_id(q, begin, template_loc);
         }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_unqualified_id);
@@ -1695,19 +1697,23 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_call_name(name, nl));
         }
         let e = self.s.act_on_id_expression(name, nl, qual);
-        self.parse_pack_index_suffix(e)
+        self.parse_pack_index_suffix(e, nl)
     }
 
     /// `N::operator@` / `X<T>::operator T` after the nested-name-specifier
     /// `q` ([expr.prim.id.qual]/1: a qualified-id's unqualified-id may be
     /// an operator- or conversion-function-id): `B<float>::operator()(v)`
     /// in libc++ <__functional/hash.h>.
-    fn parse_qualified_operator_id(&mut self, q: kiln_sema::using::Qualifier, begin: Loc) -> PExpr {
+    fn parse_qualified_operator_id(
+        &mut self,
+        q: kiln_sema::using::Qualifier,
+        begin: Loc,
+        template_kw: Option<Loc>,
+    ) -> PExpr {
         let nl = self.loc();
         let name = self.parse_operator_function_name()?;
-        if self.at(Punct::Less) {
-            self.unsupported("an operator function template-id", nl);
-            return None;
+        if self.at_operator_template_args(name, Some(q), template_kw) {
+            return self.parse_operator_template_id(name, nl, Some((q, begin)), template_kw);
         }
         if self.s.is_dependent_ctx(q.ctx) {
             return Some(self.s.act_dependent_scope_ref(q.nns, name, None, begin, nl));
@@ -1715,22 +1721,90 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_id_expression_dn(name, nl, Some(q)))
     }
 
+    /// Whether the `<` after the operator-function-id `name` (qualified
+    /// by `q`, after `template` at `template_kw`) starts its template
+    /// argument list ([temp.names]/3): after `template`, or when the name
+    /// is a template-name (otherwise `<` is the less-than operator).
+    fn at_operator_template_args(
+        &mut self,
+        name: DeclName,
+        q: Option<kiln_sema::using::Qualifier>,
+        template_kw: Option<Loc>,
+    ) -> bool {
+        if !self.at(Punct::Less) {
+            return false;
+        }
+        if template_kw.is_some() {
+            return true;
+        }
+        if q.is_some_and(|q| self.s.is_dependent_ctx(q.ctx)) {
+            return false;
+        }
+        self.s.operator_names_template(name, q.map(|q| q.ctx))
+    }
+
+    /// An operator-function-id template-id at its `<` ([temp.names]/1):
+    /// `operator()<T>`, `Q::operator()<T>`, `Q<T>::template
+    /// operator()<U>`; `name` was named at `nl`, after the qualifier `q`
+    /// (which begins at its `Loc`) and the `template` keyword at
+    /// `template_kw`, if any. As for an identifier template-id, a
+    /// dependent qualifier makes a `DependentScopeDeclRefExpr`, and one
+    /// not called is resolved to its single specialization.
+    fn parse_operator_template_id(
+        &mut self,
+        name: DeclName,
+        nl: Loc,
+        q: Option<(kiln_sema::using::Qualifier, Loc)>,
+        template_kw: Option<Loc>,
+    ) -> PExpr {
+        let (args, _, _) = self.parse_template_arg_list()?;
+        if let Some((q, begin)) = q
+            && self.s.is_dependent_ctx(q.ctx)
+        {
+            let targs = self.s.ast.types.arg_list(&args);
+            let e = self.s.act_dependent_scope_ref(q.nns, name, Some(targs), begin, nl);
+            self.s.set_template_kw(e, template_kw);
+            return Some(e);
+        }
+        let call = self.at(Punct::LParen);
+        let e = self.s.act_on_operator_template_id(name, &args, nl, q.map(|(q, _)| q.ctx), call);
+        if let Some((q, begin)) = q {
+            self.s.set_template_id_begin(e, begin, nl);
+            self.s.set_template_id_qualifier(e, q.nns);
+            self.s.set_template_kw(e, template_kw);
+        }
+        if !self.at(Punct::LParen) {
+            return Some(self.s.resolve_single_template_id(e));
+        }
+        Some(e)
+    }
+
     /// `pack...[index]` after an id-expression (C++26
-    /// [expr.prim.pack.index]); `e` unchanged without `...[`.
-    fn parse_pack_index_suffix(&mut self, e: ExprId) -> PExpr {
-        let Some((ellipsis, index, rsquare)) = self.parse_pack_index().ok()? else {
+    /// [expr.prim.pack.index]) whose name begins at `begin`; `e`
+    /// unchanged without `...[`.
+    fn parse_pack_index_suffix(&mut self, e: ExprId, begin: Loc) -> PExpr {
+        let Some((ellipsis, index, rsquare)) = self.parse_pack_index(begin).ok()? else {
             return Some(e);
         };
         Some(self.s.act_pack_indexing(e, ellipsis, index, rsquare))
     }
 
     /// `...[ constant-expression ]` (shared by the expression and type
-    /// forms): `Err` on a parse error, `Ok(None)` without `...[`.
-    pub(crate) fn parse_pack_index(&mut self) -> Result<Option<(Loc, ExprId, Loc)>, ()> {
+    /// forms) after a pack name beginning at `begin`: `Err` on a parse
+    /// error, `Ok(None)` without `...[`.
+    pub(crate) fn parse_pack_index(
+        &mut self,
+        begin: Loc,
+    ) -> Result<Option<(Loc, ExprId, Loc)>, ()> {
         if !(self.at(Punct::Ellipsis) && self.peek_is(1, Punct::LSquare)) {
             return Ok(None);
         }
         let ellipsis = self.bump().span.lo;
+        if self.std < kiln_lex::Std::Cxx26 {
+            // P2662: clang `ext_pack_indexing`, at the pack name.
+            let w = self.s.diag(DiagId::parse_ext_pack_indexing, begin);
+            self.emit(w);
+        }
         let lsquare = self.bump().span.lo;
         let index = self.with_greater_op(true, Self::parse_constant_expr).ok_or(())?;
         let rsquare = self.expect_closing(Punct::RSquare, Punct::LSquare, lsquare);

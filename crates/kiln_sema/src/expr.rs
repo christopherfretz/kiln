@@ -1885,6 +1885,12 @@ impl Sema<'_, '_> {
             _ => (ty, ExprFlags::NONE),
         };
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, flags);
+        if flags == ExprFlags::REFERS_TO_ENCLOSING
+            && matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar)
+            && self.captured_by_copy_in_dependent_object_lambda(d)
+        {
+            self.ast.exprs.mark_type_dependent(e);
+        }
         // A binding to a bit-field designates it (clang `BuildDeclRefExpr`).
         if n.kind() == DeclKind::Binding
             && let Some(b) = self.ast.decls.binding_expr(d)
@@ -2973,6 +2979,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[l, r], loc);
         }
+        // P1467 [conv.double]/1: the result converts back to `E1`'s type
+        // (GCC: diagnosed at `E2`).
+        conv::fp_rank_check(self, r, res_ty, conv::strip_cv(self, lt));
         let res = self.builder().compound_assign(op, l, r2, target_t, lhs_ty, res_ty, loc);
         self.mark_bitfield_if(res, l);
         res

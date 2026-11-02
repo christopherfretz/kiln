@@ -142,6 +142,21 @@ pub(crate) fn float_kind(s: &Sema<'_, '_>, b: BuiltinType) -> Option<FloatKind> 
     })
 }
 
+/// [dcl.init.list]/7.2 (C++23): a floating conversion is not narrowing
+/// when the target's rank is greater or equal. clang's ranks for the
+/// types clang has, the P1467 value-set ranks when either is a C++23
+/// extended floating-point type.
+fn float_widening(s: &Sema<'_, '_>, fb: BuiltinType, tb: BuiltinType) -> bool {
+    if fb.is_std_extended_floating() || tb.is_std_extended_floating() {
+        match (super::rank::float_format(s, fb), super::rank::float_format(s, tb)) {
+            (Some(ff), Some(tf)) => super::rank::format_subset(ff, tf),
+            _ => true,
+        }
+    } else {
+        clang_float_rank(fb) <= clang_float_rank(tb)
+    }
+}
+
 /// clang's floating-point rank (`getFloatingRank`), used for the
 /// narrowing test between floating types.
 fn clang_float_rank(b: BuiltinType) -> u8 {
@@ -234,7 +249,7 @@ pub fn narrowing_kind(
             let (Some(fb), Some(tb)) = (s.ast.types.builtin(from), s.ast.types.builtin(to)) else {
                 return Narrowing::NotNarrowing;
             };
-            if clang_float_rank(fb) <= clang_float_rank(tb) {
+            if float_widening(s, fb, tb) {
                 return Narrowing::NotNarrowing;
             }
             if dependent {

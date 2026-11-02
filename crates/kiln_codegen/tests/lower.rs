@@ -217,6 +217,29 @@ fn lowering_matches_clang() {
     assert!(failures.is_empty(), "{} failing case(s):\n{}", failures.len(), failures.join("\n"));
 }
 
+/// Signed multiplication overflow wider than 64 bits is expanded inline
+/// (spec/codegen.md §3, "Builtins"; a documented deviation from clang,
+/// whose `llvm.smul.with.overflow.i128` lowers to compiler-rt's
+/// `__muloti4`, which libgcc lacks): the magnitudes go through
+/// `llvm.umul.with.overflow`, and no `smul` intrinsic remains.
+#[test]
+fn wide_signed_mul_overflow_is_inline() {
+    let src = "bool f(__int128 a, __int128 b, __int128 *r) { return __builtin_mul_overflow(a, b, r); }\n\
+               bool g(__int128 a, __int128 b, unsigned __int128 *r) { return __builtin_mul_overflow(a, b, r); }\n\
+               bool h(long long a, unsigned long long b, __int128 *r) { return __builtin_mul_overflow(a, b, r); }\n\
+               bool k(long long a, long long b, long long *r) { return __builtin_mul_overflow(a, b, r); }\n";
+    let ir = kiln_ir(src).unwrap_or_else(|e| panic!("kiln failed: {e}"));
+    assert!(!ir.contains("@llvm.smul.with.overflow.i128"), "{ir}");
+    assert!(!ir.contains("@llvm.smul.with.overflow.i129"), "{ir}");
+    assert!(ir.contains("@llvm.umul.with.overflow.i128("), "{ir}");
+    assert!(ir.contains("@llvm.umul.with.overflow.i129("), "{ir}");
+    // 64 bits and narrower keep the intrinsic (no libcall there).
+    assert!(ir.contains("@llvm.smul.with.overflow.i64("), "{ir}");
+    if let Some(r) = opt(&ir) {
+        r.unwrap_or_else(|e| panic!("IR does not verify: {e}\n{ir}"));
+    }
+}
+
 /// (name, mode, program).
 const CASES: &[(&str, Mode, &str)] = &[
     ("int_lit_return", Exact, "int f() { return 42; }"),

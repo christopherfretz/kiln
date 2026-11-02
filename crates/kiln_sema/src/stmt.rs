@@ -264,6 +264,12 @@ impl Sema<'_, '_> {
     /// An expression statement ([stmt.expr]): `e` is a discarded-value
     /// full-expression.
     pub fn act_on_expr_stmt(&mut self, e: ExprId) -> StmtId {
+        let e = if self.diagnose_unexpanded_written(e, "expression", None) {
+            let at = self.begin_loc(e);
+            self.recover_err(&[], at)
+        } else {
+            e
+        };
         if !self.check_builtin_fn_use(e) && !self.check_overload_use(e) {
             self.diagnose_unused(e);
         }
@@ -274,6 +280,10 @@ impl Sema<'_, '_> {
 
     /// A condition ([stmt.pre]/4): contextually converted to `bool`.
     pub fn act_on_condition(&mut self, e: ExprId) -> ExprId {
+        if self.diagnose_unexpanded_written(e, "expression", None) {
+            let at = self.begin_loc(e);
+            return self.recover_err(&[], at);
+        }
         let e = match conv::contextually_convert_to_bool(self, e) {
             Ok(c) => c,
             Err(err) => {
@@ -687,8 +697,25 @@ impl Sema<'_, '_> {
         // [temp.res.general]/6: a condition of dependent type is checked
         // (converted, promoted) when the template is instantiated; the
         // case values are left unevaluated until then.
+        // [stmt.switch]/2: a condition of class type is contextually
+        // implicitly converted to an integral or enumeration type
+        // ([conv.general]/5, `switch_conv.rs`).
+        let class = if ok || self.is_dependent_type(ty0) || t.as_record(ty0).is_none() {
+            None
+        } else {
+            self.switch_class_condition(cond, loc)
+        };
         let (cond, cond_ty, invalid) = if self.is_dependent_type(ty0) {
             (cond, ty0, false)
+        } else if let Some(c) = class {
+            if self.is_err_expr(c) {
+                (c, QualType::INT, true)
+            } else {
+                self.check_switch_bool(c, loc);
+                let c = conv::integral_promotion(self, c);
+                let ty = self.ast.exprs.get(c).ty();
+                (c, ty, false)
+            }
         } else if ok {
             self.check_switch_bool(cond, loc);
             let c = conv::integral_promotion(self, cond);
@@ -1000,6 +1027,13 @@ impl Sema<'_, '_> {
 
     /// `return e;` ([stmt.return]).
     pub fn act_on_return(&mut self, value: Option<ExprId>, loc: Loc) -> StmtId {
+        let value = match value {
+            Some(e) if self.diagnose_unexpanded_written(e, "expression", None) => {
+                let at = self.begin_loc(e);
+                Some(self.recover_err(&[], at))
+            }
+            v => v,
+        };
         self.note_return_stmt(loc);
         let Some((fdecl, mut ret)) = self.func.as_ref().map(|f| (f.decl, f.ret)) else {
             return self.builder().return_stmt(value, None, loc);

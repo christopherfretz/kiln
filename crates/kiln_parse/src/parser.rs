@@ -105,6 +105,8 @@ pub struct Parser<'a, 'sm> {
     pub(crate) std: Std,
     /// Active token replays, innermost last.
     replay: Vec<Replay>,
+    /// Module state, once modules are active (spec/modules.md).
+    pub(crate) mods: Option<Box<crate::modules::ParseModules>>,
     /// The classes being defined whose complete-class contexts are saved
     /// for replay (clang's `ParsingClassStack`), innermost last.
     pub(crate) late: Vec<LateClass>,
@@ -272,6 +274,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             lit_opts,
             std,
             replay: Vec::new(),
+            mods: None,
             late: Vec::new(),
             late_fn: crate::class::LateFnParts::default(),
             member_depr: None,
@@ -292,6 +295,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             lead_decl_attrs: Vec::new(),
             stmt_attrs_loc: None,
         };
+        if p.src.get_mut().module_lines() {
+            p.module_activate();
+        }
         p.handle_events(0);
         p
     }
@@ -316,6 +322,16 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     }
 
     // -- token access -----------------------------------------------------------
+
+    /// The index of the current token in the stream.
+    pub(crate) fn token_index(&self) -> usize {
+        self.pos
+    }
+
+    /// Whether the parser is replaying saved tokens.
+    pub(crate) fn in_replay(&self) -> bool {
+        !self.replay.is_empty()
+    }
 
     /// The current token.
     pub(crate) fn tok(&self) -> Token {
