@@ -252,9 +252,19 @@ also in `--list`), only while the condition holds:
   and `create_directory(p, attrs)` cannot copy the attributes
   (`HOST_FS_UNSUPPORTED`: `fs.op.hard_lk_ct/hard_link_count.pass.cpp`,
   `fs.op.create_directory/create_directory_with_attributes.pass.cpp`).
+- an aarch64 host (`COMPILER_RT_UNSUPPORTED`: `numeric.ops.sat/mul_sat.pass.cpp`):
+  LLVM lowers the signed 128-bit `__builtin_mul_overflow` to a `__muloti4`
+  libcall that only compiler-rt's builtins define, and the GNU link line
+  (clang's and kiln's) links libgcc, which has none; the link fails. x86_64
+  expands the multiply inline.
+- the system tzdata (`/usr/share/zoneinfo/tzdata.zi`, first line
+  `# version YYYYx`) at 2024b or later (`TZDATA_Z_UNSUPPORTED`:
+  `time.zone.members/sys_info.zdump.pass.cpp`): `tzdata.zi` spells numeric
+  abbreviations `%z`, which libc++ 19's tzdb parser keeps verbatim, so
+  `sys_info::abbrev` differs from `zdump`'s.
 
 A test joins a list only after its clang 19 build is shown to fail at the
-same assertion under the same condition; both lists are sorted (unit
+same assertion under the same condition; the lists are sorted (unit
 test `env_exclusions`).
 
 ## Commands
@@ -270,8 +280,13 @@ kiln++ -std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread \
      -I <llvm-project>/libcxx/test/support  <ADDITIONAL_COMPILE_FLAGS>  \
      (-fsyntax-only | -c -o t.o)  <test>
 kiln t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi
-./t.exe                     # cwd = scratch, --timeout, --mem-limit
+./t.exe                     # cwd = scratch, --timeout, --mem-limit, no TZ
 ```
+
+The test binary runs without `TZ` in its environment, as under lit (whose
+`config.environment` does not pass it on): `current_zone()` is then the
+system's `/etc/localtime`, which the `current_zone.pass.cpp` tests compare
+against.
 
 This mirrors lit's `llvm-libc++-shared.cfg` at its defaults: the newest
 standard, experimental features enabled, no warnings, and no `-Werror`. The
