@@ -2,7 +2,7 @@
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::InitStyle;
-use kiln_ast::stmt::IfKind;
+use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std, TokKind};
@@ -84,7 +84,7 @@ impl Parser<'_, '_> {
         if !self.stack_ok() {
             return None;
         }
-        if self.at_cxx11_attr() {
+        if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
             let start = self.loc();
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
@@ -104,8 +104,22 @@ impl Parser<'_, '_> {
                 let sub = self.parse_statement_after_attrs()?;
                 return Some(self.s.act_on_attributed_stmt(&attrs, sub, start, self.std));
             }
-            // Otherwise they appertain to a declaration's entities.
-            self.stmt_attrs = attrs;
+            // Otherwise they appertain to a declaration's entities; on any
+            // other statement they are errors (clang
+            // `ProcessStmtAttributes`).
+            let n = attrs.len();
+            self.stmt_attrs = attrs.clone();
+            self.stmt_attrs_loc = Some(start);
+            let s = self.parse_statement_after_attrs()?;
+            let asm = match self.s.ast.stmts.get(s).kind() {
+                StmtKind::DeclStmt | StmtKind::LabelStmt => return Some(s),
+                StmtKind::GCCAsmStmt => true,
+                _ => false,
+            };
+            if n > 0 {
+                self.s.act_on_stmt_decl_attrs(&attrs, asm);
+            }
+            return Some(s);
         }
         self.parse_statement_after_attrs()
     }
@@ -113,6 +127,7 @@ impl Parser<'_, '_> {
     /// A statement after its attribute-specifier-seq.
     fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
         let lead_attrs = std::mem::take(&mut self.stmt_attrs);
+        let lead_loc = self.stmt_attrs_loc.take().filter(|_| !lead_attrs.is_empty());
         let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         self.skip_extension_before_using();
         let loc = self.loc();
@@ -160,12 +175,15 @@ impl Parser<'_, '_> {
                     self.skip_statement();
                     return None;
                 }
+                // [dcl.pre]/5: a static_assert-declaration, alias-declaration
+                // or namespace-alias-definition takes no attributes.
                 Kw::StaticAssert => {
+                    self.prohibit_attrs_at(lead_loc);
                     let d = self.parse_static_assert()?;
                     return Some(self.s.act_on_decl_stmt(&[d], loc));
                 }
                 Kw::Using => {
-                    let ds = self.parse_using();
+                    let ds = self.parse_using_leading(&lead_attrs, lead_loc);
                     if ds.is_empty() {
                         return None;
                     }
@@ -174,6 +192,7 @@ impl Parser<'_, '_> {
                 Kw::Namespace
                     if self.ident_of(self.peek(1)).is_some() && self.peek_is(2, Punct::Equal) =>
                 {
+                    self.prohibit_attrs_at(lead_loc);
                     self.bump();
                     let name = self.ident()?;
                     let nl = self.bump().span.lo;
@@ -204,6 +223,7 @@ impl Parser<'_, '_> {
         }
         if self.is_cxx_declaration_statement(false) {
             self.lead_decl_attrs = lead_attrs;
+            self.stmt_attrs_loc = lead_loc;
             let decls = self.parse_simple_declaration(DeclaratorContext::Block, false);
             if decls.is_empty() {
                 return None;

@@ -6496,17 +6496,17 @@ impl Sema<'_, '_> {
             {
                 return Some(self.act_on_anonymous_record(ds, t));
             }
+            self.warn_free_standing_tag_attrs(ds, t, &ds.attrs);
             return None;
         }
-        if ds.is_empty() && !ds.attrs.is_empty() {
-            // An attribute-declaration (`alignas(8);`, [dcl.pre]/1): an
-            // alignment-specifier there appertains to nothing.
-            let mut attrs = ds.attrs.clone();
-            let n = attrs.len();
-            self.reject_alignas(&mut attrs, u8::MAX);
-            if attrs.len() != n {
-                return None;
-            }
+        if ds.is_empty() && !ds.attrs.is_empty() && self.member_spec_class().is_none() {
+            // An attribute-declaration (`[[nodiscard]];`, `alignas(8);`,
+            // [dcl.pre]/10): its attributes appertain to nothing (clang
+            // checks them against the enclosing namespace); in a class
+            // it is a declaration without declarators.
+            let ctx = self.ctx;
+            self.act_on_decl_attrs(ctx, &ds.attrs);
+            return None;
         }
         if !ds.invalid {
             self.error(DiagId::sema_no_declarators, ds.loc);

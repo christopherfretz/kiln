@@ -149,6 +149,8 @@ pub struct Parser<'a, 'sm> {
     /// The attributes `parse_decl_specifiers` starts its seq with (a
     /// declaration statement's leading ones).
     pub(crate) lead_decl_attrs: Vec<kiln_ast::AttrId>,
+    /// Where `stmt_attrs` / `lead_decl_attrs` start (`[[` or `alignas`).
+    pub(crate) stmt_attrs_loc: Option<Loc>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -258,6 +260,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             template_delay_level: None,
             stmt_attrs: Vec::new(),
             lead_decl_attrs: Vec::new(),
+            stmt_attrs_loc: None,
         };
         p.handle_events(0);
         p

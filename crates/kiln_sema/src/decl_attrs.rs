@@ -7,11 +7,13 @@
 //! `err_attribute_not_type_attr`).
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclKind, EnumData};
+use kiln_ast::types::TagKeyword;
 use kiln_ast::{AttrId, DeclId, QualType};
 use kiln_diag::DiagId;
 
 use crate::Sema;
+use crate::declspec::DeclSpec;
 
 /// The attribute's name as clang prints it (no scope, no `__` affixes);
 /// `None` for the vector and other type attributes, which may appear in
@@ -104,6 +106,80 @@ impl Sema<'_, '_> {
         });
     }
 
+    /// The attributes written before a using-directive or
+    /// using-declaration `d` ([namespace.udir]/1, [namespace.udecl]/1),
+    /// or of an attribute-declaration (`[[nodiscard]];`, [dcl.pre]/10,
+    /// with `d` the enclosing namespace): checked against the subject
+    /// table of [`Sema::check_decl_attrs`]; kiln keeps none of them.
+    pub fn act_on_decl_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
+        let mut v = attrs.to_vec();
+        self.check_decl_attrs(d, &mut v);
+    }
+
+    /// The declaration attributes of an attribute-specifier-seq that
+    /// appertains to a statement other than a declaration
+    /// ([dcl.attr.grammar]/5, [stmt.pre]/1): each is `'X' attribute
+    /// cannot be applied to a statement` (clang
+    /// `err_decl_attribute_invalid_on_stmt`); before an
+    /// asm-declaration (`asm`) clang instead warns `'X' attribute
+    /// ignored`. The statement attributes (`assume`, `likely`,
+    /// `unlikely`, `fallthrough`) are left to
+    /// [`Sema::act_on_attributed_stmt`].
+    pub fn act_on_stmt_decl_attrs(&mut self, attrs: &[AttrId], asm: bool) {
+        for &a in attrs {
+            let node = *self.ast.attrs.get(a);
+            if matches!(
+                node.kind,
+                AttrKind::ASSUME | AttrKind::LIKELY | AttrKind::UNLIKELY | AttrKind::FALLTHROUGH
+            ) {
+                continue;
+            }
+            let Some(name) = attr_name(&node) else { continue };
+            let id = if asm {
+                DiagId::parse_attribute_ignored
+            } else {
+                DiagId::sema_decl_attribute_on_stmt
+            };
+            let msg = self.diag(id, node.loc).arg(name);
+            self.emit(msg);
+        }
+    }
+
+    /// A decl-specifier-seq that only declares the class or enumeration
+    /// `tag` (`__attribute__((packed)) struct S { };`): its attributes
+    /// would appertain to the (absent) declarators, so clang warns
+    /// `attribute 'X' is ignored, place it after "struct" to apply
+    /// attribute to type declaration` (`warn_declspec_attribute_ignored`,
+    /// [dcl.spec.general]/1, [dcl.pre]/5) for each of `attrs`: the
+    /// trailing ones (`struct S { } [[x]];`, reported by the parser) and
+    /// then the leading ones (`ds.attrs`, by
+    /// [`Sema::act_on_decl_spec_only`]).
+    pub fn warn_free_standing_tag_attrs(&mut self, ds: &DeclSpec, tag: DeclId, attrs: &[AttrId]) {
+        if attrs.is_empty() {
+            return;
+        }
+        let key = match ds.keyword {
+            TagKeyword::Struct => "struct",
+            TagKeyword::Class => "class",
+            TagKeyword::Union => "union",
+            TagKeyword::Enum => match self.ast.decls.enumeration(tag).map(|e| e.flags) {
+                Some(f) if f & EnumData::SCOPED_STRUCT != 0 => "enum struct",
+                Some(f) if f & EnumData::SCOPED != 0 => "enum class",
+                _ => "enum",
+            },
+            _ => return,
+        };
+        for &a in attrs {
+            let node = *self.ast.attrs.get(a);
+            let Some(name) = attr_name(&node) else { continue };
+            let msg = self
+                .diag(DiagId::sema_declspec_attribute_ignored, node.loc)
+                .arg(format!("'{name}'"))
+                .arg(key);
+            self.emit(msg);
+        }
+    }
+
     /// Checks attributes against the declaration `d` they appertain to
     /// ([dcl.attr]), dropping (and reporting) those that cannot apply to
     /// it: `alignas` ([`Sema::check_alignas_subject`]), the statement
@@ -135,6 +211,15 @@ impl Sema<'_, '_> {
                 false
             }
             AttrKind::NODISCARD => self.check_nodiscard_subject(d, kind, node),
+            // clang `handleDeprecatedAttr`: not (yet) on a
+            // using-declaration.
+            AttrKind::DEPRECATED if kind == DeclKind::Using => {
+                let msg = self
+                    .diag(DiagId::sema_attribute_no_effect_on_using, node.loc)
+                    .arg("'deprecated'");
+                self.emit(msg);
+                false
+            }
             AttrKind::NORETURN if node.is_gnu_spelling() => self.check_gnu_noreturn(d, kind, node),
             // [dcl.attr.noreturn]/1.
             AttrKind::NORETURN => {

@@ -73,7 +73,7 @@ impl Sema<'_, '_> {
 
     /// The class whose member-specification is being parsed, if the
     /// innermost scope is a class scope.
-    fn member_spec_class(&self) -> Option<DeclId> {
+    pub(crate) fn member_spec_class(&self) -> Option<DeclId> {
         let s = self.scopes.iter().rev().find(|s| !s.is_transparent())?;
         if s.kind == ScopeKind::Record { s.entity } else { None }
     }

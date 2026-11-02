@@ -201,6 +201,9 @@ pub struct DeclSpec {
     pub keyword: TagKeyword,
     /// Attributes appertaining to the declared entities.
     pub attrs: Vec<AttrId>,
+    /// Where a leading C++11 attribute-specifier-seq (`[[...]]`,
+    /// `alignas`) starts, when one was written ([dcl.pre]/5).
+    pub lead_cxx11: Option<Loc>,
     /// Where the declaration starts.
     pub loc: Loc,
     /// An error was already reported.

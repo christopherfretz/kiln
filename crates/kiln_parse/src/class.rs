@@ -1076,7 +1076,7 @@ impl Parser<'_, '_> {
                 self.parse_using();
                 true
             }
-            (Some(Punct::LSquare), _) if self.at_attributed_using() => {
+            _ if self.at_attributed_using() => {
                 self.parse_attributed_using();
                 true
             }
@@ -1239,6 +1239,19 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// [dcl.attr.grammar]/5: an attribute-specifier-seq appertaining to
+    /// a friend declaration requires it to be a definition: before a
+    /// friend type or friend function declaration clang reports `an
+    /// attribute list cannot appear here` at its start and drops it.
+    fn prohibit_friend_lead_attrs(&mut self, ds: &mut DeclSpec) {
+        if ds.friend.is_none() {
+            return;
+        }
+        let Some(at) = ds.lead_cxx11 else { return };
+        self.s.error(DiagId::parse_attributes_not_allowed, at);
+        Self::drop_lead_cxx11(&self.s.ast.attrs, ds);
+    }
+
     /// member-declaration ([class.mem]; clang's
     /// `ParseCXXClassMemberDeclaration`).
     pub(crate) fn parse_member_declaration(&mut self) {
@@ -1255,8 +1268,9 @@ impl Parser<'_, '_> {
         if !self.stack_ok() || self.parse_member_declaration_leader() {
             return;
         }
-        let ds = self.parse_decl_specifiers(DeclaratorContext::Member);
+        let mut ds = self.parse_decl_specifiers(DeclaratorContext::Member);
         if self.at(Punct::Semi) {
+            self.prohibit_friend_lead_attrs(&mut ds);
             self.bump();
             self.act_on_member_decl_spec_only(&ds);
             return;
@@ -1306,6 +1320,9 @@ impl Parser<'_, '_> {
             if first && is_fn && self.at_function_definition() {
                 self.parse_member_function_definition(&ds, base, &d, parts);
                 return;
+            }
+            if first {
+                self.prohibit_friend_lead_attrs(&mut ds);
             }
             // clang's in-class initializer classification.
             let mut nsdmi = false;
