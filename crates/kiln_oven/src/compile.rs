@@ -981,6 +981,25 @@ impl<'a> Compiler<'a> {
         self.trap_loc(loc, msg.to_owned());
     }
 
+    /// Traps (and returns true) if `e` is a `_BitInt(N)` with `N > 128`:
+    /// the Oven's integers are register values of at most 128 bits; the
+    /// arbitrary-precision path is not implemented yet (spec/oven.md
+    /// "`_BitInt`").
+    fn wide_bit_int(&mut self, e: ExprId) -> bool {
+        let q = self.b.ast().exprs.get(e).ty();
+        let wide = matches!(
+            self.b.ast().types.canonical_view(q),
+            TypeView::BitInt { width, .. } if width > 128
+        );
+        if wide {
+            self.trap(
+                e,
+                "kiln: constant evaluation of a _BitInt wider than 128 bits is not supported yet",
+            );
+        }
+        wide
+    }
+
     /// [expr.const]/10.22 (before C++26 and P3068, as clang 19):
     /// evaluating a throw-expression is not a core constant expression;
     /// the generic note at the `throw`.
@@ -2397,6 +2416,9 @@ impl Compiler<'_> {
     }
 
     fn rv_inner(&mut self, e: ExprId, dst: u32) {
+        if self.wide_bit_int(e) {
+            return;
+        }
         let n = self.node(e);
         let ty = self.ety(e);
         match n.kind() {
@@ -4034,6 +4056,9 @@ impl Compiler<'_> {
     }
 
     fn init_inner(&mut self, e: ExprId, p: u32, ty: OTy) {
+        if self.wide_bit_int(e) {
+            return;
+        }
         let n = self.node(e);
         match n.kind() {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
