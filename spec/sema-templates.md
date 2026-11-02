@@ -1046,7 +1046,8 @@ errors.
 | `static_assert` | fully: substituted and evaluated now | — |
 | member template | declaration: a new template decl, with outer levels substituted and its own parameters retained (§5.1); `TemplateInfo.member_of` points to the pattern member | its own specializations need it |
 | friend | declaration; a hidden friend's definition is in `instantiated_from` | odr-use (§4.9) |
-| anonymous union | definition | — |
+| anonymous struct or union, unnamed member class | definition, with the unnamed member object and the injected `IndirectField`s (`subst/anon.rs`) | — |
+| unnamed bit-field | declaration, width substituted (a non-dependent width's `ConstantExpr` is not wrapped again) | — |
 
 6. Complete the class:
    - implicit special-member declarations (S3C);
@@ -1756,7 +1757,15 @@ recomputed exactly as for non-template code (clang's
   parser replays them. Local enumerations are substituted the same way.
   An anonymous struct or union member of a local class is instantiated as
   in a class template (`unnamed_member_class`), which declares its member
-  object and injects its members' names (WP-192).
+  object and injects its members' names (WP-192). A block-scope
+  anonymous union of the body (of a function template, a lambda or a
+  generic lambda in one) is defined by its declaration statement's class
+  (`local_class`, marked anonymous), then its unnamed object, the
+  statement's next declaration, is declared again for it
+  (`local_anonymous_object`), injecting the members' names; the pattern
+  names a member as `obj.member`, so only the object is linked (WP-311,
+  `tests/conformance/class.union.anon/function-template-locals.cpp`,
+  `template-unnamed-members-ast.cpp`).
 - **Member templates** are created as in §4.6.
 - **`static_assert`** is evaluated with the substituted condition.
 - **`using` declarations** with packs give a `UsingPack` decl.

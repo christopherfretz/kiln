@@ -1057,7 +1057,13 @@ impl Substituter<'_, '_, '_> {
             return Ok(f);
         }
         let fd: Option<FieldData> = self.sema.ast.decls.field(d).copied();
-        if let Some(w) = fd.and_then(|x| x.bit_width) {
+        if let Some(mut w) = fd.and_then(|x| x.bit_width) {
+            // A non-dependent width is already a `ConstantExpr`, which
+            // the declarator adds again (clang `TransformConstantExpr`
+            // transforms the operand).
+            if self.sema.ast.exprs.get(w).kind() == kiln_ast::expr::ExprKind::ConstantExpr {
+                w = self.sema.ast.exprs.operand(w);
+            }
             dr.bit_width = Some(self.expr(w)?);
         }
         if let Some(x) = fd.filter(|x| x.init.is_some()) {
