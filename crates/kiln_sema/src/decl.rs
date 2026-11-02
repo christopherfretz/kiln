@@ -1656,9 +1656,13 @@ impl Sema<'_, '_> {
     }
 
     /// Records a block-scope function or `extern` variable declaration
-    /// for later namespace-scope redeclarations.
+    /// for later namespace-scope redeclarations. A declaration in a
+    /// template pattern is not recorded: only its instantiations
+    /// redeclare the entity ([temp.spec.general]/2; clang does not chain
+    /// a dependent-context local extern, WP-330).
     fn note_local_extern(&mut self, name: Symbol, d: DeclId) {
         if self.in_local_scope()
+            && !self.in_template()
             && let Some(ns) = self.enclosing_namespace()
         {
             self.local_externs.push((ns, name, d));
@@ -3841,12 +3845,11 @@ impl Sema<'_, '_> {
         let old_def = !old_extern;
         let new_extern = storage == VarStorage::Extern;
         let new_static = storage == VarStorage::Static;
-        let t = &self.ast.types;
-        let compatible = t.same_type(pty, ty)
-            || t.is_array(pty)
-                && t.is_array(ty)
-                && (t.array_size(pty).is_none() || t.array_size(ty).is_none())
-                && t.element(pty).zip(t.element(ty)).is_some_and(|(a, b)| t.same_type(a, b));
+        // A dependent type is checked at instantiation (clang
+        // `MergeVarDeclTypes` for a local variable; WP-330).
+        let compatible = self.redecl_var_types_compatible(pty, ty)
+            || self.is_dependent_type(pty)
+            || self.is_dependent_type(ty);
         let n = sym_str(self, name);
         // An `extern` that also finds a declaration with linkage in the
         // enclosing namespace (or an earlier block-scope `extern`) sees an
@@ -3930,7 +3933,11 @@ impl Sema<'_, '_> {
             let block = local.is_some() && self.in_local_scope();
             if pn.kind() == DeclKind::Var && !block {
                 let pty = pn.ty().unwrap_or(QualType::ERROR);
-                let compatible = self.redecl_var_types_compatible(pty, ty);
+                // A block-scope `extern` of dependent type is checked at
+                // instantiation (clang `MergeVarDeclTypes`; WP-330).
+                let compatible = self.redecl_var_types_compatible(pty, ty)
+                    || self.in_local_scope()
+                        && (self.is_dependent_type(pty) || self.is_dependent_type(ty));
                 if !compatible {
                     // clang's `diagnoseVarDeclTypeMismatch`: "redefinition" if
                     // the new declaration is a definition (judged before its
