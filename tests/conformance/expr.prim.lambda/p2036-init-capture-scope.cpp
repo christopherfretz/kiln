@@ -17,7 +17,7 @@ template <class T> constexpr T tmpl(T t) {
   return l();
 }
 static_assert(tmpl(2L) == 4);
-static_assert(tmpl('a') == 'a' * 2);
+static_assert(tmpl('0') == '0' * 2);  // '0' * 2 = 96 fits a signed char on every target
 
 template <class... T> constexpr auto pack(T... t) {
   return [... xs = t]() -> decltype((xs + ...)) { return (xs + ...); }();
