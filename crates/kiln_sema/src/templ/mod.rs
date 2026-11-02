@@ -40,7 +40,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::templates::{SpecKind, is_template_kind};
-use kiln_ast::types::TemplateArg;
+use kiln_ast::types::{TemplateArg, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_source::Loc;
@@ -49,6 +49,10 @@ use kiln_source::symbol::Symbol;
 use crate::Sema;
 use crate::declspec::ParamInfo;
 use crate::scope::{Ns, Scope, ScopeKind};
+
+/// A type-constraint `C<A...>` of a placeholder: the concept and the
+/// arguments after the constrained type.
+pub type TypeConstraint = (DeclId, Vec<TemplateArg>);
 
 /// A template parameter list being parsed or waiting for its
 /// declaration (one per `ScopeKind::TemplateParams` scope, plus invented
@@ -1189,6 +1193,58 @@ impl Sema<'_, '_> {
             self.builder().set_parm_constraint(p, e);
         }
         ty
+    }
+
+    /// clang's `err_auto_not_allowed` for a parameter's placeholder:
+    /// `decltype(auto)` in any parameter, `auto` in a parameter of a
+    /// function declarator that declares no function ([dcl.fct]/22,
+    /// [dcl.spec.auto.general]/2-3). `site`: 0 a function prototype, 1
+    /// one that is not a function declaration, 2 a lambda parameter.
+    /// Returns `int`, the type clang recovers with.
+    pub fn act_on_misplaced_param_placeholder(
+        &mut self,
+        loc: Loc,
+        decltype_auto: bool,
+        site: u8,
+    ) -> QualType {
+        let msg = self
+            .diag(DiagId::sema_auto_not_allowed_prototype, loc)
+            .arg(u8::from(decltype_auto))
+            .arg(site);
+        self.emit(msg);
+        QualType::INT
+    }
+
+    /// The undeduced placeholder of `t`, a parameter's trailing return
+    /// type (under pointer and reference declarators, as
+    /// [`Sema::replace_placeholder`] rewrites it): whether it is
+    /// `decltype(auto)`, and its type-constraint with the extra arguments.
+    pub fn trailing_return_placeholder(
+        &self,
+        t: QualType,
+    ) -> Option<(bool, Option<TypeConstraint>)> {
+        let mut cur = t;
+        for _ in 0..256 {
+            match self.ast.types.canonical_view(cur) {
+                TypeView::Auto { keyword, deduced: None, concept, args, .. } => {
+                    let extra = args.map(|a| self.ast.types.args(a).to_vec()).unwrap_or_default();
+                    return Some((
+                        keyword == kiln_ast::types::AutoKeyword::DecltypeAuto,
+                        concept.map(|c| (c, extra)),
+                    ));
+                }
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// `t` with its trailing-return placeholder replaced by the invented
+    /// template parameter type `with` (clang invents one for an `auto` in
+    /// a parameter's trailing return type, `void f(auto (*p)() -> auto)`).
+    pub fn replace_trailing_return_placeholder(&mut self, t: QualType, with: QualType) -> QualType {
+        self.replace_placeholder(t, with)
     }
 
     /// Before a function declarator's declaration is created: finishes
