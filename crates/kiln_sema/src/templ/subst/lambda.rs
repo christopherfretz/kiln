@@ -19,6 +19,7 @@ use super::{DeclOrPack, SubstFail, SubstResult, Substituter};
 use crate::declspec::{Chunk, Declarator, DeclaratorContext};
 use crate::init::Initializer;
 use crate::lambda::{LambdaCaptureSpec, LambdaIntroducer, LambdaSpecifiers};
+use crate::templ::pack::Expansion;
 
 impl Substituter<'_, '_, '_> {
     /// The lambda-expression `e` of the pattern.
@@ -74,16 +75,23 @@ impl Substituter<'_, '_, '_> {
         self.lambda_constraints(head.map(|h| h.0), call_op, new_op);
         self.lambda_default_args(call_op, new_op);
         // The init-capture variables, by name.
-        for v in init_vars {
-            let name = self.sema.ast.decls.get(v).name();
-            let caps = self.sema.ast.exprs.lambdas.get(lambda).captures.clone();
-            if let Some(x) = caps
-                .iter()
-                .filter(|c| c.init)
-                .filter_map(|c| c.var)
-                .find(|&x| self.sema.ast.decls.get(x).name() == name)
-            {
-                self.locals.insert(v, DeclOrPack::Decl(x));
+        // The init-capture variables, in order (several pattern
+        // variables share a name after an earlier expansion of an
+        // init-capture pack); an expanded pack maps to all its elements.
+        let caps = self.sema.ast.exprs.lambdas.get(lambda).captures.clone();
+        let mut news = caps.iter().filter(|c| c.init).filter_map(|c| c.var);
+        for (v, n) in init_vars {
+            let vars: Vec<kiln_ast::DeclId> = news.by_ref().take(n.unwrap_or(1)).collect();
+            match n {
+                Some(_) => {
+                    let l = self.sema.ast.lists.push(&vars);
+                    self.locals.insert(v, DeclOrPack::Pack(l));
+                }
+                None => {
+                    if let Some(&x) = vars.first() {
+                        self.locals.insert(v, DeclOrPack::Decl(x));
+                    }
+                }
             }
         }
         let rbrace = self.sema.ast.stmts.rbrace(body);
@@ -102,14 +110,51 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// The explicit captures of the pattern into `intro`; the
-    /// init-capture variables of the pattern, in order.
+    /// init-capture variables of the pattern, in order, each with
+    /// the number of captures an expanded init-capture pack became.
     fn lambda_captures(
         &mut self,
         captures: &[LambdaCapture],
         intro: &mut LambdaIntroducer,
-    ) -> SubstResult<Vec<kiln_ast::DeclId>> {
+    ) -> SubstResult<Vec<(kiln_ast::DeclId, Option<usize>)>> {
         let mut init_vars = Vec::new();
         for c in captures.iter().filter(|c| !c.implicit) {
+            if c.ellipsis.is_valid()
+                && let Some(v) = c.var.filter(|_| c.init)
+            {
+                // An init-capture pack `...xs = init`
+                // ([expr.prim.lambda.capture]/17): one init-capture per
+                // element of the expanded pattern, all named `xs`; kept
+                // as a pack when the expansion stays unexpanded.
+                let i = self.sema.ast.decls.var(v).and_then(|x| x.init).ok_or(SubstFail)?;
+                let name = self.sema.ast.decls.get(v).name().as_ident().map(|s| (s, c.loc));
+                let elems = match self.expand_pattern_at(Some(c.ellipsis), |s| {
+                    match s.initializer(i, InitStyle::C)? {
+                        Some(Initializer::Expr(x)) => Ok(x),
+                        _ => Err(SubstFail),
+                    }
+                })? {
+                    Expansion::Elements(xs) => {
+                        init_vars.push((v, Some(xs.len())));
+                        xs.into_iter().map(|x| (None, x)).collect()
+                    }
+                    Expansion::Unexpanded(x) => {
+                        init_vars.push((v, None));
+                        vec![(Some(c.ellipsis), x)]
+                    }
+                };
+                for (ellipsis, x) in elems {
+                    intro.captures.push(LambdaCaptureSpec {
+                        kind: c.kind,
+                        name,
+                        loc: c.loc,
+                        ellipsis,
+                        init: Some(x),
+                        var: Some(v),
+                    });
+                }
+                continue;
+            }
             if c.ellipsis.is_valid() {
                 // A simple-capture pack `ts...` / `&ts...`
                 // ([expr.prim.lambda.capture]/18): one capture per
@@ -117,6 +162,21 @@ impl Substituter<'_, '_, '_> {
                 let params = match c.var.filter(|_| !c.init).and_then(|v| self.locals.get(&v)) {
                     Some(&DeclOrPack::Pack(l)) => {
                         self.sema.ast.lists.iter::<kiln_ast::DeclId>(l).collect::<Vec<_>>()
+                    }
+                    // Keep mode: the pack belongs to a retained level (a
+                    // generic lambda's parameter pack while the enclosing
+                    // template is instantiated) and stays a capture pack.
+                    Some(&DeclOrPack::Decl(v)) if self.sema.is_pack_decl(v) => {
+                        let name = self.sema.ast.decls.get(v).name().as_ident().map(|s| (s, c.loc));
+                        intro.captures.push(LambdaCaptureSpec {
+                            kind: c.kind,
+                            name,
+                            loc: c.loc,
+                            ellipsis: Some(c.ellipsis),
+                            init: None,
+                            var: Some(v),
+                        });
+                        continue;
                     }
                     _ => return self.unimplemented("capture packs in templates", c.loc),
                 };
@@ -140,7 +200,7 @@ impl Substituter<'_, '_, '_> {
             let init = match c.var.filter(|_| c.init) {
                 Some(v) => {
                     let i = self.sema.ast.decls.var(v).and_then(|x| x.init).ok_or(SubstFail)?;
-                    init_vars.push(v);
+                    init_vars.push((v, None));
                     match self.initializer(i, InitStyle::C)? {
                         Some(Initializer::Expr(x)) => Some(x),
                         _ => return self.unimplemented("this init-capture in a template", c.loc),
@@ -151,7 +211,10 @@ impl Substituter<'_, '_, '_> {
             // A simple capture names its variable again directly: the
             // name may not be in scope (a nested lambda instantiated with
             // its enclosing generic lambda's call operator).
-            let var = match c.var.filter(|_| !c.init) {
+            // An init-capture names the pattern's variable (no duplicate
+            // check: an expanded pack's elements share a name).
+            let var = match c.var {
+                Some(v) if c.init => Some(v),
                 Some(v) => Some(self.find_instantiated_decl(v, c.loc)?),
                 None => None,
             };

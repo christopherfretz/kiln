@@ -71,6 +71,8 @@ keywords! {
     False = "false";
     Float = "float";
     Float128 = "__float128";
+    Float16 = "_Float16";
+    Fp16 = "__fp16";
     For = "for";
     Friend = "friend";
     Goto = "goto";

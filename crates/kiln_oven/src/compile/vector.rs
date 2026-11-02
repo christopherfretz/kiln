@@ -187,7 +187,8 @@ impl Compiler<'_> {
     /// `__builtin_shufflevector(a, b, i...)` with folded indices (clang
     /// `ExprConstant` `evalShuffleGeneric`): lane `k` of the result is
     /// lane `i_k` of `a` followed by `b`; a `-1` (poison) lane is not a
-    /// constant (clang's note, at the builtin).
+    /// constant (clang's `err_` note, printed as an error, at the
+    /// builtin; `Note::is_error`).
     fn vec_shuffle(&mut self, e: ExprId) -> Vec<u32> {
         let ast = self.ast();
         let subs: Vec<ExprId> = ast.lists.iter(ast.exprs.shuffle_subs(e)).collect();
@@ -199,6 +200,12 @@ impl Compiler<'_> {
             self.unsupported(e);
             return Vec::new();
         };
+        if subs.len() == 2 {
+            // The unary form with a vector mask: clang 19 crashes
+            // evaluating it; kiln reports the generic note.
+            self.throw_invalid(e);
+            return Vec::new();
+        }
         let mut lanes = self.vec_regs(x);
         lanes.extend(self.vec_regs(y));
         let mut out = Vec::with_capacity(mask.len());
