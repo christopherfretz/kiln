@@ -2085,7 +2085,6 @@ constexpr defaulted special member (C++23) is marked invalid, as clang's
 `setInvalidDecl`.
 
 **Left for later.**
-- Codegen of a constant global of a class with virtual bases.
 - Sema's final-overrider and used-virtual-member walks are exponential in
   the depth of a virtual lattice (`class/virtual/graph.rs`,
   `class/virtual/used.rs`).
