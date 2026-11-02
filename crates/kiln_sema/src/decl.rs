@@ -2039,9 +2039,21 @@ impl Sema<'_, '_> {
             } else {
                 ty
             };
-            self.act_on_var(ds, ty, d, name)
+            let v = self.act_on_var(ds, ty, d, name);
+            if let Some(tl) = ds.type_loc
+                && self.is_ctad_placeholder(ty)
+            {
+                let _ = self.templ.ctad_var_type_locs.insert(v, tl);
+            }
+            v
         };
         if invalid {
+            self.ast.decls.set_flags(decl, DeclFlags::INVALID);
+        } else if d.ctx == DeclaratorContext::Member
+            && let Some(w) = d.bit_width
+            && self.ast.decls.field(decl).is_none()
+        {
+            self.non_field_bit_width(ds, ty, name, d.name_loc(), w);
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
         }
         if dropped_local {
@@ -3721,9 +3733,35 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// A member declarator with a bit-field width that declared no
+    /// field ([class.bit]/3, clang `ActOnCXXMemberDeclarator`): a static
+    /// data member, a typedef or a function, each diagnosed at its name
+    /// with the width's range. The width is dropped.
+    fn non_field_bit_width(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        name: Symbol,
+        loc: Loc,
+        w: ExprId,
+    ) {
+        let n = sym_str(self, name);
+        let msg = if ds.is_typedef() {
+            self.diag(DiagId::sema_typedef_not_bitfield, loc).arg(n)
+        } else if self.ast.types.is_function(ty) {
+            self.diag(DiagId::sema_bitfield_non_integral, loc).arg(n).arg(self.ty_arg(ty))
+        } else {
+            self.diag(DiagId::sema_static_not_bitfield, loc).arg(n)
+        };
+        let msg = msg.range(self.expr_range(w));
+        self.emit(msg);
+    }
+
     /// Checks a bit-field width ([class.bit]/1): an integral constant
-    /// expression, wrapped in a `ConstantExpr`.
-    /// Diagnostics point at the field's location `loc`, as clang's do.
+    /// expression, wrapped in a `ConstantExpr` (clang `VerifyBitField`).
+    /// Diagnostics point at the field's location `loc`, as clang's do,
+    /// with the width's range where clang gives one (non-integral field
+    /// type, zero width), or at the width for a non-integral width.
     fn bit_width(
         &mut self,
         w: ExprId,
@@ -3731,11 +3769,15 @@ impl Sema<'_, '_> {
         name: Option<&str>,
         loc: Loc,
     ) -> Option<ExprId> {
-        if self.expr_is_value_dependent(w) || self.is_dependent_type(ty) {
-            return Some(w);
+        if self.is_err_expr(w) {
+            return None;
         }
         let t = &self.ast.types;
-        if !(t.is_integral(ty) || t.as_enum(ty).is_some() || self.is_error_type(ty)) {
+        if !(self.is_dependent_type(ty)
+            || t.is_integral(ty)
+            || t.as_enum(ty).is_some()
+            || self.is_error_type(ty))
+        {
             let msg = match name {
                 Some(n) => {
                     self.diag(DiagId::sema_bitfield_non_integral, loc).arg(n).arg(self.ty_arg(ty))
@@ -3744,11 +3786,37 @@ impl Sema<'_, '_> {
                     self.diag(DiagId::sema_anon_bitfield_non_integral, loc).arg(self.ty_arg(ty))
                 }
             };
+            let msg = msg.range(self.expr_range(w));
+            self.emit(msg);
+            return None;
+        }
+        if self.expr_is_value_dependent(w) || self.is_dependent_type(ty) {
+            return Some(w);
+        }
+        // clang `VerifyIntegerConstantExpression`: the width has integral
+        // or unscoped enumeration type (a class type converts below).
+        let wt = self.ast.exprs.get(w).ty();
+        let t = &self.ast.types;
+        if !(t.is_integral(wt)
+            || t.as_enum(wt).is_some_and(|en| !self.is_scoped_enum(en))
+            || t.as_record(wt).is_some()
+            || self.is_error_type(wt))
+        {
+            let msg = self
+                .diag(DiagId::sema_ice_not_integral, self.begin_loc(w))
+                .arg(self.ty_arg(wt))
+                .range(self.expr_range(w));
             self.emit(msg);
             return None;
         }
         let c = conv::decay(self, w);
+        let errors = self.diags.error_count();
         let c = self.act_on_constant_full_expr(c);
+        if self.diags.error_count() > errors {
+            // A member named without an object (clang returns an
+            // invalid expression and drops the width).
+            return None;
+        }
         let v = match self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(w))) {
             Ok(v) => v,
             // clang `VerifyBitField`: `AllowFold`.
@@ -3769,13 +3837,15 @@ impl Sema<'_, '_> {
         if v == 0
             && let Some(n) = name
         {
-            let msg = self.diag(DiagId::sema_bitfield_zero_width, loc).arg(n);
+            let msg =
+                self.diag(DiagId::sema_bitfield_zero_width, loc).arg(n).range(self.expr_range(w));
             self.emit(msg);
             return None;
         }
         if let Some((bits, _)) = constfold::int_info(&self.ast, ty) {
-            let bits = if self.ast.types.builtin(ty) == Some(BuiltinType::Bool) { 8 } else { bits };
+            // clang warns for every integral type but `bool`.
             if v > i128::from(bits)
+                && self.ast.types.builtin(ty) != Some(BuiltinType::Bool)
                 && let Some(n) = name
             {
                 let msg = self
@@ -4378,7 +4448,7 @@ impl Sema<'_, '_> {
         }
         if self.undeduced_ctad(ty).is_some() {
             // [dcl.type.class.deduct]/1 (WP-071b).
-            ty = self.ctad_for_initializer(ty, &init, direct, loc).unwrap_or(QualType::ERROR);
+            ty = self.ctad_for_var(v, ty, &init, direct, loc);
             self.ast.decls.set_ty(v, ty);
             if self.is_error_type(ty) {
                 self.ast.decls.set_flags(v, DeclFlags::INVALID);
@@ -5218,24 +5288,10 @@ impl Sema<'_, '_> {
     }
 
     /// Marks a type-name's declaration referenced ([basic.def.odr]: clang's
-    /// `isReferenced` for types).
+    /// `isReferenced` for types): the declaration lookup found, not the
+    /// rest of its chain (clang `isThisDeclarationReferenced`).
     pub fn mark_type_referenced(&mut self, d: DeclId) {
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
-        let first = self.ast.first(d);
-        // (Not a class a friend declaration introduced: clang leaves it
-        // unreferenced once a later declaration makes the name visible.)
-        // (Nor a member of an implicit specialization explicitly
-        // specialized: lookup finds the specialization, [temp.expl.spec]/1.)
-        let explicit_member = self
-            .ast
-            .member_spec_info(first)
-            .is_some_and(|(_, m)| m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization);
-        if first != d
-            && self.ast.decls.get(first).misc().friend() != FriendKind::Undeclared
-            && !explicit_member
-        {
-            self.ast.decls.set_flags(first, DeclFlags::REFERENCED);
-        }
     }
 
     pub(crate) fn tag_kind_of(keyword: TagKeyword) -> TagKind {
@@ -5589,7 +5645,8 @@ impl Sema<'_, '_> {
                     }
                     prev = None;
                 } else if use_ == TagUse::Reference {
-                    self.mark_type_referenced(p);
+                    // (Not marked referenced: clang `ActOnTag` marks no
+                    // declaration an elaborated-type-specifier names.)
                     self.check_name_access_as(n, qualifier, p, nloc, LookupKind::Tag);
                     self.diagnose_type_name_use(p, nloc);
                     return p;
@@ -5618,10 +5675,10 @@ impl Sema<'_, '_> {
                     // A class template redeclaration is a new decl with a
                     // `ClassTemplateDecl` of its own (clang
                     // `CheckClassTemplate`; `finish_template_pattern`
-                    // checks its head, [temp.param]/12, /14). A class
-                    // redeclaration creates none, unless only a friend
-                    // declaration introduced it ([namespace.memdef]/3).
-                    if inst || head.is_none() {
+                    // checks its head, [temp.param]/12, /14), and so is a
+                    // class redeclaration `struct N; struct N;` (clang
+                    // `ActOnTag`): both join `p`'s chain (below).
+                    if inst || head.is_none() && is_enum {
                         return p;
                     }
                 }
@@ -6679,8 +6736,8 @@ impl Sema<'_, '_> {
             .arg(self.const_display(lv))
             .arg(op)
             .arg(self.const_display(rv))
-            .range(self.expr_range(l))
-            .range(self.expr_range(r));
+            // clang `DiagnoseStaticAssertDetails`: the operator's range.
+            .range(self.expr_range(c));
         d.with_note(note)
     }
 
@@ -6743,6 +6800,21 @@ impl Sema<'_, '_> {
                 invalid = true;
             }
         }
+        // [dcl.pre]/5, [class.mem.general]/3: a member-declaration or
+        // declaration without declarators declares at least one name; an
+        // anonymous union or struct with no member declares none (clang
+        // `BuildAnonymousStructOrUnion`, once, for the template's
+        // pattern: an instantiation is not diagnosed again).
+        if self.inst.stack.is_empty()
+            && !self.ast.decls.members(rec).any(|m| self.kind_of(m) == DeclKind::Field)
+        {
+            let d = self.diag(DiagId::sema_no_declarators, ds.loc);
+            let d = match self.specifiers_before_type(ds) {
+                Some(end) => d.range(Span::new(ds.loc, end)),
+                None => d,
+            };
+            self.emit(d);
+        }
         let ty = self.tag_type(rec);
         let h = DeclHead::new(ctx, DeclName::EMPTY, ds.loc).flags(DeclFlags::IMPLICIT);
         let obj = if in_class {
@@ -6795,6 +6867,26 @@ impl Sema<'_, '_> {
             self.register_local(name, ind);
         }
         obj
+    }
+
+    /// The end of the decl-specifiers written before the type-specifier
+    /// of `ds` (`static const` in `static const union { };`), clang's
+    /// `DeclSpec` source range: `None` when the type-specifier comes
+    /// first. Read from the source text before the type-specifier.
+    fn specifiers_before_type(&self, ds: &DeclSpec) -> Option<Loc> {
+        let t = ds.type_loc?;
+        let sm = self.diags.sm();
+        let (file, pos) = sm.offset_of(t)?;
+        let (_, start) = sm.offset_of(ds.loc)?;
+        if pos <= start {
+            return None;
+        }
+        let text = sm.text(file).as_bytes();
+        let mut i = pos as usize;
+        while i > start as usize && text.get(i - 1).is_some_and(u8::is_ascii_whitespace) {
+            i -= 1;
+        }
+        u32::try_from(i).ok().filter(|&o| o > start).map(|o| sm.loc(file, o))
     }
 
     // -- name classification -----------------------------------------------------

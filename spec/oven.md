@@ -1601,6 +1601,10 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   `non-literal type 'X' cannot be used in a constant expression`, also
   for an inheriting constructor through a virtual base (WP-146; the
   evaluated variable itself is rejected by sema, sema-class.md §4.10).
+  `call_frame` makes the same check for every by-value argument of
+  class type, to a declared or a variadic parameter (clang
+  `EvaluateCallArg` → `EvaluateInPlace`): a non-literal one traps at the
+  argument before it is initialized (WP-320, sema.md §5.20).
   The remaining `VIRTUAL_UNSUPPORTED` traps (a `VirtualBase` ctor-init, a
   class cast through a virtual base) are therefore unreachable from
   valid code, so dispatch,
