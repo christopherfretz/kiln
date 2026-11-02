@@ -71,6 +71,7 @@ pub mod stack_guard;
 pub mod stmt;
 mod struct_bind;
 mod sve;
+mod template_id_typo;
 mod switch_conv;
 mod switch_enum;
 pub mod target;

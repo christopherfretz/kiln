@@ -247,6 +247,25 @@ impl Sema<'_, '_> {
         self.is_err_expr(e)
     }
 
+    /// clang's `Expr::containsErrors`: `e` or an expression under it is
+    /// erroneous (a `RecoveryExpr` or of the error type). The walk is
+    /// bounded: it serves parser recovery only (WP-391).
+    pub fn contains_errors(&self, e: ExprId) -> bool {
+        let mut stack = vec![e];
+        let mut budget = 1usize << 16;
+        while let Some(x) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if self.is_err_expr(x) {
+                return true;
+            }
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        false
+    }
+
     /// True if an integer type `t` is narrower than `int`: arithmetic on
     /// it is done in `int` and cannot overflow (clang's
     /// `UnaryOperator::canOverflow` rule).
@@ -2798,6 +2817,8 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         // [over.over]/1: an overload set needs a target; only an
         // assignment's right operand has one.
+        let l = self.resolve_single_overload_candidate(l);
+        let r = if op == BinaryOp::Assign { r } else { self.resolve_single_overload_candidate(r) };
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
         }
