@@ -556,7 +556,7 @@ impl Sema<'_, '_> {
         d: &mut DeducedArgs,
     ) -> Tdk {
         let Some(parm) = e.and_then(|e| self.nttp_of_expr(e)) else {
-            return Tdk::Success;
+            return self.check_nondeduced_value(e, p, a, d);
         };
         if parm.depth != d.depth {
             return Tdk::Success;
@@ -570,6 +570,37 @@ impl Sema<'_, '_> {
                 d.info.second = Some(a);
                 Tdk::NonDeducedMismatch
             }
+        }
+    }
+
+    /// A non-deduced non-type `P` that is a value already (a written
+    /// constant, or a parameter given explicitly and substituted,
+    /// [temp.deduct]/2) against a value `A`: unequal values are a
+    /// mismatch now, so a derived-to-base deduction tries the next base
+    /// ([temp.deduct.call]/4.3; clang converts the substituted argument
+    /// to an integral one). Anything else is checked when the deduction
+    /// is finished.
+    fn check_nondeduced_value(
+        &mut self,
+        e: Option<ExprId>,
+        p: TemplateArg,
+        a: TemplateArg,
+        d: &mut DeducedArgs,
+    ) -> Tdk {
+        let (Some(e), ArgView::Value { value, .. }) = (e, a.view()) else {
+            return Tdk::Success;
+        };
+        if self.expr_is_value_dependent(e) {
+            return Tdk::Success;
+        }
+        let Some(av) = self.const_int(value) else { return Tdk::Success };
+        match self.fold_int(e) {
+            Some(pv) if pv != av => {
+                d.info.first = Some(p);
+                d.info.second = Some(a);
+                Tdk::NonDeducedMismatch
+            }
+            _ => Tdk::Success,
         }
     }
 

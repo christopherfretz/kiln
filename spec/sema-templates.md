@@ -2251,6 +2251,15 @@ A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the
 result is `MiscellaneousDeductionFailure` (clang).
+A non-type argument of `P` that is not a deduced parameter but a value
+already (a written constant, or an explicitly given parameter substituted
+into `P`, [temp.deduct]/2) is compared with `A`'s value during the match:
+unequal values are `NonDeducedMismatch`, so the base walk moves on to the
+next base (`check_nondeduced_value`; clang converts the substituted
+argument to an integral one). `std::get<1>(tuple)` matches
+`_Tuple_impl<1, _Head, _Tail...>` against the second base, not the first
+(`tests/conformance/temp.deduct.call/libstdcxx-base-explicit-nttp-mismatch.cpp`,
+WP-332).
 
 A dependent class template-id `P` written with fewer arguments than its
 template has is first completed with the template's default arguments
