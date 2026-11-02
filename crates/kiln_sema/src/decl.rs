@@ -6107,6 +6107,7 @@ impl Sema<'_, '_> {
         let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
         let head = self.tag_template_head(is_enum, qualifier, use_);
         let mut prev = None;
+        let mut redefined = false;
         if let Some((n, nloc)) = name {
             if qualifier.is_none() && use_ != TagUse::Reference {
                 self.check_template_param_shadow(n, nloc);
@@ -6147,6 +6148,7 @@ impl Sema<'_, '_> {
                         let msg = self.note_prev(msg, def, true);
                         self.emit(msg);
                         prev = None;
+                        redefined = true;
                     }
                 } else if use_ == TagUse::Declaration
                     && self.ast.decls.get(p).misc().friend() != FriendKind::Undeclared
@@ -6180,6 +6182,9 @@ impl Sema<'_, '_> {
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
+        if redefined {
+            h = h.flags(DeclFlags::INVALID);
+        }
         h.lexical = Some(if qualifier.is_some() { self.ctx } else { ctx });
         let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         let d = if is_enum {
@@ -6195,12 +6200,21 @@ impl Sema<'_, '_> {
         if qualifier.is_none() {
             self.set_member_access(d);
         }
-        if let Some(t) = self.finish_template_pattern(d) {
+        let t = self.finish_template_pattern(d);
+        if let Some(t) = t {
             if qualifier.is_none() {
                 self.set_member_access(t);
             } else if self.templ.member_spec.is_some() {
                 self.specialize_member_template(t);
             }
+        }
+        if redefined {
+            // [basic.def.odr]/1, diagnosed above: the redefinition is not
+            // visible to later lookups, which find the first definition
+            // (clang's `ActOnTag` makes it anonymous and invalid), and
+            // the parser skips its body (`tag_body_skipped`).
+            self.builder().unregister_name(t.unwrap_or(d));
+            return d;
         }
         if let Some((n, _)) = name
             && self.in_local_scope()
@@ -6215,6 +6229,14 @@ impl Sema<'_, '_> {
             self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
+    }
+
+    /// True if `d`, just returned by [`Sema::act_on_tag`] for a
+    /// definition, is a redefinition whose body the parser skips
+    /// (spec/sema.md §4.4; clang neither checks its members nor declares
+    /// its enumerators).
+    pub fn tag_body_skipped(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).has(DeclFlags::INVALID)
     }
 
     /// The elaborated-type-specifier of `friend class X;`

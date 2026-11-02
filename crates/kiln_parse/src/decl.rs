@@ -1640,6 +1640,22 @@ impl Parser<'_, '_> {
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
+        if use_ == TagUse::Definition && self.s.tag_body_skipped(d) {
+            // A redefinition, diagnosed: its body is skipped and the
+            // declarators it heads get an error type (clang's invalid
+            // anonymous tag; spec/sema.md §4.4).
+            self.skip_class_body();
+            ds.invalid = true;
+            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+            let spelling = match keyword {
+                TagKeyword::Struct => "struct",
+                TagKeyword::Class => "class",
+                TagKeyword::Union => "union",
+                _ => "enum",
+            };
+            self.check_after_tag_definition(spelling, false);
+            return;
+        }
         if use_ == TagUse::Definition {
             // `struct A::B { ... }`: names in the body are looked up in
             // `A` too ([basic.lookup.unqual]/2, [class.nest]/3).

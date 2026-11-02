@@ -1308,7 +1308,18 @@ and returns the scope it names:
     a class template redeclaration is, and a later definition joins
     that chain. An enumeration redeclaration creates no decl. Test:
     class.name/redeclaration-ast.cpp.
-  - A definition checks for redefinition and kind mismatch.
+  - A definition checks for redefinition and kind mismatch. A
+    redefinition ([basic.def.odr]/1) is diagnosed once and recovered
+    from as clang's `ActOnTag` does (it makes the new tag anonymous and
+    invalid): the new decl is created `INVALID` and taken out of every
+    lookup table (`AstBuilder::unregister_name`, also its class
+    template), so later uses find the first definition rather than an
+    ambiguity — at namespace scope, in a reopened, unnamed or inline
+    namespace, in a class and in a block alike. The parser skips its
+    body (`Sema::tag_body_skipped`; no member is checked, no enumerator
+    declared) and its declarators get an error type. Gap: clang still
+    parses a base-clause there (`expected class name`). Test:
+    basic.def.odr/class-redefinition-recovery.cpp.
   - A type name marks referenced only the declaration lookup found (the
     latest in its chain; clang `isThisDeclarationReferenced`). An
     elaborated-type-specifier that finds a tag (`struct N *a`) marks
