@@ -6714,6 +6714,10 @@ impl Sema<'_, '_> {
                 n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY
             });
         }
+        let inline = match prev {
+            Some(p) => self.check_namespace_inline_mismatch(p, inline, name.map_or(loc, |n| n.1)),
+            None => inline,
+        };
         // The semantic context is the extended namespace's (an inline
         // namespace of `self.ctx`, above); the lexical one is `self.ctx`.
         let sem = prev.and_then(|p| self.ast.decls.get(p).ctx()).unwrap_or(self.ctx);
@@ -6735,6 +6739,34 @@ impl Sema<'_, '_> {
         self.scopes.push(scope);
         self.ctx = ns;
         ns
+    }
+
+    /// [namespace.def.general]/3: `inline` shall appear on the original
+    /// definition of an inline namespace and not on an extension of a
+    /// non-inline one (clang `DiagnoseNamespaceInlineMismatch`). Omitting
+    /// it on an extension of an inline namespace is allowed, but clang
+    /// warns (`-Winline-namespace-reopened-noninline`); adding it to an
+    /// extension of a non-inline one is an error. Both note the original
+    /// definition; the extension takes the original's inlineness, which
+    /// is returned.
+    fn check_namespace_inline_mismatch(&mut self, prev: DeclId, inline: bool, loc: Loc) -> bool {
+        let first = self.ast.first(prev);
+        let orig = self
+            .ast
+            .decls
+            .namespace(first)
+            .is_some_and(kiln_ast::decl::NamespaceData::is_inline);
+        if orig != inline {
+            let id = if orig {
+                DiagId::sema_inline_namespace_reopened_noninline
+            } else {
+                DiagId::sema_inline_namespace_mismatch
+            };
+            let msg = self.diag(id, loc);
+            let msg = self.note_prev(msg, first, true);
+            self.emit(msg);
+        }
+        orig
     }
 
     /// `}` of a namespace.

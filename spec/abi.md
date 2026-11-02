@@ -1155,6 +1155,30 @@ std_substitutions.cpp`, `std_cxx11_abi_tag.cpp`, `std_libcxx_spelling.cpp`,
   (`_ZZ5localB5cxx11vE1sB5cxx11`). Constructors, destructors and
   conversion functions have no return-type tags.
 
+### 8.22 Landed (WP-389): internal types in signatures
+- **Unique-external functions** (`is_unique_external`,
+  `fn_type_externally_visible`, `args_externally_visible`; clang
+  `getLVForNamespaceScopeDecl` / `getLVForClassMember` /
+  `getLVForTemplateArgumentList`): a namespace-scope function or a
+  member function is emitted `internal`, keeping its name, when its
+  return type or a parameter type is not externally visible (names a
+  type in an unnamed namespace, a local or unnamed class, directly or
+  through a typedef, pointer, reference, function type or template
+  argument). Inline functions and function templates are included. The
+  return type counts only as written: a deduced `auto` /
+  `decltype(auto)` return (`FnSpec::return_deduced`, set when sema
+  deduces a placeholder) does not make the function internal, a
+  trailing return type does. A specialization (function, class or
+  variable) is also internal when one of its template arguments is not
+  externally visible: a type, a template whose template has internal
+  linkage, or a pointer / member-pointer value naming an internal
+  entity (packs recurse; aggregate class-type values are not walked
+  yet). A class specialization that is internal this way makes its
+  members, vtable and RTTI internal too. The mangled name is unchanged
+  (no `L` prefix: that follows the storage class only). Test:
+  `tests/codegen/linkage_internal_types.cpp` (IR diff against clang 19
+  and 22).
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

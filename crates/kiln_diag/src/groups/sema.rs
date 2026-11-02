@@ -60,6 +60,7 @@ InaccessibleBase = "inaccessible-base" [];
 InconsistentMissingOverride = "inconsistent-missing-override" [];
 IncrementBool = "increment-bool" [];
 InitializerOverrides = "initializer-overrides" [];
+InlineNamespaceReopenedNoninline = "inline-namespace-reopened-noninline" [];
 InstantiationAfterSpecialization = "instantiation-after-specialization" [];
 InvalidNoreturn = "invalid-noreturn" [];
 InvalidOffsetof = "invalid-offsetof" [];
