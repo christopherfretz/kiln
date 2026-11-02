@@ -422,6 +422,22 @@ pub fn is_long(rel: &str, d: &Directives) -> Option<&'static str> {
     slow_tests().find(|&(p, _)| p == rel).map(|_| "slow_tests.txt")
 }
 
+/// Tests whose `XFAIL:` the driver ignores, with the reason (spec/libcxx.md
+/// "Outcomes"): they expect a failure that only lit's flags produce.
+/// Sorted by path.
+const XFAIL_IGNORED: &[(&str, &str)] = &[
+    // `XFAIL: *` because lit compiles with `-Werror`; the driver does not
+    // (kiln's warning set is not clang's, so `-Werror` would turn warning
+    // wording deviations into failures), so the unused variable compiles.
+    ("libcxx/selftest/pass.cpp/werror.pass.cpp", "built without -Werror"),
+    ("libcxx/selftest/sh.cpp/werror.sh.cpp", "built without -Werror"),
+];
+
+/// Why the driver ignores `rel`'s `XFAIL:`, if it does ([`XFAIL_IGNORED`]).
+pub fn xfail_ignored(rel: &str) -> Option<&'static str> {
+    XFAIL_IGNORED.iter().find(|&&(p, _)| p == rel).map(|&(_, r)| r)
+}
+
 /// What lit decides before anything runs: `Err(outcome)` ends the test
 /// (UNSUPPORTED or ERROR), `Ok` carries the directives, flags and the
 /// XFAIL expression that applies, if any.
@@ -519,6 +535,7 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
             return r;
         }
     };
+    let xfail = xfail.filter(|_| xfail_ignored(&job.rel).is_none());
     // Named like lit's `%T` (`<test file>.dir`): `RUN:` lines can see it.
     let scratch = cfg.scratch.join(format!("t{}-{name}.dir", job.index));
     if let Err(e) = std::fs::create_dir_all(&scratch) {
@@ -1064,6 +1081,25 @@ mod tests {
         assert_eq!(is_long("std/a/b.pass.cpp", &plain), None);
         let long = Directives::parse("// REQUIRES: long_tests").unwrap();
         assert_eq!(is_long("std/a/b.pass.cpp", &long), Some("REQUIRES: long_tests"));
+    }
+
+    #[test]
+    fn xfail_ignored_list() {
+        let paths: Vec<&str> = XFAIL_IGNORED.iter().map(|&(p, _)| p).collect();
+        let mut sorted = paths.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, paths);
+        for &(path, reason) in XFAIL_IGNORED {
+            assert!(path.starts_with("std/") || path.starts_with("libcxx/"), "{path}");
+            assert!(Kind::of(path.rsplit('/').next().unwrap()).is_some(), "{path}");
+            assert!(!reason.is_empty(), "{path} has no reason");
+        }
+        assert_eq!(
+            xfail_ignored("libcxx/selftest/pass.cpp/werror.pass.cpp"),
+            Some("built without -Werror")
+        );
+        assert_eq!(xfail_ignored("libcxx/selftest/pass.cpp/xfail.pass.cpp"), None);
     }
 
     /// Writes an executable script at `path` without this process ever
