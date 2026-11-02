@@ -2865,7 +2865,9 @@ impl Parser<'_, '_> {
                 // An initializer-clause pack expansion ([temp.variadic]/5.4).
                 match value {
                     InitValue::Expr(e) => value = InitValue::Expr(self.s.act_pack_expansion(e, l)),
-                    InitValue::List(_) => self.unsupported("pack expansions of braced lists", l),
+                    InitValue::List(n) => {
+                        value = InitValue::Expr(self.s.act_pack_expansion_list(&n, l));
+                    }
                 }
             }
             items.push(InitItem { designator, value });

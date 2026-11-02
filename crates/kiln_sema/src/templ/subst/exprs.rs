@@ -107,13 +107,27 @@ impl Substituter<'_, '_, '_> {
     /// keeps it as written, [`crate::Sema::dependent_init_list`]).
     fn call_arg_list(&mut self, l: kiln_ast::ids::ListId) -> SubstResult<Vec<ExprId>> {
         let v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-        if !v.iter().any(|&x| self.braced_source(x).is_some()) {
+        if !v.iter().any(|&x| self.braced_source(x).is_some() || self.braced_pattern(x).is_some())
+        {
             return self.expr_list(l);
         }
         let mut out = Vec::with_capacity(v.len());
         for x in v {
             if self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultArgExpr {
                 break;
+            }
+            if let Some(p) = self.braced_pattern(x) {
+                let ellipsis = self.sema.ast.exprs.get(x).loc();
+                match self.expand_pattern_at(Some(ellipsis), |s| s.init_list(p))? {
+                    crate::templ::pack::Expansion::Elements(ls) => {
+                        out.extend(ls.into_iter().map(|il| self.sema.act_on_braced_arg(il)));
+                    }
+                    crate::templ::pack::Expansion::Unexpanded(il) => {
+                        let e = self.sema.act_on_braced_arg(il);
+                        out.push(self.sema.act_pack_expansion(e, ellipsis));
+                    }
+                }
+                continue;
             }
             match self.braced_source(x) {
                 Some(b) => {
@@ -124,6 +138,14 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(out)
+    }
+
+    /// The braced-init-list pattern of `x` when `x` is the pack expansion
+    /// `{a, b}...` ([temp.variadic]/5.4: the pattern of an
+    /// initializer-list expansion is an *initializer-clause*).
+    fn braced_pattern(&self, x: ExprId) -> Option<ExprId> {
+        crate::templ::pack::expr_pattern(self.sema, x)
+            .filter(|&p| self.sema.ast.exprs.get(p).kind() == ExprKind::InitListExpr)
     }
 
     /// The braced-init-list an analyzed operand `x` was initialized from
@@ -1629,17 +1651,26 @@ impl Substituter<'_, '_, '_> {
         let mut out = Vec::with_capacity(items.len());
         for &x in items {
             match crate::templ::pack::expr_pattern(self.sema, x) {
-                Some(p) if self.sema.ast.exprs.get(p).kind() == ExprKind::DesignatedInitExpr => {
+                Some(p)
+                    if matches!(
+                        self.sema.ast.exprs.get(p).kind(),
+                        ExprKind::DesignatedInitExpr | ExprKind::InitListExpr
+                    ) =>
+                {
                     // `.m = e...`: one designated clause per element
-                    // (clang expands the whole `DesignatedInitExpr`).
+                    // (clang expands the whole `DesignatedInitExpr`);
+                    // `{a, b}...`: one braced-init-list per element
+                    // ([temp.variadic]/5.4).
                     let ellipsis = self.sema.ast.exprs.get(x).loc();
                     match self.expand_pattern_at(Some(ellipsis), |s| s.init_value(p))? {
                         crate::templ::pack::Expansion::Elements(v) => out.extend(v),
                         crate::templ::pack::Expansion::Unexpanded(mut it) => {
-                            if let InitValue::Expr(y) = it.value {
-                                it.value =
-                                    InitValue::Expr(self.sema.act_pack_expansion(y, ellipsis));
-                            }
+                            it.value = InitValue::Expr(match it.value {
+                                InitValue::Expr(y) => self.sema.act_pack_expansion(y, ellipsis),
+                                InitValue::List(l) => {
+                                    self.sema.act_pack_expansion_list(&l, ellipsis)
+                                }
+                            });
                             out.push(it);
                         }
                     }
@@ -1721,10 +1752,41 @@ impl Substituter<'_, '_, '_> {
 
     /// A braced-init-list as the parser built it (a mem-initializer's).
     fn written_list(&mut self, l: &InitList) -> SubstResult<InitList> {
+        /// The elements of the expansion `{a, b}...` (`e`), each a
+        /// braced-init-list item with `designator`.
+        fn out_lists(
+            s: &mut Substituter<'_, '_, '_>,
+            e: ExprId,
+            designator: &[crate::init::Designator],
+            items: &mut Vec<InitItem>,
+        ) -> SubstResult<()> {
+            let Some(p) = s.braced_pattern(e) else { return Ok(()) };
+            let ellipsis = s.sema.ast.exprs.get(e).loc();
+            match s.expand_pattern_at(Some(ellipsis), |s| s.init_list(p))? {
+                crate::templ::pack::Expansion::Elements(ls) => {
+                    for n in ls {
+                        items.push(InitItem {
+                            designator: designator.to_vec(),
+                            value: InitValue::List(n),
+                        });
+                    }
+                }
+                crate::templ::pack::Expansion::Unexpanded(n) => {
+                    let value = InitValue::Expr(s.sema.act_pack_expansion_list(&n, ellipsis));
+                    items.push(InitItem { designator: designator.to_vec(), value });
+                }
+            }
+            Ok(())
+        }
         let mut items = Vec::with_capacity(l.items.len());
         for it in &l.items {
             let designator = self.written_designators(&it.designator)?;
             let value = match &it.value {
+                InitValue::Expr(e) if self.braced_pattern(*e).is_some() => {
+                    // `{a, b}...`: one braced-init-list per element.
+                    out_lists(self, *e, &designator, &mut items)?;
+                    continue;
+                }
                 InitValue::Expr(e) if crate::templ::pack::expr_pattern(self.sema, *e).is_some() => {
                     // `.m = e...` repeats the designators per element.
                     for y in self.expand_exprs(&[*e])? {

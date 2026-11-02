@@ -474,6 +474,7 @@ type parameter named `auto:N`, as in clang's dump.
 | function parameter pack | `void f(T... t)` | declarator | yes |
 | template parameter pack that is a pack expansion | `template<T... v>` | §2.1 | yes |
 | initializer-list / call arguments | `f(a...)`, `{a...}`, `T(a...)` | expression-list | yes |
+| braced-init-list pattern ([temp.variadic]/5.4, WP-332) | `{{t, 1}...}`, `f({t, 1}...)`, `: m{{t, 1}...}`, `{.m = {t}...}` | `parse_init_list` / expression-list: `act_pack_expansion_list` keeps the list unanalyzed (an `InitListExpr` of type `void`) under a `PackExpansionExpr`; instantiation (`init_items`, `written_list`, `call_arg_list`) rebuilds one braced-init-list (or braced argument) per element | yes |
 | base-specifier-list | `struct D : B<T>... {}` | base clause (WP-065) | yes |
 | mem-initializer-list | `D() : B<T>(0)... {}` | ctor-initializer (WP-065) | yes |
 | template-argument-list | `X<T...>` | §2.2 | yes |

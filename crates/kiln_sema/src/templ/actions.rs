@@ -1018,6 +1018,21 @@ impl Sema<'_, '_> {
         self.builder().pack_expansion_expr(pattern, ellipsis)
     }
 
+    /// `{a, b}...`: a braced-init-list as the pattern of an
+    /// initializer-list pack expansion ([temp.variadic]/5.4, whose
+    /// pattern is an *initializer-clause*). The list is kept unanalyzed
+    /// (an `InitListExpr` of type `void`, as [`Self::dependent_init_list`])
+    /// under a `PackExpansionExpr`; instantiation expands it into one
+    /// braced-init-list per element (spec/sema-templates.md §5.3).
+    pub fn act_pack_expansion_list(
+        &mut self,
+        l: &crate::init::InitList,
+        ellipsis: Loc,
+    ) -> ExprId {
+        let e = self.dependent_init_list(l);
+        self.act_pack_expansion(e, ellipsis)
+    }
+
     /// `T...` as a type ([temp.variadic]/5).
     pub fn act_pack_expansion_type(&mut self, pattern: QualType, ellipsis: Loc) -> QualType {
         if !self.ast.types.flags(pattern.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
