@@ -968,7 +968,10 @@ impl Parser<'_, '_> {
                     return true;
                 }
                 let next = self.tok_at(end);
-                if self.ident_of(next).is_some() {
+                // `T::m x`, `T::m const x`: no expression continues so.
+                if self.ident_of(next).is_some()
+                    || self.kw_of(next).is_some_and(crate::decl::is_decl_specifier_kw)
+                {
                     return true;
                 }
                 match ctx {
@@ -1004,7 +1007,7 @@ impl Parser<'_, '_> {
     /// declarator-id at namespace or block scope) it is diagnosed and
     /// parsed as if `typename` were written.
     pub(crate) fn parse_template_type_name(&mut self, ctx: DeclaratorContext) -> Option<QualType> {
-        let start = self.loc();
+        let start = self.name_begin();
         let q = self.parse_nested_name_nns().ok()?;
         match q {
             None => {
@@ -1034,6 +1037,9 @@ impl Parser<'_, '_> {
                         );
                         let d = self.s.diag(DiagId::parse_missing_typename, start).arg(text);
                         self.emit(d);
+                        if ctx == DeclaratorContext::Prototype {
+                            self.param_typename = ParamTypename::Missing;
+                        }
                     }
                 }
                 self.parse_qualified_type_rest(q, TagKeyword::None)

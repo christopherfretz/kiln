@@ -664,8 +664,11 @@ trivial, no NSDMI (default ctor), not a variant-member conflict. Computed at
 (from `TRIVIAL_*`, or, for a copy/move member whose class has `NEEDS_OVL_*`,
 by selecting each direct base's and class field's member as clang
 `SpecialMemberIsTrivial`: `{ P1 m; }` has a trivial move ctor because P1's
-copy ctor is selected); an
-`= default` on first declaration gets it at `}` (`mark_function`, already
+copy ctor is selected). That selection also sets or clears the class's own
+`TRIVIAL_*` bit (clang `addedEligibleSpecialMember`; the member is declared
+eagerly at `}`), so `struct S : E {}` and `{ E e; }` see `E`'s move ctor as
+trivial (tests/conformance/class.copy.ctor/trivial-through-overload-resolution.cpp);
+an `= default` on first declaration gets it at `}` (`mark_function`, already
 `LATE`). Eligibility ([special]/6) of constrained special members is WP-073's;
 for non-template classes every non-deleted declared special member is eligible.
 
