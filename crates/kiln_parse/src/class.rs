@@ -1369,7 +1369,16 @@ impl Parser<'_, '_> {
         d: &Declarator,
         parts: LateFnParts,
     ) {
+        // A friend definition: sema checks where it may be defined
+        // ([class.friend]/6).
+        let friend = ds.friend.is_some();
+        if friend {
+            self.s.act_function_def_next(true);
+        }
         let (_, target) = self.act_on_member(ds, base, d);
+        if friend {
+            self.s.act_function_def_next(false);
+        }
         if !parts.is_empty()
             && let Some(f) = target
         {

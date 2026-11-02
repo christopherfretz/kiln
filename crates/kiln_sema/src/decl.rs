@@ -3148,13 +3148,20 @@ impl Sema<'_, '_> {
             {
                 self.ast.decls.set_flags(f, DeclFlags::INVALID);
             }
-        } else if d.op_name.is_none() {
+        } else if let Some(op) = d.op_name {
+            if !global_new_delete
+                && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
+                && !self.check_operator_decl(f)
+            {
+                self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            }
+            // A block-scope operator declaration: a local class's friend
+            // may redeclare it ([class.friend]/11).
+            if !method && !friend {
+                self.push_local_operator(op, f);
+            }
+        } else {
             self.register_local(name, f);
-        } else if !global_new_delete
-            && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
-            && !self.check_operator_decl(f)
-        {
-            self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         f
     }
