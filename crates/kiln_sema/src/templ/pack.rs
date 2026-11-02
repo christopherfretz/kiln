@@ -12,6 +12,8 @@
 //! pattern, still an expansion.
 
 use kiln_ast::ExprId;
+use kiln_ast::DeclId;
+use kiln_ast::templates::Requirement;
 use kiln_ast::QualType;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::RawId;
@@ -446,9 +448,9 @@ impl Substituter<'_, '_, '_> {
     /// Maps the parameters `pp` of a pattern function to the parameters
     /// `fp` of its instantiation: a function parameter pack takes the
     /// parameters its expansion produced (§7.1).
-    pub(crate) fn map_params(&mut self, pp: &[kiln_ast::DeclId], fp: &[kiln_ast::DeclId]) {
+    pub(crate) fn map_params(&mut self, pp: &[DeclId], fp: &[DeclId]) {
         use crate::templ::subst::DeclOrPack;
-        let is_pack = |s: &Self, p: kiln_ast::DeclId| {
+        let is_pack = |s: &Self, p: DeclId| {
             s.sema
                 .ast
                 .decls
@@ -479,14 +481,14 @@ impl Substituter<'_, '_, '_> {
     /// take the pack's name), as clang `addInstantiatedParametersToScope`
     /// does when it defines a function from a definition whose
     /// parameters are named differently from the declaration's.
-    pub(crate) fn rename_params_from_pattern(&mut self, pp: &[kiln_ast::DeclId]) {
+    pub(crate) fn rename_params_from_pattern(&mut self, pp: &[DeclId]) {
         use crate::templ::subst::DeclOrPack;
         for &a in pp {
             let name = self.sema.ast.decls.get(a).name();
             match self.locals.get(&a).copied() {
                 Some(DeclOrPack::Decl(b)) => self.sema.ast.decls.set_name(b, name),
                 Some(DeclOrPack::Pack(l)) => {
-                    let elems: Vec<kiln_ast::DeclId> = self.sema.ast.lists.iter(l).collect();
+                    let elems: Vec<DeclId> = self.sema.ast.lists.iter(l).collect();
                     for b in elems {
                         self.sema.ast.decls.set_name(b, name);
                     }
@@ -673,7 +675,7 @@ impl Substituter<'_, '_, '_> {
         use crate::templ::args::ArgLookup;
         use crate::templ::subst::DeclOrPack;
         let n = *self.sema.ast.exprs.get(e);
-        let d = kiln_ast::DeclId::from_raw(n.a()).ok_or(SubstFail)?;
+        let d = DeclId::from_raw(n.a()).ok_or(SubstFail)?;
         // A structured binding pack whose decomposition failed.
         if self.failed_locals.contains(&d) {
             return Err(SubstFail);
@@ -848,6 +850,26 @@ impl Sema<'_, '_> {
                     self.type_packs(t, out, depth + 1);
                 }
             }
+            // The local parameters' types, then the requirements
+            // ([temp.variadic]/5; clang's `TraverseRequiresExpr`).
+            ExprKind::RequiresExpr => {
+                let Some(rq) = self.ast.requires_of(e) else { return };
+                for p in self.ast.lists.iter::<DeclId>(rq.params) {
+                    if let Some(t) = self.ast.decls.get(p).ty() {
+                        self.type_packs(t, out, depth + 1);
+                    }
+                }
+                for r in self.ast.templates.requirements(rq) {
+                    match *r {
+                        Requirement::Simple(x) | Requirement::Nested(x) => {
+                            self.expr_packs(x, out, depth + 1);
+                        }
+                        Requirement::Compound { expr, .. } => self.expr_packs(expr, out, depth + 1),
+                        Requirement::Type(t, _) => self.type_packs(t, out, depth + 1),
+                    }
+                }
+                return;
+            }
             _ => {}
         }
         let before = out.len();
@@ -912,8 +934,12 @@ impl Sema<'_, '_> {
                     self.type_packs(x, out, depth + 1);
                 }
             }
+            TypeView::DependentName { nns, .. } => self.nns_packs(nns, out, depth + 1),
             TypeView::TemplateSpecialization { args, .. }
             | TypeView::DependentTemplateSpecialization { args, .. } => {
+                if let TypeView::DependentTemplateSpecialization { nns, .. } = t.view(q.ty()) {
+                    self.nns_packs(nns, out, depth + 1);
+                }
                 for &a in t.args(args) {
                     match a.view() {
                         ArgView::Type(x) => self.type_packs(x, out, depth + 1),
@@ -924,6 +950,27 @@ impl Sema<'_, '_> {
             }
             TypeView::Decltype { expr, .. } => self.expr_packs(expr, out, depth + 1),
             _ => {}
+        }
+    }
+
+    /// The packs a nested-name-specifier names (`Ts::` in
+    /// `typename Ts::type`), outermost prefix first.
+    fn nns_packs(&self, n: kiln_ast::NnsId, out: &mut Vec<String>, depth: u32) {
+        use kiln_ast::types::{Nns, TypeFlags};
+        let t = &self.ast.types;
+        if depth > 256 || !t.nns_flags(n).contains(TypeFlags::UNEXPANDED_PACK) {
+            return;
+        }
+        let (prefix, ty) = match t.nns_view(n) {
+            Nns::Type { prefix, ty, .. } => (prefix, Some(ty)),
+            Nns::Identifier { prefix, .. } => (prefix, None),
+            _ => (None, None),
+        };
+        if let Some(p) = prefix {
+            self.nns_packs(p, out, depth + 1);
+        }
+        if let Some(ty) = ty {
+            self.type_packs(ty, out, depth + 1);
         }
     }
 }

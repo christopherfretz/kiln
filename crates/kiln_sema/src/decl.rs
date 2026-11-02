@@ -6854,6 +6854,15 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> (DeclId, bool) {
         let mut failed = false;
+        // [temp.variadic]/5: an unexpanded pack is ill-formed here
+        // (clang's `UPPC_StaticAssertExpression`).
+        let cond = if self.diagnose_unexpanded_written(cond, "static assertion", None) {
+            failed = true;
+            let at = self.begin_loc(cond);
+            self.recover_err(&[], at)
+        } else {
+            cond
+        };
         let c = match conv::contextually_convert_to_bool(self, cond) {
             Ok(c) => c,
             Err(err) => {
