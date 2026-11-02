@@ -732,17 +732,38 @@ impl Sema<'_, '_> {
             || mt.owner(self.ast.first(d)).exported
     }
 
-    /// ADL ([basic.lookup.argdep]/4): `raw` is visible, or it is an
-    /// exported declaration in the purview of a named module some class
-    /// of `classes` is attached to (reachable through an import the
-    /// current unit does not see). As clang 22, "in the interface of M"
-    /// means exported: a non-exported function of M's interface is not
-    /// found by an importer's ADL.
-    pub(crate) fn module_adl_visible(&self, raw: DeclId, classes: &[DeclId]) -> bool {
+    /// ADL ([basic.lookup.argdep]/4): `raw` is found when it is visible,
+    /// or when it is exported, attached to a named module `M`, and has the
+    /// same innermost enclosing non-inline namespace as an associated
+    /// entity (class or enumeration of `assoc`) attached to `M` (reachable
+    /// through an import the current unit does not see). As clang 22, a
+    /// non-exported function of M's interface is not found by an
+    /// importer's ADL.
+    ///
+    /// During an instantiation everything reachable is visible (the
+    /// instantiation context, [module.context]), except a TU-local
+    /// (internal-linkage) declaration of another module unit (not a header
+    /// unit): naming it would be ill-formed ([basic.link]/14), and clang 22
+    /// does not find it.
+    pub(crate) fn module_adl_visible(
+        &self,
+        raw: DeclId,
+        assoc: &crate::overload::adl::AssocSet,
+    ) -> bool {
+        let mt = &self.ast.modules;
+        if mt.active
+            && !self.inst.stack.is_empty()
+            && let Some(d) = self.module_scope_decl(raw)
+            && let o = mt.owner(d)
+            && o.unit != self.modules.cur()
+            && mt.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
+            && internal(self, self.ast.strip_shadow(d))
+        {
+            return false;
+        }
         if self.module_visible(raw) {
             return true;
         }
-        let mt = &self.ast.modules;
         let exported = self
             .module_scope_decl(raw)
             .is_some_and(|d| mt.owner(d).exported || mt.owner(self.ast.first(d)).exported);
@@ -750,7 +771,27 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some(m) = mt.purview_module(raw) else { return false };
-        classes.iter().any(|&c| mt.purview_module(self.ast.first(c)) == Some(m))
+        let ns = self.innermost_non_inline_namespace(self.ast.strip_shadow(raw));
+        assoc.classes.iter().chain(&assoc.enums).any(|&e| {
+            mt.purview_module(e) == Some(m) && self.innermost_non_inline_namespace(e) == ns
+        })
+    }
+
+    /// The innermost enclosing namespace of `d` that is not inline (its
+    /// primary context; the translation unit for the global namespace).
+    fn innermost_non_inline_namespace(&self, d: DeclId) -> Option<DeclId> {
+        let mut ns = self.innermost_namespace(d)?;
+        while self.kind_of(ns) == DeclKind::Namespace
+            && self
+                .ast
+                .decls
+                .namespace(self.ast.first(ns))
+                .is_some_and(kiln_ast::decl::NamespaceData::is_inline)
+        {
+            let p = self.ast.decls.get(ns).ctx()?;
+            ns = self.ast.primary_context(p);
+        }
+        Some(ns)
     }
 
     /// Redeclaration lookup ([basic.link]/8): drops the declarations of

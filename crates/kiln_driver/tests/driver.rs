@@ -643,3 +643,39 @@ fn module_missing_import_notes() {
     .collect();
     assert_eq!(notes, want, "{}", o.stderr);
 }
+
+#[test]
+fn module_adl_example() {
+    // [basic.lookup.argdep]/4-5: in the standard example's instantiation
+    // of `apply` (tests/conformance/basic.lookup.argdep/module-example.cpp)
+    // ADL does not find R::g, internal to module N's unit; clang 22
+    // reports it in N's source with the instantiation note, which the
+    // corpus cannot match (its primary is in Inputs/).
+    let dir = repo().join("tests/conformance/basic.lookup.argdep");
+    let input = |f: &str| dir.join("Inputs").join(f).display().to_string();
+    let args = [
+        "-std=c++20".to_owned(),
+        "-fsyntax-only".to_owned(),
+        format!("-fmodule-file=M={}", input("adl-m.cppm")),
+        format!("-fmodule-file=N={}", input("adl-n.cppm")),
+        format!("-fmodule-file=Q={}", input("adl-q.cppm")),
+        dir.join("module-example.cpp").display().to_string(),
+    ];
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let o = kiln(&args, "");
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    let lines: Vec<&str> = o
+        .stderr
+        .lines()
+        .filter(|l| l.contains(": error: ") || l.contains(": note: "))
+        .map(|l| l.rsplit('/').next().unwrap_or(l))
+        .collect();
+    let want = [
+        "module-example.cpp:25:3: error: no matching function for call to 'f'",
+        "adl-m.cppm:5:15: note: candidate function not viable: requires 1 argument, but 2 were provided",
+        "module-example.cpp:31:6: error: no type named 'f' in namespace 'R'",
+        "adl-n.cppm:8:3: error: use of undeclared identifier 'g'",
+        "module-example.cpp:27:3: note: in instantiation of function template specialization 'apply<R::X, S::Z>' requested here",
+    ];
+    assert_eq!(lines, want, "{}", o.stderr);
+}

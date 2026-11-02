@@ -185,13 +185,24 @@ A using-declaration is filtered by its own owner, not its target's: `export
 namespace std { using std::vector; }` makes `std::vector` visible to an
 importer although the class template, declared in std's GMF, is not.
 
-ADL ([basic.lookup.argdep]/4) uses the same predicate plus: an *exported*
-function declared in the purview of the named module an associated entity
-is attached to is visible even when that unit is only reachable (not
-imported by the current unit), and hidden friends of associated classes
-are always visible. A non-exported function of the module's interface is
-not found by an importer's ADL: clang 22 reads "in the interface of M" as
-"exported", and kiln follows it (`module.interface/visibility.cpp`).
+ADL ([basic.lookup.argdep]/4, `Sema::module_adl_visible`) uses the same
+predicate plus: a function that is *exported*, attached to a named module
+`M` and only reachable (its unit is not imported by the current one) is
+visible when it has the same innermost enclosing non-inline namespace as
+an associated entity attached to `M` (an associated class or enumeration;
+clang 22 considers classes only, a deviation in kiln's favour of the
+standard); hidden friends of associated classes are always visible. The
+standard's /5 example: `f(x)` finds `R::f` through `R::X`, `f(x, S::Z())`
+does not consider `S::f` although `S` is associated
+(`basic.lookup.argdep/module-example.cpp`, `module-enum.cpp`). A
+non-exported function of the module's interface is not found by an
+importer's ADL: clang 22 reads "in the interface of M" as "exported", and
+kiln follows it (`module.interface/visibility.cpp`). Inside an
+instantiation every reachable declaration is visible (the instantiation
+context, [module.context]), except to ADL a TU-local (internal-linkage)
+declaration of another named-module unit, which naming would make
+ill-formed ([basic.link]/14) and which clang 22 does not find (`g(t)` in
+the /5 example's `apply`; kiln_driver `module_adl_example`).
 
 **Missing imports.** When a lookup finds nothing visible, it is redone
 ignoring visibility (`Sema::module_hidden_lookup`) at the sites that would
