@@ -4642,8 +4642,9 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_reference(ty) {
             if spec.storage() != VarStorage::Extern {
+                // Repeats the template definition's report (WP-318).
                 let msg = self.diag(DiagId::sema_reference_var_requires_init, loc).arg(name);
-                self.emit(msg);
+                self.emit(msg.per_instantiation());
             }
             return;
         }
@@ -4693,7 +4694,11 @@ impl Sema<'_, '_> {
     /// variable, a reference type, so `S::name &r;` with no `S::name`
     /// (whose type recovers to `int`, [dcl.type.simple]) reports
     /// "declaration of reference variable 'r' requires an initializer"
-    /// after "no type named 'name' in 'S'" (WP-308). True if it reported.
+    /// after "no type named 'name' in 'S'" (WP-308); and, for a dependent
+    /// reference type, `T &r;` in a template pattern reports at the
+    /// definition (clang checks the reference before it stops at a
+    /// dependent type) and again, with the instantiation note, for each
+    /// instantiation (WP-318). True if it reported.
     fn uninit_array_or_reference(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
         let Some(ty) = vn.ty() else { return false };
@@ -4716,9 +4721,8 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return true;
         }
-        if !vn.has(DeclFlags::INVALID)
-            || self.ast.types.is_dependent(ty)
-            || !self.ast.types.is_reference(ty)
+        if !self.ast.types.is_reference(ty)
+            || !(vn.has(DeclFlags::INVALID) || self.ast.types.is_dependent(ty))
         {
             return false;
         }
