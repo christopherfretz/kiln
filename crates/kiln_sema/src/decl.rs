@@ -4621,9 +4621,34 @@ impl Sema<'_, '_> {
 
     /// The type an elaborated-type-specifier or class-specifier names:
     /// `struct S` is `'struct S':'S'` ([dcl.type.elab]).
+    /// Inside the pattern (or a partial specialization) of a class
+    /// template, `class X` naming its injected-class-name is `X<P...>`
+    /// ([temp.local]/1), substituted with the class.
     pub fn elaborated_tag_type(&mut self, d: DeclId, keyword: TagKeyword) -> QualType {
-        let t = self.tag_type(d);
+        let t = self.injected_tag_type(d).unwrap_or_else(|| self.tag_type(d));
         self.ast.types.elaborated(keyword, None, t)
+    }
+
+    /// The injected-class-name type `X<P...>` when tag `d` is the pattern
+    /// or a partial specialization of class template `X` and the current
+    /// context is inside it ([temp.local]/1); `None` otherwise (a
+    /// `template<class U> friend class X;` names the template itself).
+    fn injected_tag_type(&mut self, d: DeclId) -> Option<QualType> {
+        if self.kind_of(d) != DeclKind::CXXRecord || self.friend_class_template.is_some() {
+            return None;
+        }
+        let first = self.ast.first(d);
+        if self.ast.described_template(first).is_none()
+            && self.ast.partial_spec_info(first).is_none()
+        {
+            return None;
+        }
+        let tmpl = self.injected_template_of(d)?;
+        let c = self.injected_class_decl(tmpl)?;
+        if self.ast.first(c) != first {
+            return None;
+        }
+        self.injected_class_type(tmpl)
     }
 
     /// Marks a type-name's declaration referenced ([basic.def.odr]: clang's
