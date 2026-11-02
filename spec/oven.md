@@ -1251,6 +1251,33 @@ No new memory state: the entry already existed and is removed with the
 destruction. Clang 19 accepts destroying a union with a user-provided
 destructor twice and reading a member after it; kiln rejects both.
 
+*Unconstructed bases (WP-390).* Sema leaves a direct non-virtual base
+out of a constructor's ctor-initializers only after diagnosing that it
+has no usable default constructor ([class.base.init]/9, clang's
+`err_missing_default_ctor`); clang's evaluator still runs the
+constructor, leaving the base subobject without a value. A
+non-delegating constructor's prologue (`member_prologue`) emits
+`EndLife` aux 8 for each such base that holds data: `Memory::set_unconstructed`
+tracks the allocation in any space (a `constexpr` variable's static
+storage too), marks the base's `copy_size` bytes uninitialized and
+outside their lifetime, sets `life_frame` and records the base in
+`Memory::unconstructed` (cleared by `reset`; entries a rolled-back
+trial made stay, an error path only). Reading, assigning or calling a
+member function of the base or its members is then "... object outside
+its lifetime"; a destructor of the base is "destroying object 'd' whose
+lifetime has already ended"; and freezing the object (`walk`) is
+"constructor of base class 'B' is not called" at the base-specifier,
+before its fields are visited. The derived object itself is not
+destroyed: `life_ended` ignores dead bytes that belong to an
+unconstructed base of the object (`Memory::holds_unconstructed`), so a
+class whose only data is that base is destroyed silently, as by clang
+(`tests/conformance/class.base.init/unconstructed-base-constexpr.cpp`,
+`base-initialized-by-some-constructors-run.cpp`). Not yet: an empty
+base (no bytes to mark) is not noted at freeze; a trivial copy of the
+object reports the lifetime read where clang notes the base (needs a
+fault kind in `notes.rs`); the destruction note of a heap object is
+located at the implicit destructor where clang uses the `delete`.
+
 *Deviations from clang 19.* A class
 whose subobjects' lifetimes all ended one by one is diagnosed at its
 implicit destruction as if destroyed itself. An explicit call of a virtual destructor ends only the lifetime of

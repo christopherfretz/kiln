@@ -515,6 +515,12 @@ pub(crate) struct Memory {
     /// A frame object has been [`flags::LIFE`]-tracked in this evaluation:
     /// leaving a scope checks the objects it releases (`Oven::scope_life`).
     pub life_frame: bool,
+    /// The base subobjects a constructor did not construct
+    /// ([`Memory::set_unconstructed`]) in this evaluation, by pointer:
+    /// their bytes are outside their lifetime while their derived object
+    /// is not ([`Memory::holds_unconstructed`]). Empty unless Sema
+    /// diagnosed a constructor (WP-390).
+    pub unconstructed: Vec<(u64, OTy)>,
     /// Open checkpoints and their undo log (spec/oven.md "Trial
     /// evaluation").
     trial: Trial,
@@ -563,6 +569,7 @@ impl Memory {
             cur_frame: 0,
             serial: 0,
             life_frame: false,
+            unconstructed: Vec::new(),
             trial: Trial::default(),
         }
     }
@@ -617,6 +624,7 @@ impl Memory {
     pub fn reset(&mut self) {
         self.frame.top = 0;
         self.life_frame = false;
+        self.unconstructed.clear();
         self.slots.truncate(1);
         self.free.clear();
         self.live.clear();
@@ -1275,6 +1283,47 @@ impl Memory {
             s.set_life(abs, len, live);
         }
         Ok(())
+    }
+
+    /// Marks the `len` bytes at `raw` (a base subobject its derived
+    /// class's constructor does not construct) outside their lifetime
+    /// and uninitialized, tracking the allocation in any space: unlike
+    /// [`Memory::set_lifetime`], a static object under construction (a
+    /// `constexpr` variable's) is tracked too, so its freeze finds the
+    /// base (WP-390). Only reached after Sema diagnosed the constructor.
+    /// Its destruction is checked as a frame object's is (`life_frame`).
+    /// Entries a rolled-back trial made stay (an error path only).
+    pub fn set_unconstructed(&mut self, raw: u64, len: u64, ty: OTy) -> Result<(), MemFault> {
+        if len == 0 {
+            return Ok(());
+        }
+        let (sp, abs, a) = self.check_storage(raw, len, true)?;
+        if a.flags & flags::TRACKED == 0 {
+            self.track_life(raw)?;
+        }
+        self.trial_write(raw, len)?;
+        let s = self.space_mut(sp);
+        s.set_init(abs, len, false);
+        s.set_life(abs, len, false);
+        self.life_frame = true;
+        self.unconstructed.push((raw, ty));
+        Ok(())
+    }
+
+    /// Whether the `ty` object at `raw` (`len` bytes) contains an
+    /// unconstructed base subobject other than itself: its dead bytes
+    /// may be that base's alone, the object still within its lifetime.
+    pub fn holds_unconstructed(&self, raw: u64, len: u64, ty: OTy) -> bool {
+        let p = Ptr::decode(raw);
+        let off = u64::from(p.off);
+        self.unconstructed.iter().any(|&(b, bt)| {
+            let q = Ptr::decode(b);
+            let o = u64::from(q.off);
+            q.slot == p.slot
+                && q.generation == p.generation
+                && (off..off + len).contains(&o)
+                && (o != off || bt != ty)
+        })
     }
 
     /// Starts tracking the lifetime of the bytes of the (frame or heap)
