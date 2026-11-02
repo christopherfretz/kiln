@@ -1078,6 +1078,27 @@ passed as the first-class aggregate `%struct.Q` where clang coerces it to
 `tests/conformance/basic.extended.fp/p1467-run.cpp` (calls on both CI
 targets).
 
+### 8.19 Landed (WP-373): standard abbreviations, tagged inline namespaces
+- **Standard abbreviations** (Itanium `<substitution>`, clang
+  `mangleStandardSubstitution`; `Mangler::std_abbrev`): for an entity
+  whose parent is `::std` itself (not a nested or inline namespace),
+  the template `allocator` is `Sa` and `basic_string` is `Sb`, and the
+  specializations `basic_string<char, char_traits<char>,
+  allocator<char>>` is `Ss`, `basic_istream<char, char_traits<char>>`
+  `Si`, `basic_ostream<...>` `So` and `basic_iostream<...>` `Sd`. They
+  are tried before the substitution table and before `St`, wherever a
+  prefix, template prefix, unscoped template, template name or class
+  type is mangled; they are never candidates themselves (the
+  specialization `SaIcE` is). `std::__cxx11::basic_string` stays
+  spelled out.
+- **Tagged inline namespaces**: a namespace's own `abi_tag` is not
+  mangled (`St7__cxx11`, not `St7__cxx11B5cxx11`); its tags are
+  implied by its name.
+- **Not yet**: clang's implicit tags, where a function or variable
+  whose type names a tagged entity carries the tags its own name lacks
+  (`_Z3useB2tgv`). Test: `tests/mangle/std_abbrev.cpp` (clang-exact,
+  both triples).
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

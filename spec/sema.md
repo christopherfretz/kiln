@@ -1209,6 +1209,12 @@ and returns the scope it names:
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
+- **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
+  `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
+  `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
+  `decl.rs`), so libstdc++'s `[[__gnu__::__always_inline__]]` is
+  `always_inline` with the GNU flag. Test:
+  `tests/conformance/dcl.attr/reserved-attribute-namespace-spelling.cpp`.
   - GNU `visibility`, `section` and `format`: `'x' attribute ignored`
     (a written `format` is not stored; only the printf builtins' implicit
     one is, §5.4)

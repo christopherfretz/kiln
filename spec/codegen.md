@@ -902,6 +902,16 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   references name the external symbol, structor calls the complete
   variant (D1/C1). Implicitly declared special members are not
   instantiations and are still emitted.
+  An inline function carrying `always_inline` on any redeclaration
+  (`Cg::is_always_inline_fn`) is the exception (WP-373): clang emits it
+  `available_externally` and inlines it even at `-O0`, so its program
+  never references the symbol; kiln runs no inliner, so it emits the
+  definition `linkonce_odr` instead. libstdc++'s
+  `allocator<char>::allocate`/`deallocate` are such members under
+  `extern template class allocator<char>`, and libstdc++.so does not
+  export them. Tests:
+  `tests/conformance/temp.explicit/extern-template-always-inline-run.cpp`,
+  `tests/conformance/class.copy.ctor/libstdcxx-string-copy.cpp`.
 - **Explicit instantiation definitions** ([temp.explicit], WP-170;
   `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
   `GVA_StrongODR`): a function or variable that is an explicit
