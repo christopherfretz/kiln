@@ -124,6 +124,18 @@ impl Parser<'_, '_> {
         self.parse_statement_after_attrs()
     }
 
+    /// A namespace-alias-definition at block scope, at `namespace`; it
+    /// takes no attribute-specifier-seq ([dcl.pre]/5).
+    fn parse_block_namespace_alias(&mut self, lead_loc: Option<Loc>, loc: Loc) -> Option<StmtId> {
+        self.prohibit_attrs_at(lead_loc);
+        self.bump();
+        let name = self.ident()?;
+        let nl = self.bump().span.lo;
+        self.bump();
+        let d = self.parse_namespace_alias(name, nl)?;
+        Some(self.s.act_on_decl_stmt(&[d], loc))
+    }
+
     /// A statement after its attribute-specifier-seq.
     fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
         let lead_attrs = std::mem::take(&mut self.stmt_attrs);
@@ -192,13 +204,7 @@ impl Parser<'_, '_> {
                 Kw::Namespace
                     if self.ident_of(self.peek(1)).is_some() && self.peek_is(2, Punct::Equal) =>
                 {
-                    self.prohibit_attrs_at(lead_loc);
-                    self.bump();
-                    let name = self.ident()?;
-                    let nl = self.bump().span.lo;
-                    self.bump();
-                    let d = self.parse_namespace_alias(name, nl)?;
-                    return Some(self.s.act_on_decl_stmt(&[d], loc));
+                    return self.parse_block_namespace_alias(lead_loc, loc);
                 }
                 Kw::Namespace | Kw::Template => {
                     self.unsupported(&format!("'{}' here", k.spelling()), loc);

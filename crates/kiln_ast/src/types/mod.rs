@@ -44,8 +44,7 @@ pub use node::{ConstArray, TypeNode};
 pub use print::{
     PrintOptions, RawNames, TypeNames, aka, dump_strings, print_type, write_arg_list,
     write_arg_list_c, write_arg_list_canonical, write_arg_list_of, write_arg_list_prefix,
-    write_arg_list_scoped,
-    write_arg_list_scoped_of, write_declarator, write_nns, write_nns_resolved, write_template_arg,
-    write_type,
+    write_arg_list_scoped, write_arg_list_scoped_of, write_declarator, write_nns,
+    write_nns_resolved, write_template_arg, write_type,
 };
 pub use profile_expr::deps_type_flags;

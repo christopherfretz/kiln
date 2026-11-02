@@ -15,8 +15,7 @@ use std::fmt::Write as _;
 use kiln_ast::decl::{DeclKind, DefinitionBits, NamespaceData};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{
-    BuiltinType, PrintOptions, Quals, TypeNames, TypeView, VectorKind, write_arg_list_c,
-    write_type,
+    BuiltinType, PrintOptions, Quals, TypeNames, TypeView, VectorKind, write_arg_list_c, write_type,
 };
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, TypeId};
 use kiln_source::SourceManager;
@@ -772,7 +771,8 @@ impl<'a> CPrinter<'a> {
     /// (C++ policy) as a leaf.
     fn delegate(&mut self, q: QualType, scoped: bool) {
         let names = AbiNames { names: self.names };
-        let opts = PrintOptions { full_scope: scoped, split_closers: true, ..PrintOptions::SUGARED };
+        let opts =
+            PrintOptions { full_scope: scoped, split_closers: true, ..PrintOptions::SUGARED };
         write_type(&self.ast.types, &names, q, opts, &mut self.out);
         self.space_before_ph();
     }

@@ -1438,7 +1438,7 @@ impl Parser<'_, '_> {
         while self.is_final_tok(self.tok_at(i)) {
             i += 1;
         }
-        let Some(j) = self.after_cxx11_attrs_at(i) else { return None };
+        let j = self.after_cxx11_attrs_at(i)?;
         if i == self.pos()
             || !matches!(Self::punct_of(self.tok_at(j)), Some(Punct::LBrace | Punct::Colon))
         {
@@ -2554,7 +2554,8 @@ impl Parser<'_, '_> {
     /// Drops the C++11 attributes (`[[...]]`, `alignas`) of `ds`, whose
     /// leading attribute-specifier-seq was reported.
     pub(crate) fn drop_lead_cxx11(attrs: &kiln_ast::attr::AttrArena, ds: &mut DeclSpec) {
-        ds.attrs.retain(|&a| !matches!(attrs.get(a).syntax, AttrSyntax::Cxx11 | AttrSyntax::Keyword));
+        ds.attrs
+            .retain(|&a| !matches!(attrs.get(a).syntax, AttrSyntax::Cxx11 | AttrSyntax::Keyword));
         ds.lead_cxx11 = None;
     }
 

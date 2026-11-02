@@ -1324,29 +1324,8 @@ impl Parser<'_, '_> {
             if first {
                 self.prohibit_friend_lead_attrs(&mut ds);
             }
-            // clang's in-class initializer classification.
-            let mut nsdmi = false;
-            let mut init = false;
-            if self.at(Punct::Equal) || self.at(Punct::LBrace) {
-                if has_width && !d.has_name() {
-                    self.error_here(DiagId::parse_anon_bitfield_member_init);
-                    self.skip_until(&[Punct::Comma], true, false);
-                } else if is_fn {
-                    if let Some(z) = self.try_pure_specifier() {
-                        d.pure = Some(z);
-                    } else {
-                        init = true;
-                    }
-                } else {
-                    d.init_style =
-                        Some(if self.at(Punct::Equal) { InitStyle::C } else { InitStyle::List });
-                    if !is_static && !is_typedef && ds.friend.is_none() {
-                        nsdmi = true;
-                    } else {
-                        init = true;
-                    }
-                }
-            }
+            let data_member = !is_static && !is_typedef && ds.friend.is_none();
+            let (nsdmi, init) = self.classify_member_init(&mut d, has_width, is_fn, data_member);
             let (decl, target) =
                 if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
             if let Some(x) = decl {
@@ -1372,6 +1351,37 @@ impl Parser<'_, '_> {
             self.s.error(DiagId::parse_expected_semi_decl_list, self.expected_loc());
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
+        }
+    }
+
+    /// clang's in-class initializer classification of a member
+    /// declarator `d` at `=` or `{`: (a default member initializer of a
+    /// non-static data member, an initializer parsed in place). A pure
+    /// specifier is stored in `d`.
+    fn classify_member_init(
+        &mut self,
+        d: &mut Declarator,
+        has_width: bool,
+        is_fn: bool,
+        data_member: bool,
+    ) -> (bool, bool) {
+        if !self.at(Punct::Equal) && !self.at(Punct::LBrace) {
+            return (false, false);
+        }
+        if has_width && !d.has_name() {
+            self.error_here(DiagId::parse_anon_bitfield_member_init);
+            self.skip_until(&[Punct::Comma], true, false);
+            (false, false)
+        } else if is_fn {
+            if let Some(z) = self.try_pure_specifier() {
+                d.pure = Some(z);
+                (false, false)
+            } else {
+                (false, true)
+            }
+        } else {
+            d.init_style = Some(if self.at(Punct::Equal) { InitStyle::C } else { InitStyle::List });
+            (data_member, !data_member)
         }
     }
 

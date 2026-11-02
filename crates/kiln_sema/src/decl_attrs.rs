@@ -224,7 +224,12 @@ impl Sema<'_, '_> {
             // [dcl.attr.noreturn]/1.
             AttrKind::NORETURN => {
                 kind.is_function()
-                    || wrong(self, DiagId::sema_attribute_wrong_decl_type_error, "noreturn", "functions")
+                    || wrong(
+                        self,
+                        DiagId::sema_attribute_wrong_decl_type_error,
+                        "noreturn",
+                        "functions",
+                    )
             }
             // [dcl.attr.nouniqueaddr]/1.
             AttrKind::NO_UNIQUE_ADDRESS => {
@@ -346,8 +351,7 @@ impl Sema<'_, '_> {
             );
         }
         if typedef && node.syntax != AttrSyntax::Gnu {
-            let spelling =
-                if gnu { "'[[gnu::warn_unused_result]]'" } else { "'[[nodiscard]]'" };
+            let spelling = if gnu { "'[[gnu::warn_unused_result]]'" } else { "'[[nodiscard]]'" };
             let msg = self.diag(DiagId::sema_unused_result_typedef, node.loc).arg(spelling);
             self.emit(msg);
             return false;
@@ -382,10 +386,8 @@ impl Sema<'_, '_> {
             return true;
         }
         let ts = format!("'{}'", self.ty_str(ty));
-        let msg = self
-            .diag(DiagId::sema_type_attribute_wrong_type, node.loc)
-            .arg("'noreturn'")
-            .arg(ts);
+        let msg =
+            self.diag(DiagId::sema_type_attribute_wrong_type, node.loc).arg("'noreturn'").arg(ts);
         self.emit(msg);
         false
     }

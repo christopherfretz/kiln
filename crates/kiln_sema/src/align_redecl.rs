@@ -15,8 +15,8 @@
 //! attribute) requests less than its type's alignment is an error.
 
 use kiln_ast::attr::{AttrKind, AttrSyntax};
-use kiln_ast::ids::RawId;
 use kiln_ast::decl::DeclKind;
+use kiln_ast::ids::RawId;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -112,7 +112,12 @@ impl Sema<'_, '_> {
     /// after a definition without one is reported and removed) with its
     /// previous declaration's ([dcl.align]/6). `is_def`: `new` is a
     /// definition. Records what `new` inherits.
-    pub(crate) fn merge_aligned_redecl(&mut self, new: DeclId, own: &mut Vec<AttrId>, is_def: bool) {
+    pub(crate) fn merge_aligned_redecl(
+        &mut self,
+        new: DeclId,
+        own: &mut Vec<AttrId>,
+        is_def: bool,
+    ) {
         let Some(old) = self.ast.prev(new) else { return };
         let def = self.definition_before(new);
         self.merge_aligned(Some(new), new, old, def, own, is_def);
@@ -152,9 +157,9 @@ impl Sema<'_, '_> {
                     let at = self.ast.decls.get(def).loc();
                     let msg =
                         self.diag(DiagId::sema_alignas_missing_on_definition, at).arg("'alignas'");
-                    let note =
+                    let earlier =
                         self.diag(DiagId::note_alignas_on_declaration, node.loc).arg("'alignas'");
-                    self.emit(msg.with_note(note));
+                    self.emit(msg.with_note(earlier));
                     own.remove(i);
                 } else {
                     i += 1;
@@ -203,9 +208,9 @@ impl Sema<'_, '_> {
         }
         if let Some(oa) = o.alignas
             && n.alignas.is_none()
-            && !(inherited.first().is_some_and(|&s| {
-                self.ast.attrs.get(s).syntax == AttrSyntax::Keyword
-            }))
+            && !(inherited
+                .first()
+                .is_some_and(|&s| self.ast.attrs.get(s).syntax == AttrSyntax::Keyword))
         {
             inherited.push(oa);
         }
@@ -236,9 +241,10 @@ impl Sema<'_, '_> {
     }
 
     fn is_complete_tag_def(&self, d: DeclId) -> bool {
-        self.ast.decls.record(d).is_some_and(|r| {
-            r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE)
-        })
+        self.ast
+            .decls
+            .record(d)
+            .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE))
     }
 
     /// Merges and checks the alignment attributes of variable or member
