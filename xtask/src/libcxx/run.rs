@@ -21,6 +21,12 @@ pub struct Config {
     /// `/usr/lib/llvm-N` of `KILN_ORACLE`: kiln++ runs with it as
     /// `KILN_LLVM_DIR` (`spec/harness.md` "Oracle toolchain").
     pub llvm_dir: PathBuf,
+    /// kiln++'s `-fclang-compat`: the major of `llvm_dir`, so kiln
+    /// identifies as the clang whose libc++ it compiles. 19 is kiln's
+    /// default and is not passed.
+    pub clang_compat: u32,
+    /// The libc++ to use when it is not `llvm_dir`'s own.
+    pub libcxx: Option<LibcxxTree>,
     pub resource_dir: PathBuf,
     pub features: Vec<String>,
     pub compile_timeout: Duration,
@@ -30,6 +36,17 @@ pub struct Config {
     /// The per-run scratch root; test `i` uses `<root>/t<i>`.
     pub scratch: PathBuf,
     pub keep: bool,
+}
+
+/// An extracted libc++ package tree (spec/libcxx.md "Toolchain"): its
+/// headers replace the system's (`-nostdinc++ -isystem`) and its static
+/// archives are linked, so no shared libc++ of another release is picked up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibcxxTree {
+    /// `.../include/c++/v1`.
+    pub include: PathBuf,
+    /// The directory of `libc++.a`, `libc++abi.a`, `libc++experimental.a`.
+    pub lib: PathBuf,
 }
 
 impl Config {
@@ -51,16 +68,43 @@ impl Config {
             "-pthread".to_owned(),
             "-ferror-limit=0".to_owned(),
             "-D_LIBCPP_ENABLE_EXPERIMENTAL".to_owned(),
-            "-I".to_owned(),
         ]
         .into();
+        if self.clang_compat != 19 {
+            v.push(format!("-fclang-compat={}", self.clang_compat));
+        }
+        if let Some(t) = &self.libcxx {
+            v.extend(["-nostdinc++".to_owned(), "-isystem".to_owned()]);
+            v.push(t.include.display().to_string());
+        }
+        v.push("-I".to_owned());
         v.push(self.test_root().join("support").display().to_string());
         v
     }
 
-    /// The flags of the link step, after the object.
-    pub fn link_flags() -> &'static [&'static str] {
-        &["-stdlib=libc++", "-pthread", "-lc++experimental", "-lc++abi"]
+    /// The flags of the link step, after the object. With a package tree,
+    /// its archives are linked statically and `--as-needed` drops the
+    /// driver's own trailing `-lc++`.
+    pub fn link_flags(&self) -> Vec<String> {
+        let mut v: Vec<String> = ["-stdlib=libc++", "-pthread"].map(str::to_owned).into();
+        match &self.libcxx {
+            None => v.extend(["-lc++experimental", "-lc++abi"].map(str::to_owned)),
+            Some(t) => {
+                v.push(format!("-L{}", t.lib.display()));
+                v.extend(
+                    [
+                        "-Wl,--as-needed",
+                        "-Wl,-Bstatic",
+                        "-lc++experimental",
+                        "-lc++",
+                        "-lc++abi",
+                        "-Wl,-Bdynamic",
+                    ]
+                    .map(str::to_owned),
+                );
+            }
+        }
+        v
     }
 }
 
@@ -394,7 +438,7 @@ fn execute(
     };
     let link = || {
         let mut c = Command::new(&cfg.kiln);
-        c.arg(&obj).arg("-o").arg(&exe).args(Config::link_flags());
+        c.arg(&obj).arg("-o").arg(&exe).args(cfg.link_flags());
         c.env("KILN_LLVM_DIR", &cfg.llvm_dir);
         c
     };

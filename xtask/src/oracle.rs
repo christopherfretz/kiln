@@ -1,8 +1,9 @@
 //! The oracle toolchain: the one place that names the clang/LLVM release the
 //! harness compares kiln with (`spec/harness.md` "Oracle toolchain").
 //!
-//! `KILN_ORACLE` selects the release: `19` (the default, and the M3 gate's)
-//! or `22`. Every tool name (`clang++-N`, `opt-N`, `llc-N`, `FileCheck-N`),
+//! `KILN_ORACLE` selects the release: `22` (the default since WP-355) or
+//! `19` (kiln's codegen and the M3 libc++ gate still mirror it; CI runs the
+//! quick suite under both). Every tool name (`clang++-N`, `opt-N`, `llc-N`, `FileCheck-N`),
 //! the LLVM directory `/usr/lib/llvm-N` (exported to kiln++ as
 //! `KILN_LLVM_DIR`) and the libc++ header directory come from here; the
 //! commands' `--oracle`/`--compiler` flags still override the compiler.
@@ -12,8 +13,11 @@ use std::path::PathBuf;
 /// The environment variable that selects the oracle release.
 pub const ENV: &str = "KILN_ORACLE";
 
-/// The releases `KILN_ORACLE` accepts; the first is the default.
+/// The releases `KILN_ORACLE` accepts, oldest first.
 pub const SUPPORTED: &[u32] = &[19, 22];
+
+/// The release an unset (or empty) `KILN_ORACLE` selects.
+pub const DEFAULT: u32 = 22;
 
 /// One clang/LLVM release installed side by side with the others
 /// (Debian's `-N` suffixed tools and `/usr/lib/llvm-N`).
@@ -25,7 +29,7 @@ pub struct Oracle {
 
 impl Default for Oracle {
     fn default() -> Self {
-        Self { version: SUPPORTED[0] }
+        Self { version: DEFAULT }
     }
 }
 
@@ -47,7 +51,7 @@ impl Oracle {
                 Err(format!(
                     "{ENV}=`{v}` is not a known oracle release (accepted: {}; unset means {})",
                     known.join(" or "),
-                    SUPPORTED[0]
+                    DEFAULT
                 ))
             }
         }
@@ -63,19 +67,19 @@ impl Oracle {
     }
 
     /// The IR optimizer/verifier, `opt-N`.
-    #[allow(dead_code)] // named here for WP-184 step E (IR-diff, libc++ 22)
+    #[allow(dead_code)] // the IR-diff corpus names its tools itself (kiln_codegen tests)
     pub fn opt(self) -> String {
         self.tool("opt")
     }
 
     /// The static compiler, `llc-N`.
-    #[allow(dead_code)] // named here for WP-184 step E (IR-diff, libc++ 22)
+    #[allow(dead_code)] // the IR-diff corpus names its tools itself (kiln_codegen tests)
     pub fn llc(self) -> String {
         self.tool("llc")
     }
 
     /// The test matcher, `FileCheck-N`.
-    #[allow(dead_code)] // named here for WP-184 step E (IR-diff, libc++ 22)
+    #[allow(dead_code)] // the IR-diff corpus names its tools itself (kiln_codegen tests)
     pub fn filecheck(self) -> String {
         self.tool("FileCheck")
     }
@@ -97,10 +101,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unset_and_empty_are_19() {
-        assert_eq!(Oracle::parse(None), Ok(Oracle { version: 19 }));
-        assert_eq!(Oracle::parse(Some("")), Ok(Oracle { version: 19 }));
-        assert_eq!(Oracle::default().version, 19);
+    fn unset_and_empty_are_22() {
+        assert_eq!(Oracle::parse(None), Ok(Oracle { version: 22 }));
+        assert_eq!(Oracle::parse(Some("")), Ok(Oracle { version: 22 }));
+        assert_eq!(Oracle::default().version, 22);
+        assert!(SUPPORTED.contains(&DEFAULT));
     }
 
     #[test]
