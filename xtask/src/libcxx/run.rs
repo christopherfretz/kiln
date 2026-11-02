@@ -218,6 +218,17 @@ const HOST_FS_UNSUPPORTED: &[&str] = &[
     "std/input.output/filesystems/fs.op.funcs/fs.op.hard_lk_ct/hard_link_count.pass.cpp",
 ];
 
+/// With glibc locale data whose `en_US.UTF-8` digit grouping is `3` (glibc
+/// 2.41 here; `LC_ALL=en_US.UTF-8 locale -k grouping`), not the `3;3`
+/// these tests expect on every non-Windows, non-AIX target.
+const GROUPING_UNSUPPORTED: &[&str] = &[
+    "std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp",
+    "std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp",
+];
+
+/// The UNSUPPORTED reason of a [`GROUPING_UNSUPPORTED`] test.
+pub const GROUPING_REASON: &str = "env: glibc en_US.UTF-8 grouping is 3, the test expects 3;3";
+
 /// Filesystem types of a host-shared bind mount (`/proc/self/mountinfo`).
 const HOST_FS_TYPES: &[&str] = &["fakeowner", "fuse.grpcfuse", "virtiofs"];
 
@@ -226,6 +237,9 @@ const HOST_FS_TYPES: &[&str] = &["fakeowner", "fuse.grpcfuse", "virtiofs"];
 pub fn env_unsupported(rel: &str, scratch: &Path) -> Option<String> {
     if ROOT_UNSUPPORTED.contains(&rel) && running_as_root() {
         return Some(ROOT_REASON.to_owned());
+    }
+    if GROUPING_UNSUPPORTED.contains(&rel) && en_us_grouping_is_3() {
+        return Some(GROUPING_REASON.to_owned());
     }
     if HOST_FS_UNSUPPORTED.contains(&rel)
         && let Some(fs) = mount_fs_type(scratch).filter(|t| HOST_FS_TYPES.contains(&t.as_str()))
@@ -240,6 +254,22 @@ fn running_as_root() -> bool {
     static ROOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ROOT.get_or_init(|| {
         euid_is_root(&std::fs::read_to_string("/proc/self/status").unwrap_or_default())
+    })
+}
+
+/// Whether glibc's `en_US.UTF-8` groups digits by 3 only: `locale -k
+/// grouping` prints exactly `grouping=3` (`3;3` is what the tests want;
+/// without the locale it prints C's `-1`).
+fn en_us_grouping_is_3() -> bool {
+    static G: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *G.get_or_init(|| {
+        Command::new("locale")
+            .args(["-k", "grouping"])
+            .env("LC_ALL", "en_US.UTF-8")
+            .output()
+            .is_ok_and(|o| {
+                o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "grouping=3"
+            })
     })
 }
 
@@ -694,7 +724,7 @@ mod tests {
 
     #[test]
     fn env_exclusions() {
-        for list in [ROOT_UNSUPPORTED, HOST_FS_UNSUPPORTED] {
+        for list in [ROOT_UNSUPPORTED, HOST_FS_UNSUPPORTED, GROUPING_UNSUPPORTED] {
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
@@ -705,6 +735,9 @@ mod tests {
         let listed = env_unsupported(ROOT_UNSUPPORTED[0], &tmp);
         assert_eq!(listed.is_some(), running_as_root());
         assert!(listed.is_none_or(|r| r == ROOT_REASON));
+        let listed = env_unsupported(GROUPING_UNSUPPORTED[0], &tmp);
+        assert_eq!(listed.is_some(), en_us_grouping_is_3());
+        assert!(listed.is_none_or(|r| r == GROUPING_REASON));
         // The effective uid is the second `Uid:` field (real, effective,
         // saved, filesystem).
         assert!(euid_is_root("Name:\tx\nUid:\t1000\t0\t0\t0\nGid:\t0\t0\t0\t0\n"));

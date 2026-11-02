@@ -273,9 +273,15 @@ also in `--list`), only while the condition holds:
   and `create_directory(p, attrs)` cannot copy the attributes
   (`HOST_FS_UNSUPPORTED`: `fs.op.hard_lk_ct/hard_link_count.pass.cpp`,
   `fs.op.create_directory/create_directory_with_attributes.pass.cpp`).
+- glibc's `en_US.UTF-8` groups digits by `3` only (`LC_ALL=en_US.UTF-8
+  locale -k grouping` prints exactly `grouping=3`; glibc 2.41 in the
+  agent containers), reason `env: glibc en_US.UTF-8 grouping is 3, the
+  test expects 3;3`: the two `grouping.pass.cpp` tests of
+  `locale.moneypunct.byname` and `locale.numpunct.byname` assert `"\3\3"`
+  on every non-Windows, non-AIX target (`GROUPING_UNSUPPORTED`).
 
 A test joins a list only after its clang 19 build is shown to fail at the
-same assertion under the same condition; both lists are sorted (unit
+same assertion under the same condition; the lists are sorted (unit
 test `env_exclusions`).
 
 ## Timeouts and retries
