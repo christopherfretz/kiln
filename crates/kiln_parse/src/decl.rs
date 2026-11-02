@@ -2026,6 +2026,7 @@ impl Parser<'_, '_> {
     ) {
         let pname = pd.name.map(|(n, _)| n);
         let pack = pd.ellipsis.is_some();
+        let cloc = pd.trailing_constraint;
         for c in &mut pd.chunks {
             let Chunk::Function { trailing: Some((t, tloc)), .. } = c else { continue };
             let Some((decltype_auto, constraint)) = self.s.trailing_return_placeholder(*t) else {
@@ -2035,7 +2036,7 @@ impl Parser<'_, '_> {
             {
                 self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why)
             } else {
-                let constraint = constraint.map(|(c, a)| (c, a, Loc::INVALID));
+                let constraint = constraint.map(|(c, a)| (c, a, cloc));
                 let loc = if tloc.is_valid() { *tloc } else { at };
                 self.s.act_on_invented_template_param(loc, pack, constraint, pname, qualifier)
             };
@@ -2141,7 +2142,11 @@ impl Parser<'_, '_> {
                     // function's trailing return type.
                     let this =
                         self.s.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
+                    self.type_id_constraint = Loc::INVALID;
                     let ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
+                    if !d.trailing_constraint.is_valid() {
+                        d.trailing_constraint = self.type_id_constraint;
+                    }
                     self.s.act_on_end_this_scope(this);
                     trailing = Some((ty, loc));
                     return (exc.unwrap_or_default(), quals, ref_qual, trailing);
@@ -2238,6 +2243,11 @@ impl Parser<'_, '_> {
         d.site = site;
         self.parse_declarator(&mut d);
         let base = self.s.type_from_declspec(&ds);
+        self.type_id_constraint = if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            ds.constraint_loc
+        } else {
+            d.trailing_constraint
+        };
         Some(self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d))
     }
 

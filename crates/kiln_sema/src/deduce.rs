@@ -226,18 +226,11 @@ impl Sema<'_, '_> {
     }
 
     /// True if `q` is an undeduced `auto` under zero or more pointer and
-    /// reference declarators (`auto`, `const auto &`, `auto **`, ...;
-    /// [dcl.spec.auto.general]/3).
+    /// reference declarators and function return types (`auto`, `const
+    /// auto &`, `auto **`, `auto (*)(int) -> auto`, ...;
+    /// [dcl.spec.auto.general]/3, [`Sema::placeholder_step`]).
     pub(crate) fn contains_undeduced_auto(&self, q: QualType) -> bool {
-        let mut cur = q;
-        for _ in 0..256 {
-            match self.ast.types.canonical_view(cur) {
-                TypeView::Auto { deduced: None, .. } => return true,
-                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
-                _ => return false,
-            }
-        }
-        false
+        self.contained_placeholder(q).is_some()
     }
 
     /// The type deduced for a declared type `declared` containing a
@@ -319,7 +312,7 @@ impl Sema<'_, '_> {
                     self.ast.types.qualify(r, p.quals())
                 });
             }
-            v @ TypeView::Pointer(_) => v,
+            v @ (TypeView::Pointer(_) | TypeView::Function(_)) => v,
             _ => t.canonical_view(p),
         };
         match view {
@@ -350,8 +343,55 @@ impl Sema<'_, '_> {
                 let r = self.ast.types.pointer_to(inner);
                 Some(if pq.is_empty() { r } else { self.ast.types.qualify(r, pq) })
             }
+            // Below a declarator: a reference matches exactly.
+            TypeView::LValueRef(pp) | TypeView::RValueRef(pp) => {
+                let lref = matches!(view, TypeView::LValueRef(_));
+                let inner = match t.canonical_view(a) {
+                    TypeView::LValueRef(ap) if lref => self.deduce_match(pp, ap)?,
+                    TypeView::RValueRef(ap) if !lref => self.deduce_match(pp, ap)?,
+                    _ => return None,
+                };
+                Some(if lref {
+                    self.ast.types.lvalue_ref_to(inner)
+                } else {
+                    self.ast.types.rvalue_ref_to(inner)
+                })
+            }
+            TypeView::Function(pf) => self.deduce_match_function(pf, a),
             _ => None,
         }
+    }
+
+    /// [`Self::deduce_match`] for a function type `pf` whose return type
+    /// holds the placeholder (`auto (*p)(int) -> auto = f;`,
+    /// [temp.deduct.type]/8 `T (T)`): `a` must be a function type with
+    /// the same parameters, variadic-ness, cv- and ref-qualifiers; the
+    /// return types match recursively. The result keeps `pf`'s sugar and
+    /// exception specification (a non-throwing `a` converts to a
+    /// potentially-throwing `pf`, [temp.deduct.call]/4.3, not back).
+    fn deduce_match_function(
+        &mut self,
+        pf: kiln_ast::types::FuncProto,
+        a: QualType,
+    ) -> Option<QualType> {
+        let t = &self.ast.types;
+        let TypeView::Function(af) = t.canonical_view(a) else { return None };
+        let pinfo = pf.info().with_trailing_return(false);
+        let ainfo = af.info().with_trailing_return(false);
+        let pexc = t.canonical_exc(t.exc_spec(&pf));
+        let aexc = t.canonical_exc(t.exc_spec(&af));
+        let pparams: Vec<QualType> =
+            t.params(&pf).iter().map(|&x| t.canonical(x).without_quals()).collect();
+        if pinfo != ainfo
+            || pparams.as_slice() != t.params(&af)
+            || (pexc != aexc && aexc != kiln_ast::types::ExcSpec::Nothrow)
+        {
+            return None;
+        }
+        let ret = self.deduce_match(pf.ret(), af.ret())?;
+        let params = self.ast.types.params(&pf).to_vec();
+        let exc = self.ast.types.exc_spec(&pf);
+        Some(self.ast.types.function(ret, &params, pf.info(), exc))
     }
 
     /// `return e;` (or `return;` when `value` is `None`) in a function

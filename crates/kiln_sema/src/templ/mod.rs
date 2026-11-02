@@ -1194,28 +1194,21 @@ impl Sema<'_, '_> {
     }
 
     /// The undeduced placeholder of `t`, a parameter's trailing return
-    /// type (under pointer and reference declarators, as
+    /// type (under pointer and reference declarators and further function
+    /// return types, `auto (*)(int) -> auto`, as
     /// [`Sema::replace_placeholder`] rewrites it): whether it is
     /// `decltype(auto)`, and its type-constraint with the extra arguments.
     pub fn trailing_return_placeholder(
         &self,
         t: QualType,
     ) -> Option<(bool, Option<TypeConstraint>)> {
-        let mut cur = t;
-        for _ in 0..256 {
-            match self.ast.types.canonical_view(cur) {
-                TypeView::Auto { keyword, deduced: None, concept, args, .. } => {
-                    let extra = args.map(|a| self.ast.types.args(a).to_vec()).unwrap_or_default();
-                    return Some((
-                        keyword == kiln_ast::types::AutoKeyword::DecltypeAuto,
-                        concept.map(|c| (c, extra)),
-                    ));
-                }
-                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
-                _ => return None,
-            }
-        }
-        None
+        let leaf = self.contained_placeholder(t)?;
+        let TypeView::Auto { keyword, concept, args, .. } = self.ast.types.canonical_view(leaf)
+        else {
+            return None;
+        };
+        let extra = args.map(|a| self.ast.types.args(a).to_vec()).unwrap_or_default();
+        Some((keyword == kiln_ast::types::AutoKeyword::DecltypeAuto, concept.map(|c| (c, extra))))
     }
 
     /// `t` with its trailing-return placeholder replaced by the invented

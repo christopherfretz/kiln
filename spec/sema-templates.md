@@ -458,7 +458,8 @@ type parameter named `auto:N`, as in clang's dump.
   (`auto (*cb)(int) -> int`) keeps its decl-specifier `auto`: it is the
   function type's `auto` ([dcl.fct]/2; a `C auto` or `const auto` there is
   `sema_trailing_return_without_auto`). A placeholder in that trailing
-  return type (under pointer and reference declarators) is checked as
+  return type (under pointer, reference and further function
+  declarators: `auto (*cb)(int) -> auto (*)(int) -> C auto`) is checked as
   above, reported at the decl-specifier, and otherwise invents a
   parameter (`void f(auto (*p)() -> C auto)` is a template; clang's
   `GetFullTypeForDeclarator`). Tests: `dcl.fct/p22-auto-nested-prototype*.cpp`,
@@ -2270,6 +2271,24 @@ least as specialized as").
    error.
 4. `C auto`: check `C<deduced, args…>` (§8). On failure, "deduced type
    'int' does not satisfy 'C'" plus the note chain.
+
+**Where the placeholder sits** (clang `getContainedDeducedType`,
+[dcl.spec.auto.general]/3). The placeholder of a declared type is found
+by walking pointers, references and function return types
+(`contained_placeholder`); a function type's own trailing return type
+is part of that walk, so `auto (*p)(int) -> auto (*)(int) -> auto = g;`
+deduces the innermost `auto`. Deduction matches a function type
+against the initializer's exactly except for the return type: equal
+parameter types (top-level cv dropped), equal variadic, cv and ref
+qualifiers, and an equal exception specification (a `noexcept`
+initializer also matches a potentially-throwing declared type), else
+"variable 'p' with type '…' has incompatible initializer of type '…'".
+The result keeps the declared sugar (`int (*(*)(int))(int)` prints as
+`auto (*)(int) -> auto (*)(int) -> int`), and a constrained placeholder
+there is checked at its type-constraint, both for a variable and for an
+invented parameter (`sema_trailing_return_without_auto` rules, §2.6).
+Tests: `dcl.spec.auto/nested-return-placeholder-run.cpp`,
+`dcl.spec.auto/nested-return-placeholder-diags.cpp`.
 
 **Uses:**
 - variables;

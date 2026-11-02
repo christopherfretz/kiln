@@ -2402,6 +2402,17 @@ impl Sema<'_, '_> {
         td
     }
 
+    /// Where the type-constraint of the constrained placeholder in the
+    /// type `ds d` declares is written: the decl-specifier's, else one in
+    /// a trailing return type (`auto (*v)() -> C auto`).
+    pub(crate) fn placeholder_constraint_loc(ds: &DeclSpec, d: &Declarator) -> Option<Loc> {
+        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            Some(ds.constraint_loc)
+        } else {
+            d.trailing_constraint.is_valid().then_some(d.trailing_constraint)
+        }
+    }
+
     /// The outermost `&`/`&&` of `d` when its declared type is a
     /// reference (its first chunk), else invalid.
     pub(crate) fn outer_ref_loc(d: &Declarator) -> Loc {
@@ -3048,8 +3059,8 @@ impl Sema<'_, '_> {
         {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
-        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
-            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
+            self.inst.concepts.placeholder_locs.insert(f, l);
         }
         if d.missing_typename {
             self.missing_typename_fns.insert(f);
@@ -3504,8 +3515,8 @@ impl Sema<'_, '_> {
             self.note_type_spec_loc(f, ds, d.name_loc());
             self.note_ref_loc(f, d, ty);
         }
-        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
-            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
+            self.inst.concepts.placeholder_locs.insert(f, l);
         }
         if d.init_style.is_some() {
             self.special.nsdmi.insert(f);
@@ -3860,9 +3871,9 @@ impl Sema<'_, '_> {
         }
         self.note_ref_loc(v, d, ty);
         self.lambda_mangle.var = Some(v);
-        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
             // The constrained placeholder's diagnostics point here.
-            self.inst.concepts.placeholder_locs.insert(v, ds.constraint_loc);
+            self.inst.concepts.placeholder_locs.insert(v, l);
         }
         self.check_abstract_var(v);
         self.check_void_init_var(v, d);

@@ -659,6 +659,12 @@ pub struct Declarator {
     /// `isFunctionDeclarationContext` is false then: its function
     /// declarator declares no function, [dcl.fct]/22). Set by the parser.
     pub typedef: bool,
+    /// The type-constraint of a constrained placeholder in one of the
+    /// declarator's trailing return types (`auto (*v)() -> C auto`,
+    /// nested ones included), where its "does not satisfy" diagnostics
+    /// point (clang's `AutoTypeLoc`); invalid when there is none. Set by
+    /// the parser.
+    pub trailing_constraint: Loc,
     /// What the declarator declares, beyond `ctx`, where that decides
     /// whether a placeholder for a deduced class type may appear
     /// ([dcl.type.class.deduct]/2; clang's finer `DeclaratorContext`s).
@@ -791,6 +797,7 @@ impl Declarator {
             decomp: None,
             friend: false,
             typedef: false,
+            trailing_constraint: Loc::INVALID,
         }
     }
 
