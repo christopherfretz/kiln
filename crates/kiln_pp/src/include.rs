@@ -112,6 +112,20 @@ pub trait IncludeResolver {
         let _ = (sm, req);
         None
     }
+
+    /// The header name, `<...>` or `"..."`, to suggest in a diagnostic
+    /// asking for `file` to be included, given the main file's directory
+    /// (clang `suggestPathToFileForDiagnostics`). The default suggests
+    /// nothing.
+    fn suggest_include(
+        &self,
+        sm: &SourceManager,
+        file: FileId,
+        main_dir: Option<&str>,
+    ) -> Option<String> {
+        let _ = (sm, file, main_dir);
+        None
+    }
 }
 
 /// The resolver installed by default: finds nothing. `#include` then

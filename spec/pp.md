@@ -57,6 +57,8 @@ packages replace the defaults without changing the core.
 pub trait IncludeResolver {
     fn resolve(&mut self, sm: &SourceManager, req: &IncludeRequest) -> Option<ResolvedInclude>;
     fn resolve_embed(&mut self, sm: &SourceManager, req: &EmbedRequest) -> Option<EmbedData> { None }
+    fn suggest_include(&self, sm: &SourceManager, file: FileId, main_dir: Option<&str>)
+        -> Option<String> { None }
 }
 pub struct IncludeRequest { kind: IncludeKind, name: String, angled: bool,
     includer: Option<FileId>, lookup_from: Option<u32>, name_span: Span, directive_span: Span }
@@ -67,6 +69,17 @@ pub struct EmbedRequest { name: String, angled: bool, includer: Option<FileId>,
     limit: Option<u64>, offset: Option<u64>, name_span: Span, query_only: bool }
 pub struct EmbedData { bytes: Vec<u8> }
 ```
+
+`suggest_include` names a header for a diagnostic (clang
+`suggestPathToFileForDiagnostics`); `HeaderSearch` implements it with
+`search::suggest_include_name`: the file's path relative to the longest
+search directory that is a path prefix of it (`<...>` for a system
+directory, `"..."` otherwise), else relative to `main_dir`, else the whole
+path quoted; paths are compared absolute (against the working directory)
+with `.`/`..` removed. The core calls it for each file it leaves with a
+controlling macro and records the result with
+`SourceManager::mark_include_guarded` (`#pragma once` does not count, as
+in clang 22's missing-import diagnostic).
 
 The core does the following itself:
 

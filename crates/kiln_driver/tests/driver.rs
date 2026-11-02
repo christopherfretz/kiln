@@ -600,3 +600,82 @@ fn bit_width_and_static_assert_ranges_like_clang() {
     let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], BIT_WIDTH_SOURCE);
     assert_eq!((o.code, o.stderr.as_str()), (1, BIT_WIDTH_GOLDEN));
 }
+
+#[test]
+fn module_missing_import_notes() {
+    // [module.reach]: each missing-import error of
+    // tests/conformance/module.reach/missing-import.cpp carries clang 22's
+    // note at the declaration in the module source; the corpus matches
+    // only notes located in the test file, so they are checked here.
+    let dir = repo().join("tests/conformance/module.reach");
+    let input = |f: &str| dir.join("Inputs").join(f).display().to_string();
+    let args = [
+        "-std=c++20".to_owned(),
+        "-fsyntax-only".to_owned(),
+        format!("-fmodule-file=mr.a={}", input("mr-a.cppm")),
+        format!("-fmodule-file=mr.b={}", input("mr-b.cppm")),
+        format!("-fmodule-file=mr.b:part={}", input("mr-p.cppm")),
+        dir.join("missing-import.cpp").display().to_string(),
+    ];
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let o = kiln(&args, "");
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    let notes: Vec<&str> = o
+        .stderr
+        .lines()
+        .filter(|l| l.contains(": note: "))
+        .map(|l| l.rsplit('/').next().unwrap_or(l))
+        .collect();
+    let at = |l: &str| format!("{l}: note: declaration here is not visible");
+    let want: Vec<String> = [
+        "mr-a.cppm:5:12",
+        "mr-p.cppm:4:12",
+        "mr-b.cppm:6:5",
+        "mr-b.cppm:8:5",
+        "mr-b.cppm:8:5",
+        "mr-b.cppm:18:5",
+        "mr-b.cppm:21:5",
+        "mr-b.cppm:9:8",
+        "mr-b.cppm:19:8",
+    ]
+    .into_iter()
+    .map(at)
+    .collect();
+    assert_eq!(notes, want, "{}", o.stderr);
+}
+
+#[test]
+fn module_adl_example() {
+    // [basic.lookup.argdep]/4-5: in the standard example's instantiation
+    // of `apply` (tests/conformance/basic.lookup.argdep/module-example.cpp)
+    // ADL does not find R::g, internal to module N's unit; clang 22
+    // reports it in N's source with the instantiation note, which the
+    // corpus cannot match (its primary is in Inputs/).
+    let dir = repo().join("tests/conformance/basic.lookup.argdep");
+    let input = |f: &str| dir.join("Inputs").join(f).display().to_string();
+    let args = [
+        "-std=c++20".to_owned(),
+        "-fsyntax-only".to_owned(),
+        format!("-fmodule-file=M={}", input("adl-m.cppm")),
+        format!("-fmodule-file=N={}", input("adl-n.cppm")),
+        format!("-fmodule-file=Q={}", input("adl-q.cppm")),
+        dir.join("module-example.cpp").display().to_string(),
+    ];
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let o = kiln(&args, "");
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    let lines: Vec<&str> = o
+        .stderr
+        .lines()
+        .filter(|l| l.contains(": error: ") || l.contains(": note: "))
+        .map(|l| l.rsplit('/').next().unwrap_or(l))
+        .collect();
+    let want = [
+        "module-example.cpp:25:3: error: no matching function for call to 'f'",
+        "adl-m.cppm:5:15: note: candidate function not viable: requires 1 argument, but 2 were provided",
+        "module-example.cpp:31:6: error: no type named 'f' in namespace 'R'",
+        "adl-n.cppm:8:3: error: use of undeclared identifier 'g'",
+        "module-example.cpp:27:3: note: in instantiation of function template specialization 'apply<R::X, S::Z>' requested here",
+    ];
+    assert_eq!(lines, want, "{}", o.stderr);
+}

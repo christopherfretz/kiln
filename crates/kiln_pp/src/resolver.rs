@@ -23,7 +23,9 @@ use kiln_source::{FileId, SourceManager};
 use crate::include::{
     EmbedData, EmbedRequest, IncludeKind, IncludeRequest, IncludeResolver, ResolvedInclude,
 };
-use crate::search::{Characteristic, HeaderFs, SearchList, join_path, parent_dir};
+use crate::search::{
+    Characteristic, HeaderFs, SearchList, join_path, parent_dir, suggest_include_name,
+};
 
 /// Something header search found that the `-M` dependency output wants
 /// but the preprocessor's file-change callbacks do not see.
@@ -205,5 +207,16 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
             .limit
             .map_or(rest.len(), |l| usize::try_from(l).unwrap_or(usize::MAX).min(rest.len()));
         Some(EmbedData { bytes: rest[..len].to_vec() })
+    }
+
+    fn suggest_include(
+        &self,
+        sm: &SourceManager,
+        file: FileId,
+        main_dir: Option<&str>,
+    ) -> Option<String> {
+        let cwd = std::env::current_dir().ok()?;
+        let dirs = self.list.dirs().iter().map(|d| (d.path.as_str(), d.characteristic.is_system()));
+        Some(suggest_include_name(sm.file_name(file), dirs, main_dir, &cwd.to_string_lossy()))
     }
 }

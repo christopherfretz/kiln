@@ -288,6 +288,9 @@ impl Sema<'_, '_> {
                 let _ = self.ast.decls.cold.key_function.insert(r, k);
             }
         }
+        if polymorphic {
+            self.mark_module_vtable_used(r);
+        }
     }
 
     /// clang `computeKeyFunction`: a dependent class (a template pattern,

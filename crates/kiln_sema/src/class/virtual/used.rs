@@ -9,6 +9,7 @@
 
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DefinitionBits};
+use kiln_ast::modules::UnitKind;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashSet;
 
@@ -52,6 +53,29 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A dynamic class defined in the purview of a module interface or
+    /// partition unit has its vtable emitted there even if unused (clang
+    /// `ActOnTagFinishDefinition`; spec/modules.md §7): its importers
+    /// declare it external, so the owning unit must define it and its
+    /// virtual members.
+    pub(crate) fn mark_module_vtable_used(&mut self, r: DeclId) {
+        let o = self.ast.modules.owner(r);
+        let interface = self.ast.modules.units.get(usize::from(o.unit)).is_some_and(|u| {
+            matches!(
+                u.kind,
+                UnitKind::Interface
+                    | UnitKind::PartitionInterface
+                    | UnitKind::PartitionImplementation
+            )
+        });
+        if o.unit != 0 || !interface || self.ast.module_attachment(r).is_none() {
+            return;
+        }
+        let loc = self.ast.decls.get(r).loc();
+        self.mark_vtable_used(r, loc);
+        self.module_vtables.insert(self.ast.first(r));
+    }
+
     /// clang `DefineUsedVTables`: marks the virtual members of every used
     /// vtable whose class's key function is not declared-but-undefined
     /// here (that vtable is emitted with the key function elsewhere).
@@ -62,6 +86,7 @@ impl Sema<'_, '_> {
         for (class, loc) in uses {
             if let Some(&k) = self.ast.decls.cold.key_function.get(class)
                 && self.ast.definition(k).is_none()
+                && !self.module_vtables.contains(&self.ast.first(class))
             {
                 continue;
             }

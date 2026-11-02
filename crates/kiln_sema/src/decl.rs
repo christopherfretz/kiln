@@ -7659,7 +7659,7 @@ impl Sema<'_, '_> {
 
     /// The [`NameClass`] of a non-empty ordinary (or nested-name) lookup
     /// result.
-    fn classify_found(&self, found: &crate::lookup::Found) -> NameClass {
+    pub(crate) fn classify_found(&self, found: &crate::lookup::Found) -> NameClass {
         let Some(&d) = found.decls.first() else { return NameClass::Undeclared };
         // An ambiguous lookup that found a type recovers with the
         // earliest type found ([basic.lookup.general]/1; clang's

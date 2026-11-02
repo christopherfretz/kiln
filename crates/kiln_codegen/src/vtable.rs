@@ -10,6 +10,7 @@ use std::rc::Rc;
 use kiln_abi::mangle::{self, Structor};
 use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout, VttComponent};
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, TagKind};
+use kiln_ast::modules::UnitKind;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -235,9 +236,29 @@ impl Cg<'_> {
             Some(_) => return VtLinkage::Weak,
             None => {}
         }
+        // clang `isVTableExternal`: the tables of a class attached to a
+        // named module are emitted, strongly, only by the unit that
+        // defines it (spec/modules.md §7).
+        if let Some(def) = self.class_def(first)
+            && self.ast.module_attachment(def).is_some()
+            && !self.class_is_templated_or_instantiated(def)
+        {
+            return if self.ast.modules.owner(def).unit == 0 {
+                VtLinkage::Strong
+            } else {
+                VtLinkage::External
+            };
+        }
         match self.key_function(rd) {
             None => VtLinkage::LinkOnce,
             Some((_, None)) => VtLinkage::External,
+            // A key function defined in an imported unit's global module
+            // fragment: that unit's object defines the tables (a
+            // deviation from clang 22, which emits them in every importer
+            // and not in the module unit; spec/modules.md §7).
+            Some((_, Some(def))) if self.ast.modules.is_imported_named_unit_decl(def) => {
+                VtLinkage::External
+            }
             Some((_, Some(def))) => {
                 if self.fn_is_inline(def) {
                     VtLinkage::LinkOnce
@@ -293,11 +314,20 @@ impl Cg<'_> {
             .key_function
             .iter()
             .filter_map(|(c, _)| {
+                if self.class_def(c).is_some_and(|d| {
+                    ast.module_attachment(d).is_some()
+                        && !self.class_is_templated_or_instantiated(d)
+                }) {
+                    return None;
+                }
                 let (_, def) = self.key_function(c)?;
                 let def = def?;
                 Some((def, c))
             })
             .collect();
+        // clang marks the vtable of every dynamic class defined in a named
+        // module unit's purview used when the class is completed.
+        classes.extend(self.module_dynamic_classes().into_iter().map(|c| (c, c)));
         classes.sort_unstable();
         for (_, c) in classes {
             if ast.decls.get(c).has(DeclFlags::INVALID) {
@@ -311,6 +341,52 @@ impl Cg<'_> {
             self.emit_vtable_def(c)?;
         }
         Ok(())
+    }
+
+    /// The dynamic, non-templated classes (nested ones included) that
+    /// this interface or partition unit defines in its purview (their
+    /// vtables are used at their definition: `mark_module_vtable_used`).
+    fn module_dynamic_classes(&self) -> Vec<DeclId> {
+        let ast = self.ast;
+        let mut out = Vec::new();
+        let interface = ast.modules.units.first().is_some_and(|u| {
+            matches!(
+                u.kind,
+                UnitKind::Interface
+                    | UnitKind::PartitionInterface
+                    | UnitKind::PartitionImplementation
+            )
+        });
+        if !ast.modules.active || !interface {
+            return out;
+        }
+        let mut stack = vec![ast.tu];
+        while let Some(ctx) = stack.pop() {
+            for d in ast.decls.members(ctx) {
+                let n = ast.decls.get(d);
+                if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) {
+                    continue;
+                }
+                match n.kind() {
+                    DeclKind::Namespace | DeclKind::Export => stack.push(d),
+                    DeclKind::CXXRecord if ast.definition(d) == Some(d) => {
+                        if self.class_is_templated_or_instantiated(d) {
+                            continue;
+                        }
+                        stack.push(d);
+                        if ast.modules.owner(d).unit == 0
+                            && ast.module_attachment(d).is_some()
+                            && self.is_dynamic(d)
+                            && self.vtable_linkage(d) == VtLinkage::Strong
+                        {
+                            out.push(d);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
     }
 
     /// clang `ItaniumCXXABI::emitVTableDefinitions` (idempotent).
