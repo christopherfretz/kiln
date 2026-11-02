@@ -12,7 +12,7 @@
 //@ diag: 24:33 warning "memory order argument to atomic operation is invalid"
 //@ diag: 25:32 warning "memory order argument to atomic operation is invalid"
 //@ requires: clang<22
-// clang 22 emits warning: memory order argument to atomic operation is invalid; WP-355 residual
+// clang 19 spelling; memory-order-clang22.cpp has clang 22's (WP-394).
 void f(_Atomic(int) *ap, int *p, int *e, bool *b) {
   __c11_atomic_load(ap, 3);
   __c11_atomic_store(ap, 1, 2);

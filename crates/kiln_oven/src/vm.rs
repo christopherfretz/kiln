@@ -947,10 +947,13 @@ impl Oven {
                 }
                 Op::New => {
                     let elem = OTy(arg!(1) as u32);
-                    let e = match self.origins[arg!(3)] {
+                    let mut e = match self.origins[arg!(3)] {
                         Origin::Heap(e, _) => e,
                         _ => ExprId::new(0),
                     };
+                    if aux & new_aux::STD != 0 && self.clang_compat >= 22 {
+                        e = self.std_alloc_site(b, e);
+                    }
                     let origin = Origin::Heap(e, self.mem.heap_allocs as u32);
                     let bound = if aux & new_aux::ARRAY != 0 {
                         let mut v = reg!(2);
@@ -1715,6 +1718,81 @@ impl Oven {
         self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(..)))
     }
 
+    /// clang 22 notes a `std::allocator<T>::allocate` allocation at the
+    /// call of `allocate` (its member name for a member call), not at the
+    /// `operator new` inside it; `e` when there is no such call.
+    #[inline(never)]
+    fn std_alloc_site(&self, b: &mut dyn SemaBridge, e: ExprId) -> ExprId {
+        let Some(f) = self.stack.last() else { return e };
+        if f.call_pc == NO_CALL {
+            return e;
+        }
+        let Some(ce) = self.site(f.call_pc as usize).e else { return e };
+        let ast = b.ast();
+        if ast.exprs.get(ce).kind() == kiln_ast::expr::ExprKind::CXXMemberCallExpr
+            && let Some(&m) = ast.exprs.children(ce, &ast.lists).first()
+        {
+            return m;
+        }
+        ce
+    }
+
+    /// The bytes of the string literal `raw` points into without its
+    /// terminator, and its character width; `None` for anything else.
+    fn literal_bytes(&self, raw: u64) -> Option<(&[u8], usize)> {
+        let ptr = Ptr::decode(raw);
+        let a = self.alloc_any(ptr)?;
+        if !matches!(a.origin, Origin::Str(..)) || ptr.space() != Sp::Static {
+            return None;
+        }
+        let width = match self.types.kind(a.ty) {
+            TyKind::Array { elem, .. } => self.types.size(elem) as usize,
+            _ => return None,
+        };
+        let (b, n) = (a.base as usize, a.size as usize);
+        let bytes = self.mem.stat.bytes.get(b..b + n)?;
+        Some((&bytes[..n.saturating_sub(width)], width.max(1)))
+    }
+
+    /// clang 22's `ArePotentiallyOverlappingStringLiterals`: `p` and `q`
+    /// point into string literals that, merged so the two pointers
+    /// coincide, agree on every overlapping byte (terminators included).
+    fn literals_may_overlap(&self, p: u64, q: u64) -> bool {
+        let (Some((mut l, _)), Some((mut r, _))) = (self.literal_bytes(p), self.literal_bytes(q))
+        else {
+            return false;
+        };
+        let (lo, ro) = (i64::from(Ptr::decode(p).off), i64::from(Ptr::decode(q).off));
+        let off = ro - lo;
+        if off < 0 {
+            let k = off.unsigned_abs() as usize;
+            if l.len() < k {
+                return false;
+            }
+            l = &l[k..];
+        } else {
+            let k = off as usize;
+            if r.len() < k {
+                return false;
+            }
+            r = &r[k..];
+        }
+        let (lw, rw) = (
+            self.literal_bytes(p).map_or(1, |x| x.1),
+            self.literal_bytes(q).map_or(1, |x| x.1),
+        );
+        let (longer, shorter, width) =
+            if l.len() > r.len() { (l, r, rw) } else { (r, l, lw) };
+        for nb in 0..width {
+            match longer.get(shorter.len() + nb) {
+                None => break,
+                Some(&0) => {}
+                Some(_) => return false,
+            }
+        }
+        longer.starts_with(shorter)
+    }
+
     /// A pointer into an object of unknown identity (P2280).
     fn is_unknown(&self, raw: u64) -> bool {
         raw != 0
@@ -1741,7 +1819,14 @@ impl Oven {
             return Err(Fault::PtrCmp { p, q, pointee });
         }
         if p != 0 && q != 0 {
-            if self.is_literal(p) || self.is_literal(q) {
+            if self.clang_compat >= 22 {
+                // clang 22: only two string literals whose merged storage
+                // could put `p` and `q` at one address compare
+                // unspecified; a literal is distinct from any other object.
+                if self.literals_may_overlap(p, q) {
+                    return Err(Fault::LiteralCmp);
+                }
+            } else if self.is_literal(p) || self.is_literal(q) {
                 return Err(Fault::LiteralCmp);
             }
             if Ptr::decode(p).off == 0 && !Ptr::decode(p).is_fn() && self.past_complete(q) {

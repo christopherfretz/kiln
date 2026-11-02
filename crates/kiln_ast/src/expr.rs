@@ -1126,8 +1126,9 @@ pub enum ExtVectorAccess {
         repeated: bool,
     },
     /// `illegal vector component name '{c}'`: the first character that
-    /// is not from the set the accessor started with.
-    Illegal(char),
+    /// is not from the set the accessor started with, and its byte
+    /// offset in the accessor (clang 22 diagnoses it there).
+    Illegal(char, u32),
     /// `vector component access exceeds type`.
     Exceeds,
 }
@@ -1180,7 +1181,8 @@ pub fn ext_vector_access(name: &str, count: u32) -> ExtVectorAccess {
         }
     }
     if !half && i < b.len() {
-        return ExtVectorAccess::Illegal(name[i..].chars().next().unwrap_or('?'));
+        let at = u32::try_from(i).unwrap_or(u32::MAX);
+        return ExtVectorAccess::Illegal(name[i..].chars().next().unwrap_or('?'), at);
     }
     let idx = |c: u8| if hex { numeric(c) } else { point(c) };
     let comps = &b[usize::from(hex)..];

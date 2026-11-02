@@ -4091,6 +4091,11 @@ impl Sema<'_, '_> {
         }
         if let Some(b) = self.builtin_callee(callee)
             && let Some(id) = self.ast.decls.builtin_id(b)
+        {
+            self.atomic_flag_order_check(id, args);
+        }
+        if let Some(b) = self.builtin_callee(callee)
+            && let Some(id) = self.ast.decls.builtin_id(b)
             && kiln_ast::decl::builtin::is_custom(id)
         {
             let has_braced = braced.iter().any(Option::is_some);

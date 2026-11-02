@@ -3614,6 +3614,38 @@ impl Compiler<'_> {
             }
             ExprKind::MemberExpr => self.member(e, acc),
             ExprKind::ArraySubscriptExpr
+                if self.o.clang_compat >= 22 && {
+                    let [a, _] = self.ast().exprs.operands(e);
+                    self.is_vector_expr(a)
+                } =>
+            {
+                // clang 22 evaluates a lane access as an element of the
+                // lane array (spec/oven.md "Vectors").
+                let [a, i] = self.ast().exprs.operands(e);
+                let p = self.vec_object(a, acc);
+                let ri = self.rv(i);
+                let ru = self.reg();
+                self.emit(Op::ICast, 64 << 9, &[ru, ri]);
+                self.lane_place(p, ru, a, e)
+            }
+            ExprKind::ExtVectorElementExpr
+                if self.o.clang_compat >= 22 && self.ext_elt_lane(e).is_some() =>
+            {
+                // clang 22: a one-lane access of a vector object is that
+                // lane (spec/oven.md "Vectors").
+                let lane = self.ext_elt_lane(e).expect("guarded");
+                let ast = self.ast();
+                let base = ast.exprs.operand(e);
+                let p = if ast.exprs.get(e).has(kiln_ast::expr::ExprFlags::ARROW) {
+                    self.rv(base)
+                } else {
+                    self.vec_object(base, acc)
+                };
+                let ri = self.reg();
+                self.konst(ri, u128::from(lane));
+                self.lane_place(p, ri, base, e)
+            }
+            ExprKind::ArraySubscriptExpr
                 if {
                     let [a, b] = self.ast().exprs.operands(e);
                     self.is_vector_expr(a) || self.is_vector_expr(b)

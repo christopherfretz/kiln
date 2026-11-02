@@ -20,7 +20,7 @@ use kiln_ast::ExprId;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp};
 
 use super::{Access, Compiler, Place, cmp_of, float_code, int_of, int_op, skip_parens};
-use crate::kbc::{Op, ak, bi, int_aux};
+use crate::kbc::{Op, ak, bi, cmp, int_aux};
 use crate::mem::Origin;
 use crate::ty::{OTy, TyKind};
 
@@ -88,6 +88,51 @@ impl Compiler<'_> {
         } else {
             let t = self.ety(x);
             self.materialize(x, t)
+        }
+    }
+
+    /// The vector object `x` designates (a glvalue, accessed as `acc`),
+    /// else a temporary holding its value.
+    pub(super) fn vec_object(&mut self, x: ExprId, acc: Access) -> u32 {
+        if self.node(x).value_category().is_glvalue() {
+            self.lv_mem(x, acc)
+        } else {
+            let t = self.ety(x);
+            self.materialize(x, t)
+        }
+    }
+
+    /// Lane `ri` (an index of 64-bit unsigned type: clang 22 converts the
+    /// index, so `v[-1]` names element 18446744073709551615) of the
+    /// vector at `p`, stepped like an array element with the note at
+    /// `base`'s begin.
+    pub(super) fn lane_place(&mut self, p: u32, ri: u32, base: ExprId, e: ExprId) -> Place {
+        let ety = self.ety(e);
+        let r = self.reg();
+        let pc = self.emit_at(Op::PtrAdd, int_aux(64, false), &[r, p, ri, ety.0], e);
+        let loc = self.begin(base);
+        if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
+            site.loc = loc;
+        }
+        Place::Mem(r)
+    }
+
+    /// The lane a one-lane ext vector element access `e` selects.
+    pub(super) fn ext_elt_lane(&self, e: ExprId) -> Option<u32> {
+        let ast = self.ast();
+        let base = ast.exprs.operand(e);
+        let mut bt = ast.exprs.get(base).ty();
+        if ast.exprs.get(e).has(ExprFlags::ARROW) {
+            bt = ast.types.pointee(bt)?;
+        }
+        let count = match ast.types.canonical_view(bt) {
+            kiln_ast::types::TypeView::Vector { count, .. } => count,
+            _ => return None,
+        };
+        let acc = ast.symbols().as_str(ast.exprs.ext_vector_accessor(e));
+        match kiln_ast::expr::ext_vector_access(acc, count) {
+            kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } if lanes.len() == 1 => lanes.first().copied(),
+            _ => None,
         }
     }
 
@@ -380,6 +425,49 @@ impl Compiler<'_> {
             }
         }
         out
+    }
+
+    /// `__builtin_reduce_*(x)` of an integer vector into `dst` (clang 22
+    /// `ExprConstant` `VisitBuiltinCallExpr`): the lanes combined in
+    /// order, `add`/`mul` with the overflow note at the call; a floating
+    /// vector is not folded, silently.
+    pub(super) fn vec_reduce(&mut self, e: ExprId, bid: u32, x: ExprId, dst: u32) {
+        use kiln_ast::decl::builtin as id;
+        let xt = self.ety(x);
+        let Some((elem, _)) = self.lanes(xt) else { return self.unsupported(e) };
+        if !matches!(self.kind(elem), TyKind::Int { .. } | TyKind::Bool) {
+            return self.trap(e, "");
+        }
+        let lanes = self.vec_regs(x);
+        let Some((&first, rest)) = lanes.split_first() else { return };
+        self.emit(Op::Mov, 0, &[dst, first]);
+        let (w, s) = int_of(self.kind(elem)).unwrap_or((32, true));
+        for &r in rest {
+            match bid {
+                id::REDUCE_MIN | id::REDUCE_MAX => {
+                    // `dst = r` when `r` orders before (min) / after (max).
+                    let c = if bid == id::REDUCE_MIN { cmp::LT } else { cmp::GT };
+                    let t = self.reg();
+                    self.emit(Op::ICmp, int_aux(w as u8, s) | c << 9, &[t, r, dst]);
+                    let j = self.jmp_if(t, false);
+                    self.emit(Op::Mov, 0, &[dst, r]);
+                    self.patch_here(j);
+                }
+                _ => {
+                    let iop = match bid {
+                        id::REDUCE_ADD => Op::IAdd,
+                        id::REDUCE_MUL => Op::IMul,
+                        id::REDUCE_AND => Op::IAnd,
+                        id::REDUCE_OR => Op::IOr,
+                        _ => Op::IXor,
+                    };
+                    let d = self.reg();
+                    let begin = self.begin(e);
+                    self.emit_site(iop, int_aux(w as u8, s), &[d, dst, r], e, begin);
+                    self.emit(Op::Mov, 0, &[dst, d]);
+                }
+            }
+        }
     }
 
     /// `c ? t : f` of vector type: the scalar-condition form selects an

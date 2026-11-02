@@ -1015,6 +1015,16 @@ impl Sema<'_, '_> {
         // A field whose initializer failed (clang: `BuildCXXDefaultInitExpr`
         // fails, the list is invalid).
         if self.ast.decls.get(f).has(DeclFlags::INVALID) {
+            // clang 22's aggregate initialization reports each use of a
+            // default member initializer that is not parsed yet, even
+            // after the field was invalidated (spec/sema.md §1.1).
+            if self.clang_compat >= 22
+                && self.field_has_nsdmi(f)
+                && self.ast.decls.field(f).and_then(|x| x.init).is_none()
+                && !self.inst.deferred_nsdmis.contains_key(&f)
+            {
+                self.default_member_init_not_yet_parsed(f, at);
+            }
             return self.recover(fty, &[], at);
         }
         if self.field_has_nsdmi(f) {

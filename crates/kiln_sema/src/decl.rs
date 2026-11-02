@@ -3318,9 +3318,15 @@ impl Sema<'_, '_> {
                         }
                         _ => false,
                     };
-                    let msg = if same_params {
+                    // clang 22 reports two `extern "C"` declarations
+                    // differing in return type as conflicting types
+                    // (spec/sema.md §1.1).
+                    let both_c = self.clang_compat >= 22
+                        && kiln_abi::mangle::is_extern_c(&self.ast, p)
+                        && self.ctx_is_extern_c(self.context());
+                    let msg = if same_params && !both_c {
                         self.diag(DiagId::sema_ovl_diff_return_type, d.name_loc())
-                    } else if extern_c_redecl {
+                    } else if extern_c_redecl || both_c {
                         invalid_redecl = true;
                         self.diag(DiagId::sema_conflicting_types, d.name_loc()).arg(fname.clone())
                     } else {

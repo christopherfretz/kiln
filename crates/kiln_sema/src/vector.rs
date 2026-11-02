@@ -52,8 +52,14 @@ impl Sema<'_, '_> {
                 return None;
             }
             _ => {
-                let msg = self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n).arg("1");
-                self.emit(msg);
+                // clang 22 checks `ext_vector_type`'s arguments as a
+                // declaration attribute and again as a type attribute:
+                // the error twice (spec/sema.md §1.1).
+                let times = if kind == AttrKind::EXT_VECTOR_TYPE && self.clang_compat >= 22 { 2 } else { 1 };
+                for _ in 0..times {
+                    let msg = self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n.clone()).arg("1");
+                    self.emit(if times == 2 { msg.allow_duplicate() } else { msg });
+                }
                 return None;
             }
         };
@@ -134,8 +140,8 @@ impl Sema<'_, '_> {
     /// Applies (and removes from `attrs`) the vector attributes of a
     /// declaration of type `ty`. `typedef` is true for a typedef or
     /// alias-declaration, the only declarations `ext_vector_type` applies
-    /// to; `vector_size` also applies to the type of a variable, field or
-    /// parameter (on a function clang applies it to the return type: not
+    /// to at clang 19 (clang 22 takes any); `vector_size` also applies to
+    /// the type of a variable, field or parameter (on a function clang applies it to the return type: not
     /// supported yet). Returns the declared type.
     pub(crate) fn apply_vector_attrs(
         &mut self,
@@ -153,7 +159,9 @@ impl Sema<'_, '_> {
             }
             attrs.remove(i);
             let ext = node.kind == AttrKind::EXT_VECTOR_TYPE;
-            if !typedef && ext {
+            // clang 22 applies `ext_vector_type` to any declared type
+            // (spec/sema.md §1.1).
+            if !typedef && ext && self.clang_compat < 22 {
                 self.error(DiagId::sema_ext_vector_type_on_non_typedef, node.loc);
                 continue;
             }
