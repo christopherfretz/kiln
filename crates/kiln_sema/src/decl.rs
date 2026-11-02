@@ -3689,7 +3689,14 @@ impl Sema<'_, '_> {
     /// field ([class.bit]/3, clang `ActOnCXXMemberDeclarator`): a static
     /// data member, a typedef or a function, each diagnosed at its name
     /// with the width's range. The width is dropped.
-    fn non_field_bit_width(&mut self, ds: &DeclSpec, ty: QualType, name: Symbol, loc: Loc, w: ExprId) {
+    fn non_field_bit_width(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        name: Symbol,
+        loc: Loc,
+        w: ExprId,
+    ) {
         let n = sym_str(self, name);
         let msg = if ds.is_typedef() {
             self.diag(DiagId::sema_typedef_not_bitfield, loc).arg(n)
@@ -3782,7 +3789,8 @@ impl Sema<'_, '_> {
         if v == 0
             && let Some(n) = name
         {
-            let msg = self.diag(DiagId::sema_bitfield_zero_width, loc).arg(n).range(self.expr_range(w));
+            let msg =
+                self.diag(DiagId::sema_bitfield_zero_width, loc).arg(n).range(self.expr_range(w));
             self.emit(msg);
             return None;
         }
