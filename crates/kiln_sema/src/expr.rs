@@ -600,7 +600,7 @@ impl Sema<'_, '_> {
         if !self.lambdas.is_empty()
             && self.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
         {
-            self.note_unexpanded_in_lambda();
+            self.note_unexpanded_in_lambda(crate::templ::pack::PackOperand::Expr(e));
         }
         self.check_implicit_conversions(e, cc);
         self.flush_member_refs();
@@ -1302,6 +1302,20 @@ impl Sema<'_, '_> {
             };
         }
         None
+    }
+
+    /// True if `e` (under parens) names a function that is already invalid
+    /// (an unknown return or parameter type): clang's
+    /// `BuildDeclarationNameExpr` makes such a name an error unless it is
+    /// resolved as a call's overload set, so taking its address or
+    /// converting it is erroneous without a diagnostic of its own
+    /// (`&A::f` into a pointer to member, `void (*p)() = k;`; WP-379).
+    pub(crate) fn names_invalid_function(&self, e: ExprId) -> bool {
+        let x = self.ignore_parens(e);
+        self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr && {
+            let d = self.ast.decls.get(self.ast.exprs.decl(x));
+            d.kind().is_function() && d.has(DeclFlags::INVALID)
+        }
     }
 
     /// clang `CallExpr::getCallReturnType` is a reference: the callee's
@@ -2622,6 +2636,13 @@ impl Sema<'_, '_> {
                 loc,
                 ExprFlags::CANNOT_OVERFLOW,
             );
+        }
+        // `&(C::f)` is no pointer to member: its member name is still
+        // "without an object" (clang names it before it checks validity).
+        let x = self.ignore_parens(e);
+        if self.names_invalid_function(e) && (x == e || !self.member_refs.contains_key(&x)) {
+            self.member_refs.remove(&x);
+            return self.recover_err(&[e], loc);
         }
         if let Some(mp) = self.member_pointer_of(e, loc) {
             return mp;

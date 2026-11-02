@@ -1313,6 +1313,12 @@ impl Parser<'_, '_> {
                     Self::punct_of(next),
                     Some(Punct::LParen | Punct::ColonColon | Punct::Less)
                 ))
+            // A bit-field width ([class.bit]/1) or, at namespace scope,
+            // what clang's `ParseImplicitInt` treats the same way: `y : 3;`
+            // is "unknown type name 'y'", then an anonymous bit-field
+            // (namespace scope: "expected unqualified-id" at the `:`).
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                && Self::punct_of(next) == Some(Punct::Colon))
     }
 
     /// `foo<args> x` with `foo` undeclared ([`Parser::undeclared_template_type`]):
@@ -2948,6 +2954,7 @@ impl Parser<'_, '_> {
         allow_fn_def: bool,
         level: usize,
     ) -> Vec<DeclId> {
+        let tmpl_kind = self.template_decl_kind.take();
         let mut ds = self.parse_decl_specifiers(ctx);
         let mut decls = Vec::new();
         if ds.tag_declares
@@ -2973,7 +2980,7 @@ impl Parser<'_, '_> {
         // [dcl.pre]/6 (clang's `BuildDeclaratorGroup`): a structured
         // binding declaration is alone in its group.
         let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;
-        let mut declarators = 0usize;
+        let (mut declarators, mut restrict) = (0usize, None);
         let _ = self.s.take_declarator_type_invalid();
         let mut type_invalid = false;
         loop {
@@ -2983,7 +2990,7 @@ impl Parser<'_, '_> {
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
-            if self.parse_asm_label_and_gnu_attrs(&mut d, declarators == 0).is_err() {
+            if self.parse_asm_label_and_gnu_attrs(&mut d, declarators, &mut restrict).is_err() {
                 self.skip_until(&[], true, false);
                 break;
             }
@@ -3047,7 +3054,7 @@ impl Parser<'_, '_> {
                 return decls;
             }
             decls.extend(v);
-            if self.eat(Punct::Comma).is_none() {
+            if !self.next_declarator(tmpl_kind) {
                 break;
             }
         }
@@ -3059,6 +3066,22 @@ impl Parser<'_, '_> {
         }
         self.expect_declaration_semi(ctx);
         decls
+    }
+
+    /// clang forms each declarator's type from the decl-specifier-seq
+    /// anew: its "restrict requires a pointer or reference" is reported
+    /// once per declarator (`__restrict int a, b;`). The first declarator
+    /// (`first`) takes the error of the group's type; later ones repeat it.
+    pub(crate) fn repeat_declspec_errors(
+        &mut self,
+        restrict_error: &mut Option<(Loc, QualType)>,
+        first: bool,
+    ) {
+        if first {
+            *restrict_error = self.s.take_declspec_restrict_error();
+        } else if let Some(r) = *restrict_error {
+            self.s.report_restrict_not_pointer(r);
+        }
     }
 
     /// Sets `d.end` right after `parse_declarator` (and a trailing
@@ -3088,8 +3111,17 @@ impl Parser<'_, '_> {
     /// Only GNU attributes follow (clang's `MaybeParseGNUAttributes` in
     /// `ParseDeclGroup`): a C++11 attribute-specifier-seq here ends the
     /// declarator, and the `;` (or function body) expected there is
-    /// reported by the caller.
-    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator, first: bool) -> Result<(), ()> {
+    /// reported by the caller. First repeats the decl-specifiers' errors
+    /// for this declarator ([`Parser::repeat_declspec_errors`]).
+    /// `index` is the declarator's index in its group.
+    fn parse_asm_label_and_gnu_attrs(
+        &mut self,
+        d: &mut Declarator,
+        index: usize,
+        restrict_error: &mut Option<(Loc, QualType)>,
+    ) -> Result<(), ()> {
+        let first = index == 0;
+        self.repeat_declspec_errors(restrict_error, first);
         self.gnu_attr_end = Loc::INVALID;
         if first && d.is_function_declarator() {
             self.parse_gnu_attr_seq(&mut d.attrs);
