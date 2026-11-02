@@ -3045,11 +3045,7 @@ impl Parser<'_, '_> {
     /// `ParseDeclGroup`): a C++11 attribute-specifier-seq here ends the
     /// declarator, and the `;` (or function body) expected there is
     /// reported by the caller.
-    fn parse_asm_label_and_gnu_attrs(
-        &mut self,
-        d: &mut Declarator,
-        first: bool,
-    ) -> Result<(), ()> {
+    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator, first: bool) -> Result<(), ()> {
         self.gnu_attr_end = Loc::INVALID;
         if first && d.is_function_declarator() {
             self.parse_gnu_attr_seq(&mut d.attrs);
