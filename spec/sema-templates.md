@@ -191,7 +191,15 @@ template-template-param := template-head ('class'|'typename') '...'? identifier?
 
 **Defaults** are kept unparsed only where [temp.param]/15 requires
 delayed meaning; in practice they are always parsed immediately.
-- A default may name earlier parameters.
+- A default may name earlier parameters. A parameter's locus is after
+  its complete template-parameter ([basic.scope.pdecl]/9): its own
+  default does not see it, so `template <class T = T>` names an outer
+  `T` (libc++ `template <class _Tp = _Tp>` in a member template of a
+  class template with a parameter `_Tp`). The parser declares the name
+  in the template-parameter scope after the default
+  (`Sema::act_on_template_param_end`, which also reports the
+  [temp.local]/6 shadowing error; WP-295,
+  `tests/conformance/basic.scope.pdecl/template-param-own-default.cpp`).
 - Redefining a default is an error: "template parameter redefines default
   argument".
 - Defaults are stored in the cold "template default args" map
@@ -1549,8 +1557,12 @@ recomputed exactly as for non-template code (clang's
   becomes N `ParmVar`s (`DeclOrPack::Pack`). A specialization declared
   from an earlier declaration takes the definition's parameter names
   when its body is instantiated (clang instantiates them from the
-  definition), so a local of the body may reuse a forward
-  declaration's parameter name.
+  definition, `addInstantiatedParametersToScope`, [temp.inst]/4), so a
+  local of the body may reuse a forward declaration's parameter name.
+  This holds for function template specializations and for members and
+  member templates of class templates defined out of class, parameter
+  packs included (`rename_params_from_pattern`, WP-295;
+  `tests/conformance/temp.inst/member-definition-parameter-names.cpp`).
 - **Variables** keep the pattern's form of initialization (`cinit`,
   `callinit`, `listinit`): `T v{a, b}` stays direct-list-initialization,
   which may choose an explicit constructor. A braced list is redone as a
@@ -1563,6 +1575,11 @@ recomputed exactly as for non-template code (clang's
   class derived from it ([dcl.init.general]/16.6.2, [dcl.init.list]/3.2)
   call the copy or move constructor at instantiation. Only a construction
   with no parentheses and no written argument is a default-initialization.
+  A braced-init-list argument of a dependent parenthesized initializer
+  (`C c({1, 2}, a)`, `new C({1, 2}, a)`) stays a braced argument when
+  the list is substituted, so the constructor's parameter is
+  initialized from it by [over.ics.list] (`call_arg_list`; WP-295,
+  `tests/conformance/over.ics.list/dependent-paren-init-braced-arg.cpp`).
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
@@ -3270,6 +3287,7 @@ pub fn act_on_constrained_template_param(&mut self, concept: DeclId, cargs: &[Te
 pub fn act_on_non_type_template_param(&mut self, p: &ParamInfo, pack: bool) -> DeclId;
 pub fn act_on_template_template_param(&mut self, params: TemplateParamListId, typename_kw: bool, kw_loc: Loc, pack: bool, name: Option<(Symbol, Loc)>) -> DeclId;
 pub fn act_on_template_param_default(&mut self, p: DeclId, arg: TemplateArg, loc: Loc); // loc = the argument, not `=`
+pub fn act_on_template_param_end(&mut self, p: DeclId); // after the default, if any: declares p's name ([basic.scope.pdecl]/9)
 pub fn act_template_head(&mut self, requires: Option<ExprId>, r_angle: Loc) -> TemplateParamListId; // params pushed one by one
 pub fn act_on_finish_template_decl(&mut self);
 pub fn act_on_invented_template_param(&mut self, loc: Loc, pack: bool, constraint: Option<(DeclId, Vec<TemplateArg>)>, param_name: Option<Symbol>) -> QualType;
@@ -4542,6 +4560,12 @@ requires-clause scope.**
   `Sema.inherited_defaults`, filled by `merge_template_defaults`; they
   are not dumped (a gap). Deduction completes a dependent `P` with its
   defaulted arguments (`complete_dependent_args`, [temp.deduct.type]).
+  The parameters and defaults are those of the declaration that stands
+  for the template (`head_template`, as in template-id conversion), not
+  the first declaration: a friend redeclaration nested in a class
+  template can come first (libc++ `__wrap_iter` befriends `vector`),
+  and its deeper parameters' inherited defaults name the outer ones
+  (WP-295, `tests/conformance/temp.deduct.type/default-completion-friend-first.cpp`).
 - *Trailing requires-clause* ([basic.scope.param]/1, [expr.prim.this]/2):
   the function parameters (and `this` in a member) are in scope.
   Satisfaction substitutes the pattern's parameters into fresh ones
