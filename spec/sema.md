@@ -99,13 +99,30 @@ Constructors:
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
     (`ambiguous_type_recovery`) follows clang: the declaration is
     dropped and the statement skipped.
-- **Block-scope using-directives** ([namespace.udir]/2): a local
-  scope's `using namespace N;` is collected while walking outwards, and
-  `N`'s members are searched at the nearest enclosing namespace (or the
-  translation unit) that encloses `N`, together with that scope's own
-  using-directives.
-- **Qualified lookup** ([basic.lookup.qual]) searches one context's
-  table, plus that namespace's using-directives.
+- **Using-directives** ([namespace.udir]/2-4, WP-339): a namespace-scope
+  `using namespace N;` is recorded on its namespace (or the translation
+  unit) in `LookupTables::using_dirs` (`Ast::add_using_directive`), so it
+  outlives the namespace body and holds for every later reopening and
+  lookup into it; a directive inside an inline namespace is also
+  recorded on each enclosing namespace up to the first non-inline one
+  ([namespace.def.general]/7). A block-scope directive stays on its
+  scope. Unqualified lookup (`visible_using_directives`) collects the
+  directives of the scopes on the stack, then closes them transitively
+  over the nominated namespaces' own directives; each nominated
+  namespace `N` is searched at the nearest enclosing namespace that
+  contains both the directive's scope and `N` (`common_namespace`). At
+  that level its members are *joined* with the namespace's own (clang's
+  `CppNamespaceLookup`): `k(0L)` sees both `S::k(int)` and
+  `S::T::k(long)` from inside `S::U` with `using namespace T;`. Literal
+  operators ([lex.ext]/3-8) are found the same way, through
+  `std::literals::chrono_literals` and `std::chrono`'s directive.
+- **Qualified lookup** ([basic.lookup.qual], [namespace.qual]/2) searches
+  one context's table; only if that finds nothing (after the lookup
+  kind's filter) does it search the namespaces nominated by the
+  context's recorded directives, recursively, each once: S'(X, m) is the
+  union, over nominated namespaces, of their own members, else of their
+  own nominated namespaces' S'. Two different entities so found are
+  ambiguous.
 - **Argument-dependent lookup** ([basic.lookup.argdep]; WP-068a,
   `overload/adl.rs`, spec/sema-overload.md §2.2): a call's unqualified,
   unparenthesized callee whose ordinary lookup found only namespace-scope
@@ -582,6 +599,13 @@ Redeclaration and linkage rules:
   placeholder under pointer and reference declarators (`auto *`,
   `const auto &`, `auto &&`) is deduced as for a function call
   ([temp.deduct.call]/2-4) with `auto` as the template parameter.
+  A copy-list-initializer (`auto l = {...}`, and the range of a
+  range-based `for` over a braced list) deduces `std::initializer_list<U>`
+  from each element; a nested braced-init-list element is a non-deduced
+  context ([temp.deduct.call]/1) and is left out (`auto_list_items`), so
+  `{P{0, 1}, {2, 3}}` deduces `U = P<int, int>` and `{{1}}` deduces
+  nothing (`cannot deduce actual type ... from initializer list`), as
+  does a designated element (WP-339).
 - Deduced return types ([dcl.spec.auto.general]/9-11): the first
   `return` deduces, later ones must agree (clang's
   `'auto' in return type deduced as ... here but deduced as ...`),
