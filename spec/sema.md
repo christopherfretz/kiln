@@ -1577,7 +1577,11 @@ diagnostics and IR.
     `CreateRecoveryExpr`), so it is not diagnosed again. Not yet: the
     C-style cast's own rvalue message (`(S&)mk()` reports the
     initialization failure of its static step instead of `C-style cast
-    from rvalue to reference type`).
+    from rvalue to reference type`). A value of type `std::nullptr_t`
+    converts to an integral type (not an enumeration) as `(void*)0`
+    does (`PointerToIntegral`, with the pointer path's
+    `cast from pointer to smaller type` error, [expr.reinterpret.cast]/4,
+    WP-296).
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold. They are run-time
   behavior diagnostics anchored at the right operand (clang's

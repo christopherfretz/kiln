@@ -4955,6 +4955,19 @@ impl Sema<'_, '_> {
             }
             return Some(CastKind::PointerToIntegral);
         }
+        // [expr.reinterpret.cast]/4: a value of type `std::nullptr_t`
+        // converts to an integral type (not an enumeration) with the
+        // meaning and validity of `(void*)0`'s conversion (clang
+        // `TryReinterpretCast`).
+        if self.is_nullptr_type(from) && self.ast.types.is_integral(to) {
+            let pw = u32::try_from(self.abi.pointer_size * 8).unwrap_or(64);
+            if conv::int_width(self, to).is_some_and(|w| w < pw) {
+                let msg =
+                    self.diag(DiagId::sema_reinterpret_cast_small_int, loc).arg(self.ty_arg(to));
+                self.emit(msg);
+            }
+            return Some(CastKind::PointerToIntegral);
+        }
         if style == CastStyle::Reinterpret
             && self.is_integral_or_enum(from)
             && self.ast.types.same_unqualified(from, to)

@@ -1829,6 +1829,18 @@ formed it:
 3. **Finish** ([temp.deduct.general]/5):
    - an undeduced parameter takes its default (substituted in order); a
      pack takes the empty pack; anything else gives `Incomplete`;
+   - check the argument of each P without deduced template params
+     (step 2's last bullet) for an implicit conversion, with the
+     options `add_candidate` would use (`deduce_call`'s `opts`), before
+     anything is substituted into the function type ([temp.deduct.call]
+     CWG1391, clang `CheckNonDependent`). A bad one fails with
+     `NonDependentConversionFailure` carrying the argument index and
+     its sequence; `add_template_candidate` reports it as the
+     template's `BadConversion` (no `[with ...]`, as before). A later
+     parameter whose substitution would be a hard error (libc++
+     `shared_ptr(nullptr_t, D, enable_if_t<__well_formed_deleter<D,
+     nullptr_t>>)` against an `int*` argument) is thus never
+     substituted (WP-296);
    - substitute everything into the function type under
      `DeducedTemplateArgumentSubstitution`;
    - check that the deduced A is compatible ([temp.deduct.call]/4:

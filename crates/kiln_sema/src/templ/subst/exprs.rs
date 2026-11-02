@@ -144,7 +144,13 @@ impl Substituter<'_, '_, '_> {
     /// ([expr.type.conv]/2), which redoes the initialization (the
     /// resolved one is not reused: an instantiation-dependent operand may
     /// convert differently).
-    fn paren_list_init(&mut self, p: ExprId, ty: QualType, loc: Loc, end: Loc) -> SubstResult<ExprId> {
+    fn paren_list_init(
+        &mut self,
+        p: ExprId,
+        ty: QualType,
+        loc: Loc,
+        end: Loc,
+    ) -> SubstResult<ExprId> {
         let args = self.call_arg_list(self.sema.ast.exprs.paren_list_inits(p))?;
         Ok(match args.as_slice() {
             [a] if !self.sema.is_braced_arg(*a) => {
@@ -300,7 +306,8 @@ impl Substituter<'_, '_, '_> {
                     let il = self.braced_list(src)?;
                     return Ok(self.sema.act_on_assign_list(b, l, &il, loc));
                 }
-                let args = if op == OO::Call { self.call_arg_list(args)? } else { self.expr_list(args)? };
+                let args =
+                    if op == OO::Call { self.call_arg_list(args)? } else { self.expr_list(args)? };
                 match (op, args.as_slice()) {
                     (OO::Call, [f, rest @ ..]) => {
                         let lparen = self.sema.begin_loc(*f);

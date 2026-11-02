@@ -34,6 +34,9 @@ pub struct DeductionFailure {
     pub diag: Option<Diag>,
     /// `ConstraintsNotSatisfied`: why (§8.7).
     pub sat: Option<super::concepts::SatId>,
+    /// `NonDependentConversionFailure`: the call argument's index and
+    /// its bad conversion sequence.
+    pub(crate) bad: Option<(usize, crate::overload::Ics)>,
 }
 
 /// What a deduction without call arguments matches the template
@@ -51,7 +54,7 @@ enum DeduceTarget {
 
 impl DeductionFailure {
     fn new(tdk: Tdk, deduced: DeducedArgs) -> Box<DeductionFailure> {
-        Box::new(DeductionFailure { tdk, deduced, args: None, diag: None, sat: None })
+        Box::new(DeductionFailure { tdk, deduced, args: None, diag: None, sat: None, bad: None })
     }
 }
 
@@ -165,15 +168,19 @@ impl Sema<'_, '_> {
     /// call with arguments `args` (`explicit` the explicitly-specified
     /// template arguments, as written) and forms the specialization
     /// (§6.1). `object`: `args` has no slot for an object argument the
-    /// template's implicit object parameter takes.
+    /// template's implicit object parameter takes. `opts[i]`: the
+    /// options of `args[i]`'s conversion sequence, for the
+    /// non-dependent parameters checked before the function type is
+    /// substituted ([temp.deduct.call]/10, CWG1391).
     pub(crate) fn deduce_call(
         &mut self,
         ft: DeclId,
         explicit: Option<ArgListId>,
         args: &[ArgInfo],
+        opts: &[IcsOptions],
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        self.deduce_spec(ft, explicit, Some(args), DeduceTarget::None, loc)
+        self.deduce_spec(ft, explicit, Some((args, opts)), DeduceTarget::None, loc)
     }
 
     /// The specialization of `ft` whose type matches the function type
@@ -228,11 +235,11 @@ impl Sema<'_, '_> {
         &mut self,
         ft: DeclId,
         explicit: Option<ArgListId>,
-        call: Option<&[ArgInfo]>,
+        call: Option<(&[ArgInfo], &[IcsOptions])>,
         target: DeduceTarget,
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        let args = call.unwrap_or(&[]);
+        let (args, arg_opts) = call.unwrap_or((&[], &[]));
         let ft = self.ast.first(ft);
         let params = self.template_params(ft);
         let depth = self.template_param_depth(ft);
@@ -417,6 +424,9 @@ impl Sema<'_, '_> {
         // [temp.deduct.call]/4: the (argument index, P, adjusted A) of
         // each deduced-from argument, checked against the deduced A.
         let mut originals: Vec<(usize, QualType, QualType)> = Vec::new();
+        // [temp.deduct.call]/10: the (argument index, P) of each P that
+        // takes no part in deduction, checked before substitution.
+        let mut nondeduced: Vec<(usize, QualType)> = Vec::new();
         let mut pi = 0;
         for (i, a) in args.iter().enumerate() {
             // [temp.deduct.type]/5.7: a non-trailing function parameter
@@ -457,6 +467,7 @@ impl Sema<'_, '_> {
                 break;
             }
             if !self.is_dependent_type(p) {
+                nondeduced.push((i, p));
                 continue;
             }
             let r = self.deduce_call_arg(p, a, &mut d);
@@ -536,6 +547,22 @@ impl Sema<'_, '_> {
                 let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d);
                 f.args = Some(sugared);
                 f.sat = Some(sat);
+                return Err(f);
+            }
+        }
+        // [temp.deduct.call]/10 (CWG1391): an argument that does not
+        // convert to its non-dependent P fails deduction before the
+        // function type is substituted, so a later parameter's
+        // substitution (libc++ `shared_ptr(nullptr_t, D, enable_if_t<
+        // __well_formed_deleter<D, nullptr_t>>)` for an `int*`
+        // argument) is not instantiated (clang `CheckNonDependent`).
+        for &(i, p) in &nondeduced {
+            let o = arg_opts.get(i).copied().unwrap_or(IcsOptions::NONE);
+            let x = self.try_implicit_conversion(&args[i], p, o);
+            if x.is_bad() {
+                let mut f = DeductionFailure::new(Tdk::NonDependentConversionFailure, d);
+                f.args = Some(sugared);
+                f.bad = Some((i, x));
                 return Err(f);
             }
         }
