@@ -2290,7 +2290,11 @@ pub enum NormNode {                         // 12 B, hash-consed in NormTable
 - A concept-id `C<A…>` normalizes `C`'s constraint expression with the
   parameter mapping substituted by `A…`. The frame is
   `ParameterMappingSubstitution`; a failure there makes the program
-  ill-formed (clang's error).
+  ill-formed (clang's error). The mapping is `A…` shaped to `C`'s
+  parameters: when `C`'s last parameter is a pack, the arguments for it
+  are grouped into one pack argument ([temp.arg.general]/4), so `C<F, T, T>`
+  written directly and `C<F, A...>` reached by substituting `A := {T, T}`
+  give the same mapping (and identical atoms).
 - Anything else gives an `Atomic` node.
 
 **Identity** ([temp.constr.atomic]/2). Two atomic constraints are
