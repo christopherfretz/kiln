@@ -1718,7 +1718,13 @@ and returns the scope it names:
     - Test: tests/codegen/namespace_reopen_inline.cpp (IR diff against
       clang++-19 on both triples).
   - An unnamed namespace is created once per scope and gets an
-    implicit `UsingDirectiveDecl` ([namespace.unnamed]).
+    implicit `UsingDirectiveDecl` ([namespace.unnamed]). "Scope" is the
+    primary redeclaration context (`Sema::anon_namespaces`, keyed by
+    `primary_context(redecl_context(ctx))`, clang's
+    `getAnonymousNamespace` on the original namespace): an unnamed
+    namespace in a reopened `namespace N` or inside `extern "C++" { }`
+    extends the first one (WP-397). Its declaration location is the
+    `{` (clang's `NamespaceDecl` location for an unnamed namespace).
   - **Inline mismatch on reopening** ([namespace.def.general]/3,
     WP-389; clang `DiagnoseNamespaceInlineMismatch`,
     `Sema::check_namespace_inline_mismatch`): when a namespace
@@ -1732,9 +1738,11 @@ and returns the scope it names:
     ("non-inline namespace cannot be reopened as inline"). Both carry
     "previous definition is here" at the first definition and are
     reported at the name (for an unnamed namespace at the `namespace`
-    keyword; clang uses the `{`, a known column difference). Tests:
+    keyword, its note at the first definition's `{`, as clang 19 and
+    22). Tests:
     tests/conformance/namespace.def/inline-namespace-reopened-noninline.cpp,
-    tests/conformance/namespace.def/inline-namespace-mismatch.cpp.
+    tests/conformance/namespace.def/inline-namespace-mismatch.cpp,
+    tests/conformance/namespace.unnamed/reopened-inline-mismatch.cpp.
 - **Using-directives:** the payload is `Payload::None(nominated.raw())`.
 - **`extern "C"`/`"C++"`** creates a `LinkageSpecDecl`.
   - Without braces (`extern "C" int x;`) the parser calls
