@@ -496,7 +496,7 @@ impl Oven {
             return None;
         }
         let root = self.alloc_any(p)?.ty;
-        let (md, at) = self.base_owner(b, root, u64::from(p.off), 0, true, cls)?;
+        let (md, at) = self.base_owner(b, (root, raw), u64::from(p.off), 0, true, cls)?;
         Some((self.poly_info(b, md) as usize, at))
     }
 
@@ -734,11 +734,13 @@ impl Oven {
     /// object of type `t` at offset `abs`: `t` itself when `cand` (a
     /// complete object, member or array element), else, descending through
     /// array elements, members and non-virtual bases, the innermost such
-    /// object containing the byte.
+    /// object containing the byte. In a union only the active member is
+    /// searched (any member while the active one is not known); `raw`
+    /// names the allocation the union keys are in.
     fn base_owner(
         &mut self,
         b: &mut dyn SemaBridge,
-        t: OTy,
+        (t, raw): (OTy, u64),
         rel: u64,
         abs: u64,
         cand: bool,
@@ -750,7 +752,7 @@ impl Oven {
                 if es == 0 || rel / es >= n {
                     return None;
                 }
-                self.base_owner(b, elem, rel % es, abs + rel / es * es, true, cls)
+                self.base_owner(b, (elem, raw), rel % es, abs + rel / es * es, true, cls)
             }
             TyKind::Record { union, .. } => {
                 if cand && !union {
@@ -759,19 +761,28 @@ impl Oven {
                         return Some((t, abs));
                     }
                 }
+                // [class.union]/2: at most one member is active.
+                let active = if union {
+                    self.mem.unions.get(&Ptr::union_key(raw, abs, t)).copied()
+                } else {
+                    None
+                };
                 let fields: Vec<_> = self
                     .types
                     .fields(t)
                     .iter()
-                    .filter(|f| {
-                        f.width.is_none()
+                    .enumerate()
+                    .filter(|&(i, f)| {
+                        active.is_none_or(|a| a as usize == i)
+                            && f.width.is_none()
                             && rel >= f.offset
                             && rel < f.offset + self.types.size(f.ty).max(1)
                     })
-                    .copied()
+                    .map(|(_, f)| *f)
                     .collect();
                 fields.into_iter().find_map(|f| {
-                    self.base_owner(b, f.ty, rel - f.offset, abs + f.offset, !f.base, cls)
+                    let at = abs + f.offset;
+                    self.base_owner(b, (f.ty, raw), rel - f.offset, at, !f.base, cls)
                 })
             }
             _ => None,

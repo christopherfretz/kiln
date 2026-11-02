@@ -2058,7 +2058,11 @@ dynamic type of the returned object is honoured
 `sub_addr` and by the exception handler match of a thrown pointer to a
 subobject, "Exceptions") descends through array elements, members and
 base fields, the virtual-base fields included, so a subobject inside an
-enclosing object's virtual base is found.
+enclosing object's virtual base is found. In a union it searches only the
+active member (`Memory::unions` at the union's key; every member while no
+single active one is recorded), so a member whose class has the searched
+class at the same offset is not mistaken for the most derived object
+(WP-400, `class.union/constexpr-virtual-base-in-union-cxx26.cpp`).
 
 **Tests.** `tests/conformance/class.mi/constexpr-virtual-*`
 (C++23 rejection with clang's notes, C++26 acceptance, diamond and
@@ -2081,8 +2085,6 @@ constexpr defaulted special member (C++23) is marked invalid, as clang's
 `setInvalidDecl`.
 
 **Left for later.**
-- `base_owner` in a union takes the first member in which the search
-  succeeds, not the active one.
 - Codegen of a constant global of a class with virtual bases.
 - Sema's final-overrider and used-virtual-member walks are exponential in
   the depth of a virtual lattice (`class/virtual/graph.rs`,
