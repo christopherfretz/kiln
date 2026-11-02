@@ -227,6 +227,25 @@ fn set(m: &mut BTreeMap<String, String>, n: &str, v: &str) {
 
 /// Applies the dialect and flag deltas (measured against clang 19; see
 /// `resource/README.md`).
+/// The feature-test macros of features kiln implements beyond clang 19
+/// (docs/status/cxx-features.md), before the flags that remove them:
+/// P1061 structured binding packs (C++17 on) and P2893 variadic friends
+/// (every C++ mode) at clang 22's values in the same modes, and
+/// `KILN_FEATURES` (P2747, P3068) by `__cplusplus`.
+fn kiln_features(m: &mut BTreeMap<String, String>) {
+    let cplusplus =
+        m.get("__cplusplus").and_then(|v| v.trim_end_matches('L').parse::<u64>().ok()).unwrap_or(0);
+    for &(min, n, v) in KILN_FEATURES {
+        if cplusplus >= min {
+            set(m, n, v);
+        }
+    }
+    if m.contains_key("__cpp_structured_bindings") {
+        set(m, "__cpp_structured_bindings", "202411L");
+    }
+    set(m, "__cpp_variadic_friend", "202403L");
+}
+
 fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     if cfg.gnu {
         m.remove("__STRICT_ANSI__");
@@ -255,15 +274,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         }
     }
     if cfg.cplusplus {
-        let cplusplus = m
-            .get("__cplusplus")
-            .and_then(|v| v.trim_end_matches('L').parse::<u64>().ok())
-            .unwrap_or(0);
-        for &(min, n, v) in KILN_FEATURES {
-            if cplusplus >= min {
-                set(m, n, v);
-            }
-        }
+        kiln_features(m);
         if !cfg.exceptions {
             m.remove("__EXCEPTIONS");
             m.remove("__cpp_exceptions");
@@ -296,14 +307,6 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
-        // Features kiln implements beyond clang 19, at clang 22's values
-        // in the same modes (docs/status/cxx-features.md): P1061
-        // structured binding packs (C++17 on) and P2893 variadic friends
-        // (every C++ mode). P2747 and P3068: `KILN_FEATURES`, above.
-        if m.contains_key("__cpp_structured_bindings") {
-            set(m, "__cpp_structured_bindings", "202411L");
-        }
-        set(m, "__cpp_variadic_friend", "202403L");
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {
         m.remove(n);
