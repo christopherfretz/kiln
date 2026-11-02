@@ -226,6 +226,9 @@ pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
     loop {
         match ast.exprs.get(e).kind() {
             ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
+                e = ast.exprs.choose_chosen(e).expect("guarded");
+            }
             ExprKind::SubstNonTypeTemplateParmExpr => e = ast.exprs.subst_replacement(e),
             // [over.match.oper]/8: the rewritten form is its semantic
             // expression.
@@ -1122,6 +1125,12 @@ impl Scan<'_> {
                 }
             }
             ExprKind::ParenExpr => self.expr(ast.exprs.operand(e), ok),
+            // `__builtin_choose_expr`: only the chosen operand is evaluated.
+            ExprKind::ChooseExpr => {
+                if let Some(c) = ast.exprs.choose_chosen(e) {
+                    self.expr(c, ok);
+                }
+            }
             ExprKind::SubstNonTypeTemplateParmExpr => self.expr(ast.exprs.subst_replacement(e), ok),
             ExprKind::CXXDefaultArgExpr => {
                 if let Some(d) = default_arg_of(ast, e) {
@@ -2321,6 +2330,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.rv_inner(op, dst);
             }
+            ExprKind::ChooseExpr if self.ast().exprs.choose_chosen(e).is_some() => {
+                let op = self.ast().exprs.choose_chosen(e).expect("guarded");
+                self.rv_inner(op, dst);
+            }
             ExprKind::CXXRewrittenBinaryOperator => {
                 let op = self.ast().exprs.rewritten_semantic(e);
                 self.rv_inner(op, dst);
@@ -3306,6 +3319,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 self.lv(op, acc)
             }
+            ExprKind::ChooseExpr if self.ast().exprs.choose_chosen(e).is_some() => {
+                let op = self.ast().exprs.choose_chosen(e).expect("guarded");
+                self.lv(op, acc)
+            }
             ExprKind::CXXRewrittenBinaryOperator => {
                 let op = self.ast().exprs.rewritten_semantic(e);
                 self.lv(op, acc)
@@ -3812,6 +3829,10 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.operand(e);
                 return self.init_inner(op, p, ty);
             }
+            ExprKind::ChooseExpr if self.ast().exprs.choose_chosen(e).is_some() => {
+                let op = self.ast().exprs.choose_chosen(e).expect("guarded");
+                return self.init_inner(op, p, ty);
+            }
             ExprKind::CXXRewrittenBinaryOperator => {
                 let op = self.ast().exprs.rewritten_semantic(e);
                 return self.init_inner(op, p, ty);
@@ -4207,6 +4228,10 @@ impl Compiler<'_> {
             ExprKind::StmtExpr => self.stmt_expr(e, None),
             ExprKind::ParenExpr => {
                 let op = self.ast().exprs.operand(e);
+                self.effect(op);
+            }
+            ExprKind::ChooseExpr if self.ast().exprs.choose_chosen(e).is_some() => {
+                let op = self.ast().exprs.choose_chosen(e).expect("guarded");
                 self.effect(op);
             }
             ExprKind::CXXRewrittenBinaryOperator => {

@@ -267,22 +267,24 @@ impl Parser<'_, '_> {
     /// statement before the closing `})` (null statements aside) yields
     /// the statement expression's value (clang's `handleExprStmt`).
     fn parse_expression_statement(&mut self, in_stmt_expr: bool) -> Option<StmtId> {
+        let mark = self.s.begin_delayed_typos();
         let Some(e) = self.parse_expression() else {
+            self.s.end_delayed_typos(mark);
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
             return None;
         };
-        let s = if in_stmt_expr && self.ends_stmt_expr() {
-            self.s.act_on_stmt_expr_result(e)
-        } else {
-            self.s.act_on_expr_stmt(e)
-        };
+        let result = in_stmt_expr && self.ends_stmt_expr();
         if self.eat(Punct::Semi).is_none() {
             // clang's `ExpectAndConsumeSemi`: nothing is skipped; the next
             // statement starts at the current token (`X<T>::m b;` goes on
             // with `b;`).
             self.s.error(DiagId::parse_expected_semi_after_expr, self.expected_loc());
         }
+        // clang's `handleExprStmt` finishes the full-expression after the
+        // `;` (its delayed typo corrections report then: `S::nom y;`).
+        self.s.end_delayed_typos(mark);
+        let s = if result { self.s.act_on_stmt_expr_result(e) } else { self.s.act_on_expr_stmt(e) };
         Some(s)
     }
 

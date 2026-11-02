@@ -1,0 +1,6 @@
+int a = 11;
+int b[] = { 1 + 2 15 };
+int c = 17;
+int d = 19 + 20;
+int e = 24;
+int f = 27;

@@ -4,6 +4,7 @@
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::expr::ExprKind;
+pub use kiln_ast::expr::OffsetofComponent;
 use kiln_ast::ids::RawId;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
@@ -27,31 +28,6 @@ use crate::target;
 pub struct StmtExprScope {
     outer_odr: Vec<ExprId>,
     outer_imm: crate::consteval::SavedImm,
-}
-
-/// One part of a `__builtin_offsetof` designator (clang
-/// `Sema::OffsetOfComponent`).
-#[derive(Clone, Copy, Debug)]
-pub enum OffsetofComponent {
-    /// A member name: the leading identifier (`start` = `end` = its
-    /// location) or `.identifier` (`start` is the `.`).
-    Field {
-        /// The member name.
-        name: Symbol,
-        /// The `.`, or the name for the leading identifier.
-        start: Loc,
-        /// The name.
-        end: Loc,
-    },
-    /// `[ index ]`.
-    Index {
-        /// The index expression.
-        index: ExprId,
-        /// The `[`.
-        start: Loc,
-        /// The `]`.
-        end: Loc,
-    },
 }
 
 impl Sema<'_, '_> {
@@ -189,6 +165,60 @@ impl Sema<'_, '_> {
         ))
     }
 
+    /// `__builtin_choose_expr(cond, lhs, rhs)` at `loc` (clang
+    /// `ActOnChooseExpr`): `cond` must be an integral constant expression
+    /// (`'__builtin_choose_expr' requires a constant expression`, with the
+    /// evaluation's notes); a nonzero value picks `lhs`, zero `rhs`, and
+    /// the result is the chosen operand unconverted: its type, value
+    /// category and object kind. A type- or value-dependent `cond` leaves
+    /// the result type-dependent until substitution.
+    pub fn act_on_choose_expr(
+        &mut self,
+        loc: Loc,
+        cond: ExprId,
+        lhs: ExprId,
+        rhs: ExprId,
+        _rparen: Loc,
+    ) -> ExprId {
+        if [cond, lhs, rhs].iter().any(|&x| self.is_err_expr(x)) {
+            return self.recover_err(&[cond, lhs, rhs], loc);
+        }
+        // A substituted condition was already wrapped once.
+        let mut cond = cond;
+        while self.ast.exprs.get(cond).kind() == ExprKind::ConstantExpr {
+            cond = self.ast.exprs.operand(cond);
+        }
+        let deps = self.ast.exprs.get(cond).deps();
+        if deps.intersects(kiln_ast::expr::ExprDeps::TYPE.with(kiln_ast::expr::ExprDeps::VALUE)) {
+            return self.builder().choose_expr(cond, lhs, rhs, None, loc);
+        }
+        let at = self.begin_loc(cond);
+        let c = conv::lvalue_to_rvalue(self, cond);
+        let ty = self.ast.exprs.get(c).ty();
+        let r = if conv::is_integral_or_unscoped_enum(self, ty) {
+            let c = self.act_on_constant_full_expr(c);
+            self.eval_int(c, kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, at))
+                .map(|v| (c, v))
+        } else {
+            Err(kiln_oven::EvalFailure::silent(kiln_oven::FailKind::NotConstant))
+        };
+        match r {
+            Ok((c, v)) => {
+                let ty = self.ast.exprs.get(c).ty();
+                let cv = self.int_const(ty, v);
+                let wrapped = self.builder().constant_expr(c, Some(cv));
+                self.builder().choose_expr(wrapped, lhs, rhs, Some(v != 0), loc)
+            }
+            Err(mut f) => {
+                let at = Self::fold_lone_invalid(&mut f, at);
+                let d = self.diag(DiagId::sema_choose_expr_requires_constant, at);
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                self.recover_err(&[cond, lhs, rhs], loc)
+            }
+        }
+    }
+
     /// `__builtin_offsetof(ty, comps...)` at `loc` (clang
     /// `BuildBuiltinOffsetOf`): a `std::size_t` prvalue holding the byte
     /// offset of the designated subobject. Indices must be constant.
@@ -199,6 +229,23 @@ impl Sema<'_, '_> {
         comps: &[OffsetofComponent],
         rparen: Loc,
     ) -> ExprId {
+        // A dependent operand type or a value-dependent index defers the
+        // whole designator to instantiation (clang `BuildBuiltinOffsetOf`
+        // builds a dependent `OffsetOfExpr`; [temp.dep.constexpr]).
+        let dependent = self.ast.types.is_dependent(ty)
+            || comps.iter().any(|c| match *c {
+                OffsetofComponent::Index { index, .. } => self
+                    .ast
+                    .exprs
+                    .get(index)
+                    .deps()
+                    .intersects(kiln_ast::expr::ExprDeps::TYPE_VALUE_INST),
+                OffsetofComponent::Field { .. } => false,
+            });
+        if dependent {
+            let st = self.size_type();
+            return self.builder().dependent_offsetof(st, ty, comps, loc, rparen);
+        }
         let mut indices = Vec::new();
         let offset = self.offsetof_value(loc, ty, comps, &mut indices);
         let fits = offset.and_then(|v| u32::try_from(v).ok());

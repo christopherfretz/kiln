@@ -180,16 +180,6 @@ impl Sema<'_, '_> {
         opts: &[IcsOptions],
         loc: Loc,
     ) -> Result<DeclId, Box<DeductionFailure>> {
-        // clang `DeduceTemplateArguments`: an invalid function template
-        // (its declaration already diagnosed) deduces nothing.
-        if self
-            .templated_function(ft)
-            .is_some_and(|f| self.ast.decls.get(f).has(DeclFlags::INVALID))
-        {
-            let ft = self.ast.first(ft);
-            let d = DeducedArgs::new(self.template_param_depth(ft), self.template_params(ft).len());
-            return Err(DeductionFailure::new(Tdk::Invalid, d));
-        }
         self.deduce_spec(ft, explicit, Some((args, opts)), DeduceTarget::None, loc)
     }
 
@@ -258,6 +248,14 @@ impl Sema<'_, '_> {
         let Some(templated) = self.templated_function(ft) else {
             return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
         };
+        // clang `DeduceTemplateArguments`: an invalid template (its
+        // function has an invalid parameter or return type, already
+        // reported) deduces nothing.
+        if self.ast.decls.get(templated).has(DeclFlags::INVALID)
+            || self.ast.decls.get(ft).has(DeclFlags::INVALID)
+        {
+            return Err(DeductionFailure::new(Tdk::Invalid, d));
+        }
         let is_pack = |s: &Self, p: DeclId| s.ast.template_parm(p).is_some_and(|x| x.pack);
         // [temp.arg.explicit]/9: a template parameter pack anywhere in the
         // list (`template <class... A, class T>`) takes every remaining
