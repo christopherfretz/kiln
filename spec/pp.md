@@ -689,9 +689,28 @@ belong to WP-017, which builds them on `macro_defined` and
   `P1467_LIMITS`) plus `__FLT16_IS_IEC_60559__`. libstdc++ keys
   `<stdfloat>`, `numeric_limits` and the `<cmath>` overloads on them. The
   other `__FLT16_*__` macros stay clang's (same values, clang's shorter
-  digit strings); GCC's `__FLT32X_*__`/`__FLT64X_*__` are not defined
-  (kiln has no `_Float32x`/`_Float64x`). Test:
-  `conformance/basic.extended.fp/p1467-macros.cpp`, `-cxx17.cpp`.
+  digit strings). GCC's `__FLT32X_*__` (the `__FLT64_*__` values) and
+  `__FLT64X_*__` (`long double`'s: the `__FLT128_*__` values on AArch64,
+  x87's `FLT64X_X87` table on x86-64), with the `F32x`/`F64x` suffix,
+  are defined in every C++ mode too (WP-380; spec/types.md §5.1). Tests:
+  `conformance/basic.extended.fp/p1467-macros.cpp`, `-cxx17.cpp`,
+  `float-nx.cpp`, `float-nx-x86.cpp`, `float-nx-aarch64.cpp`.
+- **`__GNUC__` stays clang's 4 (`__GNUC_MINOR__` 2), decided by WP-380.**
+  glibc declares `typedef double _Float32x;` and `typedef long double
+  _Float64x;` (and the `_Float32`/`_Float64`/`_Float128` typedefs, and
+  `__CFLOAT32X` as `_Complex double`) whenever a C++ compiler is not GCC
+  >= 13. Reporting `__GNUC__` >= 13 would silence those typedefs, but it
+  would also send glibc and libstdc++ down GCC-only paths (`__GNUC_PREREQ`
+  and `__GNUC__` version guards that select GCC builtins, attributes and
+  intrinsics kiln does not provide) that clang-built headers never take,
+  and it would contradict clang's predefines, which kiln matches.
+  kiln instead keeps clang's value and the parser drops those glibc
+  typedefs of its keywords in system headers (spec/types.md §5.1), so
+  `-stdlib=libstdc++` and `-stdlib=libc++` headers compile on both
+  targets while `_Float32x`/`_Float64x` stay GCC's distinct types. The
+  cost: a library that keys `_FloatNx` support on `__GNUC__` >= 13 (and
+  not on `__FLT32X_MANT_DIG__`) does not see it. Test:
+  `conformance/basic.extended.fp/float-nx-glibc.cpp`.
 - **Diagnostics.** Every [cpp] diagnostic has a `pp_*` id in
   `kiln_diag/src/ids/pp.rs`, with clang 19's wording, level and group. After
   an error in a directive, the rest of the line is skipped.

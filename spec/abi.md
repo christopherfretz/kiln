@@ -1092,6 +1092,8 @@ AArch64 HFA as its twin's is.
 | `_Float32` | SSE (`float`) | V reg / HFA | `DF32_` |
 | `_Float64` | SSE (`double`) | V reg / HFA | `DF64_` |
 | `_Float128` | SSE+SSEUP (`fp128`) | Q reg / HFA | `DF128_` |
+| `_Float32x` (GCC, WP-380) | as `double` | as `double` | `DF32x` |
+| `_Float64x` (GCC, WP-380) | as `long double` (X87, `x86_fp80`) | as `long double` (Q reg, `fp128`) | `DF64x` |
 
 On x86-64 an SSE+SSEUP pair is coerced as clang's `GetByteVectorType`
 (WP-365, `call.rs` `byte_vector`): a record that wraps a single element
