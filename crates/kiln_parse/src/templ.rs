@@ -578,17 +578,17 @@ impl Parser<'_, '_> {
     }
 
     fn parse_type_param_default_arg(&mut self, p: DeclId) -> bool {
-        if self.eat(Punct::Equal).is_none() {
+        let Some(eq) = self.eat(Punct::Equal) else {
             return true;
-        }
+        };
         // The default argument's location (clang's diagnostics point there).
-        let eq = self.loc();
+        let at = self.loc();
         let Some(t) =
             self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TypeParamDefault))
         else {
             return false;
         };
-        self.s.act_on_template_param_default(p, TemplateArg::ty(t), eq);
+        self.s.act_on_template_param_default(p, TemplateArg::ty(t), eq, at);
         true
     }
 
@@ -657,11 +657,11 @@ impl Parser<'_, '_> {
     /// `= id-expression` of template template parameter `p`
     /// ([temp.param]/10).
     fn parse_template_template_param_default(&mut self, p: DeclId) -> bool {
-        if self.eat(Punct::Equal).is_none() {
+        let Some(eq) = self.eat(Punct::Equal) else {
             return true;
-        }
+        };
         // The default argument's location (clang's diagnostics point there).
-        let eq = self.loc();
+        let at = self.loc();
         let Ok(qual) = self.parse_nested_name_nns() else { return false };
         // `nns template name` with a dependent `nns` ([temp.names]/5).
         let dep = qual.as_ref().is_some_and(|q| self.s.is_dependent_ctx(q.ctx));
@@ -679,12 +679,12 @@ impl Parser<'_, '_> {
                 .ast
                 .types
                 .template_name(TemplateName::DependentIdentifier { nns: q.nns, name: n });
-            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq);
+            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq, at);
             return true;
         }
         if let NameClass::TypeTemplate(d) = self.s.classify_name(n, qual.map(|q| q.ctx)) {
             let tn = self.s.template_name_for(d);
-            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq);
+            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq, at);
         } else {
             let text = self.s.ast.symbols().as_str(n).to_owned();
             let d = self.s.diag(DiagId::sema_no_template_named, nl).arg(text);
@@ -729,12 +729,12 @@ impl Parser<'_, '_> {
         }
         let p = self.s.act_on_non_type_template_param(&info, pack);
         let mut ok = true;
-        if self.eat(Punct::Equal).is_some() {
-            let eq = self.loc();
+        if let Some(eq) = self.eat(Punct::Equal) {
+            let at = self.loc();
             match self.with_greater_op(false, Self::parse_constant_expr) {
                 Some(e) => {
                     let a = self.s.builder().template_arg_expr(e);
-                    self.s.act_on_template_param_default(p, a, eq);
+                    self.s.act_on_template_param_default(p, a, eq, at);
                 }
                 None => ok = false,
             }
@@ -1090,6 +1090,19 @@ impl Parser<'_, '_> {
             // dependent base: looked up at instantiation ([temp.dep.type]/6).
             if let Some(t) = self.s.act_unknown_specialization_type(q, name, kw, name_loc) {
                 return Some(t);
+            }
+            // A reachable type that is not visible ([module.reach]): the
+            // missing-import error, then the type is used.
+            if class == NameClass::Undeclared
+                && !self.at(Punct::Less)
+                && let Some(NameClass::Type(t, d)) =
+                    self.s.module_hidden_type(name, Some(q.ctx), name_loc)
+            {
+                self.s.mark_type_referenced(d);
+                let kind = self.s.ast.decls.get(d).kind();
+                let named =
+                    if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
+                return Some(self.s.ast.types.elaborated(kw, Some(q.nns), named));
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             let ctx = self.s.qualifier_desc(q.ctx);

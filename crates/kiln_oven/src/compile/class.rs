@@ -365,6 +365,9 @@ impl Compiler<'_> {
             let delegating = inits.iter().any(|c| c.kind == CtorInitKind::Delegating);
             let mut vptr = poly && !delegating;
             let loc = self.ast().decls.get(def).loc();
+            if !delegating && !union {
+                self.unconstructed_bases(&inits, this, cls, loc);
+            }
             // The subobjects completed so far: `done` entries of `fields`.
             let mut done = 0;
             for ci in inits {
@@ -435,6 +438,33 @@ impl Compiler<'_> {
             let m = self.next;
             let q = self.elem_ptr_loc(this, fi.offset, loc);
             self.push_cleanup(q, fi.ty, 2, loc);
+            self.next = m;
+        }
+    }
+
+    /// The direct non-virtual bases of `cls` that constructor `inits`
+    /// does not initialize: Sema leaves a base out only after diagnosing
+    /// that it has no usable default constructor (clang's
+    /// `err_missing_default_ctor`), and clang's evaluator then leaves the
+    /// base subobject without a value. Its bytes begin outside their
+    /// lifetime (`EndLife` aux 8), so an access is "... object outside
+    /// its lifetime" and a frozen result notes "constructor of base class
+    /// 'B' is not called" (spec/oven.md "Object lifetime", WP-390). An
+    /// empty base has no bytes to mark.
+    fn unconstructed_bases(&mut self, inits: &[CtorInit], this: u32, cls: OTy, loc: Loc) {
+        let covered: Vec<usize> = inits
+            .iter()
+            .filter(|c| c.kind == CtorInitKind::Base)
+            .filter_map(|c| self.init_index(c, cls))
+            .collect();
+        let fields = self.o.types.fields(cls).to_vec();
+        for (i, fi) in fields.into_iter().enumerate() {
+            if !fi.base || covered.contains(&i) || self.o.types.holds_no_data(fi.ty) {
+                continue;
+            }
+            let m = self.next;
+            let q = self.elem_ptr_loc(this, fi.offset, loc);
+            self.emit_loc(Op::EndLife, 8, &[q, fi.ty.0], loc);
             self.next = m;
         }
     }

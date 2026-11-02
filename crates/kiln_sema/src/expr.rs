@@ -1445,6 +1445,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         qualifier: Option<crate::using::Qualifier>,
     ) -> ExprId {
+        let written = qualifier;
         let nns = qualifier.map(|q| q.nns);
         let begin = qualifier.map(|q| q.loc);
         let qualifier = qualifier.map(|q| q.ctx);
@@ -1491,6 +1492,16 @@ impl Sema<'_, '_> {
                     self.unknown_specialization_nns(crate::using::Qualifier { ctx, nns, loc: b })
             {
                 return self.act_dependent_scope_ref(n, name, None, b, loc);
+            }
+            // A declaration that is reachable but not visible: clang's
+            // missing-import error, then the name is used as found
+            // ([module.reach], spec/modules.md §5).
+            if let Some(f) = self.module_hidden_lookup(name, qualifier, LookupKind::Ordinary) {
+                self.module_diagnose_hidden(&f, name, loc);
+                self.modules_see_hidden(true);
+                let e = self.act_on_id_expression_dn(name, loc, written);
+                self.modules_see_hidden(false);
+                return e;
             }
             let text = self.decl_name_str(name);
             if let Some(q) = qualifier {
@@ -4160,6 +4171,13 @@ impl Sema<'_, '_> {
                 .zip(&braced)
                 .map(|(&a, b)| b.as_ref().map_or(a, |l| self.dependent_init_list(l)))
                 .collect();
+            let c = self.ast.exprs.get(callee);
+            if c.kind() == ExprKind::UnresolvedLookupExpr
+                && self.ast.templates.expr_targs.contains(callee)
+                && self.ast.unresolved_decls(callee).is_empty()
+            {
+                self.diagnose_adl_only_template_id(c.loc());
+            }
             return self.dependent_call(callee, &args, loc, rparen);
         }
         // [over.call.object]: a call of an object of class type.

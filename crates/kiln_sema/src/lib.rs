@@ -348,6 +348,13 @@ pub struct Sema<'a, 'sm> {
     /// known to be non-dependent ([temp.dep.candidate]), and ADL applies
     /// (spec/sema-overload.md §2.2).
     pub(crate) deferring_call_ref: bool,
+    /// Building the type of a function parameter pack's declarator:
+    /// a declarator whose type is in error recovers as clang's
+    /// `GetFullTypeForDeclarator` does (an erroneous base or chunk is
+    /// `int`, a function returning an array or function returns `int`, a
+    /// reference to a reference collapses), so the pack check still
+    /// runs on it ([dcl.fct]/16; [`Sema::type_for_declarator_at`]).
+    pub(crate) declarator_int_recovery: bool,
     /// Replaying a non-dependent class-scope using-declaration of a
     /// pattern: clang walks the pattern's shadow list, which is newest
     /// first, so the instantiation's shadows come in reverse (WP-159).
@@ -477,6 +484,10 @@ pub struct Sema<'a, 'sm> {
     pub(crate) vtable_uses: Vec<(DeclId, Loc)>,
     /// The classes ever pushed on `vtable_uses` (first declarations).
     pub(crate) vtables_used: kiln_source::fx::FxHashSet<DeclId>,
+    /// Module classes whose vtables are defined here even when their key
+    /// function is defined in another unit (clang `DefinitionRequired`;
+    /// spec/modules.md §7).
+    pub(crate) module_vtables: kiln_source::fx::FxHashSet<DeclId>,
     /// The depth of `synth` whose notes were last printed (clang
     /// `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) synth_noted: std::cell::Cell<usize>,
@@ -741,6 +752,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             empty_loop_bodies: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
+            declarator_int_recovery: false,
             reverse_using_shadows: false,
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),
@@ -777,6 +789,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             synth: Vec::new(),
             vtable_uses: Vec::new(),
             vtables_used: kiln_source::fx::FxHashSet::default(),
+            module_vtables: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
             delegating: Vec::new(),
             ctor_entity: None,

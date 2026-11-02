@@ -7,11 +7,11 @@
 //@ expect: compile-fail
 //@ std: c++20
 //@ strict-diags
-//@ diag: 24:15 error "too few template arguments for class template"
+//@ diag: 24:15 error "too few template arguments for class template 'A'"
 //@ diag: 21:29 note "template is declared here"
-//@ diag: 25:15 error "too many template arguments for class template"
+//@ diag: 25:15 error "too many template arguments for class template 'A'"
 //@ diag: 21:29 note "template is declared here"
-//@ diag: 26:6 error "too many template arguments for class template"
+//@ diag: 26:6 error "too many template arguments for class template 'A'"
 //@ diag: 21:29 note "template is declared here"
 //@ diag: 28:3 error "no matching function for call to 'f'"
 //@ diag: 22:34 note "candidate template ignored: deduced too few arguments for expanded pack 'a'; no argument for 2nd expanded parameter in deduced argument pack <1>"

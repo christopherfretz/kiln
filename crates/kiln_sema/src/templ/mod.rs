@@ -684,13 +684,20 @@ impl Sema<'_, '_> {
     }
 
     /// The default argument `= arg` of parameter `p`
-    /// ([temp.param]/10-12).
-    pub fn act_on_template_param_default(&mut self, p: DeclId, arg: TemplateArg, loc: Loc) {
+    /// ([temp.param]/10-12); `eq` is the `=`, `loc` the argument.
+    pub fn act_on_template_param_default(
+        &mut self,
+        p: DeclId,
+        arg: TemplateArg,
+        eq: Loc,
+        loc: Loc,
+    ) {
         use crate::templ::pack::PackOperand;
         if self.ast.template_parm(p).is_some_and(|x| x.pack) {
-            // [temp.param]/11 ("template parameter pack cannot have a
-            // default argument") is diagnosed by clang; kiln drops it.
-            self.templ_unimplemented("default argument of a template parameter pack", loc);
+            // [temp.param]/11: "template parameter pack cannot have a
+            // default argument", at the `=` (clang's
+            // `ActOn*TemplateParameter`); the default is dropped.
+            self.error(DiagId::sema_template_param_pack_default_arg, eq);
             return;
         }
         // [temp.variadic]/12: `class U = Ts` is reported at the
@@ -919,8 +926,11 @@ impl Sema<'_, '_> {
     /// head just taken). A friend template's scope is the enclosing
     /// function ([temp.pre]/2: "templates can only be declared in
     /// namespace or class scope"); it is dropped (true). A member
-    /// template stays declared, the static data member check quiet.
-    pub(crate) fn check_template_in_local_class(&mut self, friend: bool) -> bool {
+    /// template stays declared, the static data member check quiet. An
+    /// abbreviated function template (`void f(auto)`, no written head)
+    /// is diagnosed at `begin`, where its declaration starts (clang 22;
+    /// clang 19 gives no location).
+    pub(crate) fn check_template_in_local_class(&mut self, friend: bool, begin: Loc) -> bool {
         let Some(list) = self.templ.cur else { return false };
         if self.kind_of(self.ctx) != DeclKind::CXXRecord {
             return false;
@@ -929,7 +939,12 @@ impl Sema<'_, '_> {
         if !self.is_local_class(class) {
             return false;
         }
-        let loc = self.ast.templates.param_list(list).template_loc;
+        let invented = self.templ.heads.iter().any(|h| h.invented && h.list == Some(list));
+        let loc = if invented && begin != Loc::INVALID {
+            begin
+        } else {
+            self.ast.templates.param_list(list).template_loc
+        };
         if friend {
             self.error(DiagId::sema_template_outside_namespace_or_class, loc);
             self.templ.cur = None;

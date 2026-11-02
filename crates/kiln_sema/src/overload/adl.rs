@@ -19,6 +19,8 @@ pub(crate) struct AssocSet {
     pub namespaces: Vec<DeclId>,
     /// Associated classes (first declarations).
     pub classes: Vec<DeclId>,
+    /// Associated enumerations (first declarations; [basic.lookup.argdep]/3.3).
+    pub enums: Vec<DeclId>,
 }
 
 /// Bound on the type recursion (template arguments of template
@@ -181,6 +183,10 @@ impl Sema<'_, '_> {
                 {
                     self.assoc_class_only(p, out);
                 }
+                let f = self.ast.first(d);
+                if !out.enums.contains(&f) {
+                    out.enums.push(f);
+                }
                 self.assoc_entity_ns(d, out);
             }
             _ => {}
@@ -265,7 +271,7 @@ impl Sema<'_, '_> {
                     if !self.friend_of_any(d, &assoc.classes) {
                         continue;
                     }
-                } else if !self.module_adl_visible(raw, &assoc.classes) {
+                } else if !self.module_adl_visible(raw, &assoc) {
                     continue;
                 }
                 let f = self.ast.first(d);
