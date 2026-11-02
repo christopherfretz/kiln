@@ -102,6 +102,7 @@ sema_hidden_overloaded_virtual = WarningOff [OverloadedVirtual] (2) "'{0}' hides
 sema_ice_not_integral = Error (1) "integral constant expression must have integral or unscoped enumeration type, not {0}";
 sema_illegal_initializer = Error (0) "illegal initializer (only variables can be initialized)";
 sema_illegal_initializer_type = Error (1) "illegal initializer type {0}";
+sema_illegal_storage_class_on_function = Error (0) "illegal storage class on function";
 sema_imaginary_constant = Extension [GnuImaginaryConstant] (0) "imaginary constants are a GNU extension";
 sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
 sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";

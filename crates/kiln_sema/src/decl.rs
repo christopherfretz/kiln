@@ -1255,6 +1255,14 @@ impl Sema<'_, '_> {
         };
         self.note_default_init_full_expr();
         let e = self.act_on_full_expr(e);
+        // An erroneous default argument makes the parameter, and so its
+        // function, invalid (clang's `ActOnParamDefaultArgumentError`).
+        if self.has_errors_in(e) {
+            p.invalid = true;
+            if let Some(d) = p.decl {
+                self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            }
+        }
         p.default_arg = DefaultArg::Parsed(e);
     }
 
@@ -2403,6 +2411,7 @@ impl Sema<'_, '_> {
         let in_class = method && d.qualifier.is_none() && !friend;
         let mut spec = FnSpec::new();
         let block = self.in_local_scope();
+        let mut invalid_decl = false;
         match ds.storage {
             Some((StorageSpec::Static, loc)) if method && !in_class => {
                 self.error(DiagId::sema_static_out_of_class, loc);
@@ -2418,11 +2427,20 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_storage_class_for_member, loc);
             }
             Some((StorageSpec::Extern, _)) => spec = spec.with_storage(FnStorage::Extern),
-            Some((StorageSpec::Mutable, loc)) if method => {
+            // In a member declaration clang diagnoses the specifier and
+            // keeps the declaration valid; elsewhere (namespace or block
+            // scope, out-of-class member definitions) the declaration is
+            // invalid (clang's `getFunctionStorageClass`, "illegal storage
+            // class on function").
+            Some((StorageSpec::Mutable, loc)) if in_class => {
                 self.error(DiagId::sema_mutable_function, loc);
             }
+            Some((StorageSpec::Register, loc)) if in_class => {
+                self.error(DiagId::sema_storage_class_for_member, loc);
+            }
             Some((StorageSpec::Register | StorageSpec::Mutable, loc)) => {
-                self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
+                self.error(DiagId::sema_illegal_storage_class_on_function, loc);
+                invalid_decl = true;
             }
             _ => {}
         }
@@ -2486,7 +2504,11 @@ impl Sema<'_, '_> {
             }
         }
         let mut prev_ok = None;
-        let mut invalid_redecl = false;
+        // A function with an invalid parameter (a `void` parameter, an
+        // erroneous default argument) is invalid (clang's
+        // `ActOnFunctionDeclarator`).
+        invalid_decl |= d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid));
+        let mut invalid_redecl = invalid_decl;
         let late_exc =
             d.late_noexcept.is_some() || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
         let mut delayed_prev = false;
@@ -2546,7 +2568,10 @@ impl Sema<'_, '_> {
                 .as_ident()
                 .is_some_and(|sym| self.check_local_friend(ctx, sym, new_fn, d.name_loc()));
         invalid_redecl |= bad_local_friend;
-        let prev = if global_new_delete || deferred_friend || bad_local_friend {
+        // An invalid declaration (an illegal storage class, an invalid
+        // parameter) redeclares nothing either: clang checks it against no
+        // previous declaration (`ActOnFunctionDeclarator`).
+        let prev = if global_new_delete || deferred_friend || invalid_decl || bad_local_friend {
             None
         } else if friend && d.qualifier.is_none() && self.in_templated_class(Some(lexical)) {
             // A friend of a templated class redeclares nothing until
@@ -2605,6 +2630,7 @@ impl Sema<'_, '_> {
         let prev = match prev {
             None if !method
                 && !friend
+                && !invalid_decl
                 && d.qualifier.is_none()
                 && self.templ.cur.is_none()
                 && dname.as_ident().is_some() =>
@@ -2638,7 +2664,9 @@ impl Sema<'_, '_> {
             prev_ok = p;
             if let Some(p) = p {
                 let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
-                if !self.ast.types.same_type(pty, ty) && self.written_exc_spec(ty) == ExcSpec::None
+                if !self.ast.types.same_type(pty, ty)
+                    && self.written_exc_spec(ty) == ExcSpec::None
+                    && !self.ast.decls.get(p).has(DeclFlags::INVALID)
                 {
                     let delete =
                         matches!(op, OverloadedOperator::Delete | OverloadedOperator::ArrayDelete);
@@ -2657,6 +2685,17 @@ impl Sema<'_, '_> {
                     }
                 }
             }
+        } else if invalid_decl {
+            // Already diagnosed and invalid; matched against nothing.
+        } else if prev.is_some_and(|p| {
+            self.ast.decls.get(p).has(DeclFlags::INVALID)
+                && self.kind_of(p).payload() == kiln_ast::decl::PayloadClass::Function
+        }) {
+            // A redeclaration of an invalid declaration is itself invalid,
+            // without a diagnostic (clang's `MergeFunctionDecl` gives up on
+            // an invalid old declaration); `pick_prev_function` prefers a
+            // valid corresponding declaration.
+            invalid_redecl = true;
         } else if friend
             && d.qualifier.is_some()
             && !quiet_friend
@@ -5564,7 +5603,9 @@ impl Sema<'_, '_> {
         }
         let bits = self.class_bits(r, build.as_ref(), bits);
         let bits = self.virtual_class_bits(r, bits);
-        // Special members (spec/sema-class.md §4.1, §4.2, §4.4).
+        // Special members (spec/sema-class.md §4.1, §4.2, §4.4), after
+        // selecting the destructor among prospective ones (sema-class.md §4.7.1).
+        self.select_destructor(r);
         let bits = self.special_member_bits(r, bits);
         let bits = self.finish_special_members(r, bits);
         // [class.compare.default]/4: the implicit `operator==`s.
@@ -6304,6 +6345,36 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [`Sema::classify_name`] of `name` in `q`, a member class of a class
+    /// template specialization named through a typedef
+    /// (`typedef L<int>::P Q; Q::I`, `typedef L<int> D; D::P::I`) whose
+    /// definition is not instantiated yet: lookahead cannot instantiate
+    /// ([temp.inst]/2 happens when the nested-name-specifier is parsed),
+    /// so the name is classified in the member's pattern, as a
+    /// template-id qualifier is (`L<int>::P::I`). The specialization
+    /// itself (`D::P`) is the WP-276 case above. `None` when `q` is not
+    /// such a class.
+    fn classify_uninstantiated_member(&self, q: DeclId, name: Symbol) -> Option<NameClass> {
+        if self.kind_of(q) != DeclKind::CXXRecord
+            || self.ast.definition(q).is_some()
+            || self.ast.spec_info(q).is_some()
+        {
+            return None;
+        }
+        let p = self.ast.instantiated_from(q)?;
+        let def = self.ast.definition(p)?;
+        let found = self.lookup_qualified(def, name, LookupKind::Ordinary);
+        let Some(&d) = found.decls.first() else { return Some(NameClass::Dependent) };
+        let k = self.kind_of(self.ast.strip_shadow(d));
+        Some(match k {
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => NameClass::TypeTemplate(d),
+            DeclKind::VarTemplate => NameClass::VarTemplate(d),
+            DeclKind::FunctionTemplate => NameClass::FunctionTemplate(d),
+            _ if is_type_kind(k) => NameClass::Type(QualType::DEPENDENT, d),
+            _ => NameClass::Value(d),
+        })
+    }
+
     /// `A<args>::name` with `A` an alias template, for the lookahead: the
     /// alias's pattern names a class (template) specialization, whose
     /// primary pattern's member is classified as for `X<args>::name`
@@ -6392,6 +6463,11 @@ impl Sema<'_, '_> {
         if let Some(q) = qualifier
             && self.kind_of(q) == DeclKind::TypeAliasTemplate
             && let Some(c) = self.classify_alias_template_member(q, name)
+        {
+            return c;
+        }
+        if let Some(q) = qualifier
+            && let Some(c) = self.classify_uninstantiated_member(q, name)
         {
             return c;
         }

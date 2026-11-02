@@ -413,6 +413,12 @@ impl Sema<'_, '_> {
                 continue;
             }
             let spec = self.ast.decls.function(f).map(|x| x.spec).unwrap_or_default();
+            // [class.dtor]/4: a prospective destructor that was not
+            // selected is not the destructor (clang counts only the
+            // selected one, `addedSelectedDestructor`).
+            if spec.not_selected() {
+                continue;
+            }
             if fkind == DeclKind::CXXConstructor {
                 out.any_ctor = true;
             }
