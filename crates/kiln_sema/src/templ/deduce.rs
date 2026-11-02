@@ -1120,7 +1120,10 @@ impl Sema<'_, '_> {
             }
         }
         let ty = self.ast.decls.get(ex.decl(e)).ty()?;
-        (!self.ast.types.is_dependent(ty)).then_some(ty)
+        // A placeholder parameter (`template <auto N>`) takes the bound's
+        // own type: `std::size_t` for an array bound, `int` for a
+        // `_BitInt` width ([temp.deduct.type]/20).
+        (!self.ast.types.is_dependent(ty) && !self.contains_undeduced_auto(ty)).then_some(ty)
     }
 
     /// `noexcept(b)` of a function type `P` ([temp.deduct.type]/8).

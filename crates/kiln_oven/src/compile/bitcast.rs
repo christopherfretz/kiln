@@ -77,7 +77,17 @@ impl Compiler<'_> {
     /// Oven's object model does not lay out), the source checked first.
     pub(super) fn bit_cast_unsupported(&self, t: OTy, src: bool) -> Option<String> {
         let types = &self.o.types;
+        // clang's `BitCastBuffer` has no `_BitInt` case: any width is
+        // rejected (spec/oven.md §3.2).
+        let bit_int = matches!(
+            self.ast().types.canonical_view(types.info(t).q),
+            kiln_ast::types::TypeView::BitInt { .. }
+        );
         match types.kind(t) {
+            _ if bit_int => {
+                let n = self.o.tname(self.ast(), t);
+                Some(format!("constexpr bit cast involving type '{n}' is not yet supported"))
+            }
             TyKind::Opaque => {
                 let n = self.o.tname(self.ast(), t);
                 Some(format!("constexpr bit cast involving type '{n}' is not yet supported"))
