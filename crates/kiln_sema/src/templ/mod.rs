@@ -1269,7 +1269,10 @@ impl Sema<'_, '_> {
 
     /// Attaches the trailing requires-clause `r` to function `f`
     /// ([dcl.decl.general]/4); only a templated function may have one
-    /// ([dcl.decl.general]/5).
+    /// ([dcl.decl.general]/5), and a virtual function may not
+    /// ([class.virtual]/6). Both errors point at the clause's first
+    /// token; the clause is attached anyway and still checked, as in
+    /// clang.
     pub fn act_on_trailing_requires(&mut self, f: DeclId, r: ExprId) {
         if self.kind_of(f).payload() != kiln_ast::decl::PayloadClass::Function {
             let loc = self.ast.exprs.get(r).loc();
@@ -1279,8 +1282,17 @@ impl Sema<'_, '_> {
         // An instantiated member keeps its pattern's clause; an invalid
         // clause was diagnosed already (clang drops it in the parser).
         if !self.in_template() && self.inst.stack.is_empty() && !self.is_err_expr(r) {
-            let loc = self.ast.exprs.get(r).loc();
+            let loc = self.begin_loc(r);
             self.error(DiagId::sema_trailing_requires_non_template, loc);
+            let _ = self.inst.concepts.untemplated_requires.insert(f);
+        }
+        // clang `CheckFunctionDeclaration` (`err_constrained_virtual_method`):
+        // declared `virtual`, overriding a virtual function, or redeclaring
+        // a virtual function; again in each instantiation.
+        if crate::class::is_virtual(&self.ast, f) && !self.is_err_expr(r) {
+            let loc = self.begin_loc(r);
+            let d = self.diag(DiagId::sema_virtual_requires_clause, loc).per_instantiation();
+            self.emit(d);
         }
         let _ = self.ast.templates.trailing_requires.insert(f, r);
     }

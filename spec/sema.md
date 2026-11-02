@@ -1123,9 +1123,44 @@ and returns the scope it names:
     `instantiateDependentAlignedAttr`), so the strictest wins and an empty
     pack leaves the natural alignment; each element is re-checked at the
     attribute token (spec/sema-templates.md §2.7). On variables the
-    attributes are copied too (`var_align_attrs`), but variable alignment
-    is not yet consumed by `alignof` or codegen (xfail
-    `tests/conformance/dcl.align/variable-alignas.cpp`).
+    attributes are copied too (`var_align_attrs`), and a variable
+    template specialization copies the pattern's alignment-specifiers
+    with a dependent operand substituted (`templ/var.rs`, clang
+    `InstantiateAttrs`).
+  - Variable alignment ([dcl.align]/5, WP-312): an `alignas`/`aligned`
+    attribute on a variable or data member sets the alignment of its
+    storage and of `alignof` applied to an expression naming it (clang
+    `getDeclAlign`; `kiln_abi::layout::decl_align`, spec/abi.md §3.2).
+    Constant evaluation reads it through `SemaBridge::alignof_decl`;
+    codegen through `var_align` (spec/codegen.md §3). Tests:
+    `tests/conformance/dcl.align/{variable,member}-alignas.cpp`,
+    `tests/codegen/alignas_variable.cpp`.
+  - `alignas` subjects ([dcl.align]/1, `check_alignas_subject`):
+    allowed on a variable, a non-bit-field data member and a class. On
+    a function parameter, a `register` variable, a `catch` variable, a
+    bit-field or an enumeration it is `'alignas' attribute cannot be
+    applied to {a function parameter|...}`; on any other declaration
+    `'alignas' attribute only applies to variables, data members and
+    tag types`; in an attribute-declaration (`alignas(8);`) it
+    appertains to nothing. The specifier is dropped. Written where only
+    type attributes may appear (the end of a decl-specifier-seq,
+    `char alignas(8) c;`, after a ptr-operator or array declarator) it
+    is `'alignas' attribute cannot be applied to types`
+    (`act_on_type_position_attrs`; clang `err_attribute_not_type_attr`).
+    Before a namespace-definition, a static_assert-declaration, a
+    using-declaration or an alias-declaration, a leading
+    attribute-specifier-seq containing `alignas` is `an attribute list
+    cannot appear here` (parser `discard_attrs_before_unattributed_decl`;
+    file scope only). Tests: `tests/conformance/dcl.align/alignas-*.cpp`.
+  - `alignof` of an expression ([expr.alignof]/1 takes a type-id) is
+    the GNU extension `'alignof' applied to an expression is a GNU
+    extension` (`-Wgnu-alignof-expression`, in `-Wgnu`, at the keyword;
+    not for `__alignof`/`__alignof__`). `alignof` of a data member
+    (named ignoring parentheses) of a class still being defined is
+    `invalid application of 'alignof' to a field of a class still being
+    defined` at the operand's own location (clang `CheckAlignOfExpr`;
+    [class.mem.general]/8). Test:
+    `tests/conformance/dcl.align/alignof-expression-diag.cpp`.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
 
 ### 4.6 Namespaces, linkage specifications, static_assert
@@ -1778,9 +1813,11 @@ diagnostics and IR.
   - **member calls:** `CXXMemberCallExpr` for a single candidate
     (sema-class.md §8.3, "Landed (WP-066b)"); overloaded member
     functions wait for WP-068a
+  - **ext-vector element access:** §5.19
   - **subscripts:** either operand order
   - **`sizeof`/`alignof`:** of types and expressions, using
-    `kiln_abi` layout
+    `kiln_abi` layout; `alignof` of an expression naming a variable or
+    data member uses its declared alignment (§4.5)
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
     `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
@@ -2286,7 +2323,14 @@ for them.
   cast at the `(`. clang's diagnostics follow from that:
   - a reference type cannot bind to an initializer list;
   - more than one element for a scalar is a function-style cast
-    error;
+    error, except for a `_Complex` type, whose list takes the real and
+    imaginary parts (`(_Complex float){x, 2}`; a third element is
+    `excess elements in scalar initializer`; WP-312,
+    `tests/conformance/ext.gnu.compound.literal/complex-diagnostics.cpp`);
+  - a scalar list narrows as any list-initialization does
+    ([dcl.init.list]/7): `(bool){i}` for an `int`, floating or pointer
+    `i`, or a constant other than 0 and 1, is the narrowing error
+    (`tests/conformance/ext.gnu.compound.literal/bool-narrowing-diagnostics.cpp`);
   - an incomplete type is diagnosed with the forward-declaration note.
 
   - a class literal (WP-191) is list-initialized as a direct-list
@@ -2987,16 +3031,25 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `expression is not assignable`; a const base is the usual
   const-variable diagnostic. `&v.x` and binding a non-const reference
   are rejected as for any vector element (§5.13).
-- Constant evaluation does not evaluate the access (clang 19 does not
-  either): a constexpr use is "must be initialized by a constant
-  expression".
+- A GNU `vector_size` vector has no components (`member reference base
+  type ... is not a structure or union`). An unused access (`v.x;`) is
+  `expression result unused` at the base's begin (clang's `getExprLoc`).
+- Constant evaluation (oven.md "Vectors", WP-312): an access on a
+  prvalue vector (a compound literal, `(v + v)`, a `bit_cast`) folds, as
+  in clang 19; one on a vector object is not a constant expression
+  (clang 19 rejects it too), reported at the expression's begin.
 - Codegen (codegen.md "Vectors"): a glvalue access is an `LV` whose
-  `vidx` is `VecLane::Index` (one lane) or `VecLane::Swizzle` (several;
-  a swizzle of a swizzle lvalue composes onto the innermost vector);
-  a load is `extractelement`/`shufflevector`, a store inserts each
-  source element at its lane. A prvalue base is swizzled as a value.
+  `vidx` is `VecLane::Index` (one lane, an `i64` index) or
+  `VecLane::Swizzle` (several; a swizzle of a swizzle lvalue composes
+  onto the innermost vector); a load is `extractelement`/
+  `shufflevector`; a store of several lanes shuffles the value into the
+  loaded vector (`store_swizzle`). A prvalue base is stored to a
+  temporary first (WP-312, clang `EmitExtVectorElementExpr`).
 - Tests: `ext.vector/ext-vector-access.cpp` (run, including templates),
-  `ext.vector/ext-vector-access-diagnostics.cpp` (strict-diags).
+  `ext.vector/ext-vector-access-diagnostics.cpp`,
+  `ext.vector/element-access-diagnostics.cpp`,
+  `ext.vector/element-access-constexpr-diagnostics.cpp` (strict-diags),
+  `tests/codegen/ext_vector_element.cpp`.
 
 ### 5.20 Variadic arguments (`expr.rs`, WP-311)
 - An argument for the ellipsis gets the default argument promotions

@@ -215,6 +215,20 @@ the evaluator's flattened type table.
   ([basic.start.static]/2): manifestly constant-evaluated, but silent and
   not recorded, like `try_fold`. Codegen uses it for the initializers it
   emits as constants (spec/codegen.md).
+- `Oven::has_constant_destruction(bridge, var, value, const_context) ->
+  bool` (WP-294, [expr.const]/7, clang `Sema::FinalizeVarWithDestructor`
+  + `VarDecl::evaluateDestruction`): true when destroying `var` (a
+  non-reference variable whose type, through arrays, has a non-trivial
+  destructor) is a constant expression, so codegen emits no destructor
+  call, `atexit` registration or guard for it. `value` is the frozen
+  initializer value (`None`: not constant). A `const` variable's object
+  is a writable static allocation (`Origin::Var`) holding `value`, or
+  indeterminate without one; its `mutable` members are outside their
+  lifetime, so reading or writing them faults. Any other variable's
+  object is external: every access faults. `const_context` is clang's
+  "is constant-initialized static" flag (lax evaluation, `RunState`).
+  Silent, not recorded; an outermost evaluation (false when nested); the
+  temporary object is popped (`Memory::pop_static`) and memory reset.
 - `Oven::fold_rvalue(bridge, e) -> Option<ConstValueId>` (WP-165):
   `try_fold` in **lax mode** (`RunState::lax`), clang's codegen-time
   `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
@@ -294,8 +308,13 @@ the evaluator's flattened type table.
   initialized (`RESOLVING`), its lifetime-extended temporaries, and
   frame and heap objects never carry the flag, so their mutable members
   are read and written freely. The read carries the trivial copy's "in
-  call to 'S(s)'" frame (WP-241). Deviations: clang rejects every such read
-  before C++14 and during constant destruction, kiln does not.
+  call to 'S(s)'" frame (WP-241). A *write* (`store`, `store_bits`) to a
+  `mutable` member of a `MUTABLE_OUTSIDE` allocation that is not `CONST`
+  faults the same way (`mutable_path` with the store's access kind, whose
+  verb opens the note): this is the writable `const` object of
+  `has_constant_destruction` (WP-294), whose mutable members are outside
+  their lifetime; initialization stores are exempt. Deviation: clang
+  rejects every such read before C++14, kiln does not.
 
 ### Manifestly constant-evaluated context — normative (WP-063)
 `__builtin_is_constant_evaluated()` ([expr.const]/20, [meta.const.eval])
@@ -1200,7 +1219,8 @@ closes. Rollback relies on this.
 of `try_fold`, `fold_int`, `eval_const`, `eval_int` or
 `is_constant_initialized` share one property. Each is an *outermost* Oven
 evaluation, or a nested one under `ensure_body`, so no memory outlives it:
-- `eval_outermost` resets `Memory` at its end;
+- `eval_outermost` (`begin_outermost` / `end_outermost`, shared with
+  `has_constant_destruction`) resets `Memory` at its end;
 - provisional global resolutions are undone at the next outermost start;
 - frozen results are interned.
 
@@ -1577,8 +1597,13 @@ stays `Opaque`: it has no value model yet. The operations are in
   at the expression's begin, as clang 19 does: a subscript `v[i]`,
   `__builtin_reduce_*`, and a bit cast from a vector to a scalar of a
   different class.
+- **Ext-vector element access** (`ext_elt_regs`, WP-312): on a prvalue
+  vector (a compound literal, an operator result, a call) the selected
+  lanes are taken from the operand's registers, for one lane (a scalar)
+  and for a swizzle (a vector), as clang 19 folds them.
 - **Rejected without a note** (clang 19 fails silently): a `?:` with a
-  vector condition, and ext-vector element access `.x`.
+  vector condition, and ext-vector element access on a vector object
+  (`v.x` for a variable `v`, the error at the expression's begin).
 - clang 20+ folds subscripts, reductions and vector-condition `?:`. The
   boundary moves with the oracle at the clang 22 switch (M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
@@ -1704,6 +1729,7 @@ impl Oven {
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn is_constant_initialized(&mut self, bridge: &mut dyn SemaBridge, var: DeclId) -> bool;
     pub fn fold_constant_init(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) -> Option<ConstValueId>;
+    pub fn has_constant_destruction(&mut self, bridge: &mut dyn SemaBridge, var: DeclId, value: Option<ConstValueId>, const_context: bool) -> bool;
     pub fn fold_rvalue(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn stats(&self) -> &EvalStats;
     pub fn footprint(&self) -> usize;
@@ -1829,7 +1855,9 @@ to glvalues); arrays, structs, unions, bit-fields; all C control flow (if,
 loops, switch incl. fallthrough, break/continue, return); labels and
 `goto` (diagnosed as clang does); calls and recursion; constexpr variables
 and functions; `static_assert`; compound assignment, comma, conditional,
-casts, `sizeof`/`alignof` (of a reference type: the referred type's);
+casts, `sizeof`/`alignof` (of a reference type: the referred type's;
+`alignof e` naming a variable or data member is its declared alignment,
+`SemaBridge::alignof_decl`, clang `GetAlignOfExpr`, spec/abi.md §3.2);
 string literals (each evaluation of a `StringLiteral` is a distinct object;
 frozen pointers keep it through `PtrBase::StringLit { lit, origin }`, so
 `p + 1 != q` for `constexpr const char *p = "ab", *q = "ab";` is rejected

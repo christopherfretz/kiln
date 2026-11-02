@@ -636,6 +636,9 @@ impl Sema<'_, '_> {
         }
         let first_explicit =
             matches!(info.kind, SpecKind::Undeclared | SpecKind::ImplicitInstantiation);
+        if first_explicit {
+            self.builder().relocate_spec(spec, name_loc);
+        }
         if self.ast.definition(spec).is_none() && !self.instantiate_explicit(spec, name_loc) {
             return Err(());
         }

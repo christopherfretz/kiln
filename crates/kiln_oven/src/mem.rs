@@ -671,6 +671,25 @@ impl Memory {
         Ptr { slot: idx | STATIC_BIT, generation: 0, past: false, off: 0 }.encode()
     }
 
+    /// Frees static allocation `p` if it is the last one made (a
+    /// scratch object, `Oven::has_constant_destruction`); else keeps it.
+    pub fn pop_static(&mut self, p: u64, types: &Types) {
+        let pp = Ptr::decode(p);
+        let idx = pp.slot & !STATIC_BIT;
+        if pp.space() != Sp::Static || idx as usize + 1 != self.statics.len() {
+            return;
+        }
+        let Some(a) = self.statics.pop() else { return };
+        if a.flags & flags::HAS_UNION != 0 {
+            let key = Ptr::alloc_key(p);
+            for &(o, ut) in types.unions(a.ty) {
+                self.unions.remove(&UKey::new(key, o, ut));
+                self.union_alts.remove(&UKey::new(key, o, ut));
+            }
+        }
+        self.stat.top = u64::from(a.base);
+    }
+
     /// The allocation a (non-null, non-function) pointer designates.
     pub fn alloc_of(&self, p: Ptr) -> Result<&Alloc, MemFault> {
         let a = match p.space() {

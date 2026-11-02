@@ -178,7 +178,7 @@ impl Cg<'_> {
         // `EmitAutoVarAlloca`.
         let q = self.var_type(var)?;
         let ty = self.mty(q);
-        let align = self.global_align(q);
+        let align = self.var_align(var);
         let a = self.f.fir.alloca(ty, align);
         let addr = Addr { v: a, ty, align };
         self.f.locals.insert(var, addr);

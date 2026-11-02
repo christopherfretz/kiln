@@ -148,7 +148,13 @@ impl Sema<'_, '_> {
         let ty = self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.map_contexts(&pairs);
-            sub.ty(pty, ploc)
+            let ty = sub.ty(pty, ploc);
+            // [dcl.align]/1: the pattern's alignment-specifiers, with a
+            // dependent operand substituted (clang `InstantiateAttrs`).
+            if ty.is_ok() {
+                sub.var_align_attrs(spec, pattern);
+            }
+            ty
         });
         self.pop_inst_frame();
         let Ok(ty) = ty else {

@@ -38,6 +38,7 @@ ExtraQualification = "extra-qualification" [];
 FlexibleArrayExtensions = "flexible-array-extensions" [];
 FormatExtraArgs = "format-extra-args" [];
 FormatInsufficientArgs = "format-insufficient-args" [];
+GnuAlignofExpression = "gnu-alignof-expression" [];
 GnuDesignator = "gnu-designator" [];
 GnuEmptyStruct = "gnu-empty-struct" [];
 GnuFlexibleArrayInitializer = "gnu-flexible-array-initializer" [];

@@ -306,6 +306,7 @@ impl Sema<'_, '_> {
         let mut attrs = specs.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
+            self.check_alignas_subject(f, &mut attrs);
             let _ = self.builder().attach_attrs(f, &attrs);
         }
         if let Some(r) = d.trailing_requires {

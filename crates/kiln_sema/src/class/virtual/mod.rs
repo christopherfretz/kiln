@@ -91,6 +91,16 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_virtual_not_member_fn, vloc);
             } else if !site.in_class {
                 self.error(DiagId::sema_virtual_out_of_class, vloc);
+            } else if self.templ.cur.is_some() {
+                // [temp.mem]/3: a member function template is not virtual
+                // (clang `err_virtual_member_function_template`; the
+                // function is then declared non-virtual).
+                let span = kiln_source::Span::new(vloc, vloc.with_offset(7));
+                let d = self
+                    .diag(DiagId::sema_virtual_member_function_template, vloc)
+                    .range(span)
+                    .fixit(kiln_diag::FixIt::remove(span));
+                self.emit(d);
             } else {
                 *spec = spec.with_virtual(true).with_virtual_written(true);
             }
