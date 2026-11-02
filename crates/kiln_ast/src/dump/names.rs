@@ -43,6 +43,10 @@ pub struct AstNames<'a> {
     /// (clang 22's `NamedDecl::printNestedNameSpecifier`; set under
     /// `-fclang-compat=22`).
     pub closure_as_lambda: bool,
+    /// With canonical expression types: a type qualifier prints as its
+    /// canonical type with every name scoped (`n::tr<n::A, int>::value`),
+    /// as clang 22 prints a failed requirement (`-fclang-compat=22`).
+    pub scoped_nns: bool,
 }
 
 impl std::fmt::Debug for AstNames<'_> {
@@ -54,7 +58,13 @@ impl std::fmt::Debug for AstNames<'_> {
 impl<'a> AstNames<'a> {
     /// Names over `ast` without locations.
     pub fn new(ast: &'a Ast) -> Self {
-        AstNames { ast, sources: None, expr_types: PrintOptions::SUGARED, closure_as_lambda: false }
+        AstNames {
+            ast,
+            sources: None,
+            expr_types: PrintOptions::SUGARED,
+            closure_as_lambda: false,
+            scoped_nns: false,
+        }
     }
 
     /// Names over `ast` printing unnamed tags with their location.
@@ -64,6 +74,7 @@ impl<'a> AstNames<'a> {
             sources: Some(sources),
             expr_types: PrintOptions::SUGARED,
             closure_as_lambda: false,
+            scoped_nns: false,
         }
     }
 
@@ -458,6 +469,53 @@ impl<'a> AstNames<'a> {
         }
     }
 
+    /// [`Self::append_scope`] with each enclosing class template
+    /// specialization's full converted argument list, canonical
+    /// ([`TypeNames::write_converted_scope`]).
+    fn append_converted_scope(&self, ctx: Option<DeclId>, depth: u32, out: &mut String) {
+        let Some(ctx) = ctx else { return };
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let n = self.ast.decls.get(ctx);
+        let kind = n.kind();
+        if kind == DeclKind::TranslationUnit || kind.is_function() {
+            return;
+        }
+        self.append_converted_scope(n.ctx(), depth + 1, out);
+        match kind {
+            DeclKind::Namespace => {
+                let inline = self
+                    .ast
+                    .decls
+                    .namespace(ctx)
+                    .is_some_and(super::super::decl::NamespaceData::is_inline);
+                if inline {
+                    return;
+                }
+                if self.is_unnamed(ctx) {
+                    out.push_str("(anonymous namespace)::");
+                } else {
+                    self.write_name(ctx, out);
+                    out.push_str("::");
+                }
+            }
+            DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+            | DeclKind::Enum
+                if !self.is_unnamed(ctx) =>
+            {
+                self.write_name(ctx, out);
+                if let Some(args) = self.converted_args(ctx) {
+                    write_arg_list_canonical(&self.ast.types, self, args, out);
+                }
+                out.push_str("::");
+            }
+            _ => {}
+        }
+    }
+
     /// The `FieldDecl`s of record definition `r`, in declaration order.
     fn fields(&self, r: DeclId) -> impl Iterator<Item = DeclId> + '_ {
         self.ast.members(r).filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
@@ -736,7 +794,7 @@ impl<'a> AstNames<'a> {
                     // one its explicit arguments, canonical.
                     let d0 = exprs.decl(e);
                     if let Some(q) = extra.and_then(|x| x.qualifier) {
-                        write_nns_resolved(&ast.types, self, q, out);
+                        write_nns_resolved(&ast.types, self, q, self.scoped_nns, out);
                         self.write_name(d0, out);
                         if ast.decls.get(d0).kind() == DeclKind::Var
                             && let Some((_, info)) = ast.spec_info(d0)
@@ -1405,6 +1463,11 @@ impl TypeNames for AstNames<'_> {
             return None;
         }
         self.ast.spec_info(decl).map(|(_, s)| s.args)
+    }
+
+    fn write_converted_scope(&self, decl: DeclId, out: &mut String) -> bool {
+        self.append_converted_scope(self.ast.decls.get(decl).ctx(), 0, out);
+        true
     }
 
     fn write_decl_name(&self, decl: DeclId, scoped: bool, out: &mut String) {

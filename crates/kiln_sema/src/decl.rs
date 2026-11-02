@@ -2368,8 +2368,8 @@ impl Sema<'_, '_> {
         } else if !self.in_local_scope() && !self.is_dependent_type(ty) {
             let bits = target::size_align(&self.ast, ty, self.abi()).map(|(s, _)| s * 8);
             let size = bits.map(|b| kiln_abi::asm::global_register_size_mismatch(arch, &name, b));
-            let unreserved = self.clang_compat >= 22
-                && !kiln_abi::asm::global_register_reserved_22(arch, &name);
+            let unreserved =
+                self.clang_compat >= 22 && !kiln_abi::asm::global_register_reserved_22(arch, &name);
             match size {
                 Some(Some(_)) if unreserved => {
                     let msg = self.diag(DiagId::sema_asm_invalid_global_var_reg, loc).arg(name);
@@ -7105,7 +7105,10 @@ impl Sema<'_, '_> {
     pub(crate) fn requirement_text(&self, c: ExprId) -> String {
         let mut req = String::new();
         kiln_ast::types::TypeNames::write_expr(
-            &kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types(),
+            &kiln_ast::dump::AstNames {
+                scoped_nns: self.clang_compat >= 22,
+                ..kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types()
+            },
             c,
             &mut req,
         );

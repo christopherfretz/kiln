@@ -314,7 +314,8 @@ impl Sema<'_, '_> {
         if self.ast.first(q.ctx) == self.ast.first(class) {
             self.error(DiagId::sema_using_decl_refers_to_own_class, q.loc);
             // clang 22 stops there; clang 19 also looks the name up.
-            if self.clang_compat < 22 && self.lookup_in_dn(q.ctx, name, LookupKind::All).is_empty() {
+            if self.clang_compat < 22 && self.lookup_in_dn(q.ctx, name, LookupKind::All).is_empty()
+            {
                 let msg = self
                     .diag(DiagId::sema_no_member, name_loc)
                     .arg(self.decl_name_str(name))

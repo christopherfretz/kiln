@@ -1089,6 +1089,21 @@ and returns the scope it names:
     `implicit-guide-locations-init-list.cpp`.
   - Gap: a qualified concept name in a type-constraint loses its
     qualifier (`template <NC R>` where clang prints `N::NC R`).
+  - At `-fclang-compat=22` (WP-377, clang 22): the guide's class type
+    is the injected specialization named by its scope (`-> N::S<T>`,
+    `-> Outer<int>::Q<U>`; inline and anonymous namespaces elided;
+    `guide_class_type`); a default argument the constructor's class
+    template inherits from an earlier declaration is cloned as
+    inherited, so the guide's printed head omits it (`class _Alloc`,
+    only the parameter's own default prints); and a
+    deduced-template-specialization placeholder prints the template
+    name as written at that use, not its first spelling
+    (`TypeContext::dtst_first_spelling`). Tests: the `-clang22.cpp`
+    copies of `building-guides-note`,
+    `implicit-guide-first-declaration-params`,
+    `implicit-guide-locations-init-list`,
+    `dcl.type.class.deduct/placeholder-spelling{,-first-use}` and
+    `templates/ctad/over.match.class.deduct-{member-template-diag,member-template-qualified-diag,no-viable-diag}`.
 - **Building the implicit guides** runs under a
   `FrameKind::BuildingDeductionGuides` frame (not an instantiation;
   clang `BuildingDeductionGuides`), so an error forming them (the
@@ -1655,6 +1670,14 @@ and returns the scope it names:
     prints its explicit arguments canonical (`ok<n::A>(0)`,
     `write_arg_list_canonical`). A call to a function template-id keeps
     the explicit arguments on the resolved `DeclRefExpr`.
+    At `-fclang-compat=22` (clang 22, WP-377) the qualifier's class is
+    printed fully scoped: every enclosing namespace (`(anonymous
+    namespace)::`, inline ones skipped) and class, each class template
+    specialization with all its converted arguments, canonical
+    (`n::tr<n::A, int>::In::w` for `Y::In::w`;
+    `TypeNames::write_converted_scope`, `AstNames::scoped_nns`). Test:
+    `dcl.pre/static-assert-substituted-names-clang22.cpp`,
+    `static-assert-variable-template-clang22.cpp`.
   - Evaluation notes follow (§8).
   - **User-generated messages** ([dcl.pre]/10-12, P2741, WP-356). A
     message that is not a string literal (spec/parse.md §4) must be an

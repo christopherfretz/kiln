@@ -14,7 +14,7 @@
 //@ diag: 44:15 note "in instantiation of function template specialization 'f<n::A>' requested here"
 //@ diag: 42:17 error "static assertion failed due to requirement 'ok<n::A>(0)': g"
 //@ requires: clang<22
-// clang 22 emits error: static assertion failed due to requirement 'n::tr<n::A, int>::value'; WP-355 residual
+// clang 19 spelling; static-assert-substituted-names-clang22.cpp has clang 22's (WP-377).
 namespace n {
 struct A {};
 template <class T, class U = int> struct tr {

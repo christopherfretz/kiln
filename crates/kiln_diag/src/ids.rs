@@ -213,11 +213,12 @@ impl DiagId {
     /// whose wording clang 22 changed is replaced by its `<name>_19` row
     /// (clang 19's wording, same kind, group and arguments). Every other id,
     /// and every id at level 22, is itself.
+    #[must_use]
     pub fn for_compat(self, level: u32) -> DiagId {
+        static MAP: std::sync::OnceLock<Vec<DiagId>> = std::sync::OnceLock::new();
         if level >= 22 {
             return self;
         }
-        static MAP: std::sync::OnceLock<Vec<DiagId>> = std::sync::OnceLock::new();
         let map = MAP.get_or_init(|| {
             let mut map = DiagId::ALL.to_vec();
             for &old in DiagId::ALL {

@@ -7,7 +7,8 @@ use kiln_ast::expr::BinaryOp;
 use kiln_ast::ids::{ArgListId, TemplateNameId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{
-    ArgView, AutoKeyword, ExcSpec, FuncInfo, FuncProto, Quals, TemplateArg, TemplateName, TypeView,
+    ArgView, AutoKeyword, ExcSpec, FuncInfo, FuncProto, Nns, Quals, TagKeyword, TemplateArg,
+    TemplateName, TypeView,
 };
 use kiln_ast::{DeclHead, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
@@ -197,7 +198,13 @@ fn ctad_redepth_param(
     }
     if let Some(a) = s.sema.template_default(p) {
         let a = s.template_arg(a, n.loc())?;
-        let _ = s.sema.builder().set_template_default(np, a);
+        // clang 22 clones an inherited default as inherited, so the
+        // guide's printed head omits it (`class _Allocator`).
+        if s.sema.clang_compat >= 22 && s.sema.ast.templates.defaults.get(p).is_none() {
+            s.sema.inherited_defaults.insert(np, a);
+        } else {
+            let _ = s.sema.builder().set_template_default(np, a);
+        }
     }
     Ok(np)
 }
@@ -420,6 +427,54 @@ impl Sema<'_, '_> {
         self.injected_type_of(own)
     }
 
+    /// The type an implicit guide of `owner` names its class with: clang 22
+    /// names the injected specialization by its scope (`N::S<T>`,
+    /// `Outer<int>::Q<U>`; inline namespaces elided), clang 19 bare.
+    fn guide_class_type(&mut self, owner: DeclId, injected: QualType) -> QualType {
+        if self.clang_compat < 22 {
+            return injected;
+        }
+        let ctx = self.ast.decls.get(owner).ctx();
+        match ctx.and_then(|c| self.scope_nns(c)) {
+            Some(nns) => self.ast.types.elaborated(TagKeyword::None, Some(nns), injected),
+            None => injected,
+        }
+    }
+
+    /// The nested-name-specifier that names scope `ctx` from the global
+    /// scope as clang's fully-qualified printing does: inline and
+    /// anonymous namespaces are elided; a function scope ends it.
+    fn scope_nns(&mut self, ctx: DeclId) -> Option<NnsId> {
+        let parent = self.ast.decls.get(ctx).ctx();
+        match self.kind_of(ctx) {
+            DeclKind::Namespace => {
+                let prefix = parent.and_then(|p| self.scope_nns(p));
+                let first = self.ast.first(ctx);
+                let elided = self
+                    .ast
+                    .decls
+                    .namespace(first)
+                    .is_some_and(kiln_ast::decl::NamespaceData::is_inline)
+                    || self.decl_name_str(self.ast.decls.get(first).name()).is_empty();
+                if elided {
+                    return prefix;
+                }
+                Some(self.ast.types.nns(Nns::Namespace { prefix, ns: first }))
+            }
+            DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization => {
+                let prefix = parent.and_then(|p| self.scope_nns(p));
+                let ty = match self.ast.described_template(ctx) {
+                    Some(t) => self.injected_type_of(t)?,
+                    None => self.class_type(ctx),
+                };
+                Some(self.ast.types.nns(Nns::Type { prefix, ty, template_kw: false }))
+            }
+            _ => None,
+        }
+    }
+
     /// [`Sema::implicit_guides`] once the frame is pushed.
     fn form_implicit_guides(&mut self, tmpl: DeclId, first: DeclId) -> Vec<DeclId> {
         let Some(pat) = self.pattern_of(tmpl) else { return Vec::new() };
@@ -432,6 +487,7 @@ impl Sema<'_, '_> {
         else {
             return Vec::new();
         };
+        let injected = self.guide_class_type(owner, injected);
         let ctx = self.ast.decls.get(first).ctx().unwrap_or(self.ast.tu);
         let name = self.ast.names.deduction_guide(first);
         let saved = self.ast.templates.dependent_depth;
@@ -897,6 +953,7 @@ impl Sema<'_, '_> {
         else {
             return None;
         };
+        let injected = self.guide_class_type(owner, injected);
         let ctx = self.ast.decls.get(first).ctx().unwrap_or(self.ast.tu);
         let name = self.ast.names.deduction_guide(first);
         let loc = self.ast.decls.get(owner).loc();
@@ -1937,7 +1994,12 @@ impl Sema<'_, '_> {
                 out.push(' ');
                 out.push_str(&pname);
             }
-            if let Some(a) = self.template_default(p) {
+            let shown = if self.clang_compat >= 22 {
+                self.ast.templates.defaults.get(p).copied()
+            } else {
+                self.template_default(p)
+            };
+            if let Some(a) = shown {
                 out.push_str(" = ");
                 out.push_str(&self.arg_str(a));
             }

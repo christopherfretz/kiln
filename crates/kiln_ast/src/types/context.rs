@@ -234,6 +234,10 @@ pub struct TypeContext {
     /// uniques `DeducedTemplateSpecializationType` on the canonical
     /// template, so later undeduced spellings print as the first one.
     pub(crate) first_dtst_names: kiln_source::fx::FxHashMap<u32, TemplateNameId>,
+    /// clang 19's first-spelling rule for undeduced placeholders
+    /// ([`TypeContext::dtst_display_name`]); clang 22 prints each one as
+    /// written (`-fclang-compat=22` clears it, WP-377).
+    pub dtst_first_spelling: bool,
     pub(crate) nns: KeyedTable,
     pub(crate) args: ArgTable,
     pub(crate) profiles: ProfileTable,
@@ -284,6 +288,7 @@ impl TypeContext {
             name_decls: Vec::new(),
             dependent_templates: kiln_source::fx::FxHashSet::default(),
             first_dtst_names: kiln_source::fx::FxHashMap::default(),
+            dtst_first_spelling: true,
             nns: KeyedTable::new(),
             args: ArgTable::new(),
             profiles: ProfileTable::new(),

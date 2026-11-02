@@ -446,7 +446,7 @@ pub fn global_register_size_mismatch(arch: Arch, name: &str, size_bits: u64) -> 
 pub fn global_register_reserved_22(arch: Arch, name: &str) -> bool {
     match arch {
         Arch::AArch64 => name == "sp" || name == "x0" || name == "w0",
-        _ => true,
+        Arch::X86_64 => true,
     }
 }
 
