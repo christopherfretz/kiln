@@ -7,7 +7,7 @@
 //@ diag: 13:3 error "value of type 'S' is not implicitly convertible to 'int'"
 //@ diag: 18:3 error "value of type 'const S' is not implicitly convertible to 'unsigned long'"
 //@ requires: clang<22
-// clang 22 emits error: value of type 'S' is not implicitly convertible to 'int'; WP-355 residual
+// clang 19 spelling; class-arg-no-conversion-clang22.cpp has clang 22's (WP-377).
 template <int N> struct A {};
 struct S {};
 A<S{}> a;

@@ -251,12 +251,14 @@ impl Sema<'_, '_> {
 
     /// A declaration statement ([stmt.dcl]).
     pub fn act_on_decl_stmt(&mut self, decls: &[DeclId], loc: Loc) -> StmtId {
-        if !self.lambdas.is_empty()
-            && decls
-                .iter()
-                .any(|&d| self.ast.decls.get(d).ty().is_some_and(|t| self.has_unexpanded_pack(t)))
-        {
-            self.note_unexpanded_in_lambda();
+        if !self.lambdas.is_empty() {
+            for &d in decls {
+                if let Some(t) = self.ast.decls.get(d).ty()
+                    && self.has_unexpanded_pack(t)
+                {
+                    self.note_unexpanded_in_lambda(crate::templ::pack::PackOperand::Type(t));
+                }
+            }
         }
         self.builder().decl_stmt(decls, loc)
     }
@@ -332,8 +334,10 @@ impl Sema<'_, '_> {
                 AttrKind::FALLTHROUGH => "fallthrough",
                 _ => continue,
             };
+            let name = self.attr_shown(&node, name);
             if sub_kind == StmtKind::DeclStmt {
-                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name);
+                let msg =
+                    self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name.clone());
                 self.emit(msg);
                 continue;
             }
@@ -342,7 +346,7 @@ impl Sema<'_, '_> {
             {
                 let msg = self
                     .diag(DiagId::sema_attribute_wrong_stmt_type, node.loc)
-                    .arg(name)
+                    .arg(name.clone())
                     .arg("empty statements");
                 self.emit(msg);
                 continue;
@@ -368,7 +372,7 @@ impl Sema<'_, '_> {
                 }
                 AttrKind::LIKELY | AttrKind::UNLIKELY => {
                     if std < Std::Cxx20 && node.syntax == kiln_ast::attr::AttrSyntax::Cxx11 {
-                        let msg = self.diag(DiagId::ext_cxx20_attr, node.loc).arg(name);
+                        let msg = self.diag(DiagId::ext_cxx20_attr, node.loc).arg(name.clone());
                         self.emit(msg);
                     }
                     if let Some(prev) = likelihood

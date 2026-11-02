@@ -6,7 +6,7 @@
 //@ diag: 12:9 error "you need to include <typeinfo> before using the 'typeid' operator"
 //@ diag: 13:9 error "you need to include <typeinfo> before using the 'typeid' operator"
 //@ requires: clang<22
-// clang 22 emits error: you need to include <typeinfo> or import std before using the 'typeid' oper...; WP-355 residual
+// clang 19 spelling; no-header-clang22.cpp has clang 22's (WP-377).
 namespace std { struct other; }
 void f(int x) {
   (void)typeid(int);

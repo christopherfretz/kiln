@@ -4,7 +4,7 @@
 //@ strict-diags
 //@ diag: 12:63 warning "non-void function does not return a value in all control paths"
 //@ requires: clang<22
-// clang 22 emits warning: non-void function does not return a value in all control paths; WP-355 residual
+// clang 19 spelling; falloff-try-nested-clang22.cpp has clang 22's (WP-377).
 int u2(int x) { if consteval { return 1; } }
 int u3(int x) { return 1; x++; }
 enum E { A, B };

@@ -397,7 +397,9 @@ impl Sema<'_, '_> {
             elem = match n {
                 Some(n) => {
                     if self.array_too_large(n, elem) {
-                        let msg = self.diag(DiagId::sema_array_too_large, at).arg(n.to_string());
+                        let msg = self
+                            .diag(DiagId::sema_array_too_large, at)
+                            .arg(self.element_count_text(n));
                         self.emit(msg);
                         return self.recover_err(&kids, loc);
                     }
@@ -880,11 +882,30 @@ impl Sema<'_, '_> {
         if let Some(n) = v
             && self.array_too_large(n, elem)
         {
-            let msg = self.diag(DiagId::sema_array_too_large, at).arg(n.to_string());
+            let msg = self.diag(DiagId::sema_array_too_large, at).arg(self.element_count_text(n));
             self.emit(msg);
             return None;
         }
         Some((c, v))
+    }
+
+    /// An element count as `array is too large` prints it: clang 22
+    /// groups the digits with `'` separators (`18'446'744'073'709'551'615`),
+    /// clang 19 does not.
+    pub(crate) fn element_count_text(&self, n: impl std::fmt::Display) -> String {
+        let s = n.to_string();
+        if self.clang_compat < 22 {
+            return s;
+        }
+        let (sign, digits) = s.strip_prefix('-').map_or(("", s.as_str()), |d| ("-", d));
+        let mut out = String::from(sign);
+        for (i, c) in digits.chars().enumerate() {
+            if i > 0 && (digits.len() - i) % 3 == 0 {
+                out.push('\'');
+            }
+            out.push(c);
+        }
+        out
     }
 
     /// clang's `ConstantArrayType::getNumAddressingBits` check: `n`

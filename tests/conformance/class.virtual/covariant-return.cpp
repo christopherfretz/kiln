@@ -28,7 +28,7 @@
 //@ diag: 70:6 error "return type of virtual function 'f14' is not covariant with the return type of the function it overrides ('B *' is not derived from 'X *')"
 //@ diag: 54:14 note "overridden virtual function is here"
 //@ requires: clang<22
-// clang 22 emits error: virtual function 'f2' has a different return type ('int *') than the functi...; WP-355 residual
+// clang 19 spelling; covariant-return-clang22.cpp has clang 22's (WP-377).
 struct X {};
 struct Y : X {};
 struct Z : private X {};

@@ -595,7 +595,16 @@ impl Sema<'_, '_> {
     /// one declaration (a `DeclRefExpr` or implicit member access, not
     /// an overload set) and it is no template.
     pub fn potential_template_name(&self, name: Symbol) -> Option<DeclId> {
-        let found = self.lookup_name(name, LookupKind::Ordinary);
+        self.potential_template_name_in(None, name)
+    }
+
+    /// [`Sema::potential_template_name`] for `name` looked up in the
+    /// context `qual` when qualified (`::f<int>`, `N::f<int>`).
+    pub fn potential_template_name_in(&self, qual: Option<DeclId>, name: Symbol) -> Option<DeclId> {
+        let found = match qual {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
         let [d] = found.decls[..] else { return None };
         let d = self.ast.strip_shadow(d);
         (!matches!(
@@ -1362,6 +1371,27 @@ impl Sema<'_, '_> {
                 false
             }
         }
+    }
+
+    /// [`Sema::act_pack_indexing_type`] for the type name `name` written
+    /// at `name_loc`: a `T` that is not a pack is reported there by name,
+    /// as clang does ("'T' does not refer to the name of a parameter
+    /// pack").
+    pub fn act_pack_indexing_type_named(
+        &mut self,
+        pattern: QualType,
+        name: Symbol,
+        name_loc: Loc,
+        ellipsis: Loc,
+        index: ExprId,
+    ) -> QualType {
+        if !self.ast.types.flags(pattern.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
+            let text = format!("'{}'", self.ast.symbols().as_str(name));
+            let msg = self.diag(DiagId::sema_sizeof_pack_no_pack, name_loc).arg(text);
+            self.emit(msg);
+            return QualType::ERROR;
+        }
+        self.act_pack_indexing_type(pattern, ellipsis, index)
     }
 
     /// `T...[index]` as a type (C++26 [dcl.type.pack.index]).

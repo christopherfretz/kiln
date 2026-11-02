@@ -224,6 +224,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Clang 22 (`CheckConvertedConstantExpression` called from
+    /// `CheckTemplateArgument`) follows a conversion error in a non-type
+    /// template argument with "template parameter is declared here" at
+    /// the parameter `ploc`; clang 19 does not.
+    pub(crate) fn note_nttp_param(&self, d: Diag, ploc: Option<Loc>) -> Diag {
+        match ploc {
+            Some(l) if self.clang_compat >= 22 => {
+                d.note(DiagId::note_template_param_here, kiln_source::Span::empty(l))
+            }
+            _ => d,
+        }
+    }
+
     /// Converts argument `e` of a reference-typed non-type template
     /// parameter `pty` ([temp.arg.nontype]/2): the reference is bound as
     /// in copy-initialization and the result must be a constant
@@ -235,6 +248,7 @@ impl Sema<'_, '_> {
         pty: QualType,
         e: ExprId,
         at: Loc,
+        ploc: Option<Loc>,
     ) -> Result<TemplateArg, ()> {
         if !self.check_nttp_type(pty, at) {
             return Err(());
@@ -249,6 +263,7 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_cce_not_implicitly_convertible, at)
                 .arg(self.ty_arg(ety))
                 .arg(self.ty_arg(pty));
+            let d = self.note_nttp_param(d, ploc);
             self.emit(d);
             return Err(());
         }
@@ -272,6 +287,7 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_cce_ref_binds_temporary, at)
                 .arg(self.ty_arg(ety))
                 .arg(self.ty_arg(pty));
+            let d = self.note_nttp_param(d, ploc);
             self.emit(d);
             return Err(());
         }

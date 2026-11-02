@@ -10,7 +10,7 @@
 //@ diag: 24:14 error "illegal storage class on file-scoped variable"
 //@ diag: 25:1 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
 //@ diag: 25:14 error "illegal storage class on file-scoped variable"
-//@ diag: 28:1 error "decomposition declaration cannot be declared 'register'"
+//@ diag: 28:1 error "declaration cannot be declared 'register'"
 //@ diag: 28:1 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
 //@ diag: 28:15 error "illegal storage class on file-scoped variable"
 //@ diag: 29:15 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
@@ -18,8 +18,8 @@
 //@ diag: 30:20 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
 //@ diag: 30:31 error "illegal storage class on file-scoped variable"
 //@ diag: 31:12 error "storage class specified for a member declaration"
-//@ requires: clang<22
-// clang 22 emits error: structured binding declaration cannot be declared 'register'; WP-355 residual
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 
 register int gg;
 register int gi = "x";

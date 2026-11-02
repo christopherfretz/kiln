@@ -254,6 +254,7 @@ impl Sema<'_, '_> {
     /// qualifier is dropped (`__restrict int h();`, WP-371).
     fn declspec_quals(&mut self, ds: &DeclSpec, base: QualType) -> Quals {
         let cv = ds.cv;
+        self.declspec_restrict_error = None;
         if let Some(rloc) = ds.cv_locs[2]
             && cv.contains(Quals::RESTRICT)
             && !self.restrict_ok(base)
@@ -261,9 +262,28 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_typecheck_invalid_restrict_not_pointer, rloc);
             let msg = msg.arg(self.ty_arg(base));
             self.emit(msg);
+            self.declspec_restrict_error = Some((rloc, base));
             return cv - Quals::RESTRICT;
         }
         cv
+    }
+
+    /// The `__restrict` error the decl-specifier-seq whose type was formed
+    /// last reported, if any: the parser repeats it
+    /// ([`Sema::report_restrict_not_pointer`]) for each later declarator
+    /// of the group (`__restrict int a, b;` is reported twice, as clang
+    /// does; WP-379).
+    pub fn take_declspec_restrict_error(&mut self) -> Option<(Loc, QualType)> {
+        self.declspec_restrict_error.take()
+    }
+
+    /// "restrict requires a pointer or reference ('T' is invalid)" again
+    /// at the `__restrict` of a decl-specifier-seq of type `T`, for a later
+    /// declarator of its group (not deduplicated).
+    pub fn report_restrict_not_pointer(&mut self, (rloc, base): (Loc, QualType)) {
+        let msg = self.diag(DiagId::sema_typecheck_invalid_restrict_not_pointer, rloc);
+        let msg = msg.arg(self.ty_arg(base)).allow_duplicate();
+        self.emit(msg);
     }
 
     /// True if `restrict` may qualify `ty`: a pointer, reference or
@@ -875,7 +895,13 @@ impl Sema<'_, '_> {
                     prev_ref = false;
                     let Some(qual) = qual else { return QualType::ERROR };
                     let Some(class) = self.member_pointer_class(qual) else {
-                        let msg = self.diag(DiagId::sema_mptr_in_nonclass, *loc).arg(&name);
+                        // clang 22 says "member pointer" for an abstract declarator
+                        // (clang 19 "'type name'"; no identifier has a space).
+                        let msg = if self.clang_compat >= 22 && name == "type name" {
+                            self.diag(DiagId::sema_mptr_in_nonclass_22, *loc)
+                        } else {
+                            self.diag(DiagId::sema_mptr_in_nonclass, *loc).arg(&name)
+                        };
                         self.emit(msg);
                         return QualType::ERROR;
                     };
@@ -1084,6 +1110,20 @@ impl Sema<'_, '_> {
                     if fp16_bad {
                         return QualType::ERROR;
                     }
+                    // [depr.volatile.type]/2 (C++20 [dcl.fct]/12): a
+                    // volatile-qualified return type is deprecated, at the
+                    // function declarator's '(' or a trailing return
+                    // type's `auto` (clang's `warn_deprecated_volatile_return`;
+                    // not before C++20).
+                    if self.std >= kiln_lex::Std::Cxx20
+                        && self.ast.types.effective_quals(ty).contains(Quals::VOLATILE)
+                    {
+                        let at = if trailing.is_some() { spec_loc } else { *loc };
+                        let msg = self
+                            .diag(DiagId::sema_deprecated_volatile_return, at)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                    }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
@@ -1146,7 +1186,9 @@ impl Sema<'_, '_> {
             }
             Ok(v) => {
                 if v > i128::from(u64::MAX >> 4) {
-                    let msg = self.diag(DiagId::sema_array_too_large, loc).arg(v.to_string());
+                    let msg = self
+                        .diag(DiagId::sema_array_too_large, loc)
+                        .arg(self.element_count_text(v));
                     self.emit(msg);
                     return None;
                 }
@@ -2386,7 +2428,14 @@ impl Sema<'_, '_> {
             self.emit(self.diag(DiagId::sema_asm_unknown_register_name, loc).arg(name));
         } else if !self.in_local_scope() && !self.is_dependent_type(ty) {
             let bits = target::size_align(&self.ast, ty, self.abi()).map(|(s, _)| s * 8);
-            match bits.map(|b| kiln_abi::asm::global_register_size_mismatch(arch, &name, b)) {
+            let size = bits.map(|b| kiln_abi::asm::global_register_size_mismatch(arch, &name, b));
+            let unreserved =
+                self.clang_compat >= 22 && !kiln_abi::asm::global_register_reserved_22(arch, &name);
+            match size {
+                Some(Some(_)) if unreserved => {
+                    let msg = self.diag(DiagId::sema_asm_invalid_global_var_reg, loc).arg(name);
+                    self.emit(msg);
+                }
                 Some(None) => {
                     let msg = self.diag(DiagId::sema_asm_invalid_global_var_reg, loc).arg(name);
                     self.emit(msg);
@@ -2405,7 +2454,10 @@ impl Sema<'_, '_> {
         }
         let t = &self.ast.types;
         if !t.is_integral(ty) && !t.is_pointer(ty) {
-            self.error(DiagId::sema_asm_bad_register_type, ds.loc);
+            // clang 22 reports at the type specifier, clang 19 at the
+            // decl-specifier-seq.
+            let at = if self.clang_compat >= 22 { ds.type_loc.unwrap_or(ds.loc) } else { ds.loc };
+            self.error(DiagId::sema_asm_bad_register_type, at);
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
     }
@@ -6742,6 +6794,10 @@ impl Sema<'_, '_> {
                 n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY
             });
         }
+        let inline = match prev {
+            Some(p) => self.check_namespace_inline_mismatch(p, inline, name.map_or(loc, |n| n.1)),
+            None => inline,
+        };
         // The semantic context is the extended namespace's (an inline
         // namespace of `self.ctx`, above); the lexical one is `self.ctx`.
         let sem = prev.and_then(|p| self.ast.decls.get(p).ctx()).unwrap_or(self.ctx);
@@ -6763,6 +6819,31 @@ impl Sema<'_, '_> {
         self.scopes.push(scope);
         self.ctx = ns;
         ns
+    }
+
+    /// [namespace.def.general]/3: `inline` shall appear on the original
+    /// definition of an inline namespace and not on an extension of a
+    /// non-inline one (clang `DiagnoseNamespaceInlineMismatch`). Omitting
+    /// it on an extension of an inline namespace is allowed, but clang
+    /// warns (`-Winline-namespace-reopened-noninline`); adding it to an
+    /// extension of a non-inline one is an error. Both note the original
+    /// definition; the extension takes the original's inlineness, which
+    /// is returned.
+    fn check_namespace_inline_mismatch(&mut self, prev: DeclId, inline: bool, loc: Loc) -> bool {
+        let first = self.ast.first(prev);
+        let orig =
+            self.ast.decls.namespace(first).is_some_and(kiln_ast::decl::NamespaceData::is_inline);
+        if orig != inline {
+            let id = if orig {
+                DiagId::sema_inline_namespace_reopened_noninline
+            } else {
+                DiagId::sema_inline_namespace_mismatch
+            };
+            let msg = self.diag(id, loc);
+            let msg = self.note_prev(msg, first, true);
+            self.emit(msg);
+        }
+        orig
     }
 
     /// `}` of a namespace.
@@ -7117,7 +7198,10 @@ impl Sema<'_, '_> {
     pub(crate) fn requirement_text(&self, c: ExprId) -> String {
         let mut req = String::new();
         kiln_ast::types::TypeNames::write_expr(
-            &kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types(),
+            &kiln_ast::dump::AstNames {
+                scoped_nns: self.clang_compat >= 22,
+                ..kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types()
+            },
             c,
             &mut req,
         );
@@ -7936,6 +8020,10 @@ impl Sema<'_, '_> {
         args: &[AttrArg],
         loc: Loc,
     ) -> Option<AttrId> {
+        let raw = sym_str(self, name);
+        if scope.is_some() || raw.starts_with("__") {
+            self.attr_spellings.insert(loc, (scope, name));
+        }
         let a = self.attribute_node(syntax, scope, name, args, loc)?;
         if scope.is_some_and(|s| norm_attr_scope(&sym_str(self, s)) == "gnu") {
             self.ast.attrs.set_flags(a, AttrNode::GNU_SCOPED);
@@ -7956,6 +8044,7 @@ impl Sema<'_, '_> {
         let raw = sym_str(self, name);
         let scope_s = scope.map(|s| norm_attr_scope(&sym_str(self, s)).to_owned());
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
+        let shown = self.attr_shown_parts(syntax, scope, name);
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
         let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;
         let clang_scope = scope_s.as_deref() == Some("clang");
@@ -7973,7 +8062,7 @@ impl Sema<'_, '_> {
                         | "coro_only_destroy_when_complete"
                 ))
         {
-            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
+            let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(shown);
             self.emit(msg);
             return None;
         }
@@ -7983,7 +8072,7 @@ impl Sema<'_, '_> {
             } else {
                 DiagId::parse_unknown_attribute
             };
-            let msg = self.diag(id, loc).arg(raw);
+            let msg = self.diag(id, loc).arg(shown);
             self.emit(msg);
             return None;
         };
@@ -8539,7 +8628,7 @@ impl Sema<'_, '_> {
 /// An attribute scope as clang normalizes it (`normalizeAttrScopeName`):
 /// the reserved spellings `__gnu__` and `_Clang` name `gnu` and `clang`
 /// (`[[__gnu__::__always_inline__]]` is `[[gnu::always_inline]]`).
-fn norm_attr_scope(s: &str) -> &str {
+pub(crate) fn norm_attr_scope(s: &str) -> &str {
     match s {
         "__gnu__" => "gnu",
         "_Clang" => "clang",

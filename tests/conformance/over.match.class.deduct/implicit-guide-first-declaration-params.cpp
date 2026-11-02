@@ -26,7 +26,7 @@
 //@ diag: 40:50 note "candidate function template not viable: requires 3 arguments, but 1 was provided"
 //@ diag: 40:50 note "implicit deduction guide declared as 'template <class T, class U> vec2(int, int, int) -> vec2<T, U>'"
 //@ requires: clang<22
-// clang 22 emits error: no viable constructor or deduction guide for deduction of template argument...; WP-355 residual
+// clang 19 spelling; implicit-guide-first-declaration-params-clang22.cpp has clang 22's (WP-377).
 template <class T> struct al {};
 template <class _Tp, class _Alloc = al<_Tp> > class vector;
 template <class _Tp, class _Allocator /* = al<_Tp> */> class vector { public: vector(int, int, int); };

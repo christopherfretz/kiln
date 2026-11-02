@@ -383,7 +383,7 @@ impl Sema<'_, '_> {
 
     /// The named, non-inline namespaces enclosing namespace `ns` (itself
     /// included), outermost first; the translation unit is not one.
-    fn named_ns_chain(&self, mut ns: DeclId) -> Vec<DeclId> {
+    pub(crate) fn named_ns_chain(&self, mut ns: DeclId) -> Vec<DeclId> {
         let mut chain = Vec::new();
         for _ in 0..10_000 {
             if self.kind_of(ns) == DeclKind::Namespace
@@ -409,7 +409,7 @@ impl Sema<'_, '_> {
     /// for an enclosing namespace or when the first component would name
     /// an enclosing one; otherwise the path from the innermost common
     /// namespace. Inline and unnamed namespaces are not spelled.
-    fn correction_qualifier(&self, ns: DeclId, cur: &[DeclId]) -> (String, usize) {
+    pub(crate) fn correction_qualifier(&self, ns: DeclId, cur: &[DeclId]) -> (String, usize) {
         let chain = self.named_ns_chain(ns);
         let common = chain.iter().zip(cur).take_while(|(a, b)| a == b).count();
         let spell = |s: &Self, part: &[DeclId]| {
@@ -438,7 +438,7 @@ impl Sema<'_, '_> {
 
 /// Levenshtein distance between `a` and `b` (substitutions allowed), by
 /// byte as clang's `StringRef::edit_distance`.
-fn edit_distance(a: &str, b: &str) -> usize {
+pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     let mut row: Vec<usize> = (0..=b.len()).collect();
     for (i, &ca) in a.iter().enumerate() {

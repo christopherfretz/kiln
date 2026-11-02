@@ -3,8 +3,8 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 10:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 10:18 note "comparison between '&a' and '&b' has unspecified value"
-//@ requires: clang<22
-// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
+//@ diag: 10:18 note "'&a' and '&b' has unspecified value"
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 constexpr int a = 1, b = 2;
 static_assert(&a < &b);

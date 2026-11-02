@@ -9,8 +9,9 @@
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{DeclKind, EnumData};
 use kiln_ast::types::TagKeyword;
-use kiln_ast::{AttrId, DeclId, QualType};
+use kiln_ast::{AttrId, DeclId, QualType, StmtId};
 use kiln_diag::DiagId;
+use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::declspec::DeclSpec;
@@ -87,6 +88,39 @@ impl Sema<'_, '_> {
     /// after a function declarator, `attribute 'X' ignored, because it
     /// cannot be applied to a type`; it is dropped. GNU-syntax and
     /// vector attributes are kept.
+    /// The attribute's name as a diagnostic prints it, `canonical` the
+    /// kind's name: as written (no scope) at clang 19; at clang 22, for
+    /// a `[[...]]` attribute, `scope::name` with the scope and the `__`
+    /// affixes normalized (`[[_Clang::__fallthrough__]]` is
+    /// `'clang::fallthrough'`), a GNU-syntax one still as written.
+    pub(crate) fn attr_shown(&self, node: &AttrNode, canonical: &str) -> String {
+        match self.attr_spellings.get(&node.loc) {
+            Some(&(scope, name)) => self.attr_shown_parts(node.syntax, scope, name),
+            None => canonical.to_owned(),
+        }
+    }
+
+    /// [`Sema::attr_shown`] of the attribute-token `scope::name`.
+    pub(crate) fn attr_shown_parts(
+        &self,
+        syntax: AttrSyntax,
+        scope: Option<Symbol>,
+        name: Symbol,
+    ) -> String {
+        let raw = self.ast.symbols().as_str(name).to_string();
+        if self.clang_compat < 22 || syntax != AttrSyntax::Cxx11 {
+            return raw;
+        }
+        let n = raw.trim_start_matches("__").trim_end_matches("__");
+        match scope {
+            Some(s) => {
+                let s = self.ast.symbols().as_str(s).to_string();
+                format!("{}::{n}", crate::decl::norm_attr_scope(&s))
+            }
+            None => n.to_owned(),
+        }
+    }
+
     pub fn act_on_type_position_attrs(&mut self, attrs: &mut Vec<AttrId>, after_function: bool) {
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
@@ -101,7 +135,7 @@ impl Sema<'_, '_> {
             } else {
                 DiagId::sema_attribute_not_type_attr
             };
-            let msg = self.diag(id, node.loc).arg(format!("'{name}'"));
+            let msg = self.diag(id, node.loc).arg(format!("'{}'", self.attr_shown(&node, name)));
             self.emit(msg);
             false
         });
@@ -141,8 +175,25 @@ impl Sema<'_, '_> {
             } else {
                 DiagId::sema_decl_attribute_on_stmt
             };
-            let msg = self.diag(id, node.loc).arg(name);
+            let msg = self.diag(id, node.loc).arg(self.attr_shown(&node, name));
             self.emit(msg);
+        }
+    }
+
+    /// The attributes before a block-scope using-directive or
+    /// using-declaration `s`: at clang 22 each is also "cannot be applied
+    /// to a statement" (after the subject check of
+    /// [`Sema::act_on_decl_attrs`]); clang 19 reports only the subject.
+    pub fn act_on_decl_stmt_attrs(&mut self, s: StmtId, attrs: &[AttrId]) {
+        if self.clang_compat < 22 || attrs.is_empty() {
+            return;
+        }
+        let list = self.ast.stmts.decl_stmt_decls(s);
+        let using = self.ast.lists.iter::<DeclId>(list).any(|d| {
+            matches!(self.ast.decls.get(d).kind(), DeclKind::UsingDirective | DeclKind::Using)
+        });
+        if using {
+            self.act_on_stmt_decl_attrs(attrs, false);
         }
     }
 
@@ -175,7 +226,7 @@ impl Sema<'_, '_> {
             let Some(name) = attr_name(&node) else { continue };
             let msg = self
                 .diag(DiagId::sema_declspec_attribute_ignored, node.loc)
-                .arg(format!("'{name}'"))
+                .arg(format!("'{}'", self.attr_shown(&node, name)))
                 .arg(key);
             self.emit(msg);
         }
@@ -198,7 +249,8 @@ impl Sema<'_, '_> {
     /// One attribute of [`Sema::check_decl_attrs`]; false drops it.
     fn check_decl_attr(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
         let wrong = |s: &mut Self, id: DiagId, name: &str, what: &str| {
-            let msg = s.diag(id, node.loc).arg(format!("'{name}'")).arg(what.to_owned());
+            let shown = s.attr_shown(&node, name);
+            let msg = s.diag(id, node.loc).arg(format!("'{shown}'")).arg(what.to_owned());
             s.emit(msg);
             false
         };
@@ -206,7 +258,7 @@ impl Sema<'_, '_> {
             // [dcl.attr.assume]/1, [dcl.attr.fallthrough]/1,
             // [dcl.attr.likelihood]/1: statement attributes.
             AttrKind::ASSUME | AttrKind::FALLTHROUGH | AttrKind::LIKELY | AttrKind::UNLIKELY => {
-                let name = attr_name(&node).unwrap_or_default();
+                let name = self.attr_shown(&node, attr_name(&node).unwrap_or_default());
                 let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name);
                 self.emit(msg);
                 false
@@ -324,11 +376,14 @@ impl Sema<'_, '_> {
     /// spelling not a variable; on a typedef only the GNU syntax.
     fn check_nodiscard_subject(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
         let gnu = node.is_gnu_spelling();
-        let name = if gnu { "'warn_unused_result'" } else { "'nodiscard'" };
+        let name = format!(
+            "'{}'",
+            self.attr_shown(&node, if gnu { "warn_unused_result" } else { "nodiscard" })
+        );
         let typedef = matches!(kind, DeclKind::Typedef | DeclKind::TypeAlias);
         let fty = self.decl_function_type(d, kind);
         let warn = |s: &mut Self, id: DiagId, what: Option<&str>| {
-            let mut msg = s.diag(id, node.loc).arg(name);
+            let mut msg = s.diag(id, node.loc).arg(name.clone());
             if let Some(w) = what {
                 msg = msg.arg(w.to_owned());
             }
@@ -381,7 +436,7 @@ impl Sema<'_, '_> {
         let Some(ty) = self.decl_value_type(d, kind) else {
             let msg = self
                 .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
-                .arg("'noreturn'")
+                .arg(format!("'{}'", self.attr_shown(&node, "noreturn")))
                 .arg("functions and methods");
             self.emit(msg);
             return false;
@@ -395,6 +450,7 @@ impl Sema<'_, '_> {
         }
         let ts = format!("'{}'", self.ty_str(ty));
         let msg =
+            // clang 22 names the type attribute unscoped here.
             self.diag(DiagId::sema_type_attribute_wrong_type, node.loc).arg("'noreturn'").arg(ts);
         self.emit(msg);
         false

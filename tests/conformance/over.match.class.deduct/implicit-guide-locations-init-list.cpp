@@ -18,7 +18,7 @@
 //@ diag: 31:34 note "candidate function template not viable: requires 1 argument, but 0 were provided"
 //@ diag: 31:34 note "implicit deduction guide declared as 'template <class T, int N> arr(arr<T, N>) -> arr<T, N>'"
 //@ requires: clang<22
-// clang 22 emits error: no viable constructor or deduction guide for deduction of template argument...; WP-355 residual
+// clang 19 spelling; implicit-guide-locations-init-list-clang22.cpp has clang 22's (WP-377).
 namespace std {
 template <class E> class initializer_list {
   const E *b; decltype(sizeof 0) n;

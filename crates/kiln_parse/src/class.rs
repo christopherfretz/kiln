@@ -1218,6 +1218,24 @@ impl Parser<'_, '_> {
     /// The type named by a member declaration's decl-specifiers, formed
     /// once the first declarator is known: clang reports a missing type
     /// specifier at its name.
+    /// clang forms each member declarator's type anew: a decl-specifier
+    /// error is repeated per declarator ([`Parser::repeat_declspec_errors`])
+    /// and every later declarator without a type is reported
+    /// (`static y, z;`).
+    fn repeat_member_declspec_errors(
+        &mut self,
+        ds: &DeclSpec,
+        d: &Declarator,
+        first: bool,
+        restrict_error: &mut Option<(Loc, QualType)>,
+    ) {
+        self.repeat_declspec_errors(restrict_error, first);
+        let untyped = !ds.has_type_specifier() && !ds.invalid;
+        if !first && untyped && !d.invalid && d.special.is_none() {
+            self.s.error(DiagId::parse_missing_type_specifier, d.name_loc());
+        }
+    }
+
     fn member_base_type(&mut self, ds: &DeclSpec, d: &Declarator) -> QualType {
         if !ds.has_type_specifier() && is_deduction_guide(d) {
             self.s.plain_auto_type()
@@ -1360,6 +1378,7 @@ impl Parser<'_, '_> {
     }
 
     fn parse_member_declaration_inner(&mut self) {
+        let tmpl_kind = self.template_decl_kind.take();
         if !self.stack_ok() || self.parse_member_declaration_leader() {
             return;
         }
@@ -1387,6 +1406,7 @@ impl Parser<'_, '_> {
         let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
         let is_typedef = ds.is_typedef();
         let mut base_ty: Option<QualType> = None;
+        let mut restrict_error = None;
         let mut first = true;
         let mut group = AutoGroup::default();
         loop {
@@ -1408,12 +1428,7 @@ impl Parser<'_, '_> {
             }
             let parts = mem::take(&mut self.late_fn);
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
-            // clang forms each member declarator's type anew: every one
-            // without a type is reported (`static y, z;`).
-            let untyped = !ds.has_type_specifier() && !ds.invalid;
-            if !first && untyped && !d.invalid && d.special.is_none() {
-                self.s.error(DiagId::parse_missing_type_specifier, d.name_loc());
-            }
+            self.repeat_member_declspec_errors(&ds, &d, first, &mut restrict_error);
             let is_fn = d.is_function_declarator();
             let (has_width, width_failed) =
                 self.parse_member_declarator_tail(&mut d, ds.friend.is_some());
@@ -1453,7 +1468,7 @@ impl Parser<'_, '_> {
             {
                 self.push_late(LateItem::Method { f, parts });
             }
-            if self.eat(Punct::Comma).is_none() {
+            if !self.next_declarator(tmpl_kind) {
                 break;
             }
             first = false;
@@ -2114,6 +2129,18 @@ impl Parser<'_, '_> {
         };
         self.s.check_type_name_access(name, q, d, id_loc);
         let ty = self.named_type(ty, d);
+        // `Ts...[i]` (C++26 [dcl.type.pack.index]: a computed-type-specifier
+        // is a class-or-decltype).
+        let ty = match self.parse_pack_index(id_loc) {
+            Ok(Some((ellipsis, index, _))) => {
+                self.s.act_pack_indexing_type_named(ty, name, id_loc, ellipsis, index)
+            }
+            Ok(None) => ty,
+            Err(()) => return None,
+        };
+        if self.s.is_error_type(ty) {
+            return None;
+        }
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
         Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs })
     }

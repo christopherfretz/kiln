@@ -11,7 +11,7 @@
 //@ diag: 16:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
 //@ diag: 16:28 note "implicit deduction guide declared as 'template <class U> H(H<U>) -> H<U>'"
 //@ requires: clang<22
-// clang 22 emits error: no viable constructor or deduction guide for deduction of template argument...; WP-355 residual
+// clang 19 spelling; over.match.class.deduct-member-template-qualified-diag-clang22.cpp has clang 22's (WP-377).
 template<class T> struct Outer {
   template<class U> struct H { template<class V> H(V, T, V = V()); };
 };
