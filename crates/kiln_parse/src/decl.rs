@@ -99,6 +99,7 @@ impl Parser<'_, '_> {
         while !self.at_eof() {
             self.parse_external_declaration();
         }
+        self.module_flush();
         // [temp.point]/7: the end of the translation unit is a point of
         // instantiation of every pending definition.
         self.s.end_of_tu_instantiations();
@@ -109,6 +110,17 @@ impl Parser<'_, '_> {
 
     /// A declaration at namespace scope ([dcl.pre] declaration).
     pub fn parse_external_declaration(&mut self) {
+        if self.mods.is_some() {
+            // Modules: directive events first, then the cross-unit
+            // deduplication (spec/modules.md §4, §6).
+            let crate::modules::BeforeDecl::Parse(start) = self.module_before_decl() else {
+                return;
+            };
+            self.parse_external_declaration_inner();
+            self.s.act_on_end_abbreviated();
+            self.module_after_decl(start);
+            return;
+        }
         self.parse_external_declaration_inner();
         // An abbreviated function template's invented head ends with its
         // declaration ([dcl.fct]/22).
@@ -182,6 +194,9 @@ impl Parser<'_, '_> {
             }
             (_, Some(Kw::Extern)) if self.kw_of(self.peek(1)) == Some(Kw::Template) => {
                 self.parse_template_declaration(DeclaratorContext::File);
+            }
+            (_, Some(Kw::Export)) if self.std >= Std::Cxx20 => {
+                self.parse_export_declaration();
             }
             (_, Some(Kw::Export)) => {
                 self.unsupported("modules", loc);
@@ -269,7 +284,11 @@ impl Parser<'_, '_> {
         };
         let mut opened = Vec::new();
         if names.is_empty() {
-            opened.push(self.s.act_on_start_namespace(None, inline, ns_loc));
+            let ns = self.s.act_on_start_namespace(None, inline, ns_loc);
+            if self.mods.is_some() {
+                self.s.module_note_anon_namespace(ns, open);
+            }
+            opened.push(ns);
         }
         for (n, l, inl) in names {
             opened.push(self.s.act_on_start_namespace(Some((n, l)), inl, ns_loc));

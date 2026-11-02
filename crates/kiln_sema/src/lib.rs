@@ -52,6 +52,7 @@ pub mod literal;
 mod literal_op;
 mod local_friend;
 pub mod lookup;
+pub mod modules;
 pub mod names;
 pub mod new_delete;
 mod null_deref;
@@ -604,6 +605,8 @@ pub struct Sema<'a, 'sm> {
     /// ([`Sema::signed_size_type`], [`Sema::ptrdiff_type`]).
     pub(crate) signed_size_t_sugar: QualType,
     pub(crate) ptrdiff_t_sugar: QualType,
+    /// C++20 modules: the units being read (spec/modules.md).
+    pub(crate) modules: modules::ModSema,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -770,6 +773,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             size_t_sugar: size_t,
             signed_size_t_sugar: ptrdiff_t,
             ptrdiff_t_sugar: ptrdiff_t,
+            modules: modules::ModSema::default(),
         };
         s.declare_size_t_sugar();
         s.declare_builtin_va_list();

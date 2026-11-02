@@ -70,6 +70,8 @@ pub struct Ast {
     pub cmp_categories: CmpCategories,
     /// The `TranslationUnitDecl`.
     pub tu: DeclId,
+    /// Module units and declaration ownership (spec/modules.md §5).
+    pub modules: crate::modules::ModuleTable,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -119,6 +121,7 @@ impl Ast {
             vtables: ClassCache::default(),
             cmp_categories: CmpCategories::default(),
             tu,
+            modules: crate::modules::ModuleTable::default(),
             symbols,
             inst: InstantiationMeter::default(),
         }

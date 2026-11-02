@@ -109,6 +109,12 @@ residual` (docs/status/wp-184-oracle-switch.md).
     sub-statement that is not one (parse.md §6.1).
 
 ## 3. Lookup (`lookup.rs`)
+- **Modules.** With C++20 modules active, every namespace-scope lookup
+  result, ADL candidate and redeclaration candidate also passes the module
+  visibility predicate of spec/modules.md §5 (`Sema::module_visible`,
+  `module_adl_visible`, `module_redecl_candidate` in
+  `kiln_sema::modules`); a TU without module or import directives skips
+  it entirely.
 - **Unqualified lookup** ([basic.lookup.unqual]) walks the stack
   innermost first:
   - A local scope searches its `locals`.

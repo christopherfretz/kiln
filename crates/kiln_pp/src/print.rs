@@ -612,7 +612,7 @@ impl Printer<'_, '_, '_, '_> {
                 self.out.push_str(&text);
                 self.emitted_tokens = true;
             }
-            Marker::Module { .. } => {}
+            Marker::Module { .. } | Marker::UnitBegin { .. } | Marker::UnitEnd { .. } => {}
             Marker::Embed { span } => {
                 self.embed = self
                     .sm

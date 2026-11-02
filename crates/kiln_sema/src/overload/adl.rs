@@ -261,7 +261,11 @@ impl Sema<'_, '_> {
                 if !(k == DeclKind::Function || k == DeclKind::FunctionTemplate) {
                     continue;
                 }
-                if flags.contains(LookupFlags::ADL_ONLY) && !self.friend_of_any(d, &assoc.classes) {
+                if flags.contains(LookupFlags::ADL_ONLY) {
+                    if !self.friend_of_any(d, &assoc.classes) {
+                        continue;
+                    }
+                } else if !self.module_adl_visible(raw, &assoc.classes) {
                     continue;
                 }
                 let f = self.ast.first(d);

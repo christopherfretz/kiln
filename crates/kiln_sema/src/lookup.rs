@@ -164,7 +164,7 @@ impl Sema<'_, '_> {
     fn filter(&self, v: Vec<DeclId>, kind: LookupKind) -> Found {
         let mut out = Found::default();
         for raw in v {
-            if self.ast.decls.hidden_shadow(raw).is_some() {
+            if self.ast.decls.hidden_shadow(raw).is_some() || !self.module_visible(raw) {
                 continue;
             }
             let d = self.ast.strip_shadow(raw);
@@ -928,7 +928,9 @@ impl Sema<'_, '_> {
                 .ast
                 .lookup_local(e, dname)
                 .iter_with_inline()
-                .filter(|&(_, via_inline)| with_inline || !via_inline)
+                .filter(|&(d, via_inline)| {
+                    (with_inline || !via_inline) && self.module_redecl_candidate(d)
+                })
                 .map(|(d, _)| d)
                 .collect(),
             None => Vec::new(),

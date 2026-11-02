@@ -102,21 +102,22 @@ DRs already listed above: P2280, P2468, P2036, P2564, P2513, P2327.
 | P1949R7 | C++ identifier syntax using UAX 31 | — | done | `conformance/lex.name/p1949-probe.cpp` | |
 | P2316R2 | Consistent character literal encoding | — | done | `conformance/cpp.cond/p2316-probe.cpp` | |
 | P1854R4 | Making non-encodable string literals ill-formed | — | done | `conformance/lex.ccon/p1854-probe.cpp` | |
+| P2615R1 | Meaningful exports | — | done | `conformance/module.interface/export-errors.cpp` | `export` of static_assert, using-directives, empty declarations and explicit specializations is accepted, as clang 22 (spec/modules.md §4). |
+| P2788R0 | Linkage for modular constants | — | done | `mangle/modules.cpp` | A `const` variable attached to a named module has module linkage (`_ZW1M1c`), differential against clang. |
+| P3034R1 | Module declarations shouldn't be macros | — | done | `conformance/cpp.module/p3034-probe.cpp`<br>`conformance/cpp.module/p3034-function-like.cpp` | clang 19 and 22 expand object-like macros in module names (probe `xfail(clang)`); kiln diagnoses them per the paper. |
 
 Not tabulated:
 - Contracts (P2900): clang 22 does not ship them.
 - P2300-adjacent library hooks: the libc++ status table covers them.
-- Module DRs (P2615, P2788, P3034): belong with the M4 modules work.
 - Codegen-only DRs with no front-end observable (P2809 trivial infinite loops, P2752 static storage for braced initializers).
 
 ## Macro gaps
 
-kiln's `__cpp_*` set under `-std=c++26` is clang 19's, plus the P0847, P1061 and P2893 macros, `__cpp_constexpr` 202406L (P2747) and `__cpp_constexpr_exceptions` 202411L (P3068, which clang 22 does not define), so it differs from clang 22 as follows:
+kiln's `__cpp_*` set under `-std=c++26` is clang 19's, plus the P0847, P1061 and P2893 macros, `__cpp_constexpr` 202406L (P2747) and `__cpp_constexpr_exceptions` 202411L (P3068, which clang 22 does not define) and `__cpp_modules` 1 from C++20 (clang 22's value; clang 19 does not define it), so it differs from clang 22 as follows:
 
 | Macro | kiln (= clang 19) | clang 22 | Row | Action |
 |---|---|---|---|---|
 | `__cpp_trivial_relocatability` | — | 202502L | P2786 (todo) | Add with the feature. |
-| `__cpp_modules` | — | 1 | (modules, not tabulated) | Add with the M4 modules work. |
 
 kiln no longer advertises a macro without the feature: `__cpp_auto_cast` (P0849),
 `__cpp_placeholder_variables` (P2169) and `__cpp_static_assert` 202306L (P2741),
