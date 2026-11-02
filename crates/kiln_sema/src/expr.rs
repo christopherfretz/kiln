@@ -3285,8 +3285,71 @@ impl Sema<'_, '_> {
         self.diag_runtime_behavior_now(msg);
     }
 
+    /// clang `Expr::isSameComparisonOperand` (simplified): through
+    /// parentheses and implicit conversions, the same variable, `this`,
+    /// or the same member of the same such operand.
+    fn same_comparison_operand(&self, l: ExprId, r: ExprId) -> bool {
+        let (l, r) = (self.ignore_paren_imp_casts(l), self.ignore_paren_imp_casts(r));
+        let (ln, rn) = (self.ast.exprs.get(l), self.ast.exprs.get(r));
+        if ln.kind() != rn.kind() {
+            return false;
+        }
+        match ln.kind() {
+            ExprKind::CXXThisExpr => true,
+            ExprKind::DeclRefExpr => {
+                let d = self.ast.exprs.decl(l);
+                d == self.ast.exprs.decl(r) && matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar)
+            }
+            ExprKind::MemberExpr => {
+                self.ast.exprs.decl(l) == self.ast.exprs.decl(r)
+                    && ln.has(ExprFlags::ARROW) == rn.has(ExprFlags::ARROW)
+                    && self.kind_of(self.ast.exprs.decl(l)) == DeclKind::Field
+                    && self.same_comparison_operand(self.ast.exprs.operand(l), self.ast.exprs.operand(r))
+            }
+            _ => false,
+        }
+    }
+
+    /// clang `diagnoseTautologicalComparison`, self-comparison part:
+    /// `x == x` of a non-floating type always evaluates to `true`
+    /// (`==`, `<=`, `>=`), `false` (`!=`, `<`, `>`) or
+    /// `std::strong_ordering::equal` (`<=>`), where run-time behavior is
+    /// diagnosed. Not in a template instantiation nor from a macro; a
+    /// class operand only at clang 22, where an operator without a viable
+    /// candidate is checked as a built-in comparison (spec/sema.md §1.1).
+    /// Arrays are `diagnose_array_comparison`'s.
+    pub(crate) fn diagnose_self_comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) {
+        if self.inst.stack.depth() > 0 || !self.same_comparison_operand(l, r) {
+            return;
+        }
+        let t = self.ety(self.ignore_paren_imp_casts(l));
+        let ty = &self.ast.types;
+        if ty.is_array(t)
+            || ty.is_floating(t)
+            || ty.as_complex(t).is_some()
+            || self.vector_parts(t).is_some()
+            || (ty.as_record(t).is_some() && self.clang_compat < 22)
+            || self.is_dependent_type(t)
+        {
+            return;
+        }
+        let begin_macro = |s: &Self, e: ExprId| s.begin_loc(e).is_macro();
+        if loc.is_macro() || begin_macro(self, l) || begin_macro(self, r) {
+            return;
+        }
+        let result = match op {
+            BinaryOp::EQ | BinaryOp::LE | BinaryOp::GE => 1,
+            BinaryOp::NE | BinaryOp::LT | BinaryOp::GT => 2,
+            BinaryOp::Cmp => 3,
+            _ => return,
+        };
+        let msg = self.diag(DiagId::sema_comparison_always, loc).arg(0).arg(result);
+        self.diag_runtime_behavior_now(msg);
+    }
+
     fn comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         self.diagnose_array_comparison(op, l, r, loc);
+        self.diagnose_self_comparison(op, l, r, loc);
         let l2 = conv::decay(self, l);
         let r2 = conv::decay(self, r);
         let (lt, rt) = (self.ety(l2), self.ety(r2));

@@ -168,6 +168,11 @@ pub struct Sema<'a, 'sm> {
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
     pub clang_compat: u32,
+    /// The begin of the nested-name-specifier whose component the parser
+    /// is acting on (set around each `act_on_nested_name_*` call): clang
+    /// 22's point of instantiation for a class or enumeration completed
+    /// as a qualifier (`Sema::nns_poi`).
+    pub nns_start: Option<Loc>,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -670,6 +675,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 19,
+            nns_start: None,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,

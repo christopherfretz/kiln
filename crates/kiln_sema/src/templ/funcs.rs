@@ -7,7 +7,7 @@
 //! translation unit.
 
 use kiln_ast::QualType;
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ExcSpec, NoexceptValue, TypeView};
@@ -326,7 +326,12 @@ impl Sema<'_, '_> {
             // A mem-initializer that failed to instantiate does too (clang's
             // `InstantiateMemInitializers`): the constructor is never
             // constant-evaluated, so no evaluation note follows (WP-374).
-            if sub.stmt_failed || inits_failed {
+            // clang 22: a constexpr specialization whose body names a
+            // variable whose initializer failed is invalid too.
+            let named_failed = sub.failed_init_use
+                && sub.sema.clang_compat >= 22
+                && sub.sema.ast.decls.function(f).is_some_and(|x| x.spec.constexpr_kind() != ConstexprKind::None);
+            if sub.stmt_failed || inits_failed || named_failed {
                 s.ast.decls.set_flags(f, DeclFlags::INVALID);
             }
             s.act_on_finish_function_def(f, b, rbrace);
@@ -960,11 +965,11 @@ impl Sema<'_, '_> {
         }
         if ds.constexpr.is_some() {
             fspec = fspec
-                .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Constexpr)
+                .with_constexpr_kind(ConstexprKind::Constexpr)
                 .with_implicit_inline(true);
         } else if ds.consteval.is_some() {
             fspec = fspec
-                .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Consteval)
+                .with_constexpr_kind(ConstexprKind::Consteval)
                 .with_implicit_inline(true);
         }
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());

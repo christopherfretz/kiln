@@ -1699,6 +1699,19 @@ impl Compiler<'_> {
                     return;
                 }
                 let v = ast.stmts.return_value(s);
+                // clang 22 drops a `return` whose operand has an error
+                // (`containsErrors()`): evaluation goes on past it, to
+                // "control reached end of constexpr function" when nothing
+                // else returns (spec/oven.md "Erroneous expressions").
+                if self.o.clang_compat >= 22
+                    && v.is_some_and(|v| {
+                        let n = ast.exprs.get(v);
+                        n.kind() == ExprKind::RecoveryExpr
+                            || n.deps().contains(kiln_ast::expr::ExprDeps::ERROR)
+                    })
+                {
+                    return;
+                }
                 match (self.ret, v) {
                     (RetKind::Sret(ty), Some(v)) => {
                         self.init(v, 0, ty);

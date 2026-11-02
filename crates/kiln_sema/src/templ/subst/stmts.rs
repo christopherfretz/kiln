@@ -49,6 +49,15 @@ impl Substituter<'_, '_, '_> {
                 if reported && !decl_init && self.lambda_bodies == 0 {
                     self.stmt_failed = true;
                 }
+                // clang 22 drops a `return` whose operand is an error of
+                // the pattern: a constant evaluation goes on past it
+                // (spec/sema-templates.md §5.5).
+                if !reported
+                    && self.sema.clang_compat >= 22
+                    && self.sema.ast.stmts.get(s).kind() == StmtKind::ReturnStmt
+                {
+                    return self.sema.act_on_null_stmt(loc);
+                }
                 let e = self.sema.recover_err(&[], loc);
                 self.sema.builder().expr_stmt(e)
             }

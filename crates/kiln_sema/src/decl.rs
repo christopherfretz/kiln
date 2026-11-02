@@ -7822,7 +7822,8 @@ impl Sema<'_, '_> {
                 // a class template specialization named before `::` is
                 // instantiated (`O<int>::M::N`).
                 if self.ast.definition(d).is_none() && self.ast.instantiated_from(d).is_some() {
-                    let _ = self.instantiate_class(d, loc, true);
+                    let poi = self.nns_poi(loc);
+                    let _ = self.instantiate_class(d, poi, true);
                 }
                 Some(self.ast.definition(d).unwrap_or(d))
             }

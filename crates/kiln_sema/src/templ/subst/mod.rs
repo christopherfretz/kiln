@@ -95,6 +95,12 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// Variable initializers that failed to substitute (the variable is
     /// invalid, its declaration statement is not: clang keeps it).
     pub(crate) init_failures: u32,
+    /// The instantiated variables whose initializer failed to substitute
+    /// with an error of this instantiation.
+    pub(crate) failed_inits: Vec<DeclId>,
+    /// A statement outside a lambda body named one of `failed_inits`
+    /// (clang 22: a constexpr specialization doing so is invalid).
+    pub(crate) failed_init_use: bool,
     /// The pattern's value expression of the innermost statement
     /// expression being rebuilt: its expression statement ends the
     /// statement expression (`act_on_stmt_expr_result`).
@@ -160,6 +166,8 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             lambda_bodies: 0,
             stmt_failed: false,
             init_failures: 0,
+            failed_inits: Vec::new(),
+            failed_init_use: false,
             stmt_expr_result: None,
             failed_locals: Vec::new(),
             invalid_decl_stmt: false,
@@ -689,7 +697,12 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     pub fn find_instantiated_decl(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
         if let Some(&x) = self.locals.get(&d) {
             return match x {
-                DeclOrPack::Decl(x) => Ok(x),
+                DeclOrPack::Decl(x) => {
+                    if self.lambda_bodies == 0 && self.failed_inits.contains(&x) {
+                        self.failed_init_use = true;
+                    }
+                    Ok(x)
+                }
                 DeclOrPack::Pack(l) => {
                     let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
                     let i = self.pack_reached(
