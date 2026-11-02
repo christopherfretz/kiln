@@ -6,9 +6,9 @@ The small ones were fixed on `wp/276`. Every reproducer is a corpus test of at m
 passes under kiln and under `--compiler clang++-19`. A reproducer that is still failing carries
 `xfail(kiln): <cause>`.
 
-Rerun of the 42 tests on `wp/276` (`cargo xtask libcxx --no-fail -j 4 <tests>`): **31 pass, 11 fail**.
-The 11 failures are lazy_split 15–18, `<expected>` 25–30 and inout_ptr 36. All three groups are listed under
-"Belongs to other work packages" below.
+Rerun of the 42 tests on `wp/276` after merging main 04c330a0 (`cargo xtask libcxx --no-fail -j 4
+<tests>`): **35 pass, 7 fail**. The 7 failures are `<expected>` 25–30 and inout_ptr 36. lazy_split 15–18
+pass now: three of their causes were fixed here, and WP-278 (#46) fixed the last one.
 
 Cause classes:
 
@@ -42,10 +42,10 @@ Paths are relative to `tests/conformance/`. Test paths are relative to `libcxx/t
 | 12 | containers/…/unord.multimap.modifiers/insert_node_type_hint.pass.cpp | as #5 | sema | as #5 | fixed |
 | 13 | language.support/support.types/nullptr_t.pass.cpp | static assertion failed due to requirement '!has_less\<std::nullptr_t\>::value' | sema: relational operators accepted `std::nullptr_t` | expr.rel/nullptr-operand.cpp | fixed |
 | 14 | numerics/…/valarray.transcend/pow_valarray_valarray.pass.cpp | link: undefined `__cxa_allocate_exception.1` | codegen: a user `extern "C"` redeclaration of a runtime function got a renamed `.1` copy | dcl.link/extern-c-runtime-function-redeclaration.cpp | fixed |
-| 15 | ranges/…/range.lazy.split/constraints.compile.pass.cpp | static assertion failed due to requirement '!...' (types.h:114) | sema: a call returning `const X` was not a const prvalue; constrained member partial specializations; a member class of a member template specialization. Remaining: friend-template access | expr.call/const-class-prvalue-result.cpp, temp.spec.partial.member/constrained-member-partial-match.cpp, temp.mem.class/nested-class-of-member-template-names-sibling.cpp | partly fixed; remaining belongs to WP-278 |
-| 16 | ranges/…/range.lazy.split.inner/ctor.outer_iterator.pass.cpp | as #15 | sema | as #15 | as #15 |
-| 17 | ranges/…/range.lazy.split.outer.value/end.pass.cpp | as #15 | sema | as #15 | as #15 |
-| 18 | ranges/…/range.lazy.split/view_interface.pass.cpp | as #15 | sema | as #15 | as #15 |
+| 15 | ranges/…/range.lazy.split/constraints.compile.pass.cpp | static assertion failed due to requirement '!...' (types.h:114) | sema: a call returning `const X` was not a const prvalue; constrained member partial specializations; a member class of a member template specialization. Remaining: friend-template access | expr.call/const-class-prvalue-result.cpp, temp.spec.partial.member/constrained-member-partial-match.cpp, temp.mem.class/nested-class-of-member-template-names-sibling.cpp | fixed (three causes here, friend-template access by WP-278) |
+| 16 | ranges/…/range.lazy.split.inner/ctor.outer_iterator.pass.cpp | as #15 | sema | as #15 | fixed (as #15) |
+| 17 | ranges/…/range.lazy.split.outer.value/end.pass.cpp | as #15 | sema | as #15 | fixed (as #15) |
+| 18 | ranges/…/range.lazy.split/view_interface.pass.cpp | as #15 | sema | as #15 | fixed (as #15) |
 | 19 | re/re.submatch/re.submatch.op/compare.pass.cpp | aggregate expression CXXRewrittenBinaryOperator is not supported yet | codegen: aggregate `CXXRewrittenBinaryOperator`; sema: reversed `<=>` was not `0 <=> (y <=> x)` | over.match.oper/reversed-spaceship-run.cpp | fixed |
 | 20 | thread/futures/futures.shared_future/wait_for.pass.cpp | as #14 | codegen | as #14 | fixed |
 | 21 | thread/futures/…/futures.task.nonmembers/swap.pass.cpp | allocating an object of abstract class type '_FF' | sema: an operator function did not override a virtual base operator function | class.virtual/operator-function-override.cpp | fixed |
@@ -75,16 +75,17 @@ Paths are relative to `tests/conformance/`. Test paths are relative to `libcxx/t
 
 | class | tests | fixed | remaining |
 |-------|-------|-------|-----------|
-| sema | 3, 4, 5, 6, 9–13, 15–18, 21, 23, 25–30, 32, 33, 36, 38–42 | 21 | lazy_split 15–18 (WP-278), prospective destructors 25–30 (new WP), inout_ptr 36 (WP-282) |
+| sema | 3, 4, 5, 6, 9–13, 15–18, 21, 23, 25–30, 32, 33, 36, 38–42 | 25 (15–18 together with WP-278) | prospective destructors 25–30 (new WP), inout_ptr 36 (WP-282) |
 | oven | 1, 31, 35 | 3 | none |
 | codegen | 2, 14, 19, 20, 22, 24, 34, 37 (7, 8 fixed on main) | 8 | none |
 | parser | none (the requires-clause trait parse was found while reducing 25–30) | | |
 
 ## Belongs to other work packages
 
-**WP-278 (friend-template access).** For lazy_split 15–18 the remaining errors are at
-lazy_split_view.h:331, where a member template friend of a member class template is not
-honoured, and at :394, the hidden-friend `iter_swap`'s `noexcept`. Reduction:
+**WP-278 (friend-template access, merged in #46).** For lazy_split 15–18 the last errors were at
+lazy_split_view.h:331, where a member template friend of a member class template was not
+honoured, and at :394, the hidden-friend `iter_swap`'s `noexcept`. With WP-278 merged, all four
+tests pass. Reduction (now accepted):
 
 ```cpp
 template <class V> struct view {
