@@ -192,7 +192,10 @@ The `<built-in>` buffer is `kiln_pp::build_predefines(base, cfg, -D/-U)`.
   - freestanding;
   - `-pthread`;
   - thread-safe statics;
-  - sized deallocation.
+  - sized deallocation;
+  - `-stdlib=libc++`: no `__STDCPP_FLOAT16_T__` ... `__STDCPP_BFLOAT16_T__`
+    (`std_float_aliases`; libc++ has no `<stdfloat>`, spec/pp.md P1467
+    macros).
 - kiln adds `__KILN__ 1`, `__KILN_MAJOR__` and `__KILN_MINOR__`. kiln
   defines `__clang__` and the clang version macros exactly as clang 19 does,
   so headers take their clang paths.

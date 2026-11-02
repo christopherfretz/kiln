@@ -659,7 +659,11 @@ belong to WP-017, which builds them on `macro_defined` and
   from clang, which lacks P1467, so `apply_flags` adds GCC 14's set in
   C++ (not in C): `__STDCPP_FLOAT16_T__`, `__STDCPP_FLOAT32_T__`,
   `__STDCPP_FLOAT64_T__`, `__STDCPP_FLOAT128_T__` and
-  `__STDCPP_BFLOAT16_T__`, each `1`, when `__cplusplus >= 202302L`; and in
+  `__STDCPP_BFLOAT16_T__`, each `1`, when `__cplusplus >= 202302L` and the
+  library declares the `std::floatN_t` aliases (`PredefConfig::std_float_aliases`:
+  false under `-stdlib=libc++`, whose 19 and 22 releases have no
+  `<stdfloat>`; libc++'s `std` module exports the aliases when the macros
+  are defined, so `import std;` needs them off; WP-363); and in
   every C++ mode, as GCC does, the 64 limit macros `__FLT32_*__`,
   `__FLT64_*__`, `__FLT128_*__` and `__BFLT16_*__` (`DIG`, `MANT_DIG`,
   `MIN_EXP`, `MAX_EXP`, `MIN_10_EXP`, `MAX_10_EXP`, `DECIMAL_DIG`, `MAX`,
