@@ -2267,9 +2267,7 @@ impl Parser<'_, '_> {
             d.direct_init = direct_init;
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
-            if d.is_function_declarator() {
-                self.diagnose_virt_specifiers_outside_class();
-            }
+            self.diagnose_virt_specifiers_outside_class(&d);
             // The declspec's type is formed once the first declarator is
             // known: clang reports a missing type specifier at its name.
             // Constructors, destructors and conversion functions have
@@ -2354,12 +2352,12 @@ impl Parser<'_, '_> {
         decls
     }
 
-    /// A virt-specifier-seq after a function declarator outside a
+    /// A virt-specifier-seq after function declarator `d` outside a
     /// member-specification ([class.mem.general]/1 allows one only in a
     /// member-declarator): each `final`/`override` is diagnosed and
     /// skipped (clang's `err_virt_specifier_outside_class`).
-    fn diagnose_virt_specifiers_outside_class(&mut self) {
-        loop {
+    fn diagnose_virt_specifiers_outside_class(&mut self, d: &Declarator) {
+        while d.is_function_declarator() {
             let t = self.tok();
             let sp = if self.is_final_tok(t) {
                 "final"
