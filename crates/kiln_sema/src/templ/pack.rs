@@ -1013,7 +1013,7 @@ impl Sema<'_, '_> {
 
     /// The packs a nested-name-specifier names (`Ts::` in
     /// `typename Ts::type`), outermost prefix first.
-    fn nns_packs(&self, n: kiln_ast::NnsId, out: &mut Vec<String>, depth: u32) {
+    fn nns_packs(&self, n: kiln_ast::NnsId, out: &mut Vec<DeclId>, depth: u32) {
         use kiln_ast::types::{Nns, TypeFlags};
         let t = &self.ast.types;
         if depth > 256 || !t.nns_flags(n).contains(TypeFlags::UNEXPANDED_PACK) {
