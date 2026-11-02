@@ -711,7 +711,7 @@ impl<'a> Cg<'a> {
             }
             // An in-class definition attached to a named module is not
             // inline ([class.mfct]/1): an importer only declares it.
-            in_class && !(ast.modules.is_imported_named_unit_decl(r) && !self.fn_is_inline(r))
+            in_class && (self.fn_is_inline(r) || !ast.modules.is_imported_named_unit_decl(r))
         })
     }
 
