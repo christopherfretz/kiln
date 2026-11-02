@@ -4,8 +4,8 @@
 // WP-185 feature probe.
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(clang): neither clang 19 nor clang 22 implements P3068
-//@ xfail(kiln): throw-expressions are never constant expressions
+//@ skip(clang): neither clang 19 nor clang 22 implements P3068
+//@ std: c++26
 constexpr int f() {
   try {
     throw 1;

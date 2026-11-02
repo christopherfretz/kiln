@@ -3,8 +3,25 @@
 //!
 //! libc++'s lit configuration derives its features at startup by probing the
 //! compiler (`libcxx/utils/libcxx/test/{params,features}.py`). This driver
-//! does not run lit, so most of the set is fixed here (the `locale.*`
-//! features are detected, [`detect`]): what that configuration
+//! does not run lit. What lit reads from the toolchain and is cheap to read
+//! without a compiler is derived the same way here ([`detect`]):
+//!
+//! - the `__config_site` macros of the installed libc++ headers
+//!   (`features.py` `macros`; [`config_site_features`]): ABI version,
+//!   availability markup, hardening mode and the `no-*` carve-outs
+//!   (`no-tzdb`, `no-localization`, `no-threads`, ...), in both the
+//!   libc++ 19 spelling (`_LIBCPP_HAS_NO_X` defined) and the libc++ ≥ 20 one
+//!   (`_LIBCPP_HAS_X` defined to `0`);
+//! - `locale.<name>` for each locale `locale -a` lists ([`locale_features`]);
+//! - `has-no-zdump` when `zdump --version` fails (the tzdata validation
+//!   tests compare against `zdump`).
+//!
+//! The libc++ version (`_LIBCPP_VERSION` in `__config`, [`libcxx_version`])
+//! is not a lit feature; the harness uses it to gate environment
+//! exclusions that only a given release needs (`run.rs`
+//! `TZDATA_Z_UNSUPPORTED`).
+//!
+//! The rest of the set is fixed ([`FEATURES`]): what that configuration
 //! derives for libc++ 19.1.7 (Debian `libc++-19-dev`) on
 //! aarch64-unknown-linux-gnu with its default parameters, with three
 //! deliberate differences:
@@ -22,13 +39,14 @@
 //!   this machine, not as kiln does today, so the set does not move when
 //!   kiln changes. Probes of compiler *flags* (`has-fconstexpr-steps`,
 //!   `-fsized-deallocation`, `verify-support`) are kiln's answers;
-//! - `libcpp-hardening-mode=none` is present although lit adds it only when
-//!   the `hardening_mode` parameter is set: it is what the installed
-//!   `__config_site` builds (`_LIBCPP_HARDENING_MODE_DEFAULT` is
-//!   `_LIBCPP_HARDENING_MODE_NONE`), so `.assert.pass.cpp` death tests that
-//!   lit gates with `UNSUPPORTED: libcpp-hardening-mode=none` are skipped
-//!   instead of failing with "child did not die" (clang++-19 fails them the
-//!   same way).
+//! - `libcpp-hardening-mode=<mode>` is present although lit adds it only
+//!   when the `hardening_mode` parameter is set: it is what the installed
+//!   `__config_site` builds (`_LIBCPP_HARDENING_MODE_DEFAULT`; Debian:
+//!   none), so `.assert.pass.cpp` death tests that lit gates with
+//!   `UNSUPPORTED: libcpp-hardening-mode=none` are skipped instead of
+//!   failing with "child did not die" (clang++-19 fails them the same way).
+
+use std::path::Path;
 
 /// The C++ standard the suite is run in, as a lit feature and a flag.
 pub const STD: &str = "c++26";
@@ -36,7 +54,7 @@ pub const STD: &str = "c++26";
 /// The target triple (`target=<triple>` feature).
 pub const TARGET: &str = "aarch64-unknown-linux-gnu";
 
-/// Every feature, sorted, without the `target=` one (see [`all`]).
+/// Every static feature, sorted, without the `target=` one (see [`all`]).
 const FEATURES: &[&str] = &[
     // Parameters (params.py defaults): std, stdlib, optimization,
     // enable_experimental, long_tests, large_tests.
@@ -56,13 +74,10 @@ const FEATURES: &[&str] = &[
     // `hasCompileFlag("-Xclang -verify-ignore-unexpected")` (spec/libcxx.md
     // ".verify.cpp").
     "verify-support",
-    // __config / __config_site macros (features.py `macros`).
-    "libcpp-abi-version=1",
-    "libcpp-has-no-availability-markup",
+    // A `__config` macro (features.py `macros`) that `__config` computes
+    // from the target rather than `__config_site` setting it: every Linux
+    // build of libc++ with threads.
     "libcpp-has-thread-api-pthread",
-    // `_LIBCPP_HARDENING_MODE_DEFAULT` in the installed `__config_site`
-    // (Debian: none); see the module doc.
-    "libcpp-hardening-mode=none",
     // Target and host.
     "buildhost=linux",
     "can-create-symlinks",
@@ -74,7 +89,7 @@ const FEATURES: &[&str] = &[
 ];
 
 /// The static feature set, including `target=<triple>` and without the
-/// detected `locale.*` features (see [`detect`]).
+/// derived ones (see [`detect`]).
 pub fn all() -> Vec<String> {
     let mut v: Vec<String> = FEATURES.iter().map(|&f| f.to_owned()).collect();
     v.push(format!("target={TARGET}"));
@@ -95,9 +110,11 @@ pub const LOCALES: &[&str] = &[
     "zh_CN.UTF-8",
 ];
 
-/// The feature set of this machine: [`all`] plus `locale.<name>` for each
-/// of [`LOCALES`] that `locale -a` lists.
-pub fn detect() -> Vec<String> {
+/// The feature set of this machine and of the libc++ headers in `include`:
+/// [`all`], the [`config_site_features`] of `include/__config_site`,
+/// `has-no-zdump` when `zdump --version` fails, and `locale.<name>` for
+/// each of [`LOCALES`] that `locale -a` lists.
+pub fn detect(include: &Path) -> Vec<String> {
     let listed = std::process::Command::new("locale")
         .arg("-a")
         .output()
@@ -105,7 +122,103 @@ pub fn detect() -> Vec<String> {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
-    with_locales(all(), &listed)
+    let mut set = all();
+    let site = std::fs::read_to_string(include.join("__config_site")).unwrap_or_default();
+    set.extend(config_site_features(&site));
+    let zdump = std::process::Command::new("zdump")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !zdump {
+        set.push("has-no-zdump".to_owned());
+    }
+    with_locales(set, &listed)
+}
+
+/// `_LIBCPP_VERSION` of the libc++ headers in `include` (`190107` for
+/// 19.1.7), from `include/__config`.
+pub fn libcxx_version(include: &Path) -> Option<u32> {
+    parse_libcxx_version(&std::fs::read_to_string(include.join("__config")).ok()?)
+}
+
+/// The `_LIBCPP_VERSION` a `__config` text defines.
+pub fn parse_libcxx_version(config: &str) -> Option<u32> {
+    defines(config).find(|(m, _)| *m == "_LIBCPP_VERSION").and_then(|(_, v)| v.parse().ok())
+}
+
+/// The libc++ major release of a `_LIBCPP_VERSION` (`190107` is 19).
+pub fn libcxx_major(version: u32) -> u32 {
+    version / 10000
+}
+
+/// The `#define NAME [VALUE]` lines of a header (any indentation after `#`).
+fn defines(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.lines().filter_map(|l| {
+        let rest = l.trim_start().strip_prefix('#')?.trim_start().strip_prefix("define")?;
+        if !rest.starts_with([' ', '\t']) {
+            return None;
+        }
+        let rest = rest.trim();
+        let (name, value) = rest.split_once([' ', '\t']).unwrap_or((rest, ""));
+        Some((name, value.split("//").next().unwrap_or("").trim()))
+    })
+}
+
+/// `__config_site` macros whose presence is a lit feature: libc++ 19
+/// defines `_LIBCPP_HAS_NO_<X>` (`features.py` `macros`); libc++ ≥ 20
+/// defines `_LIBCPP_HAS_<X>` to `0` or `1` and lit adds the feature for
+/// `0` (`inverted_macros`).
+const CARVE_OUTS: &[(&str, &str, &str)] = &[
+    ("_LIBCPP_HAS_NO_FILESYSTEM", "_LIBCPP_HAS_FILESYSTEM", "no-filesystem"),
+    ("_LIBCPP_HAS_NO_LOCALIZATION", "_LIBCPP_HAS_LOCALIZATION", "no-localization"),
+    ("_LIBCPP_HAS_NO_MONOTONIC_CLOCK", "_LIBCPP_HAS_MONOTONIC_CLOCK", "no-monotonic-clock"),
+    ("_LIBCPP_HAS_NO_RANDOM_DEVICE", "_LIBCPP_HAS_RANDOM_DEVICE", "no-random-device"),
+    ("_LIBCPP_HAS_NO_THREADS", "_LIBCPP_HAS_THREADS", "no-threads"),
+    ("_LIBCPP_HAS_NO_TIME_ZONE_DATABASE", "_LIBCPP_HAS_TIME_ZONE_DATABASE", "no-tzdb"),
+    ("_LIBCPP_HAS_NO_UNICODE", "_LIBCPP_HAS_UNICODE", "libcpp-has-no-unicode"),
+    (
+        "_LIBCPP_HAS_NO_VENDOR_AVAILABILITY_ANNOTATIONS",
+        "_LIBCPP_HAS_VENDOR_AVAILABILITY_ANNOTATIONS",
+        "libcpp-has-no-availability-markup",
+    ),
+    ("_LIBCPP_HAS_NO_WIDE_CHARACTERS", "_LIBCPP_HAS_WIDE_CHARACTERS", "no-wide-characters"),
+];
+
+/// The lit features a `__config_site` text implies: [`CARVE_OUTS`],
+/// `libcpp-abi-version=<n>` (`_LIBCPP_ABI_VERSION`) and
+/// `libcpp-hardening-mode=<mode>` (`_LIBCPP_HARDENING_MODE_DEFAULT`, the
+/// `__config` values `1 << 1` none, `1 << 2` fast, `1 << 4` extensive,
+/// `1 << 3` debug, as numbers or by name).
+pub fn config_site_features(site: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (name, value) in defines(site) {
+        if let Some((.., f)) =
+            CARVE_OUTS.iter().find(|(old, new, _)| name == *old || (name == *new && value == "0"))
+        {
+            out.push((*f).to_owned());
+        }
+        match name {
+            "_LIBCPP_ABI_VERSION" if !value.is_empty() => {
+                out.push(format!("libcpp-abi-version={value}"));
+            }
+            "_LIBCPP_HARDENING_MODE_DEFAULT" => {
+                let mode = match value {
+                    "2" | "(1 << 1)" | "_LIBCPP_HARDENING_MODE_NONE" => "none",
+                    "4" | "(1 << 2)" | "_LIBCPP_HARDENING_MODE_FAST" => "fast",
+                    "16" | "(1 << 4)" | "_LIBCPP_HARDENING_MODE_EXTENSIVE" => "extensive",
+                    "8" | "(1 << 3)" | "_LIBCPP_HARDENING_MODE_DEBUG" => "debug",
+                    _ => continue,
+                };
+                out.push(format!("libcpp-hardening-mode={mode}"));
+            }
+            _ => {}
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// `features` plus the `locale.*` features of `locale_a` (`locale -a`
@@ -167,7 +280,6 @@ mod tests {
         assert!(all.iter().any(|f| f == STD));
         assert!(all.iter().any(|f| f == "kiln"));
         assert!(all.iter().any(|f| f == "verify-support"));
-        assert!(all.iter().any(|f| f == "libcpp-hardening-mode=none"));
         for f in &all {
             for bad in ["clang", "gcc", "msvc", "apple-clang"] {
                 assert!(
@@ -177,6 +289,57 @@ mod tests {
             }
         }
         assert!(!all.iter().any(|f| f.starts_with("locale.")), "locales are detected");
+        for derived in ["libcpp-abi-version", "libcpp-hardening-mode", "no-", "has-no-zdump"] {
+            assert!(!all.iter().any(|f| f.starts_with(derived)), "{derived} is derived");
+        }
+    }
+
+    /// libc++ 19.1.7's Debian `__config_site` (abridged) gives exactly what
+    /// the static set held before the derivation.
+    #[test]
+    fn config_site_19() {
+        let site = "#ifndef _LIBCPP___CONFIG_SITE\n#define _LIBCPP___CONFIG_SITE\n\n\
+                    #define _LIBCPP_ABI_VERSION 1\n#define _LIBCPP_ABI_NAMESPACE __1\n\
+                    /* #undef _LIBCPP_HAS_NO_THREADS */\n\
+                    #define _LIBCPP_HAS_NO_VENDOR_AVAILABILITY_ANNOTATIONS\n\
+                    /* #undef _LIBCPP_HAS_NO_TIME_ZONE_DATABASE */\n\
+                    #define _LIBCPP_PSTL_BACKEND_STD_THREAD\n\
+                    #define _LIBCPP_HARDENING_MODE_DEFAULT 2\n#endif\n";
+        assert_eq!(
+            config_site_features(site),
+            [
+                "libcpp-abi-version=1",
+                "libcpp-hardening-mode=none",
+                "libcpp-has-no-availability-markup"
+            ]
+        );
+        let config = "#ifndef _LIBCPP___CONFIG\n#  define _LIBCPP_VERSION 190107\n";
+        assert_eq!(parse_libcxx_version(config), Some(190_107));
+        assert_eq!(libcxx_major(190_107), 19);
+        assert_eq!(parse_libcxx_version("#define _LIBCPP_VERSIONX 1\n"), None);
+    }
+
+    /// libc++ ≥ 20 spells the carve-outs as `_LIBCPP_HAS_<X> 0|1`.
+    #[test]
+    fn config_site_20_spelling() {
+        let site = "#define _LIBCPP_ABI_VERSION 2\n#define _LIBCPP_HAS_THREADS 1\n\
+                    #define _LIBCPP_HAS_TIME_ZONE_DATABASE 0\n\
+                    #define _LIBCPP_HAS_VENDOR_AVAILABILITY_ANNOTATIONS 0\n\
+                    #define _LIBCPP_HAS_LOCALIZATION 1\n\
+                    #define _LIBCPP_HARDENING_MODE_DEFAULT _LIBCPP_HARDENING_MODE_NONE\n";
+        assert_eq!(
+            config_site_features(site),
+            [
+                "libcpp-abi-version=2",
+                "libcpp-hardening-mode=none",
+                "libcpp-has-no-availability-markup",
+                "no-tzdb"
+            ]
+        );
+        assert_eq!(
+            config_site_features("#define _LIBCPP_HAS_NO_LOCALIZATION\n"),
+            ["no-localization"]
+        );
     }
 
     #[test]

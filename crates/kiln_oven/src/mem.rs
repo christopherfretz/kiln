@@ -156,6 +156,11 @@ pub(crate) enum Origin {
     /// A variable not usable in constant expressions (reads and writes
     /// are diagnosed; its address is a constant).
     External(DeclId),
+    /// The object of unknown value a reference variable not usable in
+    /// constant expressions binds to (P2280, C++23 [expr.const]/10): its
+    /// address is usable, accesses are diagnosed (clang's
+    /// constexpr-unknown lvalue).
+    Unknown(DeclId),
     /// A string literal (and the expr that created it, if evaluated).
     Str(StringLitId, Option<ExprId>),
     /// An anonymous constant thawed from the store.
@@ -382,6 +387,9 @@ pub(crate) enum MemFault {
     ModifyGlobal,
     /// Read (`false`) or write (`true`) of an external variable.
     External(DeclId, bool),
+    /// An access of the object of unknown value of a reference variable
+    /// ([`Origin::Unknown`]).
+    Unknown(DeclId),
     /// Access of a static temporary not usable in constant expressions
     /// outside the evaluation that created it (its
     /// `LifetimeExtendedTemporary`).
@@ -879,6 +887,7 @@ impl Memory {
         if a.flags & flags::EXTERNAL != 0 {
             match a.origin {
                 Origin::External(d) => return Err(MemFault::External(d, write)),
+                Origin::Unknown(d) => return Err(MemFault::Unknown(d)),
                 Origin::Let(t) => return Err(MemFault::Temporary(t)),
                 _ => {}
             }

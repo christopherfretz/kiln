@@ -16,8 +16,9 @@ Checks docs/status/cxx-features.md (spec/harness.md \"Feature table\"):
   (a) every `done` row names at least one test, and every named test exists;
   (b) the tests of `done` rows pass under kiln (the `cargo xtask test` runner);
   (c) for `done` rows with a macro, `kiln++ -std=c++26 -dM -E` defines it with
-      the table's clang 22 value; and on every row the table's kiln value is
-      the one kiln defines today.
+      the table's clang 22 value (unless clang 22 does not define it: a
+      feature kiln ships ahead of clang 22); and on every row the table's
+      kiln value is the one kiln defines today.
 
 options:
   --compiler <path>   kiln++ binary (default: cargo build -p kiln_driver)
@@ -255,7 +256,12 @@ pub fn check_static(
         }
         if let Some(m) = &row.macro_cell {
             let actual = predefs.get(&m.name);
-            if row.status == FeatureStatus::Done && actual != m.clang22.as_ref() {
+            // A macro clang 22 does not define is a feature kiln ships
+            // ahead of it (its row carries the written reason).
+            if row.status == FeatureStatus::Done
+                && m.clang22.is_some()
+                && actual != m.clang22.as_ref()
+            {
                 p.push(format!(
                     "(c) kiln defines `{}` as {}, clang 22 as {}",
                     m.name,
@@ -531,6 +537,20 @@ mod tests {
         assert_eq!(p.len(), 2, "{p:?}");
         assert!(p[0].1.iter().any(|m| m.contains("clang 22 as 202403L")), "{p:?}");
         assert_eq!(p[1].1, ["(a) `done` but names no test"]);
+
+        // A done row kiln ships ahead of clang 22: only the kiln column counts.
+        let mut ahead = rows[2].clone();
+        ahead.status = FeatureStatus::Done;
+        let cell = ahead.macro_cell.as_mut().expect("macro");
+        cell.clang22 = None;
+        cell.kiln = Some("202411L".into());
+        let name = cell.name.clone();
+        let defs = parse_predefs(&format!("#define {name} 202411L\n"));
+        let none: Vec<_> = Vec::new();
+        assert_eq!(check_static(std::slice::from_ref(&ahead), |_| true, &defs), none);
+        let stale = parse_predefs(&format!("#define {name} 202403L\n"));
+        let p = check_static(&[ahead], |_| true, &stale);
+        assert!(p[0].1.iter().any(|m| m.contains("stale kiln column")), "{p:?}");
     }
 
     #[test]

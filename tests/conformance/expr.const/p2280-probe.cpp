@@ -5,7 +5,6 @@
 //@ expect: compile-ok
 //@ std: c++23
 //@ strict-diags
-//@ xfail(kiln): unknown references rejected ("function parameter 'a' with unknown value")
-//@ xfail(clang): clang 19 lacks P2280 (implemented in clang 20; clang 22 accepts)
+//@ requires: clang>=22
 template <class T, unsigned long N> constexpr unsigned long size(T (&)[N]) { return N; }
 void f(int (&a)[4]) { static_assert(size(a) == 4); }

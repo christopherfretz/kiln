@@ -384,7 +384,17 @@ impl Sema<'_, '_> {
         if instance {
             // A non-static member without an object: `&C::f`, or "call to
             // non-static member function without an object argument".
-            return self.implicit_member_ref(d, loc, shadow, nns);
+            let e = self.implicit_member_ref(d, loc, shadow, nns);
+            // The explicit template arguments written on the name
+            // (`pick<X>()` through an implicit `this`) stay on the access,
+            // so an instantiation names the specialization again with
+            // them ([temp.arg.explicit]/1).
+            if let Some(targs) = self.ast.templates.expr_targs.get(ule).copied()
+                && self.ast.exprs.get(e).kind() == ExprKind::MemberExpr
+            {
+                let _ = self.ast.exprs.set_member_template_args(e, targs);
+            }
+            return e;
         }
         // The only candidate's constraints first ([expr.prim.id.general]/4,
         // clang `DiagnoseUseOfDecl` before `BuildDeclRefExpr`): a function

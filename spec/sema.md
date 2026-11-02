@@ -3769,6 +3769,19 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `parse_qualified_type_rest`). At block scope the statement is
   parsed as an expression, as clang does. Test:
   `tests/conformance/temp.names/no-template-named-qualified.cpp`.
+  An unqualified decl-specifier `X<...>` whose `X` is undeclared is a
+  template-name by [temp.names]/3.3 (P0846: an unqualified-id followed by
+  `<` whose lookup finds nothing), so it gets clang's "no template named
+  'X'" (`sema_no_template_named`; clang `ParseImplicitInt`) instead of
+  "expected unqualified-id": at namespace or class scope always, at block
+  scope when a declarator follows the argument list
+  (`undeclared<int> x;`; the tentative parse takes `X<...> ident` as a
+  declaration). The argument list is parsed and dropped, the type is
+  `int` with the specifier marked invalid, and the declarators are not
+  diagnosed again (`kiln_parse` `undeclared_template_type`,
+  `undeclared_template_id_before_ident`; libc++
+  `locale.stdcvt/remove.verify.cpp`, WP-358). Test:
+  `tests/conformance/temp.names/undeclared-template-id-type.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.
@@ -4951,6 +4964,23 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     (`is_constant_initialized`).
 
   A reference is usable when it binds to a static lvalue.
+
+  From C++23 on (P2280, a DR; WP-357) a reference that is not usable
+  (a parameter named outside its call, an `extern` reference, one with a
+  non-constant initializer) may still be *named* in a constant
+  expression: the Oven binds it to an object of unknown value and
+  diagnoses only accesses of that object, its dynamic type, address
+  comparisons and a constant result referring to it (spec/oven.md
+  "Unknown references"). Sema passes the language mode through
+  `SemaBridge::cxx_year`.
+- **Exceptions** (C++26, P3068; WP-357): a throw-expression and
+  try-blocks are evaluated by the Oven (spec/oven.md "Exceptions"). An
+  exception leaving a non-throwing function ends the evaluation; the
+  Oven asks `SemaBridge::is_nothrow(f)`, which answers from the resolved
+  exception specification (`Sema::known_nothrow`) and otherwise resolves
+  a deferred or uninstantiated one first (`Sema::resolve_nothrow`, at the
+  evaluation's location, lending the Oven for nested evaluation of a
+  `noexcept(expr)`).
 - **Failures:**
   - The primary diagnostic is sema's, at the site, as clang reports it
     (for example `static assertion expression is not an integral
