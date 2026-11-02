@@ -1106,6 +1106,15 @@ vector, so `struct Q { _Float128 x; }` is `fp128` and `struct V { v4 v; }`
 `tests/conformance/basic.extended.fp/p1467-run.cpp` (calls on both CI
 targets).
 
+**Known backend defect (x86-64, LLVM 19):** `llc-19` (kiln's backend, and
+clang 19's) widens `bfloat` to `float` and, at `-O0`, takes a `bfloat`
+call result passed straight on as another call's argument (`g(f())`) as
+already widened: it runs `__truncsfbf2` on the raw bf16 bits, so the
+callee receives garbage. The IR is clang 19's and correct; LLVM 22
+compiles it correctly (the clang 22 switch, WP-355, removes it). kiln
+does not work around it; `nextafterf16-run.cpp` stores each `__bf16`
+call result to a local before passing it.
+
 ### 8.19 Landed (WP-363): module names
 
 `mangle.rs`, clang 22's `mangleModuleName`; the contract is

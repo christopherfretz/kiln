@@ -47,7 +47,14 @@ template <class T, class F> int sweep(F next, unsigned short inf) {
     for (unsigned short d : dirs) {
       unsigned short dy = d;
       if (inf == 0x7f80 && (d == 0xbc00 || d == 0x3c00)) dy = d == 0xbc00 ? 0xbf80 : 0x3f80;
-      unsigned short r = bits(next(of<T>(x), of<T>(dy)));
+      // Every 16-bit value is stored to a local before it is passed:
+      // LLVM 19's x86-64 backend (kiln's llc-19, and clang 19 alike)
+      // miscompiles a `__bf16` call result passed straight on as an
+      // argument (it takes the raw bits for the widened `float`); fixed
+      // in LLVM 22.
+      T a = of<T>(x), b = of<T>(dy);
+      T n = next(a, b);
+      unsigned short r = bits(n);
       unsigned short w = ref<T>(x, dy, inf);
       if (w == 0x7fff ? !isnan16<T>(r, inf) : r != w) ++bad;
     }
