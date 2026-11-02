@@ -104,8 +104,18 @@ fn local_tag_key(ast: &Ast, d: DeclId) -> Option<(DeclId, kiln_source::symbol::S
 
 /// The semantic context of `d` as the mangler sees it (clang
 /// `getEffectiveDeclContext`): a closure type created in a default
-/// argument belongs to the parameter's function.
+/// argument belongs to the parameter's function, and a namespace
+/// definition that extends a namespace of the enclosing namespace's
+/// inline namespace set ([namespace.def.general]/3) mangles under the
+/// namespace it is written in, its lexical context, as clang does
+/// (`namespace A { inline namespace I { namespace R {} } namespace R {
+/// int y; } }` gives `_ZN1A1R1yE`; spec/sema.md §4.6).
 fn effective_ctx(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    if ast.decls.get(d).kind() == DeclKind::Namespace
+        && let Some(lex) = ast.decls.lexical_ctx(d)
+    {
+        return Some(lex);
+    }
     if let Some(p) = closure_param_ctx(ast, d) {
         return ast.decls.get(p).ctx();
     }

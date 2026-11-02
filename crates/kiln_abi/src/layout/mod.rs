@@ -372,6 +372,67 @@ pub fn decl_max_align(ast: &Ast, d: DeclId, target: &Target) -> u64 {
     max_align_attr(ast, d, target, &mut |q| lay.type_info(q).align)
 }
 
+/// The alignment in bytes of the object declared by `d` (clang
+/// `ASTContext::getDeclAlign(d, for_alignof)`; spec/abi.md §3.2):
+///
+/// - a variable with an `alignas` / `aligned` attribute: the attribute's
+///   alignment alone ([dcl.align]/5; `aligned` may lower it);
+/// - otherwise its type's (a reference's referee for `alignof`, a pointer
+///   for storage), and for storage (`!for_alignof`) an x86-64 array of at
+///   least 16 bytes is raised to 16 (`LargeArrayMinWidth`);
+/// - a data member: the strictest of its attribute and type, capped by
+///   what its offset guarantees inside the class (the class's alignment
+///   or the low bit of the offset, whichever is smaller); a packed member
+///   or a member of a packed class has its attribute's alignment only.
+///
+/// At least 1. No minimum global alignment applies on the M2 targets.
+pub fn decl_align(ast: &Ast, d: DeclId, target: &Target, for_alignof: bool) -> u64 {
+    use kiln_ast::attr::AttrKind;
+    use kiln_ast::decl::DeclKind;
+    let mut lay = Layouter::new(ast, target);
+    let attr = max_align_attr(ast, d, target, &mut |q| lay.type_info(q).align);
+    let node = ast.decls.get(d);
+    let parent = (node.kind() == DeclKind::Field)
+        .then(|| node.ctx().and_then(|p| ast.definition(p)))
+        .flatten();
+    let attr_only = match parent {
+        Some(def) => {
+            props::has_attr(ast, def, AttrKind::PACKED)
+                || props::attrs(ast, d).any(|a| a.kind == AttrKind::PACKED)
+        }
+        None => attr != 0,
+    };
+    let mut align = if attr != 0 { attr } else { 8 };
+    if !attr_only && let Some(ty) = node.ty() {
+        let (t, info) = match ast.types.canonical_view(ty) {
+            TypeView::LValueRef(r) | TypeView::RValueRef(r) if for_alignof => (r, lay.type_info(r)),
+            TypeView::LValueRef(_) | TypeView::RValueRef(_) => {
+                let p = target.pointer_size * 8;
+                (ty, Info { width: p, align: p })
+            }
+            _ => (ty, lay.type_info(ty)),
+        };
+        align = align.max(info.align);
+        let x86 = target.triple.arch == crate::target::Arch::X86_64;
+        if x86 && !for_alignof && ast.types.is_array(t) && info.width >= 128 {
+            align = align.max(128);
+        }
+        if let Some(def) = parent {
+            let first = ast.first(def);
+            let index = props::fields(ast, def).iter().position(|f| f.decl == d);
+            let rl = lay.record(first);
+            let mut field_align = u64::from(rl.align) * 8;
+            if let Some(&offset) = index.and_then(|i| rl.fields.get(i))
+                && offset > 0
+            {
+                field_align = field_align.min(offset.isolate_lowest_one());
+            }
+            align = align.min(field_align);
+        }
+    }
+    (align / 8).max(1)
+}
+
 /// The layout of `count` elements of `elem` ([dcl.array]/1: contiguous,
 /// with the element's size as stride).
 pub fn array_layout(ast: &Ast, elem: QualType, count: u64, target: &Target) -> TypeLayout {
