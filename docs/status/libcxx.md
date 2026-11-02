@@ -10,6 +10,7 @@ passes when run as the compiler under `cargo xtask libcxx` (contract:
 
 | Date | kiln main | Scope | pass | fail | xfail | unsupported | pass rate | wall |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-02 | 4d071f81 | stratum B: same disjoint 10% sample (790 tests) after WP-297, 300, 301, 304, 306 (#61–#65) | 739 | 13 | 3 | 34 (4 driver) | **97.8%** | 26 min, -j 3, debug kiln, 20 s timeout, 1 timeout counted as fail (simd_copy, WP-313), box loaded (7 implementers). All 14 non-passes are covered: 6 by WP-310 (landed in 7a8b29bf, after this sha), 3 by WP-309 (PR #69), 1 each by WP-307, WP-303, WP-313, and 2 coroutine tests (M4) |
 | 2026-11-02 | 94249795 | stratum A: same 10% sample (790 tests) after WP-297, 300, 301, 304 (#61–#63, #65) | 760 | 1 | 3 | 25 (3 driver) | **99.3%** | 29 min, -j 3, debug kiln, 20 s timeout, box loaded (6 implementers); the 1 fail is coroutines (`co_await`, M4), the 1 timeout is `charconv.msvc/test.pass.cpp` (run) |
 | 2026-11-02 | a812270a | stratum B: disjoint 10% sample (790 tests, offset 5 in sorted order) | 730 | 25 | 3 | 31 (4 driver) | **96.2%** | 28 min, -j 3, debug kiln, 20 s timeout, 1 timeout counted as fail, box loaded (6 implementers) |
 | 2026-11-02 | 68822097 | same 10% sample (790 tests) after WP-268…276, 279, 280, 282, 287 | 724 | 41 | 3 | 22 (3 driver) | **94.3%** | 24 min, -j 3, debug kiln, 20 s timeout |
