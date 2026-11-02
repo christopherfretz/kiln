@@ -1917,6 +1917,17 @@ impl Sema<'_, '_> {
             } else {
                 self.ast.decls.get(fields[cur - nb]).ty().unwrap_or(QualType::ERROR)
             };
+            // §5.8: a flexible array member's initializer (clang
+            // `CheckFlexibleArrayInit`).
+            if cur >= nb && self.is_flexible_array_type(ety) {
+                if !self.check_flexible_array_init(fields[cur - nb], item) {
+                    *pos = items.len();
+                    return self.recover(ty, &[], lbrace);
+                }
+                *pos += 1;
+                cur += 1;
+                continue;
+            }
             let dtor_at = self.item_begin(item);
             let top_designated = dtors && k.is_some();
             designated |= top_designated;
@@ -2496,7 +2507,7 @@ impl Sema<'_, '_> {
 
     /// clang `QualType::isDestructedType` for a class: a class, or an
     /// array of them, with a non-trivial destructor.
-    fn is_destructed_type(&self, ty: QualType) -> bool {
+    pub(crate) fn is_destructed_type(&self, ty: QualType) -> bool {
         let mut t = ty;
         while let Some(e) = self.ast.types.element(t) {
             t = e;

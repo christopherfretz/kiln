@@ -4,7 +4,6 @@
 // <codecvt>, <streambuf> and every iostream header (docs/status/libstdcxx.md,
 // WP-188). Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): '__typeof' is not supported yet
 extern "C" int f(int);
 extern "C" __typeof(f) g;
 int x;

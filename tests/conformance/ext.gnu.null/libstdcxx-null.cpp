@@ -5,7 +5,6 @@
 // headers that include <bits/gthr.h> (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): use of undeclared identifier '__null'
 int *p = __null;
 void (*fp)() = __null;
 static_assert(sizeof(__null) == sizeof(void *));
