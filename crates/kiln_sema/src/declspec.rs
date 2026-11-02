@@ -197,7 +197,7 @@ pub struct DeclSpec {
     /// extension in C++) written at.
     pub atomic_qual: Option<Loc>,
     /// The clang nullability qualifiers (`_Nonnull`, ...) written among
-    /// the decl-specifiers, in order (spec/sema.md §3.6).
+    /// the decl-specifiers, in order (spec/sema.md §4.1.1).
     pub nullability: Vec<NullSpec>,
     /// The GNU `_Complex` specifier written at.
     pub complex: Option<Loc>,
@@ -536,7 +536,7 @@ pub enum DefaultArg {
 }
 
 /// A clang nullability qualifier as written (`_Nonnull`, `_Nullable`,
-/// `_Null_unspecified`, `_Nullable_result`; spec/sema.md §3.6).
+/// `_Null_unspecified`, `_Nullable_result`; spec/sema.md §4.1.1).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct NullSpec {
     /// Which one (a nullability [`TypeAttrKind`]).
@@ -686,7 +686,7 @@ pub struct Declarator {
     pub fn_qual_locs: [Option<Loc>; 3],
     /// The nullability qualifiers after a ptr-operator, with the index
     /// in `chunks` of the pointer, member-pointer or reference chunk
-    /// they follow, in order (spec/sema.md §3.6).
+    /// they follow, in order (spec/sema.md §4.1.1).
     pub nullability: Vec<(usize, NullSpec)>,
     /// The declarator-id is an operator-function-id (`operator new`):
     /// `name` then holds the `operator` keyword and its location.

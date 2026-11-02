@@ -1,6 +1,6 @@
 //! The clang nullability qualifiers `_Nonnull`, `_Nullable`,
 //! `_Null_unspecified` and `_Nullable_result` (a clang extension;
-//! spec/sema.md §3.6). They are recorded as `Attributed` type sugar over
+//! spec/sema.md §4.1.1). They are recorded as `Attributed` type sugar over
 //! the pointer they qualify, as clang's `AttributedType`, and checked as
 //! clang's `CheckNullabilityTypeSpecifier` and
 //! `distributeNullabilityTypeAttr` do (SemaType.cpp).
@@ -176,7 +176,7 @@ impl Sema<'_, '_> {
     /// declarator's pointer (clang's `distributeNullabilityTypeAttr`):
     /// it is kept as an unchecked marker layer for
     /// [`Sema::declarator_nullability`], which knows the declarator.
-    /// One on an undeduced `auto` is dropped (spec/sema.md §3.6).
+    /// One on an undeduced `auto` is dropped (spec/sema.md §4.1.1).
     pub(crate) fn declspec_nullability(&mut self, ds: &DeclSpec, mut ty: QualType) -> QualType {
         for &n in &ds.nullability {
             if self.is_error_type(ty) {
