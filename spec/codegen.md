@@ -267,7 +267,13 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
       `f`/`l` forms) call the function of the unprefixed name, declared
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
-      call site too).
+      call site too). A function is declared once per mangled name (clang
+      `GetOrCreateLLVMFunction`): a declaration whose name the module
+      already has with the same function type reuses it, so the library
+      function and a program's own `extern "C" double pow(double, double)`
+      (separate declarations to sema) are one `@pow`, in either order, and
+      never a uniqued `@pow.1` (WP-288; `tests/codegen/lib_builtin_shared_decl.cpp`,
+      `tests/conformance/dcl.link/libcxx-pow-run.cpp`).
     - checked arithmetic (WP-270, clang `EmitBuiltinExpr`;
       `checked.rs`): the typed forms call `llvm.{s,u}{op}.with.overflow`
       at the parameter type and store the value at the result pointer's
