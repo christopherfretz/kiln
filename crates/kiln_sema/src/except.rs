@@ -289,7 +289,7 @@ impl Sema<'_, '_> {
 
     /// Whether function `f`'s type has a non-throwing exception
     /// specification (an unresolved one counts as throwing).
-    fn decl_is_nothrow(&self, f: DeclId) -> bool {
+    pub(crate) fn decl_is_nothrow(&self, f: DeclId) -> bool {
         let t = &self.ast.types;
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         t.proto(ty).is_some_and(|p| t.exc_spec(p).is_nothrow())

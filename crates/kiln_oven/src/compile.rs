@@ -985,13 +985,19 @@ impl<'a> Compiler<'a> {
         }
         if matches!(
             k,
-            ExprKind::AtomicExpr | ExprKind::VAArgExpr | ExprKind::DesignatedInitUpdateExpr
+            ExprKind::AtomicExpr
+                | ExprKind::VAArgExpr
+                | ExprKind::DesignatedInitUpdateExpr
+                | ExprKind::CoawaitExpr
+                | ExprKind::CoyieldExpr
+                | ExprKind::DependentCoawaitExpr
         ) {
             // clang 19 never constant-evaluates an atomic builtin, a
             // `__builtin_va_arg` or a `DesignatedInitUpdateExpr` (its
             // evaluator has no visitor for one): the generic note at the
             // expression (the lock-free queries are folded in
-            // `compile/builtins.rs` before they reach here).
+            // `compile/builtins.rs` before they reach here). Nor a
+            // `co_await`/`co_yield` ([expr.const]/5.23, WP-351).
             return self.throw_invalid(e);
         }
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
@@ -1687,7 +1693,15 @@ impl Compiler<'_> {
             // [dcl.asm]/1, [expr.const]/5: an asm statement is never a
             // core constant expression (clang: the generic note at `asm`;
             // spec/oven.md, WP-140).
-            StmtKind::GotoStmt | StmtKind::IndirectGotoStmt | StmtKind::GCCAsmStmt => {
+            // A coroutine body or `co_return` ([dcl.constexpr]/3,
+            // [expr.const]/5.23: a coroutine is never constexpr; clang's
+            // `EvaluateStmt` has no case for either: the generic note at
+            // the statement, spec/oven.md, WP-351).
+            StmtKind::GotoStmt
+            | StmtKind::IndirectGotoStmt
+            | StmtKind::GCCAsmStmt
+            | StmtKind::CoroutineBodyStmt
+            | StmtKind::CoreturnStmt => {
                 self.trap_loc(n.loc(), "subexpression not valid in a constant expression".into());
             }
             // A label is evaluated by evaluating its statement (clang

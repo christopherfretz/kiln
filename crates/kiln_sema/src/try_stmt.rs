@@ -34,6 +34,16 @@ impl Sema<'_, '_> {
         self.scopes.push(s);
     }
 
+    /// Enters the scope of a handler ([except.pre]/1; clang
+    /// `CatchScope`), where `co_await` and `co_yield` are ill-formed
+    /// ([expr.await]/2).
+    pub fn push_catch_scope(&mut self) {
+        self.push_scope(ScopeKind::Control);
+        if let Some(s) = self.scopes.last_mut() {
+            s.catch_handler = true;
+        }
+    }
+
     /// The exception-declaration of a handler ([except.handle]/1–3,
     /// clang `ActOnExceptionDeclarator` + `BuildExceptionDeclaration`):
     /// declares the exception variable in the handler's scope.
@@ -441,6 +451,10 @@ impl Sema<'_, '_> {
         match st.get(s).kind() {
             StmtKind::ExprStmt => exprs.push(st.expr_stmt_expr(s)),
             StmtKind::ReturnStmt => exprs.extend(st.return_value(s)),
+            StmtKind::CoreturnStmt => {
+                exprs.extend(st.coreturn_operand(s));
+                exprs.extend(st.coreturn_promise_call(s));
+            }
             StmtKind::DeclStmt => {
                 for d in self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)) {
                     exprs.extend(self.ast.decls.var(d).and_then(|v| v.init));

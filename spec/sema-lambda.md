@@ -22,7 +22,12 @@ that `expect: ast` goldens compare without special cases.
 | templates | §9: lambdas in templates and generic lambdas in templates; simple-capture packs (`[ts...]`) of a function parameter pack (WP-282) | init-capture packs, lambdas as template arguments |
 | codegen | §8: IR-exact against clang for the corpus in `tests/codegen/lambda_*.cpp` | |
 
-Coroutine lambdas are out of scope (coroutines milestone).
+A lambda whose body uses `co_await`, `co_yield` or `co_return` is a
+coroutine like any function (spec/sema.md §7.13, WP-351): its call
+operator stops being implicitly constexpr, and the closure type is the
+implicit object parameter in the `coroutine_traits` arguments but the
+closure object is passed neither to the promise constructor nor to a
+promise `operator new`.
 
 ## 2. Parser to Sema protocol
 

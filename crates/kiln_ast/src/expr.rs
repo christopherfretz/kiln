@@ -2621,6 +2621,7 @@ impl ExprArena {
             | ExprKind::CXXDependentScopeMemberExpr
             | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::PackExpansionExpr
+            | ExprKind::DependentCoawaitExpr
             | ExprKind::CXXRewrittenBinaryOperator => v.extend(id(n.a)),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr | ExprKind::CXXFoldExpr => {
                 v.extend(id(n.a));
@@ -2662,6 +2663,11 @@ impl ExprArena {
             }
             // `CXXUnresolvedConstructExpr` and `ParenListExpr` are template
             // expressions (spec/sema-templates.md §2.4).
+            // The operand, the awaiter and the three calls; the
+            // `OpaqueValueExpr` (sixth) is shared.
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                v.extend(lists.iter::<ExprId>(ListId::new(n.a)).take(5));
+            }
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr
@@ -2712,6 +2718,38 @@ impl HeapSize for ExprArena {
     }
 }
 
+/// The resolved parts of a `CoawaitExpr`/`CoyieldExpr` (clang's
+/// `CoroutineSuspendExpr`): `common` is the awaiter, bound by `opaque`
+/// (an lvalue `OpaqueValueExpr`) in the three calls.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CoawaitParts {
+    /// The operand as written (for `co_yield`, the yielded expression).
+    pub operand: ExprId,
+    /// The awaiter (a glvalue).
+    pub common: ExprId,
+    /// `awaiter.await_ready()`, contextually converted to `bool`.
+    pub ready: ExprId,
+    /// The suspend expression (see [`SuspendKind`]).
+    pub suspend: ExprId,
+    /// `awaiter.await_resume()`: the value of the expression.
+    pub resume: ExprId,
+    /// The `OpaqueValueExpr` standing for `common`.
+    pub opaque: ExprId,
+}
+
+/// The form of a suspend expression ([expr.await]/5.1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SuspendKind {
+    /// `await_suspend(h)` returns `void`: always suspends.
+    Void,
+    /// It returns `bool`: suspends unless it is `false`.
+    Bool,
+    /// It returns a `coroutine_handle`: the suspend expression is
+    /// `__builtin_coro_resume(await_suspend(h).address())`, resuming the
+    /// returned coroutine after suspending (symmetric transfer).
+    Handle,
+}
+
 /// Accessors for the WP-064 expression forms (spec/ast.md §5.1).
 impl ExprArena {
     /// The operand of a `CXXThrowExpr` (`None` for a rethrow).
@@ -2728,6 +2766,49 @@ impl ExprArena {
         let mut it = lists.iter::<ExprId>(ListId::new(n.a));
         let mut next = || it.next().expect("four operands");
         [next(), next(), next(), next()]
+    }
+
+    /// The operand as written of a `CoawaitExpr`, `CoyieldExpr` or
+    /// `DependentCoawaitExpr` ([expr.await], [expr.yield]).
+    pub fn coawait_operand(&self, e: ExprId, lists: &IdLists) -> ExprId {
+        let n = self.get(e);
+        match n.kind {
+            ExprKind::DependentCoawaitExpr => ExprId::new(n.a),
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                lists.iter::<ExprId>(ListId::new(n.a)).next().expect("operand")
+            }
+            k => panic!("expected a coroutine expression, found {k:?}"),
+        }
+    }
+
+    /// The resolved parts of a `CoawaitExpr` or `CoyieldExpr`; `None`
+    /// for a dependent `CoyieldExpr` (a template pattern).
+    pub fn coawait_parts(&self, e: ExprId, lists: &IdLists) -> Option<CoawaitParts> {
+        let n = self.get(e);
+        assert!(
+            matches!(n.kind, ExprKind::CoawaitExpr | ExprKind::CoyieldExpr),
+            "expected CoawaitExpr or CoyieldExpr, found {:?}",
+            n.kind
+        );
+        let v: Vec<ExprId> = lists.iter::<ExprId>(ListId::new(n.a)).collect();
+        let [operand, common, ready, suspend, resume, opaque] = v[..] else { return None };
+        Some(CoawaitParts { operand, common, ready, suspend, resume, opaque })
+    }
+
+    /// Whether a `CoawaitExpr` is implicit (an initial or final suspend
+    /// point, or the `co_await` of a `co_yield`).
+    pub fn coawait_is_implicit(&self, e: ExprId) -> bool {
+        self.get(e).aux & 1 != 0
+    }
+
+    /// How a `CoawaitExpr`/`CoyieldExpr` suspends (the result of its
+    /// `await_suspend`).
+    pub fn coawait_suspend_kind(&self, e: ExprId) -> SuspendKind {
+        match (self.get(e).aux >> 1) & 3 {
+            1 => SuspendKind::Bool,
+            2 => SuspendKind::Handle,
+            _ => SuspendKind::Void,
+        }
     }
 
     /// The side record of a `LambdaExpr`.

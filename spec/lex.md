@@ -354,12 +354,33 @@ variants are additions to a `#[non_exhaustive]` enum.
   decimal, hex; hex floats (C++17; `HexFloatExtension`); digit separators
   (C++14; `DigitSeparatorPosition`); integer suffixes `u`, `l`, `ll`, `z`
   (C++23; `SizeSuffixExtension`) in any legal order and case; float
-  suffixes `f l f16 f32 f64 f128 bf16`. Diagnostics follow clang's
+  suffixes `f l f16 f32 f64 f128 bf16` (see "Extended floating
+  suffixes"). Diagnostics follow clang's
   `NumericLiteralParser` (`InvalidDigit`, `InvalidSuffix`,
   `ExponentNoDigits`, `HexFloatNoExponent`, …).
 - Unevaluated strings: an encoding prefix, a ud-suffix, or a numeric /
   unknown escape is an error (`UnevaluatedString*`).
 - Raw strings: body verbatim; CR LF in the body becomes LF.
+
+### Extended floating suffixes
+[lex.fcon] (C++23, P1467R9; WP-361): `f16`/`F16`, `f32`/`F32`,
+`f64`/`F64`, `f128`/`F128` and `bf16`/`BF16` (both letters in one case:
+`Bf16` is an invalid suffix) name `_Float16`, `_Float32`, `_Float64`,
+`_Float128` and `__bf16`. They are accepted in every C++ mode, as GCC 14
+does, because libstdc++ spells them in every mode (`<limits>` pastes
+`0.5F##N`, `<bits/c++config.h>` uses `__decltype(0.0bf16)`, and the
+`__FLT32_*__` ... `__BFLT16_*__` macros expand to suffixed literals;
+spec/pp.md). Before C++23, `f32`, `f64`, `f128` and `bf16` get
+`FloatSuffixExtension` (`lit_float_suffix_ext`, Extension, group
+`c++23-extensions`: "'{0}' suffix on a floating literal is a C++23
+extension", at the suffix; off unless `-pedantic`); `f16` stays
+undiagnosed (clang's extension in every mode). A ud-suffix is not
+affected. The value is rounded once, to nearest-even, from the exact
+decimal or hex value into the type's format (spec/sema-conv.md §8); GCC
+14 instead evaluates a `bf16`/`f16` literal in `float` (its excess
+precision) and rounds that, so `1.003906250931322574615478515625bf16` is
+`0x1.02p0` in kiln and `1.0` in GCC (a double rounding;
+`conformance/basic.extended.fp/p1467-literals.cpp`).
 
 ### Tables
 `scripts/gen-unicode-tables.py [UCD_VERSION]` (default 15.1.0, SHA-256 of
@@ -371,8 +392,9 @@ algorithmic Hangul syllables; ~468 KB of source). Name lookup is a binary
 search over blocks with a fixed 128-byte key buffer: no allocation.
 
 ### Deviations from clang
-- `f32 f64 f128 bf16` accepted from C++23 (clang 19 rejects them); `f16`
-  in every mode (clang: targets with `_Float16`); GNU `q`/`w`, MS `i64`,
+- `f32 f64 f128 bf16` accepted (clang 19 and 22 reject them; an
+  extension before C++23, above); `f16` in every mode (clang: targets
+  with `_Float16`); GNU `q`/`w`, MS `i64`,
   fixed-point and `_BitInt` (`wb`) suffixes are not supported (invalid
   suffix).
 - `i`/`if`/`il` on a number are a ud-suffix (the standard library's
