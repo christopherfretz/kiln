@@ -54,12 +54,13 @@ fn opt_string(out: &mut String, s: Option<&str>) {
 pub struct JsonSink<W: Write> {
     out: W,
     backtrace_limit: u32,
+    clang_compat: u32,
 }
 
 impl<W: Write> JsonSink<W> {
     /// A JSON sink writing to `out`.
     pub fn new(out: W, opts: &DiagOptions) -> JsonSink<W> {
-        JsonSink { out, backtrace_limit: opts.macro_backtrace_limit }
+        JsonSink { out, backtrace_limit: opts.macro_backtrace_limit, clang_compat: opts.clang_compat }
     }
 
     /// The underlying writer.
@@ -163,8 +164,13 @@ fn fixit_json(out: &mut String, sm: &SourceManager, f: &FixIt, first: bool) -> b
 }
 
 /// Renders `d` as one line of JSON (without the newline).
-pub(crate) fn render(sm: &SourceManager, d: &Diagnostic, backtrace_limit: u32) -> String {
-    let entries = layout::layout(sm, d, backtrace_limit);
+pub(crate) fn render(
+    sm: &SourceManager,
+    d: &Diagnostic,
+    backtrace_limit: u32,
+    compat: u32,
+) -> String {
+    let entries = layout::layout(sm, d, backtrace_limit, compat);
     let mut out = String::new();
     if let Some((head, notes)) = entries.split_first() {
         entry_json(&mut out, sm, head, Some(notes));
@@ -174,7 +180,7 @@ pub(crate) fn render(sm: &SourceManager, d: &Diagnostic, backtrace_limit: u32) -
 
 impl<W: Write> DiagSink for JsonSink<W> {
     fn emit(&mut self, sm: &SourceManager, d: &Diagnostic) {
-        let mut line = render(sm, d, self.backtrace_limit);
+        let mut line = render(sm, d, self.backtrace_limit, self.clang_compat);
         line.push('\n');
         let _ = self.out.write_all(line.as_bytes());
     }

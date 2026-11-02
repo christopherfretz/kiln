@@ -45,6 +45,7 @@ struct TextOptions {
     tabstop: u32,
     snippet_lines: u32,
     backtrace_limit: u32,
+    clang_compat: u32,
 }
 
 /// Renders diagnostics as clang does, to any [`Write`]r. Output errors are
@@ -75,6 +76,7 @@ impl<W: Write> TextSink<W> {
                 tabstop: opts.tabstop,
                 snippet_lines: opts.snippet_line_limit,
                 backtrace_limit: opts.macro_backtrace_limit,
+                clang_compat: opts.clang_compat,
             },
             prefix: None,
             last_loc: Loc::INVALID,
@@ -100,7 +102,7 @@ impl<W: Write> TextSink<W> {
     /// Renders one diagnostic to a byte vector (used by the sink).
     fn render(&mut self, sm: &SourceManager, d: &Diagnostic) -> Vec<u8> {
         let mut buf = Vec::new();
-        for e in layout::layout(sm, d, self.opts.backtrace_limit) {
+        for e in layout::layout(sm, d, self.opts.backtrace_limit, self.opts.clang_compat) {
             self.entry(sm, &e, &mut buf);
         }
         buf

@@ -876,6 +876,20 @@ impl Sema<'_, '_> {
                     star.with_offset(1),
                 )));
             }
+        } else if self.clang_compat >= 22 {
+            // clang 22 decides the macro-argument backtrace on the
+            // diagnostic's `R1`/`R2` as streamed (spec/diag.md §3.3): a
+            // built-in binary operator's two operands, else the
+            // expression with an unset (invalid) `R2`.
+            let x = self.ignore_parens(e);
+            if self.ast.exprs.get(x).kind() == ExprKind::BinaryOperator
+                && matches!(id, DiagId::sema_unused_expr | DiagId::sema_unused_comma_left_operand)
+            {
+                let [l, r] = self.ast.exprs.operands(x);
+                d = d.range(self.expr_range(l)).range(self.expr_range(r));
+            } else {
+                d = d.range(self.expr_range(e)).range(kiln_source::Span::INVALID);
+            }
         } else {
             d = d.range(self.expr_range(e));
         }
