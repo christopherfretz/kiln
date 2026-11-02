@@ -187,11 +187,11 @@ absolute numbers.
 
 ### `-std=c++20`
 
-**c++20: 44 of 109 headers ok with kiln (65 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.43 s / p95 2.63 s, peak RSS p50 18 MiB / p95 32 MiB; clang++-19 wall p50 0.07 s / p95 0.30 s, peak RSS p50 90 MiB / p95 119 MiB**
+**c++20: 67 of 109 headers ok with kiln (42 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.63 s / p95 4.42 s, peak RSS p50 18 MiB / p95 34 MiB; clang++-19 wall p50 0.09 s / p95 0.48 s, peak RSS p50 94 MiB / p95 124 MiB**
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `cbcb2e52` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `9ca8e9cc` |
 | reference | `Debian clang version 19.1.7 (3+b1)` |
 | libstdc++ | `_GLIBCXX_RELEASE` 14, `__GLIBCXX__` 20250315 (`/usr/include/c++/14`) |
 | headers | extension-less files directly in the include directory; not compiled: subdirectories (`backward/`, `bits/`, `debug/`, `decimal/`, `experimental/`, `ext/`, `parallel/`, `pstl/`, `tr1/`, `tr2/`) and `.h`/`.tcc` files |
@@ -199,7 +199,7 @@ absolute numbers.
 | flags (both compilers) | `-std=c++20 -stdlib=libstdc++ -fsyntax-only -ferror-limit=0 t.cpp` (`t.cpp`: `#include <h>`) |
 | limits | 8192 MiB address space per compile (kiln: plus its stack reservation); timeout 120 s; -j 2 |
 | RSS source | `gnu-time` |
-| wall time | 50.1 s |
+| wall time | 114.8 s |
 
 #### Headers (`-std=c++20`)
 
@@ -207,152 +207,142 @@ absolute numbers.
 
 | header | kiln | errors | first error | clang++-19 | kiln wall | kiln RSS | clang wall | clang RSS |
 |---|---|---:|---|---|---:|---:|---:|---:|
-| `<algorithm>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.95 s | 20 MiB | 0.11 s | 95 MiB |
-| `<any>` | ok |  |  | ok | 0.22 s | 16 MiB | 0.06 s | 84 MiB |
-| `<array>` | fail | 25 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.42 s | 17 MiB | 0.08 s | 89 MiB |
-| `<atomic>` | fail | 2 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 0.43 s | 17 MiB | 0.06 s | 89 MiB |
-| `<barrier>` | fail | 105 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 1.79 s | 27 MiB | 0.21 s | 110 MiB |
-| `<bit>` | ok |  |  | ok | 0.15 s | 16 MiB | 0.03 s | 84 MiB |
-| `<bitset>` | fail | 82 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.21 s | 24 MiB | 0.16 s | 103 MiB |
-| `<cassert>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 79 MiB |
-| `<ccomplex>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.36 s | 32 MiB | 0.26 s | 115 MiB |
-| `<cctype>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cerrno>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 79 MiB |
-| `<cfenv>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 79 MiB |
-| `<cfloat>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 78 MiB |
-| `<charconv>` | ok |  |  | ok | 0.23 s | 16 MiB | 0.05 s | 85 MiB |
-| `<chrono>` | fail | 172 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 4.49 s | 43 MiB | 0.59 s | 147 MiB |
-| `<cinttypes>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
-| `<ciso646>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
-| `<climits>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
-| `<clocale>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
-| `<cmath>` | fail | 25 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.93 s | 24 MiB | 0.11 s | 96 MiB |
-| `<codecvt>` | fail | 86 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.23 s | 24 MiB | 0.20 s | 104 MiB |
-| `<compare>` | fail | 22 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.17 s | 16 MiB | 0.03 s | 84 MiB |
-| `<complex>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.21 s | 32 MiB | 0.24 s | 116 MiB |
-| `<concepts>` | ok |  |  | ok | 0.12 s | 15 MiB | 0.03 s | 83 MiB |
-| `<condition_variable>` | fail | 115 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.36 s | 30 MiB | 0.28 s | 118 MiB |
-| `<coroutine>` | fail | 23 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.16 s | 16 MiB | 0.03 s | 85 MiB |
-| `<csetjmp>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.04 s | 79 MiB |
-| `<csignal>` | ok |  |  | ok | 0.08 s | 15 MiB | 0.02 s | 81 MiB |
-| `<cstdalign>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
-| `<cstdarg>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
-| `<cstdbool>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 78 MiB |
-| `<cstddef>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 81 MiB |
-| `<cstdint>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.02 s | 79 MiB |
-| `<cstdio>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cstdlib>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.02 s | 81 MiB |
-| `<cstring>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
-| `<ctgmath>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.28 s | 32 MiB | 0.28 s | 116 MiB |
-| `<ctime>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 80 MiB |
-| `<cuchar>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cwchar>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cwctype>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
-| `<deque>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.72 s | 20 MiB | 0.09 s | 94 MiB |
-| `<exception>` | ok |  |  | ok | 0.16 s | 16 MiB | 0.03 s | 84 MiB |
-| `<execution>` | fail | 120 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 3.27 s | 37 MiB | 0.35 s | 130 MiB |
-| `<expected>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.04 s | 79 MiB |
-| `<filesystem>` | fail | 139 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.63 s | 31 MiB | 0.29 s | 119 MiB |
-| `<format>` | fail | 155 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.67 s | 32 MiB | 0.41 s | 130 MiB |
-| `<forward_list>` | fail | 58 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.72 s | 20 MiB | 0.12 s | 93 MiB |
-| `<fstream>` | fail | 120 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.72 s | 26 MiB | 0.22 s | 109 MiB |
-| `<functional>` | fail | 68 | `bits/stl_function.h:571:13: error: use of undeclared identifier 'operator>'` | ok | 1.20 s | 22 MiB | 0.15 s | 101 MiB |
-| `<future>` | fail | 139 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.02 s | 33 MiB | 0.30 s | 123 MiB |
-| `<generator>` | fail | 151 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.50 s | 26 MiB | 0.22 s | 119 MiB |
-| `<initializer_list>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 80 MiB |
-| `<iomanip>` | fail | 130 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 1.74 s | 27 MiB | 0.21 s | 110 MiB |
-| `<ios>` | fail | 104 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.48 s | 25 MiB | 0.18 s | 107 MiB |
-| `<iosfwd>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 81 MiB |
-| `<iostream>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.49 s | 25 MiB | 0.18 s | 108 MiB |
-| `<istream>` | fail | 105 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.51 s | 25 MiB | 0.19 s | 108 MiB |
-| `<iterator>` | fail | 86 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 1.27 s | 24 MiB | 0.17 s | 105 MiB |
-| `<latch>` | fail | 2 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 0.31 s | 18 MiB | 0.05 s | 88 MiB |
-| `<limits>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.02 s | 81 MiB |
-| `<list>` | fail | 60 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.64 s | 19 MiB | 0.08 s | 92 MiB |
-| `<locale>` | fail | 127 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.54 s | 26 MiB | 0.20 s | 108 MiB |
-| `<map>` | fail | 63 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.74 s | 20 MiB | 0.09 s | 94 MiB |
-| `<memory>` | fail | 106 | `bits/allocator.h:191:10: error: use of undeclared identifier '__builtin_mul_overflow'` | ok | 1.88 s | 28 MiB | 0.23 s | 112 MiB |
-| `<memory_resource>` | fail | 61 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.04 s | 23 MiB | 0.14 s | 101 MiB |
-| `<mutex>` | fail | 62 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.78 s | 20 MiB | 0.09 s | 95 MiB |
-| `<new>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
-| `<numbers>` | ok |  |  | ok | 0.11 s | 15 MiB | 0.03 s | 83 MiB |
-| `<numeric>` | fail | 5 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.30 s | 17 MiB | 0.05 s | 87 MiB |
-| `<optional>` | fail | 23 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.30 s | 16 MiB | 0.05 s | 87 MiB |
-| `<ostream>` | fail | 104 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.43 s | 25 MiB | 0.18 s | 107 MiB |
-| `<print>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
-| `<queue>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.86 s | 21 MiB | 0.11 s | 97 MiB |
-| `<random>` | fail | 178 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.05 s | 31 MiB | 0.25 s | 117 MiB |
-| `<ranges>` | fail | 151 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.50 s | 26 MiB | 0.22 s | 119 MiB |
-| `<ratio>` | ok |  |  | ok | 0.14 s | 16 MiB | 0.03 s | 83 MiB |
-| `<regex>` | fail | 154 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.77 s | 32 MiB | 0.32 s | 124 MiB |
-| `<scoped_allocator>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.50 s | 19 MiB | 0.07 s | 91 MiB |
-| `<semaphore>` | fail | 24 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 0.61 s | 21 MiB | 0.08 s | 93 MiB |
-| `<set>` | fail | 63 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.73 s | 20 MiB | 0.09 s | 94 MiB |
-| `<shared_mutex>` | fail | 25 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.41 s | 19 MiB | 0.06 s | 90 MiB |
-| `<source_location>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
-| `<span>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.51 s | 18 MiB | 0.07 s | 90 MiB |
-| `<spanstream>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
-| `<sstream>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.56 s | 26 MiB | 0.20 s | 108 MiB |
-| `<stack>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.74 s | 20 MiB | 0.09 s | 94 MiB |
-| `<stacktrace>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
-| `<stdexcept>` | fail | 80 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.10 s | 23 MiB | 0.14 s | 103 MiB |
-| `<stdfloat>` | ok |  |  | ok | 0.01 s | 12 MiB | 0.02 s | 74 MiB |
-| `<stop_token>` | fail | 108 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 2.38 s | 30 MiB | 0.31 s | 116 MiB |
-| `<streambuf>` | fail | 86 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.33 s | 25 MiB | 0.19 s | 105 MiB |
-| `<string>` | fail | 80 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.28 s | 23 MiB | 0.18 s | 103 MiB |
-| `<string_view>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.64 s | 20 MiB | 0.10 s | 94 MiB |
-| `<syncstream>` | fail | 107 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.77 s | 26 MiB | 0.20 s | 109 MiB |
-| `<system_error>` | fail | 81 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.24 s | 24 MiB | 0.17 s | 104 MiB |
-| `<text_encoding>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
-| `<thread>` | fail | 110 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.29 s | 30 MiB | 0.27 s | 116 MiB |
-| `<tuple>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.46 s | 18 MiB | 0.07 s | 90 MiB |
-| `<type_traits>` | ok |  |  | ok | 0.11 s | 15 MiB | 0.03 s | 83 MiB |
-| `<typeindex>` | fail | 22 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.17 s | 16 MiB | 0.04 s | 84 MiB |
-| `<typeinfo>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
-| `<unordered_map>` | fail | 60 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.89 s | 22 MiB | 0.10 s | 97 MiB |
-| `<unordered_set>` | fail | 59 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.98 s | 21 MiB | 0.12 s | 96 MiB |
-| `<utility>` | fail | 22 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.21 s | 16 MiB | 0.04 s | 85 MiB |
-| `<valarray>` | fail | 73 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.80 s | 28 MiB | 0.18 s | 106 MiB |
-| `<variant>` | fail | 26 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.38 s | 17 MiB | 0.06 s | 88 MiB |
-| `<vector>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.84 s | 20 MiB | 0.12 s | 96 MiB |
-| `<version>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.02 s | 79 MiB |
+| `<algorithm>` | ok |  |  | ok | 1.03 s | 21 MiB | 0.10 s | 99 MiB |
+| `<any>` | ok |  |  | ok | 0.19 s | 16 MiB | 0.04 s | 88 MiB |
+| `<array>` | ok |  |  | ok | 0.50 s | 18 MiB | 0.06 s | 93 MiB |
+| `<atomic>` | ok |  |  | ok | 0.43 s | 18 MiB | 0.07 s | 93 MiB |
+| `<barrier>` | fail | 32 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.12 s | 28 MiB | 0.24 s | 115 MiB |
+| `<bit>` | ok |  |  | ok | 0.16 s | 16 MiB | 0.03 s | 88 MiB |
+| `<bitset>` | fail | 20 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.46 s | 25 MiB | 0.16 s | 108 MiB |
+| `<cassert>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
+| `<ccomplex>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.48 s | 34 MiB | 0.26 s | 120 MiB |
+| `<cctype>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 84 MiB |
+| `<cerrno>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cfenv>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cfloat>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
+| `<charconv>` | ok |  |  | ok | 0.24 s | 17 MiB | 0.05 s | 90 MiB |
+| `<chrono>` | fail | 64 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 6.39 s | 48 MiB | 0.57 s | 151 MiB |
+| `<cinttypes>` | ok |  |  | ok | 0.03 s | 15 MiB | 0.02 s | 83 MiB |
+| `<ciso646>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
+| `<climits>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
+| `<clocale>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cmath>` | ok |  |  | ok | 0.97 s | 25 MiB | 0.11 s | 100 MiB |
+| `<codecvt>` | fail | 23 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.41 s | 25 MiB | 0.16 s | 109 MiB |
+| `<compare>` | ok |  |  | ok | 0.17 s | 16 MiB | 0.04 s | 88 MiB |
+| `<complex>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.50 s | 33 MiB | 0.26 s | 119 MiB |
+| `<concepts>` | ok |  |  | ok | 0.13 s | 16 MiB | 0.03 s | 88 MiB |
+| `<condition_variable>` | fail | 38 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 3.10 s | 33 MiB | 0.35 s | 123 MiB |
+| `<coroutine>` | ok |  |  | ok | 0.18 s | 17 MiB | 0.05 s | 89 MiB |
+| `<csetjmp>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 84 MiB |
+| `<csignal>` | ok |  |  | ok | 0.07 s | 15 MiB | 0.03 s | 85 MiB |
+| `<cstdalign>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 83 MiB |
+| `<cstdarg>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 83 MiB |
+| `<cstdbool>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 83 MiB |
+| `<cstddef>` | ok |  |  | ok | 0.04 s | 15 MiB | 0.02 s | 85 MiB |
+| `<cstdint>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<cstdio>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.03 s | 84 MiB |
+| `<cstdlib>` | ok |  |  | ok | 0.08 s | 15 MiB | 0.07 s | 85 MiB |
+| `<cstring>` | ok |  |  | ok | 0.13 s | 14 MiB | 0.08 s | 84 MiB |
+| `<ctgmath>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 3.23 s | 34 MiB | 0.41 s | 119 MiB |
+| `<ctime>` | ok |  |  | ok | 0.13 s | 14 MiB | 0.06 s | 84 MiB |
+| `<cuchar>` | ok |  |  | ok | 0.15 s | 14 MiB | 0.06 s | 84 MiB |
+| `<cwchar>` | ok |  |  | ok | 0.12 s | 14 MiB | 0.06 s | 84 MiB |
+| `<cwctype>` | ok |  |  | ok | 0.13 s | 13 MiB | 0.06 s | 83 MiB |
+| `<deque>` | ok |  |  | ok | 1.06 s | 20 MiB | 0.14 s | 98 MiB |
+| `<exception>` | ok |  |  | ok | 0.21 s | 16 MiB | 0.07 s | 88 MiB |
+| `<execution>` | fail | 39 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 4.42 s | 38 MiB | 0.71 s | 134 MiB |
+| `<expected>` | ok |  |  | ok | 0.14 s | 13 MiB | 0.07 s | 83 MiB |
+| `<filesystem>` | fail | 55 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 7.95 s | 30 MiB | 0.57 s | 124 MiB |
+| `<format>` | fail | 57 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 13.07 s | 39 MiB | 0.58 s | 134 MiB |
+| `<forward_list>` | ok |  |  | ok | 1.51 s | 19 MiB | 0.19 s | 97 MiB |
+| `<fstream>` | fail | 46 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 5.84 s | 27 MiB | 0.35 s | 113 MiB |
+| `<functional>` | fail | 4 | `bits/std_function.h:558:2: error: call to 'swap' is ambiguous` | ok | 1.78 s | 24 MiB | 0.30 s | 105 MiB |
+| `<future>` | fail | 58 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 4.75 s | 35 MiB | 0.59 s | 128 MiB |
+| `<generator>` | fail | 34 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.62 s | 27 MiB | 0.41 s | 124 MiB |
+| `<initializer_list>` | ok |  |  | ok | 0.15 s | 13 MiB | 0.07 s | 84 MiB |
+| `<iomanip>` | fail | 52 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.86 s | 29 MiB | 0.48 s | 114 MiB |
+| `<ios>` | fail | 31 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.42 s | 27 MiB | 0.35 s | 111 MiB |
+| `<iosfwd>` | ok |  |  | ok | 0.14 s | 14 MiB | 0.07 s | 85 MiB |
+| `<iostream>` | fail | 32 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.40 s | 27 MiB | 0.31 s | 112 MiB |
+| `<istream>` | fail | 32 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.44 s | 28 MiB | 0.33 s | 112 MiB |
+| `<iterator>` | fail | 22 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.05 s | 27 MiB | 0.31 s | 110 MiB |
+| `<latch>` | ok |  |  | ok | 0.63 s | 18 MiB | 0.12 s | 92 MiB |
+| `<limits>` | ok |  |  | ok | 0.20 s | 15 MiB | 0.06 s | 85 MiB |
+| `<list>` | fail | 2 | `bits/stl_list.h:189:14: error: use of undeclared identifier '_Iter'` | ok | 1.05 s | 20 MiB | 0.18 s | 96 MiB |
+| `<locale>` | fail | 49 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.98 s | 28 MiB | 0.35 s | 112 MiB |
+| `<map>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 1.17 s | 19 MiB | 0.15 s | 98 MiB |
+| `<memory>` | fail | 31 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.78 s | 29 MiB | 0.28 s | 116 MiB |
+| `<memory_resource>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 1.57 s | 24 MiB | 0.20 s | 105 MiB |
+| `<mutex>` | fail | 3 | `bits/unique_lock.h:215:2: error: call to 'swap' is ambiguous` | ok | 1.02 s | 21 MiB | 0.16 s | 99 MiB |
+| `<new>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.03 s | 85 MiB |
+| `<numbers>` | ok |  |  | ok | 0.14 s | 16 MiB | 0.04 s | 87 MiB |
+| `<numeric>` | ok |  |  | ok | 0.40 s | 18 MiB | 0.08 s | 91 MiB |
+| `<optional>` | ok |  |  | ok | 0.45 s | 15 MiB | 0.10 s | 90 MiB |
+| `<ostream>` | fail | 31 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.10 s | 26 MiB | 0.25 s | 111 MiB |
+| `<print>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.04 s | 82 MiB |
+| `<queue>` | ok |  |  | ok | 1.14 s | 22 MiB | 0.16 s | 102 MiB |
+| `<random>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.70 s | 33 MiB | 0.31 s | 121 MiB |
+| `<ranges>` | fail | 34 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.94 s | 28 MiB | 0.28 s | 124 MiB |
+| `<ratio>` | ok |  |  | ok | 0.18 s | 16 MiB | 0.04 s | 88 MiB |
+| `<regex>` | fail | 62 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 3.76 s | 34 MiB | 0.43 s | 127 MiB |
+| `<scoped_allocator>` | ok |  |  | ok | 0.65 s | 19 MiB | 0.09 s | 95 MiB |
+| `<semaphore>` | ok |  |  | ok | 0.73 s | 21 MiB | 0.12 s | 97 MiB |
+| `<set>` | fail | 4 | `bits/stl_tree.h:2107:5: error: out-of-line definition of '_M_get_insert_unique_pos' does not match any declaration in '_Rb_tree<_Key2, _Value2, _KeyOfValue, _Co…` | ok | 0.99 s | 21 MiB | 0.13 s | 98 MiB |
+| `<shared_mutex>` | fail | 1 | `shared_mutex:834:2: error: call to 'swap' is ambiguous` | ok | 0.64 s | 19 MiB | 0.09 s | 94 MiB |
+| `<source_location>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.03 s | 84 MiB |
+| `<span>` | ok |  |  | ok | 0.70 s | 18 MiB | 0.11 s | 94 MiB |
+| `<spanstream>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.05 s | 83 MiB |
+| `<sstream>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.07 s | 27 MiB | 0.24 s | 113 MiB |
+| `<stack>` | ok |  |  | ok | 0.94 s | 21 MiB | 0.16 s | 97 MiB |
+| `<stacktrace>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 83 MiB |
+| `<stdexcept>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.45 s | 23 MiB | 0.18 s | 108 MiB |
+| `<stdfloat>` | ok |  |  | ok | 0.04 s | 12 MiB | 0.03 s | 78 MiB |
+| `<stop_token>` | fail | 33 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.94 s | 32 MiB | 0.30 s | 120 MiB |
+| `<streambuf>` | fail | 22 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.64 s | 26 MiB | 0.23 s | 110 MiB |
+| `<string>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.56 s | 24 MiB | 0.22 s | 107 MiB |
+| `<string_view>` | ok |  |  | ok | 0.91 s | 22 MiB | 0.13 s | 99 MiB |
+| `<syncstream>` | fail | 34 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 2.88 s | 27 MiB | 0.24 s | 113 MiB |
+| `<system_error>` | fail | 19 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 1.91 s | 25 MiB | 0.24 s | 108 MiB |
+| `<text_encoding>` | ok |  |  | ok | 0.09 s | 14 MiB | 0.06 s | 83 MiB |
+| `<thread>` | fail | 34 | `bits/basic_string.h:4165:12: error: no matching function for call to '__stoa'` | ok | 3.16 s | 32 MiB | 0.27 s | 120 MiB |
+| `<tuple>` | ok |  |  | ok | 0.57 s | 19 MiB | 0.09 s | 94 MiB |
+| `<type_traits>` | ok |  |  | ok | 0.14 s | 16 MiB | 0.03 s | 87 MiB |
+| `<typeindex>` | ok |  |  | ok | 0.19 s | 16 MiB | 0.04 s | 89 MiB |
+| `<typeinfo>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 84 MiB |
+| `<unordered_map>` | ok |  |  | ok | 1.03 s | 22 MiB | 0.12 s | 101 MiB |
+| `<unordered_set>` | ok |  |  | ok | 1.05 s | 21 MiB | 0.14 s | 101 MiB |
+| `<utility>` | ok |  |  | ok | 0.23 s | 17 MiB | 0.04 s | 90 MiB |
+| `<valarray>` | fail | 16 | `bits/valarray_after.h:179:35: error: expected a type` | ok | 1.99 s | 28 MiB | 0.18 s | 110 MiB |
+| `<variant>` | fail | 2 | `variant:1526:61: error: expected ')'` | ok | 0.39 s | 18 MiB | 0.07 s | 92 MiB |
+| `<vector>` | ok |  |  | ok | 0.94 s | 21 MiB | 0.12 s | 101 MiB |
+| `<version>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 83 MiB |
 
 #### Error clusters (`-std=c++20`, generated)
 
-38 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 30; the hand-written triage is in "Clusters" below.
+20 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 20; the hand-written triage is in "Clusters" below.
 
 | # | first | any | cluster | headers (first) |
 |---:|---:|---:|---|---|
-| 1 | 62 | 65 | `use of undeclared identifier '…'` | `<algorithm>` `<array>` `<atomic>` `<barrier>` `<bitset>` `<ccomplex>` `<chrono>` `<cmath>` `<compare>` `<complex>` `<condition_variable>` `<coroutine>` `<ctgmath>` `<deque>` `<execution>` `<filesystem>` `<format>` `<forward_list>` `<fstream>` `<functional>` `<future>` `<generator>` `<iomanip>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<latch>` `<list>` `<map>` `<memory>` `<memory_resource>` `<mutex>` `<numeric>` `<optional>` `<ostream>` `<queue>` `<random>` `<ranges>` `<regex>` `<scoped_allocator>` `<semaphore>` `<set>` `<shared_mutex>` `<span>` `<sstream>` `<stack>` `<stdexcept>` `<stop_token>` `<string>` `<string_view>` `<syncstream>` `<system_error>` `<thread>` `<tuple>` `<typeindex>` `<unordered_map>` `<unordered_set>` `<utility>` `<valarray>` `<variant>` `<vector>` |
-| 2 | 3 | 33 | `'…' is not supported yet` | `<codecvt>` `<locale>` `<streambuf>` |
-| 3 | 0 | 62 | `'…' cannot be the name of a variable or data member` | (e.g. `<algorithm>`) |
-| 4 | 0 | 62 | `data member '…' cannot be a member template` | (e.g. `<algorithm>`) |
-| 5 | 0 | 62 | `expected '…' at end of declaration list` | (e.g. `<algorithm>`) |
-| 6 | 0 | 54 | `friends can only be classes or functions` | (e.g. `<algorithm>`) |
-| 7 | 0 | 52 | `constexpr variable '…' must be initialized by a constant expression` | (e.g. `<algorithm>`) |
-| 8 | 0 | 52 | `in-class initializer for static data member is not a constant expression` | (e.g. `<algorithm>`) |
-| 9 | 0 | 33 | `no matching function for call to '…'` | (e.g. `<barrier>`) |
-| 10 | 0 | 31 | `call to '…' is ambiguous` | (e.g. `<barrier>`) |
-| 11 | 0 | 29 | `type '…' does not provide a call operator` | (e.g. `<barrier>`) |
-| 12 | 0 | 28 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | (e.g. `<barrier>`) |
-| 13 | 0 | 10 | `'…' with a non-bool expression is not supported yet` | (e.g. `<chrono>`) |
-| 14 | 0 | 8 | `no matching constructor for initialization of '…' (aka '…')` | (e.g. `<chrono>`) |
-| 15 | 0 | 7 | `redefinition of '…' as different kind of symbol` | (e.g. `<chrono>`) |
-| 16 | 0 | 6 | `'…' is a protected member of '…' (aka '…')` | (e.g. `<chrono>`) |
-| 17 | 0 | 4 | `friend declaration of '…' does not match any declaration in namespace '…'` | (e.g. `<chrono>`) |
-| 18 | 0 | 4 | `kiln: not yet implemented: an atomic constraint that stays value-dependent after substitution` | (e.g. `<chrono>`) |
-| 19 | 0 | 4 | `no type named '…' in '…'` | (e.g. `<filesystem>`) |
-| 20 | 0 | 4 | `out-of-line definition of '…' does not match any declaration in '…'` | (e.g. `<map>`) |
-| 21 | 0 | 3 | `expected '…'` | (e.g. `<chrono>`) |
-| 22 | 0 | 2 | `call to deleted constructor of '…' (aka '…')` | (e.g. `<condition_variable>`) |
-| 23 | 0 | 2 | `calling a private constructor of class '…' (aka '…')` | (e.g. `<chrono>`) |
-| 24 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
-| 25 | 0 | 2 | `constraints not satisfied for class template '…' [with _It = iterator, _Sent = iterator, _Kind = N]` | (e.g. `<chrono>`) |
-| 26 | 0 | 2 | `destructor type '…' (aka '…') in object destruction expression does not match the type '…' (aka '…') of the object being destroyed` | (e.g. `<condition_variable>`) |
-| 27 | 0 | 2 | `expected '…' after alias declaration` | (e.g. `<generator>`) |
-| 28 | 0 | 2 | `no matching function for call to object of type '…' (aka '…')` | (e.g. `<chrono>`) |
-| 29 | 0 | 2 | `no viable conversion from '…' (aka '…') to '…' (aka '…')` | (e.g. `<chrono>`) |
-| 30 | 0 | 2 | `pack expansions of braced lists is not supported yet` | (e.g. `<future>`) |
+| 1 | 31 | 33 | `no matching function for call to '…'` | `<barrier>` `<bitset>` `<ccomplex>` `<chrono>` `<codecvt>` `<complex>` `<ctgmath>` `<execution>` `<filesystem>` `<format>` `<fstream>` `<generator>` `<iomanip>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<locale>` `<memory>` `<ostream>` `<random>` `<ranges>` `<regex>` `<sstream>` `<stdexcept>` `<stop_token>` `<streambuf>` `<string>` `<syncstream>` `<system_error>` `<thread>` |
+| 2 | 6 | 31 | `call to '…' is ambiguous` | `<condition_variable>` `<functional>` `<future>` `<memory_resource>` `<mutex>` `<shared_mutex>` |
+| 3 | 2 | 4 | `out-of-line definition of '…' does not match any declaration in '…'` | `<map>` `<set>` |
+| 4 | 1 | 4 | `use of undeclared identifier '…'` | `<list>` |
+| 5 | 1 | 3 | `expected '…'` | `<variant>` |
+| 6 | 1 | 1 | `expected a type` | `<valarray>` |
+| 7 | 0 | 28 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | (e.g. `<barrier>`) |
+| 8 | 0 | 6 | `'…' is a protected member of '…'` | (e.g. `<chrono>`) |
+| 9 | 0 | 2 | `call to deleted constructor of '…'` | (e.g. `<condition_variable>`) |
+| 10 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
+| 11 | 0 | 2 | `destructor type '…' in object destruction expression does not match the type '…' of the object being destroyed` | (e.g. `<condition_variable>`) |
+| 12 | 0 | 2 | `expected '…' after alias declaration` | (e.g. `<generator>`) |
+| 13 | 0 | 2 | `kiln: not yet implemented: local UsingEnum declarations in templates` | (e.g. `<chrono>`) |
+| 14 | 0 | 2 | `no matching constructor for initialization of '…'` | (e.g. `<execution>`) |
+| 15 | 0 | 2 | `no matching constructor for initialization of '…' (aka '…')` | (e.g. `<chrono>`) |
+| 16 | 0 | 2 | `no type named '…' in '…'` | (e.g. `<generator>`) |
+| 17 | 0 | 2 | `pack expansions of braced lists is not supported yet` | (e.g. `<future>`) |
+| 18 | 0 | 2 | `static assertion failed due to requirement '…': result type must be constructible from input type` | (e.g. `<condition_variable>`) |
+| 19 | 0 | 2 | `use '…' keyword to treat '…' as a dependent template name` | (e.g. `<execution>`) |
+| 20 | 0 | 1 | `static assertion failed due to requirement '…': deleter must be swappable` | (e.g. `<future>`) |
 
 <!-- libstdcxx:c++20:end -->
 
