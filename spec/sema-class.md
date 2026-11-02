@@ -2308,6 +2308,24 @@ gates `Ast::memory()` bytes per class — the lazy policy must keep unused
 implicit members at zero bytes — and a reference-workload-style synthetic (many small
 polymorphic classes) for `final_overrider`/vtable cache size.
 
+Virtual lattices (WP-400): every walk over a class's bases visits each
+class once, never once per path, so a lattice of virtual diamonds (2^N
+paths, 3N+1 subobjects) costs polynomial time. The vtable marking
+(`class/virtual/used.rs`, clang's recursive `MarkVirtualMembersReferenced`
+in one preorder walk with a visited set), the virtual-base list
+(`virtual_bases`) and the vbase base-specifier search
+(`define.rs` `vbase_spec_index`), the bases-with-fields and repeated-base
+checks (`members.rs`), `has_virtual_base` (dominance), and the path
+searches of member lookup (`lookup.rs` `class_leaves`) and of
+derived-to-base conversion (`conv/bases.rs` `walk`), which skip a class
+already found to lead nowhere (a search cut by a depth or count limit
+records nothing more). Results and diagnostics are unchanged.
+`ClassVirtuals` is cached per class (`ensure_virtuals`) and computed from
+the class's own subobject graph. Validation:
+`tests/stress/virtual-lattice-deep.cpp` (depth 32),
+`bench/frontend/virtual-lattice.cpp` (depth 14; clang 22 is exponential
+there).
+
 ## 11. Open questions (with recommendation)
 - **Q1 Implicit-member laziness.** Mirror clang's eager/lazy policy (§4.1;
   needs the append-to-complete-class mutation, §8.2) or declare all six at

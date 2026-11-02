@@ -8,6 +8,7 @@
 
 use kiln_ast::decl::DefinitionBits;
 use kiln_ast::{DeclId, ListId, QualType};
+use kiln_source::fx::FxHashSet;
 
 use crate::Sema;
 
@@ -69,12 +70,28 @@ pub(crate) fn same_class(s: &Sema<'_, '_>, a: DeclId, b: DeclId) -> bool {
 
 const MAX_DEPTH: usize = 1024;
 
-fn walk(s: &Sema<'_, '_>, cur: DeclId, base: DeclId, path: &mut BasePath, out: &mut Vec<BasePath>) {
+/// Every path from `cur` to `base`, appended to `out`. `barren` holds the
+/// classes with no path to `base` (each is walked once, not once per path
+/// through a virtual lattice; WP-400); its flag records that a limit cut
+/// the walk, after which nothing more is recorded.
+fn walk(
+    s: &Sema<'_, '_>,
+    cur: DeclId,
+    base: DeclId,
+    path: &mut BasePath,
+    out: &mut Vec<BasePath>,
+    barren: &mut (FxHashSet<DeclId>, bool),
+) {
     if path.specs.len() > MAX_DEPTH || out.len() > 64 {
+        barren.1 = true;
         return;
     }
     let Some(def) = defined_class(s, cur) else { return };
+    if barren.0.contains(&def) {
+        return;
+    }
     let Some(rec) = s.ast.decls.record(def) else { return };
+    let found = out.len();
     let idx = s.ast.lists.get(rec.bases);
     let specs: Vec<_> = s.ast.decls.bases(def, &s.ast.lists).copied().collect();
     for (&i, spec) in idx.iter().zip(specs) {
@@ -90,12 +107,15 @@ fn walk(s: &Sema<'_, '_>, cur: DeclId, base: DeclId, path: &mut BasePath, out: &
         if same_class(s, c, base) {
             out.push(path.clone());
         } else {
-            walk(s, c, base, path, out);
+            walk(s, c, base, path, out, barren);
         }
         path.specs.pop();
         path.classes.pop();
         path.written.pop();
         (path.last_virtual, path.first_virtual) = saved_virtual;
+    }
+    if out.len() == found && !barren.1 {
+        barren.0.insert(def);
     }
 }
 
@@ -125,7 +145,7 @@ pub fn find_base(s: &Sema<'_, '_>, derived: DeclId, base: DeclId) -> BaseSearch 
         last_virtual: None,
         first_virtual: None,
     };
-    walk(s, derived, base, &mut path, &mut out);
+    walk(s, derived, base, &mut path, &mut out, &mut (FxHashSet::default(), false));
     if out.is_empty() {
         return BaseSearch::NotDerived;
     }
@@ -152,7 +172,7 @@ pub(crate) fn base_paths(s: &Sema<'_, '_>, derived: DeclId, base: DeclId) -> Vec
         last_virtual: None,
         first_virtual: None,
     };
-    walk(s, derived, base, &mut path, &mut out);
+    walk(s, derived, base, &mut path, &mut out, &mut (FxHashSet::default(), false));
     out
 }
 

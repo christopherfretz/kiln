@@ -10,6 +10,7 @@ use kiln_ast::decl::{
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{ExcSpec, FuncInfo, Quals, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType};
+use kiln_source::fx::FxHashSet;
 
 use super::SpecialKind;
 use super::deletion::Selected;
@@ -243,27 +244,37 @@ impl Sema<'_, '_> {
     /// base that introduced it).
     pub(crate) fn virtual_bases(&self, r: DeclId) -> Vec<(DeclId, BaseSpec)> {
         let mut out: Vec<(DeclId, BaseSpec)> = Vec::new();
-        self.collect_vbases(self.class_def(r), &mut out, 0);
+        let mut seen: FxHashSet<DeclId> = FxHashSet::default();
+        let mut walked: FxHashSet<DeclId> = FxHashSet::default();
+        self.collect_vbases(self.class_def(r), &mut out, &mut seen, &mut walked, 0);
         out
     }
 
-    fn collect_vbases(&self, r: DeclId, out: &mut Vec<(DeclId, BaseSpec)>, depth: usize) {
+    /// Appends the virtual bases of `r` not yet in `out` in inheritance
+    /// graph order. A class already `walked` has all its virtual bases in
+    /// `out`, so each class is walked once (linear in a virtual lattice,
+    /// not exponential; WP-400).
+    fn collect_vbases(
+        &self,
+        r: DeclId,
+        out: &mut Vec<(DeclId, BaseSpec)>,
+        seen: &mut FxHashSet<DeclId>,
+        walked: &mut FxHashSet<DeclId>,
+        depth: usize,
+    ) {
         if depth > MAX_DEPTH {
             return;
         }
         let bases: Vec<BaseSpec> = self.ast.decls.bases(r, &self.ast.lists).copied().collect();
         for b in bases {
             let Some(bd) = self.base_class(&b) else { continue };
-            if self.defn_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
-                let mut inner = Vec::new();
-                self.collect_vbases(bd, &mut inner, depth + 1);
-                for (c, s) in inner {
-                    if !out.iter().any(|x| self.ast.first(x.0) == self.ast.first(c)) {
-                        out.push((c, s));
-                    }
-                }
+            let first = self.ast.first(bd);
+            if self.defn_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES)
+                && walked.insert(first)
+            {
+                self.collect_vbases(bd, out, seen, walked, depth + 1);
             }
-            if b.is_virtual && !out.iter().any(|x| self.ast.first(x.0) == self.ast.first(bd)) {
+            if b.is_virtual && seen.insert(first) {
                 out.push((bd, b));
             }
         }
