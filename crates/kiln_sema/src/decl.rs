@@ -4293,6 +4293,16 @@ impl Sema<'_, '_> {
     /// The initializer of variable `v` ([dcl.init]). Its syntax
     /// ([`Declarator::init_style`]) was recorded when `v` was declared.
     pub fn act_on_init(&mut self, v: DeclId, init: Initializer) {
+        let es = match &init {
+            Initializer::Expr(e) => vec![*e],
+            Initializer::Paren(es, ..) => es.clone(),
+            Initializer::List(l) => Self::list_exprs(l),
+        };
+        // [temp.variadic]/12: "initializer contains unexpanded parameter
+        // pack"; the variable becomes invalid (its initializer dropped).
+        if es.iter().any(|&e| self.diagnose_unexpanded_written(e, "initializer")) {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
         self.act_on_init_inner(v, init);
         self.check_constinit(v);
         self.initializing = None;

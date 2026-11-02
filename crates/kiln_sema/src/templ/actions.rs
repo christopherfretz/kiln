@@ -1145,7 +1145,36 @@ impl Sema<'_, '_> {
             self.error(DiagId::parse_expected_name_of_pack, self.begin_loc(pattern));
             return self.recover_err(&[pattern, index], ellipsis);
         }
+        if !self.pack_index_may_be_constant(index) {
+            // Without the pattern: an error naming no pack.
+            return self.recover_err(&[index], ellipsis);
+        }
         self.builder().pack_indexing_expr(pattern, index, rsquare)
+    }
+
+    /// [expr.prim.pack.index]/1: an index that is not value-dependent is
+    /// checked as a constant expression when the pack index is formed
+    /// (clang's array-size converted constant expression check, "array
+    /// size is not a constant expression"), before the pack's length is
+    /// known. False after that diagnostic. A type pack index
+    /// ([dcl.type.pack.index]) is checked only at instantiation, as clang.
+    fn pack_index_may_be_constant(&mut self, index: ExprId) -> bool {
+        if !self.in_template() || self.expr_is_value_dependent(index) {
+            return true;
+        }
+        let at = self.begin_loc(index);
+        let c = crate::conv::decay(self, index);
+        let c = self.act_on_full_expr(c);
+        let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, at);
+        match self.eval_int(c, ctx) {
+            Ok(_) => true,
+            Err(f) => {
+                let d = self.diag(DiagId::sema_expr_not_cce, at).arg("array size");
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                false
+            }
+        }
     }
 
     /// `T...[index]` as a type (C++26 [dcl.type.pack.index]).

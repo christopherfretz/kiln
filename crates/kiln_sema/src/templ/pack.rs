@@ -566,6 +566,10 @@ impl Substituter<'_, '_, '_> {
         let pattern = ExprId::from_raw(n.a()).ok_or(SubstFail)?;
         let index = ExprId::from_raw(n.b()).ok_or(SubstFail)?;
         let index = self.expr(index)?;
+        if self.sema.expr_is_value_dependent(index) {
+            let p = self.kept_pack_pattern(|s| s.expr(pattern))?;
+            return Ok(self.sema.act_pack_indexing(p, loc, index, end));
+        }
         match self.expand_pattern(|s| s.expr(pattern))? {
             Expansion::Unexpanded(p) => Ok(self.sema.act_pack_indexing(p, loc, index, end)),
             Expansion::Elements(v) => {
@@ -590,6 +594,11 @@ impl Substituter<'_, '_, '_> {
         loc: Loc,
     ) -> SubstResult<QualType> {
         let index = self.expr(index)?;
+        if self.sema.expr_is_value_dependent(index) {
+            let p = self.kept_pack_pattern(|s| s.element_ty(pattern, loc))?;
+            let at = self.sema.begin_loc(index);
+            return Ok(self.sema.act_pack_indexing_type(p, at, index));
+        }
         match self.expand_pattern(|s| s.element_ty(pattern, loc))? {
             Expansion::Unexpanded(p) => {
                 let at = self.sema.begin_loc(index);
@@ -604,6 +613,25 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// The pattern of a pack index that stays value-dependent (a generic
+    /// lambda's `xs...[I]` with `I` its own parameter and `xs` already
+    /// known, §7.4): substituted once in keep mode (§7.2), so a known
+    /// pack becomes a `FunctionParmPackExpr` /
+    /// `SubstNonTypeTemplateParmPackExpr` / `SubstTemplateTypeParmPackType`
+    /// naming its elements, and the index selects among them when the
+    /// retained level is instantiated.
+    fn kept_pack_pattern<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> SubstResult<T>,
+    ) -> SubstResult<T> {
+        let saved = std::mem::replace(&mut self.pack, PackState { keep: true, ..PackState::default() });
+        let saved_index = self.pack_index.take();
+        let r = f(self);
+        self.pack = saved;
+        self.pack_index = saved_index;
+        r
+    }
+
     /// The value of a substituted pack index, checked against the pack's
     /// length `len` (clang: "invalid index 3 for pack 'T' of size 2").
     fn pack_index_value(
@@ -614,14 +642,20 @@ impl Substituter<'_, '_, '_> {
         at: Loc,
     ) -> SubstResult<usize> {
         use kiln_oven::{EvalContext, EvalKind};
-        if self.sema.expr_is_value_dependent(index) {
-            return self.unimplemented("pack index that stays dependent", at);
-        }
         let c = crate::conv::decay(self.sema, index);
         let c = self.sema.act_on_full_expr(c);
         let loc = self.sema.begin_loc(index);
-        let v =
-            self.sema.eval_int(c, EvalContext::new(EvalKind::Other, loc)).map_err(|_| SubstFail)?;
+        // clang checks the index as a converted constant expression of
+        // the array-size kind ("array size is not a constant expression").
+        let v = match self.sema.eval_int(c, EvalContext::new(EvalKind::Other, loc)) {
+            Ok(v) => v,
+            Err(f) => {
+                let d = self.sema.diag(DiagId::sema_expr_not_cce, loc).arg("array size");
+                let d = Sema::with_failure_notes(d, f);
+                self.sema.emit(d);
+                return Err(SubstFail);
+            }
+        };
         match usize::try_from(v) {
             Ok(i) if i < len => Ok(i),
             _ => {
@@ -713,6 +747,24 @@ impl Sema<'_, '_> {
         let d = self.diag(DiagId::sema_unexpanded_pack, at).arg(what).arg(list);
         self.emit(d);
         true
+    }
+
+    /// [temp.variadic]/12 for an expression written in a template (an
+    /// expression statement, `return` operand or condition, `what` =
+    /// "expression"; a variable's initializer, "initializer"): naming a
+    /// pack outside an expansion is diagnosed when the template is
+    /// parsed (clang's `DiagnoseUnexpandedParameterPack` in
+    /// `ActOnFinishFullExpr` / `AddInitializerToDecl`). Inside a lambda
+    /// body the lambda-expression carries the pack instead
+    /// ([`Sema::note_unexpanded_in_lambda`]); a substituted expression is
+    /// not checked (a pack it keeps belongs to an enclosing expansion
+    /// being rebuilt, §7.2). True after the diagnostic.
+    pub(crate) fn diagnose_unexpanded_written(&mut self, e: ExprId, what: &'static str) -> bool {
+        if !self.in_template() || !self.lambdas.is_empty() || !self.inst.stack.is_empty() {
+            return false;
+        }
+        let at = self.begin_loc(e);
+        self.diagnose_unexpanded_pack(PackOperand::Expr(e), what, at)
     }
 
     /// The packs expression `e` names outside expansions, in order.
