@@ -131,7 +131,7 @@ static initialization order, inline variables.
   on 22 in `-std=c++26`. Steps A/B (the `KILN_ORACLE` and `-fclang-compat`
   knobs) landed early (WP-262/263); C–E landed as WP-355 (2026-11-02): `KILN_ORACLE`
   defaults to 22, CI also runs `KILN_ORACLE=19 cargo xtask ci --quick`, and the
-  M4 libc++ baseline is in `docs/status/libcxx.md` (`docs/status/wp-184-oracle-switch.md`).
+  M4 libc++ baseline is in `docs/status/libcxx.md` (`docs/status/wp-184-oracle-switch.md`); WP-398 took the M4 gate from 11.7% to 95.0% (2448/2661).
 - Exit: every C++23 row is `done`; every clang-22 C++26 row is `done` or has a
   written reason; `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>`, `<expected>`, `<mdspan>`,

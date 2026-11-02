@@ -602,6 +602,21 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     a decl-specifier when not followed by `(`) and applied as clang's
     `BuildQualifiedType`: `_Atomic T` is `_Atomic(T)`, with the same
     operand checks.
+  - The clang nullability qualifiers `_Nonnull`, `_Nullable`,
+    `_Null_unspecified`, `_Nullable_result` (WP-398; keywords in every
+    language mode, `keywords.rs`) are parsed where clang parses them: in
+    a decl-specifier-seq (`DeclSpec::nullability`, in order, with their
+    locations), after the `*` of a pointer or member-pointer declarator
+    (with the cv-qualifiers, `parse_ptr_quals`) and after `&`/`&&`
+    (`parse_ref_quals`), also in conversion-type-ids and new-type-ids.
+    A declarator chunk's qualifiers go to `Declarator::push_chunk`, which
+    records them against the chunk's index. They never start an
+    expression and do not count as a type specifier (`int`-defaulting is
+    unchanged); the statement disambiguator treats them as
+    decl-specifiers and as ptr-operator qualifiers. Their meaning is in
+    spec/sema.md §4.1.1. Not parsed: block pointers `^` (no `-fblocks`)
+    and qualifiers inside a parameter's array brackets (`int a[_Nonnull]`,
+    like the C99 `int a[const]`, is "expected expression").
 - **Exception specifications** (`parse_exception_spec`, after the
   function parameters, [except.spec]/1): at most one per declarator.
   - `noexcept` is `ExcSpec::BasicNoexcept`.
