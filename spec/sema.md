@@ -446,7 +446,8 @@ Redeclaration and linkage rules:
   variable (after `loop variable 'x' may not be declared 'register'`;
   after `decomposition declaration cannot be declared 'register'` for a
   binding), and the declaration continues. A variable with an asm label
-  (`register int r asm("x1")`) is exempt. At namespace scope a variable,
+  (`register int r asm("x1")`) is exempt (its register is checked under
+  *GNU register variables*). At namespace scope a variable,
   structured binding or variable template additionally gets `illegal
   storage class on file-scoped variable` (`sema_illegal_storage_class_on_var`)
   at its name and is invalid (`register_at_file_scope`); its initializer
@@ -456,6 +457,60 @@ Redeclaration and linkage rules:
   §4) and a member `storage class specified for a member declaration`.
   Tests: `dcl.stc/register-storage-class.cpp`,
   `dcl.stc/register-storage-class-namespace.cpp`.
+- **Where a storage class is rejected** ([dcl.stc], WP-327). Every
+  context, with its diagnostic:
+  - a type-specifier-seq (type-id, new-type-id, conversion-type-id,
+    functional cast, condition, exception-declaration): the parser's
+    `type name does not allow storage class to be specified`
+    (`parse_typename_storage_class`; spec/parse.md §4). Test:
+    `dcl.stc/storage-class-type-id.cpp`;
+  - a friend declaration: `'…' is invalid in friend declarations`
+    (below);
+  - a parameter: `invalid storage class specifier in function
+    declarator` (`register` instead gets -Wregister, above);
+  - a member declaration: `storage class specified for a member
+    declaration` (`register`, `extern`), `'mutable' cannot be applied to
+    functions` / `references`, `'mutable' and 'const' cannot be mixed`;
+  - a function outside a member declaration with `mutable` or
+    `register`: `illegal storage class on function` (§4.7);
+  - `register` on a variable at namespace scope: `illegal storage class
+    on file-scoped variable` (above);
+  - **`mutable`** ([dcl.stc]/9) on a variable that is not a non-static
+    data member — namespace or block scope, a for/range-for variable, a
+    structured binding (after `decomposition declaration cannot be
+    declared 'mutable'`), a variable template, an out-of-class static
+    data member definition: `'mutable' can only be applied to member
+    variables` (`sema_mutable_nonmember`, clang `err_mutable_nonmember`)
+    at the name (a binding's `[`), from `var_spec`; the variable is
+    invalid (`storage_invalidates_var`; the static member in
+    `act_on_static_member`), so its initializer is not checked. Test:
+    `dcl.stc/mutable-nonmember.cpp`;
+  - an **out-of-class static data member definition**
+    ([class.static.data]/2-3, `act_on_static_member`): `static` is
+    `'static' can only be specified inside the class definition`;
+    `extern` and `register` (after -Wregister) are `static data member
+    definition cannot specify a storage class`
+    (`sema_storage_class_for_static_member`, clang
+    `err_storage_class_for_static_member`), at the specifier; the storage
+    class is dropped and the definition stays valid. Test:
+    `class.static.data/out-of-class-storage-class.cpp`.
+- **GNU register variables** (`register T v asm("reg")`, [dcl.asm];
+  clang `ActOnVariableDeclarator`; `check_register_variable`, WP-327).
+  At block scope the name must be one the target knows
+  (`kiln_abi::asm::is_valid_register_name`): else `unknown register name
+  '…' in asm` at the label. At namespace scope, in order: an unknown
+  name is that error; a name the target cannot hold a global variable
+  in (`global_register_size_mismatch` returns `None`: AArch64 accepts
+  `sp` and names starting `x` (64 bits) or `w` (32 bits); x86_64 `rsp`,
+  `rbp` (64) and `esp`, `ebp` (32), as written, so `%rsp` is
+  unsuitable) is `register '…' unsuitable for global register variables
+  on this target`; a variable whose size differs is `size of register
+  '…' does not match variable size` (clang 19 checks sizes only for
+  globals; a dependent type's size is not checked). Then a type that is
+  neither integral (enums are not) nor a pointer is `bad type for named
+  register variable` at the decl-specifiers, and the variable is
+  invalid. Tests (pinned targets): `dcl.asm/global-register-variable-aarch64.cpp`,
+  `dcl.asm/global-register-variable-x86_64.cpp`.
 - **Storage classes in friend declarations** ([class.friend]/6, WP-293):
   diagnosed by the parser as `'mutable' is invalid in friend
   declarations` (likewise `static`, `extern`, `register`, `typedef`,
@@ -1899,7 +1954,14 @@ diagnostics and IR.
     converts to an integral type (not an enumeration) as `(void*)0`
     does (`PointerToIntegral`, with the pointer path's
     `cast from pointer to smaller type` error, [expr.reinterpret.cast]/4,
-    WP-296).
+    WP-296). A cast to a non-reference, non-class type that no rule
+    allows is `{static_cast|…} from 'F' to 'T' is not allowed` (clang
+    `err_bad_cxx_cast_generic`, `bad_cast`), where `F` is the operand's
+    type after the array-to-pointer and function-to-pointer conversions
+    (`'int *'` for an `int[3]`, `'void (*)(int)'` for a function), and
+    `const_cast<void>` is `const_cast to 'void', which is not a
+    reference, pointer-to-object, or pointer-to-data-member` (WP-327;
+    test `expr.static.cast/bad-cast-decayed-operand.cpp`).
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold. They are run-time
   behavior diagnostics anchored at the right operand (clang's

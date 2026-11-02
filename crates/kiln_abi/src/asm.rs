@@ -820,6 +820,19 @@ mod tests {
     }
 
     #[test]
+    fn global_register_variables() {
+        let f = global_register_size_mismatch;
+        assert_eq!(f(Arch::AArch64, "x0", 64), Some(false));
+        assert_eq!(f(Arch::AArch64, "w8", 64), Some(true));
+        assert_eq!(f(Arch::AArch64, "sp", 32), Some(true));
+        assert_eq!(f(Arch::AArch64, "lr", 64), None);
+        assert_eq!(f(Arch::X86_64, "rsp", 64), Some(false));
+        assert_eq!(f(Arch::X86_64, "ebp", 64), Some(true));
+        assert_eq!(f(Arch::X86_64, "%rsp", 64), None);
+        assert_eq!(f(Arch::X86_64, "rax", 64), None);
+    }
+
+    #[test]
     fn simplify() {
         let outs = [out(Arch::AArch64, "=r").unwrap()];
         assert_eq!(simplify_constraint(Arch::AArch64, "r,m", &outs), "r|m");

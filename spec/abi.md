@@ -745,7 +745,10 @@ asm hooks, shared by sema and codegen: `ConstraintInfo` and
 `+`/`=`/`&`, tied numbers and `[name]`s, immediate classes),
 `validate_constraint_modifier` (the aarch64 `w`/`x` width warning),
 register and clobber names (`is_valid_register_name`, `is_valid_clobber`,
-`normalized_register_name`), `machine_clobbers`, `simplify_constraint`
+`normalized_register_name`), `global_register_size_mismatch` (clang's
+`validateGlobalRegisterVariable` for GNU global register variables:
+`None` when unsuitable, else whether the size differs; WP-327, spec/sema.md
+[dcl.stc]), `machine_clobbers`, `simplify_constraint`
 (clang's `SimplifyConstraint`), and the template parser
 `analyze_asm_string` (pieces: text, operand with modifier; clang's
 errors) with `generate_asm_string` producing LLVM's `$`-syntax as bytes.
