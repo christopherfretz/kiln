@@ -7127,11 +7127,47 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
+    /// Class `q` printed as its injected-class-name type when it is a
+    /// class template's pattern or a partial specialization (see
+    /// [`Sema::qualifier_desc`]); `None` for any other class.
+    fn current_instantiation_desc(&self, q: DeclId) -> Option<String> {
+        let first = self.ast.first(q);
+        if let Some((_, info)) = self.ast.partial_spec_info(first) {
+            let mut s = self.decl_name(q);
+            let names = crate::names::SemaNames::new(self);
+            let canon = self.ast.types.canonical_args(info.args);
+            kiln_ast::types::write_arg_list(&self.ast.types, &names, canon, &mut s);
+            return Some(s);
+        }
+        let t = self.ast.described_template(first)?;
+        let params: Vec<String> = self
+            .template_params(t)
+            .iter()
+            .map(|&p| {
+                let mut n = self.decl_name(p);
+                if self.ast.template_parm(p).is_some_and(|x| x.pack) {
+                    n.push_str("...");
+                }
+                n
+            })
+            .collect();
+        Some(format!("{}<{}>", self.decl_name(q), params.join(", ")))
+    }
+
     /// How a qualifier context is named in "no member named 'x' in ...".
     pub fn qualifier_desc(&self, q: DeclId) -> String {
         match self.ast.decls.get(q).kind() {
             DeclKind::Namespace => format!("namespace '{}'", self.qualified_decl_name(q)),
             DeclKind::TranslationUnit => "the global namespace".to_owned(),
+            // A class template's pattern or a partial specialization is
+            // printed as its injected-class-name type (clang's
+            // `getTypeDeclType`, an `InjectedClassNameType`): unqualified,
+            // the pattern with its parameters (`'V<T>'`, a pack `'P<T...>'`),
+            // a partial specialization with its canonical arguments
+            // (`'V<type-parameter-0-0 *>'`) ([temp.dep.type]/1).
+            DeclKind::CXXRecord if self.current_instantiation_desc(q).is_some() => {
+                format!("'{}'", self.current_instantiation_desc(q).unwrap_or_default())
+            }
             // clang prints the context's qualified name (the canonical
             // type: `'N::B'`, not `'B' (aka 'N::B')`).
             _ => {

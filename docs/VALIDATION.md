@@ -145,7 +145,11 @@ over a static feature set, and `ADDITIONAL_COMPILE_FLAGS`. `--gate m3` is
 the M3 exit gate. A run's `--report` regenerates the per-directory table and
 the error-cluster table of a status page (`docs/status/libcxx-m3.md`). It is
 run by hand or periodically, and the pass rate is tracked there. The
-contract is `spec/libcxx.md`.
+contract is `spec/libcxx.md`. It builds kiln++ with the optimized `harness`
+cargo profile by default (`--profile debug|harness|release`; `spec/libcxx.md`
+"Build profiles"), and the rows of `docs/status/libcxx.md` and
+`docs/status/libcxx-m3.md` come from `harness` runs from WP-319 on; each row
+names its profile (earlier rows used a debug kiln++).
 
 `cargo xtask libstdcxx` is the libstdc++ consumption track, also outside
 `ci`. It compiles every public header of the system libstdc++ (the
