@@ -27,7 +27,7 @@ use crate::declspec::{
     Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign,
     SpecialName, StorageSpec, TypeSpecKind, Width,
 };
-use crate::init::{InitValue, Initializer};
+use crate::init::Initializer;
 use crate::local_friend::LocalFriend;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
@@ -561,12 +561,29 @@ impl Sema<'_, '_> {
             };
             return self.ast.types.qualify(t, base.quals());
         }
+        if let TypeView::DependentTemplateSpecialization { keyword, nns, .. } = view {
+            // `typename X<P...>::template M<A...>` itself.
+            let Some(t) = self.rebuild_ci_member_template_id(base, qual, loc) else {
+                return base;
+            };
+            let t = self.ast.types.elaborated(keyword, Some(nns), t);
+            return self.ast.types.qualify(t, base.quals());
+        }
         let TypeView::DependentName { keyword, nns, name } = view else {
             return base;
         };
-        let kiln_ast::types::Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else {
+        let kiln_ast::types::Nns::Type { prefix, ty, template_kw } = self.ast.types.nns_view(nns)
+        else {
             return base;
         };
+        // `typename X<P...>::template M<A...>::m`: the qualifier names the
+        // member template `M` of the current instantiation (libstdc++
+        // `valarray<_Tp>::template _UnaryOp<_Name>::_Rt`).
+        if let Some(r) = self.rebuild_ci_member_template_id(ty, qual, loc) {
+            let n = self.ast.types.nns(kiln_ast::types::Nns::Type { prefix, ty: r, template_kw });
+            let t = self.ast.types.dependent_name(keyword, n, name);
+            return self.ast.types.qualify(t, base.quals());
+        }
         let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty()) else {
             return base;
         };
@@ -591,6 +608,48 @@ impl Sema<'_, '_> {
         };
         let t = self.ast.types.elaborated(keyword, Some(nns), t);
         self.ast.types.qualify(t, base.quals())
+    }
+
+    /// `X<P...>::template M<A...>` written before the declarator-id of a
+    /// member of class template `X`, rebuilt as the specialization of the
+    /// member template `M` of the current instantiation, as `M<A...>`
+    /// names it inside the class ([temp.dep.type]/6). `None` when `ty` is
+    /// not that form or `M` is not a member class or alias template.
+    fn rebuild_ci_member_template_id(
+        &mut self,
+        ty: QualType,
+        qual: DeclId,
+        loc: Loc,
+    ) -> Option<QualType> {
+        let TypeView::DependentTemplateSpecialization { nns, name, args, .. } =
+            self.ast.types.view(ty.ty())
+        else {
+            return None;
+        };
+        let kiln_ast::types::Nns::Type { ty: cty, .. } = self.ast.types.nns_view(nns) else {
+            return None;
+        };
+        let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(cty.ty())
+        else {
+            return None;
+        };
+        let tmpl = self.ast.types.template_decl(tn)?;
+        let entered = self.act_on_enter_declarator_scope(qual);
+        let pat = self.current_instantiation(tmpl, cty);
+        self.act_on_exit_declarator_scope(entered);
+        let found = self.lookup_qualified(pat?, name, LookupKind::Ordinary);
+        let &[m] = found.decls.as_slice() else { return None };
+        if !matches!(self.kind_of(m), DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate) {
+            return None;
+        }
+        let tn = self.template_name_for(m);
+        let list = self.ast.types.args(args).to_vec();
+        let Ok(crate::templ::actions::TemplateIdRef::Type(t)) =
+            self.act_template_id(tn, &list, loc, loc)
+        else {
+            return None;
+        };
+        Some(self.ast.types.qualify(t, ty.quals()))
     }
 
     /// Before the initializer of `v`, declared with a qualified
@@ -2085,6 +2144,7 @@ impl Sema<'_, '_> {
         }
         self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
+        self.recognize_builtin_decl(decl, &mut attrs);
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
@@ -2575,6 +2635,18 @@ impl Sema<'_, '_> {
         if l.is_valid() && self.is_dependent_type(ty) {
             self.ref_locs.insert(id, l);
         }
+    }
+
+    /// Whether return type `ret` is const-qualified after its reference
+    /// (`const T &`): an assignment to the call names it
+    /// ([`Sema::type_spec_locs`]).
+    fn returns_const(&self, ret: QualType) -> bool {
+        let t = &self.ast.types;
+        let p = match t.canonical_view(ret) {
+            TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
+            _ => ret,
+        };
+        t.effective_quals(p).is_const()
     }
 
     /// `using name = type-id;` ([dcl.typedef]/2).
@@ -3205,11 +3277,14 @@ impl Sema<'_, '_> {
         // Where a substituted signature's return and parameter types are
         // diagnosed (clang `BuildFunctionType` at the declaration's
         // begin, §5.6).
+        // A const-qualified return type is also noted there when the call
+        // is assigned to ([expr.assign]/1, `ret_type_loc`).
         if let Some(tl) = ds.type_loc
             && tl != d.name_loc()
             && self.ast.types.proto(ty).is_some_and(|p| {
                 self.ast.types.is_dependent(p.ret())
                     || self.ast.types.params(p).iter().any(|&q| self.ast.types.is_dependent(q))
+                    || self.returns_const(p.ret())
             })
         {
             self.type_spec_locs.insert(f, tl);
@@ -4624,22 +4699,19 @@ impl Sema<'_, '_> {
         direct: bool,
     ) -> Option<QualType> {
         use crate::templ::auto::{AutoFail, AutoInit};
-        let list_items = |l: &crate::init::InitList| -> Vec<Option<ExprId>> {
-            l.items
-                .iter()
-                .map(|it| match it.value {
-                    InitValue::Expr(e) if it.designator.is_empty() => Some(e),
-                    _ => None,
-                })
-                .collect()
-        };
         let (items, kind, lbrace) = match init {
             Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, None),
             Initializer::Paren(es, ..) => {
                 (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
             }
-            Initializer::List(l) if direct => (list_items(l), AutoInit::DirectList, Some(l.lbrace)),
-            Initializer::List(l) => (list_items(l), AutoInit::CopyList, Some(l.lbrace)),
+            Initializer::List(l) if direct => (
+                crate::templ::auto::auto_list_items(l, false),
+                AutoInit::DirectList,
+                Some(l.lbrace),
+            ),
+            Initializer::List(l) => {
+                (crate::templ::auto::auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace))
+            }
         };
         // [temp.deduct.call]/6: every member of an overload set deduces
         // `auto`, so nothing is deduced (a placeholder in a function
@@ -4654,7 +4726,22 @@ impl Sema<'_, '_> {
             None => match self.deduce_auto(declared, &items, kind) {
                 Ok(t) => {
                     let at = self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or(loc);
-                    return Some(if self.check_placeholder_constraint(declared, t, at) {
+                    // `constexpr C decltype(auto) x = e;`: the constraint
+                    // is checked against `decltype(e)`, before `constexpr`
+                    // adds its `const` ([dcl.type.auto.deduct]/2,/5).
+                    let (checked, ct) = match self.ast.types.canonical_view(declared) {
+                        TypeView::Auto { keyword: AutoKeyword::DecltypeAuto, .. }
+                            if !self.ast.types.canonical(declared).quals().is_empty() =>
+                        {
+                            let unq = self.ast.types.unqualified(declared);
+                            match self.deduce_auto(unq, &items, kind) {
+                                Ok(t0) => (unq, t0),
+                                Err(_) => (declared, t),
+                            }
+                        }
+                        _ => (declared, t),
+                    };
+                    return Some(if self.check_placeholder_constraint(checked, ct, at) {
                         t
                     } else {
                         QualType::ERROR
@@ -5329,7 +5416,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn tag_matches(&self, d: DeclId, keyword: TagKeyword) -> bool {
+    pub(crate) fn tag_matches(&self, d: DeclId, keyword: TagKeyword) -> bool {
         let n = self.ast.decls.get(d);
         match keyword {
             TagKeyword::Enum => n.kind() == DeclKind::Enum,
@@ -6596,6 +6683,15 @@ impl Sema<'_, '_> {
         }
         if let Some(s) = self.scopes.iter_mut().rev().find(|s| !s.is_transparent()) {
             s.using_dirs.push(nominated);
+            // A namespace-scope directive outlives the scope instance: it
+            // is seen from every later reopening of the namespace, from
+            // instantiations, and through qualified lookup and other
+            // directives ([namespace.udir]/4, [namespace.qual]/2).
+            if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit)
+                && let Some(e) = s.entity
+            {
+                self.ast.add_using_directive(e, nominated);
+            }
         }
         d
     }
@@ -6630,8 +6726,13 @@ impl Sema<'_, '_> {
         // [dcl.pre]/11 (P2741): a message that is not a string literal is
         // checked now, evaluated only if the assertion fails.
         let parts = msg.and_then(|m| self.static_assert_message_parts(m));
-        // [dcl.pre]/10: a value-dependent condition waits for instantiation.
-        if !self.has_errors_in(c) && !self.expr_is_value_dependent(c) {
+        // [dcl.pre]/10: a value-dependent condition waits for instantiation,
+        // and so does any condition in a template definition (P2593R1,
+        // a DR: `else static_assert(false);` in a discarded branch;
+        // clang's `CurContext->isDependentContext()`).
+        let in_definition =
+            self.in_template() || self.ast.decls.get(self.ctx).has(DeclFlags::DEPENDENT_CTX);
+        if !self.has_errors_in(c) && !self.expr_is_value_dependent(c) && !in_definition {
             match self.eval_const(c, EvalContext::new(EvalKind::StaticAssert, loc)) {
                 Ok(v) if self.const_truth(v) != Some(false) => {
                     if let (Some(m), Some(Some((size, data)))) = (msg, parts) {
@@ -7698,6 +7799,7 @@ impl Sema<'_, '_> {
     }
 
     /// [`Sema::act_on_attribute`] without the scope flag.
+    #[allow(clippy::too_many_lines)]
     fn attribute_node(
         &mut self,
         syntax: AttrSyntax,
@@ -7722,6 +7824,7 @@ impl Sema<'_, '_> {
                         | "exclude_from_explicit_instantiation"
                         | "flag_enum"
                         | "enum_extensibility"
+                        | "preferred_name"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
@@ -7748,6 +7851,20 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
+        }
+        // `preferred_name(typedef-name)`: the type in `b`, checked
+        // against its class template in `check_decl_attrs`.
+        if kind == AttrKind::PREFERRED_NAME {
+            let [AttrArg::Type(t)] = args else {
+                let msg = self
+                    .diag(DiagId::parse_attribute_wrong_arg_count, loc)
+                    .arg("preferred_name")
+                    .arg("1");
+                self.emit(msg);
+                return None;
+            };
+            let node = AttrNode { kind, syntax, flags: 0, loc, a: 0, b: t.to_raw() };
+            return Some(self.ast.attrs.push(node));
         }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
@@ -7979,6 +8096,56 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(d, &attrs);
         }
+    }
+
+    /// clang `handlePreferredName`: `preferred_name` applies to a class
+    /// template (else it is ignored with a warning) and names a typedef
+    /// for one of its specializations (else an error); kept when valid.
+    /// Type names print it ([`kiln_ast::types::TypeNames::preferred_name`]).
+    pub(crate) fn check_preferred_name(&mut self, d: DeclId, node: AttrNode) -> bool {
+        let tmpl = (self.ast.decls.get(d).kind() == DeclKind::CXXRecord)
+            .then(|| self.ast.described_template(d))
+            .flatten();
+        let Some(tmpl) = tmpl else {
+            let msg = self
+                .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
+                .arg("'preferred_name'")
+                .arg("class templates");
+            self.emit(msg);
+            return false;
+        };
+        let Some(t) = QualType::from_raw(node.b) else { return false };
+        if self.is_error_type(t) {
+            return false;
+        }
+        let ts = &self.ast.types;
+        let mut named = t;
+        while let TypeView::Elaborated { named: n, .. } = ts.view(named.ty()) {
+            named = n;
+        }
+        let typedef = match ts.view(named.ty()) {
+            TypeView::Typedef { decl, .. } if t.quals().is_empty() => Some(decl),
+            _ => None,
+        };
+        let of_tmpl = ts
+            .as_record(t)
+            .and_then(|r| self.ast.spec_info(r))
+            .is_some_and(|(_, i)| self.ast.first(i.template) == self.ast.first(tmpl));
+        if typedef.is_some() && of_tmpl {
+            return true;
+        }
+        let mut msg = self
+            .diag(DiagId::sema_attribute_preferred_name_arg_invalid, node.loc)
+            .arg(self.ty_arg(t))
+            .arg(format!("'{}'", self.decl_name(tmpl)));
+        if let Some(td) = typedef {
+            let td_note = self
+                .diag(DiagId::note_entity_declared_at, self.ast.decls.get(td).loc())
+                .arg(format!("'{}'", self.decl_name(td)));
+            msg = msg.with_note(td_note);
+        }
+        self.emit(msg);
+        false
     }
 
     /// [dcl.align]/1: an `alignas` specifier applies to a variable that
@@ -8248,6 +8415,7 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("hot", _, true) => AttrKind::HOT,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
         ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
+        ("preferred_name", _, gnu) if gnu || clang_scope => AttrKind::PREFERRED_NAME,
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,

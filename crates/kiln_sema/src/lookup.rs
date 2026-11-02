@@ -267,17 +267,29 @@ impl Sema<'_, '_> {
             return self.lookup_in_class_dn(ctx, name, kind);
         }
         let found = self.lookup_in_dn(ctx, name, kind);
-        if !found.is_empty() {
+        if !found.is_empty() || self.ast.lookup.has_no_using_directives() {
             return found;
         }
-        // Using-directives at namespace scope are recorded on the scope
-        // that was active; search scopes whose entity is `ctx`.
+        // [namespace.qual]/2: when `ctx` (with its inline namespace set)
+        // declares nothing acceptable, the namespaces nominated by its
+        // using-directives are searched, each in the same way, and the
+        // results are united. Every namespace is searched once.
         let mut v = Vec::new();
-        for s in &self.scopes {
-            if s.entity.map(|e| self.ast.first(e)) == Some(self.ast.first(ctx)) {
-                for &n in &s.using_dirs {
-                    v.extend(self.ast.lookup_local(n, name).iter_ordinary());
-                }
+        let mut seen = vec![self.ast.first(ctx)];
+        let mut work: Vec<DeclId> =
+            self.ast.lookup.using_directives(self.ast.primary_context(ctx)).to_vec();
+        work.reverse();
+        while let Some(n) = work.pop() {
+            if seen.contains(&n) {
+                continue;
+            }
+            seen.push(n);
+            let here: Vec<DeclId> = self.ast.lookup_local(n, name).iter_ordinary().collect();
+            if self.filter(here.clone(), kind).is_empty() {
+                let dirs = self.ast.lookup.using_directives(n);
+                work.extend(dirs.iter().rev().copied());
+            } else {
+                v.extend(here);
             }
         }
         self.filter(v, kind)
@@ -343,11 +355,10 @@ impl Sema<'_, '_> {
     fn lookup_name_scoped(&self, dname: DeclName, kind: LookupKind, skip_records: bool) -> Found {
         let ident = dname.as_ident();
         let name = ident.unwrap_or(Symbol::from_index(0));
-        // Namespaces nominated by block-scope using-directives: their
-        // members appear as if declared in the nearest enclosing
-        // namespace that contains both the directive and the nominated
-        // namespace ([namespace.udir]/2).
-        let mut local_dirs: Vec<DeclId> = Vec::new();
+        // The namespaces nominated by the using-directives in scope here
+        // and the namespace each one's members appear in (computed when
+        // the walk first reaches a namespace scope; [namespace.udir]/2).
+        let mut udirs: Option<Vec<(DeclId, DeclId)>> = None;
         for (i, s) in self.scopes.iter().enumerate().rev() {
             // [basic.scope.param]: the parameters of a declarator being
             // parsed, before the scope the declarator appears in.
@@ -386,7 +397,6 @@ impl Sema<'_, '_> {
                 continue;
             }
             if s.is_local() {
-                local_dirs.extend(s.using_dirs.iter().copied());
                 if ident.is_none() {
                     continue;
                 }
@@ -436,31 +446,99 @@ impl Sema<'_, '_> {
                 continue;
             }
             let mut v: Vec<DeclId> = self.ast.lookup_local(entity, dname).iter_ordinary().collect();
-            let own = self.filter(v.clone(), kind);
-            if !own.is_empty() {
-                return own;
+            if !matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit) {
+                let own = self.filter(v, kind);
+                if !own.is_empty() {
+                    return own;
+                }
+                continue;
             }
-            v.clear();
-            for &n in &s.using_dirs {
-                v.extend(self.ast.lookup_local(n, dname).iter_ordinary());
-            }
-            if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit) {
-                let mut i = 0;
-                while i < local_dirs.len() {
-                    if self.encloses(entity, local_dirs[i]) {
-                        let n = local_dirs.remove(i);
-                        v.extend(self.ast.lookup_local(n, dname).iter_ordinary());
-                    } else {
-                        i += 1;
-                    }
+            // [namespace.udir]/2: the members of a nominated namespace
+            // appear as if declared in the nearest enclosing namespace of
+            // both the directive's scope and the nominated namespace; the
+            // first namespace scope out from there that encloses it when
+            // that namespace has no open scope.
+            let dirs = udirs.get_or_insert_with(|| self.visible_using_directives());
+            let mut j = 0;
+            while j < dirs.len() {
+                if self.encloses(entity, dirs[j].1) {
+                    let (n, _) = dirs.remove(j);
+                    v.extend(self.ast.lookup_local(n, dname).iter_ordinary());
+                } else {
+                    j += 1;
                 }
             }
-            let via = self.filter(v, kind);
-            if !via.is_empty() {
-                return via;
+            // United with the namespace's own declarations (clang's
+            // `CppNamespaceLookup`).
+            if !v.is_empty() {
+                let found = self.filter(v, kind);
+                if !found.is_empty() {
+                    return found;
+                }
             }
         }
         Found::default()
+    }
+
+    /// The namespaces nominated by the using-directives visible from the
+    /// current scope, transitively ([namespace.udir]/4), each with the
+    /// namespace its members appear in for unqualified lookup: the
+    /// nearest enclosing namespace of the nominated namespace and of the
+    /// innermost namespace containing the directive's scope (clang's
+    /// `UnqualUsingDirectiveSet`). A block-scope directive counts as in
+    /// the innermost enclosing namespace of the lookup. Each namespace
+    /// appears once.
+    fn visible_using_directives(&self) -> Vec<(DeclId, DeclId)> {
+        let mut out: Vec<(DeclId, DeclId)> = Vec::new();
+        let tables = &self.ast.lookup;
+        let has_local = self.scopes.iter().any(|s| s.is_local() && !s.using_dirs.is_empty());
+        if tables.has_no_using_directives() && !has_local {
+            return out;
+        }
+        let innermost_ns = self
+            .scopes
+            .iter()
+            .rev()
+            .filter(|s| matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit))
+            .find_map(|s| s.entity)
+            .unwrap_or(self.ast.tu);
+        let mut work: Vec<(DeclId, DeclId)> = Vec::new();
+        for s in self.scopes.iter().rev() {
+            if s.is_local() {
+                work.extend(s.using_dirs.iter().rev().map(|&n| (n, innermost_ns)));
+            } else if matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit)
+                && let Some(e) = s.entity
+            {
+                let dirs = tables.using_directives(self.ast.primary_context(e));
+                work.extend(dirs.iter().rev().map(|&n| (n, e)));
+            }
+            while let Some((n, eff)) = work.pop() {
+                let n = self.ast.first(n);
+                if out.iter().any(|&(m, _)| m == n) {
+                    continue;
+                }
+                out.push((n, self.common_namespace(n, eff)));
+                let next = tables.using_directives(n);
+                work.extend(next.iter().rev().map(|&m| (m, eff)));
+            }
+        }
+        out
+    }
+
+    /// The nearest namespace (or the translation unit) that encloses
+    /// both namespace `a` and namespace `b` (each encloses itself).
+    fn common_namespace(&self, a: DeclId, b: DeclId) -> DeclId {
+        let mut cur = Some(b);
+        for _ in 0..10_000 {
+            let Some(c) = cur else { break };
+            if matches!(self.kind_of(c), DeclKind::Namespace | DeclKind::TranslationUnit)
+                && self.encloses(c, a)
+            {
+                return self.ast.first(c);
+            }
+            cur = self.ast.decls.get(c).ctx();
+        }
+        self.ast.tu
     }
 
     /// The order in which clang lists the declarations of an ambiguous

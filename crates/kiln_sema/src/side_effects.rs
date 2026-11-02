@@ -261,7 +261,7 @@ impl Sema<'_, '_> {
     }
 
     /// The function a call expression calls, if it names one.
-    fn callee_decl(&self, c: ExprId) -> Option<kiln_ast::DeclId> {
+    pub(crate) fn callee_decl(&self, c: ExprId) -> Option<kiln_ast::DeclId> {
         let exprs = &self.ast.exprs;
         let mut r = exprs.callee(c);
         for _ in 0..64 {

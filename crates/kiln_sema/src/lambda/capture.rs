@@ -738,7 +738,12 @@ impl Sema<'_, '_> {
             self.emit(msg);
             QualType::ERROR
         };
-        let conv = if self.is_error_type(ty) {
+        // A class that is (a member of) the current instantiation is a
+        // dependent type ([temp.dep.type]/7): its constructors are chosen
+        // at instantiation, as for a variable (`defer_dependent_init`).
+        let dependent_class =
+            self.ast.types.is_dependent(ty) && self.ast.types.as_record(ty).is_some();
+        let conv = if self.is_error_type(ty) || dependent_class {
             init
         } else {
             // clang `InitializedEntity::InitializeLambdaCapture`.

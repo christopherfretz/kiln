@@ -523,6 +523,12 @@ impl Sema<'_, '_> {
                     }
                 };
                 self.emit(msg);
+                // clang's BuildCallToObjectOfClassType keeps the deleted
+                // call in the AST, and naming the operator() for it is a
+                // use ([dcl.fct.def.delete]/2): a second error at the `(`.
+                if form == OperForm::Call {
+                    self.diagnose_deleted_use(f, loc);
+                }
                 None
             }
             OvlOutcome::Ambiguous => {

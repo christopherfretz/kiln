@@ -120,9 +120,6 @@ pub(crate) struct UserConv {
     pub after: StandardConversion,
     /// The kind.
     pub via: UdcVia,
-    /// The constructor is an initializer-list constructor called with a
-    /// braced-init-list ([over.ics.rank]/3.1).
-    pub list_ctor: bool,
 }
 
 /// Why there is no implicit conversion sequence (for the candidate
@@ -799,7 +796,6 @@ impl Sema<'_, '_> {
                     found: None,
                     after: id,
                     via: UdcVia::Aggregate,
-                    list_ctor: false,
                 });
             }
             return Ics::bad(BadKind::InitList, void_from, to);
@@ -1504,7 +1500,6 @@ impl Sema<'_, '_> {
                 found: Some(cand.found),
                 after,
                 via: UdcVia::ConvFn,
-                list_ctor: false,
             });
         }
         let after = StandardConversion::identity(to, to, RefBinding::NONE);
@@ -1514,7 +1509,6 @@ impl Sema<'_, '_> {
             found: Some(cand.found),
             after,
             via: UdcVia::Ctor,
-            list_ctor,
         })
     }
 
@@ -1865,12 +1859,10 @@ impl Sema<'_, '_> {
         match (a, b) {
             (Ics::Standard(x), Ics::Standard(y)) => compare_standard_conversions(self, x, y),
             (Ics::UserDefined(x), Ics::UserDefined(y)) => {
-                // /3.1: a list-initialization sequence converting to
-                // std::initializer_list is better (approximated by the
-                // initializer-list-constructor bit).
-                if x.list_ctor != y.list_ctor {
-                    return if x.list_ctor { IcsCompare::Better } else { IcsCompare::Worse };
-                }
+                // A class initialized through its initializer-list
+                // constructor does not convert to std::initializer_list
+                // (/3.1.1 names the parameter type): two such sequences
+                // through different constructors are indistinguishable.
                 // /3.3: the same function (or aggregate initialization of
                 // the same class): compare the second standard
                 // conversions.

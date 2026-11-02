@@ -62,7 +62,6 @@ impl Sema<'_, '_> {
                     found: Some(found),
                     after,
                     via: UdcVia::ConvFn,
-                    list_ctor: false,
                 }));
             }
             bad => {

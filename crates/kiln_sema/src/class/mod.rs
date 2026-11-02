@@ -230,7 +230,7 @@ impl Sema<'_, '_> {
     /// empty slice when there is no base-clause. Invalid specifiers are
     /// diagnosed and dropped; the class stays valid.
     pub fn act_on_base_specifiers(&mut self, r: DeclId, specs: &[BaseSpecInfo]) {
-        self.attach_bases(r, specs);
+        let _ = self.attach_bases(r, specs);
     }
 
     /// `public:` / `protected:` / `private:` at `loc` in the class being

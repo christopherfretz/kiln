@@ -455,8 +455,96 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        // [temp.func.order]/6: equally specialized, the more constrained.
-        self.template_more_constrained(a, b)
+        // [temp.func.order]/6: equally specialized, the more constrained,
+        // provided /6.1-6.2.2 make the constraints comparable.
+        self.constraints_comparable(a, sa, b, sb) && self.template_more_constrained(a, b)
+    }
+
+    /// [temp.func.order]/6.1-6.2.2 (clang `getMoreSpecializedTemplate`):
+    /// constraints decide between equally specialized `a` and `b` only
+    /// when their template-parameter-lists and function parameter lists
+    /// have the same length, the corresponding template parameters are
+    /// equivalent ignoring constraints ([temp.over.link]/6), the
+    /// positionally corresponding function parameters have the same type
+    /// ignoring top-level cv ([dcl.fct]/5), and, for conversion
+    /// functions, the conversion types are the same.
+    fn constraints_comparable(&mut self, a: DeclId, sa: Side, b: DeclId, sb: Side) -> bool {
+        let heads = |s: &Self, t: DeclId| {
+            let i = s.ast.template_info(t)?;
+            let l = *s.ast.templates.param_list(i.params);
+            Some(s.ast.lists.iter::<DeclId>(l.params).collect::<Vec<DeclId>>())
+        };
+        let (Some(ha), Some(hb)) = (heads(self, a), heads(self, b)) else { return false };
+        if ha.len() != hb.len()
+            || !ha.iter().zip(&hb).all(|(&x, &y)| self.template_params_equivalent(x, y))
+        {
+            return false;
+        }
+        let (Some(pa), Some(pb)) =
+            (self.declared_param_types(a, sa), self.declared_param_types(b, sb))
+        else {
+            return false;
+        };
+        pa.len() == pb.len()
+            && pa.iter().zip(&pb).all(|(&x, &y)| self.ast.types.same_unqualified(x, y))
+    }
+
+    /// The function parameter types of `ft` compared by
+    /// [`Self::constraints_comparable`]: all declared parameters, after
+    /// an inserted object parameter and reversed as `side` says
+    /// ([temp.func.order]/3), or the conversion type.
+    fn declared_param_types(&mut self, ft: DeclId, side: Side) -> Option<Vec<QualType>> {
+        let f = self.templated_function(ft)?;
+        match side {
+            Side::Call { object, reverse, .. } => {
+                let mut v = self.proto_param_types(f).0;
+                if object {
+                    let c = self.ast.decls.get(f).ctx()?;
+                    v.insert(0, self.class_type(c));
+                }
+                if reverse {
+                    v.reverse();
+                }
+                Some(v)
+            }
+            Side::Conversion => Some(vec![self.conversion_result_type(f)]),
+        }
+    }
+
+    /// [temp.over.link]/6 equivalence of template parameters `x` and `y`
+    /// ignoring type-constraints (clang `TPL_TemplateParamsEquivalent`):
+    /// same kind and packness, same non-type parameter type, and
+    /// equivalent template template parameter heads.
+    fn template_params_equivalent(&self, x: DeclId, y: DeclId) -> bool {
+        let (kx, ky) = (self.kind_of(x), self.kind_of(y));
+        if kx != ky {
+            return false;
+        }
+        let (ix, iy) = (self.ast.template_parm(x).copied(), self.ast.template_parm(y).copied());
+        let (Some(ix), Some(iy)) = (ix, iy) else { return ix.is_none() && iy.is_none() };
+        if ix.pack != iy.pack {
+            return false;
+        }
+        match kx {
+            DeclKind::NonTypeTemplateParm => {
+                match (self.ast.decls.get(x).ty(), self.ast.decls.get(y).ty()) {
+                    (Some(tx), Some(ty)) => self.ast.types.same_type(tx, ty),
+                    _ => false,
+                }
+            }
+            DeclKind::TemplateTemplateParm => match (ix.params, iy.params) {
+                (Some(a), Some(b)) => {
+                    let (la, lb) =
+                        (*self.ast.templates.param_list(a), *self.ast.templates.param_list(b));
+                    let pa: Vec<DeclId> = self.ast.lists.iter::<DeclId>(la.params).collect();
+                    let pb: Vec<DeclId> = self.ast.lists.iter::<DeclId>(lb.params).collect();
+                    pa.len() == pb.len()
+                        && pa.iter().zip(&pb).all(|(&p, &q)| self.template_params_equivalent(p, q))
+                }
+                (a, b) => a.is_none() && b.is_none(),
+            },
+            _ => true,
+        }
     }
 
     /// The parameter types of function template `ft`'s templated

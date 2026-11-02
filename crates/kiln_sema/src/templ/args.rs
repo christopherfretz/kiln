@@ -181,6 +181,19 @@ impl Sema<'_, '_> {
         arg_locs: &[Loc],
         loc: Loc,
     ) -> Result<ConvertedArgs, ()> {
+        let saved = self.inst.template_id_loc.replace(loc);
+        let r = self.check_template_args_at(tmpl, written, arg_locs, loc);
+        self.inst.template_id_loc = saved;
+        r
+    }
+
+    fn check_template_args_at(
+        &mut self,
+        tmpl: DeclId,
+        written: &[TemplateArg],
+        arg_locs: &[Loc],
+        loc: Loc,
+    ) -> Result<ConvertedArgs, ()> {
         let head = self.head_template(tmpl);
         let tmpl = self.ast.first(tmpl);
         let params = self.template_params(head);
@@ -282,6 +295,12 @@ impl Sema<'_, '_> {
             {
                 Err(())
             }
+            // An erroneous argument (`T<undeclared>`) was diagnosed when
+            // it was formed (clang's `RecoveryExpr` makes the template-id
+            // invalid without a second error).
+            (DeclKind::TemplateTypeParm, ArgView::Expr { expr, .. }) if self.is_err_expr(expr) => {
+                Err(())
+            }
             (DeclKind::TemplateTypeParm, _) => {
                 let d = self.diag(DiagId::sema_template_arg_must_be_type, at);
                 let d = self.note_param_here(d, p);
@@ -353,6 +372,7 @@ impl Sema<'_, '_> {
         }
         let args = self.prior_levels(tmpl, depth, prior);
         let mut s = Substituter::new(self, &args);
+        s.final_subst = true;
         s.ty(ty, at).map_err(|_| ())
     }
 
@@ -394,6 +414,7 @@ impl Sema<'_, '_> {
     /// `e` converted to the type of non-type parameter `p` as a
     /// converted constant expression ([temp.arg.nontype]/2) and
     /// evaluated: a `Value` argument.
+    #[allow(clippy::too_many_lines)]
     fn convert_nttp_arg(
         &mut self,
         tmpl: DeclId,
@@ -406,7 +427,33 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return Err(());
         }
-        let mut pty = self.nttp_type(tmpl, depth, p, prior, at)?;
+        // A type substituted from prior arguments is substituted under a
+        // frame and checked at the parameter (clang `CheckTemplateArgument`:
+        // `CheckNonTypeTemplateParameterType(NTTPType, NTTP->getLocation())`).
+        let declared = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        let substituted = self.ast.types.is_dependent(declared);
+        if substituted {
+            let poi = self.inst.template_id_loc.unwrap_or(at);
+            if !self.push_inst_frame(FrameKind::PriorArgSubstitution, p, tmpl, poi) {
+                return Err(());
+            }
+            let l = self.ast.types.arg_list(prior);
+            self.set_frame_args(l);
+        }
+        let r = self.nttp_type(tmpl, depth, p, prior, at).and_then(|t| {
+            if substituted && !self.is_error_type(t) && !self.ast.types.is_dependent(t) {
+                let ploc = self.ast.decls.get(p).loc();
+                let _ = self.require_complete_silent(t, ploc);
+                if !self.check_nttp_type(t, ploc) {
+                    return Err(());
+                }
+            }
+            Ok(t)
+        });
+        if substituted {
+            self.pop_inst_frame();
+        }
+        let mut pty = r?;
         if self.is_error_type(pty) {
             return Err(());
         }
@@ -416,6 +463,7 @@ impl Sema<'_, '_> {
             return Ok(self.builder().template_arg_expr(e));
         }
         let ety = self.ast.exprs.get(e).ty();
+        let placeholder = pty;
         if matches!(
             self.ast.types.canonical_view(pty),
             TypeView::Auto { keyword: kiln_ast::types::AutoKeyword::Auto, .. }
@@ -450,6 +498,13 @@ impl Sema<'_, '_> {
                 return Err(());
             }
         }
+        // A deduced type is checked at the argument ([temp.param]/6.3),
+        // naming the parameter (clang `CheckTemplateArgument`).
+        if pty != placeholder
+            && !self.check_nttp_type_noting(pty, at, Some(self.ast.decls.get(p).loc()))
+        {
+            return Err(());
+        }
         let t = &self.ast.types;
         if t.as_record(pty).is_some() {
             // [temp.param]/8: a template parameter object (§6.10).
@@ -458,6 +513,26 @@ impl Sema<'_, '_> {
         if t.is_reference(pty) {
             return self.convert_ref_nttp_arg(pty, e, at);
         }
+        // clang `CheckConvertedConstantExpression`: an argument with no
+        // implicit conversion sequence to the parameter's type
+        // ([temp.arg.nontype]/2, [expr.const]/12) is diagnosed as such.
+        if ety != QualType::OVERLOAD && !t.is_dependent(ety) {
+            let info = self.arg_info(e);
+            let ics = self.try_implicit_conversion(&info, pty, crate::overload::IcsOptions::NONE);
+            if ics.is_bad() {
+                // At the argument (`From->getBeginLoc()`), also when the
+                // template-id is substituted.
+                let from = self.begin_loc(e);
+                let from = if from.is_valid() { from } else { at };
+                let d = self
+                    .diag(DiagId::sema_cce_not_implicitly_convertible, from)
+                    .arg(self.ty_arg(ety))
+                    .arg(self.ty_arg(pty));
+                self.emit(d);
+                return Err(());
+            }
+        }
+        let t = &self.ast.types;
         if t.is_array(ety) && !t.is_pointer(pty) {
             self.templ_unimplemented("non-type template parameter of class or reference type", at);
             return Err(());

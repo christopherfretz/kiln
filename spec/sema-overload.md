@@ -617,6 +617,9 @@ added as needed) over the last call.
 ```rust
 pub struct AllocFns { pub new_fn: DeclId, pub delete_fn: Option<DeclId>,
                       pub pass_align: bool, pub sized_delete: bool }
+// as built (overload/alloc.rs): AllocFns { fns, in_class, naming: Option<DeclId> }
+// `naming`: the class a class-scope candidate set was found in, for the
+// access check of [expr.new]/19 and [expr.delete]/12 (WP-335).
 fn find_allocation_functions(&mut self, ty: QualType, array: bool, global_only: bool,
     placement: &[ExprId], loc: SourceLoc) -> Option<AllocFns>;
 fn find_deallocation_function(&mut self, ty: QualType, array: bool, global_only: bool,
@@ -1215,7 +1218,7 @@ types first (interface PR, docs/AGENTS.md); 068b starts from that.
 | **068b** operators | `overload/{oper,builtin,arrow,alloc}.rs`; `expr.rs` one dispatch call per binary/unary/subscript site; `decl.rs` `check_operator_decl`; operator ids | §2.4–2.5, §5, §6, surrogates, memoized built-in tables | `over.match.oper`, `over.built`, `over.call.object`, `over.oper`, `over.ref`, `class.compare` (rewrites), `expr.new` (lookup); 144/121-note relational ambiguity per target; `__float128` per target |
 
 Shared `expr.rs` edits are disjoint (068b: one dispatch call per site), as
-are the diag-id blocks. **Bench** `bench/overload/` (mirrorbind-style): 200
+are the diag-id blocks. **Bench** `bench/overload/` (reference-workload-style): 200
 overloads × 1000 calls, a 50-deep `->` chain, 10k class `a < b`; records
 `ovl.*`, wall time, peak memory (spec/bench.md gates).
 

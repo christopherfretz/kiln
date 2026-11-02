@@ -25,6 +25,9 @@ pub(crate) struct AllocFns {
     pub fns: Vec<DeclId>,
     /// Found in the scope of the allocated class.
     pub in_class: bool,
+    /// The class they were found in, the naming class of their access
+    /// check ([class.access]/4, [expr.new]/19, [expr.delete]/12).
+    pub naming: Option<DeclId>,
 }
 
 impl Sema<'_, '_> {
@@ -53,7 +56,7 @@ impl Sema<'_, '_> {
                 .filter(|&d| matches!(self.kind_of(d), DeclKind::CXXMethod | DeclKind::Function))
                 .collect();
             if !found.decls.is_empty() {
-                return AllocFns { fns, in_class: true };
+                return AllocFns { fns, in_class: true, naming: Some(def) };
             }
         }
         let tu = self.ast.tu;
@@ -63,7 +66,7 @@ impl Sema<'_, '_> {
             .iter()
             .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::Function)
             .collect();
-        AllocFns { fns, in_class: false }
+        AllocFns { fns, in_class: false, naming: None }
     }
 
     /// The usual deallocation function among `fns` ([basic.stc.dynamic.

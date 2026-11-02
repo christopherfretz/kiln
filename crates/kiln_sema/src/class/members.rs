@@ -319,8 +319,8 @@ impl Sema<'_, '_> {
         };
         let Some(rec) = self.ast.decls.record(def) else { return msg };
         let bits = rec.defn;
-        let rd = self.ast.types.canonical(elem);
-        let rd = self.ty_arg(crate::conv::strip_cv(self, rd));
+        // clang streams the `CXXRecordDecl` (`getNameForDiagnostic`), not its type.
+        let rd = format!("'{}'", self.name_for_diagnostic(def));
         let def_loc = self.ast.decls.get(def).loc();
         if bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
             let vbases = self.virtual_bases(def);
@@ -453,20 +453,23 @@ impl Sema<'_, '_> {
     }
 
     /// The base-clause of class `r` (clang's `CheckBaseSpecifier` and
-    /// `AttachBaseSpecifiers`).
-    pub(crate) fn attach_bases(&mut self, r: DeclId, specs: &[BaseSpecInfo]) {
+    /// `AttachBaseSpecifiers`). False when a specifier was dropped (an
+    /// instantiated class is then invalid, clang `SubstBaseSpecifiers`).
+    pub(crate) fn attach_bases(&mut self, r: DeclId, specs: &[BaseSpecInfo]) -> bool {
         if specs.is_empty() {
-            return;
+            return true;
         }
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
         if tag == TagKind::Union {
             self.error(DiagId::sema_union_has_base, self.ast.decls.get(r).loc());
-            return;
+            return false;
         }
+        let mut dropped = false;
         let mut out: Vec<BaseSpec> = Vec::new();
         let mut seen: Vec<DeclId> = Vec::new();
         for s in specs {
             if self.is_error_type(s.ty) {
+                dropped = true;
                 continue;
             }
             // A dependent base ([temp.dep.type]/1) is checked at
@@ -484,21 +487,25 @@ impl Sema<'_, '_> {
             }
             if s.pack_expansion {
                 self.unsupported("pack expansions in a base-specifier list", s.loc);
+                dropped = true;
                 continue;
             }
             let Some(b) = self.ast.types.as_record(s.ty) else {
                 self.error(DiagId::sema_base_not_class, s.loc);
+                dropped = true;
                 continue;
             };
             let btag = self.ast.decls.record(b).map_or(TagKind::Struct, |x| x.tag);
             if btag == TagKind::Union {
                 self.error(DiagId::sema_base_is_union, s.loc);
+                dropped = true;
                 continue;
             }
             // clang `CheckBaseSpecifier`'s `RequireCompleteType`: a base
             // whose instantiation fails here is dropped, quietly; lookup
             // in the derived class does not find its members.
             if self.instantiation_fails(s.ty, s.loc) {
+                dropped = true;
                 continue;
             }
             if !self.require_complete(s.ty, s.loc) {
@@ -515,6 +522,7 @@ impl Sema<'_, '_> {
                     _ => msg,
                 };
                 self.emit(msg);
+                dropped = true;
                 continue;
             }
             let def = self.ast.definition(b).unwrap_or(b);
@@ -526,12 +534,14 @@ impl Sema<'_, '_> {
                         .arg(n),
                 );
                 self.emit(msg);
+                dropped = true;
                 continue;
             }
             if seen.iter().any(|&x| self.ast.first(x) == self.ast.first(def)) {
                 let unq = self.ast.types.canonical(s.ty).without_quals();
                 let msg = self.diag(DiagId::sema_base_duplicate, s.loc).arg(self.ty_arg(unq));
                 self.emit(msg);
+                dropped = true;
                 continue;
             }
             seen.push(def);
@@ -548,6 +558,7 @@ impl Sema<'_, '_> {
             let _ = ast.decls.set_bases(r, &out, &mut ast.lists);
             self.check_inaccessible_bases(r, &out);
         }
+        !dropped
     }
 
     /// The access a base-specifier of `r` grants ([class.access.base]/2):
