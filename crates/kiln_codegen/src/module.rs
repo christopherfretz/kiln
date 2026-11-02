@@ -733,29 +733,65 @@ impl<'a> Cg<'a> {
     /// its enclosing class specialization ([temp.explicit]/14: no
     /// definition is provided; at -O0 clang emits none, even for inline
     /// members, which would be `available_externally`). An inline
-    /// function carrying `always_inline` is the exception: clang emits it
-    /// `available_externally` at every level and always inlines it, so the
-    /// program never references its symbol (libstdc++'s
-    /// `std::allocator<char>::allocate` is not exported). kiln runs no
-    /// inliner, so it emits such a function as an implicit instantiation
-    /// (`linkonce_odr`), which also needs no external definition
-    /// (spec/codegen.md "Explicit instantiation declarations").
+    /// function carrying `always_inline` is the exception
+    /// ([`Self::is_available_externally_fn`]): clang emits it
+    /// `available_externally` at every level and the always-inliner of the
+    /// O0 pipeline inlines and deletes it, so the program never references
+    /// its symbol (libstdc++'s `std::allocator<char>::allocate` is not
+    /// exported; spec/codegen.md "Explicit instantiation declarations").
     pub(crate) fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
         self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
             && !self.is_always_inline_fn(first)
     }
 
+    /// clang `GVA_AvailableExternally` emitted at -O0 (`shouldEmitFunction`
+    /// keeps it only with `AlwaysInlineAttr`): an inline `always_inline`
+    /// function under an explicit instantiation declaration.
+    pub(crate) fn is_available_externally_fn(&self, first: DeclId) -> bool {
+        self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
+            && self.is_always_inline_fn(first)
+    }
+
     /// An inline function with the `always_inline` attribute (on any
     /// redeclaration; an instantiation carries its pattern's attributes).
     fn is_always_inline_fn(&self, first: DeclId) -> bool {
-        let ast = self.ast;
-        ast.decls.function(first).is_some()
+        self.ast.decls.function(first).is_some()
             && self.fn_is_inline(first)
-            && ast.redecls_of(first).any(|r| {
-                ast.lists
-                    .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
-                    .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::ALWAYS_INLINE)
-            })
+            && self.has_always_inline_attr(first)
+    }
+
+    /// Whether a redeclaration of function `d` carries `always_inline`
+    /// and none carries `noinline` (clang
+    /// `SetLLVMFunctionAttributesForDefinition`: `noinline` wins; the
+    /// definition gets `alwaysinline` instead of `noinline optnone`).
+    pub(crate) fn has_always_inline_attr(&self, d: DeclId) -> bool {
+        use kiln_ast::attr::AttrKind as K;
+        self.has_fn_attr(d, K::ALWAYS_INLINE) && !self.has_fn_attr(d, K::NOINLINE)
+    }
+
+    /// The `inline` part of a definition's attributes (clang
+    /// `SetLLVMFunctionAttributesForDefinition` at -O0).
+    pub(crate) fn def_inline_attrs(&self, d: DeclId) -> DefInline {
+        use kiln_ast::attr::AttrKind as K;
+        if !self.has_fn_attr(d, K::ALWAYS_INLINE) {
+            DefInline::OptNone
+        } else if self.has_fn_attr(d, K::NOINLINE) {
+            // `always_inline` keeps `optnone` off even when `noinline`
+            // wins.
+            DefInline::NoInline
+        } else {
+            DefInline::Always
+        }
+    }
+
+    /// Whether a redeclaration of `d` carries an attribute of kind `k`.
+    fn has_fn_attr(&self, d: DeclId, k: kiln_ast::attr::AttrKind) -> bool {
+        let ast = self.ast;
+        ast.redecls_of(d).any(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .any(|a| ast.attrs.get(a).kind == k)
+        })
     }
 
     /// Whether variable or function `first` is under an explicit
@@ -1452,9 +1488,15 @@ impl<'a> Cg<'a> {
         } else {
             None
         };
+        let available_externally = !internal && self.is_available_externally_fn(self.ast.first(d));
         let func = self.m.func_mut(f);
         if internal {
             func.linkage = Linkage::Internal;
+            func.dso_local = false;
+        } else if available_externally {
+            // No comdat and not `dso_local` (clang `setDSOLocal` skips
+            // `available_externally`).
+            func.linkage = Linkage::AvailableExternally;
             func.dso_local = false;
         } else if weak {
             func.linkage = Linkage::WeakOdr;
@@ -1472,12 +1514,16 @@ impl<'a> Cg<'a> {
 
     /// The function attributes of a definition.
     pub fn def_fn_attrs(&mut self, f: DefFnAttrs) -> AttrSetId {
-        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn, extra } = f;
+        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn, inline, extra } =
+            f;
         let mut a = Vec::new();
+        if inline == DefInline::Always {
+            a.push(Attr::Flag(AttrKind::AlwaysInline));
+        }
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
         }
-        if !self.opts.optimize {
+        if inline == DefInline::NoInline || (inline == DefInline::OptNone && !self.opts.optimize) {
             a.push(Attr::Flag(AttrKind::NoInline));
         }
         if is_main {
@@ -1489,7 +1535,7 @@ impl<'a> Cg<'a> {
         if nounwind {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
-        if !self.opts.optimize {
+        if inline == DefInline::OptNone && !self.opts.optimize {
             a.push(Attr::Flag(AttrKind::OptimizeNone));
         }
         a.extend(extra);
@@ -1893,6 +1939,17 @@ pub(crate) fn gval(g: GlobalId) -> Value {
     Value::global(g)
 }
 
+/// The inlining attributes of a definition at -O0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DefInline {
+    /// `noinline optnone`, the default.
+    OptNone,
+    /// `noinline` alone: `always_inline` together with `noinline`.
+    NoInline,
+    /// `alwaysinline`.
+    Always,
+}
+
 /// The inputs of [`Cg::def_fn_attrs`]: the flags that decide a
 /// definition's function attributes.
 #[derive(Clone, Debug)]
@@ -1903,6 +1960,9 @@ pub(crate) struct DefFnAttrs {
     pub(crate) mustprogress: bool,
     pub(crate) vector_width: u64,
     pub(crate) noreturn: bool,
+    /// `noinline optnone`, `noinline` or `alwaysinline`
+    /// ([`Cg::def_inline_attrs`]).
+    pub(crate) inline: DefInline,
     /// `const` / `pure` attributes (`crate::builtins::const_pure_attrs`).
     pub(crate) extra: Vec<Attr>,
 }

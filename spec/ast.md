@@ -210,6 +210,9 @@ struct FunctionData {               // 24 bytes
                                     //   not_selected(1, bit 23: a prospective destructor overload
                                     //   resolution did not select, [class.dtor]/4; LATE, set at `}`;
                                     //   `Ast::destructor` skips it; the dump omits it)
+                                    //   return_deduced(1, bit 24: the return type was deduced from
+                                    //   a placeholder, so the declared type is not the type as
+                                    //   written; LATE; read by the linkage computation, WP-389)
                                     //   (`virtual` is semantic: written or overriding; `virtual_written`
                                     //   is the specifier, which the dump prints. LATE bits, set after
                                     //   the body or at `}`: trivial, has_contracts, is_coroutine,

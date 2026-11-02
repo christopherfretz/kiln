@@ -36,6 +36,8 @@ impl Oven {
         !i.has_union
             && !matches!(i.kind, TyKind::Record { union: true, .. })
             && self.mem.ended(raw, self.types.size(ty))
+            && (self.mem.unconstructed.is_empty()
+                || !self.mem.holds_unconstructed(raw, self.types.size(ty), ty))
     }
 
     /// The implicit destruction of the `ty` object at `raw`: arrays
