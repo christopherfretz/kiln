@@ -468,7 +468,7 @@ impl Sema<'_, '_> {
     /// clang's `isUnsignedIntegerType`: `bool`, an unsigned (or
     /// unsigned-character) integer type, an unsigned `_BitInt`, or a
     /// complete unscoped enumeration with an unsigned underlying type.
-    fn is_unsigned_integer_type(&self, q: QualType) -> bool {
+    pub(crate) fn is_unsigned_integer_type(&self, q: QualType) -> bool {
         if self.ast.types.as_enum(q).is_some() {
             return conv::rank::is_unscoped_enum(self, q)
                 && conv::rank::int_width(self, q).is_some()

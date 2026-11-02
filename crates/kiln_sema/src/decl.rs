@@ -3763,13 +3763,7 @@ impl Sema<'_, '_> {
             let block = local.is_some() && self.in_local_scope();
             if pn.kind() == DeclKind::Var && !block {
                 let pty = pn.ty().unwrap_or(QualType::ERROR);
-                let compatible = self.ast.types.same_type(pty, ty) || {
-                    let t = &self.ast.types;
-                    t.is_array(pty)
-                        && t.is_array(ty)
-                        && (t.array_size(pty).is_none() || t.array_size(ty).is_none())
-                        && t.element(pty).zip(t.element(ty)).is_some_and(|(a, b)| t.same_type(a, b))
-                };
+                let compatible = self.redecl_var_types_compatible(pty, ty);
                 if !compatible {
                     // clang's `diagnoseVarDeclTypeMismatch`: "redefinition" if
                     // the new declaration is a definition (judged before its
@@ -3808,10 +3802,7 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
-        if let Some(p) = prev_ok {
-            // An incomplete array redeclared with a bound takes the bound.
-            let _ = p;
-        }
+        let ty = prev_ok.map_or(ty, |p| self.redecl_var_type(p, ty));
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
         h.lexical = Some(lexical);
         self.mark_pattern_next();
@@ -3843,6 +3834,34 @@ impl Sema<'_, '_> {
             self.record_extern_c(name, v);
         }
         v
+    }
+
+    /// [basic.link]/11: two declarations of one variable may name array
+    /// types that differ only in the presence of a major bound.
+    pub(crate) fn redecl_var_types_compatible(&self, pty: QualType, ty: QualType) -> bool {
+        let t = &self.ast.types;
+        t.same_type(pty, ty)
+            || t.is_array(pty)
+                && t.is_array(ty)
+                && (t.array_size(pty).is_none() || t.array_size(ty).is_none())
+                && t.element(pty).zip(t.element(ty)).is_some_and(|(a, b)| t.same_type(a, b))
+    }
+
+    /// [dcl.array]/8: an array bound omitted by a redeclaration (or by the
+    /// definition of a static data member) is the bound of the earlier
+    /// declaration of `prev`: `extern int a[4]; int a[] = {1};` declares
+    /// `int[4]` (clang `MergeVarDeclTypes`). Otherwise `ty`.
+    pub(crate) fn redecl_var_type(&self, prev: DeclId, ty: QualType) -> QualType {
+        let t = &self.ast.types;
+        if !matches!(t.canonical_view(ty), TypeView::IncompleteArray(_)) {
+            return ty;
+        }
+        let pty = self.ast.decls.get(self.ast.latest(prev)).ty().unwrap_or(QualType::ERROR);
+        if t.array_size(pty).is_some() && self.redecl_var_types_compatible(pty, ty) {
+            pty
+        } else {
+            ty
+        }
     }
 
     /// [basic.def]/5, [dcl.init.general]/7: a variable with an initializer

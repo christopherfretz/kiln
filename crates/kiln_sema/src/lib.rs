@@ -14,6 +14,7 @@
     reason = "sema code uses the standard's short names (e, t, d, l, r)"
 )]
 
+mod absolute_value;
 mod asm;
 mod bitfield_constant;
 mod builtins;
@@ -310,7 +311,7 @@ pub struct Sema<'a, 'sm> {
     /// The non-dependent variadic arguments of a template definition's
     /// calls that the instantiation must diagnose (a `void` or non-trivial
     /// class argument), with the callee kind: clang checks them only in
-    /// the instantiation, which shares the call (spec/sema.md §5.18).
+    /// the instantiation, which shares the call (spec/sema.md §5.19).
     pub(crate) vararg_recheck: kiln_source::fx::FxHashMap<ExprId, u8>,
     /// The null dereferences warned about per instantiation context
     /// (`queue_null_deref`).
