@@ -2458,6 +2458,14 @@ impl ExprArena {
         self.nodes[e.index() as usize].deps |= ExprDeps::INSTANTIATION;
     }
 
+    /// Marks `e` type-, value- and instantiation-dependent: a variable
+    /// captured by copy in a lambda whose explicit object parameter has a
+    /// dependent type ([temp.dep.expr]/3, P0847) has a type that depends
+    /// on the specialization. Call it before any parent of `e` is built.
+    pub fn mark_type_dependent(&mut self, e: ExprId) {
+        self.nodes[e.index() as usize].deps |= ExprDeps::TYPE_VALUE_INST;
+    }
+
     /// Marks the `DeclRefExpr` or construction `e` as immediate-escalating
     /// (P2564): it made the enclosing function immediate.
     ///

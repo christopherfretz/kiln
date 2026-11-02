@@ -115,8 +115,11 @@ closure type or a class derived from it ([expr.prim.lambda.closure]/5;
   object: a type not derived from the closure gets the same message, a
   private or protected derivation "must derive publicly from the
   lambda" plus the access note (`check_lambda_object_base_access`,
-  `BaseUse::LambdaObject` in `class/access.rs`). The call is then
-  invalid.
+  `BaseUse::LambdaObject` in `class/access.rs`); an ambiguous base
+  (`find_base` finds several closure subobjects) gets
+  `sema_explicit_object_lambda_ambiguous_base` ("lambda '(lambda at
+  ...)' is inaccessible due to ambiguity:" with clang's path lines).
+  The call is then invalid.
 
 A lambda without captures takes any object type. The conversion to
 pointer to function of such a lambda returns the call operator's address
@@ -252,9 +255,22 @@ Such a name is not a candidate for implicit move or NRVO
 capture is `const` exactly when the parameter's (referenced) type is
 const-qualified, whatever `mutable` says ([expr.prim.id.unqual]/3;
 `lambda_capture_const`, clang `lambdaCaptureShouldBeConst`). For a
-generic lambda this is decided on the template's parameter as written
-(`this auto&` versus `this const auto&`), not per specialization (§11). `this` in the body is the captured `this` or
-the address of the `*this` copy.
+generic lambda it is decided per specialization: the call operator
+consulted is the one enclosing the current context (the specialization
+whose body is being instantiated, `current_call_op`), so `this const
+Self&` makes the captures const there and `this Self&` with a non-const
+object does not. To that end a use of a variable captured by copy
+(explicitly, or implied by a `=` default) in a lambda whose explicit
+object parameter has a dependent type is type-, value- and
+instantiation-dependent ([temp.dep.expr]/3;
+`captured_by_copy_in_dependent_object_lambda`,
+`ExprArena::mark_type_dependent`, clang
+`isCapturedByCopyInLambdaWithExplicitObjectParameter`), so
+`decltype((x))` is recomputed in each specialization. A use in such a
+specialization that is not an odr-use and has no capture still gets the
+type a capture-default would give it ([expr.prim.id.unqual]/3).
+`this` in the body is the captured `this` or the address of the
+`*this` copy.
 
 ## 5. Generic lambdas
 
@@ -440,11 +456,6 @@ rebuilt one is in `locals`, step 1) to itself, as clang's
    lambdas; a lambda-expression as a template argument and calling an
    `auto` template parameter whose default is a closure
    (`template-argument.cpp`); `x.template operator()<T>()` (WP-121).
-4. **Explicit object parameters** (WP-356 follow-ups): a generic call
-   operator's capture constness is fixed by the template's parameter
-   as written, not recomputed per specialization; an ambiguous closure
-   base is reported as "not derived" rather than with clang's
-   ambiguity wording.
 
 ## Landed (WP-075)
 

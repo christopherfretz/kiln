@@ -37,6 +37,7 @@ sema_explicit_inst_undefined_template = Error (1) "explicit instantiation of und
 sema_explicit_inst_undefined_var_template = Error (1) "explicit instantiation of undefined variable template '{0}'";
 sema_explicit_non_ctor_or_conv = Error (0) "'explicit' can only be applied to a constructor or conversion function";
 sema_explicit_non_function = Error (0) "'explicit' can only appear on non-static member functions";
+sema_explicit_object_lambda_ambiguous_base = Error (2) "lambda {0} is inaccessible due to ambiguity:{1}";
 sema_explicit_object_lambda_capture_type = Error (2) "invalid explicit object parameter type {0} in lambda with capture; the type must {1:be the same as, or derived from,|derive publicly from} the lambda";
 sema_explicit_object_lambda_mutable = Error (0) "a lambda with an explicit object parameter cannot be mutable";
 sema_explicit_object_param_default = Error (0) "the explicit object parameter cannot have a default argument";
