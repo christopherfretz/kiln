@@ -1685,6 +1685,21 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// The class template whose parameters spell the injected-class-name
+    /// of class template pattern `c`: clang builds that type once, when
+    /// the first declaration is seen, and caches it in the redeclaration
+    /// chain's common data, so the first declaration's parameter names
+    /// print. A friend declared in a templated class does not count: clang
+    /// links it into the chain only at instantiation.
+    pub(crate) fn injected_params_template(&self, c: DeclId) -> Option<DeclId> {
+        let own =
+            self.ast.redecls_of(c).filter_map(|d| self.ast.described_template(d)).filter(|&t| {
+                self.ast.decls.get(t).misc().friend() == FriendKind::None
+                    || !self.in_templated_class(self.ast.decls.lexical_ctx(t))
+            });
+        own.last().or_else(|| self.ast.described_template(c))
+    }
+
     /// The injected-class-name of class template `tmpl` used without
     /// arguments inside its own definition ([temp.local]/1): `X<P...>`
     /// for its parameters `P`, as an `InjectedClassNameType`. `None`
@@ -1695,16 +1710,8 @@ impl Sema<'_, '_> {
         }
         let c = self.injected_class_for(tmpl)?;
         let first = self.ast.first(c);
-        if let Some(ft) = self.ast.described_template(first) {
-            // The parameters of the first declaration (clang caches the
-            // type in the redeclaration chain's common data), unless that
-            // is a friend's: then those of the template whose definition
-            // this is.
-            let own = if self.ast.decls.get(ft).misc().friend() == FriendKind::None {
-                ft
-            } else {
-                self.ast.described_template(c).unwrap_or(tmpl)
-            };
+        if self.ast.described_template(first).is_some() {
+            let own = self.injected_params_template(c).unwrap_or(tmpl);
             return self.injected_type_of(own);
         }
         if self.ast.partial_spec_info(first).is_some() {

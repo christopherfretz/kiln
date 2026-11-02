@@ -164,7 +164,17 @@ Constructors:
   diagnosed as [stmt.pre]/5 requires.
 - **Block-scope `extern` declarations** are recorded in `local_externs`.
   A later namespace-scope declaration of the same name redeclares them,
-  per [basic.link]/6 and clang's local extern decls.
+  per [basic.link]/6 and clang's local extern decls. A declaration in a
+  function template pattern is not recorded: only its instantiations
+  redeclare the entity ([temp.spec.general]/2), so the pattern's `extern
+  T e;` is never the previous declaration of `extern int e;` in
+  `f<int>`, and a namespace-scope declaration after the pattern does not
+  conflict with it. The pattern itself still looks its name up, so a
+  non-dependent `extern int g;` in it conflicts with an earlier `extern
+  char g;`. A block-scope redeclaration whose type (or the earlier
+  declaration's type) is dependent is checked only at instantiation
+  (clang's `MergeVarDeclTypes` for a local variable). Test:
+  tests/conformance/basic.link/local-extern-template-pattern.cpp (WP-330).
 - **`classify_name`** gives the parser a name's category: type,
   namespace, value, or undeclared.
   Landed (WP-140): a non-dependent typedef or alias qualifier is
@@ -292,7 +302,8 @@ Redeclaration and linkage rules:
      when the block's declaration has none: `redefinition of 'x' as
      different kind of symbol`;
   2. differing types (as above; skipped when the earlier declaration is
-     invalid, e.g. `static Q(a);` of incomplete `Q`);
+     invalid, e.g. `static Q(a);` of incomplete `Q`, or when either type
+     is dependent);
   3. `static` after an `extern`: `static declaration of 'x' follows
      non-static declaration`;
   4. non-`static` after `static` (unless an `extern` redeclaring a
@@ -945,11 +956,37 @@ and returns the scope it names:
   alias template's guide substitutes the alias's arguments into that
   sugar; its `__is_deducible(A, R)` prints the guide's sugared return
   type `R` (WP-311; test
-  `over.match.class.deduct/guide-signature-as-written.cpp`). Not
-  printed yet: clang's `while building implicit deduction guide first
-  needed here` frame note, at the placeholder's template-name location,
-  for an error substituting a member template's constructors (the
-  placeholder's name location is not recorded).
+  `over.match.class.deduct/guide-signature-as-written.cpp`).
+- **Guide printing** (WP-320), as clang:
+  - The injected class type of an implicit guide (`-> vector<_Tp,
+    _Alloc>`) uses the template parameters of the class template's
+    first declaration (`injected_params_template`): a forward
+    declaration's names, `type-parameter-0-N` for unnamed ones. A friend
+    declaration inside a templated class does not count (clang links it
+    only at instantiation); one in a non-template class does.
+  - A type-constraint prints with its written arguments in the guide's
+    parameter names (`template <Compat<T> R>`, `Var<T, int>`), not as
+    `Compat<>`.
+  - The simple `C() -> C<T>` guide and the copy guide sit at the class
+    template's definition.
+  - Tests `over.match.class.deduct/implicit-guide-constraint-args.cpp`,
+    `implicit-guide-first-declaration-params.cpp`,
+    `implicit-guide-locations-init-list.cpp`.
+  - Gap: a qualified concept name in a type-constraint loses its
+    qualifier (`template <NC R>` where clang prints `N::NC R`).
+- **Building the implicit guides** runs under a
+  `FrameKind::BuildingDeductionGuides` frame (not an instantiation;
+  clang `BuildingDeductionGuides`), so an error forming them (the
+  enclosing arguments substituted into a member template's
+  constructor) is followed by `while building implicit deduction guide
+  first needed here` at the template name of the placeholder that first
+  needed them. The parser records each placeholder's template-name
+  location by its type-specifier location (`ctad_placeholder`,
+  `TemplState::ctad_name_locs`); a variable's type-specifier location is
+  kept per variable (`ctad_var_type_locs`), and an expression form
+  (functional cast, new-expression) deduces at its type-specifier. A
+  variable instantiated from a template notes the variable instead.
+  Test `over.match.class.deduct/building-guides-note.cpp`.
 - **Array new.** `new X[n]{…}` with a placeholder element type is
   `sema_ctad_compound_type` ("cannot form array of deduced class
   template specialization type") at the innermost bound, as clang.
@@ -988,8 +1025,17 @@ and returns the scope it names:
     explicit specialization or instantiation is "forward declaration
     of struct cannot have a nested name specifier" at the qualifier
     ([dcl.type.elab]/1, [dcl.enum]/1), reported before the lookup.
-  - A declaration redeclares the tag in the current scope.
+  - A declaration redeclares the tag in the current scope. A class
+    redeclaration `struct N; struct N;` ([class.name]/2) is a new
+    CXXRecordDecl in N's chain (clang `ActOnTag`; the dump's `prev`), as
+    a class template redeclaration is, and a later definition joins
+    that chain. An enumeration redeclaration creates no decl. Test:
+    class.name/redeclaration-ast.cpp.
   - A definition checks for redefinition and kind mismatch.
+  - A type name marks referenced only the declaration lookup found (the
+    latest in its chain; clang `isThisDeclarationReferenced`). An
+    elaborated-type-specifier that finds a tag (`struct N *a`) marks
+    nothing (clang `ActOnTag`).
 - **Enumerations** ([dcl.enum]):
   - enumerators are typed as clang types them
   - a fixed underlying type gets converted-constant-expression checks
@@ -1001,13 +1047,29 @@ and returns the scope it names:
   - an unfixed one gets its type from the enumerators' range (the best
     type), and the enumerators are then retyped to the enumeration
   - `replace_enumerator_init` records the converted initializer
-- **Bit-fields** ([class.bit]):
+- **Bit-fields** ([class.bit]; `bit_width`, clang `VerifyBitField`):
+  - a named bit-field's type must be integral or an enumeration, checked
+    even when the width is value-dependent (`bit-field 'f' has
+    non-integral type 'float'`, underlining the width)
   - the width must be an integral constant expression; one that folds
-    laxly is accepted (`fold_not_ice`, below)
+    laxly is accepted (`fold_not_ice`, below). A width whose type is not
+    integral or an unscoped enumeration (`2.0`, `SE::a`, `nullptr`) is
+    `integral constant expression must have integral or unscoped
+    enumeration type, not 'T'` at the width. A width whose
+    full-expression reported an error (a member named without an
+    object) is dropped without a further error
   - it must not be negative
-  - it must not be zero-width with a name
-  - it must not exceed the type's width
+  - it must not be zero-width with a name (underlining the width)
+  - it must not exceed the type's width (`-Wbitfield-width`; never for
+    `bool`)
+  - a member declarator with a width that declares no field
+    (`non_field_bit_width`, [class.bit]/3) is `static member 's' cannot
+    be a bit-field`, `typedef member 'td' cannot be a bit-field`, or the
+    non-integral error for a function; the member becomes invalid
   - `mark_bitfield` records the width
+  - Tests `class.bit/width-and-member-kinds.cpp`; the underlines are
+    checked by `kiln_driver` test
+    `bit_width_and_static_assert_ranges_like_clang` (WP-320).
 - **Anonymous unions and structs** ([class.union.anon]):
   - `act_on_decl_spec_only` creates the unnamed member, or the implicit
     variable outside a class, and returns it.
@@ -1015,6 +1077,16 @@ and returns the scope it names:
   - Conflicts are diagnosed (`member of anonymous union redeclares 'x'`).
   - Anonymous unions outside a class must be `static` at namespace
     scope.
+  - An anonymous union or struct with no member (no `Field`; an unnamed
+    bit-field counts as one) declares no name ([dcl.pre]/5,
+    [class.mem.general]/3). That is "declaration does not declare
+    anything" [-Wmissing-declarations] at the decl-specifier-seq, after
+    the scope errors above (clang `BuildAnonymousStructOrUnion`). Its
+    range covers the specifiers written before the class-key (`static
+    const`), read from the source (`specifiers_before_type`). A
+    template's pattern is diagnosed when it is parsed, and an
+    instantiation is not diagnosed again. Test:
+    class.union.anon/empty-anonymous-record-declares-nothing.cpp.
   - An anonymous struct outside a class is an error.
   - `act_on_finish_record_definition(r, then_semi)` sets `ANONYMOUS`
     and `HAS_VARIANT_MEMBERS`.
@@ -1426,6 +1498,9 @@ and returns the scope it names:
   variable becomes invalid and the initializer is dropped.
 - **`static_assert`** ([dcl.pre]/10) requires a converted constant
   expression of type `bool`.
+  - A failed comparison adds `expression evaluates to 'L op R'` at the
+    operator, underlining the whole comparison (clang
+    `DiagnoseStaticAssertDetails`).
   - In a template definition (`in_template()`, or a context flagged
     `DEPENDENT_CTX`) the condition is not evaluated, even when it is not
     value-dependent (P2593R1, a DR; clang's
@@ -2114,7 +2189,14 @@ diagnostics and IR.
   - **subscripts:** either operand order
   - **`sizeof`/`alignof`:** of types and expressions, using
     `kiln_abi` layout; `alignof` of an expression naming a variable or
-    data member uses its declared alignment (§4.5)
+    data member uses its declared alignment (§4.5). An invalid operand
+    (function type, incomplete type, sizeless type, bit-field) is
+    diagnosed as clang `CheckUnaryExprOrTypeTraitOperand`: a type
+    operand at the keyword with the `( type-id )` range (the whole
+    expression when rebuilt by an instantiation), an expression operand
+    at its expression location (`getExprLoc`: its begin, a member call's
+    member name) with its range (the bit-field error without one;
+    WP-320, test `expr.sizeof/incomplete-operand-location.cpp`)
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
     `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
@@ -3417,8 +3499,14 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   walk over a shared expression (§5.10's `mark_shared_expr_referenced`)
   checks those arguments of the calls in it again, under the
   instantiation's context notes.
+- In constant evaluation an argument of non-literal class type, for the
+  ellipsis or a declared by-value parameter, stops the evaluation at the
+  argument with clang's `CheckLiteralType` note "non-literal type 'T'
+  cannot be used in a constant expression" (spec/oven.md, call frames;
+  WP-320), before any constructor or destructor of it runs.
 - Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
-  `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`.
+  `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`,
+  `tests/conformance/expr.const/non-literal-argument.cpp`.
 
 ### 5.21 Template rules from the libstdc++ clusters (WP-323)
 - **Default arguments in dependent template-ids** ([temp.arg.general]/9,

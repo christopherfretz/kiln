@@ -203,7 +203,10 @@ clang's `Parser` over `Preprocessor::Lex`.
   Once a decl-specifier names no type (`DeclSpec::type_error`), the
   later declarators of the group are skipped up to the `;`, as clang's
   `ParseDeclGroup`, so `u5 &x1, &x2;` and `S::c &x3, &x4;` report once
-  (WP-318, `tests/conformance/stmt.ambig/unknown-type-before-ptr-operator.cpp`).
+  (WP-318, `tests/conformance/stmt.ambig/unknown-type-before-ptr-operator.cpp`);
+  `X<int>::t f, &g;` with `X` undefined reports the undefined template
+  once for the declaration, not per declarator (clang's second print is
+  the per-declaration repeat of spec/diag.md §7.4.1, WP-330).
   A qualified name that its non-dependent scope does not declare,
   followed by an identifier (`S::nom x`), is not a type in a type-id or
   a declaration-specifier scan (clang returns `False` for an
@@ -986,23 +989,47 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   full-expression. Elsewhere (a declaration's initializer, a condition, a
   `return`, a template instantiation) and for an unqualified name or a
   member access (`s.nomember`) it is reported where it is written.
-  Nested in a larger expression statement (WP-318): when call arguments
-  held a delayed typo and the `)` is missing (`f(S::nom x);`,
-  `a = f(S::nom x);`, `g(1, S::nom x);`), the parser skips to the `)`
-  (stopping at `;`) and reports no "expected ')'", as clang's
-  `ParsePostfixExpressionSuffix` (`Sema::typo_count` tells it a typo
-  was held); in a parenthesized expression (`(S::nom x);`) "expected
-  ')'" and its note come first. Kept deviations: a delayed typo in a
-  subscript (`arr[S::nom x]`) is reported when the statement ends
-  (clang flushes it only at the end of the function; same set, other
-  order), and a full-expression nested in an expression statement (a
-  declaration in a lambda body) is held until the outer statement ends
-  (clang ends it sooner); both need a general per-full-expression
-  delayed-diagnostic scope
-  (`tests/conformance/stmt.expr/delayed-no-member-after-missing-semi.cpp`,
+  Scopes nest: an inner scope's held typos stay held while an outer
+  one is open (`end_delayed_typos`), and each held typo records the
+  recovery expression that stands for clang's `TypoExpr`
+  (`Sema::correct_delayed_typos_in` finds them in a subexpression).
+  The points where clang's parser corrects a subexpression's typos
+  early (WP-318, WP-330; `ParsePostfixExpressionSuffix`,
+  `ParseExpressionList`):
+  - A call whose `)` is missing (`f(S::nom x);`, `S::nom(1;`,
+    `g(1, S::nom x);`) reports the callee's and the arguments' typos at
+    once, before what follows (`a = g(S::nom x) + ;` reports the typo,
+    then "expected expression"); if there were any, the parser skips to
+    the `)` (stopping at `;`) with no "expected ')'", and the
+    expression is invalid (clang's `ExprError`; `Parser::expr_invalid`):
+    an expression statement missing its `;` after it (`a = g(S::nom x)`
+    then a newline) skips to the next `;` with no "expected ';' after
+    expression", as clang's `ParseExprStatement`. In a
+    parenthesized expression (`(S::nom x);`) "expected ')'" and its note
+    come first.
+  - A subscript's base is corrected at the `]` (`S::nom[1 2]` reports
+    the typo before "expected ']'"). Its index list is a scope of its
+    own: with the `]` present it ends normally; with the `]` missing
+    the index is dropped and its typos are kept
+    (`Sema::drop_delayed_typos`) until the end of the translation unit,
+    after the pending instantiations and before the
+    `ActOnEndOfTranslationUnit` checks (`act_on_end_of_translation_unit`),
+    as clang, which never corrects a dropped `TypoExpr` before then;
+    this holds in a declaration's initializer too (`int v = arr[S::nom
+    x];`).
+  - An expression list that fails to parse (a call's or a
+    subscript's) reports the typos of what it parsed, then the
+    callee's or base's, after the syntax error.
+  - A lambda body and a statement expression suspend the enclosing
+    scopes (`Sema::suspend_delayed_typos`): their statements and
+    declarations end their own full-expressions, so `[] { int v =
+    S::nom; }(), 1 +;` reports the typo before "expected expression".
+  Tests: `tests/conformance/stmt.expr/delayed-no-member-after-missing-semi.cpp`,
   `tests/conformance/stmt.expr/delayed-no-member-nested-full-expression.cpp`,
-  kiln_parse `delayed_no_member_after_missing_semi`,
-  `delayed_no_member_nested_in_expression_statement`).
+  `tests/conformance/stmt.expr/delayed-typo-correction-points.cpp`
+  (kiln_parse `delayed_no_member_after_missing_semi`,
+  `delayed_no_member_nested_in_expression_statement`,
+  `delayed_typo_correction_points`).
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed

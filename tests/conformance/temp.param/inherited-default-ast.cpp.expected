@@ -1,0 +1,111 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Q
+| |-TemplateTypeParmDecl class depth 0 index 0
+| `-CXXRecordDecl struct Q
+|-ClassTemplateDecl R
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| | `-TemplateArgument type 'int'
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 1 N
+| | `-TemplateArgument expr
+| |   `-IntegerLiteral 'int' 3
+| |-TemplateTemplateParmDecl depth 0 index 2 TT
+| | |-TemplateTypeParmDecl class depth 1 index 0
+| | `-TemplateArgument template
+| |-CXXRecordDecl struct R
+| `-ClassTemplateSpecializationDecl struct R definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-TemplateArgument value 'int' 3
+|   `-TemplateArgument template
+|-ClassTemplateDecl R
+| |-TemplateTypeParmDecl class depth 0 index 0 A
+| | `-TemplateArgument type 'int'
+| |   `-inherited from TemplateTypeParm 'T'
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 1 M
+| | `-TemplateArgument expr
+| |   |-inherited from NonTypeTemplateParm 'N' 'int'
+| |   `-IntegerLiteral 'int' 3
+| |-TemplateTemplateParmDecl depth 0 index 2 UU
+| | |-TemplateTypeParmDecl class depth 1 index 0
+| | `-TemplateArgument template
+| |   `-inherited from TemplateTemplateParm 'TT'
+| |-CXXRecordDecl struct R
+| `-ClassTemplateSpecialization 'R'
+|-ClassTemplateDecl R
+| |-TemplateTypeParmDecl class depth 0 index 0 B
+| | `-TemplateArgument type 'int'
+| |   `-inherited from TemplateTypeParm 'T'
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 1 K
+| | `-TemplateArgument expr
+| |   |-inherited from NonTypeTemplateParm 'N' 'int'
+| |   `-IntegerLiteral 'int' 3
+| |-TemplateTemplateParmDecl depth 0 index 2 VV
+| | |-TemplateTypeParmDecl class depth 1 index 0
+| | `-TemplateArgument template
+| |   `-inherited from TemplateTemplateParm 'TT'
+| |-CXXRecordDecl struct R definition
+| `-ClassTemplateSpecialization 'R'
+|-VarDecl r 'R<>' callinit
+| `-CXXConstructExpr 'R<>' 'void () noexcept'
+|-ClassTemplateDecl S
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-TemplateTypeParmDecl class depth 0 index 1 U
+| | `-TemplateArgument type 'int'
+| |-CXXRecordDecl struct S
+| `-ClassTemplateSpecializationDecl struct S definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   `-TemplateArgument type 'int'
+|-ClassTemplateDecl S
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| | `-TemplateArgument type 'char'
+| |-TemplateTypeParmDecl class depth 0 index 1 U
+| | `-TemplateArgument type 'int'
+| |   `-inherited from TemplateTypeParm 'U'
+| |-CXXRecordDecl struct S
+| `-ClassTemplateSpecialization 'S'
+|-ClassTemplateDecl S
+| |-TemplateTypeParmDecl class depth 0 index 0 X
+| | `-TemplateArgument type 'char'
+| |   `-inherited from TemplateTypeParm 'T'
+| |-TemplateTypeParmDecl class depth 0 index 1 Y
+| | `-TemplateArgument type 'int'
+| |   `-inherited from TemplateTypeParm 'U'
+| |-CXXRecordDecl struct S definition
+| `-ClassTemplateSpecialization 'S'
+|-VarDecl s 'S<>' callinit
+| `-CXXConstructExpr 'S<>' 'void () noexcept'
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| | `-TemplateArgument type 'int'
+| `-FunctionDecl f 'void ()'
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl class depth 0 index 0 U
+| | `-TemplateArgument type 'int'
+| |   `-inherited from TemplateTypeParm 'T'
+| `-FunctionDecl f 'void ()'
+|   `-CompoundStmt
+|-CXXRecordDecl struct P definition
+| `-VarTemplateDecl v
+|   |-TemplateTypeParmDecl class depth 0 index 0 T
+|   |-NonTypeTemplateParmDecl 'int' depth 0 index 1 N
+|   | `-TemplateArgument expr
+|   |   `-IntegerLiteral 'int' 2
+|   `-VarDecl v 'const int' static
+|-VarTemplateDecl parent v
+| |-TemplateTypeParmDecl class depth 0 index 0 U
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 M
+| | `-TemplateArgument expr
+| |   |-inherited from NonTypeTemplateParm 'N' 'int'
+| |   `-IntegerLiteral 'int' 2
+| `-VarDecl parent v 'const int' cinit
+|   `-DeclRefExpr 'int' NonTypeTemplateParm 'M' 'int'
+|-CXXRecordDecl struct O definition
+| `-FunctionTemplateDecl g
+|   |-TemplateTypeParmDecl class depth 0 index 0 T
+|   | `-TemplateArgument type 'long'
+|   `-CXXMethodDecl g 'void ()'
+`-FunctionTemplateDecl parent g
+  |-TemplateTypeParmDecl class depth 0 index 0 U
+  | `-TemplateArgument type 'long'
+  |   `-inherited from TemplateTypeParm 'T'
+  `-CXXMethodDecl parent g 'void ()'
+    `-CompoundStmt
