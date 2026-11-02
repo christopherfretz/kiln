@@ -2027,7 +2027,7 @@ impl Substituter<'_, '_, '_> {
     /// expression is then dropped without a second diagnostic, as clang
     /// rebuilds no `CXXUnresolvedConstructExpr` list-initialization of an
     /// invalid class (`std::numbers::e_v<int>` reports only the
-    /// `static_assert`, spec/sema-templates.md §5.7).
+    /// `static_assert`, spec/sema.md §5.22).
     fn invalid_class_braced_cast(&mut self, ty: QualType, loc: Loc) -> bool {
         let Some(r) = self.sema.ast.types.as_record(ty) else { return false };
         let _ = self.sema.require_complete(ty, loc);
