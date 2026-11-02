@@ -502,9 +502,34 @@ impl Sema<'_, '_> {
             return Ok(ty);
         }
         let args = self.prior_levels(tmpl, depth, prior);
-        let mut s = Substituter::new(self, &args);
-        s.final_subst = true;
-        s.ty(ty, at).map_err(|_| ())
+        self.in_template_context(tmpl, |s| {
+            let mut s = Substituter::new(s, &args);
+            s.final_subst = true;
+            s.ty(ty, at).map_err(|_| ())
+        })
+    }
+
+    /// Runs `f` with the declaration context of template `tmpl` current
+    /// ([temp.dep.candidate], [temp.res.general]): the names its
+    /// parameter types, function parameter types and default template
+    /// arguments use were looked up from the template's scope, and a
+    /// name substitution looks up again (`mk<T>()` with explicit
+    /// arguments) is too, not from the scope of the use (`n::f<int>()`
+    /// outside `n`; clang `SubstDefaultTemplateArgument` and
+    /// `SubstituteExplicitTemplateArguments` enter the template's
+    /// context), as for its signature and body. A template in a local
+    /// scope keeps the use's scopes: they are the only ones that hold its
+    /// function's names.
+    pub(crate) fn in_template_context<R>(
+        &mut self,
+        tmpl: DeclId,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if self.decl_in_local_scope(tmpl) {
+            return f(self);
+        }
+        let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
+        self.in_inst_context(ctx, f)
     }
 
     /// The levels for substituting into parameter `depth` of `tmpl`:
@@ -783,20 +808,10 @@ impl Sema<'_, '_> {
         let args = self.prior_levels(tmpl, depth, prior);
         // Errors point into the default argument, as clang's do.
         let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
-        // [temp.dep.candidate], [temp.res.general]: the default's names
-        // were looked up from the template's scope, and a name substitution
-        // looks up again (`declval<T>()` with explicit arguments) is too,
-        // as for the template's signature and body, not from the scope of
-        // the use that needs the default (`n::f<int>()` outside `n`;
-        // clang `SubstDefaultTemplateArgument` enters the template's
-        // context). A template in a local scope keeps the use's scopes:
-        // they are the only ones that hold its function's names.
-        let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
-        let r = if self.decl_in_local_scope(tmpl) {
-            Substituter::new(self, &args).template_arg(def, at)
-        } else {
-            self.in_inst_context(ctx, |s| Substituter::new(s, &args).template_arg(def, at))
-        };
+        // In the template's scope, not the use's (`n::f<int>()` outside
+        // `n`).
+        let r =
+            self.in_template_context(tmpl, |s| Substituter::new(s, &args).template_arg(def, at));
         let r = match r {
             Ok(a) => self.check_template_arg(tmpl, depth, p, a, at, prior),
             Err(_) => Err(()),

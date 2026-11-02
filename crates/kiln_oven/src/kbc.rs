@@ -290,9 +290,10 @@ pub(crate) const NO_DTOR: u32 = u32::MAX;
 
 /// `VoidCast` aux: the conversion of a non-null `T *` to `void *`, which
 /// records `T` (+ 1) in bits 64..96 of the pointer register, the
-/// designator a placement new of the `void *` reads (spec/oven.md
-/// "Construction"). Pointer operations read the low 64 bits only, and a
-/// store to memory drops the tag.
+/// designator a placement new of the `void *` and a cast from it read
+/// (spec/oven.md "Construction"). Pointer operations read the low 64
+/// bits only; a store to memory keeps the tag in the granule's pointer
+/// mark (`Memory::void_mark`) and a load restores it.
 pub(crate) const VOID_TAG: u32 = 1;
 
 /// The kinds of `Builtin` and their operands.

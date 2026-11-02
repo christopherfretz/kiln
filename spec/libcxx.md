@@ -226,7 +226,7 @@ ERROR.
 ## Feature set
 
 The feature set is the static list below plus what is derived from the
-toolchain the run uses (**Derived**, **Locales**). It is defined in
+toolchain the run uses (**Target**, **Derived**, **Locales**). It is defined in
 `xtask/src/libcxx/features.rs`. There is no compiler-identity
 feature (`clang`, `gcc`, `clang-19`, `apple-clang`), so tests that XFAIL or
 skip one particular compiler run normally under kiln. `kiln` itself is in
@@ -240,20 +240,37 @@ accepts (`depr.numeric.limits.has.denorm/deprecated.verify.cpp` needs its
 `c++26`, `c++experimental`, `large_tests`, `long_tests`,
 `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`,
 `-fsized-deallocation`, `gcc-style-warnings`, `has-fconstexpr-steps`, `verify-support`,
-`libcpp-has-thread-api-pthread`,
-`buildhost=linux`, `linux`, `can-create-symlinks`, `has-64-bit-atomics`,
-`has-unix-headers`, `kiln`, `target=aarch64-unknown-linux-gnu`.
+`can-create-symlinks`, `has-64-bit-atomics`, `has-unix-headers`, `kiln`.
 
 What stays static, and why: the parameters (lit's `params.py` defaults);
 compiler-flag probes, which are kiln's answers and change only with kiln;
 snippet-compiling target probes (`has-unix-headers`, `has-64-bit-atomics`),
-taken as clang 19 sees this machine so the set does not move with kiln;
-`libcpp-has-thread-api-pthread`, which `__config` computes from the target
-rather than `__config_site` setting it; and the target triple and host
-features, which would need a probe of the compiler's default target.
+taken as clang 19 sees this machine so the set does not move with kiln.
 
-**Derived.** `features::detect` reads the libc++ headers of `KILN_ORACLE`
-(`/usr/lib/llvm-N/include/c++/v1`, `spec/harness.md` "Oracle toolchain"):
+**Target.** The target triple is kiln's default target,
+`<host arch>-unknown-linux-gnu` (`features::target_triple`; the harness
+passes no `--target`), so the same harness gives the right set on aarch64
+and x86_64. From it and the host (`features::target_features`), as lit
+derives them: `target=<triple>` (`params.py` `target_triple`), `linux`
+when the triple's OS is Linux (`__linux__` among the compiler's macros,
+`features.py`) and `buildhost=<os>` (`sys.platform`, `linux` here). lit
+has no `host=` feature and no bare architecture feature in libc++ 19 or
+22's `features.py`, so the harness adds none.
+
+**Derived.** `features::detect` reads the libc++ headers the run
+compiles against: the system install of `KILN_ORACLE`
+(`/usr/lib/llvm-N/include/c++/v1`, `spec/harness.md` "Oracle toolchain")
+or the extracted `.toolchain/libcxx-N-root` ("Toolchain"), whichever the
+run uses:
+- the thread API, `libcpp-has-thread-api-pthread` or
+  `libcpp-has-thread-api-external` (`features::thread_api_features`;
+  `features.py` `macros`, libc++ 22's `true_false_macros`): none when
+  `__config_site` disables threads; else the API it selects (libc++ 19:
+  `_LIBCPP_HAS_THREAD_API_<X>` defined; libc++ ≥ 20: defined to `1`);
+  else pthreads when the target OS is one `__config` maps to pthreads
+  (Linux, the Apple and BSD systems, ...), as `__config` computes it.
+  Debian's libc++ 19 and the extracted libc++ 22 both select nothing and
+  get `libcpp-has-thread-api-pthread` from the Linux target;
 - `__config_site` macros, as lit's `features.py` `macros` table maps
   them: `libcpp-abi-version=<n>` from `_LIBCPP_ABI_VERSION`;
   `libcpp-hardening-mode=<mode>` from `_LIBCPP_HARDENING_MODE_DEFAULT`
@@ -450,11 +467,15 @@ and `<!-- libcxx:end -->`. Text outside the markers is preserved, which is
 where hand-written analysis goes. A file without markers gets the region
 appended. The region contains:
 - **Run**: kiln version and commit, tests tag, `_LIBCPP_VERSION`, target,
-  command, compile and link flags, features, limits, wall time, and peak RSS
+  command, compile and link flags, features, limits, wall time, peak RSS
   (the largest single-process peak, via GNU time, with its test; see
-  **Peak RSS** below).
+  **Peak RSS** below), and kiln compile peak RSS (the largest peak of a
+  kiln++ compile step, with its test).
 - **Peak RSS** is over every step of a test, the test binary's run
-  included, so it does not by itself measure kiln. The `REQUIRES:
+  included, so it does not by itself measure kiln; **kiln compile peak
+  RSS** is over the compile steps alone (`TestResult::compile_rss_kb`;
+  the `-fsyntax-only`, `-verify` or `-c` step, not the link or run), so
+  it is kiln's own number. The `REQUIRES:
   large_tests` tests allocate gigabytes at run time:
   `stringstream.members/gcount.pass.cpp` (and the `tellp` tests of the same
   shape) builds a `std::string` of `INT_MAX - 1` characters and writes it
@@ -521,8 +542,8 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   long); `allow_retries_reruns_the_binary` (a fake compiler whose test
   script fails twice, then passes: PASS with 2 retries, FAIL with 1; a
   timeout is retried under the given limit).
-- `report.rs`: counts, page rendering (with the `kiln build profile` row),
-  marker splicing.
+- `report.rs`: counts, page rendering (with the `kiln build profile` row
+  and the two peak-RSS rows, measured and unavailable), marker splicing.
 - `mod.rs`: options, discovery, `lit.local.cfg` lookup;
   `profiles_and_compile_timeouts` (`--profile`, the per-profile compile
   limit, `--compile-timeout`, the profile named for a `--compiler` binary);
@@ -533,7 +554,10 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 - `features.rs`: the set is sorted and unique, with no compiler-identity
   feature and no static `locale.*`; `locale_names_normalize_like_glibc`;
   `locale_features_from_locale_a` (no locales, the provisioned seven, a
-  bare `fr_CA`).
+  bare `fr_CA`); `target_features_from_the_triple` (Linux triples with and
+  without a vendor, a non-Linux one); `thread_api_from_config_site_and_target`
+  (libc++ 19 and 22 spellings, no threads, an explicit API, a target
+  `__config` maps to no API).
 - `directives.rs`: `allow_retries_and_long_tests` (`ALLOW_RETRIES:` must
   be one integer; which `REQUIRES:` mark a test long).
 
