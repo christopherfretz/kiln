@@ -685,8 +685,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `parse_deprecated_missing_comma_before_ellipsis`
   (`-Wdeprecated-missing-comma-variadic-parameter`, in `-Wdeprecated`)
   at the `...`. A lone `(...)`, `(int, ...)` and a function parameter
-  pack are not deprecated. Before C++26, nothing. clang's separate
-  `-Wambiguous-ellipsis` (`(Ts......)`) is not implemented.
+  pack are not deprecated. Before C++26, nothing.
+  In every mode, when the parameter before that `...` has its own pack
+  `...` (`(Ts......)`, `(Ts...a...)`) or a type naming an unexpanded
+  pack, clang's `-Wambiguous-ellipsis` follows (WP-364, clang
+  `warn_misplaced_ellipsis_vararg`, after the deprecation in C++26):
+  `'...' in this location creates a C-style varargs function` at the
+  `...` (`, not a function parameter pack` appended when the parameter
+  has no `...` of its own), a note `preceding '...' declares a function
+  parameter pack` at the pack's `...` (or `place '...' immediately
+  before declared identifier` / `here` at the name or the declarator),
+  and `insert ',' before '...' to silence this warning` at the `...`.
+  Tests: `dcl.fct/p3176-ambiguous-ellipsis.cpp` (C++23),
+  `dcl.fct/p3176-variadic-comma.cpp` (C++26, clang >= 22).
 - **Initializers** (`parse_initializer`, crate-visible):
   - `= expr`, `= { … }`, `( expr )` and `{ … }`
   - designated initializers `.x = …` (C++20)
