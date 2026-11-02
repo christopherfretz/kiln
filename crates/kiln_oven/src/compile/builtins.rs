@@ -6,6 +6,7 @@
 use kiln_ast::consts::FloatKind;
 use kiln_ast::decl::builtin as id;
 use kiln_ast::expr::{BinaryOp, ExprKind};
+use kiln_ast::types::TypeView;
 use kiln_ast::{Ast, ExprId, QualType};
 
 use super::{Compiler, float_code, skip_parens};
@@ -804,6 +805,22 @@ impl Compiler<'_> {
         let Some(pointee) = ast.types.pointee(ast.exprs.get(x).ty()) else { return (false, 0) };
         if ast.types.is_void(pointee) {
             return (false, 0);
+        }
+        // The pointee as written (`_Aligned_Tp *`): an aligned typedef
+        // raises its alignment (clang `getTypeAlignInChars`).
+        let mut w = ast.exprs.get(x).ty();
+        let written = loop {
+            if let TypeView::Pointer(p) = ast.types.view(w.ty()) {
+                break p;
+            }
+            let d = ast.types.desugar_once(w);
+            if d.ty() == w.ty() {
+                break pointee;
+            }
+            w = d;
+        };
+        if let Some(a) = self.typedef_align(written) {
+            return (false, a);
         }
         let t = self.ty(pointee);
         let info = self.o.types.info(t);

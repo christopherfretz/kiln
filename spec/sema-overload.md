@@ -617,6 +617,9 @@ added as needed) over the last call.
 ```rust
 pub struct AllocFns { pub new_fn: DeclId, pub delete_fn: Option<DeclId>,
                       pub pass_align: bool, pub sized_delete: bool }
+// as built (overload/alloc.rs): AllocFns { fns, in_class, naming: Option<DeclId> }
+// `naming`: the class a class-scope candidate set was found in, for the
+// access check of [expr.new]/19 and [expr.delete]/12 (WP-335).
 fn find_allocation_functions(&mut self, ty: QualType, array: bool, global_only: bool,
     placement: &[ExprId], loc: SourceLoc) -> Option<AllocFns>;
 fn find_deallocation_function(&mut self, ty: QualType, array: bool, global_only: bool,

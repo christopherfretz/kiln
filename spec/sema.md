@@ -582,6 +582,14 @@ Redeclaration and linkage rules:
   placeholder under pointer and reference declarators (`auto *`,
   `const auto &`, `auto &&`) is deduced as for a function call
   ([temp.deduct.call]/2-4) with `auto` as the template parameter.
+  A type-constraint on the placeholder (`C<A> decltype(auto) x = e;`)
+  is checked against the deduced placeholder type
+  ([dcl.type.auto.deduct]/2.2, /4), not the variable's type: the
+  `const` that `constexpr` adds ([dcl.constexpr]/10) is not part of it,
+  so `constexpr same_as<const bool> decltype(auto) r = X::v;` (with
+  `decltype(X::v)` = `const bool`) is satisfied and `constexpr
+  same_as<const int> decltype(auto) d = 1;` is `deduced type 'int' does
+  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335).
 - Deduced return types ([dcl.spec.auto.general]/9-11): the first
   `return` deduces, later ones must agree (clang's
   `'auto' in return type deduced as ... here but deduced as ...`),
@@ -1958,7 +1966,13 @@ diagnostics and IR.
     type `T` only when `T` is a non-class, non-dependent type; a class
     (or dependent) result keeps its cv-qualifiers, so `decltype(f())`
     for `const X f()` is `const X` ([expr.type]/2, clang
-    `getNonLValueExprType`; WP-276)
+    `getNonLValueExprType`; WP-276). The callee must be a function
+    lvalue or a pointer to function ([expr.call]/1): a pointer to
+    member function is not callable without an object (`(o.*pmf)(a)`),
+    so `pmf(a)` is `called object type 'P' (aka 'int (S::*)(int)') is
+    not a function or function pointer` (a substitution failure in a
+    requires-expression: libc++'s `invocable<int (S::*)(int), int>` is
+    false; WP-335)
   - **member access:** `.` and `->` on records and through
     `IndirectField`; members found in base classes, static members,
     enumerators and member functions, implicit `this->`, `this`,
@@ -2051,17 +2065,26 @@ diagnostics and IR.
     pointers, otherwise (a non-null integer, `nullptr` as a non-null
     operand of a different kind) `invalid operands`.
   Not yet: the composite type that needs a cv-union of both sides
-  (`const int B::*` vs `volatile int D::*`; [expr.type]/4.6) and
-  constant evaluation of the comparison (WP-076).
+  for comparisons (`const int B::*` vs `volatile int D::*`;
+  [expr.type]/4.6) and constant evaluation of the comparison (WP-076).
 - **Composite pointer type** ([expr.type]/4; `composite_pointer` in
   `expr.rs`, used by `==`, `<`, `<=>` and `?:`): after the null,
   same-type and one-way-conversion cases, `cv_combined_pointer` tries a
   pointer to either side's unqualified pointee with the cv-qualifiers of
   both (`void *` vs `const B *` is `const void *`; `B *` vs `const D *`
   is `const B *`), taking the first that both operands reach by a
-  standard conversion (WP-155). Not yet: multi-level cv-combination
-  (`int **` vs `const int **` is `const int *const *`) and the member
-  pointer case above.
+  standard conversion (WP-155). Member pointers take the same path
+  ([expr.type]/4.6, WP-335): a null pointer constant against a member
+  pointer converts to it, and two member pointers combine to a member
+  pointer of the cv-combined pointee in either side's class (`int S::*`
+  vs `const int S::*` is `const int S::*`; `int S::*` vs `int D::*` is
+  `int D::*`; a pointer to `noexcept` member function converts to the
+  plain one). Unrelated classes have no composite type (`incompatible
+  operand types ('int A::*' and 'int B::*')` for `?:`). This is what
+  libc++'s `common_with`, `common_reference` and
+  `equality_comparable_with` see through `decltype(b ? x : y)`. Not
+  yet: multi-level cv-combination (`int **` vs `const int **` is
+  `const int *const *`).
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -2673,8 +2696,15 @@ and aggregate element types.
   array cannot have dynamic size` (see the gaps below).
 - **Allocation function** ([expr.new]/12-19): `PASS_ALIGN` when
   `alignof(T)` exceeds `__STDCPP_DEFAULT_NEW_ALIGNMENT__` (16 on both
-  targets, `kiln_abi::Target::default_new_align`). Global lookup only
-  (class-scope `operator new` is `todo(WP-068b)`): the candidates whose
+  targets, `kiln_abi::Target::default_new_align`). Lookup is in the
+  allocated class first, then global (`::new` only global;
+  [expr.new]/12, `alloc_fns`). A class-scope
+  `operator new` / `operator delete` (`AllocFns::naming` is its class)
+  is access-checked from the context of the expression ([expr.new]/19,
+  [expr.delete]/12, clang `CheckAllocationAccess`): `'operator new' is
+  a private member of 'P'` with the `declared private here` note, a
+  substitution failure in a requires-expression (libc++
+  `shared_ptr_Y.pass.cpp`; WP-335). Among the candidates: those whose
   leading parameters are `size_t` (and `align_val_t` when aligned) and
   that accept the placement arguments, preferring the most exact
   matches; with `PASS_ALIGN` a second round without the alignment

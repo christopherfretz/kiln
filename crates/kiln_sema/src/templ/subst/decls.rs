@@ -1153,6 +1153,7 @@ impl Substituter<'_, '_, '_> {
             if failed {
                 self.sema.ast.decls.set_flags(a, DeclFlags::INVALID);
             }
+            self.var_align_attrs(a, d);
             return Ok(a);
         }
         let mut ds = self.pattern_declspec(d, ty);
@@ -1162,6 +1163,11 @@ impl Substituter<'_, '_, '_> {
         if failed {
             self.sema.ast.decls.set_flags(td, DeclFlags::INVALID);
         }
+        // A typedef's `__attribute__((aligned(N)))` is instantiated with
+        // it (clang `InstantiateAttrs`; libc++'s `atomic_ref` names its
+        // object as `typedef _Tp _Aligned_Tp
+        // __attribute__((aligned(required_alignment)))`).
+        self.var_align_attrs(td, d);
         self.copy_begin_loc(d, td, ty);
         Ok(td)
     }
