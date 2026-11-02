@@ -131,53 +131,8 @@ impl Sema<'_, '_> {
             if digits > 0 && s.get(i + digits) == Some(&b'$') {
                 return None;
             }
-            while s.get(i).is_some_and(|c| b"-+ #0".contains(c)) {
-                i += 1;
-            }
-            // Width and precision: (byte offset of the diagnostic, is
-            // precision) per `*`. clang reports a width `*` one byte
-            // after it and a precision `*` at it.
-            let mut stars = Vec::new();
-            if s.get(i) == Some(&b'*') {
-                stars.push((i + 1, false));
-                i += 1;
-            } else {
-                i += s[i..].iter().take_while(|c| c.is_ascii_digit()).count();
-            }
-            if s.get(i) == Some(&b'.') {
-                i += 1;
-                if s.get(i) == Some(&b'*') {
-                    stars.push((i, true));
-                    i += 1;
-                } else {
-                    i += s[i..].iter().take_while(|c| c.is_ascii_digit()).count();
-                }
-            }
-            let (class, size) = match (s.get(i), s.get(i + 1)) {
-                (Some(b'l'), Some(b'l')) => (2, false),
-                (Some(b'l'), _) => (1, false),
-                (Some(b'z'), _) => (1, true),
-                _ => (0, false),
-            };
-            i += match (class, size) {
-                (2, _) => 2,
-                (1, _) => 1,
-                _ => 0,
-            };
-            let conv_at = i;
-            let want = match s.get(i)? {
-                b'd' | b'i' => Want::Int { class, unsigned: false, size },
-                b'u' | b'o' | b'x' | b'X' => Want::Int { class, unsigned: true, size },
-                b'c' if class == 0 => Want::Int { class, unsigned: false, size },
-                b's' if class == 0 => Want::CStr,
-                b'p' if class == 0 => Want::VoidPtr,
-                b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' if class == 0 => {
-                    Want::Double
-                }
-                _ => return None,
-            };
-            i += 1;
-            for (off, precision) in stars {
+            let (star_offs, conv_at, want) = parse_spec(s, &mut i)?;
+            for (off, precision) in star_offs {
                 let &a = data.get(next)?;
                 next += 1;
                 let star = Want::Int { class: 0, unsigned: false, size: false };
@@ -267,7 +222,8 @@ impl Sema<'_, '_> {
         }
         let mut ty: QualType = self.ety(e);
         let types = &self.ast.types;
-        if types.is_dependent(ty) || types.as_record(ty).is_some() || conv::is_scoped_enum(self, ty) {
+        if types.is_dependent(ty) || types.as_record(ty).is_some() || conv::is_scoped_enum(self, ty)
+        {
             return None;
         }
         let mut underlying = false;
@@ -296,4 +252,60 @@ impl Sema<'_, '_> {
         };
         (!ok).then(|| (underlying, self.ty_arg(ty)))
     }
+}
+
+/// A `*` width or precision: the byte offset its diagnostic points at,
+/// and whether it is the precision.
+type StarOff = (usize, bool);
+
+/// Parses the flags, width, precision, length and conversion of the
+/// specification after a `%` at `*i`, leaving `*i` after the conversion:
+/// the `*` diagnostic offsets (with whether each is the precision), the
+/// conversion's offset and what it wants. `None` for an unmodelled one.
+fn parse_spec(s: &[u8], i: &mut usize) -> Option<(Vec<StarOff>, usize, Want)> {
+    while s.get(*i).is_some_and(|c| b"-+ #0".contains(c)) {
+        *i += 1;
+    }
+    // Width and precision: (byte offset of the diagnostic, is
+    // precision) per `*`. clang reports a width `*` one byte
+    // after it and a precision `*` at it.
+    let mut star_offs = Vec::new();
+    if s.get(*i) == Some(&b'*') {
+        star_offs.push((*i + 1, false));
+        *i += 1;
+    } else {
+        *i += s[*i..].iter().take_while(|c| c.is_ascii_digit()).count();
+    }
+    if s.get(*i) == Some(&b'.') {
+        *i += 1;
+        if s.get(*i) == Some(&b'*') {
+            star_offs.push((*i, true));
+            *i += 1;
+        } else {
+            *i += s[*i..].iter().take_while(|c| c.is_ascii_digit()).count();
+        }
+    }
+    let (class, size) = match (s.get(*i), s.get(*i + 1)) {
+        (Some(b'l'), Some(b'l')) => (2, false),
+        (Some(b'l'), _) => (1, false),
+        (Some(b'z'), _) => (1, true),
+        _ => (0, false),
+    };
+    *i += match (class, size) {
+        (2, _) => 2,
+        (1, _) => 1,
+        _ => 0,
+    };
+    let conv_at = *i;
+    let want = match s.get(*i)? {
+        b'd' | b'i' => Want::Int { class, unsigned: false, size },
+        b'u' | b'o' | b'x' | b'X' => Want::Int { class, unsigned: true, size },
+        b'c' if class == 0 => Want::Int { class, unsigned: false, size },
+        b's' if class == 0 => Want::CStr,
+        b'p' if class == 0 => Want::VoidPtr,
+        b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' if class == 0 => Want::Double,
+        _ => return None,
+    };
+    *i += 1;
+    Some((star_offs, conv_at, want))
 }

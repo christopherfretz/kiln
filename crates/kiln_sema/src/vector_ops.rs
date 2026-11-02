@@ -735,12 +735,15 @@ impl Sema<'_, '_> {
             return self.recover_err(args, loc);
         }
         if args.len() < 2 {
-            let d = self.diag(DiagId::sema_call_too_few_args_at_least, rparen).arg(2).arg(args.len());
+            let d =
+                self.diag(DiagId::sema_call_too_few_args_at_least, rparen).arg(2).arg(args.len());
             self.emit(d);
             return self.recover_err(args, loc);
         }
         let name = || "__builtin_shufflevector".to_string();
-        let dep = |s: &Self, e: ExprId| s.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::TYPE);
+        let dep = |s: &Self, e: ExprId| {
+            s.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::TYPE)
+        };
         let mut res = self.ety(args[0]);
         let mut count = None;
         if !dep(self, args[0]) && !dep(self, args[1]) {

@@ -713,7 +713,8 @@ impl Sema<'_, '_> {
         }
         if args.len() > 3 {
             // clang `checkArgCountAtMost`: at the call's end.
-            let d = self.diag(DiagId::sema_call_too_many_args_at_most, rparen).arg(3).arg(args.len());
+            let d =
+                self.diag(DiagId::sema_call_too_many_args_at_most, rparen).arg(3).arg(args.len());
             self.emit(d);
             return None;
         }

@@ -539,9 +539,8 @@ impl Sema<'_, '_> {
             // The elements of a capture pack instantiated from
             // `ts...` share a name, not a variable (templ/subst/lambda.rs
             // names each one).
-            if let Some(&(_, init, _)) = names
-                .iter()
-                .find(|&&(s, _, v)| s == sym && (c.var.is_none() || v == Some(var)))
+            if let Some(&(_, init, _)) =
+                names.iter().find(|&&(s, _, v)| s == sym && (c.var.is_none() || v == Some(var)))
             {
                 let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                 self.emit(msg);

@@ -595,7 +595,9 @@ impl Cg<'_> {
                 self.intrinsic_call(f, vec![x, nv])
             }
             id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE => {
-                return self.builtin_object_size(b, e, &args).map(|v| BuiltinCall::Emitted(Some(v)));
+                return self
+                    .builtin_object_size(b, e, &args)
+                    .map(|v| BuiltinCall::Emitted(Some(v)));
             }
             id::ASSUME_ALIGNED => self.builtin_assume_aligned(e, &args)?,
             id::ASSUME => {
@@ -815,7 +817,8 @@ impl Cg<'_> {
     /// dynamic)` with `min` the type's bit 1.
     fn builtin_object_size(&mut self, b: u32, e: ExprId, args: &[ExprId]) -> R<V> {
         let rt = self.lty(self.ast.exprs.get(e).ty());
-        let (Some(&p), Some(t)) = (args.first(), args.get(1).and_then(|&t| self.fold_int(t))) else {
+        let (Some(&p), Some(t)) = (args.first(), args.get(1).and_then(|&t| self.fold_int(t)))
+        else {
             return err(self.loc_of(e), "__builtin_object_size without a constant type");
         };
         if t == 3 {
@@ -833,7 +836,8 @@ impl Cg<'_> {
     /// after `llvm.assume(i1 true) ["align"(ptr p, i64 a[, i64 off])]`
     /// with the alignment clamped to 2^32 (clang `MaximumAlignment`).
     fn builtin_assume_aligned(&mut self, e: ExprId, args: &[ExprId]) -> R<V> {
-        let (Some(&p), Some(a)) = (args.first(), args.get(1).and_then(|&a| self.fold_int(a))) else {
+        let (Some(&p), Some(a)) = (args.first(), args.get(1).and_then(|&a| self.fold_int(a)))
+        else {
             return err(self.loc_of(e), "__builtin_assume_aligned without a constant alignment");
         };
         let pv = self.emit_scalar(p)?;
@@ -851,7 +855,13 @@ impl Cg<'_> {
             let fn_ty = self.m.func(f).ty();
             let cond = self.m.const_bool(true);
             self.f.fir.push(
-                Op::AssumeBundle { fn_ty, callee: Value::func(f), cond, tag: "align", args: bundle },
+                Op::AssumeBundle {
+                    fn_ty,
+                    callee: Value::func(f),
+                    cond,
+                    tag: "align",
+                    args: bundle,
+                },
                 LTy::VOID,
             );
         }

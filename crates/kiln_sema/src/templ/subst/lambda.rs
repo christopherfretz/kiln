@@ -10,6 +10,7 @@
 use kiln_ast::ExprId;
 use kiln_ast::decl::{ConstexprKind, FnStorage, InitStyle};
 use kiln_ast::expr::ExprKind;
+use kiln_ast::lambda::LambdaCapture;
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_source::Loc;
@@ -43,62 +44,7 @@ impl Substituter<'_, '_, '_> {
             default_loc: data.default_loc,
             captures: Vec::new(),
         };
-        let mut init_vars = Vec::new();
-        for c in data.captures.iter().filter(|c| !c.implicit) {
-            if c.ellipsis.is_valid() {
-                // A simple-capture pack `ts...` / `&ts...`
-                // ([expr.prim.lambda.capture]/18): one capture per
-                // parameter the function parameter pack expanded to.
-                let params = match c.var.filter(|_| !c.init).and_then(|v| self.locals.get(&v)) {
-                    Some(&DeclOrPack::Pack(l)) => {
-                        self.sema.ast.lists.iter::<kiln_ast::DeclId>(l).collect::<Vec<_>>()
-                    }
-                    _ => return self.unimplemented("capture packs in templates", c.loc),
-                };
-                for v in params {
-                    let name = self.sema.ast.decls.get(v).name().as_ident().map(|s| (s, c.loc));
-                    intro.captures.push(LambdaCaptureSpec {
-                        kind: c.kind,
-                        name,
-                        loc: c.loc,
-                        ellipsis: None,
-                        init: None,
-                        var: Some(v),
-                    });
-                }
-                continue;
-            }
-            let name = c
-                .var
-                .and_then(|v| self.sema.ast.decls.get(v).name().as_ident())
-                .map(|s| (s, c.loc));
-            let init = match c.var.filter(|_| c.init) {
-                Some(v) => {
-                    let i = self.sema.ast.decls.var(v).and_then(|x| x.init).ok_or(SubstFail)?;
-                    init_vars.push(v);
-                    match self.initializer(i, InitStyle::C)? {
-                        Some(Initializer::Expr(x)) => Some(x),
-                        _ => return self.unimplemented("this init-capture in a template", c.loc),
-                    }
-                }
-                None => None,
-            };
-            // A simple capture names its variable again directly: the
-            // name may not be in scope (a nested lambda instantiated with
-            // its enclosing generic lambda's call operator).
-            let var = match c.var.filter(|_| !c.init) {
-                Some(v) => Some(self.find_instantiated_decl(v, c.loc)?),
-                None => None,
-            };
-            intro.captures.push(LambdaCaptureSpec {
-                kind: c.kind,
-                name,
-                loc: c.loc,
-                ellipsis: None,
-                init,
-                var,
-            });
-        }
+        let init_vars = self.lambda_captures(&data.captures, &mut intro)?;
         let lambda = self.sema.act_on_lambda_start(&intro);
         if let Some((_, params)) = head
             && self.open_substituted_head(params).is_err()
@@ -153,6 +99,72 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         }
         Ok(self.sema.act_on_lambda_end(lambda, b, rbrace))
+    }
+
+    /// The explicit captures of the pattern into `intro`; the
+    /// init-capture variables of the pattern, in order.
+    fn lambda_captures(
+        &mut self,
+        captures: &[LambdaCapture],
+        intro: &mut LambdaIntroducer,
+    ) -> SubstResult<Vec<kiln_ast::DeclId>> {
+        let mut init_vars = Vec::new();
+        for c in captures.iter().filter(|c| !c.implicit) {
+            if c.ellipsis.is_valid() {
+                // A simple-capture pack `ts...` / `&ts...`
+                // ([expr.prim.lambda.capture]/18): one capture per
+                // parameter the function parameter pack expanded to.
+                let params = match c.var.filter(|_| !c.init).and_then(|v| self.locals.get(&v)) {
+                    Some(&DeclOrPack::Pack(l)) => {
+                        self.sema.ast.lists.iter::<kiln_ast::DeclId>(l).collect::<Vec<_>>()
+                    }
+                    _ => return self.unimplemented("capture packs in templates", c.loc),
+                };
+                for v in params {
+                    let name = self.sema.ast.decls.get(v).name().as_ident().map(|s| (s, c.loc));
+                    intro.captures.push(LambdaCaptureSpec {
+                        kind: c.kind,
+                        name,
+                        loc: c.loc,
+                        ellipsis: None,
+                        init: None,
+                        var: Some(v),
+                    });
+                }
+                continue;
+            }
+            let name = c
+                .var
+                .and_then(|v| self.sema.ast.decls.get(v).name().as_ident())
+                .map(|s| (s, c.loc));
+            let init = match c.var.filter(|_| c.init) {
+                Some(v) => {
+                    let i = self.sema.ast.decls.var(v).and_then(|x| x.init).ok_or(SubstFail)?;
+                    init_vars.push(v);
+                    match self.initializer(i, InitStyle::C)? {
+                        Some(Initializer::Expr(x)) => Some(x),
+                        _ => return self.unimplemented("this init-capture in a template", c.loc),
+                    }
+                }
+                None => None,
+            };
+            // A simple capture names its variable again directly: the
+            // name may not be in scope (a nested lambda instantiated with
+            // its enclosing generic lambda's call operator).
+            let var = match c.var.filter(|_| !c.init) {
+                Some(v) => Some(self.find_instantiated_decl(v, c.loc)?),
+                None => None,
+            };
+            intro.captures.push(LambdaCaptureSpec {
+                kind: c.kind,
+                name,
+                loc: c.loc,
+                ellipsis: None,
+                init,
+                var,
+            });
+        }
+        Ok(init_vars)
     }
 
     /// The lambda-declarator of pattern call operator `call_op`: the

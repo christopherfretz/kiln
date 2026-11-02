@@ -411,7 +411,14 @@ pub fn objectsize(m: &mut Module, ret: TypeId) -> FuncId {
     let p = ptr(m);
     let name = overloaded_name(m, "llvm.objectsize", &[ret, p]);
     let imm: &[Attr] = &[Attr::Flag(ImmArg)];
-    declare(m, &name, ret, &[(p, &[]), (TypeId::I1, imm), (TypeId::I1, imm), (TypeId::I1, imm)], &[], Shape::Pure)
+    declare(
+        m,
+        &name,
+        ret,
+        &[(p, &[]), (TypeId::I1, imm), (TypeId::I1, imm), (TypeId::I1, imm)],
+        &[],
+        Shape::Pure,
+    )
 }
 
 /// `i1 @llvm.is.fpclass.T(T, i32 immarg test)` for a floating-point `T`.
