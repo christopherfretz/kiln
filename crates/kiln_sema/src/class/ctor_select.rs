@@ -122,7 +122,7 @@ impl Sema<'_, '_> {
         self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
         self.ensure_implicit(c, crate::class::SpecialKind::CopyCtor);
         self.ensure_implicit(c, crate::class::SpecialKind::MoveCtor);
-        let mut found: Vec<DeclId> = self.ast.constructors(c).iter().collect();
+        let mut found: Vec<DeclId> = self.usable_ctors(c);
         found.extend(self.ctor_shadows(c));
         let mut params = Vec::new();
         found.retain(|&fd| {
@@ -255,11 +255,33 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// Whether declaration `d` is invalid.
+    pub(crate) fn is_invalid_decl(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).has(kiln_ast::decl::DeclFlags::INVALID)
+    }
+
+    /// The constructors (and constructor templates) of class `c` that take
+    /// part in overload resolution: an invalid one, such as one with a
+    /// parameter naming no type, does not (clang's
+    /// `ResolveConstructorOverload` and `LookupSpecialMember` skip an
+    /// invalid constructor; WP-318).
+    pub(crate) fn usable_ctors(&self, c: DeclId) -> Vec<DeclId> {
+        self.ast
+            .constructors(c)
+            .iter()
+            .filter(|&f| {
+                !self.is_invalid_decl(f)
+                    && (self.kind_of(f) != DeclKind::FunctionTemplate
+                        || self.pattern_of(f).is_none_or(|p| !self.is_invalid_decl(p)))
+            })
+            .collect()
+    }
+
     /// The constructors of class `c` and the base constructors its
     /// visible `ConstructorUsingShadow`s inherit ([namespace.udecl]/13:
     /// inherited constructors are candidates of [over.match.list] too).
     fn ctors_and_inherited(&self, c: DeclId) -> Vec<DeclId> {
-        let mut out: Vec<DeclId> = self.ast.constructors(c).iter().collect();
+        let mut out: Vec<DeclId> = self.usable_ctors(c);
         out.extend(self.ctor_shadows(c).into_iter().filter_map(|s| self.ast.using_target(s)));
         out
     }

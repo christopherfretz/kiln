@@ -7,7 +7,7 @@
 // `sentinel_wrapper::operator==` (test_iterators.h) under `insert_range`.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 65:11 error "no member named 'missing' in"
+//@ diag: 65:11 error "no member named 'missing' in 'It'"
 //@ diag: 71:14 note "in instantiation of member function 'Bad<It>::operator==' requested here"
 
 struct It {

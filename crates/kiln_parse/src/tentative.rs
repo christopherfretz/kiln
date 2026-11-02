@@ -319,10 +319,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         let Some((end, class)) = self.name_here() else {
             return Tpr::False;
         };
-        // `foo bar` with `foo` undeclared: `foo` is (meant as) a type
-        // name, so the declaration parser reports it. A declared non-type
-        // `foo` is an expression (clang's `ClassifyName`).
-        if matches!(class, NameClass::Undeclared) && self.ident_at(end).is_some() {
+        if matches!(class, NameClass::Undeclared) && self.undeclared_type_before_ident(end) {
             return Tpr::True;
         }
         match class {
@@ -339,6 +336,17 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             NameClass::Dependent if end > self.i + 1 => self.after_dependent_name(end),
             _ => Tpr::False,
         }
+    }
+
+    /// `foo bar` with `foo` undeclared (the name ends at `end`): `foo` is
+    /// (meant as) a type name, so the declaration parser reports it. A
+    /// declared non-type `foo` is an expression (clang's `ClassifyName`).
+    /// A qualified name not found in its non-dependent scope (`S::nom x`)
+    /// is not: clang's `ANK_Unresolved` on an `annot_cxxscope` is `False`
+    /// unless the caller tracks `InvalidAsDeclSpec` (WP-318), so
+    /// `(S::nom x)` is a parenthesized expression.
+    fn undeclared_type_before_ident(&self, end: usize) -> bool {
+        self.ident_at(end).is_some() && !(end > self.i + 1 && self.p.unresolved_scope_name(self.i))
     }
 
     /// The `NameClass::Dependent` arm of [`Scan::decl_specifier`]: the
@@ -1064,6 +1072,13 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         Tpr::Ambiguous
     }
 
+    /// An undeclared unqualified name followed by `*`, `&` or `&&`.
+    fn undeclared_before_ptr_operator(&self) -> bool {
+        self.ident_at(self.i).is_some()
+            && matches!(self.name_here(), Some((end, NameClass::Undeclared)) if end == self.i + 1)
+            && matches!(self.punct_at(self.i + 1), Some(Punct::Star | Punct::Amp | Punct::AmpAmp))
+    }
+
     /// clang's `isCXXSimpleDeclaration`.
     fn is_simple_declaration(&mut self, allow_for_range: bool) -> bool {
         if self.dependent_template_id_name() {
@@ -1093,6 +1108,13 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             if non_type {
                 return false;
             }
+            Tpr::Ambiguous
+        } else if self.undeclared_before_ptr_operator() {
+            // An undeclared unqualified name followed by a ptr-operator
+            // (`u5 &r;`, `u5 *p;`): clang's `ANK_Unresolved`, ambiguous
+            // here; the declarator decides (`u5 & r + 1;` is an
+            // expression), and the declaration parser reports "unknown
+            // type name" (WP-318).
             Tpr::Ambiguous
         } else {
             self.decl_specifier(Tpr::False)

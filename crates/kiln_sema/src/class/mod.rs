@@ -353,14 +353,17 @@ impl Sema<'_, '_> {
     /// written or implicit, is diagnosed: `'this' cannot be implicitly
     /// used in a static member function declaration` (clang
     /// `checkThisInStaticMemberFunctionExceptionSpec`).
-    fn check_this_in_static_exception_spec(&mut self, e: ExprId) {
+    pub(crate) fn check_this_in_static_exception_spec(&mut self, e: ExprId) {
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             if self.ast.exprs.get(x).kind() == ExprKind::CXXThisExpr {
                 let implicit = self.ast.exprs.this_is_implicit(x);
                 let loc = self.ast.exprs.get(x).loc();
-                let msg =
-                    self.diag(DiagId::sema_this_static_member_func, loc).arg(u32::from(implicit));
+                // Repeated in each instantiation of the class, as clang.
+                let msg = self
+                    .diag(DiagId::sema_this_static_member_func, loc)
+                    .arg(u32::from(implicit))
+                    .per_instantiation();
                 self.emit(msg);
                 return;
             }

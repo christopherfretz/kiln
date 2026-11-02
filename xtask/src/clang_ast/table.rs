@@ -116,6 +116,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("CompoundLiteralExpr", Keep),
     ("BinaryConditionalOperator", Keep),
     ("OffsetOfExpr", Keep),
+    // `__builtin_choose_expr` (WP-316).
+    ("ChooseExpr", Keep),
     // Templates as written (WP-069, spec/ast-dump.md §5).
     ("ClassTemplateDecl", Keep),
     ("FunctionTemplateDecl", Keep),
@@ -229,7 +231,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("TypeTraitExpr", Unsupported(NOT_M2)),
     ("ArrayTypeTraitExpr", Unsupported(NOT_M2)),
     ("ExpressionTraitExpr", Unsupported(NOT_M2)),
-    ("ChooseExpr", Unsupported(NOT_M2)),
     ("GNUNullExpr", Unsupported(NOT_M2)),
     ("VAArgExpr", Keep),
     ("PredefinedExpr", Keep),
@@ -417,7 +418,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "StmtExpr"
         | "CompoundLiteralExpr"
         | "BinaryConditionalOperator"
-        | "OffsetOfExpr" => &[],
+        | "OffsetOfExpr"
+        | "ChooseExpr" => &[],
         // `hasExplicitParameters` (clang 22+): whether the lambda spells a
         // parameter list; ignored, the parameters are the call operator's
         // (WP-262, spec/harness.md "Oracle toolchain").
@@ -654,6 +656,7 @@ pub const M2_KINDS: &[&str] = &[
     "CompoundLiteralExpr",
     "BinaryConditionalOperator",
     "OffsetOfExpr",
+    "ChooseExpr",
     "CompoundStmt",
     "DeclStmt",
     "NullStmt",

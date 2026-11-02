@@ -388,7 +388,15 @@ impl Parser<'_, '_> {
             return self.parse_expression().map(|e| (None, e));
         }
         let ctx = DeclaratorContext::Condition;
-        let ds = self.parse_decl_specifiers(ctx);
+        let mut ds = self.parse_decl_specifiers(ctx);
+        // [stmt.pre]/1: a type-specifier-seq, so no storage class (clang
+        // `ParseSpecifierQualifierList`: reported at the storage class,
+        // else at `thread_local`, and dropped).
+        if let Some(l) = ds.storage.map(|(_, l)| l).or(ds.thread_local) {
+            self.s.error(DiagId::parse_typename_storage_class, l);
+            ds.storage = None;
+            ds.thread_local = None;
+        }
         if ds.is_empty() {
             self.error_here(DiagId::parse_expected_expression);
             return None;

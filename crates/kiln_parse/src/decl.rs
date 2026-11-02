@@ -364,7 +364,7 @@ impl Parser<'_, '_> {
                 return Vec::new();
             }
             let tl = self.loc();
-            let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::NoDeduction) else {
+            let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::Alias) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
@@ -517,6 +517,8 @@ impl Parser<'_, '_> {
         let mut ds = DeclSpec::new(self.name_begin());
         ds.attrs = std::mem::take(&mut self.lead_decl_attrs);
         ds.lead_cxx11 = self.stmt_attrs_loc.take().filter(|_| !ds.attrs.is_empty());
+        // The spelling of the thread storage class (`_Thread_local`).
+        let mut thread_spelling: Option<String> = None;
         // The end of the leading attribute-specifier-seq: attributes there
         // appertain to the declaration ([dcl.pre]/5).
         let mut lead_end = self.pos();
@@ -614,7 +616,10 @@ impl Parser<'_, '_> {
                 Kw::Extern => ds.set_storage(StorageSpec::Extern, loc),
                 Kw::Register => ds.set_storage(StorageSpec::Register, loc),
                 Kw::Mutable => ds.set_storage(StorageSpec::Mutable, loc),
-                Kw::ThreadLocal => set_flag(&mut ds.thread_local, loc, "thread_local"),
+                Kw::ThreadLocal => {
+                    thread_spelling = Some(self.spelling_of(&self.tok()));
+                    set_flag(&mut ds.thread_local, loc, "thread_local")
+                }
                 Kw::Constexpr | Kw::Consteval | Kw::Constinit => {
                     set_constexpr_kind(&mut ds, k, loc)
                 }
@@ -729,7 +734,32 @@ impl Parser<'_, '_> {
                 self.s.error(DiagId::parse_attributes_not_allowed, at);
             }
         }
+        self.reject_friend_storage(&mut ds, thread_spelling.as_deref().unwrap_or("thread_local"));
         ds
+    }
+
+    /// [class.friend]/6: no storage class in a friend declaration (clang
+    /// `DeclSpec::Finish`, `err_friend_decl_spec`): reported at the
+    /// storage class, or `thread_local` after it (`'static thread_local'
+    /// is invalid in friend declarations`), and dropped, the declaration
+    /// otherwise proceeding as written.
+    fn reject_friend_storage(&mut self, ds: &mut DeclSpec, thread: &str) {
+        if ds.friend.is_none() || ds.storage.is_none() && ds.thread_local.is_none() {
+            return;
+        }
+        let mut name = ds.storage.map(|(s, _)| s.spelling().to_owned()).unwrap_or_default();
+        let mut at = ds.storage.map_or(Loc::INVALID, |(_, l)| l);
+        if let Some(l) = ds.thread_local {
+            if !name.is_empty() {
+                name.push(' ');
+            }
+            name.push_str(thread);
+            at = l;
+        }
+        let d = self.s.diag(DiagId::parse_friend_decl_spec, at).arg(name);
+        self.emit(d);
+        ds.storage = None;
+        ds.thread_local = None;
     }
 
     /// The C11 atomic-type-specifier `_Atomic ( type-id )` (a clang
@@ -1052,6 +1082,7 @@ impl Parser<'_, '_> {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
                 }
                 ds.invalid = true;
+                ds.type_error = true;
                 let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
                 true
             }
@@ -1064,6 +1095,7 @@ impl Parser<'_, '_> {
                 self.emit(d);
                 self.bump();
                 ds.invalid = true;
+                ds.type_error = true;
                 let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
                 true
             }
@@ -1073,11 +1105,25 @@ impl Parser<'_, '_> {
 
     /// True if token `end`, after an unknown name in a decl-specifier,
     /// shows the name was meant as a type (a declarator follows).
+    ///
+    /// A ptr-operator counts in every declaration context (clang's
+    /// `ParseImplicitInt`: `*`, `&` and `&&` are not valid after a
+    /// declarator-id): at block scope the statement disambiguation chose
+    /// a declaration for `u5 &r;` already
+    /// ([`Scan::is_simple_declaration`](crate::tentative)), and after
+    /// another decl-specifier (`const u7 &c;`) only a declaration is
+    /// possible (WP-318).
     fn unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
         let next = self.tok_at(end);
         self.ident_of(next).is_some()
-            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
-                && matches!(Self::punct_of(next), Some(Punct::Star | Punct::Amp | Punct::AmpAmp)))
+            || (matches!(
+                ctx,
+                DeclaratorContext::File
+                    | DeclaratorContext::Member
+                    | DeclaratorContext::Block
+                    | DeclaratorContext::Condition
+                    | DeclaratorContext::ForInit
+            ) && matches!(Self::punct_of(next), Some(Punct::Star | Punct::Amp | Punct::AmpAmp)))
             // A parameter: clang's `ParseImplicitInt` diagnoses any
             // undeclared name where a decl-specifier is required in C++
             // (`void a(u1);`, `int e(u4 *p);`); `(`, `::` and `<` are
@@ -1188,7 +1234,10 @@ impl Parser<'_, '_> {
             self.bump();
             let base = self.parse_decl_specifiers(DeclaratorContext::TypeName);
             if base.has_type_specifier() {
-                fixed = Some(self.s.type_from_declspec(&base));
+                let ty = self.s.type_from_declspec(&base);
+                // [dcl.enum]/2, [dcl.spec.auto.general]/5.
+                let at = base.type_loc.unwrap_or(base.loc);
+                fixed = Some(self.s.type_specifier_placeholder_check(ty, at));
             } else {
                 self.error_here(DiagId::parse_expected_type);
             }
@@ -2083,7 +2132,8 @@ impl Parser<'_, '_> {
             pd.chunks.iter().any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
         let at = ds.type_loc.unwrap_or(start);
         if (placeholder || decltype_auto) && !ds.invalid && !trailing {
-            if let Some(why) = misplaced_param_placeholder(decltype_auto, fn_decl, site) {
+            if let Some(why) = kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site)
+            {
                 let int = self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why);
                 ds.auto_constraint = None;
                 ds.base = TypeSpecKind::Named;
@@ -2126,16 +2176,18 @@ impl Parser<'_, '_> {
     ) {
         let pname = pd.name.map(|(n, _)| n);
         let pack = pd.ellipsis.is_some();
+        let cloc = pd.trailing_constraint;
         for c in &mut pd.chunks {
             let Chunk::Function { trailing: Some((t, tloc)), .. } = c else { continue };
             let Some((decltype_auto, constraint)) = self.s.trailing_return_placeholder(*t) else {
                 continue;
             };
-            let with = if let Some(why) = misplaced_param_placeholder(decltype_auto, fn_decl, site)
+            let with = if let Some(why) =
+                kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site)
             {
                 self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why)
             } else {
-                let constraint = constraint.map(|(c, a)| (c, a, Loc::INVALID));
+                let constraint = constraint.map(|(c, a)| (c, a, cloc));
                 let loc = if tloc.is_valid() { *tloc } else { at };
                 self.s.act_on_invented_template_param(loc, pack, constraint, pname, qualifier)
             };
@@ -2241,7 +2293,11 @@ impl Parser<'_, '_> {
                     // function's trailing return type.
                     let this =
                         self.s.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
+                    self.type_id_constraint = Loc::INVALID;
                     let ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
+                    if !d.trailing_constraint.is_valid() {
+                        d.trailing_constraint = self.type_id_constraint;
+                    }
                     self.s.act_on_end_this_scope(this);
                     trailing = Some((ty, loc));
                     return (exc.unwrap_or_default(), quals, ref_qual, trailing);
@@ -2338,6 +2394,11 @@ impl Parser<'_, '_> {
         d.site = site;
         self.parse_declarator(&mut d);
         let base = self.s.type_from_declspec(&ds);
+        self.type_id_constraint = if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            ds.constraint_loc
+        } else {
+            d.trailing_constraint
+        };
         Some(self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d))
     }
 
@@ -2534,24 +2595,7 @@ impl Parser<'_, '_> {
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
-            // The declspec's type is formed once the first declarator is
-            // known: clang reports a missing type specifier at its name.
-            // Constructors, destructors and conversion functions have
-            // none ([class.ctor.general]/1, [class.dtor]/1,
-            // [class.conv.fct]/1).
-            let untyped = !ds.has_type_specifier() && is_untyped_special(&d);
-            let base = *base_ty.get_or_insert_with(|| {
-                if untyped && is_deduction_guide(&d) {
-                    self.s.plain_auto_type()
-                } else if untyped {
-                    QualType::VOID
-                } else if d.invalid && !ds.has_type_specifier() {
-                    QualType::ERROR
-                } else {
-                    let t = self.s.type_from_declspec_at(&ds, d.name_loc());
-                    self.s.rebuild_in_current_instantiation(t, &d)
-                }
-            });
+            let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
             // a malformed one drops the declarator.
             let Ok(label) = self.parse_asm_label() else {
@@ -2585,6 +2629,15 @@ impl Parser<'_, '_> {
                     return decls;
                 }
             }
+            // clang's `ParseDeclGroup`: a later declarator of a
+            // decl-specifier that named no type is parsed, not declared,
+            // and takes no initializer (`u1 &a, &b;` reports `a` only).
+            if declarators > 0 && ds.type_error {
+                if self.eat(Punct::Comma).is_none() {
+                    break;
+                }
+                continue;
+            }
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
@@ -2616,6 +2669,25 @@ impl Parser<'_, '_> {
         }
         self.expect_declaration_semi(ctx);
         decls
+    }
+
+    /// The type of decl-specifier-seq `ds`, formed once the first
+    /// declarator `d` of its group is known: clang reports a missing type
+    /// specifier at its name. Constructors, destructors and conversion
+    /// functions have none ([class.ctor.general]/1, [class.dtor]/1,
+    /// [class.conv.fct]/1).
+    fn group_base_type(&mut self, ds: &DeclSpec, d: &Declarator) -> QualType {
+        let untyped = !ds.has_type_specifier() && is_untyped_special(d);
+        if untyped && is_deduction_guide(d) {
+            self.s.plain_auto_type()
+        } else if untyped {
+            QualType::VOID
+        } else if d.invalid && !ds.has_type_specifier() {
+            QualType::ERROR
+        } else {
+            let t = self.s.type_from_declspec_at(ds, d.name_loc());
+            self.s.rebuild_in_current_instantiation(t, d)
+        }
     }
 
     /// A virt-specifier-seq after function declarator `d` outside a
@@ -3002,21 +3074,6 @@ fn set_flag(slot: &mut Option<Loc>, loc: Loc, spelling: &str) -> Result<(), Spec
     }
     *slot = Some(loc);
     Ok(())
-}
-
-/// Why a parameter's placeholder is ill-formed, as the site argument of
-/// [`kiln_sema::Sema::act_on_misplaced_param_placeholder`] (clang's
-/// `err_auto_not_allowed`): `decltype(auto)` is never a parameter's type
-/// ([dcl.spec.auto.general]/2-3), and `auto` only in the clause of a
-/// function declaration or a lambda (`fn_decl`, [dcl.fct]/22).
-fn misplaced_param_placeholder(decltype_auto: bool, fn_decl: bool, site: DeclSite) -> Option<u8> {
-    if decltype_auto {
-        Some(if site == DeclSite::LambdaParam { 2 } else { 0 })
-    } else if !fn_decl {
-        Some(1)
-    } else {
-        None
-    }
 }
 
 /// clang's `FunctionDeclarationScope`: the parameter clause of the

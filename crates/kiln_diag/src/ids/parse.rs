@@ -100,6 +100,7 @@ parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU s
 parse_template_args_expected_gt = Error (0) "expected '>'";
 parse_template_kw_missing = Error (1) "missing 'template' keyword prior to dependent template name '{0}'";
 parse_this_captured_by_reference = Error (0) "'this' cannot be captured by reference";
+parse_typename_storage_class = Error (0) "type name does not allow storage class to be specified";
 parse_unknown_attribute = Warning [UnknownAttributes] (1) "unknown attribute '{0}' ignored";
 parse_unsupported = Error (1) "{0} is not supported yet";
 parse_using_enum_requires_name = Error (0) "using enum requires an enum or typedef name";

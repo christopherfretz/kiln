@@ -739,7 +739,7 @@ impl Sema<'_, '_> {
             // clang reports it at the entity (`int a[2] = 1;` at `a`).
             let msg = self.diag(DiagId::sema_array_init_not_init_list, at).arg(which);
             self.emit(msg);
-            return e;
+            return self.recover(ty, &[e], at);
         }
         if let Some(x) = self.atomic_class_init(ty, e, ctx, at) {
             return x;
@@ -1016,15 +1016,19 @@ impl Sema<'_, '_> {
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
             let bound = self.ast.types.array_size(ty);
-            if bound.is_some_and(|n| args.len() as u64 > n) {
-                let msg = self.diag(DiagId::sema_excess_initializers, at).arg("0");
-                self.emit(msg);
-                return self.recover(ty, args, at);
+            // Every argument initializes an element, past the bound too;
+            // the first failure ends it, then the excess is reported
+            // (clang `TryOrBuildParenListInitialization`).
+            let mut inits = Vec::with_capacity(args.len());
+            for &a in args {
+                let e = self.paren_element_init(elem, a, entity::ELEMENT);
+                if self.is_err_expr(e) {
+                    return self.recover(ty, args, at);
+                }
+                inits.push(e);
             }
-            let inits: Vec<ExprId> =
-                args.iter().map(|&a| self.paren_element_init(elem, a, entity::ELEMENT)).collect();
-            if inits.iter().any(|&e| self.is_err_expr(e)) {
-                return self.recover(ty, args, at);
+            if bound.is_some_and(|n| args.len() as u64 > n) {
+                return self.paren_excess(ty, args, at, "0");
             }
             let n = bound.unwrap_or(args.len() as u64);
             let filler = if n > args.len() as u64 {
@@ -1050,11 +1054,8 @@ impl Sema<'_, '_> {
         let bases = self.init_bases(def);
         let fields = self.init_fields(def);
         let nb = bases.len();
-        if args.len() > nb + fields.len() {
-            let msg = self.diag(DiagId::sema_excess_initializers, at).arg("4");
-            self.emit(msg);
-            return self.recover(ty, args, at);
-        }
+        // The subobjects in order, the first failure ending it; then the
+        // excess arguments.
         let mut inits = Vec::with_capacity(nb + fields.len());
         for i in 0..nb + fields.len() {
             let ety = if i < nb {
@@ -1088,12 +1089,24 @@ impl Sema<'_, '_> {
                     }
                 }
             };
+            if self.is_err_expr(e) {
+                return self.recover(ty, args, at);
+            }
             inits.push(e);
         }
-        if inits.iter().any(|&e| self.is_err_expr(e)) {
-            return self.recover(ty, args, at);
+        if args.len() > nb + fields.len() {
+            return self.paren_excess(ty, args, at, "4");
         }
         self.builder().paren_list_init(ty, &inits, None, at, rparen)
+    }
+
+    /// clang's `err_excess_initializers` of a parenthesized aggregate
+    /// initialization, at the entity `at`, once the elements are
+    /// initialized (`kind`: "0" array, "3" union, "4" struct).
+    fn paren_excess(&mut self, ty: QualType, args: &[ExprId], at: Loc, kind: &str) -> ExprId {
+        let msg = self.diag(DiagId::sema_excess_initializers, at).arg(kind);
+        self.emit(msg);
+        self.recover(ty, args, at)
     }
 
     /// An element (or member) of a parenthesized aggregate initialization
@@ -1137,18 +1150,20 @@ impl Sema<'_, '_> {
         rparen: Loc,
     ) -> ExprId {
         let fields = self.init_fields(def);
-        let (Some(&f), Some(&a)) = (fields.first(), args.first()) else {
+        let Some(&a) = args.first() else {
             return self.recover(ty, args, at);
         };
-        if args.len() > 1 {
-            let msg = self.diag(DiagId::sema_excess_initializers, at).arg("3");
-            self.emit(msg);
-            return self.recover(ty, args, at);
-        }
+        // A union without members takes no argument.
+        let Some(&f) = fields.first() else {
+            return self.paren_excess(ty, args, at, "3");
+        };
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let init = self.paren_element_init(fty, a, entity::MEMBER);
         if self.is_err_expr(init) {
             return self.recover(ty, args, at);
+        }
+        if args.len() > 1 {
+            return self.paren_excess(ty, args, at, "3");
         }
         let el = self.begin_loc(init);
         self.check_bit_field_init(f, init, el);
@@ -1274,6 +1289,25 @@ impl Sema<'_, '_> {
                             .is_some_and(|x: &FieldData| x.bit_width.is_some()))
             })
             .collect()
+    }
+
+    /// Whether aggregate `ty` has no elements ([dcl.init.aggr]/2): an
+    /// array of bound 0, or a class without direct bases and without
+    /// members other than unnamed bit-fields. Brace elision never enters
+    /// such an aggregate ([dcl.init.aggr]/16 takes no clause for it; clang
+    /// and GCC reject the clause instead, `initializer for aggregate with
+    /// no elements requires explicit braces`). The one rule for both
+    /// initialization (`init_element`) and the overload viability walk
+    /// (`aggregate_list_walk`).
+    pub(crate) fn aggregate_has_no_elements(&self, ty: QualType) -> bool {
+        if self.ast.types.is_array(ty) {
+            return self.ast.types.array_size(ty) == Some(0);
+        }
+        let Some(r) = self.ast.types.as_record(ty) else {
+            return false;
+        };
+        let def = self.ast.definition(r).unwrap_or(r);
+        self.init_bases(def).is_empty() && self.init_fields(def).is_empty()
     }
 
     /// List-initialization ([dcl.init.list]/3).
@@ -1761,6 +1795,15 @@ impl Sema<'_, '_> {
                 };
                 if elide && self.is_vector_type(ty) {
                     self.elided_vector_init(ty, items, pos, at)
+                } else if elide && self.aggregate_has_no_elements(ty) {
+                    // clang `CheckImplicitInitList` with no elements:
+                    // the clause is consumed and the element recovers.
+                    *pos += 1;
+                    let msg = self
+                        .diag(DiagId::sema_implicit_empty_initializer, self.begin_loc(e))
+                        .range(self.expr_range(e));
+                    self.emit(msg);
+                    self.recover(ty, &[e], self.begin_loc(e))
                 } else if elide {
                     // A designated clause whose designator names the
                     // aggregate itself (`.m = 1`) starts a brace-elided

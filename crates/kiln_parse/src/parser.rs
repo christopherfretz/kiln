@@ -120,6 +120,11 @@ pub struct Parser<'a, 'sm> {
     /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
     /// declarator, not the parameter list ([dcl.fct]/14).
     pub(crate) pack_hint: bool,
+    /// The type-constraint location of the constrained placeholder the
+    /// last type-id contained (its decl-specifier's, or one in its
+    /// trailing return types), for the enclosing declarator's
+    /// [`Declarator::trailing_constraint`]; invalid when none.
+    pub(crate) type_id_constraint: Loc,
     /// The decl-specifier-seq of a parameter-declaration being parsed is
     /// not one where a dependent qualified name is implicitly a type
     /// ([temp.res.general]/4: a parameter of a function declared at
@@ -253,6 +258,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             greater_is_op: true,
             greater_off_depth: 0,
             pack_hint: false,
+            type_id_constraint: Loc::INVALID,
             param_typename: ParamTypename::Implicit,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),

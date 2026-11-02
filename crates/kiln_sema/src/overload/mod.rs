@@ -400,6 +400,12 @@ pub(crate) struct OverloadScratch {
     /// type [`QualType::OVERLOAD`], kiln's `UnresolvedMemberExpr`) names:
     /// consumed by [`Sema::resolve_member_call`].
     pub members: kiln_source::fx::FxHashMap<kiln_ast::ExprId, OvlMember>,
+    /// The function template-ids resolved to their one specialization
+    /// without a target ([`Sema::resolve_single_template_id`]): the
+    /// `DeclRefExpr` to the template-id's `UnresolvedLookupExpr`. clang
+    /// keeps such an operand an overload set, which a candidate note
+    /// and an assignment's diagnostic name.
+    pub template_id_refs: kiln_source::fx::FxHashMap<kiln_ast::ExprId, kiln_ast::ExprId>,
     /// How many user-defined conversions are being applied
     /// ([`Sema::user_convert`]).
     pub udc_depth: u8,

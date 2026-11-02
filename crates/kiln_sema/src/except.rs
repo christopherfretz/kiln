@@ -414,12 +414,19 @@ impl Sema<'_, '_> {
                         | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
                 )
             };
-            if unknown(ne) || unknown(pe) {
+            // A templated class's friend with a dependent `noexcept(expr)`
+            // matches no other declaration's specification (clang
+            // `CheckEquivalentExceptionSpecImpl`: its `canThrow` is
+            // `CT_Dependent`); each instantiation is checked again.
+            let dependent_friend = unknown(ne)
+                && !matches!(ne, ExcSpec::Deferred(_))
+                && self.is_dependent_friend_fn(n);
+            if !dependent_friend && (unknown(ne) || unknown(pe)) {
                 // The other one is still to come: check again then.
                 self.delayed_exc_equiv.push((n, p));
                 continue;
             }
-            if ne.is_nothrow() == pe.is_nothrow() {
+            if !dependent_friend && ne.is_nothrow() == pe.is_nothrow() {
                 continue;
             }
             let loc = self.ast.decls.get(n).loc();
@@ -431,7 +438,7 @@ impl Sema<'_, '_> {
             }
             let msg = self.diag(DiagId::sema_exception_spec_mismatch, loc);
             let msg = self.note_prev(msg, p, false);
-            self.emit(msg);
+            self.emit(per_instantiation_exc(msg, ne));
         }
     }
 
@@ -575,7 +582,12 @@ impl Sema<'_, '_> {
                 .unwrap_or_default()
         };
         let (pp, fp) = (params(self, pattern), params(self, f));
-        let method = self.kind_of(f) == kiln_ast::decl::DeclKind::CXXMethod;
+        // A static member function has no `this`: an implicit one in the
+        // pattern is "invalid use of 'this' outside of a non-static
+        // member function" now ([expr.prim.this]/3; clang's
+        // `TransformCXXThisExpr` in `InstantiateExceptionSpec`).
+        let method =
+            self.kind_of(f) == kiln_ast::decl::DeclKind::CXXMethod && !self.is_static_method(f);
         let at = self.ast.exprs.get(expr).loc();
         let start = self.begin_loc(expr);
         // A friend's is in its class ([class.friend]/7), whose members it
@@ -794,4 +806,12 @@ pub(crate) fn missing_exc_spec_fixit_loc(d: &Declarator) -> Option<Loc> {
     };
     let (at, len) = last.unwrap_or((rparen, 1));
     at.is_file().then(|| at.with_offset(len))
+}
+
+/// A redeclaration's `noexcept(expr)` mismatch inside an instantiation is
+/// reported for each instantiation, also when the template definition
+/// reported it (clang substitutes and compares the operand every time,
+/// spec/diag.md §7.4).
+pub(crate) fn per_instantiation_exc(msg: kiln_diag::Diag, ne: ExcSpec) -> kiln_diag::Diag {
+    if matches!(ne, ExcSpec::NoexceptExpr { .. }) { msg.per_instantiation() } else { msg }
 }

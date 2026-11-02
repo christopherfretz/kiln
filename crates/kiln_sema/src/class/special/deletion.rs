@@ -140,7 +140,7 @@ impl Sema<'_, '_> {
         if k.is_ctor() {
             let mut found = std::mem::take(&mut set.found);
             found.clear();
-            found.extend(self.ast.constructors(c).iter());
+            found.extend(self.usable_ctors(c));
             found.extend(self.ctor_shadows(c));
             self.add_found_candidates(
                 &mut set,
