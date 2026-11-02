@@ -925,13 +925,29 @@ and returns the scope it names:
   - an unfixed one gets its type from the enumerators' range (the best
     type), and the enumerators are then retyped to the enumeration
   - `replace_enumerator_init` records the converted initializer
-- **Bit-fields** ([class.bit]):
+- **Bit-fields** ([class.bit]; `bit_width`, clang `VerifyBitField`):
+  - a named bit-field's type must be integral or an enumeration, checked
+    even when the width is value-dependent (`bit-field 'f' has
+    non-integral type 'float'`, underlining the width)
   - the width must be an integral constant expression; one that folds
-    laxly is accepted (`fold_not_ice`, below)
+    laxly is accepted (`fold_not_ice`, below). A width whose type is not
+    integral or an unscoped enumeration (`2.0`, `SE::a`, `nullptr`) is
+    `integral constant expression must have integral or unscoped
+    enumeration type, not 'T'` at the width. A width whose
+    full-expression reported an error (a member named without an
+    object) is dropped without a further error
   - it must not be negative
-  - it must not be zero-width with a name
-  - it must not exceed the type's width
+  - it must not be zero-width with a name (underlining the width)
+  - it must not exceed the type's width (`-Wbitfield-width`; never for
+    `bool`)
+  - a member declarator with a width that declares no field
+    (`non_field_bit_width`, [class.bit]/3) is `static member 's' cannot
+    be a bit-field`, `typedef member 'td' cannot be a bit-field`, or the
+    non-integral error for a function; the member becomes invalid
   - `mark_bitfield` records the width
+  - Tests `class.bit/width-and-member-kinds.cpp`; the underlines are
+    checked by `kiln_driver` test
+    `bit_width_and_static_assert_ranges_like_clang` (WP-320).
 - **Anonymous unions and structs** ([class.union.anon]):
   - `act_on_decl_spec_only` creates the unnamed member, or the implicit
     variable outside a class, and returns it.
@@ -1165,6 +1181,9 @@ and returns the scope it names:
   variable becomes invalid and the initializer is dropped.
 - **`static_assert`** ([dcl.pre]/10) requires a converted constant
   expression of type `bool`.
+  - A failed comparison adds `expression evaluates to 'L op R'` at the
+    operator, underlining the whole comparison (clang
+    `DiagnoseStaticAssertDetails`).
   - On failure it reports
     `static assertion failed due to requirement '…'`, with the
     condition printed by `TypeNames::write_expr`, plus the message if

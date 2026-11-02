@@ -1980,6 +1980,12 @@ impl Sema<'_, '_> {
         };
         if invalid {
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
+        } else if d.ctx == DeclaratorContext::Member
+            && let Some(w) = d.bit_width
+            && self.ast.decls.field(decl).is_none()
+        {
+            self.non_field_bit_width(ds, ty, name, d.name_loc(), w);
+            self.ast.decls.set_flags(decl, DeclFlags::INVALID);
         }
         if dropped_local {
             self.dropped_qualified_locals.insert(decl);
@@ -3542,9 +3548,28 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// A member declarator with a bit-field width that declared no
+    /// field ([class.bit]/3, clang `ActOnCXXMemberDeclarator`): a static
+    /// data member, a typedef or a function, each diagnosed at its name
+    /// with the width's range. The width is dropped.
+    fn non_field_bit_width(&mut self, ds: &DeclSpec, ty: QualType, name: Symbol, loc: Loc, w: ExprId) {
+        let n = sym_str(self, name);
+        let msg = if ds.is_typedef() {
+            self.diag(DiagId::sema_typedef_not_bitfield, loc).arg(n)
+        } else if self.ast.types.is_function(ty) {
+            self.diag(DiagId::sema_bitfield_non_integral, loc).arg(n).arg(self.ty_arg(ty))
+        } else {
+            self.diag(DiagId::sema_static_not_bitfield, loc).arg(n)
+        };
+        let msg = msg.range(self.expr_range(w));
+        self.emit(msg);
+    }
+
     /// Checks a bit-field width ([class.bit]/1): an integral constant
-    /// expression, wrapped in a `ConstantExpr`.
-    /// Diagnostics point at the field's location `loc`, as clang's do.
+    /// expression, wrapped in a `ConstantExpr` (clang `VerifyBitField`).
+    /// Diagnostics point at the field's location `loc`, as clang's do,
+    /// with the width's range where clang gives one (non-integral field
+    /// type, zero width), or at the width for a non-integral width.
     fn bit_width(
         &mut self,
         w: ExprId,
@@ -3552,11 +3577,15 @@ impl Sema<'_, '_> {
         name: Option<&str>,
         loc: Loc,
     ) -> Option<ExprId> {
-        if self.expr_is_value_dependent(w) || self.is_dependent_type(ty) {
-            return Some(w);
+        if self.is_err_expr(w) {
+            return None;
         }
         let t = &self.ast.types;
-        if !(t.is_integral(ty) || t.as_enum(ty).is_some() || self.is_error_type(ty)) {
+        if !(self.is_dependent_type(ty)
+            || t.is_integral(ty)
+            || t.as_enum(ty).is_some()
+            || self.is_error_type(ty))
+        {
             let msg = match name {
                 Some(n) => {
                     self.diag(DiagId::sema_bitfield_non_integral, loc).arg(n).arg(self.ty_arg(ty))
@@ -3565,11 +3594,37 @@ impl Sema<'_, '_> {
                     self.diag(DiagId::sema_anon_bitfield_non_integral, loc).arg(self.ty_arg(ty))
                 }
             };
+            let msg = msg.range(self.expr_range(w));
+            self.emit(msg);
+            return None;
+        }
+        if self.expr_is_value_dependent(w) || self.is_dependent_type(ty) {
+            return Some(w);
+        }
+        // clang `VerifyIntegerConstantExpression`: the width has integral
+        // or unscoped enumeration type (a class type converts below).
+        let wt = self.ast.exprs.get(w).ty();
+        let t = &self.ast.types;
+        if !(t.is_integral(wt)
+            || t.as_enum(wt).is_some_and(|en| !self.is_scoped_enum(en))
+            || t.as_record(wt).is_some()
+            || self.is_error_type(wt))
+        {
+            let msg = self
+                .diag(DiagId::sema_ice_not_integral, self.begin_loc(w))
+                .arg(self.ty_arg(wt))
+                .range(self.expr_range(w));
             self.emit(msg);
             return None;
         }
         let c = conv::decay(self, w);
+        let errors = self.diags.error_count();
         let c = self.act_on_constant_full_expr(c);
+        if self.diags.error_count() > errors {
+            // A member named without an object (clang returns an
+            // invalid expression and drops the width).
+            return None;
+        }
         let v = match self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(w))) {
             Ok(v) => v,
             // clang `VerifyBitField`: `AllowFold`.
@@ -3590,13 +3645,14 @@ impl Sema<'_, '_> {
         if v == 0
             && let Some(n) = name
         {
-            let msg = self.diag(DiagId::sema_bitfield_zero_width, loc).arg(n);
+            let msg = self.diag(DiagId::sema_bitfield_zero_width, loc).arg(n).range(self.expr_range(w));
             self.emit(msg);
             return None;
         }
         if let Some((bits, _)) = constfold::int_info(&self.ast, ty) {
-            let bits = if self.ast.types.builtin(ty) == Some(BuiltinType::Bool) { 8 } else { bits };
+            // clang warns for every integral type but `bool`.
             if v > i128::from(bits)
+                && self.ast.types.builtin(ty) != Some(BuiltinType::Bool)
                 && let Some(n) = name
             {
                 let msg = self
@@ -6458,8 +6514,8 @@ impl Sema<'_, '_> {
             .arg(self.const_display(lv))
             .arg(op)
             .arg(self.const_display(rv))
-            .range(self.expr_range(l))
-            .range(self.expr_range(r));
+            // clang `DiagnoseStaticAssertDetails`: the operator's range.
+            .range(self.expr_range(c));
         d.with_note(note)
     }
 
