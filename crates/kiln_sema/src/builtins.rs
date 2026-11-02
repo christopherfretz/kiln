@@ -182,6 +182,75 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// clang's `BuiltinAttr` on a written declaration (spec/sema.md §5.4,
+    /// "One declaration per builtin"): a redeclaration of a builtin is
+    /// the builtin (its id is inherited along the redeclaration chain,
+    /// so `extern "C" void *__builtin_memcpy(...)` after a call still
+    /// calls the builtin); and the first declaration of a non-library
+    /// builtin name (`builtin::by_name`) in a namespace-scope context
+    /// with C language linkage and with the builtin's type ignoring the
+    /// exception specification is the builtin (clang
+    /// `ActOnFunctionDeclarator`; implicit `Builtin` attribute appended
+    /// to `attrs`). Any other declaration of the name is an ordinary
+    /// function.
+    pub(crate) fn recognize_builtin_decl(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
+        if self.kind_of(f) != DeclKind::Function {
+            return;
+        }
+        if let Some(p) = self.ast.prev(f) {
+            if let Some(id) = self.ast.decls.builtin_id(p) {
+                let _ = self.ast.decls.cold.builtin_id.insert(f, id);
+            }
+            return;
+        }
+        let Some(name) = self.ast.decls.get(f).name().as_ident() else { return };
+        let Some(id) = builtin::by_name(self.ast.symbols().as_str(name)) else { return };
+        let Some(info) = builtin::info(id).copied() else { return };
+        if !self.c_linkage_file_scope_fn_of_type(f, info.sig) {
+            return;
+        }
+        let _ = self.ast.decls.cold.builtin_id.insert(f, id);
+        let n = AttrNode {
+            kind: AttrKind::BUILTIN,
+            syntax: AttrSyntax::Gnu,
+            flags: 1,
+            loc: Loc::INVALID,
+            a: id,
+            b: 0,
+        };
+        attrs.push(self.ast.attrs.push(n));
+    }
+
+    /// Whether `f` is a `Function` in a namespace-scope context (through
+    /// linkage specifications) with C language linkage whose type is the
+    /// one the `Builtins.td` signature `sig` spells, ignoring the
+    /// exception specification.
+    fn c_linkage_file_scope_fn_of_type(&mut self, f: DeclId, sig: &str) -> bool {
+        if self.kind_of(f) != DeclKind::Function {
+            return false;
+        }
+        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
+            let r = self.ast.redecl_context(c);
+            matches!(self.kind_of(r), DeclKind::TranslationUnit | DeclKind::Namespace)
+        });
+        if !file_ctx || !kiln_abi::mangle::is_extern_c(&self.ast, f) {
+            return false;
+        }
+        let Some(ty) = self.ast.decls.get(f).ty() else { return false };
+        let (ret, params, variadic) = self.builtin_signature(sig);
+        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
+            return false;
+        }
+        let want = self.ast.types.function(
+            ret,
+            &params,
+            FuncInfo::new().with_variadic(variadic),
+            ExcSpec::None,
+        );
+        let have = self.with_exc_spec(ty, ExcSpec::None);
+        self.ast.types.same_type(want, have)
+    }
+
     /// The [`builtin::LIB`] row declaration `f` is recognized as (clang's
     /// library-builtin recognition in `ActOnFunctionDeclarator`, which
     /// gives it a builtin id): a `Function` in a namespace-scope context
@@ -191,31 +260,9 @@ impl Sema<'_, '_> {
         if self.kind_of(f) != DeclKind::Function {
             return None;
         }
-        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
-            let r = self.ast.redecl_context(c);
-            matches!(self.kind_of(r), DeclKind::TranslationUnit | DeclKind::Namespace)
-        });
-        if !file_ctx || !kiln_abi::mangle::is_extern_c(&self.ast, f) {
-            return None;
-        }
         let name = self.ast.decls.get(f).name().as_ident()?;
         let info = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied()?;
-        let ty = self.ast.decls.get(f).ty()?;
-        let (ret, params, variadic) = self.builtin_signature(info.sig);
-        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
-            return None;
-        }
-        let want = self.ast.types.function(
-            ret,
-            &params,
-            FuncInfo::new().with_variadic(variadic),
-            ExcSpec::None,
-        );
-        let have = self.with_exc_spec(ty, ExcSpec::None);
-        if !self.ast.types.same_type(want, have) {
-            return None;
-        }
-        Some(info)
+        self.c_linkage_file_scope_fn_of_type(f, info.sig).then_some(info)
     }
 
     /// Declares the builtin function `name` (first used at `loc`) if it

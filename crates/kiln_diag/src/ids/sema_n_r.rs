@@ -21,6 +21,7 @@ sema_no_declarators_error = Error (0) "declaration does not declare anything";
 sema_no_matching_local_friend = Error (0) "no matching function found in local scope";
 sema_no_matching_local_friend_suggest = Error (2) "no matching function '{0}' found in local scope; did you mean '{1}'?";
 sema_no_member = Error (2) "no member named '{0}' in {1}";
+sema_no_member_template = Error (2) "no template named '{0}' in {1}";
 sema_no_subscript_operator = Error (1) "type {0} does not provide a subscript operator";
 sema_no_suitable_delete_member = Error (2) "no suitable member {0} in {1}";
 sema_no_template_named = Error (1) "no template named '{0}'";

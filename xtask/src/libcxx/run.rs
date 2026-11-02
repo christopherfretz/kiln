@@ -25,6 +25,8 @@ pub struct Config {
     pub features: Vec<String>,
     pub compile_timeout: Duration,
     pub run_timeout: Duration,
+    /// The run limit of a long test ([`is_long`]): `--run-timeout-long`.
+    pub long_run_timeout: Duration,
     pub mem: Option<MemLimit>,
     pub probe: RssProbe,
     /// The per-run scratch root; test `i` uses `<root>/t<i>`.
@@ -204,6 +206,9 @@ const ROOT_UNSUPPORTED: &[&str] = &[
     "std/input.output/filesystems/fs.op.funcs/fs.op.temp_dir_path/temp_directory_path.pass.cpp",
 ];
 
+/// The UNSUPPORTED reason of a [`ROOT_UNSUPPORTED`] test run as root.
+pub const ROOT_REASON: &str = "env: running as root: perms::none does not deny access";
+
 /// With the scratch directory (`TMPDIR`) on a host-shared filesystem (a
 /// Docker Desktop bind mount): a directory's hard-link count is not
 /// `2 + subdirectories`, and `create_directory(p, attrs)` fails copying
@@ -213,6 +218,17 @@ const HOST_FS_UNSUPPORTED: &[&str] = &[
     "std/input.output/filesystems/fs.op.funcs/fs.op.hard_lk_ct/hard_link_count.pass.cpp",
 ];
 
+/// With glibc locale data whose `en_US.UTF-8` digit grouping is `3` (glibc
+/// 2.41 here; `LC_ALL=en_US.UTF-8 locale -k grouping`), not the `3;3`
+/// these tests expect on every non-Windows, non-AIX target.
+const GROUPING_UNSUPPORTED: &[&str] = &[
+    "std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp",
+    "std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp",
+];
+
+/// The UNSUPPORTED reason of a [`GROUPING_UNSUPPORTED`] test.
+pub const GROUPING_REASON: &str = "env: glibc en_US.UTF-8 grouping is 3, the test expects 3;3";
+
 /// Filesystem types of a host-shared bind mount (`/proc/self/mountinfo`).
 const HOST_FS_TYPES: &[&str] = &["fakeowner", "fuse.grpcfuse", "virtiofs"];
 
@@ -220,7 +236,10 @@ const HOST_FS_TYPES: &[&str] = &["fakeowner", "fuse.grpcfuse", "virtiofs"];
 /// scratch directory lives.
 pub fn env_unsupported(rel: &str, scratch: &Path) -> Option<String> {
     if ROOT_UNSUPPORTED.contains(&rel) && running_as_root() {
-        return Some("env: needs EACCES from perms::none; running as root".to_owned());
+        return Some(ROOT_REASON.to_owned());
+    }
+    if GROUPING_UNSUPPORTED.contains(&rel) && en_us_grouping_is_3() {
+        return Some(GROUPING_REASON.to_owned());
     }
     if HOST_FS_UNSUPPORTED.contains(&rel)
         && let Some(fs) = mount_fs_type(scratch).filter(|t| HOST_FS_TYPES.contains(&t.as_str()))
@@ -234,13 +253,34 @@ pub fn env_unsupported(rel: &str, scratch: &Path) -> Option<String> {
 fn running_as_root() -> bool {
     static ROOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ROOT.get_or_init(|| {
-        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
-        status
-            .lines()
-            .find_map(|l| l.strip_prefix("Uid:"))
-            .and_then(|ids| ids.split_whitespace().nth(1))
-            .is_some_and(|euid| euid == "0")
+        euid_is_root(&std::fs::read_to_string("/proc/self/status").unwrap_or_default())
     })
+}
+
+/// Whether glibc's `en_US.UTF-8` groups digits by 3 only: `locale -k
+/// grouping` prints exactly `grouping=3` (`3;3` is what the tests want;
+/// without the locale it prints C's `-1`).
+fn en_us_grouping_is_3() -> bool {
+    static G: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *G.get_or_init(|| {
+        Command::new("locale")
+            .args(["-k", "grouping"])
+            .env("LC_ALL", "en_US.UTF-8")
+            .output()
+            .is_ok_and(|o| {
+                o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "grouping=3"
+            })
+    })
+}
+
+/// Whether the effective uid (the second field of `Uid:`) in the text of
+/// `/proc/<pid>/status` is 0.
+fn euid_is_root(status: &str) -> bool {
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("Uid:"))
+        .and_then(|ids| ids.split_whitespace().nth(1))
+        .is_some_and(|euid| euid == "0")
 }
 
 /// The filesystem type of the mount holding `path` (the longest mount
@@ -264,6 +304,27 @@ fn mount_fs_type_in(info: &str, path: &Path) -> Option<String> {
         }
     }
     best.map(|(_, fs)| fs.to_owned())
+}
+
+/// `slow_tests.txt`: tests that get the long run timeout although they do
+/// not say `REQUIRES: long_tests` (spec/libcxx.md "Timeouts and retries").
+const SLOW_TESTS: &str = include_str!("slow_tests.txt");
+
+/// The `(path, reason)` entries of [`SLOW_TESTS`], in file order.
+fn slow_tests() -> impl Iterator<Item = (&'static str, &'static str)> {
+    SLOW_TESTS.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(|l| {
+        let (path, reason) = l.split_once(char::is_whitespace).unwrap_or((l, ""));
+        (path, reason.trim())
+    })
+}
+
+/// Why `rel` gets the long run timeout, if it does: it says `REQUIRES:
+/// long_tests`, or it is in `slow_tests.txt`.
+pub fn is_long(rel: &str, d: &Directives) -> Option<&'static str> {
+    if d.requires_feature("long_tests") {
+        return Some("REQUIRES: long_tests");
+    }
+    slow_tests().find(|&(p, _)| p == rel).map(|_| "slow_tests.txt")
 }
 
 /// What lit decides before anything runs: `Err(outcome)` ends the test
@@ -355,7 +416,10 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
             return r;
         }
     }
-    execute(cfg, &job.path, &scratch, kind, &flags, &mut r);
+    let run_timeout =
+        if is_long(&job.rel, &d).is_some() { cfg.long_run_timeout } else { cfg.run_timeout };
+    let run = RunLimits { timeout: run_timeout, retries: d.allow_retries };
+    execute(cfg, &job.path, &scratch, kind, &flags, run, &mut r);
     // XFAIL turns PASS into XPASS and FAIL into XFAIL; it never hides a
     // KILLED, a TIMEOUT or a compiler crash.
     if xfail.is_some() && !r.crashed {
@@ -375,13 +439,24 @@ fn cleanup(cfg: &Config, scratch: &Path) {
     }
 }
 
+/// How a test binary runs: its time limit, and how many times a failing
+/// run is retried (`ALLOW_RETRIES:`).
+#[derive(Clone, Copy, Debug)]
+struct RunLimits {
+    timeout: Duration,
+    retries: u32,
+}
+
 /// Runs the steps of `kind` and fills in `r`'s outcome, keys and timing.
+/// Only the run step is retried: compiling and linking are deterministic,
+/// so lit's rerun of the whole test reaches the same binary.
 fn execute(
     cfg: &Config,
     src: &Path,
     scratch: &Path,
     kind: Kind,
     flags: &[String],
+    run: RunLimits,
     r: &mut TestResult,
 ) {
     let obj = scratch.join("t.o");
@@ -431,22 +506,20 @@ fn execute(
         } else {
             cfg.mem
         };
-        let timeout = if is_kiln { cfg.compile_timeout } else { cfg.run_timeout };
-        let measured =
-            process::run_measured(&cmd, &cfg.probe, &scratch.join("rss.txt"), timeout, limit);
-        let m = match measured {
-            Ok(m) => m,
-            Err(e) => {
-                r.outcome = Outcome::Error(format!(
-                    "cannot run {stage:?} step: {e}",
-                    stage = stage.label()
-                ));
-                return;
-            }
-        };
-        r.wall += m.wall;
-        r.max_rss_kb = r.max_rss_kb.max(m.max_rss_kb);
-        match judge(stage, &m, kind == Kind::Verify) {
+        let timeout = if is_kiln { cfg.compile_timeout } else { run.timeout };
+        let attempts = if is_kiln { 1 } else { run.retries + 1 };
+        let verdict =
+            match attempt_step(cfg, &cmd, scratch, stage, kind, timeout, limit, attempts, r) {
+                Ok(v) => v,
+                Err(e) => {
+                    r.outcome = Outcome::Error(format!(
+                        "cannot run {stage:?} step: {e}",
+                        stage = stage.label()
+                    ));
+                    return;
+                }
+            };
+        match verdict {
             Step::Ok if expect_success => {}
             Step::Ok => {
                 r.outcome = Outcome::Fail(Stage::ExpectedFail);
@@ -475,6 +548,36 @@ fn execute(
             }
         }
     }
+}
+
+/// Runs one step up to `attempts` times, until it succeeds, adding each
+/// attempt's wall time and peak RSS to `r`; the last attempt's verdict.
+#[allow(clippy::too_many_arguments)] // the step, its limits and the result
+fn attempt_step(
+    cfg: &Config,
+    cmd: &Command,
+    scratch: &Path,
+    stage: Stage,
+    kind: Kind,
+    timeout: Duration,
+    limit: Option<MemLimit>,
+    attempts: u32,
+    r: &mut TestResult,
+) -> std::io::Result<Step> {
+    let mut verdict = Step::Ok;
+    for attempt in 1..=attempts {
+        let m = process::run_measured(cmd, &cfg.probe, &scratch.join("rss.txt"), timeout, limit)?;
+        r.wall += m.wall;
+        r.max_rss_kb = r.max_rss_kb.max(m.max_rss_kb);
+        verdict = judge(stage, &m, kind == Kind::Verify);
+        if matches!(verdict, Step::Ok) {
+            if attempt > 1 {
+                r.detail = format!("passed on attempt {attempt} of {attempts}");
+            }
+            break;
+        }
+    }
+    Ok(verdict)
 }
 
 /// Classifies one step's end. A compiler step "crashes" on a panic, an LLVM
@@ -621,7 +724,7 @@ mod tests {
 
     #[test]
     fn env_exclusions() {
-        for list in [ROOT_UNSUPPORTED, HOST_FS_UNSUPPORTED] {
+        for list in [ROOT_UNSUPPORTED, HOST_FS_UNSUPPORTED, GROUPING_UNSUPPORTED] {
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
@@ -631,7 +734,111 @@ mod tests {
         assert_eq!(env_unsupported("std/utilities/any/any.class/nothing.pass.cpp", &tmp), None);
         let listed = env_unsupported(ROOT_UNSUPPORTED[0], &tmp);
         assert_eq!(listed.is_some(), running_as_root());
-        assert!(listed.is_none_or(|r| r.starts_with("env: ")));
+        assert!(listed.is_none_or(|r| r == ROOT_REASON));
+        let listed = env_unsupported(GROUPING_UNSUPPORTED[0], &tmp);
+        assert_eq!(listed.is_some(), en_us_grouping_is_3());
+        assert!(listed.is_none_or(|r| r == GROUPING_REASON));
+        // The effective uid is the second `Uid:` field (real, effective,
+        // saved, filesystem).
+        assert!(euid_is_root("Name:\tx\nUid:\t1000\t0\t0\t0\nGid:\t0\t0\t0\t0\n"));
+        assert!(!euid_is_root("Uid:\t0\t1000\t1000\t1000\n"));
+        assert!(!euid_is_root("Name:\tx\n"));
+    }
+
+    #[test]
+    fn slow_tests_list() {
+        let entries: Vec<_> = slow_tests().collect();
+        assert_ne!(entries.len(), 0);
+        let mut sorted: Vec<&str> = entries.iter().map(|(p, _)| *p).collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, entries.iter().map(|(p, _)| *p).collect::<Vec<_>>());
+        for (path, reason) in &entries {
+            assert!(path.starts_with("std/") || path.starts_with("libcxx/"), "{path}");
+            assert!(Kind::of(path.rsplit('/').next().unwrap()).is_some(), "{path}");
+            assert!(!reason.is_empty(), "{path} has no reason");
+        }
+        let plain = Directives::default();
+        assert_eq!(is_long(entries[0].0, &plain), Some("slow_tests.txt"));
+        assert_eq!(is_long("std/a/b.pass.cpp", &plain), None);
+        let long = Directives::parse("// REQUIRES: long_tests").unwrap();
+        assert_eq!(is_long("std/a/b.pass.cpp", &long), Some("REQUIRES: long_tests"));
+    }
+
+    /// A fake compiler: `-c -o t.o` writes the object, the link step writes
+    /// `t.exe` as a copy of the test source (a shell script), so the run
+    /// step runs the test's own script.
+    #[cfg(unix)]
+    fn fake_run(script: &str, run: RunLimits) -> TestResult {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!(
+            "kiln-libcxx-retry-{}-{}",
+            std::process::id(),
+            script.len()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let kiln = base.join("fake-kiln");
+        let src = base.join("t.pass.cpp");
+        std::fs::write(
+            &kiln,
+            format!(
+                "#!/bin/sh\nfor a; do case \"$a\" in -c) exec touch t.o;; esac; done\n\
+                 cp {} t.exe && chmod +x t.exe\n",
+                src.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&kiln, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&src, script).unwrap();
+        let cfg = Config {
+            kiln,
+            checkout: base.clone(),
+            tag: String::new(),
+            llvm_dir: base.clone(),
+            resource_dir: base.clone(),
+            features: Vec::new(),
+            compile_timeout: Duration::from_secs(20),
+            run_timeout: run.timeout,
+            long_run_timeout: run.timeout,
+            mem: None,
+            probe: RssProbe::Unavailable,
+            scratch: base.join("s"),
+            keep: false,
+        };
+        let scratch = base.join("s");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let mut r = TestResult {
+            rel: "t.pass.cpp".into(),
+            outcome: Outcome::Pass,
+            keys: Vec::new(),
+            crashed: false,
+            detail: String::new(),
+            wall: Duration::ZERO,
+            max_rss_kb: None,
+        };
+        execute(&cfg, &src, &scratch, Kind::Pass, &[], run, &mut r);
+        let _ = std::fs::remove_dir_all(&base);
+        r
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn allow_retries_reruns_the_binary() {
+        // Fails on the first two runs (counting in the scratch dir, the
+        // cwd), passes on the third.
+        let flaky = "#!/bin/sh\necho x >> runs; [ $(wc -l < runs) -ge 3 ]\n";
+        let secs = Duration::from_secs(20);
+        let r = fake_run(flaky, RunLimits { timeout: secs, retries: 2 });
+        assert_eq!(r.outcome, Outcome::Pass);
+        assert_eq!(r.detail, "passed on attempt 3 of 3");
+        let r = fake_run(flaky, RunLimits { timeout: secs, retries: 1 });
+        assert_eq!(r.outcome, Outcome::Fail(Stage::Run));
+        // A timeout is retried too, and the limit is the one given.
+        let slow = "#!/bin/sh\nsleep 5\n";
+        let r = fake_run(slow, RunLimits { timeout: Duration::from_millis(300), retries: 1 });
+        assert_eq!(r.outcome, Outcome::Timeout(Stage::Run));
+        assert!(r.wall < Duration::from_secs(4), "{:?}", r.wall);
     }
 
     #[test]
