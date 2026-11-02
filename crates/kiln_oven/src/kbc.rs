@@ -153,7 +153,8 @@ ops! {
     Ret = 1,
     // [dst, global]
     GlobalAddr = 2,
-    // [dst, p, target pointee type]
+    // [dst, p, target pointee type]; aux = `VOID_TAG`: [dst, p, source
+    // pointee type], a `T *` to `void *` conversion that tags `p`
     VoidCast = 3,
     // [dst, type, count, origin, explicit inits]: a transient allocation
     // (spec/oven.md "Transient allocation"), uninitialized unless aux has
@@ -173,8 +174,10 @@ ops! {
     // (spec/oven.md "Destruction"): the innermost `ScopeExit` or `Ret`
     // whose mark is below it calls the destructor, last registered first.
     // aux = 1: `p` is the first element of a heap array of `type`
-    // (`delete[]`), its count is the allocation's. A null `p` registers
-    // nothing.
+    // (`delete[]`), its count is the allocation's; aux 2 = a subobject
+    // destroyed by a destructor (notes); aux 4 = run only by unwinding
+    // (a subobject of an object under construction, [except.ctor]/3-4),
+    // dropped by any other exit. A null `p` registers nothing.
     PushCleanup = 3,
     // [p]: the complete object at `p` is const from now on (a const
     // object is modifiable during its construction, [class.ctor.general]/5).
@@ -283,6 +286,13 @@ ops! {
 /// `Op::Throw` operand: the exception object has no destructor to run.
 pub(crate) const NO_DTOR: u32 = u32::MAX;
 
+/// `VoidCast` aux: the conversion of a non-null `T *` to `void *`, which
+/// records `T` (+ 1) in bits 64..96 of the pointer register, the
+/// designator a placement new of the `void *` reads (spec/oven.md
+/// "Construction"). Pointer operations read the low 64 bits only, and a
+/// store to memory drops the tag.
+pub(crate) const VOID_TAG: u32 = 1;
+
 /// The kinds of `Builtin` and their operands.
 pub(crate) mod bi {
     /// `t1`/`t2`: no static type; the type of the designated object.
@@ -368,6 +378,9 @@ pub(crate) mod bi {
     pub const ROTL: u32 = 4;
     /// `INT_OP`: `__builtin_rotateright*`.
     pub const ROTR: u32 = 5;
+    /// `INT_OP`: `__builtin_abs`/`labs`/`llabs` of the canonical signed
+    /// `a` (WP-365); the most negative value is undefined (a fault).
+    pub const IABS: u32 = 6;
     // WP-270: checked arithmetic.
     /// `__builtin_{add,sub,mul}_overflow` on canonical `a`, `b`: sub = op
     /// (0 add, 1 sub, 2 mul) | `a` signed << 2 | `b` signed << 3 | result
@@ -400,6 +413,11 @@ pub(crate) mod bi {
     /// `Oven::evaluate_chars`): the `a` elements of character type `t1`
     /// that `b` points to, read into the Oven's message buffer.
     pub const MSG_CHARS: u32 = 24;
+    /// `std::uncaught_exceptions()` / `__builtin_uncaught_exceptions()`
+    /// ([except.uncaught]/1, P3068): the number of exceptions thrown and
+    /// not yet caught in this evaluation (a nested evaluation counts its
+    /// own, spec/oven.md "Exceptions").
+    pub const UNCAUGHT: u32 = 29;
     /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
     /// bytes.
     pub const WCHAR: u32 = 2;
@@ -426,6 +444,56 @@ pub(crate) mod bi {
     pub const FMAX: u32 = 2;
     pub const FMIN: u32 = 3;
     pub const ISINF_SIGN: u32 = 4;
+
+    // WP-365: P0533 constexpr <cmath>.
+    /// A `<cmath>` operation on `a` (`b`, `c`) in the float kind of sub's
+    /// low 4 bits: sub = float kind | `CEIL`..`CMP` << 4 | [`SECOND`]
+    /// (`softfloat::math`; IEEE-exact, GCC's folding rules: an invalid,
+    /// overflowing, inexact-underflowing or signaling-NaN case is not a
+    /// constant).
+    pub const FP_MATH: u32 = 13;
+    /// sub flag of `FP_MATH`: the operation's second result (`frexp`'s
+    /// exponent, `modf`'s integral part, `remquo`'s quotient bits).
+    pub const SECOND: u32 = 1 << 9;
+    /// `FP_MATH` operations: rounding to an integral value of the same
+    /// type.
+    pub const CEIL: u32 = 0;
+    pub const FLOOR: u32 = 1;
+    pub const TRUNC: u32 = 2;
+    pub const ROUND: u32 = 3;
+    pub const ROUNDEVEN: u32 = 4;
+    /// `rint`/`nearbyint`: the default rounding, to nearest even.
+    pub const RINT: u32 = 5;
+    /// `lround`/`llround`, `lrint`/`llrint`: to a signed integer of `t1`
+    /// bits (canonical).
+    pub const LROUND: u32 = 6;
+    pub const LRINT: u32 = 7;
+    pub const FMOD: u32 = 8;
+    pub const REMAINDER: u32 = 9;
+    /// `remquo`: the remainder; with `SECOND` the quotient bits (`int`).
+    pub const REMQUO: u32 = 10;
+    pub const FDIM: u32 = 11;
+    /// `fma(a, b, c)` with one rounding.
+    pub const FMA: u32 = 12;
+    /// `frexp`: the fraction; with `SECOND` the exponent (`int`).
+    pub const FREXP: u32 = 13;
+    /// `ldexp`/`scalbn`/`scalbln(a, b)`, `b` a canonical signed integer.
+    pub const LDEXP: u32 = 14;
+    /// `ilogb(a)` (`int`).
+    pub const ILOGB: u32 = 15;
+    pub const LOGB: u32 = 16;
+    /// `modf`: the fraction; with `SECOND` the integral part.
+    pub const MODF: u32 = 17;
+    /// `nextafter`/`nexttoward(a, b)`, `b` of float kind `t1`.
+    pub const NEXTAFTER: u32 = 18;
+    /// `signbit(a)` (`int` 0 or 1; never faults).
+    pub const SIGNBIT: u32 = 19;
+    /// `isgreater`..`isunordered(a, b)`: `t1` = `cmp::GT`, `GE`, `LT`,
+    /// `LE`, `NE` (`islessgreater`) or [`UNORDERED`]; quiet, never
+    /// faults.
+    pub const CMP: u32 = 20;
+    /// `t1` of `FP_MATH` `CMP`: `isunordered`.
+    pub const UNORDERED: u32 = 6;
 }
 
 /// The aux of `New`.

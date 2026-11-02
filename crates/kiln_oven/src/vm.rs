@@ -143,9 +143,15 @@ pub(crate) struct Cleanup {
     /// The destroyed object's type.
     pub ty: OTy,
     pub func: u32,
+    /// The registering instruction, | [`UNWIND_ONLY`].
     pub pc: u32,
     pub depth: u32,
 }
+
+/// `Cleanup::pc` flag: a destruction run only by unwinding, dropped by
+/// any other exit (the subobjects of an object under construction,
+/// [except.ctor]/3-4; `Op::PushCleanup` aux 4).
+pub(crate) const UNWIND_ONLY: u32 = 1 << 31;
 
 /// Why execution stopped (rendered into notes by `notes`).
 #[derive(Clone, Debug)]
@@ -187,6 +193,10 @@ pub(crate) enum Fault {
     },
     /// clang's generic `Error(E)`: "subexpression not valid".
     Invalid,
+    /// A failure clang reports with no note and no call stack, so the
+    /// error lands at the declaration (clang 22's `__builtin_abs` of the
+    /// most negative value).
+    Quiet,
     PtrCmp {
         p: u64,
         q: u64,
@@ -431,10 +441,12 @@ impl Oven {
         let pend = self.run.pending.len();
         let clean = self.cleanups.len();
         let excs = self.exc.lens();
+        let exc_base = std::mem::replace(&mut self.exc.base, excs);
         let entry_pc = self.funcs[func as usize].entry as usize;
         let r = self.run_loop(b, func, entry_pc, fb);
         self.cleanups.truncate(clean);
         self.exc.truncate(excs);
+        self.exc.base = exc_base;
         let out = match r {
             Ok(()) => Ok(()),
             Err((fault, pc)) => {
@@ -497,6 +509,8 @@ impl Oven {
             self.bi_assume_aligned(b, aux >> 8 != 0, a as u64, bb, c).map(|()| a)
         } else if aux & 0xff == crate::kbc::bi::MSG_CHARS {
             self.bi_msg_chars(a, bb as u64, OTy(t1)).map(|()| a)
+        } else if aux & 0xff == crate::kbc::bi::UNCAUGHT {
+            Ok(self.exc.uncaught() as u128)
         } else if aux & 0xff == crate::kbc::bi::META {
             self.exec_meta(b, pc, fb, aux >> 8, (a, bb, c), (t1, t2))
         } else {
@@ -1007,12 +1021,18 @@ impl Oven {
                     } else {
                         elem
                     };
-                    let stat = arg!(2) as u32;
-                    let stat = (stat != crate::kbc::bi::DYN).then_some(OTy(stat));
-                    if aux & new_aux::BOUND == 0
-                        && let Err(f) = self.placement(reg!(0) as u64, ty, stat, aux)
-                    {
-                        fail!(f);
+                    // A `void *` argument: the subobject type its
+                    // conversion from `T *` recorded (`kbc::VOID_TAG`).
+                    let stat = match arg!(2) as u32 {
+                        crate::kbc::bi::DYN => (reg!(0) >> 64) as u32,
+                        s => s.wrapping_add(1),
+                    };
+                    let stat = stat.checked_sub(1).map(OTy);
+                    if aux & new_aux::BOUND == 0 {
+                        if let Err(f) = self.placement(reg!(0) as u64, ty, stat, aux) {
+                            fail!(f);
+                        }
+                        reg!(0) = u128::from(reg!(0) as u64);
                     }
                     pc += 6;
                 }
@@ -1038,7 +1058,7 @@ impl Oven {
                     if self.cleanups.len() > (m >> 64) as usize {
                         // Destroy the innermost registered object, then
                         // execute this `ScopeExit` again.
-                        match self.run_cleanup(b, pc, pc, fb) {
+                        match self.run_cleanup(b, pc, pc, fb, false) {
                             Ok(Some((npc, nfb))) => {
                                 pc = npc;
                                 fb = nfb;
@@ -1268,7 +1288,7 @@ impl Oven {
                     if self.cleanups.last().is_some_and(|c| c.depth as usize == self.stack.len()) {
                         // The frame's objects are destroyed after the
                         // result is initialized ([stmt.return]/3).
-                        match self.run_cleanup(b, pc, pc, fb) {
+                        match self.run_cleanup(b, pc, pc, fb, false) {
                             Ok(Some((npc, nfb))) => {
                                 pc = npc;
                                 fb = nfb;
@@ -1320,6 +1340,12 @@ impl Oven {
                     reg!(0) = u128::from(p);
                     pc += 3;
                 }
+                Op::VoidCast if aux == crate::kbc::VOID_TAG => {
+                    let raw = reg!(1) as u64;
+                    let tag = if raw == 0 { 0 } else { u128::from(arg!(2) as u32) + 1 };
+                    reg!(0) = u128::from(raw) | tag << 64;
+                    pc += 4;
+                }
                 Op::VoidCast => {
                     let raw = reg!(1) as u64;
                     match self.void_cast(raw, OTy(arg!(2) as u32)) {
@@ -1356,8 +1382,9 @@ impl Oven {
 
     /// Pops the innermost registered destruction and enters its
     /// destructor from the instruction at `pc` (which executes again on
-    /// return, or `ret` when unwinding); the frame of the running function
-    /// is at `fb`.
+    /// return, or `ret` when `unwinding`); the frame of the running
+    /// function is at `fb`. An [`UNWIND_ONLY`] registration is dropped
+    /// unless `unwinding`.
     #[inline(never)]
     fn run_cleanup(
         &mut self,
@@ -1365,8 +1392,15 @@ impl Oven {
         pc: usize,
         ret: usize,
         fb: usize,
+        unwinding: bool,
     ) -> Result<Option<(usize, usize)>, (Fault, usize)> {
         let Some(mut c) = self.cleanups.pop() else { return Ok(None) };
+        if c.pc & UNWIND_ONLY != 0 {
+            if !unwinding {
+                return Ok(None);
+            }
+            c.pc &= !UNWIND_ONLY;
+        }
         if c.func >= exc::SENTINEL {
             // A try-block's marker or an exception's end (`vm/exc.rs`).
             match self.exc_cleanup(c).map_err(|f| (f, pc))? {
@@ -1424,10 +1458,11 @@ impl Oven {
         let es = self.types.size(elem);
         let off = u64::from(Ptr::decode(raw).off);
         let depth = self.stack.len() as u32;
+        let pc = pc as u32 | if aux & 4 != 0 { UNWIND_ONLY } else { 0 };
         self.cleanups.reserve(n as usize);
         for i in 0..n {
             let this = if i == 0 { raw } else { Ptr::with_off(raw, off + i * es, false) };
-            self.cleanups.push(Cleanup { this, ty: elem, func, pc: pc as u32, depth });
+            self.cleanups.push(Cleanup { this, ty: elem, func, pc, depth });
         }
         Ok(())
     }
@@ -2323,9 +2358,9 @@ impl Oven {
         let (sp, _, a) = self.mem.check_storage(raw, 0, true).map_err(fault)?;
         let (sp, a) = (sp, *a);
         let off = u64::from(Ptr::decode(raw).off);
-        // The designated object: of the argument's static type, or (a
-        // `void *` argument, whose designator the Oven does not keep) the
-        // outermost object at `off`.
+        // The designated object: of the argument's static type or, for a
+        // `void *` argument, of the type its conversion from `T *`
+        // recorded; failing both, the outermost object at `off`.
         let target = match stat {
             Some(s) if self.types.has_subobject(a.ty, off, s) => s,
             _ => self.outermost_at(a.ty, off).unwrap_or_else(|| self.dynamic_type(a.ty, off)),

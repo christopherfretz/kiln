@@ -19,6 +19,7 @@ use crate::class::{CtorCall, DeletedAs, DiagSites, InitEntity, Selected, Special
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{Chunk, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
+use crate::switch_conv::ContextualConv;
 use crate::templ::ctad::CtadInit;
 use crate::{EvalContext, Sema};
 
@@ -432,7 +433,7 @@ impl Sema<'_, '_> {
         let mut array_size = synthesized_size.map(|(e, _)| e);
         let mut const_bound: Option<u64> = synthesized_size.map(|(_, n)| n);
         if let Some((Some(e), _)) = first {
-            match self.convert_new_size(e, elem) {
+            match self.convert_new_size(e, elem, loc) {
                 Some((c, v)) => {
                     array_size = Some(c);
                     const_bound = v;
@@ -774,13 +775,45 @@ impl Sema<'_, '_> {
 
     /// The first array bound converted to `std::size_t` ([expr.new]/8)
     /// and its value when it is a constant; `None` after a diagnostic.
-    fn convert_new_size(&mut self, e: ExprId, elem: QualType) -> Option<(ExprId, Option<u64>)> {
-        let ety = self.ast.exprs.get(e).ty();
+    fn convert_new_size(
+        &mut self,
+        e: ExprId,
+        elem: QualType,
+        new_loc: Loc,
+    ) -> Option<(ExprId, Option<u64>)> {
+        let mut e = e;
+        let mut ety = self.ast.exprs.get(e).ty();
         if self.is_error_type(ety) {
             return None;
         }
         let at = self.begin_loc(e);
         let size_t = self.size_type();
+        if self.std < kiln_lex::Std::Cxx14 {
+            // C++11 [expr.new]/6: contextually implicitly converted to an
+            // integral or unscoped enumeration type (`switch_conv.rs`),
+            // diagnosed at the new-expression.
+            let mut ok = self.contextual_target_matches(ContextualConv::ArraySize, ety);
+            if !ok && self.ast.types.as_record(ety).is_some() {
+                match self.contextual_class_conversion(ContextualConv::ArraySize, e, new_loc) {
+                    Some(c) if self.is_err_expr(c) => return None,
+                    Some(c) => {
+                        e = c;
+                        ety = self.ast.exprs.get(c).ty();
+                        ok = true;
+                    }
+                    None => {}
+                }
+            }
+            if !ok {
+                let unscoped = if self.std >= kiln_lex::Std::Cxx11 { "0" } else { "1" };
+                let msg = self
+                    .diag(DiagId::sema_array_size_not_integral, new_loc)
+                    .arg(unscoped)
+                    .arg(self.ty_arg(ety));
+                self.emit(msg);
+                return None;
+            }
+        }
         let t = &self.ast.types;
         if t.is_pointer(ety) {
             let msg = self
@@ -803,12 +836,28 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
-        if class {
-            self.unsupported("a class-type array bound in a new-expression", at);
-            return None;
-        }
         let c = match conv::implicit_convert(self, e, size_t, ConvCtx::Initialization) {
             Ok(c) => c,
+            Err(err) if class && err.id == DiagId::sema_no_viable_conversion => {
+                // C++14: clang `PerformImplicitConversion` (an
+                // `AssignmentAction::Converting`) reports no usable
+                // conversion function as an incompatible conversion.
+                let msg = self
+                    .diag(DiagId::sema_converting_to_incompatible, at)
+                    .arg(self.ty_arg(ety))
+                    .arg(self.ty_arg(size_t));
+                self.emit(msg);
+                return None;
+            }
+            Err(err) if class && err.id == DiagId::sema_conv_deleted_ctor => {
+                // ... and a deleted one as a use of a deleted function.
+                let mut msg = self.diag(DiagId::sema_use_deleted_function, at).arg("");
+                for n in err.notes {
+                    msg = msg.with_note(n);
+                }
+                self.emit(msg);
+                return None;
+            }
             Err(err) => {
                 self.emit_conv_error(err, at);
                 return None;
@@ -1379,14 +1428,21 @@ impl Sema<'_, '_> {
                 loc,
             );
         }
-        let ety = self.ast.exprs.get(operand).ty();
-        let t = &self.ast.types;
-        if t.as_record(ety).is_some() && conv::has_conversion_functions(self, ety) {
+        let mut operand = operand;
+        let mut ety = self.ast.exprs.get(operand).ty();
+        if self.ast.types.as_record(ety).is_some() {
             // [expr.delete]/2: contextually implicitly converted to a
-            // pointer by a conversion function.
-            self.unsupported("deleting an object of class type through a conversion function", loc);
-            return self.recover_err(&[operand], loc);
+            // pointer to object type (`switch_conv.rs`).
+            match self.contextual_class_conversion(ContextualConv::Delete, operand, loc) {
+                Some(c) if self.is_err_expr(c) => return c,
+                Some(c) => {
+                    operand = c;
+                    ety = self.ast.exprs.get(c).ty();
+                }
+                None => {}
+            }
         }
+        let t = &self.ast.types;
         let pointee = if t.is_pointer(ety) { t.pointee(ety) } else { None };
         let Some(pointee) = pointee.filter(|p| !t.is_function(*p)) else {
             let msg = self.diag(DiagId::sema_delete_operand, loc).arg(self.ty_arg(ety));

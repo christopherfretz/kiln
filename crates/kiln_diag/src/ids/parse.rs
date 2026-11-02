@@ -93,6 +93,7 @@ parse_lambda_decl_specifier_repeated = Error (1) "{0} cannot appear multiple tim
 parse_literal_operator_string_not_empty = Error (0) "string literal after 'operator' must be '\"\"'";
 parse_literal_operator_string_prefix = Error (0) "string literal after 'operator' cannot have an encoding prefix";
 parse_long_long_long = Error (0) "'long long long' is invalid";
+parse_misplaced_ellipsis_in_declaration = Error (1) "'...' must {0:immediately precede declared identifier|be innermost component of anonymous pack declaration}";
 parse_misplaced_ellipsis_vararg = Warning [AmbiguousEllipsis] (1) "'...' in this location creates a C-style varargs function{0:, not a function parameter pack|}";
 parse_missing_dependent_template_kw = Error (1) "use 'template' keyword to treat '{0}' as a dependent template name";
 parse_missing_type_specifier = Error (0) "a type specifier is required for all declarations";

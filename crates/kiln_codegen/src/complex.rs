@@ -349,9 +349,15 @@ impl Cg<'_> {
         let op = ast.exprs.binary_op(e);
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                let ty = ast.exprs.get(e).ty();
+                if let Some(fty) = self.cx_promotion(ty) {
+                    let eq = self.cx_elem(ty).expect("complex type");
+                    let (r, i) = self.emit_cx_promoted(e, fty)?;
+                    let f = QualType::FLOAT;
+                    return Ok((Some(self.conv(r, f, eq)), Some(self.conv(i, f, eq))));
+                }
                 let lhs = self.cx_operand(l)?;
                 let rhs = self.cx_operand(r)?;
-                let ty = ast.exprs.get(e).ty();
                 let (r, i) = self.cx_arith(op, &Ops { lhs, rhs, ty })?;
                 Ok((Some(r), Some(i)))
             }
@@ -413,7 +419,10 @@ impl Cg<'_> {
         let ty = ca.result_ty;
         let ceq = self.cx_elem(ty).expect("complex computation type");
         let rq = ast.exprs.get(ca.rhs).ty();
-        let rhs = if ast.types.is_floating(rq) && !self.is_complex(rq) {
+        let pt = self.cx_promotion(ty);
+        let rhs = if let Some(fty) = pt {
+            self.cx_operand_promoted(ca.rhs, fty)?
+        } else if ast.types.is_floating(rq) && !self.is_complex(rq) {
             (Some(self.emit_scalar(ca.rhs)?), None)
         } else {
             self.emit_cx(ca.rhs, ALL)?
@@ -433,7 +442,15 @@ impl Cg<'_> {
                 (Some(v), Some(V::C(self.m.const_zero(t))))
             }
         };
-        let res = self.cx_arith(op, &Ops { lhs, rhs, ty })?;
+        let res = match pt {
+            Some(fty) => {
+                let lhs = self.cx_ext(lhs, ceq);
+                let (r, i) = self.cx_arith(op, &Ops { lhs, rhs, ty: fty })?;
+                let f = QualType::FLOAT;
+                (self.conv(r, f, ceq), self.conv(i, f, ceq))
+            }
+            None => self.cx_arith(op, &Ops { lhs, rhs, ty })?,
+        };
         if self.is_complex(lq) {
             let (r, i) = self.cx_convert((Some(res.0), Some(res.1)), ty, lq);
             let v = self.both((r, i), e)?;
@@ -456,6 +473,61 @@ impl Cg<'_> {
             return self.bin(BinOp::Or, Flags::NONE, r, i);
         }
         self.conv(r, fe, to)
+    }
+
+    /// clang `getPromotionType` on a complex type: `_Complex float` when
+    /// the element is excess-precision (`__bf16`; `_Float16` on x86-64,
+    /// `f16_excess`). Its arithmetic runs in `float` (`__mulsc3`,
+    /// `__divsc3`) and is truncated once at the end, as clang does for
+    /// `_Complex _Float16` and GCC 14 for `_Complex __bf16` (spec/abi.md).
+    fn cx_promotion(&self, ty: QualType) -> Option<QualType> {
+        let eq = self.cx_elem(ty)?;
+        if !self.f16_excess(eq) {
+            return None;
+        }
+        self.ast.types.find_complex(QualType::FLOAT)
+    }
+
+    /// The pair `cx` of element type `eq` extended to `float`.
+    fn cx_ext(&mut self, (r, i): Cx, eq: QualType) -> Cx {
+        let f = QualType::FLOAT;
+        (r.map(|v| self.conv(v, eq, f)), i.map(|v| self.conv(v, eq, f)))
+    }
+
+    /// clang `EmitPromoted` on a complex `+ - * /` of an excess-precision
+    /// element: both operands are emitted promoted (nested arithmetic
+    /// stays in `float`), each extended as soon as it is loaded.
+    fn emit_cx_promoted(&mut self, e: ExprId, fty: QualType) -> R<(V, V)> {
+        let ast = self.ast;
+        let [l, r] = ast.exprs.operands(e);
+        let op = ast.exprs.binary_op(e);
+        let lhs = self.cx_operand_promoted(l, fty)?;
+        let rhs = self.cx_operand_promoted(r, fty)?;
+        self.cx_arith(op, &Ops { lhs, rhs, ty: fty })
+    }
+
+    /// clang `EmitPromotedComplexOperand`: a complex operand in `float`
+    /// parts, or a real operand alone (`EmitPromotedScalarExpr`).
+    fn cx_operand_promoted(&mut self, x: ExprId, fty: QualType) -> R<Cx> {
+        let ast = self.ast;
+        let q = ast.exprs.get(x).ty();
+        if !self.is_complex(q) {
+            return Ok((Some(self.emit_promoted(x)?), None));
+        }
+        let y = self.skip_parens(x);
+        if ast.exprs.get(y).kind() == ExprKind::BinaryOperator
+            && matches!(
+                ast.exprs.binary_op(y),
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+            )
+            && self.cx_promotion(q).is_some()
+        {
+            let (r, i) = self.emit_cx_promoted(y, fty)?;
+            return Ok((Some(r), Some(i)));
+        }
+        let v = self.emit_cx(x, ALL)?;
+        let eq = self.cx_elem(q).expect("complex type");
+        Ok(self.cx_ext(v, eq))
     }
 
     /// clang `EmitBinAdd`/`Sub`/`Mul`/`Div`.

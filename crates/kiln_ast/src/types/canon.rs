@@ -8,8 +8,8 @@ use super::context::{
 };
 use super::func::{ExcSpec, FuncInfo, NoexceptValue};
 use super::kinds::{
-    AutoKeyword, Quals, TagKeyword, TypeAttrKind, TypeFlags, TypeKind, UnaryTransformKind,
-    VectorKind,
+    AutoKeyword, BuiltinType, Quals, TagKeyword, TypeAttrKind, TypeFlags, TypeKind,
+    UnaryTransformKind, VectorKind,
 };
 use super::names::TemplateName;
 use super::node::{ConstArray, ExcKey, Key};
@@ -350,10 +350,25 @@ impl TypeContext {
         t.into()
     }
 
-    /// `_Complex T`.
+    /// `_Complex T`. A half-precision `T` (`_Float16`, `__bf16`) also
+    /// interns `_Complex float`, the type codegen promotes its arithmetic
+    /// to (`find_complex`).
     pub fn complex(&mut self, elem: QualType) -> QualType {
+        if matches!(
+            self.builtin(self.canonical(elem)),
+            Some(BuiltinType::Float16 | BuiltinType::BFloat16)
+        ) {
+            self.complex(QualType::FLOAT);
+        }
         let t: TypeId = { self.derived1(TypeKind::Complex, 0, elem, TypeFlags::NONE) };
         t.into()
+    }
+
+    /// The already-interned `_Complex T` over exactly `elem`, if any: a
+    /// read-only lookup for codegen, which promotes `_Complex __bf16`
+    /// arithmetic to `_Complex float` (`complex` interns it).
+    pub fn find_complex(&self, elem: QualType) -> Option<QualType> {
+        self.lookup(&Key::inline(TypeKind::Complex, 0, raw(elem))).ok().map(QualType::from)
     }
 
     /// `_Atomic(T)`.

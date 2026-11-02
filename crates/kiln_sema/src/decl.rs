@@ -292,6 +292,14 @@ impl Sema<'_, '_> {
                 | TypeSpecKind::Float64
                 | TypeSpecKind::StdFloat128
         );
+        // WP-365: GCC's `_Complex __bf16`, spelled directly or through a
+        // type-name (libstdc++ `<complex>`'s `__complex__ decltype(0.0bf16)`
+        // under `__STDCPP_BFLOAT16_T__`, which kiln predefines as GCC
+        // does); clang 19 rejects both.
+        let ok = ok
+            || (matches!(ds.base, TypeSpecKind::BFloat16 | TypeSpecKind::Named)
+                && self.ast.types.builtin(self.ast.types.canonical(base))
+                    == Some(BuiltinType::BFloat16));
         if !ok {
             if !ds.invalid && !self.is_error_type(base) {
                 // clang `DeclSpec::getSpecifierName(TST_typename)`.

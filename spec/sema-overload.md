@@ -687,9 +687,11 @@ and contextual bool. `contextually_convert_to_bool(e)` becomes
 `if (w)` accepts `explicit operator bool`, `bool k = w;` is "no viable
 conversion from 'W' to 'bool'" + "explicit conversion function is not a
 candidate". Contextual implicit conversion ([conv]/6: `switch`, `delete`,
-array-new size) is `contextual_implicit_convert(e, pred)`: the unique
-non-explicit conversion function whose result satisfies `pred`; several is
-clang's `err_*_multiple_conversions` + one note per function.
+pre-C++14 array-new size) is `contextual_class_conversion(kind, e, loc)`
+(`switch_conv.rs`, sema.md `switch`): the non-explicit conversion
+functions whose result `kind` accepts must agree on one target, then
+overload resolution picks one; several targets or an ambiguity is
+clang's `err_*_multiple_conversions`/`ambiguous` + one note per function.
 
 ### 6.7 Literal operators and user-defined literals ([over.literal], [lex.ext]; `literal_op.rs`)
 - **Declarations.** A literal-operator-id is `operator "" X` or

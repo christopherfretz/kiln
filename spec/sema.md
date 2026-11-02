@@ -3136,8 +3136,23 @@ and aggregate element types.
   reference or an incomplete type; `auto` is deduced from a single
   parenthesized or braced argument (`new auto(x)`; `new auto*(p)` is
   unsupported). The new-declarator's first bound is converted to `size_t`
-  ([expr.new]/8: integral or unscoped enumeration, or a class with one
-  conversion, which is unsupported); a constant first bound that is
+  ([expr.new]/8). From C++14 that is an implicit conversion (clang
+  `PerformImplicitConversion`, `AssignmentAction::Converting`): a class
+  bound uses its non-explicit conversion functions (templates deduced
+  against `size_t`); no usable one is `converting 'C' to incompatible
+  type`, an ambiguity `conversion from 'C' to ... is ambiguous` with the
+  candidate notes, a deleted one `attempt to use a deleted function`.
+  Before C++14 it is the contextual implicit conversion to an integral or
+  unscoped enumeration type (`switch_conv.rs`, as for `switch`, all
+  diagnostics at the new-expression): `array size expression must have
+  integral or {unscoped }enumeration type, not 'T'`, `ambiguous
+  conversion of array size expression of type 'C' to an integral or
+  enumeration type`, `array size expression of type 'C' requires
+  explicit conversion to type 'U'`, `array size expression has
+  incomplete class type 'C'`, with `conversion to {integral|enumeration}
+  type 'U' declared here` notes (WP-374; tests
+  `expr.new/array-bound-class-conversion{,-cxx11}.cpp`,
+  `expr.delete/class-operand-conversion-run.cpp`). A constant first bound that is
   negative, too large, or smaller than the number of initializers is an
   error; later bounds are converted constant expressions. A `new T[]`
   takes its bound from the initializer. In a parenthesized type-id a
@@ -3182,8 +3197,16 @@ and aggregate element types.
   parenthesized initialization (they need `CXXConstructExpr`,
   WP-067b); braced aggregate initialization works.
 - **Delete** ([expr.delete]): the operand is converted to a pointer
-  prvalue (a class operand with a conversion function is unsupported).
-  Errors and warnings follow clang: `cannot delete expression of type`,
+  prvalue. A class operand is contextually implicitly converted to a
+  pointer to object (or incomplete) type (`switch_conv.rs`, as for
+  `switch`; WP-374), at the `delete` keyword: `deleting incomplete class
+  type 'C'; no conversions to pointer type` (with the forward
+  declaration note), `ambiguous conversion of delete expression of type
+  'C' to a pointer`, `converting delete expression from type 'C' to type
+  'T *' invokes an explicit conversion function` (then called), each
+  conversion function noted `conversion to pointer type 'T *'`; with no
+  usable conversion, `cannot delete expression of type 'C'` (tests
+  `expr.delete/class-operand-conversion{,-run}.cpp`). Errors and warnings follow clang: `cannot delete expression of type`,
   `cannot delete pointer to incomplete type 'void'` (an error for
   `void*` in C++26), the incomplete-type warning, and `'delete' applied
   to a pointer-to-array type ... treated as 'delete[]'` (then
@@ -3572,11 +3595,15 @@ pointer constant: a zero integer literal, a `std::nullptr_t` value or
   `tests/conformance/temp.inst/null-dereference-rewarn.cpp`.
 ### 5.16 GNU `_Complex` (`complex.rs`, `conv/`, WP-211)
 clang 19's C99/GNU complex support in C++:
-- **Types.** `_Complex` combines with `float`, `double`, `long double`
-  and the integer types (`char` through `long long`, signed or unsigned).
-  Plain `_Complex` is `_Complex double` with a warning. Any other base
-  (`bool`, `void`, `wchar_t`, `char8_t`, `char16_t`, `char32_t`,
-  `__int128`, `auto`, `__bf16`, a typedef name, spelled `'type-name'`) is
+- **Types.** `_Complex` combines with `float`, `double`, `long double`,
+  `__float128`, `_Float16/32/64/128` and the integer types (`char`
+  through `long long`, signed or unsigned). As in GCC 14 (not clang),
+  it also combines with `__bf16`, spelled directly or through a
+  type-name that denotes it (libstdc++ `<complex>`'s `__complex__
+  decltype(0.0bf16)`; WP-365, spec/abi.md §8.17). Plain `_Complex` is
+  `_Complex double` with a warning. Any other base (`bool`, `void`,
+  `wchar_t`, `char8_t`, `char16_t`, `char32_t`, `__int128`, `auto`,
+  another typedef name, spelled `'type-name'`) is
   `sema_invalid_complex_spec`, and the declaration continues with the base
   type (so `_Complex void v;` also reports the incomplete type).
   `-pedantic` warns `'_Complex' is a C99 extension` on each keyword
@@ -4403,7 +4430,10 @@ Each rule names the libc++ test it fixed and its corpus test.
   - a condition of class type ([stmt.switch]/2, [conv.general]/5;
     `switch_conv.rs`, clang `PerformContextualImplicitConversion`
     with the C++14 rules, WP-364) is contextually implicitly converted
-    before promotion. All diagnostics are at the `switch` keyword:
+    before promotion. The same helper (`contextual_class_conversion`,
+    parameterized by `ContextualConv`) converts a `delete` operand and a
+    pre-C++14 array-new bound with their own wording (§ new/delete,
+    WP-374). All diagnostics are at the `switch` keyword:
     1. An incomplete class (after instantiating a specialization) is
        `switch condition has incomplete class type 'T'` with the
        `forward declaration` note.
@@ -4416,12 +4446,19 @@ Each rule names the libc++ test it fixed and its corpus test.
        cv-unqualified target `T`; otherwise `multiple conversions from
        switch condition type 'C' to an integral or enumeration type`
        with one `conversion to {integral|enumeration} type 'U'` note per
-       conversion function (at its name).
+       conversion function (at its name). A conversion function
+       template among them is noted `candidate function template`.
     4. Overload resolution ([over.match.conv]) among the non-explicit
        matching ones (templates deduced against `T`) picks the function
        called (`call_conversion_function`), then a standard conversion
        to `T` (so a `const int&` result is read). An ambiguity is the
-       same `multiple conversions` error.
+       same `multiple conversions` error; a conversion function template
+       is noted by its deduced specialization, `candidate function [with
+       T = int]` (`candidate function template` when deduction failed).
+       clang 19-22 crash on both template cases
+       (`diagnoseAmbiguousConversion` casts the template to a conversion
+       function), so this wording is kiln's (WP-374;
+       `stmt.switch/ambiguous-conversion-template.cpp`, `skip(clang)`).
     5. With none viable (none, deleted, only templates, a non-viable
        object qualifier) and exactly one explicit matching non-template
        conversion function: `switch condition type 'C' requires
