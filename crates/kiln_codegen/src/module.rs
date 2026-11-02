@@ -6,6 +6,7 @@ use kiln_abi::call::{ArgKind, CallInfo, classify_call};
 use kiln_abi::irtype::{IrType, IrTypes, record_kind_prefix};
 use kiln_abi::mangle;
 use kiln_abi::{Arch, Target};
+use kiln_ast::decl::FriendTarget;
 use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TemplLinkKind, VarStorage,
 };
@@ -337,6 +338,9 @@ impl<'a> Cg<'a> {
                     if !ast.templates.is_moved_class_inst(ast.first(d)) {
                         self.emit_class_members(d)?;
                     }
+                    if ast.modules.active && ast.decls.get(d).kind() == DeclKind::CXXRecord {
+                        self.emit_module_class_defs(d, 0)?;
+                    }
                 }
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
                 DeclKind::FileScopeAsm => self.emit_file_scope_asm(d),
@@ -361,9 +365,10 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         if !self.discardable_fn(d) {
-            // A definition from an imported module's purview belongs to
-            // that module's object file (spec/modules.md §7).
-            if ast.modules.is_imported_module_decl(d) {
+            // A definition owned by an imported named-module unit (its
+            // purview or its global module fragment) belongs to that
+            // unit's object file (spec/modules.md §7).
+            if ast.modules.is_imported_named_unit_decl(d) {
                 return Ok(());
             }
             return self.emit_fn_def(d);
@@ -436,6 +441,60 @@ impl<'a> Cg<'a> {
         Ok(())
     }
 
+    /// The in-class function definitions of namespace-scope class `d`
+    /// (and of its nested classes, in member order) that are not inline
+    /// because the class is attached to a named module ([class.mfct]/1,
+    /// [class.friend]/7; spec/modules.md §7): emitted (strong) whether
+    /// used or not, right after the class, as clang's
+    /// `HandleInlineFunctionDefinition` / `EmitDeferredDecls` do.
+    fn emit_module_class_defs(&mut self, d: DeclId, depth: usize) -> R<()> {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        if depth > 256
+            || n.has(DeclFlags::INVALID)
+            || n.has(DeclFlags::DEPENDENT_CTX)
+            || ast.templ_link(d).get().is_some()
+            || ast.definition(d) != Some(d)
+        {
+            return Ok(());
+        }
+        let members: Vec<DeclId> = ast.decls.members(d).collect();
+        for m in members {
+            match ast.decls.get(m).kind() {
+                DeclKind::CXXMethod | DeclKind::CXXConversion if self.module_non_inline_def(m) => {
+                    self.emit_global_fn(m)?;
+                }
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor
+                    if self.module_non_inline_def(m) =>
+                {
+                    self.emit_global_structor(m)?;
+                }
+                DeclKind::Friend => {
+                    if let FriendTarget::Decl(f) = ast.decls.friend_target(m)
+                        && ast.decls.get(f).kind() == DeclKind::Function
+                        && self.module_non_inline_def(f)
+                    {
+                        self.emit_global_fn(f)?;
+                    }
+                }
+                DeclKind::CXXRecord => self.emit_module_class_defs(m, depth + 1)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `m` is an in-class function definition that is not inline
+    /// because its class is attached to a named module ([class.mfct]/1).
+    fn module_non_inline_def(&self, m: DeclId) -> bool {
+        let ast = self.ast;
+        ast.modules.active
+            && ast.decls.function(m).is_some_and(|f| f.body.is_some() && f.templ.get().is_none())
+            && !ast.decls.get(m).has(DeclFlags::IMPLICIT)
+            && ast.module_attachment(m).is_some()
+            && !self.discardable_fn(m)
+    }
+
     /// clang `EmitGlobal` for a variable.
     fn emit_global_var(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
@@ -456,7 +515,7 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         if !self.discardable_var(d) || self.var_must_emit(d) {
-            if !self.discardable_var(d) && ast.modules.is_imported_module_decl(d) {
+            if !self.discardable_var(d) && ast.modules.is_imported_named_unit_decl(d) {
                 return Ok(());
             }
             return self.emit_var_def(d);
@@ -647,7 +706,12 @@ impl<'a> Cg<'a> {
                     DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
                 )
             });
-            in_class || self.is_implicit_instantiation(r)
+            if self.is_implicit_instantiation(r) {
+                return true;
+            }
+            // An in-class definition attached to a named module is not
+            // inline ([class.mfct]/1): an importer only declares it.
+            in_class && (self.fn_is_inline(r) || !ast.modules.is_imported_named_unit_decl(r))
         })
     }
 
@@ -709,7 +773,7 @@ impl<'a> Cg<'a> {
         ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|v| v.spec.is_inline()))
     }
 
-    fn discardable_var(&self, d: DeclId) -> bool {
+    pub(crate) fn discardable_var(&self, d: DeclId) -> bool {
         if mangle::is_internal_symbol(self.ast, d) {
             return true;
         }
@@ -733,29 +797,65 @@ impl<'a> Cg<'a> {
     /// its enclosing class specialization ([temp.explicit]/14: no
     /// definition is provided; at -O0 clang emits none, even for inline
     /// members, which would be `available_externally`). An inline
-    /// function carrying `always_inline` is the exception: clang emits it
-    /// `available_externally` at every level and always inlines it, so the
-    /// program never references its symbol (libstdc++'s
-    /// `std::allocator<char>::allocate` is not exported). kiln runs no
-    /// inliner, so it emits such a function as an implicit instantiation
-    /// (`linkonce_odr`), which also needs no external definition
-    /// (spec/codegen.md "Explicit instantiation declarations").
+    /// function carrying `always_inline` is the exception
+    /// ([`Self::is_available_externally_fn`]): clang emits it
+    /// `available_externally` at every level and the always-inliner of the
+    /// O0 pipeline inlines and deletes it, so the program never references
+    /// its symbol (libstdc++'s `std::allocator<char>::allocate` is not
+    /// exported; spec/codegen.md "Explicit instantiation declarations").
     pub(crate) fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
         self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
             && !self.is_always_inline_fn(first)
     }
 
+    /// clang `GVA_AvailableExternally` emitted at -O0 (`shouldEmitFunction`
+    /// keeps it only with `AlwaysInlineAttr`): an inline `always_inline`
+    /// function under an explicit instantiation declaration.
+    pub(crate) fn is_available_externally_fn(&self, first: DeclId) -> bool {
+        self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
+            && self.is_always_inline_fn(first)
+    }
+
     /// An inline function with the `always_inline` attribute (on any
     /// redeclaration; an instantiation carries its pattern's attributes).
     fn is_always_inline_fn(&self, first: DeclId) -> bool {
-        let ast = self.ast;
-        ast.decls.function(first).is_some()
+        self.ast.decls.function(first).is_some()
             && self.fn_is_inline(first)
-            && ast.redecls_of(first).any(|r| {
-                ast.lists
-                    .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
-                    .any(|a| ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::ALWAYS_INLINE)
-            })
+            && self.has_always_inline_attr(first)
+    }
+
+    /// Whether a redeclaration of function `d` carries `always_inline`
+    /// and none carries `noinline` (clang
+    /// `SetLLVMFunctionAttributesForDefinition`: `noinline` wins; the
+    /// definition gets `alwaysinline` instead of `noinline optnone`).
+    pub(crate) fn has_always_inline_attr(&self, d: DeclId) -> bool {
+        use kiln_ast::attr::AttrKind as K;
+        self.has_fn_attr(d, K::ALWAYS_INLINE) && !self.has_fn_attr(d, K::NOINLINE)
+    }
+
+    /// The `inline` part of a definition's attributes (clang
+    /// `SetLLVMFunctionAttributesForDefinition` at -O0).
+    pub(crate) fn def_inline_attrs(&self, d: DeclId) -> DefInline {
+        use kiln_ast::attr::AttrKind as K;
+        if !self.has_fn_attr(d, K::ALWAYS_INLINE) {
+            DefInline::OptNone
+        } else if self.has_fn_attr(d, K::NOINLINE) {
+            // `always_inline` keeps `optnone` off even when `noinline`
+            // wins.
+            DefInline::NoInline
+        } else {
+            DefInline::Always
+        }
+    }
+
+    /// Whether a redeclaration of `d` carries an attribute of kind `k`.
+    fn has_fn_attr(&self, d: DeclId, k: kiln_ast::attr::AttrKind) -> bool {
+        let ast = self.ast;
+        ast.redecls_of(d).any(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .any(|a| ast.attrs.get(a).kind == k)
+        })
     }
 
     /// Whether variable or function `first` is under an explicit
@@ -1452,9 +1552,15 @@ impl<'a> Cg<'a> {
         } else {
             None
         };
+        let available_externally = !internal && self.is_available_externally_fn(self.ast.first(d));
         let func = self.m.func_mut(f);
         if internal {
             func.linkage = Linkage::Internal;
+            func.dso_local = false;
+        } else if available_externally {
+            // No comdat and not `dso_local` (clang `setDSOLocal` skips
+            // `available_externally`).
+            func.linkage = Linkage::AvailableExternally;
             func.dso_local = false;
         } else if weak {
             func.linkage = Linkage::WeakOdr;
@@ -1472,12 +1578,16 @@ impl<'a> Cg<'a> {
 
     /// The function attributes of a definition.
     pub fn def_fn_attrs(&mut self, f: DefFnAttrs) -> AttrSetId {
-        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn, extra } = f;
+        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn, inline, extra } =
+            f;
         let mut a = Vec::new();
+        if inline == DefInline::Always {
+            a.push(Attr::Flag(AttrKind::AlwaysInline));
+        }
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
         }
-        if !self.opts.optimize {
+        if inline == DefInline::NoInline || (inline == DefInline::OptNone && !self.opts.optimize) {
             a.push(Attr::Flag(AttrKind::NoInline));
         }
         if is_main {
@@ -1489,7 +1599,7 @@ impl<'a> Cg<'a> {
         if nounwind {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
-        if !self.opts.optimize {
+        if inline == DefInline::OptNone && !self.opts.optimize {
             a.push(Attr::Flag(AttrKind::OptimizeNone));
         }
         a.extend(extra);
@@ -1531,6 +1641,7 @@ impl<'a> Cg<'a> {
         gv.linkage = Linkage::External;
         gv.align = Some(align);
         self.gvars.insert(first, g);
+        self.mark_tls(first, g, false);
         self.available_externally(first, g, ty)?;
         Ok(g)
     }
@@ -1632,6 +1743,7 @@ impl<'a> Cg<'a> {
             let name = mangle::mangle_decl(ast, &mut self.anon, first);
             let g = self.m.add_global(&name, ity);
             self.gvars.insert(first, g);
+            self.mark_tls(first, g, false);
             g
         };
         let internal = mangle::is_internal_symbol(ast, d);
@@ -1746,6 +1858,7 @@ impl<'a> Cg<'a> {
         } else {
             gv.linkage = Linkage::Internal;
         }
+        self.mark_tls(first, g, true);
         self.static_locals.insert(first, g);
         // clang `AddInitializerToStaticVarDecl`.
         // A dynamic initializer runs, guarded, at the declaration
@@ -1893,6 +2006,17 @@ pub(crate) fn gval(g: GlobalId) -> Value {
     Value::global(g)
 }
 
+/// The inlining attributes of a definition at -O0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DefInline {
+    /// `noinline optnone`, the default.
+    OptNone,
+    /// `noinline` alone: `always_inline` together with `noinline`.
+    NoInline,
+    /// `alwaysinline`.
+    Always,
+}
+
 /// The inputs of [`Cg::def_fn_attrs`]: the flags that decide a
 /// definition's function attributes.
 #[derive(Clone, Debug)]
@@ -1903,6 +2027,9 @@ pub(crate) struct DefFnAttrs {
     pub(crate) mustprogress: bool,
     pub(crate) vector_width: u64,
     pub(crate) noreturn: bool,
+    /// `noinline optnone`, `noinline` or `alwaysinline`
+    /// ([`Cg::def_inline_attrs`]).
+    pub(crate) inline: DefInline,
     /// `const` / `pure` attributes (`crate::builtins::const_pure_attrs`).
     pub(crate) extra: Vec<Attr>,
 }

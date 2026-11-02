@@ -57,6 +57,8 @@ packages replace the defaults without changing the core.
 pub trait IncludeResolver {
     fn resolve(&mut self, sm: &SourceManager, req: &IncludeRequest) -> Option<ResolvedInclude>;
     fn resolve_embed(&mut self, sm: &SourceManager, req: &EmbedRequest) -> Option<EmbedData> { None }
+    fn suggest_include(&self, sm: &SourceManager, file: FileId, main_dir: Option<&str>)
+        -> Option<String> { None }
 }
 pub struct IncludeRequest { kind: IncludeKind, name: String, angled: bool,
     includer: Option<FileId>, lookup_from: Option<u32>, name_span: Span, directive_span: Span }
@@ -67,6 +69,17 @@ pub struct EmbedRequest { name: String, angled: bool, includer: Option<FileId>,
     limit: Option<u64>, offset: Option<u64>, name_span: Span, query_only: bool }
 pub struct EmbedData { bytes: Vec<u8> }
 ```
+
+`suggest_include` names a header for a diagnostic (clang
+`suggestPathToFileForDiagnostics`); `HeaderSearch` implements it with
+`search::suggest_include_name`: the file's path relative to the longest
+search directory that is a path prefix of it (`<...>` for a system
+directory, `"..."` otherwise), else relative to `main_dir`, else the whole
+path quoted; paths are compared absolute (against the working directory)
+with `.`/`..` removed. The core calls it for each file it leaves with a
+controlling macro and records the result with
+`SourceManager::mark_include_guarded` (`#pragma once` does not count, as
+in clang 22's missing-import diagnostic).
 
 The core does the following itself:
 
@@ -444,10 +457,12 @@ takes the same branch it takes under clang. `fabs`, `fmin`, `fmax`,
 `copysign` and the classification builtins answer 1 at both levels; at
 22, `abs`/`labs`/`llabs`, `signbit` and the `isgreater` family answer 1
 too. Under `-fsyntax-only` and code generation the driver also applies
-kiln's builtin staging (spec/sema-templates.md §13.3), whose Oven column
-is clang 19's; the driver exempts those ten clang 22 additions, which the
-Oven folds (`OVEN_FOLDS_FROM_22`, `kiln_driver/src/pp_cmd.rs`).
-Test: `tests/conformance/c.math/has-constexpr-builtin-p0533.cpp`.
+kiln's builtin staging (spec/sema-templates.md §13.3): a row whose Oven
+column is `No` answers 0. The ten clang 22 additions are `Oven::Yes`
+rows (WP-393; the Oven folds them since WP-365), so the clang table
+alone decides their answer, 0 below 22 and 1 from 22.
+Tests: `tests/conformance/c.math/has-constexpr-builtin-p0533.cpp`,
+`has-constexpr-builtin-p0533-19.cpp`.
 
 ### `PpCallbacks`: consumers are WP-014 (`-M`), WP-017 (`-dD`, `-dI`) and phase 7
 

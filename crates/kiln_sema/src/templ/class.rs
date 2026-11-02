@@ -591,14 +591,44 @@ impl Sema<'_, '_> {
     pub(crate) fn spec_args(&self, spec: DeclId) -> Option<(DeclId, MultiLevelArgs)> {
         let (_, info) = self.ast.spec_info(spec)?;
         let tmpl = info.template;
-        let mut args = self.base_levels(tmpl);
         // Instantiated from a partial specialization: its deduced
         // arguments ([temp.spec.partial.match]/2, [temp.inst]/2).
-        match (info.from_args, self.ast.partial_spec_info(info.from)) {
-            (Some(a), Some((_, p))) => args.push(a, p.partial, LevelMode::Substitute),
-            _ => args.push(info.args, tmpl, LevelMode::Substitute),
-        }
+        let args = if let (Some(a), Some((_, p))) =
+            (info.from_args, self.ast.partial_spec_info(info.from))
+        {
+            self.partial_levels(tmpl, p.partial, a)
+        } else {
+            let mut args = self.base_levels(tmpl);
+            args.push(info.args, tmpl, LevelMode::Substitute);
+            args
+        };
         Some((tmpl, args))
+    }
+
+    /// The argument levels of a specialization of `tmpl` instantiated
+    /// from its partial specialization `partial` with deduced arguments
+    /// `deduced`: the levels enclosing `tmpl`, then `deduced`. A partial
+    /// specialization declared for a member template of an implicit
+    /// specialization (`template<> template<int n> struct
+    /// O<int>::A<char, n>`, [temp.expl.spec]/16) has no enclosing
+    /// template levels, so only those above its own depth are kept.
+    pub(crate) fn partial_levels(
+        &self,
+        tmpl: DeclId,
+        partial: DeclId,
+        deduced: ArgListId,
+    ) -> MultiLevelArgs {
+        let mut args = self.base_levels(tmpl);
+        // The depth of the definition substituted: a partial
+        // specialization redeclared with its member template is defined
+        // by the original ([`Substituter::member_partial_spec`]).
+        let pattern = self.ast.templates.instantiated_from_map(partial).unwrap_or(partial);
+        if let Some((_, info)) = self.ast.partial_spec_info(pattern) {
+            let depth = usize::from(self.ast.templates.param_list(info.params).depth);
+            args.levels.truncate(depth);
+        }
+        args.push(deduced, partial, LevelMode::Substitute);
+        args
     }
 
     /// The template whose pattern instantiates the specializations of
@@ -728,8 +758,7 @@ impl Sema<'_, '_> {
         };
         let pattern = match matched {
             Some(m) => {
-                args = self.base_levels(tmpl);
-                args.push(m.args, m.partial, LevelMode::Substitute);
+                args = self.partial_levels(tmpl, m.partial, m.args);
                 // A partial specialization redeclared with its member
                 // template ([`Substituter::member_partial_spec`]) is
                 // defined by the original.

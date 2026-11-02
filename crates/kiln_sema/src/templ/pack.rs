@@ -11,11 +11,12 @@
 //! (every pack belongs to a retained level) yields the substituted
 //! pattern, still an expansion.
 
-use kiln_ast::ExprId;
 use kiln_ast::QualType;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::RawId;
+use kiln_ast::templates::Requirement;
 use kiln_ast::types::{ArgView, TemplateArg, TypeView};
+use kiln_ast::{DeclId, ExprId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -446,9 +447,9 @@ impl Substituter<'_, '_, '_> {
     /// Maps the parameters `pp` of a pattern function to the parameters
     /// `fp` of its instantiation: a function parameter pack takes the
     /// parameters its expansion produced (§7.1).
-    pub(crate) fn map_params(&mut self, pp: &[kiln_ast::DeclId], fp: &[kiln_ast::DeclId]) {
+    pub(crate) fn map_params(&mut self, pp: &[DeclId], fp: &[DeclId]) {
         use crate::templ::subst::DeclOrPack;
-        let is_pack = |s: &Self, p: kiln_ast::DeclId| {
+        let is_pack = |s: &Self, p: DeclId| {
             s.sema
                 .ast
                 .decls
@@ -479,14 +480,14 @@ impl Substituter<'_, '_, '_> {
     /// take the pack's name), as clang `addInstantiatedParametersToScope`
     /// does when it defines a function from a definition whose
     /// parameters are named differently from the declaration's.
-    pub(crate) fn rename_params_from_pattern(&mut self, pp: &[kiln_ast::DeclId]) {
+    pub(crate) fn rename_params_from_pattern(&mut self, pp: &[DeclId]) {
         use crate::templ::subst::DeclOrPack;
         for &a in pp {
             let name = self.sema.ast.decls.get(a).name();
             match self.locals.get(&a).copied() {
                 Some(DeclOrPack::Decl(b)) => self.sema.ast.decls.set_name(b, name),
                 Some(DeclOrPack::Pack(l)) => {
-                    let elems: Vec<kiln_ast::DeclId> = self.sema.ast.lists.iter(l).collect();
+                    let elems: Vec<DeclId> = self.sema.ast.lists.iter(l).collect();
                     for b in elems {
                         self.sema.ast.decls.set_name(b, name);
                     }
@@ -677,7 +678,7 @@ impl Substituter<'_, '_, '_> {
         use crate::templ::args::ArgLookup;
         use crate::templ::subst::DeclOrPack;
         let n = *self.sema.ast.exprs.get(e);
-        let d = kiln_ast::DeclId::from_raw(n.a()).ok_or(SubstFail)?;
+        let d = DeclId::from_raw(n.a()).ok_or(SubstFail)?;
         // A structured binding pack whose decomposition failed.
         if self.failed_locals.contains(&d) {
             return Err(SubstFail);
@@ -728,20 +729,41 @@ impl Sema<'_, '_> {
         what: &'static str,
         at: Loc,
     ) -> bool {
-        let unexpanded = match op {
+        if !self.operand_has_packs(op) {
+            return false;
+        }
+        let packs = self.unexpanded_packs(op);
+        self.report_unexpanded_packs(&packs, what, at);
+        true
+    }
+
+    /// True if `op` is marked as naming an unexpanded pack.
+    pub(crate) fn operand_has_packs(&self, op: PackOperand) -> bool {
+        match op {
             PackOperand::Expr(e) => {
                 self.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
             }
             PackOperand::Type(t) => self.has_unexpanded_pack(t),
-        };
-        if !unexpanded {
-            return false;
         }
-        let mut names = Vec::new();
-        match op {
-            PackOperand::Expr(e) => self.expr_packs(e, &mut names, 0),
-            PackOperand::Type(t) => self.type_packs(t, &mut names, 0),
+    }
+
+    /// The packs `op` names outside any expansion, in order (a
+    /// lambda-expression's are those its body and captures name,
+    /// [`Sema::lambda_unexpanded`]).
+    pub(crate) fn unexpanded_packs(&self, op: PackOperand) -> Vec<DeclId> {
+        let mut packs = Vec::new();
+        if self.operand_has_packs(op) {
+            match op {
+                PackOperand::Expr(e) => self.expr_packs(e, &mut packs, 0),
+                PackOperand::Type(t) => self.type_packs(t, &mut packs, 0),
+            }
         }
+        packs
+    }
+
+    /// "`what` contains unexpanded parameter pack[s] 'P'..." at `at`.
+    fn report_unexpanded_packs(&mut self, packs: &[DeclId], what: &'static str, at: Loc) {
+        let names: Vec<String> = packs.iter().map(|&d| self.decl_name(d)).collect();
         let quoted: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
         let list = match quoted.as_slice() {
             [] => String::new(),
@@ -751,7 +773,6 @@ impl Sema<'_, '_> {
         };
         let d = self.diag(DiagId::sema_unexpanded_pack, at).arg(what).arg(list);
         self.emit(d);
-        true
     }
 
     /// [temp.variadic]/12 for the type of a declarator: `Ts x;`,
@@ -768,11 +789,19 @@ impl Sema<'_, '_> {
         what: &'static str,
         at: Loc,
     ) -> bool {
-        // In a lambda body the lambda-expression carries the pack (a
-        // lambda in a pack expansion, `[] { Ts x{}; }()...`).
-        if !self.lambdas.is_empty()
-            || !self.diagnose_unexpanded_pack(PackOperand::Type(ty), what, at)
-        {
+        // In a lambda body the lambda-expression carries an enclosing
+        // scope's pack (a lambda in a pack expansion, `[] { Ts x{}; }()...`);
+        // the lambda's own packs are diagnosed here.
+        if !self.lambdas.is_empty() {
+            if !self.inst.stack.is_empty() {
+                return false;
+            }
+            let local = self.lambda_unexpanded(PackOperand::Type(ty));
+            if local.is_empty() {
+                return false;
+            }
+            self.report_unexpanded_packs(&local, what, at);
+        } else if !self.diagnose_unexpanded_pack(PackOperand::Type(ty), what, at) {
             return false;
         }
         self.declarator_type_invalid = true;
@@ -803,7 +832,21 @@ impl Sema<'_, '_> {
         what: &'static str,
         at: Option<Loc>,
     ) -> bool {
-        if !self.in_template() || !self.lambdas.is_empty() || !self.inst.stack.is_empty() {
+        if !self.inst.stack.is_empty() {
+            return false;
+        }
+        if !self.lambdas.is_empty() {
+            // Only the innermost lambda's own packs are diagnosed in its
+            // body; an enclosing scope's make the lambda unexpanded.
+            let local = self.lambda_unexpanded(PackOperand::Expr(e));
+            if local.is_empty() {
+                return false;
+            }
+            let at = at.unwrap_or_else(|| self.begin_loc(e));
+            self.report_unexpanded_packs(&local, what, at);
+            return true;
+        }
+        if !self.in_template() {
             return false;
         }
         let at = at.unwrap_or_else(|| self.begin_loc(e));
@@ -811,7 +854,7 @@ impl Sema<'_, '_> {
     }
 
     /// The packs expression `e` names outside expansions, in order.
-    fn expr_packs(&self, e: ExprId, out: &mut Vec<String>, depth: u32) {
+    fn expr_packs(&self, e: ExprId, out: &mut Vec<DeclId>, depth: u32) {
         use kiln_ast::expr::ExprDeps;
         let n = self.ast.exprs.get(e);
         if depth > 256 || !n.deps().contains(ExprDeps::UNEXPANDED_PACK) {
@@ -824,10 +867,34 @@ impl Sema<'_, '_> {
             | ExprKind::PackIndexingExpr => return,
             ExprKind::DeclRefExpr => {
                 let d = self.ast.exprs.decl(e);
-                if self.is_pack_decl(d) {
-                    let name = self.decl_name(d);
-                    if !out.contains(&name) {
-                        out.push(name);
+                if self.is_pack_decl(d) && !out.contains(&d) {
+                    out.push(d);
+                }
+                return;
+            }
+            ExprKind::LambdaExpr => {
+                // What the body names (recorded when it was analysed), and
+                // the captures that do not expand their own packs (as
+                // `AstBuilder::lambda_expr`'s dependence).
+                let id = self.ast.exprs.lambda_id(e);
+                for &d in self.lambda_packs.get(&id).map_or(&[][..], Vec::as_slice) {
+                    if !out.contains(&d) {
+                        out.push(d);
+                    }
+                }
+                let l = self.ast.exprs.lambdas.get(id);
+                // The call operator's parameter and return types (clang's
+                // `TraverseLambdaExpr` visits the lambda's type-loc).
+                if let Some(op) = l.call_op
+                    && let Some(t) = self.ast.decls.get(op).ty()
+                {
+                    self.type_packs(t, out, depth + 1);
+                }
+                if let Some(inits) = l.inits {
+                    for (i, k) in self.ast.lists.iter::<ExprId>(inits).enumerate() {
+                        if !l.captures.get(i).is_some_and(|c| c.ellipsis.is_valid() || c.implicit) {
+                            self.expr_packs(k, out, depth + 1);
+                        }
                     }
                 }
                 return;
@@ -842,15 +909,25 @@ impl Sema<'_, '_> {
                     self.type_packs(t, out, depth + 1);
                 }
             }
-            // The call operator's parameter and return types (clang's
-            // `TraverseLambdaExpr` visits the lambda's type-loc).
-            ExprKind::LambdaExpr => {
-                let l = self.ast.exprs.lambda_id(e);
-                if let Some(op) = self.ast.exprs.lambdas.get(l).call_op
-                    && let Some(t) = self.ast.decls.get(op).ty()
-                {
-                    self.type_packs(t, out, depth + 1);
+            // The local parameters' types, then the requirements
+            // ([temp.variadic]/5; clang's `TraverseRequiresExpr`).
+            ExprKind::RequiresExpr => {
+                let Some(rq) = self.ast.requires_of(e) else { return };
+                for p in self.ast.lists.iter::<DeclId>(rq.params) {
+                    if let Some(t) = self.ast.decls.get(p).ty() {
+                        self.type_packs(t, out, depth + 1);
+                    }
                 }
+                for r in self.ast.templates.requirements(rq) {
+                    match *r {
+                        Requirement::Simple(x) | Requirement::Nested(x) => {
+                            self.expr_packs(x, out, depth + 1);
+                        }
+                        Requirement::Compound { expr, .. } => self.expr_packs(expr, out, depth + 1),
+                        Requirement::Type(t, _) => self.type_packs(t, out, depth + 1),
+                    }
+                }
+                return;
             }
             _ => {}
         }
@@ -865,16 +942,15 @@ impl Sema<'_, '_> {
     }
 
     /// The packs type `q` names outside expansions, in order.
-    fn type_packs(&self, q: QualType, out: &mut Vec<String>, depth: u32) {
+    fn type_packs(&self, q: QualType, out: &mut Vec<DeclId>, depth: u32) {
         if depth > 256 || !self.has_unexpanded_pack(q) {
             return;
         }
         let t = &self.ast.types;
         match t.view(q.ty()) {
             TypeView::TemplateTypeParm(d) => {
-                let name = self.decl_name(d);
-                if !out.contains(&name) {
-                    out.push(name);
+                if !out.contains(&d) {
+                    out.push(d);
                 }
             }
             TypeView::Pointer(x)
@@ -916,8 +992,12 @@ impl Sema<'_, '_> {
                     self.type_packs(x, out, depth + 1);
                 }
             }
+            TypeView::DependentName { nns, .. } => self.nns_packs(nns, out, depth + 1),
             TypeView::TemplateSpecialization { args, .. }
             | TypeView::DependentTemplateSpecialization { args, .. } => {
+                if let TypeView::DependentTemplateSpecialization { nns, .. } = t.view(q.ty()) {
+                    self.nns_packs(nns, out, depth + 1);
+                }
                 for &a in t.args(args) {
                     match a.view() {
                         ArgView::Type(x) => self.type_packs(x, out, depth + 1),
@@ -928,6 +1008,27 @@ impl Sema<'_, '_> {
             }
             TypeView::Decltype { expr, .. } => self.expr_packs(expr, out, depth + 1),
             _ => {}
+        }
+    }
+
+    /// The packs a nested-name-specifier names (`Ts::` in
+    /// `typename Ts::type`), outermost prefix first.
+    fn nns_packs(&self, n: kiln_ast::NnsId, out: &mut Vec<DeclId>, depth: u32) {
+        use kiln_ast::types::{Nns, TypeFlags};
+        let t = &self.ast.types;
+        if depth > 256 || !t.nns_flags(n).contains(TypeFlags::UNEXPANDED_PACK) {
+            return;
+        }
+        let (prefix, ty) = match t.nns_view(n) {
+            Nns::Type { prefix, ty, .. } => (prefix, Some(ty)),
+            Nns::Identifier { prefix, .. } => (prefix, None),
+            _ => (None, None),
+        };
+        if let Some(p) = prefix {
+            self.nns_packs(p, out, depth + 1);
+        }
+        if let Some(ty) = ty {
+            self.type_packs(ty, out, depth + 1);
         }
     }
 }

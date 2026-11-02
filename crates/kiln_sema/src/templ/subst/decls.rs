@@ -1083,7 +1083,8 @@ impl Substituter<'_, '_, '_> {
             _ => self.expr(def),
         };
         if let Ok(e) = e {
-            self.sema.act_on_param_default_arg(b, e);
+            // (A pattern's pack has no default argument to substitute.)
+            self.sema.act_on_param_default_arg(b, e, Loc::INVALID);
         }
     }
 

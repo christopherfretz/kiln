@@ -2,11 +2,12 @@
 //! 754-2019 §5) in every format, for the Oven's `bi::FP_MATH` builtins
 //! (spec/oven.md "Floating-point math builtins"): nextafter, frexp,
 //! ldexp, ilogb/logb, modf, the rounding functions, fmod/remainder/remquo,
-//! fma and fdim.
+//! fma and fdim; and P1383's `sqrt` (WP-393).
 //!
 //! Each result is the correctly rounded IEEE result under the default
 //! environment (round to nearest even), computed on unpacked values, never
-//! through the host libm. A call that would raise an IEEE exception other
+//! through the host libm (`sqrt` of binary32/binary64 is the host's IEEE
+//! `squareRoot`, which Rust guarantees correctly rounded). A call that would raise an IEEE exception other
 //! than inexact (invalid, division by zero, overflow, or underflow: a tiny
 //! inexact result, and any subnormal or zero `nextafter` result that moves)
 //! is not a constant ([library.c]/3, C23 F.8.4 as GCC applies it), and so
@@ -406,6 +407,57 @@ pub(crate) fn fma(kind: FloatKind, x: u128, y: u128, z: u128) -> Option<u128> {
     (!tiny(kind, r) || exact).then_some(r)
 }
 
+/// `sqrt(x)` correctly rounded (IEEE 754-2019 §5.4.1, C23 F.10.4.5):
+/// `sqrt(+-0)` is `+-0`, `sqrt(+inf)` is `+inf`, a quiet NaN is returned
+/// quiet; a negative operand (`-inf` included) or a signaling NaN is
+/// invalid. The result never overflows or underflows.
+pub(crate) fn sqrt(kind: FloatKind, x: u128) -> Option<u128> {
+    match unpack(kind, x) {
+        Val::NaN if is_signaling(kind, x) => None,
+        Val::NaN => Some(quiet(kind, x)),
+        Val::Zero(_) | Val::Inf(false) => Some(x),
+        Val::Inf(true) | Val::Fin(true, ..) => None,
+        Val::Fin(false, e, m) => Some(match kind {
+            FloatKind::Single => u128::from(f32::from_bits(x as u32).sqrt().to_bits()),
+            FloatKind::Double => u128::from(f64::from_bits(x as u64).sqrt().to_bits()),
+            _ => sqrt_fin(kind, e, m),
+        }),
+    }
+}
+
+/// The square root of the positive finite `m * 2^(e - 127)` rounded to
+/// `kind`: a digit-by-digit (restoring) integer square root of 125 bits,
+/// at least 12 beyond binary128's 113, with the remainder as a sticky
+/// bit, rounded once by [`pack`].
+fn sqrt_fin(kind: FloatKind, e: i32, m: u128) -> u128 {
+    // Result bits: the remainder stays below 2 * root < 2^126, so
+    // `rem << 2` fits.
+    const N: u32 = 125;
+    // `unpack` leaves at least 15 low zero bits (no format has more than
+    // 113 significand bits), so `x = mm * 2^ee` exactly, `mm < 2^115`,
+    // with `ee` made even.
+    let (mut mm, mut ee) = (m >> 14, e - 113);
+    if ee & 1 != 0 {
+        mm <<= 1;
+        ee -= 1;
+    }
+    // sqrt(mm * 4^t) has exactly N bits.
+    let t = N - (128 - mm.leading_zeros()).div_ceil(2);
+    let (mut root, mut rem) = (0u128, 0u128);
+    for j in (0..N).rev() {
+        let pair = if j >= t { mm >> (2 * (j - t)) & 3 } else { 0 };
+        rem = rem << 2 | pair;
+        let trial = root << 2 | 1;
+        root <<= 1;
+        if rem >= trial {
+            rem -= trial;
+            root |= 1;
+        }
+    }
+    // sqrt(x) = (root + f) * 2^(ee/2 - t), 0 <= f < 1, f = 0 iff rem = 0.
+    pack(kind, false, ee / 2 - t as i32 + 127, root | u128::from(rem != 0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +625,55 @@ mod tests {
         assert_eq!(fdim(D, d(1.0), d(3.0)), Some(d(0.0)));
         assert_eq!(fdim(D, d(5.0), d(3.0)), Some(d(2.0)));
         assert_eq!(fdim(D, d(f64::MAX), d(-f64::MAX)), None);
+    }
+
+    /// IEEE 754-2019 §5.4.1, C23 F.10.4.5: the integer square root agrees
+    /// with the host's correctly rounded binary32/binary64 `sqrt` (normal
+    /// and subnormal operands, both exponent parities), and is correctly
+    /// rounded for x87 and binary128 `sqrt(2)`.
+    #[test]
+    fn square_root() {
+        let mut bits = 0x3FF0_0000_0000_0001u64;
+        let mut vals = vec![2.0, 3.0, 0.5, 1e-310, 5e-324, 1.7976931348623157e308, 0.1, 1e22];
+        for _ in 0..4000 {
+            // xorshift over positive finite doubles.
+            bits ^= bits << 13;
+            bits ^= bits >> 7;
+            bits ^= bits << 17;
+            let v = f64::from_bits(bits & 0x7FEF_FFFF_FFFF_FFFF);
+            vals.push(v);
+        }
+        for &v in &vals {
+            let Val::Fin(false, e, m) = unpack(D, d(v)) else { continue };
+            assert_eq!(sqrt_fin(D, e, m), d(v.sqrt()), "sqrt({v:e})");
+            let f = v as f32;
+            if let Val::Fin(false, e, m) = unpack(S, s(f)) {
+                assert_eq!(sqrt_fin(S, e, m), s(f.sqrt()), "sqrtf({f:e})");
+            }
+        }
+        assert_eq!(sqrt(D, d(2.0)), Some(d(std::f64::consts::SQRT_2)));
+        assert_eq!(sqrt(D, d(-0.0)), Some(d(-0.0)));
+        assert_eq!(sqrt(D, d(f64::INFINITY)), Some(d(f64::INFINITY)));
+        assert_eq!(sqrt(D, d(-1.0)), None);
+        assert_eq!(sqrt(D, d(f64::NEG_INFINITY)), None);
+        assert_eq!(sqrt(D, 0x7FF0_0000_0000_0001), None);
+        assert!(is_nan_bits(sqrt(D, d(f64::NAN)).unwrap()));
+        // 2.0 in binary128, x87 extended, binary16 and bfloat16.
+        let (q2, x2) = (0x4000u128 << 112, 0x4000_8000_0000_0000_0000u128);
+        assert_eq!(sqrt(Q, q2), Some(0x3FFF_6A09_E667_F3BC_C908_B2FB_1366_EA95));
+        assert_eq!(sqrt(X, x2), Some(0x3FFF_B504_F333_F9DE_6484));
+        // sqrt(2) = 1.0110101000001001111...: rounds down in binary16.
+        assert_eq!(sqrt(H, 0x4000), Some(0x3DA8));
+        assert_eq!(sqrt(B, 0x4000), Some(0x3FB5));
+        // Exact squares and the smallest subnormals: 2^-16494 -> 2^-8247,
+        // 2^-16445 -> sqrt(2) * 2^-8223.
+        assert_eq!(sqrt(Q, 0x4001u128 << 112), Some(q2));
+        assert_eq!(sqrt(Q, 1), Some(0x1FC8u128 << 112));
+        assert_eq!(sqrt(X, 1), Some(0x1FE0_B504_F333_F9DE_6484));
+        assert_eq!(sqrt(X, 0x7FFF_8000_0000_0000_0001), None);
+    }
+
+    fn is_nan_bits(a: u128) -> bool {
+        unpack(D, a) == Val::NaN
     }
 }

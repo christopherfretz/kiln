@@ -2075,13 +2075,27 @@ impl AstBuilder<'_> {
         loc: Loc,
         rbrace: Loc,
     ) -> ExprId {
+        // [temp.variadic]/5: the expression contains an unexpanded pack
+        // when its parameter-declaration-clause or a requirement does
+        // (`requires(const Ts& t) { t < t; }`); a local parameter pack
+        // (`const Ts&... t`) has an expansion type and expands its own.
         let mut dep = false;
+        let mut unexpanded = false;
+        for &p in params {
+            if let Some(t) = self.ast.decls.get(p).ty() {
+                let d = self.type_deps(t);
+                dep |= !d.is_none();
+                unexpanded |= d.contains(ExprDeps::UNEXPANDED_PACK);
+            }
+        }
         for r in reqs {
-            dep |= match *r {
-                Requirement::Simple(e) | Requirement::Nested(e) => !self.deps(e).is_none(),
-                Requirement::Compound { expr, .. } => !self.deps(expr).is_none(),
-                Requirement::Type(t, _) => !self.type_deps(t).is_none(),
+            let d = match *r {
+                Requirement::Simple(e) | Requirement::Nested(e) => self.deps(e),
+                Requirement::Compound { expr, .. } => self.deps(expr),
+                Requirement::Type(t, _) => self.type_deps(t),
             };
+            dep |= !d.is_none();
+            unexpanded |= d.contains(ExprDeps::UNEXPANDED_PACK);
         }
         let t = &mut self.ast.templates;
         let first = t.requirements.len() as u32;
@@ -2090,7 +2104,10 @@ impl AstBuilder<'_> {
         let t = &mut self.ast.templates;
         let i = t.requires.len() as u32;
         t.requires.push(RequiresData { body, params, first, len: reqs.len() as u32 });
-        let deps = if dep { ExprDeps::VALUE_INST } else { ExprDeps::NONE };
+        let mut deps = if dep { ExprDeps::VALUE_INST } else { ExprDeps::NONE };
+        if unexpanded {
+            deps |= ExprDeps::UNEXPANDED_PACK;
+        }
         let e = self.simple(
             ExprKind::RequiresExpr,
             ValueCategory::PRValue,

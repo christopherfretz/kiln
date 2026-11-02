@@ -531,7 +531,8 @@ literal is one instruction and one step, not an interpreted loop.
 - **GCC's implicit library builtins (WP-380):** a direct call of a
   function with no builtin id but a `gnu_lib_twin` (spec/sema.md §5.4:
   the C library `ceil`/`floor`/`trunc`/`round`/`fabs`/`fmin`/`fmax`/
-  `copysign` and their `f`/`l` variants under `-stdlib=libstdc++`) is
+  `copysign`, and since WP-393 `sqrt`, with their `f`/`l` variants under
+  `-stdlib=libstdc++`) is
   lowered as a call of the twin `__builtin_` function, so it folds with
   the twin's rules; under `-stdlib=libc++` such a call is a call of a
   non-constexpr function, as in clang.
@@ -562,8 +563,8 @@ literal is one instruction and one step, not an interpreted loop.
   through it.
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
   constant expression", as clang 19): the math functions outside the
-  P0533 set below (`sqrt`, `sin`, `exp`, `pow`, ...: `builtin::is_libm`
-  minus `p0533_base`); `__builtin_unreachable` when
+  P0533 set below (`sin`, `exp`, `pow`, `cbrt`, `hypot`, ...:
+  `builtin::is_libm` minus `p0533_base`); `__builtin_unreachable` when
   reached; `__builtin_operator_new`/`_delete` outside
   `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
   untyped-memory note; inside them they allocate, "Transient
@@ -575,8 +576,10 @@ literal is one instruction and one step, not an interpreted loop.
   `fdim`, `fma`, `frexp`/`ldexp`/`scalbn`/`scalbln`/`ilogb`/`logb`/`modf`,
   `nextafter`/`nexttoward`, `nextafterf16`/`f16b`, `signbit`, the six
   comparison macros (`isgreater` ... `isunordered`, quiet: false on NaN)
-  and integer `abs`/`labs`/`llabs` (`bi::IABS`), each in its plain, `f`,
-  `l` and `f128` spellings (`kiln_ast` `builtin::p0533_base`), evaluate
+  and integer `abs`/`labs`/`llabs` (`bi::IABS`), and P1383's `sqrt`
+  (WP-393, `bi::SQRT`), each in its plain, `f`, `l` and `f128` spellings
+  (`kiln_ast` `builtin::p0533_base`; `sqrt` also clang's `__fp16`
+  `__builtin_sqrtf16`), evaluate
   exactly in the operand's format: binary16, bfloat16, binary32,
   binary64, x87 80-bit and binary128 all go through the integer
   significand code in `softfloat` (no host libm, no host float
@@ -603,6 +606,21 @@ literal is one instruction and one step, not an interpreted loop.
   nearest-even), rejects `fmod(x, inf)` (= x here) and any infinite
   operand to its MPFR folders (`fma`, `fdim`, `ldexp`), and does not fold
   the pointer-output `*f128` calls.
+  **`sqrt`** (WP-393, IEEE 754-2019 §5.4.1 squareRoot, C23 F.10.4.5) is
+  correctly rounded in the operand's format: binary32 and binary64 use
+  Rust's `f32::sqrt`/`f64::sqrt` (IEEE squareRoot, correctly rounded on
+  every host; the one place the P0533 code uses host float arithmetic),
+  the other formats `softfloat::math::sqrt_fin`, a digit-by-digit integer
+  root of the significand to 125 bits plus a sticky bit, rounded once by
+  `pack` (unit tests check it against the host for binary32/binary64).
+  `sqrt(-0)` is -0; a negative finite operand, -inf or a signaling NaN
+  raises invalid and is not a constant; `sqrt(+inf)` is +inf and a quiet
+  NaN is returned (no exception, so constants by [library.c]/3).
+  **Divergences:** g++ 14 also rejects `sqrt(+inf)` and `sqrt(qNaN)`;
+  clang 19 and 22 evaluate no `sqrt` form (`__has_constexpr_builtin`
+  answers 0 at both levels; codegen keeps the call, as for the rest of
+  the set). Tests: `tests/conformance/c.math/constexpr-sqrt*.cpp`,
+  `gnu-lib-sqrt.cpp`.
 - **Bits** (`bi::CLZ`/`CTZ`/`POPCOUNT`/`BSWAP`): any width up to 128; a
   zero operand to `clz`/`ctz` without the `g` forms' fallback is not a
   constant (no note, as clang).
@@ -765,6 +783,32 @@ literal is one instruction and one step, not an interpreted loop.
   "subexpression not valid", as clang 19. **Divergences:** for the
   object-size comma rule a call with arguments counts as a read (its
   callee reads them) and one without as none, whatever the callee reads.
+
+#### `_Float32x`/`_Float64x` math builtins (WP-393)
+
+GCC spells its TS 18661-3 math builtins for `_Float32x` (double's
+format) and `_Float64x` (long double's) with `f32x`/`f64x` suffixes.
+kiln provides the set clang 22 provides plus those g++ 14 provides that
+libstdc++'s headers reference under kiln's flags. Both are empty:
+`clang++-22` and `clang++-19` answer `__has_builtin` 0 for every name
+below (and have no `_Float32x` type), libstdc++ 14 names none of them,
+and glibc's `<math.h>` (`bits/floatn-common.h`), which names the
+constant forms, maps them to the `double`/`long double` builtins because
+kiln reports clang's `__GNUC__` 4. So kiln declares none, and code
+reaches the formats through the `double`/`long double` forms by
+conversion, as for `_Float32`/`_Float64` above.
+
+| Family (each `__builtin_<f>f32x` and `__builtin_<f>f64x`) | kiln |
+|---|---|
+| `fabs`, `copysign`, `fmax`, `fmin` | not provided (clang 22 doesn't either) |
+| `ceil`, `floor`, `trunc`, `round`, `rint`, `nearbyint` | not provided (clang 22 doesn't either) |
+| `sqrt` | not provided (clang 22 doesn't either) |
+| `nan`, `nans`, `inf`, `huge_val` | not provided (clang 22 doesn't either); glibc's `HUGE_VAL_F32X`, `SNANF64X`, ... macros use the `double`/`long double` forms |
+| `fma`, `fmod`, `frexp`, `ldexp`, `nextafter` and the rest of GCC's set | not provided (clang 22 doesn't either) |
+
+`__builtin_isnan`/`isinf`/`isfinite` and the other type-generic builtins
+take `_Float32x`/`_Float64x` operands directly. Test:
+`tests/conformance/basic.extended.fp/float-nx-builtins.cpp`.
 
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,
@@ -1260,6 +1304,33 @@ lifetime" ([basic.life]/7)
 No new memory state: the entry already existed and is removed with the
 destruction. Clang 19 accepts destroying a union with a user-provided
 destructor twice and reading a member after it; kiln rejects both.
+
+*Unconstructed bases (WP-390).* Sema leaves a direct non-virtual base
+out of a constructor's ctor-initializers only after diagnosing that it
+has no usable default constructor ([class.base.init]/9, clang's
+`err_missing_default_ctor`); clang's evaluator still runs the
+constructor, leaving the base subobject without a value. A
+non-delegating constructor's prologue (`member_prologue`) emits
+`EndLife` aux 8 for each such base that holds data: `Memory::set_unconstructed`
+tracks the allocation in any space (a `constexpr` variable's static
+storage too), marks the base's `copy_size` bytes uninitialized and
+outside their lifetime, sets `life_frame` and records the base in
+`Memory::unconstructed` (cleared by `reset`; entries a rolled-back
+trial made stay, an error path only). Reading, assigning or calling a
+member function of the base or its members is then "... object outside
+its lifetime"; a destructor of the base is "destroying object 'd' whose
+lifetime has already ended"; and freezing the object (`walk`) is
+"constructor of base class 'B' is not called" at the base-specifier,
+before its fields are visited. The derived object itself is not
+destroyed: `life_ended` ignores dead bytes that belong to an
+unconstructed base of the object (`Memory::holds_unconstructed`), so a
+class whose only data is that base is destroyed silently, as by clang
+(`tests/conformance/class.base.init/unconstructed-base-constexpr.cpp`,
+`base-initialized-by-some-constructors-run.cpp`). Not yet: an empty
+base (no bytes to mark) is not noted at freeze; a trivial copy of the
+object reports the lifetime read where clang notes the base (needs a
+fault kind in `notes.rs`); the destruction note of a heap object is
+located at the implicit destructor where clang uses the `delete`.
 
 *Deviations from clang 19.* A class
 whose subobjects' lifetimes all ended one by one is diagnosed at its

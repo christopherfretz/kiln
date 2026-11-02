@@ -256,12 +256,14 @@ impl Sema<'_, '_> {
 
     /// A declaration statement ([stmt.dcl]).
     pub fn act_on_decl_stmt(&mut self, decls: &[DeclId], loc: Loc) -> StmtId {
-        if !self.lambdas.is_empty()
-            && decls
-                .iter()
-                .any(|&d| self.ast.decls.get(d).ty().is_some_and(|t| self.has_unexpanded_pack(t)))
-        {
-            self.note_unexpanded_in_lambda();
+        if !self.lambdas.is_empty() {
+            for &d in decls {
+                if let Some(t) = self.ast.decls.get(d).ty()
+                    && self.has_unexpanded_pack(t)
+                {
+                    self.note_unexpanded_in_lambda(crate::templ::pack::PackOperand::Type(t));
+                }
+            }
         }
         self.builder().decl_stmt(decls, loc)
     }

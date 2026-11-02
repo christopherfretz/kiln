@@ -966,6 +966,10 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         if conds.is_empty()
             && let Some(m) = f.mi.controlling_macro()
         {
+            let main_dir = self.main_file.map(|m| crate::search::parent_dir(self.sm.file_name(m)));
+            if let Some(h) = self.resolver.suggest_include(self.sm, exited, main_dir) {
+                self.sm.mark_include_guarded(exited, h.into());
+            }
             self.guards.insert(exited, m);
         }
         self.include_depth = self.include_depth.saturating_sub(1);

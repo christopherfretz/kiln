@@ -255,7 +255,9 @@ ops! {
     // of the `type` object at `p`; aux 1 = check that its lifetime has
     // not ended, aux 2 = end it (`std::allocator` storage only); aux 4 =
     // a member call on it instead: `std::allocator` storage must be
-    // within its lifetime.
+    // within its lifetime; aux 8 = a base subobject the constructor
+    // does not construct: its `copy_size` bytes begin outside their
+    // lifetime, in any storage (WP-390).
     EndLife = 2,
     // [handler]: enters a try-block (P3068, [except.handle]): registers a
     // handler marker in the cleanup stack (spec/oven.md "Exceptions");
@@ -448,7 +450,7 @@ pub(crate) mod bi {
 
     // WP-365: P0533 constexpr <cmath>.
     /// A `<cmath>` operation on `a` (`b`, `c`) in the float kind of sub's
-    /// low 4 bits: sub = float kind | `CEIL`..`CMP` << 4 | [`SECOND`]
+    /// low 4 bits: sub = float kind | `CEIL`..`SQRT` << 4 | [`SECOND`]
     /// (`softfloat::math`; IEEE-exact, GCC's folding rules: an invalid,
     /// overflowing, inexact-underflowing or signaling-NaN case is not a
     /// constant).
@@ -493,6 +495,8 @@ pub(crate) mod bi {
     /// `LE`, `NE` (`islessgreater`) or [`UNORDERED`]; quiet, never
     /// faults.
     pub const CMP: u32 = 20;
+    /// `sqrt(a)`, correctly rounded (WP-393).
+    pub const SQRT: u32 = 21;
     /// `t1` of `FP_MATH` `CMP`: `isunordered`.
     pub const UNORDERED: u32 = 6;
 }

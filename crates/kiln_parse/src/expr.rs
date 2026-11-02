@@ -106,6 +106,10 @@ fn is_simple_type_kw(k: Kw) -> bool {
                 | Kw::Volatile
                 | Kw::Restrict
                 | Kw::Atomic
+                | Kw::Nonnull
+                | Kw::Nullable
+                | Kw::NullUnspecified
+                | Kw::NullableResult
                 | Kw::Struct
                 | Kw::Class
                 | Kw::Union
@@ -1805,6 +1809,9 @@ impl Parser<'_, '_> {
             }
             let _ = self.split_greater();
             self.s.diagnose_expr_intended_as_template_name(name, found, nl);
+            // clang's `checkPotentialAngleBracket` makes the name
+            // `ExprError()`: the enclosing expression is invalid.
+            self.expr_invalid = true;
             return Some(self.s.act_on_error_expr(&[], nl));
         }
         if qual.is_none()

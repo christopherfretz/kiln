@@ -222,6 +222,15 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (clang's `MergeVarDecl` returns at an invalid new declaration), so
     it reports no redefinition and `c` still names the valid `c`.
     `dcl.type/missing-type-specifier-implicit-int.cpp`.
+    A function whose declaration is invalid (an unknown return or
+    parameter type) is erroneous when named outside a call (clang's
+    `BuildDeclarationNameExpr` makes such a name an error; a call
+    resolves it through its overload set and is still checked, so
+    `k()` reports "no matching function"): `&A::f` and `&k`
+    (`Sema::address_of`) and an implicit conversion of `k`
+    (`conv::implicit_convert`, `Sema::names_invalid_function`) recover
+    silently, with no "cannot initialize" after the first error
+    (WP-379, `expr.unary.op/address-of-invalid-member-function.cpp`).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
@@ -363,6 +372,51 @@ residual` (docs/status/wp-184-oracle-switch.md).
     wraps the type in `Paren` sugar for each pair of parentheses around
     exactly the chunks applied so far (`declarator_parens`; none around
     the outermost type or a function or array type, spec/types.md)
+
+### 4.1.1 Nullability qualifiers (`nullability.rs`, WP-398)
+A clang extension. A nullability qualifier (`_Nonnull`, `_Nullable`,
+`_Null_unspecified`, `_Nullable_result`; spec/parse.md §4) is recorded
+as `Attributed` sugar (`TypeAttrKind::{Nonnull, Nullable,
+NullUnspecified, NullableResult}`) over the type it qualifies, as
+clang's `AttributedType`; the canonical type is unchanged
+(`__is_same(int* _Nonnull, int*)`), and the type prints as clang does
+(`int * _Nonnull`). `apply_nullability` is clang's
+`CheckNullabilityTypeSpecifier`:
+- the type must be able to have nullability (`can_have_nullability`:
+  canonically a pointer or member pointer, or a dependent type), else
+  `sema_nullability_nonpointer` ("nullability specifier '_Nonnull'
+  cannot be applied to non-pointer type 'int'") and the qualifier is
+  dropped; a reference is a non-pointer
+- the same qualifier written twice is `sema_nullability_duplicate`
+  (warning, `-Wnullability`); a different one already written on the
+  type, or carried through sugar (a typedef), is
+  `sema_nullability_conflicting` (an error, the new one dropped), with
+  `note_nullability_here` at the typedef that carries it
+- order: a declarator chunk's qualifiers apply right after the chunk
+  (`chunk_nullability`, clang's `processTypeAttrs` on the chunk).
+
+Decl-specifier qualifiers apply to the decl-specifier type when it can
+have nullability (`declspec_nullability`; `_Nonnull NP x` with `NP` a
+pointer typedef). Otherwise, as clang's `distributeNullabilityTypeAttr`,
+they move to the declarator's outermost pointer or member-pointer chunk
+(through arrays, not through references; past a function's return
+type to a function pointer) with the `-Wnullability-declspec`
+warning-as-error `sema_nullability_declspec` ("...; did you mean to
+apply the specifier to the pointer?"), unless that chunk already has
+one. An array parameter (it decays) accepts one directly. With no
+target, the non-pointer error stands. A qualifier on an undeduced
+`auto` is dropped (clang applies it after deduction; follow-up).
+
+Instantiation (`templ/subst/types.rs`, clang's
+`TransformAttributedType`): a qualifier on a dependent type that
+substitutes to a non-pointer is `sema_nullability_nonpointer` and a
+substitution failure (a SFINAE note in deduction). kiln reports it at
+the instantiation location (a member's name), clang at the keyword
+(it keeps a TypeLoc).
+Not implemented: clang's redeclaration check
+(`warn_nullability_conflict` on `void f(int* _Nonnull); void
+f(int* _Nullable);`), the `-Wnullability-completeness` family, and the
+`nonnull` attribute spellings.
 
 ### 4.2 Declarator to declaration
 `act_on_declarator` turns a `Declarator` into a declaration:
@@ -699,7 +753,18 @@ Redeclaration and linkage rules:
   is diagnosed at that `auto` type-specifier when the return type is
   trailing (the inner `auto` of a nested `auto (*)() -> F`; also after
   substitution), otherwise at the function declarator's `(`, as clang
-  (`dcl.fct/return-function-type-trailing.cpp`).
+  (`dcl.fct/return-function-type-trailing.cpp`). A lambda has no
+  `auto` to point at: its trailing-return checks use the lambda
+  declarator's `(`.
+- **Volatile return types** ([depr.volatile.type]/2, C++20 and later):
+  a function declarator whose return type is volatile-qualified (also
+  through a typedef; not a pointer to volatile) warns
+  `volatile-qualified return type T is deprecated`
+  [-Wdeprecated-volatile] (`sema_deprecated_volatile_return`, in
+  `-Wdeprecated`), at the same location as the array/function return
+  check. Not re-checked after template substitution (clang warns for
+  `T f()` with `T = volatile int`). Tests:
+  `depr.volatile.type/volatile-return{,-cxx17}.cpp`.
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.
@@ -750,9 +815,15 @@ Redeclaration and linkage rules:
   placeholder or an error) is "restrict requires a pointer or reference
   ('int' is invalid)" at the qualifier, which is dropped
   (`type_from_declspec_at`, so `__restrict int *p;` qualifies `int` and
-  is diagnosed). It is reported once per declaration group where clang
-  reports it per declarator. `_Atomic int g();` (friend or not) is
-  accepted, as clang 19 and 22 do;
+  is diagnosed). As clang forms each declarator's type anew
+  ([dcl.decl.general]/3), it is reported once per declarator: the
+  group's type is formed once, and the parser repeats the error for each
+  later declarator (`take_declspec_restrict_error`,
+  `report_restrict_not_pointer`; `__restrict int e, *f;` reports it
+  twice). A `__restrict` ptr-operator qualifies its own declarator only
+  (`int *__restrict a, *b;`: `b` is `int *`; WP-379,
+  `dcl.decl/restrict-per-declarator.cpp`). `_Atomic int g();` (friend or
+  not) is accepted, as clang 19 and 22 do;
   `class.friend/restrict-atomic-decl-specifiers.cpp`.
 - `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
   over the declared type of an unparenthesized id-expression or member
@@ -1680,6 +1751,22 @@ and returns the scope it names:
       clang++-19 on both triples).
   - An unnamed namespace is created once per scope and gets an
     implicit `UsingDirectiveDecl` ([namespace.unnamed]).
+  - **Inline mismatch on reopening** ([namespace.def.general]/3,
+    WP-389; clang `DiagnoseNamespaceInlineMismatch`,
+    `Sema::check_namespace_inline_mismatch`): when a namespace
+    definition extends one whose first definition differs in
+    `inline`, the extension takes the first definition's inlineness.
+    Reopening an inline namespace without `inline` is the warning
+    `sema_inline_namespace_reopened_noninline` ("inline namespace
+    reopened as a non-inline namespace",
+    `-Winline-namespace-reopened-noninline`); reopening a non-inline
+    one with `inline` is the error `sema_inline_namespace_mismatch`
+    ("non-inline namespace cannot be reopened as inline"). Both carry
+    "previous definition is here" at the first definition and are
+    reported at the name (for an unnamed namespace at the `namespace`
+    keyword; clang uses the `{`, a known column difference). Tests:
+    tests/conformance/namespace.def/inline-namespace-reopened-noninline.cpp,
+    tests/conformance/namespace.def/inline-namespace-mismatch.cpp.
 - **Using-directives:** the payload is `Payload::None(nominated.raw())`.
 - **`extern "C"`/`"C++"`** creates a `LinkageSpecDecl`.
   - Without braces (`extern "C" int x;`) the parser calls
@@ -2692,19 +2779,19 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   ::ceil;` etc., so its C++23 constexpr `std::ceil(double)` (P0533)
   relies on GCC folding the C library function as a builtin. A first
   declaration recognized as a library function above whose name is
-  `ceil`, `floor`, `trunc`, `round`, `fabs`, `fmin`, `fmax` or
-  `copysign` (or the `f`/`l` variant) records its `__builtin_` twin
+  `ceil`, `floor`, `trunc`, `round`, `fabs`, `fmin`, `fmax`,
+  `copysign` or `sqrt` (WP-393; or the `f`/`l` variant) records its `__builtin_` twin
   (`builtin::gnu_lib_twin`; the `gnu_lib_twin` cold data);
   redeclarations inherit it. Only the Oven reads it: a call folds as the
   twin (spec/oven.md "Builtins"); every other rule (attributes, codegen,
   diagnostics) treats the call as ordinary. GCC 14 is the reference:
   `rint`/`nearbyint` are not folded (GCC leaves them to the rounding
-  mode at run time) and `sqrt`, which GCC folds, is not (the Oven has no
-  `__builtin_sqrt`; clang folds neither). Under `-stdlib=libc++` nothing
+  mode at run time); `sqrt` folds correctly rounded, so libstdc++'s
+  constexpr `std::sqrt(double)` works (clang folds neither). Under `-stdlib=libc++` nothing
   is recorded, as clang (libc++'s `constexpr-cxx23-clang.pass.cpp`
   requires `::ceil` to stay non-constant). A C++-linkage or class-scope
   `ceil`, or one with another type, is an ordinary function
-  (`tests/conformance/c.math/gnu-lib-builtins*.cpp`).
+  (`tests/conformance/c.math/gnu-lib-builtins*.cpp`, `gnu-lib-sqrt.cpp`).
 - **Custom-checked builtins** (WP-270): the generic
   `__builtin_{add,sub,mul}_overflow` (`builtin_overflow`) and the
   alignment of `__builtin_alloca_with_align` (`check_alloca_align`) are
@@ -3911,7 +3998,15 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   canonical types, keeping the written arguments as sugar, so it is the
   type the in-class declaration named. When they are still dependent,
   the template-id is formed again from the rebuilt arguments, defaults
-  included (stl_tree.h:2107). Tests:
+  included (stl_tree.h:2107). The rebuild also looks through `*`, `&`
+  and `&&` around such a member (`pair<typename X<T>::ptr&, bool>`,
+  libc++ `__tree::__find_equal`, WP-398). A template-id is dependent only
+  when a *canonical* argument is dependent ([temp.dep.type]/8, clang's
+  `anyDependentTemplateArguments`): `pair<nbp>` with `using nbp =
+  rebind<T, int>` (an alias of a dependent alias template specialization
+  naming `int*`) is the concrete `pair<int*>`, written arguments kept as
+  sugar. Tests:
+  `tests/conformance/temp.dep.type/p8-out-of-line-nondependent-alias-arg.cpp`,
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return.cpp`,
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return-args.cpp`.
   A qualifier `typename X<P...>::template M<A...>::m` (or the type

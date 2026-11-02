@@ -246,6 +246,13 @@ impl Sema<'_, '_> {
         poi: Loc,
     ) {
         let Some((tmpl, args)) = self.spec_args(f) else { return };
+        // Already being instantiated further up (mutually recursive
+        // constexpr templates, each instantiated at its use): the
+        // definition is in progress (clang's `isDefined` is true once
+        // `InstantiateFunctionDefinition` has started).
+        if self.inst.stack.contains(crate::templ::stack::FrameKind::FunctionSpec, f) {
+            return;
+        }
         if !self.push_inst_frame(crate::templ::stack::FrameKind::FunctionSpec, f, tmpl, poi) {
             return;
         }

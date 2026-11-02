@@ -5,7 +5,7 @@ use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
-use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
+use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
@@ -14,7 +14,7 @@ use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
     BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
-    Designator, InitItem, InitList, InitValue, Initializer, NameClass, ParamInfo, Sign,
+    Designator, InitItem, InitList, InitValue, Initializer, NameClass, NullSpec, ParamInfo, Sign,
     SpecialName, StorageSpec, TagUse, TypeSpecKind, Width,
 };
 use kiln_source::symbol::Symbol;
@@ -65,7 +65,22 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Typeof
             | Kw::TypeofUnqual
             | Kw::Atomic
+            | Kw::Nonnull
+            | Kw::Nullable
+            | Kw::NullUnspecified
+            | Kw::NullableResult
     )
+}
+
+/// The clang nullability qualifier keyword `k` names (spec/parse.md).
+pub(crate) fn nullability_kw(k: Kw) -> Option<TypeAttrKind> {
+    Some(match k {
+        Kw::Nonnull => TypeAttrKind::Nonnull,
+        Kw::Nullable => TypeAttrKind::Nullable,
+        Kw::NullUnspecified => TypeAttrKind::NullUnspecified,
+        Kw::NullableResult => TypeAttrKind::NullableResult,
+        _ => return None,
+    })
 }
 
 /// True for a keyword that can begin a decl-specifier-seq ([dcl.spec]).
@@ -719,6 +734,12 @@ impl Parser<'_, '_> {
                 Kw::Const => ds.add_cv(Quals::CONST, "const", loc),
                 Kw::Volatile => ds.add_cv(Quals::VOLATILE, "volatile", loc),
                 Kw::Restrict => ds.add_cv(Quals::RESTRICT, "restrict", loc),
+                Kw::Nonnull | Kw::Nullable | Kw::NullUnspecified | Kw::NullableResult => {
+                    if let Some(kind) = nullability_kw(k) {
+                        ds.nullability.push(NullSpec { kind, loc });
+                    }
+                    Ok(())
+                }
                 Kw::Short => ds.set_width(Width::Short, loc),
                 Kw::Long => ds.set_width(Width::Long, loc),
                 Kw::Signed => ds.set_sign(Sign::Signed, loc),
@@ -1277,6 +1298,23 @@ impl Parser<'_, '_> {
         if !self.unknown_type_follows(end, ctx) {
             return false;
         }
+        // A reachable type that is not visible ([module.reach]):
+        // the missing-import error, then the type is used.
+        if let Some(NameClass::Type(ty, d)) = self.s.module_hidden_type(name, None, loc) {
+            self.bump();
+            self.s.mark_type_referenced(d);
+            let kind = self.s.ast.decls.get(d).kind();
+            let ty = if kiln_sema::lookup::is_tag_kind(kind) {
+                self.s.elaborated_tag_type(d, TagKeyword::None)
+            } else {
+                ty
+            };
+            if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                ds.invalid = true;
+                self.spec_error(&e, loc);
+            }
+            return true;
+        }
         let text = self.s.ast.symbols().as_str(name).to_owned();
         let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
         self.emit(d);
@@ -1321,6 +1359,12 @@ impl Parser<'_, '_> {
                     Self::punct_of(next),
                     Some(Punct::LParen | Punct::ColonColon | Punct::Less)
                 ))
+            // A bit-field width ([class.bit]/1) or, at namespace scope,
+            // what clang's `ParseImplicitInt` treats the same way: `y : 3;`
+            // is "unknown type name 'y'", then an anonymous bit-field
+            // (namespace scope: "expected unqualified-id" at the `:`).
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                && Self::punct_of(next) == Some(Punct::Colon))
     }
 
     /// `foo<args> x` with `foo` undeclared ([`Parser::undeclared_template_type`]):
@@ -1790,21 +1834,21 @@ impl Parser<'_, '_> {
         match Self::punct_of(self.tok()) {
             Some(Punct::Star) => {
                 self.bump();
-                let quals = self.parse_ptr_cv();
+                let (quals, nulls) = self.parse_ptr_quals();
                 self.parse_declarator(d);
-                d.chunks.push(Chunk::Pointer { quals, loc });
+                d.push_chunk(Chunk::Pointer { quals, loc }, nulls);
             }
             Some(Punct::Amp) => {
                 self.bump();
-                self.skip_attributes();
+                let nulls = self.parse_ref_quals();
                 self.parse_declarator(d);
-                d.chunks.push(Chunk::LRef { loc });
+                d.push_chunk(Chunk::LRef { loc }, nulls);
             }
             Some(Punct::AmpAmp) => {
                 self.bump();
-                self.skip_attributes();
+                let nulls = self.parse_ref_quals();
                 self.parse_declarator(d);
-                d.chunks.push(Chunk::RRef { loc });
+                d.push_chunk(Chunk::RRef { loc }, nulls);
             }
             _ => {
                 if let Some(star) = self.at_member_pointer() {
@@ -1883,9 +1927,9 @@ impl Parser<'_, '_> {
         if self.pos() == star {
             self.bump();
         }
-        let quals = self.parse_ptr_cv();
+        let (quals, nulls) = self.parse_ptr_quals();
         rest(self, d);
-        d.chunks.push(Chunk::MemberPointer { qual, quals, loc });
+        d.push_chunk(Chunk::MemberPointer { qual, quals, loc }, nulls);
     }
 
     /// Attributes appertaining to a type, after a ptr-operator or an
@@ -1898,19 +1942,28 @@ impl Parser<'_, '_> {
         self.s.act_on_type_position_attrs(&mut attrs, false);
     }
 
-    /// The cv-qualifiers (and attributes) after a `*`.
-    pub(crate) fn parse_ptr_cv(&mut self) -> Quals {
+    /// The cv-qualifiers, nullability qualifiers and attributes after a
+    /// `*` ([dcl.ptr]/1; clang's `ParseTypeQualifierListOpt`).
+    pub(crate) fn parse_ptr_quals(&mut self) -> (Quals, Vec<NullSpec>) {
         let mut q = Quals::NONE;
+        let mut nulls = Vec::new();
         loop {
             let (add, sp) = match self.kw() {
                 Some(Kw::Const) => (Quals::CONST, "const"),
                 Some(Kw::Volatile) => (Quals::VOLATILE, "volatile"),
                 Some(Kw::Restrict) => (Quals::RESTRICT, "restrict"),
+                Some(k) if nullability_kw(k).is_some() => {
+                    let loc = self.bump().span.lo;
+                    if let Some(kind) = nullability_kw(k) {
+                        nulls.push(NullSpec { kind, loc });
+                    }
+                    continue;
+                }
                 _ if self.at_attr() => {
                     self.skip_type_position_attrs();
                     continue;
                 }
-                _ => return q,
+                _ => return (q, nulls),
             };
             let loc = self.bump().span.lo;
             if q.contains(add) {
@@ -1918,6 +1971,22 @@ impl Parser<'_, '_> {
                 self.emit(d);
             }
             q |= add;
+        }
+    }
+
+    /// The attributes and nullability qualifiers after a `&` or `&&`
+    /// ([dcl.ref]/1; a nullability qualifier there is diagnosed by sema).
+    pub(crate) fn parse_ref_quals(&mut self) -> Vec<NullSpec> {
+        let mut nulls = Vec::new();
+        loop {
+            if let Some(kind) = self.kw().and_then(nullability_kw) {
+                let loc = self.bump().span.lo;
+                nulls.push(NullSpec { kind, loc });
+            } else if self.at_attr() {
+                self.skip_attributes();
+            } else {
+                return nulls;
+            }
         }
     }
 
@@ -2227,7 +2296,12 @@ impl Parser<'_, '_> {
     pub(crate) fn is_param_list_start(&self, n: usize) -> bool {
         let t = self.peek(n);
         match t.kind {
-            TokKind::Punct(Punct::RParen | Punct::Ellipsis) => true,
+            TokKind::Punct(Punct::RParen) => true,
+            // `(...)`; `(...x)` groups a pack's declarator-id
+            // ([dcl.decl.general]/4).
+            TokKind::Punct(Punct::Ellipsis) => {
+                self.peek(n + 1).kind == TokKind::Punct(Punct::RParen)
+            }
             TokKind::Punct(Punct::LSquare) => {
                 self.peek(n + 1).kind == TokKind::Punct(Punct::LSquare)
             }
@@ -2848,7 +2922,18 @@ impl Parser<'_, '_> {
         };
         // The initializer, with its conversions, is potentially evaluated.
         let quiet = self.s.enter_var_initializer(v);
+        let outer_invalid = std::mem::replace(&mut self.expr_invalid, false);
         let init = self.parse_initializer(d.init_style, d.is_function_declarator());
+        // clang's `ParseDeclarationAfterDeclaratorAndAttributes`: an
+        // invalid `= expression` (`ExprError`, `expr_invalid`) skips to
+        // the next declarator's `,` or the `;`, with no "expected ';'"
+        // for what is left of it (`int q = 1 + v<S>{};`).
+        if std::mem::replace(&mut self.expr_invalid, outer_invalid)
+            && d.init_style == Some(InitStyle::C)
+            && matches!(init, Ok(Some(Initializer::Expr(_))))
+        {
+            self.skip_until(&[Punct::Comma], true, false);
+        }
         self.s.act_on_exit_declarator_scope(entered);
         let r = self.finish_declarator_initializer(d, v, init);
         self.s.exit_var_initializer(quiet);
@@ -2963,6 +3048,7 @@ impl Parser<'_, '_> {
         allow_fn_def: bool,
         level: usize,
     ) -> Vec<DeclId> {
+        let tmpl_kind = self.template_decl_kind.take();
         let mut ds = self.parse_decl_specifiers(ctx);
         let mut decls = Vec::new();
         if ds.tag_declares
@@ -2988,7 +3074,7 @@ impl Parser<'_, '_> {
         // [dcl.pre]/6 (clang's `BuildDeclaratorGroup`): a structured
         // binding declaration is alone in its group.
         let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;
-        let mut declarators = 0usize;
+        let (mut declarators, mut restrict) = (0usize, None);
         let _ = self.s.take_declarator_type_invalid();
         let mut type_invalid = false;
         loop {
@@ -2998,7 +3084,7 @@ impl Parser<'_, '_> {
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
-            if self.parse_asm_label_and_gnu_attrs(&mut d, declarators == 0).is_err() {
+            if self.parse_asm_label_and_gnu_attrs(&mut d, declarators, &mut restrict).is_err() {
                 self.skip_until(&[], true, false);
                 break;
             }
@@ -3062,7 +3148,7 @@ impl Parser<'_, '_> {
                 return decls;
             }
             decls.extend(v);
-            if self.eat(Punct::Comma).is_none() {
+            if !self.next_declarator(tmpl_kind) {
                 break;
             }
         }
@@ -3074,6 +3160,22 @@ impl Parser<'_, '_> {
         }
         self.expect_declaration_semi(ctx);
         decls
+    }
+
+    /// clang forms each declarator's type from the decl-specifier-seq
+    /// anew: its "restrict requires a pointer or reference" is reported
+    /// once per declarator (`__restrict int a, b;`). The first declarator
+    /// (`first`) takes the error of the group's type; later ones repeat it.
+    pub(crate) fn repeat_declspec_errors(
+        &mut self,
+        restrict_error: &mut Option<(Loc, QualType)>,
+        first: bool,
+    ) {
+        if first {
+            *restrict_error = self.s.take_declspec_restrict_error();
+        } else if let Some(r) = *restrict_error {
+            self.s.report_restrict_not_pointer(r);
+        }
     }
 
     /// Sets `d.end` right after `parse_declarator` (and a trailing
@@ -3103,8 +3205,17 @@ impl Parser<'_, '_> {
     /// Only GNU attributes follow (clang's `MaybeParseGNUAttributes` in
     /// `ParseDeclGroup`): a C++11 attribute-specifier-seq here ends the
     /// declarator, and the `;` (or function body) expected there is
-    /// reported by the caller.
-    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator, first: bool) -> Result<(), ()> {
+    /// reported by the caller. First repeats the decl-specifiers' errors
+    /// for this declarator ([`Parser::repeat_declspec_errors`]).
+    /// `index` is the declarator's index in its group.
+    fn parse_asm_label_and_gnu_attrs(
+        &mut self,
+        d: &mut Declarator,
+        index: usize,
+        restrict_error: &mut Option<(Loc, QualType)>,
+    ) -> Result<(), ()> {
+        let first = index == 0;
+        self.repeat_declspec_errors(restrict_error, first);
         self.gnu_attr_end = Loc::INVALID;
         if first && d.is_function_declarator() {
             self.parse_gnu_attr_seq(&mut d.attrs);

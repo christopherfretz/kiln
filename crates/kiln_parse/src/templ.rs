@@ -30,6 +30,16 @@ use crate::keywords::Kw;
 use crate::parser::{ParamTypename, Parser, is_template_class};
 use crate::tentative::TypeIdContext;
 
+/// The kind of declaration a template head, `template<>` or an
+/// explicit-instantiation `template` introduces (clang's
+/// `ParsedTemplateKind`), for "can only declare a single entity".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TemplateDeclKind {
+    Template = 0,
+    ExplicitSpecialization = 1,
+    ExplicitInstantiation = 2,
+}
+
 /// The kind of a template-parameter ([temp.param]/1), decided from its
 /// first tokens as clang's `isStartOfTemplateTypeParameter` does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,7 +119,9 @@ impl Parser<'_, '_> {
             // explicit-instantiation ([temp.explicit]/1).
             if self.at_partial_specialization() || !self.at_spec_tag_or_template() {
                 self.s.act_explicit_inst_start(extern_loc, loc);
+                self.template_decl_kind = Some(TemplateDeclKind::ExplicitInstantiation);
                 self.parse_spec_declaration(ctx);
+                self.template_decl_kind = None;
                 self.s.act_explicit_inst_end();
                 return;
             }
@@ -162,7 +174,9 @@ impl Parser<'_, '_> {
                 || !self.at_spec_tag_or_template()
             {
                 self.s.act_explicit_spec_start(loc);
+                self.template_decl_kind = Some(TemplateDeclKind::ExplicitSpecialization);
                 self.parse_spec_declaration(ctx);
+                self.template_decl_kind = None;
                 self.s.act_explicit_spec_end();
                 return;
             }
@@ -244,11 +258,40 @@ impl Parser<'_, '_> {
             self.skip_unsupported_declaration();
             return;
         }
+        self.template_decl_kind = Some(TemplateDeclKind::Template);
         if ctx == DeclaratorContext::Member {
             self.parse_member_declaration();
         } else {
             self.parse_simple_declaration(DeclaratorContext::File, true);
         }
+        self.template_decl_kind = None;
+    }
+
+    /// After a declarator of a group: true if a `,` follows and the
+    /// group goes on ([`Parser::diagnose_multiple_template_declarators`]
+    /// ends a template declaration's group first).
+    pub(crate) fn next_declarator(&mut self, tmpl_kind: Option<TemplateDeclKind>) -> bool {
+        !self.diagnose_multiple_template_declarators(tmpl_kind) && self.eat(Punct::Comma).is_some()
+    }
+
+    /// [temp.pre]/5, [temp.expl.spec], [temp.explicit]: a template
+    /// declaration, explicit specialization or explicit instantiation
+    /// declares one entity. At the `,` after its first declarator, clang's
+    /// `err_multiple_template_declarators`; the rest of the group is
+    /// skipped to its `;` (left for the caller). True if reported.
+    pub(crate) fn diagnose_multiple_template_declarators(
+        &mut self,
+        kind: Option<TemplateDeclKind>,
+    ) -> bool {
+        let Some(kind) = kind else { return false };
+        if !self.at(Punct::Comma) {
+            return false;
+        }
+        let d =
+            self.s.diag(DiagId::parse_multiple_template_declarators, self.loc()).arg(kind as u8);
+        self.emit(d);
+        self.skip_until(&[Punct::RBrace], true, false);
+        true
     }
 
     /// A class-key, `enum` or `template` after `template<>` or an
@@ -519,17 +562,17 @@ impl Parser<'_, '_> {
     }
 
     fn parse_type_param_default_arg(&mut self, p: DeclId) -> bool {
-        if self.eat(Punct::Equal).is_none() {
+        let Some(eq) = self.eat(Punct::Equal) else {
             return true;
-        }
+        };
         // The default argument's location (clang's diagnostics point there).
-        let eq = self.loc();
+        let at = self.loc();
         let Some(t) =
             self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TypeParamDefault))
         else {
             return false;
         };
-        self.s.act_on_template_param_default(p, TemplateArg::ty(t), eq);
+        self.s.act_on_template_param_default(p, TemplateArg::ty(t), eq, at);
         true
     }
 
@@ -598,11 +641,11 @@ impl Parser<'_, '_> {
     /// `= id-expression` of template template parameter `p`
     /// ([temp.param]/10).
     fn parse_template_template_param_default(&mut self, p: DeclId) -> bool {
-        if self.eat(Punct::Equal).is_none() {
+        let Some(eq) = self.eat(Punct::Equal) else {
             return true;
-        }
+        };
         // The default argument's location (clang's diagnostics point there).
-        let eq = self.loc();
+        let at = self.loc();
         let Ok(qual) = self.parse_nested_name_nns() else { return false };
         // `nns template name` with a dependent `nns` ([temp.names]/5).
         let dep = qual.as_ref().is_some_and(|q| self.s.is_dependent_ctx(q.ctx));
@@ -620,12 +663,12 @@ impl Parser<'_, '_> {
                 .ast
                 .types
                 .template_name(TemplateName::DependentIdentifier { nns: q.nns, name: n });
-            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq);
+            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq, at);
             return true;
         }
         if let NameClass::TypeTemplate(d) = self.s.classify_name(n, qual.map(|q| q.ctx)) {
             let tn = self.s.template_name_for(d);
-            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq);
+            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq, at);
         } else {
             let text = self.s.ast.symbols().as_str(n).to_owned();
             let d = self.s.diag(DiagId::sema_no_template_named, nl).arg(text);
@@ -670,12 +713,12 @@ impl Parser<'_, '_> {
         }
         let p = self.s.act_on_non_type_template_param(&info, pack);
         let mut ok = true;
-        if self.eat(Punct::Equal).is_some() {
-            let eq = self.loc();
+        if let Some(eq) = self.eat(Punct::Equal) {
+            let at = self.loc();
             match self.with_greater_op(false, Self::parse_constant_expr) {
                 Some(e) => {
                     let a = self.s.builder().template_arg_expr(e);
-                    self.s.act_on_template_param_default(p, a, eq);
+                    self.s.act_on_template_param_default(p, a, eq, at);
                 }
                 None => ok = false,
             }
@@ -1031,6 +1074,19 @@ impl Parser<'_, '_> {
             // dependent base: looked up at instantiation ([temp.dep.type]/6).
             if let Some(t) = self.s.act_unknown_specialization_type(q, name, kw, name_loc) {
                 return Some(t);
+            }
+            // A reachable type that is not visible ([module.reach]): the
+            // missing-import error, then the type is used.
+            if class == NameClass::Undeclared
+                && !self.at(Punct::Less)
+                && let Some(NameClass::Type(t, d)) =
+                    self.s.module_hidden_type(name, Some(q.ctx), name_loc)
+            {
+                self.s.mark_type_referenced(d);
+                let kind = self.s.ast.decls.get(d).kind();
+                let named =
+                    if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
+                return Some(self.s.ast.types.elaborated(kw, Some(q.nns), named));
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             let ctx = self.s.qualifier_desc(q.ctx);

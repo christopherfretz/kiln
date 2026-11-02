@@ -673,7 +673,15 @@ The normative description is spec/driver.md "Code generation". In short:
   native AArch64 host has and an x86-64 host cross-targeting aarch64 (the
   GitHub runner) does not, so the flag keeps the comparison independent of
   the host. A `//@ args: <opts>` line in a case appends
-  `<opts>` to both command lines after it (WP-165). The oracle is
+  `<opts>` to both command lines after it (WP-165). A
+  `//@ module: <name>=<path>` line (path relative to the case, lines in
+  dependency order) names a module interface unit the case imports: kiln
+  gets `-fmodule-file=<name>=<path>` and builds it in-process
+  (spec/modules.md §1); clang first precompiles it with `--precompile`
+  and the same flags (plus the earlier lines' BMIs) into a scratch
+  directory and gets `-fmodule-file=<name>=<bmi>` (WP-376). A
+  `//@ min-oracle: <N>` line compares the case only under oracle release
+  N or later; under an older oracle kiln's IR must still verify. The oracle is
   `clang++-N`/`opt-N` for `N` = `$KILN_ORACLE` (default 22; spec/harness.md
   "Oracle toolchain"); both texts go through that `opt-N`. `KILN_CASE=<stem>`
   prints both texts (in the oracle's mode); without `opt-N`/`clang++-N` it
@@ -729,6 +737,24 @@ The normative description is spec/driver.md "Code generation". In short:
   (`basic.start.main` argv/environment/return-value/stdin and
   `stmt.ranged/constexpr-sum`) are `xfail(kiln)`: libstdc++'s
   `c++config.h` uses `decltype`, which kiln_parse does not support yet.
+
+### Always-inliner (WP-389)
+- clang's `-O0` pipeline (`buildO0DefaultPipeline`) runs
+  `AlwaysInlinerPass` (without lifetime markers) before `-emit-llvm`
+  writes the module, so its `-O0` IR has every call to an `always_inline`
+  definition inlined and such a discardable definition deleted. kiln
+  emits the definition the way clang's codegen does (`alwaysinline` in
+  place of `noinline optnone`; with `noinline` also present, `noinline`
+  alone; `Cg::def_inline_attrs`) and the driver runs LLVM's own
+  pipeline, `opt -passes=default<O0>`, over a module whose attribute
+  groups hold `alwaysinline` (spec/driver.md "IR optimization"). Writing an
+  inliner over kiln's IR was the alternative; running LLVM's pass keeps
+  `ir_vs_clang` exact by construction (alloca hoisting, block splitting
+  and PHIs, `noalias` scope metadata for `sret`, invoke unwinding, the
+  attribute merge and dead-function removal all come from the same
+  code), and it only runs for modules that need it. Test:
+  `tests/codegen/always_inline.cpp` (exact under oracle 19, structural
+  under 22).
 
 ### Deviations
 - **clang 22 codegen (WP-355).** kiln's IR follows clang 19 under every
@@ -959,10 +985,12 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   variant (D1/C1). Implicitly declared special members are not
   instantiations and are still emitted.
   An inline function carrying `always_inline` on any redeclaration
-  (`Cg::is_always_inline_fn`) is the exception (WP-373): clang emits it
-  `available_externally` and inlines it even at `-O0`, so its program
-  never references the symbol; kiln runs no inliner, so it emits the
-  definition `linkonce_odr` instead. libstdc++'s
+  (`Cg::is_always_inline_fn`) is the exception (WP-373, WP-389): as clang
+  (`GVA_AvailableExternally`, kept at `-O0` only for `AlwaysInlineAttr`),
+  kiln emits its definition `available_externally` (no comdat, not
+  `dso_local`; `Cg::is_available_externally_fn`) and the driver's O0
+  pipeline inlines every call to it and deletes it (§6 "Always-inliner"),
+  so the program never references the symbol. libstdc++'s
   `allocator<char>::allocate`/`deallocate` are such members under
   `extern template class allocator<char>`, and libstdc++.so does not
   export them. Tests:
@@ -1547,8 +1575,7 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   value (`fold.rs` `refers_to_const_var`, clang `CEK_AsValueOrReference`).
   `tests/codegen/ref_constant_read.cpp`,
   `tests/conformance/basic.def.odr/reference-constant-init-not-odr-used.cpp`.
-- **Not implemented:** `init_priority`, `thread_local` dynamic
-  initialization (TLS wrappers), folding of reads of `const` class
+- **Not implemented:** `init_priority`, folding of reads of `const` class
   objects that clang permits ([basic.start.static]/3), and `constant` on
   an `extern` declaration of a reference or const scalar (clang
   `isTypeConstant`; `module.rs` `get_gvar` emits `external global`).
@@ -2116,6 +2143,59 @@ return gets clang's `retval` temporary, erased when unused.
 - **Empty-record `va_arg`.** The aggregate copy of a `va_arg` result
   skips empty records, as clang's `EmitAggregateCopy`.
 
+## 7p. Landed (WP-376): thread-local storage (`tls.rs`)
+
+clang `CodeGenModule::setTLSMode`, `ItaniumCXXABI::EmitThreadLocalInitFuncs`
+and `EmitThreadLocalVarDeclLValue` mirrored ([basic.stc.thread],
+[basic.start.dynamic]/7, [basic.start.term]/1, Itanium ABI §3.4). Every
+`thread_local`, `_Thread_local` or `__thread` variable is a C++ dynamic
+TLS variable (sema does not yet tell `__thread` apart, kiln_sema
+`decl.rs` `TlsKind::Static`).
+
+- **Globals.** A thread-local variable's global (namespace-scope, static
+  data member, function-local, its `_ZGV` guard and the `_ZGR` of a
+  temporary it extends) is `thread_local` (general dynamic). The address
+  of a thread-local object is not a constant ([expr.const]/14; the Oven's
+  result check rejects it without a note, as clang), so a reference bound
+  to one is dynamically initialized.
+- **Access.** A scalar load or store whose pointer is a thread-local
+  global goes through `@llvm.threadlocal.address` (clang
+  `EmitLoadOfScalar`/`EmitStoreOfScalar`); constructor calls and
+  `__cxa_thread_atexit` take the raw global. A namespace-scope variable
+  with dynamic initialization or a destructor, or one with no
+  initializing declaration here (clang `usesThreadWrapperFunction`), is
+  reached by calling its wrapper `_ZTW<name>`; otherwise, and for every
+  function-local one, by `@llvm.threadlocal.address`. A reference's
+  wrapper returns the referee.
+- **Initialization.** Dynamic initializers are ordinary
+  `__cxx_global_var_init.N` functions; an ordered variable's is called
+  from `internal void @__tls_init()` behind `internal thread_local i8
+  @__tls_guard` (branch weights 1:1023, guard stored before the calls)
+  and named by `_ZTH<name>`, an alias of `__tls_init` with the variable's
+  linkage. A template instantiation's (unordered) `_ZTH` aliases its own
+  guarded initializer. Destructors register with `__cxa_thread_atexit`
+  (`nounwind`). A function-local `thread_local` is guarded by its
+  `thread_local` `_ZGV` byte without `__cxa_guard_*` (weights 1:1023).
+- **Wrappers.** Created at first use and, at the end of the TU, for each
+  defined non-discardable thread-local variable in creation order:
+  `internal` for an internal variable, else `weak_odr hidden` in a comdat
+  (`linkonce_odr` when the variable is not defined here); `noinline`,
+  `uwtable` (`nounwind` under `-fno-exceptions`), `noundef ptr` return.
+  The body calls `_ZTH` (through `icmp ne ptr @_ZTH, null` and an
+  `extern_weak` declaration when not defined here; omitted for a
+  constant-initialized one), then returns `@llvm.threadlocal.address`
+  (loaded through for a reference). Importers of a named module declare
+  its variables and use the `linkonce_odr` form (spec/modules.md §10
+  deviation 9).
+- Tests: `tests/codegen/thread_local.cpp`,
+  `tests/codegen/module_thread_local.cpp` (oracle 22),
+  `tests/conformance/basic.stc.thread/module-tls-run.cpp`.
+- **Remaining:** `__thread`/`_Thread_local` as clang `TLS_Static` (no
+  wrapper, constant initialization only); clang emits a template
+  variable's initializer after the TU's functions (deferred) where kiln
+  emits it at first use, so `thread_local.cpp` has no thread-local
+  variable template.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
@@ -2136,8 +2216,7 @@ no `result.ptr` spill).
 
 **Remaining (M3):**
 1. Oven folding of constant-initialized references, for the
-   direct-referee use (deviations above); `init_priority` and
-   `thread_local` dynamic initialization (§7e).
+   direct-referee use (deviations above); `init_priority` (§7f).
 2. The Sema gaps above, then corpus cases for them: class copy-init,
    braced returns, reference casts, temporaries, range-for over arrays.
 3. Bit-field and base-class constants, reference members.

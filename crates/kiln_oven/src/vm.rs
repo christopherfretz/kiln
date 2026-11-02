@@ -2687,6 +2687,15 @@ impl Oven {
     /// `Op::EndLife`: an explicit destruction of the `ty` object at `raw`
     /// (aux 1: check that its lifetime has not ended; aux 2: end it).
     fn end_life(&mut self, raw: u64, ty: OTy, aux: u32) -> Result<(), Fault> {
+        if aux & 8 != 0 {
+            let n = self.types.copy_size(ty);
+            return self.mem.set_unconstructed(raw, n, ty).map_err(|f| Fault::Mem {
+                f,
+                ak: ak::INIT,
+                ty,
+                p: raw,
+            });
+        }
         let size = self.types.size(ty);
         if aux & 4 != 0 {
             // A member call (clang's `checkDynamicType` with
