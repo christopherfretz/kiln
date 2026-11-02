@@ -105,6 +105,7 @@ pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
+pub use template_id_typo::TemplateIdTypo;
 
 /// A delayed-typo diagnostic held for the end of its full-expression
 /// ([`Sema::begin_delayed_typos`]): its sequence number and the recovery

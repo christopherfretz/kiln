@@ -98,6 +98,7 @@ sema_template_different_requires_clause = Error (0) "requires clause differs in 
 sema_template_different_type_constraint = Error (0) "type constraint differs in template redeclaration";
 sema_template_implicit_instantiate_undefined = Error (1) "implicit instantiation of undefined template '{0}'";
 sema_template_kw_refers_to_non_template = Error (1) "'{0}' following the 'template' keyword does not refer to a template";
+sema_template_kw_refers_to_type_template = Error (2) "'{0}' is expected to be a non-type template, but instantiated to a {1:class|type alias} template";
 sema_template_nontype_parm_different_type = Error (2) "template non-type parameter has a different type {0} in template {1:|template parameter }redeclaration";
 sema_template_outside_namespace_or_class = Error (0) "templates can only be declared in namespace or class scope";
 sema_template_param_default_redefined = Error (0) "template parameter redefines default argument";

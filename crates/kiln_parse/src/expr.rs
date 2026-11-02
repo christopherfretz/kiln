@@ -1706,15 +1706,17 @@ impl Parser<'_, '_> {
             // around ("expected ')'" / "expected ';'" may follow).
             return Some(self.s.act_on_undeclared_template_id_typo(name, nl));
         }
-        if functions {
-            if let Some(e) = self.s.correct_function_template_id(name, &args, nl) {
-                return Some(e);
+        match self.s.correct_template_id_typo(name, &args, nl) {
+            kiln_sema::TemplateIdTypo::Recovered(e) => return Some(e),
+            kiln_sema::TemplateIdTypo::Suggested => {}
+            kiln_sema::TemplateIdTypo::Uncorrected if functions => {
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::sema_undeclared_var_use, nl).arg(text);
+                self.emit(d);
             }
-            let text = self.s.ast.symbols().as_str(name).to_owned();
-            let d = self.s.diag(DiagId::sema_undeclared_var_use, nl).arg(text);
-            self.emit(d);
-        } else {
-            let _ = self.s.act_on_id_expression(name, nl, None);
+            kiln_sema::TemplateIdTypo::Uncorrected => {
+                let _ = self.s.act_on_id_expression(name, nl, None);
+            }
         }
         let goes_on = self.cur_binop().is_some()
             || [

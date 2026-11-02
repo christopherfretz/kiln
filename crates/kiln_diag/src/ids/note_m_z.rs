@@ -98,6 +98,7 @@ note_raii_guard_add_name = Note (2) "add a variable name to declare a {0} initia
 note_ref_or_ptr_member_here = Note (1) "{0:reference|pointer} member declared here";
 note_refconst_member_not_initialized = Note (2) "{0:const|reference} member {1} will never be initialized";
 note_reference_temporary_list_init = Note (1) "in initialization of temporary of type {0} created to list-initialize this reference";
+note_referenced_type_template = Note (1) "{0:class|type alias} template declared here";
 note_remove_abs = Note (1) "remove the call to '{0}' since unsigned values cannot be negative";
 note_remove_parens_for_variable_declaration = Note (0) "remove parentheses to silence this warning";
 note_reorder_ctor = Note (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
