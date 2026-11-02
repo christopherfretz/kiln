@@ -3219,6 +3219,13 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   included (stl_tree.h:2107). Tests:
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return.cpp`,
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return-args.cpp`.
+  A qualifier `typename X<P...>::template M<A...>::m` (or the type
+  `X<P...>::template M<A...>` itself) is rebuilt as the specialization
+  `M<A...>` of the member class or alias template `M` of the current
+  instantiation, as the in-class `typename M<A...>::m` names it
+  (`rebuild_ci_member_template_id`; libstdc++ valarray:1100
+  `valarray<_Tp>::template _UnaryOp<_Name>::_Rt`, WP-332). Test:
+  `tests/conformance/temp.dep.type/libstdcxx-out-of-line-member-template-qualifier.cpp`.
 - **Member template-ids with non-template overloads**
   ([temp.arg.explicit]/4, [over.match.call.general]/1): an unqualified
   function template-id `f<A>(args)` names the whole overload set that

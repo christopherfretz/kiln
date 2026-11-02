@@ -1185,6 +1185,12 @@ class name" at `B`
   canonical type is the dependent `A<T…>` (types.md T6).
 - `A` followed by `<`, or used as a template template argument, is the
   template-name ([temp.local]/1–2).
+- A template argument `ns::A` or `C::A` whose qualifier is a namespace
+  or the class `A` is a member of finds the template itself, never an
+  injected-class-name, so inside `A`'s own definition it is a template
+  template argument too (the parser's `names_member_template`; libstdc++
+  `_UnClos<__negate, std::_Expr, _Clos>` in `_Expr`, WP-332). Test:
+  `tests/conformance/temp.local/libstdcxx-qualified-template-name-in-own-class.cpp`.
 - Substituting an `InjectedClassName` gives
   `Record(get_class_spec(tmpl, level args))`. It always hits the map,
   because the specialization exists.

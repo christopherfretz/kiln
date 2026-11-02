@@ -564,12 +564,29 @@ impl Sema<'_, '_> {
             };
             return self.ast.types.qualify(t, base.quals());
         }
+        if let TypeView::DependentTemplateSpecialization { keyword, nns, .. } = view {
+            // `typename X<P...>::template M<A...>` itself.
+            let Some(t) = self.rebuild_ci_member_template_id(base, qual, loc) else {
+                return base;
+            };
+            let t = self.ast.types.elaborated(keyword, Some(nns), t);
+            return self.ast.types.qualify(t, base.quals());
+        }
         let TypeView::DependentName { keyword, nns, name } = view else {
             return base;
         };
-        let kiln_ast::types::Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else {
+        let kiln_ast::types::Nns::Type { prefix, ty, template_kw } = self.ast.types.nns_view(nns)
+        else {
             return base;
         };
+        // `typename X<P...>::template M<A...>::m`: the qualifier names the
+        // member template `M` of the current instantiation (libstdc++
+        // `valarray<_Tp>::template _UnaryOp<_Name>::_Rt`).
+        if let Some(r) = self.rebuild_ci_member_template_id(ty, qual, loc) {
+            let n = self.ast.types.nns(kiln_ast::types::Nns::Type { prefix, ty: r, template_kw });
+            let t = self.ast.types.dependent_name(keyword, n, name);
+            return self.ast.types.qualify(t, base.quals());
+        }
         let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty()) else {
             return base;
         };
@@ -594,6 +611,48 @@ impl Sema<'_, '_> {
         };
         let t = self.ast.types.elaborated(keyword, Some(nns), t);
         self.ast.types.qualify(t, base.quals())
+    }
+
+    /// `X<P...>::template M<A...>` written before the declarator-id of a
+    /// member of class template `X`, rebuilt as the specialization of the
+    /// member template `M` of the current instantiation, as `M<A...>`
+    /// names it inside the class ([temp.dep.type]/6). `None` when `ty` is
+    /// not that form or `M` is not a member class or alias template.
+    fn rebuild_ci_member_template_id(
+        &mut self,
+        ty: QualType,
+        qual: DeclId,
+        loc: Loc,
+    ) -> Option<QualType> {
+        let TypeView::DependentTemplateSpecialization { nns, name, args, .. } =
+            self.ast.types.view(ty.ty())
+        else {
+            return None;
+        };
+        let kiln_ast::types::Nns::Type { ty: cty, .. } = self.ast.types.nns_view(nns) else {
+            return None;
+        };
+        let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(cty.ty())
+        else {
+            return None;
+        };
+        let tmpl = self.ast.types.template_decl(tn)?;
+        let entered = self.act_on_enter_declarator_scope(qual);
+        let pat = self.current_instantiation(tmpl, cty);
+        self.act_on_exit_declarator_scope(entered);
+        let found = self.lookup_qualified(pat?, name, LookupKind::Ordinary);
+        let &[m] = found.decls.as_slice() else { return None };
+        if !matches!(self.kind_of(m), DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate) {
+            return None;
+        }
+        let tn = self.template_name_for(m);
+        let list = self.ast.types.args(args).to_vec();
+        let Ok(crate::templ::actions::TemplateIdRef::Type(t)) =
+            self.act_template_id(tn, &list, loc, loc)
+        else {
+            return None;
+        };
+        Some(self.ast.types.qualify(t, ty.quals()))
     }
 
     /// Before the initializer of `v`, declared with a qualified
