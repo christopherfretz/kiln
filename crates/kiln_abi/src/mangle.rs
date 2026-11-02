@@ -367,10 +367,9 @@ fn value_externally_visible(ast: &Ast, value: ConstValueId) -> bool {
     match ast.consts.get(value) {
         ConstValue::Scalar(Scalar::Pointer { base, .. }) => match base {
             PtrBase::Decl(d) | PtrBase::Function(d) => !is_internal_symbol(ast, d),
-            PtrBase::Temporary(t) => ast
-                .decls
-                .lifetime_extended(t)
-                .is_none_or(|l| !is_internal_symbol(ast, l.extending)),
+            PtrBase::Temporary(t) => {
+                ast.decls.lifetime_extended(t).is_none_or(|l| !is_internal_symbol(ast, l.extending))
+            }
             PtrBase::TypeInfo(t) => type_externally_visible(ast, t),
             PtrBase::StringLit { .. } | PtrBase::Const(_) => false,
         },
