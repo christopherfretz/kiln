@@ -1601,6 +1601,51 @@ impl Parser<'_, '_> {
         self.parse_id_expression_rest()
     }
 
+    /// The template-id of an id-expression whose name is a template (or
+    /// follows `template`): a function template's overload set, a variable
+    /// template or concept's value, or an error for a type template
+    /// ([temp.names]/1).
+    fn template_id_expr(
+        &mut self,
+        qual: Option<kiln_sema::using::Qualifier>,
+        (class, name, nl): (NameClass, kiln_source::symbol::Symbol, Loc),
+        begin: Loc,
+        template_loc: Option<Loc>,
+    ) -> ExprId {
+        match self.parse_template_id_rest(class, name, nl) {
+            Ok(TemplateIdRef::Overload(e)) => {
+                let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
+                if let Some(q) = qual {
+                    self.s.set_template_id_begin(e, begin, nl);
+                    self.s.set_template_id_qualifier(e, q.nns);
+                    self.s.set_template_kw(e, template_loc);
+                }
+                if !self.at(Punct::LParen) {
+                    return self.s.resolve_single_template_id(e);
+                }
+                if qual.is_none() {
+                    self.s.act_on_template_id_call_name(e);
+                }
+                e
+            }
+            Ok(TemplateIdRef::Value(e)) => {
+                if let Some(q) = qual {
+                    self.s.set_template_id_begin(e, begin, nl);
+                    self.s.set_template_id_qualifier(e, q.nns);
+                    self.s.set_template_kw(e, template_loc);
+                }
+                e
+            }
+            Ok(TemplateIdRef::Type(_)) => {
+                let t = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, nl).arg(t);
+                self.emit(d);
+                self.s.act_on_error_expr(&[], nl)
+            }
+            Err(()) => self.s.act_on_error_expr(&[], nl),
+        }
+    }
+
     /// An undeclared template-id that is not called (`(undeclared<int> * 2)`),
     /// at its `<` ([temp.names]/3.3): the name is still a template-name, so
     /// the list is its arguments (not `<`/`>` operators), and the id names
@@ -1672,38 +1717,7 @@ impl Parser<'_, '_> {
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
-            return match self.parse_template_id_rest(class, name, nl) {
-                Ok(TemplateIdRef::Overload(e)) => {
-                    let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
-                    if let Some(q) = qual {
-                        self.s.set_template_id_begin(e, begin, nl);
-                        self.s.set_template_id_qualifier(e, q.nns);
-                        self.s.set_template_kw(e, template_loc);
-                    }
-                    if !self.at(Punct::LParen) {
-                        return Some(self.s.resolve_single_template_id(e));
-                    }
-                    if qual.is_none() {
-                        self.s.act_on_template_id_call_name(e);
-                    }
-                    Some(e)
-                }
-                Ok(TemplateIdRef::Value(e)) => {
-                    if let Some(q) = qual {
-                        self.s.set_template_id_begin(e, begin, nl);
-                        self.s.set_template_id_qualifier(e, q.nns);
-                        self.s.set_template_kw(e, template_loc);
-                    }
-                    Some(e)
-                }
-                Ok(TemplateIdRef::Type(_)) => {
-                    let t = self.s.ast.symbols().as_str(name).to_owned();
-                    let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, nl).arg(t);
-                    self.emit(d);
-                    Some(self.s.act_on_error_expr(&[], nl))
-                }
-                Err(()) => Some(self.s.act_on_error_expr(&[], nl)),
-            };
+            return Some(self.template_id_expr(qual, (class, name, nl), begin, template_loc));
         }
         // [temp.names]/3 (P0846): an unqualified name that lookup finds
         // nothing or only functions for, followed by `<`, is a
