@@ -2071,6 +2071,10 @@ impl Parser<'_, '_> {
                         | Kw::Double
                         | Kw::Float128
                         | Kw::Float16
+                        | Kw::Float32
+                        | Kw::Float64
+                        | Kw::StdFloat128
+                        | Kw::Bf16
                         | Kw::Fp16
                         | Kw::Bool
                         | Kw::Class

@@ -453,7 +453,7 @@ impl TypeKind {
 
 macro_rules! builtins {
     ($($(#[$doc:meta])* $konst:ident = $id:literal, $variant:ident, $name:literal;)*) => {
-        /// The builtin types, pre-interned at fixed ids 1..=47 in this
+        /// The builtin types, pre-interned at fixed ids 1..=50 in this
         /// order (spec/types.md §5.1). The discriminant is the `TypeId`
         /// index.
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
@@ -464,7 +464,7 @@ macro_rules! builtins {
 
         impl BuiltinType {
             /// All builtins in id order.
-            pub const ALL: [BuiltinType; 47] = [$(BuiltinType::$variant,)*];
+            pub const ALL: [BuiltinType; 50] = [$(BuiltinType::$variant,)*];
 
             /// The builtin with type id index `id`, if it is one.
             pub fn from_index(id: u32) -> Option<BuiltinType> {
@@ -605,6 +605,15 @@ builtins! {
     SV_BOOL = 46, SvBool, "__SVBool_t";
     /// The `AArch64` SVE ACLE sizeless type `__SVCount_t`.
     SV_COUNT = 47, SvCount, "__SVCount_t";
+    /// `_Float32` (`std::float32_t`, P1467): binary32, distinct from
+    /// `float`.
+    FLOAT32 = 48, Float32, "_Float32";
+    /// `_Float64` (`std::float64_t`, P1467): binary64, distinct from
+    /// `double`.
+    FLOAT64 = 49, Float64, "_Float64";
+    /// `_Float128` (`std::float128_t`, P1467): binary128, distinct from
+    /// `long double` and from `__float128`.
+    STD_FLOAT128 = 50, StdFloat128, "_Float128";
 }
 
 impl BuiltinType {
@@ -644,7 +653,34 @@ impl BuiltinType {
 
     /// True for the floating-point types.
     pub const fn is_floating(self) -> bool {
-        (self as u8) >= 20 && (self as u8) <= 26
+        ((self as u8) >= 20 && (self as u8) <= 26) || ((self as u8) >= 48 && (self as u8) <= 50)
+    }
+
+    /// True for the C++23 extended floating-point types of P1467
+    /// [basic.extended.fp]: `_Float16`, `_Float32`, `_Float64`,
+    /// `_Float128` and `__bf16` (`std::bfloat16_t`).
+    pub const fn is_std_extended_floating(self) -> bool {
+        matches!(
+            self,
+            BuiltinType::Float16
+                | BuiltinType::BFloat16
+                | BuiltinType::Float32
+                | BuiltinType::Float64
+                | BuiltinType::StdFloat128
+        )
+    }
+
+    /// The builtin with the same representation and calling convention:
+    /// `_Float32` → `float`, `_Float64` → `double`, `_Float128` →
+    /// `__float128` (clang/GCC lower and pass them identically,
+    /// spec/abi.md §2); every other builtin is its own twin.
+    pub const fn abi_twin(self) -> BuiltinType {
+        match self {
+            BuiltinType::Float32 => BuiltinType::Float,
+            BuiltinType::Float64 => BuiltinType::Double,
+            BuiltinType::StdFloat128 => BuiltinType::Float128,
+            b => b,
+        }
     }
 
     /// True for the placeholder builtins (`Dependent`, `Overload`,

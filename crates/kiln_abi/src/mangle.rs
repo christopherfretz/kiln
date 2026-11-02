@@ -795,6 +795,15 @@ struct Mangler<'a, 'b> {
 }
 
 impl<'a, 'b> Mangler<'a, 'b> {
+    /// A builtin mangled as a substitutable vendor extended type
+    /// (`u <source-name>`): the SVE types, and `__bf16` on `AArch64`
+    /// (clang and GCC: `u6__bf16`; x86-64 uses `DF16b`).
+    fn vendor_builtin(&self, b: BuiltinType) -> bool {
+        b.is_sizeless()
+            || (b == BuiltinType::BFloat16
+                && self.ast.types.target().long_double == kiln_ast::types::FloatFormat::IeeeQuad)
+    }
+
     fn new(ast: &'a Ast, anon: &'b mut AnonIds, prefix: &str) -> Self {
         Mangler {
             ast,
@@ -2024,7 +2033,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let view = ast.types.canonical_view(q);
         match view {
             // A vendor extended type (`u <source-name>`) is substitutable.
-            TypeView::Builtin(b) if !b.is_sizeless() => {
+            TypeView::Builtin(b) if !self.vendor_builtin(b) => {
                 self.out.push_str(builtin_code(b));
                 return;
             }
@@ -2130,6 +2139,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
             TypeView::PackExpansion { pattern, .. } => {
                 self.out.push_str("Dp");
                 self.ty(pattern);
+            }
+            TypeView::Builtin(b) if self.vendor_builtin(b) && b == BuiltinType::BFloat16 => {
+                self.out.push_str("u6__bf16");
             }
             TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
             TypeView::TemplateSpecialization { name, args, .. } => self.dependent_tst(name, args),
@@ -2243,6 +2255,9 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         B::Double => "d",
         B::LongDouble => "e",
         B::Float128 => "g",
+        B::Float32 => "DF32_",
+        B::Float64 => "DF64_",
+        B::StdFloat128 => "DF128_",
         B::Half => "Dh",
         B::NullPtr => "Dn",
         B::SvInt8 => "u10__SVInt8_t",

@@ -159,8 +159,13 @@ fn direct(coerce: IrType) -> ArgKind {
     ArgKind::Direct { coerce, offset: 0, flatten: true, align: None }
 }
 
+/// The canonical view, with the P1467 `_FloatN` types replaced by the
+/// builtin they are passed as (`BuiltinType::abi_twin`).
 fn view(t: &IrTypes<'_>, q: QualType) -> TypeView {
-    t.ast().types.canonical_view(q)
+    match t.ast().types.canonical_view(q) {
+        TypeView::Builtin(b) => TypeView::Builtin(b.abi_twin()),
+        v => v,
+    }
 }
 
 fn type_bits(t: &mut IrTypes<'_>, q: QualType) -> u64 {
