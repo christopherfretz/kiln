@@ -34,7 +34,7 @@ int h(P p) {
   int arr[2] = {};
   for (register int e : arr) {}
   register auto [a, b] = p;
-  register int r asm("x1");
+  register int r asm("r8");
   if (register int z = 1) {}
   return y + a + b + r + *ptr;
 }
