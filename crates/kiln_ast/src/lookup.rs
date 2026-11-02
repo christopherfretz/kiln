@@ -318,3 +318,34 @@ impl HeapSize for LookupTables {
         r
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{LookupFlags, LookupTables};
+    use crate::ids::DeclId;
+    use crate::names::DeclName;
+    use kiln_source::symbol::Interner;
+
+    /// The kept sums (WP-313) equal the sums over the sets after
+    /// singleton entries, set creation, appends, replacements and
+    /// duplicates.
+    #[test]
+    fn set_meter_tracks_the_sets() {
+        let i = Interner::new();
+        let mut t = LookupTables::new();
+        let ctx = DeclId::new(1);
+        for n in 0..40u32 {
+            let name = DeclName::ident(i.intern(&format!("f{}", n % 7)));
+            let d = DeclId::new(2 + n);
+            t.insert(ctx, name, d, None, n % 3 == 0);
+            t.insert(ctx, name, d, None, false);
+            if n % 5 == 0 {
+                t.insert(ctx, name, DeclId::new(100 + n), Some(d), false);
+            }
+            t.insert_with_flags(ctx, name, DeclId::new(200 + n), None, LookupFlags::ADL_ONLY);
+            let words: usize = t.sets.iter().map(Vec::len).sum();
+            let cap: usize = t.sets.iter().map(Vec::capacity).sum();
+            assert_eq!((t.set_words, t.set_cap), (words, cap));
+        }
+    }
+}
