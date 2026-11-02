@@ -525,7 +525,9 @@ pub fn coro(m: &mut Module, which: Coro, size: TypeId) -> FuncId {
             &[],
             Shape::Basic(Some(MemoryEffects::argmem_only(ModRef::Read))),
         ),
-        Coro::Alloc => declare(m, "llvm.coro.alloc", TypeId::I1, &[(t, &[])], &[], Shape::NoUnwind(false)),
+        Coro::Alloc => {
+            declare(m, "llvm.coro.alloc", TypeId::I1, &[(t, &[])], &[], Shape::NoUnwind(false))
+        }
         Coro::Size | Coro::Align => {
             let base = if which == Coro::Size { "llvm.coro.size" } else { "llvm.coro.align" };
             let name = overloaded_name(m, base, &[size]);
@@ -565,7 +567,9 @@ pub fn coro(m: &mut Module, which: Coro, size: TypeId) -> FuncId {
             &[],
             Shape::NoUnwindArgRead,
         ),
-        Coro::Resume => declare(m, "llvm.coro.resume", TypeId::VOID, &[(p, &[])], &[], Shape::Throws),
+        Coro::Resume => {
+            declare(m, "llvm.coro.resume", TypeId::VOID, &[(p, &[])], &[], Shape::Throws)
+        }
         Coro::Destroy => {
             declare(m, "llvm.coro.destroy", TypeId::VOID, &[(p, &[])], &[], Shape::Throws)
         }

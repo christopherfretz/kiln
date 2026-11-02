@@ -12,9 +12,7 @@
 //! (`DependentCoawaitExpr`, a one-operand `CoyieldExpr`, a `CoreturnStmt`
 //! without promise call); its instantiation builds the coroutine.
 
-use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, InitStyle, VarSpec,
-};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, InitStyle, VarSpec};
 use kiln_ast::expr::{CastKind, CoawaitParts, ExprKind, SuspendKind, UnaryOp, ValueCategory};
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::CoroutineBodyData;
@@ -45,6 +43,7 @@ pub(crate) struct CoroState {
     pub(crate) moves: Vec<(DeclId, StmtId)>,
     /// The implicit initial and final suspend expressions: `None` until
     /// built, `Some(None)` after they failed.
+    #[allow(clippy::option_option, reason = "not built yet vs. failed")]
     pub(crate) suspends: Option<Option<(ExprId, ExprId)>>,
     /// `std::coroutine_handle<P>`, once looked up.
     pub(crate) handle_ty: Option<QualType>,
@@ -237,7 +236,8 @@ impl Sema<'_, '_> {
     /// Whether `stash` holds an error.
     fn stash_has_error(&self, stash: &[Diag]) -> bool {
         stash.iter().any(|d| {
-            d.id().is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
+            d.id()
+                .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
         })
     }
 
@@ -311,13 +311,18 @@ impl Sema<'_, '_> {
         if found.decls.is_empty() {
             return None;
         }
-        Some((self.ast.first(ns), found.decls.to_vec()))
+        Some((self.ast.first(ns), found.decls))
     }
 
     /// The class template `std::NAME` (clang `lookupCoroutineTraits`,
     /// `lookupCoroutineHandleType`): diagnosed when missing or not a
     /// class template.
-    fn std_coro_template(&mut self, name: &str, loc: Loc, malformed: DiagId) -> Option<(DeclId, DeclId)> {
+    fn std_coro_template(
+        &mut self,
+        name: &str,
+        loc: Loc,
+        malformed: DiagId,
+    ) -> Option<(DeclId, DeclId)> {
         let Some((ns, found)) = self.std_lookup(name) else {
             let d = self
                 .diag(DiagId::sema_implied_coroutine_type_not_found, loc)
@@ -336,15 +341,20 @@ impl Sema<'_, '_> {
     fn written_return(&self, f: DeclId) -> QualType {
         let Some(ty) = self.ast.decls.get(f).ty() else { return QualType::ERROR };
         let t = &self.ast.types;
-        t.proto_of(ty.ty()).or_else(|| t.proto(ty)).map_or(QualType::ERROR, |p| p.ret())
+        t.proto_of(ty.ty())
+            .or_else(|| t.proto(ty))
+            .map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret)
     }
 
     /// The promise type `std::coroutine_traits<R, P...>::promise_type`
     /// ([dcl.fct.def.coroutine]/3, /4; clang `lookupPromiseType`).
     fn lookup_promise_type(&mut self, f: DeclId, kw_loc: Loc) -> Option<QualType> {
         let floc = self.ast.decls.get(f).loc();
-        let (ns, tmpl) =
-            self.std_coro_template("coroutine_traits", kw_loc, DiagId::sema_malformed_std_coroutine_traits)?;
+        let (ns, tmpl) = self.std_coro_template(
+            "coroutine_traits",
+            kw_loc,
+            DiagId::sema_malformed_std_coroutine_traits,
+        )?;
         let mut args = vec![TemplateArg::ty(self.written_return(f))];
         // The implicit object parameter of a non-static member function
         // ([over.match.funcs.general]/4).
@@ -362,7 +372,8 @@ impl Sema<'_, '_> {
         let (params, _) = self.fn_params(f).unwrap_or_default();
         args.extend(params.into_iter().map(TemplateArg::ty));
         let name = self.template_name_for(tmpl);
-        let Ok(TemplateIdRef::Type(traits)) = self.act_template_id(name, &args, kw_loc, kw_loc) else {
+        let Ok(TemplateIdRef::Type(traits)) = self.act_template_id(name, &args, kw_loc, kw_loc)
+        else {
             return None;
         };
         if !self.require_complete_silent(traits, kw_loc) {
@@ -376,7 +387,8 @@ impl Sema<'_, '_> {
         let def = self.ast.definition(rec)?;
         let pt = self.intern("promise_type");
         let found = self.lookup_in_class(def, pt, LookupKind::Ordinary);
-        let Some(&p) = found.decls.iter().find(|&&d| crate::lookup::is_type_kind(self.kind_of(d))) else {
+        let Some(&p) = found.decls.iter().find(|&&d| crate::lookup::is_type_kind(self.kind_of(d)))
+        else {
             let std = self.ast.types.nns(Nns::Namespace { prefix: None, ns });
             let qual = self.ast.types.elaborated(TagKeyword::None, Some(std), traits);
             let d = self
@@ -392,7 +404,8 @@ impl Sema<'_, '_> {
             return None;
         }
         let std = self.ast.types.nns(Nns::Namespace { prefix: None, ns });
-        let nns = self.ast.types.nns(Nns::Type { prefix: Some(std), ty: traits, template_kw: false });
+        let nns =
+            self.ast.types.nns(Nns::Type { prefix: Some(std), ty: traits, template_kw: false });
         let elab = self.ast.types.elaborated(TagKeyword::None, Some(nns), promise_ty);
         if self.ast.types.as_record(promise_ty).is_none() {
             let d = self
@@ -498,7 +511,13 @@ impl Sema<'_, '_> {
     /// `operator co_await(e)` if one applies, else `e` ([expr.await]/3.3;
     /// clang `buildOperatorCoawaitCall`).
     fn operator_coawait(&mut self, e: ExprId, loc: Loc) -> ExprId {
-        match self.try_overloaded_operator(OperForm::Unary(UnaryOp::Coawait), &[e], &[], loc, Loc::INVALID) {
+        match self.try_overloaded_operator(
+            OperForm::Unary(UnaryOp::Coawait),
+            &[e],
+            &[],
+            loc,
+            Loc::INVALID,
+        ) {
             OperResult::Done(x) => x,
             OperResult::Converted(v) => v.first().copied().unwrap_or(e),
             OperResult::Builtin | OperResult::BuiltinNotes(_) => e,
@@ -508,40 +527,38 @@ impl Sema<'_, '_> {
     /// `std::coroutine_handle<P>::from_address(__builtin_coro_frame())`
     /// (clang `buildCoroutineHandle`).
     fn coroutine_handle(&mut self, promise_ty: QualType, loc: Loc) -> Option<ExprId> {
-        let ty = match self.coro_state().and_then(|c| c.handle_ty) {
-            Some(t) => t,
-            None => {
-                let (ns, tmpl) = self.std_coro_template(
-                    "coroutine_handle",
-                    loc,
-                    DiagId::sema_malformed_std_coroutine_handle,
-                )?;
-                let name = self.template_name_for(tmpl);
-                let Ok(TemplateIdRef::Type(t)) =
-                    self.act_template_id(name, &[TemplateArg::ty(promise_ty)], loc, loc)
-                else {
-                    return None;
-                };
-                if !self.require_complete_silent(t, loc) {
-                    let d = self
-                        .diag(DiagId::sema_coroutine_type_missing_specialization, loc)
-                        .arg(self.ty_arg(t));
-                    self.emit(d);
-                    return None;
-                }
-                let std = self.ast.types.nns(Nns::Namespace { prefix: None, ns });
-                let _ = std;
-                if let Some(c) = self.coro_state_mut() {
-                    c.handle_ty = Some(t);
-                }
-                t
+        let ty = if let Some(t) = self.coro_state().and_then(|c| c.handle_ty) {
+            t
+        } else {
+            let (_, tmpl) = self.std_coro_template(
+                "coroutine_handle",
+                loc,
+                DiagId::sema_malformed_std_coroutine_handle,
+            )?;
+            let name = self.template_name_for(tmpl);
+            let Ok(TemplateIdRef::Type(t)) =
+                self.act_template_id(name, &[TemplateArg::ty(promise_ty)], loc, loc)
+            else {
+                return None;
+            };
+            if !self.require_complete_silent(t, loc) {
+                let d = self
+                    .diag(DiagId::sema_coroutine_type_missing_specialization, loc)
+                    .arg(self.ty_arg(t));
+                self.emit(d);
+                return None;
             }
+            if let Some(c) = self.coro_state_mut() {
+                c.handle_ty = Some(t);
+            }
+            t
         };
         let rec = self.ast.types.as_record(ty)?;
         let def = self.ast.definition(rec)?;
         let fa = self.intern("from_address");
         if self.lookup_in_class(def, fa, LookupKind::Ordinary).decls.is_empty() {
-            let d = self.diag(DiagId::sema_coroutine_handle_missing_member, loc).arg("from_address");
+            let d =
+                self.diag(DiagId::sema_coroutine_handle_missing_member, loc).arg("from_address");
             self.emit(d);
             return None;
         }
@@ -572,8 +589,12 @@ impl Sema<'_, '_> {
                 ExprKind::ExprWithCleanups
                 | ExprKind::ImplicitCastExpr
                 | ExprKind::CXXBindTemporaryExpr
-                | ExprKind::MaterializeTemporaryExpr => x = self.ast.exprs.children(x, &self.ast.lists)[0],
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
+                | ExprKind::MaterializeTemporaryExpr => {
+                    x = self.ast.exprs.children(x, &self.ast.lists)[0];
+                }
+                ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr => {
                     return self.callee_decl(x);
                 }
                 _ => return None,
@@ -608,7 +629,10 @@ impl Sema<'_, '_> {
             Err(err) => {
                 let mut d = err.diag_at(self, self.eloc(call));
                 if let Some(f) = self.coro_callee(call) {
-                    let n = self.diag(DiagId::note_await_ready_no_bool_conversion, self.ast.decls.get(f).loc());
+                    let n = self.diag(
+                        DiagId::note_await_ready_no_bool_conversion,
+                        self.ast.decls.get(f).loc(),
+                    );
                     d = d.with_note(n);
                 }
                 if let Some(n) = self.note_implicit_call(call, loc) {
@@ -646,7 +670,9 @@ impl Sema<'_, '_> {
             let is_bool = self.ast.types.same_type(urt, QualType::BOOL);
             if self.ast.types.is_reference(rt) || (!is_bool && !self.ast.types.is_void(rt)) {
                 let at = callee.map_or(loc, |f| self.ast.decls.get(f).loc());
-                let mut d = self.diag(DiagId::sema_await_suspend_invalid_return_type, at).arg(self.ty_arg(rt));
+                let mut d = self
+                    .diag(DiagId::sema_await_suspend_invalid_return_type, at)
+                    .arg(self.ty_arg(rt));
                 if let Some(n) = self.note_implicit_call(call, loc) {
                     d = d.with_note(n);
                 }
@@ -711,7 +737,10 @@ impl Sema<'_, '_> {
         if self.promise_has_member(promise, "await_transform").is_some() {
             let t = self.promise_call(promise, loc, "await_transform", &[e]);
             if self.is_err_expr(t) {
-                self.error(DiagId::note_coroutine_promise_implicit_await_transform_required_here, loc);
+                self.error(
+                    DiagId::note_coroutine_promise_implicit_await_transform_required_here,
+                    loc,
+                );
                 return None;
             }
             x = t;
@@ -727,6 +756,7 @@ impl Sema<'_, '_> {
 
     /// clang `ActOnCoroutineBodyStart`: the promise, then the initial and
     /// final suspend points (at the function's location).
+    #[allow(clippy::option_option, reason = "invalid context vs. no promise")]
     fn coroutine_body_start(&mut self, loc: Loc, kw: &'static str) -> Option<Option<DeclId>> {
         self.coro_isolated(|s| {
             let valid = s.valid_coroutine_context(loc, kw).is_some();
@@ -761,41 +791,37 @@ impl Sema<'_, '_> {
         Some((init, fin))
     }
 
-    fn build_suspend(&mut self, promise: DeclId, name: &str, which: u8, floc: Loc) -> Option<ExprId> {
+    fn build_suspend(
+        &mut self,
+        promise: DeclId,
+        name: &str,
+        which: u8,
+        floc: Loc,
+    ) -> Option<ExprId> {
         let (r, stash) = self.capturing(|s| {
             let call = s.promise_call(promise, floc, name, &[]);
             if s.is_err_expr(call) {
-                return Err(false);
+                return None;
             }
             let aw = s.operator_coawait(call, floc);
             if s.is_err_expr(aw) {
-                return Err(false);
+                return None;
             }
-            let Some(e) = s.build_resolved_coawait(promise, floc, call, aw, true, false) else {
-                return Err(true);
-            };
-            Ok(s.act_on_full_expr(e))
+            let e = s.build_resolved_coawait(promise, floc, call, aw, true, false)?;
+            Some(s.act_on_full_expr(e))
         });
-        match r {
-            Ok(e) => {
-                self.release(stash, Vec::new());
-                Some(e)
-            }
-            Err(note) => {
-                let mut notes = Vec::new();
-                if note || true {
-                    notes.push(
-                        self.diag(DiagId::note_coroutine_promise_suspend_implicitly_required, floc)
-                            .arg(which),
-                    );
-                    if let Some(n) = self.note_coroutine_here() {
-                        notes.push(n);
-                    }
-                }
-                self.release(stash, notes);
-                None
-            }
+        if let Some(e) = r {
+            self.release(stash, Vec::new());
+            return Some(e);
         }
+        let mut notes = vec![
+            self.diag(DiagId::note_coroutine_promise_suspend_implicitly_required, floc).arg(which),
+        ];
+        if let Some(n) = self.note_coroutine_here() {
+            notes.push(n);
+        }
+        self.release(stash, notes);
+        None
     }
 
     /// clang `checkFinalSuspendNoThrow`: the functions the final suspend
@@ -816,14 +842,17 @@ impl Sema<'_, '_> {
                         self.check_decl_nothrow(d, floc, &mut throwing);
                     }
                 }
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
+                ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr => {
                     if self.ast.exprs.get(x).is_type_dependent() {
                         continue;
                     }
-                    if let Some(f) = self.callee_decl(x) {
-                        if self.ast.decls.builtin_id(f) != Some(kiln_ast::decl::builtin::CORO_RESUME) {
-                            self.check_decl_nothrow(f, floc, &mut throwing);
-                        }
+                    if let Some(f) = self.callee_decl(x)
+                        && self.ast.decls.builtin_id(f)
+                            != Some(kiln_ast::decl::builtin::CORO_RESUME)
+                    {
+                        self.check_decl_nothrow(f, floc, &mut throwing);
                     }
                     let rt = self.ety(x);
                     if let Some(r) = self.ast.types.as_record(rt)
@@ -965,7 +994,12 @@ impl Sema<'_, '_> {
     /// The operand and promise call of `co_return e;` (clang
     /// `BuildCoreturnStmt`): `return_value(e)` for a braced list or an
     /// operand not of type `void`, else `e;` and `return_void()`.
-    fn coreturn_call(&mut self, promise: DeclId, e: Option<ExprId>, loc: Loc) -> (Option<ExprId>, Option<ExprId>) {
+    fn coreturn_call(
+        &mut self,
+        promise: DeclId,
+        e: Option<ExprId>,
+        loc: Loc,
+    ) -> (Option<ExprId>, Option<ExprId>) {
         let braced = e.is_some_and(|x| self.is_braced_arg(x));
         if let Some(x) = e
             && self.is_err_expr(x)
@@ -1030,16 +1064,18 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
             return body;
         };
-        let built = self.coro_isolated(|s| s.build_coroutine_stmts(f, promise, &coro, body, init_suspend, final_suspend));
-        match built {
-            Some(s) => s,
-            None => {
-                self.ast.decls.set_flags(f, DeclFlags::INVALID);
-                body
-            }
+        let built = self.coro_isolated(|s| {
+            s.build_coroutine_stmts(f, promise, &coro, body, init_suspend, final_suspend)
+        });
+        if let Some(s) = built {
+            s
+        } else {
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            body
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one step per [dcl.fct.def.coroutine]/5 statement")]
     fn build_coroutine_stmts(
         &mut self,
         f: DeclId,
@@ -1092,12 +1128,18 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_coroutine_promise_incompatible_return_functions, floc)
                     .arg(self.ty_arg(rty))
                     .with_note(
-                        self.diag(DiagId::note_member_first_declared_here, self.ast.decls.get(a).loc())
-                            .arg("'return_void'"),
+                        self.diag(
+                            DiagId::note_member_first_declared_here,
+                            self.ast.decls.get(a).loc(),
+                        )
+                        .arg("'return_void'"),
                     )
                     .with_note(
-                        self.diag(DiagId::note_member_first_declared_here, self.ast.decls.get(b).loc())
-                            .arg("'return_value'"),
+                        self.diag(
+                            DiagId::note_member_first_declared_here,
+                            self.ast.decls.get(b).loc(),
+                        )
+                        .arg("'return_value'"),
                     );
                 self.emit(d);
                 return None;
@@ -1171,7 +1213,8 @@ impl Sema<'_, '_> {
             return_stmt = Some(self.builder().return_stmt(Some(conv), None, floc));
         }
         // makeReturnOnAllocFailure.
-        let alloc_fail = self.promise_has_member(promise, "get_return_object_on_allocation_failure");
+        let alloc_fail =
+            self.promise_has_member(promise, "get_return_object_on_allocation_failure");
         let mut return_on_alloc_failure = None;
         if let Some(m) = alloc_fail {
             let is_static = self.kind_of(m) == DeclKind::CXXMethod
@@ -1207,7 +1250,8 @@ impl Sema<'_, '_> {
             return_on_alloc_failure = Some(self.builder().return_stmt(Some(v), None, floc));
         }
         // makeNewAndDeleteExpr.
-        let (allocate, deallocate) = self.coro_new_delete(f, promise, floc, alloc_fail.is_some())?;
+        let (allocate, deallocate) =
+            self.coro_new_delete(f, promise, floc, alloc_fail.is_some())?;
         let moves: Vec<StmtId> = coro.moves.iter().map(|m| m.1).collect();
         let param_moves = self.ast.lists.push(&moves);
         let data = CoroutineBodyData {
@@ -1247,6 +1291,10 @@ impl Sema<'_, '_> {
 
     /// The frame's allocation and deallocation calls
     /// ([dcl.fct.def.coroutine]/9-12; clang `makeNewAndDeleteExpr`).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the new/delete lookup cascade of [dcl.fct.def.coroutine]/9-12"
+    )]
     fn coro_new_delete(
         &mut self,
         f: DeclId,
@@ -1259,7 +1307,8 @@ impl Sema<'_, '_> {
         let promise_ty = self.ast.decls.get(promise).ty().unwrap_or(QualType::ERROR);
         let rec = self.promise_record(promise)?;
         let new_name = DeclName::operator(OO::New);
-        let contains_new = !self.lookup_in_class_dn(rec, new_name, LookupKind::Ordinary).decls.is_empty();
+        let contains_new =
+            !self.lookup_in_class_dn(rec, new_name, LookupKind::Ordinary).decls.is_empty();
         let mut place: Vec<ExprId> = Vec::new();
         if contains_new {
             if self.method_this_type(f).is_some() && !self.is_lambda_call_op(f) {
@@ -1302,16 +1351,19 @@ impl Sema<'_, '_> {
             let g = self.alloc_fns(promise_ty, OO::New, true, loc);
             new = self.find_operator_new(&g.fns, &place, false).map(|x| x.0);
         }
-        let fname = format!("'{}'", self.decl_name(f));
+        let callee_name = format!("'{}'", self.decl_name(f));
         let Some(new) = new else {
             if contains_new {
                 let d = self
                     .diag(DiagId::sema_coroutine_unusable_new, loc)
                     .arg(self.ty_arg(promise_ty))
-                    .arg(fname);
+                    .arg(callee_name);
                 self.emit(d);
             } else if requires_nothrow {
-                let d = self.diag(DiagId::sema_coroutine_unfound_nothrow_new, loc).arg(fname).arg(0u8);
+                let d = self
+                    .diag(DiagId::sema_coroutine_unfound_nothrow_new, loc)
+                    .arg(callee_name)
+                    .arg(0u8);
                 self.emit(d);
             }
             return None;
@@ -1321,9 +1373,15 @@ impl Sema<'_, '_> {
             if !self.decl_is_nothrow(new) {
                 let n = format!("'{}'", self.decl_name(new));
                 let d = self
-                    .diag(DiagId::sema_coroutine_promise_new_requires_nothrow, self.ast.decls.get(new).loc())
+                    .diag(
+                        DiagId::sema_coroutine_promise_new_requires_nothrow,
+                        self.ast.decls.get(new).loc(),
+                    )
                     .arg(n.clone())
-                    .with_note(self.diag(DiagId::note_coroutine_promise_call_implicitly_required, loc).arg(n));
+                    .with_note(
+                        self.diag(DiagId::note_coroutine_promise_call_implicitly_required, loc)
+                            .arg(n),
+                    );
                 self.emit(d);
                 return None;
             }

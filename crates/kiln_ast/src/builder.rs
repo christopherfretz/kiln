@@ -23,10 +23,10 @@ use crate::decl::{
     StaticAssertData, TagKind, TemplLink, TypedefData, VarData, VarEval, VarSpec,
 };
 use crate::expr::{
-    ArrayTraitExtra, BinaryOp, CoawaitParts, SuspendKind, CastKind, CharKind, CompoundAssignExtra, ConstructInfo,
-    ConstructionKind, DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode, InitListExtra,
-    NewExtra, NewInitStyle, NonOdrUse, ObjectKind, Radix, StorageDuration, StringKind, TraitKind,
-    TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
+    ArrayTraitExtra, BinaryOp, CastKind, CharKind, CoawaitParts, CompoundAssignExtra,
+    ConstructInfo, ConstructionKind, DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode,
+    InitListExtra, NewExtra, NewInitStyle, NonOdrUse, ObjectKind, Radix, StorageDuration,
+    StringKind, SuspendKind, TraitKind, TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
 };
 use crate::ids::{
     AttrId, ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, StmtId, StringLitId,
@@ -36,8 +36,8 @@ use crate::lookup::LookupFlags;
 use crate::names::DeclName;
 use crate::slot::AlreadySet;
 use crate::stmt::{
-    AsmData, AsmOperand, CaseData, CoroutineBodyData, IfData, IfKind, LoopData, RangeForData, StmtKind, StmtNode,
-    SwitchData,
+    AsmData, AsmOperand, CaseData, CoroutineBodyData, IfData, IfKind, LoopData, RangeForData,
+    StmtKind, StmtNode, SwitchData,
 };
 use crate::types::TypeFlags;
 
@@ -2729,7 +2729,8 @@ impl<'a> AstBuilder<'a> {
         let r = *self.ast.exprs.get(parts.resume);
         let deps = r.deps().with(self.deps(parts.operand));
         let p = parts;
-        let list = self.ast.lists.push(&[p.operand, p.common, p.ready, p.suspend, p.resume, p.opaque]);
+        let list =
+            self.ast.lists.push(&[p.operand, p.common, p.ready, p.suspend, p.resume, p.opaque]);
         let sk = match suspend {
             SuspendKind::Void => 0u8,
             SuspendKind::Bool => 1,

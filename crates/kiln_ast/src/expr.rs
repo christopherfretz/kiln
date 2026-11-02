@@ -2613,6 +2613,7 @@ impl ExprArena {
             | ExprKind::CXXDependentScopeMemberExpr
             | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::PackExpansionExpr
+            | ExprKind::DependentCoawaitExpr
             | ExprKind::CXXRewrittenBinaryOperator => v.extend(id(n.a)),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr | ExprKind::CXXFoldExpr => {
                 v.extend(id(n.a));
@@ -2659,7 +2660,6 @@ impl ExprArena {
             ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)).take(5));
             }
-            ExprKind::DependentCoawaitExpr => v.extend(id(n.a)),
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr

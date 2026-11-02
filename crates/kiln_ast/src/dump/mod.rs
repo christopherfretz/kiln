@@ -696,6 +696,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per expression kind")]
     fn expr_children(&self, e: ExprId, kids: &mut Vec<(Node, Option<&'static str>)>) {
         let exprs = &self.ast.exprs;
         let lists = &self.ast.lists;
