@@ -14,12 +14,20 @@ use std::hash::{Hash, Hasher};
 
 use kiln_source::fx::FxHasher;
 
-/// Hashes `v` with `FxHash`.
+/// Hashes `v` with `FxHash`, then folds the high half into the low half
+/// (spec/types.md §7.1). `FxHash` multiplies last, so bit `k` of its
+/// result depends only on bits `0..=k` of the last word mixed in; the
+/// table indexes buckets by the low bits, and a key written as one
+/// 64-bit word (`[u32; 2]`, a `Pair` key's payload) would otherwise land
+/// every key that differs only in its second `u32` in the same bucket
+/// (WP-313: the specializations of one template, a probe chain as long
+/// as their number).
 #[inline]
 pub(crate) fn fx_hash<T: Hash + ?Sized>(v: &T) -> u64 {
     let mut h = FxHasher::default();
     v.hash(&mut h);
-    h.finish()
+    let h = h.finish();
+    h ^ (h >> 32)
 }
 
 /// An id-only hash table over keys stored elsewhere.
@@ -137,6 +145,16 @@ mod tests {
             assert_eq!(t.find(h(k), |j| keys[j as usize - 1] == k), Some(i as u32 + 1));
         }
         assert!(t.heap_bytes() >= t.live_bytes());
+    }
+
+    /// Keys that differ only in their second `u32` (one 64-bit word,
+    /// `FxHash`'s last) spread over the low bits the table buckets by
+    /// (spec/types.md §7.1, WP-313); unfolded, they all share one bucket.
+    #[test]
+    fn second_word_reaches_the_low_bits() {
+        let low: std::collections::HashSet<u64> =
+            (0..4096u32).map(|k| fx_hash(&[7u32, k]) & 0xfff).collect();
+        assert!(low.len() > 2048, "{} distinct buckets of 4096", low.len());
     }
 }
 
