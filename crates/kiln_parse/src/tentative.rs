@@ -321,8 +321,15 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         };
         // `foo bar` with `foo` undeclared: `foo` is (meant as) a type
         // name, so the declaration parser reports it. A declared non-type
-        // `foo` is an expression (clang's `ClassifyName`).
-        if matches!(class, NameClass::Undeclared) && self.ident_at(end).is_some() {
+        // `foo` is an expression (clang's `ClassifyName`). A qualified
+        // name not found in its non-dependent scope (`S::nom x`) is not:
+        // clang's `ANK_Unresolved` on an `annot_cxxscope` is `False`
+        // unless the caller tracks `InvalidAsDeclSpec` (WP-318), so
+        // `(S::nom x)` is a parenthesized expression.
+        if matches!(class, NameClass::Undeclared)
+            && self.ident_at(end).is_some()
+            && !(end > self.i + 1 && self.p.unresolved_scope_name(self.i))
+        {
             return Tpr::True;
         }
         match class {
