@@ -13,7 +13,7 @@ use kiln_ast::ids::RawId;
 use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{
-    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeView,
+    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeFlags, TypeView,
 };
 use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::{DiagId, FixIt};
@@ -1159,8 +1159,16 @@ impl Sema<'_, '_> {
         ty = self.adjust_param_type(ty);
         let original_ty = (ty != declared).then_some(declared);
         if let Some(l) = d.ellipsis {
-            // [dcl.fct]/16: a function parameter pack `T... x`.
-            ty = self.act_pack_expansion_type(ty, l);
+            // [dcl.fct]/16, [temp.variadic]/5: a function parameter pack
+            // `T... x` names a pack; else clang's
+            // `err_function_parameter_pack_without_parameter_packs`, which
+            // prints the declared (unadjusted) type and drops the `...`.
+            if self.ast.types.flags(declared.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
+                ty = self.act_pack_expansion_type(ty, l);
+            } else if !self.is_error_type(declared) {
+                let m = self.diag(DiagId::sema_param_pack_without_packs, l).arg(self.ty_arg(declared));
+                self.emit(m);
+            }
         }
         ParamInfo {
             name: d.name,

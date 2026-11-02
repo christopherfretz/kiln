@@ -488,6 +488,17 @@ type parameter named `auto:N`, as in clang's dump.
 | structured-binding pack | `auto [...xs] = e` | — | M4 |
 | friend pack | `friend T...;` | — | M4 |
 
+A pattern that names no unexpanded pack is "pack expansion does not
+contain any unexpanded parameter packs" at the `...`
+(`sema_pack_expansion_without_packs`), except for a function parameter
+pack ([dcl.fct]/16): there clang's wording names the parameter's declared
+type before array/function adjustment, "type 'int' of function parameter
+pack does not contain any unexpanded parameter packs"
+(`sema_param_pack_without_packs`, `act_on_param_declarator`), and the
+parameter is kept as a plain parameter. A misplaced `auto` in its clause
+has already become `int` (§2.6), so `void f(auto (*...x)(C auto...))`
+reports both. Test: `temp.variadic/p5-param-pack-without-packs.cpp`.
+
 **Fold expressions** ([expr.prim.fold]) take the 32 fold-operators.
 After `(`:
 1. If the next token is `...`, it is a left fold: `( ... op cast-expr )`.
@@ -2286,7 +2297,7 @@ initializer also matches a potentially-throwing declared type), else
 The result keeps the declared sugar (`int (*(*)(int))(int)` prints as
 `auto (*)(int) -> auto (*)(int) -> int`), and a constrained placeholder
 there is checked at its type-constraint, both for a variable and for an
-invented parameter (`sema_trailing_return_without_auto` rules, §2.6).
+invented parameter (§2.6).
 Tests: `dcl.spec.auto/nested-return-placeholder-run.cpp`,
 `dcl.spec.auto/nested-return-placeholder-diags.cpp`.
 
