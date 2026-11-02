@@ -4,6 +4,7 @@
 //! toolchain builds from them (`spec/driver.md` "Toolchain").
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use kiln_pp::{DirGroup, SearchDirSpec, join_path};
 
@@ -411,12 +412,15 @@ impl Tool {
 
 impl Toolchain {
     /// The major version of the LLVM installation (`KILN_LLVM_DIR`) that
-    /// consumes kiln's IR: the `N` of a directory named `llvm-N` (after
-    /// resolving symlinks), else 19, the version of the unversioned
-    /// default and of the `-19` tool names.
+    /// consumes kiln's IR: the major of `<llvm_dir>/bin/llvm-config
+    /// --version` (probed once per directory per process), else the `N` of
+    /// a directory named `llvm-N` (after resolving symlinks), else 19, the
+    /// version of the unversioned default and of the `-19` tool names
+    /// (spec/driver.md "Toolchain").
     pub fn llvm_major(&self) -> u32 {
         let dir = Path::new(&self.llvm_dir);
-        llvm_dir_major(dir)
+        probe_llvm_config_major(dir)
+            .or_else(|| llvm_dir_major(dir))
             .or_else(|| std::fs::canonicalize(dir).ok().and_then(|d| llvm_dir_major(&d)))
             .unwrap_or(19)
     }
@@ -458,6 +462,43 @@ fn detect_gcc(sysroot: &str, target: &Target) -> Option<GccInstall> {
 
 /// `/usr/lib/llvm-22` -> `22`; `None` unless the last component is
 /// `llvm-N`.
+/// The major of `<dir>/bin/llvm-config --version`, cached per directory
+/// for the life of the process (the driver asks once per compile job; a
+/// process normally sees one installation). `None` when the tool is
+/// missing, fails, or prints something that is not `N.M.P...`.
+fn probe_llvm_config_major(dir: &Path) -> Option<u32> {
+    static CACHE: Mutex<Vec<(PathBuf, Option<u32>)>> = Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, m)) = cache.iter().find(|(d, _)| d == dir) {
+        return *m;
+    }
+    let tool = dir.join("bin").join("llvm-config");
+    let m = if tool.is_file() {
+        std::process::Command::new(&tool)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| llvm_config_version_major(&String::from_utf8_lossy(&o.stdout)))
+    } else {
+        None
+    };
+    cache.push((dir.to_path_buf(), m));
+    m
+}
+
+/// `22.1.8`, `19.1.7git` -> 22, 19: the leading integer of
+/// `llvm-config --version`'s output.
+fn llvm_config_version_major(out: &str) -> Option<u32> {
+    let major = out.trim().split('.').next()?;
+    if major.is_empty() || !major.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    major.parse().ok()
+}
+
 fn llvm_dir_major(dir: &Path) -> Option<u32> {
     dir.file_name()?.to_str()?.strip_prefix("llvm-")?.parse().ok()
 }
@@ -503,6 +544,33 @@ mod tests {
         assert_eq!(llvm_dir_major(Path::new("/usr/lib/llvm-19/")), Some(19));
         assert_eq!(llvm_dir_major(Path::new("/opt/llvm")), None);
         assert_eq!(llvm_dir_major(Path::new("/opt/llvm-main")), None);
+    }
+
+    #[test]
+    fn llvm_config_versions() {
+        assert_eq!(llvm_config_version_major("22.1.8\n"), Some(22));
+        assert_eq!(llvm_config_version_major("19.1.7"), Some(19));
+        assert_eq!(llvm_config_version_major("23.0.0git\n"), Some(23));
+        assert_eq!(llvm_config_version_major(""), None);
+        assert_eq!(llvm_config_version_major("x.1"), None);
+    }
+
+    /// The probe keys on the installed tool, not the directory name; a
+    /// directory without one falls back to the name, then 19.
+    #[test]
+    fn llvm_major_probe() {
+        let tc = |d: &str| Toolchain {
+            llvm_dir: d.to_owned(),
+            ..Toolchain::new(AARCH64, None, None)
+        };
+        assert_eq!(tc("/nonexistent/llvm-22").llvm_major(), 22);
+        assert_eq!(tc("/nonexistent/llvm").llvm_major(), 19);
+        for n in [19, 22] {
+            let d = format!("/usr/lib/llvm-{n}");
+            if Path::new(&d).join("bin/llvm-config").is_file() {
+                assert_eq!(tc(&d).llvm_major(), n);
+            }
+        }
     }
 
     #[test]

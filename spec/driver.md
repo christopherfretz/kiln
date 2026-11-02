@@ -151,9 +151,12 @@ and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
   files are `<resource>/predefines/<triple>.<std>.txt`.
 - **LLVM:** `$KILN_LLVM_DIR`, default `/usr/lib/llvm-19`. This is where
   libc++'s headers are found. Its major version (`Toolchain::llvm_major`:
-  the `N` of a directory named `llvm-N`, after resolving symlinks, else
-  19) selects the intrinsic signatures that differ between LLVM 19 and 22
-  (spec/codegen.md, coroutines).
+  the leading integer of `<dir>/bin/llvm-config --version`, probed once
+  per directory per process; if that tool is missing or fails, the `N` of
+  a directory named `llvm-N`, after resolving symlinks; else 19) selects
+  the IR that differs between LLVM 19 and 22 (spec/codegen.md,
+  coroutines and §6). A tree whose name says nothing about its version
+  (`/opt/llvm`) is keyed correctly by the probe.
 - **GCC:** clang `GCCInstallationDetector`. The newest
   `<sysroot>/usr/lib/gcc/<triple>/<version>` that contains `crtbegin.o`,
   over the target's candidate triples in clang's order.
