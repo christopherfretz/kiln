@@ -129,6 +129,11 @@ impl Cg<'_> {
                 Some(c) => self.cx_const(c, q).map(|(r, i)| (Some(r), Some(i))),
                 None => self.emit_cx(ast.exprs.operand(e), ign),
             },
+            // clang `ComplexExprEmitter::VisitCompoundLiteralExpr`.
+            ExprKind::CompoundLiteralExpr => {
+                let lv = self.compound_literal_lvalue(e)?;
+                Ok(self.cx_load(lv.addr, lv.q, ign))
+            }
             ExprKind::CXXDefaultArgExpr => match ast.default_arg_expr(e) {
                 Some(d) => {
                     let saved = self.enter_default_arg(e);

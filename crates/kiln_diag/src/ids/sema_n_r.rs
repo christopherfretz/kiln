@@ -109,6 +109,7 @@ sema_param_constexpr_spec = Error (1) "function parameter cannot be {0:constexpr
 sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
 sema_param_redefinition = Error (1) "redefinition of parameter '{0}'";
 sema_param_with_void_type = Error (0) "argument may not have 'void' type";
+sema_parameters_retval_fp16 = Error (1) "{0:parameters cannot|function return value cannot} have __fp16 type; did you forget * ?";
 sema_parens_disambiguated_as_variable = Warning [VexingParse] (1) "parentheses were disambiguated as redundant parentheses around declaration of variable named '{0}'";
 sema_partial_spec_ambiguous = Error (1) "ambiguous partial specializations of '{0}'";
 sema_partial_spec_args_match_primary = Error (2) "{0:class|variable} template partial specialization does not specialize any template argument; to {1:declare|define} the primary template, remove the template argument list";

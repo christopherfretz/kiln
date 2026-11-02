@@ -917,6 +917,30 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         return QualType::ERROR;
                     }
+                    // [basic.extended.fp] (clang): `__fp16` is a storage-only
+                    // type where the target passes no half values, checked
+                    // as clang's `GetFullTypeForDeclarator` (no fix-it).
+                    let mut fp16_bad = false;
+                    if self.is_fp16_arg_disallowed(ty) {
+                        let at = d.name.map_or(d.loc, |n| n.1);
+                        let msg = self.diag(DiagId::sema_parameters_retval_fp16, at).arg("1");
+                        self.emit(msg);
+                        fp16_bad = true;
+                    }
+                    for p in params {
+                        if self.is_fp16_arg_disallowed(p.ty) {
+                            let at = p.decl.map_or_else(
+                                || p.name.map_or(p.loc, |n| n.1),
+                                |pd| self.ast.decls.get(pd).loc(),
+                            );
+                            let msg = self.diag(DiagId::sema_parameters_retval_fp16, at).arg("0");
+                            self.emit(msg);
+                            fp16_bad = true;
+                        }
+                    }
+                    if fp16_bad {
+                        return QualType::ERROR;
+                    }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
@@ -2997,9 +3021,15 @@ impl Sema<'_, '_> {
         {
             let _ = self.templ.trailing_arrow.insert(f, *arrow);
         }
+        // Where a substituted signature's return and parameter types are
+        // diagnosed (clang `BuildFunctionType` at the declaration's
+        // begin, §5.6).
         if let Some(tl) = ds.type_loc
             && tl != d.name_loc()
-            && self.ast.types.proto(ty).is_some_and(|p| self.ast.types.is_dependent(p.ret()))
+            && self.ast.types.proto(ty).is_some_and(|p| {
+                self.ast.types.is_dependent(p.ret())
+                    || self.ast.types.params(p).iter().any(|&q| self.ast.types.is_dependent(q))
+            })
         {
             self.type_spec_locs.insert(f, tl);
         }
@@ -7085,7 +7115,7 @@ impl Sema<'_, '_> {
         let (mut a, mut b) = (0u32, 0u32);
         match (kind, args.first()) {
             (AttrKind::ALIGNED, Some(AttrArg::Expr(e))) => {
-                let e = self.check_alignment_expr(*e)?;
+                let e = self.check_alignment_expr(*e, loc)?;
                 a = e.raw();
             }
             (AttrKind::ALIGNED, Some(AttrArg::Type(t))) => b = t.to_raw(),
@@ -7205,9 +7235,39 @@ impl Sema<'_, '_> {
         Some(self.ast.attrs.push(node))
     }
 
+    /// The operand `arg` of `alignas`, written at `begin` and followed by
+    /// `...` at `ellipsis` ([dcl.align]/1, [temp.variadic]/5): a pack
+    /// expansion, expanded into one alignment per element when the
+    /// attribute is instantiated; without `...` the operand may not name
+    /// a pack ([temp.variadic]/12, clang's "expression contains
+    /// unexpanded parameter pack", a type-id being an `alignof` operand).
+    /// `None` drops the attribute.
+    pub fn act_on_alignas_operand(
+        &mut self,
+        arg: AttrArg,
+        ellipsis: Option<Loc>,
+        begin: Loc,
+    ) -> Option<AttrArg> {
+        match (arg, ellipsis) {
+            (AttrArg::Type(t), Some(l)) => Some(AttrArg::Type(self.act_pack_expansion_type(t, l))),
+            (AttrArg::Expr(e), Some(l)) => Some(AttrArg::Expr(self.act_pack_expansion(e, l))),
+            (AttrArg::Type(t), None) => {
+                use crate::templ::pack::PackOperand;
+                (!self.diagnose_unexpanded_pack(PackOperand::Type(t), "expression", begin))
+                    .then_some(arg)
+            }
+            (AttrArg::Expr(e), None) => {
+                use crate::templ::pack::PackOperand;
+                (!self.diagnose_unexpanded_pack(PackOperand::Expr(e), "expression", begin))
+                    .then_some(arg)
+            }
+            (AttrArg::Ident(..), _) => Some(arg),
+        }
+    }
+
     /// An alignment argument ([dcl.align]/2): an integral constant
     /// expression whose value is a power of two (0 is ignored).
-    pub(crate) fn check_alignment_expr(&mut self, e: ExprId) -> Option<ExprId> {
+    pub(crate) fn check_alignment_expr(&mut self, e: ExprId, at: Loc) -> Option<ExprId> {
         if self.expr_is_value_dependent(e) {
             return Some(e);
         }
@@ -7216,13 +7276,14 @@ impl Sema<'_, '_> {
         let c = self.act_on_constant_full_expr(c);
         let r = self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(e)));
         if let Ok(v) = r {
+            // Reported at the attribute (clang's `AddAlignedAttr`).
             if v != 0 && (v < 0 || (v & (v - 1)) != 0) {
-                self.error(DiagId::sema_alignment_not_power_of_two, loc);
+                self.error(DiagId::sema_alignment_not_power_of_two, at);
                 return None;
             }
             if v > 1 << 32 {
                 let msg =
-                    self.diag(DiagId::sema_alignment_too_big, loc).arg((1u64 << 32).to_string());
+                    self.diag(DiagId::sema_alignment_too_big, at).arg((1u64 << 32).to_string());
                 self.emit(msg);
                 return None;
             }
@@ -7560,4 +7621,14 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         }
         _ => return None,
     })
+}
+
+impl Sema<'_, '_> {
+    /// Whether `ty` is `__fp16` and the target passes no half values in
+    /// parameters or return values (clang `allowHalfArgsAndReturns`:
+    /// true on `AArch64`, false on x86-64).
+    pub(crate) fn is_fp16_arg_disallowed(&self, ty: QualType) -> bool {
+        self.abi.triple.arch == kiln_abi::target::Arch::X86_64
+            && self.ast.types.canonical(ty).ty() == QualType::HALF.ty()
+    }
 }
