@@ -3,7 +3,6 @@
 // name is unusable once redeclared. WP-185 feature probe.
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(kiln): placeholder variables not implemented ("redefinition of '_'")
 struct P { int a, b; };
 constexpr int f() {
   int _ = 1;

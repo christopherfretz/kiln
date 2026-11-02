@@ -223,6 +223,18 @@ the evaluator's flattened type table.
   initializer (its object is under construction, `RESOLVING`).
 - `Oven::try_fold(bridge, e) -> Option<ConstValueId>`: silent, not
   recorded.
+- `Oven::evaluate_chars(bridge, size, data, EvalContext) -> (Vec<u8>,
+  Result<(), EvalFailure>)` (WP-356, [dcl.pre]/11-12, P2741; clang
+  `Expr::EvaluateCharRangeAsString`): the characters of a `static_assert`
+  message that is not a string literal. `size` (converted to
+  `std::size_t`) and `data` (converted to `const char *`) are evaluated
+  in that order in one manifestly constant-evaluated context, then the
+  builtin `bi::MSG_CHARS` reads the `size` characters `data` points to
+  into the Oven's message buffer; temporaries of both calls live until
+  the last read. Recorded in the stats like `evaluate`, never memoized.
+  On failure the characters read before the failing one are returned
+  with the failure and its notes (clang prints them). spec/sema.md §4.6
+  renders the text.
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.
@@ -1990,6 +2002,24 @@ temporaries scope. If it is false, evaluation fails with clang's
 location ([dcl.attr.assume]/1, [expr.const]/5.8). An assumption that has
 possible side effects is never evaluated, as in clang's `EvaluateStmt`
 (`tests/conformance/expr.const/assume-false.cpp`).
+
+**Landed (WP-356): lambdas with an explicit object parameter, condition
+bindings.** In a lambda call operator the closure object is the implicit
+object parameter or, with an explicit object parameter
+([expr.prim.lambda.closure]/5, P0847), that parameter (or its referent)
+converted to its closure-type base when its type is derived from the
+closure type (non-virtual bases only, as sema requires; clang
+`EmitLValueForLambdaField`); the prologue (`compile/lambda.rs`) keeps it
+in `closure_reg`, and captures are read through it while `this` in the
+body is the captured one. An overloaded operator call whose callee is an
+explicit object member function passes the converted object as the
+first argument, as a plain call does ([over.call.func]/3). A structured
+binding declared as the condition of `if`, `while` or `for`
+([stmt.pre]/4, P0963) initializes its tuple-like bindings (the `get`
+calls) after the condition is evaluated (`cond_bindings`); in a loop
+their registers are kept to the end of the loop statement
+(`tests/conformance/dcl.struct.bind/p0963-binding-condition.cpp`,
+`tests/conformance/dcl.fct/p0847-lambda-explicit-object*.cpp`).
 
 ## Tests
 `crates/kiln_oven/tests/`, each test naming its section:

@@ -4,7 +4,7 @@
 //@ strict-diags
 //@ args: -Wno-deprecated-array-compare -Wno-string-compare
 //@ diag: 10:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 9:33 note "comparison of addresses of literals has unspecified value"
+//@ diag: 9:34 note "comparison of addresses of literals has unspecified value"
 //@ diag: 10:15 note "in call to 'f()'"
-constexpr bool f() { return "x" != "x"; }
+constexpr bool f() { return +"x" != "x"; }
 static_assert(f());

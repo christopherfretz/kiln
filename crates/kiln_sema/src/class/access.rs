@@ -811,7 +811,7 @@ impl Sema<'_, '_> {
         path: &BasePath,
         loc: Loc,
     ) -> bool {
-        self.check_base_access_impl(derived_ty, base_ty, path, loc, false)
+        self.check_base_access_impl(derived_ty, base_ty, path, loc, BaseUse::Conversion)
     }
 
     /// [`Self::check_base_access`] for a covariant return type
@@ -824,7 +824,21 @@ impl Sema<'_, '_> {
         path: &BasePath,
         loc: Loc,
     ) -> bool {
-        self.check_base_access_impl(derived_ty, base_ty, path, loc, true)
+        self.check_base_access_impl(derived_ty, base_ty, path, loc, BaseUse::Covariant)
+    }
+
+    /// [`Self::check_base_access`] for the explicit object parameter of
+    /// a lambda with captures ([expr.prim.lambda.closure]/5): `invalid
+    /// explicit object parameter type 'D' in lambda with capture; the type
+    /// must derive publicly from the lambda`.
+    pub(crate) fn check_lambda_object_base_access(
+        &mut self,
+        derived_ty: QualType,
+        base_ty: QualType,
+        path: &BasePath,
+        loc: Loc,
+    ) -> bool {
+        self.check_base_access_impl(derived_ty, base_ty, path, loc, BaseUse::LambdaObject)
     }
 
     fn check_base_access_impl(
@@ -833,7 +847,7 @@ impl Sema<'_, '_> {
         base_ty: QualType,
         path: &BasePath,
         loc: Loc,
-        covariant: bool,
+        usage: BaseUse,
     ) -> bool {
         let Some(derived) = self.ast.types.as_record(self.ast.types.canonical(derived_ty)) else {
             return true;
@@ -859,16 +873,21 @@ impl Sema<'_, '_> {
         if self.is_accessible(&ec, &t, derived, acc) {
             return true;
         }
-        let msg = if covariant {
-            self.diag(DiagId::sema_covariant_return_inaccessible, loc)
+        let msg = match usage {
+            BaseUse::Covariant => self
+                .diag(DiagId::sema_covariant_return_inaccessible, loc)
                 .arg(self.ty_arg(base_ty))
                 .arg(u8::from(acc == Access::Protected))
-                .arg(self.ty_arg(derived_ty))
-        } else {
-            self.diag(DiagId::sema_access_base_conv, loc)
+                .arg(self.ty_arg(derived_ty)),
+            BaseUse::Conversion => self
+                .diag(DiagId::sema_access_base_conv, loc)
                 .arg(self.ty_arg(derived_ty))
                 .arg(u8::from(acc == Access::Protected))
-                .arg(self.ty_arg(base_ty))
+                .arg(self.ty_arg(base_ty)),
+            BaseUse::LambdaObject => self
+                .diag(DiagId::sema_explicit_object_lambda_capture_type, loc)
+                .arg(self.ty_arg(derived_ty))
+                .arg(1u8),
         };
         let msg = self.access_path_notes(msg, &ec, &t, derived);
         self.emit(msg);
@@ -1172,4 +1191,15 @@ impl Sema<'_, '_> {
         }
         n.ctx().unwrap_or(self.ctx)
     }
+}
+
+/// What a derived-to-base access check is for (the diagnostic it gives).
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum BaseUse {
+    /// A derived-to-base conversion ([conv.ptr]/3).
+    Conversion,
+    /// A covariant return type ([class.virtual]/8).
+    Covariant,
+    /// A lambda's explicit object parameter ([expr.prim.lambda.closure]/5).
+    LambdaObject,
 }

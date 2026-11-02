@@ -471,6 +471,9 @@ pub struct ParamInfo {
     /// in place is already converted to the parameter's type by
     /// [`crate::Sema::act_on_param_default_init`]).
     pub default_arg: DefaultArg,
+    /// The `=` of a default argument written in place (invalid when
+    /// none is, or for a delayed one: [`DefaultArg::Unparsed`] holds it).
+    pub default_loc: Loc,
     /// Where the parameter-declaration starts and ends (just past its
     /// last token, default argument included; the `-Wvexing-parse`
     /// fix-its, [dcl.ambig.res]).
