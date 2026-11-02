@@ -706,10 +706,7 @@ impl Compiler<'_> {
                     },
                     _ => 0,
                 };
-                let p = match out {
-                    Some(o) => Some((self.rv(o), self.ast().exprs.get(o).ty())),
-                    None => None,
-                };
+                let p = out.map(|o| (self.rv(o), self.ast().exprs.get(o).ty()));
                 op(self, bi::FP_MATH, sub, [a, b, c], [t1, 0], begin);
                 if let Some((p, pq)) = p {
                     let rt = self.ty(self.ast().types.pointee(pq)?);

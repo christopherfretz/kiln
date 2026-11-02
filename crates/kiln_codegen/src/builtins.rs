@@ -855,7 +855,8 @@ impl Cg<'_> {
         let ty = self.f.fir.ty(&self.m, x);
         let i16 = LTy::I16;
         let (hx, hy) = (self.cast(CastOp::BitCast, x, i16), self.cast(CastOp::BitCast, y, i16));
-        let (fx, fy) = (self.cast(CastOp::FPExt, x, LTy::FLOAT), self.cast(CastOp::FPExt, y, LTy::FLOAT));
+        let (fx, fy) =
+            (self.cast(CastOp::FPExt, x, LTy::FLOAT), self.cast(CastOp::FPExt, y, LTy::FLOAT));
         let c = |s: &mut Self, v: i128| V::C(s.m.const_int(i16, v));
         let (abs_mask, sign_mask, one, m1, zero) =
             (c(self, 0x7fff), c(self, -0x8000), c(self, 1), c(self, -1), c(self, 0));

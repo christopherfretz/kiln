@@ -41,14 +41,26 @@ fn quiet(kind: FloatKind, a: u128) -> u128 {
     a | 1 << (f.p - 2) | int
 }
 
-/// The NaN result of an operation with NaN operands `xs` (each with its
-/// kind): `None` if one is signaling, else the first NaN, in `kind`.
-fn nan_result(kind: FloatKind, xs: &[(FloatKind, u128)]) -> Option<Option<u128>> {
+/// Whether an operation's operands include a NaN, and if so its result.
+enum NanIn {
+    /// No operand is a NaN.
+    No,
+    /// Some operand is a NaN: `None` (not a constant) if one is signaling,
+    /// else the first NaN, quieted, in the result kind.
+    Yes(Option<u128>),
+}
+
+/// The NaN result of an operation with operands `xs` (each with its kind).
+fn nan_result(kind: FloatKind, xs: &[(FloatKind, u128)]) -> NanIn {
     if xs.iter().any(|&(k, a)| is_signaling(k, a)) {
-        return Some(None);
+        return NanIn::Yes(None);
     }
-    let &(k, a) = xs.iter().find(|&&(k, a)| unpack(k, a) == Val::NaN)?;
-    Some(Some(if k == kind { quiet(kind, a) } else { repack(kind, Val::NaN) }))
+    match xs.iter().find(|&&(k, a)| unpack(k, a) == Val::NaN) {
+        None => NanIn::No,
+        Some(&(k, a)) => {
+            NanIn::Yes(Some(if k == kind { quiet(kind, a) } else { repack(kind, Val::NaN) }))
+        }
+    }
 }
 
 fn tiny(kind: FloatKind, r: u128) -> bool {
@@ -65,7 +77,7 @@ fn max_finite(kind: FloatKind, s: bool) -> Val {
 /// neighbour of `x` in `kind` in the direction of `y`; `y` (converted)
 /// when they are equal.
 pub(crate) fn nextafter(kind: FloatKind, x: u128, ykind: FloatKind, y: u128) -> Option<u128> {
-    if let Some(r) = nan_result(kind, &[(kind, x), (ykind, y)]) {
+    if let NanIn::Yes(r) = nan_result(kind, &[(kind, x), (ykind, y)]) {
         return r;
     }
     let up = match cmp(ykind, super::cast(kind, ykind, x), y)? {
@@ -216,12 +228,12 @@ pub(crate) fn modf(kind: FloatKind, x: u128) -> Option<(u128, u128)> {
 /// its sign (GCC's `remquo` fold). An infinite `x` or a zero `y` is
 /// invalid.
 pub(crate) fn rem(kind: FloatKind, x: u128, y: u128, nearest: bool) -> Option<(u128, i32)> {
-    if let Some(r) = nan_result(kind, &[(kind, x), (kind, y)]) {
+    if let NanIn::Yes(r) = nan_result(kind, &[(kind, x), (kind, y)]) {
         return r.map(|n| (n, 0));
     }
     let p = Fmt::of(kind).p;
     let (sx, ex, mx, sy, ey, my) = match (unpack(kind, x), unpack(kind, y)) {
-        (Val::Inf(_), _) | (_, Val::Zero(_)) | (Val::NaN, _) | (_, Val::NaN) => return None,
+        (Val::Inf(_) | Val::NaN, _) | (_, Val::Zero(_) | Val::NaN) => return None,
         (Val::Zero(_), _) | (_, Val::Inf(_)) => return Some((x, 0)),
         (Val::Fin(sx, ex, mx), Val::Fin(sy, ey, my)) => (sx, ex, mx, sy, ey, my),
     };
@@ -241,7 +253,7 @@ pub(crate) fn rem(kind: FloatKind, x: u128, y: u128, nearest: bool) -> Option<(u
         while left > 0 {
             let k = left.min(yi.leading_zeros());
             r <<= k;
-            q = q << k | r / yi;
+            q = (q << k) | (r / yi);
             r %= yi;
             left -= k;
         }
@@ -258,13 +270,13 @@ pub(crate) fn rem(kind: FloatKind, x: u128, y: u128, nearest: bool) -> Option<(u
     }
     let v = if r == 0 { pack_zero(Fmt::of(kind), sx) } else { pack(kind, neg, scale + 127, r) };
     let qm = (q & 0x7FFF_FFFF) as i32;
-    Some((v, if sx != sy { -qm } else { qm }))
+    Some((v, if sx == sy { qm } else { -qm }))
 }
 
 /// `fdim(x, y)`: `x - y` when `x > y`, else +0; an overflow is not a
 /// constant.
 pub(crate) fn fdim(kind: FloatKind, x: u128, y: u128) -> Option<u128> {
-    if let Some(r) = nan_result(kind, &[(kind, x), (kind, y)]) {
+    if let NanIn::Yes(r) = nan_result(kind, &[(kind, x), (kind, y)]) {
         return r;
     }
     if cmp(kind, x, y) != Some(Ordering::Greater) {
@@ -304,7 +316,7 @@ impl U256 {
         }
     }
 
-    /// Shifted right, the lost bits ORed into bit 0.
+    /// Shifted right, the lost bits `OR`ed into bit 0.
     fn shr_sticky(self, d: u32) -> U256 {
         let r = match d {
             0 => return self,
@@ -333,7 +345,7 @@ pub(crate) fn fma(kind: FloatKind, x: u128, y: u128, z: u128) -> Option<u128> {
     if matches!((a, b), (Val::Inf(_), Val::Zero(_)) | (Val::Zero(_), Val::Inf(_))) {
         return None;
     }
-    if let Some(r) = nan_result(kind, &[(kind, x), (kind, y), (kind, z)]) {
+    if let NanIn::Yes(r) = nan_result(kind, &[(kind, x), (kind, y), (kind, z)]) {
         return r;
     }
     let sign = |v| matches!(v, Val::Zero(true) | Val::Inf(true) | Val::Fin(true, ..));
@@ -361,13 +373,15 @@ pub(crate) fn fma(kind: FloatKind, x: u128, y: u128, z: u128) -> Option<u128> {
         let lz = m.leading_zeros();
         (m.shl(lz).shr_sticky(1), e - lz as i32 + 1)
     };
-    let (pm, pe) =
-        norm(U256::mul(ma >> (128 - f.p), mb >> (128 - f.p)), lsb(ea) + lsb(eb));
+    let (pm, pe) = norm(U256::mul(ma >> (128 - f.p), mb >> (128 - f.p)), lsb(ea) + lsb(eb));
     let (s, m, e) = match c {
         Val::Fin(sc, ec, mc) => {
             let (cm, ce) = norm(U256(0, mc >> (128 - f.p)), lsb(ec));
-            let ((s1, m1, e1), (s2, m2, e2)) =
-                if (pe, pm) >= (ce, cm) { ((sp, pm, pe), (sc, cm, ce)) } else { ((sc, cm, ce), (sp, pm, pe)) };
+            let ((s1, m1, e1), (s2, m2, e2)) = if (pe, pm) >= (ce, cm) {
+                ((sp, pm, pe), (sc, cm, ce))
+            } else {
+                ((sc, cm, ce), (sp, pm, pe))
+            };
             let m2 = m2.shr_sticky((e1 - e2).min(300) as u32);
             if s1 == s2 {
                 (s1, m1.add(m2), e1)
@@ -412,8 +426,22 @@ mod tests {
     }
 
     const VALS: [f64; 16] = [
-        0.0, -0.0, 1.0, -1.0, 0.5, 2.5, -2.5, 3.5, 1.75, -0.3, 1e300, -1e-300, 123.456,
-        4503599627370497.0, 7.0, 1e-310,
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        2.5,
+        -2.5,
+        3.5,
+        1.75,
+        -0.3,
+        1e300,
+        -1e-300,
+        123.456,
+        4503599627370497.0,
+        7.0,
+        1e-310,
     ];
 
     // [c.math.nearbyint], [c.math.round], C23 7.12.9: native agreement.
@@ -435,7 +463,10 @@ mod tests {
         assert_eq!(to_int(D, d(-2.5), Rounding::Away, 64), Some((-3i128) as u128));
         assert_eq!(to_int(D, d(2.5), Rounding::Even, 64), Some(2));
         assert_eq!(to_int(D, d(9.3e18), Rounding::Even, 64), None);
-        assert_eq!(to_int(D, d(-9223372036854775808.0), Rounding::Even, 64), Some((i64::MIN as i128) as u128));
+        assert_eq!(
+            to_int(D, d(-9223372036854775808.0), Rounding::Even, 64),
+            Some((i64::MIN as i128) as u128)
+        );
     }
 
     // C23 7.12.10: fmod and remainder agree with the exact definitions.
@@ -471,7 +502,10 @@ mod tests {
         assert_eq!(n(D, d(0.0), d(1.0)), None);
         assert_eq!(n(D, d(0.0), d(-0.0)), Some(d(-0.0)));
         assert_eq!(n(D, d(f64::MIN_POSITIVE), d(0.0)), None);
-        assert_eq!(n(D, d(f64::MIN_POSITIVE), d(1.0)), Some(d(f64::from_bits(0x0010_0000_0000_0001))));
+        assert_eq!(
+            n(D, d(f64::MIN_POSITIVE), d(1.0)),
+            Some(d(f64::from_bits(0x0010_0000_0000_0001)))
+        );
         // binary16 and bfloat16: 1 + 2^-10, 1 - 2^-11; 1 + 2^-7.
         assert_eq!(n(H, 0x3C00, 0x4000), Some(0x3C01));
         assert_eq!(n(H, 0x3C00, 0), Some(0x3BFF));
@@ -481,7 +515,10 @@ mod tests {
         assert_eq!(n(B, 0x0080, 0x4000), Some(0x0081));
         assert_eq!(n(B, 0x0080, 0), None);
         // x87: 1 -> 1 + 2^-63; binary128: 1 - 2^-113.
-        assert_eq!(n(X, 0x3FFF_8000_0000_0000_0000, 0x4000_8000_0000_0000_0000), Some(0x3FFF_8000_0000_0000_0001));
+        assert_eq!(
+            n(X, 0x3FFF_8000_0000_0000_0000, 0x4000_8000_0000_0000_0000),
+            Some(0x3FFF_8000_0000_0000_0001)
+        );
         assert_eq!(n(X, 0x3FFF_8000_0000_0000_0000, 0), Some(0x3FFE_FFFF_FFFF_FFFF_FFFF));
         assert_eq!(n(Q, 0x3FFF << 112, 0), Some(0x3FFE_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF));
         // nexttoward(1.0f, 1.0L + tiny) steps up.

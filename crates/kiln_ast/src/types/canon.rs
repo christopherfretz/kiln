@@ -9,8 +9,7 @@ use super::context::{
 use super::func::{ExcSpec, FuncInfo, NoexceptValue};
 use super::kinds::{
     AutoKeyword, BuiltinType, Quals, TagKeyword, TypeAttrKind, TypeFlags, TypeKind,
-    UnaryTransformKind,
-    VectorKind,
+    UnaryTransformKind, VectorKind,
 };
 use super::names::TemplateName;
 use super::node::{ConstArray, ExcKey, Key};
