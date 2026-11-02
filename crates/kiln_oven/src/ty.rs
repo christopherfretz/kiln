@@ -650,7 +650,11 @@ impl Types {
                     t = elem;
                 }
                 _ if self.same_unqualified(t, p) => return Some((base, 1, false)),
-                TyKind::Record { union: true, .. } => {
+                // A union's members overlap, and so may a class's: an
+                // empty `[[no_unique_address]]` member shares its offset
+                // with the next one ([intro.object]/9), so each member
+                // containing the byte is tried in turn.
+                TyKind::Record { .. } => {
                     let rel = o - base;
                     for f in self.fields(t) {
                         if f.width.is_some() {
@@ -665,11 +669,6 @@ impl Types {
                         }
                     }
                     return None;
-                }
-                TyKind::Record { .. } => {
-                    let f = self.field_at(t, o - base)?;
-                    base += f.offset;
-                    t = f.ty;
                 }
                 _ => return None,
             }

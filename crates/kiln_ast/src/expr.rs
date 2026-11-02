@@ -2206,6 +2206,18 @@ impl ExprArena {
         ArgListId::try_new(b).unwrap_or(ArgListId::EMPTY)
     }
 
+    /// The pattern's parameter pack of a `FunctionParmPackExpr`.
+    pub fn parm_pack_parameter(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::FunctionParmPackExpr).a)
+    }
+
+    /// The expanded `ParmVar`s (a list of `DeclId`) of a
+    /// `FunctionParmPackExpr`.
+    pub fn parm_pack_params(&self, e: ExprId) -> ListId {
+        let b = self.expect_kind(e, ExprKind::FunctionParmPackExpr).b;
+        ListId::from_raw(b).unwrap_or(ListId::EMPTY)
+    }
+
     /// The cached value of a `ConstantExpr`.
     pub fn constant_value(&self, e: ExprId) -> Option<ConstValueId> {
         ConstValueId::from_raw(self.expect_kind(e, ExprKind::ConstantExpr).b)

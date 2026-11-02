@@ -470,7 +470,8 @@ impl Sema<'_, '_> {
     /// clang `ActOnLambdaExpressionAfterIntroducer`).
     #[allow(clippy::too_many_lines, reason = "one arm per capture form, as clang")]
     pub(crate) fn act_on_explicit_captures(&mut self, id: LambdaId, intro: &LambdaIntroducer) {
-        let mut names: Vec<(Symbol, bool)> = Vec::new();
+        // Each name with whether it is an init-capture and its variable.
+        let mut names: Vec<(Symbol, bool, Option<DeclId>)> = Vec::new();
         for c in &intro.captures {
             let Some((sym, nloc)) = c.name else {
                 // `this` / `*this`.
@@ -493,12 +494,12 @@ impl Sema<'_, '_> {
                 if self.is_error_expr(init) {
                     continue;
                 }
-                if names.iter().any(|&(s, _)| s == sym) {
+                if names.iter().any(|&(s, _, _)| s == sym) {
                     let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                     self.emit(msg);
                     continue;
                 }
-                names.push((sym, true));
+                names.push((sym, true, None));
                 self.add_init_capture(id, sym, nloc, c.kind == CaptureKind::ByRef, init);
                 continue;
             }
@@ -535,7 +536,13 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 continue;
             };
-            if let Some(&(_, init)) = names.iter().find(|&&(s, _)| s == sym) {
+            // The elements of a capture pack instantiated from
+            // `ts...` share a name, not a variable (templ/subst/lambda.rs
+            // names each one).
+            if let Some(&(_, init, _)) = names
+                .iter()
+                .find(|&&(s, _, v)| s == sym && (c.var.is_none() || v == Some(var)))
+            {
                 let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                 self.emit(msg);
                 if !init {
@@ -543,7 +550,7 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
-            names.push((sym, false));
+            names.push((sym, false, Some(var)));
             if self.ast.decls.get(var).flags().contains(DeclFlags::INVALID) {
                 continue;
             }

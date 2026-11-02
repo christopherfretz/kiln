@@ -46,7 +46,27 @@ impl Substituter<'_, '_, '_> {
         let mut init_vars = Vec::new();
         for c in data.captures.iter().filter(|c| !c.implicit) {
             if c.ellipsis.is_valid() {
-                return self.unimplemented("capture packs in templates", c.loc);
+                // A simple-capture pack `ts...` / `&ts...`
+                // ([expr.prim.lambda.capture]/18): one capture per
+                // parameter the function parameter pack expanded to.
+                let params = match c.var.filter(|_| !c.init).and_then(|v| self.locals.get(&v)) {
+                    Some(&DeclOrPack::Pack(l)) => {
+                        self.sema.ast.lists.iter::<kiln_ast::DeclId>(l).collect::<Vec<_>>()
+                    }
+                    _ => return self.unimplemented("capture packs in templates", c.loc),
+                };
+                for v in params {
+                    let name = self.sema.ast.decls.get(v).name().as_ident().map(|s| (s, c.loc));
+                    intro.captures.push(LambdaCaptureSpec {
+                        kind: c.kind,
+                        name,
+                        loc: c.loc,
+                        ellipsis: None,
+                        init: None,
+                        var: Some(v),
+                    });
+                }
+                continue;
             }
             let name = c
                 .var

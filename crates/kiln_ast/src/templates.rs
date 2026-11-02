@@ -2025,6 +2025,32 @@ impl AstBuilder<'_> {
         )
     }
 
+    /// A reference to an instantiated function parameter pack whose
+    /// expansion is still dependent on a retained level ([temp.variadic]/5;
+    /// clang's `FunctionParmPackExpr`, spec/sema-templates.md §7.2):
+    /// `param` is the pattern's pack and `params` the list of the
+    /// `ParmVar`s it expanded to. An lvalue of the dependent `ty`, naming
+    /// an unexpanded pack, so an enclosing expansion selects its element
+    /// per index.
+    pub fn function_parm_pack_expr(
+        &mut self,
+        param: DeclId,
+        params: ListId,
+        ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        self.simple(
+            ExprKind::FunctionParmPackExpr,
+            ValueCategory::LValue,
+            ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK),
+            0,
+            ty,
+            loc,
+            param.raw(),
+            params.raw(),
+        )
+    }
+
     /// `C<args>` naming concept `c` ([temp.names]/8): a
     /// `ConceptSpecializationExpr`, a `bool` prvalue, value-dependent when
     /// an argument is.
