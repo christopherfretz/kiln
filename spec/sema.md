@@ -1695,7 +1695,13 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
       declarator (`subst/stmts.rs` `local_using_decl`), so a
       non-enumerator target is diagnosed then, with its note at the
       `using`, and a use (`local_using_ref`) is looked up again in the
-      instantiated block. The uses of a declarator that failed
+      instantiated block. A qualifier error (`T` not a class, or not
+      a base class) is reported at the start of the
+      nested-name-specifier, as clang does (`Substituter::qualifier_begin`,
+      sema-templates.md §5.8); the class-member `using T::member;` and
+      `using typename T::type;` (`templ/class.rs`) do the same
+      (tests/conformance/namespace.udecl/dependent-qualifier-location.cpp).
+      The uses of a declarator that failed
       (`Substituter::failed_usings`) are errors without another
       diagnostic (clang's invalid `UsingDecl`; WP-197).
     - A qualifier that is still dependent after substitution (a
@@ -3500,6 +3506,27 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   variables in a linkage specification (clang checks the declaration
   context) are not diagnosed. Other locals are left to a CFG
   uninitialized-values analysis kiln does not have.
+- **Verify-only initialization** (WP-328; clang's `VerifyOnly` in
+  `TryOrBuildParenListInitialization`): an attempt that only asks
+  "would this initialization succeed" must leave no trace when it
+  fails. `verify_paren_aggregate_init(ty, args, at, rparen)` runs
+  `paren_aggregate_init` inside `enter_unevaluated`/`exit_unevaluated`
+  (nothing is odr-used, so no function template specialization is
+  instantiated and no implicit member is defined; the cleanups it
+  pushes are popped), under `Sema::capturing` (its diagnostics,
+  deferred ones included, are dropped), and restores `braced_args`
+  (the braced-argument placeholders it consumed). It returns whether
+  the result is valid; the throwaway expression is never used. On
+  success the caller builds the initialization again for real, so its
+  warnings and instantiations happen once ([temp.inst]/5: a
+  specialization is instantiated only when needed). Used by the
+  single-operand cast to an aggregate class with no viable
+  constructor (`class/construct.rs` `construct_class`,
+  spec/sema-class.md §5.6). Tests:
+  `tests/conformance/dcl.init.general/paren-aggregate-cast-verify-only.cpp`
+  (a converting constructor template whose `static_assert` would fire
+  if the failed attempt instantiated it),
+  `tests/conformance/dcl.init.general/paren-aggregate-cast-run.cpp`.
 
 ### 6.1 Braced lists in expressions and explicit type conversions (`forms.rs`)
 - **Call arguments** `f({...})` ([expr.call]/7):

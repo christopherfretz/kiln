@@ -992,7 +992,10 @@ impl Parser<'_, '_> {
                 // A qualified name: the qualifier is formed (and kept as
                 // sugar) by the parse proper.
                 let ty = match self.parse_nested_name_nns() {
-                    Ok(Some(q)) => self.parse_qualified_type_rest(q, TagKeyword::None),
+                    Ok(Some(q)) => {
+                        self.check_missing_typename_in_class(q, ctx, loc);
+                        self.parse_qualified_type_rest(q, TagKeyword::None)
+                    }
                     _ => None,
                 };
                 if ty.is_none() {

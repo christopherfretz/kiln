@@ -1100,6 +1100,31 @@ impl Sema<'_, '_> {
         self.builder().paren_list_init(ty, &inits, None, at, rparen)
     }
 
+    /// Verify-only parenthesized aggregate initialization (spec/sema.md
+    /// "Verify-only initialization"; clang `TryOrBuildParenListInitialization`
+    /// with `VerifyOnly`): whether [`Sema::paren_aggregate_init`] of `ty`
+    /// from `args` would succeed, with no lasting effect. It is attempted
+    /// with its diagnostics dropped, in an unevaluated context (nothing it
+    /// names is odr-used, so no function is instantiated or implicit
+    /// member defined, and its temporaries add no cleanups), and the
+    /// braced-init-list arguments it consumes are put back. Class
+    /// templates it needs complete are still instantiated, as in clang.
+    /// The caller builds the initialization afresh when it succeeds.
+    pub(crate) fn verify_paren_aggregate_init(
+        &mut self,
+        ty: QualType,
+        args: &[ExprId],
+        at: Loc,
+        rparen: Loc,
+    ) -> bool {
+        let braced = self.braced_args.clone();
+        self.enter_unevaluated();
+        let (e, _) = self.capturing(|s| s.paren_aggregate_init(ty, args, at, rparen));
+        self.exit_unevaluated();
+        self.braced_args = braced;
+        !self.is_err_expr(e)
+    }
+
     /// clang's `err_excess_initializers` of a parenthesized aggregate
     /// initialization, at the entity `at`, once the elements are
     /// initialized (`kind`: "0" array, "3" union, "4" struct).

@@ -567,8 +567,11 @@ impl Substituter<'_, '_, '_> {
     fn local_using_decl(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
         let dname = self.sema.ast.decls.get(d).name();
         let name = dname.as_ident().ok_or(SubstFail)?;
-        let nns = self.sema.ast.using_qualifier(d).ok_or(SubstFail)?;
-        let nns = self.nns(nns, loc)?;
+        let pnns = self.sema.ast.using_qualifier(d).ok_or(SubstFail)?;
+        // Qualifier errors and the qualifier's notes are located where
+        // the nested-name-specifier begins, not at the name.
+        let qloc = self.qualifier_begin(pnns, loc);
+        let nns = self.nns(pnns, qloc)?;
         // The `using` keyword, where the declaration's notes point.
         let using_loc = self.sema.ast.decls.cold.begin_loc.get(d).copied().unwrap_or(loc);
         if self.nns_still_dependent(nns) {
@@ -583,14 +586,14 @@ impl Substituter<'_, '_, '_> {
             self.sema.push_local(name, x);
             return Ok(x);
         }
-        let ctx = self.nns_context(nns, loc)?;
+        let ctx = self.nns_context(nns, qloc)?;
         // A using-declaration whose lookup finds nothing survives in the
         // pattern only with `using_if_exists` (the qualifier is not
         // dependent, so the lookup is the definition's). A dependent one
         // (`UnresolvedUsingValue`) is checked now.
         let if_exists = self.sema.kind_of(d) == DeclKind::Using
             && self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
-        let q = crate::using::Qualifier { ctx, nns, loc };
+        let q = crate::using::Qualifier { ctx, nns, loc: qloc };
         let r = self.sema.act_on_using_declarator(using_loc, Some(q), dname, loc, if_exists, None);
         r.ok_or(SubstFail)
     }

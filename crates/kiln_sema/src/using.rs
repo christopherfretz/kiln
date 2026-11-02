@@ -337,7 +337,8 @@ impl Sema<'_, '_> {
             } else {
                 self.diag(DiagId::sema_using_decl_not_base_class, q.loc)
                     .arg(self.nns_str(q.nns))
-                    .arg(self.decl_name(class))
+                    // A `NamedDecl` argument: `C<X>` for a specialization.
+                    .arg(self.name_for_diagnostic(class))
             };
             self.emit(msg);
             return None;
