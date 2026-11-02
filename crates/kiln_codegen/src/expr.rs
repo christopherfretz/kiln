@@ -3799,7 +3799,7 @@ impl Cg<'_> {
         // or reference to a variable length array).
         self.emit_vla_bounds(q)?;
         let ty = self.mty(q);
-        let dtor_class = self.destructed_class(q);
+        let dtor_class = self.var_destructed_class(d, q);
         // NRVO: the variable lives in the return slot (clang
         // `EmitAutoVarAlloca`), with a flag telling its cleanup whether
         // the return happened.
