@@ -394,6 +394,9 @@ impl Sema<'_, '_> {
         let mut out = Declared::default();
         let members: Vec<DeclId> = self.ast.members(r).collect();
         let vbases = class_trivial.contains(DefinitionBits::HAS_VIRTUAL_BASES);
+        // An in-class defaulted constructor or destructor is constexpr
+        // unless virtual bases forbid it (before C++26, P3533R2).
+        let vb_forbid = self.vbases_forbid_constexpr(class_trivial);
         for m in members {
             if self.kind_of(m) == DeclKind::ConstructorUsingShadow {
                 // [basic.types.general]/10.5.2: a constexpr constructor
@@ -440,7 +443,7 @@ impl Sema<'_, '_> {
             let in_class_default = spec.defaulted() == Defaulted::Explicit;
             if fkind == DeclKind::CXXConstructor
                 && !matches!(kind, Some(SpecialKind::CopyCtor | SpecialKind::MoveCtor))
-                && (spec.constexpr_kind() != ConstexprKind::None || in_class_default && !vbases)
+                && (spec.constexpr_kind() != ConstexprKind::None || in_class_default && !vb_forbid)
             {
                 out.constexpr_ctor = true;
             }
@@ -457,7 +460,7 @@ impl Sema<'_, '_> {
                 }
                 SpecialKind::Dtor => {
                     out.dtor_constexpr = Some(
-                        spec.constexpr_kind() != ConstexprKind::None || in_class_default && !vbases,
+                        spec.constexpr_kind() != ConstexprKind::None || in_class_default && !vb_forbid,
                     );
                 }
                 _ => {}

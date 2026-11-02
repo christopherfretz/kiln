@@ -800,6 +800,8 @@ impl Sema<'_, '_> {
                 msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
             }
             self.emit(msg);
+            // clang `setInvalidDecl`: overload resolution skips it.
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
             had_error = true;
         } else if spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None && !constexpr_ok {
             // todo: clang `err_incorrect_defaulted_constexpr` for a
