@@ -779,7 +779,30 @@ and returns the scope it names:
   carries `ctad_alias[g'] = (alias, rhs)`, and `deduce_call` checks
   clang's `__is_deducible(A, R)` on the deduced return type
   (`note_alias_not_deducible`). An RHS that is not a simple-template-id
-  is `sema_ctad_non_deducible_template`.
+  is `sema_ctad_non_deducible_template`. Details (WP-311):
+  - The deduction of `g`'s return type from the RHS may fail part way
+    (`pair<A, B>`'s `tuple<A, B>` against `tuple<int, T...>`: `B` against
+    the expansion `T...`); as clang 19, the guide is still formed with what
+    was deduced, and `__is_deducible` decides at the call.
+  - The alias parameters used are those the deductions name (clang
+    `MarkUsedTemplateParameters`, `params_named`): each element of a
+    deduced pack, an element that is an expansion by its pattern, probed
+    by deducing it from itself. So `tuple<T..., U>` uses both `T` and `U`
+    although its list is a non-deduced context.
+  - A function parameter pack of `g` whose template parameter pack was
+    deduced as a list with an expansion element (`const U&...` with
+    `U = <int, T...>`) expands to `const int&, const T&...`: the
+    expansion element is substituted as its pattern and the result
+    re-formed as an expansion (`expand_pattern_rewrap`).
+  - The guide keeps `g`'s implicitness: one formed from a user-declared
+    guide is not implicit, so it beats the alias guide of the matching
+    constructor ([over.match.best.general]/2.11) rather than tying with
+    it. Every alias guide's notes include `note_implicit_deduction_guide`,
+    whose `requires __is_deducible(A, R)` names the guide's return type
+    `R` (clang `NoteImplicitDeductionGuide`).
+  - Tests: `over.match.class.deduct/alias-pack.cpp`,
+    `alias-pack-non-trailing.cpp`; `std::tuple` through
+    `template<class... T> using TT = std::tuple<int, T...>` deduces.
 - **Resolution.** The usual candidate machinery with `deduce_call`, then
   `order_template_candidates` and `best_viable`.
   - List-initialization runs [over.match.list] phase 1 first (WP-134):

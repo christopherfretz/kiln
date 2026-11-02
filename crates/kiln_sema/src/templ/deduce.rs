@@ -128,6 +128,10 @@ pub struct DeducedArgs {
     /// (`SubstTemplateTypeParmPackType` in a partially substituted
     /// pattern, §7.2).
     pub pack_elem: Option<usize>,
+    /// Where the deduction was requested (the call, the declaration, the
+    /// alias template): the location of a diagnostic issued from a step
+    /// that has none of its own.
+    pub loc: Loc,
 }
 
 impl DeducedArgs {
@@ -140,6 +144,7 @@ impl DeducedArgs {
             pack_cur: None,
             expansions: false,
             pack_elem: None,
+            loc: Loc::INVALID,
         }
     }
 
@@ -189,6 +194,9 @@ impl Sema<'_, '_> {
         d: &mut DeducedArgs,
         loc: Loc,
     ) -> Tdk {
+        if loc.is_valid() {
+            d.loc = loc;
+        }
         self.deduce_arg_list(ps, as_, must_match, d, 0, loc)
     }
 
@@ -517,7 +525,8 @@ impl Sema<'_, '_> {
             }
             ArgView::Null => Tdk::Success,
             ArgView::Pack(_) | ArgView::TemplateExpansion { .. } => {
-                self.templ_unimplemented("template argument deduction for a pack", loc);
+                let at = if loc.is_valid() { loc } else { d.loc };
+                self.templ_unimplemented("template argument deduction for a pack", at);
                 Tdk::MiscellaneousDeductionFailure
             }
         }
@@ -953,7 +962,7 @@ impl Sema<'_, '_> {
                 }
             }
             TypeView::PackExpansion { .. } => {
-                self.templ_unimplemented("template argument deduction for a pack", Loc::INVALID);
+                self.templ_unimplemented("template argument deduction for a pack", d.loc);
                 Tdk::MiscellaneousDeductionFailure
             }
             // Non-deduced contexts ([temp.deduct.type]/5): the
@@ -1120,7 +1129,7 @@ impl Sema<'_, '_> {
         if ps.len() < as_.len() {
             self.complete_dependent_args(name, &mut ps);
         }
-        let r = self.deduce_arg_list(&ps, &as_, true, d, level, Loc::INVALID);
+        let r = self.deduce_arg_list(&ps, &as_, true, d, level, d.loc);
         if r == Tdk::NonDeducedMismatch {
             // clang deduces against `P`'s canonical arguments, so an inner
             // `P` prints canonically (`pr<type-parameter-0-0, int>`).

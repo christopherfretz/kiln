@@ -2208,9 +2208,12 @@ immediate context: errors are hard.
   explicit arguments are substituted, one whose packs are all given
   is expanded to its explicit elements; it still counts as one
   parameter in the too-many-arguments check (clang retains the
-  expansion). An undeduced pack is then empty, and the arity is
-  checked on the specialization (`candidate function [with T = <>]
-  not viable: requires 1 argument, …`). A parameter pack never counts
+  expansion). A pack that is left unexpanded (not all given) skips the
+  too-many-arguments check before deduction (clang `isTemplateVariadic`:
+  a pack anywhere, not only trailing; WP-311). An undeduced pack is then
+  empty, and the arity is checked on the specialization (`candidate
+  function [with T = <>] not viable: requires 1 argument, …`; test
+  `temp.deduct.call/non-trailing-pack-arity.cpp`). A parameter pack never counts
   towards the minimum argument count (`fn_min_args`, clang
   `getMinRequiredArguments`), wherever it is.
 - **The explicit-specifier** ([temp.deduct.general]/7, [dcl.fct.spec]/3).
