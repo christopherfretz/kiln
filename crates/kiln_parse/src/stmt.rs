@@ -527,7 +527,7 @@ impl Parser<'_, '_> {
         }
         let cond = self.parse_paren_condition("if");
         if constexpr {
-            self.s.exit_constant_evaluated();
+            self.s.exit_constant_evaluated(None);
         }
         let Some((init, (var, c))) = cond else {
             self.s.pop_scope();

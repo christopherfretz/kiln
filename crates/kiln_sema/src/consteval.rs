@@ -22,6 +22,7 @@ use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::class::CleanupState;
 
 /// Why an escalated function is immediate (clang's
 /// `DiagnoseImmediateEscalatingReason`).
@@ -161,6 +162,7 @@ impl Sema<'_, '_> {
     /// argument, `if constexpr`). Its invocations are not wrapped.
     pub fn enter_constant_evaluated(&mut self) {
         self.imm.pending.const_eval += 1;
+        self.cleanup_marks.push(self.cleanup);
     }
 
     /// Whether the expression being built is in a context entered with
@@ -169,9 +171,43 @@ impl Sema<'_, '_> {
         self.imm.pending.const_eval > 0
     }
 
-    /// Leaves a context entered with [`Sema::enter_constant_evaluated`].
-    pub fn exit_constant_evaluated(&mut self) {
+    /// Leaves a context entered with [`Sema::enter_constant_evaluated`];
+    /// `e` is the constant-expression parsed in it, if any.
+    pub fn exit_constant_evaluated(&mut self, e: Option<ExprId>) {
         self.imm.pending.const_eval = self.imm.pending.const_eval.saturating_sub(1);
+        let outer = self.cleanup_marks.pop().unwrap_or_default();
+        if let Some(e) = e {
+            self.note_constant_outer_cleanups(e, outer);
+        }
+    }
+
+    /// Records `outer`, the cleanup state before constant-expression `e`
+    /// was built, for [`Sema::act_on_constant_full_expr`] (clang's
+    /// `ConstantEvaluated` context saving `ParentCleanup`). Only an outer
+    /// full-expression with pending cleanups needs it.
+    pub(crate) fn note_constant_outer_cleanups(&mut self, e: ExprId, outer: CleanupState) {
+        if outer.needs {
+            self.constant_outer_cleanups.insert(e, outer);
+        }
+    }
+
+    /// The outer cleanup state recorded for a constant-expression inside
+    /// `e` (which may be its converted form), removed from the table.
+    pub(crate) fn take_constant_outer_cleanups(&mut self, e: ExprId) -> Option<CleanupState> {
+        if self.constant_outer_cleanups.is_empty() {
+            return None;
+        }
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            if let Some(s) = self.constant_outer_cleanups.remove(&x) {
+                return Some(s);
+            }
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::ExprWithCleanups | ExprKind::LambdaExpr => {}
+                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+            }
+        }
+        None
     }
 
     /// Takes the pending state where a nested body or full-expression
