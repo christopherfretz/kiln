@@ -117,7 +117,10 @@ impl Sema<'_, '_> {
                         Some(e) => {
                             let at = self.ast.latest(e);
                             let note = self
-                                .diag(DiagId::note_forward_declaration, self.ast.decls.get(at).loc())
+                                .diag(
+                                    DiagId::note_forward_declaration,
+                                    self.ast.decls.get(at).loc(),
+                                )
                                 .arg(format!("'{}'", self.qualified_decl_name(e)));
                             d.with_note(note)
                         }

@@ -3521,7 +3521,7 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   member of the non-dependent `N` gets `sema_no_member_template`
   (clang `DiagnoseUnknownTypeName` with `IsTemplateName`). The argument
   list is skipped and the declarators are not diagnosed again
-  (`kiln_parse` `unknown_template_follows`,
+  (`kiln_parse` `qualified_unknown_type_follows`,
   `parse_qualified_type_rest`). At block scope the statement is
   parsed as an expression, as clang does. Test:
   `tests/conformance/temp.names/no-template-named-qualified.cpp`.

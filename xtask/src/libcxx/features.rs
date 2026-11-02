@@ -99,8 +99,7 @@ mod tests {
         for f in &all {
             for bad in ["clang", "gcc", "msvc", "apple-clang"] {
                 assert!(
-                    f == "gcc-style-warnings"
-                        || (f != bad && !f.starts_with(&format!("{bad}-"))),
+                    f == "gcc-style-warnings" || (f != bad && !f.starts_with(&format!("{bad}-"))),
                     "compiler-identity feature `{f}` in the static set"
                 );
             }
