@@ -384,10 +384,10 @@ impl Sema<'_, '_> {
             // `'W<s::string>' (aka 'W<basic_string<char>>')`.
             let mut sugared = d.args.clone();
             for (a, &w) in sugared.iter_mut().zip(&written) {
-                if let (ArgView::Type(c), ArgView::Type(wt)) = (a.view(), w.view()) {
-                    if self.ast.types.canonical(c) == self.ast.types.canonical(wt) {
-                        *a = TemplateArg::ty(wt);
-                    }
+                if let (ArgView::Type(c), ArgView::Type(wt)) = (a.view(), w.view())
+                    && self.ast.types.canonical(c) == self.ast.types.canonical(wt)
+                {
+                    *a = TemplateArg::ty(wt);
                 }
             }
             let sugared_levels = self.prior_levels(ft, depth, &sugared);
@@ -670,7 +670,7 @@ impl Sema<'_, '_> {
         let canonical = self.ast.types.canonical_args(sugared);
         let conv = ConvertedArgs { sugared, canonical };
         let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(sugared), loc, |s| {
-            s.get_function_spec_signature(ft, &conv, loc)
+            s.get_function_spec_signature(ft, conv, loc)
         });
         match r {
             None => Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),

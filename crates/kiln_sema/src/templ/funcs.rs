@@ -37,7 +37,7 @@ impl Sema<'_, '_> {
         args: &ConvertedArgs,
         loc: Loc,
     ) -> Result<DeclId, ()> {
-        let spec = self.get_function_spec_signature(tmpl, args, loc)?;
+        let spec = self.get_function_spec_signature(tmpl, *args, loc)?;
         self.finish_function_spec_explicit(spec)?;
         Ok(spec)
     }
@@ -53,7 +53,7 @@ impl Sema<'_, '_> {
     pub(crate) fn get_function_spec_signature(
         &mut self,
         tmpl: DeclId,
-        args: &ConvertedArgs,
+        args: ConvertedArgs,
         loc: Loc,
     ) -> Result<DeclId, ()> {
         let tmpl = self.ast.first(tmpl);

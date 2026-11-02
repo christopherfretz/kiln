@@ -40,6 +40,7 @@ impl<'s> SemaNames<'s> {
     /// the template parameter list, so `shouldIncludeTypeForArgument` is
     /// true for each (spec/diag.md §5). Nested template-ids keep their
     /// own rule (`'f<X<2>>'`).
+    #[must_use]
     pub fn typed_args_of(self, f: DeclId) -> Self {
         SemaNames { typed_args: Some(f), ..self }
     }
