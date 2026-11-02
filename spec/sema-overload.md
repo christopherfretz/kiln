@@ -825,7 +825,13 @@ Verified: deleted best, distance 1, two distance-3 (scope order), distance 4.
 **Locations**: the primary diagnostic is at the callee name (member name
 for member calls), the operator token, the declarator / `T(` for
 constructors, the expression for conversions; notes are at each candidate's
-name; implicit special members at the class name.
+name; implicit special members at the class name. An implicitly
+instantiated class template specialization is located at its pattern's
+definition (the primary template's or the matched partial specialization's
+name, clang `InstantiateClass`), not at the first declaration of the
+template, so its implicit members' notes point there; an explicit
+specialization or explicit instantiation keeps its own template-name
+(WP-366).
 
 **Parameter sugar** (WP-227): a bad-conversion note names the parameter
 type as declared, sugar and top-level `const` kept (`no known conversion

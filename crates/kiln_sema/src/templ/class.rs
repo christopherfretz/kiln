@@ -659,6 +659,19 @@ impl Sema<'_, '_> {
     /// point of instantiation. False when the specialization cannot be
     /// defined (diagnosed if `diagnose`).
     pub fn instantiate_class(&mut self, spec: DeclId, poi: Loc, diagnose: bool) -> bool {
+        self.instantiate_class_as(spec, poi, diagnose, true)
+    }
+
+    /// [`Sema::instantiate_class`]; `implicit` relocates an implicit
+    /// instantiation at its pattern's definition (false for an explicit
+    /// instantiation, already located at its template-name).
+    pub(crate) fn instantiate_class_as(
+        &mut self,
+        spec: DeclId,
+        poi: Loc,
+        diagnose: bool,
+        implicit: bool,
+    ) -> bool {
         if self.ast.definition(spec).is_some() {
             return true;
         }
@@ -745,6 +758,21 @@ impl Sema<'_, '_> {
                     s.point_of_instantiation = poi;
                 }
             });
+            // clang `InstantiateClass` locates an implicit instantiation at
+            // its pattern's definition (the primary's or the partial
+            // specialization's name), so the implicit special members
+            // declared in it point there too; an explicit instantiation
+            // stays at its own template-name.
+            if implicit
+                && self
+                    .ast
+                    .templates
+                    .spec(i)
+                    .is_some_and(|s| s.kind == SpecKind::ImplicitInstantiation)
+            {
+                let at = self.ast.decls.get(def).loc();
+                self.builder().relocate_spec(spec, at);
+            }
         }
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let outer = self.inst_context_pairs(parent);
