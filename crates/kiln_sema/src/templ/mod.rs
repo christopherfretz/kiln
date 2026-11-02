@@ -632,13 +632,20 @@ impl Sema<'_, '_> {
     }
 
     /// The default argument `= arg` of parameter `p`
-    /// ([temp.param]/10-12).
-    pub fn act_on_template_param_default(&mut self, p: DeclId, arg: TemplateArg, loc: Loc) {
+    /// ([temp.param]/10-12); `eq` is the `=`, `loc` the argument.
+    pub fn act_on_template_param_default(
+        &mut self,
+        p: DeclId,
+        arg: TemplateArg,
+        eq: Loc,
+        loc: Loc,
+    ) {
         use crate::templ::pack::PackOperand;
         if self.ast.template_parm(p).is_some_and(|x| x.pack) {
-            // [temp.param]/11 ("template parameter pack cannot have a
-            // default argument") is diagnosed by clang; kiln drops it.
-            self.templ_unimplemented("default argument of a template parameter pack", loc);
+            // [temp.param]/11: "template parameter pack cannot have a
+            // default argument", at the `=` (clang's
+            // `ActOn*TemplateParameter`); the default is dropped.
+            self.error(DiagId::sema_template_param_pack_default_arg, eq);
             return;
         }
         // [temp.variadic]/12: `class U = Ts` is reported at the

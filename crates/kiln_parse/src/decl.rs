@@ -2173,7 +2173,12 @@ impl Parser<'_, '_> {
     pub(crate) fn is_param_list_start(&self, n: usize) -> bool {
         let t = self.peek(n);
         match t.kind {
-            TokKind::Punct(Punct::RParen | Punct::Ellipsis) => true,
+            TokKind::Punct(Punct::RParen) => true,
+            // `(...)`; `(...x)` groups a pack's declarator-id
+            // ([dcl.decl.general]/4).
+            TokKind::Punct(Punct::Ellipsis) => {
+                self.peek(n + 1).kind == TokKind::Punct(Punct::RParen)
+            }
             TokKind::Punct(Punct::LSquare) => {
                 self.peek(n + 1).kind == TokKind::Punct(Punct::LSquare)
             }

@@ -104,6 +104,7 @@ sema_template_param_default_redefined = Error (0) "template parameter redefines 
 sema_template_param_different_kind = Error (1) "template parameter has a different kind in template {0:|template parameter }redeclaration";
 sema_template_param_list_different_arity = Error (2) "{0:too few|too many} template parameters in template {1:|template parameter }redeclaration";
 sema_template_param_missing_default = Error (0) "template parameter missing a default argument";
+sema_template_param_pack_default_arg = Error (0) "template parameter pack cannot have a default argument";
 sema_template_param_pack_not_last = Error (0) "template parameter pack must be the last template parameter";
 sema_template_param_shadow = Error (1) "declaration of {0} shadows template parameter";
 sema_template_parameter_pack_non_pack = Error (2) "{0:template type|non-type template|template template} parameter{1:| pack} conflicts with previous {0:template type|non-type template|template template} parameter{1: pack|}";

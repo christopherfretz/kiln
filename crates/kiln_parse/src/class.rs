@@ -666,7 +666,7 @@ impl Parser<'_, '_> {
             .unwrap_or_default();
         for (i, t) in parts.default_args {
             self.begin_replay(t.toks, t.end);
-            self.bump();
+            let eq = self.bump().span.lo;
             if let Some(&p) = params.get(i) {
                 self.s.act_on_start_delayed_default_arg(p);
             }
@@ -678,7 +678,10 @@ impl Parser<'_, '_> {
                     }
                     if let Some(&p) = params.get(i) {
                         self.trace(|_| format!("default_arg({i})"));
-                        self.s.act_on_param_default_list(p, &l);
+                        let pty = self.s.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                        if !self.s.reject_param_pack_default(pty, eq) {
+                            self.s.act_on_param_default_list(p, &l);
+                        }
                     }
                 }
             } else if let Some(e) = self.parse_assignment_expr() {
@@ -690,7 +693,7 @@ impl Parser<'_, '_> {
                     // [dcl.fct.default]/9 (checked on the written
                     // argument, as for one parsed in place).
                     if self.s.check_default_arg_refs(e) {
-                        self.s.act_on_param_default_arg(p, e);
+                        self.s.act_on_param_default_arg(p, e, eq);
                     } else {
                         self.s.ast.decls.set_flags(p, DeclFlags::INVALID);
                     }
