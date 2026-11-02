@@ -484,3 +484,67 @@ fn driver_modes() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// [except.spec]/5, [class.virtual]/2, [dcl.init.general]/16.9: clang 19's
+/// stderr for `clang++ -std=c++26 -fsyntax-only -x c++ -` on
+/// `EXC_SPEC_SOURCE`, fix-its after cv- and ref-qualifiers and the
+/// initializer's range included (the corpus harness ignores both).
+const EXC_SPEC_SOURCE: &str = r#"struct A {
+  void f() const noexcept;
+  void g() & noexcept;
+  void h() const volatile && noexcept;
+  void i() volatile const noexcept;
+};
+void A::f() const {}
+void A::g() & {}
+void A::h() const volatile && {}
+void A::i() volatile const {}
+struct B { virtual void m() noexcept; };
+struct C : B { void m(); };
+void (*p)() noexcept = (void (*)())nullptr;
+"#;
+const EXC_SPEC_GOLDEN: &str = r#"<stdin>:7:9: error: 'f' is missing exception specification 'noexcept'
+    7 | void A::f() const {}
+      |         ^
+      |                   noexcept
+<stdin>:2:8: note: previous declaration is here
+    2 |   void f() const noexcept;
+      |        ^
+<stdin>:8:9: error: 'g' is missing exception specification 'noexcept'
+    8 | void A::g() & {}
+      |         ^
+      |               noexcept
+<stdin>:3:8: note: previous declaration is here
+    3 |   void g() & noexcept;
+      |        ^
+<stdin>:9:9: error: 'h' is missing exception specification 'noexcept'
+    9 | void A::h() const volatile && {}
+      |         ^
+      |                               noexcept
+<stdin>:4:8: note: previous declaration is here
+    4 |   void h() const volatile && noexcept;
+      |        ^
+<stdin>:10:9: error: 'i' is missing exception specification 'noexcept'
+   10 | void A::i() volatile const {}
+      |         ^
+      |                            noexcept
+<stdin>:5:8: note: previous declaration is here
+    5 |   void i() volatile const noexcept;
+      |        ^
+<stdin>:12:21: error: exception specification of overriding function is more lax than base version
+   12 | struct C : B { void m(); };
+      |                     ^
+<stdin>:11:25: note: overridden virtual function is here
+   11 | struct B { virtual void m() noexcept; };
+      |                         ^
+<stdin>:13:8: error: cannot initialize a variable of type 'void (*)() noexcept' with an rvalue of type 'void (*)()': different exception specifications
+   13 | void (*p)() noexcept = (void (*)())nullptr;
+      |        ^               ~~~~~~~~~~~~~~~~~~~
+6 errors generated.
+"#;
+
+#[test]
+fn exception_spec_fixits_and_ranges_like_clang() {
+    let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], EXC_SPEC_SOURCE);
+    assert_eq!((o.code, o.stderr.as_str()), (1, EXC_SPEC_GOLDEN));
+}

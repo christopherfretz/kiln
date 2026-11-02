@@ -2,6 +2,7 @@
 //! declarators ([except.spec]) and the `noexcept` operator
 //! ([expr.unary.noexcept]) (spec/sema.md §5.3).
 
+use kiln_ast::decl::DeclFlags;
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::types::{BuiltinType, ExcSpec, NoexceptValue};
 use kiln_ast::{DeclId, ExprId};
@@ -365,7 +366,7 @@ impl Sema<'_, '_> {
             ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
         ) && !self.in_template()
             && self.ast.described_template(d).is_none()
-            && !self.ast.decls.get(self.ctx).has(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
+            && !self.ast.decls.get(self.ctx).has(DeclFlags::DEPENDENT_CTX)
     }
 
     /// Instantiates the deferred `noexcept(expr)` of `f`, a member of a
@@ -545,6 +546,47 @@ impl Sema<'_, '_> {
         (loc, fname, fix_at): (Loc, &str, Option<Loc>),
         replaceable: bool,
     ) -> (QualType, bool) {
+        // clang compares against a valid previous declaration only: an
+        // invalid one (`void e() noexcept = 0;`) is skipped for the latest
+        // valid redeclaration, and with none the specification is
+        // inherited silently.
+        let invalid = |s: &Self, d: DeclId| s.ast.decls.get(d).has(DeclFlags::INVALID);
+        let (p, pty) = if invalid(self, p) {
+            // An invalid redeclaration of a member (`void f(); void f();`
+            // in one class) is not on the first declaration's chain:
+            // look for that corresponding valid function by name.
+            let node = self.ast.decls.get(p);
+            let (nctx, nname, nkind) = (node.ctx(), node.name(), node.kind());
+            let mut valid = self.ast.redecls_of(p).find(|&r| !invalid(self, r));
+            if valid.is_none()
+                && let Some(c) = nctx
+            {
+                let found: Vec<DeclId> = self.ast.lookup_local(c, nname).to_vec();
+                valid = found.into_iter().rev().find(|&c| {
+                    c != p
+                        && !invalid(self, c)
+                        && self.kind_of(c) == nkind
+                        && self
+                            .declared_fn_type(c)
+                            .is_some_and(|t| self.same_ignoring_exc_spec(t, ty))
+                });
+            }
+            match valid {
+                Some(v) => (v, self.declared_fn_type(v).unwrap_or(pty)),
+                None => {
+                    let old = self.written_exc_spec(pty);
+                    let ty = match old {
+                        ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
+                        | ExcSpec::DependentNoexcept(_)
+                        | ExcSpec::Deferred(_) => ty,
+                        e => self.with_exc_spec(ty, e),
+                    };
+                    return (ty, false);
+                }
+            }
+        } else {
+            (p, pty)
+        };
         let old = self.written_exc_spec(pty);
         let first = self.ast.redecls_of(p).last().unwrap_or(p);
         let ploc = self.ast.decls.get(p).loc();
@@ -586,19 +628,30 @@ impl Sema<'_, '_> {
 }
 
 /// Where clang's missing-exception-specification fix-it inserts the
-/// specification: just past the `)` of the function declarator `d`
+/// specification: just past the end of the function declarator `d`'s
+/// parameter list and cv- and ref-qualifiers
 /// (`getLocForEndOfToken(FTLoc.getLocalRangeEnd())`). None with a trailing
-/// return type (clang gives none) and, as kiln does not record where a
-/// cv- or ref-qualifier ends, after either; none for a `)` from a macro.
+/// return type (clang gives none) and for a `)` or qualifier from a macro.
 pub(crate) fn missing_exc_spec_fixit_loc(d: &Declarator) -> Option<Loc> {
-    d.chunks.iter().find_map(|c| match c {
-        crate::declspec::Chunk::Function { rparen, quals, ref_qual, trailing, .. } => Some(
-            (trailing.is_none()
-                && quals.is_empty()
-                && *ref_qual == kiln_ast::types::RefQual::None
-                && rparen.is_file())
-            .then(|| rparen.with_offset(1)),
-        ),
+    let (rparen, ref_qual) = d.chunks.iter().find_map(|c| match c {
+        crate::declspec::Chunk::Function { rparen, ref_qual, trailing, .. } => {
+            Some(trailing.is_none().then_some((*rparen, *ref_qual)))
+        }
         _ => None,
-    })?
+    })??;
+    // The innermost function declarator's qualifiers ([`Declarator::
+    // fn_qual_locs`]): a ref-qualifier follows any cv-qualifiers.
+    let [c, v, r] = d.fn_qual_locs;
+    let last = match (r, ref_qual) {
+        (Some(r), kiln_ast::types::RefQual::LValue) => Some((r, 1)),
+        (Some(r), kiln_ast::types::RefQual::RValue) => Some((r, 2)),
+        _ => match (c, v) {
+            (Some(c), Some(v)) if v.to_raw() > c.to_raw() => Some((v, 8)),
+            (Some(c), _) => Some((c, 5)),
+            (None, Some(v)) => Some((v, 8)),
+            (None, None) => None,
+        },
+    };
+    let (at, len) = last.unwrap_or((rparen, 1));
+    at.is_file().then(|| at.with_offset(len))
 }

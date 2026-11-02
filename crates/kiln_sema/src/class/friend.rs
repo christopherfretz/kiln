@@ -61,11 +61,8 @@ impl Sema<'_, '_> {
             // `friend class X<T>;` naming the current instantiation
             // befriends the pattern too ([temp.dep.type]/1): its own
             // members are checked against it before instantiation.
-            let rec = self
-                .ast
-                .types
-                .as_record(base)
-                .or_else(|| self.friend_current_instantiation(base));
+            let rec =
+                self.ast.types.as_record(base).or_else(|| self.friend_current_instantiation(base));
             if let Some(c) = rec {
                 let c = self.ast.first(c);
                 self.push_friend(c);
