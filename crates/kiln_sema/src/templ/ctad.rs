@@ -252,8 +252,8 @@ impl Sema<'_, '_> {
         // clang forms the placeholder `X` for the guide's declarator name
         // while parsing it, which fixes the spelling every later deduced
         // `X` type prints with (`TypeContext::deduced_template_specialization`).
-        let bare = self.template_name_for(template);
-        let _ = self.ast.types.deduced_template_specialization(bare, None);
+        let placeholder_name = self.template_name_for(template);
+        let _ = self.ast.types.deduced_template_specialization(placeholder_name, None);
         let sloc = d.special.map_or(d.loc, |(_, l)| l);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
@@ -2038,6 +2038,21 @@ impl Sema<'_, '_> {
             return None;
         }
         Some(t)
+    }
+
+    /// Deduces variable `v`'s placeholder type `ty` from `init`, the
+    /// diagnostics citing the placeholder as `v`'s declaration wrote it
+    /// (`ctad_var_type_locs`); the error type after a diagnostic.
+    pub(crate) fn ctad_for_var(
+        &mut self,
+        v: DeclId,
+        ty: QualType,
+        init: &Initializer,
+        direct: bool,
+        loc: Loc,
+    ) -> QualType {
+        self.templ.ctad_site = self.templ.ctad_var_type_locs.get(&v).copied();
+        self.ctad_for_initializer(ty, init, direct, loc).unwrap_or(QualType::ERROR)
     }
 
     /// Whether `ty` is a class template placeholder to deduce.

@@ -1148,7 +1148,8 @@ impl Sema<'_, '_> {
             // ([temp.deduct.call]/1), as written (`value_type`).
             if let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(cur.ty())
                 && self.initializer_list_param(cur).is_some()
-                && let Some(ArgView::Type(e)) = self.ast.types.args(args).first().map(|x| x.view())
+                && let Some(ArgView::Type(e)) =
+                    self.ast.types.args(args).first().map(TemplateArg::view)
             {
                 cur = e;
                 continue;

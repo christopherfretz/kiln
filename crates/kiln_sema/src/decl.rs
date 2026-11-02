@@ -4385,8 +4385,7 @@ impl Sema<'_, '_> {
         }
         if self.undeduced_ctad(ty).is_some() {
             // [dcl.type.class.deduct]/1 (WP-071b).
-            self.templ.ctad_site = self.templ.ctad_var_type_locs.get(&v).copied();
-            ty = self.ctad_for_initializer(ty, &init, direct, loc).unwrap_or(QualType::ERROR);
+            ty = self.ctad_for_var(v, ty, &init, direct, loc);
             self.ast.decls.set_ty(v, ty);
             if self.is_error_type(ty) {
                 self.ast.decls.set_flags(v, DeclFlags::INVALID);
