@@ -709,19 +709,16 @@ impl Sema<'_, '_> {
                             .is_some_and(|t| self.same_ignoring_exc_spec(t, ty))
                 });
             }
-            match valid {
-                Some(v) => (v, self.declared_fn_type(v).unwrap_or(pty)),
-                None => {
-                    let old = self.written_exc_spec(pty);
-                    let ty = match old {
-                        ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
-                        | ExcSpec::DependentNoexcept(_)
-                        | ExcSpec::Deferred(_) => ty,
-                        e => self.with_exc_spec(ty, e),
-                    };
-                    return (ty, false);
-                }
-            }
+            let Some(v) = valid else {
+                let ty = match self.written_exc_spec(pty) {
+                    ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
+                    | ExcSpec::DependentNoexcept(_)
+                    | ExcSpec::Deferred(_) => ty,
+                    e => self.with_exc_spec(ty, e),
+                };
+                return (ty, false);
+            };
+            (v, self.declared_fn_type(v).unwrap_or(pty))
         } else {
             (p, pty)
         };

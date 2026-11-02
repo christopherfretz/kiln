@@ -489,7 +489,7 @@ fn driver_modes() {
 /// stderr for `clang++ -std=c++26 -fsyntax-only -x c++ -` on
 /// `EXC_SPEC_SOURCE`, fix-its after cv- and ref-qualifiers and the
 /// initializer's range included (the corpus harness ignores both).
-const EXC_SPEC_SOURCE: &str = r#"struct A {
+const EXC_SPEC_SOURCE: &str = r"struct A {
   void f() const noexcept;
   void g() & noexcept;
   void h() const volatile && noexcept;
@@ -502,8 +502,8 @@ void A::i() volatile const {}
 struct B { virtual void m() noexcept; };
 struct C : B { void m(); };
 void (*p)() noexcept = (void (*)())nullptr;
-"#;
-const EXC_SPEC_GOLDEN: &str = r#"<stdin>:7:9: error: 'f' is missing exception specification 'noexcept'
+";
+const EXC_SPEC_GOLDEN: &str = r"<stdin>:7:9: error: 'f' is missing exception specification 'noexcept'
     7 | void A::f() const {}
       |         ^
       |                   noexcept
@@ -541,7 +541,7 @@ const EXC_SPEC_GOLDEN: &str = r#"<stdin>:7:9: error: 'f' is missing exception sp
    13 | void (*p)() noexcept = (void (*)())nullptr;
       |        ^               ~~~~~~~~~~~~~~~~~~~
 6 errors generated.
-"#;
+";
 
 #[test]
 fn exception_spec_fixits_and_ranges_like_clang() {
