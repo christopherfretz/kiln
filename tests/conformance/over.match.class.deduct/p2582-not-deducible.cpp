@@ -23,9 +23,9 @@
 //@ diag: 36:27 note "candidate template ignored: could not match 'V<X>' against 'int'"
 //@ diag: 36:27 note "implicit deduction guide declared as 'template <class X> V(V<X>) -> V<X>'"
 //@ diag: 36:27 note "candidate template ignored: could not match 'X *' against 'int'"
-//@ diag: 36:27 note "implicit deduction guide declared as 'template <class X> requires __is_deducible(V, B<X *>) V(X *) -> B<X *>'"
+//@ diag: 36:27 note "implicit deduction guide declared as 'template <class X> requires __is_deducible(V, B<X *>) V(X *) -> V<X>'"
 //@ diag: 36:27 note "candidate template ignored: could not match 'B<X *>' against 'int'"
-//@ diag: 36:27 note "implicit deduction guide declared as 'template <class X> requires __is_deducible(V, B<X *>) V(B<X *>) -> B<X *>'"
+//@ diag: 36:27 note "implicit deduction guide declared as 'template <class X> requires __is_deducible(V, B<X *>) V(B<X *>) -> V<X>'"
 //@ diag: 36:27 note "candidate function template not viable: requires 0 arguments, but 1 was provided"
 //@ diag: 36:27 note "implicit deduction guide declared as 'template <class X> V() -> V<X>'"
 template <typename T> struct B { B(T); };

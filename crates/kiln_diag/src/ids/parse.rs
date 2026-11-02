@@ -69,6 +69,7 @@ parse_ext_alias_in_init_statement = ExtWarn [Cxx23Extensions] (0) "alias declara
 parse_ext_binding_pack = ExtWarn [Cxx26Extensions] (0) "structured binding packs are a C++2c extension";
 parse_ext_constexpr_if = ExtWarn [Cxx17Extensions] (0) "constexpr if is a C++17 extension";
 parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
+parse_ext_pack_indexing = ExtWarn [Cxx26Extensions] (0) "pack indexing is a C++2c extension";
 parse_ext_static_assert_user_message = ExtWarn [Cxx26Extensions] (0) "'static_assert' with a user-generated message is a C++26 extension";
 parse_ext_variadic_friend = ExtWarn [Cxx26Extensions] (0) "variadic 'friend' declarations are a C++2c extension";
 parse_extraneous_closing_brace = Error (0) "extraneous closing brace ('}}')";
