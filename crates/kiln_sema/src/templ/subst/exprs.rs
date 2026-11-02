@@ -467,6 +467,17 @@ impl Substituter<'_, '_, '_> {
                 let list = self.expr(list)?;
                 Ok(self.sema.act_on_va_arg(list, ty, ty_loc, loc, end))
             }
+            ExprKind::ShuffleVectorExpr => {
+                // clang `TransformShuffleVectorExpr`: the operands, rebuilt
+                // (and re-checked) as the builtin call.
+                let subs: Vec<ExprId> =
+                    self.sema.ast.lists.iter::<ExprId>(ex(self).shuffle_subs(e)).collect();
+                let mut args = Vec::with_capacity(subs.len());
+                for s in subs {
+                    args.push(self.expr(s)?);
+                }
+                Ok(self.sema.act_on_shufflevector(&args, loc, end))
+            }
             ExprKind::ConvertVectorExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 let o = self.expr(ex(self).operand(e))?;

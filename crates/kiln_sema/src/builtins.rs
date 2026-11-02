@@ -384,6 +384,9 @@ impl Sema<'_, '_> {
             self.unsupported("a braced argument to a builtin function", loc);
             return self.recover_err(&kids, loc);
         }
+        if id == builtin::SHUFFLEVECTOR {
+            return self.act_on_shufflevector(args, self.begin_loc(callee), rparen);
+        }
         if builtin::atomic::is_op(id) {
             // WP-154: an `AtomicExpr` (no call, no callee).
             return match self.builtin_atomic_op(self.begin_loc(callee), id, args, rparen) {
@@ -416,6 +419,7 @@ impl Sema<'_, '_> {
             | builtin::ISLESSGREATER
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
+            builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
             builtin::COMPLEX => self.builtin_complex(args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
             builtin::VA_START => self.builtin_va_start(callee, args, rparen),
@@ -609,6 +613,9 @@ impl Sema<'_, '_> {
         callee: ExprId,
         args: &[ExprId],
     ) -> bool {
+        if id == builtin::VERBOSE_TRAP {
+            return self.check_verbose_trap(args);
+        }
         let mask = builtin::ice_params(id);
         if mask == 0 {
             return true;
@@ -631,7 +638,125 @@ impl Sema<'_, '_> {
         {
             return self.check_alloca_align(callee, a);
         }
+        if matches!(id, builtin::OBJECT_SIZE | builtin::DYNAMIC_OBJECT_SIZE)
+            && let Some(&a) = args.get(1)
+            && !self.expr_is_value_dependent(a)
+            && let Some(v) = self.fold_int(a)
+            && !(0..=3).contains(&v)
+        {
+            // clang `BuiltinConstantArgRange(TheCall, 1, 0, 3)`.
+            let d = self
+                .diag(DiagId::sema_argument_invalid_range, self.begin_loc(callee))
+                .arg(v.to_string())
+                .arg("0".to_string())
+                .arg("3".to_string());
+            self.emit(d);
+            return false;
+        }
         true
+    }
+
+    /// clang `checkBuiltinVerboseTrap`: each argument must evaluate to a
+    /// constant string without a `$`, else `argument to
+    /// __builtin_verbose_trap must {be a pointer to a constant string|not
+    /// contain $}` at the argument. A string literal (through the
+    /// decay) is read directly; any other argument must constant-fold,
+    /// and its characters are not inspected (spec/sema.md §5.4).
+    fn check_verbose_trap(&mut self, args: &[ExprId]) -> bool {
+        let mut ok = true;
+        for &a in args {
+            if self.expr_is_value_dependent(a) {
+                continue;
+            }
+            let inner = self.ignore_paren_imp_casts(a);
+            let kind = if let Some(lit) = self.string_lit_of(inner) {
+                let sid = self.ast.exprs.string_lit(lit);
+                let bytes = self.ast.strings.bytes(sid);
+                // The stored bytes include the trailing NUL only.
+                bytes.contains(&b'$').then_some(1)
+            } else if self.try_fold(a).is_some() {
+                None
+            } else {
+                Some(0)
+            };
+            if let Some(k) = kind {
+                let d = self.diag(DiagId::sema_builtin_verbose_trap_arg, self.begin_loc(a)).arg(k);
+                self.emit(d);
+                ok = false;
+            }
+        }
+        ok
+    }
+
+    /// `__builtin_assume_aligned(p, align[, offset])` (clang
+    /// `BuiltinAssumeAligned`): 2 or 3 arguments; `p` decays and must
+    /// convert to `const void *` (it keeps its own type); `align` is an
+    /// integer constant power of 2 (left unconverted), warned about above
+    /// 2^32 (`-Wbuiltin-assume-aligned-alignment`); `offset` converts to
+    /// `size_t`. The call is a `void *` prvalue. Alignment errors are at
+    /// the call's start.
+    fn builtin_assume_aligned(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if args.len() < 2 {
+            let d = self.diag(DiagId::sema_call_too_few_args, rparen).arg(2).arg(args.len());
+            self.emit(d);
+            return None;
+        }
+        if args.len() > 3 {
+            // clang `checkArgCountAtMost`: at the call's end.
+            let d = self.diag(DiagId::sema_call_too_many_args_at_most, rparen).arg(3).arg(args.len());
+            self.emit(d);
+            return None;
+        }
+        let cvp = self.ast.types.qualify(QualType::VOID, Quals::CONST);
+        let cvp = self.ast.types.pointer_to(cvp);
+        let p = args[0];
+        if let Err(e) = conv::implicit_convert(self, p, cvp, ConvCtx::Argument) {
+            let d = e.diag_at(self, self.begin_loc(p));
+            self.emit(d);
+            return None;
+        }
+        let p = conv::decay(self, p);
+        let al = args[1];
+        if !self.expr_is_value_dependent(al) {
+            let at = self.begin_loc(callee);
+            let v = if self.ast.types.is_integral(self.ety(al)) { self.fold_int(al) } else { None };
+            let Some(v) = v else {
+                let d = self
+                    .diag(DiagId::sema_constant_integer_arg_type, at)
+                    .arg("__builtin_assume_aligned".to_string());
+                self.emit(d);
+                return None;
+            };
+            if v <= 0 || (v & (v - 1)) != 0 {
+                self.error(DiagId::sema_alignment_not_power_of_two, at);
+                return None;
+            }
+            if v > 1 << 32 {
+                let d = self
+                    .diag(DiagId::sema_builtin_assume_aligned_too_big, at)
+                    .arg((1u64 << 32).to_string());
+                self.emit(d);
+            }
+        }
+        let mut out = vec![p, al];
+        if let Some(&off) = args.get(2) {
+            let sz = self.size_type();
+            match conv::implicit_convert(self, off, sz, ConvCtx::Argument) {
+                Ok(x) => out.push(x),
+                Err(e) => {
+                    let d = e.diag_at(self, self.begin_loc(off));
+                    self.emit(d);
+                    return None;
+                }
+            }
+        }
+        let vp = self.ast.types.pointer_to(QualType::VOID);
+        Some((out, vp))
     }
 
     /// The alignment of `__builtin_alloca_with_align`, in bits (clang

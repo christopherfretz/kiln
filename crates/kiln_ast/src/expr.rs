@@ -1940,6 +1940,19 @@ impl ExprArena {
         ListId::new(self.expect_kind(e, ExprKind::AtomicExpr).a)
     }
 
+    /// The operands of a `ShuffleVectorExpr`: the two vectors, then the
+    /// indices, as written.
+    pub fn shuffle_subs(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::ShuffleVectorExpr).a)
+    }
+
+    /// The folded indices of a `ShuffleVectorExpr` (`u32::MAX` for a
+    /// poison lane), `None` while one is value-dependent.
+    pub fn shuffle_mask<'l>(&self, e: ExprId, lists: &'l IdLists) -> Option<&'l [u32]> {
+        let n = self.expect_kind(e, ExprKind::ShuffleVectorExpr);
+        (n.aux & 1 != 0).then(|| lists.get(ListId::new(n.b)))
+    }
+
     /// The explicit initializers of a `CXXParenListInitExpr`.
     pub fn paren_list_inits(&self, e: ExprId) -> ListId {
         ListId::new(self.expect_kind(e, ExprKind::CXXParenListInitExpr).a)
@@ -2460,6 +2473,7 @@ impl ExprArena {
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr
+            | ExprKind::ShuffleVectorExpr
             | ExprKind::CXXUnresolvedConstructExpr
             | ExprKind::ParenListExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));

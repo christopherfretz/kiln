@@ -382,6 +382,24 @@ impl Cg<'_> {
                 let i = self.emit_scalar(idx)?;
                 self.extract_elt(v, i)
             }
+            ExprKind::ShuffleVectorExpr => {
+                // clang `ScalarExprEmitter::VisitShuffleVectorExpr` with
+                // scalar indices (a `-1` is a poison lane).
+                let subs: Vec<ExprId> = ast.lists.iter(ast.exprs.shuffle_subs(e)).collect();
+                let Some(mask) = ast.exprs.shuffle_mask(e, &ast.lists) else {
+                    return err(self.loc_of(e), "a dependent __builtin_shufflevector");
+                };
+                let mask: Vec<u32> = mask
+                    .iter()
+                    .map(|&w| if w == u32::MAX { kiln_llvm::SHUFFLE_POISON } else { w })
+                    .collect();
+                let (Some(&x), Some(&y)) = (subs.first(), subs.get(1)) else {
+                    return err(self.loc_of(e), "malformed ShuffleVectorExpr");
+                };
+                let a = self.emit_scalar(x)?;
+                let b = self.emit_scalar(y)?;
+                self.shuffle(a, Some(b), mask)
+            }
             ExprKind::ConvertVectorExpr => {
                 let src = ast.exprs.operand(e);
                 let v = self.emit_scalar(src)?;

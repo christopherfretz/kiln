@@ -2447,6 +2447,42 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// `__builtin_shufflevector(v1, v2, i...)` (clang `ShuffleVectorExpr`;
+    /// WP-282): a prvalue of type `ty` whose operands `subs` (the two
+    /// vectors, then the indices) are kept as written. `mask` is the
+    /// folded indices (`u32::MAX` for a `-1`, a poison lane), `None`
+    /// while one is value-dependent; codegen and the Oven read it.
+    pub fn shuffle_vector(
+        &mut self,
+        subs: &[ExprId],
+        mask: Option<&[u32]>,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        for &c in subs {
+            deps |= self.deps(c);
+        }
+        let list = self.ast.lists.push(subs);
+        let (known, m) = match mask {
+            Some(m) => (1, self.ast.lists.push_raw(m).raw()),
+            None => (0, 0),
+        };
+        let e = self.simple(
+            ExprKind::ShuffleVectorExpr,
+            ValueCategory::PRValue,
+            deps,
+            known,
+            ty,
+            loc,
+            list.raw(),
+            m,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
     // ----- WP-064: expression forms ---------------------------------------
 
     /// `T()` for a non-class type `T` ([expr.type.conv]/2): a prvalue
