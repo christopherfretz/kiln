@@ -8,8 +8,8 @@ use kiln_ast::{DeclId, ExprId, StmtId};
 use super::{Compiler, Local, Place};
 use crate::kbc::{NO_DTOR, Op};
 use crate::mem::Origin;
-use crate::vm::exc::EXC_FREE;
 use crate::ty::TyKind;
+use crate::vm::exc::EXC_FREE;
 
 impl Compiler<'_> {
     /// A throw-expression ([expr.throw]): the exception object is a heap

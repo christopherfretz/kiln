@@ -130,28 +130,29 @@ impl Oven {
             return self.unwind(b, pc, fb);
         }
         let arg = |i: usize| self.code[pc + 1 + i];
-        let mut exc = match aux {
-            0 => {
-                let obj = self.regs[fb + arg(0) as usize] as u64;
-                // The exception object is initialized: its release on an
-                // exception from that is no longer needed.
-                if self.cleanups.last().is_some_and(|c| {
-                    c.func == EXC_FREE && c.this == obj && c.pc & UNWIND_ONLY != 0
-                }) {
-                    self.cleanups.pop();
+        let mut exc =
+            match aux {
+                0 => {
+                    let obj = self.regs[fb + arg(0) as usize] as u64;
+                    // The exception object is initialized: its release on an
+                    // exception from that is no longer needed.
+                    if self.cleanups.last().is_some_and(|c| {
+                        c.func == EXC_FREE && c.this == obj && c.pc & UNWIND_ONLY != 0
+                    }) {
+                        self.cleanups.pop();
+                    }
+                    Exc { obj, ty: OTy(arg(1)), dtor: arg(2), pc: pc as u32, h: 0, at: 0 }
                 }
-                Exc { obj, ty: OTy(arg(1)), dtor: arg(2), pc: pc as u32, h: 0, at: 0 }
-            }
-            // [expr.throw]/4: the currently handled exception.
-            1 => match self.exc.handled() {
-                Some(e) => e,
-                None => return Err((Fault::RethrowNone, pc)),
-            },
-            _ => match self.exc.inflight.pop() {
-                Some(e) => e,
-                None => return Err((Fault::Invalid, pc)),
-            },
-        };
+                // [expr.throw]/4: the currently handled exception.
+                1 => match self.exc.handled() {
+                    Some(e) => e,
+                    None => return Err((Fault::RethrowNone, pc)),
+                },
+                _ => match self.exc.inflight.pop() {
+                    Some(e) => e,
+                    None => return Err((Fault::Invalid, pc)),
+                },
+            };
         // The innermost try-block of this evaluation.
         let entry = self.run.entry;
         let h = self
@@ -383,9 +384,9 @@ impl Oven {
                     // most derived object (not yet evaluated).
                     let p = Ptr::decode(v as u64);
                     let complete = !p.past
-                        && self
-                            .alloc_any(p)
-                            .is_some_and(|a| self.types.has_complete_object(a.ty, u64::from(p.off), ept));
+                        && self.alloc_any(p).is_some_and(|a| {
+                            self.types.has_complete_object(a.ty, u64::from(p.off), ept)
+                        });
                     if !complete {
                         return Err(Fault::Invalid);
                     }
