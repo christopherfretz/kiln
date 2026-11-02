@@ -217,14 +217,12 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     .iter()
     .chain(pinned_flags(triple))
     .map(|s| (*s).to_owned())
-            .chain(extra_flags(file))
-            .chain(
-                module_inputs(file)
-                    .into_iter()
-                    .map(|(n, p)| format!("-fmodule-file={n}={}", p.display())),
-            )
-            .chain(std::iter::once(file.display().to_string()))
-            .collect();
+    .chain(extra_flags(file))
+    .chain(
+        module_inputs(file).into_iter().map(|(n, p)| format!("-fmodule-file={n}={}", p.display())),
+    )
+    .chain(std::iter::once(file.display().to_string()))
+    .collect();
     let code = run(&args, io);
     if code != 0 {
         return Err(format!("kiln exited {code}:\n{}", err.contents()));
