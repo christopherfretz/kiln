@@ -38,7 +38,7 @@
 //@ diag: 71:24 error "constexpr variable 't' must be initialized by a constant expression"
 //@ diag: 72:24 error "constexpr variable 'u' must be initialized by a constant expression"
 //@ diag: 73:22 error "constexpr variable 'v' must be initialized by a constant expression"
-//@ diag: 74:25 error "constexpr variable 'w' must be initialized by a constant expression"
+//@ diag: 74:21 error "constexpr variable 'w' must be initialized by a constant expression"
 //@ diag: 76:15 error "constexpr variable 'x' must be initialized by a constant expression"
 //@ diag: 75:44 note "subexpression not valid in a constant expression"
 //@ diag: 76:19 note "in call to 'fexp(nan)'"

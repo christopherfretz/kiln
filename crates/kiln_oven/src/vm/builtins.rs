@@ -327,10 +327,11 @@ impl Oven {
                     bi::BITREVERSE => v.reverse_bits() >> (128 - w),
                     bi::IABS => {
                         // `a` is canonical; the most negative value has no
-                        // representable magnitude (undefined, [expr.pre]/4).
+                        // representable magnitude (undefined, [expr.pre]/4);
+                        // clang 22 fails it without a note.
                         let x = a as i128;
                         if v == 1 << (w - 1) {
-                            return Err(Fault::Invalid);
+                            return Err(Fault::Quiet);
                         }
                         x.unsigned_abs()
                     }

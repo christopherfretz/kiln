@@ -542,7 +542,8 @@ literal is one instruction and one step, not an interpreted loop.
   rounding to infinity in `fma`, `fdim`, `ldexp`, `nextafter`),
   divide-by-zero (`logb(0)`), or underflow (an inexact subnormal `ldexp`/
   `fma` result, and every subnormal or zero `nextafter` result, F.10.8.3);
-  `abs` of the most negative value is undefined. Exact infinite and NaN
+  `abs` of the most negative value is undefined (a note-less failure,
+  `Fault::Quiet`, so the error lands at the declaration as clang 22's). Exact infinite and NaN
   results from infinite or quiet-NaN operands are constants. They are
   evaluated whatever `-fclang-compat` says; codegen's constant-folding
   prepass leaves them as calls (`clang19_unevaluated`) so the IR still

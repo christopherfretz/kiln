@@ -179,6 +179,10 @@ pub(crate) enum Fault {
     PtrSub,
     /// clang's generic `Error(E)`: "subexpression not valid".
     Invalid,
+    /// A failure clang reports with no note and no call stack, so the
+    /// error lands at the declaration (clang 22's `__builtin_abs` of the
+    /// most negative value).
+    Quiet,
     PtrCmp {
         p: u64,
         q: u64,
