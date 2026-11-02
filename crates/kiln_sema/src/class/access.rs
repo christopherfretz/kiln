@@ -255,6 +255,10 @@ impl Sema<'_, '_> {
             Access::None => return false,
             Access::Private | Access::Protected => {}
         }
+        // A context class not known to derive from `naming` that has a
+        // dependent base may still turn out to (clang's `AR_dependent`
+        // from `IsDerivedFromInclusive`): decided in each instantiation.
+        let mut dependent = false;
         for &r in &ec.records {
             if access == Access::Private {
                 if same_class(self, r, naming) {
@@ -263,6 +267,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             if !self.derived_inclusive(r, naming) {
+                dependent |= self.has_dependent_bases_in(r, 0);
                 continue;
             }
             match t.object {
@@ -278,13 +283,35 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        if access == Access::Protected && t.instance_member {
-            return match t.object {
+        let friend = if access == Access::Protected && t.instance_member {
+            match t.object {
                 None => self.is_friend(ec, naming),
                 Some(ic) => self.is_protected_friend(ec, ic, naming),
-            };
+            }
+        } else {
+            self.is_friend(ec, naming)
+        };
+        if !friend && dependent {
+            // [class.protected], [temp.dep.type]: re-checked against the
+            // instantiated class ([`Sema::replay_dependent_access`]).
+            self.speculative_friend.set(true);
+            return true;
         }
-        self.is_friend(ec, naming)
+        friend
+    }
+
+    /// Whether class `c` or a (non-dependent) base of it, transitively,
+    /// has a dependent base ([temp.dep.type]; clang's
+    /// `IsDerivedFromInclusive` answering `AR_dependent`).
+    fn has_dependent_bases_in(&self, c: DeclId, depth: u32) -> bool {
+        if depth > 64 {
+            return false;
+        }
+        let Some(def) = self.ast.definition(c) else { return false };
+        self.ast.decls.bases(def, &self.ast.lists).any(|b| {
+            self.is_dependent_type(b.ty)
+                || self.ast.types.as_record(b.ty).is_some_and(|r| self.has_dependent_bases_in(r, depth + 1))
+        })
     }
 
     /// The class containing the `j`th base-specifier of `p`, a path from
