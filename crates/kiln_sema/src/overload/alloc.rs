@@ -70,25 +70,41 @@ impl Sema<'_, '_> {
     /// deallocation]/5, [expr.delete]/10): the alignment parameter must
     /// match `aligned` when one that does exists; then a class-scope
     /// lookup prefers the unsized function, a global one the sized one
-    /// when `sized`. Destroying operator delete is not supported yet.
-    /// Returns the function and whether it takes the size.
+    /// when `sized`. With `destroying` (a delete-expression or a deleting
+    /// destructor, not a new-expression's cleanup), a destroying operator
+    /// delete `operator delete(C*, std::destroying_delete_t, ...)` is
+    /// usual too, and when one is found only those are considered
+    /// ([expr.delete]/10.1). Returns the function and whether it takes
+    /// the size.
     pub(crate) fn usual_delete(
         &mut self,
         fns: &[DeclId],
         in_class: bool,
         aligned: bool,
         sized: bool,
+        destroying: bool,
     ) -> Option<(DeclId, bool)> {
         let vp = self.ast.types.pointer_to(QualType::VOID);
         let size_t = self.size_type();
         let al = self.global_ops.align_val_t;
         let mut usual: Vec<(DeclId, bool, bool)> = Vec::new();
+        let mut any_destroying = false;
         for &f in fns {
             let Some((ps, variadic)) = self.fn_params(f) else { continue };
-            if variadic || ps.is_empty() || !self.ast.types.same_type(ps[0], vp) {
+            if variadic || ps.is_empty() {
                 continue;
             }
-            let rest = &ps[1..];
+            let is_destroying = self.ast.is_destroying_operator_delete(f);
+            if is_destroying && !destroying {
+                continue;
+            }
+            if !is_destroying && !self.ast.types.same_type(ps[0], vp) {
+                continue;
+            }
+            if any_destroying && !is_destroying {
+                continue;
+            }
+            let rest = &ps[if is_destroying { 2 } else { 1 }..];
             let is = |t: QualType, w: Option<QualType>| {
                 w.is_some_and(|w| self.ast.types.same_type(t, w))
             };
@@ -99,6 +115,10 @@ impl Sema<'_, '_> {
                 [a, b] if is(*a, Some(size_t)) && is(*b, al) => (true, true),
                 _ => continue,
             };
+            if is_destroying && !any_destroying {
+                usual.clear();
+                any_destroying = true;
+            }
             usual.push((f, has_size, has_align));
         }
         if usual.iter().any(|u| u.2 == aligned) {
