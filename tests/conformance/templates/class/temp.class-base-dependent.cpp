@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.dep.type], [class.derived]: a dependent base class is substituted when
 // the derived specialization is instantiated.
 template <class T> struct Base { T b; };

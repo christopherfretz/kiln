@@ -1,5 +1,6 @@
 // [expr.new]/8: the array bound must be of integral or unscoped enumeration type.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 5:26 error "incompatible pointer to integer conversion converting 'int *' to type 'unsigned long'"
+//@ diag: 6:26 error "incompatible pointer to integer conversion converting 'int *' to type '__size_t' (aka 'unsigned long')"
+//@ requires: clang>=22
 void f(int *n) { new int[n]; }

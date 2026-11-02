@@ -53,7 +53,7 @@ commands:
               `--quick` skips the clang self-check (local iteration only)
 
 environment:
-  KILN_ORACLE  the oracle clang/LLVM release: 19 (default; the M3 gate's) or 22. Names
+  KILN_ORACLE  the oracle clang/LLVM release: 22 (default) or 19 (the M3 gate's). Names
                clang++-N, opt-N, llc-N, FileCheck-N and /usr/lib/llvm-N (exported to
                kiln++ as KILN_LLVM_DIR); spec/harness.md \"Oracle toolchain\"
 ";
@@ -103,7 +103,7 @@ fn stress(args: impl Iterator<Item = String>) -> ExitCode {
 const CI_USAGE: &str = "\
 usage: cargo xtask ci [--quick]
 
-  --quick     skip the clang++-N corpus self-check (N: KILN_ORACLE, default 19; 
+  --quick     skip the clang++-N corpus self-check (N: KILN_ORACLE, default 22; 
               local iteration; merges and GitHub CI use the full form)
 ";
 

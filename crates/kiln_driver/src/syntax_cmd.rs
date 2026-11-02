@@ -132,7 +132,9 @@ impl SyntaxJob<'_> {
         let a = job.args;
         let dump_opts = match &a.dump_ast {
             Some(o) => match dump_options(o, a.dump_ast_filter.clone(), sm, inputs.main) {
-                Ok(d) => Some(d),
+                Ok(d) => {
+                    Some(DumpOptions { written_tags: a.predef.clang_compat.major() >= 22, ..d })
+                }
                 Err(bad) => {
                     Diag::new(DiagId::drv_invalid_value, Span::INVALID)
                         .arg(format!("-fdump-ast={o}"))
@@ -169,6 +171,7 @@ impl SyntaxJob<'_> {
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection,
+            clang_compat: a.predef.clang_compat.major(),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();

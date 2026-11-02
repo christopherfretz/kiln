@@ -40,7 +40,13 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
-        if let Some(rep) = table::deprecated_replacement(t) {
+        // clang 22 also deprecates `__is_trivially_relocatable` in favour
+        // of the P2786 `__builtin_is_cpp_trivially_relocatable`.
+        let rep = table::deprecated_replacement(t).or_else(|| {
+            (self.clang_compat >= 22 && t == TypeTrait::IsTriviallyRelocatable)
+                .then_some("__builtin_is_cpp_trivially_relocatable")
+        });
+        if let Some(rep) = rep {
             let d = self.diag(DiagId::sema_deprecated_builtin, loc).arg(t.spelling()).arg(rep);
             self.emit(d);
         }

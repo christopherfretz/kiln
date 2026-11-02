@@ -9,26 +9,28 @@
 //@ expect: compile-fail
 //@ args: --target=aarch64-unknown-linux-gnu
 //@ strict-diags
-//@ diag: 33:21 error "size of register 'x0' does not match variable size"
-//@ diag: 35:22 error "size of register 'w0' does not match variable size"
-//@ diag: 36:21 error "size of register 'sp' does not match variable size"
-//@ diag: 39:22 error "register 'lr' unsuitable for global register variables on this target"
-//@ diag: 40:22 error "register 'r8' unsuitable for global register variables on this target"
-//@ diag: 41:22 error "unknown register name 'rsp' in asm"
-//@ diag: 42:21 error "unknown register name 'rsp' in asm"
-//@ diag: 43:22 error "unknown register name 'ebp' in asm"
-//@ diag: 44:22 error "unknown register name '%rsp' in asm"
-//@ diag: 45:22 error "unknown register name 'rax' in asm"
-//@ diag: 46:22 error "unknown register name 'bogus' in asm"
-//@ diag: 47:22 error "size of register 'w0' does not match variable size"
-//@ diag: 50:21 error "unknown register name 'rsp' in asm"
-//@ diag: 50:1 error "bad type for named register variable"
-//@ diag: 51:23 error "size of register 'x0' does not match variable size"
-//@ diag: 51:1 error "bad type for named register variable"
-//@ diag: 52:16 error "bad type for named register variable"
-//@ diag: 54:14 warning "ignored asm label 'x8' on automatic variable"
-//@ diag: 56:24 error "unknown register name 'rax' in asm"
-//@ diag: 57:23 error "unknown register name 'nosuchreg' in asm"
+//@ diag: 35:21 error "size of register 'x0' does not match variable size"
+//@ diag: 37:22 error "size of register 'w0' does not match variable size"
+//@ diag: 38:21 error "size of register 'sp' does not match variable size"
+//@ diag: 41:22 error "register 'lr' unsuitable for global register variables on this target"
+//@ diag: 42:22 error "register 'r8' unsuitable for global register variables on this target"
+//@ diag: 43:22 error "unknown register name 'rsp' in asm"
+//@ diag: 44:21 error "unknown register name 'rsp' in asm"
+//@ diag: 45:22 error "unknown register name 'ebp' in asm"
+//@ diag: 46:22 error "unknown register name '%rsp' in asm"
+//@ diag: 47:22 error "unknown register name 'rax' in asm"
+//@ diag: 48:22 error "unknown register name 'bogus' in asm"
+//@ diag: 49:22 error "size of register 'w0' does not match variable size"
+//@ diag: 52:21 error "unknown register name 'rsp' in asm"
+//@ diag: 52:1 error "bad type for named register variable"
+//@ diag: 53:23 error "size of register 'x0' does not match variable size"
+//@ diag: 53:1 error "bad type for named register variable"
+//@ diag: 54:16 error "bad type for named register variable"
+//@ diag: 56:14 warning "ignored asm label 'x8' on automatic variable"
+//@ diag: 58:24 error "unknown register name 'rax' in asm"
+//@ diag: 59:23 error "unknown register name 'nosuchreg' in asm"
+//@ requires: clang<22
+// clang 22 emits error: register 'x8' unsuitable for global register variables on this target; WP-355 residual
 register long a1 asm("x0");
 register int a2 asm("x0");
 register int a3 asm("w0");

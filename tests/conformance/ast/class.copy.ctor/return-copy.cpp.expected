@@ -1,37 +1,37 @@
 Dumping q::ret1:
 FunctionDecl ret1 'S (S)'
-|-ParmVarDecl a 'S':'q::S' destroyed
+|-ParmVarDecl a 'S' destroyed
 `-CompoundStmt
   `-ReturnStmt
-    `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
-      `-ImplicitCastExpr 'const S':'const q::S' lvalue <NoOp>
-        `-DeclRefExpr 'S':'q::S' lvalue Var 'a0' 'S':'q::S'
+    `-CXXConstructExpr 'S' 'void (const S &) noexcept'
+      `-ImplicitCastExpr 'const S' lvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue Var 'a0' 'S'
 
 Dumping q::ret2:
 FunctionDecl ret2 'S (S)'
-|-ParmVarDecl used a 'S':'q::S' destroyed
+|-ParmVarDecl used a 'S' destroyed
 `-CompoundStmt
   `-ReturnStmt
-    `-CXXConstructExpr 'S':'q::S' 'void (const S &) noexcept'
-      `-ImplicitCastExpr 'const S':'const q::S' xvalue <NoOp>
-        `-DeclRefExpr 'S':'q::S' lvalue ParmVar 'a' 'S':'q::S'
+    `-CXXConstructExpr 'S' 'void (const S &) noexcept'
+      `-ImplicitCastExpr 'const S' xvalue <NoOp>
+        `-DeclRefExpr 'S' lvalue ParmVar 'a' 'S'
 
 Dumping q::ret3:
 FunctionDecl ret3 'T (T)'
-|-ParmVarDecl used a 'T':'q::T'
+|-ParmVarDecl used a 'T'
 `-CompoundStmt
   `-ReturnStmt
-    `-CXXConstructExpr 'T':'q::T' 'void (T &&) noexcept'
-      `-ImplicitCastExpr 'T':'q::T' xvalue <NoOp>
-        `-DeclRefExpr 'T':'q::T' lvalue ParmVar 'a' 'T':'q::T'
+    `-CXXConstructExpr 'T' 'void (T &&) noexcept'
+      `-ImplicitCastExpr 'T' xvalue <NoOp>
+        `-DeclRefExpr 'T' lvalue ParmVar 'a' 'T'
 
 Dumping q::ret4:
 FunctionDecl ret4 'S ()'
 `-CompoundStmt
   `-ReturnStmt
-    `-ExprWithCleanups 'S':'q::S'
-      `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
-        `-CallExpr 'S':'q::S'
+    `-ExprWithCleanups 'S'
+      `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+        `-CallExpr 'S'
           `-ImplicitCastExpr 'S (*)()' <FunctionToPointerDecay>
             `-DeclRefExpr 'S ()' lvalue Function 'mk' 'S ()'
 

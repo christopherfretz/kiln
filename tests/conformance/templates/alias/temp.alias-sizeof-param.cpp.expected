@@ -5,5 +5,5 @@ TranslationUnitDecl
 |-VarDecl b 'Bytes<int>':'char[4]'
 `-StaticAssertDecl
   `-BinaryOperator 'bool' '=='
-    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Bytes<long>':'char[8]'
-    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'long'
+    |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Bytes<long>':'char[8]'
+    `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'long'

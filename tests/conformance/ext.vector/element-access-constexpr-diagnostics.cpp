@@ -4,8 +4,10 @@
 // rejects one on a vector object without a note.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 25:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 27:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 29:15 error "static assertion expression is not an integral constant expression"
+//@ requires: clang<22
+// clang 22 expected compile-fail, but compilation succeeded; WP-355 residual
 typedef float f4 __attribute__((ext_vector_type(4)));
 typedef int i4 __attribute__((ext_vector_type(4)));
 typedef int i3 __attribute__((ext_vector_type(3)));

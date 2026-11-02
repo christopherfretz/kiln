@@ -4,20 +4,21 @@
 // specialization has the call operator's deduced return type.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 24:3 error "no matching function for call to object of type '(lambda at "
-//@ diag: 23:13 note "candidate template ignored: constraints not satisfied [with x:auto = double]"
-//@ diag: 23:16 note "because 'double' does not satisfy 'Small'"
-//@ diag: 21:36 note "because 'sizeof(double) <= 4' (8 <= 4) evaluated to false"
-//@ diag: 26:3 error "no matching function for call to object of type '(lambda at "
-//@ diag: 25:13 note "candidate template ignored: deduced conflicting types for parameter 'T' ('int' vs. 'double')"
-//@ diag: 28:10 error "no viable conversion from '(lambda at "
-//@ diag: 27:12 note "candidate function [with x:auto = int]"
-//@ diag: 30:3 error "no matching function for call to object of type '(lambda at "
-//@ diag: 29:12 note "candidate template ignored: constraints not satisfied [with T = long long]"
-//@ diag: 29:33 note "because 'long long' does not satisfy 'Small'"
-//@ diag: 21:36 note "because 'sizeof(long long) <= 4' (8 <= 4) evaluated to false"
-//@ diag: 31:26 error "member reference base type 'int' is not a structure or union"
-//@ diag: 32:4 note "in instantiation of function template specialization 'f()::(anonymous class)::operator()<int>' requested here"
+//@ diag: 25:3 error "no matching function for call to object of type '(lambda at "
+//@ diag: 24:13 note "candidate template ignored: constraints not satisfied [with x:auto = double]"
+//@ diag: 24:16 note "because 'double' does not satisfy 'Small'"
+//@ diag: 22:36 note "because 'sizeof(double) <= 4' (8 <= 4) evaluated to false"
+//@ diag: 27:3 error "no matching function for call to object of type '(lambda at "
+//@ diag: 26:13 note "candidate template ignored: deduced conflicting types for parameter 'T' ('int' vs. 'double')"
+//@ diag: 29:10 error "no viable conversion from '(lambda at "
+//@ diag: 28:12 note "candidate function [with x:auto = int]"
+//@ diag: 31:3 error "no matching function for call to object of type '(lambda at "
+//@ diag: 30:12 note "candidate template ignored: constraints not satisfied [with T = long long]"
+//@ diag: 30:33 note "because 'long long' does not satisfy 'Small'"
+//@ diag: 22:36 note "because 'sizeof(long long) <= 4' (8 <= 4) evaluated to false"
+//@ diag: 32:26 error "member reference base type 'int' is not a structure or union"
+//@ diag: 33:4 note "in instantiation of function template specialization 'f()::(lambda)::operator()<int>' requested here"
+//@ requires: clang>=22
 template <class T> concept Small = sizeof(T) <= 4;
 void f() {
   auto cn = [](Small auto x) { return x + 1; };

@@ -2,6 +2,7 @@
 // rebuilt on substitution, staying a DependentNameType while its
 // arguments are dependent and resolving once they are known.
 //@ expect: ast
+//@ requires: clang>=22
 template <class T> struct M {
   template <class U> struct N {
     template <class V> struct O { using type = V; };

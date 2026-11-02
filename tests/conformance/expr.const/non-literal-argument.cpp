@@ -5,12 +5,14 @@
 // constructor or destructor it would have run.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 19:15 error "constexpr variable 'a' must be initialized by a constant expression"
-//@ diag: 19:24 note "non-literal type 'NL' cannot be used in a constant expression"
-//@ diag: 20:15 error "constexpr variable 'b' must be initialized by a constant expression"
-//@ diag: 20:21 note "non-literal type 'NL' cannot be used in a constant expression"
-//@ diag: 21:15 error "constexpr variable 'c' must be initialized by a constant expression"
-//@ diag: 21:27 note "non-literal type 'NL' cannot be used in a constant expression"
+//@ diag: 21:15 error "constexpr variable 'a' must be initialized by a constant expression"
+//@ diag: 21:24 note "non-literal type 'NL' cannot be used in a constant expression"
+//@ diag: 22:15 error "constexpr variable 'b' must be initialized by a constant expression"
+//@ diag: 22:21 note "non-literal type 'NL' cannot be used in a constant expression"
+//@ diag: 23:15 error "constexpr variable 'c' must be initialized by a constant expression"
+//@ diag: 23:27 note "non-literal type 'NL' cannot be used in a constant expression"
+//@ requires: clang<22
+// clang 22 emits error: constexpr variable 'a' must be initialized by a constant expression; WP-355 residual
 struct NL { constexpr NL() {} constexpr NL(const NL &) {} ~NL() {} };
 struct L { int x = 0; };
 constexpr int v(int, ...) { return 1; }

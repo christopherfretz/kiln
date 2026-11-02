@@ -3604,7 +3604,7 @@ trait of its own.
 | `__has_virtual_destructor(T)` | complete; its destructor is virtual | `cls` |
 | `__has_unique_object_representations(T)` | complete; [meta.unary.prop]: no padding bits; floating types are false; member pointers per the Itanium ABI | `abi.record_layout` + `tc` |
 | `__is_trivially_equality_comparable(T)` | clang 19 (WP-166): not an enum or array; for a class, `const T& == const T&` (built under a SFINAE frame from the TU) selects a defaulted `operator==` whose parameters are `const T&` (or `T` when trivially copyable), recursively for every base and field (reference or enum fields fail; a union fails); then unique object representations without the trivially-copyable requirement | `cls` + `abi` + lookup |
-| `__is_trivially_relocatable(T)` | clang 19 (WP-166): a class that can be passed in registers (`canPassInRegisters`, as `__can_pass_in_regs`), or any other complete object type; references, functions and `void` are false | `cls` |
+| `__is_trivially_relocatable(T)` | clang 19 (WP-166): a class that can be passed in registers (`canPassInRegisters`, as `__can_pass_in_regs`), or any other complete object type; references, functions and `void` are false. At `-fclang-compat=22` it also warns `sema_deprecated_builtin` (`-Wdeprecated-builtins`) naming `__builtin_is_cpp_trivially_relocatable`, as clang 22 (WP-355) | `cls` |
 | `__is_base_of(B,D)` | both are classes (not unions), `D` is complete when the two differ, and `B` is `D` or a base of `D` (cv ignored) | `cls.bases` (S3C) |
 | `__is_convertible(F,T)` / `__is_nothrow_convertible(F,T)` | `conv_check(F,T).ok` (and `.nothrow`). WP-131 landed them (and `__is_convertible_to`): `To` void is true only for `From` void; `To` function or array, or `From` void, is false; otherwise the copy-initialization of a `To` from an opaque `declval<From>()` operand under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `conv_check` |
 | `__is_constructible(T,A…)` / `__is_trivially_constructible` / `__is_nothrow_constructible` | `init_check(T, A…, Direct)`: `.ok`, `.ok && .trivial`, `.ok && .nothrow`. A reference `T` takes exactly one argument; it still counts as constructible when the reference binds to a temporary created by an implicit conversion (clang 19; only `__reference_constructs_from_temporary` excludes that). WP-131 landed `__is_constructible` and `__is_nothrow_constructible`: a temporary's direct-initialization (value-initialization for no arguments) built on opaque `declval` operands under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `init_check` |
@@ -5096,6 +5096,21 @@ explicit specialization errors remain. The blockers are:
   `aka`-worthy (`print.rs::should_aka`), so a member of `V<s::pl>`
   takes 'W<plain>' with no `aka` (WP-366). Test:
   `tests/conformance/temp.arg.explicit/explicit-arg-sugar-nondependent-param.cpp`.
+  Deduced arguments are not substituted as written (WP-373, checked
+  against clang 19 and 22): clang 19's `FinishTemplateArgumentDeduction`
+  substitutes the canonical deduced list, so `f(x, 1)` of `f(T, typename
+  id<W<T>>::type)` with `x` an `s::pl` notes 'typename id<W<plain>>::type'
+  (aka 'W<s::plain>'), as kiln does; clang 22 substitutes the deduced list
+  `Final` but deduces `T` from the call argument's canonical type, so
+  only its printing differs (`id<W<s::plain>>`, the clang-22 scoped
+  printing of a bare class, left to the clang-22 switch). The
+  specialization's own arguments are canonical in both (clang's
+  `TemplateArgumentList` comes from the canonical builder), so a
+  candidate note naming it binds them canonically, `[with T = s::plain,
+  U = int]` for `f<s::pl>(x, i, 1)` with `i` a `myint`
+  (`overload/diag.rs` `spec_desc`), while a failed deduction's
+  bindings keep the argument's sugar (`'myint' (aka 'int')`). Test:
+  `tests/conformance/temp.deduct.call/specialization-binding-canonical.cpp`.
   `deduce_explicit_only` is the same pipeline with no call: it is used
   for a function template-id that is not called ([over.over]/3,
   `Sema::resolve_single_template_id`). Mismatch notes print P as

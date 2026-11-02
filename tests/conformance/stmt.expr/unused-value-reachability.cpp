@@ -4,20 +4,22 @@
 // none in a constexpr or a non-inline static data member's initializer.
 //@ expect: compile-ok
 //@ strict-diags
-//@ diag: 21:31 warning "expression result unused"
-//@ diag: 22:39 warning "expression result unused"
-//@ diag: 27:18 warning "left operand of comma operator has no effect"
-//@ diag: 27:21 warning "expression result unused"
-//@ diag: 28:29 warning "equality comparison result unused"
-//@ diag: 28:29 note "use '=' to turn this equality comparison into an assignment"
-//@ diag: 29:28 warning "equality comparison result unused"
-//@ diag: 29:28 note "use '=' to turn this equality comparison into an assignment"
-//@ diag: 30:44 warning "expression result unused"
-//@ diag: 32:60 warning "expression result unused"
-//@ diag: 35:22 warning "ignoring return value of function declared with 'nodiscard' attribute"
-//@ diag: 39:11 warning "left operand of comma operator has no effect"
-//@ diag: 43:27 warning "left operand of comma operator has no effect"
-//@ diag: 46:20 warning "left operand of comma operator has no effect"
+//@ diag: 23:31 warning "expression result unused"
+//@ diag: 24:39 warning "expression result unused"
+//@ diag: 29:18 warning "left operand of comma operator has no effect"
+//@ diag: 29:21 warning "expression result unused"
+//@ diag: 30:29 warning "equality comparison result unused"
+//@ diag: 30:29 note "use '=' to turn this equality comparison into an assignment"
+//@ diag: 31:28 warning "equality comparison result unused"
+//@ diag: 31:28 note "use '=' to turn this equality comparison into an assignment"
+//@ diag: 32:44 warning "expression result unused"
+//@ diag: 34:60 warning "expression result unused"
+//@ diag: 37:22 warning "ignoring return value of function declared with 'nodiscard' attribute"
+//@ diag: 41:11 warning "left operand of comma operator has no effect"
+//@ diag: 45:27 warning "left operand of comma operator has no effect"
+//@ diag: 48:20 warning "left operand of comma operator has no effect"
+//@ requires: clang<22
+// clang 22 no longer emits warning: expression result unused; WP-355 residual
 template<class T> void t1() { 1; }
 template<class T> void t2() { return; 2; }
 template<class T> void t3(T x) { return; x; }

@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.arg.nontype]/1, [dcl.array]: a non-type parameter used as an array
 // bound substitutes into a constant array type.
 template <unsigned N> struct Buf {

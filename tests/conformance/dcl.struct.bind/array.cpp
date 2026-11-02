@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: test
+//@ requires: clang>=22
 // [dcl.struct.bind]/3 (C++26 [dcl.struct.bind]/6): binding an array. The
 // unnamed holding variable `e` (DecompositionDecl) copies the array (an
 // ArrayInitLoopExpr) for `auto`, or refers to it for the reference forms;

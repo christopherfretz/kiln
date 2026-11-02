@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 inline void *operator new(unsigned long, void *p) noexcept { return p; }
 void *operator new[](unsigned long, int, int);
 void *operator new(unsigned long, short, char) noexcept;

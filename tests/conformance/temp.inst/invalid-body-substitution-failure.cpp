@@ -9,16 +9,18 @@
 // WP-145.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 23:52 error "no member named 'nosuch' in 'S'"
-//@ diag: 24:10 note "in instantiation of function template specialization 'h<S>' requested here"
-//@ diag: 25:10 error "no matching function for call to 'h'"
-//@ diag: 23:34 note "candidate template ignored: substitution failure [with T = S]"
-//@ diag: 26:43 error "no member named 'nosuch' in 'S'"
-//@ diag: 27:9 note "in instantiation of function template specialization 'm<S>' requested here"
-//@ diag: 27:18 error "no matching function for call to 'm'"
-//@ diag: 26:25 note "candidate template ignored: substitution failure [with T = S]"
-//@ diag: 28:54 error "no member named 'nosuch' in 'S'"
-//@ diag: 29:10 note "in instantiation of function template specialization 'h3<S>' requested here"
+//@ diag: 25:52 error "no member named 'nosuch' in 'S'"
+//@ diag: 26:10 note "in instantiation of function template specialization 'h<S>' requested here"
+//@ diag: 27:10 error "no matching function for call to 'h'"
+//@ diag: 25:34 note "candidate template ignored: substitution failure [with T = S]"
+//@ diag: 28:43 error "no member named 'nosuch' in 'S'"
+//@ diag: 29:9 note "in instantiation of function template specialization 'm<S>' requested here"
+//@ diag: 29:18 error "no matching function for call to 'm'"
+//@ diag: 28:25 note "candidate template ignored: substitution failure [with T = S]"
+//@ diag: 30:54 error "no member named 'nosuch' in 'S'"
+//@ diag: 31:10 note "in instantiation of function template specialization 'h3<S>' requested here"
+//@ requires: clang<22
+// clang 22 emits error: no matching function for call to 'h3'; WP-355 residual
 struct S {};
 template <class T> constexpr int h(T t) { return t.nosuch(); }
 int e1 = h(S{});

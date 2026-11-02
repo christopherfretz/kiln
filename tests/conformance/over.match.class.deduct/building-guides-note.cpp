@@ -6,26 +6,28 @@
 // through an alias-qualified name.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 30:48 error "type 'int' cannot be used prior to '::' because it has no members"
-//@ diag: 32:13 note "while building implicit deduction guide first needed here"
-//@ diag: 32:16 error "no viable constructor or deduction guide for deduction of template arguments of 'Outer<int>::In'"
-//@ diag: 30:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
-//@ diag: 30:28 note "implicit deduction guide declared as 'template <class U> In(In<U>) -> In<U>'"
-//@ diag: 30:48 error "type 'char' cannot be used prior to '::' because it has no members"
-//@ diag: 33:31 note "while building implicit deduction guide first needed here"
-//@ diag: 33:18 error "no viable constructor or deduction guide for deduction of template arguments of 'Outer<char>::In'"
-//@ diag: 30:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
-//@ diag: 30:28 note "implicit deduction guide declared as 'template <class U> In(In<U>) -> In<U>'"
-//@ diag: 30:48 error "type 'short' cannot be used prior to '::' because it has no members"
-//@ diag: 34:37 note "while building implicit deduction guide first needed here"
-//@ diag: 34:23 error "no viable constructor or deduction guide for deduction of template arguments of 'Outer<short>::In'"
-//@ diag: 30:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
-//@ diag: 30:28 note "implicit deduction guide declared as 'template <class U> In(In<U>) -> In<U>'"
-//@ diag: 30:48 error "type 'long' cannot be used prior to '::' because it has no members"
-//@ diag: 36:15 note "while building implicit deduction guide first needed here"
-//@ diag: 36:18 error "no viable constructor or deduction guide for deduction of template arguments of 'O::In'"
-//@ diag: 30:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
-//@ diag: 30:28 note "implicit deduction guide declared as 'template <class U> In(In<U>) -> In<U>'"
+//@ diag: 32:48 error "type 'int' cannot be used prior to '::' because it has no members"
+//@ diag: 34:13 note "while building implicit deduction guide first needed here"
+//@ diag: 34:16 error "no viable constructor or deduction guide for deduction of template arguments of 'Outer<int>::In'"
+//@ diag: 32:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
+//@ diag: 32:28 note "implicit deduction guide declared as 'template <class U> In(In<U>) -> In<U>'"
+//@ diag: 32:48 error "type 'char' cannot be used prior to '::' because it has no members"
+//@ diag: 35:31 note "while building implicit deduction guide first needed here"
+//@ diag: 35:18 error "no viable constructor or deduction guide for deduction of template arguments of 'Outer<char>::In'"
+//@ diag: 32:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
+//@ diag: 32:28 note "implicit deduction guide declared as 'template <class U> In(In<U>) -> In<U>'"
+//@ diag: 32:48 error "type 'short' cannot be used prior to '::' because it has no members"
+//@ diag: 36:37 note "while building implicit deduction guide first needed here"
+//@ diag: 36:23 error "no viable constructor or deduction guide for deduction of template arguments of 'Outer<short>::In'"
+//@ diag: 32:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
+//@ diag: 32:28 note "implicit deduction guide declared as 'template <class U> In(In<U>) -> In<U>'"
+//@ diag: 32:48 error "type 'long' cannot be used prior to '::' because it has no members"
+//@ diag: 38:15 note "while building implicit deduction guide first needed here"
+//@ diag: 38:18 error "no viable constructor or deduction guide for deduction of template arguments of 'O::In'"
+//@ diag: 32:28 note "candidate function template not viable: requires 1 argument, but 2 were provided"
+//@ diag: 32:28 note "implicit deduction guide declared as 'template <class U> In(In<U>) -> In<U>'"
+//@ requires: clang<22
+// clang 22 emits error: no viable constructor or deduction guide for deduction of template argument...; WP-355 residual
 template<class T> struct Outer {
   template<class U> struct In { In(U, typename T::type); };
 };

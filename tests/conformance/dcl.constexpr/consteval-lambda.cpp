@@ -2,16 +2,17 @@
 // and a lambda call operator that becomes immediate by calling one.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 19:11 error "call to consteval function 'run(int)::(anonymous class)::operator()' is not a constant expression"
-//@ diag: 19:13 note "function parameter 'n' with unknown value cannot be used in a constant expression"
-//@ diag: 16:13 note "declared here"
-//@ diag: 22:11 error "call to immediate function 'run(int)::(anonymous class)::operator()' is not a constant expression"
-//@ diag: 22:13 note "function parameter 'n' with unknown value cannot be used in a constant expression"
-//@ diag: 16:13 note "declared here"
-//@ diag: 24:26 error "call to immediate function 'run(int)::(anonymous class)::operator()' is not a constant expression"
-//@ diag: 23:28 note "read of non-constexpr variable 'g' is not allowed in a constant expression"
-//@ diag: 24:26 note "in call to 'g.operator()()'"
-//@ diag: 23:8 note "declared here"
+//@ diag: 20:11 error "call to consteval function 'run(int)::(lambda)::operator()' is not a constant expression"
+//@ diag: 20:13 note "function parameter 'n' with unknown value cannot be used in a constant expression"
+//@ diag: 17:13 note "declared here"
+//@ diag: 23:11 error "call to immediate function 'run(int)::(lambda)::operator()' is not a constant expression"
+//@ diag: 23:13 note "function parameter 'n' with unknown value cannot be used in a constant expression"
+//@ diag: 17:13 note "declared here"
+//@ diag: 25:26 error "call to immediate function 'run(int)::(lambda)::operator()' is not a constant expression"
+//@ diag: 24:28 note "read of non-constexpr variable 'g' is not allowed in a constant expression"
+//@ diag: 25:26 note "in call to 'g.operator()()'"
+//@ diag: 24:8 note "declared here"
+//@ requires: clang>=22
 consteval int sq(int x) { return x * x; }
 int run(int n) {
   auto c = [](int y) consteval { return y + 1; };

@@ -8,8 +8,12 @@ enum class EC { a };
 
 static_assert(__is_void(void) && __is_void(const volatile void));
 static_assert(!__is_void(int) && !__is_void(void *));
+#if __clang_major__ < 22 // clang 22 removed __is_nullptr; kiln mirrors it
 static_assert(__is_nullptr(decltype(nullptr)) && __is_nullptr(const decltype(nullptr)));
 static_assert(!__is_nullptr(void *) && !__is_nullptr(int));
+#else
+static_assert(!__has_builtin(__is_nullptr));
+#endif
 static_assert(__is_integral(int) && __is_integral(bool) && __is_integral(char8_t));
 static_assert(__is_integral(const unsigned long) && __is_integral(wchar_t));
 static_assert(!__is_integral(float) && !__is_integral(E) && !__is_integral(int &));

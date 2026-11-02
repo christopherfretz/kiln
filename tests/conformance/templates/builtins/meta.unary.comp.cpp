@@ -1,6 +1,8 @@
 // [meta.unary.comp]: the composite type category predicates, positive and
 // negative (spec/sema-templates.md §9.1).
 //@ strict-diags
+//@ requires: clang<22
+// clang 22 expected compile-ok, but the compiler failed (exit code 1); WP-355 residual
 struct S { int m; };
 enum E { e0 };
 

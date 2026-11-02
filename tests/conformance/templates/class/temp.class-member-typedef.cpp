@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.inst]/3: member typedef and alias declarations are instantiated with
 // the class; the substituted type is visible through the specialization.
 template <class T> struct Traits {

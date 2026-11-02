@@ -7,20 +7,22 @@
 // (clang's desugarForDiagnostic).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 48:7 error "no viable conversion from 'S' to 'int'"
-//@ diag: 49:7 error "no viable conversion from 'I' to 'int'"
-//@ diag: 50:7 error "no viable conversion from 'J<int>' to 'int'"
-//@ diag: 52:7 error "no viable conversion from 'iterator<false>' to 'int'"
-//@ diag: 53:7 error "no viable conversion from 'plain' to 'int'"
-//@ diag: 55:7 error "no viable conversion from 'iterator<false>' to 'int'"
-//@ diag: 57:7 error "no viable conversion from 'decltype(v.p())' (aka 'view<int>::plain') to 'int'"
-//@ diag: 58:7 error "cannot initialize a variable of type 'int' with an rvalue of type 'SA *' (aka 'ns::S *')"
-//@ diag: 42:41 error "no viable conversion from 'view<int>::iterator<false>' to 'int'"
-//@ diag: 59:3 note "in instantiation of function template specialization 'take<view<int>::iterator<false>>' requested here"
-//@ diag: 42:41 error "no viable conversion from 'view<int>::plain' to 'int'"
-//@ diag: 60:3 note "in instantiation of function template specialization 'take<view<int>::plain>' requested here"
-//@ diag: 45:18 error "no viable conversion from 'view<int>::plain' to 'int'"
-//@ diag: 61:25 note "in instantiation of member function 'W<view<int>::plain>::h' requested here"
+//@ diag: 50:7 error "no viable conversion from 'S' to 'int'"
+//@ diag: 51:7 error "no viable conversion from 'I' to 'int'"
+//@ diag: 52:7 error "no viable conversion from 'J<int>' to 'int'"
+//@ diag: 54:7 error "no viable conversion from 'iterator<false>' to 'int'"
+//@ diag: 55:7 error "no viable conversion from 'plain' to 'int'"
+//@ diag: 57:7 error "no viable conversion from 'iterator<false>' to 'int'"
+//@ diag: 59:7 error "no viable conversion from 'decltype(v.p())' (aka 'view<int>::plain') to 'int'"
+//@ diag: 60:7 error "cannot initialize a variable of type 'int' with an rvalue of type 'SA *' (aka 'ns::S *')"
+//@ diag: 44:41 error "no viable conversion from 'view<int>::iterator<false>' to 'int'"
+//@ diag: 61:3 note "in instantiation of function template specialization 'take<view<int>::iterator<false>>' requested here"
+//@ diag: 44:41 error "no viable conversion from 'view<int>::plain' to 'int'"
+//@ diag: 62:3 note "in instantiation of function template specialization 'take<view<int>::plain>' requested here"
+//@ diag: 47:18 error "no viable conversion from 'view<int>::plain' to 'int'"
+//@ diag: 63:25 note "in instantiation of member function 'W<view<int>::plain>::h' requested here"
+//@ requires: clang<22
+// clang 22 emits error: no viable conversion from 'decltype(v.p())' (aka 'plain') to 'int'; WP-355 residual
 namespace ns {
 struct S {};
 S mk();

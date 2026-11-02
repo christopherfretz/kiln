@@ -6,18 +6,20 @@
 // checked. A member gets the member-declaration error instead (WP-293).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 22:1 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 22:14 error "illegal storage class on file-scoped variable"
-//@ diag: 23:1 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 23:14 error "illegal storage class on file-scoped variable"
-//@ diag: 26:1 error "decomposition declaration cannot be declared 'register'"
-//@ diag: 26:1 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 26:15 error "illegal storage class on file-scoped variable"
-//@ diag: 27:15 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 27:28 error "illegal storage class on file-scoped variable"
-//@ diag: 28:20 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
-//@ diag: 28:31 error "illegal storage class on file-scoped variable"
-//@ diag: 29:12 error "storage class specified for a member declaration"
+//@ diag: 24:1 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 24:14 error "illegal storage class on file-scoped variable"
+//@ diag: 25:1 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 25:14 error "illegal storage class on file-scoped variable"
+//@ diag: 28:1 error "decomposition declaration cannot be declared 'register'"
+//@ diag: 28:1 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 28:15 error "illegal storage class on file-scoped variable"
+//@ diag: 29:15 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 29:28 error "illegal storage class on file-scoped variable"
+//@ diag: 30:20 error "ISO C++17 does not allow 'register' storage class specifier [-Wregister]"
+//@ diag: 30:31 error "illegal storage class on file-scoped variable"
+//@ diag: 31:12 error "storage class specified for a member declaration"
+//@ requires: clang<22
+// clang 22 emits error: structured binding declaration cannot be declared 'register'; WP-355 residual
 
 register int gg;
 register int gi = "x";

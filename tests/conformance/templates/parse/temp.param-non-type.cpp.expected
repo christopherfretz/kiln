@@ -9,7 +9,7 @@ TranslationUnitDecl
 | |   `-CXXBoolLiteralExpr 'bool' true
 | |-NonTypeTemplateParmDecl 'unsigned long' depth 0 index 2 M
 | | `-TemplateArgument expr
-| |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+| |   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'int'
 | `-CXXRecordDecl struct B definition
 |-ClassTemplateDecl C
 | |-TemplateTypeParmDecl referenced class depth 0 index 0 T

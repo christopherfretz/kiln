@@ -3,6 +3,7 @@
 // is an expression (`T(a)` with `a` a variable). `sizeof(T())` is a
 // function type: see type-id-errors.cpp.
 //@ expect: ast
+//@ requires: clang>=22
 namespace std { class type_info; }
 struct T { T(); T(int); int m; };
 int a;

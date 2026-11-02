@@ -7,7 +7,7 @@
 // are default-movable (move construction and assignment select members
 // neither user-provided nor deleted, destructor not user-provided).
 // Oracle-checked by hand with clang++-22 (22.1.8): same answers.
-//@ skip(clang): clang 19 lacks __builtin_is_cpp_trivially_relocatable (added in clang 21)
+//@ requires: clang>=22
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 40:12 error "incomplete type 'Inc' used in type trait expression"
