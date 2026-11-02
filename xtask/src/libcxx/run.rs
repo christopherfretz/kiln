@@ -217,7 +217,7 @@ const HOST_FS_UNSUPPORTED: &[&str] = &[
 /// (`llvm.smul.with.overflow.i128`, from `__builtin_mul_overflow`) to a
 /// `__muloti4` libcall that only compiler-rt's builtins provide; the
 /// GNU toolchain's link line (clang's and kiln's) links libgcc, which has
-/// no `__muloti4`. (x86_64 expands it inline.)
+/// no `__muloti4`. (`x86_64` expands it inline.)
 const COMPILER_RT_UNSUPPORTED: &[&str] =
     &["std/numerics/numeric.ops/numeric.ops.sat/mul_sat.pass.cpp"];
 
