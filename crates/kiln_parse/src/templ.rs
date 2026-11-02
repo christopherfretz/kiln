@@ -805,17 +805,18 @@ impl Parser<'_, '_> {
         // its qualifier and keyword as written ([temp.names]/5).
         let template_kw = end >= 2 && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template);
         let underlying = self.s.template_name_for(d);
-        if template_kw && qual.is_some() {
-            if let Some(Some(q)) = self.parse_nested_name_nns().ok() {
-                self.eat_kw(Kw::Template);
-                self.bump();
-                let tn = self.s.ast.types.template_name(TemplateName::Qualified {
-                    nns: q.nns,
-                    template_kw: true,
-                    underlying,
-                });
-                return Some(TemplateArg::template(tn));
-            }
+        if template_kw
+            && qual.is_some()
+            && let Ok(Some(q)) = self.parse_nested_name_nns()
+        {
+            self.eat_kw(Kw::Template);
+            self.bump();
+            let tn = self.s.ast.types.template_name(TemplateName::Qualified {
+                nns: q.nns,
+                template_kw: true,
+                underlying,
+            });
+            return Some(TemplateArg::template(tn));
         }
         while self.pos() < end {
             self.bump();

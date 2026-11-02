@@ -962,31 +962,21 @@ impl Parser<'_, '_> {
                 true
             }
             // `X<A>::name` with an annotated scope ([`Parser::annotate_template_scope`])
-            // in which `name` is not a type, where only a type can be:
-            // the parse proper reports it ("no type named ..."; clang's
-            // `DiagnoseUnknownTypeName`).
-            Some((end, NameClass::Undeclared, _))
-                if end == start + 2
-                    && self.at_decltype_scope()
-                    && self.decltype_scope_ok()
-                    && self.unknown_type_follows(end, ctx) =>
-            {
-                if let Ok(Some(q)) = self.parse_nested_name_nns() {
-                    let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
-                }
-                ds.invalid = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
-                true
-            }
-            // `S::name d` with `S` a non-dependent class or namespace
-            // that has no `name`, where only a type can be: "no type
-            // named 'name' in 'S'" (clang `DiagnoseUnknownTypeName`). At
-            // block scope the statement disambiguation chose a
+            // in which `name` is not a type, or `S::name d` with `S` a
+            // non-dependent class or namespace that has no `name`, where
+            // only a type can be: the parse proper reports it ("no type
+            // named 'name' in 'S'"; clang's `DiagnoseUnknownTypeName`).
+            // At block scope the statement disambiguation chose a
             // declaration already (`S::name(e);`, `S::name *g;`).
             Some((end, NameClass::Undeclared, _))
-                if end > start + 1
-                    && self.unresolved_scope_name(start)
-                    && (ctx == DeclaratorContext::Block || self.unknown_type_follows(end, ctx)) =>
+                if (end == start + 2
+                    && self.at_decltype_scope()
+                    && self.decltype_scope_ok()
+                    && self.unknown_type_follows(end, ctx))
+                    || (end > start + 1
+                        && self.unresolved_scope_name(start)
+                        && (ctx == DeclaratorContext::Block
+                            || self.unknown_type_follows(end, ctx))) =>
             {
                 if let Ok(Some(q)) = self.parse_nested_name_nns() {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
