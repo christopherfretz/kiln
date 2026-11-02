@@ -978,7 +978,16 @@ and returns the scope it names:
 
 ### 4.6 Namespaces, linkage specifications, static_assert
 - **Namespaces:**
-  - Named namespaces are reopened ([namespace.def]).
+  - Named namespaces are reopened ([namespace.def]). The name is
+    searched in the enclosing namespace and, when that finds no
+    namespace, in its inline namespace set ([namespace.def.general]/3):
+    `namespace std::ranges {` extends libc++'s `std::__1::ranges`. Such
+    a reopening's semantic context is the extended namespace's parent and
+    its lexical context the enclosing scope, so its members are members
+    of (and mangle as) the extended namespace, as GCC does; clang 19
+    mangles them with the lexical path (`_ZN1A1R1yE` for
+    `_ZN1A1I1R1yE`), a clang divergence kiln does not follow
+    (tests/conformance/namespace.def/reopen-through-inline.cpp).
   - An unnamed namespace is created once per scope and gets an
     implicit `UsingDirectiveDecl` ([namespace.unnamed]).
 - **Using-directives:** the payload is `Payload::None(nominated.raw())`.
