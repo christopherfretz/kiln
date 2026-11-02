@@ -3,6 +3,8 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 parse_anon_bitfield_member_init = Error (0) "anonymous bit-field cannot have a default member initializer";
+parse_array_qual_outside_prototype = Error (0) "type qualifier used in array declarator outside of function prototype";
+parse_array_static_outside_prototype = Error (0) "'static' used in array declarator outside of function prototype";
 parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
 parse_asm_expected_string = Error (0) "expected string literal or parenthesized constant expression in 'asm'";
 parse_asm_expected_string_19 = Error (0) "expected string literal in 'asm'";
@@ -17,6 +19,7 @@ parse_attributes_misplaced = Error (0) "misplaced attributes; expected attribute
 parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
 parse_bad_pure_specifier = Error (0) "initializer on function does not look like a pure-specifier";
 parse_bit_int_extension = Extension [BitIntExtension] (0) "'_BitInt' in C++ is a Clang extension";
+parse_c99_array_usage_cxx = Error (1) "{0:qualifier in|static} array size is a C99 feature, not permitted in C++";
 parse_c99_complex = Extension [C99Extensions] (0) "'_Complex' is a C99 extension";
 parse_capture_default_first = Error (0) "capture default must be first";
 parse_concept_has_constraints = Error (0) "concept cannot have associated constraints";

@@ -2010,6 +2010,44 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// C99's `static` and type-qualifier-list in an array declarator's
+    /// brackets (clang `ParseBracketDeclarator`): both are errors in C++
+    /// ("... is a C99 feature" on a parameter's outermost array, else
+    /// "... outside of function prototype", which invalidates the
+    /// declarator), at the `[`. A nullability qualifier there is
+    /// a clang extension: it applies to the array, which only the
+    /// parameter's outermost one may carry (it moves to the decayed
+    /// pointer; spec/sema.md §4.1.1).
+    fn parse_bracket_quals(&mut self, d: &mut Declarator, open: Loc) {
+        let mut stat = self.at_kw(Kw::Static);
+        if stat {
+            self.bump();
+        }
+        let (quals, nulls) = self.parse_ptr_quals();
+        if !stat && !quals.is_empty() && self.at_kw(Kw::Static) {
+            self.bump();
+            stat = true;
+        }
+        let i = d.chunks.len();
+        d.nullability.extend(nulls.into_iter().map(|n| (i, n)));
+        if !stat && quals.is_empty() {
+            return;
+        }
+        let param = d.ctx == DeclaratorContext::Prototype && i == 0;
+        let id = match (param, stat) {
+            (true, _) => DiagId::parse_c99_array_usage_cxx,
+            (false, true) => DiagId::parse_array_static_outside_prototype,
+            (false, false) => DiagId::parse_array_qual_outside_prototype,
+        };
+        let mut diag = self.s.diag(id, open);
+        if param {
+            diag = diag.arg(u8::from(stat));
+        } else {
+            d.invalid = true;
+        }
+        self.emit(diag);
+    }
+
     /// The attributes and nullability qualifiers after a `&` or `&&`
     /// ([dcl.ref]/1; a nullability qualifier there is diagnosed by sema).
     pub(crate) fn parse_ref_quals(&mut self) -> Vec<NullSpec> {
@@ -2149,6 +2187,7 @@ impl Parser<'_, '_> {
         loop {
             if self.at(Punct::LSquare) && !self.at_cxx11_attr() {
                 let open = self.bump().span.lo;
+                self.parse_bracket_quals(d, open);
                 let mut size = None;
                 if !self.at(Punct::RSquare) {
                     // An array bound is manifestly constant-evaluated.

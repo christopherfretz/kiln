@@ -1367,7 +1367,17 @@ impl Sema<'_, '_> {
 
     /// [dcl.fct]/5: a parameter of array type "array of T" becomes
     /// "pointer to T"; of function type, "pointer to" that type.
+    /// A nullability qualifier on the array (`int a[_Nonnull]`, or a
+    /// decl-specifier one) moves to the pointer (clang keeps
+    /// `int * _Nonnull`).
     pub(crate) fn adjust_param_type(&mut self, ty: QualType) -> QualType {
+        if let TypeView::Attributed { kind, modified, .. } = self.ast.types.view(ty.ty())
+            && crate::nullability::is_nullability(kind)
+            && self.ast.types.is_array(modified)
+        {
+            let p = self.adjust_param_type(modified);
+            return self.ast.types.attributed(kind, p, p);
+        }
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
             self.ast.types.pointer_to(elem)
@@ -3499,6 +3509,9 @@ impl Sema<'_, '_> {
             spec = spec.with_explicit_object(true);
         }
         let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
+        if let Some(p) = prev_ok {
+            self.check_param_nullability(p, &params);
+        }
         // clang marks the redeclaration invalid and leaves it out of the
         // redeclaration chain; calls ignore it.
         if redefined {
