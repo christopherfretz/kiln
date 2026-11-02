@@ -8,16 +8,16 @@
 //@ std: c++26
 //@ strict-diags
 //@ requires: clang>=22
-//@ diag: 20:11 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
-//@ diag: 23:17 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
-//@ diag: 24:22 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
-//@ diag: 25:16 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
-//@ diag: 26:28 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
-//@ diag: 29:21 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
-//@ diag: 31:38 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
-//@ diag: 31:38 warning "'...' in this location creates a C-style varargs function [-Wambiguous-ellipsis]"
-//@ diag: 31:35 note "preceding '...' declares a function parameter pack"
-//@ diag: 31:38 note "insert ',' before '...' to silence this warning"
+//@ diag: 21:11 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
+//@ diag: 24:17 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
+//@ diag: 25:22 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
+//@ diag: 26:16 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
+//@ diag: 27:28 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
+//@ diag: 30:21 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
+//@ diag: 32:38 warning "declaration of a variadic function without a comma before '...' is deprecated [-Wdeprecated-missing-comma-variadic-parameter]"
+//@ diag: 32:38 warning "'...' in this location creates a C-style varargs function [-Wambiguous-ellipsis]"
+//@ diag: 32:35 note "preceding '...' declares a function parameter pack"
+//@ diag: 32:38 note "insert ',' before '...' to silence this warning"
 void f(int...);
 void g(int, ...);
 void h(...);
