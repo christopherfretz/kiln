@@ -1464,6 +1464,16 @@ impl Sema<'_, '_> {
             set.cands.push(cand);
             return;
         }
+        if let Some(sat) = self.check_function_constraints(f, set.loc).filter(|&s| !self.sat_ok(s))
+        {
+            // [over.match.viable]/3: a conversion function whose trailing
+            // requires-clause is not satisfied is not viable, after the
+            // object argument (clang `AddConversionCandidate`).
+            cand.viable = false;
+            cand.failure = CandidateFailure::ConstraintsNotSatisfied { sat };
+            set.cands.push(cand);
+            return;
+        }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let ret =
             self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);

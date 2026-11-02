@@ -1008,7 +1008,29 @@ and returns the scope it names:
     Namespace attributes are not parsed yet, so a deprecated namespace
     is not a deprecated context.
   - `maybe_unused` suppresses unused warnings.
-  - `alignas` is validated as a power of two and fed into layout.
+  - `alignas` is validated as a power of two and fed into layout
+    (`check_alignment_expr`). `requested alignment is not a power of 2`
+    and `requested alignment must be ... or smaller` are reported at the
+    attribute token, as clang's `AddAlignedAttr` does, not at the
+    expression.
+  - `alignas` operands ([dcl.align]/1, [temp.variadic]/5,
+    `act_on_alignas_operand`, WP-302): `alignas(T...)` / `alignas(e...)`
+    build a pack expansion (a type operand through
+    `act_pack_expansion_type`, so an expansion with no pack is `pack
+    expansion does not contain any unexpanded parameter packs` at the
+    `...`). An operand that contains an unexpanded pack without `...` is
+    `expression contains unexpanded parameter pack 'Ts'` at the operand's
+    begin (`sema_unexpanded_pack`, `diagnose_unexpanded_pack` in
+    `templ/pack.rs`; a type-id operand counts as an `alignof` expression;
+    two names print `packs 'A' and 'B'`, more `packs 'A', 'B', ...`), and
+    the attribute is dropped. Instantiation expands the operand and
+    attaches one `ALIGNED` attribute per element (clang's
+    `instantiateDependentAlignedAttr`), so the strictest wins and an empty
+    pack leaves the natural alignment; each element is re-checked at the
+    attribute token (spec/sema-templates.md §2.7). On variables the
+    attributes are copied too (`var_align_attrs`), but variable alignment
+    is not yet consumed by `alignof` or codegen (xfail
+    `tests/conformance/dcl.align/variable-alignas.cpp`).
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
 
 ### 4.6 Namespaces, linkage specifications, static_assert
@@ -1054,8 +1076,17 @@ and returns the scope it names:
     `static assertion failed due to requirement '…'`, with the
     condition printed by `TypeNames::write_expr`, plus the message if
     there is one. A variable template-id prints its explicit arguments
-    (`is_v<ND>`, clang `VisitDeclRefExpr`); its qualifier is not yet
-    kept on the `DeclRefExpr` (clang prints `!std::is_same_v<…>`).
+    (`is_v<ND>`, clang `VisitDeclRefExpr`) after its qualifier as
+    written (`ns::S::z<char>`, `::ns::f<int *>`): the parser and the
+    instantiation of a qualified or `T::template` variable template-id
+    record the nested-name-specifier on the `DeclRefExpr`
+    (`set_template_id_qualifier` → `ExprArena::set_decl_ref_qualifier`)
+    and its begin (the diagnostic's column) at the qualifier. In an
+    instantiation the qualifier is substituted: `A::` in the pattern of
+    `A` names the specialization (`A<int>::y`), and a substituted
+    parameter head prints its canonical replacement without scope
+    (`T::y` with `T = ns::S` prints `S::y`, clang's
+    `NestedNameSpecifier::print` `SuppressScope`) (WP-302).
   - Evaluation notes follow (§8).
 
 ### 4.7 Exception specifications (`except.rs`)

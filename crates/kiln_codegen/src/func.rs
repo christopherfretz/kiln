@@ -1353,8 +1353,8 @@ impl Cg<'_> {
 
     /// LLVM `ConstantFolder` for the formats `cfloat` does not read
     /// (`half`, `bfloat`, `fp128`, `x86_fp80`; WP-292): `APFloat`
-    /// arithmetic via the Oven's `apfloat`. A NaN result is left unfolded
-    /// (its payload rules are `APFloat`'s).
+    /// arithmetic via the Oven's `apfloat`, NaN results included (their
+    /// sign and payload rules are `APFloat`'s; WP-302).
     fn fold_wide_bin(&mut self, op: BinOp, l: V, r: V) -> Option<V> {
         let (ty, k, a) = self.cfloat_bits(l)?;
         let (_, _, b) = self.cfloat_bits(r)?;
@@ -1368,7 +1368,7 @@ impl Cg<'_> {
             BinOp::FDiv => apfloat::BinOp::Div,
             _ => return None,
         };
-        let x = apfloat::bin(op, k, a, b).filter(|&x| !apfloat::is_nan(k, x))?;
+        let x = apfloat::bin(op, k, a, b)?;
         Some(V::C(self.m.const_float_bits(ty, x)))
     }
 
@@ -1388,9 +1388,6 @@ impl Cg<'_> {
             return Some(V::C(self.m.const_float_bits(to, x)));
         }
         let (_, fk, a) = self.cfloat_bits(v)?;
-        if apfloat::is_nan(fk, a) {
-            return None;
-        }
         match op {
             CastOp::FPExt | CastOp::FPTrunc => {
                 let tk = float_kind(to)?;
@@ -1677,6 +1674,11 @@ impl Cg<'_> {
     }
 
     pub fn fneg(&mut self, v: V) -> V {
+        if let Some((ty, k, a)) = self.cfloat_bits(v)
+            && !matches!(k, FloatKind::Single | FloatKind::Double)
+        {
+            return V::C(self.m.const_float_bits(ty, a ^ 1 << (k.bits() - 1)));
+        }
         if let Some((ty, a)) = self.cfloat(v) {
             return self.mk_float(ty, -a);
         }
@@ -1743,12 +1745,24 @@ impl Cg<'_> {
                     let _ = fty;
                     Some(self.mk_float(to, x))
                 }
-                CastOp::FPToSI if x.is_finite() => {
-                    Some(V::C(self.m.const_int(to, x.trunc() as i128)))
-                }
-                CastOp::FPToUI if x.is_finite() && x >= 0.0 => {
-                    Some(V::C(self.m.const_int(to, x.trunc() as i128)))
-                }
+                // `APFloat::convertToInteger` toward zero; a NaN, an
+                // infinity or an out-of-range value folds to poison.
+                CastOp::FPToSI | CastOp::FPToUI => self.m.types.int_width(to).map(|w| {
+                    let t = x.trunc();
+                    let ok = if op == CastOp::FPToSI {
+                        let lim = 2f64.powi(w as i32 - 1);
+                        t >= -lim && t < lim
+                    } else {
+                        t > -1.0 && t < 2f64.powi(w as i32)
+                    };
+                    if !ok {
+                        V::C(self.m.const_poison(to))
+                    } else if op == CastOp::FPToSI {
+                        V::C(self.m.const_int(to, t as i128))
+                    } else {
+                        V::C(self.m.const_int(to, t as u128 as i128))
+                    }
+                }),
                 _ => None,
             };
             if let Some(r) = r {

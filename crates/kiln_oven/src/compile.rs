@@ -691,6 +691,9 @@ pub(crate) struct Compiler<'a> {
     /// source-location builtin: the builtins in it take the values of
     /// that use (clang `SourceLocExprScopeGuard`; spec/oven.md, Builtins).
     srcloc: Option<ExprId>,
+    /// Comma left operands not evaluated: the ignored values of the
+    /// `__builtin_object_size` trial being compiled (WP-302).
+    skip_effects: Vec<ExprId>,
 }
 
 /// The value an `OpaqueValueExpr` stands for.
@@ -729,6 +732,7 @@ impl<'a> Compiler<'a> {
             cur_params: Vec::new(),
             array_index: None,
             srcloc: None,
+            skip_effects: Vec::new(),
         }
     }
 
@@ -4187,6 +4191,9 @@ impl Compiler<'_> {
 
     /// Evaluates `e` for its side effects.
     fn effect(&mut self, e: ExprId) {
+        if self.skip_effects.contains(&e) {
+            return;
+        }
         let m = self.next;
         let n = self.node(e);
         let ty = self.ety(e);
