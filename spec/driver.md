@@ -369,6 +369,18 @@ the current directory (standard input is `-`). `-o -` is standard output.
   aarch64, LLVM 19): on libc++'s `end.to.end/generator.pass.cpp`
   (4.8k lines of IR) `opt` takes 0.02 s and 62 MB RSS, against 2.9 s
   for the whole debug-build `kiln++ -c`; `go.pass.cpp` 0.01 s.
+- **O0 pipeline (WP-389).** When the IR defines an `always_inline`
+  function (an `attributes #N` line holds `alwaysinline`;
+  `needs_always_inline`), it goes through clang 19's O0 module pipeline,
+  `opt -passes=default<O0>` (`AlwaysInlinerPass` without lifetime
+  markers, then the coroutine lowering when needed), on every output.
+  For `-S -emit-llvm` and `-c -emit-llvm` the IR is first assembled with
+  `llvm-as -o - -` and `opt` gets `-discard-value-names -S -` (clang's
+  default; `opt` refuses textual IR in a name-discarding context), so
+  the inliner adds no `<callee>.exit` block names; the frontend's
+  `; ModuleID` line is kept. For `-S`, `-c` and linking, `opt -S -`
+  feeds `llc` directly and the separate coroutine step is then a no-op.
+  `-v` prints the extra commands; `-###` does not show them.
 - **Link.** `clang++` with `--target=<triple>` (only if given),
   `--sysroot=`, the `-O` flag, `-pthread`, `-stdlib=`, then the objects,
   linker inputs and link options in command-line order, then

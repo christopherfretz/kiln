@@ -415,6 +415,73 @@ pub fn needs_coro_lowering(ir: &str) -> bool {
     ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
 }
 
+/// Whether the IR defines an `always_inline` function (an attribute
+/// group holds `alwaysinline`; kiln puts it on definitions only). clang's
+/// O0 pipeline (`AlwaysInlinerPass`) inlines every call to one, deleting
+/// a discardable one left unused, before `-emit-llvm` writes the module.
+pub fn needs_always_inline(ir: &str) -> bool {
+    ir.lines().any(|l| {
+        l.starts_with("attributes #") && l.split_ascii_whitespace().any(|w| w == "alwaysinline")
+    })
+}
+
+/// clang 19's whole O0 module pipeline (`buildO0DefaultPipeline`) over
+/// `text`: `AlwaysInlinerPass` without lifetime markers (`opt
+/// -passes=always-inline` alone would insert them), then the coroutine
+/// lowering when the module declares coroutine intrinsics. For IR that is
+/// written out (`emit_ir`), local value names are discarded as clang does
+/// (no `<callee>.exit` blocks from the inliner); `opt` reads textual IR
+/// only with names kept, so the text goes through `llvm-as` first.
+/// `None` after a failure, which has been reported. The frontend's
+/// `; ModuleID` line is kept (`opt` names the module `<stdin>`).
+fn o0_pipeline(
+    args: &Args,
+    tc: &Toolchain,
+    text: &str,
+    emit_ir: bool,
+    drv: &DiagEngine<'_>,
+    io: &Io,
+) -> Option<String> {
+    let mut opt = Command::new(tc, Tool::Opt);
+    opt.arg("-passes=default<O0>");
+    let out = if emit_ir {
+        let mut as_ = Command::new(tc, Tool::LlvmAs);
+        as_.arg("-o").arg("-").arg("-");
+        let bc = run_opt(args, &as_, text.as_bytes(), drv, io)?;
+        opt.arg("-discard-value-names").arg("-S").arg("-");
+        run_opt(args, &opt, &bc, drv, io)?
+    } else {
+        opt.arg("-S").arg("-");
+        run_opt(args, &opt, text.as_bytes(), drv, io)?
+    };
+    let mut out = String::from_utf8_lossy(&out).into_owned();
+    if let (Some(rest), Some(id)) = (
+        out.strip_prefix("; ModuleID = '<stdin>'"),
+        text.lines().next().filter(|l| l.starts_with("; ModuleID = ")),
+    ) {
+        out = format!("{id}{rest}");
+    }
+    Some(out)
+}
+
+/// Runs an LLVM tool over `input` (printing it first under `-v`) and
+/// returns its standard output; `None` after a failure, which the tool or
+/// the driver has reported.
+fn run_opt(
+    args: &Args,
+    cmd: &Command,
+    input: &[u8],
+    drv: &DiagEngine<'_>,
+    io: &Io,
+) -> Option<Vec<u8>> {
+    if args.verbose {
+        let mut err = io.stderr.clone();
+        let _ = err.write_all(cmd.render(false).as_bytes());
+    }
+    let mut out = Vec::new();
+    cmd.run(Some(input), &mut out, &io.stderr, drv).then_some(out)
+}
+
 /// `opt` running clang's O0 coroutine lowering (`CoroConditionalWrapper`
 /// in `buildO0DefaultPipeline`): `CoroEarly`, `CoroSplit`, `CoroCleanup`,
 /// then `GlobalDCE`. Text in, text out.
@@ -518,6 +585,13 @@ fn execute(
         match step {
             Step::Frontend { input, dest } => {
                 ir = frontend(args, tc, input, stdin_text, diag_opts, io);
+                // The always-inliner runs on every output, `-emit-llvm`
+                // included (spec/driver.md "O0 pipeline").
+                if let Some(text) = &ir
+                    && needs_always_inline(text)
+                {
+                    ir = o0_pipeline(args, tc, text, matches!(dest, Dest::File(_)), drv, io);
+                }
                 skip_piped = ir.is_none();
                 failed |= ir.is_none();
                 if let (Some(text), Dest::File(f)) = (&ir, dest)
@@ -542,23 +616,20 @@ fn execute(
                 }
                 // A coroutine is lowered first: `llc` does not run the
                 // coroutine passes (spec/driver.md "Coroutine lowering").
+                // A module that went through the O0 pipeline above is
+                // already lowered.
                 if cmd.tool == Tool::Llc
                     && let Some(text) = &ir
                     && needs_coro_lowering(text)
                 {
-                    let opt = coro_lowering(tc);
-                    if args.verbose {
-                        let mut err = io.stderr.clone();
-                        let _ = err.write_all(opt.render(false).as_bytes());
-                    }
-                    let mut out = Vec::new();
-                    if !opt.run(Some(text), &mut out, &io.stderr, drv) {
+                    let Some(out) = run_opt(args, &coro_lowering(tc), text.as_bytes(), drv, io)
+                    else {
                         failed = true;
                         continue;
-                    }
+                    };
                     ir = Some(String::from_utf8_lossy(&out).into_owned());
                 }
-                failed |= !cmd.run(ir.as_deref(), &mut io.stdout, &io.stderr, drv);
+                failed |= !cmd.run(ir.as_deref().map(str::as_bytes), &mut io.stdout, &io.stderr, drv);
             }
             Step::External { cmd, piped: false } => {
                 // The link step: only when everything before it worked.
@@ -644,6 +715,13 @@ mod tests {
         assert!(needs_coro_lowering("declare ptr @llvm.coro.noop() #1\n"));
         assert!(!needs_coro_lowering("define void @\"llvm.coro.id\"() {\n}\n"));
         assert!(!needs_coro_lowering("declare void @f() #0\n"));
+    }
+
+    #[test]
+    fn always_inline_detection() {
+        assert!(needs_always_inline("attributes #1 = { alwaysinline mustprogress nounwind }\n"));
+        assert!(!needs_always_inline("attributes #0 = { mustprogress noinline optnone }\n"));
+        assert!(!needs_always_inline("define void @alwaysinline() #0 {\n}\n"));
     }
 
     #[test]
