@@ -75,6 +75,7 @@ mod switch_conv;
 mod switch_enum;
 pub mod target;
 pub mod templ;
+mod template_id_typo;
 mod try_stmt;
 mod type_diff;
 mod unreachable_code;
