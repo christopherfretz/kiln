@@ -379,11 +379,18 @@ initializer's name, `_ZGIW1M` / `_ZGIW1MWP1P` (spec/abi.md §8.19).
 `export import std;` and the `::` re-exports. Both work under `-std=c++20`
 and later. The libc++ 22 layout adds partitions-free `std.cppm` too.
 
-Cost (debug kiln++, aarch64): `import std;` plus a small `main` takes about
-12 s and 100 MiB to compile, roughly the cost of including every standard
-header once. libc++'s own modules tests (`std/modules/`,
+Cost (aarch64): `import std;` plus a small `main` takes about 15 s with a
+debug kiln++ and 1.8 s with the `harness` profile, and 100 MiB, roughly the
+cost of including every standard header once; link and run are instant, so
+neither libc++ test needs the long run limit (`slow_tests.txt` governs only
+the run step, spec/libcxx.md). libc++'s own modules tests (`std/modules/`,
 `libcxx/selftest/modules/`, 6 tests) went from 6 UNSUPPORTED to 2 PASS
-and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
+and 4 UNSUPPORTED. The 4 are `.sh.cpp` self-tests of lit's module plumbing:
+`libcxx/lit.local.cfg` (a `%{python}` substitution) makes the whole
+`libcxx/` subtree `driver: lit.local.cfg`, and behind that their RUN lines
+grep `%{compile_flags}` for the `-fmodule-file=std=%T/std.pcm %T/std.pcm`
+that libc++'s `format.py` adds after a `--precompile` step, which needs
+part B (§9).
 
 ## 9. Part B hooks
 
