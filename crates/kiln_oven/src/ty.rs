@@ -507,10 +507,10 @@ impl Types {
                 };
                 self.simple(c, size, align.max(1), kind)
             }
-            // `_BitInt(N)` (spec/oven.md §3.2): N <= 128 is an ordinary
-            // integer of width N in its ABI-sized slot (the KBC integer
-            // opcodes wrap to the width in `aux`); wider ones have no value
-            // model yet (opaque: evaluation stops with a note).
+            // `_BitInt(N)` (spec/oven.md "`_BitInt`"): N <= 128 is an
+            // ordinary integer of width N in its ABI-sized slot (the KBC
+            // integer opcodes wrap to the width in `aux`); wider ones have
+            // no value model yet (opaque: evaluation stops with a note).
             TypeView::BitInt { signed, width } => {
                 let (size, align) = bridge.opaque_size_align(c);
                 let kind = match u8::try_from(width) {

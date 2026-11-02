@@ -92,7 +92,7 @@ pub enum TypeSpecKind {
     /// `__int128`.
     Int128,
     /// `_BitInt ( constant-expression )` (C23 bit-precise integer, a
-    /// clang extension in C++; spec/types.md §5.3): the width is in
+    /// clang extension in C++; spec/types.md §21): the width is in
     /// [`DeclSpec::bit_int_width`].
     BitInt,
     /// `float`.

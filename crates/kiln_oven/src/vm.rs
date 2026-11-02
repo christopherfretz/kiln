@@ -2420,8 +2420,7 @@ impl Oven {
         // array element owns its bytes: their lifetime is its own, which
         // its destruction checks (`end_life`; `std::vector<std::bitset<0>>`).
         let owns = self.element_type(a.ty, off) == Some(target);
-        let size =
-            if !owns && self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
+        let size = if !owns && self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
         if a.flags & flags::HAS_UNION != 0 {
             self.place_in_unions(raw, a.ty, ty)?;
         }

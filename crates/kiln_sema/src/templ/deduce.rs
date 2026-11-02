@@ -932,7 +932,7 @@ impl Sema<'_, '_> {
             }
             // clang `DeduceTemplateArgumentsByTypeMatch`: `_BitInt(N)`
             // deduces `N` from the argument's width as an `int`
-            // (spec/types.md §5.3); the signedness must match. A dependent
+            // (spec/types.md §21); the signedness must match. A dependent
             // width deduces as a dependent array bound does (clang only
             // marks it used; kiln's partial-specialization deducibility
             // check deduces the arguments against themselves).
@@ -1092,9 +1092,9 @@ impl Sema<'_, '_> {
             Some(Ok(n)) => {
                 // The value has the parameter's type ([temp.deduct.type]/17);
                 // an undeduced type uses `size_t`.
-                let ty = self.nttp_param_type(e).unwrap_or_else(|| {
-                    if int_bound { QualType::INT } else { self.size_type() }
-                });
+                let ty = self
+                    .nttp_param_type(e)
+                    .unwrap_or_else(|| if int_bound { QualType::INT } else { self.size_type() });
                 let v = self.int_const(ty, i128::from(n));
                 TemplateArg::value(self.ast.types.canonical(ty), v)
             }

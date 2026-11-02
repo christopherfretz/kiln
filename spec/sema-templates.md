@@ -1825,8 +1825,10 @@ like clang's.
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
 | `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
 
-`_BitInt(N)` and splice types never reach the substituter yet: the parser
-does not accept `_BitInt` and rejects a dependent splice. Any other kind
+`DependentBitInt{signed, width}` substitutes the width expression and
+rebuilds the type through `Sema::build_bit_int_type`, which checks the
+width then (spec/types.md §21; WP-404). Splice types never reach the
+substituter yet: the parser rejects a dependent splice. Any other kind
 gives the NYI diagnostic "substitution into this type".
 
 ### 5.4 Expressions

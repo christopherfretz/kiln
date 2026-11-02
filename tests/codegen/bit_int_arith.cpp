@@ -1,5 +1,5 @@
 // C23 6.2.5 / [basic.fundamental] (a clang extension in C++, spec/types.md
-// §5.3): `_BitInt(N)` lowers to `iN` in registers, its ABI-sized slot in
+// §21): `_BitInt(N)` lowers to `iN` in registers, its ABI-sized slot in
 // memory (loads/stores of the `iN` value; clang widens in-memory values
 // to the slot), with no integer promotion. Widths 7, 33 and 128 on both
 // targets; 200 where BITINT_MAXWIDTH allows it (x86_64).

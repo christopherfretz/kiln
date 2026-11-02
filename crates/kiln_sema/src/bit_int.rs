@@ -1,4 +1,4 @@
-//! `_BitInt(N)` / `unsigned _BitInt(N)` (spec/types.md §5.3): building
+//! `_BitInt(N)` / `unsigned _BitInt(N)` (spec/types.md §21): building
 //! the type from its width expression (clang `Sema::BuildBitIntType`).
 //!
 //! The C23 bit-precise integer types are a clang extension in C++
@@ -88,6 +88,10 @@ impl Sema<'_, '_> {
         }
         let ct = self.ast.exprs.get(c).ty();
         let bits = crate::constfold::int_info(&self.ast, ct).map_or(32, |(b, _)| b);
-        Some(if bits >= 128 { v.cast_unsigned() } else { v.cast_unsigned() & ((1u128 << bits) - 1) })
+        Some(if bits >= 128 {
+            v.cast_unsigned()
+        } else {
+            v.cast_unsigned() & ((1u128 << bits) - 1)
+        })
     }
 }

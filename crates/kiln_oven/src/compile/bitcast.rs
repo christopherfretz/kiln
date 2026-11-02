@@ -78,7 +78,7 @@ impl Compiler<'_> {
     pub(super) fn bit_cast_unsupported(&self, t: OTy, src: bool) -> Option<String> {
         let types = &self.o.types;
         // clang's `BitCastBuffer` has no `_BitInt` case: any width is
-        // rejected (spec/oven.md §3.2).
+        // rejected (spec/oven.md "`_BitInt`").
         let bit_int = matches!(
             self.ast().types.canonical_view(types.info(t).q),
             kiln_ast::types::TypeView::BitInt { .. }

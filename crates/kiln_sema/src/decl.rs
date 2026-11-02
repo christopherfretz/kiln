@@ -5893,7 +5893,7 @@ impl Sema<'_, '_> {
 
     /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2);
     /// clang (`CheckEnumUnderlyingType`) takes only the standard integer
-    /// types, so a bit-precise one is rejected too (spec/types.md §5.3).
+    /// types, so a bit-precise one is rejected too (spec/types.md §21).
     /// An invalid one recovers to `int`, as clang's `ActOnTag` does. The
     /// parser checks the enum-base at its type (`loc`, as clang); an
     /// instantiated dependent one is checked again in [`Self::act_on_tag`].
