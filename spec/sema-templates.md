@@ -274,6 +274,24 @@ If `typename` is missing outside these contexts, clang's error and fix-it
 apply: "missing 'typename' prior to dependent type name 'T::type'". The
 parser then recovers as if `typename` had been written.
 
+A qualifier naming a class that is declared in a dependent context but is
+not the current instantiation where it is used ([temp.dep.type]/1) makes
+the name dependent too: a local class `L` of a function template named
+after its definition (`L::U x;` at block scope), or a member class `N` of
+a class template named in a block of a member function outside `N`
+(clang's `computeDeclContext` gives no context for it). In a context
+where `typename` is required (block scope, a condition, a for-init, a
+function parameter outside the implied contexts above), a type found
+through such a qualifier is "missing 'typename' prior to dependent type
+name 'L::U'" at the qualifier (`Sema::is_unentered_dependent_class`,
+checked by `kiln_parse` `check_missing_typename_in_class` from the
+qualified type arm of `parse_type_name_spec`). Kiln still finds the type
+in `L` and recovers as if `typename` had been written. Inside `L`'s own
+definition (its members, its declarators' scope) `L` is the current
+instantiation and no `typename` is needed. Clang parses `L::U *p;` and
+`sizeof(L::U)` at block scope as expressions; kiln parses them as types
+(a gap). Test: `tests/conformance/temp.res.general/missing-typename-unentered-class.cpp`.
+
 A parameter-declaration of a function declared at namespace or block
 scope with an unqualified declarator-id (`template <class T> void
 f(X<T>::m x);`) is such a context (WP-287): the parser sets
@@ -2045,6 +2063,16 @@ formed it:
   template class" note points there, as clang's
   `RequireCompleteDeclContext` does, not at the declarator (WP-307;
   `temp.inst/instantiation-note-template-id-column.cpp`).
+- A using-declaration's qualifier error (`T` not a class or not a base,
+  "cannot be used prior to '::'") is reported at the start of its
+  nested-name-specifier, as clang does: `Substituter::qualifier_begin`
+  walks the NNS prefixes to the outermost dependent one and returns its
+  written location (block scope `subst/stmts.rs` `local_using_decl`,
+  member `templ/class.rs` `member_using`/`member_using_typename`, pack
+  expansions included; WP-328,
+  `namespace.udecl/dependent-qualifier-location.cpp`). A non-dependent
+  leading prefix (`N::X<T>::m`) or a leading `::` is not recorded, so
+  such a qualifier reports at its first dependent component.
 - Recording happens only while parsing (the instantiation stack is
   empty), so instantiation never grows the table.
 - `Substituter::written(key, loc)` returns the recorded location nearest

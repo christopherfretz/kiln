@@ -190,18 +190,18 @@ impl Sema<'_, '_> {
             // aggregate initialization (a fallback after the
             // constructors) is reported as the constructor overload
             // failure (clang `tryDiagnoseOverloadedCast`,
-            // `FK_ParenthesizedListInitFailed`), its own errors dropped.
+            // `FK_ParenthesizedListInitFailed`), its own errors dropped
+            // and, being verify-only, its side effects never made.
             let failed = self.ovl.failed.take();
-            let (e, held) = self.capturing(|s| s.paren_aggregate_init(ty, args, loc, rparen));
-            if !self.is_err_expr(e) {
-                if let Some(set) = failed {
-                    self.end_set(set);
-                }
-                self.release(held, Vec::new());
-                return Some(e);
-            }
+            let ok = self.verify_paren_aggregate_init(ty, args, loc, rparen);
             if let Some(old) = std::mem::replace(&mut self.ovl.failed, failed) {
                 self.end_set(old);
+            }
+            if ok {
+                if let Some(set) = self.ovl.failed.take() {
+                    self.end_set(set);
+                }
+                return Some(self.paren_aggregate_init(ty, args, loc, rparen));
             }
         }
         if let Selected::Found(f) | Selected::Deleted(f) = sel

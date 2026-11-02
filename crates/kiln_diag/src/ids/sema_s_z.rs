@@ -56,6 +56,8 @@ sema_std_source_location_impl_not_found = Error (0) "'std::source_location::__im
 sema_stmt_attribute_on_decl = Error (1) "'{0}' attribute cannot be applied to a declaration";
 sema_stmtexpr_file_scope = Error (0) "statement expression not allowed at file scope";
 sema_storage_class_for_member = Error (0) "storage class specified for a member declaration";
+// [class.static.data]/2 (WP-327)
+sema_storage_class_for_static_member = Error (0) "static data member definition cannot specify a storage class";
 sema_storage_class_on_typedef = Error (0) "'typedef' cannot be combined with a storage class";
 sema_string_literal_operator_template = ExtWarn [GnuStringLiteralOperatorTemplate] (0) "string literal operator templates are a GNU extension";
 sema_sub_ptr_compatible = Error (2) "{0} and {1} are not pointers to compatible types";
