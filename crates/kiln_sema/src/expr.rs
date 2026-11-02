@@ -4104,9 +4104,8 @@ impl Sema<'_, '_> {
         match decl {
             Some(d) if self.kind_of(d) == DeclKind::CXXConstructor => 3,
             Some(d) if self.is_instance_member(d) => 2,
-            Some(_) => 0,
             None if self.ety(callee) == QualType::BOUND_MEMBER => 2,
-            None => 0,
+            Some(_) | None => 0,
         }
     }
 

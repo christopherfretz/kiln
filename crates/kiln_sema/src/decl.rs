@@ -5335,19 +5335,15 @@ impl Sema<'_, '_> {
                 {
                     // `[extern] template struct C<args>::I;` explicitly
                     // instantiates a member class ([temp.explicit]/3).
-                    if qualifier.is_some() && self.act_on_explicit_member_class_inst(p, nloc) {
-                        return p;
-                    }
-                    // A class template redeclaration is a new decl in the
-                    // chain, with a `ClassTemplateDecl` of its own (clang
-                    // `CheckClassTemplate`): `finish_template_pattern`
-                    // checks its head against the template's
-                    // ([temp.over.link]/6, [temp.param]/12, /14) and
-                    // merges the default arguments. A class
-                    // redeclaration creates no new decl. One of a class
-                    // only a friend declaration introduced makes it
-                    // visible ([namespace.memdef]/3): a new decl (below).
-                    if head.is_none() {
+                    let inst =
+                        qualifier.is_some() && self.act_on_explicit_member_class_inst(p, nloc);
+                    // A class template redeclaration is a new decl with a
+                    // `ClassTemplateDecl` of its own (clang
+                    // `CheckClassTemplate`; `finish_template_pattern`
+                    // checks its head, [temp.param]/12, /14). A class
+                    // redeclaration creates none, unless only a friend
+                    // declaration introduced it ([namespace.memdef]/3).
+                    if inst || head.is_none() {
                         return p;
                     }
                 }
