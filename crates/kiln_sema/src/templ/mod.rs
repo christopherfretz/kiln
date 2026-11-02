@@ -1195,8 +1195,9 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_trailing_requires_non_function, loc);
             return;
         }
-        // An instantiated member keeps its pattern's clause.
-        if !self.in_template() && self.inst.stack.is_empty() {
+        // An instantiated member keeps its pattern's clause; an invalid
+        // clause was diagnosed already (clang drops it in the parser).
+        if !self.in_template() && self.inst.stack.is_empty() && !self.is_err_expr(r) {
             let loc = self.ast.exprs.get(r).loc();
             self.error(DiagId::sema_trailing_requires_non_template, loc);
         }

@@ -67,7 +67,7 @@ impl Sema<'_, '_> {
         let at = self.begin_loc(callee);
         if cands.is_empty() {
             let text = self.decl_name_str(name);
-            let msg = self.diag(DiagId::sema_undeclared_var_use, n.loc()).arg(text);
+            let msg = self.diag(Self::undeclared_use_id(name), n.loc()).arg(text);
             self.emit(msg);
             return None;
         }

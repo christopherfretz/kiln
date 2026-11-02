@@ -998,7 +998,9 @@ specification as written (`TypeNames` prints ` noexcept`,
 - **`noexcept`** is `ExcSpec::BasicNoexcept`.
 - **`act_on_noexcept_spec(e, loc, start)`** ([except.spec]/2): `e` is
   a contextually converted constant expression of type `bool`
-  ([expr.const]/12), evaluated with `EvalContext::converted(start)`.
+  ([expr.const]/12), evaluated with `EvalContext::converted(start)`
+  (`Sema::bool_cce`, shared with `explicit(expr)`, spec/sema-class.md
+  §4.7).
   The result is `NoexceptExpr { expr: ConstantExpr(e'), value }`.
   Diagnostics point at `start`, the operand's first token, and follow
   clang 19:
@@ -1010,7 +1012,10 @@ specification as written (`TypeNames` prints ` noexcept`,
     constant expression (pointers, `std::nullptr_t`, floating point):
     `conversion from 'T' to 'bool' is not allowed in a converted
     constant expression`, with `T` as written (`int *const`);
-  - a class or scoped-enumeration type: `value of type 'T' is not
+  - a class type converts through its conversion functions (the
+    contextual conversion of [conv.general]/4, WP-275), so
+    `noexcept(bool_constant<true>())` is `noexcept(true)`; a class type
+    without one, or a scoped-enumeration type: `value of type 'T' is not
     implicitly convertible to 'bool'`;
   - a non-constant operand: `noexcept specifier argument is not a
     constant expression`, plus the Oven's notes.
@@ -1049,9 +1054,9 @@ specification as written (`TypeNames` prints ` noexcept`,
   the spec is part of the type (clang's `DiagnoseUseOfDecl`).
 - *Lazy dependent specs* ([temp.inst]/14, clang `EST_Uninstantiated`):
   when a member of a class template specialization is instantiated and
-  its `noexcept(expr)` is value-dependent, and the member is neither a
-  member template nor in a still-dependent context (`lazy_exc_spec`),
-  the member gets `ExcSpec::Deferred(pattern)` and an entry in
+  its `noexcept(expr)` is value-dependent, and the member is not in a
+  still-dependent context (`lazy_exc_spec`; WP-269 below for member and
+  friend templates), the member gets `ExcSpec::Deferred(pattern)` and an entry in
   `uninstantiated_exc: FxHashMap<DeclId, DeclId>` (first declaration to
   pattern). `resolve_exc` calls `instantiate_exception_spec(f, poi)`
   first. That function substitutes the pattern's expression in the
@@ -1060,12 +1065,8 @@ specification as written (`TypeNames` prints ` noexcept`,
   instantiation of exception specification for 'f' requested here`
   (`note_template_exception_spec_here`). A failed substitution leaves
   the member potentially throwing (`ExcSpec::None`), as clang does.
-  A friend *defined* in the class template is deferred the same way
-  (WP-278; a friend that only redeclares is substituted at once, its
-  specification being compared with the prior declaration's); its
-  specification is substituted in the class that declared it
-  (`inst_lexical_class`, [temp.friend]/1). A function whose constraints
-  are not satisfied is never needed ([temp.inst]/17): the one candidate
+  A function whose constraints are not satisfied is never needed
+  ([temp.inst]/17, WP-278): the one candidate
   of a call has its constraints checked before its reference is built
   (`finish_overload_ref`, clang's `DiagnoseUseOfDecl` before
   `BuildDeclRefExpr`), and a constrained function found by
@@ -1117,6 +1118,76 @@ specification as written (`TypeNames` prints ` noexcept`,
   resolved through `class/special/excspec.rs` (sema-class.md §4.7). The
   `noexcept` operator sees these specs through constructor, destructor
   and member calls (§5.3).
+
+**Landed (WP-269).** Friends, member templates and function template
+specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
+- *Friends*: an unqualified friend function or friend template declared
+  in a class has its *noexcept-specifier* saved for the complete-class
+  context like a member's (clang 19 does too), so it names members
+  declared later (libc++ `move_iterator::iter_move` / `iter_swap` on
+  `__current_`). A redeclaration whose spec is not known yet
+  (`Deferred`, or a still-uninstantiated one) is matched against the
+  previous declaration ignoring the spec, and the pair goes into
+  `delayed_exc_equiv` (clang `DelayedEquivalentExceptionSpecChecks`).
+  `set_member_exception_spec` then runs `check_delayed_exc_equiv(f)`:
+  if the nothrow-ness differs, `exception specification in declaration
+  does not match previous declaration` at the friend, noted `previous
+  declaration is here`. `set_member_exception_spec` only rewrites
+  redeclarations still `Deferred(f)`, so an earlier namespace-scope
+  declaration keeps its own spec.
+- *Redeclaring a delayed friend* (merged with WP-268's missing-spec
+  path): a previous declaration's still-uninstantiated spec is
+  instantiated first, as clang does in `CheckEquivalentExceptionSpec`. While
+  either spec is still `Deferred`, the redeclaration is never treated as
+  missing a spec; the pair is queued and checked when either is
+  replayed. A redeclaration written without a spec then takes
+  `merge_missing_exc_spec` (`'m' is missing exception specification
+  'noexcept(S::x)'`), and otherwise gets the mismatch error.
+- *Unparsed through the redeclaration chain*: `exc_unparsed(f)` is true
+  when `f`, its first declaration, or the pattern it waits on is in
+  `unparsed_exc`. Both `resolve_exc_for_type` and
+  `diagnose_unparsed_exc_spec` use it. A use before the class is
+  complete gives the error once (clang 19 gives it twice for a friend
+  template, and leaves the specialization unresolved afterwards).
+- *Member and friend templates of class template specializations*: the
+  redeclared pattern keeps `Deferred` (`lazy_exc_spec(d, p, friend)`:
+  the spec is dependent at no more than the template's own level; a
+  friend template that is declared but not defined in the class is
+  substituted at once). Its specializations wait on the original pattern
+  (`defer_spec_exception_spec`).
+- *Function template specializations* (DR1330, clang
+  `InitFunctionInstantiation`): `function_spec_signature` does not
+  substitute a dependent `noexcept(expr)` during deduction. Unless the
+  pattern is in a local scope, the specialization gets `Deferred(spec)`
+  and `uninstantiated_exc[spec] = pat`. `deduce_noexcept` accepts an
+  unresolved spec. `substitute_exception_spec` substitutes it later with
+  the specialization's full argument levels (`spec_args`,
+  `spec_pairs_ctx`), in the lexical class of the specialization's
+  template for a friend. Access is therefore checked as the friend: it
+  may name its own class's private members, but not those of another
+  specialization ([class.friend]/2). The frame note names the
+  specialization with its arguments (`'h<long>'`), as clang does.
+- *Consumers*: `noexcept(...)`, the resolution of overloads on a
+  noexcept function pointer, member pointers and codegen's `nounwind`
+  all go through `exc_spec_needed` / `resolve_exc_for_type`, so each
+  sees the resolved spec.
+- *Other complete-class contexts* (tests in
+  `tests/conformance/class.mem.general/`):
+  - A default argument used before the class is complete gives clang's
+    `use of default argument to function 'f' that is declared later in
+    class 'S'` (sema-class.md §2.7).
+  - An NSDMI needed early gives `default member initializer ... needed
+    within definition of enclosing class` (existing).
+  - A trailing requires-clause is not a complete-class context. A later
+    member is undeclared there, and an invalid clause no longer also
+    gives `non-templated function cannot have a requires clause`.
+- *Divergences from clang*:
+  - A local class in a function template gets its members'
+    noexcept-specifiers deferred like any class. clang 19 substitutes
+    them with the class (`no member 'y' in 'L'; it has not yet been
+    instantiated`).
+  - A friend declared in a local class is not diagnosed (clang: `no
+    matching function found in local scope`).
 
 ### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
 - **Using-declarators** ([namespace.udecl]):
@@ -1208,6 +1279,19 @@ specification as written (`TypeNames` prints ` noexcept`,
     target of using declaration already in scope`, and is marked invalid;
     in a class a member function instead hides the shadow
     ([namespace.udecl]/14, `Decls::hidden_shadow`).
+  - An unqualified friend function (template) in a class of a namespace
+    with a using-declarator of that name does not redeclare the shadow
+    (redeclaration lookup skips it): a friend that does not correspond to
+    the target overloads it as a hidden friend; one that corresponds
+    ([basic.scope.scope]/4, `fn_corresponds`) would redeclare the target
+    and reports `cannot befriend target of using declaration` with notes
+    at the target and the using-declarator, and is marked invalid
+    (clang `err_using_decl_friend`; `friend_befriends_using_target`). In
+    a templated class a friend that is neither a template nor of
+    dependent type is checked at definition, any other when instantiated
+    (WP-273; `namespace.udecl/hidden-friend-overloads-using-target.cpp`,
+    `friend-befriends-using-target.cpp`,
+    `libstdcxx-hidden-friend-vs-using.cpp`).
   - Repeating a using-declaration of the same entity is allowed; the new
     shadow redeclares the old one.
 - **Class scope:** kiln has no base classes yet (M3), so every
@@ -1537,6 +1621,7 @@ constant and never look at the operand.
 | implicit calls: constructors, destructors, conversion functions, allocation functions | yes: constructors (`CXXConstructExpr`), destructors (`CXXBindTemporaryExpr`) and conversion functions (implicit member calls), each resolving the callee's spec first (WP-112); every `new` counts as throwing |
 | `__attribute__((nothrow))` on the callee | M3 (not parsed) |
 | a dependent operand (value-dependent `CXXNoexceptExpr`) | yes (lazily instantiated member specs, §4.7) |
+| a pseudo-destructor call `t.~T()` ([expr.prim.id.dtor]/2: no effect) | yes (WP-275): never potentially-throwing, and, as clang's `canThrow`, its object expression is not walked either (`noexcept(f().~I())` is true) |
 
 The operands of nested `sizeof`, `alignof` and `noexcept` are not
 looked at (they are unevaluated). An erroneous operand gives an error
@@ -1578,13 +1663,20 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   specification, gets implicit `NoThrow` and `Const`/`Pure` attributes
   (after its written ones). Sig letter `a` is `__builtin_va_list`
   (decayed when an array), `P` the type of the TU-scope `FILE`
-  typedef (none yet: not recognized). Redeclarations inherit them
+  typedef (none yet: not recognized), `R` adds `restrict` to the type
+  before it (WP-270; skipped when counting `I` arguments). Redeclarations inherit them
   (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
   a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
   true). No `Builtin` attribute is attached, so the call stays an
   ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
   calls to intrinsics and its implicit `format` / `alloc_size`
   attributes (`-Wformat*`) are not modelled.
+- **Custom-checked builtins** (WP-270): the generic
+  `__builtin_{add,sub,mul}_overflow` (`builtin_overflow`) and the
+  alignment of `__builtin_alloca_with_align` (`check_alloca_align`) are
+  checked as clang's `SemaBuiltinOverflow` / `SemaBuiltinAllocaWithAlign`;
+  the rules and the builtin table are spec/sema-templates.md §9
+  ("checked arithmetic", "stack allocation", "printf family" rows).
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:
@@ -1847,6 +1939,110 @@ for them.
     the Oven and codegen.
   - kiln does not wrap the elements of a namespace-scope literal in
     `ConstantExpr` nodes, as clang does.
+- **Flexible array members** (`flex_array.rs`, WP-271; a C99 feature,
+  clang `ActOnFields` / `CheckFlexibleArrayInit`). A non-static data
+  member of array-of-unknown-bound type `T[]` is accepted when its
+  element type is complete (`field_complete_type`; an incomplete or
+  abstract element is diagnosed as for a bounded array). The member
+  keeps the incomplete type; the class is complete and records
+  `DefinitionBits::HAS_FLEXIBLE_ARRAY_MEMBER`. Layout: size zero at the
+  aligned end of the preceding members, counting for the alignment
+  (`sizeof(struct { int n; char d[]; }) == 4`); LLVM type `[0 x T]`;
+  implicit copies copy only the other members. At the `}`
+  (`check_flexible_array_members`, run per instantiation; each
+  diagnostic is `per_instantiation`, spec/diag.md §7.4), over the
+  fields in order:
+  - not the last field of a struct/class: error `flexible array member
+    'd' with type 'T[]' is not at the end of struct`, note `next field
+    declaration is here` at the next field; field and class invalid;
+  - in a union: `-Wgnu-flexible-array-union-member`; otherwise, when no
+    named field precedes it: `-Wgnu-empty-struct`;
+  - a class with a virtual base (direct or inherited): error `...not
+    allowed in struct which has a virtual base class`;
+  - always `flexible array members are a C99 feature` [-Wc99-extensions];
+  - a non-dependent element type with non-trivial destruction: error
+    `flexible array member 'd' of type 'T[]' with non-trivial
+    destruction`; field and class invalid;
+  - a field whose class has a flexible array member gives this class one
+    too; in a struct/class it warns `field 'a' with variable sized type
+    'A' not at the end of a struct or class is a GNU extension`
+    [-Wgnu-variable-sized-type-not-at-end, on by default] when not last,
+    else `'a' may not be nested in a struct due to flexible array member`
+    [-Wflexible-array-extensions];
+  - an array of such a class: `'A' may not be used as an array element
+    due to flexible array member` [-Wflexible-array-extensions] at the
+    `[` (the declarator's array chunk).
+
+  Except where noted, the warnings are Extensions (`-pedantic`). A
+  default member initializer of a `d[]` member is the parse error `array
+  bound cannot be deduced from a default member initializer` (at the `=`
+  or `{`; the member is invalid and gets no checks). In an aggregate
+  initialization the member's initializer is: an empty list, the GNU
+  extension `flexible array initialization is a GNU extension`
+  [-Wgnu-flexible-array-initializer] with the note `initialized flexible
+  array member 'd' is here` and `zero size arrays are an extension`
+  [-Wzero-length-array]; elements, an error `initialization of flexible
+  array member is not allowed` (same note) unless they initialize a
+  variable without automatic storage directly (`Sema::init_var` with no
+  `init_entity`). The Oven rejects the decay of a member subobject of
+  unknown bound (`array-to-pointer decay of array member without known
+  bound is not supported`, clang `addUnsizedArray`).
+
+  Deviation: elements initializing a static variable (clang's extension,
+  which emits the variable with a larger type) are reported as not
+  supported yet.
+- **Zero-length arrays** `T[0]`: `zero size arrays are an extension`
+  [-Wzero-length-array, in -Wgnu] at the bound, per instantiation; an
+  error in a SFINAE context (above).
+- **`__null`** (`gnu_null.rs`; `NULL` in the resource `<stddef.h>`): a
+  `GNUNullExpr` prvalue of the signed integer type as wide as a data
+  pointer (`int`, `long` or `long long`; `long` on LP64, clang's
+  `ActOnGNUNullExpr`), with value 0. It is a null pointer constant
+  (`conv::is_null_pointer_constant`), so it converts to any pointer,
+  pointer to member and `std::nullptr_t`; as an integer it converts like
+  any `long` (so `g(int)`/`g(void*)` is ambiguous). Constant-evaluates to
+  0; mangles as the literal `Ll0E`; prints as `__null`. Warnings (both on
+  by default, not runtime-behavior diagnostics):
+  - `implicit conversion of NULL constant to 'T'` [-Wnull-conversion, in
+    -Wconversion; alias -Wconversion-null] for an implicit conversion to
+    a scalar type other than its own, a pointer, a pointer to member or
+    `std::nullptr_t` (clang's `DiagnoseNullConversion`, from the
+    implicit-conversion walk, `impcast.rs`). It is reported at `__null`,
+    or at the `NULL` macro name when `__null` came from `NULL`'s
+    expansion; after taking both locations out of macro arguments, it is
+    dropped when that location and the conversion's context are in
+    different files or macro expansions (`#define MYNULL __null` does
+    not warn).
+  - [-Wnull-arithmetic] (clang's `checkArithmeticNull`), at the operator
+    of a built-in `+ - * / % << >> & ^ |`, compound assignment, or
+    comparison with a `__null` operand (implicit casts and parentheses
+    stripped), unless the other operand is a pointer to member or a
+    function: `use of NULL in arithmetic operation` for the arithmetic
+    operators; for a comparison, `comparison between NULL and non-pointer
+    (NULL and 'T')` / `('T' and NULL)` when only one side is `__null`
+    and the other is neither a pointer nor an array.
+- **GNU `typeof`** (`gnu_typeof.rs`; parsing in spec/parse.md §4):
+  `__typeof ( type-id )` is `TypeOf` sugar over that type
+  (`act_on_typeof_type`), printed `typeof(T)`. `__typeof e` /
+  `__typeof ( e )` (`act_on_typeof_expr`; clang
+  `ActOnTypeofExpression`) is sugar over the unevaluated operand's
+  expression type: an lvalue adds no reference (`__typeof(ri)` for
+  `int& ri` is `int`), cv-qualifiers are kept, an id-expression or
+  bit-field member gives its expression type, a function name its
+  function type, and side effects are not diagnosed (unlike
+  `decltype`). It prints `typeof (e)` (the parentheses are a
+  `ParenExpr`). An erroneous operand or an unresolved overload set
+  (`check_overload_use`: "reference to overloaded function could not
+  be resolved; did you mean to call it?") makes the type specifier an
+  error that combines with no other specifier. A type-dependent
+  operand gives a dependent type whose canonical form is keyed on the
+  operand's profile (clang `DependentTypeOfExprType`), rebuilt at
+  substitution (`templ/subst/types.rs`) and mangled as clang's vendor
+  type `u6typeof`; a dependent `__typeof(T)` is canonically `T`.
+  `__typeof_unqual` is the same with the cv-qualifiers dropped
+  (canonically, `ctx.unqualified`; `typeof_unqual (e)` prints).
+  No diagnostics of its own (no pedantic warning, as clang).
+  `tests/conformance/ext.gnu.typeof/`.
 
 ### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
@@ -2263,7 +2459,7 @@ pointer constant: a zero integer literal, a `std::nullptr_t` value or
   (`null_deref_seen`), so a shared dereference that a rebuilt parent
   re-checks warns once. Other run-time warnings (division by zero,
   shift counts) are not repeated, as in clang.
-- **Deviations:** kiln does not parse `__null` yet. A default member
+- **Deviations:** A default member
   initializer of a class template does not warn again when a
   constructor uses it (clang instantiates it then), and a variable
   template specialization's warning can print later than clang's,
@@ -2840,12 +3036,12 @@ template saved in `range_for_outer_depth` for instantiations).
   (`rebuild_with_dereference`); an iterator or loop-variable failure gets
   `selected 'begin' function with iterator type T` (the candidate notes
   are captured through `diag_capture` while each attempt runs and
-  released on success of the diagnosis). The capture holds only
-  diagnostics that would print: an error inside a SFINAE context nested
-  in the attempt (e.g. a constraint check of a `begin() const
-  requires forward_range<const V>` candidate) still fails that
-  substitution ([temp.deduct.general]/8, [temp.constr.atomic]/3) and is
-  never released.
+  released on success of the diagnosis). A SFINAE context entered
+  inside a capture (deeper on the instantiation stack than where the
+  capture began, such as deducing a converting constructor template
+  for a rewritten `operator==` candidate of `__begin != __end`) takes
+  its errors as substitution failures, not captured diagnostics
+  (WP-271).
 - **Templates.** A type-dependent range (or loop-variable type) keeps
   only `__range` and the loop variable in the pattern; instantiation
   (`templ/subst/stmts.rs` `range_for`) substitutes the range under a new
@@ -3175,6 +3371,114 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   - The `EvalFailure`'s notes follow it (`with_failure_notes`): the
     reason, the `in call to` backtrace, and any `declared here` notes.
   - An expression that already contains errors is not evaluated.
+
+## 8a. Reflection (spike, -freflection) (`reflect.rs`, WP-267)
+
+This is a design spike, not P2996. All of it is gated on `Sema::reflection`
+(driver `-freflection`, default off, C++26). `__cpp_reflection` is not
+predefined. With the flag off, nothing here is reachable: the lexer does
+not produce `^^`, `[:` or `:]`. Findings: docs/status/reflection-spike.md.
+Tests: `tests/conformance/reflection/`, written as kiln-only goldens from
+the P2996R13 wording.
+
+- **Value type.** `std::meta::info` is the builtin type `MetaInfo`, spelled
+  `decltype(^^int)` (`tests/support/kiln_meta.h`). It is a scalar with
+  these operations:
+  - copy, and comparison with `==`/`!=` (both operands `info`;
+    [expr.eq]/7 as amended by P2996);
+  - `?:` with two `info` arms;
+  - value-initialization (`info{}`, the null reflection);
+  - use as an NTTP: a substituted argument is rebuilt as the
+    `CXXReflectExpr` of the same entity.
+
+  Nothing converts to or from it. Any other operator is
+  `invalid operands`.
+- **`^^` operand** ([expr.reflect]). Supported operands:
+  - a type-id;
+  - a namespace;
+  - a variable;
+  - a non-template function;
+  - a (qualified) data member.
+
+  The result is a constant `CXXReflectExpr` whose value is the
+  `ReflectionId` of `Reflectee::Type(canonical QualType)` or
+  `Reflectee::Decl(first declaration)`. **Divergence from spec/ast.md §10:**
+  the spike canonicalizes alias sugar, so `^^Alias == ^^int`. Any other
+  operand gets `cannot reflect {0}`. In a template, `^^T` reflects the
+  substituted type.
+- **Type splice** ([dcl.type.splice]). `typename [: e :]` is a type, and so
+  is `[: e :]` where a template type argument is expected. `e` is
+  converted and evaluated as a constant expression of type `info`. The
+  errors are:
+  - `splice operand of type {0} is not a reflection`;
+  - `splice operand must be a constant expression`, with the Oven's notes;
+  - `splice in a type position does not designate a type`.
+
+  A dependent operand is "unsupported: dependent splice", and
+  `using A = [: r :];` without `typename` is not parsed yet.
+- **Intrinsics.** `meta_intrinsic_of(f)` recognizes these declarations by
+  qualified name, for the Oven's dispatch (spec/oven.md
+  "Reflection runtime"). Their bodies do not exist; the header only
+  declares them.
+  - `std::meta::type_of(info)`: the type of a variable, data member or
+    function, canonical. Anything else gets the note "'X' has no type".
+  - `std::meta::name_of(info) -> const char*`: an identifier, a class's
+    name, or a type's spelling, as a frozen string literal object. The
+    null reflection gets the note "'std::meta::info()' has no name".
+  - `std::meta::__kiln_members_count(info)` / `__kiln_member_at(info, i)`:
+    the class's members in declaration order. Members are included if
+    they are named and are not implicitly declared, an access specifier,
+    a `static_assert` or a friend. A class template specialization is
+    completed on demand (lent Oven; only when manifestly
+    constant-evaluated). An incomplete class gets the note
+    "'X' reflects an incomplete class". The header's
+    `members_of<R>()` builds a `member_list<N>` from these two.
+  - `__kiln_define_member(info cls, info type, const char* name)`, at
+    namespace scope: see below.
+- **`define_member` rules** (the mutation experiment). When the call
+  succeeds, it appends a public non-static data member `name` of type
+  `type` to `cls`'s member list, at the point the member-specification has
+  reached. The new member is a `Field` with `DeclFlags::INJECTED` and the
+  call's location. The call returns the member's reflection.
+
+  Layout, aggregate-ness and the rest of the definition bits come from
+  class completion at `}`. The member is found by every later lookup:
+  - later code in the same evaluation;
+  - later member declarations;
+  - complete-class contexts (member function bodies);
+  - code after the class.
+
+  In a class template, an unqualified name in a member function body is
+  looked up at definition time ([temp.res]), so it needs `this->v`. The
+  conditions, checked in order:
+  1. The evaluation must be manifestly constant-evaluated
+     (`inst.eval_loc` set). Otherwise the call fails silently, so a
+     speculative `try_fold` never mutates.
+  2. `cls` must reflect a class type: "'X' does not reflect a class type".
+  3. That class must be the innermost class being defined
+     (`classes.last()`), compared by first declaration. Otherwise the
+     note is "'__kiln_define_member' can only add a member to the class
+     whose member-specification is being evaluated ('S' is not)", plus
+     "class being defined is 'I'" when there is one. This covers a
+     complete class, an outer class, and namespace scope.
+  4. `type` must reflect a complete object type other than `cls`. A
+     template specialization is completed on demand. Otherwise the note is
+     "'X' is not a complete object type for a data member", or
+     "'X' does not reflect a type".
+  5. `name` must be an identifier: "'n' is not an identifier".
+  6. `name` must not be declared in the class yet ([class.mem]/5). A
+     duplicate gets three notes:
+     - "duplicate member 'x'" at the call;
+     - "previous declaration is here";
+     - "in evaluation of '__kiln_define_member' for class 'S' being
+       defined here" at the class.
+
+  The supported evaluation contexts are any constant evaluation in the
+  member-specification. In practice that is `static_assert`, called
+  directly or through a consteval helper, in a class or a class template
+  (each specialization evaluates its own). P2996's `define_aggregate`,
+  which completes an *incomplete* class from a consteval block, is not
+  implemented.
 
 ## 9. Target (`target.rs`)
 - `pub use kiln_abi::{Arch, Target}`.

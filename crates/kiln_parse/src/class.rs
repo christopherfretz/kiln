@@ -37,6 +37,14 @@ pub(crate) struct LateToks {
     end: Loc,
 }
 
+impl LateToks {
+    /// Where the saved tokens after the first start (a default
+    /// argument's expression after its `=`), else `or`.
+    pub(crate) fn second_loc(&self, or: Loc) -> Loc {
+        self.toks.get(1).map_or(or, |t| t.span.lo)
+    }
+}
+
 /// The saved parts of a member function declarator: its default
 /// arguments (by parameter index) and its *noexcept-specifier*. The
 /// `delay_*` switches tell the declarator parser whether to save them.
@@ -1205,6 +1213,23 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The default member initializer of `decl`, saved for the complete
+    /// class. [dcl.array]/3: for an array of unknown bound (`unbounded`)
+    /// it is not an initializer that can deduce a bound (clang
+    /// `err_incomplete_array_member_init`), at the initializer; the member
+    /// is invalid (no flexible array member checks, spec/sema.md §5.8).
+    fn save_member_nsdmi(&mut self, unbounded: bool, decl: Option<DeclId>) {
+        if !unbounded {
+            self.save_nsdmi(decl);
+            return;
+        }
+        self.error_here(DiagId::parse_incomplete_array_member_init);
+        self.skip_until(&[Punct::Comma], true, false);
+        if let Some(x) = decl {
+            self.s.ast.decls.set_flags(x, DeclFlags::INVALID);
+        }
+    }
+
     /// member-declaration ([class.mem]; clang's
     /// `ParseCXXClassMemberDeclaration`).
     pub(crate) fn parse_member_declaration(&mut self) {
@@ -1232,7 +1257,10 @@ impl Parser<'_, '_> {
             d.friend = ds.friend.is_some();
             self.late_fn = LateFnParts {
                 delay_args: !is_typedef,
-                delay_noexcept: !is_typedef && ds.friend.is_none(),
+                // A friend function's noexcept-specifier is a
+                // complete-class context too ([class.mem.general]/7), as
+                // in clang 19, unless it names a member of another class.
+                delay_noexcept: !is_typedef,
                 ..LateFnParts::default()
             };
             if !self.at(Punct::Colon) {
@@ -1288,7 +1316,7 @@ impl Parser<'_, '_> {
                 self.s.act_on_group_declarator(&mut group, x);
             }
             if nsdmi {
-                self.save_nsdmi(decl);
+                self.save_member_nsdmi(d.is_array_of_unknown_bound(), decl);
             } else {
                 self.parse_member_init_in_place(&d, decl, init, is_static);
             }

@@ -432,6 +432,9 @@ the long tail below.
   builtin table with sema + Oven support for `__builtin_*_overflow`, and
   lowering to llvm intrinsics/libcalls. (The C99 complex builtins
   `__builtin_cabs`/`csqrt`/... that <complex> needed landed in WP-237.)
+  **Landed (WP-270):** the overflow builtins (generic and typed),
+  `__builtin_alloca{,_with_align}` and `__builtin_vsnprintf`/`snprintf`/
+  `sprintf`; the repro passes (no longer `xfail(kiln)`).
 - **C — `__null`.** `use of undeclared identifier '__null'` at
   gthr-default.h:676. WP: `__null` as a null pointer constant of type
   `long` (LP64) / `int`, with the clang `-Wnull-arithmetic` note optional.

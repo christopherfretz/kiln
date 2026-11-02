@@ -4,7 +4,6 @@
 // `explicit(__not_<__and_<...>>())`; <functional>, <unordered_map>, 29 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): 'explicit' with a non-bool expression is not supported yet
 template<bool B> struct bool_constant {
   static constexpr bool value = B;
   constexpr operator bool() const noexcept { return B; }

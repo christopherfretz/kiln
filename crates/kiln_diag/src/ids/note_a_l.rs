@@ -51,6 +51,7 @@ note_deduced_conflicting = Note (4) "candidate template ignored: deduced conflic
 note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";
 note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match {0} against {1}";
 note_deduction_underqualified = Note (3) "candidate template ignored: cannot deduce a type for '{0}' that would make '{1}' equal '{2}'";
+note_default_arg_declared_here = Note (0) "default argument declared here";
 note_default_arg_instantiation_here = Note (1) "in instantiation of default argument for '{0}' required here";
 note_default_function_arg_instantiation_here = Note (1) "in instantiation of default function argument expression for '{0}' required here";
 note_default_member_init_not_yet_parsed = Note (0) "default member initializer declared here";
@@ -105,6 +106,7 @@ note_expr_evaluates_to = Note (3) "expression evaluates to '{0} {1} {2}'";
 note_extern_c_begins_here = Note (0) "extern \"C\" language linkage specification begins here";
 note_extern_c_global_conflict = Note (1) "declared {0:in global scope|with C language linkage} here";
 note_final_overrider = Note (2) "final overrider of '{0}' in '{1}'";
+note_flexible_array_member = Note (1) "initialized flexible array member '{0}' is here";
 note_fn_template_spec_matched = Note (2) "function template '{0}' matches specialization {1}";
 note_for_range_begin_end = Note (4) "selected '{0:begin|end}' {1:function|template }{2} with iterator type {3}";
 note_for_range_invalid_iterator = Note (2) "in implicit call to 'operator{0:!=|*|++}' for iterator of type {1}";

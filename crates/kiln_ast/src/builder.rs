@@ -1276,6 +1276,12 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::CXXNullPtrLiteralExpr, ValueCategory::PRValue, deps, 0, ty, loc, 0, 0)
     }
 
+    /// GNU `__null`: `GNUNullExpr`, an integer null pointer constant of
+    /// type `ty` (the signed integer type as wide as a pointer).
+    pub fn gnu_null(&mut self, ty: QualType, loc: Loc) -> ExprId {
+        self.simple(ExprKind::GNUNullExpr, ValueCategory::PRValue, ExprDeps::NONE, 0, ty, loc, 0, 0)
+    }
+
     /// `__func__`, `__FUNCTION__` or `__PRETTY_FUNCTION__`
     /// ([dcl.fct.def.general]/8): `PredefinedExpr`, an lvalue of type `ty`
     /// (`const char[N]`, or the dependent type in a dependent context,
@@ -2134,6 +2140,47 @@ impl<'a> AstBuilder<'a> {
         if let Some(l) = rhs_loc {
             self.ast.exprs.cold.trait_rhs_loc.insert(e, l).expect("fresh expression");
         }
+        e
+    }
+
+    /// `^^T` / `^^entity` (P2996 [expr.reflect], WP-267 spike): a
+    /// `std::meta::info` prvalue. `a` is the operand (a `QualType` raw
+    /// when `aux` is 0, a `DeclId` raw when `aux` is 1), `b` the
+    /// [`crate::ids::ReflectionId`] index plus 1 (0 while the operand is
+    /// dependent: the expression is then value-dependent).
+    pub fn reflect_expr(
+        &mut self,
+        operand: crate::reflect::Reflectee,
+        ty: QualType,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        use crate::reflect::Reflectee;
+        let mut deps = ExprDeps::NONE;
+        let (aux, a) = match operand {
+            Reflectee::Type(t) => {
+                let d = self.type_deps(t);
+                deps |= d.without(ExprDeps::TYPE);
+                if d.contains(ExprDeps::TYPE) {
+                    deps |= ExprDeps::VALUE_INST;
+                }
+                (0u8, t.raw())
+            }
+            Reflectee::Decl(d) => (1, d.raw()),
+            Reflectee::Null => (2, 0),
+        };
+        let b = if deps.contains(ExprDeps::VALUE_INST) {
+            0
+        } else {
+            let canon = match operand {
+                Reflectee::Type(t) => Reflectee::Type(self.ast.types.canonical(t)),
+                r => r,
+            };
+            self.ast.reflections.intern(canon).index()
+        };
+        let e =
+            self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);
+        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
         e
     }
 

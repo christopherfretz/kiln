@@ -61,7 +61,7 @@ undeclared, which resolves the C++ declaration/expression ambiguities.
   - GNU extensions: `x ?: y`, statement expressions `({ ... })`,
     `__builtin_offsetof`, scalar compound literals `(T){...}`
     (spec/sema.md §6.10)
-  - `nullptr`, `true`, `false`
+  - `nullptr`, `true`, `false`, GNU `__null` (spec/sema.md §5.8)
   - string-literal concatenation
   - literals; user-defined literals are diagnosed because M2 has no
     literal operators
@@ -381,6 +381,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     recognised at namespace and class scope only; a decl-specifier-seq
     with no type is allowed before a constructor, destructor or
     conversion function.
+  - an attribute-specifier-seq right after the declarator-id
+    (`declarator-id attribute-specifier-seq(opt)`, [dcl.decl.general]/4),
+    for every kind of declarator-id: an identifier or qualified-id
+    (`f [[deprecated]] (int)`, a member template `g [[nodiscard]] (T)`),
+    an operator-function-id (`operator() [[nodiscard]] (int)`,
+    `operator new [[a]] (size_t)`) and `~C [[a]] ()`. It lands in
+    `Declarator::attrs`, so it appertains to the declared entity. After a
+    conversion-type-id the attributes are parsed with the type (they
+    appertain to the type, as in clang).
   - on a function chunk: cv-qualifiers (a duplicate warns
     `duplicate 'const' declaration specifier`), a ref-qualifier, and an
     explicit object parameter (`this T self`, [dcl.fct]/6) in
@@ -416,9 +425,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     is `err_stmt_expr_in_default_arg`, skipped to `,`/`)`). In a member
     declarator whose function chunk applies to the name directly,
     default arguments and a parenthesized *noexcept-specifier* are
-    saved instead (§2.4): the parameter gets `DefaultArg::Unparsed(=)`,
-    the declarator `late_noexcept`, and the chunk `ExcSpec::None` until
-    replay. The
+    saved instead (§2.4): the parameter gets `DefaultArg::Unparsed(=,
+    arg)` (the `=` and the argument's first token), the declarator
+    `late_noexcept`, and the chunk `ExcSpec::None` until replay. A friend
+    function or friend template declared in the class has its
+    *noexcept-specifier* saved too (WP-269); a qualified friend
+    (`friend void N::f() noexcept(...)`) does not. The
     parameter-declaration-clause brackets `act_on_start_prototype` /
     `act_on_prototype_param` / `act_on_end_prototype` (closed after the
     trailing return type): each parameter is declared at its point of
@@ -435,6 +447,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     leading `auto` and diagnosed otherwise by Sema.
   - `decltype ( expression )` and `decltype(auto)` are type specifiers;
     the operand is unevaluated.
+  - GNU `typeof` (`parse_typeof_specifier`; spec/sema.md §5.8):
+    `__typeof`/`__typeof__` (and `typeof`, a keyword only under
+    `-std=gnu++NN`, `Keywords::new(_, gnu)`) and
+    `__typeof_unqual`/`__typeof_unqual__` (no `typeof_unqual` in C++)
+    followed by the operand of `sizeof` (`parse_trait_operand`, clang's
+    `ParseExprAfterUnaryExprOrTypeTrait`): `( type-id )`, or an
+    unevaluated unary-expression, a parenthesized one taking its postfix
+    suffix (`__typeof(x)(y)` is the type of the call `x(y)`). As clang,
+    `__typeof_unqual` does not begin a type-id in the disambiguator
+    (`tentative.rs`) or a functional cast, so a template argument or a
+    C-style cast cannot start with it ("expected expression").
     A concept name followed by `auto` or `decltype ( auto` begins a
     declaration in the statement disambiguator (`tentative.rs`), so
     `std::same_as<X> decltype(auto) r = e;` in a block is a constrained
@@ -485,7 +508,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **GNU `__extension__`** before a `using` or `template` declaration at
   namespace, class or block scope is dropped (`skip_extension_before_using`;
   clang skips it in `ParseExternalDeclaration`): libc++ `__extension__
-  using`, libstdc++ `__extension__ template<>` (WP-237).
+  using`, libstdc++ `__extension__ template<>` (WP-237). At namespace
+  scope only, it is also dropped before an asm-declaration (libstdc++
+  `__extension__ asm(...)`, WP-271); in a class or block `asm` after it
+  is an error, as clang.
   `tests/conformance/ext.gnu.extension/`. Elsewhere it is a
   decl-specifier or the unary operator.
 - **GNU asm labels** (`parse_asm_label`, clang's
@@ -741,7 +767,7 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   start or a decl-specifier keyword, so `new (short(n), 'x') int` is a
   placement and `new (int (*)[2])` a type-id. A `(` followed by a
   member-pointer declarator (`new (void (T::*)())`, `member_pointer_at`;
-  WP-216) is a type-id too. `decltype`, `typeof`,
+  WP-216) is a type-id too. `decltype`, `typeof`, `__typeof_unqual`,
   `typename` and a class-key are always a type-id.
 - **new-type-id.** The decl-specifiers and an abstract new-declarator
   (`*`, `&`-free ptr-operators, then `[expr]` bounds); the first bound
@@ -759,6 +785,25 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   followed by a postfix '[' operator; add parentheses` and parses the
   suffix for recovery (except `[`/`(`/`++`/`--` at the start of a line,
   where the caller's `expected ';'` is better).
+
+### 5.2 Reflection (`reflect.rs`, WP-267 spike, `-freflection`)
+- The tokens `^^`, `[:` and `:]` exist only when `ParseOptions::reflection`
+  is set and the standard is C++26 (spec/lex.md Phase 3). Without the
+  flag, `^^x` is `^` `^x` and gets clang 19's errors
+  (`tests/conformance/reflection/flag-off.cpp`).
+- **`^^` operand** ([expr.reflect]). If the operand can be a type-id (the
+  test is the trailing-return-type one, so `void (*)(int)` is a type), it
+  is parsed as a type-id → `act_on_reflect_type`. Otherwise it is an
+  optional nested-name-specifier and an identifier →
+  `act_on_reflect_name`. A template-id operand is
+  "unsupported: reflection of a template-id".
+- **Splice brackets.** `typename [: e :]` in a type position, and `[: e :]`
+  as a template argument ([temp.arg.general]/3; the spike always treats it
+  as a type), parse `e` as a constant-expression and pass it to
+  `act_on_splice_type`. `splice_end` finds the matching `:]` (nested
+  splices balance), and the tentative-parse scanner and template-argument
+  scan use it to skip a splice as one unit. An expression splice is
+  "unsupported: expression splice".
 
 ## 6. Statements and attributes
 
@@ -951,7 +996,8 @@ in `kiln_diag` for now; nothing emits them.
   - qualified member access `e.N::m` (reported "qualified member
     access is not supported yet": `act_on_member` takes no
     nested-name-specifier)
-  - reflection (`^^`, `[: :]`)
+  - reflection beyond the `-freflection` spike (§5.2): expression,
+    dependent and template splices, `^^` of a template-id
   - `co_await`/`co_yield`
 - **Statements:** range-based `for`, `co_return`, contracts.
 

@@ -710,6 +710,7 @@ impl<'a> AstNames<'a> {
                 out.push_str(if exprs.bool_value(e) { "true" } else { "false" });
             }
             ExprKind::CXXNullPtrLiteralExpr => out.push_str("nullptr"),
+            ExprKind::GNUNullExpr => out.push_str("__null"),
             // clang's `VisitDeclRefExpr`: the qualifier as written, then
             // the name.
             ExprKind::DeclRefExpr => {
@@ -1401,6 +1402,21 @@ impl PrintEnv for AstNames<'_> {
         }
         false
     }
+
+    fn reflection(&self, id: crate::ids::ReflectionId, out: &mut String) {
+        use crate::reflect::Reflectee;
+        match self.ast.reflections.get(id) {
+            Reflectee::Null => out.push_str("std::meta::info()"),
+            Reflectee::Type(t) => {
+                out.push_str("^^");
+                self.type_name(t, out);
+            }
+            Reflectee::Decl(d) => {
+                out.push_str("^^");
+                self.write_qualified_name(d, out);
+            }
+        }
+    }
 }
 
 impl TypeNames for Ast {
@@ -1456,6 +1472,10 @@ impl PrintEnv for Ast {
 
     fn enumerator(&self, ty: QualType, bits: &IntBits<'_>, out: &mut String) -> bool {
         AstNames::new(self).enumerator(ty, bits, out)
+    }
+
+    fn reflection(&self, id: crate::ids::ReflectionId, out: &mut String) {
+        AstNames::new(self).reflection(id, out);
     }
 }
 

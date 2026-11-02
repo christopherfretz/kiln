@@ -6,7 +6,8 @@
 //! whose value changes, or is out of range (clang's
 //! `DiagnoseFloatingImpCast` with `IsLiteral`); and `-Wconstant-conversion`,
 //! an integral constant implicitly converted to a narrower integer type
-//! whose value changes (clang's `warn_impcast_integer_precision_constant`).
+//! whose value changes (clang's `warn_impcast_integer_precision_constant`);
+//! and `-Wnull-conversion` for GNU `__null` (`gnu_null.rs`).
 
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
 use kiln_ast::types::BuiltinType;
@@ -97,6 +98,9 @@ impl Sema<'_, '_> {
     fn check_conversion(&mut self, e: ExprId, src: ExprId, cc: Loc) {
         let to = self.ast.exprs.get(e).ty();
         let from = self.ast.exprs.get(src).ty();
+        if self.ast.exprs.get(src).kind() == ExprKind::GNUNullExpr {
+            self.check_null_conversion(src, to, cc);
+        }
         if self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
         }
