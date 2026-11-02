@@ -495,7 +495,15 @@ impl Sema<'_, '_> {
             .decls
             .iter()
             .copied()
-            .filter(|&d| matches!(self.kind_of(d), DeclKind::FunctionTemplate | DeclKind::Function))
+            .filter(|&d| {
+                // A member function is a candidate too: libstdc++
+                // `bitset::to_string(char, char)` calls the overloaded
+                // member template `to_string<char, ...>(z, o)`.
+                matches!(
+                    self.kind_of(self.ast.strip_shadow(d)),
+                    DeclKind::FunctionTemplate | DeclKind::Function | DeclKind::CXXMethod
+                )
+            })
             .collect();
         if decls.len() < 2 || decls.len() != found.decls.len() {
             return e;
