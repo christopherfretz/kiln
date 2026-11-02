@@ -11,6 +11,7 @@
 //! list `>` is not an operator (`greater_is_op`), and the first `>` of a
 //! `>>`-like token closes it ([`Parser::split_greater`]).
 
+use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::BinaryOp;
 use kiln_ast::templates::Requirement;
 use kiln_ast::types::{TagKeyword, TemplateArg, TemplateName};
@@ -729,10 +730,15 @@ impl Parser<'_, '_> {
         self.with_greater_op(true, Self::annotate_decltype_scope_here);
         // A class template name alone is a template template argument,
         // not a deduced class type placeholder ([dcl.type.class.deduct]/2
-        // allows no placeholder here).
+        // allows no placeholder here). A name qualified by a namespace, or
+        // by the class the template is a member of, is the template and
+        // never an injected-class-name, even inside the template's own
+        // definition (libstdc++ `_UnClos<__negate, std::_Expr, _Clos>`
+        // in `_Expr`, [temp.local]/1).
         let ctad_name = matches!(
             self.scan_name_qual_at(self.pos()),
-            Some((_, false, NameClass::TypeTemplate(d), _, _)) if self.s.is_ctad_template(d)
+            Some((_, false, NameClass::TypeTemplate(d), _, q))
+                if self.s.is_ctad_template(d) || q.is_some_and(|q| self.names_member_template(q, d))
         );
         let a = if ctad_name && let Some(t) = self.at_template_name_arg() {
             t
@@ -754,6 +760,15 @@ impl Parser<'_, '_> {
             Some(l) => Some(self.s.act_pack_expansion_arg(a, l)),
             None => Some(a),
         }
+    }
+
+    /// Whether qualified lookup in `q` found class template `d` itself:
+    /// `q` is a namespace or `d`'s own class, never a class whose lookup
+    /// finds an injected-class-name.
+    fn names_member_template(&self, q: DeclId, d: DeclId) -> bool {
+        let decls = &self.s.ast.decls;
+        matches!(decls.get(q).kind(), DeclKind::Namespace | DeclKind::TranslationUnit)
+            || decls.get(d).ctx() == Some(q)
     }
 
     /// A template-argument that is an id-expression naming a class or
@@ -955,6 +970,16 @@ impl Parser<'_, '_> {
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             let ctx = self.s.qualifier_desc(q.ctx);
+            if self.at(Punct::Less) && class == NameClass::Undeclared {
+                // `std::codecvt_utf8<wchar_t> c;` with no such member
+                // ([temp.names]/3: only a template name is followed by
+                // `<`): clang's `DiagnoseUnknownTypeName` "no template
+                // named 'X' in 'N'", then its argument list is skipped.
+                let d = self.s.diag(DiagId::sema_no_member_template, name_loc).arg(text).arg(ctx);
+                self.emit(d);
+                let _ = self.parse_template_arg_list();
+                return None;
+            }
             let d =
                 self.s.diag(DiagId::sema_typename_nested_not_found, name_loc).arg(text).arg(ctx);
             self.emit(d);

@@ -475,6 +475,18 @@ impl Sema<'_, '_> {
         if explicit_value != Some(false) && explicit {
             spec = spec.with_explicit(true);
         }
+        // The explicit-specifier is a property of the first declaration
+        // ([dcl.fct.spec]/4 allows it only in the class, clang's
+        // `getExplicitSpecifier` reads the canonical declaration): an
+        // out-of-line definition stays explicit, so copy-initialization
+        // still does not consider it ([over.match.copy]/1.1).
+        let inherited_explicit = prev_ok.filter(|_| !explicit).and_then(|p| {
+            let e = self.ast.decls.cold.explicit_expr.get(p).copied();
+            self.fn_spec(p).is_explicit().then_some(e)
+        });
+        if inherited_explicit.is_some() {
+            spec = spec.with_explicit(true);
+        }
         let fparams: Vec<ParamInfo> =
             if shape == Shape::Dtor { Vec::new() } else { params.clone() };
         // A parameter that names no type makes the function invalid
@@ -505,6 +517,9 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         if explicit && let Some(e) = ds.explicit_expr {
+            let _ = self.ast.decls.cold.explicit_expr.insert(f, e);
+        }
+        if let Some(Some(e)) = inherited_explicit {
             let _ = self.ast.decls.cold.explicit_expr.insert(f, e);
         }
         self.create_params(f, &fparams, &defaults);

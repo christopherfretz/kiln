@@ -773,6 +773,15 @@ impl Sema<'_, '_> {
         if self.is_error_type(destroyed) {
             return self.recover_err(&[base], loc);
         }
+        // Inside a class template, its injected-class-name names the
+        // dependent `X<P...>` ([temp.local]/1), substituted with the class:
+        // `this->~X()` in libstdc++ `_Sp_counted_ptr_inplace::_M_destroy`.
+        let destroyed = match td {
+            Some(td) if destroyed == self.tag_type(td) => {
+                self.injected_tag_type(td).unwrap_or(destroyed)
+            }
+            _ => destroyed,
+        };
         if self.ast.types.is_dependent(obj_ty) || self.ast.types.is_dependent(destroyed) {
             let qualified = !matches!(qual, DtorQual::None);
             return self.builder().pseudo_destructor_q(b, arrow, qualified, destroyed, loc);

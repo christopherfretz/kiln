@@ -446,9 +446,6 @@ pub struct Sema<'a, 'sm> {
     /// The depth of `synth` whose notes were last printed (clang
     /// `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) synth_noted: std::cell::Cell<usize>,
-    /// The internal `__builtin_memcpy` declaration (spec/sema-class.md
-    /// §4.5), once declared.
-    pub(crate) memcpy_decl: Option<DeclId>,
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
@@ -706,7 +703,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             vtable_uses: Vec::new(),
             vtables_used: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
-            memcpy_decl: None,
             delegating: Vec::new(),
             ctor_entity: None,
             ctor_diag_ty: None,
