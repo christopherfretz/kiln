@@ -248,9 +248,12 @@ pub(crate) enum Fault {
         ak: u32,
         field: DeclId,
     },
+    /// [expr.static.cast]/14: the `void *` `p` designates an object of
+    /// type `from`, not similar to `to`.
     VoidCast {
         from: OTy,
         to: OTy,
+        p: u64,
     },
     NullCallee,
     Callee(u32),
@@ -504,7 +507,7 @@ impl Oven {
                 Some(cv) => self.thaw_ptr(b, cv, OTy(t2), top as u32),
                 None => 0,
             };
-            Ok(u128::from(p))
+            Ok(p)
         } else if aux & 0xff == crate::kbc::bi::ASSUME_ALIGNED {
             self.bi_assume_aligned(b, aux >> 8 != 0, a as u64, bb, c).map(|()| a)
         } else if aux & 0xff == crate::kbc::bi::MSG_CHARS {
@@ -1425,7 +1428,7 @@ impl Oven {
                 None => return Ok(None),
             }
         } else {
-            self.cleanup_life(&c).map_err(|f| (f, pc))?;
+            self.cleanup_life(&c, fb).map_err(|f| (f, self.cleanup_fault_pc(&c, pc)))?;
         }
         // A const object is modifiable during its destruction
         // ([class.dtor]/5).
@@ -1788,7 +1791,7 @@ impl Oven {
             if self.types.similar(from, to) {
                 return Ok(());
             }
-            return Err(Fault::VoidCast { from, to });
+            return Err(Fault::VoidCast { from, to, p: raw });
         }
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
@@ -1798,7 +1801,7 @@ impl Oven {
             return Ok(());
         }
         let from = self.deepest_at(a.ty, off);
-        Err(Fault::VoidCast { from, to })
+        Err(Fault::VoidCast { from, to, p: raw })
     }
 
     /// The most derived (innermost) type of an object at byte `off` of
@@ -2080,7 +2083,7 @@ impl Oven {
             TyKind::Int { width, signed } => canon(v, u32::from(width), signed),
             // A `void *` stored with its tag gets it back (`kbc::VOID_TAG`).
             TyKind::Ptr(_) if sp.ptr_mark(abs) >= crate::mem::PTR_TAGGED => {
-                v | u128::from(self.mem.void_tag(sp.ptr_mark(abs))) << 64
+                v | u128::from(self.mem.void_tag(st, abs)) << 64
             }
             _ => v,
         })
@@ -2110,7 +2113,7 @@ impl Oven {
         } else if v >> 64 == 0 {
             1
         } else {
-            self.mem.void_mark((v >> 64) as u32)
+            self.mem.set_void_tag(st, abs, (v >> 64) as u32)
         };
         let sp = self.mem.space_mut(st);
         sp.write(abs, len, v);
@@ -2604,7 +2607,8 @@ impl Oven {
     /// (aux 1: check that its lifetime has not ended; aux 2: end it).
     fn end_life(&mut self, raw: u64, ty: OTy, aux: u32) -> Result<(), Fault> {
         if aux & 8 != 0 {
-            let n = self.types.copy_size(ty);
+            // aux 16: an empty base, recorded by identity (WP-401).
+            let n = if aux & 16 != 0 { 0 } else { self.types.copy_size(ty) };
             return self.mem.set_unconstructed(raw, n, ty).map_err(|f| Fault::Mem {
                 f,
                 ak: ak::INIT,

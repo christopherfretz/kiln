@@ -1026,8 +1026,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `ParseExpressionList`; WP-391): an argument that fails to parse is
   skipped to the next `,` or the closing `)` without taking it, nested
   `()`/`[]`/`{}` skipped whole (`SkipUntil(comma, r_paren,
-  StopBeforeMatch)`), and parsing goes on after the `,`: in
-  `f(undeclared<int> 7, "a"*2)` the second argument is diagnosed too. A
+  StopBeforeMatch)`; stopping at a `;` under clang 22, past it under
+  clang 19), and parsing goes on after the `,`: in
+  `f(undeclared<int> 7, "a"*2)` the second argument is diagnosed too. An
+  argument is invalid when it fails to parse or leaves `expr_invalid`
+  set: the parser went on past clang's `ExprError` (an undeclared
+  template-id, a call missing its `)`, a failed subscript; the flag is
+  per argument and restored after the list). A
   `...` after an argument is taken even when the argument failed. A list
   with a failed argument then takes its `)` (skipping to it, stopping at
   `;`) and is invalid. Its call is then a parse error under clang 19 and
@@ -1039,10 +1044,23 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `correct_delayed_typos_in`), or contains an error expression (clang 22,
   `Sema::contains_errors`, clang's `containsErrors`). Tests:
   `tests/conformance/expr.call/expression-list-recovery-22.cpp`,
-  `expression-list-recovery-19.cpp`. Not modelled: clang's
-  `ExprError` for a subscript or other expression whose Sema action
-  failed (kiln builds a recovery expression), so `f(1 [2, 3] 4, "a"*2)`
-  does not yet skip to the `,`.
+  `expression-list-recovery-19.cpp`. Not modelled: clang's `ExprError`
+  for an undeclared plain identifier (kiln builds a recovery
+  expression), so `f(u 8, "a"*2)` does not yet skip to the `,`.
+- **Subscript recovery** (WP-399, clang's `ParsePostfixExpressionSuffix`
+  for `[`): the subscript is `ExprError` (an error expression with
+  `expr_invalid` set, so an enclosing expression-list skips to its `,`
+  and an expression statement or `= initializer` skips to its `;`/`,`)
+  when its expression-list failed (its `]` then matched with "expected
+  ']'" if missing: `a[u<int>] 3, x` skips the `]` as the first token
+  and reports at the `;`), when the list is not followed by `]` (no Sema
+  action), or when its Sema action reports an error and yields an error
+  expression (`i[1]` on an `int`, a non-integer index, no viable
+  `operator[]`). A subscript over an operand that merely contains errors
+  (`g(u<int> 7)[0]`) stays a recovery expression. Under the same model an
+  expression statement followed by `)` `;` reports "extraneous ')'
+  before ';'" and takes both (clang's `ExpectAndConsumeSemi`). Tests:
+  `tests/conformance/expr.sub/`.
 - **Literals:**
   - Integer, floating and character literals are classified by
     `kiln_lex::literal` and typed by `kiln_sema::literal`
@@ -1216,6 +1234,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   full-expression. Elsewhere (a declaration's initializer, a condition, a
   `return`, a template instantiation) and for an unqualified name or a
   member access (`s.nomember`) it is reported where it is written.
+  Under `-fclang-compat=19` (WP-399) a `return` operand, a declaration's
+  `=`/`(`/`{` initializer, an expression condition and a `decltype`
+  operand are scopes too, ended where clang 19 corrects them: the
+  `return` operand before its `;` and the return's checks, the
+  initializer after the initialization, the condition and the
+  `decltype` operand right after the expression (the correction points
+  of spec/sema.md "Clang 19 correction to the qualified function").
   Scopes nest: an inner scope's held typos stay held while an outer
   one is open (`end_delayed_typos`), and each held typo records the
   recovery expression that stands for clang's `TypoExpr`

@@ -55,6 +55,20 @@ pub struct DiagEngine<'sm> {
     unrecoverable: AtomicU32,
     warnings: AtomicU32,
     fatal: AtomicBool,
+    /// [`Self::hold`] depth: while positive, diagnostics wait in `held`.
+    holding: AtomicU32,
+    held: Mutex<Vec<HeldDiag>>,
+    /// What the held diagnostics will count, in the order `errors`,
+    /// `uncompilable`, `unrecoverable`, `warnings`.
+    held_counts: [AtomicU32; 4],
+}
+
+/// A diagnostic [`DiagEngine::hold`] keeps back.
+struct HeldDiag {
+    diag: Diag,
+    id: DiagId,
+    level: Level,
+    dropped: bool,
 }
 
 impl std::fmt::Debug for DiagEngine<'_> {
@@ -91,6 +105,9 @@ impl<'sm> DiagEngine<'sm> {
             unrecoverable: AtomicU32::new(0),
             warnings: AtomicU32::new(0),
             fatal: AtomicBool::new(false),
+            holding: AtomicU32::new(0),
+            held: Mutex::new(Vec::new()),
+            held_counts: Default::default(),
         };
         for od in opts.pending.iter().chain(&reports) {
             let mut d = Diag::new(od.id, Span::INVALID);
@@ -205,7 +222,7 @@ impl<'sm> DiagEngine<'sm> {
 
     /// Errors emitted so far (fatal errors included).
     pub fn error_count(&self) -> u32 {
-        self.errors.load(Ordering::Acquire)
+        self.errors.load(Ordering::Acquire) + self.held_count(0)
     }
 
     /// Errors emitted so far whose id is an error by default (fatal
@@ -215,19 +232,101 @@ impl<'sm> DiagEngine<'sm> {
     /// after an error (sema's flow warnings) go on as for a warning
     /// (spec/diag.md §7.5).
     pub fn uncompilable_error_count(&self) -> u32 {
-        self.uncompilable.load(Ordering::Acquire)
+        self.uncompilable.load(Ordering::Acquire) + self.held_count(1)
     }
 
     /// Errors emitted so far whose id is of class error (fatal errors
     /// included): clang `DiagnosticErrorTrap::hasUnrecoverableErrorOccurred`,
     /// which also leaves out a warning that is an error by default.
     pub fn unrecoverable_error_count(&self) -> u32 {
-        self.unrecoverable.load(Ordering::Acquire)
+        self.unrecoverable.load(Ordering::Acquire) + self.held_count(2)
     }
 
     /// Warnings emitted so far.
     pub fn warning_count(&self) -> u32 {
-        self.warnings.load(Ordering::Acquire)
+        self.warnings.load(Ordering::Acquire) + self.held_count(3)
+    }
+
+    fn held_count(&self, i: usize) -> u32 {
+        self.held_counts[i].load(Ordering::Acquire)
+    }
+
+    /// Adds (or with `sub`, takes away) what a held diagnostic counts.
+    fn count_held(&self, id: DiagId, level: Level, sub: bool) {
+        let bump = |i: usize| {
+            let c = &self.held_counts[i];
+            if sub {
+                c.fetch_sub(1, Ordering::AcqRel);
+            } else {
+                c.fetch_add(1, Ordering::AcqRel);
+            }
+        };
+        match level {
+            Level::Error => {
+                bump(0);
+                if id.is_default_error() {
+                    bump(1);
+                }
+                if !id.is_warning_or_extension() {
+                    bump(2);
+                }
+            }
+            Level::Warning => bump(3),
+            _ => {}
+        }
+    }
+
+    /// Starts holding back every diagnostic but a fatal one until the
+    /// matching [`Self::release`]: sema's speculative typo correction
+    /// (spec/diag.md "Held diagnostics") decides which of them to drop
+    /// ([`Self::drop_held`]). Held diagnostics count as emitted. Holds
+    /// nest.
+    pub fn hold(&self) {
+        self.holding.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// How many diagnostics are held: the index the next held one gets.
+    pub fn held_len(&self) -> usize {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner).len()
+    }
+
+    /// The held errors from index `from` on, not dropped, with their ids.
+    pub fn held_errors_from(&self, from: usize) -> Vec<(usize, DiagId)> {
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        let tail = held.get(from..).unwrap_or_default();
+        let errors = tail.iter().enumerate().filter(|(_, h)| !h.dropped && h.level == Level::Error);
+        errors.map(|(i, h)| (from + i, h.id)).collect()
+    }
+
+    /// Drops held diagnostic `i`: it will not be emitted or counted.
+    pub fn drop_held(&self, i: usize) {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(h) = held.get_mut(i)
+            && !h.dropped
+        {
+            h.dropped = true;
+            self.count_held(h.id, h.level, true);
+        }
+    }
+
+    /// Ends a [`Self::hold`]; the outermost emits the held diagnostics
+    /// not dropped, in order.
+    pub fn release(&self) {
+        let prev =
+            self.holding.try_update(Ordering::AcqRel, Ordering::Acquire, |d| d.checked_sub(1));
+        match prev {
+            Ok(1) => {}
+            Ok(_) => return,
+            Err(_) => {
+                debug_assert!(false, "release without hold");
+                return;
+            }
+        }
+        let held = std::mem::take(&mut *self.held.lock().unwrap_or_else(PoisonError::into_inner));
+        for h in held.into_iter().filter(|h| !h.dropped) {
+            self.count_held(h.id, h.level, true);
+            self.emit(h.diag);
+        }
     }
 
     /// Whether a fatal error was emitted; every later diagnostic is dropped.
@@ -320,6 +419,12 @@ impl<'sm> DiagEngine<'sm> {
         if self.suppressed_in_system_header(id, d.span.lo) {
             return;
         }
+        if level != Level::Fatal && self.holding.load(Ordering::Acquire) > 0 {
+            let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+            self.count_held(id, level, false);
+            held.push(HeldDiag { diag: d, id, level, dropped: false });
+            return;
+        }
         let mut st = self.lock();
         // Re-check under the lock: another thread may have gone fatal.
         if self.has_fatal() {
@@ -333,7 +438,7 @@ impl<'sm> DiagEngine<'sm> {
         }
         let record = if level == Level::Error
             && self.error_limit != 0
-            && self.error_count() >= self.error_limit
+            && self.errors.load(Ordering::Acquire) >= self.error_limit
         {
             Diagnostic {
                 id: Some(DiagId::diag_too_many_errors),

@@ -1,23 +1,25 @@
 // [temp.names]/3: undeclared-template-id-function-22.cpp's forms under
-// clang 19, which reports the template-id's name as undeclared (a delayed
-// typo whose correction to the qualified name fails in these
-// expressions).
+// clang 19, which reports the template-id's name as undeclared: a delayed
+// typo whose correction to the qualified name fails because the rebuilt
+// expression (function + int, an overload set, a call) is invalid or
+// there is no single qualified candidate (undeclared-template-id-correct-19.cpp
+// has the corrected forms).
 //@ requires: clang<22
 //@ expect: compile-fail
 //@ strict-diags
 //@ args: -ferror-limit=0
-//@ diag: 25:56 error "use of undeclared identifier 'fn'"
-//@ diag: 32:18 error "use of undeclared identifier 'val'"
-//@ diag: 33:19 error "use of undeclared identifier 'val'"
-//@ diag: 34:18 error "use of undeclared identifier 'redecl'"
-//@ diag: 35:18 error "use of undeclared identifier 'ovset'"
-//@ diag: 36:18 error "use of undeclared identifier 'ufunc'"
-//@ diag: 37:18 error "use of undeclared identifier 'mixed'"
-//@ diag: 38:18 error "use of undeclared identifier 'amb'"
-//@ diag: 39:36 error "use of undeclared identifier 'abcdef'"
-//@ diag: 40:20 error "'val' does not name a template but is followed by template arguments"
-//@ diag: 21:5 note "non-template declaration found by name lookup"
-//@ diag: 41:18 error "use of undeclared identifier 'val'"
+//@ diag: 27:56 error "use of undeclared identifier 'fn'"
+//@ diag: 34:18 error "use of undeclared identifier 'val'"
+//@ diag: 35:19 error "use of undeclared identifier 'val'"
+//@ diag: 36:18 error "use of undeclared identifier 'redecl'"
+//@ diag: 37:18 error "use of undeclared identifier 'ovset'"
+//@ diag: 38:18 error "use of undeclared identifier 'ufunc'"
+//@ diag: 39:18 error "use of undeclared identifier 'mixed'"
+//@ diag: 40:18 error "use of undeclared identifier 'amb'"
+//@ diag: 41:36 error "use of undeclared identifier 'abcdef'"
+//@ diag: 42:20 error "'val' does not name a template but is followed by template arguments"
+//@ diag: 23:5 note "non-template declaration found by name lookup"
+//@ diag: 43:18 error "use of undeclared identifier 'val'"
 int val(int);
 int redecl(int);
 int redecl(int);

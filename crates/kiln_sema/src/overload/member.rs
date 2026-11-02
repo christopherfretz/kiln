@@ -67,6 +67,31 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// The one non-template member the member access `e` names (clang's
+    /// `MemberExpr`, not an overload set or a dependent access), which a
+    /// `<` after may have been meant to follow a template name
+    /// ([temp.names]/3; clang's `mightBeIntendedToBeTemplateName`).
+    pub fn member_named_non_template(&self, e: ExprId) -> Option<DeclId> {
+        let n = self.ast.exprs.get(e);
+        if n.kind() != ExprKind::MemberExpr || self.ast.templates.expr_targs.get(e).is_some() {
+            return None;
+        }
+        let d = if n.ty() == QualType::OVERLOAD {
+            match self.member_overload_decls(e) {
+                [d] => *d,
+                _ => return None,
+            }
+        } else {
+            self.ast.exprs.decl(e)
+        };
+        let d = self.ast.strip_shadow(d);
+        (!matches!(
+            self.kind_of(d),
+            DeclKind::FunctionTemplate | DeclKind::VarTemplate | DeclKind::ClassTemplate
+        ))
+        .then_some(d)
+    }
+
     /// Records the explicit template arguments `targs` of the member
     /// template-id `e` (see [`Self::is_member_template_ref`]); false
     /// (nothing recorded) for dependent arguments, which a member

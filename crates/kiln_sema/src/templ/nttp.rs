@@ -54,6 +54,15 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some(r) = t.as_record(ty) else { return true };
+        // clang `RequireStructuralType`: the type must be complete
+        // ([temp.param]/6 via [basic.types.general]/5), in every language
+        // mode, also when substituted.
+        if !self.require_complete(ty, loc) {
+            let d = self.diag(DiagId::sema_nttp_incomplete, loc).arg(self.ty_arg(ty));
+            let d = self.incomplete_note(d, ty);
+            self.emit(here(d));
+            return false;
+        }
         let Some(def) = self.ast.definition(r) else { return true };
         let bits = self.record_bits(def);
         if !bits.contains(DefinitionBits::COMPLETE) {
@@ -326,10 +335,10 @@ impl Sema<'_, '_> {
                 }
                 // Re-keyed at the reference type: printed without `&`
                 // (`T<gi>`), as clang.
-                Some(Scalar::Pointer { base, offset, .. }) => Ok(self
+                Some(Scalar::Pointer { base, offset, designated, .. }) => Ok(self
                     .ast
                     .consts
-                    .push_scalar(Scalar::Pointer { ty: canon, base, offset })
+                    .push_scalar(Scalar::Pointer { ty: canon, base, offset, designated })
                     .unwrap_or(v)),
                 _ => Ok(v),
             }
@@ -342,6 +351,36 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 Err(())
             }
+        }
+    }
+
+    /// A `void *` argument pointing to the first element of an array
+    /// variable is the same argument as one pointing to the array (clang's
+    /// `CheckTemplateArgument` ignores the array-to-pointer decay and
+    /// keys both by the declaration): its designated type is the
+    /// variable's ([temp.type]/2.4, [temp.arg.nontype]).
+    pub(crate) fn undecayed_void_ptr_arg(&mut self, v: ConstValueId) -> ConstValueId {
+        let Some(Scalar::Pointer { ty, base: PtrBase::Decl(d), offset: 0, designated: Some(t) }) =
+            self.ast.consts.scalar(v)
+        else {
+            return v;
+        };
+        let types = &self.ast.types;
+        let Some(whole) = self.ast.decls.get(d).ty().map(|q| types.canonical(q)) else {
+            return v;
+        };
+        let unq = |q: QualType| types.canonical(q).without_quals();
+        match types.element(whole) {
+            Some(e) if types.is_array(whole) && (unq(e) == unq(t) || unq(whole) == unq(t)) => {
+                let s = Scalar::Pointer {
+                    ty,
+                    base: PtrBase::Decl(d),
+                    offset: 0,
+                    designated: Some(whole),
+                };
+                self.ast.consts.push_scalar(s).unwrap_or(v)
+            }
+            _ => v,
         }
     }
 

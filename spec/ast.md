@@ -701,7 +701,8 @@ enum Scalar<'a> {                       // `ty` is the canonical, cv-unqualified
     Bool { ty, value: bool },
     Float { ty, kind: FloatKind, bits: u128 },    // exact encoding (−0.0 ≠ +0.0, NaN payloads)
     Null { ty, kind: NullKind },                  // Pointer | MemberData | MemberFunction
-    Pointer { ty, base: PtrBase, offset: u64 },   // also references; byte offset
+    Pointer { ty, base: PtrBase, offset: u64,     // also references; byte offset
+              designated: Option<QualType> },     // `void *`: the designated object's type
     MemberPtr { ty, member: DeclId, kind: MemberKind, derived: bool, path: &'a [DeclId] },
     Reflection { ty, id: ReflectionId },          // std::meta::info (M6)
 }
@@ -801,7 +802,7 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
   | int ≤ 64 bits, bool, float ≤ 64 bits, null, reflection | 16 |
   | wider int | 16 + 8 per word |
   | x87 or quad float | 16 + 16 |
-  | pointer | 16 (+8 if the offset is ≥ 2^32) |
+  | pointer | 16 (+8 if the offset is ≥ 2^32; +16 for a designated type) |
   | member pointer | 16 + 4 per path entry |
   | aggregate | 16 + 24 (pool starts and cached 64-bit hash) + `sizeof(T)` + 8 per relocation, padding run and union entry |
 
@@ -846,13 +847,17 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
     the image width is known. Member pointers carry `kind`.
   - **Shadow summary.** Only padding is stored. `Value` and `Pointer` runs
     are derived.
-  - **Open: pointer identity.** `(void*)&s` and `(void*)&s.x` (same
-    type, base and offset) intern as equal. That is right for [expr.eq],
-    which compares addresses. [temp.type] treats them as different pointer
-    values, and clang keeps them apart through the lvalue path. If a
-    conformance test needs that, add a designator-depth disambiguator to
-    `Pointer`. Pointers of different types (`&arr` vs `&arr[0]`) are
-    already distinct.
+  - **Pointer identity.** A `void *` keeps the type of the object it
+    designates (`designated`, set by the Oven's freeze from its void tag;
+    `None` for every other pointer), and it is part of the value's
+    identity: `(void*)&s` and `(void*)&s.x` (same type, base and offset)
+    are different values, as [temp.type]/2.4 and clang's lvalue path keep
+    them apart, and mangle differently (`cv <type> ad ...`). Together with
+    the offset it names the subobject. A template argument pointing to
+    the first element of an array variable is re-keyed to the array
+    (`Sema::undecayed_void_ptr_arg`): clang ignores that decay.
+    Pointers of different types (`&arr` vs `&arr[0]`) were already
+    distinct.
   - **Open: bit-fields.** Bit-level padding inside a bit-field storage unit
     (unnamed bit-fields, unused high bits) is not tracked. Those bits must
     be zero.

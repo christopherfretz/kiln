@@ -12,6 +12,7 @@ Conversion = "conversion" [LiteralConversion, ConstantConversion, NullConversion
 ConversionNull = "conversion-null" [NullConversion];
 Cxx11Extensions = "c++11-extensions" [Cxx11LongLong];
 Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];
+CxxPre20CompatPedantic = "pre-c++20-compat-pedantic" [CxxPre20Compat];
 Dangling = "dangling" [DanglingField, ReturnStackAddress];
 Deprecated = "deprecated" [DeprecatedArrayCompare, DeprecatedDeclarations, DeprecatedLiteralOperator, DeprecatedMissingCommaVariadicParameter, DeprecatedRedundantConstexprStaticDef, DeprecatedThisCapture, DeprecatedType, DeprecatedVolatile];
 Extra = "extra" [InitializerOverrides, UnusedButSetParameter];
