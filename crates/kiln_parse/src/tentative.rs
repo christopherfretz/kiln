@@ -8,6 +8,7 @@
 //! `TentativelyDeclaredIdentifiers`).
 
 use kiln_ast::DeclId;
+use kiln_ast::decl::DeclKind;
 use kiln_lex::{Punct, Std, TokKind};
 use kiln_sema::NameClass;
 use kiln_source::symbol::Symbol;
@@ -331,11 +332,65 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             }
             // `C auto`, `C decltype(auto)` ([dcl.spec.auto.general]/1).
             NameClass::Concept(_) if self.placeholder_at(end) => Tpr::True,
-            // `T::type x` (a missing `typename`, diagnosed by the
-            // declaration parser).
-            NameClass::Dependent if end > self.i + 1 && self.ident_at(end).is_some() => Tpr::True,
+            // `T::type x`, `T::type const` (a missing `typename`,
+            // diagnosed by the declaration parser): no expression has a
+            // name or a decl-specifier there (clang's
+            // `isCXXDeclarationSpecifier` on a dependent `annot_cxxscope`).
+            NameClass::Dependent if end > self.i + 1 => self.after_dependent_name(end),
             _ => Tpr::False,
         }
+    }
+
+    /// The `NameClass::Dependent` arm of [`Scan::decl_specifier`]: the
+    /// qualified name ends at `end`; an identifier or a decl-specifier
+    /// after it makes it a (typename-less) type.
+    fn after_dependent_name(&self, end: usize) -> Tpr {
+        if self.ident_at(end).is_some() {
+            return Tpr::True;
+        }
+        let next = Scan { p: self.p, i: end, declared: self.declared.clone() };
+        match next.decl_specifier(Tpr::False) {
+            Tpr::True | Tpr::Error => Tpr::True,
+            _ => Tpr::False,
+        }
+    }
+
+    /// [`Scan::decl_specifier`] in a parameter-declaration-clause that
+    /// is weighed against an initializer: a name after a dependent
+    /// qualifier that is neither a type nor an expression for certain
+    /// (`T::m`, `X<T>::m` followed by `)` or `,`) is `Ambiguous` and sets
+    /// `invalid` -- it is a declaration only with a missing `typename`
+    /// (clang's `InvalidAsDeclSpec`, the tie-break in
+    /// [`Scan::function_declarator_at`]).
+    fn param_decl_specifier(&self, invalid: Option<&mut bool>) -> Tpr {
+        let r = self.decl_specifier(Tpr::False);
+        if r == Tpr::False
+            && let Some(invalid) = invalid
+            && let Some((end, NameClass::Dependent)) = self.name_here()
+            && end > self.i + 1
+        {
+            *invalid = true;
+            return Tpr::Ambiguous;
+        }
+        r
+    }
+
+    /// A name after a dependent qualifier that contains a template-id
+    /// (`X<T>::m`, `T::template U<int>::m`): at the start of a statement
+    /// or condition it is an expression whatever follows it (clang
+    /// annotates it as a dependent non-type name before disambiguating);
+    /// a missing `typename` there is not assumed.
+    fn dependent_template_id_name(&self) -> bool {
+        let Some((end, NameClass::Dependent)) = self.name_here() else { return false };
+        // A parsed-ahead `X<T>::` (an unknown specialization stays the
+        // class template).
+        if let Some(Ok(q)) = self.p.decltype_scope_qual_at(self.i)
+            && self.p.s.ast.decls.get(q).kind() == DeclKind::ClassTemplate
+        {
+            return true;
+        }
+        (self.i..end)
+            .any(|j| self.punct_at(j) == Some(Punct::Less) || self.kw_at(j) == Some(Kw::Template))
     }
 
     /// A `decltype(e)::name` whose qualifier was not parsed ahead (a
@@ -696,7 +751,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
 
     /// clang's `TryParseFunctionDeclarator`, after the `(`.
     fn function_declarator(&mut self, may_have_trailing_return: bool) -> Tpr {
-        let mut r = self.parameter_declaration_clause(&mut false, false);
+        let mut r = self.parameter_declaration_clause(None, false);
         if r == Tpr::Ambiguous && !self.at(Punct::RParen) {
             r = Tpr::False;
         }
@@ -779,7 +834,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     /// a decl-specifier is then no proof, and a parameter must have `=`.
     fn parameter_declaration_clause(
         &mut self,
-        _invalid: &mut bool,
+        mut invalid: Option<&mut bool>,
         versus_template_arg: bool,
     ) -> Tpr {
         if self.at(Punct::RParen) {
@@ -801,7 +856,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 }
             }
             // A parameter's initializer needs `=`: `T{` is not one.
-            let mut r = self.decl_specifier(Tpr::False);
+            let mut r = self.param_decl_specifier(invalid.as_deref_mut());
             if r != Tpr::Ambiguous && !(versus_template_arg && r == Tpr::True) {
                 return r;
             }
@@ -815,7 +870,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 if seen_type && self.ident_at(self.i).is_some() {
                     return Tpr::True;
                 }
-                r = self.decl_specifier(Tpr::False);
+                r = self.param_decl_specifier(invalid.as_deref_mut());
                 if r == Tpr::Error || (r == Tpr::True && !versus_template_arg) {
                     return r;
                 }
@@ -857,7 +912,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     fn function_declarator_at(&self, open: usize, ambiguous: &mut bool) -> bool {
         let mut s = Scan { p: self.p, i: open + 1, declared: self.declared.clone() };
         let mut invalid = false;
-        let mut r = s.parameter_declaration_clause(&mut invalid, false);
+        let mut r = s.parameter_declaration_clause(Some(&mut invalid), false);
         if r == Tpr::Ambiguous {
             if s.at(Punct::RParen) {
                 let n = s.i + 1;
@@ -877,10 +932,21 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     )
                 ) || matches!(
                     s.kw_at(n),
-                    Some(Kw::Const | Kw::Volatile | Kw::Throw | Kw::Noexcept | Kw::Try)
+                    Some(
+                        Kw::Const
+                            | Kw::Volatile
+                            | Kw::Restrict
+                            | Kw::Throw
+                            | Kw::Noexcept
+                            | Kw::Try
+                    )
                 ) || virt;
                 if decisive {
                     r = Tpr::True;
+                } else if invalid {
+                    // The absence of `typename` breaks the tie: an
+                    // initializer (clang's `InvalidAsDeclaration`).
+                    r = Tpr::False;
                 }
             } else {
                 r = Tpr::False;
@@ -976,6 +1042,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
 
     /// clang's `isCXXSimpleDeclaration`.
     fn is_simple_declaration(&mut self, allow_for_range: bool) -> bool {
+        if self.dependent_template_id_name() {
+            return false;
+        }
         let r = self.decl_specifier(Tpr::False);
         if r != Tpr::Ambiguous {
             return r != Tpr::False;
@@ -987,6 +1056,19 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
 }
 
 impl Parser<'_, '_> {
+    /// `Q::name ident` at the start of a statement, where the qualifier
+    /// `Q` failed and was diagnosed (a class template specialization
+    /// that is undefined or failed to instantiate, [temp.inst]/2): the
+    /// name is an error name (clang's `ClassifyName` `NC_Error`), and the
+    /// statement is skipped without further diagnostics.
+    pub(crate) fn at_failed_scope_declaration(&mut self) -> bool {
+        self.annotate_decltype_scope_here();
+        let i = self.pos();
+        self.decltype_scope_qual_at(i) == Some(Err(()))
+            && self.ident_of(self.tok_at(i + 1)).is_some()
+            && self.ident_of(self.tok_at(i + 2)).is_some()
+    }
+
     /// [stmt.ambig]: whether the statement at the current token (after
     /// any attributes) is a declaration-statement (clang's
     /// `isCXXDeclarationStatement`).
@@ -1013,6 +1095,9 @@ impl Parser<'_, '_> {
         let mut s = Scan::new(self, self.pos());
         if !s.skip_attributes() {
             return true;
+        }
+        if s.dependent_template_id_name() {
+            return false;
         }
         match s.decl_specifier(Tpr::False) {
             Tpr::True | Tpr::Error => return true,
@@ -1070,7 +1155,7 @@ impl Parser<'_, '_> {
             let r = s.init_declarator_list(false);
             if r == Tpr::Ambiguous && !s.at(Punct::Semi) { Tpr::False } else { r }
         } else {
-            s.parameter_declaration_clause(&mut false, true)
+            s.parameter_declaration_clause(None, true)
         };
         !matches!(r, Tpr::False | Tpr::Error)
     }

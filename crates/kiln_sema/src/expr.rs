@@ -3337,7 +3337,25 @@ impl Sema<'_, '_> {
             && self.ast.types.same_unqualified(tt, ft)
         {
             let ty = conv::strip_cv(self, tt);
-            return self.builder().conditional(c2, t2, f2, ty, loc);
+            if same_info {
+                return self.builder().conditional(c2, t2, f2, ty, loc);
+            }
+            // [expr.cond]/7: a class glvalue arm copy-initializes the
+            // result prvalue (clang `PerformCopyInitialization` of an
+            // `InitializeTemporary` entity per arm): its copy or move
+            // constructor runs.
+            let mut arms = [t2, f2];
+            for a in &mut arms {
+                if !self.ast.exprs.get(*a).value_category().is_glvalue() {
+                    continue;
+                }
+                match conv::implicit_convert(self, *a, ty, ConvCtx::Initialization) {
+                    Ok(x) if !self.is_err_expr(x) => *a = x,
+                    Ok(_) => return self.recover_err(&[c, t, f], loc),
+                    Err(err) => return self.conv_failed(&err, t, f, loc),
+                }
+            }
+            return self.builder().conditional(c2, arms[0], arms[1], ty, loc);
         }
         let msg = self.diag(DiagId::sema_incompatible_cond_operands, loc).diff_args(self, tt, ft);
         self.emit(msg);

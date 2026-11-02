@@ -968,26 +968,31 @@ impl Sema<'_, '_> {
                     && bits.contains(DefinitionBits::IMPLICIT_COPY_CTOR_CONST_PARAM)
                     || k == K::CopyAssign
                         && bits.contains(DefinitionBits::IMPLICIT_COPY_ASSIGN_CONST_PARAM);
-                self.selected_all_trivial(d, k, const_arg)
+                let t = self.selected_all_trivial(d, k, const_arg);
+                // The class's trivial bit now follows its declared member
+                // (clang `addedMember` / `addedEligibleSpecialMember`), so a
+                // class deriving from or containing `d` sees it trivial.
+                let b = k.trivial_bit();
+                self.set_finishing_bits(d, |x| if t { x.with(b) } else { x.without(b) });
+                t
             }
             _ => bits.contains(k.trivial_bit()),
         };
         if trivial {
             spec = spec.with_trivial(true);
         }
-        // A copy/move member declared at `}` because it needs overload
-        // resolution decides its class's triviality bit (clang
-        // `addedMember` for an implicit member: `HasTrivialSpecialMembers`
-        // or `DeclaredNonTrivialSpecialMembers`): a member of class type
-        // with only a trivial copy constructor leaves the implicit move
-        // constructor trivial.
+        // The triviality bit just set above for a copy/move member declared
+        // at `}` (clang `addedMember`: `HasTrivialSpecialMembers` or
+        // `DeclaredNonTrivialSpecialMembers`) also decides the finishing
+        // class's trivial copyability: a member of class type with only a
+        // trivial copy constructor leaves the implicit move constructor
+        // trivial.
         if k != K::Dtor
             && k != K::DefaultCtor
             && k.needs_ovl_bit().is_some_and(|n| bits.contains(n))
             && self.special.finishing.iter().any(|x| x.0 == d)
         {
             self.set_finishing_bits(d, |x| {
-                let x = if trivial { x.with(k.trivial_bit()) } else { x.without(k.trivial_bit()) };
                 let copyable = [K::CopyCtor, K::MoveCtor, K::CopyAssign, K::MoveAssign, K::Dtor]
                     .iter()
                     .all(|k| x.contains(k.trivial_bit()));
