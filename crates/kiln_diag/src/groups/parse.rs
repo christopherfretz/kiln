@@ -3,6 +3,7 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 Cxx20Extensions = "c++20-extensions" [];
+Cxx26Extensions = "c++26-extensions" [];
 CxxAttributeExtension = "cxx-attribute-extension" [];
 DeprecatedMissingCommaVariadicParameter = "deprecated-missing-comma-variadic-parameter" [];
 DuplicateDeclSpecifier = "duplicate-decl-specifier" [];

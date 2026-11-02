@@ -625,7 +625,8 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     declaration, definition or friend, decided by the next token, as in
     [dcl.type.elab]. A named class followed by `final` and `{` or `:`
     is a definition; a repeated `final` is `class already marked
-    'final'`. `friend class X;` is `TagUse::Friend`; a friend that
+    'final'`. `friend class X;` (or `friend class X` followed by `,` or `...`
+    in a friend-type-specifier-list) is `TagUse::Friend`; a friend that
     would define a class is `cannot define a type in a friend
     declaration` and is skipped.
   - Then `act_on_tag_attrs` for the class-head or enum-head attributes.
@@ -711,6 +712,18 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `template` (unsupported).
   - `decl-specifier-seq ;`: `act_on_friend(ds, base, None, loc)` for
     `friend class X;`, else `act_on_decl_spec_only`.
+  - A friend-type-specifier-list ([class.friend]/3, P2893, WP-359): with
+    `friend` and the next token `...` or `,`, `parse_friend_type_list`
+    takes each friend-type-specifier, an optional `...`, and calls
+    `act_on_friend_type(ds, base, ellipsis, friend_loc)`. The later
+    specifiers are parsed by `parse_decl_specifiers_from(Member,
+    Some(friend_loc))`, so `friend` applies to them and an elaborated
+    `struct A` before `,` or `...` is `TagUse::Friend`. A specifier with no
+    type is `a type specifier is required for all declarations` (skipped
+    to `;`); a missing `;` is `expected ';' after friend declaration`.
+    Before C++26 the list warns `parse_ext_variadic_friend` ("variadic
+    'friend' declarations are a C++2c extension", `-Wc++26-extensions`)
+    at its first `...` or `,`.
   - member-declarators: each goes to `act_on_declarator` with
     `DeclaratorContext::Member` (or `act_on_friend` with the declarator
     for a friend). A bit-field `: width` may carry a default member

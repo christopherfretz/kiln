@@ -1040,11 +1040,12 @@ and returns the scope it names:
   undeduced placeholder, so deduction is redone for the instantiation.
   A non-dependent use in a template is deduced at definition.
 
+- **Inherited-constructor guides (P2582, WP-359).** See
+  spec/sema-templates.md §6.6.1; neither clang 19 nor clang 22 implements
+  them, so their tests are `skip(clang)` and the standard's example is
+  the contract.
+
 **Deferred (no candidate, or diagnosed as unsupported).**
-- Inherited-constructor guides (P2582): clang 19 does not implement
-  them either, so `D d(args)` through `using B<T>::B;` finds only `D`'s
-  own guides, as clang 19 does. Implementing it is the alias transform
-  of `B`'s guides with `D`'s base-specifier as the right-hand side.
 - Guides from constructor templates of a member class template of an
   instantiated class template (only its non-template constructors and
   user guides are used).
@@ -2117,9 +2118,11 @@ diagnostics and IR.
     declared with constrained 'auto'`.
 
   `declare_decomposition` then declares the bindings: redefinitions are
-  checked against earlier names, binding attributes are attached, and a
-  pack `...a` (P1061) is reported as `a structured binding pack` is
-  unsupported. It then declares `e`. A second declarator in the same
+  checked against earlier names and binding attributes are attached. A
+  pack `...a` (P1061) is checked first (`check_binding_packs`: only in a
+  template, at most one) and then decomposed at instantiation
+  (`expand_binding_pack`; spec/sema-templates.md §7.1). It then declares
+  `e`. A second declarator in the same
   group is `decomposition declaration must be the only declaration in
   its group` (`act_on_decomposition_not_alone`). A missing initializer
   is `decomposition declaration '[a, b]' requires an initializer`
@@ -2220,7 +2223,6 @@ diagnostics and IR.
     specialization fully qualified (`Sema::decl_ty_str`, clang's
     printing of `getTypeDeclType`).
 - **Left.**
-  - Structured binding packs (P1061).
   - `constexpr` structured bindings (P2686; clang 19 rejects them too).
   - Instantiating binding attributes.
   - The NoOp `'const M'` cast clang adds when a const class `e` is

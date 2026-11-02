@@ -639,6 +639,10 @@ impl Substituter<'_, '_, '_> {
         use crate::templ::subst::DeclOrPack;
         let n = *self.sema.ast.exprs.get(e);
         let d = kiln_ast::DeclId::from_raw(n.a()).ok_or(SubstFail)?;
+        // A structured binding pack whose decomposition failed.
+        if self.failed_locals.contains(&d) {
+            return Err(SubstFail);
+        }
         let len = if let Some(&DeclOrPack::Pack(l)) = self.locals.get(&d) {
             Some(self.sema.ast.lists.len(l))
         } else if let Some(&DeclOrPack::Decl(x)) = self.locals.get(&d) {
