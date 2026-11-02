@@ -4173,6 +4173,20 @@ pub mod builtin {
         })
     }
 
+    /// The `printf` format-attribute indices of a builtin (clang 19
+    /// `Builtins.td` `PrintfFormat<N>` / `VPrintfFormat<N>`, added by
+    /// `Sema::AddKnownFunctionAttributes` as an implicit
+    /// `format(printf, F, A)`): one-based `(F, A)`, `A` = 0 when the data
+    /// arguments are a `va_list` (WP-282).
+    pub fn printf_format(id: u32) -> Option<(u16, u16)> {
+        Some(match id {
+            SPRINTF => (2, 3),
+            SNPRINTF => (3, 4),
+            VSNPRINTF => (3, 0),
+            _ => return None,
+        })
+    }
+
     // ---- end WP-270 ----
 
     // ---- WP-282 ----

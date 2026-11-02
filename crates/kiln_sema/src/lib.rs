@@ -31,6 +31,7 @@ pub mod expr;
 mod extern_c;
 mod fallthrough;
 mod for_loop_analysis;
+mod format_string;
 mod forms;
 mod gnu;
 mod impcast;

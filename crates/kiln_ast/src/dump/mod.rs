@@ -1849,6 +1849,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         if node.kind == AttrKind::BUILTIN {
             let _ = write!(self.line, " {}", node.a);
         }
+        if node.kind == AttrKind::FORMAT {
+            let _ = write!(self.line, " printf {} {}", node.b & 0xffff, node.b >> 16);
+        }
     }
 
     // -------------------------------------------------------------------

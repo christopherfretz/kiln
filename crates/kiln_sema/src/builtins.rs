@@ -258,6 +258,11 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_params(f, &pds);
         }
         let mut attrs = vec![self.ast.attrs.push(implicit(AttrKind::BUILTIN, Loc::INVALID, id))];
+        if let Some((fmt, first)) = builtin::printf_format(id) {
+            let b = u32::from(fmt) | u32::from(first) << 16;
+            let node = AttrNode { b, ..implicit(AttrKind::FORMAT, loc, 0) };
+            attrs.push(self.ast.attrs.push(node));
+        }
         let early = has(builtin::attr::CONST_EARLY);
         for (bit, kind) in [
             (builtin::attr::CONST_EARLY, AttrKind::CONST),
