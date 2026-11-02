@@ -187,8 +187,17 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `kiln_oven::apfloat` (the Oven's correctly rounded soft-float):
     `fadd/fsub/fmul/fdiv`, `fpext`/`fptrunc` with either side outside
     `float`/`double`, `[su]itofp` to `half`/`bfloat`, `fpto[su]i` from
-    `half`. A NaN result is left unfolded (its payload would have to
-    match APFloat's).
+    `half`, and unary `-` (a sign-bit flip). NaN results fold as APFloat
+    computes them (WP-302, `tests/codegen/float_nan_fold.cpp`): a NaN
+    operand is the result, quieted, sign and payload kept (the left one
+    when both are NaN, signaling or not; `fsub` does not flip its sign);
+    an invalid operation gives the positive default quiet NaN; a NaN
+    `fpext`/`fptrunc` keeps its sign, shifts the significand by the
+    precision difference (truncating) and sets the quiet bit (and x87's
+    integer bit).
+  - `fptosi`/`fptoui` of a constant (any format) fold toward zero; a NaN,
+    an infinity or a value outside the destination's range is `poison`
+    (`APFloat::convertToInteger` reporting `opInvalidOp`).
 - Arithmetic:
   - signed add, sub and mul get `nsw`; shifts mask nothing at -O0;
   - pointer arithmetic: `gep inbounds` (`gep i8` for void and function
