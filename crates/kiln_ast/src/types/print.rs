@@ -568,6 +568,7 @@ pub fn write_template_name(
         scope: false,
         suppress_tag: false,
         c_policy: false,
+        split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
         diag_desugar: false,
