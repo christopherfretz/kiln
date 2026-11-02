@@ -1537,6 +1537,11 @@ like clang's.
 | `InjectedClassName` | §4.7 |
 | `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`; a member goes through `member_map` of the enclosing specialization, and the member class is instantiated if completeness is needed |
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
+| `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
+
+`_BitInt(N)` and splice types never reach the substituter yet: the parser
+does not accept `_BitInt` and rejects a dependent splice. Any other kind
+gives the NYI diagnostic "substitution into this type".
 
 ### 5.4 Expressions
 
@@ -1602,6 +1607,49 @@ recomputed exactly as for non-template code (clang's
     [expr.assign]/8), a returned list and a for-range-initializer;
     elsewhere a `CXXStdInitializerListExpr` list-initializes its
     substituted `std::initializer_list` type ([dcl.init.list]/5).
+  - (WP-301) a nested element of a braced list, a braced argument of a
+    paren constructor call (`P p({a, 1}, b)`), and a braced argument of a
+    member, `operator()` or `operator[]` call are rebuilt as lists by
+    `call_arg_list`. That function stops at the first `CXXDefaultArgExpr`;
+  - a list-initializing `CXXConstructExpr` operand is formed again
+    through `init_from_list_at` of the substituted type
+    ([dcl.init.list]/3.7). A single-argument non-list construct is its
+    substituted argument;
+  - a compound literal `(T){...}` (C99 extension) is rebuilt from its
+    peeled initializer as a list, and `act_on_compound_literal` runs
+    again;
+  - an analyzed `new` expression (one whose direct operands were not
+    dependent, e.g. `new S[2]{{a}, {a, 1}}`) is formed again by
+    `act_on_cxx_new` from the substituted placement arguments, the
+    array bound as written, and the initializer as written: `(...)`
+    stays a paren list, with its braced items kept braced (P0960
+    `new S[3]({a, 1}, {a})`), and `{...}` stays a list. An implicit
+    value-initialization is an empty initializer of the written style
+    ([expr.new]/24).
+
+  A non-list `CXXConstructExpr` operand with zero or two or more
+  arguments outside an initializer still gives the NYI diagnostic.
+- (WP-301) GNU forms ([sema] §5.8):
+  - a binary conditional `a ?: b` substitutes its common operand once
+    and its false operand, then runs `act_on_binary_conditional` again
+    (the common operand is evaluated once, [expr.cond] as extended);
+  - a statement expression `({ ... })` opens `act_on_start_stmt_expr`,
+    substitutes its compound body in a new block scope, re-runs
+    `act_on_stmt_expr_result` on the substituted last expression
+    statement (`Substituter::stmt_expr_result`) and finishes with
+    `act_on_stmt_expr`. Because a statement expression in a dependent
+    context is always value- and instantiation-dependent (below), its
+    body is never shared with the pattern.
+
+  Every other expression or statement kind without an arm reaches the
+  generic catch-all, which gives the NYI diagnostic `substitution into
+  <kind>` and never panics. A census over the libc++ 19 10% sample
+  (790 tests, `-fsyntax-only`) found no kind reaching it; the kinds left
+  are unreachable today because their construct is rejected or
+  unimplemented before substitution: coroutine expressions and
+  statements, `template for`, computed `goto`, `contract_assert`,
+  `__builtin_choose_expr`, a dependent `__builtin_offsetof` and
+  ext-vector element access.
 
 ### 5.5 Statements
 
@@ -1948,7 +1996,19 @@ formed it:
      nullptr_t>>)` against an `int*` argument) is thus never
      substituted (WP-296);
    - substitute everything into the function type under
-     `DeducedTemplateArgumentSubstitution`;
+     `DeducedTemplateArgumentSubstitution`. A failure is
+     `SubstitutionFailure`;
+   - only then check the associated constraints (§8,
+     [temp.deduct.general]/5: "If the function template has associated
+     constraints, those constraints are checked for satisfaction").
+     Failure is `ConstraintsNotSatisfied`. The order is clang 19's
+     `FinishTemplateArgumentDeduction` (Q12, CWG2369): the CWG1391 check
+     above, then substitution, then constraints. So a candidate whose
+     substitution fails *and* whose constraints are unsatisfied gets the
+     substitution-failure note. A substitution that is a hard error
+     (instantiating a class whose `static_assert` fails) is diagnosed
+     even when the constraints would not be satisfied (WP-301,
+     `tests/conformance/temp.deduct/substitution-failure-before-constraints.cpp`);
    - check that the deduced A is compatible ([temp.deduct.call]/4:
      equal, more cv-qualified, qualification-convertible, or a derived
      class). Failure is `DeducedMismatch`. kiln records, for each
@@ -1962,8 +2022,8 @@ formed it:
      of a pack the pattern alone names (§6.4). The note prints the
      reference/pointer-stripped deduced type, as clang does, as a
      template type diff pair (`'pr<[...], char>'`, `Sema::ty_diff`).
-   - check the associated constraints (§8). The order is clang 19's,
-     *after* the function type substitution (Q12, CWG2369).
+     This check follows the constraint check, as clang's
+     `CheckOriginalCallArgDeduction` follows it.
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
    the `FunctionTemplateSpecialization` decl. It has the substituted
    type and is a declaration only.

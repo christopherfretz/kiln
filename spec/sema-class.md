@@ -1144,7 +1144,26 @@ an error (§3.4).
   enclosing temporaries are still destroyed at its end ([intro.execution]/5;
   clang's `ConstantEvaluated` context restores `ParentCleanup`; WP-296,
   `tests/conformance/class.temporary/run-template-argument-keeps-full-expression-cleanups.cpp`).
-  One with temporaries of its own still takes and resets the state.
+  One with temporaries of its own gets its own `ExprWithCleanups` and then
+  restores the enclosing state from before it began (WP-301,
+  `tests/conformance/class.temporary/run-constant-expression-own-temporaries-order.cpp`):
+  - entering a constant-evaluated context in the parser
+    (`enter_constant_evaluated`) records the cleanup state. Leaving it
+    (`exit_constant_evaluated(e)`) files that state under the parsed
+    constant-expression `e` in `constant_outer_cleanups`, but only when the
+    state has pending cleanups;
+  - the substituter does the same for an expression template argument
+    (`use(D(N + 4)) + C<D(N).v>::v` in a function template);
+  - `act_on_constant_full_expr` finds the entry inside its (converted)
+    operand, removes it, and restores that state after the constant
+    full-expression has consumed the merged state;
+  - a default template argument is substituted and converted between
+    `push_cleanups` and `pop_cleanups` (clang `SubstDefaultTemplateArgument`
+    enters a `ConstantEvaluated` context), so its temporaries never touch
+    the call that uses it (`g(D(6))` with `int N = D(5).v`).
+
+  With no entry (no pending enclosing cleanups) the constant
+  full-expression takes and resets the state as any full-expression does.
 
 ### 5.4 Lifetime extension ([class.temporary]/6–8)
 When a reference is bound to a temporary — the result of a temporary

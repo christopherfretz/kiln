@@ -497,6 +497,15 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::PackIndexing { selected: Some(s), .. } => self.ty(s, loc),
             TypeView::PackExpansion { .. } => self.unimplemented("pack expansion", loc),
+            // `const A` with `using A = T[3]`: [dcl.array]/6 pushes the
+            // cv-qualifiers into the substituted element type (clang
+            // `TransformQualifiedType` re-applying the qualifiers).
+            TypeView::QualifiedArray { quals, base } => {
+                let b = self.ty(base.into(), loc)?;
+                Ok(self.sema.ast.types.qualify(b, quals))
+            }
+            // Remaining kinds cannot be dependent today: `_BitInt(N)` is not
+            // parsed and dependent splices are rejected by the parser.
             _ => self.unimplemented("substitution into this type", loc),
         }
     }
