@@ -1500,18 +1500,21 @@ impl Substituter<'_, '_, '_> {
             }
             _ => (DeclName::ident(self.sema.nns_last_name(pnns).ok_or(SubstFail)?), true),
         };
+        // Qualifier errors and the qualifier's notes are located where
+        // the nested-name-specifier begins, not at the name.
+        let qloc = self.qualifier_begin(pnns, loc);
         let packed = self.sema.ast.types.nns_flags(pnns).contains(TypeFlags::UNEXPANDED_PACK);
         let nnss = if packed {
             // `using Bases::operator()...;` ([temp.variadic]/5): one
             // using-declarator per element.
-            match self.expand_pattern(|s| s.nns(pnns, loc))? {
+            match self.expand_pattern(|s| s.nns(pnns, qloc))? {
                 crate::templ::pack::Expansion::Elements(v) => v,
                 crate::templ::pack::Expansion::Unexpanded(_) => {
                     return self.unimplemented("this using-declaration pack expansion", loc);
                 }
             }
         } else {
-            vec![self.nns(pnns, loc)?]
+            vec![self.nns(pnns, qloc)?]
         };
         let mut last = None;
         for nns in nnss {
@@ -1519,8 +1522,8 @@ impl Substituter<'_, '_, '_> {
                 last = self.sema.still_dependent_class_using(nns, name, loc, inheriting).or(last);
                 continue;
             }
-            let ctx = self.nns_context(nns, loc)?;
-            let q = crate::using::Qualifier { ctx, nns, loc };
+            let ctx = self.nns_context(nns, qloc)?;
+            let q = crate::using::Qualifier { ctx, nns, loc: qloc };
             let resolved = self.sema.kind_of(m) == DeclKind::Using;
             // [namespace.udecl]/19: a dependent qualifier's members are
             // access-checked once it is known (a resolved pattern was
@@ -1542,7 +1545,8 @@ impl Substituter<'_, '_, '_> {
     fn member_using_typename(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
         let Some(pnns) = self.sema.ast.using_qualifier(m) else { return Ok(None) };
         let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else { return Ok(None) };
-        let nns = self.nns(pnns, loc)?;
+        let qloc = self.qualifier_begin(pnns, loc);
+        let nns = self.nns(pnns, qloc)?;
         if self.nns_still_dependent(nns) {
             return Ok(Some(self.sema.still_dependent_using_typename(
                 nns,
@@ -1550,8 +1554,8 @@ impl Substituter<'_, '_, '_> {
                 loc,
             )));
         }
-        let ctx = self.nns_context(nns, loc)?;
-        let q = crate::using::Qualifier { ctx, nns, loc };
+        let ctx = self.nns_context(nns, qloc)?;
+        let q = crate::using::Qualifier { ctx, nns, loc: qloc };
         self.sema.check_using_declarator_access(Some(q), DeclName::ident(name), loc);
         Ok(self.sema.act_on_using_typename_declarator(
             loc,

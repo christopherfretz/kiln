@@ -62,6 +62,22 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether class `c`, named by a nested-name-specifier, is declared in
+    /// a dependent context but is not the current instantiation here
+    /// ([temp.dep.type]/1: a local class of a function template, or a
+    /// member class of a class template, named outside its own
+    /// definition; clang `computeDeclContext` returns no context for it).
+    /// A type found in it is a dependent qualified name, so it needs
+    /// `typename` where [temp.res.general]/4 implies none (spec/sema-
+    /// templates.md §5.9). kiln still looks the name up in `c`.
+    pub fn is_unentered_dependent_class(&self, c: DeclId) -> bool {
+        self.kind_of(c) == DeclKind::CXXRecord
+            && self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)
+            && self.inst.stack.is_empty()
+            && !self.encloses(c, self.ctx)
+            && !self.in_declarator_scope_of(c)
+    }
+
     /// The type `q::name` names when qualified lookup did not find a type
     /// in `q` and `q` can name an unknown specialization ([temp.dep.type]/6,
     /// clang `CheckTypenameType` / `isDependentScopeSpecifier`): a
