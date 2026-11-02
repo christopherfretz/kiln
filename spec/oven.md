@@ -284,7 +284,17 @@ the evaluator's flattened type table.
   is plain `try_fold`). Variables resolved under lax mode are recorded in
   `lax_globals` and reset to unresolved when the next outermost
   evaluation runs in the other mode, and lax-mode calls are never
-  memoized, so a lax read never leaks into a strict evaluation. Codegen
+  memoized, so a lax read never leaks into a strict evaluation. A lax
+  global keeps one static object for the whole translation unit
+  (`Oven::lax_objs`, keyed by global, WP-387): re-resolving it in either
+  mode remakes that object in place (`Memory::reinit_static` drops its
+  union records and clears its contents and flags, keeping slot,
+  generation and address) instead of allocating a fresh one, so a
+  strict/lax alternation costs no static memory per switch and a pointer
+  to the global taken in one mode still designates it in the other
+  (test `limits.rs::lax_globals_do_not_grow`). The slot is reused only
+  when the object is live, of the same type and not mid-resolution;
+  otherwise a fresh one is allocated and recorded. Codegen
   uses it for its non-initializer fold candidates; sema uses it
   (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
   (spec/sema.md §4.2).

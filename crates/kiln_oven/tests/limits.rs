@@ -6,6 +6,7 @@
 
 mod common;
 use common::*;
+use kiln_ast::consts::Scalar;
 use kiln_oven::{Budget, EvalRecord, Oven, report};
 
 const LOOP: &str = "\
@@ -318,4 +319,47 @@ static_assert(k(&n) + k(m + 1) == 2);
     assert_eq!(oven.footprint(), warm, "no growth after warm-up");
     // Unbacked: neither object holds bytes.
     assert_eq!(oven.stats().totals().static_bytes, 0);
+}
+
+/// [expr.const]/4 and spec/oven.md "Evaluation entry points": a `const`
+/// variable not usable in constant expressions resolves differently in
+/// strict and lax ([`Oven::fold_rvalue`]) evaluations, so a mode switch
+/// resolves it again; it is remade in the object it had, so alternating
+/// the modes 10k times holds what the first few switches did (each
+/// re-resolution leaked a static slot and its bytes before WP-387).
+#[test]
+fn lax_globals_do_not_grow() {
+    let src = "\
+struct P { int x; double y; };
+const double d = 1.5;
+const double a[3] = {1.0, 2.0, 3.0};
+const P p = {4, 5.0};
+static_assert(d + a[2] + p.y > 9.0);
+";
+    let mut tu = Tu::new(src);
+    let Some(&Item::Assert { cond, loc }) =
+        tu.items.iter().find(|i| matches!(i, Item::Assert { .. }))
+    else {
+        panic!("assert")
+    };
+    let mut oven = Oven::new(Budget::default());
+    // The variables; the strict assertion then fails (none is usable).
+    assert!(tu.run(&mut oven).is_err());
+    let alternate = |oven: &mut Oven, tu: &mut Tu| {
+        assert!(tu.eval(oven, cond, loc).is_err(), "strict: not usable");
+        let v = oven.fold_rvalue(&mut tu.bridge(), cond).expect("lax: folds");
+        assert!(matches!(tu.ast.consts.scalar(v), Some(Scalar::Bool { value: true, .. })));
+    };
+    for _ in 0..16 {
+        alternate(&mut oven, &mut tu);
+    }
+    let warm = oven.footprint();
+    let stat = oven.stats().totals().static_bytes;
+    for _ in 0..10_000 {
+        alternate(&mut oven, &mut tu);
+    }
+    assert_eq!(oven.footprint(), warm, "no growth after warm-up");
+    assert_eq!(oven.stats().totals().static_bytes, stat, "static space flat");
+    // One object per variable: `d`, `a` and `p` (8 + 24 + 16 bytes).
+    assert!(stat <= 48, "static_bytes {stat}");
 }
