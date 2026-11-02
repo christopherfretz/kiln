@@ -1337,6 +1337,21 @@ impl Sema<'_, '_> {
                 let i = d.info.param.or_else(|| d.first_undeduced())?;
                 Some(self.diag(DiagId::note_deduction_incomplete, loc).arg(param_name(i)))
             }
+            // An expanded parameter pack deduced short ([temp.variadic]/5;
+            // clang's `TDK_IncompletePack`): `first` is the deduced pack.
+            Tdk::IncompletePack => {
+                let pack = d.info.first?;
+                let n = match pack.view() {
+                    ArgView::Pack(l) => self.ast.types.args(l).len(),
+                    _ => 0,
+                };
+                Some(
+                    self.diag(DiagId::note_deduction_incomplete_pack, loc)
+                        .arg(param_name(d.info.param?))
+                        .arg(crate::expr::ordinal(n + 1))
+                        .arg(self.deduced_arg_str(pack)),
+                )
+            }
             Tdk::Underqualified => {
                 let (ArgView::Type(p), ArgView::Type(a)) =
                     (d.info.first?.view(), d.info.second?.view())

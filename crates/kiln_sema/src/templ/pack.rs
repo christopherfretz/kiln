@@ -620,7 +620,7 @@ impl Substituter<'_, '_, '_> {
     /// `SubstNonTypeTemplateParmPackExpr` / `SubstTemplateTypeParmPackType`
     /// naming its elements, and the index selects among them when the
     /// retained level is instantiated.
-    fn kept_pack_pattern<T>(
+    pub(crate) fn kept_pack_pattern<T>(
         &mut self,
         f: impl FnOnce(&mut Self) -> SubstResult<T>,
     ) -> SubstResult<T> {

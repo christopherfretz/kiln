@@ -138,6 +138,17 @@ pub struct TemplState {
     /// Where each template parameter's default argument starts (the
     /// redefinition and missing-default diagnostics point there).
     pub(crate) default_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// The element types of each expanded non-type parameter pack (a
+    /// member template's `template<Ts... a>` once `Ts` is known,
+    /// [temp.variadic]/5; §3.2), as a list of type arguments.
+    pub(crate) expanded_packs: kiln_source::fx::FxHashMap<DeclId, ArgListId>,
+    /// The template head just taken declares a member template of a
+    /// local class ([temp.mem]/2), already diagnosed: the static data
+    /// member check stays quiet (clang drops the declaration first).
+    pub(crate) local_template: bool,
+    /// The type of the expanded-pack element being converted (read by
+    /// `convert_nttp_arg` in place of the parameter's declared type).
+    pub(crate) nttp_elem: Option<QualType>,
     /// Where each argument of the template-id being parsed starts (set by
     /// the parser right before `act_template_id`; consumed there).
     pub(crate) arg_locs: Vec<Loc>,
@@ -755,11 +766,28 @@ impl Sema<'_, '_> {
                     }
                 }
             }
-            if ordered && pack && i + 1 != params.len() {
+            // [temp.param]/14: only a template parameter pack; a non-type
+            // parameter that is a pack expansion of an enclosing level's
+            // pack (`template<Ts... a, int n>` in a member template) is
+            // not one (clang's `isPackExpansion`).
+            if ordered && pack && i + 1 != params.len() && !self.is_nttp_pack_expansion(p) {
                 let loc = self.ast.decls.get(p).loc();
                 self.error(DiagId::sema_template_param_pack_not_last, loc);
             }
         }
+    }
+
+    /// Whether `p` is a non-type template parameter whose type is a pack
+    /// expansion (`Ts... a`, [temp.param]/17) rather than a template
+    /// parameter pack of a plain type (`int... a`).
+    pub(crate) fn is_nttp_pack_expansion(&self, p: DeclId) -> bool {
+        self.kind_of(p) == DeclKind::NonTypeTemplateParm
+            && self
+                .ast
+                .decls
+                .get(p)
+                .ty()
+                .is_some_and(|t| pack::type_pattern(self, t).is_some())
     }
 
     /// The innermost untaken head the declaration being declared consumes
@@ -773,6 +801,7 @@ impl Sema<'_, '_> {
     ) -> Option<TemplateParamListId> {
         self.templ.cur = None;
         self.templ.head_mismatch = false;
+        self.templ.local_template = false;
         // The untaken heads directly around this declaration.
         let mut open = Vec::new();
         for (i, h) in self.templ.heads.iter().enumerate().rev() {
@@ -835,6 +864,32 @@ impl Sema<'_, '_> {
         let list = self.templ.heads[innermost].list;
         self.templ.cur = list;
         list
+    }
+
+    /// [temp.mem]/2: a local class shall not have member templates
+    /// (clang's `CheckTemplateDeclScope`, at the `template` keyword of the
+    /// head just taken). A friend template's scope is the enclosing
+    /// function ([temp.pre]/2: "templates can only be declared in
+    /// namespace or class scope"); it is dropped (true). A member
+    /// template stays declared, the static data member check quiet.
+    pub(crate) fn check_template_in_local_class(&mut self, friend: bool) -> bool {
+        let Some(list) = self.templ.cur else { return false };
+        if self.kind_of(self.ctx) != DeclKind::CXXRecord {
+            return false;
+        }
+        let class = self.ast.definition(self.ctx).unwrap_or(self.ctx);
+        if !self.is_local_class(class) {
+            return false;
+        }
+        let loc = self.ast.templates.param_list(list).template_loc;
+        if friend {
+            self.error(DiagId::sema_template_outside_namespace_or_class, loc);
+            self.templ.cur = None;
+            return true;
+        }
+        self.error(DiagId::sema_template_decl_in_local, loc);
+        self.templ.local_template = true;
+        false
     }
 
     /// How many template parameter lists the qualifier of an out-of-line

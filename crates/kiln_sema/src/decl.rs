@@ -1997,6 +1997,9 @@ impl Sema<'_, '_> {
             self.check_member_spec_header(d.qualifier, nloc, ds.loc);
         }
         let head = self.take_template_head(d.qualifier);
+        if self.check_template_in_local_class(false) {
+            return None;
+        }
         if self.templ.head_mismatch {
             // `template<class T> void A<int>::f()`: diagnosed; clang
             // drops the declaration.
@@ -2748,6 +2751,7 @@ impl Sema<'_, '_> {
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
         let _ = self.take_template_head(None);
+        let _ = self.check_template_in_local_class(false);
         let mut attrs = attrs.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
@@ -5761,7 +5765,9 @@ impl Sema<'_, '_> {
         use_: TagUse,
     ) -> Option<kiln_ast::ids::TemplateParamListId> {
         if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
-            return self.take_template_head(qualifier);
+            let head = self.take_template_head(qualifier);
+            let _ = self.check_template_in_local_class(false);
+            return head;
         }
         if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
             let _ = self.take_template_head(qualifier);
