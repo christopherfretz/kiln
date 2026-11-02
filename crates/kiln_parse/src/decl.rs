@@ -362,7 +362,7 @@ impl Parser<'_, '_> {
                 return Vec::new();
             }
             let tl = self.loc();
-            let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::NoDeduction) else {
+            let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::Alias) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
@@ -1127,7 +1127,10 @@ impl Parser<'_, '_> {
             self.bump();
             let base = self.parse_decl_specifiers(DeclaratorContext::TypeName);
             if base.has_type_specifier() {
-                fixed = Some(self.s.type_from_declspec(&base));
+                let ty = self.s.type_from_declspec(&base);
+                // [dcl.enum]/2, [dcl.spec.auto.general]/5.
+                let at = base.type_loc.unwrap_or(base.loc);
+                fixed = Some(self.s.type_specifier_placeholder_check(ty, at));
             } else {
                 self.error_here(DiagId::parse_expected_type);
             }
@@ -1983,7 +1986,7 @@ impl Parser<'_, '_> {
             pd.chunks.iter().any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
         let at = ds.type_loc.unwrap_or(start);
         if (placeholder || decltype_auto) && !ds.invalid && !trailing {
-            if let Some(why) = misplaced_param_placeholder(decltype_auto, fn_decl, site) {
+            if let Some(why) = kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site) {
                 let int = self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why);
                 ds.auto_constraint = None;
                 ds.base = TypeSpecKind::Named;
@@ -2032,8 +2035,7 @@ impl Parser<'_, '_> {
             let Some((decltype_auto, constraint)) = self.s.trailing_return_placeholder(*t) else {
                 continue;
             };
-            let with = if let Some(why) = misplaced_param_placeholder(decltype_auto, fn_decl, site)
-            {
+            let with = if let Some(why) = kiln_sema::Sema::param_placeholder_site(decltype_auto, fn_decl, site) {
                 self.s.act_on_misplaced_param_placeholder(at, decltype_auto, why)
             } else {
                 let constraint = constraint.map(|(c, a)| (c, a, cloc));
@@ -2869,21 +2871,6 @@ fn set_flag(slot: &mut Option<Loc>, loc: Loc, spelling: &str) -> Result<(), Spec
     }
     *slot = Some(loc);
     Ok(())
-}
-
-/// Why a parameter's placeholder is ill-formed, as the site argument of
-/// [`kiln_sema::Sema::act_on_misplaced_param_placeholder`] (clang's
-/// `err_auto_not_allowed`): `decltype(auto)` is never a parameter's type
-/// ([dcl.spec.auto.general]/2-3), and `auto` only in the clause of a
-/// function declaration or a lambda (`fn_decl`, [dcl.fct]/22).
-fn misplaced_param_placeholder(decltype_auto: bool, fn_decl: bool, site: DeclSite) -> Option<u8> {
-    if decltype_auto {
-        Some(if site == DeclSite::LambdaParam { 2 } else { 0 })
-    } else if !fn_decl {
-        Some(1)
-    } else {
-        None
-    }
 }
 
 /// clang's `FunctionDeclarationScope`: the parameter clause of the

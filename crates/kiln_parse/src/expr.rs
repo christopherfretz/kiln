@@ -792,7 +792,10 @@ impl Parser<'_, '_> {
             // clang matches the `)` before looking at the type.
             let ty = self.parse_type_id();
             let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-            return Some(self.s.act_on_typeid(Err(ty?), loc, rparen));
+            // An invalid type-id (`typeid(auto)`) ends it (clang
+            // `ParseCXXTypeid`), before the `<typeinfo>` check.
+            let ty = ty.filter(|&t| !self.s.is_error_type(t))?;
+            return Some(self.s.act_on_typeid(Err(ty), loc, rparen));
         }
         self.s.enter_unevaluated();
         let e = self.parse_expression();

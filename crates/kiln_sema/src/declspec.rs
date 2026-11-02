@@ -704,10 +704,17 @@ pub enum DeclSite {
     /// A type-id template argument (a class template name alone is a
     /// template template argument, parsed apart).
     TemplateArg,
-    /// A type-id in which clang's parser forms no placeholder (an
-    /// alias-declaration, a trailing return type): the template name
-    /// lacks its arguments.
+    /// A trailing return type: clang's parser forms no placeholder for a
+    /// deduced class type there (the template name lacks its arguments);
+    /// `auto` and `decltype(auto)` are allowed.
     NoDeduction,
+    /// The type-id of an alias-declaration: as [`DeclSite::NoDeduction`]
+    /// for a deduced class type; `auto` is "not allowed in type alias".
+    Alias,
+    /// The default argument of a type template parameter: as
+    /// [`DeclSite::NoDeduction`] for a deduced class type; `auto` is "not
+    /// allowed in template argument" (clang's `TemplateTypeArg`).
+    TypeParamDefault,
     /// A declarator rebuilt by template substitution (already checked).
     Subst,
 }

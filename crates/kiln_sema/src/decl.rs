@@ -699,7 +699,9 @@ impl Sema<'_, '_> {
             self.warn_redundant_parens(None, d);
         }
         // [dcl.type.class.deduct]/2.
-        let mut ty = self.ctad_declarator_check(base, spec_loc, d);
+        let ty = self.ctad_declarator_check(base, spec_loc, d);
+        // [dcl.spec.auto.general]/2-5.
+        let mut ty = self.auto_declarator_check(ty, spec_loc, d);
         let name = self.declarator_name(d);
         let mut prev_ref = false;
         for (i, chunk) in d.chunks.iter().enumerate().rev() {
@@ -3463,11 +3465,16 @@ impl Sema<'_, '_> {
         let invalid = invalid || {
             let kw = self.placeholder_keyword(ty);
             if let Some(kw) = kw {
-                let tag = self.ast.decls.record(ctx).map_or(TagKind::Struct, |r| r.tag);
+                use crate::templ::ctad_site::site;
+                let s = match self.ast.decls.record(ctx).map_or(TagKind::Struct, |r| r.tag) {
+                    TagKind::Struct => site::STRUCT_MEMBER,
+                    TagKind::Union => site::UNION_MEMBER,
+                    TagKind::Class => site::CLASS_MEMBER,
+                };
                 let msg = self
-                    .diag(DiagId::sema_auto_not_allowed_field, ds.type_loc.unwrap_or(ds.loc))
+                    .diag(DiagId::sema_auto_not_allowed, ds.type_loc.unwrap_or(ds.loc))
                     .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
-                    .arg(tag as u8);
+                    .arg(s);
                 // Once per declarator of a group (as clang).
                 self.emit(msg.allow_duplicate());
             }

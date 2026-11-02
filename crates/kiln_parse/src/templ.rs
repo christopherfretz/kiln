@@ -509,7 +509,9 @@ impl Parser<'_, '_> {
         }
         // The default argument's location (clang's diagnostics point there).
         let eq = self.loc();
-        let Some(t) = self.with_greater_op(false, Self::parse_type_id) else {
+        let Some(t) =
+            self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TypeParamDefault))
+        else {
             return false;
         };
         self.s.act_on_template_param_default(p, TemplateArg::ty(t), eq);

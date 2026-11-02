@@ -17,7 +17,7 @@ pub mod builtins;
 pub mod class;
 pub mod concepts;
 pub mod ctad;
-mod ctad_site;
+pub(crate) mod ctad_site;
 pub mod deduce;
 pub mod deduce_call;
 mod default_args;
@@ -1173,23 +1173,20 @@ impl Sema<'_, '_> {
         ty
     }
 
-    /// clang's `err_auto_not_allowed` for a parameter's placeholder:
-    /// `decltype(auto)` in any parameter, `auto` in a parameter of a
-    /// function declarator that declares no function ([dcl.fct]/22,
-    /// [dcl.spec.auto.general]/2-3). `site`: 0 a function prototype, 1
-    /// one that is not a function declaration, 2 a lambda parameter.
-    /// Returns `int`, the type clang recovers with.
+    /// clang's `err_auto_not_allowed` for a parameter's placeholder at
+    /// `loc`, with the position selector `site` that
+    /// [`Sema::param_placeholder_site`] gave ([dcl.fct]/22,
+    /// [dcl.spec.auto.general]/2-3). Returns `int`, the type clang
+    /// recovers with.
     pub fn act_on_misplaced_param_placeholder(
         &mut self,
         loc: Loc,
         decltype_auto: bool,
         site: u8,
     ) -> QualType {
-        let msg = self
-            .diag(DiagId::sema_auto_not_allowed_prototype, loc)
-            .arg(u8::from(decltype_auto))
-            .arg(site);
-        self.emit(msg);
+        use kiln_ast::types::AutoKeyword;
+        let kw = if decltype_auto { AutoKeyword::DecltypeAuto } else { AutoKeyword::Auto };
+        self.auto_not_allowed(loc, kw, site);
         QualType::INT
     }
 
