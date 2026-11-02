@@ -244,21 +244,21 @@ impl Parser<'_, '_> {
         match Self::punct_of(self.tok()) {
             Some(Punct::Star) => {
                 self.bump();
-                let quals = self.parse_ptr_cv();
+                let (quals, nulls) = self.parse_ptr_quals();
                 self.parse_new_declarator(d);
-                d.chunks.push(Chunk::Pointer { quals, loc });
+                d.push_chunk(Chunk::Pointer { quals, loc }, nulls);
             }
             Some(Punct::Amp) => {
                 self.bump();
-                self.skip_attributes();
+                let nulls = self.parse_ref_quals();
                 self.parse_new_declarator(d);
-                d.chunks.push(Chunk::LRef { loc });
+                d.push_chunk(Chunk::LRef { loc }, nulls);
             }
             Some(Punct::AmpAmp) => {
                 self.bump();
-                self.skip_attributes();
+                let nulls = self.parse_ref_quals();
                 self.parse_new_declarator(d);
-                d.chunks.push(Chunk::RRef { loc });
+                d.push_chunk(Chunk::RRef { loc }, nulls);
             }
             _ => match self.at_member_pointer() {
                 Some(star) => self.parse_member_pointer(d, star, Self::parse_new_declarator),

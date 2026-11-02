@@ -1011,18 +1011,29 @@ impl Sema<'_, '_> {
         res
     }
 
+    /// Whether `name<list>` is a dependent template-id. A member template
+    /// of a class template's pattern is dependent too ([temp.dep.type]/9).
+    /// An argument that is only instantiation-dependent (an alias of a
+    /// dependent alias template specialization that resolves to a concrete
+    /// type) does not make the specialization dependent ([temp.dep.type]/8
+    /// speaks of dependent arguments; clang's
+    /// `anyDependentTemplateArguments` tests the canonical arguments).
+    fn template_id_dependent(&self, name: TemplateNameId, list: ArgListId) -> bool {
+        let canon_list = self.ast.types.canonical_args(list);
+        (self.ast.types.arg_list_flags(canon_list) | self.ast.types.template_name_flags(name))
+            .intersects(TypeFlags::DEPENDENT | TypeFlags::UNEXPANDED_PACK)
+    }
+
     fn template_id(
         &mut self,
         name: TemplateNameId,
         args: &[TemplateArg],
         l: Loc,
     ) -> Result<TemplateIdRef, ()> {
+        let converted = self.injected_template_args(name, args);
+        let args = converted.as_deref().unwrap_or(args);
         let list = self.ast.types.arg_list(args);
-        // A member template of a class template's pattern is dependent
-        // too ([temp.dep.type]/9).
-        let dep_args = (self.ast.types.arg_list_flags(list)
-            | self.ast.types.template_name_flags(name))
-        .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
+        let dep_args = self.template_id_dependent(name, list);
         let Some(d) = self.ast.types.template_decl(name) else {
             if let TemplateName::TemplateTemplateParm { decl, .. } =
                 self.ast.types.template_name_view(name)
@@ -1969,6 +1980,67 @@ impl Sema<'_, '_> {
             return None;
         }
         self.injected_class_for(tmpl)
+    }
+
+    /// `args` with each injected-class-name written for a template
+    /// template parameter of `name`'s template made the class template
+    /// it names ([temp.local]/1; clang's
+    /// `convertTypeTemplateArgumentToTemplate`), so that substitution
+    /// keeps a template there, not the specialization; `None` when
+    /// there is none.
+    fn injected_template_args(
+        &mut self,
+        name: TemplateNameId,
+        args: &[TemplateArg],
+    ) -> Option<Vec<TemplateArg>> {
+        let d = self.ast.types.template_decl(name)?;
+        if !matches!(
+            self.kind_of(d),
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate | DeclKind::VarTemplate
+        ) {
+            return None;
+        }
+        let params = self.template_params(self.head_template(d));
+        let mut out: Option<Vec<TemplateArg>> = None;
+        for (i, &a) in args.iter().enumerate() {
+            let Some(&p) = params.get(i).or_else(|| {
+                params.last().filter(|&&p| self.ast.template_parm(p).is_some_and(|x| x.pack))
+            }) else {
+                break;
+            };
+            if self.kind_of(p) != DeclKind::TemplateTemplateParm {
+                continue;
+            }
+            let ArgView::Type(t) = a.view() else { continue };
+            let Some(tmpl) = self.injected_class_template(t) else { continue };
+            let n = self.template_name_for(tmpl);
+            out.get_or_insert_with(|| args.to_vec())[i] = TemplateArg::template(n);
+        }
+        out
+    }
+
+    /// The class template an unqualified-cv injected-class-name type
+    /// `t` (through sugar) names.
+    fn injected_class_template(&self, mut t: QualType) -> Option<DeclId> {
+        let types = &self.ast.types;
+        for _ in 0..64 {
+            if !t.quals().is_empty() {
+                return None;
+            }
+            match types.view(t.ty()) {
+                TypeView::InjectedClassName { pattern, .. } => {
+                    return self.injected_template_of(pattern);
+                }
+                TypeView::Elaborated { .. } | TypeView::Paren(_) => {}
+                _ => return None,
+            }
+            let n = types.desugar_once(t);
+            if n == t {
+                return None;
+            }
+            t = n;
+        }
+        None
     }
 
     /// The class template whose injected-class-name class `d` declares

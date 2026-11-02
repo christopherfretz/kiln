@@ -106,6 +106,10 @@ fn is_simple_type_kw(k: Kw) -> bool {
                 | Kw::Volatile
                 | Kw::Restrict
                 | Kw::Atomic
+                | Kw::Nonnull
+                | Kw::Nullable
+                | Kw::NullUnspecified
+                | Kw::NullableResult
                 | Kw::Struct
                 | Kw::Class
                 | Kw::Union

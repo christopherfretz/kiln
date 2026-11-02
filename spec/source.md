@@ -103,6 +103,12 @@ File kinds (clang `SrcMgr::CharacteristicKind`, WP-063):
   `#line` keeps the kind. kiln_diag suppresses warnings located in system
   headers (spec/diag.md §5.4).
 
+Include guards (WP-376): `mark_include_guarded(file, suggestion)` records
+that `file` has a controlling macro (kiln_pp calls it when it leaves the
+file, with `IncludeResolver::suggest_include`'s header name);
+`include_guarded_suggestion(file) -> Option<Box<str>>` reads it back.
+Sema uses it for clang 22's `missing '#include <h>'` (spec/modules.md §5).
+
 Lines (tables built lazily, once per buffer, `OnceLock`):
 - Line terminators are `\n`, `\r\n` and lone `\r` (clang's line table and
   lexer agree). The terminator belongs to the line it ends; the EOF location

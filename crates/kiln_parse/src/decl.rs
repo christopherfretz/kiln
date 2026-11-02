@@ -5,7 +5,7 @@ use kiln_ast::decl::{EnumData, InitStyle};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
-use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
+use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
@@ -14,7 +14,7 @@ use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
     BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
-    Designator, InitItem, InitList, InitValue, Initializer, NameClass, ParamInfo, Sign,
+    Designator, InitItem, InitList, InitValue, Initializer, NameClass, NullSpec, ParamInfo, Sign,
     SpecialName, StorageSpec, TagUse, TypeSpecKind, Width,
 };
 use kiln_source::symbol::Symbol;
@@ -65,7 +65,22 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Typeof
             | Kw::TypeofUnqual
             | Kw::Atomic
+            | Kw::Nonnull
+            | Kw::Nullable
+            | Kw::NullUnspecified
+            | Kw::NullableResult
     )
+}
+
+/// The clang nullability qualifier keyword `k` names (spec/parse.md).
+pub(crate) fn nullability_kw(k: Kw) -> Option<TypeAttrKind> {
+    Some(match k {
+        Kw::Nonnull => TypeAttrKind::Nonnull,
+        Kw::Nullable => TypeAttrKind::Nullable,
+        Kw::NullUnspecified => TypeAttrKind::NullUnspecified,
+        Kw::NullableResult => TypeAttrKind::NullableResult,
+        _ => return None,
+    })
 }
 
 /// True for a keyword that can begin a decl-specifier-seq ([dcl.spec]).
@@ -711,6 +726,12 @@ impl Parser<'_, '_> {
                 Kw::Const => ds.add_cv(Quals::CONST, "const", loc),
                 Kw::Volatile => ds.add_cv(Quals::VOLATILE, "volatile", loc),
                 Kw::Restrict => ds.add_cv(Quals::RESTRICT, "restrict", loc),
+                Kw::Nonnull | Kw::Nullable | Kw::NullUnspecified | Kw::NullableResult => {
+                    if let Some(kind) = nullability_kw(k) {
+                        ds.nullability.push(NullSpec { kind, loc });
+                    }
+                    Ok(())
+                }
                 Kw::Short => ds.set_width(Width::Short, loc),
                 Kw::Long => ds.set_width(Width::Long, loc),
                 Kw::Signed => ds.set_sign(Sign::Signed, loc),
@@ -1275,6 +1296,23 @@ impl Parser<'_, '_> {
         if !self.unknown_type_follows(end, ctx) {
             return false;
         }
+        // A reachable type that is not visible ([module.reach]):
+        // the missing-import error, then the type is used.
+        if let Some(NameClass::Type(ty, d)) = self.s.module_hidden_type(name, None, loc) {
+            self.bump();
+            self.s.mark_type_referenced(d);
+            let kind = self.s.ast.decls.get(d).kind();
+            let ty = if kiln_sema::lookup::is_tag_kind(kind) {
+                self.s.elaborated_tag_type(d, TagKeyword::None)
+            } else {
+                ty
+            };
+            if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                ds.invalid = true;
+                self.spec_error(&e, loc);
+            }
+            return true;
+        }
         let text = self.s.ast.symbols().as_str(name).to_owned();
         let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
         self.emit(d);
@@ -1792,21 +1830,21 @@ impl Parser<'_, '_> {
         match Self::punct_of(self.tok()) {
             Some(Punct::Star) => {
                 self.bump();
-                let quals = self.parse_ptr_cv();
+                let (quals, nulls) = self.parse_ptr_quals();
                 self.parse_declarator(d);
-                d.chunks.push(Chunk::Pointer { quals, loc });
+                d.push_chunk(Chunk::Pointer { quals, loc }, nulls);
             }
             Some(Punct::Amp) => {
                 self.bump();
-                self.skip_attributes();
+                let nulls = self.parse_ref_quals();
                 self.parse_declarator(d);
-                d.chunks.push(Chunk::LRef { loc });
+                d.push_chunk(Chunk::LRef { loc }, nulls);
             }
             Some(Punct::AmpAmp) => {
                 self.bump();
-                self.skip_attributes();
+                let nulls = self.parse_ref_quals();
                 self.parse_declarator(d);
-                d.chunks.push(Chunk::RRef { loc });
+                d.push_chunk(Chunk::RRef { loc }, nulls);
             }
             _ => {
                 if let Some(star) = self.at_member_pointer() {
@@ -1885,9 +1923,9 @@ impl Parser<'_, '_> {
         if self.pos() == star {
             self.bump();
         }
-        let quals = self.parse_ptr_cv();
+        let (quals, nulls) = self.parse_ptr_quals();
         rest(self, d);
-        d.chunks.push(Chunk::MemberPointer { qual, quals, loc });
+        d.push_chunk(Chunk::MemberPointer { qual, quals, loc }, nulls);
     }
 
     /// Attributes appertaining to a type, after a ptr-operator or an
@@ -1900,19 +1938,28 @@ impl Parser<'_, '_> {
         self.s.act_on_type_position_attrs(&mut attrs, false);
     }
 
-    /// The cv-qualifiers (and attributes) after a `*`.
-    pub(crate) fn parse_ptr_cv(&mut self) -> Quals {
+    /// The cv-qualifiers, nullability qualifiers and attributes after a
+    /// `*` ([dcl.ptr]/1; clang's `ParseTypeQualifierListOpt`).
+    pub(crate) fn parse_ptr_quals(&mut self) -> (Quals, Vec<NullSpec>) {
         let mut q = Quals::NONE;
+        let mut nulls = Vec::new();
         loop {
             let (add, sp) = match self.kw() {
                 Some(Kw::Const) => (Quals::CONST, "const"),
                 Some(Kw::Volatile) => (Quals::VOLATILE, "volatile"),
                 Some(Kw::Restrict) => (Quals::RESTRICT, "restrict"),
+                Some(k) if nullability_kw(k).is_some() => {
+                    let loc = self.bump().span.lo;
+                    if let Some(kind) = nullability_kw(k) {
+                        nulls.push(NullSpec { kind, loc });
+                    }
+                    continue;
+                }
                 _ if self.at_attr() => {
                     self.skip_type_position_attrs();
                     continue;
                 }
-                _ => return q,
+                _ => return (q, nulls),
             };
             let loc = self.bump().span.lo;
             if q.contains(add) {
@@ -1920,6 +1967,22 @@ impl Parser<'_, '_> {
                 self.emit(d);
             }
             q |= add;
+        }
+    }
+
+    /// The attributes and nullability qualifiers after a `&` or `&&`
+    /// ([dcl.ref]/1; a nullability qualifier there is diagnosed by sema).
+    pub(crate) fn parse_ref_quals(&mut self) -> Vec<NullSpec> {
+        let mut nulls = Vec::new();
+        loop {
+            if let Some(kind) = self.kw().and_then(nullability_kw) {
+                let loc = self.bump().span.lo;
+                nulls.push(NullSpec { kind, loc });
+            } else if self.at_attr() {
+                self.skip_attributes();
+            } else {
+                return nulls;
+            }
         }
     }
 

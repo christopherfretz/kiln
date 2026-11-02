@@ -56,6 +56,7 @@ pub mod modules;
 pub mod names;
 pub mod new_delete;
 mod null_deref;
+mod nullability;
 mod oven_bridge;
 pub mod overload;
 mod packed;
@@ -96,7 +97,7 @@ pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
     BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
-    ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
+    NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 pub use empty_body::EmptyBodyStmt;
 pub use gnu::{OffsetofComponent, StmtExprScope};
@@ -497,6 +498,10 @@ pub struct Sema<'a, 'sm> {
     pub(crate) vtable_uses: Vec<(DeclId, Loc)>,
     /// The classes ever pushed on `vtable_uses` (first declarations).
     pub(crate) vtables_used: kiln_source::fx::FxHashSet<DeclId>,
+    /// Module classes whose vtables are defined here even when their key
+    /// function is defined in another unit (clang `DefinitionRequired`;
+    /// spec/modules.md §7).
+    pub(crate) module_vtables: kiln_source::fx::FxHashSet<DeclId>,
     /// The depth of `synth` whose notes were last printed (clang
     /// `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) synth_noted: std::cell::Cell<usize>,
@@ -676,6 +681,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) ptrdiff_t_sugar: QualType,
     /// C++20 modules: the units being read (spec/modules.md).
     pub(crate) modules: modules::ModSema,
+    /// The decl-specifier nullability markers awaiting their declarator
+    /// and the qualifier each stands for (`nullability.rs`).
+    pub(crate) declspec_nulls: Vec<(QualType, NullSpec)>,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -806,6 +814,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             synth: Vec::new(),
             vtable_uses: Vec::new(),
             vtables_used: kiln_source::fx::FxHashSet::default(),
+            module_vtables: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
             delegating: Vec::new(),
             ctor_entity: None,
@@ -853,6 +862,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             signed_size_t_sugar: ptrdiff_t,
             ptrdiff_t_sugar: ptrdiff_t,
             modules: modules::ModSema::default(),
+            declspec_nulls: Vec::new(),
         };
         s.declare_size_t_sugar();
         s.declare_builtin_va_list();
