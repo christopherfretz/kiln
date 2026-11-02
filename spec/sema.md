@@ -2784,7 +2784,7 @@ clang 19's C99/GNU complex support in C++:
   `diagnoseInstanceReference` wording ("call to non-static member
   function without an object argument").
 
-### 5.18 Ext-vector element access (`vector_ops.rs`, WP-307)
+### 5.19 Ext-vector element access (`vector_ops.rs`, WP-307)
 clang's `ext_vector_type` element access (`v.x`, `v.xy`, `p->zw`;
 clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
 - `act_on_member_q` routes an unqualified identifier member of an ext

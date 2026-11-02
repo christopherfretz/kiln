@@ -1674,7 +1674,7 @@ recomputed exactly as for non-template code (clang's
 - **`ExtVectorElementExpr`** (WP-307; clang
   `TransformExtVectorElementExpr`): the base is substituted and
   `act_on_member` runs again with the stored accessor, so the lanes and
-  the result type are recomputed (sema.md §5.18).
+  the result type are recomputed (sema.md §5.19).
 
 ### 5.5 Statements
 
