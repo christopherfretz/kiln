@@ -1095,8 +1095,7 @@ impl Parser<'_, '_> {
                     && self.unknown_type_follows(end, ctx))
                     || (end > start + 1
                         && self.unresolved_scope_name(start)
-                        && (ctx == DeclaratorContext::Block
-                            || self.unknown_type_follows(end, ctx))) =>
+                        && self.qualified_unknown_type_follows(end, ctx)) =>
             {
                 if let Ok(Some(q)) = self.parse_nested_name_nns() {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
@@ -1155,13 +1154,27 @@ impl Parser<'_, '_> {
                 ))
     }
 
+    /// True if an unknown qualified name in a decl-specifier, ending
+    /// before token `end`, was meant as a type: at block scope the
+    /// statement disambiguation chose a declaration already, elsewhere a
+    /// declarator follows ([`Parser::unknown_type_follows`]) or, at
+    /// namespace or class scope, `<` (a class template:
+    /// `std::codecvt_utf8<wchar_t> c;`, clang's `ParseImplicitInt` with
+    /// `IsTemplateName`; at block scope `N::f<int> x;` is an expression).
+    fn qualified_unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
+        ctx == DeclaratorContext::Block
+            || self.unknown_type_follows(end, ctx)
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                && Self::punct_of(self.tok_at(end)) == Some(Punct::Less))
+    }
+
     // -- class and enum specifiers ----------------------------------------------------
 
     /// The optional nested-name-specifier of a tag specifier: `N::C`, or
     /// `X<A>::C` (the out-of-line definition of a member class of a class
     /// template, [temp.mem.class]); the scope is entered as clang's
     /// `ParseClassSpecifier` does.
-    fn parse_tag_qualifier(&mut self, ds: &mut DeclSpec) -> Option<DeclId> {
+    fn parse_tag_qualifier(&mut self, ds: &mut DeclSpec) -> Option<kiln_sema::using::Qualifier> {
         let template_id_qual = || {
             self.ident().is_some()
                 && self.peek_is(1, Punct::Less)
@@ -1176,7 +1189,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let saved = self.s.set_entering_context(true);
-        let q = self.parse_nested_name();
+        let q = self.parse_nested_name_nns();
         self.s.set_entering_context(saved);
         q.unwrap_or_else(|()| {
             ds.invalid = true;
@@ -1218,6 +1231,45 @@ impl Parser<'_, '_> {
 
     /// class-specifier, enum-specifier or elaborated-type-specifier
     /// ([class.pre], [dcl.enum], [dcl.type.elab]).
+    /// `class-key T::X` with a dependent qualifier ([dcl.type.elab],
+    /// [temp.dep.type]/6): a dependent name type with the class-key as its
+    /// keyword, resolved (and its tag kind checked) at instantiation, as
+    /// clang's `ActOnDependentTag`; with `friend`, a friend type
+    /// ([class.friend]/3, libstdc++ generator:684
+    /// `friend struct _Erased_promise::_Subyield_state;`).
+    fn dependent_tag_reference(
+        &mut self,
+        ds: &mut DeclSpec,
+        nns: kiln_ast::NnsId,
+        (name, name_loc): (Symbol, Loc),
+        keyword: TagKeyword,
+        kw_loc: Loc,
+    ) {
+        let ty = self.s.act_dependent_name_at(nns, name, None, keyword, name_loc);
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
+            ds.invalid = true;
+            self.spec_error(&e, kw_loc);
+        }
+    }
+
+    /// An optional enum-base `: type-specifier-seq` ([dcl.enum]/2); the
+    /// fixed underlying type, or `None` if absent or not a type.
+    fn parse_enum_base(&mut self) -> Option<QualType> {
+        if !self.at(Punct::Colon) {
+            return None;
+        }
+        self.bump();
+        let base = self.parse_decl_specifiers(DeclaratorContext::TypeName);
+        if !base.has_type_specifier() {
+            self.error_here(DiagId::parse_expected_type);
+            return None;
+        }
+        let ty = self.s.type_from_declspec(&base);
+        // [dcl.enum]/2, [dcl.spec.auto.general]/5.
+        let at = base.type_loc.unwrap_or(base.loc);
+        Some(self.s.type_specifier_placeholder_check(ty, at))
+    }
+
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let keyword = match k {
@@ -1237,7 +1289,8 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
-        let qualifier = self.parse_tag_qualifier(ds);
+        let qual = self.parse_tag_qualifier(ds);
+        let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
             && self.parse_ttp_elaborated(ds, kw_loc, ctx)
@@ -1249,19 +1302,7 @@ impl Parser<'_, '_> {
             self.error_here(DiagId::parse_expected_unqualified_id);
             ds.invalid = true;
         }
-        let mut fixed = None;
-        if keyword == TagKeyword::Enum && self.at(Punct::Colon) {
-            self.bump();
-            let base = self.parse_decl_specifiers(DeclaratorContext::TypeName);
-            if base.has_type_specifier() {
-                let ty = self.s.type_from_declspec(&base);
-                // [dcl.enum]/2, [dcl.spec.auto.general]/5.
-                let at = base.type_loc.unwrap_or(base.loc);
-                fixed = Some(self.s.type_specifier_placeholder_check(ty, at));
-            } else {
-                self.error_here(DiagId::parse_expected_type);
-            }
-        }
+        let fixed = if keyword == TagKeyword::Enum { self.parse_enum_base() } else { None };
         let is_class = keyword != TagKeyword::Enum;
         if is_class
             && self.at(Punct::Less)
@@ -1288,6 +1329,12 @@ impl Parser<'_, '_> {
         }
         if use_ == TagUse::Declaration && qualifier.is_some() {
             self.s.check_standalone_tag_qualifier(keyword, qual_loc);
+        }
+        if let (Some(q), Some((n, nloc)), TagUse::Reference | TagUse::Friend) = (qual, name, use_)
+            && self.s.is_dependent_ctx(q.ctx)
+        {
+            self.dependent_tag_reference(ds, q.nns, (n, nloc), keyword, kw_loc);
+            return;
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
@@ -3022,7 +3069,9 @@ impl Parser<'_, '_> {
                 // An initializer-clause pack expansion ([temp.variadic]/5.4).
                 match value {
                     InitValue::Expr(e) => value = InitValue::Expr(self.s.act_pack_expansion(e, l)),
-                    InitValue::List(_) => self.unsupported("pack expansions of braced lists", l),
+                    InitValue::List(n) => {
+                        value = InitValue::Expr(self.s.act_pack_expansion_list(&n, l));
+                    }
                 }
             }
             items.push(InitItem { designator, value });

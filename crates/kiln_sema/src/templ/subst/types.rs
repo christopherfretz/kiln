@@ -409,6 +409,15 @@ impl Substituter<'_, '_, '_> {
                 let ctx = self.nns_context(n, self.written(WrittenKey::Nns(nns), loc))?;
                 // Diagnosed at the name as written (§5.8).
                 let loc = self.written(WrittenKey::Type(q), loc);
+                if matches!(
+                    keyword,
+                    kiln_ast::types::TagKeyword::Struct
+                        | kiln_ast::types::TagKeyword::Class
+                        | kiln_ast::types::TagKeyword::Union
+                        | kiln_ast::types::TagKeyword::Enum
+                ) {
+                    return self.dependent_tag_name(keyword, n, name, ctx, loc);
+                }
                 let found = self.sema.lookup_qualified(ctx, name, LookupKind::Ordinary);
                 let Some(&d) = found.decls.first() else {
                     let d = match self.enable_if_failure(nns, n, name, ctx) {
@@ -772,6 +781,50 @@ impl Substituter<'_, '_, '_> {
                 .diag(DiagId::sema_typename_nested_not_found_enable_if, at)
                 .arg(self.ctx_arg(ctx)),
         )
+    }
+
+    /// `class-key T::name` with `T` substituted to `ctx`
+    /// ([dcl.type.elab]/1-3, clang `RebuildDependentNameType` with a tag
+    /// keyword): a tag of `ctx` whose kind agrees with the class-key.
+    fn dependent_tag_name(
+        &mut self,
+        keyword: kiln_ast::types::TagKeyword,
+        nns: kiln_ast::NnsId,
+        name: kiln_source::symbol::Symbol,
+        ctx: DeclId,
+        loc: Loc,
+    ) -> SubstResult<QualType> {
+        use kiln_ast::types::TagKeyword as K;
+        let found = self.sema.lookup_qualified(ctx, name, LookupKind::Tag);
+        let Some(&d) = found.decls.first() else {
+            let kind = match keyword {
+                K::Union => 2u8,
+                K::Class => 3,
+                K::Enum => 4,
+                _ => 0,
+            };
+            let d = self
+                .sema
+                .diag(DiagId::sema_not_tag_in_scope, loc)
+                .arg(kind)
+                .arg(crate::decl::sym_str(self.sema, name))
+                .arg(self.ctx_arg(ctx));
+            self.sema.emit(d);
+            return Err(SubstFail);
+        };
+        if !self.sema.tag_matches(d, keyword) {
+            let msg = self
+                .sema
+                .diag(DiagId::sema_use_with_wrong_tag, loc)
+                .arg(crate::decl::sym_str(self.sema, name));
+            let msg = self.sema.note_prev(msg, d, false);
+            self.sema.emit(msg);
+            return Err(SubstFail);
+        }
+        self.sema.mark_type_referenced(d);
+        self.sema.check_found_access(&found, loc);
+        let t = self.decl_type(d);
+        Ok(self.sema.ast.types.elaborated(keyword, Some(nns), t))
     }
 
     pub(crate) fn ctx_arg(&self, ctx: DeclId) -> String {

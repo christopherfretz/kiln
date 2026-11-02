@@ -208,7 +208,15 @@ impl Sema<'_, '_> {
             return QualType::ERROR;
         }
         if self.undeduced_keyword(declared) == Some(AutoKeyword::DecltypeAuto) {
-            return self.decltype_of(e);
+            // `decltype(auto)` admits no written cv; the only qualifier is
+            // the `const` `constexpr` adds ([dcl.constexpr]/6), which a
+            // reference ignores.
+            let t = self.decltype_of(e);
+            let q = declared.quals();
+            if q.is_empty() || t == QualType::ERROR || self.ast.types.is_reference(t) {
+                return t;
+            }
+            return self.ast.types.qualify(t, q);
         }
         let ety = self.ast.exprs.get(e).ty();
         let t = &self.ast.types;
