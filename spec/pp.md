@@ -382,7 +382,13 @@ macros, which say what kiln implements (docs/status/cxx-features.md),
 nor what kiln accepts: kiln's builtins are a superset of both clangs'
 (spec/sema-templates.md §9.1 "clang 22 rows"). In compile modes the
 builtins TABLE still stages `__has_builtin` off for unimplemented rows
-at either level.
+at either level. Where kiln implements a feature that clang 19 lacks,
+`build_predefines` raises the macro to clang 22's value in the same modes:
+`__cpp_structured_bindings` is `202411L` wherever it is defined (C++17
+on; P1061 structured binding packs) and `__cpp_variadic_friend` is
+`202403L` in every C++ mode (P2893), and `__cpp_explicit_this_parameter`
+is `202110L` from C++23 (P0847 with lambdas, WP-356). `predef.rs` unit
+tests check all three.
 
 **`-dM` differences, clang 19.1.7 to 22.1.8** (`-std=c++26 -dM -E -x c++
 /dev/null`; identical for every standard and flag probed; applied by
@@ -626,7 +632,10 @@ belong to WP-017, which builds them on `macro_defined` and
   - `# 1 "<built-in>" 3`;
   - the sorted base macros, adjusted for the dialect and the
     macro-changing flags (`PredefConfig`; the effects are measured in
-    `resource/README.md`);
+    `resource/README.md`), and the feature-test macros kiln implements
+    beyond the clang 19 base, at clang 22's values and at every
+    compatibility level (see above; `__cpp_explicit_this_parameter`
+    needs `__cplusplus >= 202302L`);
   - clang 19's `#pragma push_macro("__GCC_DESTRUCTIVE_SIZE")` and
     `push_macro("__GCC_CONSTRUCTIVE_SIZE")`, so that `-D` may redefine
     them without a warning;

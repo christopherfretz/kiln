@@ -281,6 +281,24 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if std.is_some_and(|v| v >= 202_002) {
             set(m, "__cpp_modules", "1");
         }
+        // [cpp.predefined] (P0847, C++23): kiln implements explicit object
+        // parameters, members and lambdas; clang 19 leaves the macro
+        // undefined, clang 22 defines it from C++23.
+        let cxx23 = m
+            .get("__cplusplus")
+            .and_then(|v| v.trim_end_matches('L').parse::<u32>().ok())
+            .is_some_and(|v| v >= 202_302);
+        if cxx23 {
+            set(m, "__cpp_explicit_this_parameter", "202110L");
+        }
+        // Features kiln implements beyond clang 19, at clang 22's values
+        // in the same modes (docs/status/cxx-features.md): P1061
+        // structured binding packs (C++17 on) and P2893 variadic friends
+        // (every C++ mode).
+        if m.contains_key("__cpp_structured_bindings") {
+            set(m, "__cpp_structured_bindings", "202411L");
+        }
+        set(m, "__cpp_variadic_friend", "202403L");
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {
         m.remove(n);
@@ -365,6 +383,23 @@ mod tests {
         assert!(s.contains("#define __STRICT_ANSI__ 1\n"));
     }
 
+    /// [cpp.predefined]/1 (`__cpp_*`, [tab:cpp.predefined.ft]): the
+    /// macros of features kiln implements beyond clang 19 take clang
+    /// 22's values in its modes (P1061 from C++17, P2893 always).
+    #[test]
+    fn kiln_feature_macros() {
+        let cfg = PredefConfig::new(true);
+        let cxx17 = format!("{BASE}#define __cpp_structured_bindings 202403L\n");
+        let s = build_predefines(&cxx17, &cfg, &[]);
+        assert!(s.contains("#define __cpp_structured_bindings 202411L\n"), "{s}");
+        assert!(s.contains("#define __cpp_variadic_friend 202403L\n"), "{s}");
+        let s = build_predefines(BASE, &cfg, &[]);
+        assert!(!s.contains("__cpp_structured_bindings"), "{s}");
+        assert!(s.contains("#define __cpp_variadic_friend 202403L\n"), "{s}");
+        let s = build_predefines(&cxx17, &PredefConfig::new(false), &[]);
+        assert!(!s.contains("__cpp_variadic_friend"), "{s}");
+    }
+
     #[test]
     fn flag_deltas() {
         let mut cfg = PredefConfig::new(true);
@@ -402,6 +437,22 @@ mod tests {
         assert!(!build_predefines(&unsigned_base, &cfg, &[]).contains("__CHAR_UNSIGNED__"));
         cfg.char_signed = Some(false);
         assert!(build_predefines(BASE, &cfg, &[]).contains("#define __CHAR_UNSIGNED__ 1\n"));
+    }
+
+    /// `__cpp_explicit_this_parameter` (P0847) from C++23 on, as clang 22
+    /// defines it; not in C.
+    #[test]
+    fn explicit_this_parameter_macro() {
+        let m = "__cpp_explicit_this_parameter 202110L";
+        let cfg = PredefConfig::new(true);
+        for (std, on) in
+            [("201703L", false), ("202002L", false), ("202302L", true), ("202400L", true)]
+        {
+            let base = format!("#define __cplusplus {std}\n");
+            assert_eq!(build_predefines(&base, &cfg, &[]).contains(m), on, "{std}");
+        }
+        let c = PredefConfig::new(false);
+        assert!(!build_predefines("#define __STDC_VERSION__ 202311L\n", &c, &[]).contains(m));
     }
 
     /// spec/pp.md "clang compatibility level": compat 19 leaves the base

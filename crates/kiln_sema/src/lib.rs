@@ -24,6 +24,7 @@ mod complex;
 mod consteval;
 pub mod constfold;
 pub mod conv;
+mod coroutine;
 pub mod decl;
 mod decl_attrs;
 pub mod declspec;
@@ -245,6 +246,13 @@ pub struct Sema<'a, 'sm> {
     /// decomposition declared in a template, which instantiation
     /// deduces anew (the pattern's own may be deduced, spec/sema.md).
     pub(crate) decomp_written: std::collections::HashMap<DeclId, QualType>,
+    /// The structured binding packs `...xs` declared so far (P1061,
+    /// spec/sema.md §4.9).
+    pub(crate) binding_packs: std::collections::HashSet<DeclId>,
+    /// A binding pack decomposed once its element count is known: the
+    /// bindings it expanded into, which replace it in its decomposition's
+    /// binding list (instantiation maps the pattern pack to them).
+    pub(crate) binding_pack_elems: std::collections::HashMap<DeclId, kiln_ast::ListId>,
     /// clang `RefsMinusAssignments`: per local variable, its references
     /// minus those that are the target of a discarded assignment, and
     /// whether it is a condition variable (clang `isCXXCondDecl`)
@@ -649,6 +657,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unowned_params: std::collections::HashSet::new(),
             requires_param_scopes: 0,
             decomp_written: std::collections::HashMap::new(),
+            binding_packs: std::collections::HashSet::new(),
+            binding_pack_elems: std::collections::HashMap::new(),
             refs_minus_assign: std::collections::HashMap::new(),
             attr_macros: (0, Vec::new()),
             declared_returns: kiln_source::fx::FxHashMap::default(),

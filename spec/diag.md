@@ -170,7 +170,7 @@ umbrella yet.
 | Umbrella | Kiln's subgroups (clang order) | Tests |
 |---|---|---|
 | `all` | `most`, `switch`, `switch-bool`, `vla-cxx-extension` | `intro.compliance/wall-*.cpp`, `dcl.array/vla-gnu-mode-wall.cpp` |
-| `most` | `comment`, `multichar`, `range-loop-construct`, `reorder`, `return-type`, `trigraphs`, `uninitialized`, `unknown-pragmas`, `unused`, `overloaded-virtual` | `intro.compliance/wmost-members.cpp` |
+| `most` | `comment`, `format`, `multichar`, `range-loop-construct`, `reorder`, `return-type`, `tautological-compare`, `trigraphs`, `uninitialized`, `unknown-pragmas`, `unused`, `overloaded-virtual` | `intro.compliance/wmost-members.cpp`, `intro.compliance/wmost-tautological-compare.cpp` |
 | `unused-value` | `unused-comparison`, `unused-result`, `unevaluated-expression` | `intro.compliance/wunused-value-unevaluated.cpp` |
 | `gnu` | `gnu-case-range`, `gnu-designator`, `vla-extension`, `gnu-folding-constant`, `gnu-imaginary-constant`, `gnu-include-next`, `gnu-line-marker`, `gnu-pointer-arith`, `gnu-string-literal-operator-template`, `gnu-zero-line-directive`, `gnu-zero-variadic-macro-arguments` | `ext.gnu.extension/wgnu-*.cpp` |
 
@@ -179,16 +179,28 @@ umbrella yet.
 `vla-cxx-extension` being in `all` matters in a GNU dialect only, where
 its diagnostic is an off-by-default Extension.
 
+`deprecated` holds `deprecated-array-compare`, `deprecated-declarations`,
+`deprecated-missing-comma-variadic-parameter`,
+`deprecated-redundant-constexpr-static-def` and `deprecated-this-capture`
+(clang order). The WP-356 groups follow clang 22: `array-compare-cxx26`
+(its one id is `WarningError`; `-Wno-array-compare-cxx26` silences the
+C++26 array comparison, as in clang),
+`array-compare`, `deprecated-array-compare`, `tautological-compare` (in
+`most`), `invalid-static-assert-message` (`WarningError`, spec/sema.md
+§4.6) and `c++26-extensions` (the `ExtWarn`s for C++26 features used
+earlier: placeholder variables, user-generated `static_assert`
+messages).
+
 Clang subgroups kiln does not have yet (add them, in place, when their
 diagnostics land):
 
 - `all`: `parentheses`, `misleading-indentation`, `packed-non-pod`.
 - `most`: `array-bounds`, `bool-operation`, `char-subscript`,
   `delete-non-virtual-dtor`, `extern-c-compat`, `for-loop-analysis`,
-  `format`, `frame-address`, `implicit`, `infinite-recursion`,
+  `frame-address`, `implicit`, `infinite-recursion`,
   `int-in-bool-context`, `mismatched-tags`, `missing-braces`, `move`,
   `private-extern`, `self-assign`, `self-move`, `sizeof-array-argument`,
-  `sizeof-array-decay`, `string-plus-int`, `tautological-compare`,
+  `sizeof-array-decay`, `string-plus-int`,
   `user-defined-warnings`, `volatile-register-var`; under `unused`:
   `unused-argument`, `unused-function`, `unused-label`,
   `unused-lambda-capture`, `unused-local-typedef`, `unused-private-field`;

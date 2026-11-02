@@ -20,7 +20,7 @@ C++26 draft; "clang" means clang 19 with `-std=c++26` on the container target
 | construction | ctor-initializers, delegating ctors, NSDMI, temporaries, cleanups, lifetime extension incl. P2718 range-for, guaranteed elision, NRVO marking, aggregates with bases, paren-aggregate init | function-try-blocks and EH cleanups (exceptions milestone) |
 | layout | full Itanium: bases, vptr, vbases, primary base, EBO, tail padding, bit-fields across bases, `#pragma pack`, `alignas`; vtable layout and VTT | MS ABI, `#pragma ms_struct`, `-fclang-abi-compat` |
 | RTTI | `dynamic_cast`/`typeid` sema; final overriders for the Oven | |
-| other | explicit object parameters (P0847): declarations, calls, `&C::f` (§2.5) | explicit object parameters of lambdas (Q4) |
+| other | explicit object parameters (P0847): declarations, calls, `&C::f` (§2.5), lambdas (spec/sema-lambda.md §3.1, WP-356) | |
 
 Principles:
 1. **clang's model where the standard leaves a choice** (node kinds,
@@ -92,14 +92,17 @@ public.
 | member function | `CXXMethod` | in-class definition implicitly inline; `static` → `FnStorage::Static`; cv/ref-qualifiers into `FuncProto.this_quals`/`ref_qual` (types.md §5.4); `virtual`, `= 0`, `override`, `final` (§3.4) |
 | constructor / destructor / conversion | `CXXConstructor` / `CXXDestructor` / `CXXConversion` | `DeclName` tag 2/3/4 keyed by the canonical class `TypeId` / target `QualType` (ast.md §3) |
 | nested class / enum / typedef / alias | M2 kinds, ctx = class | access applies to the name; nested class is a member ([class.access.nest]) |
-| friend | `Friend` (payload: friend decl or type) | §2.4; a friend function first declared in a class is a member of the innermost enclosing namespace, hidden from ordinary lookup ([namespace.memdef]/3, [class.friend]/7): it is entered in that namespace's lookup table with `LookupFlags::ADL_ONLY` (sema-overload.md §2.2, decision 7), which ordinary lookup skips and ADL (WP-068a) finds; no side table. A later namespace-scope redeclaration is entered without the flag and is visible to ordinary lookup. A friend's redeclaration lookup in that namespace sees hidden friends but not the members of its inline namespaces (clang's `FilterLookupForScope` without `AllowInlineNamespace`), so a hidden friend `iter_move` does not clash with an inline-namespace CPO object of that name (WP-169) |
+| friend | `Friend` (payload: friend decl or type) | §2.4; a friend-type-specifier-list (`friend A, Ts...;`, [class.friend]/3, P2893) declares one `Friend` per specifier through `act_on_friend_type`, a pack expansion one of type `PackExpansion(Ts)` expanded per element at instantiation (spec/sema-templates.md §7.1); a friend function first declared in a class is a member of the innermost enclosing namespace, hidden from ordinary lookup ([namespace.memdef]/3, [class.friend]/7): it is entered in that namespace's lookup table with `LookupFlags::ADL_ONLY` (sema-overload.md §2.2, decision 7), which ordinary lookup skips and ADL (WP-068a) finds; no side table. A later namespace-scope redeclaration is entered without the flag and is visible to ordinary lookup. A friend's redeclaration lookup in that namespace sees hidden friends but not the members of its inline namespaces (clang's `FilterLookupForScope` without `AllowInlineNamespace`), so a hidden friend `iter_move` does not clash with an inline-namespace CPO object of that name (WP-169) |
 | access-specifier | `AccessSpec` | changes `ClassBuild.access`; kept for the dump |
 | `using` member | WP-062 (`Using`, `UsingShadow`) | shadow access = the using-declaration's; inheriting constructors §4.10 |
 | member template | WP-070 | |
 
 Per-declaration checks: redeclaration of a member (`class
 member cannot be redeclared`, `constructor cannot be redeclared`, `duplicate
-member 'a'`); `mutable` with `const` or a reference; `constexpr` non-static
+member 'a'`), except that non-static data members named `_` are
+name-independent ([basic.scope.scope]/5, P2169, WP-356; spec/sema.md
+§5.24): several may be declared, a use through member access that finds
+more than one is `sema_placeholder_ambiguous`; `mutable` with `const` or a reference; `constexpr` non-static
 data member; incomplete or abstract field type (`field has incomplete type
 'In'` + note `definition of 'In' is not complete until the closing '}'`);
 a union member of reference type (`union member 'r' has reference type 'int
@@ -335,8 +338,9 @@ SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
   `&C::f` is an ordinary pointer to function ([expr.unary.op]/3.1), and
   `is_implicit_object_member` excludes such members from pointer-to-member
   matching ([over.over]). Codegen calls them directly
-  (`is_explicit_object_method`). Lambdas with an explicit object parameter
-  are `sema_unsupported` (Q4).
+  (`is_explicit_object_method`). Lambdas with an explicit object
+  parameter (the closure type as `Self`) follow spec/sema-lambda.md §3.1
+  (WP-356): `param_nonmember` and `param_not_first` select "lambda".
 
 ### 2.6 Pointers to members
 `&C::m` forms `MemberPointer` (types.md §5.2) for non-static members (`&(C::m)`
@@ -2244,8 +2248,8 @@ polymorphic classes) for `final_overrider`/vtable cache size.
   immediate invocations are evaluated against the nearest enclosing
   default-arg/default-init node's location and context (the Oven tracks it).
 - **Q4 Explicit object parameters (P0847).** *Resolved* (WP-149) for
-  member functions (§2.5); a lambda's explicit object parameter (the
-  closure type as `Self`) is still unsupported.
+  member functions (§2.5), and (WP-356) for lambdas, spec/sema-lambda.md
+  §3.1.
 - **Q5 Name clash.** `kiln_sema::declspec::BaseSpec` (type-specifier enum,
   re-exported) vs `kiln_ast::BaseSpec` (base-specifier). *Recommend*
   renaming the former to `TypeSpecKind` in WP-066a.

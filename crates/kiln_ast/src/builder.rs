@@ -23,10 +23,10 @@ use crate::decl::{
     StaticAssertData, TagKind, TemplLink, TypedefData, VarData, VarEval, VarSpec,
 };
 use crate::expr::{
-    ArrayTraitExtra, BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructInfo,
-    ConstructionKind, DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode, InitListExtra,
-    NewExtra, NewInitStyle, NonOdrUse, ObjectKind, Radix, StorageDuration, StringKind, TraitKind,
-    TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
+    ArrayTraitExtra, BinaryOp, CastKind, CharKind, CoawaitParts, CompoundAssignExtra,
+    ConstructInfo, ConstructionKind, DeclRefExtra, ExprDeps, ExprFlags, ExprKind, ExprNode,
+    InitListExtra, NewExtra, NewInitStyle, NonOdrUse, ObjectKind, Radix, StorageDuration,
+    StringKind, SuspendKind, TraitKind, TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
 };
 use crate::ids::{
     AttrId, ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, StmtId, StringLitId,
@@ -36,8 +36,8 @@ use crate::lookup::LookupFlags;
 use crate::names::DeclName;
 use crate::slot::AlreadySet;
 use crate::stmt::{
-    AsmData, AsmOperand, CaseData, IfData, IfKind, LoopData, RangeForData, StmtKind, StmtNode,
-    SwitchData,
+    AsmData, AsmOperand, CaseData, CoroutineBodyData, IfData, IfKind, LoopData, RangeForData,
+    StmtKind, StmtNode, SwitchData,
 };
 use crate::types::TypeFlags;
 
@@ -775,6 +775,43 @@ impl<'a> AstBuilder<'a> {
         self.ast.decls.push(
             NewDecl {
                 kind: DeclKind::ParmVar,
+                flags: h.flags,
+                misc: h.misc,
+                name: h.name,
+                ctx: Some(h.ctx),
+                loc: h.loc,
+                ty: Some(ty),
+            },
+            payload,
+        )
+    }
+
+    /// An init-capture's variable ([expr.prim.lambda.capture]/6), created
+    /// at the *lambda-introducer* so that it is in scope in the
+    /// *lambda-declarator* (P2036). Its context is provisionally `ctx` (the
+    /// context the lambda appears in) until the call operator adopts it
+    /// ([`crate::decl::DeclArena::set_init_capture_owner`]); like a
+    /// prototype parameter it joins no member list or lookup table.
+    pub fn init_capture_var(
+        &mut self,
+        ctx: DeclId,
+        name: DeclName,
+        loc: Loc,
+        ty: QualType,
+        name_independent: bool,
+    ) -> DeclId {
+        let misc = DeclMisc::new().with_name_independent(name_independent);
+        let h = self.ast.templates.dependent_head(DeclHead::new(ctx, name, loc).misc(misc));
+        let payload = Payload::Var(VarData {
+            redecl: self.redecl_link(None),
+            init: None,
+            spec: VarSpec::new(),
+            eval: VarEval::default(),
+            templ: TemplLink::NONE,
+        });
+        self.ast.decls.push(
+            NewDecl {
+                kind: DeclKind::Var,
                 flags: h.flags,
                 misc: h.misc,
                 name: h.name,
@@ -2718,6 +2755,90 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::BinaryConditionalOperator, vk, deps, 0, ty, loc, list.raw(), 0)
     }
 
+    /// A resolved `co_await` / `co_yield` ([expr.await], [expr.yield]):
+    /// `kind` is `CoawaitExpr` or `CoyieldExpr`; the value is
+    /// `parts.resume`'s.
+    pub fn coawait_expr(
+        &mut self,
+        kind: ExprKind,
+        parts: CoawaitParts,
+        implicit: bool,
+        suspend: SuspendKind,
+        loc: Loc,
+    ) -> ExprId {
+        let r = *self.ast.exprs.get(parts.resume);
+        let deps = r.deps().with(self.deps(parts.operand));
+        let p = parts;
+        let list =
+            self.ast.lists.push(&[p.operand, p.common, p.ready, p.suspend, p.resume, p.opaque]);
+        let sk = match suspend {
+            SuspendKind::Void => 0u8,
+            SuspendKind::Bool => 1,
+            SuspendKind::Handle => 2,
+        };
+        let aux = u8::from(implicit) | (sk << 1);
+        self.push_expr(
+            kind,
+            r.value_category(),
+            r.object_kind(),
+            ExprFlags::NONE,
+            deps,
+            aux,
+            r.ty(),
+            loc,
+            list.raw(),
+            0,
+        )
+    }
+
+    /// A `co_await` / `co_yield` in a template pattern: a type-dependent
+    /// `DependentCoawaitExpr` (`yield` false) or a `CoyieldExpr` holding
+    /// only its operand, rebuilt at instantiation.
+    pub fn dependent_coawait(&mut self, operand: ExprId, is_yield: bool, loc: Loc) -> ExprId {
+        let deps = self.deps(operand).with(ExprDeps::TYPE_VALUE_INST);
+        if is_yield {
+            let list = self.ast.lists.push(&[operand]);
+            return self.simple(
+                ExprKind::CoyieldExpr,
+                ValueCategory::PRValue,
+                deps,
+                0,
+                QualType::DEPENDENT,
+                loc,
+                list.raw(),
+                0,
+            );
+        }
+        self.simple(
+            ExprKind::DependentCoawaitExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            QualType::DEPENDENT,
+            loc,
+            operand.raw(),
+            0,
+        )
+    }
+
+    /// An lvalue `OpaqueValueExpr` standing for the glvalue `source`
+    /// (clang's awaiter binding in `buildCoawaitCalls`).
+    pub fn opaque_value_lvalue(&mut self, source: ExprId) -> ExprId {
+        let n = *self.ast.exprs.get(source);
+        self.push_expr(
+            ExprKind::OpaqueValueExpr,
+            ValueCategory::LValue,
+            n.object_kind(),
+            ExprFlags::NONE,
+            n.deps(),
+            0,
+            n.ty(),
+            n.loc(),
+            source.raw(),
+            0,
+        )
+    }
+
     /// A GNU statement expression `({ ... })`: `body` is the compound
     /// statement; the value is its last expression statement's (`ty`,
     /// `void` when there is none). `loc` is the `(`, `rparen` the `)`.
@@ -3487,6 +3608,28 @@ impl<'a> AstBuilder<'a> {
     pub fn cxx_for_range_stmt(&mut self, data: RangeForData, loc: Loc) -> StmtId {
         let side = self.ast.stmts.push_range_for(data);
         self.stmt(StmtKind::CXXForRangeStmt, 0, loc, side, 0)
+    }
+
+    /// The body of a coroutine ([dcl.fct.def.coroutine]/5), wrapping the
+    /// body as written (`data.body`); `loc` is the body's `{`.
+    pub fn coroutine_body_stmt(&mut self, data: CoroutineBodyData, loc: Loc) -> StmtId {
+        let side = self.ast.stmts.push_coro(data);
+        self.stmt(StmtKind::CoroutineBodyStmt, 0, loc, side, 0)
+    }
+
+    /// `co_return e;` ([stmt.return.coroutine]): `operand` as written,
+    /// `promise_call` the call Sema built (`None` in a template pattern);
+    /// `implicit` for the `co_return;` at the end of the body.
+    pub fn coreturn_stmt(
+        &mut self,
+        operand: Option<ExprId>,
+        promise_call: Option<ExprId>,
+        implicit: bool,
+        loc: Loc,
+    ) -> StmtId {
+        let a = operand.map_or(0, RawId::raw);
+        let b = promise_call.map_or(0, RawId::raw);
+        self.stmt(StmtKind::CoreturnStmt, u16::from(implicit), loc, a, b)
     }
 
     /// A GNU asm statement (`GCCAsmStmt`, [dcl.asm]); `bits` are the

@@ -53,6 +53,8 @@ sema_arith_void_pointer = Extension [GnuPointerArith] (1) "arithmetic on{0: a po
 // [expr.add]/1: in C++ a `void` or function pointee is an error, not
 // the GNU extension of C (WP-219)
 sema_arith_void_pointer_cxx = Error (1) "arithmetic on{0: a|} pointer{0:|s} to void";
+sema_array_comparison = Warning [ArrayCompare] (0) "comparison between two arrays compare their addresses and will be deprecated in c++20; to compare array addresses, use unary '+' to decay operands to pointers";
+sema_array_comparison_cxx26 = WarningError [ArrayCompareCxx26] (0) "comparison between two arrays is ill-formed in C++26; to compare array addresses, use unary '+' to decay operands to pointers";
 sema_array_designator_empty_range = Error (2) "array designator range [{0}, {1}] is empty";
 sema_array_designator_negative = Error (1) "array designator value '{0}' is negative";
 sema_array_designator_non_array = Error (1) "array designator cannot initialize non-array type {0}";
@@ -126,6 +128,10 @@ sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute 
 sema_attribute_wrong_decl_type_error = Error (2) "{0} attribute only applies to {1}";
 sema_attribute_wrong_stmt_type = Error (2) "'{0}' attribute only applies to {1}";
 sema_attributes_not_compatible = Error (2) "'{0}' and '{1}' attributes are not compatible";
+sema_auto_expr_deduction_failure = Error (2) "functional-style cast to {0} has incompatible initializer of type {1}";
+sema_auto_expr_init_multiple_expressions = Error (1) "initializer for functional-style cast to {0} contains multiple expressions";
+sema_auto_expr_init_no_expression = Error (1) "initializer for functional-style cast to {0} is empty";
+sema_auto_expr_init_paren_braces = Error (2) "cannot deduce actual type for {1} from {0:parenthesized|nested} initializer list";
 sema_auto_fn_deduction_failure = Error (2) "cannot deduce return type {0} from returned value of type {1}";
 sema_auto_fn_different_deductions = Error (3) "'{0:auto|decltype(auto)}' in return type deduced as {1} here but deduced as {2} in earlier return statement";
 sema_auto_fn_init_list = Error (0) "cannot deduce return type from initializer list";
@@ -142,6 +148,7 @@ sema_auto_var_in_own_initializer = Error (2) "variable '{0}' declared with deduc
 sema_auto_var_init_multiple_expressions = Error (2) "initializer for variable '{0}' with type {1} contains multiple expressions";
 sema_auto_var_init_no_expression = Error (2) "initializer for variable '{0}' with type {1} is empty";
 sema_auto_var_requires_init = Error (2) "declaration of variable '{0}' with deduced type {1} requires an initializer";
+sema_await_suspend_invalid_return_type = Error (1) "return type of 'await_suspend' is required to be 'void' or 'bool' (have {0})";
 sema_bad_cast_qualifiers_away = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} casts away qualifiers";
 sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
 sema_bad_cxx_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} is not allowed";

@@ -182,11 +182,7 @@ impl Parser<'_, '_> {
                 Kw::Goto => return self.parse_goto(),
                 Kw::Try => return self.parse_try_stmt(),
                 Kw::Asm => return self.parse_asm_statement(),
-                Kw::CoReturn => {
-                    self.unsupported(&format!("'{}' statements", k.spelling()), loc);
-                    self.skip_statement();
-                    return None;
-                }
+                Kw::CoReturn => return self.parse_coreturn(),
                 // [dcl.pre]/5: a static_assert-declaration, alias-declaration
                 // or namespace-alias-definition takes no attributes.
                 Kw::StaticAssert => {
@@ -354,7 +350,11 @@ impl Parser<'_, '_> {
         };
         let mut init = None;
         if self.condition_has_init_statement() {
-            init = self.parse_statement();
+            init = if self.at_kw(Kw::Using) {
+                self.parse_alias_init_statement()
+            } else {
+                self.parse_statement()
+            };
         }
         let Some(c) = self.parse_condition() else {
             self.skip_until(&[Punct::RParen], false, true);
@@ -362,6 +362,23 @@ impl Parser<'_, '_> {
         };
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         Some((init, c))
+    }
+
+    /// An alias-declaration as the init-statement of an `if`, `switch` or
+    /// `for` ([stmt.pre]/1, C++23 P2360), at `using` (clang
+    /// `ParseAliasDeclarationInInitStatement`): a C++23 extension before
+    /// C++23, reported at `using` once the declaration parsed.
+    fn parse_alias_init_statement(&mut self) -> Option<StmtId> {
+        let loc = self.loc();
+        let ds = self.parse_using();
+        if ds.is_empty() {
+            return None;
+        }
+        if self.std < Std::Cxx23 {
+            let w = self.s.diag(DiagId::parse_ext_alias_in_init_statement, loc);
+            self.emit(w);
+        }
+        Some(self.s.act_on_decl_stmt(&ds, loc))
     }
 
     /// Whether a `;` comes before the `)` closing a condition, skipping
@@ -493,7 +510,7 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         };
-        self.s.push_scope(ScopeKind::Control);
+        self.s.push_catch_scope();
         let var = if self.eat(Punct::Ellipsis).is_some() {
             None
         } else {
@@ -994,6 +1011,8 @@ impl Parser<'_, '_> {
         let init = if self.at(Punct::Semi) {
             self.bump();
             None
+        } else if self.at_kw(Kw::Using) {
+            self.parse_alias_init_statement()
         } else if self.is_cxx_declaration_statement(true) {
             let l = self.loc();
             let decls = self.parse_simple_declaration(DeclaratorContext::ForInit, false);
@@ -1046,6 +1065,30 @@ impl Parser<'_, '_> {
         self.s.act_on_end_loop();
         let s = self.s.act_on_for(init, var, cond, inc, body, loc);
         self.s.note_loop_body(EmptyBodyStmt::For, s, rparen, body);
+        Some(s)
+    }
+
+    /// `co_return expr-or-braced-init-list? ;` ([stmt.return.coroutine];
+    /// clang's `ParseReturnStatement` for `kw_co_return`).
+    fn parse_coreturn(&mut self) -> Option<StmtId> {
+        let loc = self.bump().span.lo;
+        let mut value = None;
+        if self.at(Punct::LBrace) {
+            let Ok(l) = self.parse_init_list() else {
+                self.skip_to_semi();
+                return None;
+            };
+            value = Some(self.s.act_on_braced_arg(l));
+        } else if !self.at(Punct::Semi) {
+            let Some(e) = self.parse_expression() else {
+                self.skip_until(&[Punct::RBrace], true, false);
+                self.eat(Punct::Semi);
+                return None;
+            };
+            value = Some(e);
+        }
+        let s = self.s.act_on_coreturn(value, loc);
+        self.expect_semi_after_stmt("co_return");
         Some(s)
     }
 

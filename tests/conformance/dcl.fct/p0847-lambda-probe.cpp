@@ -4,7 +4,7 @@
 //@ expect: compile-ok
 //@ std: c++23
 //@ strict-diags
-//@ xfail(kiln): explicit object parameters in a lambda are not supported yet
+// (WP-356: implemented.)
 constexpr int fib_test() {
   auto fib = [](this auto const& self, int n) -> int {
     return n < 2 ? n : self(n - 1) + self(n - 2);

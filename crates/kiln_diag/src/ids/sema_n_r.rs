@@ -107,6 +107,7 @@ sema_pack_index_out_of_bounds = Error (0) "a parameter pack may not be accessed 
 sema_pack_length_mismatch = Error (4) "pack expansion contains parameter packs '{0}' and '{1}' that have different lengths ({2} vs. {3})";
 sema_pack_length_mismatch_outer = Error (3) "pack expansion contains parameter pack '{0}' that has a different length ({1} vs. {2}) from outer parameter packs";
 sema_pack_length_mismatch_partial = Error (3) "pack expansion contains parameter pack '{0}' that has a different length (at least {1} vs. {2}) from outer parameter packs";
+sema_pack_outside_template = Error (0) "pack declaration outside of template";
 sema_param_constexpr_spec = Error (1) "function parameter cannot be {0:constexpr|consteval|constinit}";
 sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
 sema_param_pack_without_packs = Error (1) "type {0} of function parameter pack does not contain any unexpanded parameter packs";
@@ -121,6 +122,7 @@ sema_partial_spec_fully_specialized = Error (1) "partial specialization of '{0}'
 sema_partial_spec_not_deducible = WarningError [UnusablePartialSpecialization] (2) "{0:class|variable} template partial specialization contains {1:a template parameter|template parameters} that cannot be deduced; this partial specialization will never be used";
 sema_partial_spec_not_more_specialized = WarningError [InvalidPartialSpecialization] (1) "{0:class|variable} template partial specialization is not more specialized than the primary template";
 sema_partial_spec_redecl_scope = Error (2) "class template partial specialization of '{0}' not in a namespace enclosing '{1}'";
+sema_placeholder_ambiguous = Error (1) "ambiguous reference to placeholder '{0}', which is defined multiple times";
 sema_placeholder_constraints_not_satisfied = Error (2) "deduced type {0} does not satisfy {1}";
 sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
 // ----- WP-211 (GNU _Complex)
@@ -178,6 +180,7 @@ sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order doe
 // spec/sema-class.md §5.6).
 sema_ret_stack_addr = Warning [ReturnStackAddress] (3) "{0:address of|reference to} stack memory associated with {1:local variable|parameter} {2} returned";
 sema_return_has_expr = Error (1) "void function '{0}' should not return a value";
+sema_return_in_coroutine = Error (0) "return statement not allowed in coroutine; did you mean 'co_return'?";
 sema_return_in_ctor_handler = Error (0) "return in the catch of a function try block of a constructor is illegal";
 sema_return_init_list = Error (1) "void function '{0}' must not return a value";
 sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";

@@ -277,6 +277,9 @@ impl Sema<'_, '_> {
         if x.rewrite.is_reversed() != y.rewrite.is_reversed() {
             return !x.rewrite.is_reversed();
         }
+        if let Some(b) = self.inherited_guide_tiebreak(set, x, y) {
+            return b;
+        }
         // [over.match.class.deduct] tie-breakers (WP-071b, WP-134):
         // /2.11: a user-declared deduction guide over an implicit one;
         // /2.12: the copy deduction candidate over any other; /2.13: the
@@ -300,6 +303,23 @@ impl Sema<'_, '_> {
             }
         }
         false
+    }
+
+    /// [over.match.best.general]/2.10 (P2582): a guide not formed from an
+    /// inherited constructor beats one that is, when their parameters for
+    /// the arguments have the same types. `None` when it does not decide.
+    fn inherited_guide_tiebreak(
+        &self,
+        set: &OverloadCandidateSet,
+        x: &Candidate,
+        y: &Candidate,
+    ) -> Option<bool> {
+        if x.decl.is_none() || y.decl.is_none() {
+            return None;
+        }
+        let inh = |c: &Candidate| self.is_inherited_guide(c.template.unwrap_or(c.func()));
+        let (i1, i2) = (inh(x), inh(y));
+        (i1 != i2 && self.same_guide_params(x.func(), y.func(), set.args.len())).then_some(!i1)
     }
 
     /// Records in `set.tmpl_order` which viable function template

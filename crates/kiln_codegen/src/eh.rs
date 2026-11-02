@@ -174,7 +174,7 @@ impl Cg<'_> {
     }
 
     /// `getEHResumeBlock`: re-raises the in-flight exception.
-    fn eh_resume_block(&mut self) -> Blk {
+    pub(crate) fn eh_resume_block(&mut self) -> Blk {
         if let Some(b) = self.f.cl.eh_resume {
             return b;
         }

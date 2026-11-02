@@ -125,7 +125,8 @@ pub(crate) fn unary_oper(op: UnaryOp) -> Option<OO> {
         U::Minus => OO::Minus,
         U::Not => OO::Tilde,
         U::LNot => OO::Exclaim,
-        U::Real | U::Imag | U::Extension | U::Coawait => return None,
+        U::Coawait => OO::Coawait,
+        U::Real | U::Imag | U::Extension => return None,
     })
 }
 
@@ -1145,6 +1146,9 @@ impl Sema<'_, '_> {
             conv.extend(rest);
         } else {
             conv = self.convert_call_args(named, callee, ops, brs, &proto, loc, rparen)?;
+            if method && !self.check_lambda_explicit_object_call(f, self.begin_loc(ops[0])) {
+                return None;
+            }
         }
         if method && let Some(c) = self.operand_class(ops[0]) {
             let def = self.ast.definition(c).unwrap_or(c);

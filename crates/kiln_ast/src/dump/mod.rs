@@ -696,6 +696,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per expression kind")]
     fn expr_children(&self, e: ExprId, kids: &mut Vec<(Node, Option<&'static str>)>) {
         let exprs = &self.ast.exprs;
         let lists = &self.ast.lists;
@@ -784,6 +785,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::BinaryConditionalOperator
+            | ExprKind::CoawaitExpr
+            | ExprKind::CoyieldExpr
+            | ExprKind::DependentCoawaitExpr
             | ExprKind::ChooseExpr
             | ExprKind::OffsetOfExpr
             | ExprKind::CXXNewExpr
@@ -935,6 +939,31 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 stmt(Some(r.body), kids);
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
+            StmtKind::CoreturnStmt => {
+                expr(stmts.coreturn_operand(s), kids);
+                expr(stmts.coreturn_promise_call(s), kids);
+            }
+            StmtKind::CoroutineBodyStmt => {
+                // clang's `CoroutineBodyStmt::children` order.
+                let c = *stmts.coroutine_body(s);
+                stmt(Some(c.body), kids);
+                stmt(Some(c.promise_stmt), kids);
+                expr(Some(c.init_suspend), kids);
+                expr(Some(c.final_suspend), kids);
+                stmt(c.on_exception, kids);
+                stmt(c.on_fallthrough, kids);
+                expr(Some(c.allocate), kids);
+                expr(Some(c.deallocate), kids);
+                if let Some(d) = c.result_decl {
+                    kids.push((Node::Decl(d), None));
+                }
+                expr(Some(c.return_value), kids);
+                stmt(c.return_stmt, kids);
+                stmt(c.return_on_alloc_failure, kids);
+                for m in lists.iter::<StmtId>(c.param_moves) {
+                    stmt(Some(m), kids);
+                }
+            }
             StmtKind::GCCAsmStmt => {
                 for op in stmts.asm_operands(s) {
                     expr(Some(op.expr), kids);
@@ -1390,7 +1419,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             DeclKind::Friend => {
                 if let FriendTarget::Type { ty, .. } = decls.friend_target(d) {
-                    self.ty(ty);
+                    // `friend Ts...;` (P2893): clang prints the pattern,
+                    // then `...`.
+                    if let crate::types::TypeView::PackExpansion { pattern, .. } =
+                        self.ast.types.view(ty.ty())
+                    {
+                        self.ty(pattern);
+                        self.line.push_str("...");
+                    } else {
+                        self.ty(ty);
+                    }
                 }
             }
             DeclKind::TemplateTypeParm

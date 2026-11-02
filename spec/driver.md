@@ -347,6 +347,22 @@ the current directory (standard input is `-`). `-o -` is standard output.
   `-relocation-model=static` with `-fno-pic`/`-fno-pie`, else
   `-relocation-model=pic` (clang's default PIE), then `-filetype=obj`
   unless `-S`.
+- **Coroutine lowering (WP-351).** `llc` does not run LLVM's coroutine
+  passes, so when the IR declares any `llvm.coro.*` intrinsic (a
+  coroutine's `presplitcoroutine` body, or a lone
+  `__builtin_coro_noop`; clang's `CoroConditionalWrapper` test
+  `coro::declaresAnyIntrinsic`), the IR is first piped through
+  `opt -passes=coro-early,cgscc(coro-split),coro-cleanup,globaldce -S -`
+  (the coroutine part of clang 19's O0 pipeline; `opt` is found like
+  the other tools, `opt-19`), and `opt`'s output goes to `llc`. Any
+  other module takes the unchanged `llc`-only path. `-v` prints the
+  `opt` command before the `llc` one; `-S -emit-llvm` and
+  `-c -emit-llvm` write the pre-split IR, as clang's `-O0 -emit-llvm`
+  does; `-###` does not show the step (it depends on the generated IR).
+  An `opt` failure is a driver error like `llc`'s. Cost (WP-351,
+  aarch64, LLVM 19): on libc++'s `end.to.end/generator.pass.cpp`
+  (4.8k lines of IR) `opt` takes 0.02 s and 62 MB RSS, against 2.9 s
+  for the whole debug-build `kiln++ -c`; `go.pass.cpp` 0.01 s.
 - **Link.** `clang++` with `--target=<triple>` (only if given),
   `--sysroot=`, the `-O` flag, `-pthread`, `-stdlib=`, then the objects,
   linker inputs and link options in command-line order, then

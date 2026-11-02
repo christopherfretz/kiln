@@ -1214,13 +1214,13 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// True for a template parameter pack, a function parameter pack or
-    /// an init-capture pack ([temp.variadic]/3).
+    /// True for a template parameter pack, a function parameter pack, an
+    /// init-capture pack or a structured binding pack ([temp.variadic]/3).
     pub fn is_pack_decl(&self, d: DeclId) -> bool {
         if let Some(i) = self.ast.template_parm(d) {
             return i.pack;
         }
-        matches!(self.kind_of(d), DeclKind::ParmVar | DeclKind::Var)
+        matches!(self.kind_of(d), DeclKind::ParmVar | DeclKind::Var | DeclKind::Binding)
             && self.ast.decls.get(d).ty().is_some_and(|t| {
                 matches!(self.ast.types.view(t.ty()), TypeView::PackExpansion { .. })
             })
