@@ -284,7 +284,7 @@ impl Cg<'_> {
             .and_then(|v| v.init)
             .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)))
             .filter(|&i| !ast.is_trivial_default_construction(i));
-        let align = self.global_align(ty);
+        let align = self.var_align(d);
         let mt = self.mty(ty);
         let addr = Addr { v: V::C(gval(g)), ty: mt, align };
         if ast.types.is_reference(ty) {

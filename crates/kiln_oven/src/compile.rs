@@ -2497,6 +2497,19 @@ impl Compiler<'_> {
         if matches!(kind, TraitKind::SizeOf | TraitKind::DataSizeOf) && is_vla(ast, q) {
             return self.throw_invalid(e);
         }
+        // `alignof e` naming a variable or data member is that
+        // declaration's alignment (clang `GetAlignOfExpr`): an `alignas`
+        // on it counts.
+        if matches!(kind, TraitKind::AlignOf | TraitKind::PreferredAlignOf)
+            && let Some(d) = self.trait_operand_decl(e)
+        {
+            let v = self.b.alignof_decl(d);
+            if v != 0 {
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
+                self.konst(dst, crate::arith::canon(u128::from(v), w, s));
+                return;
+            }
+        }
         let t = self.ty(q);
         let v = match kind {
             TraitKind::SizeOf => self.o.types.size(t),
@@ -2520,6 +2533,20 @@ impl Compiler<'_> {
         };
         let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
         self.konst(dst, crate::arith::canon(u128::from(v), w, s));
+    }
+
+    /// The declaration an `alignof e` operand names: `e` (under
+    /// parentheses) is a `DeclRefExpr` or `MemberExpr`.
+    fn trait_operand_decl(&self, e: ExprId) -> Option<DeclId> {
+        let ast = self.ast();
+        if ast.exprs.trait_type_arg(e).is_some() {
+            return None;
+        }
+        let op = skip_parens(ast, ExprId::new(ast.exprs.get(e).a()));
+        match ast.exprs.get(op).kind() {
+            ExprKind::DeclRefExpr | ExprKind::MemberExpr => Some(ast.exprs.decl(op)),
+            _ => None,
+        }
     }
 
     fn unary(&mut self, e: ExprId, dst: u32, ty: OTy) {

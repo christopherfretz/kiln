@@ -1486,7 +1486,8 @@ impl<'a> Cg<'a> {
         let lt = self.mty(ty);
         let name = mangle::mangle_decl(ast, &mut self.anon, first);
         let g = self.m.add_global(&name, lt);
-        let (_, align) = self.size_align(ty);
+        // clang `GetOrCreateLLVMGlobal`: `getDeclAlign(D)`.
+        let align = self.var_align(first);
         let gv = self.m.global_mut(g);
         gv.linkage = Linkage::External;
         gv.align = Some(align);
@@ -1537,6 +1538,13 @@ impl<'a> Cg<'a> {
         } else {
             align
         }
+    }
+
+    /// The alignment of the storage of variable `d` (clang
+    /// `getDeclAlign(D)`): its `alignas`/`aligned` attribute, else
+    /// [`Self::global_align`] of its type ([dcl.align]/5).
+    pub fn var_align(&mut self, d: DeclId) -> u64 {
+        kiln_abi::layout::decl_align(self.ast, d, self.target, false)
     }
 
     /// clang `EmitGlobalVarDefinition`.
@@ -1593,7 +1601,7 @@ impl<'a> Cg<'a> {
         let quals = ast.types.effective_quals(ty);
         let constant =
             ((quals.is_const() && !has_mutable(ast, ty)) || is_ref) && !needs_init && !needs_dtor;
-        let align = self.global_align(ty);
+        let align = self.var_align(d);
         let name = self.m.global(g).name().to_owned();
         let comdat =
             if inline && !internal { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
@@ -1678,7 +1686,7 @@ impl<'a> Cg<'a> {
         let mt = self.mty(ty);
         let g = self.m.add_global(&name, mt);
         self.gi.local_index.insert(first, index);
-        let align = self.global_align(ty);
+        let align = self.var_align(d);
         let init_expr = v.init.filter(|&e| !ast.is_trivial_default_construction(e));
         let dynamic = self.static_needs_init(d, init_expr);
         let constant = (ast.types.effective_quals(ty).is_const() && !has_mutable(ast, ty)

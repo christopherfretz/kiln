@@ -65,6 +65,14 @@ impl SemaBridge for Bridge<'_> {
         (l.size, u32::try_from(l.align).unwrap_or(1))
     }
 
+    fn decl_align(&mut self, d: DeclId) -> u64 {
+        kiln_abi::layout::decl_align(self.ast, d, self.abi, false)
+    }
+
+    fn alignof_decl(&mut self, d: DeclId) -> u64 {
+        kiln_abi::layout::decl_align(self.ast, d, self.abi, true)
+    }
+
     fn final_overrider(
         &mut self,
         most_derived: DeclId,

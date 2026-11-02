@@ -1676,8 +1676,7 @@ impl Cg<'_> {
                 } else {
                     self.get_gvar(d)?
                 };
-                let dq = ast.decls.get(d).ty().unwrap_or(q);
-                let align = self.global_align(dq);
+                let align = self.var_align(d);
                 Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             DeclKind::TemplateParamObject => {
@@ -3842,7 +3841,7 @@ impl Cg<'_> {
             };
             (addr, flag)
         } else {
-            let align = self.global_align(q);
+            let align = self.var_align(d);
             let a = self.f.fir.alloca(ty, align);
             (Addr { v: a, ty, align }, None)
         };
