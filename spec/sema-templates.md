@@ -708,7 +708,13 @@ the running `Substituter` instead.
 
 With dependent args, steps 2–3 are skipped. The result is a dependent
 `TemplateSpecialization` type, unless it names the current instantiation
-(§3.4).
+(§3.4). Its arguments are not converted, so a non-dependent expression
+argument (the `1` of `X<T, 1>`) carries its canonical profile and compares
+as an expression ([temp.over.link]/5): two declarations writing `X<T, 1>`
+name the same type and redeclare the same function template
+(`tests/conformance/temp.over.link/non-type-literal-arg-in-dependent-specialization.cpp`).
+Divergence: clang converts such arguments first, so `X<T, true>` and
+`X<T, 1>` for a `bool` parameter are equivalent there and distinct here.
 
 ### 4.3 Triggers for implicit instantiation ([temp.inst]/2)
 
