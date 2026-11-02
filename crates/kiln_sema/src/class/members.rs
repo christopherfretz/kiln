@@ -469,10 +469,8 @@ impl Sema<'_, '_> {
         let mut seen: Vec<DeclId> = Vec::new();
         for s in specs {
             if self.is_error_type(s.ty) {
-                {
-                    dropped = true;
-                    continue;
-                }
+                dropped = true;
+                continue;
             }
             // A dependent base ([temp.dep.type]/1) is checked at
             // instantiation (WP-070a); lookup does not look into it
@@ -489,34 +487,26 @@ impl Sema<'_, '_> {
             }
             if s.pack_expansion {
                 self.unsupported("pack expansions in a base-specifier list", s.loc);
-                {
-                    dropped = true;
-                    continue;
-                }
+                dropped = true;
+                continue;
             }
             let Some(b) = self.ast.types.as_record(s.ty) else {
                 self.error(DiagId::sema_base_not_class, s.loc);
-                {
-                    dropped = true;
-                    continue;
-                }
+                dropped = true;
+                continue;
             };
             let btag = self.ast.decls.record(b).map_or(TagKind::Struct, |x| x.tag);
             if btag == TagKind::Union {
                 self.error(DiagId::sema_base_is_union, s.loc);
-                {
-                    dropped = true;
-                    continue;
-                }
+                dropped = true;
+                continue;
             }
             // clang `CheckBaseSpecifier`'s `RequireCompleteType`: a base
             // whose instantiation fails here is dropped, quietly; lookup
             // in the derived class does not find its members.
             if self.instantiation_fails(s.ty, s.loc) {
-                {
-                    dropped = true;
-                    continue;
-                }
+                dropped = true;
+                continue;
             }
             if !self.require_complete(s.ty, s.loc) {
                 let msg = self.diag(DiagId::sema_base_incomplete, s.loc);
@@ -532,10 +522,8 @@ impl Sema<'_, '_> {
                     _ => msg,
                 };
                 self.emit(msg);
-                {
-                    dropped = true;
-                    continue;
-                }
+                dropped = true;
+                continue;
             }
             let def = self.ast.definition(b).unwrap_or(b);
             if self.ast.decls.record(def).is_some_and(|x| x.defn.contains(DefinitionBits::FINAL)) {
@@ -546,19 +534,15 @@ impl Sema<'_, '_> {
                         .arg(n),
                 );
                 self.emit(msg);
-                {
-                    dropped = true;
-                    continue;
-                }
+                dropped = true;
+                continue;
             }
             if seen.iter().any(|&x| self.ast.first(x) == self.ast.first(def)) {
                 let unq = self.ast.types.canonical(s.ty).without_quals();
                 let msg = self.diag(DiagId::sema_base_duplicate, s.loc).arg(self.ty_arg(unq));
                 self.emit(msg);
-                {
-                    dropped = true;
-                    continue;
-                }
+                dropped = true;
+                continue;
             }
             seen.push(def);
             out.push(BaseSpec {

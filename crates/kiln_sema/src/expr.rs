@@ -2273,7 +2273,19 @@ impl Sema<'_, '_> {
     /// const-qualified (after its reference), [expr.assign]/1. The note
     /// is at the return type's first type-specifier.
     fn diagnose_const_return(&mut self, e: ExprId, loc: Loc) -> bool {
-        let c = self.ignore_paren_imp_casts(e);
+        let mut c = self.ignore_paren_imp_casts(e);
+        // Through `.` member accesses of non-const members (clang walks
+        // the `MemberExpr` bases: `get().m = 1`).
+        while self.ast.exprs.get(c).kind() == ExprKind::MemberExpr
+            && !self.ast.exprs.get(c).has(ExprFlags::ARROW)
+        {
+            let field = self.ast.exprs.decl(c);
+            let declared = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
+            if self.ast.types.effective_quals(declared).is_const() {
+                return false;
+            }
+            c = self.ignore_paren_imp_casts(self.ast.exprs.operand(c));
+        }
         if !matches!(
             self.ast.exprs.get(c).kind(),
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr

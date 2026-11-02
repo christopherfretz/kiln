@@ -934,10 +934,10 @@ impl Printer<'_> {
 
     /// clang `printRecordBefore`'s `UsePreferredNames`: a specialization
     /// named by its template's `preferred_name` typedef prints as that
-    /// typedef (with its scope, as a bare `TypedefType`). Not with
-    /// canonical arguments (`PrintCanonicalTypes`), nor in C.
+    /// typedef (with its scope, as a bare `TypedefType`), canonical
+    /// arguments (`PrintCanonicalTypes`) included; not in C.
     fn preferred_name(&mut self, d: DeclId) -> bool {
-        if self.canon_args || self.c_policy {
+        if self.c_policy {
             return false;
         }
         let Some(mut t) = self.names.preferred_name(d) else { return false };

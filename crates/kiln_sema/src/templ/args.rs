@@ -511,8 +511,7 @@ impl Sema<'_, '_> {
         // ([temp.arg.nontype]/2, [expr.const]/12) is diagnosed as such.
         if ety != QualType::OVERLOAD && !t.is_dependent(ety) {
             let info = self.arg_info(e);
-            let ics =
-                self.try_implicit_conversion(&info, pty, crate::overload::IcsOptions::NONE);
+            let ics = self.try_implicit_conversion(&info, pty, crate::overload::IcsOptions::NONE);
             if ics.is_bad() {
                 // At the argument (`From->getBeginLoc()`), also when the
                 // template-id is substituted.
