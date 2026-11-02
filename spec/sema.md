@@ -1616,6 +1616,28 @@ and returns the scope it names:
     `write_arg_list_canonical`). A call to a function template-id keeps
     the explicit arguments on the resolved `DeclRefExpr`.
   - Evaluation notes follow (§8).
+  - **User-generated messages** ([dcl.pre]/10-12, P2741, WP-356). A
+    message that is not a string literal (spec/parse.md §4) must be an
+    object `m` with `m.size()` and `m.data()` (clang
+    `Sema::EvaluateAsString`): no such members is
+    `sema_static_assert_missing_member_function`, not a class at all
+    `sema_static_assert_invalid_message`, and `size()` not convertible
+    to `std::size_t` or `data()` not to `const char*` is
+    `sema_static_assert_invalid_mem_fn_ret_ty`. A dependent message
+    waits for instantiation. When the assertion fails, the message's
+    characters are evaluated in the Oven (`Oven::evaluate_chars`, §8):
+    `size()` then `data()[0..size)`, read as one evaluation; a message
+    that is not a constant expression is
+    `sema_static_assert_message_constexpr` plus the failure notes, and
+    the text is printed as clang prints a string argument (valid UTF-8
+    as is, an unprintable code point as `<U+XXXX>`, a stray byte as
+    `<XX>`). When the assertion holds the message is still evaluated,
+    as clang 22 does, and one that is not constant is
+    `sema_static_assert_message_not_constant`
+    (`-Winvalid-static-assert-message`, an error by default; disabling
+    it skips the evaluation, the operand being unevaluated). Wording
+    follows clang 22 (tests `requires: clang>=22`):
+    `dcl.pre/p2741-static-assert-message*.cpp`.
 
 ### 4.7 Exception specifications (`except.rs`)
 The parser calls these while parsing a function declarator, and stores
@@ -2109,7 +2131,18 @@ diagnostics and IR.
   - In a condition (`DeclaratorContext::Condition`, not an
     init-statement) it warns `ISO C++17 does not permit structured
     binding declaration in a condition` (`-Wbinding-in-condition`) at
-    `[`. Clang 19 does not implement P0963 yet and warns in C++26 too.
+    `[` before C++26 (clang 19's wording; clang 22 calls it a C++2c
+    extension). In C++26 it is valid and silent ([stmt.pre]/4, P0963,
+    WP-356). The condition's value is the decomposed object `e`
+    contextually converted to `bool`, and it is evaluated **before** the
+    bindings are initialized: codegen (`emit_cond_var_decl`, then the
+    condition, then `emit_binding_vars`, clang
+    `MaybeEmitDeferredVarDeclInit`) and the Oven (`cond_bindings`) emit
+    a tuple-like binding's holding variable (its `get` call) after the
+    test, for `if`, `while` and `for`, whatever the outcome. A `switch`
+    condition of class type is not supported (no class-to-integral
+    conversion in `act_on_start_switch`). Tests:
+    `dcl.struct.bind/p0963-binding-condition*.cpp`.
   - Only `static`, `thread_local`, `auto` and cv are allowed
     ([dcl.pre]/6). Another storage class, `constexpr`, `consteval`,
     `constinit` or `inline` is `decomposition declaration cannot be
@@ -3849,6 +3882,53 @@ Each rule names the libc++ test it fixed and its corpus test.
   a class substituted into a written template-id prints unscoped there
   (`'Box<Q, int>'`) and scoped elsewhere (`'N::Q *'`) (tuple.by.type).
   Test: `tests/conformance/temp.names/substituted-args-unscoped.cpp`.
+
+### 5.24 C++23/C++26 cluster (WP-356)
+
+- **`auto(x)` and `auto{x}`** ([expr.type.conv]/1-2, P0849;
+  `forms.rs`): a functional cast to the placeholder `auto` deduces the
+  type as for `auto v(x);`, so the result is a prvalue decay-copy of
+  `x` (arrays and functions decay, cv dropped). clang's
+  `BuildCXXTypeConstructExpr` diagnostics, at the type: `auto` before
+  C++23 and `decltype(auto)` are `auto not allowed here`; an empty
+  initializer, several expressions and a parenthesized or nested braced
+  list are `sema_auto_expr_init_no_expression`,
+  `sema_auto_expr_init_multiple_expressions` and
+  `sema_auto_expr_init_paren_braces`; a failed deduction
+  is `sema_auto_expr_deduction_failure`. A type-dependent operand keeps
+  the placeholder until instantiation. Tests:
+  `expr.type.conv/p0849-auto-cast*.cpp`.
+- **Placeholder `_`** ([basic.scope.scope]/5, P2169): a declaration
+  named `_` is name-independent when it is a block-scope variable of
+  automatic storage duration, a structured binding not at namespace
+  scope, an init-capture (spec/sema-lambda.md §2) or a non-static data
+  member. Redeclaring such a `_` in the same scope is not a conflict;
+  before C++26 it is `sema_ext_placeholder_var`
+  (`-Wc++26-extensions`). A *use* of `_` that finds more than one is
+  `sema_placeholder_ambiguous` with a `note_placeholder_declared` per
+  declaration (clang `err_reference_to_placeholder_ambiguous`; latest
+  first for unqualified lookup, in source order for member access).
+  A lookup with several results is worded this way when its first
+  declaration in source order is name-independent
+  (`placeholder_ambiguity`). Tests:
+  `basic.scope.scope/p2169-placeholder*.cpp`.
+- **Array comparisons** ([expr.eq]/2, [expr.rel]/2, [depr.array.comp],
+  P2865; `expr.rs`, clang `diagnoseTautologicalComparison`): `==`,
+  `!=`, `<`, `>`, `<=`, `>=` with two operands of array type is, in
+  C++26, `sema_array_comparison_cxx26` (`-Warray-compare-cxx26`, an
+  error by default); in C++20 and C++23 `sema_depr_array_comparison`
+  (`-Wdeprecated-array-compare`), or `sema_array_comparison`
+  (`-Warray-compare`) when that is disabled and before C++20. Then,
+  where run-time behaviour is diagnosed and both operands name
+  non-reference variables, `sema_comparison_always`
+  (`-Wtautological-compare`): distinct arrays compare unequal (`==`
+  false, `!=` true, a relational "a constant"); the same one is a
+  self-comparison. Operands decayed explicitly (`+a`), an array against
+  a pointer, and comparisons in a template instantiation (clang checks
+  the definition only; a dependent array type is not diagnosed) are not
+  affected. Tests: `expr.eq/p2865-array-comparison*.cpp`.
+- P0847 lambdas and P2036: spec/sema-lambda.md §2, §3.1, §4.4. P2360
+  and P3176: spec/parse.md. P0963: §4.9. P2741: §4.6.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

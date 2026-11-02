@@ -275,6 +275,16 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
+        // [cpp.predefined] (P0847, C++23): kiln implements explicit object
+        // parameters, members and lambdas; clang 19 leaves the macro
+        // undefined, clang 22 defines it from C++23.
+        let cxx23 = m
+            .get("__cplusplus")
+            .and_then(|v| v.trim_end_matches('L').parse::<u32>().ok())
+            .is_some_and(|v| v >= 202_302);
+        if cxx23 {
+            set(m, "__cpp_explicit_this_parameter", "202110L");
+        }
         // Features kiln implements beyond clang 19, at clang 22's values
         // in the same modes (docs/status/cxx-features.md): P1061
         // structured binding packs (C++17 on) and P2893 variadic friends
@@ -421,6 +431,22 @@ mod tests {
         assert!(!build_predefines(&unsigned_base, &cfg, &[]).contains("__CHAR_UNSIGNED__"));
         cfg.char_signed = Some(false);
         assert!(build_predefines(BASE, &cfg, &[]).contains("#define __CHAR_UNSIGNED__ 1\n"));
+    }
+
+    /// `__cpp_explicit_this_parameter` (P0847) from C++23 on, as clang 22
+    /// defines it; not in C.
+    #[test]
+    fn explicit_this_parameter_macro() {
+        let m = "__cpp_explicit_this_parameter 202110L";
+        let cfg = PredefConfig::new(true);
+        for (std, on) in
+            [("201703L", false), ("202002L", false), ("202302L", true), ("202400L", true)]
+        {
+            let base = format!("#define __cplusplus {std}\n");
+            assert_eq!(build_predefines(&base, &cfg, &[]).contains(m), on, "{std}");
+        }
+        let c = PredefConfig::new(false);
+        assert!(!build_predefines("#define __STDC_VERSION__ 202311L\n", &c, &[]).contains(m));
     }
 
     /// spec/pp.md "clang compatibility level": compat 19 leaves the base

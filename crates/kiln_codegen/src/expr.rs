@@ -3968,6 +3968,22 @@ impl Cg<'_> {
     /// `EmitDecl` of a `DecompositionDecl`).
     pub(crate) fn emit_var_decl(&mut self, d: DeclId) -> R<()> {
         self.emit_one_var_decl(d)?;
+        self.emit_binding_vars(d)
+    }
+
+    /// A condition variable ([stmt.pre]/4): only the variable itself. A
+    /// decomposition's tuple-like bindings are initialized after the
+    /// condition is evaluated (P0963; clang `EmitBranchOnBoolExpr` with
+    /// its `ConditionalDecl`), by [`Self::emit_binding_vars`]; whether
+    /// that is still to do is returned.
+    pub(crate) fn emit_cond_var_decl(&mut self, d: DeclId) -> R<bool> {
+        self.emit_one_var_decl(d)?;
+        Ok(self.ast.decls.decomp_bindings(d).is_some())
+    }
+
+    /// The holding variables of decomposition `d`'s tuple-like bindings
+    /// (clang `MaybeEmitDeferredVarDeclInit`).
+    pub(crate) fn emit_binding_vars(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         if let Some(l) = ast.decls.decomp_bindings(d) {
             for b in ast.lists.iter::<DeclId>(l).collect::<Vec<_>>() {

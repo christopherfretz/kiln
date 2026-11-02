@@ -365,6 +365,10 @@ pub(crate) mod bi {
     /// in it, minus the offset `c`, is a multiple of `b`. Executed with
     /// the bridge (the declared alignment of a variable).
     pub const ASSUME_ALIGNED: u32 = 23;
+    /// The characters of a `static_assert` message (P2741,
+    /// `Oven::evaluate_chars`): the `a` elements of character type `t1`
+    /// that `b` points to, read into the Oven's message buffer.
+    pub const MSG_CHARS: u32 = 24;
     /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
     /// bytes.
     pub const WCHAR: u32 = 2;

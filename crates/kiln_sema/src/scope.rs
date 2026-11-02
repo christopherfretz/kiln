@@ -147,6 +147,9 @@ impl crate::Sema<'_, '_> {
         for f in &self.prototype_params {
             (f.depth, f.params.len(), f.index).hash(&mut h);
         }
+        for l in &self.lambdas {
+            l.init_cap_vars.len().hash(&mut h);
+        }
         h.finish()
     }
 }
