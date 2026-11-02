@@ -21,6 +21,7 @@ CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
 ClassConversion = "class-conversion" [];
 CoveredSwitchDefault = "covered-switch-default" [];
 Cxx11Narrowing = "c++11-narrowing" [];
+Cxx26Extensions = "c++26-extensions" [];
 DanglingField = "dangling-field" [];
 DefaultedFunctionDeleted = "defaulted-function-deleted" [];
 DelegatingCtorCycles = "delegating-ctor-cycles" [];

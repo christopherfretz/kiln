@@ -795,8 +795,10 @@ impl<'a> AstBuilder<'a> {
         name: DeclName,
         loc: Loc,
         ty: QualType,
+        name_independent: bool,
     ) -> DeclId {
-        let h = self.ast.templates.dependent_head(DeclHead::new(ctx, name, loc));
+        let misc = DeclMisc::new().with_name_independent(name_independent);
+        let h = self.ast.templates.dependent_head(DeclHead::new(ctx, name, loc).misc(misc));
         let payload = Payload::Var(VarData {
             redecl: self.redecl_link(None),
             init: None,

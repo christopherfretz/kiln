@@ -5,7 +5,7 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, DefinitionBits, EnumData, FieldData, FnSpec, FnStorage,
+    ConstexprKind, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, FieldData, FnSpec, FnStorage,
     FriendKind, LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
 };
 use kiln_ast::expr::{CastKind, ExprKind};
@@ -2355,6 +2355,20 @@ impl Sema<'_, '_> {
         )
     }
 
+    /// P2169: `name` is the placeholder `_` ([basic.scope.scope]/5).
+    pub(crate) fn is_placeholder_name(&self, name: Symbol) -> bool {
+        self.ast.symbols().as_str(name) == "_"
+    }
+
+    /// A name-independent declaration ([basic.scope.scope]/5) at `loc`
+    /// that redeclares `_` in its scope: valid, and before C++26 clang's
+    /// `-Wc++26-extensions` warning.
+    pub(crate) fn diagnose_placeholder_redecl(&self, loc: Loc) {
+        if self.std < kiln_lex::Std::Cxx26 {
+            self.error(DiagId::sema_ext_placeholder_var, loc);
+        }
+    }
+
     pub(crate) fn register_local(&mut self, name: Symbol, d: DeclId) {
         if self.in_local_scope() {
             self.push_local(name, d);
@@ -3619,12 +3633,20 @@ impl Sema<'_, '_> {
                 c.pending_nsdmi += 1;
             }
         }
+        // [basic.scope.scope]/5 (P2169): a non-static data member `_` is
+        // name-independent and conflicts with no earlier one.
+        let independent = name.is_some_and(|n| self.is_placeholder_name(n));
         if let Some(n) = name
             && let Some(&prev) = self.lookup_in(ctx, n, LookupKind::Ordinary).decls.first()
         {
-            let note = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
-            let msg = self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
-            self.emit(msg.with_note(note));
+            if independent && self.kind_of(prev) == DeclKind::Field {
+                self.diagnose_placeholder_redecl(d.name_loc());
+            } else {
+                let note = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
+                let msg =
+                    self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
+                self.emit(msg.with_note(note));
+            }
         }
         // [dcl.spec.auto.general]/5: a placeholder is not allowed in a
         // non-static data member (clang's `err_auto_not_allowed`).
@@ -3687,7 +3709,8 @@ impl Sema<'_, '_> {
             ty
         };
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
-        let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
+        let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc())
+            .misc(DeclMisc::new().with_name_independent(independent));
         let f = self.builder().field(h, ty, width, flags);
         if failed_spec {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
@@ -4074,7 +4097,21 @@ impl Sema<'_, '_> {
         }
         let mut prev_ok = None;
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
-        let local = self.find_prev(name, d.qualifier);
+        // [basic.scope.scope]/5 (P2169): a block-scope variable `_` of
+        // automatic storage duration is name-independent and conflicts
+        // with no earlier variable of its scope.
+        let independent = d.qualifier.is_none()
+            && self.in_local_scope()
+            && matches!(spec.storage(), VarStorage::None | VarStorage::Register)
+            && spec.tls() == TlsKind::None
+            && self.is_placeholder_name(name);
+        let mut local = self.find_prev(name, d.qualifier);
+        if independent
+            && local.is_some_and(|p| matches!(self.kind_of(p), DeclKind::Var | DeclKind::Binding))
+        {
+            self.diagnose_placeholder_redecl(d.name_loc());
+            local = None;
+        }
         let mut prev = match local {
             None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
@@ -4137,7 +4174,8 @@ impl Sema<'_, '_> {
             }
         }
         let ty = prev_ok.map_or(ty, |p| self.redecl_var_type(p, ty));
-        let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc());
+        let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc())
+            .misc(DeclMisc::new().with_name_independent(independent));
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
@@ -6541,7 +6579,7 @@ impl Sema<'_, '_> {
             kiln_ast::decl::NewDecl {
                 kind: DeclKind::UsingDirective,
                 flags,
-                misc: kiln_ast::decl::DeclMisc::default(),
+                misc: DeclMisc::default(),
                 name: DeclName::EMPTY,
                 ctx: Some(self.ctx),
                 loc,
@@ -7234,6 +7272,39 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// An ambiguous lookup `decls` of `_` ([basic.scope.scope]/5, P2169)
+    /// that clang words as a placeholder ambiguity: the first declaration
+    /// (in source order) is name-independent.
+    pub(crate) fn placeholder_ambiguity(&self, decls: &[DeclId]) -> bool {
+        decls.len() > 1
+            && decls
+                .iter()
+                .min_by_key(|&&d| self.ast.decls.get(d).loc())
+                .is_some_and(|&d| self.ast.decls.get(d).misc().name_independent())
+    }
+
+    /// clang's `err_reference_to_placeholder_ambiguous` for `decls` at
+    /// `loc`, with a "placeholder declared here" note each, in source
+    /// order when `ascending` (member access) else latest first.
+    pub(crate) fn diagnose_placeholder_ambiguity(
+        &self,
+        name: String,
+        decls: &[DeclId],
+        ascending: bool,
+        loc: Loc,
+    ) {
+        let mut locs: Vec<Loc> = decls.iter().map(|&d| self.ast.decls.get(d).loc()).collect();
+        locs.sort_unstable();
+        if !ascending {
+            locs.reverse();
+        }
+        let mut msg = self.diag(DiagId::sema_placeholder_ambiguous, loc).arg(name);
+        for l in locs {
+            msg = msg.with_note(self.diag(DiagId::note_placeholder_declared, l));
+        }
+        self.emit(msg);
+    }
+
     /// clang's `err_ambiguous_reference` for distinct entities `decls`
     /// found by one lookup of `name` ([namespace.udir]/6), with a note
     /// per candidate in clang's order.
@@ -7245,6 +7316,11 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         let text = self.decl_name_str(name);
+        if self.placeholder_ambiguity(decls) {
+            // [basic.scope.scope]/5 (P2169), latest first (clang).
+            self.diagnose_placeholder_ambiguity(text, decls, false, loc);
+            return;
+        }
         let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
         for c in self.ambiguity_order(decls, unqualified) {
             let n = self

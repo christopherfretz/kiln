@@ -363,6 +363,12 @@ impl Sema<'_, '_> {
         }
         let nns = qual.map(|q| q.nns);
         if found.decls.len() > 1 || self.kind_of(m) == DeclKind::FunctionTemplate {
+            if self.placeholder_ambiguity(&found.decls) {
+                // [basic.scope.scope]/5 (P2169): several members `_`.
+                let text = self.decl_name_str(name);
+                self.diagnose_placeholder_ambiguity(text, &found.decls, true, loc);
+                return self.recover_err(&[base], loc);
+            }
             if !self.is_member_overload_set(&found.decls) {
                 self.unsupported("this kind of overloaded member access", loc);
                 return self.recover_err(&[base], loc);

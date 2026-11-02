@@ -49,6 +49,7 @@ sema_explicit_spec_storage_class = ExtWarn [ExplicitSpecializationStorageClass] 
 sema_expr_not_cce = Error (1) "{0} is not a constant expression";
 sema_expr_not_ice = Error (0) "expression is not an integral constant expression";
 sema_expr_not_ice_folded = Extension [GnuFoldingConstant] (0) "expression is not an integral constant expression; folding it to a constant is a GNU extension";
+sema_ext_placeholder_var = ExtWarn [Cxx26Extensions] (0) "placeholder variables are a C++2c extension";
 sema_ext_vector_component_exceeds_length = Error (1) "vector component access exceeds type {0}";
 sema_ext_vector_component_name_illegal = Error (1) "illegal vector component name '{0}'";
 sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";

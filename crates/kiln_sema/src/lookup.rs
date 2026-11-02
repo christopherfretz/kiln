@@ -319,6 +319,17 @@ impl Sema<'_, '_> {
                 DeclKind::Function | DeclKind::FunctionTemplate
             )
         };
+        // [basic.scope.scope]/5 (P2169): every declaration of the scope
+        // is found with a name-independent one (an ambiguity unless it is
+        // the only one).
+        if self.ast.decls.get(raw).misc().name_independent() {
+            return s
+                .locals
+                .iter()
+                .filter(|e| e.0 == name && e.2 == Ns::Ordinary)
+                .map(|e| e.1)
+                .collect();
+        }
         if kind != LookupKind::Ordinary || !fnlike(raw) {
             return vec![raw];
         }
@@ -355,9 +366,10 @@ impl Sema<'_, '_> {
             if kind != LookupKind::Tag
                 && ident.is_some()
                 && !self.lambdas.is_empty()
-                && let Some(d) = self.lambda_init_capture_named(i + 1, name)
+                && let v = self.lambda_init_captures_named(i + 1, name)
+                && !v.is_empty()
             {
-                let found = self.filter(vec![d], kind);
+                let found = self.filter(v, kind);
                 if !found.is_empty() {
                     return found;
                 }

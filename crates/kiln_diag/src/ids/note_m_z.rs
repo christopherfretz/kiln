@@ -58,6 +58,7 @@ note_parameter_here = Note (0) "passing argument to parameter here";
 note_parameter_named_here = Note (1) "passing argument to parameter '{0}' here";
 note_partial_spec_deduct_here = Note (1) "during template argument deduction for {0}";
 note_partial_spec_match = Note (1) "partial specialization matches {0}";
+note_placeholder_declared = Note (0) "placeholder declared here";
 note_possible_target = Note (0) "possible target for call";
 note_pp_poisoned_here = Note (0) "poisoned here";
 note_previous_declaration = Note (0) "previous declaration is here";

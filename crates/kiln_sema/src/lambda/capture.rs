@@ -498,7 +498,14 @@ impl Sema<'_, '_> {
                 // pattern's variable, templ/subst/lambda.rs) was checked
                 // in the pattern; the elements of an expanded
                 // init-capture pack `...xs = init` share a name.
-                if c.var.is_none() && names.iter().any(|&(s, _, _)| s == sym) {
+                // [basic.scope.scope]/5 (P2169): init-captures `_` are
+                // name-independent.
+                let placeholder = self.is_placeholder_name(sym);
+                let repeated = names.iter().any(|&(s, _, _)| s == sym);
+                if c.var.is_none() && repeated && placeholder && names.iter().all(|e| e.0 != sym || e.1)
+                {
+                    self.diagnose_placeholder_redecl(nloc);
+                } else if c.var.is_none() && repeated {
                     let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                     self.emit(msg);
                     continue;
@@ -544,9 +551,10 @@ impl Sema<'_, '_> {
             // The elements of a capture pack instantiated from
             // `ts...` share a name, not a variable (templ/subst/lambda.rs
             // names each one).
-            if let Some(&(_, init, _)) =
-                names.iter().find(|&&(s, _, v)| s == sym && (c.var.is_none() || v == Some(var)))
-            {
+            // A capture of `_` after an init-capture `_` (clang).
+            if let Some(&(_, init, _)) = names.iter().find(|&&(s, i, v)| {
+                s == sym && (c.var.is_none() || v == Some(var)) && !(i && self.is_placeholder_name(s))
+            }) {
                 let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                 self.emit(msg);
                 if !init {
@@ -662,7 +670,7 @@ impl Sema<'_, '_> {
 
     /// The init-capture variables of lambda `id`, at its introducer: in
     /// scope in the *lambda-declarator* ([expr.prim.lambda.capture]/6,
-    /// P2036, a DR) through [`Sema::lambda_init_capture_named`], in the
+    /// P2036, a DR) through [`Sema::lambda_init_captures_named`], in the
     /// enclosing context until the call operator adopts them
     /// ([`Sema::declare_init_captures`]).
     pub(crate) fn create_init_capture_vars(&mut self, id: LambdaId) {
@@ -671,7 +679,14 @@ impl Sema<'_, '_> {
         let ctx = self.ctx;
         let mut vars = Vec::with_capacity(caps.len());
         for ic in caps {
-            let v = self.builder().init_capture_var(ctx, DeclName::ident(ic.name), ic.loc, ic.ty);
+            let independent = self.is_placeholder_name(ic.name);
+            let v = self.builder().init_capture_var(
+                ctx,
+                DeclName::ident(ic.name),
+                ic.loc,
+                ic.ty,
+                independent,
+            );
             let _ = self.builder().set_var_init(v, ic.init);
             self.ast.exprs.lambdas.get_mut(id).captures[ic.index].var = Some(v);
             vars.push((ic.name, v));
@@ -685,12 +700,25 @@ impl Sema<'_, '_> {
     /// introducer was at scope depth `depth` (found by unqualified lookup
     /// before the scopes below it, after the lambda's template and
     /// function parameters).
-    pub(crate) fn lambda_init_capture_named(&self, depth: usize, name: Symbol) -> Option<DeclId> {
-        self.lambdas
+    /// Several name-independent init-captures `_` are all found
+    /// ([basic.scope.scope]/5), in declaration order.
+    pub(crate) fn lambda_init_captures_named(&self, depth: usize, name: Symbol) -> Vec<DeclId> {
+        let Some(s) = self
+            .lambdas
             .iter()
             .rev()
             .filter(|s| s.scope_base == depth)
-            .find_map(|s| s.init_cap_vars.iter().rev().find(|e| e.0 == name).map(|e| e.1))
+            .find(|s| s.init_cap_vars.iter().any(|e| e.0 == name))
+        else {
+            return Vec::new();
+        };
+        let mut v: Vec<DeclId> =
+            s.init_cap_vars.iter().filter(|e| e.0 == name).map(|e| e.1).collect();
+        let last = v.len() - 1;
+        if !self.ast.decls.get(v[last]).misc().name_independent() {
+            v.drain(..last);
+        }
+        v
     }
 
     /// Declares the init-capture variables of lambda `id`, whose call

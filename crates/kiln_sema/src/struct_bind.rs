@@ -4,7 +4,7 @@
 //! tuple-like elements (`get<i>`) or data members (clang's
 //! `ActOnDecompositionDeclarator` / `CheckCompleteDecompositionDeclaration`).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, VarSpec, VarStorage};
+use kiln_ast::decl::{DeclFlags, DeclKind, DeclMisc, VarSpec, VarStorage};
 use kiln_ast::expr::{CastKind, ExprKind, Radix, ValueCategory};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{Nns, Quals, TagKeyword, TemplateArg, TypeView};
@@ -137,6 +137,12 @@ impl Sema<'_, '_> {
         mut invalid: bool,
     ) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
+        // [basic.scope.scope]/5 (P2169): a structured binding `_` not at
+        // namespace scope (of automatic storage duration, as clang) is
+        // name-independent.
+        let automatic = self.in_local_scope()
+            && ds.thread_local.is_none()
+            && !matches!(ds.storage, Some((StorageSpec::Static | StorageSpec::Extern, _)));
         let mut bindings = Vec::with_capacity(dc.ids.len());
         let mut pack_reported = false;
         for b in &dc.ids {
@@ -149,13 +155,21 @@ impl Sema<'_, '_> {
                 invalid = true;
             }
             self.check_template_param_shadow(b.name, b.loc);
-            if let Some(&p) = self.prev_candidates(b.name, None).last() {
+            let independent = automatic && self.is_placeholder_name(b.name);
+            let prev = self.prev_candidates(b.name, None).last().copied();
+            if independent
+                && let Some(p) = prev
+                && matches!(self.kind_of(p), DeclKind::Var | DeclKind::Binding)
+            {
+                self.diagnose_placeholder_redecl(b.loc);
+            } else if let Some(p) = prev {
                 let name = self.ast.symbols().as_str(b.name).to_owned();
                 let msg = self.diag(DiagId::sema_redefinition, b.loc).arg(name);
                 let msg = self.note_prev(msg, p, true);
                 self.emit(msg);
             }
-            let mut h = DeclHead::new(ctx, DeclName::ident(b.name), b.loc);
+            let mut h = DeclHead::new(ctx, DeclName::ident(b.name), b.loc)
+                .misc(DeclMisc::new().with_name_independent(independent));
             h.lexical = Some(lexical);
             let bd = self.builder().binding(h);
             if !b.attrs.is_empty() {
