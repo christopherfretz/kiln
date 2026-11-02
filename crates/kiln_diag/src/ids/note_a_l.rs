@@ -23,6 +23,7 @@ note_asm_missing_constraint_modifier = Note (1) "use constraint modifier \"{0}\"
 note_atomic_constraint_false = Note (2) "{0:and|because} '{1}' evaluated to false";
 note_atomic_constraint_false_elaborated = Note (5) "{0:and|because} '{1}' ({2} {3} {4}) evaluated to false";
 note_bitfield_decl = Note (0) "bit-field is declared here";
+note_building_deduction_guide_here = Note (0) "while building implicit deduction guide first needed here";
 note_builtin_non_usual_declared_here = Note (1) "non-usual {0} declared here";
 note_candidate_deleted = Note (1) "candidate function has been {0:explicitly|implicitly} deleted";
 note_checking_concept_here = Note (1) "while checking the satisfaction of concept '{0}' requested here";

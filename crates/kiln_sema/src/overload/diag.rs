@@ -102,7 +102,7 @@ impl Sema<'_, '_> {
                 return None;
             }
         }
-        Some(self.template_args_desc(tmpl, args))
+        Some(self.deduced_args_desc(tmpl, args))
     }
 
     /// The detail of candidate `c`'s bad conversion (`slot` in its

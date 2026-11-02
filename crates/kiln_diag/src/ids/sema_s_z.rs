@@ -46,6 +46,8 @@ sema_static_member_local_class = Error (3) "static data member '{0}' not allowed
 sema_static_member_nonconst_init = Error (0) "non-const static data member must be initialized out of line";
 sema_static_member_volatile_init = Error (0) "static const volatile data member must be initialized out of line";
 sema_static_non_static = Error (1) "static declaration of '{0}' follows non-static declaration";
+// [class.bit]/3 (WP-320)
+sema_static_not_bitfield = Error (1) "static member '{0}' cannot be a bit-field";
 sema_static_out_of_class = Error (0) "'static' can only be specified inside the class definition";
 sema_static_overrides_virtual = Error (1) "'static' member function '{0}' overrides a virtual function in a base class";
 sema_static_self_reference_in_init = Warning [StaticSelfInit] (1) "static variable {0} is suspiciously used within its own initialization";
@@ -118,6 +120,8 @@ sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument
 sema_typecheck_decl_incomplete_type = Error (1) "variable has incomplete type {0}";
 sema_typecheck_incomplete_array_needs_initializer = Error (0) "definition of variable with array type needs an explicit size or an initializer";
 sema_typecheck_negative_array_size = Error (0) "array size is negative";
+// [class.bit]/3 (WP-320)
+sema_typedef_not_bitfield = Error (1) "typedef member '{0}' cannot be a bit-field";
 sema_typedef_not_identifier = Error (0) "typedef name must be an identifier";
 sema_typedef_template = Error (0) "a typedef cannot be a template";
 sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
