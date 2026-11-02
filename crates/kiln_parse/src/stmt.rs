@@ -202,6 +202,10 @@ impl Parser<'_, '_> {
         if self.skip_ambiguous_name_stmt(loc) {
             return None;
         }
+        if self.at_failed_scope_declaration() {
+            self.skip_to_semi();
+            return None;
+        }
         if self.is_cxx_declaration_statement(false) {
             self.lead_decl_attrs = lead_attrs;
             let decls = self.parse_simple_declaration(DeclaratorContext::Block, false);

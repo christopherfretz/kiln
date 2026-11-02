@@ -1054,6 +1054,19 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
 }
 
 impl Parser<'_, '_> {
+    /// `Q::name ident` at the start of a statement, where the qualifier
+    /// `Q` failed and was diagnosed (a class template specialization
+    /// that is undefined or failed to instantiate, [temp.inst]/2): the
+    /// name is an error name (clang's `ClassifyName` `NC_Error`), and the
+    /// statement is skipped without further diagnostics.
+    pub(crate) fn at_failed_scope_declaration(&mut self) -> bool {
+        self.annotate_decltype_scope_here();
+        let i = self.pos();
+        self.decltype_scope_qual_at(i) == Some(Err(()))
+            && self.ident_of(self.tok_at(i + 1)).is_some()
+            && self.ident_of(self.tok_at(i + 2)).is_some()
+    }
+
     /// [stmt.ambig]: whether the statement at the current token (after
     /// any attributes) is a declaration-statement (clang's
     /// `isCXXDeclarationStatement`).

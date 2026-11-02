@@ -897,6 +897,11 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   after expression` at the end of the expression, and nothing is skipped:
   the next statement starts at the current token (clang's
   `ExpectAndConsumeSemi`), so `X<U>::m d, e;` goes on to report `d` and `e`.
+  A statement `Q::name ident` whose class template specialization
+  qualifier `Q` is undefined or failed to instantiate (diagnosed when the
+  qualifier was parsed ahead) is neither: it is skipped to `;` silently
+  and declares nothing (clang's `ClassifyName` `NC_Error`,
+  `at_failed_scope_declaration`).
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed
