@@ -1729,6 +1729,9 @@ pub struct DeclArena {
     base_specs: Vec<BaseSpec>,
     lets: Vec<LetData>,
     ctor_inits: Vec<CtorInit>,
+    /// Class definitions in the order their `}` was reached
+    /// ([`DeclArena::complete_definition`]; instantiations included).
+    completed_records: Vec<DeclId>,
     /// Cold per-declaration data.
     pub cold: ColdDeclData,
 }
@@ -1817,6 +1820,7 @@ impl Default for DeclArena {
                 init: ExprId::new(u32::MAX),
                 loc: Loc::INVALID,
             }],
+            completed_records: Vec::new(),
             cold: ColdDeclData::default(),
         }
     }
@@ -2600,6 +2604,15 @@ impl DeclArena {
             "complete_definition without begin_definition"
         );
         d.defn = d.defn.without(DefinitionBits::BEING_DEFINED).with(DefinitionBits::COMPLETE);
+        self.completed_records.push(r);
+    }
+
+    /// The class definitions completed so far, in completion order (clang
+    /// completes, and `-fdump-record-layouts` dumps, an implicit
+    /// instantiation where it is first required, before the class whose
+    /// member required it).
+    pub fn completed_records(&self) -> &[DeclId] {
+        &self.completed_records
     }
 
     /// Sets a field's default member initializer (write-once).
@@ -2744,7 +2757,7 @@ impl DeclArena {
         self.vec_rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn vec_rows(&self) -> [VecDims; 15] {
+    fn vec_rows(&self) -> [VecDims; 16] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("functions", &self.functions),
@@ -2761,6 +2774,7 @@ impl DeclArena {
             VecDims::of("base_specs", &self.base_specs),
             VecDims::of("lets", &self.lets),
             VecDims::of("ctor_inits", &self.ctor_inits),
+            VecDims::of("completed_records", &self.completed_records),
         ]
     }
 }

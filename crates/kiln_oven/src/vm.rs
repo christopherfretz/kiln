@@ -1843,7 +1843,7 @@ impl Oven {
                     }
                     let Some(f) = self
                         .types
-                        .field_at(t, rel)
+                        .member_toward(t, rel, ty)
                         .or_else(|| fields.iter().find(|f| contains(f)).copied())
                     else {
                         return Ok(());
@@ -2267,7 +2267,7 @@ impl Oven {
                     if !union {
                         let Some(f) = self
                             .types
-                            .field_at(t, rel)
+                            .member_toward(t, rel, ty)
                             .filter(|f| f.width.is_none())
                             .or_else(|| fields.iter().find(|f| contains(f)).copied())
                         else {
@@ -2359,12 +2359,46 @@ impl Oven {
         }
         let fault = |f| Fault::Mem { f, ak: ak::DESTROY, ty, p: raw };
         if aux & 1 != 0 {
-            self.mem.check(raw, size, true).map_err(fault)?;
+            match self.mem.check(raw, size, true) {
+                // A union whose active member's lifetime an explicit
+                // destructor call ended is itself still within its
+                // lifetime ([class.union.general]/6, [basic.life]/1): its
+                // bytes are the member's, so the union's entry (kept until
+                // the union is destroyed, below) tells it from a union
+                // destroyed already (libc++'s `expected` destroys the
+                // member, then the union, then constructs it anew, WP-334).
+                Err(MemFault::Lifetime) if self.union_outlives_member(raw, ty) => {}
+                r => {
+                    r.map_err(fault)?;
+                }
+            }
         }
         if aux & 2 != 0 {
             self.mem.set_lifetime(raw, size, false).map_err(fault)?;
+            // The unions of the destroyed object lose their active members
+            // with their lifetimes.
+            if self.types.info(ty).has_union {
+                let off = u64::from(Ptr::decode(raw).off);
+                let (a0, z) = self.types.info(ty).upos;
+                for i in a0..z {
+                    let (o, ut) = self.types.union_pos[i as usize];
+                    self.mem.union_put(Ptr::union_key(raw, off + o, ut), None);
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Whether the union of type `ty` at `raw` (whose bytes are outside
+    /// their lifetime) is still within its own: it has an active member,
+    /// whose lifetime alone has ended (see `end_life`).
+    fn union_outlives_member(&self, raw: u64, ty: OTy) -> bool {
+        matches!(self.types.kind(ty), TyKind::Record { union: true, .. })
+            && self.mem.check_storage(raw, self.types.size(ty), true).is_ok()
+            && {
+                let off = u64::from(Ptr::decode(raw).off);
+                self.mem.unions.contains_key(&Ptr::union_key(raw, off, ty))
+            }
     }
 
     /// The most derived object containing the byte at `off` of an object
@@ -2513,6 +2547,13 @@ impl Oven {
             return Ok(());
         }
         let active = self.mem.unions.get(&key).copied();
+        if active.is_none()
+            && matches!(self.mem.check(raw, self.types.size(uty), false), Err(MemFault::Lifetime))
+        {
+            // A destroyed union (`end_life` dropped its entry): the access
+            // reports the lifetime fault, as for any destroyed object.
+            return Ok(());
+        }
         let fields = self.types.fields(uty);
         let Some(f) = fields.get(idx as usize) else { return Ok(()) };
         Err(Fault::Union {

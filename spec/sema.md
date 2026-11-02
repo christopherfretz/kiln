@@ -57,6 +57,9 @@ Constructors:
     (`AstBuilder::register_name`).
   - Local names live in the scope's own `locals`, which plays the
     role of clang's `DeclsInScope` and `IdResolver` together.
+    Block-scope operator function declarations live in `local_ops`
+    instead, which only a local class's friend redeclaration searches
+    (sema-class.md, friend functions of a local class; WP-329).
   - Context scopes also record their `using namespace` directives.
 - **Who pushes which scope:**
   - **Function:** pushed by `act_on_start_function`. It holds the
@@ -1228,15 +1231,72 @@ and returns the scope it names:
     `'alignas' attribute only applies to variables, data members and
     tag types`; in an attribute-declaration (`alignas(8);`) it
     appertains to nothing. The specifier is dropped. Written where only
-    type attributes may appear (the end of a decl-specifier-seq,
-    `char alignas(8) c;`, after a ptr-operator or array declarator) it
-    is `'alignas' attribute cannot be applied to types`
-    (`act_on_type_position_attrs`; clang `err_attribute_not_type_attr`).
-    Before a namespace-definition, a static_assert-declaration, a
-    using-declaration or an alias-declaration, a leading
-    attribute-specifier-seq containing `alignas` is `an attribute list
-    cannot appear here` (parser `discard_attrs_before_unattributed_decl`;
-    file scope only). Tests: `tests/conformance/dcl.align/alignas-*.cpp`.
+    type attributes may appear (`char alignas(8) c;`) it is `'alignas'
+    attribute cannot be applied to types` (the type-position rule
+    below).
+    A leading `alignas` follows the same placement rules as any C++11
+    attribute (spec/parse.md, attribute placement): `an attribute list
+    cannot appear here` before a namespace-definition, static_assert,
+    alias-declaration and the rest, in every scope; before a
+    using-directive or using-declaration it is subject-checked like any
+    other attribute. Tests: `tests/conformance/dcl.align/alignas-*.cpp`,
+    `tests/conformance/dcl.attr.grammar/leading-attribute-placement*.cpp`.
+  - Leading attributes on declarations without declarators
+    ([dcl.pre]/5, [dcl.attr.grammar]/5; WP-324):
+    - attribute-declaration at namespace scope (`[[x]];`):
+      `act_on_decl_attrs` checks the attributes against the enclosing
+      context, so `alignas(4);` is the alignas subject error and
+      `[[noreturn]];` the noreturn one; no `declaration does not
+      declare anything`.
+    - a declaration that declares only a named tag (`[[x]] struct S
+      { };`, `struct S { } [[x]];`): each named attribute gets
+      `attribute 'X' is ignored, place it after "struct" to apply
+      attribute to type declaration` (`-Wignored-attributes`,
+      `warn_free_standing_tag_attrs`; the keyword is `struct`, `class`,
+      `union`, `enum`, `enum class` or `enum struct`), after the
+      parser's error for the position, if any. Not for an anonymous
+      record.
+    - on a non-declaration statement: `'X' attribute cannot be applied
+      to a statement` per declaration attribute
+      (`act_on_stmt_decl_attrs`); on a block-scope asm-declaration
+      clang's `'X' attribute ignored` warning instead.
+    - `[[deprecated]]` on a using-declaration: `'deprecated' currently
+      has no effect on a using declaration` (`-Wignored-attributes`),
+      dropped.
+  - Alignment across redeclarations ([dcl.align]/6, `align_redecl.rs`
+    `merge_aligned_redecl`, clang `mergeAlignedAttrs`; WP-324), for
+    variables, data members and classes. The old declaration's
+    alignment attributes are its own plus those it inherited
+    (`Sema::inherited_aligned`). When both the old and the new
+    declaration carry an `alignas` and their largest requests differ
+    (`alignas(0)` counts as the natural alignment), it is `redeclaration
+    has different alignment requirement (N vs M)` (new, old) at the new
+    `alignas`, with `previous declaration is here` at the old one. A
+    definition without `alignas` after a declaration with one is
+    `'alignas' must be specified on definition if it is specified on any
+    declaration` at the definition's name, with `declared with 'alignas'
+    attribute here` at the old `alignas`; so is an `alignas` added on a
+    redeclaration after a definition that had none (the attribute is
+    then dropped). A redeclaration without `alignas` after one with it is
+    fine and inherits the old `alignas`, and one with a weaker request
+    inherits the strictest. A class redeclaration that names an existing
+    class (`struct alignas(8) S;`) is checked against it
+    (`merge_aligned_folded_redecl`). A dependent request skips the
+    check. Test: `tests/conformance/dcl.align/redecl-alignment-diag.cpp`.
+  - Under-alignment ([dcl.align]/5, `check_alignas_underalignment`,
+    clang `CheckAlignasUnderalignment`; WP-324): when a declaration has
+    an `alignas` (own or inherited) and the largest requested alignment
+    (`alignas` and GNU `aligned`, whose bare form is the target's
+    biggest alignment; `alignas(0)` requests nothing) is nonzero and
+    less than the natural alignment of its type, it is `requested
+    alignment is less than minimum alignment of N for type 'T'` at the
+    last `alignas`. Checked for a variable or data member when its
+    declarator is finished (`finish_decl_alignment`) and for a class or
+    union when its definition completes, including one written in a
+    typedef or alias-declaration and a class template specialization
+    (at the pattern's `alignas`, with the instantiation note); the
+    type's natural alignment ignores the request itself. Test:
+    `tests/conformance/dcl.align/underalignment-diag.cpp`.
   - `alignof` of an expression ([expr.alignof]/1 takes a type-id) is
     the GNU extension `'alignof' applied to an expression is a GNU
     extension` (`-Wgnu-alignof-expression`, in `-Wgnu`, at the keyword;
@@ -1247,6 +1307,71 @@ and returns the scope it names:
     [class.mem.general]/8). Test:
     `tests/conformance/dcl.align/alignof-expression-diag.cpp`.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
+  - **Attribute subjects** ([dcl.attr.grammar]/5, `decl_attrs.rs`
+    `check_decl_attrs`, clang `diagAppertainsToDecl` and the per-kind
+    handlers; WP-324). One table, applied to the attributes of every
+    declarator (variables, functions, data members, typedefs), every
+    alias-declaration (`using X [[a]] = T;` appertains to the
+    typedef-name, [dcl.typedef]/2) and every class-head and enum-head.
+    An attribute the subject rejects is diagnosed at its token and
+    dropped:
+    - `nodiscard`/`warn_unused_result` ([dcl.attr.nodiscard]/1): the
+      subject must be a class, an enumeration, a typedef, or a
+      declaration whose type is a function type or a pointer or
+      reference to one; otherwise `'X' attribute only applies to
+      Objective-C methods, enums, structs, unions, classes, functions,
+      function pointers, and typedefs` (warning). Then, in order: a
+      function type returning `void` (not a constructor) is `attribute
+      'X' cannot be applied to functions without return value`
+      (warning); the standard `[[nodiscard]]` on a variable or parameter
+      is `'nodiscard' attribute only applies to functions, classes, or
+      enumerations` (warning); a non-GNU spelling on a typedef is
+      `'X' attribute ignored when applied to a typedef; consider using
+      '__attribute__((warn_unused_result))' or
+      '[[clang::warn_unused_result]]' instead` (warning;
+      `__attribute__((warn_unused_result))` there is kept). The GNU
+      spellings (`__attribute__`, `[[gnu::...]]`) are told apart by
+      `AttrNode::is_gnu_spelling` (the `GNU_SCOPED` flag).
+    - The standard `[[noreturn]]` ([dcl.attr.noreturn]/1) on anything
+      but a function is `'noreturn' attribute only applies to
+      functions` (error). The GNU `noreturn` is accepted on a function
+      and on a variable, data member or typedef whose type is a
+      function type, a pointer, reference or member pointer to one, or
+      dependent; on another such declaration it is `'noreturn' only
+      applies to function types; type here is 'T'`, on anything else
+      `'noreturn' attribute only applies to functions and methods`
+      (warnings).
+    - `no_unique_address` ([dcl.attr.nouniqueaddr]/1): only a
+      non-bit-field non-static data member (error `... only applies to
+      non-bit-field non-static data members`). `carries_dependency`:
+      only a function or parameter (error `... only applies to
+      parameters, Objective-C methods, and functions`). `packed`: a
+      class, an enumeration or a data member; otherwise `'packed'
+      attribute ignored` (warning).
+    - `fallthrough`, `likely`, `unlikely` and `assume` are statement
+      attributes: on any declaration `'X' attribute cannot be applied to
+      a declaration` (error).
+    - `alignas`: the `alignas` subjects rule above.
+    - `deprecated`, `maybe_unused` and the GNU attributes kiln models
+      are accepted on all of these (a deprecated alias warns at its
+      uses).
+    Not yet: parameters (`act_on_param_declarator` only checks
+    `alignas`) and namespace-definitions are not run through the table.
+    Test: `tests/conformance/dcl.attr.grammar/attribute-subjects.cpp`.
+  - **Type-position attributes** ([dcl.spec.general]/1, [dcl.ptr]/1,
+    [dcl.array]/1, [dcl.fct]/1; `act_on_type_position_attrs`, clang
+    `err_attribute_not_type_attr`; WP-312, WP-324). An
+    attribute-specifier-seq at the end of a decl-specifier-seq or of an
+    alias-declaration's type-id (`using X = int [[deprecated]];`), after
+    a ptr-operator or array declarator, or after a function declarator
+    (`void f() [[noreturn]];`) appertains to a type. A declaration
+    attribute written there in `[[...]]` or `alignas` syntax is `'X'
+    attribute cannot be applied to types` (error), except that after a
+    function declarator a `[[gnu::X]]` one is `attribute 'X' ignored,
+    because it cannot be applied to a type` (warning); either way it is
+    dropped. `__attribute__((...))` there, and the type attributes
+    (`vector_size`, `ext_vector_type`, `mode`, ...), are kept (spec/parse.md
+    says where they attach).
 
 ### 4.6 Namespaces, linkage specifications, static_assert
 - **Namespaces:**
@@ -1659,8 +1784,6 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     noexcept-specifiers deferred like any class. clang 19 substitutes
     them with the class (`no member 'y' in 'L'; it has not yet been
     instantiated`).
-  - A friend declared in a local class is not diagnosed (clang: `no
-    matching function found in local scope`).
 
 ### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
 - **Using-declarators** ([namespace.udecl]):
@@ -2349,11 +2472,19 @@ for them.
   cast written `(void*)` (exactly, not through a typedef) warns
   `expression result unused; should this cast be to 'void'?`
   (-Wunused-value, clang `warn_unused_voidptr`) with only the fix-it
-  removing the `*` as its range (WP-203). The warning's location is the
-  expression's begin location, so an unused qualified name (`N::x;`,
+  removing the `*` as its range (WP-203). An unused name is reported at
+  its begin location, so a qualified name (`N::x;`,
   `::N::x;`, `N::v<int>;`) points at the start of its
   nested-name-specifier, as clang's `DeclRefExpr::getBeginLoc` (WP-318,
   `tests/conformance/expr.prim.id.qual/unused-value-qualified-name-column.cpp`).
+  - **Locations**: a built-in subscript `a[i]` is reported at its `]`
+    (clang `getRBracketLoc`; also as a comma's left operand and inside
+    parentheses, where the parentheses are looked through), a unary
+    operator at the operator, a member access at the member name, a
+    binary operator at the operator; a subscript yielding a `volatile`
+    glvalue, `(void)e` and a call of an overloaded `operator[]` returning
+    a reference are not warned (WP-324; conformance test
+    `stmt.expr/unused-value-subscript.cpp`).
   - `emit_unused` (WP-182) follows clang's order: a comparison is
     `-Wunused-comparison` only when it is the unused expression itself
     (`top_comparison`: not parenthesized, not a comma's right operand or
@@ -4422,7 +4553,6 @@ the P2996R13 wording.
     object from anything but a braced list
 - **Rules not checked yet:**
   - jumps past initialization ([stmt.dcl]/3)
-  - [dcl.align]/6, that `alignas` must be on the definition
   - full [basic.def.odr] for inline functions and variables across
     redeclarations
 - **Using-declarations** (§4.8):
