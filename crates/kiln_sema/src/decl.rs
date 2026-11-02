@@ -1317,9 +1317,7 @@ impl Sema<'_, '_> {
                 Some((StorageSpec::Register, loc)) => {
                     self.emit(self.diag(DiagId::sema_register_storage_class, loc));
                 }
-                Some((_, loc)) => {
-                    self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc)
-                }
+                Some((_, loc)) => self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc),
                 None => {}
             }
         }
