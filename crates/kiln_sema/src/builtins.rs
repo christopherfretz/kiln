@@ -327,7 +327,12 @@ impl Sema<'_, '_> {
             (b'i', true, _) => QualType::ULONGLONG,
             (b'f', ..) => QualType::FLOAT,
             (b'd', _, 0) => QualType::DOUBLE,
-            (b'd', ..) => QualType::LONGDOUBLE,
+            (b'd', _, 1) => QualType::LONGDOUBLE,
+            // `LLd`: `__float128` (WP-282).
+            (b'd', ..) => QualType::FLOAT128,
+            // `h`: `__fp16`; `x`: `_Float16`.
+            (b'h', ..) => QualType::HALF,
+            (b'x', ..) => QualType::FLOAT16,
             (b'z', ..) => self.size_type(),
             (b'A', ..) => self.builtin_va_list_param(),
             (b'a', ..) => self.builtin_va_list_value(),
