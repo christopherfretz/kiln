@@ -27,6 +27,7 @@ sema_alignment_too_big_bits = Error (1) "requested alignment must be {0} or smal
 sema_alignment_too_small = Error (1) "requested alignment must be {0} or greater";
 sema_alloc_size_arg_count = Error (1) "'alloc_size' attribute takes {0:at least 1 argument|no more than 2 arguments}";
 sema_ambiguous_derived_to_base = Error (3) "ambiguous conversion from derived class {0} to base class {1}:{2}";
+sema_ambiguous_destructor = Error (1) "destructor of class {0} is ambiguous";
 sema_ambiguous_member_pointer_conv = Error (4) "ambiguous conversion from pointer to member of {0:base|derived} class {1} to pointer to member of {0:derived|base} class {2}:{3}";
 sema_ambiguous_member_subobjects = Error (3) "non-static member '{0}' found in multiple base-class subobjects of type {1}:{2}";
 sema_ambiguous_member_types = Error (1) "member '{0}' found in multiple base classes of different types";

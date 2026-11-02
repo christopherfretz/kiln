@@ -24,6 +24,7 @@ sema_no_suitable_delete_member = Error (2) "no suitable member {0} in {1}";
 sema_no_template_named = Error (1) "no template named '{0}'";
 sema_no_viable_conversion = Error (2) "no viable conversion from {0} to {1}";
 sema_no_viable_conversion_return = Error (2) "no viable conversion from returned value of type {0} to function return type {1}";
+sema_no_viable_destructor = Error (1) "no viable destructor found for class {0}";
 sema_non_bool_atomic_constraint = Error (1) "atomic constraint must be of type 'bool' (found {0})";
 sema_non_constant_constraint = Error (0) "substitution into constraint expression resulted in a non-constant expression";
 sema_non_extern_extern = Error (1) "non-extern declaration of '{0}' follows extern declaration";

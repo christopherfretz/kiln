@@ -7,7 +7,6 @@
 // Verified against clang 19.
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(kiln): prospective destructors not implemented: the first declared one is the destructor
 template <class T> union U {
   constexpr U(int v) : t(v) {}
   constexpr ~U() requires(__is_trivially_destructible(T)) = default;

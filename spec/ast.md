@@ -206,6 +206,9 @@ struct FunctionData {               // 24 bytes
                                     //   explicit_object(1, bit 20) virtual_written(1, bit 21)
                                     //   storage_inherited(1, bit 22: storage taken from a previous
                                     //   declaration, not written; the dump omits it)
+                                    //   not_selected(1, bit 23: a prospective destructor overload
+                                    //   resolution did not select, [class.dtor]/4; LATE, set at `}`;
+                                    //   `Ast::destructor` skips it; the dump omits it)
                                     //   (`virtual` is semantic: written or overriding; `virtual_written`
                                     //   is the specifier, which the dump prints. LATE bits, set after
                                     //   the body or at `}`: trivial, has_contracts, is_coroutine,
