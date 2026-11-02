@@ -448,8 +448,30 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
+            // A copy/move whose subobject members need overload resolution
+            // is trivial when every selected member is (clang
+            // `SpecialMemberIsTrivial` from `CheckCompletedCXXClass`).
+            let ovl = k != SpecialKind::Dtor
+                && k.needs_ovl_bit().is_some_and(|n| class_trivial.contains(n))
+                && !class_trivial.contains(DefinitionBits::POLYMORPHIC)
+                && !vbases;
             if self.is_user_provided(f) {
                 out.non_trivial |= k.bit();
+            } else if ovl {
+                let const_arg = self.param_decls(f).first().is_some_and(|&p| {
+                    let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                    match self.ast.types.canonical_view(t) {
+                        TypeView::LValueRef(t) => self.ast.types.effective_quals(t).is_const(),
+                        _ => false,
+                    }
+                });
+                if self.defaulted_is_trivial(f, k, true)
+                    && self.selected_all_trivial(r, k, const_arg)
+                {
+                    self.ast.decls.mark_function(f, FnSpec::new().with_trivial(true));
+                } else {
+                    out.non_trivial |= k.bit();
+                }
             } else if self.defaulted_is_trivial(f, k, class_trivial.contains(k.trivial_bit())) {
                 self.ast.decls.mark_function(f, FnSpec::new().with_trivial(true));
             } else {
@@ -958,6 +980,28 @@ impl Sema<'_, '_> {
         };
         if trivial {
             spec = spec.with_trivial(true);
+        }
+        // The triviality bit just set above for a copy/move member declared
+        // at `}` (clang `addedMember`: `HasTrivialSpecialMembers` or
+        // `DeclaredNonTrivialSpecialMembers`) also decides the finishing
+        // class's trivial copyability: a member of class type with only a
+        // trivial copy constructor leaves the implicit move constructor
+        // trivial.
+        if k != K::Dtor
+            && k != K::DefaultCtor
+            && k.needs_ovl_bit().is_some_and(|n| bits.contains(n))
+            && self.special.finishing.iter().any(|x| x.0 == d)
+        {
+            self.set_finishing_bits(d, |x| {
+                let copyable = [K::CopyCtor, K::MoveCtor, K::CopyAssign, K::MoveAssign, K::Dtor]
+                    .iter()
+                    .all(|k| x.contains(k.trivial_bit()));
+                if copyable {
+                    x.with(DefinitionBits::TRIVIALLY_COPYABLE)
+                } else {
+                    x.without(DefinitionBits::TRIVIALLY_COPYABLE)
+                }
+            });
         }
         let overridden = if k == K::Dtor { self.overridden_destructors(d) } else { Vec::new() };
         if !overridden.is_empty() {

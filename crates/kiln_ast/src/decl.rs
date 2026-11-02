@@ -2296,6 +2296,20 @@ impl DeclArena {
         n.flags = n.flags.with(f);
     }
 
+    /// Adds `DEPENDENT_CTX` to parameter `d`, declared before the first
+    /// placeholder parameter made its function an abbreviated function
+    /// template ([dcl.fct]/22): `void f(int c, auto x)` declares `c`
+    /// while no template head is open yet, but `c` belongs to the
+    /// template and is instantiated with it ([temp.inst]).
+    ///
+    /// # Panics
+    /// If `d` is not a `ParmVar`.
+    pub fn mark_dependent_param(&mut self, d: DeclId) {
+        let n = &mut self.nodes[d.index() as usize];
+        assert!(n.kind == DeclKind::ParmVar, "not a parameter: {:?}", n.kind);
+        n.flags = n.flags.with(DeclFlags::DEPENDENT_CTX);
+    }
+
     /// Re-points the location of `d` (a class template specialization
     /// that becomes explicit is located at its explicit declaration, as
     /// clang).

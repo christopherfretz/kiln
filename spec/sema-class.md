@@ -149,6 +149,18 @@ nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
 `class X` naming the injected-class-name is the injected type `X<P...>`
 anywhere inside the template, not only in a friend declaration.
 
+A class first declared inside a template by an elaborated-type-specifier
+that is a plain reference (a parameter or template-argument type `struct P*`,
+`_If<C, struct __private_nat, It>`) or by `friend struct F;` is a member of
+the nearest enclosing namespace ([basic.scope.pdecl]/7, [class.friend]/11),
+so its type is not dependent ([temp.dep.type]/9): it is built with
+`dependent_depth` cleared (`decl.rs` `namespace_tag_record`), overload
+resolution and later definitions see one ordinary class, and an atomic
+constraint naming it is a constant after substitution ([temp.constr.atomic]/3;
+libc++ `__bit_iterator::operator=`, probed by `std::formattable<vector<bool>>`;
+tests/conformance/temp.constr.atomic/elaborated-tag-in-template.cpp, WP-298).
+A local class (an enclosing block) keeps the template's dependence.
+
 **Rule** (`class/access.rs`, clang `SemaAccess`). Member `m` found in naming
 class `N` ([class.access.base]/5) is accessible at context `R` iff: (a) `m` as
 a member of `N` is public; (b) it is private and `R` is a member or friend of
@@ -441,7 +453,12 @@ virtual/private/protected bases), `POLYMORPHIC`, `ABSTRACT` (§3.4), `EMPTY`,
 ([class.prop]/1, using eligibility of the would-be implicit members, which
 needs no declaration), `LITERAL` ([basic.types.general]/10), `STRUCTURAL`
 ([temp.param]/7) follow the standard text with clang's interpretation where it
-differs. Which implicit members have been declared is sema-side state
+differs. `EMPTY` ([meta.unary.prop] `is_empty`, clang
+`CXXRecordDecl::isEmpty`) ignores unnamed bit-fields and the subobjects of
+zero size ([intro.object]/9): a `[[no_unique_address]]` field whose type is
+an `EMPTY` class (not an array of one; clang `FieldDecl::isZeroSize`; WP-292,
+test `templates/builtins/meta.unary.prop-is-empty-no-unique-address.cpp`).
+Which implicit members have been declared is sema-side state
 (`Sema.implicit_declared: FxHashMap<DeclId, u8>`), not a definition bit, so the
 AST stays frozen.
 
@@ -666,10 +683,14 @@ by selecting each direct base's and class field's member as clang
 `SpecialMemberIsTrivial`: `{ P1 m; }` has a trivial move ctor because P1's
 copy ctor is selected). That selection also sets or clears the class's own
 `TRIVIAL_*` bit (clang `addedEligibleSpecialMember`; the member is declared
-eagerly at `}`), so `struct S : E {}` and `{ E e; }` see `E`'s move ctor as
-trivial (tests/conformance/class.copy.ctor/trivial-through-overload-resolution.cpp);
-an `= default` on first declaration gets it at `}` (`mark_function`, already
-`LATE`). Eligibility ([special]/6) of constrained special members is WP-073's;
+eagerly at `}`, and while the class is finishing it also updates
+`TRIVIALLY_COPYABLE`), so `struct S : E {}` and `{ E e; }` see `E`'s move
+ctor as trivial (tests/conformance/class.copy.ctor/trivial-through-overload-resolution.cpp).
+An `= default` on first declaration gets it at `}` (`mark_function`, already
+`LATE`), by the same selection when the class has `NEEDS_OVL_*` for it
+(WP-292: `{ M m; S(S&&) = default; }` with `M` declaring only a defaulted
+copy is trivially move-constructible). Eligibility ([special]/6) of
+constrained special members is WP-073's;
 for non-template classes every non-deleted declared special member is eligible.
 
 ### 4.4 `= default`, `= delete`, user-provided

@@ -353,11 +353,18 @@ pub(crate) mod bi {
     /// type (or [`DYN`]): the bytes from `a` to the end of its complete
     /// object (types 0/2) or of the closest subobject of type `t1` (types
     /// 1/3); 0 past the end (clang `tryEvaluateBuiltinObjectSize`). With
-    /// [`SIDE`], the operand has side effects and is not evaluated: the
+    /// [`SIDE`], the operand has side effects and `a` was evaluated as a
+    /// speculative trial whose success is register `c`: on failure, the
     /// default -1 (types 0/1) or 0 (types 2/3).
     pub const OBJECT_SIZE: u32 = 22;
     /// sub flag of `OBJECT_SIZE`: the operand has side effects.
     pub const SIDE: u32 = 1;
+    /// `__builtin_assume_aligned(a, b[, c])` (WP-292; clang
+    /// `PointerExprEvaluator`): the pointer `a`, after checking that its
+    /// complete object is aligned to `b` bytes and that its byte offset
+    /// in it, minus the offset `c`, is a multiple of `b`. Executed with
+    /// the bridge (the declared alignment of a variable).
+    pub const ASSUME_ALIGNED: u32 = 23;
     /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
     /// bytes.
     pub const WCHAR: u32 = 2;

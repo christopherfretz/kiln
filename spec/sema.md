@@ -1822,7 +1822,9 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   - `__builtin_object_size` / `__builtin_dynamic_object_size`: the type
     argument (an `I` constant) must be in [0, 3] (`argument value V is
     outside the valid range [0, 3]` at the callee), checked after
-    instantiation when value-dependent.
+    instantiation when value-dependent. Constant evaluation of both
+    builtins (assume_aligned's alignment check, object_size's cast and
+    side-effect rules, WP-292) is spec/oven.md "library builtins".
   - `__builtin_verbose_trap(category, reason)` (`check_verbose_trap`):
     each argument must be a pointer to a constant string: a string
     literal (no `$`: `argument to __builtin_verbose_trap must not contain
@@ -1840,7 +1842,11 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     index of V found at position N`), all at the callee. The result is
     `v1`'s type, or a generic vector of the element type with one lane
     per index. Re-checked at instantiation when any argument is
-    dependent. The two-argument (mask vector) form is not supported.
+    dependent. With exactly two arguments (WP-292) the second is a mask:
+    an integer vector with `v1`'s lane count (else `first two arguments
+    to '__builtin_shufflevector' must have the same type`), and the
+    result is `v1`'s type; the `ShuffleVectorExpr` has no indices
+    (`ext.gnu.builtins/shufflevector-mask-form.cpp`).
   - `__builtin_powi{,f,l}`, `__builtin_copysignf16` and the `*f128` math
     family are ordinary calls (table rows in spec/sema-templates.md §9.5).
 - **Format strings** (WP-282; `format_string.rs`, clang

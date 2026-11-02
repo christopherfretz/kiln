@@ -555,7 +555,13 @@ function (the implicit copy assignment operator) not viable: …".
 `obj(args)`: §2.4. `a[b...]`: member `operator[]` with all arguments;
 built-ins only for exactly one argument; "no viable overloaded operator[]
 for type 'G'", or "type 'H' does not provide a subscript operator" when
-there is no `operator[]` and no built-in is viable. Postfix `x++` calls with
+there is no `operator[]` and no built-in is viable. A type-dependent
+`a[b...]` with one plain index stays an `ArraySubscriptExpr`; with several
+indices or a pack expansion (`m[is...]`, [temp.variadic]/5) it is a
+`CXXOperatorCallExpr '[]'` of the dependent type (prvalue) whose callee is
+an empty ADL `UnresolvedLookupExpr` of `operator[]` (clang
+`CreateOverloadedArraySubscriptExpr`); substitution expands the indices and
+dispatches again (`act_on_subscript_args`; WP-292). Postfix `x++` calls with
 `(x, 0)`, the `0` an `IntegerLiteral 'int' 0` with **invalid** location (as
 clang dumps it). C++23 static `operator()`/`[]`: the object is still
 evaluated; shape as clang 19's dump, pinned by a 068b golden (§13 q8).

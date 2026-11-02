@@ -535,6 +535,8 @@ impl Parser<'_, '_> {
                         | Kw::False
                         | Kw::Float
                         | Kw::Float128
+                        | Kw::Float16
+                        | Kw::Fp16
                         | Kw::Int
                         | Kw::Int128
                         | Kw::Long

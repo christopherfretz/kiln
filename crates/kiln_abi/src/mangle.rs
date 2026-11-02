@@ -778,6 +778,12 @@ struct Mangler<'a, 'b> {
     head_only: bool,
     /// The requires-clause being mangled, for `fp`/`fL` references.
     req: Option<constraint::ReqCtx>,
+    /// Outside a requires-clause, clang's `FunctionTypeDepth`: the
+    /// number of function types being mangled (the encoded function's
+    /// bare function type included) and whether the innermost one's
+    /// result type is (`fp`/`fL` nesting of a parameter named in a
+    /// `decltype` of the signature, [abi] <function-param>).
+    fn_depth: (u32, bool),
 }
 
 impl<'a, 'b> Mangler<'a, 'b> {
@@ -791,6 +797,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             real_depth: false,
             head_only: false,
             req: None,
+            fn_depth: (0, false),
         }
     }
 
@@ -863,9 +870,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let Some(ty) = ast.decls.get(src).ty() else { return };
         let ty = ast.types.canonical(ty);
         let Some(p) = ast.types.proto(ty).copied() else { return };
+        let saved = std::mem::replace(&mut self.fn_depth, (1, true));
         if with_ret {
             self.ty(p.ret());
         }
+        self.fn_depth.1 = false;
         let params: Vec<QualType> = ast.types.params(&p).to_vec();
         if params.is_empty() && !p.variadic() {
             self.out.push('v');
@@ -873,6 +882,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         for q in params {
             self.ty(self.param_type(q));
         }
+        self.fn_depth = saved;
         if p.variadic() {
             self.out.push('z');
         }
@@ -2159,7 +2169,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.out.push_str("Do");
         }
         self.out.push('F');
+        let saved = self.fn_depth;
+        self.fn_depth = (saved.0 + 1, true);
         self.ty(p.ret());
+        self.fn_depth.1 = false;
         let params: Vec<QualType> = ast.types.params(p).to_vec();
         if params.is_empty() && !p.variadic() {
             self.out.push('v');
@@ -2167,6 +2180,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         for x in params {
             self.ty(self.param_type(x));
         }
+        self.fn_depth = saved;
         if p.variadic() {
             self.out.push('z');
         }

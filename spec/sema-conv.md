@@ -195,7 +195,12 @@ clang's order:
    `int` keeps its type, and an enumeration bit-field promotes as its
    enumeration). An unscoped enumeration LHS thereby counts as
    arithmetic;
-3. the rules below continue with the promoted LHS type.
+3. the rules below continue with the promoted LHS type; a floating LHS
+   with an integer RHS computes in that type, except that a storage-only
+   `__fp16` LHS computes in `float` (clang `handleFloatConversion`). The
+   usual unary conversions already turn an `__fp16` RHS into `float`, so
+   `h += h2` computes in `float`, while `h += f16` (a `_Float16` RHS)
+   computes in `__fp16`, as in clang.
 
 The computation result must convert back to the LHS type. For an
 unscoped enumeration LHS it never does ([conv.prom]/3 made it an integer

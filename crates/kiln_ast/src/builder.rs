@@ -2637,8 +2637,19 @@ impl<'a> AstBuilder<'a> {
         }
         if let Some(l) = self.ast.exprs.lambdas.get(id).inits {
             let inits: Vec<ExprId> = self.ast.lists.iter::<ExprId>(l).collect();
-            for e in inits {
-                deps |= self.deps(e);
+            for (i, e) in inits.into_iter().enumerate() {
+                // A capture pack (`ts...`, `...xs = init`) expands the
+                // packs of its initializer ([expr.prim.lambda.capture]/17).
+                let expands = self
+                    .ast
+                    .exprs
+                    .lambdas
+                    .get(id)
+                    .captures
+                    .get(i)
+                    .is_some_and(|c| c.ellipsis.is_valid());
+                let d = self.deps(e);
+                deps |= if expands { d.without(ExprDeps::UNEXPANDED_PACK) } else { d };
             }
         }
         let e = self.simple(
