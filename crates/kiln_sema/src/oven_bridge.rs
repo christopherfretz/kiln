@@ -177,6 +177,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         let Some(mut oven) = self.oven.take() else {
             unreachable!("sema evaluated a constant while its Oven was out (outside ensure_body)")
         };
+        // The note wording follows sema's compatibility level (a field
+        // set after the Oven is built).
+        oven.set_clang_compat(self.clang_compat);
         let saved = std::mem::replace(&mut self.inst.eval_loc, eval_loc);
         let r = f(&mut oven, &mut Bridge { sema: self });
         self.inst.eval_loc = saved;

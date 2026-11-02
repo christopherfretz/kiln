@@ -9,7 +9,7 @@
 //@ diag: 34:25 error "no matching function for call to 'fp'"
 //@ diag: 33:25 note "candidate template ignored: invalid explicitly-specified argument for template parameter 'P'"
 //@ requires: clang<22
-// clang 22 emits error: value of type 'int' is not implicitly convertible to 'int &'; WP-355 residual
+// clang 19 spelling; temp.param-placeholder-deduction-clang22.cpp has clang 22's (WP-377).
 int gx = 1;
 const int gc = 2;
 int garr[3] = {4, 5, 6};

@@ -25,7 +25,7 @@
 //@ diag: 40:30 warning "string literal operator templates are a GNU extension"
 //@ diag: 41:6 warning "this style of line directive is a GNU extension"
 //@ requires: clang<22
-// clang 22 emits warning: case ranges are a GNU extension; WP-355 residual
+// clang 19 spelling; wgnu-members-clang22.cpp has clang 22's (WP-377).
 #define F(fmt, ...) f(fmt, ##__VA_ARGS__)
 void f(const char *, ...);
 int arr[3] = { [0 ... 1] = 4 };

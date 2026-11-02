@@ -573,13 +573,17 @@ impl Substituter<'_, '_, '_> {
         match self.expand_pattern(|s| s.expr(pattern))? {
             Expansion::Unexpanded(p) => Ok(self.sema.act_pack_indexing(p, loc, index, end)),
             Expansion::Elements(v) => {
-                // clang names the pack expression unquoted.
-                let name = if self.sema.ast.exprs.get(pattern).kind() == ExprKind::DeclRefExpr {
+                // clang 19 names the pack expression unquoted, clang 22
+                // quoted.
+                let mut name = if self.sema.ast.exprs.get(pattern).kind() == ExprKind::DeclRefExpr {
                     let d = self.sema.ast.exprs.decl(pattern);
                     self.sema.decl_name_str(self.sema.ast.decls.get(d).name())
                 } else {
                     "<expression>".to_owned()
                 };
+                if self.sema.clang_compat >= 22 {
+                    name = format!("'{name}'");
+                }
                 let i = self.pack_index_value(index, v.len(), &name, loc)?;
                 Ok(v[i])
             }

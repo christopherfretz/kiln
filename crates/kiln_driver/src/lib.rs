@@ -391,7 +391,8 @@ pub fn run(command_line: &[String], io: Io) -> i32 {
 #[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
 pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let args = Args::parse_as(argv0, command_line);
-    let diag_opts = DiagOptions::from_args(&args.diag_args);
+    let mut diag_opts = DiagOptions::from_args(&args.diag_args);
+    diag_opts.clang_compat = args.predef.clang_compat.major();
     let dsm = SourceManager::new();
     let mut drv_opts = diag_opts.clone();
     drv_opts.warnings.clear();

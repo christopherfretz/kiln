@@ -3000,7 +3000,7 @@ impl Parser<'_, '_> {
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
-            if self.parse_asm_label_and_gnu_attrs(&mut d).is_err() {
+            if self.parse_asm_label_and_gnu_attrs(&mut d, declarators == 0).is_err() {
                 self.skip_until(&[], true, false);
                 break;
             }
@@ -3106,13 +3106,17 @@ impl Parser<'_, '_> {
     /// `ParseDeclGroup`): a C++11 attribute-specifier-seq here ends the
     /// declarator, and the `;` (or function body) expected there is
     /// reported by the caller.
-    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator) -> Result<(), ()> {
+    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator, first: bool) -> Result<(), ()> {
+        self.gnu_attr_end = Loc::INVALID;
+        if first && d.is_function_declarator() {
+            self.parse_gnu_attr_seq(&mut d.attrs);
+        }
         let label = self.parse_asm_label()?;
         if label.is_some() {
             d.end = self.prev_lo();
+            self.gnu_attr_end = Loc::INVALID;
         }
         d.asm_label = label;
-        self.gnu_attr_end = Loc::INVALID;
         self.parse_gnu_attr_seq(&mut d.attrs);
         if self.gnu_attr_end != Loc::INVALID {
             d.end = self.gnu_attr_end;

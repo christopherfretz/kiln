@@ -11,13 +11,13 @@
 //@ diag: 29:6 error "'p5' declared as a member pointer to void"
 //@ diag: 30:7 error "'p6' declared as a member pointer to a reference of type 'int &'"
 //@ diag: 31:5 error "use of undeclared identifier 'nope'"
-//@ diag: 32:21 error "'type name' does not point into a class"
+//@ diag: 32:21 error "does not point into a class"
 //@ diag: 33:22 error "'type name' declared as a member pointer to a reference of type 'int &'"
-//@ diag: 34:12 error "'type name' does not point into a class"
+//@ diag: 34:12 error "does not point into a class"
 //@ diag: 35:13 error "'type name' declared as a member pointer to void"
 //@ diag: 36:16 error "cannot form pointer to 'decltype(auto)'"
-//@ requires: clang<22
-// clang 22 emits error: member pointer does not point into a class; WP-355 residual
+// clang 19 and 22 word these differently: the substrings above are common
+// to both, and kiln follows its -fclang-compat level (WP-377).
 struct C { int m; };
 typedef int I;
 enum E { e1 };

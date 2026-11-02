@@ -183,6 +183,14 @@ pub(crate) enum Fault {
         array: bool,
     },
     PtrSub,
+    /// Subtraction of pointers into different complete objects (or a
+    /// null one): clang 19's generic note, clang 22's
+    /// `note_constexpr_pointer_arith_unspecified`.
+    PtrArith {
+        p: u64,
+        q: u64,
+        pointee: OTy,
+    },
     /// clang's generic `Error(E)`: "subexpression not valid".
     Invalid,
     /// A failure clang reports with no note and no call stack, so the
@@ -207,6 +215,8 @@ pub(crate) enum Fault {
         pointee: OTy,
     },
     NullField,
+    /// `*p` of a null pointer, at clang 22 (`Op::Field` aux 2).
+    NullDeref,
     /// A base-class step of a member pointer access through a null
     /// object pointer.
     NullBase,
@@ -811,11 +821,16 @@ impl Oven {
                     let raw = reg!(1) as u64;
                     if raw == 0 {
                         // aux 1 (`.` on `*null`): stay null, so the access
-                        // reports the dereferenced null pointer.
-                        if aux == 0 {
-                            fail!(Fault::NullField);
+                        // reports the dereferenced null pointer; aux 2 (the
+                        // `*` itself, at clang 22) fails here.
+                        match aux {
+                            0 => fail!(Fault::NullField),
+                            2 => fail!(Fault::NullDeref),
+                            _ => reg!(0) = 0,
                         }
-                        reg!(0) = 0;
+                    } else if aux == 2 {
+                        // A dereference check: the pointer itself.
+                        reg!(0) = u128::from(raw);
                     } else {
                         let p = Ptr::decode(raw);
                         if p.past {
@@ -1109,7 +1124,7 @@ impl Oven {
                 }
                 Op::MpAddr => {
                     let (raw, v) = (reg!(1) as u64, reg!(2));
-                    match self.mp_addr(raw, v) {
+                    match self.mp_addr(raw, v, aux == 1) {
                         Ok(q) => reg!(0) = u128::from(q),
                         Err(f) => fail!(f),
                     }
@@ -1684,8 +1699,8 @@ impl Oven {
             return Ok(0);
         }
         if p == 0 || q == 0 || Ptr::alloc_key(p) != Ptr::alloc_key(q) {
-            // Different complete objects: clang has no specific note.
-            return Err(Fault::Invalid);
+            // Different complete objects.
+            return Err(Fault::PtrArith { p, q, pointee: elem });
         }
         let (sp, _, ip, _) = self.extent_of(p, elem).map_err(|_| Fault::PtrSub)?;
         let (sq, _, iq, _) = self.extent_of(q, elem).map_err(|_| Fault::PtrSub)?;
@@ -2701,7 +2716,9 @@ impl Oven {
 
     /// `Op::MpAddr`: the member of the object at `raw` that member
     /// pointer `v` designates (clang's `HandleMemberPointerAccess`).
-    fn mp_addr(&mut self, raw: u64, v: u128) -> Result<u64, Fault> {
+    /// `null_field` (clang 22): a null object fails a data member access
+    /// at the member pointer, "cannot access field of null pointer".
+    fn mp_addr(&mut self, raw: u64, v: u128, null_field: bool) -> Result<u64, Fault> {
         // [expr.mptr.oper]/6: a null member pointer (clang's generic
         // note at the operand).
         let Some(e) = self.mp.get(v) else { return Err(Fault::Invalid) };
@@ -2715,6 +2732,8 @@ impl Oven {
                 Err(Fault::Invalid)
             } else if !e_path_empty {
                 Err(Fault::NullBase)
+            } else if null_field && field.is_some() {
+                Err(Fault::NullField)
             } else {
                 Ok(0)
             };

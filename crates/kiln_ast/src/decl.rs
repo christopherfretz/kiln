@@ -779,7 +779,8 @@ impl FnSpec {
     /// [`Defaulted::Explicit`] and `constexpr` [`ConstexprKind::Constexpr`],
     /// known only at `= default` after the declarator, [dcl.fct.def.default],
     /// [dcl.constexpr]/7; WP-289: `not_selected`, known only at the
-    /// class's `}`, [class.dtor]/4). The two fields are OR-ed in, so sema
+    /// class's `}`, [class.dtor]/4; WP-389: `return_deduced`, known only
+    /// at the first `return`, [dcl.spec.auto.general]/3). The two fields are OR-ed in, so sema
     /// sets them only from [`Defaulted::No`] / [`ConstexprKind::None`].
     pub const LATE: FnSpec = FnSpec(
         (1 << 3)
@@ -790,7 +791,8 @@ impl FnSpec {
             | (1 << 14)
             | (1 << 15)
             | (1 << 16)
-            | (1 << 23),
+            | (1 << 23)
+            | (1 << 24),
     );
 }
 
@@ -841,6 +843,12 @@ bit_accessors!(FnSpec:
     /// ([class.dtor]/4; clang `isIneligibleOrNotSelected`). Set at class
     /// completion; [`crate::Ast::destructor`] skips it.
     not_selected / with_not_selected = 23;
+    /// The return type was deduced from a placeholder (`auto`,
+    /// `decltype(auto)`; [dcl.spec.auto]): the declared type's return
+    /// type is the deduced one, not the type as written. Set when the
+    /// return type is deduced (WP-389; clang looks only at the type as
+    /// written for the linkage, `getLVForNamespaceScopeDecl`).
+    return_deduced / with_return_deduced = 24;
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).

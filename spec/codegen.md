@@ -738,6 +738,24 @@ The normative description is spec/driver.md "Code generation". In short:
   `stmt.ranged/constexpr-sum`) are `xfail(kiln)`: libstdc++'s
   `c++config.h` uses `decltype`, which kiln_parse does not support yet.
 
+### Always-inliner (WP-389)
+- clang's `-O0` pipeline (`buildO0DefaultPipeline`) runs
+  `AlwaysInlinerPass` (without lifetime markers) before `-emit-llvm`
+  writes the module, so its `-O0` IR has every call to an `always_inline`
+  definition inlined and such a discardable definition deleted. kiln
+  emits the definition the way clang's codegen does (`alwaysinline` in
+  place of `noinline optnone`; with `noinline` also present, `noinline`
+  alone; `Cg::def_inline_attrs`) and the driver runs LLVM's own
+  pipeline, `opt -passes=default<O0>`, over a module whose attribute
+  groups hold `alwaysinline` (spec/driver.md "IR optimization"). Writing an
+  inliner over kiln's IR was the alternative; running LLVM's pass keeps
+  `ir_vs_clang` exact by construction (alloca hoisting, block splitting
+  and PHIs, `noalias` scope metadata for `sret`, invoke unwinding, the
+  attribute merge and dead-function removal all come from the same
+  code), and it only runs for modules that need it. Test:
+  `tests/codegen/always_inline.cpp` (exact under oracle 19, structural
+  under 22).
+
 ### Deviations
 - **clang 22 codegen (WP-355).** kiln's IR follows clang 19 under every
   `-fclang-compat`; the oracle-22 `DEVIATIONS` entries record where clang
@@ -967,10 +985,12 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   variant (D1/C1). Implicitly declared special members are not
   instantiations and are still emitted.
   An inline function carrying `always_inline` on any redeclaration
-  (`Cg::is_always_inline_fn`) is the exception (WP-373): clang emits it
-  `available_externally` and inlines it even at `-O0`, so its program
-  never references the symbol; kiln runs no inliner, so it emits the
-  definition `linkonce_odr` instead. libstdc++'s
+  (`Cg::is_always_inline_fn`) is the exception (WP-373, WP-389): as clang
+  (`GVA_AvailableExternally`, kept at `-O0` only for `AlwaysInlineAttr`),
+  kiln emits its definition `available_externally` (no comdat, not
+  `dso_local`; `Cg::is_available_externally_fn`) and the driver's O0
+  pipeline inlines every call to it and deletes it (§6 "Always-inliner"),
+  so the program never references the symbol. libstdc++'s
   `allocator<char>::allocate`/`deallocate` are such members under
   `extern template class allocator<char>`, and libstdc++.so does not
   export them. Tests:

@@ -7,7 +7,7 @@
 //@ diag: 13:40 error "'buf' declared as an array with a negative size"
 //@ diag: 14:9 note "in instantiation of template class 'Buf<-1>' requested here"
 //@ requires: clang<22
-// clang 22 emits error: array is too large (18'446'744'073'709'551'609 elements); WP-355 residual
+// clang 19 spelling; temp.inst-array-bound-clang22.cpp has clang 22's (WP-377).
 template <class T> struct Arr { int a[sizeof(T) - 8]; };
 Arr<char> a;
 template <int N> struct Buf { char buf[N]; };
