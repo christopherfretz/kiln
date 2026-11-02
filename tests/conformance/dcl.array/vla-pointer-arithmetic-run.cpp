@@ -1,12 +1,13 @@
 //@ expect: run
 //@ strict-diags
-//@ args: -std=gnu++26
+//@ args: -std=gnu++26 -Wno-pointer-arith
 //@ stdout: 1 3 0 22 11 20
 //@ stdout: 6 1
 // [expr.add]/4, [expr.pre.incr], [expr.post.incr] on pointers to variable
 // length arrays (a GNU extension, [dcl.array]): `p + i`, `++p`, `p--`,
 // `p += i`, `p -= i` move by whole rows of the run-time row length and
-// `p - q` counts rows (spec/codegen.md §3).
+// `p - q` counts rows (spec/codegen.md §3). clang 19 warns that the
+// subtraction's pointee has zero size (-Wpointer-arith; clang 22 does not).
 extern "C" int printf(const char *, ...);
 
 int main() {
