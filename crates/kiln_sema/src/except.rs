@@ -427,7 +427,15 @@ impl Sema<'_, '_> {
         let method = self.kind_of(f) == kiln_ast::decl::DeclKind::CXXMethod;
         let at = self.ast.exprs.get(expr).loc();
         let start = self.begin_loc(expr);
-        let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
+        // A hidden friend's names are checked in the befriending class
+        // ([class.friend]/7 lexical scope; its access is the friend's).
+        let n = self.ast.decls.get(f);
+        let ctx = if n.misc().friend() == kiln_ast::decl::FriendKind::None {
+            n.ctx()
+        } else {
+            self.ast.decls.lexical_ctx(f).or(n.ctx())
+        }
+        .unwrap_or(self.ast.tu);
         let r = self.in_inst_context(ctx, |s| {
             let this = s.act_on_start_this_scope(method, quals);
             let mut sub = Substituter::new(s, &args);

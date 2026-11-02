@@ -1059,6 +1059,14 @@ specification as written (`TypeNames` prints ` noexcept`,
   instantiation of exception specification for 'f' requested here`
   (`note_template_exception_spec_here`). A failed substitution leaves
   the member potentially throwing (`ExcSpec::None`), as clang does.
+  A friend *defined* in the class (a hidden friend) is deferred the same
+  way (WP-274): its specification may name a private member declared
+  after it (libc++ `move_iterator`'s `iter_move`). It is substituted in
+  the befriending specialization's context, so the friend's access
+  applies. A friend that only redeclares a namespace function is still
+  substituted at once. Gap: a member or friend *template* is substituted
+  at once too, where clang defers it (libc++ `move_iterator`'s
+  `iter_swap` then fails with `no member named '__current_'`).
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
