@@ -1027,8 +1027,14 @@ impl Parser<'_, '_> {
             return (TypeSpecKind::DecltypeAuto, None);
         }
         self.s.enter_decltype();
+        // clang 19's `ParseDecltypeSpecifier` corrects the operand's
+        // delayed typos as soon as it is parsed (WP-399).
+        let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
         // [temp.names]/4: inside the parentheses `>` is an operator again.
         let e = self.with_greater_op(true, Self::parse_expression);
+        if let Some(m) = typos {
+            self.s.end_delayed_typos(m);
+        }
         self.s.exit_decltype(e);
         let Some(e) = e else {
             self.skip_until(&[Punct::RParen], false, true);
@@ -2922,6 +2928,12 @@ impl Parser<'_, '_> {
         };
         // The initializer, with its conversions, is potentially evaluated.
         let quiet = self.s.enter_var_initializer(v);
+        // clang 19 corrects the initializer's delayed typos with the
+        // initialization as the filter: a correction stands only if the
+        // variable can be initialized from it (`int (*p)(int) = val<int>;`
+        // is corrected to `::val`, `long (*q)(int) = val<int>;` is not,
+        // WP-399).
+        let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
         let outer_invalid = std::mem::replace(&mut self.expr_invalid, false);
         let init = self.parse_initializer(d.init_style, d.is_function_declarator());
         // clang's `ParseDeclarationAfterDeclaratorAndAttributes`: an
@@ -2936,6 +2948,9 @@ impl Parser<'_, '_> {
         }
         self.s.act_on_exit_declarator_scope(entered);
         let r = self.finish_declarator_initializer(d, v, init);
+        if let Some(m) = typos {
+            self.s.end_delayed_typos(m);
+        }
         self.s.exit_var_initializer(quiet);
         r
     }

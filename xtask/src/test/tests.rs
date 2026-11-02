@@ -189,6 +189,7 @@ fn seed_corpus_passes_with_clang() {
         flag(s.requires_target.is_some(), "requires");
         let clang_req = s.requires_clang.is_some() || s.requires_clang_below.is_some();
         flag(clang_req, "requires-clang");
+        flag(s.requires_llvm.is_some() || s.requires_llvm_below.is_some(), "requires-llvm");
     }
     let want = [
         "args",
@@ -205,6 +206,7 @@ fn seed_corpus_passes_with_clang() {
         "exit",
         "header-test",
         "inst-report",
+        "ir",
         "layout",
         "no-crash",
         "oracle",
@@ -216,6 +218,7 @@ fn seed_corpus_passes_with_clang() {
         "placeholder",
         "requires",
         "requires-clang",
+        "requires-llvm",
         "run",
         "run-args",
         "run-stdin",
