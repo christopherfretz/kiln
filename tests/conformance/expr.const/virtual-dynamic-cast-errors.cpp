@@ -3,21 +3,23 @@
 // reason (its select index), and for a null operand.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 27:16 error "constexpr variable 'x1' must be initialized by a constant expression"
-//@ diag: 26:52 note "reference dynamic_cast failed: dynamic type 'B' of operand does not have a base class of type 'C'"
-//@ diag: 27:21 note "in call to 'no_base()'"
-//@ diag: 31:16 error "constexpr variable 'x2' must be initialized by a constant expression"
-//@ diag: 30:54 note "dynamic_cast of dereferenced null pointer is not allowed in a constant expression"
-//@ diag: 31:21 note "in call to 'null_ref()'"
-//@ diag: 36:16 error "constexpr variable 'x3' must be initialized by a constant expression"
-//@ diag: 35:46 note "reference dynamic_cast failed: static type 'A' of operand is a non-public base class of dynamic type 'P'"
-//@ diag: 36:21 note "in call to 'hidden()'"
-//@ diag: 44:16 error "constexpr variable 'x4' must be initialized by a constant expression"
-//@ diag: 43:53 note "reference dynamic_cast failed: 'A' is an ambiguous base class of dynamic type 'LR' of operand"
-//@ diag: 44:21 note "in call to 'ambiguous()'"
-//@ diag: 49:16 error "constexpr variable 'x5' must be initialized by a constant expression"
-//@ diag: 48:59 note "reference dynamic_cast failed: 'B' is a non-public base class of dynamic type 'Q' of operand"
-//@ diag: 49:21 note "in call to 'protected_target()'"
+//@ diag: 29:16 error "constexpr variable 'x1' must be initialized by a constant expression"
+//@ diag: 28:52 note "reference dynamic_cast failed: dynamic type 'B' of operand does not have a base class of type 'C'"
+//@ diag: 29:21 note "in call to 'no_base()'"
+//@ diag: 33:16 error "constexpr variable 'x2' must be initialized by a constant expression"
+//@ diag: 32:54 note "dynamic_cast of dereferenced null pointer is not allowed in a constant expression"
+//@ diag: 33:21 note "in call to 'null_ref()'"
+//@ diag: 38:16 error "constexpr variable 'x3' must be initialized by a constant expression"
+//@ diag: 37:46 note "reference dynamic_cast failed: static type 'A' of operand is a non-public base class of dynamic type 'P'"
+//@ diag: 38:21 note "in call to 'hidden()'"
+//@ diag: 46:16 error "constexpr variable 'x4' must be initialized by a constant expression"
+//@ diag: 45:53 note "reference dynamic_cast failed: 'A' is an ambiguous base class of dynamic type 'LR' of operand"
+//@ diag: 46:21 note "in call to 'ambiguous()'"
+//@ diag: 51:16 error "constexpr variable 'x5' must be initialized by a constant expression"
+//@ diag: 50:59 note "reference dynamic_cast failed: 'B' is a non-public base class of dynamic type 'Q' of operand"
+//@ diag: 51:21 note "in call to 'protected_target()'"
+//@ requires: clang<22
+// clang 22 emits error: constexpr variable 'x2' must be initialized by a constant expression; WP-355 residual
 struct A { constexpr virtual ~A() {} };
 struct B : A {};
 struct C : B {};

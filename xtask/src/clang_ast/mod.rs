@@ -32,7 +32,7 @@ Runs clang on <file> and prints its AST in the kiln dump format
 
 options:
   --compiler=<clang>   the clang to run (default: clang++-N, N from KILN_ORACLE: 19
-                       or 22, default 19; spec/harness.md \"Oracle toolchain\")
+                       or 22, default 22; spec/harness.md \"Oracle toolchain\")
   --std=<std>          language standard (default: c++26)
   --implicit           include implicit declarations (-fdump-ast=implicit)
   --all-files          include top-level declarations from included files

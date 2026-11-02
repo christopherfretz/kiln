@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 const char *s = "abc" "def";
 const char *t = "x"
                 "y"

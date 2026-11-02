@@ -11,7 +11,7 @@ FunctionDecl test_value 'int ()'
   |   |     |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
   |   |     | `-OpaqueValueExpr 'int[2]' lvalue
   |   |     |   `-DeclRefExpr 'int[2]' lvalue Var 'arr' 'int[2]'
-  |   |     `-ArrayInitIndexExpr 'unsigned long'
+  |   |     `-ArrayInitIndexExpr '__size_t':'unsigned long'
   |   |-BindingDecl referenced a 'int'
   |   | `-ArraySubscriptExpr 'int' lvalue
   |   |   |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>

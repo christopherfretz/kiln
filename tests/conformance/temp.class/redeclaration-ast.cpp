@@ -4,6 +4,8 @@
 // pattern CXXRecordDecl. Inherited default arguments (`inherited from`) are
 // covered by temp.param/inherited-default-ast.cpp.
 //@ expect: ast
+//@ requires: clang>=22
+//@ xfail(kiln): clang 22 prints the member with the redeclaration's parameter names, 'R<A, M> *' (WP-355 residual)
 template<class T, int N> struct R;
 template<class A, int M> struct R { A a[M]; R *p; };
 template<class U, int K> struct R;

@@ -13,8 +13,8 @@ TranslationUnitDecl
 |   `-FieldDecl u 'char *'
 `-StaticAssertDecl
   `-BinaryOperator 'bool' '=='
-    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'P<char>'
-    `-BinaryOperator 'unsigned long' '*'
-      |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'P<char>'
+    `-BinaryOperator '__size_t':'unsigned long' '*'
+      |-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
       | `-IntegerLiteral 'int' 2
-      `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'void *'
+      `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'void *'

@@ -7,7 +7,7 @@
 // (tests/conformance/ext.traits/is-cpp-trivially-relocatable.cpp).
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(clang): clang 19 lacks P2786 (clang 22 accepts the builtin)
+//@ requires: clang>=22
 struct S { int x; };
 struct T { T(T&&); };
 static_assert(__builtin_is_cpp_trivially_relocatable(S));

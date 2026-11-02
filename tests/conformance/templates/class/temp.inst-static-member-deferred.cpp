@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.inst]/4: the initializer of an inline static data member is
 // instantiated only when the member is used.
 template <class T> struct Traits {

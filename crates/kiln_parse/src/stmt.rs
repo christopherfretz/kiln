@@ -315,10 +315,15 @@ impl Parser<'_, '_> {
         Some(s)
     }
 
-    /// Whether the tokens from here are `;`s followed by `})`.
+    /// Whether the tokens from here are `;`s followed by `})`. Under
+    /// `-fclang-compat=22` only the statement's own `;` may come before
+    /// the `})`: a trailing null statement is the last statement, and the
+    /// statement expression is `void` (clang 22; clang 19 skipped null
+    /// statements).
     fn ends_stmt_expr(&self) -> bool {
+        let max = if self.s.clang_compat >= 22 { 1 } else { usize::MAX };
         let mut n = 0;
-        while self.peek_is(n, Punct::Semi) {
+        while n < max && self.peek_is(n, Punct::Semi) {
             n += 1;
         }
         self.peek_is(n, Punct::RBrace) && self.peek_is(n + 1, Punct::RParen)

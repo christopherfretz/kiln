@@ -6,16 +6,18 @@
 // template argument prints fully qualified.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 27:22 error "cannot initialize a variable of type 'O::template J<SA> *' (aka 'template J<ns::S> *') with an rvalue of type 'int'"
-//@ diag: 28:13 error "cannot initialize a variable of type 'O::J<SA> *' (aka 'J<ns::S> *') with an rvalue of type 'int'"
-//@ diag: 29:25 error "cannot initialize a variable of type 'K<O::template J<SA>> *' (aka 'K<template J<ns::S>> *') with an rvalue of type 'int'"
-//@ diag: 30:25 error "cannot initialize a variable of type '::O::template J<int> *' with an rvalue of type 'int'"
-//@ diag: 31:29 error "cannot initialize a variable of type 'const O::template J<int> *' with an rvalue of type 'int'"
-//@ diag: 32:6 error "cannot initialize a variable of type 'A *' (aka 'template J<int> *') with an rvalue of type 'int'"
-//@ diag: 33:21 error "cannot initialize a variable of type 'Q<O::template J> *' with an rvalue of type 'int'"
-//@ diag: 34:23 error "cannot initialize a variable of type 'Q< ::O::template J> *' with an rvalue of type 'int'"
-//@ diag: 35:12 error "cannot initialize a variable of type 'Q<O::J> *' with an rvalue of type 'int'"
-//@ diag: 36:14 error "cannot initialize a variable of type 'Q<ns::T2> *' with an rvalue of type 'int'"
+//@ diag: 29:22 error "cannot initialize a variable of type 'O::template J<SA> *' (aka 'template J<ns::S> *') with an rvalue of type 'int'"
+//@ diag: 30:13 error "cannot initialize a variable of type 'O::J<SA> *' (aka 'J<ns::S> *') with an rvalue of type 'int'"
+//@ diag: 31:25 error "cannot initialize a variable of type 'K<O::template J<SA>> *' (aka 'K<template J<ns::S>> *') with an rvalue of type 'int'"
+//@ diag: 32:25 error "cannot initialize a variable of type '::O::template J<int> *' with an rvalue of type 'int'"
+//@ diag: 33:29 error "cannot initialize a variable of type 'const O::template J<int> *' with an rvalue of type 'int'"
+//@ diag: 34:6 error "cannot initialize a variable of type 'A *' (aka 'template J<int> *') with an rvalue of type 'int'"
+//@ diag: 35:21 error "cannot initialize a variable of type 'Q<O::template J> *' with an rvalue of type 'int'"
+//@ diag: 36:23 error "cannot initialize a variable of type 'Q< ::O::template J> *' with an rvalue of type 'int'"
+//@ diag: 37:12 error "cannot initialize a variable of type 'Q<O::J> *' with an rvalue of type 'int'"
+//@ diag: 38:14 error "cannot initialize a variable of type 'Q<ns::T2> *' with an rvalue of type 'int'"
+//@ requires: clang<22
+// clang 22 emits error: cannot initialize a variable of type 'O::template J<SA> *' (aka 'O::templat...; WP-355 residual
 namespace ns { struct S {}; template <class T> struct T2 {}; }
 using SA = ns::S;
 struct O { template <class T> struct J {}; };

@@ -4,16 +4,18 @@
 // namespace function with the same signature.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 23:17 error "no matching function found in local scope"
-//@ diag: 24:17 error "no matching function 'outer' found in local scope; did you mean '::outer'?"
-//@ diag: 18:6 note "'::outer' declared here"
-//@ diag: 25:16 error "no matching function found in local scope"
-//@ diag: 26:17 error "no matching function found in local scope"
-//@ diag: 27:17 error "no matching function found in local scope"
-//@ diag: 32:28 error "no matching function found in local scope"
-//@ diag: 36:26 error "no matching function found in local scope"
-//@ diag: 36:43 error "no matching function found in local scope"
-//@ diag: 42:19 error "no matching function found in local scope"
+//@ diag: 25:17 error "no matching function found in local scope"
+//@ diag: 26:17 error "no matching function 'outer' found in local scope; did you mean '::outer'?"
+//@ diag: 20:6 note "'::outer' declared here"
+//@ diag: 27:16 error "no matching function found in local scope"
+//@ diag: 28:17 error "no matching function found in local scope"
+//@ diag: 29:17 error "no matching function found in local scope"
+//@ diag: 34:28 error "no matching function found in local scope"
+//@ diag: 38:26 error "no matching function found in local scope"
+//@ diag: 38:43 error "no matching function found in local scope"
+//@ diag: 44:19 error "no matching function found in local scope"
+//@ requires: clang<22
+// clang 22 emits error: cannot define friend function in a local class definition; WP-355 residual
 
 void outer();
 void f() {

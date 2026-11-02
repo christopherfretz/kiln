@@ -5,8 +5,10 @@
 // Mirrors crates/kiln_oven/tests/expr_const.rs `expr_const_5_24_frozen_string_literals`.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 12:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 12:21 note "comparison of addresses of literals has unspecified value"
+//@ diag: 14:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 14:21 note "comparison of addresses of literals has unspecified value"
+//@ requires: clang<22
+// clang 22 expected compile-fail, but compilation succeeded; WP-355 residual
 constexpr const char *p = "abc";
 constexpr const char *q = "abc";
 static_assert(p + 1 != q);

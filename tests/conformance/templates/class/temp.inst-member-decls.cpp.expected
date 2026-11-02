@@ -23,4 +23,4 @@ TranslationUnitDecl
 |     `-ParmVarDecl v 'int'
 `-VarDecl size 'int' cinit
   `-ImplicitCastExpr 'int' <IntegralCast>
-    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Box<int>'
+    `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Box<int>'

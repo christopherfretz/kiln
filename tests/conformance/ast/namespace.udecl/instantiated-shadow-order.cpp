@@ -2,6 +2,7 @@
 //@ ast-implicit
 //@ ast-filter: Shad
 //@ xfail(kiln): injected-class-names are not declared yet (spec/sema-class.md §2.2); the shadow order matches
+//@ requires: clang>=22
 // [temp.inst]/3: a class-scope using-declaration of a class template is
 // replayed in each instantiation. clang replays a non-dependent one from the
 // pattern's shadow list, newest first, so the instantiation lists its shadows

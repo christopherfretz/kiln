@@ -29,16 +29,16 @@ FunctionDecl f 'void (int)'
   |       `-InitListExpr 'T'
   |         `-IntegerLiteral 'int' 1
   |-CStyleCastExpr 'void' <ToVoid>
-  | `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(unsigned long)'
-  |   |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+  | `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(__size_t)'
+  |   |-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
   |   | `-IntegerLiteral 'int' 3
   |   `-CXXParenListInitExpr 'int[3]'
   |     |-array_filler: ImplicitValueInitExpr 'int'
   |     |-IntegerLiteral 'int' 1
   |     `-IntegerLiteral 'int' 2
   |-CStyleCastExpr 'void' <ToVoid>
-  | `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(unsigned long)'
-  |   |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+  | `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(__size_t)'
+  |   |-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
   |   | `-ImplicitCastExpr 'int' <LValueToRValue>
   |   |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
   |   `-CXXParenListInitExpr 'int[2]'
@@ -46,16 +46,16 @@ FunctionDecl f 'void (int)'
   |     |-IntegerLiteral 'int' 1
   |     `-IntegerLiteral 'int' 2
   |-CStyleCastExpr 'void' <ToVoid>
-  | `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(unsigned long)'
-  |   |-IntegerLiteral 'unsigned long' 3
+  | `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(__size_t)'
+  |   |-IntegerLiteral '__size_t':'unsigned long' 3
   |   `-CXXParenListInitExpr 'int[3]'
   |     |-array_filler: ImplicitValueInitExpr 'int'
   |     |-IntegerLiteral 'int' 1
   |     |-IntegerLiteral 'int' 2
   |     `-IntegerLiteral 'int' 3
   `-CStyleCastExpr 'void' <ToVoid>
-    `-CXXNewExpr 'S *' array Function 'operator new[]' 'void *(unsigned long)'
-      |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    `-CXXNewExpr 'S *' array Function 'operator new[]' 'void *(__size_t)'
+      |-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
       | `-IntegerLiteral 'int' 2
       `-CXXParenListInitExpr 'S[2]'
         |-array_filler: CXXConstructExpr 'S' 'void ()'

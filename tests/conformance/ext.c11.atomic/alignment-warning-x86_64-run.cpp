@@ -1,16 +1,17 @@
 //@ expect: run
 //@ requires: target-x86_64
+//@ requires: clang>=22
 //@ args: -latomic
 //@ strict-diags
-//@ diag: 24:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
-//@ diag: 24:3 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (8  bytes)"
 //@ diag: 25:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
-//@ diag: 25:3 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (8  bytes)"
-//@ diag: 27:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (3 bytes) exceeds the actual alignment (1 bytes)"
-//@ diag: 28:9 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
-//@ diag: 28:9 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (8  bytes)"
-//@ diag: 31:9 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
-//@ diag: 31:9 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (8  bytes)"
+//@ diag: 25:3 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (8 bytes)"
+//@ diag: 26:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
+//@ diag: 26:3 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (8 bytes)"
+//@ diag: 28:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (3 bytes) exceeds the actual alignment (1 bytes)"
+//@ diag: 29:9 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
+//@ diag: 29:9 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (8 bytes)"
+//@ diag: 32:9 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
+//@ diag: 32:9 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (8 bytes)"
 //@ stdout: x y z
 // WP-239: the x86-64 twin of alignment-warning-run.cpp (WP-165): clang's
 // -Watomic-alignment with x86-64's 8-byte max inline atomic width (no cx16);

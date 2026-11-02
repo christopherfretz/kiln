@@ -43,11 +43,10 @@ TranslationUnitDecl
     | `-VarDecl h 'int' cinit
     |   `-StmtExpr 'int'
     |     `-CompoundStmt
-    |       |-BinaryOperator 'int' '+'
-    |       | |-ImplicitCastExpr 'int' <LValueToRValue>
-    |       | | `-DeclRefExpr 'const int' lvalue Var 'ci' 'const int' non_odr_use_constant
-    |       | `-IntegerLiteral 'int' 1
-    |       `-NullStmt
+    |       `-BinaryOperator 'int' '+'
+    |         |-ImplicitCastExpr 'int' <LValueToRValue>
+    |         | `-DeclRefExpr 'const int' lvalue Var 'ci' 'const int' non_odr_use_constant
+    |         `-IntegerLiteral 'int' 1
     |-DeclStmt
     | `-VarDecl used x 'int' cinit
     |   `-StmtExpr 'int'

@@ -5,7 +5,7 @@ TranslationUnitDecl
 |-TypeAliasDecl referenced Fn 'int (int, Ptr)'
 |-CXXRecordDecl struct definition
 | `-FieldDecl referenced v 'int'
-|-TypedefDecl referenced Anon 'struct Anon':'Anon'
+|-TypedefDecl referenced Anon 'struct Anon'
 |-FunctionDecl twice 'Int2 (Int2)'
 | |-ParmVarDecl used x 'Int2':'int'
 | `-CompoundStmt
@@ -36,9 +36,9 @@ TranslationUnitDecl
 |         `-UnaryOperator 'Int *' prefix '&' cannot overflow
 |           `-DeclRefExpr 'Int':'int' lvalue ParmVar 'a' 'Int':'int'
 `-FunctionDecl anon 'int (Anon)'
-  |-ParmVarDecl used a 'Anon'
+  |-ParmVarDecl used a 'Anon':'struct Anon'
   `-CompoundStmt
     `-ReturnStmt
       `-ImplicitCastExpr 'int' <LValueToRValue>
         `-MemberExpr 'int' lvalue .v
-          `-DeclRefExpr 'Anon' lvalue ParmVar 'a' 'Anon'
+          `-DeclRefExpr 'Anon':'struct Anon' lvalue ParmVar 'a' 'Anon':'struct Anon'

@@ -4,11 +4,11 @@ TranslationUnitDecl
 |-TypeAliasDecl referenced Fn 'int (*)(Int)'
 |-CXXRecordDecl struct definition
 | `-FieldDecl referenced x 'int'
-|-TypedefDecl referenced Anon 'struct Anon':'Anon'
+|-TypedefDecl referenced Anon 'struct Anon'
 `-FunctionDecl apply 'int (Fn, IntPtr, Anon)'
   |-ParmVarDecl used f 'Fn':'int (*)(Int)'
   |-ParmVarDecl used p 'IntPtr':'Int *'
-  |-ParmVarDecl used a 'Anon'
+  |-ParmVarDecl used a 'Anon':'struct Anon'
   `-CompoundStmt
     `-ReturnStmt
       `-BinaryOperator 'int' '+'
@@ -21,4 +21,4 @@ TranslationUnitDecl
         |       `-DeclRefExpr 'IntPtr':'Int *' lvalue ParmVar 'p' 'IntPtr':'Int *'
         `-ImplicitCastExpr 'int' <LValueToRValue>
           `-MemberExpr 'int' lvalue .x
-            `-DeclRefExpr 'Anon' lvalue ParmVar 'a' 'Anon'
+            `-DeclRefExpr 'Anon':'struct Anon' lvalue ParmVar 'a' 'Anon':'struct Anon'

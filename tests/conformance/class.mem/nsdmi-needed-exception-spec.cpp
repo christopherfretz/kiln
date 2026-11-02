@@ -7,20 +7,22 @@
 // enclosing class's default constructor do not cascade.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 25:25 error "default member initializer for 'a' needed within definition of enclosing class 'V' outside of member functions"
-//@ diag: 26:22 note "in evaluation of exception specification for 'V::X::X' needed here"
-//@ diag: 25:18 note "default member initializer declared here"
-//@ diag: 30:10 error "default member initializer for 'a' needed within definition of enclosing class 'U' outside of member functions"
-//@ diag: 31:28 note "in evaluation of exception specification for 'U::X::X' needed here"
-//@ diag: 30:18 note "default member initializer declared here"
-//@ diag: 37:10 error "default member initializer for 'a' needed within definition of enclosing class 'A' outside of member functions"
-//@ diag: 38:38 note "in evaluation of exception specification for 'A::X::X' needed here"
-//@ diag: 37:18 note "default member initializer declared here"
-//@ diag: 43:10 error "default member initializer for 'a' needed within definition of enclosing class 'D' outside of member functions"
-//@ diag: 44:28 note "in evaluation of exception specification for 'D::Y::Y' needed here"
-//@ diag: 43:18 note "default member initializer declared here"
-//@ diag: 43:10 error "default member initializer for 'b' needed within definition of enclosing class 'D' outside of member functions"
-//@ diag: 43:29 note "default member initializer declared here"
+//@ diag: 27:25 error "default member initializer for 'a' needed within definition of enclosing class 'V' outside of member functions"
+//@ diag: 28:22 note "in evaluation of exception specification for 'V::X::X' needed here"
+//@ diag: 27:18 note "default member initializer declared here"
+//@ diag: 32:10 error "default member initializer for 'a' needed within definition of enclosing class 'U' outside of member functions"
+//@ diag: 33:28 note "in evaluation of exception specification for 'U::X::X' needed here"
+//@ diag: 32:18 note "default member initializer declared here"
+//@ diag: 39:10 error "default member initializer for 'a' needed within definition of enclosing class 'A' outside of member functions"
+//@ diag: 40:38 note "in evaluation of exception specification for 'A::X::X' needed here"
+//@ diag: 39:18 note "default member initializer declared here"
+//@ diag: 45:10 error "default member initializer for 'a' needed within definition of enclosing class 'D' outside of member functions"
+//@ diag: 46:28 note "in evaluation of exception specification for 'D::Y::Y' needed here"
+//@ diag: 45:18 note "default member initializer declared here"
+//@ diag: 45:10 error "default member initializer for 'b' needed within definition of enclosing class 'D' outside of member functions"
+//@ diag: 45:29 note "default member initializer declared here"
+//@ requires: clang<22
+// clang 22 emits error: default member initializer for 'a' needed within definition of enclosing cl...; WP-355 residual
 struct V {
   struct X { int a = 2; X() = default; };
   static constexpr X x{};

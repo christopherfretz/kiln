@@ -1,5 +1,7 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
+//@ xfail(kiln): clang 22 keeps the alias specialization's qualifier, 'X<int>::apply<int>' (WP-355 residual)
 // [temp.arg.template]/1, [temp.dep.type]/6: `X<T>::template apply` is a
 // dependent template name used as a template template argument; it is looked
 // up again in `X<int>` when the alias template is instantiated.

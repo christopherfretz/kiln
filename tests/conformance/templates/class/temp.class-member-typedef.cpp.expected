@@ -18,4 +18,4 @@ TranslationUnitDecl
 |-VarDecl gp 'Traits<int>::pointer':'int *'
 `-VarDecl sz 'int' cinit
   `-ImplicitCastExpr 'int' <IntegralCast>
-    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Traits<char>::ref':'const char &'
+    `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Traits<char>::ref':'const char &'

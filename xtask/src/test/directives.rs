@@ -288,6 +288,10 @@ pub struct TestSpec {
     /// `requires: clang>=X[.Y[.Z]]`: the least version of every clang the
     /// test runs (the compiler under test, the oracle); otherwise a SKIP.
     pub requires_clang: Option<ClangVersion>,
+    /// `requires: clang<X[.Y[.Z]]`: every clang the test runs must be older
+    /// (an expectation a later release changed, kept until kiln follows it;
+    /// docs/status/wp-184-oracle-switch.md "Residual"); otherwise a SKIP.
+    pub requires_clang_below: Option<ClangVersion>,
 }
 
 /// A clang that a test runs, for `requires: clang>=`: what it is to the
@@ -345,12 +349,22 @@ impl TestSpec {
                 });
             }
         }
-        let want = self.requires_clang?;
-        let need = format!("requires clang>={}", version_str(want));
-        clangs.iter().find_map(|c| match c.version {
-            Some(v) if v >= want => None,
-            Some(v) => Some(format!("{need}; {} is clang {}", c.role, version_str(v))),
-            None => Some(format!("{need}; {} names no clang version", c.role)),
+        let at_least = self.requires_clang.and_then(|want| {
+            let need = format!("requires clang>={}", version_str(want));
+            clangs.iter().find_map(|c| match c.version {
+                Some(v) if v >= want => None,
+                Some(v) => Some(format!("{need}; {} is clang {}", c.role, version_str(v))),
+                None => Some(format!("{need}; {} names no clang version", c.role)),
+            })
+        });
+        at_least.or_else(|| {
+            let below = self.requires_clang_below?;
+            let need = format!("requires clang<{}", version_str(below));
+            clangs.iter().find_map(|c| match c.version {
+                Some(v) if v < below => None,
+                Some(v) => Some(format!("{need}; {} is clang {}", c.role, version_str(v))),
+                None => Some(format!("{need}; {} names no clang version", c.role)),
+            })
         })
     }
 
@@ -413,6 +427,7 @@ struct Parser {
     /// Line of the first `diag:` / `strict-diags` (0: none).
     diag_line: usize,
     requires_clang: Option<ClangVersion>,
+    requires_clang_below: Option<ClangVersion>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
@@ -455,6 +470,7 @@ impl Parser {
             verify_line: 0,
             diag_line: 0,
             requires_clang: None,
+            requires_clang_below: None,
             run_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
@@ -761,11 +777,13 @@ impl Parser {
         }
     }
 
-    /// `requires: target-<arch>` (`<arch>` one of [`TARGET_ARCHES`]) or
-    /// `requires: clang>=X[.Y[.Z]]`; each kind at most once.
+    /// `requires: target-<arch>` (`<arch>` one of [`TARGET_ARCHES`]),
+    /// `requires: clang>=X[.Y[.Z]]` or `requires: clang<X[.Y[.Z]]`; each kind
+    /// at most once.
     fn requires_directive(&mut self, line: usize, value: &str) {
         let usage = format!(
-            "expected `requires: target-<arch>` (<arch> one of {}) or `requires: clang>=X[.Y[.Z]]`",
+            "expected `requires: target-<arch>` (<arch> one of {}), `requires: clang>=X[.Y[.Z]]` \
+             or `requires: clang<X[.Y[.Z]]`",
             TARGET_ARCHES.join(" ")
         );
         if let Some(a) = value.strip_prefix("target-") {
@@ -783,6 +801,14 @@ impl Parser {
                     self.err(line, "duplicate `requires: clang>=`");
                 }
                 Some(v) => self.requires_clang = Some(v),
+            }
+        } else if let Some(v) = value.strip_prefix("clang<") {
+            match parse_version(v.trim()) {
+                None => self.err(line, usage),
+                Some(_) if self.requires_clang_below.is_some() => {
+                    self.err(line, "duplicate `requires: clang<`");
+                }
+                Some(v) => self.requires_clang_below = Some(v),
             }
         } else {
             self.err(line, usage);
@@ -933,6 +959,7 @@ impl Parser {
             requires_target: self.requires_target,
             verify,
             requires_clang: self.requires_clang,
+            requires_clang_below: self.requires_clang_below,
         })
     }
 }
@@ -1282,6 +1309,40 @@ mod tests {
         assert!(e.iter().any(|e| e.contains("duplicate `requires: clang>=`")), "{e:?}");
         assert_eq!(parse_version("19.1.7"), Some([19, 1, 7]));
         assert_eq!(parse_version("19."), None);
+    }
+
+    /// WP-355: `requires: clang<X` (an expectation a later clang changed).
+    #[test]
+    fn requires_clang_below_directive() {
+        let s = ok("//@ requires: clang<22\n");
+        assert_eq!(s.requires_clang_below, Some([22, 0, 0]));
+        let c19 = ClangRun { role: "the compiler", version: Some([19, 1, 7]) };
+        let o22 = ClangRun { role: "the oracle", version: Some([22, 1, 8]) };
+        let unknown = ClangRun { role: "the oracle", version: None };
+        assert_eq!(s.unmet_requirement("aarch64", &[]), None, "kiln alone runs no clang");
+        assert_eq!(s.unmet_requirement("aarch64", &[c19]), None);
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[c19, o22]).as_deref(),
+            Some("requires clang<22.0.0; the oracle is clang 22.1.8")
+        );
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[unknown]).as_deref(),
+            Some("requires clang<22.0.0; the oracle names no clang version")
+        );
+        // Both bounds: the lower one is reported first.
+        let both = ok("//@ requires: clang>=19.1.3\n//@ requires: clang<22\n");
+        let old = ClangRun { role: "the compiler", version: Some([19, 1, 1]) };
+        assert_eq!(
+            both.unmet_requirement("aarch64", &[old]).as_deref(),
+            Some("requires clang>=19.1.3; the compiler is clang 19.1.1")
+        );
+        assert_eq!(both.unmet_requirement("aarch64", &[c19]), None);
+        for bad in ["clang<", "clang<22.x", "clang<=22"] {
+            let e = errs(&format!("//@ requires: {bad}\n"));
+            assert!(e.iter().any(|e| e.contains("`requires: clang<X[.Y[.Z]]`")), "{bad}: {e:?}");
+        }
+        let e = errs("//@ requires: clang<22\n//@ requires: clang<23\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `requires: clang<`")), "{e:?}");
     }
 
     #[test]

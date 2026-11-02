@@ -5,8 +5,8 @@ TranslationUnitDecl
 |   |-IfStmt has_else constexpr
 |   | |-ConstantExpr 'bool' value=true
 |   | | `-BinaryOperator 'bool' '=='
-|   | |   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
-|   | |   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|   | |   |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'int'
+|   | |   `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
 |   | |     `-IntegerLiteral 'int' 4
 |   | |-CompoundStmt
 |   | | `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'

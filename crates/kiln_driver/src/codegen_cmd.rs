@@ -183,6 +183,7 @@ impl CodegenJob<'_> {
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection,
+            clang_compat: a.predef.clang_compat.major(),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
@@ -196,6 +197,8 @@ impl CodegenJob<'_> {
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
                 complex_range: a.complex_range(),
+                clang_compat: a.predef.clang_compat.major(),
+                llvm_major: job.toolchain.llvm_major(),
             };
             let (r, warnings) = emit_with_diags(&mut tu.ast, &mut tu.oven, &target, &opts);
             for w in warnings {

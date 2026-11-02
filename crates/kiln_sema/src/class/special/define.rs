@@ -1306,7 +1306,17 @@ impl Sema<'_, '_> {
             } else {
                 ConvCtx::Argument
             };
-            let e = self.convert_for_init(a, pty, ctx);
+            // A braced argument list-initializes the parameter; an
+            // explicit or deleted constructor chosen for it is followed by
+            // the parameter's note (clang `PrintInitLocationNote`).
+            let e = if let Some(l) = self.take_braced_arg(a) {
+                let to =
+                    if self.ast.types.is_reference(pty) { pty } else { conv::strip_cv(self, pty) };
+                let note = Some(self.param_decl_note(p));
+                self.init_list_entity(to, &l, l.lbrace, ctx, note)
+            } else {
+                self.convert_for_init(a, pty, ctx)
+            };
             if self.is_err_expr(e) {
                 return None;
             }

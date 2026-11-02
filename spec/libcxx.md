@@ -22,8 +22,9 @@ for the default tag a checkout at the older location
 `.toolchain/llvm-project` is used as is. It prints the path. `LLVM_REPO`
 overrides the remote.
 
-`cargo xtask libcxx` uses the checkout of `--tag <tag>` (default
-`$KILN_LIBCXX_TAG`, else `llvmorg-19.1.7`; a tag not of the form
+`cargo xtask libcxx` uses the checkout of `--tag <tag>` (default the
+`--gate`'s tag — `llvmorg-19.1.7` for `m3`, `llvmorg-22.1.8` for `m4` —
+else `$KILN_LIBCXX_TAG`, else `llvmorg-19.1.7`; a tag not of the form
 `llvmorg-<version>` is a usage error): `<repo>/.toolchain/libcxx-<tag>`,
 then the main checkout's, and for `llvmorg-19.1.7` then
 `.toolchain/llvm-project` of each, the first that exists.
@@ -34,11 +35,26 @@ scripts/fetch-libcxx-tests.sh <tag>`. The report's tests line names the
 checkout's `git describe` and, when it differs from the tag, `(expected
 <tag>)`.
 
-kiln++ runs with `KILN_LLVM_DIR=/usr/lib/llvm-N` of `KILN_ORACLE`
-(spec/harness.md "Oracle toolchain"; default 19), whose libc++ headers
-must be the release the tests come from; when
-`/usr/lib/llvm-N/include/c++/v1` is missing the run fails with exit status
-2 before compiling anything (`--list` does not need it).
+### Toolchain
+
+The tag's major version N picks the release kiln++ imitates: when N is 19
+or 22, kiln++ runs with `KILN_LLVM_DIR=/usr/lib/llvm-N` and, for N ≠ 19,
+`-fclang-compat=N`; for another major, N is `KILN_ORACLE`'s
+(spec/harness.md "Oracle toolchain"). The libc++ must be release N's:
+- `/usr/lib/llvm-N/include/c++/v1` when it exists (the system's
+  `libc++-N-dev`; `-stdlib=libc++` finds it), else
+- an extracted package tree `.toolchain/libcxx-N-root` of this checkout or
+  of the main checkout, holding `usr/lib/llvm-N/include/c++/v1` and
+  `usr/lib/<multiarch>/libc++.a` (`dpkg-deb -x` of `libc++-N-dev`,
+  `libc++abi-N-dev` and `libunwind-N-dev`; Debian's `libc++-22-dev`
+  conflicts with `libc++-19-dev`, so the two cannot both be installed).
+  Compiles then add `-nostdinc++ -isystem <tree include>`, and links
+  `-L<tree lib> -Wl,--as-needed -Wl,-Bstatic -lc++experimental -lc++
+  -lc++abi -Wl,-Bdynamic`, so no shared libc++ of the other release is
+  picked up.
+
+When neither exists the run fails with exit status 2 before compiling
+anything, naming both places (`--list` does not need them).
 
 ## Command line
 
@@ -49,8 +65,8 @@ cargo xtask libcxx [options] [<dir>...]
 | Option | Meaning |
 |---|---|
 | `<dir>` | Directories relative to `libcxx/test`, walked recursively. Each one is a row of the report. `Inputs/` directories are skipped, as lit skips them. With no `<dir>`, the default is `--gate m3`. |
-| `--gate m3` | The M3 gate directories (below). With `<dir>`s, those are added after them. |
-| `--tag <tag>` | The release whose checkout to use (above). Default `$KILN_LIBCXX_TAG`, else `llvmorg-19.1.7`. |
+| `--gate m3\|m4` | A gate's directories (below). With `<dir>`s, those are added after them. Any other gate is a usage error. |
+| `--tag <tag>` | The release whose checkout to use (above). Default the gate's tag, else `$KILN_LIBCXX_TAG`, else `llvmorg-19.1.7`. |
 | `--libcxx-tests <dir>` | The `llvm-project` checkout. |
 | `--profile <p>` | The cargo profile the implicit build uses: `debug` (cargo's `dev`), `harness` (default) or `release` (see "Build profiles"). Anything else is a usage error. |
 | `--compiler <path>` | kiln binary. Default: `cargo build --profile <p> -p kiln_driver`, then `<target>/<p>/kiln++`. |
@@ -78,8 +94,16 @@ is `debug`, `harness` or `release` (`release (--compiler)`), else
 `std/containers/sequences/array`, `std/strings/string.view`,
 `std/containers/views/views.span`, `std/numerics/bit`,
 `std/language.support/support.limits` and
-`std/language.support/support.initlist`. The status page is
-`docs/status/libcxx-m3.md`.
+`std/language.support/support.initlist`, on `llvmorg-19.1.7`. The status
+page is `docs/status/libcxx-m3.md`; the gate stays frozen on libc++ 19 so
+its numbers remain comparable (WP-355). `m4` is `m3`'s directories followed
+by the M4 exit headers' (docs/ROADMAP.md M4): `std/containers/sequences/vector`,
+`std/strings/basic.string`, `std/utilities/memory`, `std/utilities/optional`,
+`std/utilities/variant`, `std/utilities/tuple`, `std/algorithms`,
+`std/ranges`, `std/utilities/format`, `std/utilities/expected`,
+`std/containers/views/mdspan`, `std/input.output/iostream.format/print.fun`,
+`std/containers/container.adaptors/flat.map`, on `llvmorg-22.1.8` with
+libc++ 22 ("Toolchain"); its baseline is in `docs/status/libcxx.md`.
 
 ## Build profiles
 

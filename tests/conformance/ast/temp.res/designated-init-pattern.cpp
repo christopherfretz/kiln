@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: f
+//@ requires: clang>=22
 // [temp.res], [dcl.init.aggr]/3.1: a dependent designated initializer
 // list in a template pattern is an InitListExpr of type void whose items
 // are DesignatedInitExprs (field, nested and array designators, a pack

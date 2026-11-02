@@ -579,7 +579,16 @@ impl Sema<'_, '_> {
 
     /// `std::tuple_element<i, E>::type` (clang `getTupleLikeElementType`).
     fn tuple_element_type(&mut self, loc: Loc, i: u64, dty: QualType) -> Option<QualType> {
-        let args = [self.size_t_arg(i), TemplateArg::ty(dty)];
+        // clang 22 writes the index as an integer literal of type
+        // `std::size_t`, so the qualifier prints `tuple_element<0UL, E>`.
+        let index = if self.clang_compat >= 22 {
+            let size_t = self.size_type();
+            let lit = self.ast.builder().int_literal(size_t, i, Radix::Decimal, loc);
+            TemplateArg::expr(lit, None)
+        } else {
+            self.size_t_arg(i)
+        };
+        let args = [index, TemplateArg::ty(dty)];
         let mut qual = None;
         let found = match self.std_trait_ty("tuple_element", &args, loc, true) {
             Ok((c, nns)) => {

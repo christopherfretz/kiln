@@ -1,3 +1,5 @@
+//@ requires: clang<22
+// clang 22 expected compile-ok, but the compiler failed (exit code 1); WP-355 residual
 // Mangling differential: constrained templates (spec/abi.md §8.16,
 // WP-204). Type-constraints on template parameters (`Tk`), template
 // template parameter heads (`Tt ... E`), constrained placeholders

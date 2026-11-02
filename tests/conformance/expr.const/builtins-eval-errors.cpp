@@ -5,20 +5,22 @@
 // constant-evaluable at all (as in clang 19).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 22:19 error "constexpr variable 'a' must be initialized by a constant expression"
-//@ diag: 23:19 error "constexpr variable 'b' must be initialized by a constant expression"
-//@ diag: 25:16 error "constexpr variable 'c' must be initialized by a constant expression"
-//@ diag: 25:37 note "read of dereferenced one-past-the-end pointer is not allowed in a constant expression"
-//@ diag: 26:15 error "constexpr variable 'd' must be initialized by a constant expression"
-//@ diag: 26:19 note "read of dereferenced one-past-the-end pointer is not allowed in a constant expression"
-//@ diag: 28:15 error "constexpr variable 'e' must be initialized by a constant expression"
-//@ diag: 27:53 note "'memcpy' not supported: source is not a contiguous array of at least 2 elements of type 'int'"
-//@ diag: 28:19 note "in call to 'cp()'"
-//@ diag: 30:15 error "constexpr variable 'f' must be initialized by a constant expression"
-//@ diag: 29:44 note "subexpression not valid in a constant expression"
-//@ diag: 30:19 note "in call to 'un(0)'"
-//@ diag: 31:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 32:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 24:19 error "constexpr variable 'a' must be initialized by a constant expression"
+//@ diag: 25:19 error "constexpr variable 'b' must be initialized by a constant expression"
+//@ diag: 27:16 error "constexpr variable 'c' must be initialized by a constant expression"
+//@ diag: 27:37 note "read of dereferenced one-past-the-end pointer is not allowed in a constant expression"
+//@ diag: 28:15 error "constexpr variable 'd' must be initialized by a constant expression"
+//@ diag: 28:19 note "read of dereferenced one-past-the-end pointer is not allowed in a constant expression"
+//@ diag: 30:15 error "constexpr variable 'e' must be initialized by a constant expression"
+//@ diag: 29:53 note "'memcpy' not supported: source is not a contiguous array of at least 2 elements of type 'int'"
+//@ diag: 30:19 note "in call to 'cp()'"
+//@ diag: 32:15 error "constexpr variable 'f' must be initialized by a constant expression"
+//@ diag: 31:44 note "subexpression not valid in a constant expression"
+//@ diag: 32:19 note "in call to 'un(0)'"
+//@ diag: 33:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 34:15 error "static assertion expression is not an integral constant expression"
+//@ requires: clang<22
+// clang 22 no longer emits error: static assertion expression is not an integral constant expression; WP-355 residual
 constexpr int a = __builtin_clz(0u);
 constexpr int b = __builtin_ctzll(0ull);
 constexpr char nt[3] = {'a', 'b', 'c'};

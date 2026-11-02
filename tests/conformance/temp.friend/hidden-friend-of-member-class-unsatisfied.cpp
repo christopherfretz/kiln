@@ -4,13 +4,15 @@
 // unsatisfied; the call has no viable candidate.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 29:43 error "invalid operands to binary expression ('view<NoEq>::iterator' and 'view<NoEq>::iterator')"
-//@ diag: 19:27 note "candidate function not viable: constraints not satisfied"
-//@ diag: 20:16 note "because 'NoEq' does not satisfy 'eq'"
-//@ diag: 14:58 note "because 'a == a' would be invalid: invalid operands to binary expression ('const NoEq' and 'const NoEq')"
-//@ diag: 30:46 error "invalid operands to binary expression ('view<int>::citer<false>' and 'view<int>::citer<false>')"
-//@ diag: 24:27 note "candidate function not viable: constraints not satisfied"
-//@ diag: 25:16 note "because 'false' evaluated to false"
+//@ diag: 31:43 error "invalid operands to binary expression ('view<NoEq>::iterator' and 'view<NoEq>::iterator')"
+//@ diag: 21:27 note "candidate function not viable: constraints not satisfied"
+//@ diag: 22:16 note "because 'NoEq' does not satisfy 'eq'"
+//@ diag: 16:58 note "because 'a == a' would be invalid: invalid operands to binary expression ('const NoEq' and 'const NoEq')"
+//@ diag: 32:46 error "invalid operands to binary expression ('view<int>::citer<false>' and 'view<int>::citer<false>')"
+//@ diag: 26:27 note "candidate function not viable: constraints not satisfied"
+//@ diag: 27:16 note "because 'false' evaluated to false"
+//@ requires: clang<22
+// clang 22 emits warning: self-comparison always evaluates to true; WP-355 residual
 template <class T> concept eq = requires(const T& a) { a == a; };
 struct NoEq {};
 template <class V> struct view {

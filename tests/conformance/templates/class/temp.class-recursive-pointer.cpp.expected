@@ -14,4 +14,4 @@ TranslationUnitDecl
 |   `-TemplateArgument type 'int *'
 `-VarDecl sz 'int' cinit
   `-ImplicitCastExpr 'int' <IntegralCast>
-    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'List<int>'
+    `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'List<int>'

@@ -6,18 +6,20 @@
 // declaration's declarator is not delayed to the declaration either.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 26:14 error "no matching function for call to 'dt'"
-//@ diag: 25:49 note "candidate template ignored: substitution failure [with T = C, U = typename C::P]: 'P' is a private member of 'C'"
-//@ diag: 27:15 error "explicit instantiation of 'dt' does not refer to a function template, variable template, member function, member class, or static data member"
-//@ diag: 25:49 note "candidate template ignored: substitution failure [with T = C, U = typename C::P]: 'P' is a private member of 'C'"
-//@ diag: 28:15 error "explicit instantiation of 'dt' does not refer to a function template, variable template, member function, member class, or static data member"
-//@ diag: 25:49 note "candidate template ignored: substitution failure [with T = C, U = typename C::P]: 'P' is a private member of 'C'"
-//@ diag: 30:15 error "explicit instantiation of 'dn' does not refer to a function template, variable template, member function, member class, or static data member"
-//@ diag: 29:40 note "candidate template ignored: substitution failure [with T = C]: 'obj' is a private member of 'C'"
-//@ diag: 32:15 error "explicit instantiation of 'rt' does not refer to a function template, variable template, member function, member class, or static data member"
-//@ diag: 31:24 note "candidate template ignored: substitution failure [with T = C]: 'P' is a private member of 'C'"
-//@ diag: 34:23 error "explicit instantiation of 'm' does not refer to a function template, variable template, member function, member class, or static data member"
-//@ diag: 33:78 note "candidate template ignored: substitution failure [with U = C, V = typename C::P]: 'P' is a private member of 'C'"
+//@ diag: 28:14 error "no matching function for call to 'dt'"
+//@ diag: 27:49 note "candidate template ignored: substitution failure [with T = C, U = typename C::P]: 'P' is a private member of 'C'"
+//@ diag: 29:15 error "explicit instantiation of 'dt' does not refer to a function template, variable template, member function, member class, or static data member"
+//@ diag: 27:49 note "candidate template ignored: substitution failure [with T = C, U = typename C::P]: 'P' is a private member of 'C'"
+//@ diag: 30:15 error "explicit instantiation of 'dt' does not refer to a function template, variable template, member function, member class, or static data member"
+//@ diag: 27:49 note "candidate template ignored: substitution failure [with T = C, U = typename C::P]: 'P' is a private member of 'C'"
+//@ diag: 32:15 error "explicit instantiation of 'dn' does not refer to a function template, variable template, member function, member class, or static data member"
+//@ diag: 31:40 note "candidate template ignored: substitution failure [with T = C]: 'obj' is a private member of 'C'"
+//@ diag: 34:15 error "explicit instantiation of 'rt' does not refer to a function template, variable template, member function, member class, or static data member"
+//@ diag: 33:24 note "candidate template ignored: substitution failure [with T = C]: 'P' is a private member of 'C'"
+//@ diag: 36:23 error "explicit instantiation of 'm' does not refer to a function template, variable template, member function, member class, or static data member"
+//@ diag: 35:78 note "candidate template ignored: substitution failure [with U = C, V = typename C::P]: 'P' is a private member of 'C'"
+//@ requires: clang<22
+// clang 22 no longer emits 32:15 error "explicit instantiation of 'rt' does not refer to a function...; WP-355 residual
 class C {
   typedef int P;
   static int obj;

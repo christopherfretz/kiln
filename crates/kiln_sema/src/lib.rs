@@ -151,6 +151,11 @@ pub struct Sema<'a, 'sm> {
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
+    /// The clang major `-fclang-compat` names (19 or 22; default 19): the
+    /// few spellings that differ between the two releases follow it, e.g.
+    /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
+    /// "Predefined identifiers").
+    pub clang_compat: u32,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -596,6 +601,16 @@ pub struct Sema<'a, 'sm> {
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
     /// The mangling-number state of closure types (spec/sema-lambda.md).
     pub(crate) lambda_mangle: lambda::ManglingState,
+    /// `size_t` as clang 22 spells it: the implicit, unnamed-by-lookup
+    /// alias `__size_t` (clang's `PredefinedSugarType`), the type of
+    /// `sizeof`/`alignof` and of the allocation functions' size under
+    /// `-fclang-compat=22` ([`Sema::size_type`]).
+    pub(crate) size_t_sugar: QualType,
+    /// clang 22's `__signed_size_t` (a `z` literal) and `__ptrdiff_t`
+    /// (pointer subtraction), implicit like [`Sema::size_t_sugar`]
+    /// ([`Sema::signed_size_type`], [`Sema::ptrdiff_type`]).
+    pub(crate) signed_size_t_sugar: QualType,
+    pub(crate) ptrdiff_t_sugar: QualType,
     /// C++20 modules: the units being read (spec/modules.md).
     pub(crate) modules: modules::ModSema,
 }
@@ -627,6 +642,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         let tu = ast.tu;
         templ::builtins::declare_builtin_templates(&mut ast);
         builtins::declare_int128_typedefs(&mut ast, &target);
+        let size_t = QualType::unqual(target.size_t);
+        let ptrdiff_t = QualType::unqual(target.ptrdiff_t);
         let mut s = Sema {
             ast,
             diags,
@@ -638,6 +655,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             reflection: false,
             range_lifetime_extension: false,
             gnu: false,
+            clang_compat: 19,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,
@@ -759,8 +777,12 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             srcloc: builtins::SrcLocCache::default(),
             lambdas: Vec::new(),
             lambda_mangle: lambda::ManglingState::default(),
+            size_t_sugar: size_t,
+            signed_size_t_sugar: ptrdiff_t,
+            ptrdiff_t_sugar: ptrdiff_t,
             modules: modules::ModSema::default(),
         };
+        s.declare_size_t_sugar();
         s.declare_builtin_va_list();
         s.declare_sve_typedefs();
         s

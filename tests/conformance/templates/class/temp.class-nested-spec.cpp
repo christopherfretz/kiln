@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.arg.type]: a specialization is a type argument of another.
 template <class T> struct Box { T value; };
 static_assert(sizeof(Box<Box<short>>) == 2);
