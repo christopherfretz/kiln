@@ -286,8 +286,7 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
       call site too). The C function's own declaration, used afterwards,
-      reuses that LLVM function (clang `GetOrCreateLLVMFunction` returns
-      an existing declaration of the same name and type) rather than
+      reuses that LLVM function (the same-name rule of §2a) rather than
       declaring a uniqued `strlen.1` that no library defines (WP-286;
       `tests/codegen/builtins_lib_redecl.cpp`).
     - checked arithmetic (WP-270, clang `EmitBuiltinExpr`;
