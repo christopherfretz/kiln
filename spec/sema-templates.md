@@ -747,7 +747,13 @@ silently (`diag = None`) at those sites. S3O lists them.
    element, it is that partial. Otherwise the pattern is the most
    specialized partial, found by function-template partial ordering of
    the rewritten `template<p.params> void f(X<p.args>)` (§6.7), with
-   constraints as the tie-breaker.
+   constraints as the tie-breaker. In each direction a pack expansion
+   among the synthesized arguments is deduced as a whole by a pack
+   expansion of the other partial ([temp.deduct.type]/9,
+   `DeducedArgs::expansions`), so `template <class... P> X<0, T<P...>>`
+   is more specialized than `template <int R, class... P> X<R, T<P...>>`
+   whatever the indices of the two `P`s (WP-292; test
+   `templates/spec/temp.spec.partial.order-pack-expansion.cpp`).
 5. If no unique best partial exists, the error is "ambiguous partial
    specializations of 'X<int *>'", with a note "partial specialization
    matches [with T = int]" for each candidate.

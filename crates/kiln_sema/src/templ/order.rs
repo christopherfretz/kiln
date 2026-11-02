@@ -327,6 +327,11 @@ impl Sema<'_, '_> {
         let as_: Vec<TemplateArg> = self.ast.types.args(pa.canonical).to_vec();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(lb.depth, self.ast.lists.len(lb.params));
+        // [temp.deduct.type]/9: a pack expansion of `a`'s (a synthesized
+        // pack) is deduced as a whole by a pack expansion of `b`'s, as
+        // clang does (`template <class... P> C<0, T<P...>>` against
+        // `template <int R, class... P> C<R, T<P...>>`).
+        d.expansions = true;
         let ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success;
         if ok && pb.has_pack {
             // [temp.deduct.partial]: `C<A, B...>` deduces from `C<A'>`
