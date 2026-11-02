@@ -771,6 +771,11 @@ original partial as its pattern (`instantiated_from_map`). A
 specialization that matches it is instantiated from the original
 partial's definition, with the enclosing arguments as the outer levels
 plus the deduced arguments (§4.6).
+Its associated constraints stay the original partial's, unsubstituted
+(`member_constraints`, as for a member template): matching checks them
+with the enclosing specialization's levels plus the deduced arguments
+(`template <forward_range T> struct cat<T>` in libc++'s
+`lazy_split_view`; WP-276).
 
 Out-of-class partial specializations of a member template (WP-150):
 `template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
