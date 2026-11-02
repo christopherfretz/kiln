@@ -271,7 +271,7 @@ impl Sema<'_, '_> {
         // arguments, so `f<void>()` of `f(T&)` is "requires 1 argument"
         // rather than a substitution failure. A function parameter pack
         // anywhere leaves the maximum to the check after substitution.
-        if let Some(a) = call {
+        if let Some((a, _)) = call {
             if a.len() < self.fn_min_args(templated) {
                 return Err(DeductionFailure::new(Tdk::TooFewArguments, d));
             }
