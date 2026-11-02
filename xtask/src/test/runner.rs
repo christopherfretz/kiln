@@ -36,6 +36,9 @@ pub struct Config {
     /// `/usr/lib/llvm-N` of the oracle release: kiln++ runs with it as
     /// `KILN_LLVM_DIR` (`spec/harness.md` "Oracle toolchain").
     pub llvm_dir: PathBuf,
+    /// The LLVM major of `llvm_dir`, the backend that consumes kiln's IR
+    /// (`requires: llvm>=`).
+    pub llvm_major: u32,
     pub update: bool,
     /// Per-run scratch directory (under the cargo target dir).
     pub scratch: PathBuf,
@@ -184,7 +187,11 @@ impl Test<'_> {
         }
         // The compiler under test (and the oracle) target this host unless
         // the test pins a `--target`.
-        if let Some(r) = spec.unmet_requirement(std::env::consts::ARCH, &self.clangs_run(&spec)) {
+        if let Some(r) = spec.unmet_requirement(
+            std::env::consts::ARCH,
+            &self.clangs_run(&spec),
+            &self.llvms_run(&spec),
+        ) {
             return (Status::Skip, Some(r), String::new());
         }
         if spec.is_kiln_specific() && kind != CompilerKind::Kiln {
@@ -257,6 +264,27 @@ impl Test<'_> {
         if spec.oracle && self.cfg.oracle.is_some() && self.cfg.oracle_kind == CompilerKind::Clang {
             out.push(directives::ClangRun { role: "the oracle", version: self.cfg.oracle_clang });
         }
+        out
+    }
+
+    /// The LLVM backends that consume `spec`'s IR, for `requires: llvm>=`:
+    /// kiln's (`llvm_dir`) when kiln compiles it, and every clang it runs
+    /// (a clang's major is its LLVM's).
+    fn llvms_run(&self, spec: &TestSpec) -> Vec<directives::LlvmRun<'static>> {
+        let kiln_oracle =
+            spec.oracle && self.cfg.oracle.is_some() && self.cfg.oracle_kind == CompilerKind::Kiln;
+        let mut out = Vec::new();
+        if self.cfg.compiler_kind == CompilerKind::Kiln || kiln_oracle {
+            out.push(directives::LlvmRun {
+                role: "kiln's backend",
+                major: Some(self.cfg.llvm_major),
+            });
+        }
+        out.extend(
+            self.clangs_run(spec)
+                .into_iter()
+                .map(|c| directives::LlvmRun { role: c.role, major: c.version.map(|v| v[0]) }),
+        );
         out
     }
 

@@ -455,7 +455,8 @@ pub fn prepare(
                 "driver: RUN lines with MODULE_DEPENDENCIES (format.py --precompile)".to_owned(),
             ));
         }
-        let subst: Vec<_> = local_cfgs.iter().flat_map(|c| c.substitutions.iter().cloned()).collect();
+        let subst: Vec<_> =
+            local_cfgs.iter().flat_map(|c| c.substitutions.iter().cloned()).collect();
         script::check(&d.run, &subst).map_err(Outcome::Unsupported)?;
     } else if d.has_run {
         return Err(Outcome::Unsupported("driver: RUN lines".to_owned()));
@@ -960,7 +961,8 @@ mod tests {
         let added = LocalCfg { add_features: vec!["extra".into()], ..LocalCfg::default() };
         assert!(prepare(Kind::Pass, "// REQUIRES: extra", &[&added], F).is_ok());
         assert!(prepare(Kind::Pass, "// REQUIRES: extra", &[], F).is_err());
-        let python = LocalCfg { substitutions: vec![("%{python}".into(), None)], ..LocalCfg::default() };
+        let python =
+            LocalCfg { substitutions: vec![("%{python}".into(), None)], ..LocalCfg::default() };
         let sh = |text: &str| prepare(Kind::Sh, text, &[&python], F).map(|_| ());
         assert_eq!(sh("// RUN: %{build}\n// RUN: %{run}"), Ok(()));
         assert_eq!(

@@ -452,7 +452,8 @@ fn local_cfgs<'a>(
 /// `config.load_from_path(localConfig, lit_config)` file loads.
 fn mirror_std_cfg(test_root: &Path, dir: &Path) -> Option<LocalCfg> {
     let rel = dir.strip_prefix(test_root.join("libcxx")).ok()?;
-    let text = std::fs::read_to_string(test_root.join("std").join(rel).join("lit.local.cfg")).ok()?;
+    let text =
+        std::fs::read_to_string(test_root.join("std").join(rel).join("lit.local.cfg")).ok()?;
     Some(LocalCfg::parse(&text))
 }
 
