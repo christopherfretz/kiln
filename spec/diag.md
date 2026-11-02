@@ -168,6 +168,15 @@ places those in `-Wpedantic`). `display_group` is the id's group, or
 Group names and nesting MUST match clang's for every group kiln declares
 (e.g. `all` ⊃ `most` ⊃ `unknown-pragmas`; `pragmas` ⊃ `unknown-pragmas`).
 
+Where clang 22 nests a group differently, the extra edges are keyed by the
+level (WP-394): `Group::compat_subgroups(level)` lists them (at 22,
+`c99-designator` ⊃ `initializer-overrides`, `reorder-init-list`), and
+`Group::members_at(level)` / `contains_at(id, level)` follow them;
+`members()` / `contains(id)` are level 19. The policy (§5.1) and the
+pragma state (§5.5) resolve `-W`/`-Wno-` and `#pragma clang diagnostic`
+group names at `DiagOptions::clang_compat`
+(`dcl.init.aggr/c99-designator-group.cpp`).
+
 `CLANG_GROUP_NAMES` lists every group name clang 19 accepts
 (`clang++-19 --print-diagnostic-options`). A `-W`/`-R` option naming one of
 these that kiln has no members for MUST be accepted silently, so build

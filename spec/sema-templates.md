@@ -4515,6 +4515,21 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   a member (`DP<V, IP>` in `Outer<int>`) is reported at the template-id,
   not at the argument, since substituted types keep no argument
   locations.
+- At `-fclang-compat=22` (WP-394, `templ/ttarg22.rs`; referred to as
+  §3.2.1 in the code) matching follows clang 22's
+  `isTemplateTemplateParameterAtLeastAsSpecializedAs` (CWG2398, P2113)
+  instead: under a partial-ordering context whose diagnostics carry
+  "template template argument has different template parameters than
+  its corresponding template template parameter" at the argument and
+  "previous template template parameter is here" at `P`, `P`'s
+  parameters, written as arguments at their own locations (a pack as an
+  expansion), are checked against `A`'s parameter list as for a
+  template-id `A<...>` (kind, converted-constant conversion, arity); then
+  `A`'s parameters are deduced from them (a conflicting deduction is an
+  error); last a constrained `P` must be at least as constrained as `A`
+  (subsumption over `CanonTemplateTypeParm` atoms). The substituted
+  prior arguments (`Priors`) apply as at level 19
+  (`temp.arg.template/*-clang22.cpp`).
 - P0846 ([temp.names]/3, WP-336): an unqualified name that ordinary
   lookup finds nothing (no builtin) or only non-member functions for,
   followed by a template-argument-list closed by `>(`, is assumed a

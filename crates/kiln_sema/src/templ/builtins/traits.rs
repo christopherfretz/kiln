@@ -44,7 +44,7 @@ impl Sema<'_, '_> {
         // of the P2786 `__builtin_is_cpp_trivially_relocatable`, and
         // `__reference_binds_to_temporary` in favour of
         // `__reference_constructs_from_temporary`.
-        let rep = table::deprecated_replacement(t).or_else(|| match t {
+        let rep = table::deprecated_replacement(t).or(match t {
             TypeTrait::IsTriviallyRelocatable if self.clang_compat >= 22 => {
                 Some("__builtin_is_cpp_trivially_relocatable")
             }

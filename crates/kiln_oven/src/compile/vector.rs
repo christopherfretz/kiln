@@ -125,9 +125,8 @@ impl Compiler<'_> {
         if ast.exprs.get(e).has(ExprFlags::ARROW) {
             bt = ast.types.pointee(bt)?;
         }
-        let count = match ast.types.canonical_view(bt) {
-            kiln_ast::types::TypeView::Vector { count, .. } => count,
-            _ => return None,
+        let kiln_ast::types::TypeView::Vector { count, .. } = ast.types.canonical_view(bt) else {
+            return None;
         };
         let acc = ast.symbols().as_str(ast.exprs.ext_vector_accessor(e));
         match kiln_ast::expr::ext_vector_access(acc, count) {

@@ -119,10 +119,11 @@ fn preprocess_stdin() {
 #[test]
 fn builtin_buffer_like_clang() {
     // clang 19 pushes the interference sizes, so `-D` redefines them
-    // without a warning and `pop_macro` restores the original.
+    // without a warning and `pop_macro` restores the original (64; clang
+    // 22's original is target-dependent, so the level is pinned).
     let src = "int a = __GCC_DESTRUCTIVE_SIZE;\n#pragma pop_macro(\"__GCC_DESTRUCTIVE_SIZE\")\n\
                int b = __GCC_DESTRUCTIVE_SIZE;\n";
-    let o = kiln(&["-E", "-P", "-D__GCC_DESTRUCTIVE_SIZE=128", "-"], src);
+    let o = kiln(&["-E", "-P", "-fclang-compat=19", "-D__GCC_DESTRUCTIVE_SIZE=128", "-"], src);
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
     assert_eq!(o.stdout, "int a = 128;\nint b = 64;\n");
     // Before `<command line>`, the move back to the marker's line in

@@ -161,7 +161,7 @@ pub trait TypeNames {
     }
 
     /// The clang release whose diagnostic type printing to follow
-    /// (`-fclang-compat=<major>`, spec/diag.md §5.1). At 22 a canonical
+    /// (`-fclang-compat=<major>`, spec/sema.md §1.1). At 22 a canonical
     /// tag type prints fully scoped, inside template arguments too, and
     /// the `aka` keeps a written qualifier ([`aka`]). The AST dump keys
     /// its own clang 22 rules on [`PrintOptions::written_tags`].
