@@ -2926,8 +2926,7 @@ impl Parser<'_, '_> {
         // [dcl.pre]/6 (clang's `BuildDeclaratorGroup`): a structured
         // binding declaration is alone in its group.
         let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;
-        let mut declarators = 0usize;
-        let mut restrict_error = None;
+        let (mut declarators, mut restrict_error) = (0usize, None);
         let _ = self.s.take_declarator_type_invalid();
         let mut type_invalid = false;
         loop {
@@ -3003,10 +3002,7 @@ impl Parser<'_, '_> {
                 return decls;
             }
             decls.extend(v);
-            if self.diagnose_multiple_template_declarators(tmpl_kind) {
-                break;
-            }
-            if self.eat(Punct::Comma).is_none() {
+            if !self.next_declarator(tmpl_kind) {
                 break;
             }
         }

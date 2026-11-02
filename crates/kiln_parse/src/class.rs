@@ -1439,10 +1439,7 @@ impl Parser<'_, '_> {
             {
                 self.push_late(LateItem::Method { f, parts });
             }
-            if self.diagnose_multiple_template_declarators(tmpl_kind) {
-                break;
-            }
-            if self.eat(Punct::Comma).is_none() {
+            if !self.next_declarator(tmpl_kind) {
                 break;
             }
             first = false;

@@ -267,6 +267,13 @@ impl Parser<'_, '_> {
         self.template_decl_kind = None;
     }
 
+    /// After a declarator of a group: true if a `,` follows and the
+    /// group goes on ([`Parser::diagnose_multiple_template_declarators`]
+    /// ends a template declaration's group first).
+    pub(crate) fn next_declarator(&mut self, tmpl_kind: Option<TemplateDeclKind>) -> bool {
+        !self.diagnose_multiple_template_declarators(tmpl_kind) && self.eat(Punct::Comma).is_some()
+    }
+
     /// [temp.pre]/5, [temp.expl.spec], [temp.explicit]: a template
     /// declaration, explicit specialization or explicit instantiation
     /// declares one entity. At the `,` after its first declarator, clang's
