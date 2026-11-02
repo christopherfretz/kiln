@@ -656,12 +656,13 @@ impl Sema<'_, '_> {
                 }
                 if settled && self.ast.types.as_record(ty).is_some() {
                     if v.len() == 1
-                        && let Some(x) = self.construct_from_class(
+                        && let Some(x) = self.construct_from_class_in(
                             v[0],
                             ty,
                             ConvCtx::DirectInitialization,
                             loc,
                             DeletedAs::Call,
+                            Some(r),
                         )
                     {
                         return x;

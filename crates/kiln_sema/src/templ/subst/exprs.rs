@@ -1445,9 +1445,20 @@ impl Substituter<'_, '_, '_> {
                 let l = self.construct_list(peeled, pn.loc(), end.unwrap_or(pn.loc()))?;
                 return Ok(Some(Initializer::List(l)));
             }
+            // A single element of the class (or a derived class) in braces
+            // initializes the object from that element ([dcl.init.list]/3.2):
+            // a construction with no stored braces, redone as a list.
+            if style == InitStyle::List && self.written_construct_args(peeled) {
+                let l = self.construct_list(peeled, pn.loc(), pn.loc())?;
+                return Ok(Some(Initializer::List(l)));
+            }
+            // No parentheses and no written argument: the variable was
+            // default-initialized.
+            if end.is_none() && !self.written_construct_args(peeled) {
+                return Ok(None);
+            }
             let args = self.expr_list(self.sema.ast.exprs.construct_args(peeled))?;
-            // No parentheses: the variable was default-initialized.
-            let Some(r) = end else { return Ok(None) };
+            let r = end.unwrap_or(pn.loc());
             return Ok(Some(Initializer::Paren(args, pn.loc(), r)));
         }
         if pk == ExprKind::CXXParenListInitExpr && style != InitStyle::C {
@@ -1535,6 +1546,16 @@ impl Substituter<'_, '_, '_> {
             }
         }
         self.unimplemented("substitution into this CXXConstructExpr", loc)
+    }
+
+    /// Whether construct expression `e` has a written argument (one that
+    /// is not a default argument).
+    fn written_construct_args(&self, e: ExprId) -> bool {
+        let ast = &self.sema.ast;
+        ast.lists
+            .iter::<ExprId>(ast.exprs.construct_args(e))
+            .next()
+            .is_some_and(|a| ast.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr)
     }
 
     /// The braced list of list-initializing construct expression `e`

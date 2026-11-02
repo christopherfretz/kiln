@@ -1530,7 +1530,12 @@ recomputed exactly as for non-template code (clang's
   declaration's parameter name.
 - **Variables** keep the pattern's form of initialization (`cinit`,
   `callinit`, `listinit`): `T v{a, b}` stays direct-list-initialization,
-  which may choose an explicit constructor.
+  which may choose an explicit constructor. A construction is redone from
+  its written arguments (clang `TransformInitializer`), also when it was
+  resolved at definition: `T x(e)` and `T x{e}` with `e` of class `T` or a
+  class derived from it ([dcl.init.general]/16.6.2, [dcl.init.list]/3.2)
+  call the copy or move constructor at instantiation. Only a construction
+  with no parentheses and no written argument is a default-initialization.
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
