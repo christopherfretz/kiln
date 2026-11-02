@@ -1024,6 +1024,24 @@ impl Sema<'_, '_> {
         head
     }
 
+    /// The latest declaration of template `t` that is not a friend
+    /// declaration, else the first: the one name lookup finds (a friend
+    /// declaration is invisible to it, [namespace.memdef]/3), whose head
+    /// clang's notes and constraint checks of a template-id name (its
+    /// "template is declared here", `[with C = char]`). Its parameters
+    /// are at the template's own depth, as [`Self::head_template`]'s.
+    pub(crate) fn visible_template(&self, t: DeclId) -> DeclId {
+        let first = self.ast.first(t);
+        let Some(p) = self.pattern_of(t) else { return first };
+        self.ast
+            .redecls_of(p)
+            .filter(|&x| {
+                self.ast.decls.get(x).misc().friend() == kiln_ast::decl::FriendKind::None
+            })
+            .find_map(|x| self.ast.described_template(x))
+            .unwrap_or(first)
+    }
+
     /// The template decl `d` (a template, or the pattern of one) is part
     /// of, if any.
     pub fn template_of(&self, d: DeclId) -> Option<DeclId> {

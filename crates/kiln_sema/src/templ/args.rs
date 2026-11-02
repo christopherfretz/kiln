@@ -239,7 +239,7 @@ impl Sema<'_, '_> {
     pub(crate) fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
         let name = self.qualified_decl_name(tmpl);
         let at = self
-            .pattern_of(tmpl)
+            .pattern_of(self.visible_template(tmpl))
             .map_or_else(|| self.ast.decls.get(tmpl).loc(), |p| self.ast.decls.get(p).loc());
         let d = self
             .diag(DiagId::sema_template_arg_list_different_arity, loc)
