@@ -319,6 +319,12 @@ impl Cg<'_> {
                 self.f.opaque.remove(&common);
                 return r;
             }
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                return match self.emit_coawait(e, crate::coro::Want::Scalar)? {
+                    crate::coro::Got::Scalar(v) => Ok(v),
+                    _ => Ok(None),
+                };
+            }
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Rv(v)) => return Ok(v),
                 Some(Opaque::Lv(lv)) => self.load_lv(lv),
@@ -1859,6 +1865,12 @@ impl Cg<'_> {
                 self.f.opaque.remove(&common);
                 r
             }
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                match self.emit_coawait(e, crate::coro::Want::Lvalue)? {
+                    crate::coro::Got::Lv(lv) => Ok(lv),
+                    _ => err(self.loc_of(e), "co_await glvalue without a value"),
+                }
+            }
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Lv(lv)) => Ok(lv),
                 _ => err(self.loc_of(e), "unbound glvalue OpaqueValueExpr"),
@@ -2641,6 +2653,10 @@ impl Cg<'_> {
     pub(crate) fn emit_ignored(&mut self, e: ExprId) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
+        if matches!(ast.exprs.get(e).kind(), ExprKind::CoawaitExpr | ExprKind::CoyieldExpr) {
+            self.emit_coawait(e, crate::coro::Want::Ignored)?;
+            return Ok(());
+        }
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
                 if ast.exprs.get(e).kind() == ExprKind::VAArgExpr {
@@ -3230,6 +3246,10 @@ impl Cg<'_> {
             }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
+            }
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                self.emit_coawait(e, crate::coro::Want::Agg(dest, zeroed))?;
+                Ok(())
             }
             ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
                 self.agg_visit(ast.exprs.choose_chosen(e).expect("guarded"), dest, zeroed)

@@ -488,6 +488,13 @@ impl Fir {
         }
     }
 
+    /// Replaces argument `idx` of call `i` (clang `setArgOperand`).
+    pub fn set_call_arg(&mut self, i: u32, idx: usize, v: V) {
+        if let Op::Call { args, .. } = &mut self.insts[i as usize].op {
+            args[idx] = v;
+        }
+    }
+
     /// Adds a case to switch `i`.
     pub fn add_switch_case(&mut self, i: u32, v: V, d: Blk) {
         if let Op::Switch { cases, .. } = &mut self.insts[i as usize].op {

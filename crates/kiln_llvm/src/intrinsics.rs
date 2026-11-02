@@ -32,6 +32,12 @@ enum Shape {
     Trap,
     /// `nounwind [memory(none)]`.
     NoUnwind(bool),
+    /// `nounwind memory(argmem: read)`.
+    NoUnwindArgRead,
+    /// `nomerge nounwind`.
+    NoMerge,
+    /// No attributes (an intrinsic that may throw).
+    Throws,
 }
 
 fn fn_attrs(shape: Shape) -> Vec<Attr> {
@@ -82,6 +88,11 @@ fn fn_attrs(shape: Shape) -> Vec<Attr> {
             }
             v
         }
+        Shape::NoUnwindArgRead => {
+            vec![f(NoUnwind), Attr::Memory(MemoryEffects::argmem_only(ModRef::Read))]
+        }
+        Shape::NoMerge => vec![f(AttrKind::NoMerge), f(NoUnwind)],
+        Shape::Throws => Vec::new(),
     }
 }
 
@@ -456,4 +467,124 @@ pub fn dbg_declare(m: &mut Module) -> FuncId {
 /// `void @llvm.dbg.value(metadata, metadata, metadata)`.
 pub fn dbg_value(m: &mut Module) -> FuncId {
     dbg(m, "llvm.dbg.value")
+}
+
+/// The switched-resume coroutine intrinsics (LLVM `Coroutines.rst`; the
+/// declarations clang 19 emits for C++20 coroutines, spec/llvm.md §6).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Coro {
+    /// `token @llvm.coro.id(i32, ptr readnone, ptr nocapture readonly, ptr)`.
+    Id,
+    /// `i1 @llvm.coro.alloc(token)`.
+    Alloc,
+    /// `iN @llvm.coro.size.iN()` (the operand of [`coro`] is `iN`).
+    Size,
+    /// `iN @llvm.coro.align.iN()`.
+    Align,
+    /// `ptr @llvm.coro.begin(token, ptr writeonly)`.
+    Begin,
+    /// `ptr @llvm.coro.frame()`.
+    Frame,
+    /// `token @llvm.coro.save(ptr)`.
+    Save,
+    /// `i8 @llvm.coro.suspend(token, i1)`.
+    Suspend,
+    /// `i1 @llvm.coro.end(ptr, i1, token)`.
+    End,
+    /// `ptr @llvm.coro.free(token, ptr nocapture readonly)`.
+    Free,
+    /// `void @llvm.coro.resume(ptr)`.
+    Resume,
+    /// `void @llvm.coro.destroy(ptr)`.
+    Destroy,
+    /// `i1 @llvm.coro.done(ptr nocapture readonly)`.
+    Done,
+    /// `ptr @llvm.coro.promise(ptr nocapture, i32, i1)`.
+    Promise,
+    /// `ptr @llvm.coro.noop()`.
+    Noop,
+}
+
+/// Declares (or finds) coroutine intrinsic `which`; `size` is the
+/// `size_t` type the [`Coro::Size`]/[`Coro::Align`] overloads return.
+pub fn coro(m: &mut Module, which: Coro, size: TypeId) -> FuncId {
+    let p = ptr(m);
+    let t = TypeId::TOKEN;
+    let f = Attr::Flag;
+    match which {
+        Coro::Id => declare(
+            m,
+            "llvm.coro.id",
+            t,
+            &[
+                (TypeId::I32, &[]),
+                (p, &[f(AttrKind::ReadNone)]),
+                (p, &[f(NoCapture), f(ReadOnly)]),
+                (p, &[]),
+            ],
+            &[],
+            Shape::Basic(Some(MemoryEffects::argmem_only(ModRef::Read))),
+        ),
+        Coro::Alloc => declare(m, "llvm.coro.alloc", TypeId::I1, &[(t, &[])], &[], Shape::NoUnwind(false)),
+        Coro::Size | Coro::Align => {
+            let base = if which == Coro::Size { "llvm.coro.size" } else { "llvm.coro.align" };
+            let name = overloaded_name(m, base, &[size]);
+            declare(m, &name, size, &[], &[], Shape::NoUnwind(true))
+        }
+        Coro::Begin => declare(
+            m,
+            "llvm.coro.begin",
+            p,
+            &[(t, &[]), (p, &[f(WriteOnly)])],
+            &[],
+            Shape::NoUnwind(false),
+        ),
+        Coro::Frame => declare(m, "llvm.coro.frame", p, &[], &[], Shape::NoUnwind(true)),
+        Coro::Save => declare(m, "llvm.coro.save", t, &[(p, &[])], &[], Shape::NoMerge),
+        Coro::Suspend => declare(
+            m,
+            "llvm.coro.suspend",
+            TypeId::I8,
+            &[(t, &[]), (TypeId::I1, &[])],
+            &[],
+            Shape::NoUnwind(false),
+        ),
+        Coro::End => declare(
+            m,
+            "llvm.coro.end",
+            TypeId::I1,
+            &[(p, &[]), (TypeId::I1, &[]), (t, &[])],
+            &[],
+            Shape::NoUnwind(false),
+        ),
+        Coro::Free => declare(
+            m,
+            "llvm.coro.free",
+            p,
+            &[(t, &[]), (p, &[f(NoCapture), f(ReadOnly)])],
+            &[],
+            Shape::NoUnwindArgRead,
+        ),
+        Coro::Resume => declare(m, "llvm.coro.resume", TypeId::VOID, &[(p, &[])], &[], Shape::Throws),
+        Coro::Destroy => {
+            declare(m, "llvm.coro.destroy", TypeId::VOID, &[(p, &[])], &[], Shape::Throws)
+        }
+        Coro::Done => declare(
+            m,
+            "llvm.coro.done",
+            TypeId::I1,
+            &[(p, &[f(NoCapture), f(ReadOnly)])],
+            &[],
+            Shape::NoUnwindArgRead,
+        ),
+        Coro::Promise => declare(
+            m,
+            "llvm.coro.promise",
+            p,
+            &[(p, &[f(NoCapture)]), (TypeId::I32, &[]), (TypeId::I1, &[])],
+            &[],
+            Shape::NoUnwind(true),
+        ),
+        Coro::Noop => declare(m, "llvm.coro.noop", p, &[], &[], Shape::NoUnwind(true)),
+    }
 }

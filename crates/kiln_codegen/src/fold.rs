@@ -365,6 +365,30 @@ impl Collect<'_> {
                 ast.stmts.catch_var(s).into_iter().for_each(|v| self.local_decl(v));
                 self.stmt(ast.stmts.catch_block(s));
             }
+            // Every piece of a coroutine body is emitted (spec/codegen.md
+            // §7c).
+            StmtKind::CoroutineBodyStmt => {
+                let c = *ast.stmts.coroutine_body(s);
+                for m in ast.lists.iter::<StmtId>(c.param_moves).collect::<Vec<_>>() {
+                    self.stmt(m);
+                }
+                self.stmt(c.promise_stmt);
+                self.expr(c.allocate);
+                self.expr(c.deallocate);
+                self.expr(c.return_value);
+                c.result_decl.into_iter().for_each(|d| self.local_decl(d));
+                c.return_stmt.into_iter().for_each(|x| self.stmt(x));
+                c.return_on_alloc_failure.into_iter().for_each(|x| self.stmt(x));
+                self.expr(c.init_suspend);
+                self.stmt(c.body);
+                c.on_exception.into_iter().for_each(|x| self.stmt(x));
+                c.on_fallthrough.into_iter().for_each(|x| self.stmt(x));
+                self.expr(c.final_suspend);
+            }
+            StmtKind::CoreturnStmt => {
+                ast.stmts.coreturn_operand(s).into_iter().for_each(|x| self.expr(x));
+                ast.stmts.coreturn_promise_call(s).into_iter().for_each(|x| self.expr(x));
+            }
             _ => {}
         }
     }

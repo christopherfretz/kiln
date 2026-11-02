@@ -180,6 +180,9 @@ pub(crate) struct Fx {
     /// A stack save was emitted in the current cleanup scope (clang
     /// `DidCallStackSave`).
     pub did_stack_save: bool,
+    /// The coroutine being emitted (clang `CurCoro`, spec/codegen.md
+    /// §7c).
+    pub coro: Option<Box<crate::coro::CoroData>>,
 }
 
 impl Fx {
@@ -225,6 +228,7 @@ impl Fx {
             inh_args: None,
             vla_sizes: FxHashMap::default(),
             did_stack_save: false,
+            coro: None,
         }
     }
 }
@@ -513,6 +517,7 @@ impl Cg<'_> {
         // Attributes.
         let mut extra = Vec::new();
         let const_pure = crate::builtins::const_pure_attrs(self.ast, d, &sig, &mut extra);
+        self.coro_fn_attrs(&mut extra);
         let nothrow_def = sig.nothrow
             || const_pure
             || self.ast.has_nothrow_attr(d)

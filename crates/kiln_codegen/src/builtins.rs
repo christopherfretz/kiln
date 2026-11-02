@@ -333,6 +333,9 @@ impl Cg<'_> {
         // WP-282: a `__float128` builtin with a `long double` twin lowers
         // as the twin (the operand types pick the intrinsic overload).
         let b = id::f128_twin(b).unwrap_or(b);
+        if id::is_coro(b) {
+            return self.emit_coro_builtin(b, e);
+        }
         let v = match b {
             id::IS_CONSTANT_EVALUATED => V::C(self.m.const_bool(false)),
             // clang `Builtin::BI__builtin_complex`: the two parts.

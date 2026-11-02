@@ -31,8 +31,10 @@ impl Cg<'_> {
     /// without a lexical scope of its own).
     pub(crate) fn emit_body(&mut self, body: StmtId) -> R<()> {
         let ast = self.ast;
-        if ast.stmts.get(body).kind() == StmtKind::CompoundStmt {
-            return self.emit_compound_without_scope(body);
+        match ast.stmts.get(body).kind() {
+            StmtKind::CompoundStmt => return self.emit_compound_without_scope(body),
+            StmtKind::CoroutineBodyStmt => return self.emit_coroutine_body(body),
+            _ => {}
         }
         self.emit_stmt(body)
     }
@@ -294,6 +296,8 @@ impl Cg<'_> {
             }
             StmtKind::CXXTryStmt => self.emit_try_stmt(s),
             StmtKind::GCCAsmStmt => self.emit_asm(s),
+            StmtKind::CoreturnStmt => self.emit_coreturn(s),
+            StmtKind::CoroutineBodyStmt => self.emit_coroutine_body(s),
             k => err(Some(n.loc()), format!("statement {k:?} is not supported yet")),
         }
     }
@@ -317,34 +321,42 @@ impl Cg<'_> {
                 self.store(t, flag, 1, false);
             }
         } else if let Some(e) = rv {
-            let q = ast.exprs.get(e).ty();
-            let ret_ref = self.f.sig.as_ref().is_some_and(|g| self.referee(g.ret).is_some());
-            if ast.types.is_void(q) || self.f.ret_slot.is_none() {
-                self.emit_ignored(e)?;
-            } else if ret_ref {
-                let p = self.emit_ref_binding(e)?;
-                let slot = self.f.ret_slot.expect("return slot");
-                self.store(p, slot.v, slot.align, false);
-            } else if self.is_aggregate(q) || self.is_atomic_aggregate(q) {
-                let slot = self.f.ret_slot.expect("return slot");
-                self.emit_agg_slot(e, slot, false, false)?;
-            } else if self.is_complex(q) {
-                let v = self.emit_complex(e)?;
-                let slot = self.f.ret_slot.expect("return slot");
-                self.cx_store(v, slot, q);
-            } else {
-                let v = self.emit_scalar(e)?;
-                let slot = self.f.ret_slot.expect("return slot");
-                if self.f.ret_kind == RetKind::Sret {
-                    self.store_scalar(v, slot, q);
-                } else {
-                    self.store(v, slot.v, slot.align, false);
-                }
-            }
+            self.store_return_value(e)?;
         }
         self.end_scope(sc);
         let rd = self.f.ret_dest.expect("return destination");
         self.branch_through_cleanup(rd);
+        Ok(())
+    }
+
+    /// Evaluates the returned expression `e` into the return slot
+    /// (clang `EmitReturnStmt` without the branch).
+    pub(crate) fn store_return_value(&mut self, e: ExprId) -> R<()> {
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let ret_ref = self.f.sig.as_ref().is_some_and(|g| self.referee(g.ret).is_some());
+        if ast.types.is_void(q) || self.f.ret_slot.is_none() {
+            self.emit_ignored(e)?;
+        } else if ret_ref {
+            let p = self.emit_ref_binding(e)?;
+            let slot = self.f.ret_slot.expect("return slot");
+            self.store(p, slot.v, slot.align, false);
+        } else if self.is_aggregate(q) || self.is_atomic_aggregate(q) {
+            let slot = self.f.ret_slot.expect("return slot");
+            self.emit_agg_slot(e, slot, false, false)?;
+        } else if self.is_complex(q) {
+            let v = self.emit_complex(e)?;
+            let slot = self.f.ret_slot.expect("return slot");
+            self.cx_store(v, slot, q);
+        } else {
+            let v = self.emit_scalar(e)?;
+            let slot = self.f.ret_slot.expect("return slot");
+            if self.f.ret_kind == RetKind::Sret {
+                self.store_scalar(v, slot, q);
+            } else {
+                self.store(v, slot.v, slot.align, false);
+            }
+        }
         Ok(())
     }
 

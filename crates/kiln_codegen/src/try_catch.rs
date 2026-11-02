@@ -109,6 +109,43 @@ impl Cg<'_> {
         Ok(())
     }
 
+    /// `EnterCXXTryStmt` for the implicit `catch (...)` of a coroutine
+    /// body (spec/codegen.md §7c).
+    pub(crate) fn enter_catch_all(&mut self) {
+        let blk = self.f.fir.create_block();
+        self.push_catch(vec![Handler { rtti: None, blk }]);
+    }
+
+    /// `ExitCXXTryStmt` for [`Cg::enter_catch_all`]: the handler runs
+    /// `handler` (`__promise.unhandled_exception();`).
+    pub(crate) fn exit_catch_all(&mut self, handler: StmtId) -> R<()> {
+        let d = self.f.cl.depth();
+        let used = self.f.cl.stack[d - 1].cached_eh.is_some_and(|b| self.f.fir.block_uses(b) > 0);
+        if !used {
+            self.pop_catch();
+            return Ok(());
+        }
+        self.emit_catch_dispatch(d);
+        let Kind::Catch(handlers) = self.pop_catch().kind else {
+            unreachable!("catch scope");
+        };
+        let cont = self.f.fir.create_block();
+        if self.f.fir.cur().is_some() {
+            self.br(cont);
+        }
+        self.emit_block_after_uses(handlers[0].blk);
+        let sc = self.begin_scope(false);
+        let exn = self.exn_from_slot();
+        self.call_begin_catch(exn, true);
+        self.emit_stmt(handler)?;
+        self.end_scope(sc);
+        if self.f.fir.cur().is_some() {
+            self.br(cont);
+        }
+        self.emit_block(cont, false);
+        Ok(())
+    }
+
     /// `emitCatchDispatchBlock`: compares the selector against each
     /// handler's type index (`llvm.eh.typeid.for`), falling through to
     /// the enclosing EH scope.

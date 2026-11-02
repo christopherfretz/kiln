@@ -91,6 +91,17 @@ pub(crate) enum Cleanup {
     /// `ptr` (`this`) after the complete-object destructor of a deleting
     /// destructor, even if that destructor throws (`CallDtorDelete`).
     DtorDelete { op_delete: DeclId, ptr: V, ty: QualType },
+    /// Frees a coroutine frame: `if (coro.free(id, begin)) deallocate`
+    /// (clang `CallCoroDelete`, spec/codegen.md §7c).
+    CoroDelete { dealloc: kiln_ast::ExprId },
+    /// `coro.end(null, true)` on the exceptions path out of a coroutine
+    /// (clang `CallCoroEnd`): the ramp resumes unwinding, a resumed
+    /// coroutine continues to the enclosing cleanups.
+    CoroEnd,
+    /// The destructor of the coroutine's `get_return_object()` result,
+    /// run only once `flag` (`gro.active`) is set (clang's active flag
+    /// on the `__coro_gro` cleanups).
+    FlaggedDtor { addr: V, record: DeclId, flag: V },
 }
 
 /// A value a cleanup uses: directly, or reloaded from the
@@ -372,6 +383,13 @@ impl Cg<'_> {
     /// `getJumpDestInCurrentScope`.
     pub(crate) fn jump_dest_here(&mut self) -> JumpDest {
         let blk = self.f.fir.create_block();
+        let index = self.f.cl.next_index;
+        self.f.cl.next_index += 1;
+        JumpDest { blk, depth: Some(self.f.cl.depth()), index }
+    }
+
+    /// `getJumpDestInCurrentScope` for an existing block.
+    pub(crate) fn jump_dest_to(&mut self, blk: Blk) -> JumpDest {
         let index = self.f.cl.next_index;
         self.f.cl.next_index += 1;
         JumpDest { blk, depth: Some(self.f.cl.depth()), index }
@@ -1130,6 +1148,21 @@ impl Cg<'_> {
                 if let Err(e) = self.emit_delete_call(op_delete, ptr, ty, loc) {
                     self.f.error.get_or_insert(e);
                 }
+            }
+            Cleanup::CoroDelete { dealloc } => {
+                if let Err(e) = self.emit_coro_delete(dealloc) {
+                    self.f.error.get_or_insert(e);
+                }
+            }
+            Cleanup::CoroEnd => self.emit_coro_end_cleanup(),
+            Cleanup::FlaggedDtor { addr, record, flag } => {
+                let skip = self.f.fir.create_block();
+                let run = self.f.fir.create_block();
+                let v = self.load(LTy::I1, flag, 1, false);
+                self.cond_br(v, run, skip);
+                self.emit_block(run, false);
+                self.call_dtor(record, addr, false);
+                self.emit_block(skip, false);
             }
         }
     }
