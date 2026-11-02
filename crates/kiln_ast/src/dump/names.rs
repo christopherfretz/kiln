@@ -948,6 +948,12 @@ impl<'a> AstNames<'a> {
                 }
                 out.push(')');
             }
+            // clang `StmtPrinter::VisitExtVectorElementExpr`: always `.`.
+            ExprKind::ExtVectorElementExpr => {
+                self.expr(exprs.operand(e), d, out);
+                out.push('.');
+                out.push_str(ast.symbols().as_str(exprs.ext_vector_accessor(e)));
+            }
             ExprKind::ConvertVectorExpr => {
                 out.push_str("__builtin_convertvector(");
                 self.expr(exprs.operand(e), d, out);

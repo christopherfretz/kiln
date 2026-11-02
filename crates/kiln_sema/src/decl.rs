@@ -2328,6 +2328,14 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let td = self.builder().typedef(h, kind, underlying, prev_ok);
+        if underlying.quals().is_empty()
+            && matches!(
+                self.ast.types.view(underlying.ty()),
+                TypeView::Vector { kind: kiln_ast::types::VectorKind::Ext, .. }
+            )
+        {
+            self.ext_vector_typedefs.push(td);
+        }
         // The decl-specifiers' start: an instantiation finds the type's
         // dependent names from there (§5.8), as in `typedef int
         // (*f)(typename T::type);`.

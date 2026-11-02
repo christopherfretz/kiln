@@ -690,6 +690,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::CXXThrowExpr
             | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::ConvertVectorExpr
+            | ExprKind::ExtVectorElementExpr
             | ExprKind::ImaginaryLiteral
             | ExprKind::CompoundLiteralExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
@@ -2012,6 +2013,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 if n.has(ExprFlags::IMMEDIATE_ESCALATING) {
                     self.line.push_str(" immediate-escalating");
                 }
+            }
+            // clang `VisitExtVectorElementExpr`: the accessor.
+            ExprKind::ExtVectorElementExpr => {
+                self.line.push(' ');
+                self.line.push_str(self.ast.symbols().as_str(exprs.ext_vector_accessor(e)));
             }
             ExprKind::MemberExpr => {
                 self.line.push_str(if n.has(ExprFlags::ARROW) { " ->" } else { " ." });

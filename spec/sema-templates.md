@@ -1662,9 +1662,16 @@ recomputed exactly as for non-template code (clang's
   (790 tests, `-fsyntax-only`) found no kind reaching it; the kinds left
   are unreachable today because their construct is rejected or
   unimplemented before substitution: coroutine expressions and
-  statements, `template for`, computed `goto`, `contract_assert`,
-  `__builtin_choose_expr`, a dependent `__builtin_offsetof` and
-  ext-vector element access.
+  statements, `template for`, computed `goto` and `contract_assert`.
+- **Dependent `OffsetOfExpr`** (WP-307; clang `TransformOffsetOfExpr`):
+  the stored operand type and the index expressions are substituted and
+  `act_on_builtin_offsetof` runs again with the stored components, so
+  every check of sema.md §5.8 happens at instantiation. A
+  non-dependent `OffsetOfExpr` (no pattern) is kept as is.
+- **`ExtVectorElementExpr`** (WP-307; clang
+  `TransformExtVectorElementExpr`): the base is substituted and
+  `act_on_member` runs again with the stored accessor, so the lanes and
+  the result type are recomputed (sema.md §5.18).
 
 ### 5.5 Statements
 

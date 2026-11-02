@@ -45,8 +45,18 @@ pub(crate) struct LV {
     pub addr: Addr,
     pub q: QualType,
     pub bf: Option<BitFieldInfo>,
-    /// An element of the vector at `addr` (clang `LValue::MakeVectorElt`).
-    pub vidx: Option<V>,
+    /// An element, or a swizzle, of the vector at `addr` (clang
+    /// `LValue::MakeVectorElt` / `MakeExtVectorElt`).
+    pub vidx: Option<VecLane>,
+}
+
+/// The part of a vector an [`LV`] designates.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum VecLane {
+    /// One element, by a (possibly non-constant) index.
+    Index(V),
+    /// The lanes the `ExtVectorElementExpr` names (`v.xz`).
+    Swizzle(ExprId),
 }
 
 fn low_mask(bits: u32) -> u128 {
@@ -392,9 +402,17 @@ impl Cg<'_> {
                 let sq = ast.exprs.get(src).ty();
                 self.convert_vector(v, sq, q)
             }
+            // clang `ScalarExprEmitter::VisitExtVectorElementExpr` of a
+            // prvalue vector: `extractelement` or `shufflevector`.
+            ExprKind::ExtVectorElementExpr if !self.is_glvalue(e) => {
+                let lanes = self.swizzle_lanes(e, false)?;
+                let v = self.emit_scalar(ast.exprs.operand(e))?;
+                self.swizzle_value(v, &lanes)
+            }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
+            | ExprKind::ExtVectorElementExpr
             | ExprKind::StringLiteral
             | ExprKind::PredefinedExpr
             | ExprKind::MaterializeTemporaryExpr => {
@@ -407,9 +425,18 @@ impl Cg<'_> {
 
     /// clang `EmitLoadOfLValue` for scalars.
     pub(crate) fn load_lv(&mut self, lv: LV) -> V {
-        if let Some(idx) = lv.vidx {
-            let vec = self.vec_elt_load(lv);
-            return self.extract_elt(vec, idx);
+        match lv.vidx {
+            Some(VecLane::Index(idx)) => {
+                let vec = self.vec_elt_load(lv);
+                return self.extract_elt(vec, idx);
+            }
+            Some(VecLane::Swizzle(e)) => {
+                let vec = self.vec_elt_load(lv);
+                // Sema accepted the accessor; a malformed one reads poison.
+                let lanes = self.swizzle_lanes(e, true).unwrap_or_default();
+                return self.swizzle_value(vec, &lanes);
+            }
+            None => {}
         }
         let Some(bf) = lv.bf else {
             if let Some(vq) = self.ast.types.as_atomic(lv.q) {
@@ -450,9 +477,28 @@ impl Cg<'_> {
     pub(crate) fn store_lv(&mut self, v: V, lv: LV, want: bool) -> V {
         // clang `EmitStoreThroughLValue` of a vector element: read,
         // `insertelement`, write (a `bool` vector through `<P x i1>`).
-        if let Some(idx) = lv.vidx {
+        if let Some(lane) = lv.vidx {
             let vec = self.vec_elt_load(lv);
-            let ins = self.insert_elt(vec, v, idx);
+            let ins = match lane {
+                VecLane::Index(idx) => self.insert_elt(vec, v, idx),
+                // clang `EmitStoreThroughExtVectorComponentLValue`: each
+                // source element into its named lane.
+                VecLane::Swizzle(e) => {
+                    let lanes = self.swizzle_lanes(e, true).unwrap_or_default();
+                    let count = self.vec_lane_count(vec);
+                    let mut acc = vec;
+                    for (i, &l) in lanes.iter().enumerate() {
+                        if l >= count {
+                            continue;
+                        }
+                        let si = self.icn(LTy::I32, i as i128);
+                        let elt = self.extract_elt(v, si);
+                        let li = self.icn(LTy::I32, i128::from(l));
+                        acc = self.insert_elt(acc, elt, li);
+                    }
+                    acc
+                }
+            };
             let raw = if self.m.types.int_width(lv.addr.ty).is_some() {
                 self.cast(CastOp::BitCast, ins, lv.addr.ty)
             } else {
@@ -1793,6 +1839,7 @@ impl Cg<'_> {
                 Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             ExprKind::MemberExpr => self.member_lvalue(e),
+            ExprKind::ExtVectorElementExpr => self.ext_vector_lvalue(e, q),
             ExprKind::ArraySubscriptExpr => self.subscript_lvalue(e),
             ExprKind::UnaryOperator => self.unary_lvalue(e, q),
             ExprKind::BinaryOperator => self.binary_lvalue(e, q),
@@ -2313,6 +2360,96 @@ impl Cg<'_> {
         }
     }
 
+    /// clang `EmitExtVectorElementExpr`: the base vector's address (the
+    /// pointer's pointee for `->`) and the named lanes.
+    fn ext_vector_lvalue(&mut self, e: ExprId, q: QualType) -> R<LV> {
+        let ast = self.ast;
+        // `v.wzyx.x`: a swizzle of a swizzle lvalue is one swizzle of
+        // the innermost vector (the lanes compose in `swizzle_lanes`).
+        let mut inner = e;
+        while let Some(b) = self.swizzle_lvalue_base(inner) {
+            inner = b;
+        }
+        let base = ast.exprs.operand(inner);
+        let addr = if ast.exprs.get(inner).has(ExprFlags::ARROW) {
+            let p = self.emit_scalar(base)?;
+            let Some(vq) = ast.types.pointee(ast.exprs.get(base).ty()) else {
+                return err(self.loc_of(inner), "malformed ExtVectorElementExpr");
+            };
+            Addr { v: p, ty: self.mty(vq), align: self.natural_align(vq) }
+        } else {
+            self.emit_lvalue(base)?.addr
+        };
+        let lanes = self.swizzle_lanes(e, true)?;
+        let vidx = match lanes.as_slice() {
+            [l] => VecLane::Index(self.icn(LTy::I32, i128::from(*l))),
+            _ => VecLane::Swizzle(e),
+        };
+        Ok(LV { addr, q, bf: None, vidx: Some(vidx) })
+    }
+
+    /// The `ExtVectorElementExpr` lvalue (through parentheses) that the
+    /// `.` access `e` swizzles further, if any.
+    fn swizzle_lvalue_base(&self, e: ExprId) -> Option<ExprId> {
+        let ast = self.ast;
+        if ast.exprs.get(e).has(ExprFlags::ARROW) || !self.is_glvalue(e) {
+            return None;
+        }
+        let mut b = ast.exprs.operand(e);
+        while ast.exprs.get(b).kind() == ExprKind::ParenExpr {
+            b = ast.exprs.operand(b);
+        }
+        (ast.exprs.get(b).kind() == ExprKind::ExtVectorElementExpr).then_some(b)
+    }
+
+    /// The lanes of its base vector an `ExtVectorElementExpr` selects;
+    /// with `compose`, of the innermost vector of a swizzle-of-swizzle
+    /// lvalue (a lane past the end stays past it).
+    fn swizzle_lanes(&self, e: ExprId, compose: bool) -> R<Vec<u32>> {
+        let ast = self.ast;
+        let base = ast.exprs.operand(e);
+        let mut bq = ast.exprs.get(base).ty();
+        if ast.exprs.get(e).has(ExprFlags::ARROW) {
+            bq = ast.types.pointee(bq).unwrap_or(bq);
+        }
+        let Some((_, count)) = self.vec_of(bq) else {
+            return err(self.loc_of(e), "ExtVectorElementExpr of a non-vector");
+        };
+        let name = ast.symbols().as_str(ast.exprs.ext_vector_accessor(e));
+        let kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } =
+            kiln_ast::expr::ext_vector_access(name, count)
+        else {
+            return err(self.loc_of(e), "invalid vector component name");
+        };
+        match self.swizzle_lvalue_base(e) {
+            Some(b) if compose => {
+                let outer = self.swizzle_lanes(b, true)?;
+                Ok(lanes.iter().map(|&l| outer.get(l as usize).copied().unwrap_or(u32::MAX)).collect())
+            }
+            _ => Ok(lanes),
+        }
+    }
+
+    /// `lanes` of the vector value `v`: one lane is `extractelement`,
+    /// several a one-operand `shufflevector` (a lane past the end is
+    /// poison).
+    fn swizzle_value(&mut self, v: V, lanes: &[u32]) -> V {
+        let count = self.vec_lane_count(v);
+        if let [l] = lanes {
+            let i = self.icn(LTy::I32, i128::from(*l));
+            return self.extract_elt(v, i);
+        }
+        let mask =
+            lanes.iter().map(|&l| if l < count { l } else { kiln_llvm::SHUFFLE_POISON }).collect();
+        self.shuffle(v, None, mask)
+    }
+
+    /// The element count of the vector value `v`.
+    fn vec_lane_count(&mut self, v: V) -> u32 {
+        let t = self.f.fir.ty(&self.m, v);
+        self.m.types.vector_info(t).map_or(0, |x| x.1)
+    }
+
     /// clang `EmitArraySubscriptExpr`.
     fn subscript_lvalue(&mut self, e: ExprId) -> R<LV> {
         let ast = self.ast;
@@ -2322,7 +2459,7 @@ impl Cg<'_> {
         if let Some((base, idx)) = self.vec_subscript(e) {
             let blv = self.emit_lvalue(base)?;
             let i = self.emit_scalar(idx)?;
-            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(i) });
+            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(VecLane::Index(i)) });
         }
         let [l, r] = ast.exprs.operands(e);
         let swapped =

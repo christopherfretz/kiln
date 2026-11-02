@@ -288,6 +288,10 @@ pub struct Sema<'a, 'sm> {
     /// The type `__builtin_va_list` names (its typedef sugar; the `A` of
     /// a builtin signature), once declared.
     pub(crate) va_list_type: Option<QualType>,
+    /// The typedefs and alias-declarations naming an ext vector type
+    /// directly, in declaration order: an element access names its
+    /// result through the first that matches (clang `ExtVectorDecls`).
+    pub(crate) ext_vector_typedefs: Vec<DeclId>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -592,6 +596,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             deferring_call_ref: false,
             reverse_using_shadows: false,
             va_list_type: None,
+            ext_vector_typedefs: Vec::new(),
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),

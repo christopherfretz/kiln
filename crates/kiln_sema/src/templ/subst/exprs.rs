@@ -634,6 +634,14 @@ impl Substituter<'_, '_, '_> {
                 let list = self.expr(list)?;
                 Ok(self.sema.act_on_va_arg(list, ty, ty_loc, loc, end))
             }
+            // clang `TransformExtVectorElementExpr`: the base, then the
+            // member access again (`RebuildExtVectorElementExpr`).
+            ExprKind::ExtVectorElementExpr => {
+                let b = self.expr(ex(self).operand(e))?;
+                let name = ex(self).ext_vector_accessor(e);
+                let arrow = n.has(ExprFlags::ARROW);
+                Ok(self.sema.act_on_member(b, name, loc, loc, arrow))
+            }
             // clang `TransformOffsetOfExpr`: the operand type and the
             // index expressions, then `BuildBuiltinOffsetOf` again.
             ExprKind::OffsetOfExpr => {

@@ -196,6 +196,7 @@ sema_dtor_variadic = Error (0) "destructor cannot be variadic";
 sema_duplicate_asm_operand_name = Error (1) "duplicate use of asm operand name \"{0}\"";
 sema_duplicate_case = Error (1) "duplicate case value '{0}'";
 sema_duplicate_member = Error (1) "duplicate member '{0}'";
+sema_duplicate_vector_components_not_mlvalue = Error (0) "vector is not assignable (contains duplicate components)";
 sema_dynamic_cast_bad_target = Error (1) "invalid target type {0} for dynamic_cast; target type must be a reference or pointer type to a defined class";
 sema_dynamic_cast_incomplete = Error (1) "{0} is an incomplete type";
 sema_dynamic_cast_no_rtti = Error (0) "use of dynamic_cast requires -frtti";
