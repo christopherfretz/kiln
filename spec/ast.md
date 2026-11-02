@@ -251,6 +251,11 @@ fields used by fewer than ~5% of decls of a kind go there.
   of a function or variable, keyed by the entity's *first* declaration
   (a label on any redeclaration names the entity); each declaration
   also carries an `AsmLabel` attribute (§7).
+- `declarator_end: ColdMap<DeclId, Loc>` (WP-370): for a member
+  function declared without a body (written in the source, never an
+  instantiation, which reads its pattern's), the start of the
+  declarator's last token (`Declarator::end`, clang `getEndLoc` before a
+  body is attached); sema.md §7.13 points a note there.
 - `builtin_id: ColdMap<DeclId, u32>` (WP-063): the builtin id of an
   implicit builtin `Function` decl, read through
   `DeclArena::builtin_id(d)`. Ids and spellings are in

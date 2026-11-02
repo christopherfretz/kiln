@@ -896,13 +896,21 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `Decl::getEndLoc` approximated: the `}` of a definition,
-    /// else the name.
+    /// else the declarator's last token for a member declaration (its
+    /// pattern's, for an instantiated member; `ColdDeclData::
+    /// declarator_end`), else the name.
     fn decl_end_loc(&self, d: DeclId) -> Loc {
         if let Some(def) = self.ast.definition(d)
             && let Some(b) = self.ast.decls.function(def).and_then(|x| x.body)
             && self.ast.stmts.get(b).kind() == kiln_ast::stmt::StmtKind::CompoundStmt
         {
             return self.ast.stmts.rbrace(b);
+        }
+        let ends = &self.ast.decls.cold.declarator_end;
+        if let Some(&l) =
+            ends.get(d).or_else(|| self.ast.instantiated_from(d).and_then(|p| ends.get(p)))
+        {
+            return l;
         }
         self.ast.decls.get(d).loc()
     }

@@ -671,7 +671,10 @@ impl Cg<'_> {
         let after = self.f.fir.create_block();
         self.emit_block(after, false);
         let (Some(cf), Some(t)) = (last, self.f.fir.terminator(saved_bb)) else {
-            return err(self.loc_of(dealloc), "Deallocation expressoin does not refer to coro.free");
+            return err(
+                self.loc_of(dealloc),
+                "Deallocation expressoin does not refer to coro.free",
+            );
         };
         self.f.fir.move_before(cf, t);
         self.f.fir.erase(t);

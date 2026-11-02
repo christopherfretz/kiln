@@ -4793,8 +4793,14 @@ non-throwing (`__builtin_coro_resume` excepted); else `the expression
 'co_await __promise.final_suspend()' is required to be non-throwing`
 with one `must be declared with 'noexcept'` note per offending function,
 at the end of its definition (the closing `}`) or, for a declaration
-without body, at its name (clang: the declarator's end; see Open
-questions).
+without body, at the end of its declarator (clang `getEndLoc`, WP-370):
+the start of its last token, counting cv/ref-qualifiers, the exception
+specification, a trailing return type or requires-clause, an asm label,
+GNU attributes and the last virt-specifier, but not trailing C++11
+attribute-specifiers (`ColdDeclData::declarator_end`, recorded by the
+parser for bodiless member declarations; an instantiated member uses
+its pattern's). A bodiless namespace-scope declaration still points at
+its name (open question).
 
 **`co_await e` ([expr.await]/3-5).** In order:
 
@@ -5155,10 +5161,11 @@ the P2996R13 wording.
 - AST goldens under `tests/conformance/ast/`.
 
 ## 12. Open questions
-- **Coroutine note location (WP-351):** the `must be declared with
-  'noexcept'` note of §7.13 points at a bodiless declaration's name;
-  clang points at the declarator's end (the `)` or exception
-  specification), which `FunctionData` does not record.
+- **Coroutine note location (WP-351, WP-370):** the `must be declared
+  with 'noexcept'` note of §7.13 points at the declarator's end for
+  bodiless member declarations only; a namespace-scope one (`aw
+  operator co_await(X);`) still points at its name, pending the same
+  `Declarator::end` bookkeeping in `kiln_parse/src/decl.rs`.
 - **Additive `kiln_ast` APIs added by WP-048:**
   - `label_stmt`/`goto_stmt`
   - `set_non_odr_use`, `replace_enumerator_init`, `mark_bitfield`

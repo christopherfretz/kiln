@@ -8,10 +8,10 @@
 //! or a `switch` jumps past gets none, because its lifetime would be
 //! broken into several regions.
 
+use kiln_ast::decl::VarStorage;
+use kiln_ast::expr::{ExprKind, StorageDuration};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
-use kiln_ast::expr::{ExprKind, StorageDuration};
-use kiln_ast::decl::VarStorage;
 use kiln_llvm::{Attr, AttrKind, AttrList, CallOpts, TypeId as LTy, Value, intrinsics};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
@@ -244,10 +244,15 @@ impl Cg<'_> {
 
     /// A `nounwind` call of `llvm.lifetime.start`/`.end`.
     fn lifetime_call(&mut self, start: bool, addr: V, size: u64) -> Op {
-        let f = if start { intrinsics::lifetime_start(&mut self.m) } else { intrinsics::lifetime_end(&mut self.m) };
+        let f = if start {
+            intrinsics::lifetime_start(&mut self.m)
+        } else {
+            intrinsics::lifetime_end(&mut self.m)
+        };
         let fn_ty = self.m.func(f).ty();
         let fa = self.m.attr_set(&[Attr::Flag(AttrKind::NoUnwind)]);
-        let opts = CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
+        let opts =
+            CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
         let n = V::C(self.m.const_int(LTy::I64, i128::from(size)));
         Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![n, addr], opts: Box::new(opts) }
     }
@@ -255,7 +260,8 @@ impl Cg<'_> {
     /// The lifetime start and end of the automatic variable `d` at the
     /// alloca `addr` (the end of clang `EmitAutoVarAlloca`).
     pub(crate) fn var_lifetime(&mut self, d: DeclId, addr: V, ty: LTy) {
-        if self.f.fir.cur().is_none() || self.f.bypasses.as_ref().is_some_and(|b| b.is_bypassed(d)) {
+        if self.f.fir.cur().is_none() || self.f.bypasses.as_ref().is_some_and(|b| b.is_bypassed(d))
+        {
             return;
         }
         if let Some(size) = self.emit_lifetime_start(addr, ty) {
