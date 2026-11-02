@@ -4389,7 +4389,8 @@ pub mod builtin {
     /// `__builtin_nansf16b` (GCC; `__bf16`).
     pub const NANSF16B: u32 = 2012;
     /// `__builtin_nextafterf16` (GCC; named in an `if consteval` branch
-    /// of libstdc++'s `<cmath>`; not a constant expression in kiln).
+    /// of libstdc++'s `<cmath>`; evaluated by the Oven's P0533 path and
+    /// lowered inline, as there is no libm entry point).
     pub const NEXTAFTERF16: u32 = 2013;
     /// `__builtin_nextafterf16b` (GCC; as [`NEXTAFTERF16`]).
     pub const NEXTAFTERF16B: u32 = 2014;

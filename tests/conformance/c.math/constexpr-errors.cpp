@@ -1,48 +1,52 @@
 // [c.math.syn] (P0533), [expr.const]/5, C23 F.10, [library.c]/3: a
 // constexpr math call is not a constant expression when it raises an IEEE
-// exception other than inexact: invalid (a signaling NaN operand, an
-// out-of-range lround/llrint, fmod/remainder by zero or of an infinity,
-// inf * 0 in fma, ilogb of zero or NaN), overflow (fma, fdim, ldexp,
-// nextafter past the largest finite value), divide-by-zero (logb of zero),
-// or underflow (an inexact ldexp into the subnormals, and every nextafter /
-// nexttoward / nextafterf16 result that is subnormal or zero, which C23
-// F.10.8.3 has raise underflow); nor is integer abs of the most negative
-// value ([c.math.abs]: undefined). GCC 14 rejects the same calls (it folds
-// llabs(LLONG_MIN) with a wrapped value and frexp of a signaling NaN).
+// exception other than inexact: invalid (a signaling NaN operand, an out-
+// of-range lround/llrint, fmod/remainder by zero or of an infinity, inf *
+// 0 or inf - inf in fma, ilogb of zero, NaN or infinity), overflow (fma,
+// fdim, ldexp, nextafter past the largest finite value), divide-by-zero
+// (logb of zero), or underflow (an inexact fma or ldexp result in the
+// subnormals, and every nextafter / nexttoward / nextafterf16 result that
+// is subnormal or zero, which C23 F.10.8.3 has raise underflow); nor is
+// integer abs of the most negative value ([c.math.abs]: undefined). GCC 14
+// rejects the same calls (it folds llabs(LLONG_MIN) with a wrapped value
+// and frexp of a signaling NaN).
 //@ expect: compile-fail
 //@ strict-diags
 //@ args: -ferror-limit=0
 //@ skip(clang): clang 19/22 constant-evaluate none of these builtins
-//@ diag: 47:22 error "constexpr variable 'a' must be initialized by a constant expression"
-//@ diag: 48:20 error "constexpr variable 'b' must be initialized by a constant expression"
-//@ diag: 49:25 error "constexpr variable 'c' must be initialized by a constant expression"
-//@ diag: 50:22 error "constexpr variable 'd' must be initialized by a constant expression"
-//@ diag: 51:22 error "constexpr variable 'e' must be initialized by a constant expression"
-//@ diag: 52:21 error "constexpr variable 'f' must be initialized by a constant expression"
-//@ diag: 54:15 error "constexpr variable 'g' must be initialized by a constant expression"
-//@ diag: 53:52 note "subexpression not valid in a constant expression"
-//@ diag: 54:19 note "in call to 'quo(inf, 2.000000e+00)'"
-//@ diag: 55:22 error "constexpr variable 'h' must be initialized by a constant expression"
-//@ diag: 56:22 error "constexpr variable 'i' must be initialized by a constant expression"
-//@ diag: 57:22 error "constexpr variable 'j' must be initialized by a constant expression"
-//@ diag: 58:22 error "constexpr variable 'k' must be initialized by a constant expression"
-//@ diag: 59:19 error "constexpr variable 'l' must be initialized by a constant expression"
-//@ diag: 60:22 error "constexpr variable 'm' must be initialized by a constant expression"
-//@ diag: 61:19 error "constexpr variable 'n' must be initialized by a constant expression"
-//@ diag: 62:22 error "constexpr variable 'o' must be initialized by a constant expression"
-//@ diag: 63:22 error "constexpr variable 'p' must be initialized by a constant expression"
-//@ diag: 64:22 error "constexpr variable 'q' must be initialized by a constant expression"
-//@ diag: 65:24 error "constexpr variable 'r' must be initialized by a constant expression"
-//@ diag: 66:24 error "constexpr variable 's' must be initialized by a constant expression"
-//@ diag: 67:24 error "constexpr variable 't' must be initialized by a constant expression"
-//@ diag: 68:24 error "constexpr variable 'u' must be initialized by a constant expression"
-//@ diag: 69:22 error "constexpr variable 'v' must be initialized by a constant expression"
-//@ diag: 70:25 error "constexpr variable 'w' must be initialized by a constant expression"
-//@ diag: 72:15 error "constexpr variable 'x' must be initialized by a constant expression"
-//@ diag: 71:44 note "subexpression not valid in a constant expression"
-//@ diag: 72:19 note "in call to 'fexp(nan)'"
-//@ diag: 73:25 error "constexpr variable 'y' must be initialized by a constant expression"
-//@ diag: 74:27 error "constexpr variable 'z' must be initialized by a constant expression"
+//@ diag: 51:22 error "constexpr variable 'a' must be initialized by a constant expression"
+//@ diag: 52:20 error "constexpr variable 'b' must be initialized by a constant expression"
+//@ diag: 53:25 error "constexpr variable 'c' must be initialized by a constant expression"
+//@ diag: 54:22 error "constexpr variable 'd' must be initialized by a constant expression"
+//@ diag: 55:22 error "constexpr variable 'e' must be initialized by a constant expression"
+//@ diag: 56:21 error "constexpr variable 'f' must be initialized by a constant expression"
+//@ diag: 58:15 error "constexpr variable 'g' must be initialized by a constant expression"
+//@ diag: 57:52 note "subexpression not valid in a constant expression"
+//@ diag: 58:19 note "in call to 'quo(inf, 2.000000e+00)'"
+//@ diag: 59:22 error "constexpr variable 'h' must be initialized by a constant expression"
+//@ diag: 60:22 error "constexpr variable 'i' must be initialized by a constant expression"
+//@ diag: 61:22 error "constexpr variable 'j' must be initialized by a constant expression"
+//@ diag: 62:22 error "constexpr variable 'k' must be initialized by a constant expression"
+//@ diag: 63:19 error "constexpr variable 'l' must be initialized by a constant expression"
+//@ diag: 64:22 error "constexpr variable 'm' must be initialized by a constant expression"
+//@ diag: 65:19 error "constexpr variable 'n' must be initialized by a constant expression"
+//@ diag: 66:22 error "constexpr variable 'o' must be initialized by a constant expression"
+//@ diag: 67:22 error "constexpr variable 'p' must be initialized by a constant expression"
+//@ diag: 68:22 error "constexpr variable 'q' must be initialized by a constant expression"
+//@ diag: 69:24 error "constexpr variable 'r' must be initialized by a constant expression"
+//@ diag: 70:24 error "constexpr variable 's' must be initialized by a constant expression"
+//@ diag: 71:24 error "constexpr variable 't' must be initialized by a constant expression"
+//@ diag: 72:24 error "constexpr variable 'u' must be initialized by a constant expression"
+//@ diag: 73:22 error "constexpr variable 'v' must be initialized by a constant expression"
+//@ diag: 74:25 error "constexpr variable 'w' must be initialized by a constant expression"
+//@ diag: 76:15 error "constexpr variable 'x' must be initialized by a constant expression"
+//@ diag: 75:44 note "subexpression not valid in a constant expression"
+//@ diag: 76:19 note "in call to 'fexp(nan)'"
+//@ diag: 77:25 error "constexpr variable 'y' must be initialized by a constant expression"
+//@ diag: 78:27 error "constexpr variable 'z' must be initialized by a constant expression"
+//@ diag: 79:20 error "constexpr variable 'aa' must be initialized by a constant expression"
+//@ diag: 80:23 error "constexpr variable 'bb' must be initialized by a constant expression"
+//@ diag: 81:23 error "constexpr variable 'cc' must be initialized by a constant expression"
 constexpr double snan = __builtin_nans(""), inf = __builtin_inf(), big = __DBL_MAX__;
 constexpr double a = __builtin_ceil(snan);
 constexpr long b = __builtin_lround(1e300);
@@ -72,3 +76,6 @@ constexpr int fexp(double x) { int ex = 0; __builtin_frexp(x, &ex); return ex; }
 constexpr int x = fexp(snan);
 constexpr _Float128 y = __builtin_fmaf128(0.0f128, __builtin_inff128(), 1.0f128);
 constexpr long double z = __builtin_nextafterl(__LDBL_MAX__, __builtin_infl());
+constexpr int aa = __builtin_ilogb(inf);
+constexpr double bb = __builtin_fma(inf, 1.0, -inf);
+constexpr double cc = __builtin_fma(0x1.8p-1073, 0.5, 0.0);

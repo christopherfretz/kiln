@@ -223,8 +223,14 @@ table (ids from 2000; clang's ids end at 1392), which libstdc++'s
 `<limits>` and `<cmath>` use: `__builtin_huge_valfN`, `__builtin_inffN`,
 `__builtin_nanfN`, `__builtin_nansfN` for N = 16, 32, 64,
 `__builtin_nansf16b` (constant, evaluated by their `float`/`double` twin
-through `f128_twin`), and `__builtin_nextafterf16`/`f16b` (declared only;
-neither constant-evaluated nor lowered, see spec/oven.md). The `*f128`
+through `f128_twin`), and `__builtin_nextafterf16`/`f16b` (WP-365:
+IEEE nextafter in binary16/bfloat16, constant-evaluated by the Oven's
+P0533 path, spec/oven.md, and lowered to an inline select sequence on
+the `i16` bits, as there is no libm entry point: x == y gives y, a NaN
+operand gives the NaN `fptrunc(fpext x + fpext y)`, zero steps to the
+least subnormal with y's sign, otherwise the bits step by one away from
+or toward zero; clang 19 lacks both builtins, GCC 14 calls an undefined
+`nextafterf16`). The `*f128`
 builtins stay clang's `__float128` ones; their result converts to
 `_Float128` without a rank diagnostic (same value set).
 
