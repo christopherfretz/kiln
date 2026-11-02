@@ -2668,6 +2668,12 @@ impl DeclArena {
         d.flags |= ParamData::DEFAULT_ARG_PENDING;
     }
 
+    /// Records a parameter's type before [dcl.fct]/5 adjustment (an array
+    /// or function type), when it differs from its declared type.
+    pub fn set_param_original_ty(&mut self, p: DeclId, ty: QualType) {
+        self.param_mut(p).original_ty = Some(ty);
+    }
+
     /// Marks a parameter's default argument as pending late parsing
     /// ([`ParamData::DEFAULT_ARG_PENDING`]; set before the class is
     /// complete, cleared implicitly by reading `default_arg` once set).

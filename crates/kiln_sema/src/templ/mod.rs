@@ -206,6 +206,11 @@ pub struct TemplState {
     /// The `using` keyword of each alias declaration in a template:
     /// where clang declares the guides formed for an alias template.
     pub(crate) alias_using_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// The name of the latest redeclaration of a class template that
+    /// created no decl (`Sema::act_on_tag`), keyed by the pattern's latest
+    /// decl when it was seen (a later decl supersedes it): the declaration
+    /// name lookup finds, which clang's notes name.
+    pub(crate) class_redecl_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// Where each dependent type and nested-name-specifier component was
     /// written, sorted (§5.8; [`Sema::written_loc`]).
     pub(crate) written_locs: kiln_source::fx::FxHashMap<written::WrittenKey, Vec<Loc>>,

@@ -360,6 +360,18 @@ impl Substituter<'_, '_, '_> {
         Ok(())
     }
 
+    /// A substituted function parameter type: `void` fails
+    /// ([temp.deduct.general]/11.10, clang `SubstParmVarDecl`'s
+    /// `err_param_with_void_type`), any other type is adjusted
+    /// ([dcl.fct]/5).
+    pub(crate) fn param_type(&mut self, ty: QualType, loc: Loc) -> SubstResult<QualType> {
+        if self.sema.ast.types.is_void(ty) {
+            self.sema.error(kiln_diag::DiagId::sema_param_with_void_type, loc);
+            return Err(SubstFail);
+        }
+        Ok(self.sema.adjust_param_type(ty))
+    }
+
     /// The parameters of pattern function `f` with substituted types.
     pub(crate) fn param_infos(&mut self, f: DeclId) -> SubstResult<Vec<ParamInfo>> {
         let params: Vec<DeclId> = self
@@ -408,6 +420,7 @@ impl Substituter<'_, '_, '_> {
                 };
                 let mut decls = Vec::with_capacity(tys.len());
                 for ty in tys {
+                    let ty = self.param_type(ty, loc)?;
                     let ctx = self.sema.ctx;
                     let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
                     let np =
@@ -429,7 +442,8 @@ impl Substituter<'_, '_, '_> {
             let ty = self.with_written_scope(scope, |s| s.ty(t, n.loc()));
             self.type_begin = outer;
             self.ref_loc = outer_ref;
-            let ty = ty?;
+            let declared = ty?;
+            let ty = self.param_type(declared, n.loc())?;
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
             // ([basic.scope.param]); the function adopts it.
@@ -440,7 +454,18 @@ impl Substituter<'_, '_, '_> {
                 self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo | depth);
             self.sema.unowned_params.insert(np);
             self.locals.insert(p, DeclOrPack::Decl(np));
-            out.push(subst_param_info(name, ty, n.loc(), np, (eo != 0).then_some(n.loc())));
+            // The type as declared is kept only while still dependent (a
+            // member template of a partially instantiated class), for the
+            // next substitution's invalid-type check (§5.7.2); clang's
+            // parse-time-only uses of it (a range-`for` over an array
+            // parameter) do not apply to an instantiation.
+            let original_ty =
+                (declared != ty && self.sema.is_dependent_type(declared)).then_some(declared);
+            if let Some(o) = original_ty {
+                self.sema.ast.decls.set_param_original_ty(np, o);
+            }
+            let eo_loc = (eo != 0).then_some(n.loc());
+            out.push(ParamInfo { original_ty, ..subst_param_info(name, ty, n.loc(), np, eo_loc) });
         }
         Ok(out)
     }
@@ -1374,6 +1399,7 @@ fn subst_param_info(
     ParamInfo {
         name,
         ty,
+        original_ty: None,
         loc,
         attrs: Vec::new(),
         invalid: false,

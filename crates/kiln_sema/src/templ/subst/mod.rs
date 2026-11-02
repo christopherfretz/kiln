@@ -351,6 +351,18 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         loc: Loc,
     ) -> SubstResult<Option<Vec<TemplateArg>>> {
         use crate::templ::pack::{Expansion, expr_pattern, type_pattern};
+        // A canonical argument that is an expansion (`I...` in an implicit
+        // deduction guide's canonical signature): its first expression
+        // stands for it, as in `template_arg`.
+        let a = match a.view() {
+            ArgView::Profile(p) => match self.sema.ast.types.profile_expr(p) {
+                Some(e) if expr_pattern(self.sema, e).is_some() => {
+                    self.sema.ast.builder().template_arg_expr(e)
+                }
+                _ => return Ok(None),
+            },
+            _ => a,
+        };
         let r = match a.view() {
             ArgView::Type(q) => {
                 let Some(p) = type_pattern(self.sema, q) else { return Ok(None) };
@@ -481,6 +493,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             TemplateName::Template(d)
                 if self.sema.ast.decls.get(d).flags().contains(DeclFlags::DEPENDENT_CTX) =>
             {
+                if let Some((nns, name)) = self.dependent_member_nns(d, loc)? {
+                    return Ok(self
+                        .sema
+                        .ast
+                        .types
+                        .template_name(TemplateName::DependentIdentifier { nns, name }));
+                }
                 let x = self.find_instantiated_decl(d, loc)?;
                 if x == d {
                     return Ok(n);
@@ -673,7 +692,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         let Some(parent) = node.ctx() else { return Ok(d) };
         // The pattern class of a class template is the specialization
         // being instantiated (its template is not itself a context).
-        let inst_parent = self.find_instantiated_decl(parent, loc)?;
+        let mut inst_parent = self.find_instantiated_decl(parent, loc)?;
         if inst_parent == parent {
             // The parent depends only on levels this substitution keeps
             // (an alias or member template of a class template named
@@ -690,7 +709,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             if node.kind() == DeclKind::ParmVar {
                 return self.nested_prototype_param(d, loc);
             }
-            return self.unimplemented("reference to a member of a dependent context", loc);
+            // A member of a class template pattern this substitution does
+            // not instantiate (named in the deduction guide of one of its
+            // constructor templates, [over.match.class.deduct]/1.2, or of
+            // an alias guide built from one, /3): the specialization the
+            // substituted `X<P...>` names (clang's `FindInstantiatedDecl`
+            // `ParentDC` lookup of the instantiated context).
+            inst_parent = self.pattern_specialization(parent, loc)?;
         }
         if self.sema.kind_of(inst_parent) == DeclKind::CXXRecord {
             let ty = self.sema.tag_type(inst_parent);
@@ -735,6 +760,90 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
 }
 
 impl Substituter<'_, '_, '_> {
+    /// The instantiation of the pattern of a class template or class
+    /// template partial specialization `parent` that this substitution's
+    /// arguments name: `X<P...>` substituted, made complete. Fails (a
+    /// substitution failure) when the substituted type is still dependent
+    /// or names no class.
+    fn pattern_specialization(&mut self, parent: DeclId, loc: Loc) -> SubstResult<DeclId> {
+        if !self.is_class_pattern(parent) {
+            return self.unimplemented("reference to a member of a dependent context", loc);
+        }
+        let injected = self.sema.this_class_type(parent);
+        let t = self.ty(injected, loc)?;
+        if self.sema.ast.types.is_dependent(t) {
+            return self.unimplemented("reference to a member of a dependent context", loc);
+        }
+        match self.sema.ast.types.as_record(t) {
+            Some(r) if r != parent => Ok(r),
+            _ => Err(SubstFail),
+        }
+    }
+
+    /// Whether `c` is the pattern of a class template or of a class
+    /// template partial specialization.
+    fn is_class_pattern(&self, c: DeclId) -> bool {
+        let first = self.sema.ast.first(c);
+        self.sema.kind_of(c) == DeclKind::CXXRecord
+            && (self.sema.ast.described_template(first).is_some()
+                || self.sema.ast.partial_spec_info(first).is_some())
+    }
+
+    /// For member `d` of a class template pattern this substitution
+    /// does not instantiate, when the substituted `X<A...>` is still
+    /// dependent (the guide of an alias template built from a
+    /// constructor template's guide, [over.match.class.deduct]/3): the
+    /// qualifier `X<A...>::` and `d`'s identifier, to name the member as
+    /// a member of an unknown specialization ([temp.dep.type]/6), looked
+    /// up again when the guide itself is substituted. `None` otherwise.
+    pub(crate) fn dependent_member_nns(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+    ) -> SubstResult<Option<(NnsId, Symbol)>> {
+        let node = *self.sema.ast.decls.get(d);
+        if !node.flags().contains(DeclFlags::DEPENDENT_CTX)
+            || self.locals.contains_key(&d)
+            || self.pairs.iter().any(|p| p.0 == d)
+        {
+            return Ok(None);
+        }
+        let (Some(parent), Some(name)) = (node.ctx(), node.name().as_ident()) else {
+            return Ok(None);
+        };
+        if !self.is_class_pattern(parent)
+            || self.find_instantiated_decl(parent, loc)? != parent
+            || self.levels_retained(self.sema.ctx_template_levels(parent))
+        {
+            return Ok(None);
+        }
+        let injected = self.sema.this_class_type(parent);
+        let t = self.ty(injected, loc)?;
+        if !self.sema.ast.types.is_dependent(t) {
+            return Ok(None);
+        }
+        let nns = self.sema.ast.types.nns(Nns::Type { prefix: None, ty: t, template_kw: false });
+        Ok(Some((nns, name)))
+    }
+
+    /// Whether `d` is (nested in) a member of a class template pattern
+    /// whose substitution is still dependent ([`Self::dependent_member_nns`]
+    /// applies to it or to an enclosing class).
+    pub(crate) fn in_dependent_specialization(&mut self, d: DeclId, loc: Loc) -> SubstResult<bool> {
+        let mut x = d;
+        for _ in 0..64 {
+            let Some(parent) = self.sema.ast.decls.get(x).ctx() else { return Ok(false) };
+            if self.sema.kind_of(parent) != DeclKind::CXXRecord {
+                return Ok(false);
+            }
+            if self.is_class_pattern(parent) {
+                return Ok(self.dependent_member_nns(x, loc)?.is_some());
+            }
+            x = parent;
+        }
+        Ok(false)
+    }
+
     /// True if none of the outermost `n` levels is substituted (a level of
     /// undeduced arguments keeps its parameters, as a class template's
     /// does in the guide of a constructor template, WP-134).

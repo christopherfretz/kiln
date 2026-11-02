@@ -347,7 +347,8 @@ impl Sema<'_, '_> {
                 let mut kept = 0usize;
                 for (j, &t) in tys.iter().enumerate() {
                     let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
-                        v.push(sub.ty(t, loc)?);
+                        let t = sub.ty(t, loc)?;
+                        v.push(sub.param_type(t, loc)?);
                         continue;
                     };
                     if j + 1 == tys.len() {
@@ -356,7 +357,9 @@ impl Sema<'_, '_> {
                     }
                     match sub.expand_pattern_at(None, |sub| sub.ty(pat, loc))? {
                         crate::templ::pack::Expansion::Elements(e) => {
-                            v.extend(e);
+                            for t in e {
+                                v.push(sub.param_type(t, loc)?);
+                            }
                             kept += 1;
                         }
                         crate::templ::pack::Expansion::Unexpanded(_) => v.push(t),
