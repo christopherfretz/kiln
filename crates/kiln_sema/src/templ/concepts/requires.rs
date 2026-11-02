@@ -58,6 +58,9 @@ impl Substituter<'_, '_, '_> {
         for &p in params {
             let n = *self.sema.ast.decls.get(p);
             let ty = n.ty().unwrap_or(QualType::ERROR);
+            // The function-scope depth stays (`ParamData::scope_depth`).
+            let depth =
+                self.sema.ast.decls.param(p).map_or(0, |x| x.flags & ParamData::SCOPE_DEPTH_MASK);
             let pack = self
                 .sema
                 .ast
@@ -79,7 +82,8 @@ impl Substituter<'_, '_, '_> {
                         let mut decls = Vec::with_capacity(v.len());
                         for t in v {
                             let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
-                            let np = self.sema.builder().param(body, n.name(), n.loc(), t, idx, 0);
+                            let np =
+                                self.sema.builder().param(body, n.name(), n.loc(), t, idx, depth);
                             decls.push(np);
                             new_params.push(np);
                         }
@@ -96,7 +100,7 @@ impl Substituter<'_, '_, '_> {
                             n.loc(),
                             t,
                             idx,
-                            ParamData::PACK,
+                            ParamData::PACK | depth,
                         );
                         self.locals.insert(p, DeclOrPack::Decl(np));
                         new_params.push(np);
@@ -123,7 +127,7 @@ impl Substituter<'_, '_, '_> {
             match r {
                 Some((Some(t), Ok(()))) => {
                     let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
-                    let np = self.sema.builder().param(body, n.name(), n.loc(), t, idx, 0);
+                    let np = self.sema.builder().param(body, n.name(), n.loc(), t, idx, depth);
                     self.locals.insert(p, DeclOrPack::Decl(np));
                     new_params.push(np);
                 }

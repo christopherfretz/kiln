@@ -1345,7 +1345,8 @@ pub struct ParamData {
     /// The parameter's position.
     pub index: u16,
     /// Flags: [`ParamData::EXPLICIT_OBJECT`], [`ParamData::PACK`],
-    /// [`ParamData::DEFAULT_ARG_PENDING`].
+    /// [`ParamData::DEFAULT_ARG_PENDING`]; the high byte holds the
+    /// function-scope depth ([`ParamData::scope_depth`]).
     pub flags: u16,
 }
 
@@ -1358,6 +1359,25 @@ impl ParamData {
     /// (in-class member functions, [class.mem]/7); `default_arg` is set
     /// when parsing finishes.
     pub const DEFAULT_ARG_PENDING: u16 = 4;
+    /// The bits of `flags` holding the function-scope depth.
+    pub const SCOPE_DEPTH_MASK: u16 = 0xff00;
+
+    /// The `flags` bits recording function-scope depth `depth` (clamped
+    /// to 255).
+    pub fn scope_depth_flags(depth: usize) -> u16 {
+        u16::try_from(depth.min(0xff)).unwrap_or(0xff) << 8
+    }
+
+    /// The function-scope depth: how many function prototype scopes
+    /// enclose the parameter's own ([basic.scope.param]; clang's
+    /// `getFunctionScopeDepth`). 0 for a parameter of a function declared
+    /// outside any parameter-declaration-clause, 1 for one of a function
+    /// type in such a function's parameter (`void f(int (*)(int a))`).
+    /// The Itanium `fL<L>p` mangling of a parameter reference counts the
+    /// prototype scopes between the reference and the parameter's.
+    pub fn scope_depth(&self) -> u32 {
+        u32::from(self.flags >> 8)
+    }
 }
 
 /// Payload of `Typedef` / `TypeAlias` (16 bytes).

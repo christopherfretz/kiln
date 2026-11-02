@@ -386,6 +386,8 @@ impl Substituter<'_, '_, '_> {
         for p in params {
             let n = *self.sema.ast.decls.get(p);
             let pd = self.sema.ast.decls.param(p).copied();
+            // The function-scope depth stays (`ParamData::scope_depth`).
+            let depth = pd.map_or(0, |x| x.flags & ParamData::SCOPE_DEPTH_MASK);
             let t = pd.and_then(|x| x.original_ty).unwrap_or_else(|| self.decl_ty(p));
             let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
             if pd.is_some_and(|x| x.flags & ParamData::PACK != 0)
@@ -409,7 +411,7 @@ impl Substituter<'_, '_, '_> {
                             loc,
                             ty,
                             idx,
-                            ParamData::PACK,
+                            ParamData::PACK | depth,
                         );
                         self.sema.unowned_params.insert(np);
                         self.locals.insert(p, DeclOrPack::Decl(np));
@@ -422,7 +424,8 @@ impl Substituter<'_, '_, '_> {
                     let ty = self.param_type(ty, loc)?;
                     let ctx = self.sema.ctx;
                     let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
-                    let np = self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, 0);
+                    let np =
+                        self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, depth);
                     self.sema.unowned_params.insert(np);
                     decls.push(np);
                     // The elements share the pack's name (carried by
@@ -448,7 +451,8 @@ impl Substituter<'_, '_, '_> {
             let ctx = self.sema.ctx;
             let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
             let eo = pd.map_or(0, |x| x.flags & ParamData::EXPLICIT_OBJECT);
-            let np = self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo);
+            let np =
+                self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo | depth);
             self.sema.unowned_params.insert(np);
             self.locals.insert(p, DeclOrPack::Decl(np));
             // The type as declared is kept only while still dependent (a

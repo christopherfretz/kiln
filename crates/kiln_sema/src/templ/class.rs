@@ -10,7 +10,7 @@ use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeView};
+use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeFlags, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -40,6 +40,7 @@ struct SavedState {
     enums: Vec<crate::decl::EnumBuild>,
     braced_args: Vec<(kiln_ast::ExprId, crate::init::InitList)>,
     prototype_params: Vec<crate::decl::PrototypeFrame>,
+    requires_param_scopes: usize,
     deferring_call_ref: bool,
     deferred_call_refs: Vec<(kiln_ast::ExprId, DeclId)>,
     classes: Vec<crate::class::ClassBuild>,
@@ -79,6 +80,7 @@ impl Sema<'_, '_> {
             enums: std::mem::take(&mut self.enums),
             braced_args: std::mem::take(&mut self.braced_args),
             prototype_params: std::mem::take(&mut self.prototype_params),
+            requires_param_scopes: std::mem::take(&mut self.requires_param_scopes),
             deferring_call_ref: std::mem::take(&mut self.deferring_call_ref),
             deferred_call_refs: std::mem::take(&mut self.deferred_call_refs),
             classes: std::mem::take(&mut self.classes),
@@ -136,6 +138,7 @@ impl Sema<'_, '_> {
         self.enums = saved.enums;
         self.braced_args = saved.braced_args;
         self.prototype_params = saved.prototype_params;
+        self.requires_param_scopes = saved.requires_param_scopes;
         self.deferring_call_ref = saved.deferring_call_ref;
         self.deferred_call_refs = saved.deferred_call_refs;
         self.classes = saved.classes;
@@ -289,6 +292,16 @@ impl Sema<'_, '_> {
     ) -> Result<QualType, ()> {
         let tmpl = self.ast.first(tmpl);
         let conv = self.check_template_args(tmpl, written, arg_locs, loc)?;
+        // [temp.names]/9: a non-dependent alias template-id requires the
+        // alias's associated constraints satisfied (clang's
+        // `CheckTemplateIdType`; a SFINAE failure in an immediate context,
+        // so `requires { typename std::projected<int, F>; }` is false).
+        let dependent = (self.ast.types.arg_list_flags(conv.sugared)
+            | self.ast.types.template_name_flags(name))
+        .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
+        if !dependent {
+            self.ensure_template_constraints(tmpl, conv.sugared, 3, loc)?;
+        }
         let list = self.ast.types.arg_list(written);
         if let Some(&u) = self.inst.alias_cache.get(&(tmpl, conv.canonical)) {
             return Ok(self.ast.types.template_specialization(name, list, Some(u), true));
@@ -1487,12 +1500,7 @@ impl Substituter<'_, '_, '_> {
             }
             _ => (DeclName::ident(self.sema.nns_last_name(pnns).ok_or(SubstFail)?), true),
         };
-        let packed = self
-            .sema
-            .ast
-            .types
-            .nns_flags(pnns)
-            .contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK);
+        let packed = self.sema.ast.types.nns_flags(pnns).contains(TypeFlags::UNEXPANDED_PACK);
         let nnss = if packed {
             // `using Bases::operator()...;` ([temp.variadic]/5): one
             // using-declarator per element.
