@@ -939,7 +939,7 @@ impl Sema<'_, '_> {
         braced: bool,
     ) -> Option<bool> {
         let elems = self.aggregate_elements(to)?;
-        if !braced && elems.is_empty() {
+        if !braced && self.aggregate_has_no_elements(to) {
             return Some(false);
         }
         let opts = IcsOptions::NONE;
@@ -1098,7 +1098,7 @@ impl Sema<'_, '_> {
     pub(crate) fn has_default_ctor_cheap(&mut self, c: DeclId) -> bool {
         let c = self.class_def(c);
         self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
-        let ctors: Vec<DeclId> = self.ast.constructors(c).iter().collect();
+        let ctors: Vec<DeclId> = self.usable_ctors(c);
         ctors
             .into_iter()
             .any(|f| self.kind_of(f) == DeclKind::CXXConstructor && self.fn_min_args(f) == 0)
@@ -1121,7 +1121,7 @@ impl Sema<'_, '_> {
         self.ensure_implicit(c, crate::class::SpecialKind::MoveCtor);
         let mut found = std::mem::take(&mut set.found);
         found.clear();
-        found.extend(self.ast.constructors(c).iter());
+        found.extend(self.usable_ctors(c));
         found.extend(self.ctor_shadows(c));
         self.add_found_candidates(set, &found, CandidateKind::Ctor, first_opts, list_only);
         set.found = found;
@@ -1410,7 +1410,7 @@ impl Sema<'_, '_> {
             self.ensure_implicit(c, crate::class::SpecialKind::MoveCtor);
             let mut found = std::mem::take(&mut set.found);
             found.clear();
-            found.extend(self.ast.constructors(c).iter());
+            found.extend(self.usable_ctors(c));
             if a.list.is_none() {
                 let mut params = Vec::new();
                 found.retain(|&f| {

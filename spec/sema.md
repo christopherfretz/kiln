@@ -1199,7 +1199,15 @@ and returns the scope it names:
     - Known clang divergence: clang mangles whichever redeclaration it
       reaches first. Take an entity declared in `A::I::R` and defined in
       the reopening before any use. Clang uses the reopening's `A::R`
-      path and kiln uses `A::I::R`. clang 22 behaves the same.
+      path and kiln uses `A::I::R`. clang 22 behaves the same. This
+      deviation is kept (WP-325): mangling one fixed declaration keeps
+      the symbol independent of declaration and use order. It is pinned
+      to that case only. An entity redeclared or defined in another
+      definition of the same namespace (`namespace A { inline namespace
+      I { namespace R {` again, or `namespace A::inline I::R {`) mangles
+      identically under both compilers (differential run test
+      tests/conformance/namespace.def/redeclaration-mangling.cpp, which
+      links only if kiln emits clang's symbols).
     - Test: tests/codegen/namespace_reopen_inline.cpp (IR diff against
       clang++-19 on both triples).
   - An unnamed namespace is created once per scope and gets an
@@ -1399,7 +1407,27 @@ specification as written (`TypeNames` prints ` noexcept`,
   address that reaches it fails deduction with `Tdk::Invalid`, so it is
   no candidate and gets no note (spec/sema-templates.md §5.7). An
   explicit specialization declarator with an invalid parameter matches
-  no template and reports nothing more (WP-308).
+  no template and reports nothing more (WP-308). An explicit
+  specialization `template <> void f(int);` with nothing named `f`
+  visible reports "no function template matches" and declares a plain,
+  invalid function `f` (clang, WP-318; spec/sema-templates.md §6.9), so
+  a later `f(1)` is quiet.
+  A constructor or constructor template with an invalid parameter type
+  (`S(u1)`) is invalid (`declare.rs`, `fparams` validity) and, as
+  clang's `addedMember`, LookupSpecialMember and
+  `ResolveConstructorOverload` ignore invalid constructors, it is not
+  user-declared (the class stays an aggregate and keeps its implicit
+  default constructor, `implicit.rs` `scan_declared`) and is no
+  candidate (`ctor_select.rs` `usable_ctors`, used by constructor
+  overload resolution, the implicit conversion sequences and special
+  member deletion): `S s{1, 2};` is "excess elements in struct
+  initializer" and "no matching constructor" lists no invalid
+  constructor. An implicit class template specialization whose pattern
+  has an invalid member (a field, variable, function, or a member
+  template whose pattern is invalid) is itself invalid, as clang's
+  `InstantiateClass` (`templ/class.rs`); its initializations are not
+  checked (WP-318,
+  `tests/conformance/dcl.init.aggr/invalid-constructor-keeps-aggregate.cpp`).
   Tests: `dcl.stc/function-storage-class.cpp`,
   `dcl.fct.default/invalid-default-arg.cpp`,
   `except.spec/redecl-invalid-decl.cpp`,
@@ -2224,7 +2252,11 @@ for them.
   cast written `(void*)` (exactly, not through a typedef) warns
   `expression result unused; should this cast be to 'void'?`
   (-Wunused-value, clang `warn_unused_voidptr`) with only the fix-it
-  removing the `*` as its range (WP-203).
+  removing the `*` as its range (WP-203). The warning's location is the
+  expression's begin location, so an unused qualified name (`N::x;`,
+  `::N::x;`, `N::v<int>;`) points at the start of its
+  nested-name-specifier, as clang's `DeclRefExpr::getBeginLoc` (WP-318,
+  `tests/conformance/expr.prim.id.qual/unused-value-qualified-name-column.cpp`).
   - `emit_unused` (WP-182) follows clang's order: a comparison is
     `-Wunused-comparison` only when it is the unused expression itself
     (`top_comparison`: not parenthesized, not a comma's right operand or
@@ -3249,6 +3281,20 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived
     class type is initialized from that element ([dcl.init.list]/3.2)
+  - brace elision never enters an aggregate with no elements
+    ([dcl.init.aggr]/2: no direct bases and no members but unnamed
+    bit-fields, or an array of bound 0; `aggregate_has_no_elements`).
+    [dcl.init.aggr]/16 takes no clause for such a subaggregate; clang and
+    GCC reject the unbraced clause instead, and kiln follows them:
+    `initializer for aggregate with no elements requires explicit braces`
+    (`sema_implicit_empty_initializer`) at the clause, which is consumed
+    (the next clause initializes the next element) while the element
+    recovers. With `struct E {};`, `struct D2 { E e; int i; }; D2 d{1, 2};`
+    has one error (at `1`), `struct F { E e[2]; int x; }; F f{1, 2};` has
+    two (one per array element) and `D2 d{{}, 2};` none. The overload
+    viability walk (`aggregate_list_walk`, spec/sema-overload.md) uses
+    the same predicate. Test:
+    tests/conformance/dcl.init.aggr/brace-elision-empty-aggregate.cpp
   - vector members (WP-173, clang `CheckSubElementType`): a GNU vector
     member cannot be initialized from a scalar, so a scalar starts a
     brace-elided list of up to N elements (`elided_vector_init`). A
@@ -3427,7 +3473,13 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   invalid variable whose type is a non-dependent reference (`S::c &r;`
   with no `S::c`, its type recovered to `int &`, spec/parse.md §2.1)
   still reports `declaration of reference variable 'r' requires an
-  initializer`; no other check runs for an invalid variable.
+  initializer`; no other check runs for an invalid variable. A
+  dependent reference type (`T &r;` in a template) is reported at the
+  template definition, with no note, as clang checks a reference type
+  before it stops at a dependent one, and again with the instantiation
+  note for each instantiation (`per_instantiation`, WP-318); a dependent
+  type that is not syntactically a reference waits for instantiation
+  (`tests/conformance/dcl.ref/dependent-uninitialized-reference.cpp`).
 - **Initializer of an invalid variable** (clang `AddInitializerToDecl`,
   WP-308): `act_on_init` discards it unchecked, so `S::c &r = 1;`
   reports only the decl-specifier

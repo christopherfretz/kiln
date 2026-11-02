@@ -13,7 +13,7 @@ use kiln_ast::ids::RawId;
 use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{
-    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeView,
+    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeFlags, TypeView,
 };
 use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::{DiagId, FixIt};
@@ -731,7 +731,9 @@ impl Sema<'_, '_> {
             self.warn_redundant_parens(None, d);
         }
         // [dcl.type.class.deduct]/2.
-        let mut ty = self.ctad_declarator_check(base, spec_loc, d);
+        let ty = self.ctad_declarator_check(base, spec_loc, d);
+        // [dcl.spec.auto.general]/2-5.
+        let mut ty = self.auto_declarator_check(ty, spec_loc, d);
         let name = self.declarator_name(d);
         let mut prev_ref = false;
         for (i, chunk) in d.chunks.iter().enumerate().rev() {
@@ -1198,8 +1200,17 @@ impl Sema<'_, '_> {
         ty = self.adjust_param_type(ty);
         let original_ty = (ty != declared).then_some(declared);
         if let Some(l) = d.ellipsis {
-            // [dcl.fct]/16: a function parameter pack `T... x`.
-            ty = self.act_pack_expansion_type(ty, l);
+            // [dcl.fct]/16, [temp.variadic]/5: a function parameter pack
+            // `T... x` names a pack; else clang's
+            // `err_function_parameter_pack_without_parameter_packs`, which
+            // prints the declared (unadjusted) type and drops the `...`.
+            if self.ast.types.flags(declared.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
+                ty = self.act_pack_expansion_type(ty, l);
+            } else if !self.is_error_type(declared) {
+                let m =
+                    self.diag(DiagId::sema_param_pack_without_packs, l).arg(self.ty_arg(declared));
+                self.emit(m);
+            }
         }
         ParamInfo {
             name: d.name,
@@ -1942,7 +1953,7 @@ impl Sema<'_, '_> {
                 self.templ.cur = None;
             }
         }
-        let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
@@ -1950,7 +1961,11 @@ impl Sema<'_, '_> {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
-            return self.act_on_function_spec_declarator(ds, ty, d, invalid);
+            match self.act_on_function_spec_declarator(ds, ty, d, invalid) {
+                Ok(r) => return r,
+                // No template to specialize: a plain, invalid function.
+                Err(()) => invalid = true,
+            }
         }
         if let Some((ext, _)) = self.templ.explicit_inst.filter(|_| self.at_explicit_head()) {
             self.templ.explicit_inst = None;
@@ -2453,6 +2468,17 @@ impl Sema<'_, '_> {
         }
         self.register_local(name, td);
         td
+    }
+
+    /// Where the type-constraint of the constrained placeholder in the
+    /// type `ds d` declares is written: the decl-specifier's, else one in
+    /// a trailing return type (`auto (*v)() -> C auto`).
+    pub(crate) fn placeholder_constraint_loc(ds: &DeclSpec, d: &Declarator) -> Option<Loc> {
+        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            Some(ds.constraint_loc)
+        } else {
+            d.trailing_constraint.is_valid().then_some(d.trailing_constraint)
+        }
     }
 
     /// The outermost `&`/`&&` of `d` when its declared type is a
@@ -3118,8 +3144,8 @@ impl Sema<'_, '_> {
         {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
-        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
-            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
+            self.inst.concepts.placeholder_locs.insert(f, l);
         }
         if d.missing_typename {
             self.missing_typename_fns.insert(f);
@@ -3535,11 +3561,16 @@ impl Sema<'_, '_> {
         let invalid = invalid || {
             let kw = self.placeholder_keyword(ty);
             if let Some(kw) = kw {
-                let tag = self.ast.decls.record(ctx).map_or(TagKind::Struct, |r| r.tag);
+                use crate::templ::ctad_site::site;
+                let s = match self.ast.decls.record(ctx).map_or(TagKind::Struct, |r| r.tag) {
+                    TagKind::Struct => site::STRUCT_MEMBER,
+                    TagKind::Union => site::UNION_MEMBER,
+                    TagKind::Class => site::CLASS_MEMBER,
+                };
                 let msg = self
-                    .diag(DiagId::sema_auto_not_allowed_field, ds.type_loc.unwrap_or(ds.loc))
+                    .diag(DiagId::sema_auto_not_allowed, ds.type_loc.unwrap_or(ds.loc))
                     .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
-                    .arg(tag as u8);
+                    .arg(s);
                 // Once per declarator of a group (as clang).
                 self.emit(msg.allow_duplicate());
             }
@@ -3600,8 +3631,8 @@ impl Sema<'_, '_> {
             self.note_type_spec_loc(f, ds, d.name_loc());
             self.note_ref_loc(f, d, ty);
         }
-        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
-            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
+            self.inst.concepts.placeholder_locs.insert(f, l);
         }
         if d.init_style.is_some() {
             self.special.nsdmi.insert(f);
@@ -3978,9 +4009,9 @@ impl Sema<'_, '_> {
         }
         self.note_ref_loc(v, d, ty);
         self.lambda_mangle.var = Some(v);
-        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
             // The constrained placeholder's diagnostics point here.
-            self.inst.concepts.placeholder_locs.insert(v, ds.constraint_loc);
+            self.inst.concepts.placeholder_locs.insert(v, l);
         }
         self.check_abstract_var(v);
         self.check_void_init_var(v, d);
@@ -4772,8 +4803,9 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_reference(ty) {
             if spec.storage() != VarStorage::Extern {
+                // Repeats the template definition's report (WP-318).
                 let msg = self.diag(DiagId::sema_reference_var_requires_init, loc).arg(name);
-                self.emit(msg);
+                self.emit(msg.per_instantiation());
             }
             return;
         }
@@ -4823,7 +4855,11 @@ impl Sema<'_, '_> {
     /// variable, a reference type, so `S::name &r;` with no `S::name`
     /// (whose type recovers to `int`, [dcl.type.simple]) reports
     /// "declaration of reference variable 'r' requires an initializer"
-    /// after "no type named 'name' in 'S'" (WP-308). True if it reported.
+    /// after "no type named 'name' in 'S'" (WP-308); and, for a dependent
+    /// reference type, `T &r;` in a template pattern reports at the
+    /// definition (clang checks the reference before it stops at a
+    /// dependent type) and again, with the instantiation note, for each
+    /// instantiation (WP-318). True if it reported.
     fn uninit_array_or_reference(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
         let Some(ty) = vn.ty() else { return false };
@@ -4846,9 +4882,8 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return true;
         }
-        if !vn.has(DeclFlags::INVALID)
-            || self.ast.types.is_dependent(ty)
-            || !self.ast.types.is_reference(ty)
+        if !self.ast.types.is_reference(ty)
+            || !(vn.has(DeclFlags::INVALID) || self.ast.types.is_dependent(ty))
         {
             return false;
         }
