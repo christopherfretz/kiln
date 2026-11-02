@@ -1360,6 +1360,30 @@ and returns the scope it names:
   - `alignas`/`aligned`, `packed`
   - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`,
     `hot` (`AttrKind::HOT`, WP-172)
+  - `optnone` / `minsize` (GNU syntax or `clang::`; `gnu::` and
+    unscoped standard spellings are unknown) and `naked` (GNU syntax or
+    `gnu::`), WP-405, as clang 19/22. Each takes no arguments (`'X'
+    attribute takes no arguments`). On a non-function, `optnone` and
+    `naked` warn (`only applies to functions and Objective-C methods` /
+    `only applies to functions`) and `minsize` is an error with
+    `optnone`'s text. `check_optnone_conflicts` (after
+    `check_decl_attrs`): with `optnone` on this declaration or a prior
+    one, `always_inline` / `minsize` on this declaration, or (when this
+    declaration brings the first `optnone`) on prior ones, get `'X'
+    attribute ignored` [-Wignored-attributes] with `conflicting attribute
+    is here` at the `optnone`, in source order, and are dropped from this
+    declaration. `check_naked_body` (at the end of a definition, clang
+    `ActOnFinishFunctionBody`): the first body statement that is not an
+    asm statement, a null statement or a declaration of local register
+    variables without initializers is `non-ASM statement in naked
+    function is not supported` with `attribute is here` at `naked`, and
+    the function becomes invalid. An asm operand naming a parameter or
+    `this` (clang `CheckNakedParmReference`, last child first) is
+    `parameter references not allowed in naked functions` / `'this'
+    pointer references not allowed in naked functions` with the same
+    note, and the asm statement is dropped. A naked function gets no
+    fall-off (-Wreturn-type) or noreturn-returns warning. Test:
+    `tests/conformance/dcl.attr/gnu-optnone-minsize-naked.cpp`.
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)

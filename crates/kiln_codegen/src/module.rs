@@ -849,34 +849,69 @@ impl<'a> Cg<'a> {
     }
 
     /// Whether a redeclaration of function `d` carries `always_inline`
-    /// and none carries `noinline` (clang
-    /// `SetLLVMFunctionAttributesForDefinition`: `noinline` wins; the
-    /// definition gets `alwaysinline` instead of `noinline optnone`).
+    /// and none carries `noinline` or `optnone` (clang
+    /// `SetLLVMFunctionAttributesForDefinition`: `noinline` wins, and
+    /// `optnone` overrides `always_inline`; the definition gets
+    /// `alwaysinline` instead of `noinline optnone`).
     pub(crate) fn has_always_inline_attr(&self, d: DeclId) -> bool {
         use kiln_ast::attr::AttrKind as K;
-        self.has_fn_attr(d, K::ALWAYS_INLINE) && !self.has_fn_attr(d, K::NOINLINE)
+        self.has_fn_attr(d, K::ALWAYS_INLINE)
+            && !self.has_fn_attr(d, K::NOINLINE)
+            && !self.has_fn_attr(d, K::OPTNONE)
     }
 
     /// The `inline` part of a definition's attributes (clang
-    /// `SetLLVMFunctionAttributesForDefinition`): `always_inline` gives
-    /// `alwaysinline`, or `noinline` alone when `noinline` is also present
-    /// (and keeps `optnone` off at -O0); otherwise -O0 gives `noinline
-    /// optnone`, and above -O0 a `noinline` function keeps `noinline` and
-    /// an `inline`-specified one (on a redeclaration or one of its
-    /// template pattern's) gets `inlinehint`.
+    /// `SetLLVMFunctionAttributesForDefinition`). `optnone` on a
+    /// redeclaration, or -O0 without `minsize` / `always_inline`, gives
+    /// `noinline optnone` (an `optnone` attribute overrides `always_inline`
+    /// and `minsize`); otherwise `naked` gives `noinline`, `always_inline`
+    /// gives `alwaysinline` (`noinline` alone when `noinline` is also
+    /// present), -O0 gives `noinline` (a `minsize` function), and above -O0
+    /// a `noinline` function keeps `noinline` and an `inline`-specified one
+    /// (on a redeclaration or one of its template pattern's) gets
+    /// `inlinehint`. [`Self::def_opt_attrs`] adds `naked`, `minsize` and
+    /// `optsize`.
     pub(crate) fn def_inline_attrs(&self, d: DeclId) -> DefInline {
         use kiln_ast::attr::AttrKind as K;
         let noinline = self.has_fn_attr(d, K::NOINLINE);
-        if self.has_fn_attr(d, K::ALWAYS_INLINE) {
-            if noinline { DefInline::NoInline } else { DefInline::Always }
-        } else if !self.opts.optimize {
+        let optnone = self.has_fn_attr(d, K::OPTNONE);
+        let always = self.has_fn_attr(d, K::ALWAYS_INLINE);
+        let should_optnone =
+            !self.opts.optimize && !always && !self.has_fn_attr(d, K::MINSIZE);
+        if optnone || should_optnone {
             DefInline::OptNone
-        } else if noinline {
+        } else if self.has_fn_attr(d, K::NAKED) {
+            DefInline::NoInline
+        } else if always {
+            if noinline { DefInline::NoInline } else { DefInline::Always }
+        } else if !self.opts.optimize || noinline {
             DefInline::NoInline
         } else if self.inline_specified(d) {
             DefInline::Hint
         } else {
             DefInline::Plain
+        }
+    }
+
+    /// The `naked`, `optsize` and `minsize` attributes of definition `d`
+    /// whose inlining attributes are `inline` (clang
+    /// `SetLLVMFunctionAttributesForDefinition`): `naked` from the
+    /// attribute; without an `optnone` attribute, `cold` adds `optsize`
+    /// unless the definition is `optnone` by -O0, and `minsize` adds
+    /// `minsize`.
+    pub(crate) fn def_opt_attrs(&self, d: DeclId, inline: DefInline, out: &mut Vec<Attr>) {
+        use kiln_ast::attr::AttrKind as K;
+        if self.has_fn_attr(d, K::NAKED) {
+            out.push(Attr::Flag(AttrKind::Naked));
+        }
+        if self.has_fn_attr(d, K::OPTNONE) {
+            return;
+        }
+        if self.has_fn_attr(d, K::COLD) && inline != DefInline::OptNone {
+            out.push(Attr::Flag(AttrKind::OptimizeForSize));
+        }
+        if self.has_fn_attr(d, K::MINSIZE) {
+            out.push(Attr::Flag(AttrKind::MinSize));
         }
     }
 
@@ -896,7 +931,7 @@ impl<'a> Cg<'a> {
     }
 
     /// Whether a redeclaration of `d` carries an attribute of kind `k`.
-    fn has_fn_attr(&self, d: DeclId, k: kiln_ast::attr::AttrKind) -> bool {
+    pub(crate) fn has_fn_attr(&self, d: DeclId, k: kiln_ast::attr::AttrKind) -> bool {
         let ast = self.ast;
         ast.redecls_of(d).any(|r| {
             ast.lists
@@ -1644,7 +1679,7 @@ impl<'a> Cg<'a> {
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
         }
-        if inline == DefInline::NoInline || (inline == DefInline::OptNone && !self.opts.optimize) {
+        if inline == DefInline::NoInline || inline == DefInline::OptNone {
             a.push(Attr::Flag(AttrKind::NoInline));
         }
         if is_main {
@@ -1656,7 +1691,7 @@ impl<'a> Cg<'a> {
         if nounwind {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
-        if inline == DefInline::OptNone && !self.opts.optimize {
+        if inline == DefInline::OptNone {
             a.push(Attr::Flag(AttrKind::OptimizeNone));
         }
         a.extend(extra);
@@ -2072,10 +2107,10 @@ pub(crate) fn gval(g: GlobalId) -> Value {
 /// The inlining attributes of a definition ([`Cg::def_inline_attrs`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DefInline {
-    /// `noinline optnone`, the default at -O0 (nothing above -O0).
+    /// `noinline optnone`: the default at -O0, or an `optnone` attribute.
     OptNone,
-    /// `noinline` alone: `always_inline` together with `noinline`, or
-    /// `noinline` above -O0.
+    /// `noinline` alone: `always_inline` together with `noinline`,
+    /// `naked`, `minsize` at -O0, or `noinline` above -O0.
     NoInline,
     /// `alwaysinline`.
     Always,

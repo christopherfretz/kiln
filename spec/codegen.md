@@ -759,11 +759,17 @@ The normative description is spec/driver.md "Code generation". In short:
   `stmt.ranged/constexpr-sum`) are `xfail(kiln)`: libstdc++'s
   `c++config.h` uses `decltype`, which kiln_parse does not support yet.
 
-### Inlining attributes on definitions (WP-389, WP-397)
+### Inlining attributes on definitions (WP-389, WP-397, WP-405)
 - `Cg::def_inline_attrs` follows clang's
-  `SetLLVMFunctionAttributesForDefinition`: `always_inline` gives
+  `SetLLVMFunctionAttributesForDefinition`: an `optnone` attribute on
+  any redeclaration, or `-O0` on a function without `minsize` and
+  `always_inline`, gives `noinline optnone` (`optnone` overrides
+  `always_inline` and `minsize`: neither is emitted, and
+  `Cg::has_always_inline_attr` is false); otherwise `naked` gives
+  `noinline`; `always_inline` gives
   `alwaysinline` at every level, or `noinline` alone when `noinline` is
-  also present; otherwise `-O0` gives `noinline optnone`; above `-O0`
+  also present; otherwise `-O0` gives `noinline` (a `minsize`
+  function); above `-O0`
   `noinline` (`[[gnu::noinline]]`, `[[clang::noinline]]`, `__attribute__`)
   stays `noinline`, and a function `inline`-specified on any of its
   declarations, or one instantiated from a pattern that is (not for an
@@ -772,6 +778,20 @@ The normative description is spec/driver.md "Code generation". In short:
   definitions are implicitly inline but not inline-specified, so they
   get neither. Tests: `tests/codegen/noinline_matrix_o{0,1,2}.cpp`
   (exact under oracle 19 on both targets).
+- `Cg::def_opt_attrs` adds `naked` for a `naked` function and, without
+  an `optnone` attribute, `minsize` for `minsize` and `optsize` for
+  `cold` unless the definition is `optnone` by `-O0` (`cold` itself
+  comes from `cold_hot_attrs`, also on `optnone` definitions).
+  Declarations and call sites get none of `optnone`, `minsize`,
+  `naked`. A naked definition (`Fx::naked`) has no parameter prologue
+  (no parameter or `this` slots: clang `EmitFunctionProlog` returns
+  early) and its epilogue is `unreachable` instead of a return (clang
+  `EmitFunctionEpilog`); falling off a value-returning naked function
+  still traps first at `-O0`. Falling off the end of any value-returning
+  function is `llvm.trap` + `unreachable` at `-O0` and `unreachable`
+  alone above it (clang `GenerateCode`). Tests:
+  `tests/codegen/optnone_minsize_naked_o{0,1}.cpp` (exact under oracle
+  19, structural under 22, on both targets).
 - A template parameter object is emitted `linkonce_odr` with a comdat
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
