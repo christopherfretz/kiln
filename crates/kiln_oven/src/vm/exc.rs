@@ -216,7 +216,16 @@ impl Oven {
                 }
             }
             if self.stack.len() > depth {
-                // The frame is left as by a return, without a result.
+                // The frame is left as by a return, without a result: its
+                // objects are destroyed ([except.ctor]/1), the trivially
+                // destructible ones checked as by a return.
+                if self.mem.life_frame
+                    && let Some(fr) = self.stack.last()
+                    && fr.mark != BOTTOM
+                    && let Err(f) = self.scope_life(b.ast(), fr.mark, super::life::Objs::All)
+                {
+                    return Err((f, exc.pc as usize));
+                }
                 let Some(fr) = self.stack.pop() else { break };
                 if fr.mark != BOTTOM {
                     self.mem.release(fr.mark, &self.types);

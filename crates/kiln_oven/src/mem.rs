@@ -420,14 +420,22 @@ pub(crate) enum MemFault {
     Speculative,
 }
 
+/// Dead frame slots kept from reuse: a pointer to a just-ended object
+/// (a callee's local after a return or an unwinding, a block's local
+/// after its scope, whose slot the next frame object would take) is then
+/// still "a variable whose lifetime has ended" with its declaration, not
+/// a stale slot (clang's notes; spec/oven.md "Exceptions").
+const FRAME_QUARANTINE: usize = 16;
+
 #[derive(Debug)]
 pub(crate) struct Memory {
     pub frame: Space,
     pub heap: Space,
     pub stat: Space,
     pub slots: Vec<Alloc>,
-    /// Dead slots, reused first-in first-out so a dangling pointer stays
-    /// diagnosable (its slot keeps its origin) for as long as possible.
+    /// Dead slots, reused first-in first-out, and only once more than
+    /// [`FRAME_QUARANTINE`] wait, so a dangling pointer stays diagnosable
+    /// (its slot keeps its origin) for as long as possible.
     free: VecDeque<u32>,
     pub live: Vec<u32>,
     pub statics: Vec<Alloc>,
@@ -656,7 +664,8 @@ impl Memory {
             origin,
             frame: self.cur_frame,
         };
-        let slot = if let Some(s) = self.free.pop_front() {
+        let reuse = if self.free.len() > FRAME_QUARANTINE { self.free.pop_front() } else { None };
+        let slot = if let Some(s) = reuse {
             let g = self.slots[s as usize].generation + 1;
             self.slots[s as usize] = Alloc { generation: g, ..a };
             s
