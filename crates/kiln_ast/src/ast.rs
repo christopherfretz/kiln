@@ -390,10 +390,21 @@ impl Ast {
 
     /// The destructor of class `record`, if one has been declared (a table
     /// read: never declares the implicit destructor, which is sema's job).
+    /// Of several prospective destructors ([class.dtor]/4), the one
+    /// selected at the end of the class definition: the first not marked
+    /// [`crate::decl::FnSpec::not_selected`] (before selection, or when
+    /// it failed, the first declared).
     pub fn destructor(&self, record: DeclId) -> Option<DeclId> {
         let ty = self.decls.get(record).ty()?;
         let name = self.names.find_destructor(self.types.canonical(ty).ty())?;
-        self.lookup_local(record, name).iter().next()
+        let found = self.lookup_local(record, name);
+        let first = found.iter().next()?;
+        Some(
+            found
+                .iter()
+                .find(|&d| !self.decls.function(d).is_some_and(|f| f.spec.not_selected()))
+                .unwrap_or(first),
+        )
     }
 
     /// Whether some declaration of function `d` carries a `NoThrowAttr`

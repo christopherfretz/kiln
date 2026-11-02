@@ -737,6 +737,37 @@ warns [-Wclass-conversion]. `explicit` elsewhere: `'explicit' can only be
 applied to a constructor or conversion function`. Selection (converting ctors
 and conversion functions in user-defined conversion sequences) is S3O's.
 
+#### 4.7.1 Prospective destructors ([class.dtor]/4; WP-289)
+A class may declare several *prospective* destructors, distinguished by
+their trailing *requires-clause*s. Every one is an ordinary member in lookup
+(the parser records them all). At the class's closing `}` — of the template
+pattern never, of each instantiation once (`act_on_finish_record_definition`,
+`Sema::select_destructor`, before the special-member bits) — when at least
+one non-`INVALID` prospective destructor has a trailing requires-clause,
+the destructor is selected by overload resolution with an empty argument
+list among them (clang `ComputeSelectedDestructor`): constraints are checked
+([over.match.viable]/3) and the more constrained one wins
+([over.match.best]/2.6, [temp.constr.order]). The outcome:
+- **one best**: it is the destructor; every other prospective destructor is
+  marked `FnSpec::not_selected` (ast.md; clang `isIneligibleOrNotSelected`).
+- **ambiguous**: `destructor of class 'T' is ambiguous` at the class name,
+  then a `candidate function` note per tied candidate.
+- **none viable**: `no viable destructor found for class 'T'` at the class
+  name, then `candidate function not viable: constraints not satisfied` per
+  candidate with its `because ...` satisfaction notes.
+After either error the first declared prospective destructor is used and
+the others are `not_selected`; the class is not made `INVALID` (as clang).
+A class without constrained destructors keeps today's single-destructor
+path. `Ast::destructor` returns the first destructor found that is not
+`not_selected`; the special-member scan (`scan_declared`, §4.1) skips
+`not_selected` ones, so triviality ([class.dtor]/8) and the implicit
+`noexcept` follow the selected destructor only. A destructor has no
+explicit object parameter ([class.dtor]/1), so constraints are the only
+distinction. Not yet diagnosed (follow-ups): a requires-clause on a
+non-templated destructor (only `non-templated function cannot have a
+requires clause` is issued, not the selection error) and on a `virtual`
+destructor (`virtual function cannot have a requires clause`).
+
 ### 4.8 Destruction of variables
 Sema does not insert destructor calls for named objects: a variable, parameter
 or `LifetimeExtendedTemporary` whose type is destructed ([basic.life], clang

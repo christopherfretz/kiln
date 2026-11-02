@@ -228,14 +228,27 @@ impl Types {
     /// byte `off`. A member of non-zero size wins over a zero-size one at
     /// the same offset (a zero-length array, GNU `T x[0]`, holds no byte:
     /// libc++'s `char __padding_[0]` before `__data_` in `basic_string`),
-    /// which is found only when nothing else is there.
+    /// which is found only when nothing else is there. Of two members
+    /// holding it, the one at the greater offset wins: it was placed in
+    /// the other's tail padding (a `[[no_unique_address]]` member or a
+    /// non-POD base, Itanium C++ ABI 2.4 dsize), where the other holds
+    /// no object.
     pub fn field_at(&self, t: OTy, off: u64) -> Option<FieldInfo> {
         let fs = self.fields(t);
         let sized = |f: &&FieldInfo| {
             f.width.is_none() && off >= f.offset && off < f.offset + self.size(f.ty)
         };
-        fs.iter()
-            .find(sized)
+        let union = matches!(self.kind(t), TyKind::Record { union: true, .. });
+        let found = fs.iter().position(|f| sized(&f)).map(|i| {
+            let first = &fs[i];
+            if union {
+                return first;
+            }
+            fs[i + 1..]
+                .iter()
+                .fold(first, |best, f| if f.offset > best.offset && sized(&f) { f } else { best })
+        });
+        found
             .or_else(|| {
                 fs.iter().find(|f| f.width.is_none() && self.size(f.ty) == 0 && off == f.offset)
             })

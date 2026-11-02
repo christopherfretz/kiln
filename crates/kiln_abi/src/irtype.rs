@@ -380,7 +380,17 @@ impl<'a> IrTypes<'a> {
         }
         let fields = props::fields(ast, def);
         if is_union {
-            self.lower_union(&fields, &layout, &mut out);
+            self.lower_union(&fields, &layout, layout.size, &mut out);
+            // clang 19 `lowerUnion(isNonVirtualBaseType)`: a union whose
+            // data size is short of its size (a non-POD member's tail
+            // padding) has a `.base` type of `dsize` bytes, which a
+            // potentially-overlapping member of that union type uses so
+            // later members can live in the tail padding.
+            if layout.nv_size != layout.size {
+                let mut scratch = IrRecord { zero_init: true, ..IrRecord::default() };
+                self.lower_union(&fields, &layout, layout.data_size, &mut scratch);
+                out.base_members = Some(scratch.members);
+            }
             return out;
         }
         let (members, packed) = self.lower_struct(def, &fields, &layout, false, false, &mut out);
@@ -794,13 +804,16 @@ impl<'a> IrTypes<'a> {
         IrType::int_n(f.bit_width.unwrap_or(0).min(s * 8))
     }
 
+    /// clang 19 `CGRecordLowering::lowerUnion`: the storage member of a
+    /// union padded to `layout_size` bytes (its size, or its data size
+    /// for the base-subobject type).
     fn lower_union(
         &mut self,
         fields: &[FieldDesc],
         layout: &kiln_ast::types::RecordLayout,
+        layout_size: u64,
         out: &mut IrRecord,
     ) {
-        let layout_size = layout.size;
         let mut storage: Option<IrType> = None;
         let mut seen_named = false;
         for f in fields {
