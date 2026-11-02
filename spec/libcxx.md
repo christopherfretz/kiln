@@ -111,7 +111,22 @@ kiln_driver --profile <p>` under `/usr/bin/time -f "%e %M"` (`%M` is the
 largest rustc), and `kiln++ -c` of `variant.visit/visit.pass.cpp` with the
 harness flags (best of two; same instantiation counts in every profile):
 
-MEASUREMENTS_TABLE
+| profile | clean build | largest rustc | `visit.pass` | `visit_return_type.pass` |
+|---|---:|---:|---:|---:|
+| `debug` (`dev`) | 24 s | 1.08 GiB | 216 s | 447 s |
+| `harness` | 58 s, 35 s | 1.23 GiB | 7.2 s | 12.3 s |
+| `release` | 44 s, 61 s | 1.62 GiB | 9.2 s | 18.2 s |
+| clang++-19 | | | 9.5 s | 15.7 s |
+
+(Two clean builds where two numbers are given; the spread is the box's
+load, not the profile.) `harness` builds within the 3-minute budget and
+compiles the two tests faster than `release` (0.78x and 0.68x of its
+time; why the thin-LTO build is slower here is not yet investigated), so it
+is the default. The kiln numbers were taken on main `f4e76bcd`, where both
+tests still stop at an ambiguity error (WP-303), so they measure the whole
+instantiation work but not code generation. A debug kiln++ is ~30x slower
+here: `visit_return_type.pass` exceeds even the 300 s `debug` limit, which
+is meant for ordinary tests, not these.
 
 ## Classification
 
