@@ -64,6 +64,7 @@ parse_expected_template_param = Error (0) "expected template parameter";
 parse_expected_type = Error (0) "expected a type";
 parse_expected_unqualified_id = Error (0) "expected unqualified-id";
 parse_expected_while = Error (0) "expected 'while' in do/while loop";
+parse_ext_binding_pack = ExtWarn [Cxx26Extensions] (0) "structured binding packs are a C++2c extension";
 parse_ext_constexpr_if = ExtWarn [Cxx17Extensions] (0) "constexpr if is a C++17 extension";
 parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
 parse_extraneous_closing_brace = Error (0) "extraneous closing brace ('}}')";

@@ -225,8 +225,26 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn decomp_decl(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<DeclId> {
         let (_, v) = self.decomp_declare(d, ctx)?;
         self.var_init(d, v)?;
+        self.remap_binding_pack(d);
         self.sema.diagnose_unused_inst_var(d, v);
         Ok(v)
+    }
+
+    /// Once instantiated decomposition of pattern `d` is complete, its
+    /// structured binding pack (P1061) names the bindings it expanded
+    /// into (spec/sema-templates.md §7.1); a pack whose decomposition
+    /// failed makes every use fail (already diagnosed). A pack that is
+    /// still dependent (a generic lambda's, its levels retained) stays.
+    pub(crate) fn remap_binding_pack(&mut self, d: DeclId) {
+        let old = self.sema.decomp_binding_list(d);
+        let Some(&p) = old.iter().find(|b| self.sema.binding_packs.contains(b)) else { return };
+        let Some(&DeclOrPack::Decl(np)) = self.locals.get(&p) else { return };
+        if let Some(&l) = self.sema.binding_pack_elems.get(&np) {
+            self.locals.insert(p, DeclOrPack::Pack(l));
+        } else if !self.sema.is_pack_decl(np) {
+            self.locals.remove(&p);
+            self.failed_locals.push(p);
+        }
     }
 
     /// Declares pattern decomposition `d` uninitialized: the declaration
@@ -257,7 +275,7 @@ impl Substituter<'_, '_, '_> {
                 crate::declspec::BindingId {
                     name: n.name().as_ident().unwrap_or(Symbol::from_index(0)),
                     loc: n.loc(),
-                    ellipsis: None,
+                    ellipsis: self.sema.binding_packs.contains(&b).then_some(n.loc()),
                     attrs: Vec::new(),
                 }
             })

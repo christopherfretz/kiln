@@ -1897,6 +1897,13 @@ impl Parser<'_, '_> {
                 self.skip_attributes();
             }
             let ellipsis = self.eat(Punct::Ellipsis);
+            if let Some(e) = ellipsis
+                && self.std < kiln_lex::Std::Cxx26
+            {
+                // P1061: clang `ext_cxx_binding_pack`.
+                let w = self.s.diag(DiagId::parse_ext_binding_pack, e);
+                self.emit(w);
+            }
             let Some(name) = self.ident() else {
                 let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
                 self.emit(d);
