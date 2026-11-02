@@ -13,7 +13,7 @@ use kiln_source::Loc;
 
 use crate::compile::{GKind, GState, RetKind, is_local_var};
 use crate::failure::{EvalFailure, FailKind, Note};
-use crate::mem::{Origin, Ptr, flags, fn_ptr};
+use crate::mem::{Origin, Ptr, UNBACKED, flags, fn_ptr};
 use crate::ty::{OTy, TyKind};
 use crate::vm::{Counters, value_len};
 use crate::{Oven, SemaBridge};
@@ -275,7 +275,7 @@ impl Oven {
             }
             p
         } else {
-            self.external(ty, d)
+            self.external(b, ty, d)
         };
         self.regs[0] = u128::from(p);
         let ok = self.exec(b, df, 0).is_ok() && self.leak_notes(b).is_none();
@@ -713,6 +713,9 @@ impl Oven {
         let Some(a) = self.alloc_any(p).copied() else {
             return Err(Freeze::Fault(FailKind::NotConstant));
         };
+        if a.base == UNBACKED {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        }
         let st = p.space();
         let abs = u64::from(a.base) + u64::from(p.off);
         match info.kind {
@@ -811,7 +814,7 @@ impl Oven {
             return Ok(());
         }
         let n = u64::from((f.bit + width).div_ceil(8));
-        let Some(a) = self.alloc_any(p).copied() else {
+        let Some(a) = self.alloc_any(p).copied().filter(|a| a.base != UNBACKED) else {
             return Err(Freeze::Fault(FailKind::NotConstant));
         };
         let abs = u64::from(a.base) + u64::from(p.off) + f.offset;
@@ -942,8 +945,14 @@ impl Oven {
         } else {
             let ty = self.types.intern(b, rq);
             let size = self.types.size(ty);
+            if size > u64::from(u32::MAX) {
+                // Not representable (32-bit offsets): naming it stays
+                // diagnosed, as before C++23.
+                return p;
+            }
             let hu = self.static_flags(ty) & flags::HAS_UNION;
-            let u = self.mem.alloc_static(
+            // No bytes: every access of the object is diagnosed.
+            let u = self.mem.alloc_unbacked(
                 ty,
                 size,
                 flags::EXTERNAL | flags::CONST | hu,
@@ -964,9 +973,21 @@ impl Oven {
         p
     }
 
-    fn external(&mut self, ty: OTy, d: DeclId) -> u64 {
+    /// The object of a variable not usable in constant expressions: every
+    /// access is diagnosed, so it holds no bytes ([`Memory::alloc_unbacked`]),
+    /// except a reference's pointer slot, which [`Oven::bind_unknown`]
+    /// rebinds to its unknown object.
+    ///
+    /// [`Memory::alloc_unbacked`]: crate::mem::Memory::alloc_unbacked
+    fn external(&mut self, b: &mut dyn SemaBridge, ty: OTy, d: DeclId) -> u64 {
         let size = self.types.size(ty);
-        self.mem.alloc_static(ty, size, flags::EXTERNAL | flags::CONST, Origin::External(d))
+        let ast = b.ast();
+        let fl = flags::EXTERNAL | flags::CONST;
+        if ast.decls.get(d).ty().is_some_and(|q| ast.types.is_reference(q)) {
+            self.mem.alloc_static(ty, size, fl, Origin::External(d))
+        } else {
+            self.mem.alloc_unbacked(ty, size, fl, Origin::External(d))
+        }
     }
 
     fn resolve_var(&mut self, b: &mut dyn SemaBridge, g: u32, d: DeclId, top: u32) -> u64 {
@@ -978,7 +999,7 @@ impl Oven {
             self.lax_globals.push(g);
         }
         if !(info.usable || info.lax && self.run.lax) {
-            return self.external(ty, d);
+            return self.external(b, ty, d);
         }
         let hu = self.static_flags(ty);
         match info.state {
@@ -989,7 +1010,7 @@ impl Oven {
                 self.thaw_into(b, cv, p, top);
                 p
             }
-            VarEvalState::NotConstant => self.external(ty, d),
+            VarEvalState::NotConstant => self.external(b, ty, d),
             VarEvalState::Evaluating => {
                 let size = self.types.size(ty);
                 self.mem.alloc_static(
@@ -1000,9 +1021,9 @@ impl Oven {
                 )
             }
             VarEvalState::NotEvaluated => {
-                let Some(init) = info.init else { return self.external(ty, d) };
+                let Some(init) = info.init else { return self.external(b, ty, d) };
                 if self.run.nesting >= MAX_NESTING {
-                    return self.external(ty, d);
+                    return self.external(b, ty, d);
                 }
                 let p = self.placeholder(g, ty, d);
                 self.globals[g as usize].state = GState::Resolved(p);

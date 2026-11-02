@@ -385,7 +385,10 @@ pub fn prepare(
     if d.has_run {
         return Err(Outcome::Unsupported("driver: RUN lines".to_owned()));
     }
-    if !d.module_dependencies.is_empty() {
+    // kiln builds `std`/`std.compat` in-process from libc++'s module
+    // sources (spec/modules.md §2): no flags needed. Other modules have
+    // no source the driver could find.
+    if d.module_dependencies.iter().any(|m| m != "std" && m != "std.compat") {
         return Err(Outcome::Unsupported("driver: modules".to_owned()));
     }
     let flags = d.flags_for(features);
@@ -724,8 +727,9 @@ mod tests {
             p(Kind::Pass, "// ADDITIONAL_COMPILE_FLAGS: %{maybe-include}"),
             Err(Outcome::Unsupported("driver: substitution".into()))
         );
+        assert_eq!(p(Kind::Pass, "// MODULE_DEPENDENCIES: std std.compat"), Ok((vec![], None)));
         assert_eq!(
-            p(Kind::Pass, "// MODULE_DEPENDENCIES: std"),
+            p(Kind::Pass, "// MODULE_DEPENDENCIES: other"),
             Err(Outcome::Unsupported("driver: modules".into()))
         );
         assert_eq!(p(Kind::Pass, "// XFAIL: kiln"), Ok((vec![], Some("kiln".into()))));
