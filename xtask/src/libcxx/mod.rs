@@ -10,6 +10,7 @@ mod directives;
 mod features;
 mod report;
 mod run;
+mod script;
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -447,6 +448,14 @@ fn local_cfgs<'a>(
     v
 }
 
+/// The `lit.local.cfg` of `libcxx/<rel>`'s counterpart `std/<rel>`, which a
+/// `config.load_from_path(localConfig, lit_config)` file loads.
+fn mirror_std_cfg(test_root: &Path, dir: &Path) -> Option<LocalCfg> {
+    let rel = dir.strip_prefix(test_root.join("libcxx")).ok()?;
+    let text = std::fs::read_to_string(test_root.join("std").join(rel).join("lit.local.cfg")).ok()?;
+    Some(LocalCfg::parse(&text))
+}
+
 fn load_local_cfgs(test_root: &Path, tests: &[(PathBuf, String)]) -> HashMap<PathBuf, LocalCfg> {
     let mut cache = HashMap::new();
     for (p, _) in tests {
@@ -455,7 +464,9 @@ fn load_local_cfgs(test_root: &Path, tests: &[(PathBuf, String)]) -> HashMap<Pat
             if !cache.contains_key(d)
                 && let Ok(text) = std::fs::read_to_string(d.join("lit.local.cfg"))
             {
-                cache.insert(d.to_path_buf(), LocalCfg::parse(&text));
+                let mut cfg = LocalCfg::parse(&text);
+                cfg.resolve_mirror(mirror_std_cfg(test_root, d));
+                cache.insert(d.to_path_buf(), cfg);
             }
             if d == test_root {
                 break;
@@ -866,6 +877,22 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(local_cfgs(&cache, &root, &tests[0].0).len(), 0);
         assert_eq!(local_cfgs(&cache, &root, &tests[2].0).len(), 1);
+        // A `libcxx/` directory that loads its `std/` counterpart.
+        let m = root.join("libcxx").join("x").join("sub");
+        std::fs::create_dir_all(&m).unwrap();
+        std::fs::write(m.join("e.pass.cpp"), "").unwrap();
+        std::fs::write(
+            m.join("lit.local.cfg"),
+            "import os\nlocalConfig = os.path.normpath(__file__)\n\
+             config.load_from_path(localConfig, lit_config)\n",
+        )
+        .unwrap();
+        let mirrored = discover(&root, &["libcxx/x".to_owned()], None).unwrap();
+        let cache = load_local_cfgs(&root, &mirrored);
+        let cfgs = local_cfgs(&cache, &root, &mirrored[0].0);
+        assert_eq!(cfgs.len(), 1);
+        assert_eq!(cfgs[0].unsupported(&[]), None);
+        assert_eq!(cfgs[0].unsupported(&["no-x"]), Some("lit.local.cfg: no-x".into()));
         std::fs::remove_dir_all(&base).unwrap();
     }
 

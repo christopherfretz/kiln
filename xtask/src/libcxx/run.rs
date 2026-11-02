@@ -9,6 +9,7 @@ use std::time::Duration;
 use super::cluster;
 use super::directives::{Directives, Kind, LocalCfg};
 use super::features;
+use super::script::{self, LineKind};
 use crate::util::process::{self, Measured, MemLimit, RssProbe};
 
 /// Everything a test run needs that does not vary per test.
@@ -416,17 +417,35 @@ pub fn prepare(
     local_cfgs: &[&LocalCfg],
     features: &[&str],
 ) -> Result<(Directives, Vec<String>, Option<String>), Outcome> {
+    // Features a `lit.local.cfg` adds apply below it (lit loads the
+    // configurations outermost first).
+    let mut features: Vec<&str> = features.to_vec();
     for cfg in local_cfgs {
-        if let Some(r) = cfg.unsupported(features) {
+        if let Some(r) = cfg.unsupported(&features) {
             return Err(Outcome::Unsupported(r));
         }
+        features.extend(cfg.add_features.iter().map(String::as_str));
     }
+    let features = features.as_slice();
     let d = Directives::parse(text).map_err(Outcome::Error)?;
     let xfail = d.verdict(features).map_err(Outcome::Unsupported)?;
     if let Some(r) = kind.unsupported() {
         return Err(Outcome::Unsupported(r.to_owned()));
     }
-    if d.has_run {
+    if kind == Kind::Sh {
+        if d.run.is_empty() {
+            return Err(Outcome::Unsupported("driver: .sh test without RUN lines".to_owned()));
+        }
+        // `format.py` prefixes the commands with `--precompile` builds of
+        // the module dependencies; the driver does not reproduce them.
+        if !d.module_dependencies.is_empty() {
+            return Err(Outcome::Unsupported(
+                "driver: RUN lines with MODULE_DEPENDENCIES (format.py --precompile)".to_owned(),
+            ));
+        }
+        let subst: Vec<_> = local_cfgs.iter().flat_map(|c| c.substitutions.iter().cloned()).collect();
+        script::check(&d.run, &subst).map_err(Outcome::Unsupported)?;
+    } else if d.has_run {
         return Err(Outcome::Unsupported("driver: RUN lines".to_owned()));
     }
     // kiln builds `std`/`std.compat` in-process from libc++'s module
@@ -484,7 +503,8 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
             return r;
         }
     };
-    let scratch = cfg.scratch.join(format!("t{}", job.index));
+    // Named like lit's `%T` (`<test file>.dir`): `RUN:` lines can see it.
+    let scratch = cfg.scratch.join(format!("t{}-{name}.dir", job.index));
     if let Err(e) = std::fs::create_dir_all(&scratch) {
         r.outcome = Outcome::Error(format!("cannot create {}: {e}", scratch.display()));
         return r;
@@ -502,7 +522,17 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
     let run_timeout =
         if is_long(&job.rel, &d).is_some() { cfg.long_run_timeout } else { cfg.run_timeout };
     let run = RunLimits { timeout: run_timeout, retries: d.allow_retries };
-    execute(cfg, &job.path, &scratch, kind, &flags, run, &mut r);
+    if kind == Kind::Sh {
+        let subst: Vec<(String, String)> = job
+            .local_cfgs
+            .iter()
+            .flat_map(|c| c.substitutions.iter())
+            .filter_map(|(n, v)| Some((n.clone(), v.clone()?)))
+            .collect();
+        execute_script(cfg, &job.path, &scratch, &d.run, &flags, &subst, run, &mut r);
+    } else {
+        execute(cfg, &job.path, &scratch, kind, &flags, run, &mut r);
+    }
     // XFAIL turns PASS into XPASS and FAIL into XFAIL; it never hides a
     // KILLED, a TIMEOUT or a compiler crash.
     if xfail.is_some() && !r.crashed {
@@ -604,33 +634,119 @@ fn execute(
                     return;
                 }
             };
-        match verdict {
-            Step::Ok if expect_success => {}
-            Step::Ok => {
-                r.outcome = Outcome::Fail(Stage::ExpectedFail);
-                let what = if stage == Stage::Compile { "compiled" } else { "linked" };
-                r.keys =
-                    vec![(format!("{}.fail: {what} successfully", stage.label()), String::new())];
+        if !record(stage, verdict, expect_success, timeout, r) {
+            return;
+        }
+    }
+}
+
+/// Records a step's verdict in `r`; `true` when the next step runs.
+fn record(
+    stage: Stage,
+    verdict: Step,
+    expect_success: bool,
+    timeout: Duration,
+    r: &mut TestResult,
+) -> bool {
+    match verdict {
+        Step::Ok if expect_success => true,
+        Step::Ok => {
+            r.outcome = Outcome::Fail(Stage::ExpectedFail);
+            let what = if stage == Stage::Compile { "compiled" } else { "linked" };
+            r.keys = vec![(format!("{}.fail: {what} successfully", stage.label()), String::new())];
+            false
+        }
+        Step::Failed { crashed: false, .. } if !expect_success => false,
+        Step::Failed { keys, crashed, detail } => {
+            r.outcome = Outcome::Fail(stage);
+            r.keys = keys;
+            r.crashed = crashed;
+            r.detail = detail;
+            false
+        }
+        Step::Killed(detail) => {
+            r.outcome = Outcome::Killed(stage);
+            r.detail = detail;
+            false
+        }
+        Step::Timeout => {
+            r.outcome = Outcome::Timeout(stage);
+            r.detail = format!("killed after {}s", timeout.as_secs());
+            false
+        }
+    }
+}
+
+/// Runs a `.sh.cpp` test's `RUN:` commands in order (spec/libcxx.md "RUN
+/// lines"); the first that fails decides the outcome. A compiler command
+/// is limited like a compile step, anything else like the run step (and
+/// retried under `ALLOW_RETRIES:`). Each command's stdout joins its
+/// stderr, so a `diff` or `grep` mismatch shows in the detail.
+#[allow(clippy::too_many_arguments)] // the test, its flags and limits, the result
+fn execute_script(
+    cfg: &Config,
+    src: &Path,
+    scratch: &Path,
+    lines: &[String],
+    flags: &[String],
+    cfg_subst: &[(String, String)],
+    run: RunLimits,
+    r: &mut TestResult,
+) {
+    let mut compile_flags = cfg.base_compile_flags();
+    compile_flags.extend(flags.iter().cloned());
+    let subst = script::Substitutions::new(
+        &cfg.kiln,
+        &compile_flags,
+        &cfg.link_flags(),
+        cfg_subst,
+        src,
+        scratch,
+    );
+    for line in lines {
+        let expanded = match subst.expand(line) {
+            Ok(e) => e,
+            Err(e) => {
+                r.outcome = Outcome::Error(e);
                 return;
             }
-            Step::Failed { crashed: false, .. } if !expect_success => return,
-            Step::Failed { keys, crashed, detail } => {
-                r.outcome = Outcome::Fail(stage);
-                r.keys = keys;
-                r.crashed = crashed;
-                r.detail = detail;
-                return;
+        };
+        let (stage, kind) = match script::line_kind(line) {
+            LineKind::Compile { verify: true } => (Stage::Compile, Kind::Verify),
+            LineKind::Compile { verify: false } => (Stage::Compile, Kind::Sh),
+            LineKind::Link => (Stage::Link, Kind::Sh),
+            LineKind::Run => (Stage::Run, Kind::Sh),
+        };
+        let mut cmd = Command::new("bash");
+        cmd.arg("-c").arg(script::bash_program(&expanded));
+        cmd.current_dir(scratch)
+            .env("TMPDIR", scratch)
+            .env("KILN_LLVM_DIR", &cfg.llvm_dir)
+            .env_remove("TZ");
+        let is_kiln = stage != Stage::Run;
+        let limit = if is_kiln {
+            let words: Vec<&str> = expanded.split_whitespace().collect();
+            cfg.mem.map(|m| m.plus(process::kiln_stack_reservation_mib(&words)))
+        } else {
+            cfg.mem
+        };
+        let timeout = if is_kiln { cfg.compile_timeout } else { run.timeout };
+        let attempts = if is_kiln { 1 } else { run.retries + 1 };
+        let verdict =
+            match attempt_step(cfg, &cmd, scratch, stage, kind, timeout, limit, attempts, r) {
+                Ok(v) => v,
+                Err(e) => {
+                    r.outcome = Outcome::Error(format!("cannot run `{line}`: {e}"));
+                    return;
+                }
+            };
+        if !record(stage, verdict, true, timeout, r) {
+            if r.detail.is_empty() {
+                r.detail = format!("RUN: {line}");
+            } else {
+                r.detail = format!("RUN: {line}\n{}", r.detail);
             }
-            Step::Killed(detail) => {
-                r.outcome = Outcome::Killed(stage);
-                r.detail = detail;
-                return;
-            }
-            Step::Timeout => {
-                r.outcome = Outcome::Timeout(stage);
-                r.detail = format!("killed after {}s", timeout.as_secs());
-                return;
-            }
+            return;
         }
     }
 }
@@ -778,15 +894,43 @@ mod tests {
         );
         assert_eq!(p(Kind::Pass, "// XFAIL: kiln"), Ok((vec![], Some("kiln".into()))));
         assert!(matches!(p(Kind::Pass, "// XFAIL: (a"), Err(Outcome::Error(_))));
-        let cfg = LocalCfg::Conditions(vec![
-            ("no-localization".into(), false),
-            ("c++experimental".into(), true),
-        ]);
+        let cfg = LocalCfg {
+            conditions: vec![("no-localization".into(), false), ("c++experimental".into(), true)],
+            ..LocalCfg::default()
+        };
         assert_eq!(prepare(Kind::Pass, "", &[&cfg], F).map(|_| ()), Ok(()));
         assert_eq!(
-            prepare(Kind::Pass, "", &[&LocalCfg::Opaque], F).map(|_| ()),
+            prepare(Kind::Pass, "", &[&LocalCfg::opaque()], F).map(|_| ()),
             Err(Outcome::Unsupported("driver: lit.local.cfg".into()))
         );
+    }
+
+    /// A `lit.local.cfg` that adds a feature satisfies `REQUIRES:` below
+    /// it; `.sh.cpp` tests run unless their `RUN:` lines need something
+    /// the driver lacks (spec/libcxx.md "RUN lines").
+    #[test]
+    fn preparation_of_scripts() {
+        let added = LocalCfg { add_features: vec!["extra".into()], ..LocalCfg::default() };
+        assert!(prepare(Kind::Pass, "// REQUIRES: extra", &[&added], F).is_ok());
+        assert!(prepare(Kind::Pass, "// REQUIRES: extra", &[], F).is_err());
+        let python = LocalCfg { substitutions: vec![("%{python}".into(), None)], ..LocalCfg::default() };
+        let sh = |text: &str| prepare(Kind::Sh, text, &[&python], F).map(|_| ());
+        assert_eq!(sh("// RUN: %{build}\n// RUN: %{run}"), Ok(()));
+        assert_eq!(
+            sh("// RUN: %{python} %s"),
+            Err(Outcome::Unsupported("lit.local.cfg: unresolved substitution %{python}".into()))
+        );
+        assert_eq!(
+            sh("// RUN: %{gdb} %t.exe"),
+            Err(Outcome::Unsupported("driver: substitution %{gdb}".into()))
+        );
+        assert_eq!(
+            sh("// MODULE_DEPENDENCIES: std\n// RUN: %{build}"),
+            Err(Outcome::Unsupported(
+                "driver: RUN lines with MODULE_DEPENDENCIES (format.py --precompile)".into()
+            ))
+        );
+        assert_eq!(sh(""), Err(Outcome::Unsupported("driver: .sh test without RUN lines".into())));
     }
 
     #[test]
@@ -894,6 +1038,12 @@ mod tests {
     /// step runs the test's own script.
     #[cfg(unix)]
     fn fake_run(script: &str, run: RunLimits) -> TestResult {
+        fake_run_lines(script, &[], run)
+    }
+
+    /// `fake_run` of a `.sh.cpp` test with the `RUN:` commands `lines`
+    /// (none: a `.pass.cpp` test).
+    fn fake_run_lines(script: &str, lines: &[&str], run: RunLimits) -> TestResult {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static SEQ: AtomicUsize = AtomicUsize::new(0);
         let base = std::env::temp_dir().join(format!(
@@ -943,9 +1093,41 @@ mod tests {
             wall: Duration::ZERO,
             max_rss_kb: None,
         };
-        execute(&cfg, &src, &scratch, Kind::Pass, &[], run, &mut r);
+        if lines.is_empty() {
+            execute(&cfg, &src, &scratch, Kind::Pass, &[], run, &mut r);
+        } else {
+            let lines: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
+            let flags = ["-DEXTRA".to_owned()];
+            execute_script(&cfg, &src, &scratch, &lines, &flags, &[], run, &mut r);
+        }
         let _ = std::fs::remove_dir_all(&base);
         r
+    }
+
+    /// libc++'s `.sh.cpp` idioms: `%{build}`, output redirected and
+    /// `diff`ed, `echo … | grep …` over `%{compile_flags}`, lit's `not`
+    /// (spec/libcxx.md "RUN lines").
+    #[test]
+    #[cfg(unix)]
+    fn script_lines_run_in_order() {
+        let limits = RunLimits { timeout: Duration::from_secs(20), retries: 0 };
+        let mut lines = vec![
+            "%{build}",
+            "%{exec} %t.exe > %t.actual",
+            "echo -n hi > %t.expected",
+            "diff %t.expected %t.actual",
+            "echo \"%{compile_flags}\" | grep -e -DEXTRA",
+            "echo \"%{compile_flags}\" | not grep -e -DABSENT",
+            "test -d %T",
+        ];
+        let r = fake_run_lines("#!/bin/sh\nprintf hi\n", &lines, limits);
+        assert_eq!(r.outcome, Outcome::Pass, "{}", r.detail);
+        lines[2] = "echo -n ho > %t.expected";
+        let r = fake_run_lines("#!/bin/sh\nprintf hi\n", &lines, limits);
+        assert_eq!(r.outcome, Outcome::Fail(Stage::Run));
+        assert!(r.detail.starts_with("RUN: diff %t.expected %t.actual"), "{}", r.detail);
+        let r = fake_run_lines("#!/bin/sh\nexit 0\n", &["false | true"], limits);
+        assert_eq!(r.outcome, Outcome::Fail(Stage::Run), "pipefail");
     }
 
     #[test]
