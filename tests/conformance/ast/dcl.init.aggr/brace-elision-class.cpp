@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: use
+//@ requires: clang>=22
 // [dcl.init.aggr]/16: brace elision applies only to subaggregates; an
 // element of a class with a user-declared constructor is
 // copy-initialized from its initializer-clause.

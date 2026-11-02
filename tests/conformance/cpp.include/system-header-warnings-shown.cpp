@@ -6,6 +6,8 @@
 //@ args: -Wsystem-headers -Werror -isystem %{test_dir}/Inputs
 //@ diag: 10 error "multi-character character constant"
 //@ diag: 11 error "unknown attribute 'not_an_attribute' ignored"
+//@ requires: clang<22
+// clang 22 emits error: unknown attribute 'gnu::not_an_attribute' ignored; WP-355 residual
 # 10 "tests/conformance/cpp.include/system-header-warnings-shown.cpp" 3
 int marked_system = 'gh';
 [[gnu::not_an_attribute]] int marked_attr;

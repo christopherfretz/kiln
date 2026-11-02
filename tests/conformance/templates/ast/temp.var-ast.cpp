@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.var]/1, [temp.inst]/7: a variable template and its implicit
 // instantiations.
 template <class T> constexpr int size_v = sizeof(T);

@@ -21,8 +21,8 @@ FunctionDecl use 'void ()'
   |       `-ImplicitValueInitExpr 'int'
   `-DeclStmt
     `-VarDecl p 'G *' cinit
-      `-CXXNewExpr 'G *' array Function 'operator new[]' 'void *(unsigned long)'
-        |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      `-CXXNewExpr 'G *' array Function 'operator new[]' 'void *(__size_t)'
+        |-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
         | `-IntegerLiteral 'int' 2
         `-InitListExpr 'G[2]'
           |-ImplicitCastExpr 'G' <ConstructorConversion>

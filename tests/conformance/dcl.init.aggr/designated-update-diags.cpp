@@ -8,26 +8,28 @@
 //@ expect: compile-fail
 //@ args: -Wno-c99-designator
 //@ strict-diags
-//@ diag: 35:22 warning "initializer partially overrides prior initialization of this subobject"
-//@ diag: 35:14 note "previous initialization is here"
-//@ diag: 36:37 warning "initializer partially overrides prior initialization of this subobject"
-//@ diag: 36:23 note "previous initialization is here"
-//@ diag: 37:25 warning "initializer overrides prior initialization of this subobject"
-//@ diag: 37:14 note "previous initialization with side effects is here (side effects will not occur at run time)"
-//@ diag: 38:22 warning "initializer partially overrides prior initialization of this subobject"
-//@ diag: 38:14 note "previous initialization is here"
-//@ diag: 38:32 warning "initializer partially overrides prior initialization of this subobject"
-//@ diag: 38:14 note "previous initialization is here"
-//@ diag: 42:22 error "initializer would partially override prior initialization of object of type 'T' with non-trivial destruction"
-//@ diag: 42:14 note "previous initialization is here"
-//@ diag: 46:22 warning "initializer partially overrides prior initialization of this subobject"
-//@ diag: 46:14 note "previous initialization is here"
+//@ diag: 37:22 warning "initializer partially overrides prior initialization of this subobject"
+//@ diag: 37:14 note "previous initialization is here"
+//@ diag: 38:37 warning "initializer partially overrides prior initialization of this subobject"
+//@ diag: 38:23 note "previous initialization is here"
+//@ diag: 39:25 warning "initializer overrides prior initialization of this subobject"
+//@ diag: 39:14 note "previous initialization with side effects is here (side effects will not occur at run time)"
+//@ diag: 40:22 warning "initializer partially overrides prior initialization of this subobject"
+//@ diag: 40:14 note "previous initialization is here"
+//@ diag: 40:32 warning "initializer partially overrides prior initialization of this subobject"
+//@ diag: 40:14 note "previous initialization is here"
+//@ diag: 44:22 error "initializer would partially override prior initialization of object of type 'T' with non-trivial destruction"
+//@ diag: 44:14 note "previous initialization is here"
 //@ diag: 48:22 warning "initializer partially overrides prior initialization of this subobject"
 //@ diag: 48:14 note "previous initialization is here"
-//@ diag: 52:22 warning "initializer partially overrides prior initialization of this subobject"
-//@ diag: 52:14 note "previous initialization is here"
-//@ diag: 54:25 warning "initializer overrides prior initialization of this subobject"
-//@ diag: 54:14 note "previous initialization with side effects is here (side effects will not occur at run time)"
+//@ diag: 50:22 warning "initializer partially overrides prior initialization of this subobject"
+//@ diag: 50:14 note "previous initialization is here"
+//@ diag: 54:22 warning "initializer partially overrides prior initialization of this subobject"
+//@ diag: 54:14 note "previous initialization is here"
+//@ diag: 56:25 warning "initializer overrides prior initialization of this subobject"
+//@ diag: 56:14 note "previous initialization with side effects is here (side effects will not occur at run time)"
+//@ requires: clang<22
+// clang 22 no longer emits warning: initializer partially overrides prior initialization of this su...; WP-355 residual
 struct A { int x, y; };
 struct B { A a; int z; };
 struct C { A arr[2]; };

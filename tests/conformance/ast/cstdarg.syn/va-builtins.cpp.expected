@@ -30,7 +30,7 @@ FunctionDecl vafmt 'int (char *, const char *, ...)'
   |     |-ImplicitCastExpr 'const char *' <LValueToRValue>
   |     | `-DeclRefExpr 'const char *' lvalue ParmVar 'f' 'const char *'
   |     `-CXXConstructExpr '__builtin_va_list':'std::__va_list' 'void (const __va_list &) noexcept'
-  |       `-ImplicitCastExpr 'const __va_list':'const std::__va_list' lvalue <NoOp>
+  |       `-ImplicitCastExpr 'const __va_list' lvalue <NoOp>
   |         `-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'aq' '__builtin_va_list':'std::__va_list'
   |-CallExpr 'void'
   | |-ImplicitCastExpr 'void (*)(__builtin_va_list &) noexcept' <BuiltinFnToFnPtr>

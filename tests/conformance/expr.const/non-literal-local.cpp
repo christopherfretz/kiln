@@ -4,21 +4,23 @@
 // included, at the initializer.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 25:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 24:23 note "non-literal type 'M[2]' cannot be used in a constant expression"
-//@ diag: 25:15 note "in call to 'f()'"
-//@ diag: 28:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 27:24 note "non-literal type 'NL[2][3]' cannot be used in a constant expression"
-//@ diag: 28:15 note "in call to 'g()'"
+//@ diag: 27:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 26:23 note "non-literal type 'M[2]' cannot be used in a constant expression"
+//@ diag: 27:15 note "in call to 'f()'"
 //@ diag: 30:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 29:27 note "non-literal type 'M[2]' cannot be used in a constant expression"
-//@ diag: 30:15 note "in call to 'h()'"
-//@ diag: 33:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 32:23 note "non-literal type 'Y' cannot be used in a constant expression"
-//@ diag: 33:15 note "in call to 'k()'"
-//@ diag: 38:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 37:26 note "non-literal type 'NLD' cannot be used in a constant expression"
-//@ diag: 38:15 note "in call to 'm()'"
+//@ diag: 29:24 note "non-literal type 'NL[2][3]' cannot be used in a constant expression"
+//@ diag: 30:15 note "in call to 'g()'"
+//@ diag: 32:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 31:27 note "non-literal type 'M[2]' cannot be used in a constant expression"
+//@ diag: 32:15 note "in call to 'h()'"
+//@ diag: 35:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 34:23 note "non-literal type 'Y' cannot be used in a constant expression"
+//@ diag: 35:15 note "in call to 'k()'"
+//@ diag: 40:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 39:26 note "non-literal type 'NLD' cannot be used in a constant expression"
+//@ diag: 40:15 note "in call to 'm()'"
+//@ requires: clang<22
+// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
 struct V { constexpr V(int v = 0) : v(v) {} int v; };
 struct M : virtual V { using V::V; };
 constexpr int f() { M x[2]; return x[0].v; }

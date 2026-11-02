@@ -8,7 +8,7 @@ TranslationUnitDecl
 |-CXXRecordDecl referenced struct Outer definition
 | |-CXXRecordDecl struct In definition
 | | `-FieldDecl referenced z 'int'
-| |-FieldDecl referenced in 'struct In':'Outer::In'
+| |-FieldDecl referenced in 'struct In'
 | |-FieldDecl e 'E'
 | | `-ConstantExpr 'int' value=2
 | |   `-IntegerLiteral 'int' 2
@@ -29,7 +29,7 @@ TranslationUnitDecl
       `-BinaryOperator 'int' '+'
         |-ImplicitCastExpr 'int' <LValueToRValue>
         | `-MemberExpr 'int' lvalue .z
-        |   `-MemberExpr 'struct In':'Outer::In' lvalue .in
+        |   `-MemberExpr 'struct In' lvalue .in
         |     `-DeclRefExpr 'Outer' lvalue ParmVar 'o' 'Outer'
         `-ImplicitCastExpr 'int' <IntegralCast>
           `-ImplicitCastExpr 'unsigned int' <LValueToRValue>

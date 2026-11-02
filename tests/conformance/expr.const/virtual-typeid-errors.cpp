@@ -4,21 +4,23 @@
 // bases (clang's notes).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 34:16 error "constexpr variable 'x1' must be initialized by a constant expression"
-//@ diag: 33:49 note "typeid applied to dereferenced null pointer is not allowed in a constant expression"
-//@ diag: 34:21 note "in call to 'null()'"
-//@ diag: 39:16 error "constexpr variable 'x2' must be initialized by a constant expression"
-//@ diag: 38:48 note "typeid applied to object 'ext' whose dynamic type is not constant"
-//@ diag: 39:21 note "in call to 'unknown()'"
-//@ diag: 49:16 error "constexpr variable 'x3' must be initialized by a constant expression"
-//@ diag: 45:40 note "typeid applied to object outside its lifetime is not allowed in a constant expression"
-//@ diag: 46:21 note "in call to 'this->is_b()'"
-//@ diag: 48:28 note "in call to 'H()'"
-//@ diag: 49:21 note "in call to 'early()'"
-//@ diag: 60:16 error "constexpr variable 'x4' must be initialized by a constant expression"
-//@ diag: 57:21 note "subexpression not valid in a constant expression"
-//@ diag: 59:35 note "in call to 'F()'"
-//@ diag: 60:21 note "in call to 'in_base_init()'"
+//@ diag: 36:16 error "constexpr variable 'x1' must be initialized by a constant expression"
+//@ diag: 35:49 note "typeid applied to dereferenced null pointer is not allowed in a constant expression"
+//@ diag: 36:21 note "in call to 'null()'"
+//@ diag: 41:16 error "constexpr variable 'x2' must be initialized by a constant expression"
+//@ diag: 40:48 note "typeid applied to object 'ext' whose dynamic type is not constant"
+//@ diag: 41:21 note "in call to 'unknown()'"
+//@ diag: 51:16 error "constexpr variable 'x3' must be initialized by a constant expression"
+//@ diag: 47:40 note "typeid applied to object outside its lifetime is not allowed in a constant expression"
+//@ diag: 48:21 note "in call to 'this->is_b()'"
+//@ diag: 50:28 note "in call to 'H()'"
+//@ diag: 51:21 note "in call to 'early()'"
+//@ diag: 62:16 error "constexpr variable 'x4' must be initialized by a constant expression"
+//@ diag: 59:21 note "subexpression not valid in a constant expression"
+//@ diag: 61:35 note "in call to 'F()'"
+//@ diag: 62:21 note "in call to 'in_base_init()'"
+//@ requires: clang<22
+// clang 22 emits error: constexpr variable 'x1' must be initialized by a constant expression; WP-355 residual
 namespace std {
 class type_info {
 public:

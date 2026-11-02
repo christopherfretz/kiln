@@ -5,7 +5,7 @@
 // Oracle-checked by hand with clang++-22 (22.1.8): same answers and the
 // same diagnostics.
 //@ expect: compile-fail
-//@ skip(clang): clang 19 lacks __builtin_is_virtual_base_of (added in clang 20)
+//@ requires: clang>=22
 //@ strict-diags
 //@ diag: 36:44 error "incomplete type 'Inc' where a complete type is required"
 //@ diag: 15:8 note "forward declaration of 'Inc'"

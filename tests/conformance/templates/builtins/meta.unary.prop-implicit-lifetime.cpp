@@ -6,7 +6,7 @@
 // (spec/sema-templates.md §9.1; WP-263). Oracle-checked by hand with
 // clang++-22 (22.1.8): same answers and the same diagnostics.
 //@ expect: compile-fail
-//@ skip(clang): clang 19 lacks __builtin_is_implicit_lifetime (added in clang 20)
+//@ requires: clang>=22
 //@ strict-diags
 //@ diag: 54:12 error "incomplete type 'Inc' used in type trait expression"
 //@ diag: 15:8 note "forward declaration of 'Inc'"

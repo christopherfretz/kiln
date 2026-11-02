@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ ast-filter: ret
+//@ requires: clang>=22
 // [stmt.return]/2, [class.copy.elision]/3: a returned object is
 // copy-initialized; a returned local or parameter is first treated as an
 // xvalue (the move constructor is selected), a global is copied, and a

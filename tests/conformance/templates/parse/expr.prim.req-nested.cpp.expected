@@ -2,8 +2,8 @@ TranslationUnitDecl
 |-ConceptDecl Small
 | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
 | `-BinaryOperator 'bool' '<='
-|   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
-|   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|   |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'T'
+|   `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
 |     `-IntegerLiteral 'int' 8
 `-ConceptDecl C
   |-TemplateTypeParmDecl referenced class depth 0 index 0 T
@@ -14,8 +14,8 @@ TranslationUnitDecl
     |   `-TemplateArgument type 'T'
     `-NestedRequirement dependent
       `-BinaryOperator 'bool' '>'
-        |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+        |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof
         | `-ParenExpr 'T' lvalue
         |   `-DeclRefExpr 'T' lvalue ParmVar 't' 'T' non_odr_use_unevaluated
-        `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+        `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
           `-IntegerLiteral 'int' 0

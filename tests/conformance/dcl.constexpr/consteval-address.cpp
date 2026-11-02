@@ -2,12 +2,14 @@
 // function context is an immediate invocation only as a call.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 23:18 error "cannot take address of consteval function 'sq' outside of an immediate invocation"
-//@ diag: 11:15 note "declared here"
-//@ diag: 24:12 error "cannot take address of consteval function 'm' outside of an immediate invocation"
-//@ diag: 12:26 note "declared here"
-//@ diag: 26:20 error "cannot take address of consteval function 'sq' outside of an immediate invocation"
-//@ diag: 11:15 note "declared here"
+//@ diag: 25:18 error "cannot take address of consteval function 'sq' outside of an immediate invocation"
+//@ diag: 13:15 note "declared here"
+//@ diag: 26:12 error "cannot take address of consteval function 'm' outside of an immediate invocation"
+//@ diag: 14:26 note "declared here"
+//@ diag: 28:20 error "cannot take address of consteval function 'sq' outside of an immediate invocation"
+//@ diag: 13:15 note "declared here"
+//@ requires: clang<22
+// clang 22 emits error: call to immediate function 'pick<int>' is not a constant expression; WP-355 residual
 consteval int sq(int x) { return x * x; }
 struct S { consteval int m() const { return 1; } };
 consteval int via_ptr(int x) {

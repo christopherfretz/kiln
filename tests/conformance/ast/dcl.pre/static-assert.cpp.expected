@@ -10,7 +10,7 @@ TranslationUnitDecl
 | `-StringLiteral unevaluated "math"
 `-StaticAssertDecl
   |-BinaryOperator 'bool' '=='
-  | |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'char'
-  | `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+  | |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'char'
+  | `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
   |   `-IntegerLiteral 'int' 1
   `-StringLiteral unevaluated "bytes"

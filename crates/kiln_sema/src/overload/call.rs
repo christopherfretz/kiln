@@ -111,7 +111,11 @@ impl Sema<'_, '_> {
             // diagnostics are clang's for a one-candidate set.
             let (d, f) = cands[0];
             let e = self.finish_overload_ref(d, f, naming, n.loc(), nns, ule, true);
-            if !adl && decls.len() == 1 && self.ast.decls.get(d).has(DeclFlags::INVALID) {
+            if !adl
+                && decls.len() == 1
+                && self.ast.decls.get(d).has(DeclFlags::INVALID)
+                && !self.invalid_by_param(d)
+            {
                 // A name clang resolves without an overload set (a
                 // `DeclRefExpr` built directly) whose function became
                 // invalid when its definition was instantiated by that

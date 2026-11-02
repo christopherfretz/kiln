@@ -18,7 +18,7 @@ NamespaceDecl eager
 | `-CXXConstructorDecl P2 'void (const P2 &)'
 |   `-ParmVarDecl 'const P2 &'
 |-CXXRecordDecl struct P3 definition
-| |-CXXRecordDecl implicit referenced struct P3
+| |-CXXRecordDecl implicit struct P3
 | `-CXXConstructorDecl P3 'void ()'
 |-CXXRecordDecl struct M definition
 | |-CXXRecordDecl implicit struct M
@@ -32,7 +32,7 @@ NamespaceDecl eager
 | | `-ParmVarDecl 'V &&'
 | `-CXXDestructorDecl implicit constexpr ~V 'void ()' inline default trivial noexcept-unevaluated
 |-CXXRecordDecl struct DV definition
-| |-public 'V':'eager::V'
+| |-public 'V'
 | |-CXXRecordDecl implicit struct DV
 | |-CXXMethodDecl implicit constexpr operator= 'DV &(const DV &)' inline default noexcept-unevaluated
 | | `-ParmVarDecl 'const DV &'
@@ -41,7 +41,7 @@ NamespaceDecl eager
 | `-CXXDestructorDecl implicit constexpr ~DV 'void ()' inline default trivial noexcept-unevaluated
 |-CXXRecordDecl struct H definition
 | |-CXXRecordDecl implicit struct H
-| |-FieldDecl m 'P1':'eager::P1'
+| |-FieldDecl m 'P1'
 | |-CXXConstructorDecl implicit constexpr H 'void (const H &)' inline default trivial noexcept-unevaluated
 | | `-ParmVarDecl 'const H &'
 | |-CXXConstructorDecl implicit constexpr H 'void (H &&)' inline default trivial noexcept-unevaluated

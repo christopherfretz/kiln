@@ -267,6 +267,16 @@ impl Fx {
         self.ast.builder().typedef(h, kind, under, None)
     }
 
+    /// clang 22's implicit `__size_t` sugar for `unsigned long`, the type
+    /// of `sizeof` (`kiln_sema::Sema::declare_size_t_sugar`; spec/ast-dump.md §2).
+    fn size_t(&mut self) -> QualType {
+        let h =
+            DeclHead::new(self.ast.tu, DeclName::ident(self.ast.symbols().intern("__size_t")), L)
+                .flags(DeclFlags::IMPLICIT);
+        let d = self.ast.builder().unlinked_alias(h, QualType::ULONG);
+        self.ast.decls.get(d).ty().unwrap_or(QualType::ULONG)
+    }
+
     /// `ConstantExpr` of `e` with the integer value `v` (type of `e`).
     fn constant(&mut self, e: ExprId, width: u32, v: i128) -> ExprId {
         let ty = self.ast.exprs.get(e).ty();
@@ -407,7 +417,8 @@ fn spec_example() -> Fx {
     let data = IfData { init: None, cond_var: None, cond: Some(pb), then: Some(then), els: None };
     let s4 = x.ast.builder().if_stmt(IfKind::Ordinary, data, L);
     //   return (long)sizeof(P) + f(c, nullptr);
-    let so = x.ast.builder().trait_of_type(TraitKind::SizeOf, pty, QualType::ULONG, L, L);
+    let size_t = x.size_t();
+    let so = x.ast.builder().trait_of_type(TraitKind::SizeOf, pty, size_t, L, L);
     let so = x.ast.builder().cast(
         ExprKind::ImplicitCastExpr,
         CastKind::IntegralCast,
@@ -455,10 +466,10 @@ fn golden_static_assert() {
     let eq = x.bin(BinaryOp::EQ, sum, two, QualType::BOOL);
     let msg = x.uneval("math");
     x.ast.builder().static_assert(tu, L, eq, Some(msg));
-    let so =
-        x.ast.builder().trait_of_type(TraitKind::SizeOf, QualType::CHAR, QualType::ULONG, L, L);
+    let size_t = x.size_t();
+    let so = x.ast.builder().trait_of_type(TraitKind::SizeOf, QualType::CHAR, size_t, L, L);
     let one = x.lit(1);
-    let one = x.ic(CastKind::IntegralCast, one, QualType::ULONG);
+    let one = x.ic(CastKind::IntegralCast, one, size_t);
     let eq = x.bin(BinaryOp::EQ, so, one, QualType::BOOL);
     let msg = x.uneval("bytes");
     x.ast.builder().static_assert(tu, L, eq, Some(msg));
@@ -694,9 +705,10 @@ fn golden_if_constexpr_consteval() {
     let (pick, ps) = x.func(tu, "pick", INT, &[("v", INT, true)], ce, USED);
     let v = ps[0];
     // if constexpr (sizeof(int) == 4) { v += 1; } else { v -= 1; }
-    let so = x.ast.builder().trait_of_type(TraitKind::SizeOf, INT, QualType::ULONG, L, L);
+    let size_t = x.size_t();
+    let so = x.ast.builder().trait_of_type(TraitKind::SizeOf, INT, size_t, L, L);
     let four = x.lit(4);
-    let four = x.ic(CastKind::IntegralCast, four, QualType::ULONG);
+    let four = x.ic(CastKind::IntegralCast, four, size_t);
     let eq = x.bin(BinaryOp::EQ, so, four, QualType::BOOL);
     let t = x.bool_val(true);
     let cond = x.ast.builder().constant_expr(eq, Some(t));
@@ -1296,6 +1308,7 @@ fn all_dumps() -> Vec<String> {
             filter: None,
             sources: Some(&sm),
             main_file: Some(main),
+            written_tags: false,
         };
         for x in &fixtures {
             out.push(x.dump_with(&opts));

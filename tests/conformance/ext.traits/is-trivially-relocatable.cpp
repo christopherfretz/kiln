@@ -2,7 +2,7 @@
 // object type, or a class that can be passed in registers.
 //@ expect: compile-fail
 //@ strict-diags
-//@ args: -Wno-defaulted-function-deleted
+//@ args: -Wno-defaulted-function-deleted -Wno-deprecated-builtins
 //@ diag: 64:11 error "incomplete type 'Inc' used in type trait expression"
 //@ diag: 48:8 note "forward declaration of 'Inc'"
 //@ diag: 65:11 error "incomplete type 'Inc' used in type trait expression"

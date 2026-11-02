@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.inst]/3, [temp.mem.enum]: a member enumeration's definition is
 // instantiated with its enclosing class.
 template <int N> struct Flags {

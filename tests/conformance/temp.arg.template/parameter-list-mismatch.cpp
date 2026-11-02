@@ -3,18 +3,20 @@
 // parameters" with clang's TemplateParameterListsAreEqual notes.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 23:3 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 19:1 note "too many template parameters in template template argument"
-//@ diag: 21:10 note "previous template template parameter is here"
-//@ diag: 24:3 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 20:14 note "template parameter has a different kind in template argument"
-//@ diag: 21:24 note "previous template template parameter is here"
+//@ diag: 25:3 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 21:1 note "too many template parameters in template template argument"
+//@ diag: 23:10 note "previous template template parameter is here"
 //@ diag: 26:3 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 18:16 note "template parameter has a different kind in template argument"
-//@ diag: 25:22 note "previous template template parameter is here"
-//@ diag: 29:3 error "template template argument has different template parameters than its corresponding template template parameter"
-//@ diag: 20:14 note "template parameter has a different kind in template argument"
-//@ diag: 27:27 note "previous template template parameter is here"
+//@ diag: 22:14 note "template parameter has a different kind in template argument"
+//@ diag: 23:24 note "previous template template parameter is here"
+//@ diag: 28:3 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 20:16 note "template parameter has a different kind in template argument"
+//@ diag: 27:22 note "previous template template parameter is here"
+//@ diag: 31:3 error "template template argument has different template parameters than its corresponding template template parameter"
+//@ diag: 22:14 note "template parameter has a different kind in template argument"
+//@ diag: 29:27 note "previous template template parameter is here"
+//@ requires: clang<22
+// clang 22 emits 19:1 note "too many template parameters in template template argument"; WP-355 residual
 template<class T> struct A {};
 template<class T, class U> struct B {};
 template<int N> struct C {};

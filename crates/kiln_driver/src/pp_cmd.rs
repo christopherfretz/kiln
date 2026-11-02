@@ -266,9 +266,7 @@ impl Job<'_> {
                     .map(|(n, p)| (n.clone(), std::path::PathBuf::from(p)))
                     .collect(),
                 prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
-                std_dir: Some(
-                    Path::new(&self.toolchain.llvm_dir).join("share").join("libc++").join("v1"),
-                ),
+                std_dir: Some(self.toolchain.libcxx_module_dir()),
             });
         }
         let mut pp = Preprocessor::new(sm, engine, interner, opts);
@@ -323,8 +321,11 @@ impl Job<'_> {
         } else if a.print.macros_only {
             print_macros(&mut pp, &mut result.output);
         } else {
-            let opts =
-                PrintOptions { line_markers: !a.print.no_line_markers, line_directives: false };
+            let opts = PrintOptions {
+                line_markers: !a.print.no_line_markers,
+                line_directives: false,
+                ucn_as_utf8: a.predef.clang_compat.major() >= 22,
+            };
             print_preprocessed(&mut pp, opts, &mut result.output);
         }
         drop(pp);

@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 typedef int Int;
 typedef Int Int2;
 using Ptr = const Int *;

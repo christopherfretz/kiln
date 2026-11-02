@@ -1,4 +1,5 @@
 //@ expect: ast
+//@ requires: clang>=22
 using Int = int;
 using IntPtr = Int *;
 using Fn = int (*)(Int);

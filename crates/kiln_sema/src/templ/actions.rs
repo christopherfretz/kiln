@@ -1293,7 +1293,8 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_pack_expansion_without_packs, ellipsis);
             return self.recover_err(&[pattern], ellipsis);
         }
-        self.builder().pack_expansion_expr(pattern, ellipsis)
+        let keep = self.clang_compat >= 22;
+        self.builder().pack_expansion_expr(pattern, ellipsis, keep)
     }
 
     /// `{a, b}...`: a braced-init-list as the pattern of an
@@ -1617,7 +1618,8 @@ impl Sema<'_, '_> {
                     Some(pat) => {
                         let ellipsis = self.ast.exprs.get(e).loc();
                         let d = self.builder().designated_init(&ds, pat, loc);
-                        self.builder().pack_expansion_expr(d, ellipsis)
+                        let keep = self.clang_compat >= 22;
+                        self.builder().pack_expansion_expr(d, ellipsis, keep)
                     }
                     None => self.builder().designated_init(&ds, e, loc),
                 }

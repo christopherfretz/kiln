@@ -3,11 +3,13 @@
 // its type from the argument as a variable declaration would.
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 29:5 error "non-type template parameter 'P' with type 'auto *' has incompatible initializer of type 'int'"
-//@ diag: 15:17 note "template parameter is declared here"
-//@ diag: 30:5 error "value of type 'int' is not implicitly convertible to 'int &'"
-//@ diag: 32:25 error "no matching function for call to 'fp'"
-//@ diag: 31:25 note "candidate template ignored: invalid explicitly-specified argument for template parameter 'P'"
+//@ diag: 31:5 error "non-type template parameter 'P' with type 'auto *' has incompatible initializer of type 'int'"
+//@ diag: 17:17 note "template parameter is declared here"
+//@ diag: 32:5 error "value of type 'int' is not implicitly convertible to 'int &'"
+//@ diag: 34:25 error "no matching function for call to 'fp'"
+//@ diag: 33:25 note "candidate template ignored: invalid explicitly-specified argument for template parameter 'P'"
+//@ requires: clang<22
+// clang 22 emits error: value of type 'int' is not implicitly convertible to 'int &'; WP-355 residual
 int gx = 1;
 const int gc = 2;
 int garr[3] = {4, 5, 6};

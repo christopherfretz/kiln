@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.concept]/1: concept definitions
 template <class T> concept Always = true;
 template <class T> concept Never = false;

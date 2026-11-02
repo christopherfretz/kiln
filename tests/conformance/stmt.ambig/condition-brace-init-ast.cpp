@@ -3,6 +3,7 @@
 // accepts `{` after the declarator), and a `;` after a braced initializer
 // at the top level of the parentheses ends an init-statement.
 //@ expect: ast
+//@ requires: clang>=22
 struct T { T(); T(int); explicit operator bool() const; };
 void y1() { if (T(n){1}) {} }
 void y2() { while (T(n){1}) {} }

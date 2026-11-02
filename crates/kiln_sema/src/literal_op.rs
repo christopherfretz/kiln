@@ -189,7 +189,7 @@ impl Sema<'_, '_> {
                     let m = self
                         .diag(DiagId::sema_literal_operator_param, ploc(self, params[1]))
                         .arg(format!("'{}'", self.ty_str(*b)))
-                        .arg(format!("'{}'", self.ty_str(st)));
+                        .arg(self.ty_arg(st));
                     self.emit(m);
                     return false;
                 }

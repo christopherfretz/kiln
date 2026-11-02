@@ -1,5 +1,6 @@
 //@ expect: ast
 //@ oracle: clang
+//@ requires: clang>=22
 // [temp.alias]/2, [temp.arg.nontype]: a non-type parameter of an alias
 // template substituted into an array bound.
 template <class T, int N> using Arr = T[N];

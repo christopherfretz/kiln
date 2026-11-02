@@ -60,7 +60,7 @@ options:
   -h, --help          this text
 
 environment:
-  KILN_ORACLE         the oracle clang/LLVM release, 19 (default) or 22: the default
+  KILN_ORACLE         the oracle clang/LLVM release, 22 (default) or 19: the default
                       --oracle is clang++-N, and kiln++ runs with
                       KILN_LLVM_DIR=/usr/lib/llvm-N (spec/harness.md \"Oracle toolchain\")
 

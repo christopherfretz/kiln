@@ -91,7 +91,8 @@ impl Sema<'_, '_> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn compute_predefined_name(&self, kind: PredefinedKind, f: DeclId) -> String {
         let ast = &self.ast;
-        let names = AstNames::new(ast);
+        let mut names = AstNames::new(ast);
+        names.closure_as_lambda = self.clang_compat >= 22;
         if kind != PredefinedKind::PrettyFunction {
             let mut s = String::new();
             names.write_name(f, &mut s);

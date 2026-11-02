@@ -20,37 +20,37 @@ FunctionDecl f 'void ()'
   |       `-IntegerLiteral 'int' 2
   |-DeclStmt
   | `-VarDecl r4 'const S &' cinit
-  |   `-ExprWithCleanups 'const S':'const q::S' lvalue
-  |     `-MaterializeTemporaryExpr 'const S':'const q::S' lvalue extended by Var 'r4' 'const S &'
-  |       `-ImplicitCastExpr 'const S':'const q::S' <NoOp>
-  |         `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
-  |           `-CallExpr 'S':'q::S'
+  |   `-ExprWithCleanups 'const S' lvalue
+  |     `-MaterializeTemporaryExpr 'const S' lvalue extended by Var 'r4' 'const S &'
+  |       `-ImplicitCastExpr 'const S' <NoOp>
+  |         `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+  |           `-CallExpr 'S'
   |             `-ImplicitCastExpr 'S (*)()' <FunctionToPointerDecay>
   |               `-DeclRefExpr 'S ()' lvalue Function 'mk' 'S ()'
   |-DeclStmt
   | `-VarDecl r5 'const S &' cinit
-  |   `-ExprWithCleanups 'const S':'const q::S' lvalue
-  |     `-ImplicitCastExpr 'const S':'const q::S' lvalue <DerivedToBase (S)>
-  |       `-MaterializeTemporaryExpr 'const D':'const q::D' lvalue extended by Var 'r5' 'const S &'
-  |         `-ImplicitCastExpr 'const D':'const q::D' <NoOp>
-  |           `-CXXBindTemporaryExpr 'D':'q::D' (CXXTemporary)
-  |             `-CallExpr 'D':'q::D'
+  |   `-ExprWithCleanups 'const S' lvalue
+  |     `-ImplicitCastExpr 'const S' lvalue <DerivedToBase (S)>
+  |       `-MaterializeTemporaryExpr 'const D' lvalue extended by Var 'r5' 'const S &'
+  |         `-ImplicitCastExpr 'const D' <NoOp>
+  |           `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+  |             `-CallExpr 'D'
   |               `-ImplicitCastExpr 'D (*)()' <FunctionToPointerDecay>
   |                 `-DeclRefExpr 'D ()' lvalue Function 'mkd' 'D ()'
   |-DeclStmt
   | `-VarDecl r6 'S &&' cinit
-  |   `-ExprWithCleanups 'S':'q::S' xvalue
-  |     `-MaterializeTemporaryExpr 'S':'q::S' xvalue extended by Var 'r6' 'S &&'
-  |       `-CXXBindTemporaryExpr 'S':'q::S' (CXXTemporary)
-  |         `-CallExpr 'S':'q::S'
+  |   `-ExprWithCleanups 'S' xvalue
+  |     `-MaterializeTemporaryExpr 'S' xvalue extended by Var 'r6' 'S &&'
+  |       `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+  |         `-CallExpr 'S'
   |           `-ImplicitCastExpr 'S (*)()' <FunctionToPointerDecay>
   |             `-DeclRefExpr 'S ()' lvalue Function 'mk' 'S ()'
   |-DeclStmt
   | `-VarDecl r7 'const T &' cinit
-  |   `-ExprWithCleanups 'const T':'const q::T' lvalue
-  |     `-MaterializeTemporaryExpr 'const T':'const q::T' lvalue extended by Var 'r7' 'const T &'
-  |       `-ImplicitCastExpr 'const T':'const q::T' <NoOp>
-  |         `-CallExpr 'T':'q::T'
+  |   `-ExprWithCleanups 'const T' lvalue
+  |     `-MaterializeTemporaryExpr 'const T' lvalue extended by Var 'r7' 'const T &'
+  |       `-ImplicitCastExpr 'const T' <NoOp>
+  |         `-CallExpr 'T'
   |           `-ImplicitCastExpr 'T (*)()' <FunctionToPointerDecay>
   |             `-DeclRefExpr 'T ()' lvalue Function 'mkt' 'T ()'
   |-DeclStmt
@@ -58,8 +58,8 @@ FunctionDecl f 'void ()'
   |   `-ExprWithCleanups 'int'
   |     `-ImplicitCastExpr 'int' <LValueToRValue>
   |       `-MemberExpr 'int' xvalue .a
-  |         `-MaterializeTemporaryExpr 'T':'q::T' xvalue
-  |           `-CallExpr 'T':'q::T'
+  |         `-MaterializeTemporaryExpr 'T' xvalue
+  |           `-CallExpr 'T'
   |             `-ImplicitCastExpr 'T (*)()' <FunctionToPointerDecay>
   |               `-DeclRefExpr 'T ()' lvalue Function 'mkt' 'T ()'
   `-DeclStmt
