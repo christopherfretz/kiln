@@ -205,8 +205,12 @@ sema_vector_size_too_large = Error (0) "vector size too large";
 sema_vector_zero_size = Error (0) "zero vector size";
 sema_virt_spec_hides_virtual = Error (2) "non-virtual member function marked '{0}' hides virtual member {1:function|functions}";
 sema_virt_spec_not_virtual = Error (1) "only virtual member functions can be marked '{0}'";
+// [temp.mem]/3 (WP-294)
+sema_virtual_member_function_template = Error (0) "'virtual' cannot be specified on member function templates";
 sema_virtual_not_member_fn = Error (0) "'virtual' can only appear on non-static member functions";
 sema_virtual_out_of_class = Error (0) "'virtual' can only be specified inside the class definition";
+// [class.virtual]/6 (WP-294)
+sema_virtual_requires_clause = Error (0) "virtual function cannot have a requires clause";
 sema_visibility_pop_mismatch = Error (0) "#pragma visibility pop with no matching #pragma visibility push";
 sema_vla_cxx_extension = Warning [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
 sema_vla_cxx_extension_gnu = Extension [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
