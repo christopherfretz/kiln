@@ -13,6 +13,7 @@
 #![warn(missing_docs)]
 
 use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
 
 use crate::ast::Ast;
 use crate::decl::{
@@ -1754,6 +1755,39 @@ impl<'a> AstBuilder<'a> {
             loc,
             base.raw(),
             idx.raw(),
+        )
+    }
+
+    /// `v.xy` on an `ext_vector_type` `v` (clang `ExtVectorElementExpr`):
+    /// `a` = the base, `b` = the accessor's symbol, `loc` = the accessor.
+    /// `ty` is the element type for one component, else an ext vector of
+    /// the component count; the value category is the base's, and a
+    /// glvalue designates a vector component (clang `OK_VectorComponent`).
+    pub fn ext_vector_element(
+        &mut self,
+        base: ExprId,
+        accessor: Symbol,
+        ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        let vk = self.vk(base);
+        let ok = if vk == ValueCategory::PRValue {
+            ObjectKind::Ordinary
+        } else {
+            ObjectKind::VectorComponent
+        };
+        let deps = self.deps(base) | self.type_deps(ty);
+        self.push_expr(
+            ExprKind::ExtVectorElementExpr,
+            vk,
+            ok,
+            ExprFlags::NONE,
+            deps,
+            0,
+            ty,
+            loc,
+            base.raw(),
+            accessor.index(),
         )
     }
 

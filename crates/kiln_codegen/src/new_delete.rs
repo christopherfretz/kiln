@@ -799,6 +799,7 @@ impl Cg<'_> {
                 q: x.allocated_ty,
                 bf: None,
                 vidx: None,
+                swz: None,
             };
             self.init_to_lvalue(init, lv, false)?;
         }
@@ -994,6 +995,7 @@ impl Cg<'_> {
                     q,
                     bf: None,
                     vidx: None,
+                    swz: None,
                 };
                 self.init_to_lvalue(ie, lv, false)?;
                 let one = self.i64c(1);
@@ -1095,7 +1097,7 @@ impl Cg<'_> {
         let iq = if ivie { base } else { ast.exprs.get(init).ty() };
         let ity = self.mty(iq);
         let lv =
-            LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None, vidx: None };
+            LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None, vidx: None, swz: None };
         self.init_to_lvalue(init, lv, false)?;
         // clang leaves the list's partial-array cleanup in the loop body,
         // after the first element's initializer.

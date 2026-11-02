@@ -43,6 +43,89 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `base.name` on an `ext_vector_type` `base` (clang
+    /// `CheckExtVectorComponent`, spec/sema.md §5.8): the components are
+    /// one set of `xyzw`, `rgba`, or `s`/`S` and hex digits, or one of
+    /// `hi`/`lo`/`even`/`odd` (half the lanes, rounded up). One component
+    /// is the element; more are an ext vector, named by the first
+    /// `ext_vector_type` typedef of that type. Errors at the `.`.
+    pub(crate) fn act_on_ext_vector_member(
+        &mut self,
+        base: ExprId,
+        name: kiln_source::symbol::Symbol,
+        loc: Loc,
+        op_loc: Loc,
+    ) -> ExprId {
+        use kiln_ast::expr::ext_vector_accessor_idx as idx;
+        let bt = self.ety(base);
+        let Some(p) = self.vector_parts(bt) else { return self.recover_err(&[base], loc) };
+        let s = self.ast.symbols().as_str(name).to_owned();
+        let b = s.as_bytes();
+        let halving = matches!(s.as_str(), "hi" | "lo" | "even" | "odd");
+        let hex = matches!(b, [b's' | b'S', _, ..]);
+        if !halving {
+            let rgba = |c: u8| matches!(c, b'r' | b'g' | b'b' | b'a');
+            let mut rest = b;
+            match b.first() {
+                Some(&c0) if !hex && idx(c0, false).is_some() => {
+                    while let [c, tail @ ..] = rest
+                        && idx(*c, false).is_some()
+                        && rgba(*c) == rgba(c0)
+                    {
+                        rest = tail;
+                    }
+                }
+                _ => {
+                    if hex {
+                        rest = &rest[1..];
+                    }
+                    while let [c, tail @ ..] = rest
+                        && idx(*c, true).is_some()
+                    {
+                        rest = tail;
+                    }
+                }
+            }
+            if let Some(&c) = rest.first() {
+                let msg = self
+                    .diag(DiagId::sema_ext_vector_component_name_illegal, op_loc)
+                    .arg(char::from(c).to_string());
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
+            }
+            let comps = if hex { &b[1..] } else { b };
+            if comps.iter().any(|&c| idx(c, hex).is_none_or(|i| i >= p.count)) {
+                let msg = self
+                    .diag(DiagId::sema_ext_vector_component_exceeds_length, op_loc)
+                    .arg(self.ty_arg(bt));
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
+            }
+        }
+        let n = if halving {
+            p.count.div_ceil(2)
+        } else {
+            u32::try_from(b.len()).unwrap_or(u32::MAX) - u32::from(hex)
+        };
+        let ty = if n == 1 {
+            p.elem
+        } else {
+            let vt = self.ast.types.vector(p.elem, n, VectorKind::Ext);
+            let canon = self.ast.types.canonical(vt);
+            let named = self.ext_vector_decls.iter().find_map(|&td| {
+                let u = self.ast.decls.get(td).ty()?;
+                (self.ast.types.canonical(u) == canon).then_some((td, u))
+            });
+            match named {
+                Some((td, u)) => self.ast.types.typedef_type(td, u).into(),
+                None => vt,
+            }
+        };
+        let quals = self.ast.types.canonical(bt).quals();
+        let ty = self.ast.types.qualify(ty, quals);
+        self.builder().ext_vector_element(base, name, ty, loc)
+    }
+
     /// True if `q` is a (non-dependent) vector type.
     pub(crate) fn is_vector_type(&self, q: QualType) -> bool {
         self.vector_parts(q).is_some()

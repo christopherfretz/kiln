@@ -2293,6 +2293,7 @@ impl Sema<'_, '_> {
             let _ = s;
             self.error(DiagId::sema_storage_class_on_typedef, loc);
         }
+        let ext_vector = std::mem::take(&mut self.ext_vector_applied);
         let (ctx, lexical) = self.decl_contexts(d);
         // An earlier redefinition that was diagnosed is not the previous
         // declaration (as in clang, which does not chain invalid
@@ -2391,6 +2392,9 @@ impl Sema<'_, '_> {
         }
         if let Some(t) = anon_tag {
             let _ = self.ast.decls.set_typedef_for_anon(t, td);
+        }
+        if ext_vector {
+            self.ext_vector_decls.push(td);
         }
         self.register_local(name, td);
         td

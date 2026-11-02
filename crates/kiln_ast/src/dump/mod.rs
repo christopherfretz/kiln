@@ -678,6 +678,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         };
         match n.kind() {
             ExprKind::MemberExpr
+            | ExprKind::ExtVectorElementExpr
             | ExprKind::UnaryOperator
             | ExprKind::ParenExpr
             | ExprKind::ConstantExpr
@@ -2012,6 +2013,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 if n.has(ExprFlags::IMMEDIATE_ESCALATING) {
                     self.line.push_str(" immediate-escalating");
                 }
+            }
+            ExprKind::ExtVectorElementExpr => {
+                self.line.push(' ');
+                self.line.push_str(ast.symbols().as_str(exprs.ext_vector_accessor(e)));
             }
             ExprKind::MemberExpr => {
                 self.line.push_str(if n.has(ExprFlags::ARROW) { " ->" } else { " ." });

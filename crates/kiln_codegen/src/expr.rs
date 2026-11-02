@@ -47,6 +47,10 @@ pub(crate) struct LV {
     pub bf: Option<BitFieldInfo>,
     /// An element of the vector at `addr` (clang `LValue::MakeVectorElt`).
     pub vidx: Option<V>,
+    /// The components of the vector at `addr` an `ExtVectorElementExpr`
+    /// of several lanes selects (clang `LValue::MakeExtVectorElt`); one
+    /// lane is a [`Self::vidx`].
+    pub swz: Option<ExprId>,
 }
 
 fn low_mask(bits: u32) -> u128 {
@@ -398,6 +402,7 @@ impl Cg<'_> {
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
+            | ExprKind::ExtVectorElementExpr
             | ExprKind::StringLiteral
             | ExprKind::PredefinedExpr
             | ExprKind::MaterializeTemporaryExpr => {
@@ -413,6 +418,13 @@ impl Cg<'_> {
         if let Some(idx) = lv.vidx {
             let vec = self.vec_elt_load(lv);
             return self.extract_elt(vec, idx);
+        }
+        // clang `EmitLoadOfExtVectorElementLValue`: a one-operand
+        // `shufflevector` of the loaded vector.
+        if let Some(e) = lv.swz {
+            let vec = self.vec_elt_load(lv);
+            let lanes = self.ext_vector_lanes(e);
+            return self.shuffle(vec, None, lanes);
         }
         let Some(bf) = lv.bf else {
             if let Some(vq) = self.ast.types.as_atomic(lv.q) {
@@ -463,6 +475,10 @@ impl Cg<'_> {
             };
             let vol = self.is_volatile(lv.q);
             self.store(raw, lv.addr.v, lv.addr.align, vol);
+            return v;
+        }
+        if let Some(e) = lv.swz {
+            self.store_ext_vector_elts(v, lv, e);
             return v;
         }
         let Some(bf) = lv.bf else {
@@ -1626,6 +1642,7 @@ impl Cg<'_> {
                     q,
                     bf: None,
                     vidx: None,
+                    swz: None,
                 })
             }
             // clang `EmitDeclRefLValue`: a structured binding is its
@@ -1665,7 +1682,7 @@ impl Cg<'_> {
                     return Ok(self.ref_lvalue(p, q));
                 }
                 if let Some(&a) = self.f.locals.get(&d) {
-                    return Ok(LV { addr: a, q, bf: None, vidx: None });
+                    return Ok(LV { addr: a, q, bf: None, vidx: None, swz: None });
                 }
                 let ty = self.mty(q);
                 let st = ast.decls.var(d).map(|v| v.spec.storage());
@@ -1677,14 +1694,14 @@ impl Cg<'_> {
                     self.get_gvar(d)?
                 };
                 let align = self.var_align(d);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None, swz: None })
             }
             DeclKind::TemplateParamObject => {
                 let g = self.param_object_global(d)?;
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 let ty = self.mty(dq);
                 let align = self.global_align(dq);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None, swz: None })
             }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
@@ -1738,7 +1755,7 @@ impl Cg<'_> {
     pub(crate) fn ref_lvalue(&mut self, p: V, q: QualType) -> LV {
         let ty = if self.ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
         let (_, align) = self.pointee_layout(q);
-        LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None }
+        LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None, swz: None }
     }
 
     /// clang `EmitLValue`.
@@ -1792,10 +1809,11 @@ impl Cg<'_> {
                 let g = self.lit_global(ast.exprs.string_lit(e));
                 let ty = self.m.global(g).value_type();
                 let align = self.m.global(g).align.unwrap_or(1);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None, swz: None })
             }
             ExprKind::MemberExpr => self.member_lvalue(e),
             ExprKind::ArraySubscriptExpr => self.subscript_lvalue(e),
+            ExprKind::ExtVectorElementExpr => self.ext_vector_elt_lvalue(e),
             ExprKind::UnaryOperator => self.unary_lvalue(e, q),
             ExprKind::BinaryOperator => self.binary_lvalue(e, q),
             ExprKind::CompoundAssignOperator => Ok(self.emit_compound_assign(e)?.0),
@@ -1858,7 +1876,7 @@ impl Cg<'_> {
         };
         let ty = self.m.global(g).value_type();
         let align = self.m.global(g).align.unwrap_or(1);
-        Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
+        Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None, swz: None })
     }
 
     /// clang `EmitUnaryOpLValue`: `*p`, `++x`/`--x`, `__real`/`__imag`
@@ -1870,7 +1888,7 @@ impl Cg<'_> {
                 let p = self.emit_scalar(ast.exprs.operand(e))?;
                 let ty = if ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
                 let align = self.natural_align(q);
-                Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None })
+                Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None, swz: None })
             }
             op @ (UnaryOp::PreInc | UnaryOp::PreDec) => {
                 let lv = self.emit_lvalue(ast.exprs.operand(e))?;
@@ -1912,7 +1930,7 @@ impl Cg<'_> {
                     self.emit_agg(r, t, false)?;
                     self.f.slot_volatile = false;
                     self.atomic_agg_store(t, lv);
-                    return Ok(LV { addr: t, q, bf: None, vidx: None });
+                    return Ok(LV { addr: t, q, bf: None, vidx: None, swz: None });
                 }
                 if self.is_complex(q) {
                     return Ok(self.cx_assign(e)?.0);
@@ -1945,7 +1963,7 @@ impl Cg<'_> {
         let (tmp, needs_init) =
             if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
         if !needs_init {
-            return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None });
+            return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, swz: None });
         }
         if self.is_aggregate(sq) {
             // clang `EmitAnyExprToMem`: a materialized temporary is
@@ -1982,7 +2000,7 @@ impl Cg<'_> {
         } else if n.kind() == ExprKind::MaterializeTemporaryExpr {
             self.push_temporary_cleanup(e, tmp);
         }
-        Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
+        Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, swz: None })
     }
 
     /// clang `EmitCompoundLiteralLValue` for a scalar, vector or complex
@@ -2000,7 +2018,7 @@ impl Cg<'_> {
             let v = self.emit_scalar(init)?;
             self.store_scalar(v, tmp, q);
         }
-        Ok(LV { addr: tmp, q, bf: None, vidx: None })
+        Ok(LV { addr: tmp, q, bf: None, vidx: None, swz: None })
     }
 
     /// clang `EmitCastLValue`.
@@ -2027,7 +2045,7 @@ impl Cg<'_> {
                 let (vb, off) = self.base_path(e, derived)?;
                 let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
                 let ty = self.mty(q);
-                Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
+                Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, swz: None })
             }
             // clang `EmitCastLValue` `CK_BaseToDerived`: never null-checked.
             CastKind::BaseToDerived => {
@@ -2059,7 +2077,7 @@ impl Cg<'_> {
                 let dq = ast.exprs.get(dead).ty();
                 let ty = self.mty(dq);
                 let v = V::C(self.m.const_undef(LTy::PTR));
-                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None, vidx: None });
+                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None, vidx: None, swz: None });
             }
             return self.emit_lvalue(live);
         }
@@ -2095,6 +2113,7 @@ impl Cg<'_> {
             q: ast.exprs.get(e).ty(),
             bf: None,
             vidx: None,
+            swz: None,
         })
     }
 
@@ -2182,7 +2201,7 @@ impl Cg<'_> {
                 align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
             }
             let st = self.m.types.int(bf.storage_size);
-            return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf), vidx: None });
+            return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf), vidx: None, swz: None });
         }
         let fq = ast.decls.get(field).ty().unwrap_or(q);
         if let Some(referee) = self.referee(fq) {
@@ -2192,7 +2211,7 @@ impl Cg<'_> {
             let p = self.load(LTy::PTR, slot.addr.v, slot.addr.align, false);
             let (_, align) = self.pointee_layout(referee);
             let ty = self.mty(referee);
-            return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None, vidx: None });
+            return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None, vidx: None, swz: None });
         }
         self.field_lvalue_init(base, field, q)
     }
@@ -2231,6 +2250,7 @@ impl Cg<'_> {
                 q,
                 bf: None,
                 vidx: None,
+                swz: None,
             });
         }
         let Some(i) = idx else {
@@ -2239,11 +2259,11 @@ impl Cg<'_> {
             let off = self.field_byte_offset(field)?;
             let v = if off == 0 { base.v } else { self.byte_offset(base.v, off) };
             let align = min_align(base.align, off);
-            return Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None });
+            return Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, swz: None });
         };
         let v = self.struct_gep(rty, base.v, i);
         let align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
-        Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
+        Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, swz: None })
     }
 
     /// The array operand of a simple array-to-pointer decay.
@@ -2336,6 +2356,71 @@ impl Cg<'_> {
         }
     }
 
+    /// The lanes the `ExtVectorElementExpr` `e` selects.
+    fn ext_vector_lanes(&self, e: ExprId) -> Vec<u32> {
+        let ast = self.ast;
+        let n = self.vec_of(ast.exprs.get(e).ty()).map_or(1, |x| x.1);
+        let acc = ast.symbols().as_str(ast.exprs.ext_vector_accessor(e));
+        kiln_ast::expr::ext_vector_lanes(acc, n)
+    }
+
+    /// clang `EmitExtVectorElementExpr`: the base vector's lvalue (a
+    /// prvalue base is stored to a temporary first), then one lane as a
+    /// vector element or several as an ext-vector component lvalue.
+    fn ext_vector_elt_lvalue(&mut self, e: ExprId) -> R<LV> {
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let base = ast.exprs.operand(e);
+        let blv = if self.is_glvalue(base) {
+            self.emit_lvalue(base)?
+        } else {
+            let bq = ast.exprs.get(base).ty();
+            let v = self.emit_scalar(base)?;
+            let tmp = self.temp(bq);
+            self.store(v, tmp.v, tmp.align, false);
+            LV { addr: tmp, q: bq, bf: None, vidx: None, swz: None }
+        };
+        let lanes = self.ext_vector_lanes(e);
+        if self.vec_of(q).is_none() {
+            let i = self.i64c(i128::from(lanes.first().copied().unwrap_or(0)));
+            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(i), swz: None });
+        }
+        Ok(LV { addr: blv.addr, q, bf: None, vidx: None, swz: Some(e) })
+    }
+
+    /// clang `EmitStoreThroughExtVectorComponentLValue` for several lanes:
+    /// `v` shuffled into the loaded vector, which is stored back.
+    fn store_ext_vector_elts(&mut self, v: V, lv: LV, e: ExprId) {
+        let lanes = self.ext_vector_lanes(e);
+        let vec = self.vec_elt_load(lv);
+        let src_n = u32::try_from(lanes.len()).unwrap_or(0);
+        let dst_n = self.m.types.vector_info(lv.addr.ty).map_or(0, |x| x.1);
+        let out = if dst_n == src_n {
+            let mut mask = vec![0; dst_n as usize];
+            for (i, &l) in lanes.iter().enumerate() {
+                if let Some(m) = mask.get_mut(l as usize) {
+                    *m = i as u32;
+                }
+            }
+            self.shuffle(v, None, mask)
+        } else {
+            let mut ext: Vec<u32> = (0..src_n).collect();
+            ext.resize(dst_n as usize, kiln_llvm::SHUFFLE_POISON);
+            let wide = self.shuffle(v, None, ext);
+            let mut mask: Vec<u32> = (0..dst_n).collect();
+            // An odd vector's `.hi`/`.odd` names one lane past its end.
+            let used = if lanes.last() == Some(&dst_n) { lanes.len() - 1 } else { lanes.len() };
+            for (i, &l) in lanes.iter().enumerate().take(used) {
+                if let Some(m) = mask.get_mut(l as usize) {
+                    *m = i as u32 + dst_n;
+                }
+            }
+            self.shuffle(vec, Some(wide), mask)
+        };
+        let vol = self.is_volatile(lv.q);
+        self.store(out, lv.addr.v, lv.addr.align, vol);
+    }
+
     /// clang `EmitArraySubscriptExpr`.
     fn subscript_lvalue(&mut self, e: ExprId) -> R<LV> {
         let ast = self.ast;
@@ -2345,7 +2430,7 @@ impl Cg<'_> {
         if let Some((base, idx)) = self.vec_subscript(e) {
             let blv = self.emit_lvalue(base)?;
             let i = self.emit_scalar(idx)?;
-            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(i) });
+            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(i), swz: None });
         }
         let [l, r] = ast.exprs.operands(e);
         let swapped =
@@ -2401,7 +2486,7 @@ impl Cg<'_> {
             None => min_align(addr.align, esz),
         };
         let v = self.gep(addr.ty, addr.v, indices, true);
-        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None })
+        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None, swz: None })
     }
 
     // ---- statement expressions -----------------------------------------
@@ -3607,7 +3692,7 @@ impl Cg<'_> {
         }
         self.f.array_index.push(phi);
         let sc = self.begin_scope(false);
-        let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
+        let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None, swz: None };
         let r = if inner {
             self.array_init_loop(sub, lv.addr, Some(outer))
         } else {
@@ -3719,7 +3804,7 @@ impl Cg<'_> {
                 el
             };
             let lv =
-                LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
+                LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None, swz: None };
             self.init_to_lvalue(init, lv, zeroed)?;
         }
         let trivial = match filler {
@@ -3742,7 +3827,7 @@ impl Cg<'_> {
             self.emit_block(body, false);
             let cur = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(el, entry)] }, LTy::PTR);
             let lv =
-                LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
+                LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None, vidx: None, swz: None };
             // [class.temporary]/5: the temporaries of each element's
             // initialization are destroyed before the next one starts.
             let sc = self.begin_scope(false);
@@ -3891,7 +3976,7 @@ impl Cg<'_> {
         }
         if ast.types.as_atomic(q).is_some() {
             // clang `EmitExprAsInit` -> `EmitAtomicInit` (WP-165).
-            return self.atomic_init(init, LV { addr, q, bf: None, vidx: None });
+            return self.atomic_init(init, LV { addr, q, bf: None, vidx: None, swz: None });
         }
         let fold = self.folds.get(init);
         if self.is_aggregate(q) {

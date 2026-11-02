@@ -661,6 +661,13 @@ impl Substituter<'_, '_, '_> {
                 }
                 Ok(self.sema.act_on_shufflevector(&args, loc, end))
             }
+            ExprKind::ExtVectorElementExpr => {
+                // clang `TransformExtVectorElementExpr`: the base, then the
+                // member access rebuilt on it.
+                let acc = ex(self).ext_vector_accessor(e);
+                let b = self.expr(ex(self).operand(e))?;
+                Ok(self.sema.act_on_member(b, acc, loc, loc, false))
+            }
             ExprKind::ConvertVectorExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 let o = self.expr(ex(self).operand(e))?;

@@ -190,6 +190,13 @@ pub struct Sema<'a, 'sm> {
     /// linkage (clang pushes the invalid out-of-line declaration on the
     /// block's scope chain; WP-235).
     pub(crate) dropped_qualified_locals: kiln_source::fx::FxHashSet<DeclId>,
+    /// Typedefs declared with `ext_vector_type`, in declaration order:
+    /// a multi-component ext-vector element access is typed as the first
+    /// one naming its vector type (clang `Sema::ExtVectorDecls`).
+    pub(crate) ext_vector_decls: Vec<DeclId>,
+    /// Set by [`Self::apply_vector_attrs`] when `ext_vector_type` applied
+    /// to the typedef being declared; taken by `act_on_typedef`.
+    pub(crate) ext_vector_applied: bool,
     /// Functions declared with a parameter that needed the missing-
     /// `typename` recovery: no qualified redeclaration matches them
     /// (spec/sema-templates.md, clang's invalid declaration).
@@ -584,6 +591,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             enums: Vec::new(),
             local_externs: Vec::new(),
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
+            ext_vector_decls: Vec::new(),
+            ext_vector_applied: false,
             missing_typename_fns: kiln_source::fx::FxHashSet::default(),
             extern_c: kiln_source::fx::FxHashMap::default(),
             oven: Some(Oven::new(Budget::default())),

@@ -729,6 +729,12 @@ impl<'a> AstNames<'a> {
                 out.push_str(exprs.source_loc_kind(e).spelling());
                 out.push_str("()");
             }
+            ExprKind::ExtVectorElementExpr => {
+                // clang `StmtPrinter::VisitExtVectorElementExpr`.
+                self.expr(exprs.operand(e), d, out);
+                out.push('.');
+                out.push_str(ast.symbols().as_str(exprs.ext_vector_accessor(e)));
+            }
             ExprKind::MemberExpr => {
                 // clang `VisitMemberExpr`: an anonymous struct or union
                 // member prints nothing, nor does the separator after it

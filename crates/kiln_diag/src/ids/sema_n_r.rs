@@ -38,6 +38,7 @@ sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined ou
 sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";
 sema_not_a_template = Error (1) "{0} is not a template";
 sema_not_assignable = Error (0) "expression is not assignable";
+sema_not_assignable_duplicate_components = Error (0) "vector is not assignable (contains duplicate components)";
 sema_not_contextually_convertible_to_bool = Error (1) "value of type {0} is not contextually convertible to 'bool'";
 sema_not_tag_in_scope = Error (3) "no {0:struct|interface|union|class|enum} named '{1}' in {2}";
 sema_nttp_deduction_failed = Error (3) "non-type template parameter '{0}' with type {1} has incompatible initializer of type {2}";

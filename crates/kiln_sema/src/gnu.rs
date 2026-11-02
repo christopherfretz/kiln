@@ -489,7 +489,13 @@ impl Sema<'_, '_> {
             self.unsupported(&format!("compound literals of {what}"), lparen);
             return self.recover(ty, &flat, lparen);
         }
-        if l.items.len() > 1 && !class && !self.is_vector_type(ty) {
+        // A vector or `_Complex` literal takes a list of its elements (clang
+        // `InitListChecker::CheckVectorType` / `CheckComplexType`).
+        if l.items.len() > 1
+            && !class
+            && !self.is_vector_type(ty)
+            && self.ast.types.as_complex(ty).is_none()
+        {
             self.error(DiagId::sema_builtin_func_cast_more_than_one_arg, lparen);
             return self.recover(ty, &flat, lparen);
         }

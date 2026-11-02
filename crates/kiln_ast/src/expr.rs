@@ -1974,6 +1974,12 @@ impl ExprArena {
         (n.aux & 1 != 0).then(|| lists.get(ListId::new(n.b)))
     }
 
+    /// The accessor of an `ExtVectorElementExpr` (`xy`, `s01`, `hi`; the
+    /// base is [`Self::operand`]).
+    pub fn ext_vector_accessor(&self, e: ExprId) -> Symbol {
+        Symbol::from_index(self.expect_kind(e, ExprKind::ExtVectorElementExpr).b)
+    }
+
     /// The explicit initializers of a `CXXParenListInitExpr`.
     pub fn paren_list_inits(&self, e: ExprId) -> ListId {
         ListId::new(self.expect_kind(e, ExprKind::CXXParenListInitExpr).a)
@@ -2214,6 +2220,7 @@ impl ExprArena {
                         | ExprKind::CXXStdInitializerListExpr
                         | ExprKind::ExprWithCleanups
                         | ExprKind::ConvertVectorExpr
+                        | ExprKind::ExtVectorElementExpr
                         | ExprKind::PackExpansionExpr
                         | ExprKind::ImaginaryLiteral
                 ),
@@ -2437,6 +2444,7 @@ impl ExprArena {
             | ExprKind::CXXStdInitializerListExpr
             | ExprKind::ExprWithCleanups
             | ExprKind::ConvertVectorExpr
+            | ExprKind::ExtVectorElementExpr
             | ExprKind::ImaginaryLiteral
             | ExprKind::PredefinedExpr => v.extend(id(n.a)),
             ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
@@ -2599,4 +2607,61 @@ impl ExprArena {
     pub fn compound_literal_init(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CompoundLiteralExpr).a)
     }
+}
+
+/// The lane of an ext-vector component letter: `xyzw` / `rgba` (point
+/// accessors) or a hex digit (`numeric`, after an `s`/`S`); clang
+/// `ExtVectorType::getAccessorIdx`.
+#[must_use]
+pub fn ext_vector_accessor_idx(c: u8, numeric: bool) -> Option<u32> {
+    if numeric {
+        return char::from(c).to_digit(16);
+    }
+    match c {
+        b'x' | b'r' => Some(0),
+        b'y' | b'g' => Some(1),
+        b'z' | b'b' => Some(2),
+        b'w' | b'a' => Some(3),
+        _ => None,
+    }
+}
+
+/// The lanes an ext-vector accessor selects, for a result of `count`
+/// components (1 for a scalar result): clang
+/// `ExtVectorElementExpr::getEncodedElementAccess`. `hi`/`lo`/`even`/
+/// `odd` select halves; an `s`/`S` prefix makes the rest hex digits.
+/// The accessor is one sema accepted.
+#[must_use]
+pub fn ext_vector_lanes(accessor: &str, count: u32) -> Vec<u32> {
+    let (comp, numeric) = match accessor.as_bytes().first() {
+        Some(b's' | b'S') => (&accessor[1..], true),
+        _ => (accessor, false),
+    };
+    (0..count)
+        .map(|i| match comp {
+            "hi" => count + i,
+            "lo" => i,
+            "even" => 2 * i,
+            "odd" => 2 * i + 1,
+            _ => comp
+                .as_bytes()
+                .get(i as usize)
+                .and_then(|&c| ext_vector_accessor_idx(c, numeric))
+                .unwrap_or(0),
+        })
+        .collect()
+}
+
+/// True if an ext-vector accessor names a lane twice (such an element
+/// access is not assignable; clang `containsDuplicateElements`).
+#[must_use]
+pub fn ext_vector_has_duplicates(accessor: &str) -> bool {
+    if matches!(accessor, "hi" | "lo" | "even" | "odd") {
+        return false;
+    }
+    let comp = match accessor.as_bytes().first() {
+        Some(b's' | b'S') => &accessor.as_bytes()[1..],
+        _ => accessor.as_bytes(),
+    };
+    comp.iter().enumerate().any(|(i, c)| comp[i + 1..].contains(c))
 }

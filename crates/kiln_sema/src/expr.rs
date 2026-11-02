@@ -2166,11 +2166,23 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_not_assignable, loc);
             return false;
         }
+        // clang `ClassifyInternal`: `v.xx` is not assignable.
+        let inner = self.ignore_parens(e);
+        if self.ast.exprs.get(inner).kind() == ExprKind::ExtVectorElementExpr {
+            let acc = self.ast.exprs.ext_vector_accessor(inner);
+            if kiln_ast::expr::ext_vector_has_duplicates(self.ast.symbols().as_str(acc)) {
+                self.error(DiagId::sema_not_assignable_duplicate_components, loc);
+                return false;
+            }
+        }
         if self.ast.types.effective_quals(t).is_const() {
             let mut base = self.ignore_parens(e);
             // clang classifies a vector element through its vector.
             while self.ast.exprs.get(base).object_kind() == ObjectKind::VectorComponent
-                && self.ast.exprs.get(base).kind() == ExprKind::ArraySubscriptExpr
+                && matches!(
+                    self.ast.exprs.get(base).kind(),
+                    ExprKind::ArraySubscriptExpr | ExprKind::ExtVectorElementExpr
+                )
             {
                 let v = ExprId::new(self.ast.exprs.get(base).a());
                 base = self.ignore_parens(v);
@@ -4284,6 +4296,14 @@ impl Sema<'_, '_> {
             (conv::decay(self, base), p)
         } else {
             let bt = self.ety(base);
+            // clang `LookupMemberExpr`: a component access on an ext
+            // vector (`v.xy`; spec/sema.md §5.8).
+            if let Some(sym) = name.as_ident()
+                && qual.is_none()
+                && self.vector_parts(bt).is_some_and(|p| p.is_ext())
+            {
+                return self.act_on_ext_vector_member(base, sym, loc, op_loc);
+            }
             if self.ast.types.as_record(bt).is_none() {
                 let ptr_rec = self
                     .ast

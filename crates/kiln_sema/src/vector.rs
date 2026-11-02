@@ -167,6 +167,7 @@ impl Sema<'_, '_> {
             let v = self.build_vector_type(ty, size, kind, node.loc);
             if v != QualType::ERROR {
                 ty = v;
+                self.ext_vector_applied |= ext;
             }
         }
         ty
@@ -182,6 +183,7 @@ impl Sema<'_, '_> {
         ds: &DeclSpec,
     ) -> QualType {
         let mut attrs = ds.attrs.clone();
+        self.ext_vector_applied = false;
         self.apply_vector_attrs(base, &mut attrs, ds.is_typedef())
     }
 
