@@ -77,9 +77,9 @@ pub struct CodegenOptions {
     /// The clang version whose diagnostic text codegen's warnings follow
     /// (`-fclang-compat=`; spec/driver.md).
     pub clang_compat: u32,
-    /// The major version of the LLVM that consumes the IR (the driver's
-    /// `KILN_LLVM_DIR`; spec/driver.md): selects the intrinsic signatures
-    /// that changed between the supported versions (19 and 22).
+    /// The major version of the LLVM that consumes the IR (`llvm-config
+    /// --version` of the driver's `KILN_LLVM_DIR`; spec/driver.md): selects
+    /// the IR that changed between the supported versions (19 and 22).
     pub llvm_major: u32,
 }
 

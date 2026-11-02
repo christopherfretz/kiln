@@ -59,6 +59,11 @@ impl Sema<'_, '_> {
         let mut ty = self.type_for_declarator_at(base, type_loc, d);
         let loc = d.name_loc();
         let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        // [temp.variadic]/12: the handler then catches `int`.
+        if !invalid && self.diagnose_unexpanded_type_written(ty, "exception type", loc) {
+            ty = QualType::INT;
+            invalid = true;
+        }
         if !invalid && matches!(self.ast.types.canonical_view(ty), TypeView::RValueRef(_)) {
             self.error(DiagId::sema_catch_rvalue_ref, loc);
             invalid = true;

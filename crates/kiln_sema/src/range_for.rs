@@ -257,7 +257,15 @@ impl Sema<'_, '_> {
         name: Symbol,
     ) -> Option<RangeForHead> {
         let loop_var = parts.loop_var;
-        if self.ast.decls.get(loop_var).has(DeclFlags::INVALID) {
+        // [temp.variadic]/12: clang's `ActOnCXXForRangeStmt` checks the
+        // range as an "expression" at its begin (a braced list's `{`).
+        let unexpanded = match &range {
+            RangeInit::Expr(e) => self.diagnose_unexpanded_written(*e, "expression", None),
+            RangeInit::List(l) => Self::list_exprs(l)
+                .into_iter()
+                .any(|e| self.diagnose_unexpanded_written(e, "expression", Some(l.lbrace))),
+        };
+        if unexpanded || self.ast.decls.get(loop_var).has(DeclFlags::INVALID) {
             self.discard_range_init(range);
             self.act_on_for_range_error(loop_var);
             return None;
@@ -297,9 +305,11 @@ impl Sema<'_, '_> {
             RangeInit::Expr(e) => vec![e],
             RangeInit::List(l) => Self::list_exprs(&l),
         };
+        let outer = std::mem::replace(&mut self.discarding_init, true);
         for e in es {
             let _ = self.act_on_full_expr(e);
         }
+        self.discarding_init = outer;
     }
 
     /// clang `BuildForRangeVarDecl`: an implicit for-range variable.

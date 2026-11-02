@@ -328,7 +328,15 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         if empty && size == 0 {
             return ArgKind::Ignore;
         }
-        return direct(IrType::Int(8));
+        if t.clang_compat() < 20 {
+            return direct(IrType::Int(8));
+        }
+        // clang 20+ (GCC's convention, spec/abi.md §8.21): a zero-sized
+        // argument is ignored and a non-empty-sized empty class takes the
+        // generic path below (`i64`).
+        if size == 0 {
+            return ArgKind::Ignore;
+        }
     }
     if let Some((base, members)) = homogeneous(t, q) {
         let align = t.layouter().type_layout(q).align;

@@ -1024,7 +1024,7 @@ impl Cg<'_> {
                 self.mty(pq)
             };
             let c = self.icn(LTy::I32, amount);
-            self.gep(et, old, vec![c], true)
+            self.gep_nuw(et, old, vec![c], inc)
         } else {
             let t = self.f.fir.ty(&self.m, old);
             if self.is_float_ty(t) && self.is_fp16(q) {
@@ -1207,7 +1207,7 @@ impl Cg<'_> {
                 } else {
                     self.mty(et)
                 };
-                self.gep(ety, p, vec![idx], true)
+                self.gep_nuw(ety, p, vec![idx], !is && !sub)
             }
             BinaryOp::Add => {
                 if float {
@@ -2638,7 +2638,7 @@ impl Cg<'_> {
             Some((_, x, _)) => min_align(addr.align, (x as u64).wrapping_mul(esz)),
             None => min_align(addr.align, esz),
         };
-        let v = self.gep(addr.ty, addr.v, indices, true);
+        let v = self.gep_nuw(addr.ty, addr.v, indices, !self.is_signed(iq));
         Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None })
     }
 
@@ -3145,6 +3145,16 @@ impl Cg<'_> {
             let (size, _) = self.size_align(rq);
             self.coerced_store_sized(r, &coerce, t, size);
             return Ok(Some(self.load_scalar(t, rq)));
+        }
+        if rty == LTy::BFLOAT && self.is_x86() && !self.opts.optimize && self.opts.llvm_major < 22 {
+            // spec/abi.md §8.18: LLVM 19's x86-64 FastISel (`-O0`) takes
+            // a `bfloat` call result for the already widened `float`, so a
+            // result passed straight on reaches `__truncsfbf2` as raw
+            // bits. Through memory the result is extended correctly. LLVM
+            // 22 and the optimizing selector are not affected.
+            let t = self.temp(rq);
+            self.store(r, t.v, t.align, false);
+            return Ok(Some(self.load(LTy::BFLOAT, t.v, t.align, false)));
         }
         Ok(Some(r))
     }

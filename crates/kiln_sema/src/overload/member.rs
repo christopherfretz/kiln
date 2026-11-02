@@ -29,7 +29,7 @@ impl Sema<'_, '_> {
             })
     }
 
-    fn templated_or_self(&self, d: DeclId) -> DeclId {
+    pub(crate) fn templated_or_self(&self, d: DeclId) -> DeclId {
         if self.kind_of(d) == DeclKind::FunctionTemplate {
             self.pattern_of(d).unwrap_or(d)
         } else {

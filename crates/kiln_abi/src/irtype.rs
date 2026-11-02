@@ -141,6 +141,9 @@ pub struct IrRecord {
 pub struct IrTypes<'a> {
     lay: Layouter<'a>,
     records: FxHashMap<DeclId, IrRecord>,
+    /// The clang release whose call lowering to follow where releases
+    /// differ (`-fclang-compat`; 19 by default).
+    clang_compat: u32,
 }
 
 struct Member {
@@ -156,7 +159,21 @@ struct Member {
 impl<'a> IrTypes<'a> {
     /// A session over `ast` for `target`.
     pub fn new(ast: &'a Ast, target: &'a Target) -> Self {
-        IrTypes { lay: Layouter::new(ast, target), records: FxHashMap::default() }
+        IrTypes { lay: Layouter::new(ast, target), records: FxHashMap::default(), clang_compat: 19 }
+    }
+
+    /// Follow clang release `major`'s call lowering (`-fclang-compat`):
+    /// from 20 on, an `AArch64` C++ empty class goes by value as `i64`
+    /// (spec/abi.md §8.21).
+    #[must_use]
+    pub fn with_clang_compat(mut self, major: u32) -> Self {
+        self.clang_compat = major;
+        self
+    }
+
+    /// The clang release whose call lowering is followed.
+    pub fn clang_compat(&self) -> u32 {
+        self.clang_compat
     }
 
     /// The layout session.
