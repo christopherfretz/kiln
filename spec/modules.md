@@ -163,7 +163,10 @@ declaration is a binary search on its id. Unit 0 is always the main file.
 
 Attachment ([module.unit]/7): a declaration in a purview is attached to the
 named module unless it is in a linkage specification; everything else is
-attached to the global module.
+attached to the global module. `Ast::module_attachment` walks lexical
+contexts, so a namespace first opened in the purview and reopened inside
+`extern "C++"` attaches that reopening's members to the global module
+(WP-389).
 
 **Visibility** of declaration `D` (owner `O`) from the current unit `C`
 (`Sema::module_visible`), consulted by `Sema::filter` (every ordinary,
@@ -272,6 +275,10 @@ Variables attached to a module are always mangled, and a `const` variable
 attached to a named module has module linkage (P2788), so it is
 `_ZW1M1c`, not `_ZL1c`. `kiln_abi::mangle_module_initializer` gives the
 initializer's name, `_ZGIW1M` / `_ZGIW1MWP1P` (spec/abi.md §8.19).
+The standard abbreviations `Sa`/`Sb`/`Ss`/`Si`/`So`/`Sd` do not apply to
+`std` templates attached to a named module (including a module-attached
+`char_traits<char>` / `allocator<char>` argument); `St` still does:
+`_ZW1M2g1StS_9allocatorIiE` (spec/abi.md §8.20, WP-389).
 
 ## 8. `import std;` (libc++)
 

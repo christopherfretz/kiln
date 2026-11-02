@@ -997,13 +997,20 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// ::std::allocator<char>>` (`Ss`), `::std::basic_{i,o,io}stream<char,
     /// ::std::char_traits<char>>` (`Si`, `So`, `Sd`). Only entities declared
     /// directly in `::std` qualify: libstdc++'s `std::__cxx11::basic_string`
-    /// is `NSt7__cxx1112basic_string...E`.
+    /// is `NSt7__cxx1112basic_string...E`. A template attached to a named
+    /// module gets none (clang's `getOwningModuleForLinkage` check):
+    /// `StS_9allocatorIiE` in module `M`, not `SaIiE`.
     fn std_abbrev(&self, d: DeclId) -> Option<&'static str> {
         let ast = self.ast;
         if !self.parent(d).is_some_and(|p| self.is_std(p)) {
             return None;
         }
+        let module_attached =
+            |t: DeclId| ast.modules.active && ast.module_attachment(ast.first(t)).is_some();
         if ast.decls.get(d).kind() == DeclKind::ClassTemplate {
+            if module_attached(d) {
+                return None;
+            }
             return match decl_name(ast, d).as_str() {
                 "allocator" => Some("Sa"),
                 "basic_string" => Some("Sb"),
@@ -1011,7 +1018,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             };
         }
         let (t, args) = self.spec_of(d)?;
-        if ast.decls.get(t).kind() != DeclKind::ClassTemplate {
+        if ast.decls.get(t).kind() != DeclKind::ClassTemplate || module_attached(t) {
             return None;
         }
         let (code, with_alloc) = match decl_name(ast, t).as_str() {
@@ -1044,6 +1051,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let Some(rec) = self.ast.types.as_record(ty) else { return false };
         let Some((tmpl, args)) = self.spec_of(rec) else { return false };
         self.parent(rec).is_some_and(|p| self.is_std(p))
+            && !(self.ast.modules.active && self.ast.module_attachment(self.ast.first(tmpl)).is_some())
             && decl_name(self.ast, tmpl) == name
             && matches!(self.ast.types.args(args), [c] if self.is_char_arg(c.view()))
     }

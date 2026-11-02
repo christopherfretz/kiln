@@ -1108,7 +1108,11 @@ a named module has module linkage, not internal (P2788).
   prefix, template prefix, unscoped template, template name or class
   type is mangled; they are never candidates themselves (the
   specialization `SaIcE` is). `std::__cxx11::basic_string` stays
-  spelled out.
+  spelled out. A template attached to a named module (and a
+  `char_traits` / `allocator` argument attached to one) gets no
+  abbreviation (clang `getOwningModuleForLinkage`; WP-389,
+  `tests/mangle/std_abbrev_module.cpp`,
+  `tests/mangle/std_abbrev_module_global.cpp`).
 - **Tagged inline namespaces**: a namespace's own `abi_tag` is not
   mangled (`St7__cxx11`, not `St7__cxx11B5cxx11`); its tags are
   implied by its name.
