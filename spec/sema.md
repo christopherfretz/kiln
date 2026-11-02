@@ -589,7 +589,11 @@ Redeclaration and linkage rules:
   so `constexpr same_as<const bool> decltype(auto) r = X::v;` (with
   `decltype(X::v)` = `const bool`) is satisfied and `constexpr
   same_as<const int> decltype(auto) d = 1;` is `deduced type 'int' does
-  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335).
+  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335). The
+  variable's type still carries that `const` unless `decltype(e)` is a
+  reference: `constexpr decltype(auto) b = 1;` is `const int`,
+  `constexpr decltype(auto) r = (g);` is `const int &` for a `constexpr
+  int g` (`deduce_placeholder`).
 - Deduced return types ([dcl.spec.auto.general]/9-11): the first
   `return` deduces, later ones must agree (clang's
   `'auto' in return type deduced as ... here but deduced as ...`),

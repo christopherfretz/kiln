@@ -11,6 +11,16 @@ constexpr same<const bool> decltype(auto) a = X::v;
 constexpr same<int> decltype(auto) b = 1;
 static_assert(__is_same(decltype(a), const bool));
 static_assert(__is_same(decltype(b), const int));
+// The variable keeps `constexpr`'s `const` unless `decltype(e)` is a reference.
+constexpr decltype(auto) u = 1;
+static_assert(__is_same(decltype(u), const int));
+static int h;
+constexpr decltype(auto) r = (h);
+static_assert(__is_same(decltype(r), int &));
+constexpr decltype(auto) cr = (X::v);
+static_assert(__is_same(decltype(cr), const bool &));
+struct M { static constexpr same<int> decltype(auto) m = 2; };
+static_assert(__is_same(decltype(M::m), const int));
 void f() {
   constexpr same<const bool> decltype(auto) c = X::v;
   same<bool> decltype(auto) d = !c;
