@@ -4813,6 +4813,15 @@ impl Sema<'_, '_> {
             }
             return self.bad_cast(style, e, ty, loc);
         }
+        // clang `TryStaticImplicitCast`: a class target must be complete;
+        // the use whose instantiation fails (a failed `static_assert` in
+        // the class, [temp.inst]/2) fails quietly.
+        if style.allows_static()
+            && self.ast.types.as_record(ty).is_some()
+            && self.instantiation_fails(ty, loc)
+        {
+            return self.recover(ty, &[e], loc);
+        }
         // [expr.static.cast]/4 with a class target: direct-initialization
         // of a temporary from an object of the same or a derived class
         // ([dcl.init.general]/16.6.2; clang's `ConstructorConversion`).

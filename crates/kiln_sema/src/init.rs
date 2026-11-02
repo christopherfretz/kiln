@@ -1,7 +1,7 @@
 //! Initialization ([dcl.init]): copy-, direct- and list-initialization
 //! of scalars, references, arrays and aggregates (spec/sema.md §6).
 
-use kiln_ast::decl::{DeclKind, DefinitionBits, FieldData, TagKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, FieldData, TagKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
@@ -986,7 +986,7 @@ impl Sema<'_, '_> {
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // A field whose initializer failed (clang: `BuildCXXDefaultInitExpr`
         // fails, the list is invalid).
-        if self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID) {
+        if self.ast.decls.get(f).has(DeclFlags::INVALID) {
             return self.recover(fty, &[], at);
         }
         if self.field_has_nsdmi(f) {
@@ -1914,6 +1914,13 @@ impl Sema<'_, '_> {
         let Some(r) = record else {
             return self.recover(ty, &[], lbrace);
         };
+        // clang `CheckStructUnionTypes`: an invalid class (one whose
+        // instantiation failed, [temp.inst]/2) is not checked; it is
+        // taken to consume one initializer, quietly.
+        if self.ast.definition(r).is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::INVALID)) {
+            *pos = (*pos + 1).min(items.len());
+            return self.recover(ty, &[], lbrace);
+        }
         let fields = self.init_fields(r);
         let def = self.ast.definition(r).unwrap_or(r);
         let union = self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union);
@@ -2166,7 +2173,7 @@ impl Sema<'_, '_> {
                     }
                     None => {
                         let f = fields[i - nb];
-                        invalid |= self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID);
+                        invalid |= self.ast.decls.get(f).has(DeclFlags::INVALID);
                         self.field_filler(f, rbrace)
                     }
                 };
