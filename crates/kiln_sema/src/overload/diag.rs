@@ -303,6 +303,9 @@ impl Sema<'_, '_> {
                     Some(None) => 2,
                     _ => u8::from(cand.kind == CandidateKind::ConvFn),
                 };
+                // At the first declaration, which carries the
+                // explicit-specifier (clang `DiagnoseFailedExplicitSpec`).
+                let loc = self.ast.decls.get(self.ast.first(f)).loc();
                 return self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which);
             }
             CandidateFailure::IllegalCtor => {

@@ -282,6 +282,12 @@ impl Sema<'_, '_> {
             {
                 Err(())
             }
+            // An erroneous argument (`T<undeclared>`) was diagnosed when
+            // it was formed (clang's `RecoveryExpr` makes the template-id
+            // invalid without a second error).
+            (DeclKind::TemplateTypeParm, ArgView::Expr { expr, .. }) if self.is_err_expr(expr) => {
+                Err(())
+            }
             (DeclKind::TemplateTypeParm, _) => {
                 let d = self.diag(DiagId::sema_template_arg_must_be_type, at);
                 let d = self.note_param_here(d, p);

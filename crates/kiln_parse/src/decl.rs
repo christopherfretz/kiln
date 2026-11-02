@@ -1095,7 +1095,8 @@ impl Parser<'_, '_> {
                     || (end > start + 1
                         && self.unresolved_scope_name(start)
                         && (ctx == DeclaratorContext::Block
-                            || self.unknown_type_follows(end, ctx))) =>
+                            || self.unknown_type_follows(end, ctx)
+                            || self.unknown_template_follows(end, ctx))) =>
             {
                 if let Ok(Some(q)) = self.parse_nested_name_nns() {
                     let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
@@ -1152,6 +1153,16 @@ impl Parser<'_, '_> {
                     Self::punct_of(next),
                     Some(Punct::LParen | Punct::ColonColon | Punct::Less)
                 ))
+    }
+
+    /// True if token `end`, after an unknown qualified name in a
+    /// decl-specifier at namespace or class scope, is `<`: the name was
+    /// meant as a class template (`std::codecvt_utf8<wchar_t> c;`, clang's
+    /// `ParseImplicitInt` with `IsTemplateName`). At block scope the
+    /// statement is an expression (`N::f<int> x;` compares).
+    fn unknown_template_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
+        matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+            && Self::punct_of(self.tok_at(end)) == Some(Punct::Less)
     }
 
     // -- class and enum specifiers ----------------------------------------------------
