@@ -196,14 +196,7 @@ impl Substituter<'_, '_, '_> {
         };
         let kept: &[DeclId] =
             if !ok && new_params.iter().any(|&p| dep_param(self, p)) { &[] } else { &new_params };
-        let x = self.sema.builder().requires_expr(
-            rq.body,
-            kept,
-            &[],
-            QualType::BOOL,
-            at,
-            rbrace,
-        );
+        let x = self.sema.builder().requires_expr(rq.body, kept, &[], QualType::BOOL, at, rbrace);
         let _ = self.sema.ast.exprs.set_satisfied(x, ok);
         if !ok {
             let id = self.sema.inst.concepts.push(Satisfaction { ok, records: recs });
