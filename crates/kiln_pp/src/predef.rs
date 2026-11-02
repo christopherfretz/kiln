@@ -74,6 +74,12 @@ pub struct PredefConfig {
     /// clang 19's; [`ClangCompat::Clang22`] applies `CLANG22_COMMON`
     /// (and `CLANG22_AARCH64` on `AArch64`).
     pub clang_compat: ClangCompat,
+    /// The C++ library declares `std::float16_t` ... `std::bfloat16_t`
+    /// (`<stdfloat>`): libstdc++ does, libc++ 19 and 22 do not. When false
+    /// the `__STDCPP_*_T__` macros stay undefined ([cpp.predefined]/2:
+    /// they mean the implementation supports those aliases; libc++'s
+    /// `std` module exports them when the macros are defined).
+    pub std_float_aliases: bool,
 }
 
 impl PredefConfig {
@@ -96,6 +102,7 @@ impl PredefConfig {
             sized_deallocation: true,
             kiln_version: (0, 0),
             clang_compat: ClangCompat::Clang19,
+            std_float_aliases: true,
         }
     }
 }
@@ -240,6 +247,9 @@ const KILN_FEATURES: &[(u64, &str, &str)] = &[
     (202_400, "__cpp_constexpr", "202406L"),
     // P3068 constexpr exceptions (WP-357); withdrawn with -fno-exceptions.
     (202_400, "__cpp_constexpr_exceptions", "202411L"),
+    // C++20 modules (WP-363, spec/modules.md §4): clang 22's value, from
+    // C++20 on (clang 19 does not define it).
+    (202_002, "__cpp_modules", "1"),
 ];
 
 /// The driver-injected `-D` that clang's driver appends after the user's
@@ -313,13 +323,13 @@ fn set(m: &mut BTreeMap<String, String>, n: &str, v: &str) {
 
 /// P1467 ([basic.extended.fp], [cpp.predefined]/2): GCC 14's limit
 /// macros in every C++ mode, the `__STDCPP_*_T__` ones from C++23.
-fn apply_p1467(m: &mut BTreeMap<String, String>) {
+fn apply_p1467(m: &mut BTreeMap<String, String>, std_float_aliases: bool) {
     for &(n, v) in P1467_LIMITS {
         set(m, n, v);
     }
     let cplusplus: u64 =
         m.get("__cplusplus").map_or(0, |v| v.trim_end_matches('L').parse().unwrap_or(0));
-    if cplusplus >= 202_302 {
+    if cplusplus >= 202_302 && std_float_aliases {
         for n in P1467_STDCPP {
             set(m, n, "1");
         }
@@ -332,7 +342,7 @@ fn apply_p1467(m: &mut BTreeMap<String, String>) {
 /// (docs/status/cxx-features.md), before the flags that remove them:
 /// P1061 structured binding packs (C++17 on) and P2893 variadic friends
 /// (every C++ mode) at clang 22's values in the same modes, and
-/// `KILN_FEATURES` (P2747, P3068) by `__cplusplus`.
+/// `KILN_FEATURES` (P2747, P3068, modules) by `__cplusplus`.
 fn kiln_features(m: &mut BTreeMap<String, String>) {
     let cplusplus =
         m.get("__cplusplus").and_then(|v| v.trim_end_matches('L').parse::<u64>().ok()).unwrap_or(0);
@@ -418,7 +428,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if cxx23 {
             set(m, "__cpp_explicit_this_parameter", "202110L");
         }
-        apply_p1467(m);
+        apply_p1467(m, cfg.std_float_aliases);
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {
         m.remove(n);

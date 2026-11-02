@@ -31,6 +31,7 @@ mod features;
 mod ifeval;
 mod include;
 mod macros;
+mod modules;
 mod options;
 mod pragma;
 mod predef;
@@ -54,6 +55,7 @@ pub use include::{
     NoIncludes, ResolvedInclude,
 };
 pub use macros::{AttrMacro, MacroDef, MacroTable};
+pub use modules::{DirectiveKind, ModuleDirective, ModuleOptions, has_module_lines};
 pub use options::{ClangCompat, PpOptions};
 pub use predef::{CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};
 pub use preprocessor::{Marker, PpItem, Preprocessor};

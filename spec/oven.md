@@ -85,6 +85,13 @@ the evaluator's flattened type table.
   `HAS_UNION`, `RESOLVING` — a global whose initializer is running), the
   `Origin` (local `Var`, `Temp`, `Global`, `External`, `Str(literal, expr)`,
   thawed `Const`) for notes, and the frame serial that created it.
+  An `External` object (other than a reference's pointer slot) and an
+  `Unknown` one (P2280, "Unknown references") are *unbacked*: a static
+  slot with a size, for address arithmetic and bounds, and the base
+  `mem::UNBACKED`, holding no bytes, since every access of them is
+  diagnosed before the base is used (`Memory::alloc_unbacked`, WP-375).
+  Naming an `extern` array or a reference to an array of any size costs
+  one slot. Their size is clamped to 4 GiB (pointer offsets are 32 bits).
 - **Spaces**: the *frame* space is a bump arena of all frame objects of the
   current evaluation; the *static* space holds globals and thawed constants
   and persists for the TU. Each space keeps the bytes, a per-byte
@@ -972,7 +979,12 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   is the static pointee type of the placement argument before its
   conversion to `void *` (`bi::DYN` when it was `void *` already). As in
   clang 22's `HandlePlacementNew`, the designated object is the `stat`
-  subobject at `p` (for `bi::DYN`, the outermost object there), and it
+  subobject at `p` (for `bi::DYN`, the outermost object there; inside
+  `std::construct_at` and libc++'s `std::__construct_at` the compiler
+  passes `T` instead of `bi::DYN`, since [specialized.construct]/2
+  constructs `*location` and libc++ hands the placement a `void *` from
+  `__voidify`, so a first member or `optional`/`variant` storage at
+  offset 0 is the designated object, `construct-at-member.cpp`), and it
   may hold the new object when its array extent is at least the new
   type's and their element types are the same: `new (a) int[3]` with
   `int a[3]` decayed designates one `int` ("... from 'int' to
@@ -983,6 +995,10 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   (`new_aux::BOUND`). It then
   begins the lifetime of `sizeof(T)` bytes, marks them uninitialized, and
   the initializer runs as for any `new` (a constructor call for a class).
+  A placement new allocates nothing: constructing and destroying objects
+  in one storage in a loop holds that storage only
+  (`expr.new/p2747-placement-churn.cpp`, 100000 objects, one heap
+  allocation; WP-375).
   Within `std::allocator<T>::allocate` a cast from `void*` to `T*` (as
   libc++ writes `static_cast<T*>(__builtin_operator_new(...))`) is a plain
   move, not the C++26 `void*` cast check.
@@ -1827,8 +1843,10 @@ in constant expressions (a parameter of a function outside its call, an
 constant; the reference binds to "an unspecified object of the referenced
 type". On first use in an Oven the reference's external object is
 rebound to a static object of origin `Origin::Unknown(d)` (one per
-variable, kept in `Oven::unknowns`, `EXTERNAL | CONST`), so its address
-is a constant and passing it on, binding another reference to it
+variable, kept in `Oven::unknowns`, `EXTERNAL | CONST`; unbacked, so it
+holds no bytes whatever the referenced type's size, "Abstract memory",
+WP-375: `expr.const/p2280-unknown-reference-mem.cpp` names a reference
+to a 2 GB array), so its address is a constant and passing it on, binding another reference to it
 (`std::size(a)` of an array reference parameter), and non-virtual member
 calls that do not read it are constant
 (`expr.const/p2280-unknown-reference.cpp`). Diagnosed, with clang 22's notes:
@@ -1847,6 +1865,17 @@ calls that do not read it are constant
 Before C++23 the reference stays external: naming it is "function
 parameter 'x' with unknown value cannot be used in a constant expression"
 as before (`expr.const/p2280-unknown-reference-cxx20.cpp`).
+As in clang 22, only a *variable* of reference type binds to an unknown
+object: a reference member of an unknown object is read from that object
+("read of variable 'h' whose value is not known"), and `this` outside
+the evaluation of a call to a constexpr member function is not constant
+("[implicit] use of 'this' pointer is only allowed within the evaluation
+of a call to a 'constexpr' member function"); inside a member function
+called on an unknown object, `this` is its address, so comparing it with
+the object's own address is constant and with null is not
+(`expr.const/p2280-ok.cpp`, `p2280-errors.cpp`). *Deviation:* a
+reference to an object of 4 GiB or more stays external (naming it is
+diagnosed as before C++23); clang accepts it.
 
 ### Reflection runtime (M6; WP-267 spike behind `-freflection`)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's
@@ -2218,7 +2247,13 @@ their registers are kept to the end of the loop statement
 - `tests/conformance/expr.new/p2747-placement-new*.cpp` (WP-357,
   `requires: clang>=22`): placement new of objects and arrays, the misuse
   notes, the pre-C++26 rule; `expr.const/p2280-unknown-reference*.cpp`
-  likewise for P2280. `expr.throw/constexpr-exceptions*.cpp`,
+  likewise for P2280. WP-375: `expr.new/constexpr-placement-ok.cpp`
+  (a run test: `std::allocator` storage, heap elements, union members,
+  `std::construct_at`), `constexpr-placement.cpp` (the forms still not
+  constant), `p2747-placement-churn.cpp` (`oven:` budget, `mem<=512`);
+  `expr.const/p2280-ok.cpp` (`std::array` through a reference),
+  `p2280-errors.cpp`, `p2280-unknown-reference-mem.cpp` (`oven:`
+  budget). `expr.throw/constexpr-exceptions*.cpp`,
   `constexpr-uncaught.cpp`, `constexpr-throw-churn.cpp` (`mem<=512`)
   and `except.handle/constexpr-*.cpp` (WP-357, `skip(clang)`: no
   released clang implements P3068) for exceptions.
