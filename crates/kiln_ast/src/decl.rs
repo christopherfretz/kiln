@@ -694,7 +694,8 @@ pub enum Defaulted {
 /// implicit_inline(1) constexpr_kind(2) virtual(1) pure(1) defaulted(2)
 /// deleted(1) explicit(1) trivial(1) immediate_escalating(1)
 /// has_contracts(1) is_coroutine(1) escalated(1) variadic(1) override(1)
-/// final(1) explicit_object(1) virtual_written(1) storage_inherited(1)`.
+/// final(1) explicit_object(1) virtual_written(1) storage_inherited(1)
+/// not_selected(1)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct FnSpec(u32);
 
@@ -777,10 +778,19 @@ impl FnSpec {
     /// known only at its body, [class.mfct]/1; WP-067a: `defaulted`
     /// [`Defaulted::Explicit`] and `constexpr` [`ConstexprKind::Constexpr`],
     /// known only at `= default` after the declarator, [dcl.fct.def.default],
-    /// [dcl.constexpr]/7). The two fields are OR-ed in, so sema sets them
-    /// only from [`Defaulted::No`] / [`ConstexprKind::None`].
+    /// [dcl.constexpr]/7; WP-289: `not_selected`, known only at the
+    /// class's `}`, [class.dtor]/4). The two fields are OR-ed in, so sema
+    /// sets them only from [`Defaulted::No`] / [`ConstexprKind::None`].
     pub const LATE: FnSpec = FnSpec(
-        (1 << 3) | (1 << 4) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 14) | (1 << 15) | (1 << 16),
+        (1 << 3)
+            | (1 << 4)
+            | (1 << 8)
+            | (1 << 10)
+            | (1 << 12)
+            | (1 << 14)
+            | (1 << 15)
+            | (1 << 16)
+            | (1 << 23),
     );
 }
 
@@ -826,6 +836,11 @@ bit_accessors!(FnSpec:
     /// static member function) rather than written here; clang's dump
     /// prints the written storage class only.
     storage_inherited / with_storage_inherited = 22;
+    /// A prospective destructor that is not the destructor: overload
+    /// resolution at the end of the class definition selected another
+    /// ([class.dtor]/4; clang `isIneligibleOrNotSelected`). Set at class
+    /// completion; [`crate::Ast::destructor`] skips it.
+    not_selected / with_not_selected = 23;
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).
@@ -4177,7 +4192,196 @@ pub mod builtin {
         })
     }
 
+    /// The `printf` format-attribute indices of a builtin (clang 19
+    /// `Builtins.td` `PrintfFormat<N>` / `VPrintfFormat<N>`, added by
+    /// `Sema::AddKnownFunctionAttributes` as an implicit
+    /// `format(printf, F, A)`): one-based `(F, A)`, `A` = 0 when the data
+    /// arguments are a `va_list` (WP-282).
+    pub fn printf_format(id: u32) -> Option<(u16, u16)> {
+        Some(match id {
+            SPRINTF => (2, 3),
+            SNPRINTF => (3, 4),
+            VSNPRINTF => (3, 0),
+            _ => return None,
+        })
+    }
+
     // ---- end WP-270 ----
+
+    // ---- WP-282 ----
+
+    /// `void *__builtin_assume_aligned(const void *, size_t, ...)`
+    /// (custom-checked: 2 or 3 arguments, the alignment a constant power
+    /// of 2; clang `Sema::BuiltinAssumeAligned`).
+    pub const ASSUME_ALIGNED: u32 = 201;
+    /// `size_t __builtin_object_size(const void *, int)` (the type a
+    /// constant in [0, 3]).
+    pub const OBJECT_SIZE: u32 = 957;
+    /// `size_t __builtin_dynamic_object_size(const void *, int)`.
+    pub const DYNAMIC_OBJECT_SIZE: u32 = 451;
+    /// `double __builtin_powi(double, int)`.
+    pub const POWI: u32 = 974;
+    /// `float __builtin_powif(float, int)`.
+    pub const POWIF: u32 = 973;
+    /// `long double __builtin_powil(long double, int)`.
+    pub const POWIL: u32 = 975;
+    /// `__builtin_shufflevector(v1, v2, i...)` (custom-checked; a
+    /// `ShuffleVectorExpr`, clang `Sema::BuiltinShuffleVector`).
+    pub const SHUFFLEVECTOR: u32 = 1085;
+    /// `[[noreturn]] void __builtin_verbose_trap(const char *, const char *)`
+    /// (both arguments string literals).
+    pub const VERBOSE_TRAP: u32 = 1370;
+    /// `__fp16 __builtin_copysignf16(__fp16, __fp16)`.
+    pub const COPYSIGNF16: u32 = 360;
+    /// `__builtin_ceilf128`.
+    pub const CEILF128: u32 = 317;
+    /// `__builtin_copysignf128`.
+    pub const COPYSIGNF128: u32 = 361;
+    /// `__builtin_fabsf128`.
+    pub const FABSF128: u32 = 555;
+    /// `__builtin_floorf128`.
+    pub const FLOORF128: u32 = 574;
+    /// `__builtin_fmaxf128`.
+    pub const FMAXF128: u32 = 590;
+    /// `__builtin_fminf128`.
+    pub const FMINF128: u32 = 598;
+    /// `__builtin_frexpf128`.
+    pub const FREXPF128: u32 = 620;
+    /// `__builtin_huge_valf128`.
+    pub const HUGE_VALF128: u32 = 654;
+    /// `__builtin_inff128`.
+    pub const INFF128: u32 = 675;
+    /// `__builtin_nanf128`.
+    pub const NANF128: u32 = 897;
+    /// `__builtin_nansf128`.
+    pub const NANSF128: u32 = 902;
+    /// `__builtin_nearbyintf128`.
+    pub const NEARBYINTF128: u32 = 909;
+    /// `__builtin_rintf128`.
+    pub const RINTF128: u32 = 1023;
+    /// `__builtin_roundevenf128`.
+    pub const ROUNDEVENF128: u32 = 1055;
+    /// `__builtin_roundf128`.
+    pub const ROUNDF128: u32 = 1053;
+    /// `__builtin_truncf128`.
+    pub const TRUNCF128: u32 = 1339;
+
+    /// WP-282: library builtins libc++ and libstdc++ name that WP-270 left
+    /// out.
+    pub const EXTRA: &[Info] = &[
+        row(ASSUME_ALIGNED, "__builtin_assume_aligned", "v*vC*z.", N | C | T),
+        row(OBJECT_SIZE, "__builtin_object_size", "zvC*Ii", N),
+        row(DYNAMIC_OBJECT_SIZE, "__builtin_dynamic_object_size", "zvC*Ii", N),
+        row(POWI, "__builtin_powi", "ddi", N | C),
+        row(POWIF, "__builtin_powif", "ffi", N | C),
+        row(POWIL, "__builtin_powil", "LdLdi", N | C),
+        row(SHUFFLEVECTOR, "__builtin_shufflevector", "v.", N | C | T),
+        row(VERBOSE_TRAP, "__builtin_verbose_trap", "vcC*cC*", N | R),
+        row(COPYSIGNF16, "__builtin_copysignf16", "hhh", N | C),
+    ];
+
+    /// WP-282: the `__float128` (`LLd`) math builtins (clang 19
+    /// `Builtins.td` `F128` variants), one row each. The ones with a
+    /// `long double` twin kiln already lowers or evaluates go down the
+    /// twin's path ([`f128_twin`]; both paths are driven by the operand
+    /// types, so the `__float128` operands give `fp128` intrinsics and
+    /// quad-precision Oven arithmetic); `roundevenf128` is
+    /// `llvm.roundeven`; the rest are library calls of the function the
+    /// builtin names, like [`LIBM`] ([`is_libm`]).
+    pub const F128: &[Info] = &[
+        row(105, "__builtin_acosf128", "LLdLLd", N),
+        row(112, "__builtin_acoshf128", "LLdLLd", N),
+        row(140, "__builtin_asinf128", "LLdLLd", N),
+        row(147, "__builtin_asinhf128", "LLdLLd", N),
+        row(162, "__builtin_atan2f128", "LLdLLdLLd", N),
+        row(164, "__builtin_atanf128", "LLdLLd", N),
+        row(171, "__builtin_atanhf128", "LLdLLd", N),
+        row(297, "__builtin_cbrtf128", "LLdLLd", N | C),
+        row(CEILF128, "__builtin_ceilf128", "LLdLLd", N | C),
+        row(COPYSIGNF128, "__builtin_copysignf128", "LLdLLdLLd", N | C),
+        row(383, "__builtin_cosf128", "LLdLLd", N),
+        row(391, "__builtin_coshf128", "LLdLLd", N),
+        row(500, "__builtin_erfcf128", "LLdLLd", N),
+        row(493, "__builtin_erff128", "LLdLLd", N),
+        row(525, "__builtin_exp10f128", "LLdLLd", N),
+        row(520, "__builtin_exp2f128", "LLdLLd", N),
+        row(527, "__builtin_expf128", "LLdLLd", N),
+        row(536, "__builtin_expm1f128", "LLdLLd", N),
+        row(FABSF128, "__builtin_fabsf128", "LLdLLd", N | C),
+        row(563, "__builtin_fdimf128", "LLdLLdLLd", N),
+        row(FLOORF128, "__builtin_floorf128", "LLdLLd", N | C),
+        row(582, "__builtin_fmaf128", "LLdLLdLLdLLd", N),
+        row(FMAXF128, "__builtin_fmaxf128", "LLdLLdLLd", N | C),
+        row(FMINF128, "__builtin_fminf128", "LLdLLdLLd", N | C),
+        row(606, "__builtin_fmodf128", "LLdLLdLLd", N),
+        row(FREXPF128, "__builtin_frexpf128", "LLdLLdi*", N),
+        row(HUGE_VALF128, "__builtin_huge_valf128", "LLd", N | C),
+        row(662, "__builtin_hypotf128", "LLdLLdLLd", N),
+        row(663, "__builtin_ilogbf128", "iLLd", N),
+        row(INFF128, "__builtin_inff128", "LLd", N | C),
+        row(764, "__builtin_ldexpf128", "LLdLLdi", N),
+        row(771, "__builtin_lgammaf128", "LLdLLd", N),
+        row(754, "__builtin_llrintf128", "LLiLLd", N),
+        row(755, "__builtin_llroundf128", "LLiLLd", N),
+        row(814, "__builtin_log10f128", "LLdLLd", N),
+        row(798, "__builtin_log1pf128", "LLdLLd", N),
+        row(806, "__builtin_log2f128", "LLdLLd", N),
+        row(823, "__builtin_logbf128", "LLdLLd", N),
+        row(816, "__builtin_logf128", "LLdLLd", N),
+        row(831, "__builtin_lrintf128", "LiLLd", N),
+        row(840, "__builtin_lroundf128", "LiLLd", N),
+        row(884, "__builtin_modff128", "LLdLLdLLd*", N),
+        row(NANF128, "__builtin_nanf128", "LLdcC*", N | P),
+        row(NANSF128, "__builtin_nansf128", "LLdcC*", N | P),
+        row(NEARBYINTF128, "__builtin_nearbyintf128", "LLdLLd", N | C),
+        row(916, "__builtin_nextafterf128", "LLdLLdLLd", N),
+        row(923, "__builtin_nexttowardf128", "LLdLLdLLd", N),
+        row(972, "__builtin_powf128", "LLdLLdLLd", N),
+        row(1004, "__builtin_remainderf128", "LLdLLdLLd", N),
+        row(1011, "__builtin_remquof128", "LLdLLdLLdi*", N),
+        row(RINTF128, "__builtin_rintf128", "LLdLLd", N | C),
+        row(ROUNDEVENF128, "__builtin_roundevenf128", "LLdLLd", N | C),
+        row(ROUNDF128, "__builtin_roundf128", "LLdLLd", N | C),
+        row(1080, "__builtin_scalblnf128", "LLdLLdLi", N),
+        row(1081, "__builtin_scalbnf128", "LLdLLdi", N),
+        row(1099, "__builtin_sinf128", "LLdLLd", N),
+        row(1107, "__builtin_sinhf128", "LLdLLd", N),
+        row(1122, "__builtin_sqrtf128", "LLdLLd", N),
+        row(1307, "__builtin_tanf128", "LLdLLd", N),
+        row(1315, "__builtin_tanhf128", "LLdLLd", N),
+        row(1324, "__builtin_tgammaf128", "LLdLLd", N),
+        row(TRUNCF128, "__builtin_truncf128", "LLdLLd", N | C),
+    ];
+
+    /// The `long double` builtin a [`F128`] builtin is lowered and
+    /// evaluated as, if any.
+    pub fn f128_twin(id: u32) -> Option<u32> {
+        Some(match id {
+            CEILF128 => CEILL,
+            COPYSIGNF128 => COPYSIGNL,
+            FABSF128 => FABSL,
+            FLOORF128 => FLOORL,
+            FMAXF128 => FMAXL,
+            FMINF128 => FMINL,
+            FREXPF128 => FREXPL,
+            HUGE_VALF128 => HUGE_VALL,
+            INFF128 => INFL,
+            NANF128 => NANL,
+            NANSF128 => NANSL,
+            NEARBYINTF128 => NEARBYINTL,
+            RINTF128 => RINTL,
+            ROUNDF128 => ROUNDL,
+            TRUNCF128 => TRUNCL,
+            _ => return None,
+        })
+    }
+
+    /// Whether builtin `id` is a [`F128`] builtin.
+    pub fn is_f128(id: u32) -> bool {
+        F128.iter().any(|e| e.id == id)
+    }
+
+    // ---- end WP-282 ----
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
@@ -4187,6 +4391,8 @@ pub mod builtin {
             .chain(ATOMIC)
             .chain(CORO)
             .chain(CHECKED)
+            .chain(EXTRA)
+            .chain(F128)
             .find(|e| e.name == name)
             .map(|e| e.id)
     }
@@ -4199,6 +4405,8 @@ pub mod builtin {
             .chain(ATOMIC)
             .chain(CORO)
             .chain(CHECKED)
+            .chain(EXTRA)
+            .chain(F128)
             .find(|e| e.id == id)
     }
 
@@ -4232,8 +4440,11 @@ pub mod builtin {
     }
 
     /// Whether builtin `id` is a [`LIBM`] function.
+    /// A [`F128`] builtin without a `long double` twin (other than
+    /// `roundevenf128`, an intrinsic) counts as one.
     pub fn is_libm(id: u32) -> bool {
         LIBM.iter().any(|e| e.id == id)
+            || (is_f128(id) && f128_twin(id).is_none() && id != ROUNDEVENF128)
     }
 
     /// Whether builtin `id` has custom type-checking.

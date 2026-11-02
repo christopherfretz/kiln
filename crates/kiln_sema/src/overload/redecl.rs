@@ -3,7 +3,7 @@
 //! declarations that do not correspond declare overloads
 //! (spec/sema-overload.md §2).
 
-use kiln_ast::decl::{DeclKind, FnStorage, PayloadClass};
+use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage, PayloadClass};
 use kiln_ast::templates::is_template_kind;
 use kiln_ast::{DeclId, ExprId, QualType, TemplateParamListId};
 
@@ -29,9 +29,23 @@ impl Sema<'_, '_> {
     /// redeclares: the newest function (or the latest pattern of a
     /// function template) that corresponds to it; else the newest
     /// non-function entity of that name (a conflict); else none (`new`
-    /// declares an overload).
+    /// declares an overload). A corresponding declaration that is invalid
+    /// is not on any redeclaration chain: the newest valid one is preferred
+    /// and an invalid one is returned only when no valid one corresponds
+    /// (the caller then makes `new` silently invalid, clang's
+    /// `MergeFunctionDecl` "if the old declaration is invalid, just give
+    /// up here").
     pub(crate) fn pick_prev_function(&mut self, cands: &[DeclId], new: NewFn) -> Option<DeclId> {
         let mut other = None;
+        let mut invalid = None;
+        let mut found = |s: &Self, d: DeclId| {
+            if s.ast.decls.get(d).has(DeclFlags::INVALID) {
+                invalid = invalid.or(Some(d));
+                false
+            } else {
+                true
+            }
+        };
         for &d in cands.iter().rev() {
             let k = self.kind_of(d);
             // A dependent using-declarator (`using T::f;`) is checked
@@ -47,7 +61,7 @@ impl Sema<'_, '_> {
                 let Some(p) = self.pattern_of(d).map(|p| self.ast.latest(p)) else { continue };
                 if k == DeclKind::FunctionTemplate {
                     let head = self.ast.template_info(d).map(|i| i.params);
-                    if self.fn_corresponds(p, head, new) {
+                    if self.fn_corresponds(p, head, new) && found(self, p) {
                         return Some(p);
                     }
                 } else if other.is_none() {
@@ -59,14 +73,14 @@ impl Sema<'_, '_> {
                 continue;
             }
             if k.payload() == PayloadClass::Function {
-                if self.fn_corresponds(d, None, new) {
+                if self.fn_corresponds(d, None, new) && found(self, d) {
                     return Some(d);
                 }
             } else if other.is_none() {
                 other = Some(d);
             }
         }
-        other
+        invalid.or(other)
     }
 
     /// Whether function `old` (with template head `old_head`) and `new`

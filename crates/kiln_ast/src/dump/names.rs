@@ -937,6 +937,17 @@ impl<'a> AstNames<'a> {
                 self.expr(exprs.operand(e), d, out);
                 out.push('i');
             }
+            ExprKind::ShuffleVectorExpr => {
+                // clang `StmtPrinter::VisitShuffleVectorExpr`.
+                out.push_str("__builtin_shufflevector(");
+                for (i, c) in ast.lists.iter::<ExprId>(exprs.shuffle_subs(e)).enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    self.expr(c, d, out);
+                }
+                out.push(')');
+            }
             ExprKind::ConvertVectorExpr => {
                 out.push_str("__builtin_convertvector(");
                 self.expr(exprs.operand(e), d, out);

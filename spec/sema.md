@@ -169,6 +169,18 @@ Constructors:
   `act_on_nested_name` does, so `typedef D J; J::T x;` declares `x`
   (libc++ `<typeinfo>`'s `__impl::__type_name_t`;
   `tests/conformance/basic.lookup.qual/typedef-qualifier-decl.cpp`).
+  When that class is not instantiated yet (a typedef of a member class
+  of a class template specialization, `typedef L<int>::P Q; Q::I x;`, or
+  of an undefined specialization, `typedef L<int> D; D::P::I x;`),
+  `classify_name` cannot instantiate it, so it classifies the name in
+  the pattern (the member class's pattern definition; the template
+  through `classify_template_member` for a specialization, the WP-276
+  rule in spec/parse.md), as for a template-id qualifier;
+  parsing the nested-name-specifier then instantiates the class
+  ([temp.inst]/2) and the real lookup takes the instantiated member
+  (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;
+  `tests/conformance/temp.res/qualified-name-through-typedef.cpp`,
+  `qualified-name-through-typedef-run.cpp`).
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 
@@ -928,6 +940,8 @@ and returns the scope it names:
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
   - GNU `visibility`, `section` and `format`: `'x' attribute ignored`
+    (a written `format` is not stored; only the printf builtins' implicit
+    one is, §5.4)
 - **Argument encoding** (`Attr.a`, `Attr.b`; see spec/abi.md §3.1):
 
   | kind | `a` | `b` |
@@ -936,6 +950,7 @@ and returns the scope it names:
   | NODISCARD, DEPRECATED | `ExprId` of the string-literal message | — |
   | ASM_LABEL | raw `StringLitId` of the label (flags bit 1: inherited) | — |
   | BUILTIN | the builtin id (`kiln_ast::decl::builtin`; implicit, §5.4) | — |
+  | FORMAT | 0 (`printf`; implicit, §5.4) | `F \| A << 16`, one-based format and first data argument indices (`A` = 0: a `va_list`) |
   | MALLOC | — | — |
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
@@ -1107,6 +1122,28 @@ specification as written (`TypeNames` prints ` noexcept`,
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
+- **Invalid function declarations** (WP-288; clang's
+  `ActOnFunctionDeclarator`, `MergeFunctionDecl`, `LookupResult::resolveKind`).
+  A function declaration is invalid at its source when it has an
+  illegal storage class — `mutable` or `register` outside a member
+  declaration (namespace or block scope, or an out-of-class member
+  definition): error `illegal storage class on function`
+  (`sema_illegal_storage_class_on_function`); in a member declaration
+  `register` is `storage class specified for a member declaration` and
+  `mutable` is `'mutable' cannot be applied to functions`, both leaving
+  the member valid — or an invalid parameter (a `void` parameter, or a
+  default argument parsed in place that is erroneous: the parameter is
+  invalid too). Such a declaration redeclares nothing (no prior
+  declaration is looked up for it). `pick_prev_function` prefers the
+  newest *valid* corresponding declaration; when only invalid ones
+  correspond, the new declaration is invalid without a diagnostic and
+  without being compared. A name whose lookup finds only invalid
+  functions resolves a call against the last one found (so an
+  inviable call is still `no matching function`); a reference to an
+  invalid function is an erroneous expression without a diagnostic.
+  Tests: `dcl.stc/function-storage-class.cpp`,
+  `dcl.fct.default/invalid-default-arg.cpp`,
+  `except.spec/redecl-invalid-decl.cpp`.
 - **Exception specifications on redeclarations** (WP-268,
   `merge_missing_exc_spec`; clang 19's missing-specification path of
   `Sema::CheckEquivalentExceptionSpec`). A function redeclaration
@@ -1127,14 +1164,11 @@ specification as written (`TypeNames` prints ` noexcept`,
   ` S` just past the end of the declarator's `)` or, when present, its
   last cv- or ref-qualifier (`Declarator::fn_qual_locs`; none with a
   trailing return type or for a `)` or qualifier from a macro).
-  An invalid `p` (WP-279; clang compares only valid declarations) is
-  replaced by the latest valid declaration on its redeclaration chain,
-  or, for an invalid member redeclaration that is not on the chain
-  (`struct S { void f() noexcept; void f() noexcept; };`), by the
-  latest valid same-kind function of that name in `p`'s context
-  corresponding to the redeclaration; with neither, the redeclaration
-  inherits `p`'s specification silently (`void e() noexcept = 0;
-  void e();`). "`p`'s" specification is inherited as clang does:
+  `p` is always valid: an invalid declaration is on no redeclaration
+  chain and is never compared (*Invalid function declarations* above;
+  WP-288 replaced WP-279's fallback search here), and a redeclaration
+  of an invalid `p` (`void e() noexcept = 0; void e();`) is itself
+  invalid, silently. "`p`'s" specification is inherited as clang does:
   `noexcept(true)` becomes `noexcept`, `noexcept(false)` none, others
   as written. Only `p`'s location counts, not the redeclaration's: a
   second redeclaration in user code follows the first (now `throw()`,
@@ -1701,8 +1735,10 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   declares it in the translation unit: an implicit `LinkageSpecDecl`
   (`extern "C"`) holding an implicit `extern` `FunctionDecl` with the
   builtin's function type, its id in the `builtin_id` cold data, an
-  implicit `Builtin` attribute (invalid location, `a` = id) and an
-  implicit `NoThrow` attribute. Later lookups find that declaration.
+  implicit `Builtin` attribute (invalid location, `a` = id), for the
+  printf builtins an implicit `format(printf, F, A)` attribute
+  (`builtin::printf_format`, WP-282) and an implicit `NoThrow`
+  attribute, in clang's order. Later lookups find that declaration.
 - **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
   placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
 - **Calls:** `act_on_call` converts the callee with
@@ -1735,13 +1771,83 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   true). No `Builtin` attribute is attached, so the call stays an
   ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
   calls to intrinsics and its implicit `format` / `alloc_size`
-  attributes (`-Wformat*`) are not modelled.
+  attributes on the library names (`-Wformat*` on `sprintf`) are not
+  modelled; only the `__builtin_` printf rows carry `format` (below).
 - **Custom-checked builtins** (WP-270): the generic
   `__builtin_{add,sub,mul}_overflow` (`builtin_overflow`) and the
   alignment of `__builtin_alloca_with_align` (`check_alloca_align`) are
   checked as clang's `SemaBuiltinOverflow` / `SemaBuiltinAllocaWithAlign`;
   the rules and the builtin table are spec/sema-templates.md §9
   ("checked arithmetic", "stack allocation", "printf family" rows).
+- **Library builtins** (WP-282; clang 19 `SemaChecking.cpp`), each
+  diagnosed with clang's wording:
+  - `__builtin_assume_aligned(p, a[, off])` (custom, `builtin_assume_aligned`,
+    clang `BuiltinAssumeAligned`): 2 or 3 arguments (`too few` / `too many
+    ... at most` at the `)`); `p` decays and must convert to `const void *`
+    (it keeps its own type); `a`, unless value-dependent, an integer
+    constant (`argument to '...' must be a constant integer` at the call),
+    a power of 2 (`requested alignment is not a power of 2`), warned above
+    2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
+    `size_t`. The call is a `void *` prvalue.
+  - `__builtin_object_size` / `__builtin_dynamic_object_size`: the type
+    argument (an `I` constant) must be in [0, 3] (`argument value V is
+    outside the valid range [0, 3]` at the callee), checked after
+    instantiation when value-dependent.
+  - `__builtin_verbose_trap(category, reason)` (`check_verbose_trap`):
+    each argument must be a pointer to a constant string: a string
+    literal (no `$`: `argument to __builtin_verbose_trap must not contain
+    $`) or a constant-foldable pointer; anything else `must be a pointer
+    to a constant string`. A non-literal constant's characters are not
+    inspected for `$` (clang reads them).
+  - `__builtin_shufflevector(v1, v2, i...)` (custom, `act_on_shufflevector`,
+    clang `BuiltinShuffleVector`; a `ShuffleVectorExpr`, spec/ast.md):
+    at least 2 arguments; `v1`/`v2` vectors (`first two arguments to
+    __builtin_shufflevector must be vectors`) of the same unqualified type
+    (`... must have the same type`); each index an integer constant
+    (`index for __builtin_shufflevector must be a constant integer`) that
+    is -1 (an undefined lane) or below twice the lane count (`index for
+    __builtin_shufflevector not within the bounds of the input vectors;
+    index of V found at position N`), all at the callee. The result is
+    `v1`'s type, or a generic vector of the element type with one lane
+    per index. Re-checked at instantiation when any argument is
+    dependent. The two-argument (mask vector) form is not supported.
+  - `__builtin_powi{,f,l}`, `__builtin_copysignf16` and the `*f128` math
+    family are ordinary calls (table rows in spec/sema-templates.md §9.5).
+- **Format strings** (WP-282; `format_string.rs`, clang
+  `CheckPrintfHandler`): a call whose callee has a `format(printf, F, A)`
+  attribute with `A` > 0 and whose argument `F` is an ordinary string
+  literal (through parentheses and implicit casts, concatenation
+  included) has its conversions checked against the data arguments
+  from `A` on. Supported: `%[flags][width][.precision][l|ll|z]conv` with
+  flags `-+ #0`, width/precision digits or `*`, and `conv` one of `d i u
+  o x X c s p f F e E g G a A` (`c s p` and the floating ones without a
+  length). The specified type is `int`/`long`/`long long` (`d i c`),
+  `unsigned` of each (`u o x X`), `size_t` / `ssize_t` for `z`
+  (`'size_t' (aka 'unsigned long')`), `double` (floating), `char *`
+  (`s`: a pointer to any character type) and `void *` (`p`: any pointer
+  or `std::nullptr_t`). An argument is matched by its type before the
+  default promotions (through `IntegralCast`/`FloatingCast`) and an
+  unscoped enumeration by its underlying type: integers by promoted
+  rank class ignoring signedness (`-Wformat-signedness` is off), `float`
+  matches `double`. Diagnostics, all warnings:
+  - `format specifies type 'X' but the argument has type 'Y'`
+    (`underlying type` for an enumeration) at the argument
+    (`-Wformat`);
+  - `field width|precision should have type 'int', but argument has
+    type 'Y'` at the `*` (a width one byte after it, as clang), then the
+    walk stops (`-Wformat`);
+  - `more '%' conversions than data arguments` at the conversion
+    character, then the walk stops (`-Wformat-insufficient-args`);
+  - `data argument not used by format string` at the first unused
+    argument (`-Wformat-extra-args`).
+  `-Wformat` contains the other two and is in `-Wmost`. Not checked
+  (the whole string is skipped, where clang has a diagnostic): other
+  conversions and length modifiers (`h`, `hh`, `j`, `t`, `L`, `n`, `%q`),
+  positional arguments, an embedded NUL, an incomplete trailing `%`, a
+  missing `*` argument, wide strings, class and scoped-enumeration
+  arguments, non-literal formats (`-Wformat-security`), and
+  `-Wformat-truncation`/`-Wformat-overflow`. Dependent calls are checked
+  at instantiation.
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:

@@ -21,6 +21,7 @@ mod define;
 mod deletion;
 mod excspec;
 mod implicit;
+mod prospective;
 mod uses;
 
 use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted, DefinitionBits, FnSpec, ParamData};

@@ -4,6 +4,10 @@
 
 sema_shift_gt_typewidth = Warning [ShiftCountOverflow] (0) "shift count >= width of type";
 sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative";
+sema_shufflevector_argument_too_large = Error (0) "index for __builtin_shufflevector must be less than the total number of vector elements";
+sema_shufflevector_incompatible_vec = Error (1) "first two arguments to '{0}' must have the same type";
+sema_shufflevector_non_vector = Error (1) "first two arguments to '{0}' must be vectors";
+sema_shufflevector_nonconstant_arg = Error (0) "index for __builtin_shufflevector must be a constant integer";
 // [expr.typeid]/3 (WP-219)
 sema_side_effects_typeid = Warning [PotentiallyEvaluatedExpression] (0) "expression with side effects will be evaluated despite being used as an operand to 'typeid'";
 sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";

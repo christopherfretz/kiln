@@ -1347,14 +1347,19 @@ impl Sema<'_, '_> {
             return e;
         }
         let fns = found.decls.iter().all(|&x| self.ast.decls.get(x).kind().is_function());
-        // An invalid redeclaration is not a separate overload (clang
-        // drops invalid candidates).
-        let valid: Vec<DeclId> = found
+        // An invalid redeclaration is not a separate overload: clang's
+        // `resolveKind` ignores an invalid declaration unless it is the
+        // only one left (redeclarations of an invalid function are
+        // invalid and off its chain, WP-288).
+        let mut valid: Vec<DeclId> = found
             .decls
             .iter()
             .copied()
             .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
             .collect();
+        if fns && valid.is_empty() {
+            valid.extend(found.decls.last().copied());
+        }
         if fns
             && found.naming.is_some()
             && valid.iter().any(|&x| self.member_via_dependent_base(x))
@@ -3804,6 +3809,9 @@ impl Sema<'_, '_> {
             && !self.check_builtin_ice_args(id, callee, &conv_args)
         {
             return self.recover_err(&kids, loc);
+        }
+        if let Some(d) = named {
+            self.check_format_attr(d, &conv_args);
         }
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);

@@ -278,7 +278,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `f`/`l` forms) call the function of the unprefixed name, declared
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
-      call site too).
+      call site too). The library function and a program's own
+      `extern "C" double pow(double, double)` (separate declarations to
+      sema) share one `@pow` in either order, by the same-type reuse of a
+      mangled name above, never a uniqued `@pow.1` (WP-288;
+      `tests/codegen/lib_builtin_shared_decl.cpp`,
+      `tests/conformance/dcl.link/libcxx-pow-run.cpp`).
     - checked arithmetic (WP-270, clang `EmitBuiltinExpr`;
       `checked.rs`): the typed forms call `llvm.{s,u}{op}.with.overflow`
       at the parameter type and store the value at the result pointer's
@@ -304,6 +309,31 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       to `a / 8` (`tests/codegen/builtins_alloca.cpp`);
     - `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf`
       are library builtins (`tests/codegen/builtins_printf_lib.cpp`).
+    - library builtins (WP-282, clang `EmitBuiltinExpr`):
+      `__builtin_assume_aligned(p, a[, off])` returns `p` and emits
+      `llvm.assume(i1 true) ["align"(ptr p, i64 a[, i64 off])]`
+      (`emitAlignmentAssumption`; the call is folded first so a dependent
+      alignment is a constant; `builtins_assume_aligned.cpp`).
+      `__builtin_object_size` / `__builtin_dynamic_object_size` of an
+      object the frontend does not know is `llvm.objectsize(p, min =
+      type & 2, nullunknown = true, dynamic)`, type 3 the constant 0;
+      a constant-foldable call is its folded value
+      (`builtins_object_size.cpp`). `__builtin_powi*` is
+      `llvm.powi.fT.i32`; `__builtin_copysignf16` truncates to `half`,
+      calls `llvm.copysign.f16` and extends back;
+      `__builtin_verbose_trap` is `llvm.trap` (clang uses the strings
+      only for debug info) (`builtins_powi.cpp`).
+      `__builtin_shufflevector` (a `ShuffleVectorExpr`) is one
+      `shufflevector` with a constant mask, -1 a `poison` lane
+      (`builtins_shufflevector.cpp`). A `*f128` builtin with a `long
+      double` twin (`builtin::f128_twin`) is lowered as the twin on its
+      `fp128` operands (intrinsic or constant); `roundevenf128` is
+      `llvm.roundeven`; the others call the function of the builtin's
+      own name (`builtins_f128.cpp`). Not folded: `fp128` constant
+      arithmetic (`__builtin_huge_valf128() + 1` stays an `fadd`, clang
+      folds it) and the object size of a runtime local (clang's
+      `tryEvaluateObjectSize` gives the constant; kiln emits
+      `llvm.objectsize`, which `opt` folds).
   - a call of one of the standard functions clang treats as builtins
     (clang `isStdBuiltin`: `std::move`, `move_if_noexcept`, `forward`,
     `forward_like`, `as_const`, `addressof`, `__addressof`, declared in
@@ -358,8 +388,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     its initializer folds. The exception is a trivial copy or move of
     an empty class, which reads nothing and so folds whatever its source
     is. Like clang's `isConstantInitializer`, it is constant only when
-    its source names a constexpr variable. `E e2 = std::move(e)` emits
-    nothing;
+    its source names a constexpr variable, looking through casts and
+    the std builtins that are their argument's lvalue (`std::move(ce)`,
+    `forward`, `as_const`, `move_if_noexcept`; WP-289). `E e2 =
+    std::move(e)` of a non-constexpr `e` emits nothing;
   - a non-constant aggregate goes through `EmitAggExpr`, with
     `CheckAggExprForMemSetUse` (size > 16 and nonzero*4 <= size gives a
     memset);

@@ -2,7 +2,7 @@
 // redeclaration with a valid previous declaration only (clang
 // `CheckEquivalentExceptionSpec` is skipped for an invalid one). A
 // function declaration given a pure-specifier is invalid, so its
-// redeclaration is not diagnosed and inherits `noexcept`; an invalid
+// redeclarations are invalid without a diagnostic (WP-288); an invalid
 // in-class redeclaration defers to the first member declaration (WP-279).
 //@ expect: compile-fail
 //@ strict-diags

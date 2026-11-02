@@ -32,6 +32,7 @@ mod extern_c;
 mod fallthrough;
 mod flex_array;
 mod for_loop_analysis;
+mod format_string;
 mod forms;
 mod gnu;
 mod gnu_null;
