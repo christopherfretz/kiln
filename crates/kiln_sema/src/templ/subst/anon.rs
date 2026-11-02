@@ -106,23 +106,51 @@ impl Substituter<'_, '_, '_> {
     /// Also used for a data member's attributes (`field_decl`) and a
     /// function's (`function_decl`, `function_spec_signature`).
     pub(crate) fn class_attrs(&mut self, spec: DeclId, def: DeclId) {
+        self.copy_attrs(spec, def, false);
+    }
+
+    /// The `alignas` attributes of pattern variable `def` on its
+    /// instantiation `spec` (clang `InstantiateAttrs` for a local
+    /// variable; [dcl.align]/1).
+    pub(crate) fn var_align_attrs(&mut self, spec: DeclId, def: DeclId) {
+        self.copy_attrs(spec, def, true);
+    }
+
+    fn copy_attrs(&mut self, spec: DeclId, def: DeclId, only_aligned: bool) {
         let ast = &self.sema.ast;
         let list = ast.attrs.of_decl(def);
-        let nodes: Vec<AttrNode> =
-            ast.lists.iter::<AttrId>(list).map(|a| *ast.attrs.get(a)).collect();
+        let nodes: Vec<AttrNode> = ast
+            .lists
+            .iter::<AttrId>(list)
+            .map(|a| *ast.attrs.get(a))
+            .filter(|n| !only_aligned || n.kind == AttrKind::ALIGNED)
+            .collect();
         if nodes.is_empty() || ast.attrs.of_decl(spec) != kiln_ast::ids::ListId::EMPTY {
             return;
         }
         let mut out = Vec::new();
-        for mut node in nodes {
+        for node in nodes {
             if node.kind == AttrKind::ALIGNED {
+                // `alignas(Ts...)` is one attribute per element
+                // ([dcl.align]/1, [temp.variadic]/5; clang
+                // `instantiateDependentAlignedAttr`); the strictest wins.
                 if let Some(t) = QualType::from_raw(node.b) {
-                    let Ok(t) = self.ty(t, node.loc) else { continue };
-                    node.b = t.to_raw();
+                    let Ok(ts) = self.expand_types(&[t], node.loc) else { continue };
+                    for t in ts {
+                        let n = AttrNode { b: t.to_raw(), ..node };
+                        out.push(self.sema.ast.attrs.push(n));
+                    }
+                    continue;
                 } else if let Some(e) = ExprId::from_raw(node.a) {
-                    let Ok(e) = self.expr(e) else { continue };
-                    let Some(e) = self.sema.check_alignment_expr(e) else { continue };
-                    node.a = e.raw();
+                    let Ok(es) = self.expand_exprs(&[e]) else { continue };
+                    for e in es {
+                        let Some(e) = self.sema.check_alignment_expr(e, node.loc) else {
+                            continue;
+                        };
+                        let n = AttrNode { a: e.raw(), ..node };
+                        out.push(self.sema.ast.attrs.push(n));
+                    }
+                    continue;
                 }
             }
             out.push(self.sema.ast.attrs.push(node));

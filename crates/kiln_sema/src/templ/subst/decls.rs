@@ -197,6 +197,7 @@ impl Substituter<'_, '_, '_> {
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
         self.copy_begin_loc(d, v, ty);
         self.locals.insert(d, DeclOrPack::Decl(v));
+        self.var_align_attrs(v, d);
         // A constrained placeholder's diagnostics point at its
         // type-constraint, as in the pattern.
         if let Some(&l) = self.sema.inst.concepts.placeholder_locs.get(&d) {

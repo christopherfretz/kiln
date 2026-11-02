@@ -973,7 +973,29 @@ and returns the scope it names:
     use in a template is not diagnosed again at instantiation (nor is
     a non-dependent discarded nodiscard call).
   - `maybe_unused` suppresses unused warnings.
-  - `alignas` is validated as a power of two and fed into layout.
+  - `alignas` is validated as a power of two and fed into layout
+    (`check_alignment_expr`). `requested alignment is not a power of 2`
+    and `requested alignment must be ... or smaller` are reported at the
+    attribute token, as clang's `AddAlignedAttr` does, not at the
+    expression.
+  - `alignas` operands ([dcl.align]/1, [temp.variadic]/5,
+    `act_on_alignas_operand`, WP-302): `alignas(T...)` / `alignas(e...)`
+    build a pack expansion (a type operand through
+    `act_pack_expansion_type`, so an expansion with no pack is `pack
+    expansion does not contain any unexpanded parameter packs` at the
+    `...`). An operand that contains an unexpanded pack without `...` is
+    `expression contains unexpanded parameter pack 'Ts'` at the operand's
+    begin (`sema_unexpanded_pack`, `diagnose_unexpanded_pack` in
+    `templ/pack.rs`; a type-id operand counts as an `alignof` expression;
+    two names print `packs 'A' and 'B'`, more `packs 'A', 'B', ...`), and
+    the attribute is dropped. Instantiation expands the operand and
+    attaches one `ALIGNED` attribute per element (clang's
+    `instantiateDependentAlignedAttr`), so the strictest wins and an empty
+    pack leaves the natural alignment; each element is re-checked at the
+    attribute token (spec/sema-templates.md §2.7). On variables the
+    attributes are copied too (`var_align_attrs`), but variable alignment
+    is not yet consumed by `alignof` or codegen (xfail
+    `tests/conformance/dcl.align/variable-alignas.cpp`).
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
 
 ### 4.6 Namespaces, linkage specifications, static_assert
