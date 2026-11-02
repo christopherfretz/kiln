@@ -1074,6 +1074,20 @@ Where the code differs from (or details) the design above:
     deduces P (the template's function type) from A (the target type)
     through `deduce_spec(.., target)`. It keeps the specializations that
     match exactly, then the one more specialized than all the others.
+  - A specialization's dependent noexcept-specifier that deduction left
+    uninstantiated (DR1330) is resolved before its type is compared.
+  - The conversion sequence of an overload-set argument (`address_match`,
+    used by `overload_set_ics`) selects in the same way, so `&f` for a
+    function template converts to each candidate's function-pointer
+    parameter through that parameter's own deduced specialization
+    (WP-280, `over.over/template-address-overloaded-callee.cpp`). Clang 19
+    rejects some of these calls where the targets differ only in
+    noexcept (`o(&u)` with `o(void(*)(int) noexcept)` /
+    `o(void(*)(int))`); clang 22 accepts them, and so does kiln. Open
+    divergence: for `int (*)(long) noexcept = &t` with a potentially
+    throwing `t<long>`, clang selects the specialization and reports
+    `different exception specifications`. Kiln reports `address of
+    overloaded function 't' does not match required type`.
 
 ### 10.8 Landed (WP-106): the rest of the template candidates
 - Conversion-function templates: `build_conversion_set` /

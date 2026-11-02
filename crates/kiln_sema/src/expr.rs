@@ -4225,14 +4225,13 @@ impl Sema<'_, '_> {
         };
         let rec = self.ast.types.as_record(obj_ty).expect("checked above");
         // [expr.ref]/4 (clang diagnoses at the operator). A class being
-        // defined is complete enough: its members declared so far are
-        // found (a trailing return type naming `this->m`, [class.mem]/7).
-        let first = self.ast.first(rec);
+        // defined is complete enough only where `this` may appear outside
+        // a function body: its members declared so far are found (a
+        // trailing return type naming `this->m`, [class.mem]/7).
         if self.instantiation_fails(obj_ty, op_loc) {
             return self.recover_err(&[base], loc);
         }
-        let complete = self.defining.iter().any(|&d| self.ast.first(d) == first)
-            || self.require_complete(obj_ty, op_loc);
+        let complete = self.this_outside_member_body(rec) || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
             let msg = self
                 .diag(DiagId::sema_member_reference_incomplete, op_loc)

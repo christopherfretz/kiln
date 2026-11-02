@@ -96,6 +96,7 @@ sema_template_requires_args = Error (2) "use of {0} {1} requires template argume
 sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
 sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
+sema_this_static_member_func = Error (1) "'this' cannot be{0:| implicitly} used in a static member function declaration";
 sema_three_way_vector_comparison = Error (0) "three-way comparison between vectors is not supported";
 sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
 sema_throw_in_nothrow_func = Warning [Exceptions] (1) "'{0}' has a non-throwing exception specification but can still throw";
