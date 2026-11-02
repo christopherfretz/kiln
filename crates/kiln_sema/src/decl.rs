@@ -3255,7 +3255,12 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        if let Some(first) = out.iter().position(Option::is_some) {
+        // clang skips the trailing check once a parameter is invalid
+        // (`void f(int = 1, u8, int);` with undeclared `u8` reports only
+        // the unknown type name).
+        if let Some(first) = out.iter().position(Option::is_some)
+            && !params.iter().any(|p| p.invalid)
+        {
             for (i, p) in params.iter().enumerate().skip(first + 1) {
                 if out[i].is_some() || p.default_arg != DefaultArg::None || p.invalid {
                     continue;

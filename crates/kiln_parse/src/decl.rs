@@ -1001,8 +1001,15 @@ impl Parser<'_, '_> {
         self.ident_of(next).is_some()
             || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && matches!(Self::punct_of(next), Some(Punct::Star | Punct::Amp | Punct::AmpAmp)))
+            // A parameter: clang's `ParseImplicitInt` diagnoses any
+            // undeclared name where a decl-specifier is required in C++
+            // (`void a(u1);`, `int e(u4 *p);`); `(`, `::` and `<` are
+            // reported elsewhere.
             || (ctx == DeclaratorContext::Prototype
-                && matches!(Self::punct_of(next), Some(Punct::RParen | Punct::Comma)))
+                && !matches!(
+                    Self::punct_of(next),
+                    Some(Punct::LParen | Punct::ColonColon | Punct::Less)
+                ))
     }
 
     // -- class and enum specifiers ----------------------------------------------------

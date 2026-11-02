@@ -360,17 +360,36 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     /// `invalid` -- it is a declaration only with a missing `typename`
     /// (clang's `InvalidAsDeclSpec`, the tie-break in
     /// [`Scan::function_declarator_at`]).
+    ///
+    /// An undeclared unqualified name not followed by `(`, `::` or `<`
+    /// (`void a(u1);`) is `Ambiguous` without setting `invalid`: it is
+    /// neither a valid expression nor a type, so the declaration parser
+    /// takes it and reports "unknown type name" (clang's `ANK_Unresolved`
+    /// in `isCXXDeclarationSpecifier`, which returns `Ambiguous` when
+    /// `InvalidAsDeclaration` is tracked).
     fn param_decl_specifier(&self, invalid: Option<&mut bool>) -> Tpr {
         let r = self.decl_specifier(Tpr::False);
-        if r == Tpr::False
-            && let Some(invalid) = invalid
-            && let Some((end, NameClass::Dependent)) = self.name_here()
-            && end > self.i + 1
-        {
-            *invalid = true;
-            return Tpr::Ambiguous;
+        if r != Tpr::False {
+            return r;
         }
-        r
+        let Some(invalid) = invalid else { return r };
+        match self.p.scan_name(self.i) {
+            Some((end, NameClass::Dependent, _)) if end > self.i + 1 => {
+                *invalid = true;
+                Tpr::Ambiguous
+            }
+            Some((end, NameClass::Undeclared, sym))
+                if end == self.i + 1
+                    && !self.declared.contains(&sym)
+                    && !matches!(
+                        self.punct_at(end),
+                        Some(Punct::LParen | Punct::ColonColon | Punct::Less)
+                    ) =>
+            {
+                Tpr::Ambiguous
+            }
+            _ => r,
+        }
     }
 
     /// A name after a dependent qualifier that contains a template-id

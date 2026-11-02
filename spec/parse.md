@@ -174,6 +174,15 @@ clang's `Parser` over `Preprocessor::Lex`.
   follows, as in clang, so `X<T>::m d, e;` is an expression statement.
   `tests/conformance/dcl.ambig.res/dependent-qualified-param-or-init.cpp`
   covers this.
+  An undeclared unqualified name in that parameter clause, not followed
+  by `(`, `::` or `<` and not declared earlier in the scanned
+  declaration, is ambiguous without the flag (clang's `ANK_Unresolved`),
+  so `void a(u1);` and `int e(u4 *p);` are function declarations (WP-300).
+  The parameter's decl-specifier parse then reports "unknown type name
+  'u1'" (`unknown_type_follows`, clang `ParseImplicitInt`), the type is
+  the error type and the function is still declared; once a parameter is
+  invalid, `merge_default_args` skips "missing default argument"
+  (`tests/conformance/dcl.ambig.res/undeclared-parameter-type.cpp`).
   A member-pointer ptr-operator (`member_pointer_end`) is scanned as
   `::`? (`template`? name (`<args>`)? `::`)+ `*`: each component is
   classified in the context of the previous one; template arguments
