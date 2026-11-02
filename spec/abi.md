@@ -911,7 +911,18 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   the bare function type (from the pattern of a specialization, or from
   the uninstantiated member of an instantiated class template).
   Template parameters inside a constraint keep their depth
-  (`TL<d-1>_<i-1>_`, `Mangler::real_depth`).
+  (`TL<d-1>_<i-1>_`, `Mangler::real_depth`). That includes the clause of
+  a template template parameter's head (`Tt ... Q <constraint> E`,
+  `template_param_list`): the head's own parameters are one level below
+  the template declaring the `Tt` parameter (`TL1__` for a member
+  template of a class template), an earlier parameter of the declaring
+  head and an enclosing class template's parameters keep their own
+  depth (`TL0__T_`), and a `Tt` nested in that head goes one level
+  deeper again; no depth is rebased to the encoding being mangled, as
+  in clang (checked against clang 19 by `tests/mangle/tt_requires_depth.cpp`,
+  WP-314). A generic lambda's explicit template-head
+  (`Ul <template-param-decl>* <lambda-sig> E`) is not yet mangled
+  (§8.16 "Not implemented").
 - **Constraint expressions** (`dep.rs`): a concept-id is an unresolved
   name (`[sr <nns> E] <source-name> I <args> E`, packs flattened, the
   written qualifier kept by `Sema::set_template_id_qualifier`); folds are
@@ -936,7 +947,10 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   il ... E` without the bound, as clang 19. A constraint expression kiln
   still cannot mangle falls back to `Qu7unknown`, so the symbol stays
   unique but differs from clang.
-- **Not implemented:** clang 19's member-like friend *template* mangling
+- **Not implemented:** a generic lambda's explicit template-head in its
+  closure type name (`[]<class T>(){}` is clang's `UlTyvE_`, kiln's
+  `UlvE_`, which also shifts later discriminators); clang 19's
+  member-like friend *template* mangling
   (`F` before the name when a friend template's constraint names an
   enclosing template parameter, and a nested name with no class prefix
   for a specialization whose friend declaration has a trailing
