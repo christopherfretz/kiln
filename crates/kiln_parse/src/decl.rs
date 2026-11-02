@@ -47,6 +47,8 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Float32
             | Kw::Float64
             | Kw::StdFloat128
+            | Kw::Float32x
+            | Kw::Float64x
             | Kw::Bf16
             | Kw::Fp16
             | Kw::Complex
@@ -727,11 +729,12 @@ impl Parser<'_, '_> {
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
                 Kw::Float16 => ds.set_base(TypeSpecKind::Float16, None, loc),
                 // glibc's <bits/floatn*.h> declare `typedef float _Float32;`
-                // (and `_Float64`, `_Float128`) for C++ compilers that are
-                // not GCC >= 13; kiln reports itself as clang. In a system
-                // header such a typedef of a P1467 keyword declares
-                // nothing (spec/types.md §5.1).
-                Kw::Float32 | Kw::Float64 | Kw::StdFloat128
+                // (and `_Float64`, `_Float128`, `_Float32x`, `_Float64x`)
+                // for C++ compilers that are not GCC >= 13; kiln reports
+                // itself as clang. In a system header such a typedef of a
+                // P1467 keyword or GCC `_FloatNx` keyword declares nothing
+                // (spec/types.md §5.1).
+                Kw::Float32 | Kw::Float64 | Kw::StdFloat128 | Kw::Float32x | Kw::Float64x
                     if matches!(ds.storage, Some((StorageSpec::Typedef, _)))
                         && ds.has_type_specifier()
                         && self.peek_is(1, Punct::Semi)
@@ -743,6 +746,8 @@ impl Parser<'_, '_> {
                 Kw::Float32 => ds.set_base(TypeSpecKind::Float32, None, loc),
                 Kw::Float64 => ds.set_base(TypeSpecKind::Float64, None, loc),
                 Kw::StdFloat128 => ds.set_base(TypeSpecKind::StdFloat128, None, loc),
+                Kw::Float32x => ds.set_base(TypeSpecKind::Float32x, None, loc),
+                Kw::Float64x => ds.set_base(TypeSpecKind::Float64x, None, loc),
                 Kw::Bf16 => ds.set_base(TypeSpecKind::BFloat16, None, loc),
                 Kw::Fp16 => ds.set_base(TypeSpecKind::Fp16, None, loc),
                 Kw::Complex => {
@@ -1113,7 +1118,9 @@ impl Parser<'_, '_> {
         }
     }
 
-    #[allow(clippy::too_many_lines)] // one arm per name class; the arms delegate
+    /// A type-name decl-specifier at the current token: the name class
+    /// picks the arm, and each arm is a named helper. False if the name
+    /// is no type-name here (the caller tries the other specifiers).
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
@@ -1123,65 +1130,17 @@ impl Parser<'_, '_> {
         }
         match self.scan_name(start) {
             Some((end, NameClass::Type(..), _)) if end > start + 1 => {
-                // A qualified name: the qualifier is formed (and kept as
-                // sugar) by the parse proper.
-                let ty = match self.parse_nested_name_nns() {
-                    Ok(Some(q)) => {
-                        self.check_missing_typename_in_class(q, ctx, loc);
-                        self.parse_qualified_type_rest(q, TagKeyword::None)
-                    }
-                    _ => None,
-                };
-                if ty.is_none() {
-                    ds.invalid = true;
-                }
-                if let Err(e) =
-                    ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc)
-                {
-                    ds.invalid = true;
-                    self.spec_error(&e, loc);
-                }
+                self.qualified_type_name_spec(ds, ctx, loc);
                 true
             }
             Some((end, NameClass::Type(ty, d), name)) => {
-                while self.pos() < end {
-                    self.bump();
-                }
-                // An ambiguous name recovers as the type `d` classified
-                // as ([basic.lookup.general]/1, clang's `getTypeName`).
-                self.s.diagnose_ambiguous_name(name, None, loc);
-                self.s.mark_type_referenced(d);
-                self.s.check_type_name_access(name, None, d, loc);
-                let kind = self.s.ast.decls.get(d).kind();
-                let ty = if kiln_sema::lookup::is_tag_kind(kind) {
-                    self.s.elaborated_tag_type(d, TagKeyword::None)
-                } else {
-                    ty
-                };
-                // `T...[index]` (C++26 [dcl.type.pack.index]).
-                let ty = match self.parse_pack_index(loc) {
-                    Ok(Some((ellipsis, index, _))) => {
-                        self.s.act_pack_indexing_type(ty, ellipsis, index)
-                    }
-                    Ok(None) => ty,
-                    Err(()) => QualType::ERROR,
-                };
-                if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
-                    ds.invalid = true;
-                    self.spec_error(&e, loc);
-                }
+                self.simple_type_name_spec(ds, end, (ty, d, name), loc);
                 true
             }
             Some((end, NameClass::TypeTemplate(d), _))
                 if end == start + 1 && self.s.names_injected_class(d) =>
             {
-                // The injected-class-name ([temp.local]/1).
-                self.bump();
-                let ty = self.s.injected_class_type(d);
-                if let Err(e) = ds.set_base(TypeSpecKind::Named, ty, loc) {
-                    ds.invalid = true;
-                    self.spec_error(&e, loc);
-                }
+                self.injected_class_name_spec(ds, d, loc);
                 true
             }
             // A placeholder for a deduced class type ([dcl.type.class.deduct]).
@@ -1205,12 +1164,7 @@ impl Parser<'_, '_> {
                         && self.unresolved_scope_name(start)
                         && self.qualified_unknown_type_follows(end, ctx)) =>
             {
-                if let Ok(Some(q)) = self.parse_nested_name_nns() {
-                    let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
-                }
-                ds.invalid = true;
-                ds.type_error = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
+                self.unknown_qualified_type_spec(ds, loc);
                 true
             }
             Some((end, NameClass::Undeclared, name))
@@ -1219,20 +1173,110 @@ impl Parser<'_, '_> {
                 self.undeclared_template_spec(ds, name, loc)
             }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
-                if !self.unknown_type_follows(end, ctx) {
-                    return false;
-                }
-                let text = self.s.ast.symbols().as_str(name).to_owned();
-                let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
-                self.emit(d);
-                self.bump();
-                ds.invalid = true;
-                ds.type_error = true;
-                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
-                true
+                self.unknown_type_name_spec(ds, end, ctx, name, loc)
             }
             _ => false,
         }
+    }
+
+    /// Sets the decl-spec's named base type `ty` (`None` when the name
+    /// names no type), reporting a conflicting specifier.
+    fn set_named_base(&mut self, ds: &mut DeclSpec, ty: Option<QualType>, loc: Loc) {
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, ty, loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
+    }
+
+    /// A qualified type-name (`N::T`, `X<A>::type`): the qualifier is
+    /// formed (and kept as sugar) by the parse proper.
+    fn qualified_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext, loc: Loc) {
+        let ty = match self.parse_nested_name_nns() {
+            Ok(Some(q)) => {
+                self.check_missing_typename_in_class(q, ctx, loc);
+                self.parse_qualified_type_rest(q, TagKeyword::None)
+            }
+            _ => None,
+        };
+        if ty.is_none() {
+            ds.invalid = true;
+        }
+        self.set_named_base(ds, Some(ty.unwrap_or(QualType::ERROR)), loc);
+    }
+
+    /// An unqualified type-name ending before token `end`, classified as
+    /// the type `ty` declared by `d` under the name `name`, with an
+    /// optional pack index (`T...[index]`, C++26 [dcl.type.pack.index]).
+    fn simple_type_name_spec(
+        &mut self,
+        ds: &mut DeclSpec,
+        end: usize,
+        (ty, d, name): (QualType, DeclId, Symbol),
+        loc: Loc,
+    ) {
+        while self.pos() < end {
+            self.bump();
+        }
+        // An ambiguous name recovers as the type `d` classified
+        // as ([basic.lookup.general]/1, clang's `getTypeName`).
+        self.s.diagnose_ambiguous_name(name, None, loc);
+        self.s.mark_type_referenced(d);
+        self.s.check_type_name_access(name, None, d, loc);
+        let kind = self.s.ast.decls.get(d).kind();
+        let ty = if kiln_sema::lookup::is_tag_kind(kind) {
+            self.s.elaborated_tag_type(d, TagKeyword::None)
+        } else {
+            ty
+        };
+        let ty = match self.parse_pack_index(loc) {
+            Ok(Some((ellipsis, index, _))) => self.s.act_pack_indexing_type(ty, ellipsis, index),
+            Ok(None) => ty,
+            Err(()) => QualType::ERROR,
+        };
+        self.set_named_base(ds, Some(ty), loc);
+    }
+
+    /// The injected-class-name of the class template `d` ([temp.local]/1).
+    fn injected_class_name_spec(&mut self, ds: &mut DeclSpec, d: DeclId, loc: Loc) {
+        self.bump();
+        let ty = self.s.injected_class_type(d);
+        self.set_named_base(ds, ty, loc);
+    }
+
+    /// A qualified name that names no type where only a type can be
+    /// ([`Parser::parse_type_name_spec`]): the parse proper reports it,
+    /// and the decl-spec recovers to an invalid `int`.
+    fn unknown_qualified_type_spec(&mut self, ds: &mut DeclSpec, loc: Loc) {
+        if let Ok(Some(q)) = self.parse_nested_name_nns() {
+            let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
+        }
+        ds.invalid = true;
+        ds.type_error = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
+    }
+
+    /// An undeclared unqualified name ending before token `end`: "unknown
+    /// type name" and an invalid `int` when a declarator follows
+    /// ([`Parser::unknown_type_follows`]), else false.
+    fn unknown_type_name_spec(
+        &mut self,
+        ds: &mut DeclSpec,
+        end: usize,
+        ctx: DeclaratorContext,
+        name: Symbol,
+        loc: Loc,
+    ) -> bool {
+        if !self.unknown_type_follows(end, ctx) {
+            return false;
+        }
+        let text = self.s.ast.symbols().as_str(name).to_owned();
+        let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
+        self.emit(d);
+        self.bump();
+        ds.invalid = true;
+        ds.type_error = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
+        true
     }
 
     /// True if token `end`, after an unknown name in a decl-specifier,
@@ -1970,6 +2014,8 @@ impl Parser<'_, '_> {
         {
             self.parse_special_declarator_id(d);
             self.parse_declarator_id_attrs(d);
+        } else if abstract_ok && d.abstract_at.is_none() {
+            d.abstract_at = Some(self.loc());
         }
         self.parse_declarator_suffixes(d, abstract_ok);
         self.s.act_on_exit_declarator_scope(entered);
@@ -2030,9 +2076,11 @@ impl Parser<'_, '_> {
                 self.parse_function_suffix(d, ambiguous);
                 // [dcl.fct]/1: an attribute-specifier-seq after the
                 // parameter clause appertains to the function type.
-                if self.at_cxx11_attr() {
+                // GNU attributes after it are the declarator's (parsed
+                // by the caller; clang `ParseFunctionDeclarator`).
+                if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
                     let mut attrs = Vec::new();
-                    self.parse_attributes(&mut attrs);
+                    self.parse_cxx11_attr_seq(&mut attrs);
                     self.s.act_on_type_position_attrs(&mut attrs, true);
                     d.attrs.extend(attrs);
                 }
@@ -2237,18 +2285,21 @@ impl Parser<'_, '_> {
     /// the `)`: the parameters and whether `...` ends the list. With
     /// `delay_args`, default arguments are saved in `late_fn`.
     /// An abstract declarator's identifier location is where the name
-    /// would be (clang `ParseDirectDeclarator`): the first array bound,
-    /// else the token after the declarator. Named declarators keep theirs.
+    /// would be (clang `ParseDirectDeclarator`): the token at its
+    /// innermost position (`(*)` gives the `)`), else the first array
+    /// bound, else the token after the declarator. Named declarators keep
+    /// theirs.
     pub(crate) fn set_abstract_loc(&self, d: &mut Declarator) {
         if d.name.is_none() && d.special.is_none() && d.decomp.is_none() {
-            d.loc = d
-                .chunks
-                .iter()
-                .find_map(|c| match c {
-                    Chunk::Array { loc, .. } => Some(*loc),
-                    _ => None,
-                })
-                .unwrap_or_else(|| self.loc());
+            d.loc = d.abstract_at.unwrap_or_else(|| {
+                d.chunks
+                    .iter()
+                    .find_map(|c| match c {
+                        Chunk::Array { loc, .. } => Some(*loc),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| self.loc())
+            });
         }
     }
 
@@ -2322,8 +2373,8 @@ impl Parser<'_, '_> {
             if self.at_attr() {
                 self.parse_attributes(&mut pd.attrs);
             }
+            self.misplaced_param_pack_ellipsis(&ds, &mut pd, site);
             let mut p = self.s.act_on_param_declarator(&ds, &pd);
-            self.misplaced_param_pack_ellipsis(&ds, &mut pd, &mut p, site);
             // The point of declaration: before the default argument
             // ([basic.scope.pdecl]/1).
             self.s.act_on_prototype_param(&mut p);
@@ -2366,27 +2417,31 @@ impl Parser<'_, '_> {
         (params, variadic)
     }
 
-    /// A `...` after parameter `pd` (`p` as sema built it) whose
-    /// declarator names an unexpanded pack is a misplaced pack ellipsis
-    /// ([dcl.decl.general]/4: the `...` of a declarator-id or
-    /// abstract-pack-declarator comes first): clang 22's "'...' must
-    /// immediately precede declared identifier" (named) or "must be
-    /// innermost component of anonymous pack declaration" (abstract), and
-    /// the parameter becomes the pack (`Ts a...`, `Ts (*)()...`,
-    /// `Ts......a`). Not when `)` follows a declarator that already has its
-    /// `...` (`Ts......`), or in a lambda one without (`[](Ts a...)`):
-    /// those are the varargs `...` of -Wambiguous-ellipsis. A placeholder
-    /// type names no pack yet.
+    /// A `...` after parameter declarator `pd` that names an unexpanded
+    /// pack is a misplaced pack ellipsis ([dcl.decl.general]/4: the `...`
+    /// of a declarator-id or abstract-pack-declarator comes first):
+    /// clang 22's "'...' must immediately precede declared identifier"
+    /// (named) or "must be innermost component of anonymous pack
+    /// declaration" (abstract), and the parameter becomes the pack (`Ts
+    /// a...`, `Ts (*)()...`, `Ts......a`). As in clang
+    /// (`DiagnoseMisplacedEllipsisInDeclarator` in the parser), this is
+    /// decided syntactically and reported before the parameter's Sema
+    /// action, so it precedes any type diagnostic of the parameter, and a
+    /// parameter whose type became invalid is then "type 'int' of function
+    /// parameter pack does not contain any unexpanded parameter packs".
+    /// Not when `)` follows a declarator that already has its `...`
+    /// (`Ts......`), or in a lambda one without (`[](Ts a...)`): those are
+    /// the varargs `...` of -Wambiguous-ellipsis. A placeholder type names
+    /// no pack yet.
     fn misplaced_param_pack_ellipsis(
         &mut self,
         ds: &DeclSpec,
         pd: &mut Declarator,
-        p: &mut ParamInfo,
         site: DeclSite,
     ) {
         if !self.at(Punct::Ellipsis)
             || matches!(ds.base, TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto)
-            || !self.s.declarator_has_unexpanded_pack(p.original_ty.unwrap_or(p.ty))
+            || !self.s.declarator_has_unexpanded_pack(ds, pd)
         {
             return;
         }
@@ -2399,7 +2454,6 @@ impl Parser<'_, '_> {
         self.misplaced_declarator_ellipsis(pd, ellipsis);
         if pd.ellipsis.is_none() {
             pd.ellipsis = Some(ellipsis);
-            self.s.make_param_pack(p, ellipsis);
         }
     }
 
@@ -2926,25 +2980,19 @@ impl Parser<'_, '_> {
         // [dcl.pre]/6 (clang's `BuildDeclaratorGroup`): a structured
         // binding declaration is alone in its group.
         let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;
-        let (mut declarators, mut restrict_error) = (0usize, None);
+        let (mut declarators, mut restrict) = (0usize, None);
         let _ = self.s.take_declarator_type_invalid();
         let mut type_invalid = false;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
+            self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
-            self.repeat_declspec_errors(&mut restrict_error, declarators == 0);
-            // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
-            // a malformed one drops the declarator.
-            let Ok(label) = self.parse_asm_label() else {
+            if self.parse_asm_label_and_gnu_attrs(&mut d, declarators, &mut restrict).is_err() {
                 self.skip_until(&[], true, false);
                 break;
-            };
-            d.asm_label = label;
-            if self.at_attr() {
-                self.parse_attributes(&mut d.attrs);
             }
             if !d.has_name() {
                 if !d.invalid {
@@ -2968,6 +3016,9 @@ impl Parser<'_, '_> {
                     self.skip_unsupported_declaration();
                     return decls;
                 }
+                if self.missing_fn_body_before_cxx11_attrs(ctx) {
+                    return decls;
+                }
             }
             // clang's `ParseDeclGroup`: a later declarator of a
             // decl-specifier that named no type is parsed, not declared,
@@ -2983,6 +3034,7 @@ impl Parser<'_, '_> {
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
+            self.record_declarator_end(v, &d);
             // A declarator without a type is invalid too (`static y, z;`).
             type_invalid |= self.s.take_declarator_type_invalid()
                 || (!ds.has_type_specifier() && !is_untyped_special(&d));
@@ -3030,6 +3082,76 @@ impl Parser<'_, '_> {
         } else if let Some(r) = *restrict_error {
             self.s.report_restrict_not_pointer(r);
         }
+    }
+
+    /// Sets `d.end` right after `parse_declarator` (and a trailing
+    /// requires-clause): the start of its last token (clang's
+    /// `PrevTokLocation` once `ParseDeclarator` returns), not counting a
+    /// trailing C++11 attribute-specifier-seq. An asm label, GNU
+    /// attributes and virt-specifiers extend it later.
+    pub(crate) fn set_declarator_end(&self, d: &mut Declarator) {
+        let e = self.prev_lo();
+        d.end = if e == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { e };
+    }
+
+    /// Records the end of bodiless function declaration `f`'s declarator
+    /// `d`, where notes about it point (`ColdDeclData::declarator_end`).
+    pub(crate) fn record_declarator_end(&mut self, f: Option<DeclId>, d: &Declarator) {
+        if let Some(f) = f
+            && d.end != Loc::INVALID
+            && self.s.ast.decls.function(f).is_some_and(|x| x.body.is_none())
+        {
+            let _ = self.s.ast.decls.cold.declarator_end.insert(f, d.end);
+        }
+    }
+
+    /// The GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`;
+    /// `Err` when malformed, which drops the declarator) and GNU
+    /// attributes after a non-member declarator; both extend `d.end`.
+    /// Only GNU attributes follow (clang's `MaybeParseGNUAttributes` in
+    /// `ParseDeclGroup`): a C++11 attribute-specifier-seq here ends the
+    /// declarator, and the `;` (or function body) expected there is
+    /// reported by the caller. First repeats the decl-specifiers' errors
+    /// for this declarator ([`Parser::repeat_declspec_errors`]).
+    /// `index` is the declarator's index in its group.
+    fn parse_asm_label_and_gnu_attrs(
+        &mut self,
+        d: &mut Declarator,
+        index: usize,
+        restrict_error: &mut Option<(Loc, QualType)>,
+    ) -> Result<(), ()> {
+        let first = index == 0;
+        self.repeat_declspec_errors(restrict_error, first);
+        self.gnu_attr_end = Loc::INVALID;
+        if first && d.is_function_declarator() {
+            self.parse_gnu_attr_seq(&mut d.attrs);
+        }
+        let label = self.parse_asm_label()?;
+        if label.is_some() {
+            d.end = self.prev_lo();
+            self.gnu_attr_end = Loc::INVALID;
+        }
+        d.asm_label = label;
+        self.parse_gnu_attr_seq(&mut d.attrs);
+        if self.gnu_attr_end != Loc::INVALID {
+            d.end = self.gnu_attr_end;
+        }
+        Ok(())
+    }
+
+    /// clang `ParseDeclGroup`: at namespace scope, a first function
+    /// declarator followed by neither a declaration's continuation nor a
+    /// function body, here a C++11 attribute-specifier-seq after its GNU
+    /// attributes (`void f() __attribute__((cold)) [[nodiscard]];`), is
+    /// reported as a missing body; the declaration is skipped through its
+    /// `;` and declares nothing (true).
+    fn missing_fn_body_before_cxx11_attrs(&mut self, ctx: DeclaratorContext) -> bool {
+        if ctx != DeclaratorContext::File || !(self.at_cxx11_attr() || self.at_kw(Kw::Alignas)) {
+            return false;
+        }
+        self.error_here(DiagId::parse_expected_fn_body);
+        self.skip_to_semi();
+        true
     }
 
     /// The type of decl-specifier-seq `ds`, formed once the first

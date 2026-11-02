@@ -15,7 +15,7 @@ use kiln_lex::literal::{
     CodeUnits, NumberClass, StringLiteral, classify_number, decode_char, decode_string,
     decode_unevaluated_string,
 };
-use kiln_lex::{Punct, TokKind, Token};
+use kiln_lex::{Punct, Std, TokKind, Token};
 use kiln_sema::expr::CastStyle;
 use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent, SpecialName};
 use kiln_source::Loc;
@@ -562,6 +562,8 @@ impl Parser<'_, '_> {
                         | Kw::Float32
                         | Kw::Float64
                         | Kw::StdFloat128
+                        | Kw::Float32x
+                        | Kw::Float64x
                         | Kw::Bf16
                         | Kw::Fp16
                         | Kw::Int
@@ -1601,6 +1603,85 @@ impl Parser<'_, '_> {
         self.parse_id_expression_rest()
     }
 
+    /// The template-id of an id-expression whose name is a template (or
+    /// follows `template`): a function template's overload set, a variable
+    /// template or concept's value, or an error for a type template
+    /// ([temp.names]/1).
+    fn template_id_expr(
+        &mut self,
+        qual: Option<kiln_sema::using::Qualifier>,
+        (class, name, nl): (NameClass, kiln_source::symbol::Symbol, Loc),
+        begin: Loc,
+        template_loc: Option<Loc>,
+    ) -> ExprId {
+        match self.parse_template_id_rest(class, name, nl) {
+            Ok(TemplateIdRef::Overload(e)) => {
+                let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
+                if let Some(q) = qual {
+                    self.s.set_template_id_begin(e, begin, nl);
+                    self.s.set_template_id_qualifier(e, q.nns);
+                    self.s.set_template_kw(e, template_loc);
+                }
+                if !self.at(Punct::LParen) {
+                    return self.s.resolve_single_template_id(e);
+                }
+                if qual.is_none() {
+                    self.s.act_on_template_id_call_name(e);
+                }
+                e
+            }
+            Ok(TemplateIdRef::Value(e)) => {
+                if let Some(q) = qual {
+                    self.s.set_template_id_begin(e, begin, nl);
+                    self.s.set_template_id_qualifier(e, q.nns);
+                    self.s.set_template_kw(e, template_loc);
+                }
+                e
+            }
+            Ok(TemplateIdRef::Type(_)) => {
+                let t = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, nl).arg(t);
+                self.emit(d);
+                self.s.act_on_error_expr(&[], nl)
+            }
+            Err(()) => self.s.act_on_error_expr(&[], nl),
+        }
+    }
+
+    /// An undeclared template-id that is not called (`(undeclared<int> * 2)`),
+    /// at its `<` ([temp.names]/3.3): the name is still a template-name, so
+    /// the list is its arguments (not `<`/`>` operators), and the id names
+    /// nothing: "use of undeclared identifier" and an invalid expression
+    /// (clang 22's `ExprError` from the annotated template-id). Before an
+    /// operator or a closing token the enclosing expression goes on
+    /// parsing around an error operand, which diagnoses nothing more;
+    /// before anything else the enclosing construct skips past it. WP-372.
+    fn undeclared_template_id_expr(&mut self, name: kiln_source::symbol::Symbol, nl: Loc) -> PExpr {
+        let _ = self.parse_template_arg_list();
+        if self.at(Punct::ColonColon) {
+            // `undeclared<int>::x`: a nested-name-specifier naming no
+            // template (clang's `ActOnCXXNestedNameSpecifier` on a
+            // `TNK_Undeclared_template`).
+            let text = self.s.ast.symbols().as_str(name).to_owned();
+            let d = self.s.diag(DiagId::sema_no_template_named, nl).arg(text);
+            self.emit(d);
+            return None;
+        }
+        let _ = self.s.act_on_id_expression(name, nl, None);
+        let goes_on = self.cur_binop().is_some()
+            || [
+                Punct::RParen,
+                Punct::RSquare,
+                Punct::RBrace,
+                Punct::Comma,
+                Punct::Semi,
+                Punct::Colon,
+            ]
+            .iter()
+            .any(|&p| self.at(p));
+        goes_on.then(|| self.s.act_on_error_expr(&[], nl))
+    }
+
     /// A (possibly qualified) id-expression that does not name a type
     /// ([expr.prim.id]): a template-id names a variable template, a
     /// function template or a concept ([temp.names]/1); a name after a
@@ -1638,53 +1719,52 @@ impl Parser<'_, '_> {
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
-            return match self.parse_template_id_rest(class, name, nl) {
-                Ok(TemplateIdRef::Overload(e)) => {
-                    let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
-                    if let Some(q) = qual {
-                        self.s.set_template_id_begin(e, begin, nl);
-                        self.s.set_template_id_qualifier(e, q.nns);
-                        self.s.set_template_kw(e, template_loc);
-                    }
-                    if !self.at(Punct::LParen) {
-                        return Some(self.s.resolve_single_template_id(e));
-                    }
-                    if qual.is_none() {
-                        self.s.act_on_template_id_call_name(e);
-                    }
-                    Some(e)
-                }
-                Ok(TemplateIdRef::Value(e)) => {
-                    if let Some(q) = qual {
-                        self.s.set_template_id_begin(e, begin, nl);
-                        self.s.set_template_id_qualifier(e, q.nns);
-                        self.s.set_template_kw(e, template_loc);
-                    }
-                    Some(e)
-                }
-                Ok(TemplateIdRef::Type(_)) => {
-                    let t = self.s.ast.symbols().as_str(name).to_owned();
-                    let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, nl).arg(t);
-                    self.emit(d);
-                    Some(self.s.act_on_error_expr(&[], nl))
-                }
-                Err(()) => Some(self.s.act_on_error_expr(&[], nl)),
-            };
+            return Some(self.template_id_expr(qual, (class, name, nl), begin, template_loc));
         }
         // [temp.names]/3 (P0846): an unqualified name that lookup finds
         // nothing or only functions for, followed by `<`, is a
         // template-name; ADL finds the template at the call
         // (`get<0>(c)` for `std::complex`). Only taken when a
-        // template-argument-list closed by `>(` follows.
+        // template-argument-list closed by `>(` follows. Before C++20
+        // only a name lookup finds nothing for (clang's
+        // `TNK_Undeclared_template`).
         if qual.is_none()
             && self.at(Punct::Less)
-            && matches!(class, NameClass::Undeclared | NameClass::Value(_))
+            && (class == NameClass::Undeclared
+                || (self.std >= Std::Cxx20 && matches!(class, NameClass::Value(_))))
             && let Some((close, false)) = self.skip_template_args(self.pos())
             && self.tok_at(close + 1).kind == TokKind::Punct(Punct::LParen)
             && self.s.is_assumed_template_name(name)
         {
             let (args, _, _) = self.parse_template_arg_list()?;
             return Some(self.s.act_on_assumed_template_id(name, &args, nl));
+        }
+        // A name lookup found a single non-template for, followed by what
+        // can only be a template argument list: `<>`, or `<` type-id ...
+        // `>` (clang's `checkPotentialAngleBracket`; before C++20 also
+        // for functions, which [temp.names]/3 does not yet assume to be
+        // templates). The list is skipped and the name is an error.
+        if qual.is_none()
+            && self.at(Punct::Less)
+            && let NameClass::Value(_) = class
+            && !(self.std >= Std::Cxx20 && self.s.is_assumed_template_name(name))
+            && let Some(found) = self.s.potential_template_name(name)
+            && let Some(close) = self.potential_angle_close()
+        {
+            while self.pos() < close {
+                let _ = self.bump();
+            }
+            let _ = self.split_greater();
+            self.s.diagnose_expr_intended_as_template_name(name, found, nl);
+            return Some(self.s.act_on_error_expr(&[], nl));
+        }
+        if qual.is_none()
+            && self.at(Punct::Less)
+            && class == NameClass::Undeclared
+            && matches!(self.skip_template_args(self.pos()), Some((_, false)))
+            && self.s.is_assumed_template_name(name)
+        {
+            return self.undeclared_template_id_expr(name, nl);
         }
         if qual.is_none()
             && class == NameClass::Undeclared
@@ -1698,6 +1778,39 @@ impl Parser<'_, '_> {
         }
         let e = self.s.act_on_id_expression(name, nl, qual);
         self.parse_pack_index_suffix(e, nl)
+    }
+
+    /// The index of the `>` closing what follows the current `<` as a
+    /// template argument list intended for a non-template name (clang's
+    /// `checkPotentialAngleBracket`): `<>` (or `<>>` from C++11), or `<`
+    /// followed by an unambiguous type-id and a later `>` -- brackets
+    /// balanced, not past a `;` or an unmatched closer.
+    fn potential_angle_close(&self) -> Option<usize> {
+        let less = self.pos();
+        let next = self.tok_at(less + 1).kind;
+        if next == TokKind::Punct(Punct::Greater)
+            || (self.std >= Std::Cxx11 && next == TokKind::Punct(Punct::GreaterGreater))
+        {
+            return Some(less + 1);
+        }
+        if !self.is_cxx_type_id_at(less + 1, TypeIdContext::Unambiguous).0 {
+            return None;
+        }
+        let mut j = less + 1;
+        loop {
+            match self.tok_at(j).kind {
+                // The end of the statement, or an unmatched closer.
+                TokKind::Eof
+                | TokKind::Punct(Punct::Semi | Punct::RParen | Punct::RSquare | Punct::RBrace) => {
+                    return None;
+                }
+                TokKind::Punct(Punct::Greater | Punct::GreaterGreater) => return Some(j),
+                TokKind::Punct(Punct::LParen | Punct::LSquare | Punct::LBrace) => {
+                    j = self.skip_balanced(j)?;
+                }
+                _ => j += 1,
+            }
+        }
     }
 
     /// `N::operator@` / `X<T>::operator T` after the nested-name-specifier
@@ -1800,7 +1913,7 @@ impl Parser<'_, '_> {
             return Ok(None);
         }
         let ellipsis = self.bump().span.lo;
-        if self.std < kiln_lex::Std::Cxx26 {
+        if self.std < Std::Cxx26 {
             // P2662: clang `ext_pack_indexing`, at the pack name.
             let w = self.s.diag(DiagId::parse_ext_pack_indexing, begin);
             self.emit(w);

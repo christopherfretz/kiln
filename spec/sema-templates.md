@@ -205,6 +205,35 @@ delayed meaning; in practice they are always parsed immediately.
 - Defaults are stored in the cold "template default args" map
   (ast.md §8.1).
 
+**Non-type parameters that are pack expansions** ([temp.param]/17,
+[temp.variadic]/5, WP-385). In a member template of `O<Ts...>`,
+`template<Ts... a>` declares one non-type parameter whose type is the
+expansion `Ts...`. Substituting the enclosing arguments
+(`TemplState::expanded_packs`, `member.rs` `nttp_param_ty`) makes it one
+parameter per element of `Ts`: `O<int, char>::A` takes `<int, char>`,
+`O<>::A` takes none. Argument checking (`args.rs`
+`check_expanded_pack_arg`, `nttp_elem`) converts each argument to its
+element type, and wrong arity is clang's "too few/too many template
+arguments". Deducing a member function template whose explicit
+arguments leave such an expanded pack incomplete is
+`Tdk::IncompletePack`, clang's note "deduced too few arguments for
+expanded pack 'a'; no argument for 2nd expanded parameter in deduced
+argument pack <1>". Partial specializations over it work
+(`template<Ts... a> struct Is<A<a...>>`). Such a parameter is not itself
+a parameter pack ([temp.param]/14), so "template parameter pack must be
+the last template parameter" does not apply to it: `template<Ts... a,
+int n>` is valid. Tests: `temp.variadic/p5-member-nttp-pack-expansion.cpp`,
+`temp.variadic/p5-member-nttp-pack-arity.cpp`.
+
+**Local classes** ([temp.mem]/2, WP-385). A local class, or a class
+nested in one, has no member templates. A member function, class,
+variable or alias template there is "templates cannot be declared
+inside of a local class" (`sema_template_decl_in_local`) at the
+`template` keyword (`check_template_in_local_class`). A friend function
+template is "templates can only be declared in namespace or class
+scope". A generic lambda in a member function is not a member template
+and is accepted. Test: `temp.mem/p2-local-class-member-template.cpp`.
+
 ### 2.2 Template-ids and the `<` rule
 
 [temp.names]/3 says `<` starts a template-argument-list when it follows:
@@ -219,6 +248,28 @@ delayed meaning; in practice they are always parsed immediately.
 - an injected-class-name used as a template-name ([temp.local]/1).
 
 In every other case `<` is less-than.
+
+**Before C++20: a non-template followed by template arguments**
+(clang's `checkPotentialAngleBracket` /
+`diagnoseExprIntendedAsTemplateName`, WP-385). Before C++20 an
+unqualified name whose lookup finds functions is not assumed to be a
+template; one whose lookup finds nothing still is, in every mode
+(clang's `TNK_Undeclared_template`). When lookup finds exactly one
+declaration that is not a template (a variable, enumerator, parameter,
+non-template function, or member), and `<` is followed by `>` or by an
+unambiguous type-id and then a closing `>` before `;`
+(`Parser::potential_angle_close`), the list is skipped and the error is
+"'f' does not name a template but is followed by template arguments"
+(`sema_non_template_in_template_id`) at the name, with the note
+"non-template declaration found by name lookup" at the declaration
+(`Sema::potential_template_name`,
+`Sema::diagnose_expr_intended_as_template_name`). The expression becomes
+an error, and a following `(args)` is still parsed. In C++20 the same
+spelling on an overload set of functions is the P0846 reading above.
+Clang's C++17 `ext_adl_only_template_id` warning (a template found only
+by ADL) is not implemented. Tests:
+`temp.names/non-template-followed-by-args-cxx17.cpp`,
+`temp.names/non-template-followed-by-args.cpp`.
 
 **Closing the list.**
 - The first top-level `>` closes the list. `(`, `[` and `{` nest and hide
@@ -535,6 +586,21 @@ parameter is kept as a plain parameter. A misplaced `auto` in its clause
 has already become `int` (§2.6), so `void f(auto (*...x)(C auto...))`
 reports both. Test: `temp.variadic/p5-param-pack-without-packs.cpp`.
 
+A function parameter pack whose array bound alone names the pack
+(`int ...a[Ns]`, or `int a[Ns]...` after the misplaced-ellipsis
+recovery, spec/parse.md) expands the unadjusted array type; each element
+decays when the pack is substituted, as in clang (WP-385; test
+`temp.variadic/p5-array-bound-param-pack.cpp`).
+
+A lambda whose call operator's type names an unexpanded pack (a
+parameter `Ts a` whose `...` was misplaced or omitted) contains that
+pack. Its enclosing initializer then gets "initializer contains
+unexpanded parameter pack 'Ts'" ("expression contains ..." for an
+expression statement; a pack expansion around the lambda expands it;
+`act_on_lambda_declarator` marks the
+lambda; `expr_packs` reads the call operator's type). Test:
+`temp.variadic/p5-lambda-param-unexpanded.cpp` (WP-385).
+
 **Fold expressions** ([expr.prim.fold]) take the 32 fold-operators.
 After `(`:
 1. If the next token is `...`, it is a left fold: `( ... op cast-expr )`.
@@ -836,7 +902,11 @@ the running `Substituter` instead.
      ([temp.dep.candidate]/1; WP-378,
      `tests/conformance/temp.param/default-argument-lookup-context.cpp`).
      A template in a local scope keeps the use's scopes (its function's
-     names live only there);
+     names live only there). The same rule (`Sema::in_template_context`)
+     covers the type of a non-type parameter substituted with the
+     arguments before it (`template <class T, decltype(mk<T>()) N>`) and,
+     for a function template, the explicit arguments' substitution into
+     the function parameter types (§ "Landed (WP-071)"; WP-387);
    - converts NTTP args (converted constant expressions, evaluated by the
      Oven with `EvalKind::TemplateArg`);
    - packs the trailing args into a `Pack`.
@@ -2374,7 +2444,14 @@ This is [temp.deduct.type]. It is a structural recursion over canonical
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the
-result is `MiscellaneousDeductionFailure` (clang).
+result is `MiscellaneousDeductionFailure` (clang). The template of `A` (or
+of a base) is the class template it is a specialization of: alias
+template sugar is looked through ([temp.alias]/2; clang's
+`getLastTemplateSpecType`), so a base written `A<T>` with
+`template<class T> using A = S<T>` deduces against `S<T>`
+(`written_template_name`; WP-381,
+`tests/conformance/temp.deduct.call/base-alias-template-sugar.cpp`;
+libstdc++ `variant::operator=`/`emplace`).
 A non-type argument of `P` that is not a deduced parameter but a value
 already (a written constant, or an explicitly given parameter substituted
 into `P`, [temp.deduct]/2) is compared with `A`'s value during the match:
@@ -5134,7 +5211,12 @@ explicit specialization errors remain. The blockers are:
 **Landed (WP-071): function templates.**
 - `deduce_call` (`templ/deduce_call.rs`, §6.1) builds each candidate's
   specialization. Explicit arguments are checked and then substituted
-  into P under an `ExplicitArgSubstitution` SFINAE frame. Too many of
+  into P under an `ExplicitArgSubstitution` SFINAE frame, with the
+  template's declaration context current (`in_template_context`, as for
+  a default template argument, §4.2): `n::h<int>()` of `template <class
+  T> void h(decltype(mk<T>()) * = nullptr)` in namespace `n` finds `mk`
+  from `n` ([temp.dep.candidate]; WP-387,
+  `temp.arg.explicit/substitution-in-template-context.cpp`). Too many of
   them is a `SubstitutionFailure` that carries clang's arity message.
   Before them, as in clang's `DeduceTemplateArguments`, the call's arity
   is checked against the written parameters ([temp.deduct.call]/1):

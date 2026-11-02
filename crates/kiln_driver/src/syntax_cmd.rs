@@ -173,6 +173,7 @@ impl SyntaxJob<'_> {
             reflection: a.predef.reflection,
             coro_aligned_allocation: a.predef.coro_aligned_allocation,
             clang_compat: a.predef.clang_compat.major(),
+            gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();

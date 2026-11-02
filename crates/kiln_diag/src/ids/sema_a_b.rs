@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+sema_abi_tag_namespace = Warning [IgnoredAttributes] (1) "'abi_tag' attribute on {0:non-inline|anonymous} namespace ignored";
 sema_abstract_allocation = Error (1) "allocating an object of abstract class type {0}";
 sema_abstract_array = Error (1) "array of abstract class type {0}";
 sema_abstract_final_class = Warning [AbstractFinalClass] (0) "abstract class is marked 'final'";
@@ -66,6 +67,7 @@ sema_array_of_functions = Error (2) "'{0}' declared as array of functions of typ
 sema_array_of_references = Error (2) "'{0}' declared as array of references of type {1}";
 // [expr.new]/6 (C++11 contextual conversion), [expr.delete]/2 (WP-374)
 sema_array_size_ambiguous_conversion = Error (1) "ambiguous conversion of array size expression of type {0} to an integral or enumeration type";
+sema_array_size_conversion = Extension [Cxx11Extensions] (3) "implicit conversion from array size expression of type {0} to {1:integral|enumeration} type {2} is a C++11 extension";
 sema_array_size_explicit_conversion = Error (2) "array size expression of type {0} requires explicit conversion to type {1}";
 sema_array_size_incomplete_type = Error (1) "array size expression has incomplete class type {0}";
 sema_array_size_non_int = Error (1) "size of array has non-integer type {0}";

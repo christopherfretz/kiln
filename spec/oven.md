@@ -53,7 +53,10 @@ the evaluator's flattened type table.
 - Register machine: each frame is a window of 128-bit registers in one
   growable `Vec<u128>`; every scalar fits one register (integers canonical:
   sign- or zero-extended from their width; floats as IEEE bit patterns,
-  x87 in the low 80 bits; pointers as an encoded `Ptr`). Locals whose
+  x87 in the low 80 bits; pointers as an encoded `Ptr` in the low 64
+  bits, a `void *` with its designator tag, `kbc::VOID_TAG`, the
+  designated type + 1, in bits 64..96, kept through memory by the pointer
+  mark, "Abstract memory" and "Construction"). Locals whose
   address is never taken and that are not aggregates live in registers;
   the others live in abstract memory.
 - Typed, checked arithmetic per width (1..128 bits, `_BitInt`-ready): signed
@@ -95,7 +98,9 @@ the evaluator's flattened type table.
 - **Spaces**: the *frame* space is a bump arena of all frame objects of the
   current evaluation; the *static* space holds globals and thawed constants
   and persists for the TU. Each space keeps the bytes, a per-byte
-  initialized bitmap and a per-8-byte-granule "holds a pointer" bit; unions
+  initialized bitmap and a per-8-byte-granule pointer mark byte (0: no
+  pointer; 1: a pointer; `mem::PTR_TAGGED` (2) and up: a `void *` and
+  its designator tag, below and "Construction"); unions
   keep their active member in a side map keyed by (allocation, offset,
   union type) (`mem::UKey`), so unions nested at one offset (`union {
   char c; union { int x; float y; } q; }`) each have their own entry
@@ -284,7 +289,17 @@ the evaluator's flattened type table.
   is plain `try_fold`). Variables resolved under lax mode are recorded in
   `lax_globals` and reset to unresolved when the next outermost
   evaluation runs in the other mode, and lax-mode calls are never
-  memoized, so a lax read never leaks into a strict evaluation. Codegen
+  memoized, so a lax read never leaks into a strict evaluation. A lax
+  global keeps one static object for the whole translation unit
+  (`Oven::lax_objs`, keyed by global, WP-387): re-resolving it in either
+  mode remakes that object in place (`Memory::reinit_static` drops its
+  union records and clears its contents and flags, keeping slot,
+  generation and address) instead of allocating a fresh one, so a
+  strict/lax alternation costs no static memory per switch and a pointer
+  to the global taken in one mode still designates it in the other
+  (test `limits.rs::lax_globals_do_not_grow`). The slot is reused only
+  when the object is live, of the same type and not mid-resolution;
+  otherwise a fresh one is allocated and recorded. Codegen
   uses it for its non-initializer fold candidates; sema uses it
   (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
   (spec/sema.md §4.2).
@@ -488,6 +503,13 @@ literal is one instruction and one step, not an interpreted loop.
   parsed as clang's `StringRef::getAsInteger(0)`: decimal, `0` octal,
   `0x` hex, `0b` binary, `0o` octal; an empty string is payload 0; any
   other argument is not a constant), and the source-location builtins (below).
+- **GCC's implicit library builtins (WP-380):** a direct call of a
+  function with no builtin id but a `gnu_lib_twin` (spec/sema.md §5.4:
+  the C library `ceil`/`floor`/`trunc`/`round`/`fabs`/`fmin`/`fmax`/
+  `copysign` and their `f`/`l` variants under `-stdlib=libstdc++`) is
+  lowered as a call of the twin `__builtin_` function, so it folds with
+  the twin's rules; under `-stdlib=libc++` such a call is a call of a
+  non-constexpr function, as in clang.
 - **Atomics (WP-154):** `__atomic_always_lock_free`, `__atomic_is_lock_free`
   and `__c11_atomic_is_lock_free` fold through `bi::LOCK_FREE` as clang
   19's `IntExprEvaluator`: a power-of-two size within the target's inline
@@ -1046,13 +1068,45 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   `new (f(s)) S{}` is "... from 'int' to 'S'", as in clang 22, whose
   `void *` keeps the full lvalue designator; a `void *` made from `&s`
   designates `s` (`expr.new/p2747-placement-voidified-subobject*.cpp`).
-  The tag rides registers only: copies, calls, returns and register
-  locals keep it; every pointer operation reads the low 64 bits; a
-  store to memory (a `void *` member, a `void *` local whose address is
-  taken) and a cast back to `T *` drop it, so such a `void *` falls back
-  to the outermost object. Deviation: the tag is a type, not a path, so
-  two subobjects of one type at one offset (empty bases,
-  `[[no_unique_address]]`) are not told apart.
+  Copies, calls, returns and register locals keep the tag; every pointer
+  operation reads the low 64 bits. A store of a tagged pointer to memory
+  (a `void *` member or array element, a `void *` local whose address is
+  taken, an object copy) keeps it in the granule's pointer mark (WP-387):
+  the tag types are interned TU-wide (`Memory::void_mark`, append-only,
+  so a rolled-back or copied mark stays valid), mark `PTR_TAGGED + i`
+  naming the `i`-th, and a load of a pointer whose granule bears such a
+  mark puts the tag back in bits 64..96 (`Memory::void_tag`). A `void
+  *` therefore costs what it did before: 8 bytes in memory plus the
+  granule's existing mark byte, 16 in a register; the intern table
+  holds at most 254 types (4 bytes each plus a hash entry). Once it is
+  full, a `void *` of a further type is stored untagged (mark 1). An
+  untagged `void *` (that one, a thawed constant's, which holds no
+  designator, or a builtin's result) designates the outermost object
+  at its address.
+  The tag is the designated subobject's type; with the pointer's offset
+  and past-the-end bit it names one subobject ([intro.object]/9: two
+  distinct objects of one type have distinct addresses), except members
+  of one type of a union, which the Oven's typed pointers do not tell
+  apart either (`Memory::union_alts`). An empty base is a subobject of
+  its class at its offset (`Types::empty_bases`, kept apart from
+  `Types::fields` as it holds no storage), so it and an empty
+  `[[no_unique_address]]` member at the same address are different
+  designated objects, and constructing an object that holds no data
+  (`Types::holds_no_data`) by placement touches no byte (the member
+  sharing its address keeps its value)
+  (`expr.new/p2747-placement-voidified-through-memory*.cpp`).
+- *Casts from `void *`* (C++26, P2738R1, [expr.static.cast]/14): `VoidCast
+  [dst, p, T]` aux 0 (a `static_cast` from `cv void *` to `cv T *`
+  outside `std::allocator<T>::allocate`) succeeds for null and when the
+  type the `void *`'s tag records is similar to `T` ([conv.qual]/2,
+  `Types::similar`: equal but for the cv-qualifiers at each pointer or
+  array level), as clang's check of `Designator.getType`; otherwise
+  "cast from 'void *' is not allowed in a constant expression because
+  the pointed object type 'U' is not similar to the target type 'T'". So
+  a `void *` made from a base subobject, a first member or an array is
+  not the derived object, the enclosing object or the first element. An
+  untagged `void *` succeeds when the allocation has a `T` subobject at
+  its address (`expr.static.cast/p2738-void-cast-designator*.cpp`).
   A placement new allocates nothing: constructing and destroying objects
   in one storage in a loop holds that storage only
   (`expr.new/p2747-placement-churn.cpp`, 100000 objects, one heap
@@ -1804,11 +1858,30 @@ a statement expression) is materialized and its parts loaded.
   division by zero (`handleFloatFloatBinOp`).
 - **`++`/`--`** step the real part only (clang `IncDecSubobjectHandler`);
   overflow notes name the element type.
-- **Rejected with the generic note**, as in clang 19: compound
-  assignment to a complex object (`CompoundAssignSubobjectHandler`), after
-  both operands are evaluated.
+- **Compound assignment** (`+= -= *= /=`, WP-380) with a complex left
+  or right operand folds as in GCC; clang 19 and 22 fail with the generic
+  note (`CompoundAssignSubobjectHandler`), and kiln deliberately accepts
+  more (its constexpr reference is GCC; nothing valid is rejected). The
+  right operand is evaluated first ([expr.assign]/1), then the left
+  object's parts are read, `E1 op E2` is computed in `ComputeResultTy`
+  exactly as the binary operator (Annex G for `*`/`/`), and the parts are
+  converted back to the left operand's element type and stored. Other
+  compound operators on complex operands are rejected by Sema.
+- **`_Complex __bf16`** (WP-380): each operation is computed in
+  `_Complex float` (the parts converted up, the float rules above) and
+  each part is rounded to bf16 once at its end, as GCC's run-time
+  `__mulsc3`/`__divsc3` and kiln's codegen compute it. This matches
+  GCC 14's folding of a single operation (it folds `*`/`/` correctly
+  rounded with MPC, the binary32 result for bf16 operands but in rare
+  cancellation cases). Two documented differences: GCC keeps bf16
+  intermediates of one expression in float (excess precision, for scalar
+  `__bf16` too) where kiln rounds every operation, as clang does for
+  scalars; and clang's evaluator, which reaches bf16 complex values only
+  through `__builtin_complex`, rounds each partial product. For `float`
+  and wider elements kiln keeps clang's Annex G formula, where GCC
+  rounds correctly with MPC (an open question for M6).
 - Tests: `tests/conformance/ext.complex/constexpr.cpp`,
-  `imaginary.cpp`.
+  `imaginary.cpp`, `compound-assign.cpp`, `complex-bf16-rounding.cpp`.
 
 ### Exceptions — Landed (WP-357, WP-368)
 P3068 (C++26, `__cpp_constexpr_exceptions` 202411L): a throw-expression,
@@ -1833,7 +1906,7 @@ follow clang trunk's P3068 branch.
   (`expr.throw/constexpr-throw-ctor-throws.cpp`, a 10000-round loop
   under `oven:` budgets).
   `throw;` is `Throw` aux 1 (the innermost handled exception; none:
-  "rethrow with no active exception").
+  "there is no active exception to rethrow").
 - A try-block executes `TryEnter [handler]`, which pushes a handler
   marker onto the cleanup stack (`Cleanup::func == TRY_MARK`, `this` =
   the handler pc), and pops it with the destructions registered inside
@@ -1847,9 +1920,9 @@ follow clang trunk's P3068 branch.
   `Excs::base` for its duration, so a nested evaluation (a
   `static_assert` in a member instantiated by `ensure_body` while the
   outer evaluation unwinds or is in a handler) has nothing to rethrow
-  ("rethrow with no active exception"), counts no uncaught exception,
-  and may throw without "throw while another exception is already
-  active"; an exception escaping it is uncaught in it
+  ("there is no active exception to rethrow"), counts no uncaught
+  exception, and may throw without "exception thrown out of an object
+  destructor while unrolling another exception"; an exception escaping it is uncaught in it
   (`except.handle/constexpr-nested-evaluation.cpp`). Every frame it leaves is checked first: a
   non-throwing function ([except.spec], `SemaBridge::is_nothrow`,
   resolving a deferred specification) ends the evaluation with
@@ -1871,12 +1944,18 @@ follow clang trunk's P3068 branch.
   public base (`dst` = the (sub)object's address; a by-value handler
   copies it); aux 2 a pointer handler: `nullptr_t` to any pointer, the
   same type, a qualification conversion, a conversion to `void *`
-  (object pointers only), or to an unambiguous public base. A virtual
-  base is reached through the thrown pointer's complete object
-  (`Types::has_complete_object`); a pointer to a base-class subobject
-  whose most derived object holds the virtual base is not yet evaluated
-  ("subexpression not valid in a constant expression"; follow-up)
-  (`except.handle/constexpr-catch-virtual-base-ptr.cpp`).
+  (object pointers only), or to an unambiguous public base. A base
+  that is (in) a virtual base is reached through the most derived object
+  of the thrown pointer's (sub)object ([class.mi]/4, `Oven::vbase_ptr`):
+  the object model locates it (`base_owner`: the complete object, member
+  or array element one of whose subobjects of the pointer's class the
+  pointer designates), and the base's offset is that object's virtual
+  base's plus the base's non-virtual offset in it
+  (`except.handle/constexpr-catch-virtual-base-ptr.cpp`,
+  `constexpr-catch-virtual-base-ptr-subobject.cpp`). A pointer the model
+  cannot place (a subobject of a virtual base of an enclosing object,
+  which no constant evaluation creates before P3533) is "subexpression
+  not valid in a constant expression".
   A `const T&` handler
   with `T` a pointer type matches as aux 2 and binds to a temporary
   holding the converted pointer; any other reference handler of pointer
@@ -1891,16 +1970,18 @@ follow clang trunk's P3068 branch.
   leak and a loop that throws and catches keeps a flat heap (the WP-060
   reclaim rule; `expr.throw/constexpr-throw-churn.cpp` runs a throwing
   loop under the harness `mem<=512` limit).
-- An exception escaping a destructor run by unwinding is "throw while
-  another exception is already active", with "currently active exception
-  thrown here" at the first throw.
+- An exception escaping a destructor run by unwinding is "exception
+  thrown out of an object destructor while unrolling another exception"
+  (the P3068 branch's wording), with "currently active exception thrown
+  here" at the first throw (kiln's addition).
 - An exception that leaves the evaluation (no marker of this evaluation)
   fails it, worded as clang's P3068 branch (`notes::uncaught_note`):
   "unhandled exception: W" at the throw-expression, `W` the `what()`
   string of a class derived from `std::exception` (evaluated silently
   through a virtual call); else, or when that call is not constant,
-  "unhandled exception of type 'T' thrown from here" at the operand for
-  a type holding no data, and "unhandled exception of type 'T' with
+  "unhandled exception of type 'T' thrown from here" at the operand when
+  `T` has size 1 (an empty class, a `char`, a class of one `char`: the
+  branch's `getTypeSizeInChars(T).isOne()`), and "unhandled exception of type 'T' with
   content V thrown from here" otherwise, `V` the value as every other
   note prints it (`12`, `{4}`, `1.500000e+00`). The libc++ 22 `std::exception` constructors and `what()` are not
   `constexpr`, so with the library headers only user exception classes
@@ -1939,9 +2020,7 @@ reference handler of pointer type requires the same type, [except.handle]/3.1);
 a function pointer is not caught by `void *` ([conv.ptr]/2 converts
 object pointers only); a constructor's handler rethrows at its end;
 an uncaught exception's content is printed as every Oven note prints a
-value (a class as `{4}`); the branch's "thrown from here" form without
-content is used for a type that holds no data, where the branch uses it
-for a type of size 1.
+value (a class as `{4}`).
 
 ### Unknown references — Landed (WP-357)
 P2280 (C++23 [expr.const]/10, a DR applied from C++23 on, as clang 20+;

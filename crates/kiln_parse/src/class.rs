@@ -1134,13 +1134,13 @@ impl Parser<'_, '_> {
             && d.virt_final.is_none()
             && d.virt_override.is_none()
         {
-            // `void f() [[a]];`: the function type's (not yet checked).
-            if self.at_attr() {
-                self.parse_attributes(&mut d.attrs);
-            }
-        } else {
-            self.parse_member_tail_attrs(&mut d.attrs);
+            // `void f() [[a]];`: the function type's (not yet checked),
+            // parsed with the function declarator in clang
+            // (`ParseFunctionDeclarator`), so only a C++11 specifier-seq
+            // right after it; one after the GNU attributes is reported.
+            self.parse_cxx11_attr_seq(&mut d.attrs);
         }
+        self.parse_member_tail_attrs(&mut d.attrs);
         // GNU attributes (closed by `))`) extend the declarator's range;
         // C++11 ones (`]]`) do not (clang `MaybeParseGNUAttributes(D)`).
         if self.gnu_attr_end != Loc::INVALID {
@@ -1218,6 +1218,24 @@ impl Parser<'_, '_> {
     /// The type named by a member declaration's decl-specifiers, formed
     /// once the first declarator is known: clang reports a missing type
     /// specifier at its name.
+    /// clang forms each member declarator's type anew: a decl-specifier
+    /// error is repeated per declarator ([`Parser::repeat_declspec_errors`])
+    /// and every later declarator without a type is reported
+    /// (`static y, z;`).
+    fn repeat_member_declspec_errors(
+        &mut self,
+        ds: &DeclSpec,
+        d: &Declarator,
+        first: bool,
+        restrict_error: &mut Option<(Loc, QualType)>,
+    ) {
+        self.repeat_declspec_errors(restrict_error, first);
+        let untyped = !ds.has_type_specifier() && !ds.invalid;
+        if !first && untyped && !d.invalid && d.special.is_none() {
+            self.s.error(DiagId::parse_missing_type_specifier, d.name_loc());
+        }
+    }
+
     fn member_base_type(&mut self, ds: &DeclSpec, d: &Declarator) -> QualType {
         if !ds.has_type_specifier() && is_deduction_guide(d) {
             self.s.plain_auto_type()
@@ -1359,17 +1377,6 @@ impl Parser<'_, '_> {
         self.s.end_delayed_deprecation_to(level, None);
     }
 
-    /// Records where the declarator of member function `target` (one
-    /// without a body) ends, when it has a known end.
-    fn record_declarator_end(&mut self, target: Option<DeclId>, d: &Declarator) {
-        if let Some(f) = target
-            && d.end != Loc::INVALID
-            && self.s.ast.decls.function(f).is_some_and(|x| x.body.is_none())
-        {
-            let _ = self.s.ast.decls.cold.declarator_end.insert(f, d.end);
-        }
-    }
-
     fn parse_member_declaration_inner(&mut self) {
         let tmpl_kind = self.template_decl_kind.take();
         if !self.stack_ok() || self.parse_member_declaration_leader() {
@@ -1417,18 +1424,11 @@ impl Parser<'_, '_> {
             if !self.at(Punct::Colon) {
                 self.parse_declarator(&mut d);
                 self.parse_trailing_requires(&mut d);
-                let e = self.prev_lo();
-                d.end = if e == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { e };
+                self.set_declarator_end(&mut d);
             }
             let parts = mem::take(&mut self.late_fn);
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
-            self.repeat_declspec_errors(&mut restrict_error, first);
-            // clang forms each member declarator's type anew: every one
-            // without a type is reported (`static y, z;`).
-            let untyped = !ds.has_type_specifier() && !ds.invalid;
-            if !first && untyped && !d.invalid && d.special.is_none() {
-                self.s.error(DiagId::parse_missing_type_specifier, d.name_loc());
-            }
+            self.repeat_member_declspec_errors(&ds, &d, first, &mut restrict_error);
             let is_fn = d.is_function_declarator();
             let (has_width, width_failed) =
                 self.parse_member_declarator_tail(&mut d, ds.friend.is_some());
@@ -2228,6 +2228,8 @@ impl Parser<'_, '_> {
                         | Kw::Float32
                         | Kw::Float64
                         | Kw::StdFloat128
+                        | Kw::Float32x
+                        | Kw::Float64x
                         | Kw::Bf16
                         | Kw::Fp16
                         | Kw::Bool
