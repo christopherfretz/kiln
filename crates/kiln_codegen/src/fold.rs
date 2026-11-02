@@ -440,8 +440,10 @@ impl Collect<'_> {
                 }
             }
             // clang `EmitBuiltinExpr` first tries the call as a constant.
-            ExprKind::CallExpr if crate::builtins::is_fold_candidate(ast, e) => {
-                self.out.push(e);
+            ExprKind::CallExpr => {
+                if crate::builtins::is_fold_candidate(ast, e) {
+                    self.out.push(e);
+                }
                 self.out.extend(crate::builtins::folded_arg(ast, e));
             }
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.

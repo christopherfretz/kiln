@@ -347,6 +347,17 @@ pub(crate) mod bi {
     pub const OVERFLOW: u32 = 21;
     /// sub flag of `OVERFLOW`: produce the wrapped result.
     pub const VALUE: u32 = 32;
+    // WP-282.
+    /// `__builtin_object_size` / `__builtin_dynamic_object_size` of the
+    /// pointer `a` with type `b` (0-3) and `t1` the statically designated
+    /// type (or [`DYN`]): the bytes from `a` to the end of its complete
+    /// object (types 0/2) or of the closest subobject of type `t1` (types
+    /// 1/3); 0 past the end (clang `tryEvaluateBuiltinObjectSize`). With
+    /// [`SIDE`], the operand has side effects and is not evaluated: the
+    /// default -1 (types 0/1) or 0 (types 2/3).
+    pub const OBJECT_SIZE: u32 = 22;
+    /// sub flag of `OBJECT_SIZE`: the operand has side effects.
+    pub const SIDE: u32 = 1;
     /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
     /// bytes.
     pub const WCHAR: u32 = 2;

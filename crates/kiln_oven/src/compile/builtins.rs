@@ -141,6 +141,7 @@ fn is_rounding(b: u32) -> bool {
             | id::FMA
             | id::FMAF
             | id::FMAL
+            | id::ROUNDEVENF128
     )
 }
 
@@ -203,6 +204,9 @@ impl Compiler<'_> {
         let op = |s: &mut Self, k: u32, sub: u32, r: [u32; 3], t: [u32; 2], loc| {
             s.emit_site(Op::Builtin, k | sub << 8, &[dst, r[0], r[1], r[2], t[0], t[1]], e, loc);
         };
+        // WP-282: a `__float128` builtin with a `long double` twin
+        // evaluates as the twin (the operand types pick the format).
+        let bid = id::f128_twin(bid).unwrap_or(bid);
         match bid {
             id::CONSTANT_P => {
                 let x = arg(0)?;
@@ -389,6 +393,24 @@ impl Compiler<'_> {
             id::EXPECT | id::EXPECT_WITH_PROBABILITY => self.rv_into(arg(0)?, dst),
             // clang: the assumption is not evaluated.
             id::ASSUME => self.konst(dst, 0),
+            // WP-282: the pointer (the offset is evaluated); the Oven
+            // tracks no allocation alignment, so the assumption is not
+            // checked (spec/oven.md "Divergences").
+            id::ASSUME_ALIGNED => {
+                self.rv_into(arg(0)?, dst);
+                if let Some(o) = arg(2) {
+                    self.rv(o);
+                }
+            }
+            id::OBJECT_SIZE | id::DYNAMIC_OBJECT_SIZE => {
+                let (p, t) = (arg(0)?, arg(1)?);
+                let ast = self.ast();
+                let side = has_side_effects(ast, p);
+                let ty = designator_type(ast, p).map_or(bi::DYN, |q| self.ty(q).0);
+                let b = self.rv(t);
+                let a = if side { b } else { self.rv(p) };
+                op(self, bi::OBJECT_SIZE, u32::from(side) * bi::SIDE, [a, b, dst], [ty, 0], begin);
+            }
             // As `::operator new`/`delete` (spec/oven.md "Transient
             // allocation").
             id::OPERATOR_NEW => return Some(self.global_alloc_call(e, true, args)),
@@ -423,7 +445,13 @@ impl Compiler<'_> {
             // clang evaluates no `va_list` operation.
             | id::VA_START
             | id::VA_END
-            | id::VA_COPY => self.trap_loc(begin, INVALID.into()),
+            | id::VA_COPY
+            // WP-282: nor `powi`, `copysignf16`, nor `verbose_trap`.
+            | id::POWI
+            | id::POWIF
+            | id::POWIL
+            | id::COPYSIGNF16
+            | id::VERBOSE_TRAP => self.trap_loc(begin, INVALID.into()),
             // The libm functions and the rounding intrinsics.
             _ if id::is_libm(bid) || is_rounding(bid) => self.trap_loc(begin, INVALID.into()),
             // WP-171: clang constant-evaluates no coroutine builtin.
