@@ -178,7 +178,7 @@ impl Sema<'_, '_> {
         let v = self.builder().var(h, ty, spec, None);
         let _ = self.builder().set_decomposition(v, &bindings);
         self.lambda_mangle.var = Some(v);
-        if invalid || self.register_at_file_scope(ds, d) {
+        if invalid || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         let _ = self.finish_template_pattern(v);
