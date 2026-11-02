@@ -562,8 +562,15 @@ impl Sema<'_, '_> {
             .map(|&p| self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR))
             .collect();
         let depth = self.ast.templates.param_list(params).depth + 1;
-        let shape =
-            GuideShape { ret, cparams: &cparams, ptys: &ptys, variadic, explicit, depth, implicit: true };
+        let shape = GuideShape {
+            ret,
+            cparams: &cparams,
+            ptys: &ptys,
+            variadic,
+            explicit,
+            depth,
+            implicit: true,
+        };
         let f = self.guide_function(ctx, name, loc, &shape);
         if let Some(r) = ctor.and_then(|c| self.ast.templates.trailing_requires.get(c).copied()) {
             let _ = self.ast.templates.trailing_requires.insert(f, r);
@@ -1343,13 +1350,7 @@ impl Sema<'_, '_> {
     /// an element that is an expansion (`T...` of `tuple<T..., U>`, whose
     /// list is otherwise a non-deduced context), probed by deducing it
     /// from itself.
-    fn params_named(
-        &mut self,
-        args: &[TemplateArg],
-        depth: u16,
-        n: usize,
-        loc: Loc,
-    ) -> Vec<bool> {
+    fn params_named(&mut self, args: &[TemplateArg], depth: u16, n: usize, loc: Loc) -> Vec<bool> {
         use crate::templ::deduce::{DeducedArgs, Tdk};
         let mut elems = Vec::new();
         for &a in args {

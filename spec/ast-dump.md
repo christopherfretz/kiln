@@ -515,7 +515,9 @@ Normative. The order and placement are clang 19's.
   there in full.
 - A template's specializations print under its first declaration not
   introduced by a friend declaration (else its first declaration), as
-  clang does (WP-121). A friend redeclaration of a template prints
+  clang does (WP-121). Every other redeclaration that a friend
+  declaration did not introduce lists each of them as a reference line
+  (WP-311). A friend redeclaration of a template prints
   `friend` / `friend_undeclared` only when the friend declaration
   introduced it directly.
 - `ClassTemplateSpecializationDecl <tag> <name> [definition]

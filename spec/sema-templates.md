@@ -3739,9 +3739,15 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
 - The shadow check does not cover function parameters. Kiln emits a
   plain error where clang emits the ExtWarn
   `-Wstrict-primary-template-shadow`.
-- Inherited defaults are not recorded on the redeclaration's
-  parameters. A class-template forward redeclaration creates no new
-  decl, so chained default checks are partial.
+- Each class template redeclaration is its own `ClassTemplateDecl`
+  (with its own parameter list and pattern record) linked into the
+  chain, as clang's (WP-311). `merge_template_defaults` gives every
+  redeclaration's parameters the defaults of the others, but in
+  `Sema::inherited_defaults`, not on the AST: the dump prints no
+  `inherited from`. `check_template_param_list` takes the location of a
+  repeated default from whichever earlier redeclaration gave it.
+  `tests/conformance/temp.class/redeclaration-diags.cpp`,
+  `tests/conformance/temp.class/redeclaration-ast.cpp`.
 - A template template parameter's inner list is not order-checked.
 - A template template parameter's own default template arguments
   ([temp.param]/14, [temp.arg.template]) complete `TT<args>` when the
@@ -3754,11 +3760,12 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   pack expansion.
   `tests/conformance/temp.param/template-template-param-own-defaults.cpp`.
 - The arity note (`template is declared here`) names the latest
-  declaration, as name lookup finds it: a class template redeclaration
-  after the definition creates no decl, so its name location is recorded
-  in `templ.class_redecl_loc`, keyed by the latest decl at the time
-  (`diag_template_arity`;
+  declaration, as name lookup finds it (`diag_template_arity`;
   `tests/conformance/temp.arg.general/arity-note-latest-redeclaration.cpp`).
+- The injected-class-name type `X<P...>` names the parameters of the
+  first declaration, even inside a definition that renamed them (clang
+  caches it in the chain's common data); a first declaration made by a
+  friend declaration defers to the definition's.
 - `TT<args>` for a template template parameter `TT` checks only the arity
   against `TT`'s own list (`check_ttp_arity`: "too few/many template
   arguments for template template parameter 'TT'", note at `TT`); a pack
