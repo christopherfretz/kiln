@@ -107,7 +107,12 @@ impl Compiler<'_> {
         if let Some(v) = var {
             if by_ref {
                 self.locals.insert(v, Local::Mem(dst));
-            } else if aux == 2 && self.ast().types.is_reference(self.ast().decls.get(v).ty().unwrap_or(kiln_ast::QualType::INT)) {
+            } else if aux == 2
+                && self
+                    .ast()
+                    .types
+                    .is_reference(self.ast().decls.get(v).ty().unwrap_or(kiln_ast::QualType::INT))
+            {
                 // `const T&` to a converted pointer: bound to a temporary
                 // holding the converted value.
                 let p = self.reg();

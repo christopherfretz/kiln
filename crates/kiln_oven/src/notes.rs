@@ -837,7 +837,9 @@ impl Oven {
         let mut v = String::new();
         match what {
             Some(w) => v.push_str(w),
-            None if self.types.is_aggregate(ty) => self.write_value(ast, &mut v, ty, u128::from(obj), 0),
+            None if self.types.is_aggregate(ty) => {
+                self.write_value(ast, &mut v, ty, u128::from(obj), 0);
+            }
             None => match self.load(obj, ty, ak::READ) {
                 Ok(x) => self.write_value(ast, &mut v, ty, x, 0),
                 Err(_) => v.push_str("<unknown>"),

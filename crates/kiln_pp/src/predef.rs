@@ -151,9 +151,9 @@ const CLANG22_AARCH64: &[(&str, &str)] = &[
 /// C++ at every compatibility level.
 const KILN_FEATURES: &[(u64, &str, &str)] = &[
     // P2747 constexpr placement new (WP-357).
-    (202400, "__cpp_constexpr", "202406L"),
+    (202_400, "__cpp_constexpr", "202406L"),
     // P3068 constexpr exceptions (WP-357); withdrawn with -fno-exceptions.
-    (202400, "__cpp_constexpr_exceptions", "202411L"),
+    (202_400, "__cpp_constexpr_exceptions", "202411L"),
 ];
 
 /// The driver-injected `-D` that clang's driver appends after the user's

@@ -483,7 +483,11 @@ impl Oven {
     /// The subobjects of a complete `cls` object: offset, class (type and
     /// first declaration) and whether it is polymorphic, the object itself
     /// first.
-    pub(crate) fn sub_list(&mut self, b: &mut dyn SemaBridge, cls: OTy) -> Vec<(u64, OTy, DeclId, bool)> {
+    pub(crate) fn sub_list(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        cls: OTy,
+    ) -> Vec<(u64, OTy, DeclId, bool)> {
         let i = self.poly_info(b, cls) as usize;
         self.virt.infos[i].subs.iter().map(|s| (s.off, s.cls, s.decl, s.poly)).collect()
     }

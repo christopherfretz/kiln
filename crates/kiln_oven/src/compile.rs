@@ -610,8 +610,10 @@ impl Oven {
         if ast.stmts.get(body).kind() == StmtKind::CXXTryStmt {
             // A function-try-block ([except.pre]/4). Its handlers do not
             // cover the mem-initializers (spec/oven.md "Exceptions").
-            let cdtor =
-                matches!(ast.decls.get(def).kind(), DeclKind::CXXConstructor | DeclKind::CXXDestructor);
+            let cdtor = matches!(
+                ast.decls.get(def).kind(),
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor
+            );
             c.try_stmt(body, cdtor);
         } else {
             c.stmt(body);

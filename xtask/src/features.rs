@@ -546,7 +546,8 @@ mod tests {
         cell.kiln = Some("202411L".into());
         let name = cell.name.clone();
         let defs = parse_predefs(&format!("#define {name} 202411L\n"));
-        assert!(check_static(std::slice::from_ref(&ahead), |_| true, &defs).is_empty());
+        let none: Vec<_> = Vec::new();
+        assert_eq!(check_static(std::slice::from_ref(&ahead), |_| true, &defs), none);
         let stale = parse_predefs(&format!("#define {name} 202403L\n"));
         let p = check_static(&[ahead], |_| true, &stale);
         assert!(p[0].1.iter().any(|m| m.contains("stale kiln column")), "{p:?}");

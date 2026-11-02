@@ -252,7 +252,13 @@ impl Oven {
                     self.free_exc(e.obj, e.ty)?;
                     return Ok(None);
                 }
-                self.cleanups.push(Cleanup { this: e.obj, ty: e.ty, func: EXC_FREE, pc: c.pc, depth });
+                self.cleanups.push(Cleanup {
+                    this: e.obj,
+                    ty: e.ty,
+                    func: EXC_FREE,
+                    pc: c.pc,
+                    depth,
+                });
                 Ok(Some(Cleanup { this: e.obj, ty: e.ty, func: e.dtor, pc: c.pc, depth }))
             }
             EXC_FREE => {
@@ -264,9 +270,12 @@ impl Oven {
     }
 
     fn free_exc(&mut self, obj: u64, ty: OTy) -> Result<(), Fault> {
-        self.mem
-            .heap_free(obj, DynKind::New, Some(ty), &self.types)
-            .map_err(|f| Fault::Mem { f, ak: ak::READ, ty, p: obj })
+        self.mem.heap_free(obj, DynKind::New, Some(ty), &self.types).map_err(|f| Fault::Mem {
+            f,
+            ak: ak::READ,
+            ty,
+            p: obj,
+        })
     }
 
     /// Whether the function at index `f` is non-throwing ([except.spec]).
@@ -307,8 +316,8 @@ impl Oven {
 
     fn catch_ptr(&mut self, b: &mut dyn SemaBridge, e: Exc, t: OTy) -> Result<Option<u128>, Fault> {
         match (self.types.kind(e.ty), self.types.kind(t)) {
-            (TyKind::NullPtr, TyKind::Ptr(_) | TyKind::MemPtr { .. }) => return Ok(Some(0)),
-            _ if e.ty == t => return self.load(e.obj, e.ty, ak::READ).map(Some),
+            (TyKind::NullPtr, TyKind::Ptr(_) | TyKind::MemPtr { .. }) => Ok(Some(0)),
+            _ if e.ty == t => self.load(e.obj, e.ty, ak::READ).map(Some),
             (TyKind::Ptr(ept), TyKind::Ptr(tpt)) => {
                 let ast = b.ast();
                 let (eq, tq) = (self.types.info(e.ty).q, self.types.info(t).q);
@@ -339,7 +348,11 @@ impl Oven {
                     return Err(Fault::Invalid);
                 }
                 let raw = v as u64;
-                Ok(Some(u128::from(Ptr::with_off(raw, u64::from(Ptr::decode(raw).off) + off, false))))
+                Ok(Some(u128::from(Ptr::with_off(
+                    raw,
+                    u64::from(Ptr::decode(raw).off) + off,
+                    false,
+                ))))
             }
             _ => Ok(None),
         }
