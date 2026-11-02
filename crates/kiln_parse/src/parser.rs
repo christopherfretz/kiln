@@ -68,6 +68,10 @@ struct Replay {
 
 /// A recursive-descent parser over the preprocessor's token stream,
 /// driving [`Sema`].
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent parse-state flags, as clang's Parser"
+)]
 pub struct Parser<'a, 'sm> {
     /// Semantic analysis.
     pub(crate) s: Sema<'a, 'sm>,

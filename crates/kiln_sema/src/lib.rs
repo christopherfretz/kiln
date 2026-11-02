@@ -925,8 +925,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         if found.is_empty() {
             return false;
         }
-        let (now, keep): (Vec<HeldTypo>, Vec<HeldTypo>) =
-            std::mem::take(&mut self.delayed_typos).into_iter().partition(|t| found.contains(&t.expr));
+        let (now, keep): (Vec<HeldTypo>, Vec<HeldTypo>) = std::mem::take(&mut self.delayed_typos)
+            .into_iter()
+            .partition(|t| found.contains(&t.expr));
         self.delayed_typos = keep;
         for t in now {
             self.emit(t.diag);
