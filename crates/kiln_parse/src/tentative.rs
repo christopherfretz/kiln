@@ -378,6 +378,11 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 *invalid = true;
                 Tpr::Ambiguous
             }
+            Some((end, NameClass::Undeclared, _))
+                if end > self.i + 1 && self.p.unresolved_scope_name(self.i) =>
+            {
+                Tpr::Ambiguous
+            }
             Some((end, NameClass::Undeclared, sym))
                 if end == self.i + 1
                     && !self.declared.contains(&sym)
@@ -1062,7 +1067,34 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         if self.dependent_template_id_name() {
             return false;
         }
-        let r = self.decl_specifier(Tpr::False);
+        // `S::name(e);`, `S::name *g;` with `name` not found in the
+        // non-dependent scope `S`: clang's `ANK_Unresolved`, ambiguous
+        // because `isCXXSimpleDeclaration` tracks `InvalidAsDeclaration`;
+        // the declarator decides.
+        let r = if self.p.unresolved_scope_name(self.i) {
+            // clang's `TryParseSimpleDeclaration` annotates a name after
+            // it that is a non-type (or undeclared before `(`,
+            // `NC_UndeclaredNonType`), which no declarator accepts:
+            // `S::pn y(e);` and `S::pn yv;` are expressions.
+            let end = self.p.scan_name(self.i).map_or(self.i, |n| n.0);
+            let non_type = match self.p.scan_name(end) {
+                Some((e2, NameClass::Undeclared, sym)) => {
+                    e2 == end + 1
+                        && !self.declared.contains(&sym)
+                        && self.punct_at(e2) == Some(Punct::LParen)
+                }
+                Some((e2, NameClass::Value(_) | NameClass::FunctionTemplate(_), _)) => {
+                    e2 == end + 1
+                }
+                _ => false,
+            };
+            if non_type {
+                return false;
+            }
+            Tpr::Ambiguous
+        } else {
+            self.decl_specifier(Tpr::False)
+        };
         if r != Tpr::Ambiguous {
             return r != Tpr::False;
         }
@@ -1073,17 +1105,18 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
 }
 
 impl Parser<'_, '_> {
-    /// `Q::name ident` at the start of a statement, where the qualifier
+    /// `Q::name ...` at the start of a statement, where the qualifier
     /// `Q` failed and was diagnosed (a class template specialization
     /// that is undefined or failed to instantiate, [temp.inst]/2): the
-    /// name is an error name (clang's `ClassifyName` `NC_Error`), and the
-    /// statement is skipped without further diagnostics.
+    /// name is an error name (clang's `ClassifyName` `NC_Error`, so
+    /// `isCXXDeclarationSpecifier` is `Error` whatever follows:
+    /// `Q::name *g;` declares nothing more), and the statement is
+    /// skipped without further diagnostics.
     pub(crate) fn at_failed_scope_declaration(&mut self) -> bool {
         self.annotate_decltype_scope_here();
         let i = self.pos();
         self.decltype_scope_qual_at(i) == Some(Err(()))
             && self.ident_of(self.tok_at(i + 1)).is_some()
-            && self.ident_of(self.tok_at(i + 2)).is_some()
     }
 
     /// [stmt.ambig]: whether the statement at the current token (after

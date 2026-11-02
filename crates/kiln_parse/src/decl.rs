@@ -978,6 +978,23 @@ impl Parser<'_, '_> {
                 let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
                 true
             }
+            // `S::name d` with `S` a non-dependent class or namespace
+            // that has no `name`, where only a type can be: "no type
+            // named 'name' in 'S'" (clang `DiagnoseUnknownTypeName`). At
+            // block scope the statement disambiguation chose a
+            // declaration already (`S::name(e);`, `S::name *g;`).
+            Some((end, NameClass::Undeclared, _))
+                if end > start + 1
+                    && self.unresolved_scope_name(start)
+                    && (ctx == DeclaratorContext::Block || self.unknown_type_follows(end, ctx)) =>
+            {
+                if let Ok(Some(q)) = self.parse_nested_name_nns() {
+                    let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
+                }
+                ds.invalid = true;
+                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
+                true
+            }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
                 if !self.unknown_type_follows(end, ctx) {
                     return false;

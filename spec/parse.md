@@ -906,11 +906,29 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   after expression` at the end of the expression, and nothing is skipped:
   the next statement starts at the current token (clang's
   `ExpectAndConsumeSemi`), so `X<U>::m d, e;` goes on to report `d` and `e`.
-  A statement `Q::name ident` whose class template specialization
+  A statement `Q::name ...` whose class template specialization
   qualifier `Q` is undefined or failed to instantiate (diagnosed when the
-  qualifier was parsed ahead) is neither: it is skipped to `;` silently
+  qualifier was parsed ahead) is neither, whatever follows the name
+  (`Q::name *g;`, `Q::name & r;`): it is skipped to `;` silently
   and declares nothing (clang's `ClassifyName` `NC_Error`,
   `at_failed_scope_declaration`).
+  A statement `S::name ...` with `S` a non-dependent class or namespace
+  (or `::`) that has no `name` (`unresolved_scope_name`, clang's
+  `ANK_Unresolved` after a scope) is decided by the declarator
+  (`is_simple_declaration`, WP-300): `S::name(e);`, `S::name *g;`,
+  `S::type d;` are declarations whose decl-specifier reports `no type
+  named 'name' in 'S'` (`in namespace 'N'`, `in the global namespace`;
+  `parse_type_name_spec`), and `S::name = 1;` is an expression (`no
+  member named`). An identifier after the name that is a non-type, or
+  undeclared before `(`, makes it an expression (clang annotates it,
+  and no declarator accepts the annotation): `S::pn y(e);`. Deviation:
+  clang delays the `no member named` of such an expression to the end
+  of the full-expression (typo correction), so it follows the `expected
+  ';'`; kiln reports it first. The same decl-specifier rule applies at
+  namespace scope (`N::gt gv;`) and in a parameter clause, where the
+  name is ambiguous (`param_decl_specifier`: `void a1(S::pn);` declares
+  a function)
+  (`tests/conformance/stmt.ambig/qualified-unresolved-name.cpp`).
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed
