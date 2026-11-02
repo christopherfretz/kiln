@@ -191,6 +191,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `&&`/`||`/`!`/`?:` conditions into branches and folds constants;
   - bit-fields load the storage unit, then `shl`/`ashr` (signed) or
     `lshr`/`and` (unsigned); stores mask, clear and `or` into the unit;
+  - a constructor's initialization of a bit-field member (a mem-init
+    or a default member initializer `bool b : 1 {false};`,
+    [class.base.init]/9) is stored through the storage unit the same
+    way: `field_lvalue_init` defers a bit-field to `field_lvalue`, as
+    clang `EmitLValueForFieldInitialization` does (WP-286;
+    `tests/codegen/bitfield_member_init.cpp`,
+    `tests/conformance/class.base.init/bitfield-default-member-init-run.cpp`);
   - `++`/`--` on bool, integers, floats and pointers, including bit-fields.
 - Calls:
   - a call site gets `nounwind` only when the callee's prototype is
@@ -279,11 +286,15 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
       call site too). The library function and a program's own
-      `extern "C" double pow(double, double)` (separate declarations to
-      sema) share one `@pow` in either order, by the same-type reuse of a
-      mangled name above, never a uniqued `@pow.1` (WP-288;
+      declaration of it (`extern "C" double pow(double, double)`, or
+      `strlen` after `__builtin_strlen`; separate declarations to sema)
+      share one `@pow` / `@strlen` in either order, by the same-type reuse
+      of a mangled name above, never a uniqued `@pow.1` / `@strlen.1` that
+      no library defines (WP-288, WP-286;
       `tests/codegen/lib_builtin_shared_decl.cpp`,
-      `tests/conformance/dcl.link/libcxx-pow-run.cpp`).
+      `tests/codegen/builtins_lib_redecl.cpp`,
+      `tests/conformance/dcl.link/libcxx-pow-run.cpp`,
+      `tests/conformance/expr.const/builtins-lib-redecl-run.cpp`).
     - checked arithmetic (WP-270, clang `EmitBuiltinExpr`;
       `checked.rs`): the typed forms call `llvm.{s,u}{op}.with.overflow`
       at the parameter type and store the value at the result pointer's

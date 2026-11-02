@@ -2134,10 +2134,17 @@ impl Cg<'_> {
         let ast = self.ast;
         let rd = ast.decls.get(field).ctx().expect("field parent");
         let rty = self.record_ty(rd);
-        let (is_union, idx) = {
+        let (is_union, idx, bitfield) = {
             let r = self.tys.record(rd);
-            (r.is_union, r.field_index.get(&field).copied())
+            (r.is_union, r.field_index.get(&field).copied(), r.bitfields.contains_key(&field))
         };
+        if bitfield {
+            // clang `EmitLValueForFieldInitialization` defers every
+            // non-reference field to `EmitLValueForField`: a bit-field is
+            // stored through its storage unit (a constructor's default
+            // member initializer `bool b : 1 {false};`, [class.base.init]/9).
+            return self.field_lvalue(base, field, q);
+        }
         let ty = self.mty(q);
         if is_union {
             return Ok(LV {
