@@ -1961,7 +1961,7 @@ impl Compiler<'_> {
             self.stmt(i);
         }
         if let Some(v) = d.cond_var {
-            self.decl(v);
+            self.decl_one(v);
         }
         let cond_ty = self.ety(d.cond);
         let (cw, cs) = match self.o.types.kind(cond_ty) {
@@ -1969,6 +1969,8 @@ impl Compiler<'_> {
             _ => (8, false),
         };
         let c = self.rv(d.cond);
+        // [stmt.pre]/4 (P0963): tuple-like bindings after the condition.
+        self.cond_bindings(d.cond_var);
         if nested {
             let loc = self.b.ast().stmts.get(s).loc();
             self.trap_loc(loc, "kiln: a 'case' label nested in a sub-statement of the switch body is not supported yet".into());
