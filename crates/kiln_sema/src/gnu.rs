@@ -3,8 +3,8 @@
 //! `( T ) { ... }`. Each matches clang's behaviour for C++.
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
-pub use kiln_ast::expr::OffsetofComponent;
 use kiln_ast::expr::ExprKind;
+pub use kiln_ast::expr::OffsetofComponent;
 use kiln_ast::ids::RawId;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;

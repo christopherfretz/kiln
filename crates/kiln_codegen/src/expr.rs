@@ -2431,7 +2431,10 @@ impl Cg<'_> {
         match self.swizzle_lvalue_base(e) {
             Some(b) if compose => {
                 let outer = self.swizzle_lanes(b, true)?;
-                Ok(lanes.iter().map(|&l| outer.get(l as usize).copied().unwrap_or(u32::MAX)).collect())
+                Ok(lanes
+                    .iter()
+                    .map(|&l| outer.get(l as usize).copied().unwrap_or(u32::MAX))
+                    .collect())
             }
             _ => Ok(lanes),
         }

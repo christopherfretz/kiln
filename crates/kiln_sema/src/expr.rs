@@ -2169,7 +2169,9 @@ impl Sema<'_, '_> {
             while self.ast.exprs.get(base).object_kind() == ObjectKind::VectorComponent
                 && match self.ast.exprs.get(base).kind() {
                     ExprKind::ArraySubscriptExpr => true,
-                    ExprKind::ExtVectorElementExpr => !self.ast.exprs.get(base).has(ExprFlags::ARROW),
+                    ExprKind::ExtVectorElementExpr => {
+                        !self.ast.exprs.get(base).has(ExprFlags::ARROW)
+                    }
                     _ => false,
                 }
             {

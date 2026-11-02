@@ -1806,7 +1806,6 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
-
     /// An ext-vector element access `base.accessor` or `base->accessor`
     /// (clang `ExtVectorElementExpr`): of type `ty` and value category
     /// `vk`; a glvalue designates a vector component. `base` is the
@@ -2837,7 +2836,12 @@ impl<'a> AstBuilder<'a> {
             0,
         );
         self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
-        self.ast.exprs.cold.offsetof_pattern.insert(e, (operand, comps.into())).expect("fresh expression");
+        self.ast
+            .exprs
+            .cold
+            .offsetof_pattern
+            .insert(e, (operand, comps.into()))
+            .expect("fresh expression");
         e
     }
 

@@ -1353,9 +1353,15 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             if !stop {
                 self.expect(Punct::ColonColon);
             }
-            qual = Some(
-                self.nested_name_template_id(class, qual, name, &args, template_kw, loc, head)?,
-            );
+            qual = Some(self.nested_name_template_id(
+                class,
+                qual,
+                name,
+                &args,
+                template_kw,
+                loc,
+                head,
+            )?);
             if stop {
                 break;
             }
@@ -1400,7 +1406,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     kiln_ast::types::TagKeyword::None,
                     loc,
                 );
-                self.s.act_on_nested_name_template_id(Some(pn), c, ty, template_kw, head).ok_or(())?
+                self.s
+                    .act_on_nested_name_template_id(Some(pn), c, ty, template_kw, head)
+                    .ok_or(())?
             }
             _ => {
                 let text = self.s.ast.symbols().as_str(name).to_owned();
