@@ -63,6 +63,11 @@ struct GuideShape<'p> {
     explicit: bool,
     /// The dependent depth of the guide's declaration.
     depth: u16,
+    /// Not written by the user: false only for an alias template's guide
+    /// formed from a user-declared one, which keeps that guide's
+    /// precedence over implicit ones ([over.match.best.general]/2.11;
+    /// clang `buildDeductionGuide(..., F->isImplicit())`).
+    implicit: bool,
 }
 
 /// The signature of the guide of a constructor template whose template
@@ -519,6 +524,7 @@ impl Sema<'_, '_> {
                 variadic,
                 explicit,
                 depth: pl.depth + 1,
+                implicit: true,
             };
             let f = self.guide_function(ctx, name, loc, &shape);
             let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params);
@@ -556,7 +562,8 @@ impl Sema<'_, '_> {
             .map(|&p| self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR))
             .collect();
         let depth = self.ast.templates.param_list(params).depth + 1;
-        let shape = GuideShape { ret, cparams: &cparams, ptys: &ptys, variadic, explicit, depth };
+        let shape =
+            GuideShape { ret, cparams: &cparams, ptys: &ptys, variadic, explicit, depth, implicit: true };
         let f = self.guide_function(ctx, name, loc, &shape);
         if let Some(r) = ctor.and_then(|c| self.ast.templates.trailing_requires.get(c).copied()) {
             let _ = self.ast.templates.trailing_requires.insert(f, r);
@@ -651,6 +658,7 @@ impl Sema<'_, '_> {
                 variadic,
                 explicit,
                 depth: cl.depth + 1,
+                implicit: true,
             };
             let f = s.sema.guide_function(ctx, name, loc, &shape);
             // The trailing requires-clause may name the parameters.
@@ -690,7 +698,9 @@ impl Sema<'_, '_> {
         let info = FuncInfo::new().with_trailing_return(true).with_variadic(g.variadic);
         let fty = self.ast.types.function(g.ret, g.ptys, info, ExcSpec::None);
         let mut h = DeclHead::new(ctx, name, loc);
-        h.flags = DeclFlags::IMPLICIT;
+        if g.implicit {
+            h.flags = DeclFlags::IMPLICIT;
+        }
         let spec = FnSpec::new().with_variadic(g.variadic).with_explicit(g.explicit);
         let saved = self.ast.templates.dependent_depth;
         self.ast.templates.dependent_depth = u32::from(g.depth);
@@ -831,6 +841,7 @@ impl Sema<'_, '_> {
             variadic: false,
             explicit: false,
             depth,
+            implicit: true,
         };
         let saved = self.ast.templates.dependent_depth;
         let f = self.guide_function(ctx, name, loc, &shape);
@@ -1283,6 +1294,7 @@ impl Sema<'_, '_> {
                 variadic,
                 explicit: s.sema.fn_spec(f).is_explicit(),
                 depth: gl.depth + 1,
+                implicit: s.sema.ast.decls.get(f).has(DeclFlags::IMPLICIT),
             };
             let nf = s.sema.guide_function(ctx, name, loc, &shape);
             let gps2: Vec<DeclId> = s
