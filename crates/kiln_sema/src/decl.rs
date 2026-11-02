@@ -6157,6 +6157,17 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                 }
             }
+            if prev.is_none() {
+                // [namespace.def.general]/3: the name is also searched for
+                // in the inline namespace set of the enclosing namespace;
+                // a namespace found there is extended (its scope becomes
+                // the target scope; libc++'s `namespace std::ranges {`
+                // reopens `std::__1::ranges`).
+                prev = self
+                    .current_scope_with_inline_dn(DeclName::ident(n))
+                    .into_iter()
+                    .find(|&p| self.ast.decls.get(p).kind() == DeclKind::Namespace);
+            }
         } else {
             // [namespace.unnamed]/1: every unnamed namespace of a scope is
             // the same namespace.
@@ -6165,11 +6176,17 @@ impl Sema<'_, '_> {
                 n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY
             });
         }
-        let h = DeclHead::new(
-            self.ctx,
+        // The semantic context is the extended namespace's (an inline
+        // namespace of `self.ctx`, above); the lexical one is `self.ctx`.
+        let sem = prev.and_then(|p| self.ast.decls.get(p).ctx()).unwrap_or(self.ctx);
+        let mut h = DeclHead::new(
+            sem,
             name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0)),
             name.map_or(loc, |n| n.1),
         );
+        if sem != self.ctx {
+            h = h.lexical(self.ctx);
+        }
         let ns = self.builder().namespace(h, inline, prev);
         if name.is_none() && prev.is_none() {
             // ... followed by an implicit `using namespace unique;`.
@@ -6185,7 +6202,7 @@ impl Sema<'_, '_> {
     /// `}` of a namespace.
     pub fn act_on_finish_namespace(&mut self, ns: DeclId) {
         self.scopes.pop();
-        self.ctx = self.ast.decls.get(ns).ctx().unwrap_or(self.ast.tu);
+        self.ctx = self.ast.decls.lexical_ctx(ns).unwrap_or(self.ast.tu);
     }
 
     /// `extern "C"` / `extern "C++"` ([dcl.link]); `lang` is the string
