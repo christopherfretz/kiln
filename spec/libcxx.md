@@ -146,7 +146,7 @@ the set.
 `c++26`, `c++experimental`, `large_tests`, `long_tests`,
 `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`,
 `-fsized-deallocation`, `has-fconstexpr-steps`, `verify-support`,
-`libcpp-abi-version=1`,
+`libcpp-abi-version=1`, `libcpp-hardening-mode=none`,
 `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`,
 `buildhost=linux`, `linux`, `can-create-symlinks`, `has-64-bit-atomics`,
 `has-unix-headers`, `kiln`, `target=aarch64-unknown-linux-gnu`.
@@ -156,8 +156,16 @@ Some features are deliberately missing:
 - no `has-1024-bit-atomics`;
 - no `add-latomic-workaround`;
 - no `host-has-gdb`;
-- no `libcpp-hardening-mode=*`: the lit parameter is undefined, and the
-  Debian default is `none`;
+- only `libcpp-hardening-mode=none`, never `fast`, `extensive` or `debug`.
+  lit adds the feature only when its `hardening_mode` parameter is set, and
+  that parameter defaults to undefined. The set includes it anyway because
+  it describes the library that is actually installed: Debian's
+  `__config_site` defines `_LIBCPP_HARDENING_MODE_DEFAULT` as
+  `_LIBCPP_HARDENING_MODE_NONE`. `.assert.pass.cpp` death tests are gated
+  with `UNSUPPORTED: libcpp-hardening-mode=none` and are skipped, as lit
+  would skip them on this library. They cannot pass here under any compiler
+  (clang++-19 reports "child did not die" too). `REQUIRES:
+  libcpp-hardening-mode=debug` tests stay UNSUPPORTED;
 - no `-fexperimental-library`, `-faligned-allocation` or other flag-probe
   features that kiln does not implement;
 - no `no-*` features: everything libc++ can build is enabled.
