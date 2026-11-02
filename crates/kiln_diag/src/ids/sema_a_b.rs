@@ -140,6 +140,7 @@ sema_auto_var_in_own_initializer = Error (2) "variable '{0}' declared with deduc
 sema_auto_var_init_multiple_expressions = Error (2) "initializer for variable '{0}' with type {1} contains multiple expressions";
 sema_auto_var_init_no_expression = Error (2) "initializer for variable '{0}' with type {1} is empty";
 sema_auto_var_requires_init = Error (2) "declaration of variable '{0}' with deduced type {1} requires an initializer";
+sema_await_suspend_invalid_return_type = Error (1) "return type of 'await_suspend' is required to be 'void' or 'bool' (have {0})";
 sema_bad_cast_qualifiers_away = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} casts away qualifiers";
 sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
 sema_bad_cxx_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} is not allowed";

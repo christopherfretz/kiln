@@ -177,6 +177,7 @@ sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order doe
 // spec/sema-class.md §5.6).
 sema_ret_stack_addr = Warning [ReturnStackAddress] (3) "{0:address of|reference to} stack memory associated with {1:local variable|parameter} {2} returned";
 sema_return_has_expr = Error (1) "void function '{0}' should not return a value";
+sema_return_in_coroutine = Error (0) "return statement not allowed in coroutine; did you mean 'co_return'?";
 sema_return_in_ctor_handler = Error (0) "return in the catch of a function try block of a constructor is illegal";
 sema_return_init_list = Error (1) "void function '{0}' must not return a value";
 sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";
