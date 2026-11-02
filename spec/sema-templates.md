@@ -4569,6 +4569,12 @@ declarator scopes.**
   the other's prvalue type. If both directions succeed, the result is
   `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
   /6 overloaded-operator candidates are not tried.
+- *[expr.cond]/7 class prvalue result*: when the arms are a class type
+  (after /4) and not glvalues of the same category, each glvalue arm
+  copy-initializes the prvalue result (clang `PerformCopyInitialization`
+  of an `InitializeTemporary` entity), so `b ? std::move(x) : X(3)` runs
+  `X(X&&)` and moves from `x`
+  (tests/conformance/expr.cond/class-glvalue-arm-copy.cpp).
 - *Calls returning `F&&`*: a call whose result type is an rvalue
   reference to function is an lvalue ([expr.call]/14), so
   `declval<Fn>()()` is callable and `decltype` of it is `F&`.
