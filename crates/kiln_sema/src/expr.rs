@@ -730,6 +730,13 @@ impl Sema<'_, '_> {
         self.ast.decls.set_flags(f, DeclFlags::USED);
     }
 
+    /// Whether function `d` has an invalid parameter (a `void`
+    /// parameter, an erroneous default argument), which made it invalid
+    /// at its declaration.
+    pub(crate) fn invalid_by_param(&self, d: DeclId) -> bool {
+        self.param_decls(d).iter().any(|&p| self.ast.decls.get(p).has(DeclFlags::INVALID))
+    }
+
     /// [`Sema::mark_used`] for a use at `loc`: a member function of a
     /// class template specialization is instantiated ([temp.inst]/5).
     pub(crate) fn mark_used_at(&mut self, d: DeclId, loc: Loc) {
@@ -1782,7 +1789,9 @@ impl Sema<'_, '_> {
         // A reference to a function already invalid (its body failed to
         // instantiate, diagnosed then) is erroneous with no diagnostic of
         // its own (clang's `BuildDeclarationNameExpr`).
-        if n.kind().is_function() && n.has(DeclFlags::INVALID) {
+        // A function invalid only for an invalid parameter is named as
+        // usual (clang resolves its calls through an overload set).
+        if n.kind().is_function() && n.has(DeclFlags::INVALID) && !self.invalid_by_param(d) {
             return self.recover_err(&[], loc);
         }
         if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod)
@@ -2186,7 +2195,11 @@ impl Sema<'_, '_> {
 
     /// `( e )` ([expr.prim.paren]).
     pub fn act_on_paren(&mut self, e: ExprId, lparen: Loc, rparen: Loc) -> ExprId {
-        self.builder().paren(e, lparen, rparen)
+        let x = self.builder().paren(e, lparen, rparen);
+        if !self.special.pending_deleted.is_empty() {
+            self.widen_pending_template_id(e, x);
+        }
+        x
     }
 
     // -- assignment checks -------------------------------------------------------
@@ -2374,11 +2387,16 @@ impl Sema<'_, '_> {
             }
             return self.builder().dependent_unary(op, e, loc);
         }
-        match self.try_overloaded_operator(OperForm::Unary(op), &[e], &[], loc, Loc::INVALID) {
-            OperResult::Done(x) => x,
-            OperResult::Converted(v) => self.builtin_unary(op, v[0], loc),
-            OperResult::Builtin | OperResult::BuiltinNotes(_) => self.builtin_unary(op, e, loc),
+        let x =
+            match self.try_overloaded_operator(OperForm::Unary(op), &[e], &[], loc, Loc::INVALID) {
+                OperResult::Done(x) => x,
+                OperResult::Converted(v) => self.builtin_unary(op, v[0], loc),
+                OperResult::Builtin | OperResult::BuiltinNotes(_) => self.builtin_unary(op, e, loc),
+            };
+        if op == UnaryOp::AddrOf && !self.special.pending_deleted.is_empty() {
+            self.widen_pending_template_id(e, x);
         }
+        x
     }
 
     /// The built-in unary operator `op` ([expr.unary.op], [expr.pre.incr],
@@ -4026,8 +4044,15 @@ impl Sema<'_, '_> {
         // A function named directly whose definition failed to
         // instantiate when this reference odr-used it (it is now invalid):
         // the call is erroneous, undiagnosed (clang builds a
-        // `RecoveryExpr`; a member call is not affected).
-        if direct && named.is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::INVALID)) {
+        // `RecoveryExpr`; a member call is not affected). A function
+        // invalid only for an invalid parameter (an erroneous default
+        // argument) is still called: its arguments are checked
+        // ([dcl.fct.default]; clang resolves it like any other).
+        if direct
+            && named.is_some_and(|d| {
+                self.ast.decls.get(d).has(DeclFlags::INVALID) && !self.invalid_by_param(d)
+            })
+        {
             return self.recover_err(&kids, loc);
         }
         let f = match self.builtin_callee(callee) {
@@ -4077,6 +4102,12 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         }
         if let Some(d) = named {
+            // A function invalid for an invalid parameter: its arguments
+            // were checked, the call itself is erroneous and undiagnosed
+            // (not constant-evaluated).
+            if self.ast.decls.get(d).has(DeclFlags::INVALID) && self.invalid_by_param(d) {
+                return self.recover_err(&kids, loc);
+            }
             self.check_format_attr(d, &conv_args);
             self.check_absolute_value(d, callee, &conv_args);
         }

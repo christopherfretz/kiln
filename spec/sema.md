@@ -479,7 +479,16 @@ Redeclaration and linkage rules:
   default argument on parameter` error (`merge_default_args` with
   `trailing == false`); a call that would need the invalid default
   argument is then measured against the redeclaration's arity. Test:
-  `dcl.fct.default/invalid-cast-default-arg.cpp`.
+  `dcl.fct.default/invalid-cast-default-arg.cpp`. A non-template
+  function invalid only because of an invalid parameter
+  (`Sema::invalid_by_param`) is still named and called normally (WP-373;
+  clang resolves the call through its overload set): the call's
+  arguments are converted and their errors diagnosed (`m(1, {2})`
+  through an explicit constructor), and only then is the call itself
+  erroneous and silent (a recovery expression, never constant-evaluated).
+  A function invalid for another reason (its instantiated body failed)
+  keeps the earlier silent recovery. Test:
+  `dcl.fct.default/invalid-default-arg-still-callable.cpp`.
 - **`register`** ([dcl.stc]/1; removed in C++17 by P0001R1, clang's
   `ext_register_storage_class`). `register` is `ISO C++17 does not allow
   'register' storage class specifier` (`sema_register_storage_class`,
