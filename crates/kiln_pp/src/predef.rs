@@ -145,6 +145,90 @@ const CLANG22_AARCH64: &[(&str, &str)] = &[
     ("__GCC_DESTRUCTIVE_SIZE", "256"),
 ];
 
+/// WP-361: GCC 14's P1467 limit macros for `_Float32`, `_Float64`,
+/// `_Float128` and `__bf16` (`g++-14 -std=c++23 -dM -E`, identical on
+/// both targets), which libstdc++'s `<limits>`, `<cmath>`, `<format>`
+/// and `<bits/c++config.h>` consume. Defined in every C++ mode, as GCC
+/// does; the `__FLT16_*__` set stays clang's (in the base files), and
+/// GCC's `__FLT32X_*__` / `__FLT64X_*__` are not defined (kiln has no
+/// `_Float32x` / `_Float64x`; spec/pp.md "Predefined macros").
+const P1467_LIMITS: &[(&str, &str)] = &[
+    ("__BFLT16_DECIMAL_DIG__", "4"),
+    ("__BFLT16_DENORM_MIN__", "9.18354961579912115600575419704879436e-41BF16"),
+    ("__BFLT16_DIG__", "2"),
+    ("__BFLT16_EPSILON__", "7.81250000000000000000000000000000000e-3BF16"),
+    ("__BFLT16_HAS_DENORM__", "1"),
+    ("__BFLT16_HAS_INFINITY__", "1"),
+    ("__BFLT16_HAS_QUIET_NAN__", "1"),
+    ("__BFLT16_IS_IEC_60559__", "0"),
+    ("__BFLT16_MANT_DIG__", "8"),
+    ("__BFLT16_MAX_10_EXP__", "38"),
+    ("__BFLT16_MAX_EXP__", "128"),
+    ("__BFLT16_MAX__", "3.38953138925153547590470800371487867e+38BF16"),
+    ("__BFLT16_MIN_10_EXP__", "(-37)"),
+    ("__BFLT16_MIN_EXP__", "(-125)"),
+    ("__BFLT16_MIN__", "1.17549435082228750796873653722224568e-38BF16"),
+    ("__BFLT16_NORM_MAX__", "3.38953138925153547590470800371487867e+38BF16"),
+    ("__FLT128_DECIMAL_DIG__", "36"),
+    ("__FLT128_DENORM_MIN__", "6.47517511943802511092443895822764655e-4966F128"),
+    ("__FLT128_DIG__", "33"),
+    ("__FLT128_EPSILON__", "1.92592994438723585305597794258492732e-34F128"),
+    ("__FLT128_HAS_DENORM__", "1"),
+    ("__FLT128_HAS_INFINITY__", "1"),
+    ("__FLT128_HAS_QUIET_NAN__", "1"),
+    ("__FLT128_IS_IEC_60559__", "1"),
+    ("__FLT128_MANT_DIG__", "113"),
+    ("__FLT128_MAX_10_EXP__", "4932"),
+    ("__FLT128_MAX_EXP__", "16384"),
+    ("__FLT128_MAX__", "1.18973149535723176508575932662800702e+4932F128"),
+    ("__FLT128_MIN_10_EXP__", "(-4931)"),
+    ("__FLT128_MIN_EXP__", "(-16381)"),
+    ("__FLT128_MIN__", "3.36210314311209350626267781732175260e-4932F128"),
+    ("__FLT128_NORM_MAX__", "1.18973149535723176508575932662800702e+4932F128"),
+    ("__FLT32_DECIMAL_DIG__", "9"),
+    ("__FLT32_DENORM_MIN__", "1.40129846432481707092372958328991613e-45F32"),
+    ("__FLT32_DIG__", "6"),
+    ("__FLT32_EPSILON__", "1.19209289550781250000000000000000000e-7F32"),
+    ("__FLT32_HAS_DENORM__", "1"),
+    ("__FLT32_HAS_INFINITY__", "1"),
+    ("__FLT32_HAS_QUIET_NAN__", "1"),
+    ("__FLT32_IS_IEC_60559__", "1"),
+    ("__FLT32_MANT_DIG__", "24"),
+    ("__FLT32_MAX_10_EXP__", "38"),
+    ("__FLT32_MAX_EXP__", "128"),
+    ("__FLT32_MAX__", "3.40282346638528859811704183484516925e+38F32"),
+    ("__FLT32_MIN_10_EXP__", "(-37)"),
+    ("__FLT32_MIN_EXP__", "(-125)"),
+    ("__FLT32_MIN__", "1.17549435082228750796873653722224568e-38F32"),
+    ("__FLT32_NORM_MAX__", "3.40282346638528859811704183484516925e+38F32"),
+    ("__FLT64_DECIMAL_DIG__", "17"),
+    ("__FLT64_DENORM_MIN__", "4.94065645841246544176568792868221372e-324F64"),
+    ("__FLT64_DIG__", "15"),
+    ("__FLT64_EPSILON__", "2.22044604925031308084726333618164062e-16F64"),
+    ("__FLT64_HAS_DENORM__", "1"),
+    ("__FLT64_HAS_INFINITY__", "1"),
+    ("__FLT64_HAS_QUIET_NAN__", "1"),
+    ("__FLT64_IS_IEC_60559__", "1"),
+    ("__FLT64_MANT_DIG__", "53"),
+    ("__FLT64_MAX_10_EXP__", "308"),
+    ("__FLT64_MAX_EXP__", "1024"),
+    ("__FLT64_MAX__", "1.79769313486231570814527423731704357e+308F64"),
+    ("__FLT64_MIN_10_EXP__", "(-307)"),
+    ("__FLT64_MIN_EXP__", "(-1021)"),
+    ("__FLT64_MIN__", "2.22507385850720138309023271733240406e-308F64"),
+    ("__FLT64_NORM_MAX__", "1.79769313486231570814527423731704357e+308F64"),
+];
+
+/// WP-361: the [cpp.predefined] macros of the extended floating-point
+/// types kiln provides (C++23 on; GCC 14 defines them from C++23 too).
+const P1467_STDCPP: &[&str] = &[
+    "__STDCPP_BFLOAT16_T__",
+    "__STDCPP_FLOAT128_T__",
+    "__STDCPP_FLOAT16_T__",
+    "__STDCPP_FLOAT32_T__",
+    "__STDCPP_FLOAT64_T__",
+];
+
 /// The driver-injected `-D` that clang's driver appends after the user's
 /// (it follows the unwind-table defaults on Linux).
 const DRIVER_DEFINES: &[&str] = &["__GCC_HAVE_DWARF2_CFI_ASM"];
@@ -275,6 +359,17 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
+        for &(n, v) in P1467_LIMITS {
+            set(m, n, v);
+        }
+        let cplusplus: u64 = m.get("__cplusplus").map_or(0, |v| {
+            v.trim_end_matches('L').parse().unwrap_or(0)
+        });
+        if cplusplus >= 202_302 {
+            for n in P1467_STDCPP {
+                set(m, n, "1");
+            }
+        }
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {
         m.remove(n);
@@ -346,10 +441,11 @@ mod tests {
         assert!(
             s.starts_with(
                 "#define __KILN__ 1\n#define __KILN_MAJOR__ 0\n#define __KILN_MINOR__ 0\n\
-                 # 1 \"<built-in>\" 3\n#define __EXCEPTIONS 1\n"
+                 # 1 \"<built-in>\" 3\n#define __BFLT16_DECIMAL_DIG__ 4\n"
             ),
             "{s}"
         );
+        assert!(s.contains("#define __EXCEPTIONS 1\n"));
         assert!(s.contains("#define __USER_LABEL_PREFIX__ \n"));
         assert!(s.ends_with(
             "# 1 \"<command line>\" 1\n#define A 1\n#define B 2\n#define F(x) x+1\n#define E \n\
@@ -357,6 +453,29 @@ mod tests {
         ));
         assert!(s.contains("#define __KILN__ 1\n"));
         assert!(s.contains("#define __STRICT_ANSI__ 1\n"));
+    }
+
+    /// WP-361, [cpp.predefined]/2 and [basic.extended.fp]: the P1467
+    /// limit macros in every C++ mode (GCC 14's values), the
+    /// `__STDCPP_*_T__` ones from C++23, neither in C.
+    #[test]
+    fn p1467_macros() {
+        let cxx = |v: &str| format!("#define __cplusplus {v}\n{BASE}");
+        let cfg = PredefConfig::new(true);
+        let s17 = build_predefines(&cxx("201703L"), &cfg, &[]);
+        let s23 = build_predefines(&cxx("202302L"), &cfg, &[]);
+        let c = build_predefines(BASE, &PredefConfig::new(false), &[]);
+        for s in [&s17, &s23] {
+            assert!(s.contains("#define __FLT32_MANT_DIG__ 24\n"));
+            assert!(s.contains("#define __FLT128_MAX__ 1.18973149535723176508575932662800702e+4932F128\n"));
+            assert!(s.contains("#define __BFLT16_DIG__ 2\n"));
+            assert!(!s.contains("__FLT32X_"));
+        }
+        assert!(!c.contains("__FLT64_DIG__"));
+        for n in P1467_STDCPP {
+            assert!(s23.contains(&format!("#define {n} 1\n")), "{n}");
+            assert!(!s17.contains(n), "{n}");
+        }
     }
 
     #[test]

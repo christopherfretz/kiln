@@ -152,10 +152,14 @@ fn lex_fcon_suffixes_and_errors() {
     assert_eq!(suffix("1.0f128", Std::Cxx23), FloatSuffix::F128);
     assert_eq!(suffix("1.0BF16", Std::Cxx23), FloatSuffix::BF16);
     assert_eq!(suffix("0X1P1F", Std::Cxx26), FloatSuffix::F);
-    // Before C++23 the extended suffixes are not suffixes (clang 19
-    // rejects them in every mode: a documented deviation).
-    assert_eq!(diags_in("1.0f32", Std::Cxx20), [D::InvalidSuffix { floating: true }]);
-    assert_eq!(diags_in("1.0bf16", Std::Cxx20), [D::InvalidSuffix { floating: true }]);
+    // WP-361: before C++23 they are a pedantic extension, as in GCC 14
+    // (clang 19 rejects them in every mode: a documented deviation).
+    assert_eq!(suffix("1.0f32", Std::Cxx11), FloatSuffix::F32);
+    assert_eq!(diags_in("1.0f32", Std::Cxx20), [D::FloatSuffixExtension]);
+    assert_eq!(diags_in("1.0bf16", Std::Cxx17), [D::FloatSuffixExtension]);
+    assert_eq!(diags_in("1.0F128", Std::Cxx23), []);
+    assert_eq!(diags_in("1.0f16", Std::Cxx17), []);
+    assert_eq!(diags_in("1.0Bf16", Std::Cxx23), [D::InvalidSuffix { floating: true }]);
     assert_eq!(diags("1.0ll"), [D::InvalidSuffix { floating: true }]);
     assert_eq!(diags("1.0z"), [D::InvalidSuffix { floating: true }]);
     assert_eq!(diags("1.0u"), [D::InvalidSuffix { floating: true }]);

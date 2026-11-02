@@ -385,6 +385,11 @@ impl Sema<'_, '_> {
             // `h`: `__fp16`; `x`: `_Float16`.
             (b'h', ..) => QualType::HALF,
             (b'x', ..) => QualType::FLOAT16,
+            // WP-361: kiln's `k`: `_Float32`; `K`: `_Float64`.
+            (b'k', ..) => QualType::FLOAT32,
+            (b'K', ..) => QualType::FLOAT64,
+            // `y`: `__bf16`.
+            (b'y', ..) => QualType::BFLOAT16,
             (b'z', ..) => self.size_type(),
             (b'A', ..) => self.builtin_va_list_param(),
             (b'a', ..) => self.builtin_va_list_value(),
