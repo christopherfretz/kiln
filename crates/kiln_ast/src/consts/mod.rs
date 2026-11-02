@@ -90,6 +90,10 @@ const F_WIDE: u32 = 1;
 /// `PTR`: `b` is a word-pool index holding the 64-bit offset followed by
 /// the base's second id ([`PtrBase::aux`]: a string literal's origin).
 const F_AUX: u32 = 2;
+/// `PTR`: `b` is a word-pool index holding the 64-bit offset, then the
+/// base's second id when `F_AUX` is set, then the designated type
+/// ([`Scalar::Pointer`] `designated`).
+const F_DESIG: u32 = 4;
 /// `MEMPTR`: member function.
 const F_FUNCTION: u32 = 1;
 /// `MEMPTR`: `derived` path.
@@ -453,15 +457,23 @@ impl Pools {
                 },
             },
             kind::PTR => {
-                let (base, offset) = if n.flags() & F_AUX != 0 {
-                    let aux = self.words[n.b as usize + 1] as u32;
-                    (PtrBase::from_parts_aux(n.extra(), n.a, aux), self.words[n.b as usize])
-                } else if n.flags() & F_WIDE != 0 {
-                    (PtrBase::from_parts(n.extra(), n.a), self.words[n.b as usize])
+                let (f, w) = (n.flags(), n.b as usize);
+                let aux = usize::from(f & F_AUX != 0);
+                let (base, offset) = if f & F_AUX != 0 {
+                    let aux = self.words[w + 1] as u32;
+                    (PtrBase::from_parts_aux(n.extra(), n.a, aux), self.words[w])
+                } else if f & (F_WIDE | F_DESIG) != 0 {
+                    (PtrBase::from_parts(n.extra(), n.a), self.words[w])
                 } else {
                     (PtrBase::from_parts(n.extra(), n.a), u64::from(n.b))
                 };
-                Scalar::Pointer { ty, base: base.expect("ConstStore: pointer base"), offset }
+                let designated = if f & F_DESIG != 0 {
+                    QualType::from_raw(self.words[w + 1 + aux] as u32)
+                } else {
+                    None
+                };
+                let base = base.expect("ConstStore: pointer base");
+                Scalar::Pointer { ty, base, offset, designated }
             }
             kind::MEMPTR => {
                 let start = n.b as usize;
@@ -579,11 +591,16 @@ impl Pools {
             Scalar::Null { ty, kind: k } => {
                 Node { ty, tag: tag(kind::NULL, 0, k as u32), a: 0, b: 0 }
             }
-            Scalar::Pointer { ty, base, offset } => {
-                let (flags, b) = match (base.aux(), u32::try_from(offset)) {
-                    (Some(aux), _) => (F_AUX, self.push_words(&[offset, u64::from(aux)])?),
-                    (None, Ok(b)) => (0, b),
-                    (None, Err(_)) => (F_WIDE, self.push_words(&[offset])?),
+            Scalar::Pointer { ty, base, offset, designated } => {
+                let d = designated.map(|q| u64::from(q.to_raw()));
+                let (flags, b) = match (base.aux(), d, u32::try_from(offset)) {
+                    (Some(aux), None, _) => (F_AUX, self.push_words(&[offset, u64::from(aux)])?),
+                    (Some(aux), Some(d), _) => {
+                        (F_AUX | F_DESIG, self.push_words(&[offset, u64::from(aux), d])?)
+                    }
+                    (None, Some(d), _) => (F_DESIG, self.push_words(&[offset, d])?),
+                    (None, None, Ok(b)) => (0, b),
+                    (None, None, Err(_)) => (F_WIDE, self.push_words(&[offset])?),
                 };
                 Node { ty, tag: tag(kind::PTR, flags, base.code()), a: base.raw(), b }
             }
@@ -708,13 +725,16 @@ fn hash_scalar(s: &Scalar<'_>) -> u64 {
             h.write_u64((bits >> 64) as u64);
         }
         Scalar::Null { kind: k, .. } => h.write_u32(tag(kind::NULL, 0, k as u32)),
-        Scalar::Pointer { base, offset, .. } => {
+        Scalar::Pointer { base, offset, designated, .. } => {
             h.write_u32(tag(kind::PTR, 0, base.code()));
             h.write_u32(base.raw());
             if let Some(aux) = base.aux() {
                 h.write_u32(aux);
             }
             h.write_u64(offset);
+            if let Some(d) = designated {
+                h.write_u32(d.to_raw());
+            }
         }
         Scalar::MemberPtr { member, kind: k, derived, path, .. } => {
             h.write_u32(tag(kind::MEMPTR, u32::from(derived), k as u32));

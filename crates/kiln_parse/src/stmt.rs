@@ -306,7 +306,13 @@ impl Parser<'_, '_> {
             return None;
         };
         let result = in_stmt_expr && self.ends_stmt_expr();
-        if self.eat(Punct::Semi).is_none() {
+        if self.at(Punct::RParen) && self.peek_is(1, Punct::Semi) {
+            // clang's `ExpectAndConsumeSemi`: a stray `)` before the `;`
+            // is reported and taken with it (`f(u<int> 7; x);`, WP-399).
+            self.error_here(DiagId::parse_extraneous_rparen);
+            self.bump();
+            self.bump();
+        } else if self.eat(Punct::Semi).is_none() {
             // clang's `ExpectAndConsumeSemi`: nothing is skipped; the next
             // statement starts at the current token (`X<T>::m b;` goes on
             // with `b;`).
@@ -422,7 +428,14 @@ impl Parser<'_, '_> {
     /// declaration, a reference to the variable -- not yet converted.
     fn parse_condition(&mut self) -> Option<Cond> {
         if !self.is_cxx_condition_declaration() {
-            return self.parse_expression().map(|e| (None, e));
+            // clang 19 corrects the condition's delayed typos when it
+            // finishes the condition's full-expression (WP-399).
+            let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
+            let e = self.parse_expression();
+            if let Some(m) = typos {
+                self.s.end_delayed_typos(m);
+            }
+            return e.map(|e| (None, e));
         }
         let ctx = DeclaratorContext::Condition;
         let mut ds = self.parse_decl_specifiers(ctx);
@@ -1115,7 +1128,17 @@ impl Parser<'_, '_> {
             return Some(s);
         }
         if !self.at(Punct::Semi) {
-            let Some(e) = self.parse_expression() else {
+            // clang 19's `ActOnReturnStmt` corrects the delayed typos of
+            // the operand first, before the `;` and the return's own
+            // checks (`return val<int>;` with `int val(int)` in `int f()`:
+            // "did you mean '::val'?", then "cannot initialize return
+            // object", WP-399).
+            let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
+            let parsed = self.parse_expression();
+            if let Some(m) = typos {
+                self.s.end_delayed_typos(m);
+            }
+            let Some(e) = parsed else {
                 self.skip_until(&[Punct::RBrace], true, false);
                 self.eat(Punct::Semi);
                 return None;

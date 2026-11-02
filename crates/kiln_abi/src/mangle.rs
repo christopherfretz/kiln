@@ -2020,7 +2020,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             Scalar::Float { kind, bits, .. } => self.float_literal(ty, kind.bits(), bits),
             Scalar::Null { .. } => self.null_literal(ty),
-            Scalar::Pointer { base, offset, .. } => self.pointer_value(ty, base, offset, top),
+            Scalar::Pointer { base, offset, designated, .. } => {
+                self.pointer_value(ty, base, offset, designated, top);
+            }
             Scalar::MemberPtr { member, path, .. } => {
                 // `[X] [mc <type>] adL <member> E [E] [E]`.
                 if top {
@@ -2100,11 +2102,23 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// `[X] [ad] L <entity> E [E]` for a whole object, else the subobject
     /// form `[X] [ad] so <referent type> L <entity> E [<offset>]
     /// <union-selector>* [p] E [E]`.
-    fn pointer_value(&mut self, ty: QualType, base: PtrBase, offset: u64, top: bool) {
+    ///
+    /// A `void *` that designates an object of type `designated` mangles
+    /// as clang does: the address of that object, converted to the
+    /// pointer type (`X cv <type> ad ... E`) when it is the whole
+    /// argument.
+    fn pointer_value(
+        &mut self,
+        ty: QualType,
+        base: PtrBase,
+        offset: u64,
+        designated: Option<QualType>,
+        top: bool,
+    ) {
         let ast = self.ast;
         let is_ref =
             matches!(ast.types.canonical_view(ty), TypeView::LValueRef(_) | TypeView::RValueRef(_));
-        let pointee = ast.types.pointee(ty);
+        let pointee = designated.or_else(|| ast.types.pointee(ty));
         let d = match base {
             PtrBase::Decl(d) | PtrBase::Function(d) => d,
             PtrBase::TypeInfo(t) => {
@@ -2125,9 +2139,15 @@ impl<'a, 'b> Mangler<'a, 'b> {
             PtrBase::Decl(_) => self.lvalue_path(ast.decls.get(d).ty(), offset, pointee),
             _ => LvaluePath::default(),
         };
+        // Inside a class value the member's type is known: no conversion.
+        let conv = top && designated.is_some() && !is_ref;
         let wrap = top && (!is_ref || path.nonempty || path.past_end);
         if wrap {
             self.out.push('X');
+        }
+        if conv {
+            self.out.push_str("cv");
+            self.ty(ty);
         }
         if !is_ref {
             self.out.push_str("ad");
