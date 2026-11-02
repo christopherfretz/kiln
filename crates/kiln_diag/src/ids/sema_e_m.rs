@@ -168,6 +168,7 @@ sema_integer_seq_negative_length = Error (0) "integer sequences must have non-ne
 sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";
 sema_invalid_asm_value_for_constraint = Error (2) "value '{0}' out of range for constraint '{1}'";
 sema_invalid_complex_spec = Error (1) "'_Complex {0}' is invalid";
+sema_invalid_decl_spec_in_nontype_parm = Error (0) "invalid declaration specifier in template non-type parameter";
 sema_invalid_declarator_global_scope = Error (1) "definition or redeclaration of '{0}' cannot name the global scope";
 sema_invalid_declarator_in_function = Error (1) "definition or redeclaration of '{0}' not allowed inside a function";
 sema_invalid_declarator_scope = Error (3) "cannot define or redeclare '{0}' here because namespace '{1}' does not enclose namespace '{2}'";

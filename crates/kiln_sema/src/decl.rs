@@ -1295,12 +1295,33 @@ impl Sema<'_, '_> {
         // [dcl.stc]/2: no storage class but `register`, which C++17
         // removed and clang accepts as an extension (an error by default,
         // `-Wregister`). Both before the type, in clang's order.
-        match ds.storage {
-            Some((StorageSpec::Register, loc)) => {
-                self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+        // A non-type template parameter ([temp.param]/2: no storage
+        // class; [dcl.inline]/1, [dcl.constexpr]/1, [dcl.fct.spec]/1):
+        // clang's `CheckValidDeclSpecifiers`, one error per specifier in
+        // its order, instead of the function parameter's.
+        let nttp = d.site == DeclSite::TemplateParam;
+        if nttp {
+            let locs = [
+                ds.storage.map(|(_, l)| l),
+                ds.thread_local,
+                ds.inline,
+                ds.constexpr.or(ds.consteval).or(ds.constinit),
+                ds.virtual_,
+                ds.explicit,
+            ];
+            for l in locs.into_iter().flatten() {
+                self.error(DiagId::sema_invalid_decl_spec_in_nontype_parm, l);
             }
-            Some((_, loc)) => self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc),
-            None => {}
+        } else {
+            match ds.storage {
+                Some((StorageSpec::Register, loc)) => {
+                    self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+                }
+                Some((_, loc)) => {
+                    self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc)
+                }
+                None => {}
+            }
         }
         let base = self.type_from_declspec(ds);
         let base = self.apply_declspec_vector_attrs(base, ds);
@@ -1315,8 +1336,9 @@ impl Sema<'_, '_> {
         let recovered = d.ellipsis.is_some() && self.diags.error_count() != errs;
         // [dcl.constexpr]/1, [dcl.constinit]/1: clang `err_invalid_constexpr`.
         let specs = [ds.constexpr, ds.consteval, ds.constinit];
-        if let Some((which, l)) =
-            specs.iter().enumerate().find_map(|(i, l)| l.map(|l| (i as u8, l)))
+        if !nttp
+            && let Some((which, l)) =
+                specs.iter().enumerate().find_map(|(i, l)| l.map(|l| (i as u8, l)))
         {
             let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
             self.emit(m);
