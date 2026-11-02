@@ -166,8 +166,13 @@ pub fn judge(base: Option<&Baseline>, cur: &Measurement, t: Thresholds) -> Verdi
             let (sw, sb) = beyond(bo.steps, co.steps, t.steps_pct);
             // The byte counters, minus those an older baseline lacks.
             let (mut bw, mut bb) = (false, false);
-            for c in [Counter::Bytes, Counter::PeakBytes, Counter::PeakArena, Counter::FrozenBytes]
-            {
+            for c in [
+                Counter::Bytes,
+                Counter::PeakBytes,
+                Counter::PeakArena,
+                Counter::FrozenBytes,
+                Counter::StaticBytes,
+            ] {
                 if !b.oven_missing.contains(&c) {
                     let (w, better) = beyond(bo.get(c), co.get(c), t.bytes_pct);
                     (bw, bb) = (bw || w, bb || better);
@@ -426,6 +431,7 @@ mod tests {
             allocs: 3,
             peak_arena: peak_bytes,
             frozen_bytes: 16,
+            static_bytes: 0,
             wall_us: 0,
             evaluations: 2,
         };
