@@ -25,6 +25,7 @@ use kiln_source::symbol::Symbol;
 use super::{LambdaIntroducer, LambdaScope};
 use crate::Sema;
 use crate::class::InitEntity;
+use crate::conv::bases::{BaseSearch, ambiguous_paths_string, find_base};
 use crate::init::Initializer;
 use crate::lookup::LookupKind;
 
@@ -197,9 +198,17 @@ impl Sema<'_, '_> {
                 }
                 // A generic lambda's call operator being instantiated:
                 // its closure is complete, and the pattern captured every
-                // variable a specialization may odr-use.
+                // variable a specialization may odr-use. A use that is not
+                // one still has the type a capture would give it under a
+                // capture-default ([expr.prim.id.unqual]/3).
                 if !self.lambdas.iter().any(|s| s.id == l) {
-                    return Err(Captured::NotNeeded);
+                    if build || data.default == CaptureDefault::None {
+                        return Err(Captured::NotNeeded);
+                    }
+                    chain.push(l);
+                    let Some(p) = self.lambda_parent(l) else { return Err(Captured::Failed) };
+                    c = p;
+                    continue;
                 }
                 if data.default == CaptureDefault::None {
                     if build {
@@ -320,9 +329,16 @@ impl Sema<'_, '_> {
     /// the parameter's (referenced) type is const-qualified; otherwise
     /// unless the lambda is `mutable` (clang
     /// `LambdaScopeInfo::lambdaCaptureShouldBeConst`).
+    ///
+    /// The call operator is the one being analysed: inside a
+    /// specialization of a generic lambda's call operator (its body
+    /// instantiated), that specialization's explicit object parameter
+    /// decides, so `const Self&` makes the captures const there and
+    /// `Self&` does not (WP-364).
     pub(crate) fn lambda_capture_const(&self, l: LambdaId) -> bool {
         let data = self.ast.exprs.lambdas.get(l);
-        let obj = data.call_op.filter(|&f| self.has_explicit_object(f)).and_then(|f| {
+        let op = self.current_call_op(l).or(data.call_op);
+        let obj = op.filter(|&f| self.has_explicit_object(f)).and_then(|f| {
             let x = self.ast.decls.function(f)?;
             self.ast.lists.iter::<DeclId>(x.params).next()
         });
@@ -338,6 +354,66 @@ impl Sema<'_, '_> {
             }
             None => !data.mutable,
         }
+    }
+
+    /// The call operator of lambda `l` (or a specialization of it) that
+    /// encloses the current context, if any.
+    fn current_call_op(&self, l: LambdaId) -> Option<DeclId> {
+        let mut c = self.ctx;
+        for _ in 0..4096 {
+            if self.lambda_of_call_op(c) == Some(l) {
+                return Some(c);
+            }
+            c = self.ast.decls.get(c).ctx()?;
+        }
+        None
+    }
+
+    /// [temp.dep.expr]/3 (P0847): whether a use of variable `d` in the
+    /// current context names a capture by copy (existing, or implied by a
+    /// `=` default) of a lambda whose explicit object parameter has a
+    /// dependent type; such a use is type-dependent, its constness being
+    /// that of each specialization's object parameter (clang
+    /// `isCapturedByCopyInLambdaWithExplicitObjectParameter`).
+    pub(crate) fn captured_by_copy_in_dependent_object_lambda(&self, d: DeclId) -> bool {
+        let Some(home) = self.ast.decls.get(d).ctx() else { return false };
+        let mut c = self.ctx;
+        for _ in 0..4096 {
+            if c == home {
+                return false;
+            }
+            if let Some(l) = self.lambda_of_call_op(c) {
+                let dependent = self.has_explicit_object(c)
+                    && self
+                        .ast
+                        .decls
+                        .function(c)
+                        .and_then(|x| self.ast.lists.iter::<DeclId>(x.params).next())
+                        .and_then(|p| self.ast.decls.get(p).ty())
+                        .is_some_and(|t| self.ast.types.is_dependent(t));
+                let data = self.ast.exprs.lambdas.get(l);
+                if dependent {
+                    let by_copy = match data.captures.iter().find(|x| x.var == Some(d)) {
+                        Some(x) => x.kind == CaptureKind::ByCopy,
+                        None => data.default == CaptureDefault::ByCopy,
+                    };
+                    if by_copy {
+                        return true;
+                    }
+                }
+                let Some(p) = self.lambda_parent(l) else { return false };
+                c = p;
+                continue;
+            }
+            if self.kind_of(c) == DeclKind::RequiresExprBody
+                && let Some(p) = self.ast.decls.get(c).ctx()
+            {
+                c = p;
+                continue;
+            }
+            return false;
+        }
+        false
     }
 
     /// [expr.prim.lambda.closure]/5 (P0847) for a call at `loc` of `f`:
@@ -386,12 +462,22 @@ impl Sema<'_, '_> {
         if self.ast.first(r) == self.ast.first(closure) {
             return true;
         }
-        let paths = crate::conv::bases::base_paths(self, r, closure);
-        let Some(path) = paths.first() else {
-            return self.lambda_object_not_derived(t, loc);
-        };
         let closure_ty = QualType::unqual(self.ast.types.record_type(closure));
-        self.check_lambda_object_base_access(t, closure_ty, path, loc)
+        match find_base(self, r, closure) {
+            BaseSearch::NotDerived => self.lambda_object_not_derived(t, loc),
+            BaseSearch::Unique(path) => {
+                self.check_lambda_object_base_access(t, closure_ty, &path, loc)
+            }
+            BaseSearch::Ambiguous(paths) => {
+                let shown = ambiguous_paths_string(self, t, &paths);
+                let m = self
+                    .diag(DiagId::sema_explicit_object_lambda_ambiguous_base, loc)
+                    .arg(self.ty_arg(closure_ty))
+                    .arg(shown);
+                self.emit(m);
+                false
+            }
+        }
     }
 
     /// `the type must be the same as, or derived from the lambda`.

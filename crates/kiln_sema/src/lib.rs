@@ -70,6 +70,7 @@ pub mod stack_guard;
 pub mod stmt;
 mod struct_bind;
 mod sve;
+mod switch_conv;
 mod switch_enum;
 pub mod target;
 pub mod templ;
