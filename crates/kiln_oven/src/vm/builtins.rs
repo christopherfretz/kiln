@@ -15,7 +15,7 @@ use kiln_ast::types::BuiltinType;
 
 use super::{Fault, write_fault};
 use crate::compile::float_of;
-use crate::kbc::{ak, bi};
+use crate::kbc::{ak, bi, cmp};
 use crate::mem::{MemFault, Origin, Ptr, flags};
 use crate::softfloat::{self, Class};
 use crate::ty::{OTy, TyKind};
@@ -98,6 +98,57 @@ fn checked(sub: u32, a: u128, b: u128) -> u128 {
         (true, false) => m <= mask(w - 1),
     };
     u128::from(!fits)
+}
+
+/// `bi::FP_MATH` (WP-365, spec/oven.md "Floating-point math builtins"):
+/// `None` where the operation is not a constant (an IEEE exception other
+/// than inexact, or a signaling NaN operand).
+fn fp_math(sub: u32, a: u128, b: u128, c: u128, t1: u32) -> Option<u128> {
+    use softfloat::math::{self, Rounding};
+    let k = float_of(sub & 15);
+    let second = sub & bi::SECOND != 0;
+    let int = |v: i32| i128::from(v) as u128;
+    let round = |m| math::round_int(k, a, m);
+    Some(match sub >> 4 & 31 {
+        bi::CEIL => round(Rounding::Up)?,
+        bi::FLOOR => round(Rounding::Down)?,
+        bi::TRUNC => round(Rounding::Zero)?,
+        bi::ROUND => round(Rounding::Away)?,
+        bi::ROUNDEVEN | bi::RINT => round(Rounding::Even)?,
+        bi::LROUND => math::to_int(k, a, Rounding::Away, t1)?,
+        bi::LRINT => math::to_int(k, a, Rounding::Even, t1)?,
+        op @ (bi::FMOD | bi::REMAINDER | bi::REMQUO) => {
+            let (r, q) = math::rem(k, a, b, op != bi::FMOD)?;
+            if second { int(q) } else { r }
+        }
+        bi::FDIM => math::fdim(k, a, b)?,
+        bi::FMA => math::fma(k, a, b, c)?,
+        bi::FREXP => {
+            let (f, e) = math::frexp(k, a)?;
+            if second { int(e) } else { f }
+        }
+        bi::LDEXP => math::ldexp(k, a, b as i128)?,
+        bi::ILOGB => int(math::ilogb(k, a)?),
+        bi::LOGB => math::logb(k, a)?,
+        bi::MODF => {
+            let (f, i) = math::modf(k, a)?;
+            if second { i } else { f }
+        }
+        bi::NEXTAFTER => math::nextafter(k, a, float_of(t1), b)?,
+        bi::SIGNBIT => u128::from(a & softfloat::sign_bit(k) != 0),
+        _ => {
+            let o = softfloat::cmp(k, a, b);
+            u128::from(match (t1, o) {
+                (bi::UNORDERED, o) => o.is_none(),
+                (_, None) => false,
+                (cmp::GT, Some(o)) => o.is_gt(),
+                (cmp::GE, Some(o)) => o.is_ge(),
+                (cmp::LT, Some(o)) => o.is_lt(),
+                (cmp::LE, Some(o)) => o.is_le(),
+                (_, Some(o)) => o.is_ne(),
+            })
+        }
+    })
 }
 
 fn mask(w: u32) -> u128 {
@@ -245,6 +296,7 @@ impl Oven {
                     },
                 })
             }
+            bi::FP_MATH => fp_math(sub, a, b, c, t1).ok_or(Fault::Invalid),
             bi::STRLEN => self.bi_strlen(a as u64, OTy(t1)).map(u128::from),
             k @ (bi::MEMCMP | bi::MEMCHR) => {
                 let n = if sub & bi::UNBOUNDED != 0 { u64::MAX } else { c as u64 };
@@ -273,6 +325,15 @@ impl Oven {
                         u128::from(s.leading_zeros() - (128 - w) - 1)
                     }
                     bi::BITREVERSE => v.reverse_bits() >> (128 - w),
+                    bi::IABS => {
+                        // `a` is canonical; the most negative value has no
+                        // representable magnitude (undefined, [expr.pre]/4).
+                        let x = a as i128;
+                        if v == 1 << (w - 1) {
+                            return Err(Fault::Invalid);
+                        }
+                        x.unsigned_abs()
+                    }
                     k => {
                         // clang: the amount modulo the width.
                         let n = ((b & mask(w)) % u128::from(w)) as u32;
