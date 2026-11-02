@@ -728,9 +728,19 @@ impl Sema<'_, '_> {
         let args = self.prior_levels(tmpl, depth, prior);
         // Errors point into the default argument, as clang's do.
         let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
-        let r = {
-            let mut s = Substituter::new(self, &args);
-            s.template_arg(def, at)
+        // [temp.dep.candidate], [temp.res.general]: the default's names
+        // were looked up from the template's scope, and a name substitution
+        // looks up again (`declval<T>()` with explicit arguments) is too,
+        // as for the template's signature and body, not from the scope of
+        // the use that needs the default (`n::f<int>()` outside `n`;
+        // clang `SubstDefaultTemplateArgument` enters the template's
+        // context). A template in a local scope keeps the use's scopes:
+        // they are the only ones that hold its function's names.
+        let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
+        let r = if self.decl_in_local_scope(tmpl) {
+            Substituter::new(self, &args).template_arg(def, at)
+        } else {
+            self.in_inst_context(ctx, |s| Substituter::new(s, &args).template_arg(def, at))
         };
         let r = match r {
             Ok(a) => self.check_template_arg(tmpl, depth, p, a, at, prior),
