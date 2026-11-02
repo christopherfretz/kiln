@@ -4720,7 +4720,11 @@ explicit specialization errors remain. The blockers are:
     (outer and member-template parameters), a member typedef, a static
     data member, and a class-scope static member template shadowing a
     namespace function.
-  - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
+  - `Sema::check_function_constraints(f, loc) -> Option<SatId>`; a
+    non-templated function's clause (already an error, `non-templated
+    function cannot have a requires clause`) is still checked, with no
+    template arguments, as clang does (`ConceptState::
+    untemplated_requires`; WP-294, sema-class.md §4.7.1);
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate
     function not viable: constraints not satisfied" plus the chain);
