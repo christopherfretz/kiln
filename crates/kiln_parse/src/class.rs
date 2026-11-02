@@ -1128,13 +1128,13 @@ impl Parser<'_, '_> {
             && d.virt_final.is_none()
             && d.virt_override.is_none()
         {
-            // `void f() [[a]];`: the function type's (not yet checked).
-            if self.at_attr() {
-                self.parse_attributes(&mut d.attrs);
-            }
-        } else {
-            self.parse_member_tail_attrs(&mut d.attrs);
+            // `void f() [[a]];`: the function type's (not yet checked),
+            // parsed with the function declarator in clang
+            // (`ParseFunctionDeclarator`), so only a C++11 specifier-seq
+            // right after it; one after the GNU attributes is reported.
+            self.parse_cxx11_attr_seq(&mut d.attrs);
         }
+        self.parse_member_tail_attrs(&mut d.attrs);
         if !has_width && d.virt_final.is_none() && d.virt_override.is_none() {
             self.parse_virt_specifiers(d, friend);
         }

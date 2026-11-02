@@ -1994,9 +1994,11 @@ impl Parser<'_, '_> {
                 self.parse_function_suffix(d, ambiguous);
                 // [dcl.fct]/1: an attribute-specifier-seq after the
                 // parameter clause appertains to the function type.
-                if self.at_cxx11_attr() {
+                // GNU attributes after it are the declarator's (parsed
+                // by the caller; clang `ParseFunctionDeclarator`).
+                if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
                     let mut attrs = Vec::new();
-                    self.parse_attributes(&mut attrs);
+                    self.parse_cxx11_attr_seq(&mut attrs);
                     self.s.act_on_type_position_attrs(&mut attrs, true);
                     d.attrs.extend(attrs);
                 }
@@ -2838,9 +2840,11 @@ impl Parser<'_, '_> {
                 break;
             };
             d.asm_label = label;
-            if self.at_attr() {
-                self.parse_attributes(&mut d.attrs);
-            }
+            // Only GNU attributes follow (clang's `MaybeParseGNUAttributes`
+            // in `ParseDeclGroup` and `ParseAsmAttributesAfterDeclarator`):
+            // a C++11 attribute-specifier-seq here ends the declarator, and
+            // the `;` (or function body, below) expected there is reported.
+            self.parse_gnu_attr_seq(&mut d.attrs);
             if !d.has_name() {
                 if !d.invalid {
                     self.error_here(DiagId::parse_expected_unqualified_id);
@@ -2861,6 +2865,20 @@ impl Parser<'_, '_> {
                 if !allow_fn_def && self.at(Punct::LBrace) {
                     self.error_here(DiagId::parse_function_definition_not_allowed);
                     self.skip_unsupported_declaration();
+                    return decls;
+                }
+                // clang `ParseDeclGroup`: at namespace scope, a first
+                // function declarator followed by neither a declaration's
+                // continuation nor a function body, here a C++11
+                // attribute-specifier-seq after its GNU attributes
+                // (`void f() __attribute__((cold)) [[nodiscard]];`), is
+                // reported as a missing body; the declaration is skipped
+                // through its `;` and declares nothing.
+                if ctx == DeclaratorContext::File
+                    && (self.at_cxx11_attr() || self.at_kw(Kw::Alignas))
+                {
+                    self.error_here(DiagId::parse_expected_fn_body);
+                    self.skip_to_semi();
                     return decls;
                 }
             }
