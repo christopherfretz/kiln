@@ -1857,29 +1857,6 @@ impl Sema<'_, '_> {
         e
     }
 
-    /// `[[deprecated]]` ([dcl.attr.deprecated]).
-    pub(crate) fn diagnose_deprecated(&self, d: DeclId, loc: Loc) {
-        let Some(a) = self.find_attr(d, AttrKind::DEPRECATED) else { return };
-        let attr = *self.ast.attrs.get(a);
-        // clang `getNameForDiagnostic`: a function template
-        // specialization (whose attributes are the pattern's) prints its
-        // template arguments, `f<int>`.
-        let mut name = self.decl_name(d);
-        if self.ast.decls.function(d).is_some()
-            && let Some((_, i)) = self.ast.spec_info(d)
-        {
-            let names = crate::names::SemaNames::new(self);
-            kiln_ast::types::write_arg_list(&self.ast.types, &names, i.args, &mut name);
-        }
-        let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
-        let msg = match text {
-            Some(t) => self.diag(DiagId::sema_deprecated_msg, loc).arg(name.clone()).arg(t),
-            None => self.diag(DiagId::sema_deprecated, loc).arg(name.clone()),
-        };
-        let note = self.diag(DiagId::note_marked_deprecated, attr.loc).arg(name);
-        self.emit(msg.with_note(note));
-    }
-
     /// The text of a narrow string literal.
     pub(crate) fn string_text(&self, e: ExprId) -> Option<String> {
         let s = self.string_lit_of(e)?;
