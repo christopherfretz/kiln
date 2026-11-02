@@ -164,6 +164,24 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 continue;
             }
+            // `abi_tag` applies to an inline, named namespace (an inline
+            // one reopened without `inline` included); clang ignores it
+            // elsewhere with a warning (spec/abi.md §8.15).
+            if attr.kind == AttrKind::ABI_TAG {
+                let anonymous = self.ast.decls.get(ns).name().is_empty();
+                let inline = self
+                    .ast
+                    .decls
+                    .namespace(self.ast.first(ns))
+                    .is_some_and(kiln_ast::decl::NamespaceData::is_inline);
+                if anonymous || !inline {
+                    let d = self
+                        .diag(DiagId::sema_abi_tag_namespace, attr.loc)
+                        .arg(if anonymous { 1u32 } else { 0 });
+                    self.emit(d);
+                    continue;
+                }
+            }
             kept.push(a);
         }
         if !kept.is_empty() {

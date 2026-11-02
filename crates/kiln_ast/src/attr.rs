@@ -210,6 +210,11 @@ impl AttrArena {
         self.len() == 0
     }
 
+    /// Whether any attribute of kind `kind` exists (a linear scan).
+    pub fn has_kind(&self, kind: AttrKind) -> bool {
+        self.nodes[1..].iter().any(|a| a.kind == kind)
+    }
+
     /// The attribute list of `d` ([`ListId::EMPTY`] if none).
     pub fn of_decl(&self, d: DeclId) -> ListId {
         self.decl_attrs.get(d).copied().unwrap_or(ListId::EMPTY)

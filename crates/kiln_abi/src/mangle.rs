@@ -34,6 +34,9 @@ pub struct AnonIds {
     /// named class or enumeration directly in a function among those of
     /// the same name there, in declaration order.
     local_tags: Option<FxHashMap<DeclId, u32>>,
+    /// Whether the module has any `abi_tag` attribute (computed on first
+    /// use): without one no name carries implicit tags.
+    abi_tags: Option<bool>,
 }
 
 impl AnonIds {
@@ -485,6 +488,9 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
         // Only variables with internal linkage are mangled at global scope
         // (clang `shouldMangleCXXName`): `static int h;` is `_ZL1h`.
         // A variable template specialization is `_Z1vIiE`.
+        // A variable with tags, its own or implicit from its type, is
+        // mangled (clang `shouldHaveAbiTags`): `std::string s;` with
+        // libstdc++ is `_Z1sB5cxx11`.
         DeclKind::Var => {
             in_global_ns(ast, d)
                 && abi_tags(ast, d).is_none()
@@ -492,9 +498,21 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
                 && !has_internal_linkage(ast, d)
                 && ast.spec_info(ast.first(d)).is_none()
                 && (!ast.modules.active || ast.module_attachment(ast.first(d)).is_none())
+                && !var_type_has_tags(ast, d)
         }
         _ => false,
     }
+}
+
+/// Whether the type of variable `d` mentions an abi-tagged entity.
+fn var_type_has_tags(ast: &Ast, d: DeclId) -> bool {
+    let Some(ty) = ast.decls.get(d).ty() else { return false };
+    if matches!(ast.types.canonical_view(ty), TypeView::Builtin(_)) {
+        return false;
+    }
+    let mut anon = AnonIds::new();
+    let mut m = Mangler::new(ast, &mut anon, "");
+    !m.variable_type_tags(d).is_empty()
 }
 
 fn in_global_ns(ast: &Ast, d: DeclId) -> bool {
@@ -815,6 +833,32 @@ struct Mangler<'a, 'b> {
     /// included) and whether the innermost one's result type is (`fp`/`fL`
     /// nesting of a parameter reference, [abi] <function-param>).
     fn_depth: (u32, bool),
+    /// clang's `AbiTagState`: every ABI tag mangled so far, explicitly
+    /// (`B <source-name>`) or implicitly (an abi-tagged namespace in a
+    /// prefix), in mangling order with repeats.
+    used_tags: Vec<&'a str>,
+    /// The tags written as `B <source-name>` so far.
+    emitted_tags: Vec<&'a str>,
+    /// clang's `DisableDerivedAbiTags`: while collecting the tags of a
+    /// return or variable type, or of a name, no implicit tags are
+    /// derived for the functions and variables mangled inside it.
+    no_derived: bool,
+    /// The implicit tags of the function or variable whose encoding is
+    /// being mangled, written after the unqualified name of the
+    /// declarations listed (the entity and, for a function template
+    /// specialization, its template).
+    extra_tags: Option<([DeclId; 2], Vec<&'a str>)>,
+}
+
+/// The mangler state a trial mangling restores (clang copies the
+/// outer mangler, substitutions included, into a throwaway one).
+struct Snapshot {
+    out: usize,
+    subs: usize,
+    modnames: usize,
+    used: usize,
+    emitted: usize,
+    fn_depth: (u32, bool),
 }
 
 impl<'a, 'b> Mangler<'a, 'b> {
@@ -842,6 +886,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
             real_depth: false,
             head_only: false,
             fn_depth: (0, false),
+            used_tags: Vec::new(),
+            emitted_tags: Vec::new(),
+            no_derived: false,
+            extra_tags: None,
         }
     }
 
@@ -873,6 +921,101 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 .is_none_or(|p| self.ast.decls.get(p).kind() == DeclKind::TranslationUnit)
     }
 
+    /// Whether `d`'s (effective) context is the namespace `::std` and
+    /// `d` is not attached to a named module (clang
+    /// `mangleStandardSubstitution`'s preconditions).
+    fn directly_in_std(&self, d: DeclId) -> bool {
+        self.parent(d).is_some_and(|p| self.is_std(p))
+            && self.ast.module_attachment(self.ast.first(d)).is_none()
+    }
+
+    /// The standard substitution of class template `t` ([abi:mangling]
+    /// 5.1.7 <substitution>): `Sa` for `::std::allocator`, `Sb` for
+    /// `::std::basic_string`. Only the templates declared directly in
+    /// `std` qualify, so libstdc++'s `std::__cxx11::basic_string` and
+    /// libc++'s `std::__1::allocator` mangle by name.
+    fn std_template_subst(&self, t: DeclId) -> Option<&'static str> {
+        if self.ast.decls.get(t).kind() != DeclKind::ClassTemplate || !self.directly_in_std(t) {
+            return None;
+        }
+        match decl_name(self.ast, t).as_str() {
+            "allocator" => Some("Sa"),
+            "basic_string" => Some("Sb"),
+            _ => None,
+        }
+    }
+
+    /// The standard substitution of class template specialization `d`:
+    /// `Ss` for `::std::basic_string<char, ::std::char_traits<char>,
+    /// ::std::allocator<char>>`, `Si` / `So` / `Sd` for
+    /// `::std::basic_istream` / `basic_ostream` / `basic_iostream<char,
+    /// ::std::char_traits<char>>` (clang `isStdCharSpecialization`).
+    fn std_spec_subst(&self, d: DeclId) -> Option<&'static str> {
+        let (t, args) = self.spec_of(d)?;
+        if !self.directly_in_std(d) {
+            return None;
+        }
+        let (code, alloc) = match decl_name(self.ast, t).as_str() {
+            "basic_string" => ("Ss", true),
+            "basic_istream" => ("Si", false),
+            "basic_ostream" => ("So", false),
+            "basic_iostream" => ("Sd", false),
+            _ => return None,
+        };
+        let args = self.ast.types.args(args);
+        if args.len() != 2 + usize::from(alloc) || !self.is_char_arg(args[0].view()) {
+            return None;
+        }
+        let ok = self.is_std_char_spec(args[1].view(), "char_traits")
+            && (!alloc || self.is_std_char_spec(args[2].view(), "allocator"));
+        ok.then_some(code)
+    }
+
+    /// Emits the standard substitution of class template `t`, if it has
+    /// one (it is not a substitution candidate).
+    fn std_template(&mut self, t: DeclId) -> bool {
+        let Some(c) = self.std_template_subst(t) else { return false };
+        self.out.push_str(c);
+        true
+    }
+
+    /// Emits the standard substitution of specialization `d`, if it has
+    /// one.
+    fn std_spec(&mut self, d: DeclId) -> bool {
+        let Some(c) = self.std_spec_subst(d) else { return false };
+        self.out.push_str(c);
+        true
+    }
+
+    /// Whether template argument `a` is the type `char` (clang
+    /// `isCharType`: canonical, unqualified).
+    fn is_char_arg(&self, a: ArgView) -> bool {
+        let ArgView::Type(q) = a else { return false };
+        let q = self.ast.types.canonical(q);
+        q.quals_bits() == 0
+            && matches!(
+                self.ast.types.canonical_view(q),
+                TypeView::Builtin(BuiltinType::Char)
+            )
+    }
+
+    /// Whether template argument `a` is `::std::<name><char>` (clang
+    /// `isCharSpecialization`).
+    fn is_std_char_spec(&self, a: ArgView, name: &str) -> bool {
+        let ArgView::Type(q) = a else { return false };
+        let q = self.ast.types.canonical(q);
+        if q.quals_bits() != 0 {
+            return false;
+        }
+        let TypeView::Record(d) = self.ast.types.canonical_view(q) else { return false };
+        let Some((t, args)) = self.spec_of(d) else { return false };
+        if !self.directly_in_std(d) || decl_name(self.ast, t) != name {
+            return false;
+        }
+        let args = self.ast.types.args(args);
+        args.len() == 1 && self.is_char_arg(args[0].view())
+    }
+
     // ---- encodings -----------------------------------------------------
 
     /// <encoding> ::= <name> <bare-function-type> | <name>
@@ -885,18 +1028,137 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.source_name(&decl_name(ast, d));
             return;
         }
+        let saved_extra = self.extra_tags.take();
         if is_fn {
-            // The name is mangled inside the function's prototype scope:
-            // its template arguments, template-head requires-clause and
-            // lambda signatures may name its parameters one function type
-            // deep (clang `mangleFunctionEncoding`).
-            let saved = self.fn_depth;
-            self.fn_depth = (saved.0 + 1, false);
-            self.name(d, v);
-            self.fn_depth = saved;
-            self.bare_function_type(d);
+            // Implicit tags: those of the return type that the name and
+            // bare function type do not mention (clang
+            // `mangleFunctionEncoding`, `makeFunctionReturnTypeTags`).
+            let ret = self.return_type_tags(d);
+            if !ret.is_empty() {
+                let used = self.trial_tags(|m| m.function_encoding(d, v));
+                self.set_extra_tags(d, &ret, &used);
+            }
+            self.function_encoding(d, v);
         } else {
+            // A variable's implicit tags come from its type (clang
+            // `mangleName(GlobalDecl)`, `makeVariableTypeTags`).
+            let tys = self.variable_type_tags(d);
+            if !tys.is_empty() {
+                let used = self.trial_tags(|m| m.name(d, v));
+                self.set_extra_tags(d, &tys, &used);
+            }
             self.name(d, v);
+        }
+        self.extra_tags = saved_extra;
+    }
+
+    /// <name> <bare-function-type> of function `d`.
+    fn function_encoding(&mut self, d: DeclId, v: Structor) {
+        // The name is mangled inside the function's prototype scope:
+        // its template arguments, template-head requires-clause and
+        // lambda signatures may name its parameters one function type
+        // deep (clang `mangleFunctionEncoding`).
+        let saved = self.fn_depth;
+        self.fn_depth = (saved.0 + 1, false);
+        self.name(d, v);
+        self.fn_depth = saved;
+        self.bare_function_type(d);
+    }
+
+    // ---- implicit ABI tags -----------------------------------------------
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            out: self.out.len(),
+            subs: self.subs.len(),
+            modnames: self.modnames.len(),
+            used: self.used_tags.len(),
+            emitted: self.emitted_tags.len(),
+            fn_depth: self.fn_depth,
+        }
+    }
+
+    fn restore(&mut self, s: &Snapshot) {
+        self.out.truncate(s.out);
+        self.subs.truncate(s.subs);
+        self.modnames.truncate(s.modnames);
+        self.used_tags.truncate(s.used);
+        self.emitted_tags.truncate(s.emitted);
+        self.fn_depth = s.fn_depth;
+    }
+
+    /// Runs `f` as a trial with derived tags disabled and returns the
+    /// sorted, unique tags it used; the mangler's state is restored
+    /// afterwards (clang mangles into a copy of itself whose
+    /// `AbiTagsRoot` starts empty).
+    fn trial_tags(&mut self, f: impl FnOnce(&mut Self)) -> Vec<&'a str> {
+        let snap = self.snapshot();
+        let no_derived = std::mem::replace(&mut self.no_derived, true);
+        let extra = self.extra_tags.take();
+        f(self);
+        let mut tags = self.used_tags[snap.used..].to_vec();
+        self.restore(&snap);
+        self.no_derived = no_derived;
+        self.extra_tags = extra;
+        tags.sort_unstable();
+        tags.dedup();
+        tags
+    }
+
+    /// The tags type `q` uses when mangled at this point (clang's
+    /// throwaway `TrackReturnTypeTags` / `TrackVariableType` mangler).
+    fn type_tags(&mut self, q: QualType, result: bool) -> Vec<&'a str> {
+        self.trial_tags(|m| {
+            if result {
+                m.fn_depth = (m.fn_depth.0 + 1, true);
+            }
+            m.ty(q);
+        })
+    }
+
+    /// Whether the module has any `abi_tag` attribute.
+    fn has_abi_tags(&mut self) -> bool {
+        let ast = self.ast;
+        *self.anon.abi_tags.get_or_insert_with(|| ast.attrs.has_kind(AttrKind::ABI_TAG))
+    }
+
+    /// The tags of the return type of function `d` (none while derived
+    /// tags are disabled, and none for an unmangled function).
+    fn return_type_tags(&mut self, d: DeclId) -> Vec<&'a str> {
+        let ast = self.ast;
+        if self.no_derived || !self.has_abi_tags() {
+            return Vec::new();
+        }
+        let Some(ty) = ast.decls.get(d).ty() else { return Vec::new() };
+        let Some(ret) = ast.types.proto(ast.types.canonical(ty)).map(|p| p.ret()) else {
+            return Vec::new();
+        };
+        self.type_tags(ret, true)
+    }
+
+    /// The tags of the type of variable `d`.
+    fn variable_type_tags(&mut self, d: DeclId) -> Vec<&'a str> {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        if self.no_derived
+            || n.kind() != DeclKind::Var
+            || !self.has_abi_tags()
+            || ast.decls.decomp_bindings(d).is_some()
+        {
+            return Vec::new();
+        }
+        let Some(ty) = n.ty() else { return Vec::new() };
+        self.type_tags(ty, false)
+    }
+
+    /// Records the implicit tags of `d`: `derived` (sorted, unique) less
+    /// `used`.
+    fn set_extra_tags(&mut self, d: DeclId, derived: &[&'a str], used: &[&'a str]) {
+        let extra: Vec<&'a str> =
+            derived.iter().copied().filter(|t| used.binary_search(t).is_err()).collect();
+        if !extra.is_empty() {
+            let t = self.spec_of(d).map_or(d, |(t, _)| t);
+            self.extra_tags = Some(([d, t], extra));
         }
     }
 
@@ -970,7 +1232,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if let Some(f) = enclosing_function(ast, d) {
             // <local-name> := Z <function encoding> E <entity name>
             self.out.push('Z');
+            let (used, emitted) = (self.used_tags.len(), self.emitted_tags.len());
             self.encoding(f, Structor::Complete);
+            // Tags used implicitly (from namespaces) by the encoding are
+            // not available to the entity; the written ones are (clang
+            // `mangleLocalName`'s `LocalAbiTags`).
+            let written = self.emitted_tags[emitted..].to_vec();
+            self.used_tags.truncate(used);
+            self.used_tags.extend(written);
             self.out.push('E');
             self.default_arg_discriminator(d, f);
             self.name_in(d, v, Some(f));
@@ -1161,6 +1430,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.out.push_str("St");
             return;
         }
+        if self.std_spec(dc) {
+            return;
+        }
         let key = Sub::Decl(ast.first(dc));
         if self.try_sub(key) {
             return;
@@ -1183,6 +1455,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// `v` is the structor variant of a constructor template
     /// specialization (`C1`/`C2`).
     fn template_prefix(&mut self, t: DeclId, stop: Option<DeclId>, v: Structor) {
+        if self.std_template(t) {
+            return;
+        }
         let key = Sub::Template(self.ast.first(t));
         if self.try_sub(key) {
             return;
@@ -1190,12 +1465,19 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if let Some(p) = self.parent(t) {
             self.prefix(p, stop);
         }
+        // A nested template name takes no implicit tags (clang's
+        // `mangleTemplatePrefix` is not passed them; an unscoped one is).
+        let extra = self.extra_tags.take();
         self.unqualified(t, v);
+        self.extra_tags = extra;
         self.subs.push(key);
     }
 
     /// <unscoped-template-name> of template `t` (`St`-prefixed in `std`).
     fn unscoped_template(&mut self, t: DeclId, std: bool) {
+        if self.std_template(t) {
+            return;
+        }
         let key = Sub::Template(self.ast.first(t));
         if self.try_sub(key) {
             return;
@@ -1215,12 +1497,42 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.out.push('F');
         }
         self.unqualified_untagged(d, v);
-        // <abi-tags> follow the unqualified name (clang `writeAbiTags`).
-        if let Some(tags) = abi_tags(self.ast, d) {
-            for t in tags.split(',') {
-                self.out.push('B');
-                self.source_name(t);
-            }
+        self.write_abi_tags(d);
+    }
+
+    /// <abi-tags> after the unqualified name of `d` (clang `writeAbiTags`,
+    /// `AbiTagState::write`): its own tags plus the implicit ones of the
+    /// entity being encoded, sorted. A namespace's tags are used but
+    /// never written: `std::__cxx11` is `St7__cxx11`, and the tag reaches
+    /// other names only implicitly, through a type that mentions it.
+    fn write_abi_tags(&mut self, d: DeclId) {
+        let ast = self.ast;
+        if ast.decls.get(d).kind() == DeclKind::Namespace {
+            // Only the first definition's tags count: a reopening's are
+            // not merged (clang reads the canonical declaration).
+            let own = crate::layout::props::attrs(ast, ast.first(d))
+                .find(|a| a.kind == AttrKind::ABI_TAG)
+                .map(|a| ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(a.a)));
+            self.used_tags.extend(own.into_iter().flat_map(|t| t.split(',')));
+            return;
+        }
+        let own = abi_tags(ast, d);
+        let extra = match &self.extra_tags {
+            Some((ds, _)) if ds.contains(&d) => self.extra_tags.take().map(|(_, e)| e),
+            _ => None,
+        };
+        if own.is_none() && extra.is_none() {
+            return;
+        }
+        let mut list: Vec<&'a str> = own.into_iter().flat_map(|t| t.split(',')).collect();
+        list.extend(extra.into_iter().flatten());
+        list.sort_unstable();
+        list.dedup();
+        for t in list {
+            self.used_tags.push(t);
+            self.emitted_tags.push(t);
+            self.out.push('B');
+            self.source_name(t);
         }
     }
 
@@ -1550,6 +1862,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let n = ast.types.canonical_template_name(n);
         match ast.types.template_name_view(n) {
             TemplateName::Template(t) => {
+                if self.std_template(t) {
+                    return;
+                }
                 let key = Sub::Template(ast.first(t));
                 if self.try_sub(key) {
                     return;
@@ -2066,6 +2381,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     /// A tag type: its name (a candidate keyed by the declaration).
     fn tag(&mut self, d: DeclId) {
+        if self.std_spec(d) {
+            return;
+        }
         let key = Sub::Decl(self.ast.first(d));
         if self.try_sub(key) {
             return;
