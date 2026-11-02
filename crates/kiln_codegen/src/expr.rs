@@ -2033,6 +2033,9 @@ impl Cg<'_> {
         if !needs_init {
             return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None });
         }
+        if n.kind() == ExprKind::MaterializeTemporaryExpr && !static_tmp {
+            self.temporary_lifetime(e, s, tmp);
+        }
         if self.is_aggregate(sq) {
             // clang `EmitAnyExprToMem`: a materialized temporary is
             // a `MayOverlap` slot, which only a constructor call or
@@ -4065,6 +4068,7 @@ impl Cg<'_> {
         // the return happened.
         let nrvo_slot =
             self.f.ret_slot.filter(|_| v.spec.is_nrvo() && ast.types.as_record(q).is_some());
+        let mut lifetime = None;
         let (addr, flag) = if let Some(slot) = nrvo_slot {
             let addr = Addr { v: slot.v, ty, align: slot.align };
             let flag = if dtor_class.is_some() {
@@ -4080,9 +4084,13 @@ impl Cg<'_> {
         } else {
             let align = self.var_align(d);
             let a = self.f.fir.alloca(ty, align);
+            lifetime = Some(a);
             (Addr { v: a, ty, align }, None)
         };
         self.f.locals.insert(d, addr);
+        if let Some(a) = lifetime {
+            self.var_lifetime(d, a, ty);
+        }
         // Default-initialization by a trivial constructor emits nothing
         // (but a non-trivial destructor still gets its cleanup).
         let init = v.init.filter(|&i| {

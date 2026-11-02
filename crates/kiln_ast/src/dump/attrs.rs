@@ -58,6 +58,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::HOT => "Hot",
         AttrKind::FLAG_ENUM => "FlagEnum",
         AttrKind::ENUM_EXTENSIBILITY => "EnumExtensibility",
+        AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE => "CoroOnlyDestroyWhenComplete",
         _ => return None,
     })
 }

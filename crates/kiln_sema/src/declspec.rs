@@ -623,6 +623,11 @@ pub struct Declarator {
     pub attrs: Vec<AttrId>,
     /// Where the declarator starts.
     pub loc: Loc,
+    /// The start of its last token, counting a trailing requires-clause,
+    /// an asm label, GNU attributes and the last virt-specifier but not
+    /// trailing C++11 attributes (clang's `getEndLoc`); invalid unless
+    /// the parser set it (member declarators only, for now).
+    pub end: Loc,
     /// An error was already reported.
     pub invalid: bool,
     /// A parameter needed the missing-`typename` recovery
@@ -821,6 +826,7 @@ impl Declarator {
             bit_width: None,
             attrs: Vec::new(),
             loc,
+            end: Loc::INVALID,
             invalid: false,
             missing_typename: false,
             init_style: None,
