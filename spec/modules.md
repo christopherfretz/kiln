@@ -225,12 +225,14 @@ visible, and is reported as clang 22's `diagnoseMissingImport` does:
   `missing '#include'; 'x' must be declared before it is used`, or
   `missing '#include <h>'; ...` when a header is known (clang
   `getHeaderToIncludeForDiagnostics`): walking out from the declaration's
-  file along its `#include`s (stopping at the module unit), the first
+  file along its `#include`s (stopping at the module unit; an `#include`
+  written with a macro is walked through, as in clang), the first
   include-guarded file (a controlling macro; not `#pragma once`), named as
-  kiln_pp suggested (spec/pp.md `suggest_include`). Deviations: clang 22
-  does not strip a *relative* search directory from a BMI's header (it
-  falls back to the main file's directory or the full path) where kiln
-  does; an `#include` written with a macro ends kiln's walk;
+  kiln_pp suggested (spec/pp.md `suggest_include`): relative to the
+  longest *absolute* search directory holding it, else to the main file's
+  directory, else its whole path (clang 22 and 19 read the header's path
+  back from the BMI as absolute and compare the search directories as
+  written, so a relative `-I` never matches; WP-396);
 - either way with `note: declaration here is not visible` at the
   declaration.
 
@@ -484,7 +486,9 @@ part B (§9).
   errors (§5), identical to clang 22's output;
   `module.reach/missing-include.cpp`: the header named in
   `missing '#include <h>'` (guarded, nested, `#pragma once`, unguarded
-  and system headers), and `module.import/import-std-hidden.cpp`
+  and system headers), `module.reach/missing-include-dirs.cpp`
+  (relative and absolute `-I`, a macro-written `#include`), and
+  `module.import/import-std-hidden.cpp`
   (`<__memory/pointer_traits.h>` through `import std;`).
 - `module.interface/export-run.cpp`, `visibility.cpp`,
   `module.unit/partitions-run.cpp`, `module.private.frag/private-run.cpp`,
