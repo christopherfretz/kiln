@@ -12,7 +12,7 @@ use crate::consts::{
     Scalar, Shape,
 };
 use crate::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
-use crate::expr::{CharKind, ExprFlags, ExprKind, TraitKind, ValueCategory};
+use crate::expr::{CharKind, ExprFlags, ExprKind, ValueCategory};
 use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, RawId, TypeId};
 use crate::names::{DeclName, DeclNameView};
 use crate::strings::{StringEncoding, push_unit};
@@ -963,12 +963,11 @@ impl<'a> AstNames<'a> {
                     write_type(&ast.types, self, t, self.expr_types, out);
                     out.push(')');
                 } else {
-                    let paren = kind != TraitKind::SizeOf;
-                    out.push(if paren { '(' } else { ' ' });
+                    // clang StmtPrinter: an expression operand follows a
+                    // space for every kind; its own parens (a ParenExpr)
+                    // print themselves, so `alignof(g)` reads `alignof (g)`.
+                    out.push(' ');
                     self.expr(ExprId::new(n.a()), d, out);
-                    if paren {
-                        out.push(')');
-                    }
                 }
             }
             ExprKind::TypeTraitExpr => {
