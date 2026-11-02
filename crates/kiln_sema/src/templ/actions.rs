@@ -1248,7 +1248,10 @@ impl Sema<'_, '_> {
     /// A call with a type-dependent callee or argument ([temp.dep.expr]/3,
     /// [temp.dep.candidate]): a `<dependent type>` prvalue `CallExpr`. An
     /// unqualified callee naming non-member functions becomes an
-    /// `UnresolvedLookupExpr` with ADL.
+    /// `UnresolvedLookupExpr` with ADL, unless the function is an implicit
+    /// builtin ([basic.lookup.argdep]/1, clang `UseArgumentDependentLookup`): `__builtin_addressof(x)` with
+    /// `x` a `Holder<Incomplete>*` must not complete `Holder<Incomplete>`
+    /// at instantiation ([temp.inst]/2).
     pub(crate) fn dependent_call(
         &mut self,
         callee: ExprId,
@@ -1263,7 +1266,10 @@ impl Sema<'_, '_> {
             let d = self.ast.exprs.decl(callee);
             let qualified =
                 self.ast.exprs.decl_ref_extra(callee).is_some_and(|x| x.qualifier.is_some());
-            if self.kind_of(d) == DeclKind::Function && !qualified {
+            if self.kind_of(d) == DeclKind::Function
+                && !qualified
+                && self.ast.decls.builtin_id(d).is_none()
+            {
                 let name = self.ast.decls.get(d).name().as_ident();
                 if let Some(name) = name {
                     let name = DeclName::ident(name);
