@@ -439,6 +439,20 @@ impl Substituter<'_, '_, '_> {
                     let q = self.sema.ast.types.effective_quals(ot);
                     return Ok(self.sema.field_access(base, f, q, arrow, loc));
                 }
+                if self.sema.kind_of(m) == DeclKind::CXXDestructor {
+                    // `p->~C()` / `p->B::~B()` resolved in the pattern
+                    // ([expr.ref]/4, [class.dtor]/16): formed again from
+                    // the substituted object as a destructor access to
+                    // the (instantiated) class the destructor belongs to.
+                    let Some(cls) = self.sema.ast.decls.get(m).ctx() else {
+                        return Err(SubstFail);
+                    };
+                    let cls = self.find_instantiated_decl(cls, loc)?;
+                    let ty = self.sema.tag_type(cls);
+                    let qualified = ex(self).decl_ref_extra(e).and_then(|x| x.qualifier).is_some();
+                    let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                    return Ok(self.sema.rebuild_member_destructor(base, ty, qualified, loc, op, arrow));
+                }
                 let name = self.member_name(name, loc)?;
                 // A member template-id `x.f<args>` (§6.4).
                 // A member function template specialization the pattern
