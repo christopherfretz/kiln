@@ -1269,6 +1269,12 @@ impl Parser<'_, '_> {
                     Self::punct_of(next),
                     Some(Punct::LParen | Punct::ColonColon | Punct::Less)
                 ))
+            // A bit-field width ([class.bit]/1) or, at namespace scope,
+            // what clang's `ParseImplicitInt` treats the same way: `y : 3;`
+            // is "unknown type name 'y'", then an anonymous bit-field
+            // (namespace scope: "expected unqualified-id" at the `:`).
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                && Self::punct_of(next) == Some(Punct::Colon))
     }
 
     /// `foo<args> x` with `foo` undeclared ([`Parser::undeclared_template_type`]):

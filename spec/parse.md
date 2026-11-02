@@ -209,6 +209,13 @@ clang's `Parser` over `Preprocessor::Lex`.
   dropped silently (clang's `TST_error`; `DeclSpec::set_base`,
   `set_width`, `set_sign`; WP-371,
   `class.friend/restrict-atomic-decl-specifiers.cpp`).
+  An undeclared name followed by `:` with no decl-specifier before it
+  (`y : 3;`) is "unknown type name 'y'" in a class or namespace
+  (clang's `ParseImplicitInt`); the class member is then an invalid
+  anonymous bit-field of type `int` (`y : 3 = 1;` adds "anonymous
+  bit-field cannot have a default member initializer"), and at namespace
+  scope the `:` is "expected unqualified-id". At block scope `y : 3;` is
+  a label (WP-379, `class.bit/untyped-bit-field.cpp`).
   An unqualified typename-specifier (`typename T`, `typename Ts...[0]`;
   [temp.res.general]/3) is "expected a qualified name after 'typename'"
   and recovers as clang does, by context (`parse_typename_specifier_in`,
