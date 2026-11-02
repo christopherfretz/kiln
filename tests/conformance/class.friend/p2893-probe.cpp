@@ -3,7 +3,7 @@
 //@ expect: compile-ok
 //@ strict-diags
 //@ xfail(kiln): variadic friend declarations not parsed
-//@ xfail(clang): clang 19 lacks P2893 (implemented in clang 20; clang 22 accepts)
+//@ requires: clang>=22
 template <class... Ts> class C {
   friend Ts...;
   int secret = 42;
