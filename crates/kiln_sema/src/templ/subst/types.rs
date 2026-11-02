@@ -126,12 +126,14 @@ impl Substituter<'_, '_, '_> {
                 self.chunk(p, Chunk::Pointer { quals: kiln_ast::types::Quals::NONE, loc }, loc)
             }
             TypeView::LValueRef(p) => {
+                let at = self.ref_loc.take().unwrap_or(loc);
                 let p = self.ty(p, loc)?;
-                self.chunk(p, Chunk::LRef { loc }, loc)
+                self.chunk(p, Chunk::LRef { loc: at }, loc)
             }
             TypeView::RValueRef(p) => {
+                let at = self.ref_loc.take().unwrap_or(loc);
                 let p = self.ty(p, loc)?;
-                self.chunk(p, Chunk::RRef { loc }, loc)
+                self.chunk(p, Chunk::RRef { loc: at }, loc)
             }
             TypeView::MemberPointer { pointee, class } => {
                 let p = self.ty(pointee, loc)?;

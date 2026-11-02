@@ -2193,6 +2193,15 @@ immediate context: errors are hard.
   `Subst::type_begin` while the declaration's type is substituted
   (cleared inside the function type's parameters; WP-241). Without a
   recorded location the declarator's name is used.
+- **A reference to `void`** formed by substitution ("cannot form a
+  reference to 'void'", [dcl.ref]/1) is reported at the `&`/`&&` that
+  forms it (clang's `ReferenceTypeLoc`): the outermost reference chunk of
+  a dependent field's, variable's, static data member's, typedef's or
+  parameter's declarator is recorded in `Sema::ref_locs` (a parameter
+  carries it as `ParamInfo::ref_loc`; a parameter pack does not) and
+  carried as `Subst::ref_loc`, which the first reference rebuilt takes
+  (WP-300). An alias-declaration records none and is reported at its
+  name, as clang does.
 - **Default template arguments of function templates** are used only for
   parameters that are neither deduced nor given explicitly. They are
   substituted in order and may name earlier parameters.
@@ -4272,6 +4281,13 @@ explicit specialization errors remain. The blockers are:
   specialization. Explicit arguments are checked and then substituted
   into P under an `ExplicitArgSubstitution` SFINAE frame. Too many of
   them is a `SubstitutionFailure` that carries clang's arity message.
+  Before them, as in clang's `DeduceTemplateArguments`, the call's arity
+  is checked against the written parameters ([temp.deduct.call]/1):
+  fewer arguments than `fn_min_args` is `TooFewArguments`, and more than
+  the parameters of a non-variadic template with no function parameter
+  pack is `TooManyArguments`, so `f<void>()` of `f(T &)` is "requires 1
+  argument" rather than a substitution failure (WP-300). The check after
+  substitution stays for expanded non-trailing packs.
   `deduce_explicit_only` is the same pipeline with no call: it is used
   for a function template-id that is not called ([over.over]/3,
   `Sema::resolve_single_template_id`). Mismatch notes print P as
