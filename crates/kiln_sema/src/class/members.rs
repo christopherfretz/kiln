@@ -189,14 +189,7 @@ impl Sema<'_, '_> {
                 Some(p) if self.kind_of(p) == DeclKind::Var => {
                     let p = self.ast.latest(p);
                     let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-                    let t = &self.ast.types;
-                    let compatible = t.same_type(pty, ty)
-                        || (t.is_array(pty)
-                            && t.is_array(ty)
-                            && t.array_size(pty).is_none()
-                            && t.element(pty)
-                                .zip(t.element(ty))
-                                .is_some_and(|(a, b)| t.same_type(a, b)));
+                    let compatible = self.redecl_var_types_compatible(pty, ty);
                     let prev_def = self.ast.redecls_of(p).find(|&x| self.is_var_definition(x));
                     // [depr.static.constexpr]: an out-of-class declaration
                     // without an initializer of an inline (constexpr)
@@ -244,6 +237,7 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        let ty = prev_ok.map_or(ty, |p| self.redecl_var_type(p, ty));
         let mut h = DeclHead::new(ctx, DeclName::ident(name), loc);
         h.lexical = Some(lexical);
         self.mark_pattern_next();

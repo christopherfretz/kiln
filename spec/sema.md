@@ -268,7 +268,16 @@ Redeclaration and linkage rules:
   is not `extern`, else
   `redeclaration of 'x' with a different type`. The note says
   `previous definition is here` if the previous declaration was a
-  definition, else `previous declaration is here`.
+  definition, else `previous declaration is here`. Array types that
+  differ only in the presence of a major bound are not a mismatch
+  ([basic.link]/11), in either order, also for the out-of-class
+  definition of a static data member (which therefore redeclares the
+  member rather than adding a second one to the class); a redeclaration
+  that omits the bound takes the earlier declaration's bound
+  ([dcl.array]/8; `redecl_var_type`, clang's `MergeVarDeclTypes`):
+  `extern int a[4]; int a[] = {1};` and `struct S { static int b[4]; };
+  int S::b[] = {1};` both declare `int[4]`
+  (tests/conformance/class.static.data/omitted-bound-redecl.cpp, WP-310).
 - **Linkage** ([basic.link]): `static`, `extern`, `extern "C"`, members
   of unnamed namespaces, and `const` variables at namespace scope.
 - **Block-scope variables** (`merge_local_var`, clang's `MergeVarDecl`;
