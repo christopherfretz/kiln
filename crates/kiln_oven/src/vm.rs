@@ -1662,14 +1662,15 @@ impl Oven {
 
     // ---- memory -----------------------------------------------------------
 
-    /// [expr.const]/5.9: a read of the object of type `ty` at `raw`, in an
+    /// [expr.const]/5.9: an access `k` (a read, or a write of an object that
+    /// is not `const`) of the object of type `ty` at `raw`, in an
     /// allocation marked [`flags::MUTABLE_OUTSIDE`], must not reach a
     /// `mutable` member on the path from the allocation root, nor (a
     /// whole-object read of a class, a trivial copy) contain one that it
     /// reads (clang `diagnoseMutableFields`). The slow path of a load:
     /// only allocations with the flag take it.
     #[cold]
-    pub(crate) fn mutable_path(&self, raw: u64, ty: OTy) -> Result<(), Fault> {
+    pub(crate) fn mutable_path(&self, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
         let (mut t, mut base) = (a.ty, 0u64);
@@ -1677,7 +1678,7 @@ impl Oven {
         loop {
             if t == ty && base == target {
                 return match self.mutable_read(ty) {
-                    Some(field) => Err(Fault::Mutable { ak: ak::READ, field }),
+                    Some(field) => Err(Fault::Mutable { ak: k, field }),
                     None => Ok(()),
                 };
             }
@@ -1712,7 +1713,7 @@ impl Oven {
                         return Ok(());
                     };
                     if f.mutable {
-                        return Err(Fault::Mutable { ak: ak::READ, field: f.decl });
+                        return Err(Fault::Mutable { ak: k, field: f.decl });
                     }
                     if f.width.is_some() {
                         return Ok(());
@@ -1862,8 +1863,11 @@ impl Oven {
     /// `mutable` members it may not read (outlined from the hot path).
     #[cold]
     fn slow_access(&self, fl: u8, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
-        if fl & flags::MUTABLE_OUTSIDE != 0 && k == ak::READ {
-            self.mutable_path(raw, ty)?;
+        // A write is checked in an object that is not `const`: the one
+        // `Oven::has_constant_destruction` destroys, whose `mutable`
+        // members are outside their lifetime.
+        if fl & flags::MUTABLE_OUTSIDE != 0 && (k == ak::READ || fl & flags::CONST == 0) {
+            self.mutable_path(raw, ty, k)?;
         }
         if fl & flags::HAS_UNION != 0 {
             self.union_path(raw, ty, k)?;
@@ -1922,6 +1926,10 @@ impl Oven {
             return Err(fault(f));
         }
         let has_union = a.flags & flags::HAS_UNION != 0;
+        let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
+        if mutable && !init {
+            self.mutable_path(raw, ty, k)?;
+        }
         self.mem.trial_write(raw, len).map_err(fault)?;
         if has_union {
             self.union_path(raw, ty, k)?;
@@ -1973,6 +1981,10 @@ impl Oven {
             return Err(fault(f));
         }
         let has_union = a.flags & flags::HAS_UNION != 0;
+        let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
+        if mutable && !init {
+            self.mutable_path(raw, ty, k)?;
+        }
         self.mem.trial_write(raw, n).map_err(fault)?;
         if has_union {
             self.union_path(raw, ty, k)?;
@@ -2025,7 +2037,7 @@ impl Oven {
             })?;
             src_at = Some((ss, sa));
             if sa_alloc.flags & flags::MUTABLE_OUTSIDE != 0 {
-                self.mutable_path(src, ty)?;
+                self.mutable_path(src, ty, ak::READ)?;
             }
             if let Some(ast) = full
                 && !matches!(self.types.kind(ty), TyKind::Record { union: true, .. })

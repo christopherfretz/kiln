@@ -862,6 +862,7 @@ impl Sema<'_, '_> {
             self.error(DiagId::parse_expected_namespace_name, target_loc);
             return None;
         };
+        self.act_on_namespace_name_use(t, target_loc);
         let ns = self.ast.resolve_alias(t);
         let mut prev = None;
         for p in self.lookup_current_scope(name) {

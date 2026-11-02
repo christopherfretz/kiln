@@ -65,6 +65,11 @@ pub struct LookupEntry(u32);
 pub struct LookupTables {
     map: FxHashMap<(DeclId, DeclName), LookupEntry>,
     sets: Vec<Vec<u32>>,
+    /// The summed lengths and capacities of `sets`, kept as the sets
+    /// grow: the memory meter reads them at every instantiation frame
+    /// (WP-313), so summing the sets there was quadratic.
+    set_words: usize,
+    set_cap: usize,
     inline_children: FxHashMap<DeclId, Vec<DeclId>>,
     /// Bumped by every insertion (see [`LookupTables::generation`]).
     generation: u64,
@@ -232,13 +237,18 @@ impl LookupTables {
             return;
         }
         if !set.iter().any(|s| *s & !FLAG_MASK == d.index()) {
+            let cap = set.capacity();
             set.push(word);
+            self.set_words += 1;
+            self.set_cap += set.capacity() - cap;
         }
     }
 
     fn new_set(&mut self, v: Vec<u32>) -> LookupEntry {
         let i = self.sets.len() as u32;
         assert!(i < SET_BIT, "lookup overload-set space exhausted");
+        self.set_words += v.len();
+        self.set_cap += v.capacity();
         self.sets.push(v);
         LookupEntry(SET_BIT | i)
     }
@@ -277,8 +287,7 @@ impl LookupTables {
     }
 
     fn set_row(&self) -> MemRow {
-        let words: usize = self.sets.iter().map(Vec::len).sum();
-        let cap: usize = self.sets.iter().map(Vec::capacity).sum();
+        let (words, cap) = (self.set_words, self.set_cap);
         let outer = MemRow::of_vec("sets", &self.sets);
         MemRow::new(
             "sets",
@@ -307,5 +316,36 @@ impl HeapSize for LookupTables {
             m.reserved_bytes + kids as u64 * 4,
         ));
         r
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LookupFlags, LookupTables};
+    use crate::ids::DeclId;
+    use crate::names::DeclName;
+    use kiln_source::symbol::Interner;
+
+    /// The kept sums (WP-313) equal the sums over the sets after
+    /// singleton entries, set creation, appends, replacements and
+    /// duplicates.
+    #[test]
+    fn set_meter_tracks_the_sets() {
+        let i = Interner::new();
+        let mut t = LookupTables::new();
+        let ctx = DeclId::new(1);
+        for n in 0..40u32 {
+            let name = DeclName::ident(i.intern(&format!("f{}", n % 7)));
+            let d = DeclId::new(2 + n);
+            t.insert(ctx, name, d, None, n % 3 == 0);
+            t.insert(ctx, name, d, None, false);
+            if n % 5 == 0 {
+                t.insert(ctx, name, DeclId::new(100 + n), Some(d), false);
+            }
+            t.insert_with_flags(ctx, name, DeclId::new(200 + n), None, LookupFlags::ADL_ONLY);
+            let words: usize = t.sets.iter().map(Vec::len).sum();
+            let cap: usize = t.sets.iter().map(Vec::capacity).sum();
+            assert_eq!((t.set_words, t.set_cap), (words, cap));
+        }
     }
 }

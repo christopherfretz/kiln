@@ -2387,6 +2387,14 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let td = self.builder().typedef(h, kind, underlying, prev_ok);
+        if underlying.quals().is_empty()
+            && matches!(
+                self.ast.types.view(underlying.ty()),
+                TypeView::Vector { kind: kiln_ast::types::VectorKind::Ext, .. }
+            )
+        {
+            self.ext_vector_typedefs.push(td);
+        }
         // The decl-specifiers' start: an instantiation finds the type's
         // dependent names from there (§5.8), as in `typedef int
         // (*f)(typename T::type);`.
@@ -4157,6 +4165,13 @@ impl Sema<'_, '_> {
             }
             return;
         }
+        // clang `AddInitializerToDecl`: the initializer of an invalid
+        // variable is not checked against its type (`S::name &r = 1;`
+        // with no `S::name`: the type recovered to `int`, WP-308).
+        if vn.has(DeclFlags::INVALID) {
+            self.discard_initializer(&init);
+            return;
+        }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
         if self.extern_init_redefines(v, spec, loc) {
@@ -4612,7 +4627,10 @@ impl Sema<'_, '_> {
             return;
         }
         let vn = *self.ast.decls.get(v);
-        if vn.kind() != DeclKind::Var || vn.has(DeclFlags::INVALID) {
+        if vn.kind() != DeclKind::Var {
+            return;
+        }
+        if self.uninit_array_or_reference(v) || vn.has(DeclFlags::INVALID) {
             return;
         }
         // An in-class static data member declaration is not a definition
@@ -4713,6 +4731,50 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_default_init_const, loc).arg(self.ty_arg(ty));
             self.emit(msg);
         }
+    }
+
+    /// clang's `ActOnUninitializedDecl` checks before it stops at an
+    /// invalid declaration or a dependent type, for a variable definition
+    /// without an initializer: an array of unknown bound ([dcl.array]/5,
+    /// "definition of variable with array type needs an explicit size or
+    /// an initializer"; a `constexpr` one is "must be initialized by a
+    /// constant expression"), which makes it invalid; and, for an invalid
+    /// variable, a reference type, so `S::name &r;` with no `S::name`
+    /// (whose type recovers to `int`, [dcl.type.simple]) reports
+    /// "declaration of reference variable 'r' requires an initializer"
+    /// after "no type named 'name' in 'S'" (WP-308). True if it reported.
+    fn uninit_array_or_reference(&mut self, v: DeclId) -> bool {
+        let vn = *self.ast.decls.get(v);
+        let Some(ty) = vn.ty() else { return false };
+        let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
+        if spec.storage() == VarStorage::Extern
+            || !self.is_var_definition(v)
+            || self.is_error_type(ty)
+            || self.contains_undeduced_auto(ty)
+        {
+            return false;
+        }
+        if matches!(self.ast.types.canonical_view(ty), TypeView::IncompleteArray(_)) {
+            let msg = if spec.is_constexpr() {
+                let name = self.decl_name(v);
+                self.diag(DiagId::sema_constexpr_var_non_constant, vn.loc()).arg(name)
+            } else {
+                self.diag(DiagId::sema_typecheck_incomplete_array_needs_initializer, vn.loc())
+            };
+            self.emit(msg);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return true;
+        }
+        if !vn.has(DeclFlags::INVALID)
+            || self.ast.types.is_dependent(ty)
+            || !self.ast.types.is_reference(ty)
+        {
+            return false;
+        }
+        let name = self.decl_name(v);
+        let msg = self.diag(DiagId::sema_reference_var_requires_init, vn.loc()).arg(name);
+        self.emit(msg);
+        true
     }
 
     // -- function definitions ----------------------------------------------------
@@ -5150,24 +5212,6 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// The template head of a class template redeclaration that creates
-    /// no new decl (`template<class T> struct C;` again): equivalent to
-    /// the template's ([temp.over.link]/6), then checked for default
-    /// arguments ([temp.param]/12, /14).
-    fn check_redeclared_class_head(&mut self, p: DeclId) {
-        if let Some(list) = self.templ.cur.take()
-            && let Some(t) = self.ast.described_template(p)
-            && let Some(old) = self
-                .head_comparable_decl(t)
-                .and_then(|c| self.ast.template_info(c))
-                .map(|i| i.params)
-            && self.check_template_heads_match(list, old)
-        {
-            self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
-            self.inherit_redeclared_defaults(t, list);
-        }
-    }
-
     /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2).
     fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) {
         if let Some(f) = fixed {
@@ -5364,19 +5408,19 @@ impl Sema<'_, '_> {
                     // decl (below), which an incomplete-type note names.
                     && !member_class_spec
                 {
-                    // A redeclaration creates no new decl (a deviation:
-                    // clang adds a `ClassTemplateDecl` per redeclaration),
-                    // but its template head is still checked against the
-                    // template's ([temp.param]/12, /14). One of a class
-                    // only a friend declaration introduced makes it
-                    // visible ([namespace.memdef]/3): a new decl (below).
                     // `[extern] template struct C<args>::I;` explicitly
                     // instantiates a member class ([temp.explicit]/3).
-                    if qualifier.is_none() || !self.act_on_explicit_member_class_inst(p, nloc) {
-                        self.check_redeclared_class_head(p);
-                        self.note_class_template_redecl(p, head.is_some(), nloc);
+                    let inst =
+                        qualifier.is_some() && self.act_on_explicit_member_class_inst(p, nloc);
+                    // A class template redeclaration is a new decl with a
+                    // `ClassTemplateDecl` of its own (clang
+                    // `CheckClassTemplate`; `finish_template_pattern`
+                    // checks its head, [temp.param]/12, /14). A class
+                    // redeclaration creates none, unless only a friend
+                    // declaration introduced it ([namespace.memdef]/3).
+                    if inst || head.is_none() {
+                        return p;
                     }
-                    return p;
                 }
             } else if let Some(q) = qualifier {
                 self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
@@ -5420,16 +5464,6 @@ impl Sema<'_, '_> {
             self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
-    }
-
-    /// Records the name of a class template redeclaration that created no
-    /// decl (`templ.class_redecl_loc`), for notes naming the declaration
-    /// lookup finds.
-    fn note_class_template_redecl(&mut self, p: DeclId, template: bool, nloc: Loc) {
-        if template {
-            let latest = self.ast.latest(p);
-            let _ = self.templ.class_redecl_loc.insert(latest, nloc);
-        }
     }
 
     /// The elaborated-type-specifier of `friend class X;`

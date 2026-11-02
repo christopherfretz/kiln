@@ -284,6 +284,10 @@ pub struct TemplateTables {
     /// The `.`/`->` of a dependent member access (diagnostics after
     /// substitution point at the operator, as clang's `OperatorLoc`).
     pub member_op_loc: ColdMap<ExprId, Loc>,
+    /// The `template` keyword after the qualifier of a qualified name
+    /// (`N::template v<T>`; clang's `TemplateKWLoc`), which the printer
+    /// writes back (WP-308).
+    pub template_kw: ColdMap<ExprId, Loc>,
     /// Set by sema right before it creates a template's pattern: the next
     /// declaration the builder adds is neither a member nor a name (its
     /// template decl is both, [`AstBuilder::template_decl`]).
@@ -376,6 +380,7 @@ impl Default for TemplateTables {
             expr_targs: ColdMap::new("expr_targs"),
             expr_begin: ColdMap::new("expr_begin"),
             member_op_loc: ColdMap::new("member_op_loc"),
+            template_kw: ColdMap::new("template_kw"),
             expr_nns: ColdMap::new("expr_nns"),
             pattern_next: false,
             dependent_depth: 0,
@@ -615,6 +620,7 @@ impl HeapSize for TemplateTables {
         r.push(self.expr_targs.mem_row());
         r.push(self.expr_begin.mem_row());
         r.push(self.member_op_loc.mem_row());
+        r.push(self.template_kw.mem_row());
         r.push(self.expr_nns.mem_row());
         r.push(MemRow::of_vec("templ.specs", &self.specs));
         r.push(MemRow::of_vec("templ.member_specs", &self.member_specs));
@@ -1528,6 +1534,15 @@ impl AstBuilder<'_> {
         if self.ast.decls.member_list(lexical).is_some() {
             self.ast.decls.append_member(lexical, spec);
         }
+    }
+
+    /// Locates specialization `spec` at `loc`, the template-name of the
+    /// explicit instantiation that first makes it explicit, before that
+    /// instantiation runs (clang `ActOnExplicitInstantiation` updates the
+    /// location first, so diagnostics during the instantiation that point
+    /// at the class point there).
+    pub fn relocate_spec(&mut self, spec: DeclId, loc: Loc) {
+        self.ast.decls.set_loc(spec, loc);
     }
 
     /// Marks specialization `spec` as declared in lexical context

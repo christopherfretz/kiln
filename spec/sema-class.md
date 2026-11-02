@@ -817,10 +817,36 @@ path. `Ast::destructor` returns the first destructor found that is not
 `not_selected` ones, so triviality ([class.dtor]/8) and the implicit
 `noexcept` follow the selected destructor only. A destructor has no
 explicit object parameter ([class.dtor]/1), so constraints are the only
-distinction. Not yet diagnosed (follow-ups): a requires-clause on a
-non-templated destructor (only `non-templated function cannot have a
-requires clause` is issued, not the selection error) and on a `virtual`
-destructor (`virtual function cannot have a requires clause`).
+distinction.
+
+A requires-clause on a **non-templated** destructor (or any non-templated
+function) is an error, `non-templated function cannot have a requires
+clause` at the clause's first token ([temp.constr.decl]/1, [dcl.decl]/4),
+but, as in clang, the clause is kept and checked with no template
+arguments wherever constraints are checked (`ConceptState::
+untemplated_requires`, `check_function_constraints`): destructor
+selection then reports `no viable destructor found` (or picks the
+satisfied one) exactly as for a template, and calls and references
+report `invalid reference to function 'f': constraints not satisfied`.
+For an explicit instantiation of a class template specialization that
+is first named by it (clang `ActOnExplicitInstantiation`'s
+`setLocation(TemplateNameLoc)`), the specialization's location moves to
+the template name in the explicit instantiation before the class is
+instantiated (`AstBuilder::relocate_spec`), so a selection error is
+reported there. `tests/conformance/class.dtor/prospective-destructor-non-template.cpp`.
+
+A `virtual` function with a trailing requires-clause — `virtual` as
+written, an overrider, or an out-of-class definition of one — is
+diagnosed `virtual function cannot have a requires clause` at the
+clause's first token ([class.virtual]/6, clang `CheckFunctionDeclaration`
+`err_constrained_virtual_method`), once per instantiation
+(`per_instantiation`); a requires-clause the parser already rejected
+(`is_err_expr`) is not diagnosed again. `virtual` on a member function
+template, including an abbreviated one (`h(auto)`), is diagnosed
+`'virtual' cannot be specified on member function templates` at the
+keyword with a removal fix-it ([temp.mem]/3, clang
+`err_virtual_member_function_template`), and the function is then not
+virtual. `tests/conformance/class.virtual/requires-clause.cpp`.
 
 ### 4.8 Destruction of variables
 Sema does not insert destructor calls for named objects: a variable, parameter

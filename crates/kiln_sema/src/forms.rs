@@ -152,9 +152,10 @@ impl Sema<'_, '_> {
     }
 
     /// Reports a braced-init-list argument for the ellipsis of a
-    /// variadic function ([expr.call]/12 has no such conversion).
-    pub(crate) fn braced_variadic_argument(&mut self, l: &InitList) {
-        let msg = self.diag(DiagId::sema_init_list_variadic, l.lbrace);
+    /// variadic function ([expr.call]/12 has no such conversion); `kind`
+    /// names the callee as [`Sema::variadic_call_kind`] does.
+    pub(crate) fn braced_variadic_argument(&mut self, l: &InitList, kind: u8) {
+        let msg = self.diag(DiagId::sema_init_list_variadic, l.lbrace).arg(kind);
         self.emit(msg);
     }
 

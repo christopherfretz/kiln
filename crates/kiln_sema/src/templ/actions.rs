@@ -3,7 +3,7 @@
 //! build nodes and check kinds only; everything that needs the engine
 //! (WP-070..074) reports `sema_unimplemented_template_feature`.
 
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, FriendKind};
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind};
 use kiln_ast::ids::{ArgListId, NnsId, TemplateNameId, TemplateParamListId};
 use kiln_ast::names::DeclName;
@@ -273,6 +273,12 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<(DeclId, NnsId)> {
         let n = self.ast.types.nns(Nns::Type { prefix, ty, template_kw });
+        // A dependent `X<args>::` is completed at instantiation; its point
+        // of instantiation is where the template-id was written (§5.8,
+        // clang `RequireCompleteDeclContext`'s last qualifier name).
+        if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+            self.note_written_loc(WrittenKey::Nns(n), loc);
+        }
         if let Some(p) = self.current_instantiation(tmpl, ty) {
             return Some((p, n));
         }
@@ -533,6 +539,22 @@ impl Sema<'_, '_> {
             // A variable template specialization (`N::v<int>`) keeps its
             // qualifier as written (clang's `DeclRefExpr` qualifier).
             let _ = self.ast.exprs.set_decl_ref_qualifier(e, nns);
+        }
+    }
+
+    /// Records the `template` keyword at `kw` (if written) after the
+    /// qualifier of the name `e` (`N::template v<T>`), which the AST
+    /// printer writes back as clang's `hasTemplateKeyword` (WP-308).
+    pub fn set_template_kw(&mut self, e: ExprId, kw: Option<Loc>) {
+        if let Some(kw) = kw
+            && matches!(
+                self.ast.exprs.get(e).kind(),
+                ExprKind::DeclRefExpr
+                    | ExprKind::UnresolvedLookupExpr
+                    | ExprKind::DependentScopeDeclRefExpr
+            )
+        {
+            let _ = self.ast.templates.template_kw.insert(e, kw);
         }
     }
 
@@ -1533,10 +1555,16 @@ impl Sema<'_, '_> {
         }
         let c = self.injected_class_for(tmpl)?;
         let first = self.ast.first(c);
-        if self.ast.described_template(first).is_some() {
-            // The parameters of the template whose definition this is:
-            // `tmpl` may be a redeclaration with its own (a friend's).
-            let own = self.ast.described_template(c).unwrap_or(tmpl);
+        if let Some(ft) = self.ast.described_template(first) {
+            // The parameters of the first declaration (clang caches the
+            // type in the redeclaration chain's common data), unless that
+            // is a friend's: then those of the template whose definition
+            // this is.
+            let own = if self.ast.decls.get(ft).misc().friend() == FriendKind::None {
+                ft
+            } else {
+                self.ast.described_template(c).unwrap_or(tmpl)
+            };
             return self.injected_type_of(own);
         }
         if self.ast.partial_spec_info(first).is_some() {

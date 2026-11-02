@@ -785,7 +785,30 @@ and returns the scope it names:
   carries `ctad_alias[g'] = (alias, rhs)`, and `deduce_call` checks
   clang's `__is_deducible(A, R)` on the deduced return type
   (`note_alias_not_deducible`). An RHS that is not a simple-template-id
-  is `sema_ctad_non_deducible_template`.
+  is `sema_ctad_non_deducible_template`. Details (WP-311):
+  - The deduction of `g`'s return type from the RHS may fail part way
+    (`pair<A, B>`'s `tuple<A, B>` against `tuple<int, T...>`: `B` against
+    the expansion `T...`); as clang 19, the guide is still formed with what
+    was deduced, and `__is_deducible` decides at the call.
+  - The alias parameters used are those the deductions name (clang
+    `MarkUsedTemplateParameters`, `params_named`): each element of a
+    deduced pack, an element that is an expansion by its pattern, probed
+    by deducing it from itself. So `tuple<T..., U>` uses both `T` and `U`
+    although its list is a non-deduced context.
+  - A function parameter pack of `g` whose template parameter pack was
+    deduced as a list with an expansion element (`const U&...` with
+    `U = <int, T...>`) expands to `const int&, const T&...`: the
+    expansion element is substituted as its pattern and the result
+    re-formed as an expansion (`expand_pattern_rewrap`).
+  - The guide keeps `g`'s implicitness: one formed from a user-declared
+    guide is not implicit, so it beats the alias guide of the matching
+    constructor ([over.match.best.general]/2.11) rather than tying with
+    it. Every alias guide's notes include `note_implicit_deduction_guide`,
+    whose `requires __is_deducible(A, R)` names the guide's return type
+    `R` (clang `NoteImplicitDeductionGuide`).
+  - Tests: `over.match.class.deduct/alias-pack.cpp`,
+    `alias-pack-non-trailing.cpp`; `std::tuple` through
+    `template<class... T> using TT = std::tuple<int, T...>` deduces.
 - **Resolution.** The usual candidate machinery with `deduce_call`, then
   `order_template_candidates` and `best_viable`.
   - List-initialization runs [over.match.list] phase 1 first (WP-134):
@@ -810,7 +833,18 @@ and returns the scope it names:
   `implicit deduction guide declared as '<sig>'`
   (`implicit_guide_signature`; parameter names as clang's DeclPrinter
   places them, `Ts ...xs`, and an inherited default argument as
-  `= <null expr>`).
+  `= <null expr>`). Parameter types print as the constructor wrote
+  them (member typedefs, `typename X<T>::type`,
+  `typename T::template rebind<int>::other`): a guide's function type
+  is built from the sugared prototype (`TypeTable::proto_of`), and an
+  alias template's guide substitutes the alias's arguments into that
+  sugar; its `__is_deducible(A, R)` prints the guide's sugared return
+  type `R` (WP-311; test
+  `over.match.class.deduct/guide-signature-as-written.cpp`). Not
+  printed yet: clang's `while building implicit deduction guide first
+  needed here` frame note, at the placeholder's template-name location,
+  for an error substituting a member template's constructors (the
+  placeholder's name location is not recorded).
 - **Array new.** `new X[n]{…}` with a placeholder element type is
   `sema_ctad_compound_type` ("cannot form array of deduced class
   template specialization type") at the innermost bound, as clang.
@@ -998,8 +1032,12 @@ and returns the scope it names:
     attributes); a typedef/alias looks through to its class or enum and
     an enumerator to its enumeration (clang
     `ShouldDiagnoseAvailabilityOfDecl`), the note naming that entity.
-    A specialization is named with its written arguments plus defaults
-    (`D<N::X, int>` prints `D<N::X>` as clang does). No warning in a
+    A class specialization is named with its written arguments plus
+    defaults (`D<N::X, int>` prints `D<N::X>` as clang does); a function
+    specialization with its converted arguments, every name scoped
+    (`visit_format_arg<(lambda at …), std::basic_format_context<char *,
+    char>>`, clang `getNameForDiagnostic`; WP-303); both print typed
+    arguments for placeholder parameters (`A<(n::E)5>`). No warning in a
     deprecated context: the current context or any enclosing semantic
     context is deprecated (clang `ShouldDiagnoseAvailabilityInContext`).
     Warnings for uses in a declaration's decl-specifiers, declarator and
@@ -1011,8 +1049,18 @@ and returns the scope it names:
     deprecated context, discarded with a dropped access delay point
     (specialization class-head arguments), and otherwise join the
     enclosing point. Delay applies only outside instantiation.
-    Namespace attributes are not parsed yet, so a deprecated namespace
-    is not a deprecated context.
+    Namespaces (WP-303, [dcl.attr.deprecated]/4, [namespace.def]/1):
+    `act_on_namespace_attrs` attaches a namespace definition's
+    attributes (both positions, `namespace [[a]] N [[b]] {`) to that
+    definition only; the attribute is not inherited by a reopening, and
+    lookup finds the latest definition, so a use after an unattributed
+    reopening does not warn (clang). A use warns at the
+    nested-name-specifier's `::` (`act_on_nns_component_use`), at the
+    name of a using-directive and of a namespace alias's target
+    (`act_on_namespace_name_use`). On an unnamed namespace the attribute
+    is dropped with "'deprecated' attribute on anonymous namespace
+    ignored" [-Wignored-attributes]. A deprecated namespace is a
+    deprecated context.
   - `maybe_unused` suppresses unused warnings.
   - `alignas` is validated as a power of two and fed into layout
     (`check_alignment_expr`). `requested alignment is not a power of 2`
@@ -1093,6 +1141,16 @@ and returns the scope it names:
     parameter head prints its canonical replacement without scope
     (`T::y` with `T = ns::S` prints `S::y`, clang's
     `NestedNameSpecifier::print` `SuppressScope`) (WP-302).
+  - The printed names are the substituted ones (clang's
+    `FailedBooleanConditionPrinterHelper`, WP-303): a qualified
+    `DeclRefExpr` prints its nested-name-specifier with the last type
+    component resolved to its class plus all converted arguments,
+    canonical, defaults included (`tr<n::A, int>::value` for
+    `T::value`, `write_nns_resolved`), then the name, then a variable
+    template specialization's canonical arguments; an unqualified one
+    prints its explicit arguments canonical (`ok<n::A>(0)`,
+    `write_arg_list_canonical`). A call to a function template-id keeps
+    the explicit arguments on the resolved `DeclRefExpr`.
   - Evaluation notes follow (§8).
 
 ### 4.7 Exception specifications (`except.rs`)
@@ -1222,9 +1280,18 @@ specification as written (`TypeNames` prints ` noexcept`,
   functions resolves a call against the last one found (so an
   inviable call is still `no matching function`); a reference to an
   invalid function is an erroneous expression without a diagnostic.
+  A function template whose function is invalid (a parameter type that
+  names no type) is invalid too (`finish_template_pattern`); an id-expression
+  whose lookup finds it beside other declarations ignores it
+  (`act_on_id_expression_dn`, clang `resolveKind`), and a call or
+  address that reaches it fails deduction with `Tdk::Invalid`, so it is
+  no candidate and gets no note (spec/sema-templates.md §5.7). An
+  explicit specialization declarator with an invalid parameter matches
+  no template and reports nothing more (WP-308).
   Tests: `dcl.stc/function-storage-class.cpp`,
   `dcl.fct.default/invalid-default-arg.cpp`,
-  `except.spec/redecl-invalid-decl.cpp`.
+  `except.spec/redecl-invalid-decl.cpp`,
+  `temp.deduct.general/invalid-template-not-viable.cpp`.
 - **Exception specifications on redeclarations** (WP-268,
   `merge_missing_exc_spec`; clang 19's missing-specification path of
   `Sema::CheckEquivalentExceptionSpec`). A function redeclaration
@@ -2171,6 +2238,26 @@ for them.
     `-Winvalid-offsetof`. Standard-layout is computed from members
     and bases (`is_standard_layout`) until the definition bits track
     it.
+  - (WP-307) When `T` is dependent or an array index is type-, value-
+    or instantiation-dependent, nothing is checked: the result is a
+    value- and instantiation-dependent `OffsetOfExpr`
+    (`Builder::dependent_offsetof`) whose children are the index
+    expressions and whose type and components are kept in
+    `ColdExprData::offsetof_pattern`; substitution rebuilds it
+    (sema-templates.md §5.4; `ext.gnu.offsetof/dependent*.cpp`).
+- **`__builtin_choose_expr(c, a, b)`** (`act_on_choose_expr`, clang
+  `ActOnChooseExpr`; WP-307): `c` must be an integral (or unscoped
+  enumeration) constant expression, else `'__builtin_choose_expr'
+  requires a constant expression` at `c` with the evaluation's notes
+  (no class-type contextual conversion yet). It is wrapped in a
+  `ConstantExpr`; nonzero picks `a`. The `ChooseExpr` takes the chosen
+  operand's type, value category and object kind with no conversion,
+  and its type/value dependence (other dependence bits from all three).
+  A type- or value-dependent `c` gives a `<dependent type>` prvalue
+  until substitution. `ignore_parens` looks through it to the chosen
+  operand, as clang's `IgnoreParens`; codegen and the Oven emit and
+  evaluate only the chosen operand
+  (`ext.gnu.builtins/choose-expr*.cpp`).
 - **Binary conditional** `x ?: y` (`act_on_binary_conditional`, in
   `forms.rs`): a `BinaryConditionalOperator` with `x` shared through an
   `OpaqueValueExpr`. Unless both operands are glvalues of the same
@@ -2856,11 +2943,88 @@ implemented: clang's pointer-argument, wrong-function-kind and too-small
 warnings of the same group. Test:
 `tests/conformance/c.math.abs/absolute-value-unsigned.cpp`.
 
+### 5.19 Ext-vector element access (`vector_ops.rs`, WP-307)
+clang's `ext_vector_type` element access (`v.x`, `v.xy`, `p->zw`;
+clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
+- `act_on_member_q` routes an unqualified identifier member of an ext
+  vector (through a pointer for `->`) to `ext_vector_member` before
+  class member lookup, so it is never "not a structure or union".
+  A dependent base stays a `CXXDependentScopeMemberExpr` and comes back
+  here on substitution; a non-dependent `ExtVectorElementExpr` is formed
+  again by its substitution arm (sema-templates.md §5.4).
+- The accessor (`kiln_ast::expr::ext_vector_access`) is one of: letters
+  of the point set `xyzw` or the color set `rgba`, not mixed; `s`/`S`
+  followed by hex lane digits; or `hi`/`lo`/`even`/`odd`, selecting
+  halves of `ceil(N/2)` lanes (a lane past an odd-sized vector reads
+  poison). A bad letter is `illegal vector component name 'c'`, a lane
+  past N `vector component access exceeds type 'T'`, both at the
+  member name.
+- One lane is the element type as written; several are an ext vector of
+  that many lanes, sugared with the first file-scope `ext_vector_type`
+  typedef of that exact type (`Sema::ext_vector_typedefs`, recorded by
+  `act_on_typedef`), as clang's `ExtVectorDecls`. The result carries the
+  base's cv-qualifiers; its value category is the base's for `.`
+  (`ObjectKind::VectorComponent` for a glvalue), an lvalue for `->`.
+- Assignment (`check_modifiable`): a repeated lane is `vector is not
+  assignable (contains duplicate components)`; a prvalue base is
+  `expression is not assignable`; a const base is the usual
+  const-variable diagnostic. `&v.x` and binding a non-const reference
+  are rejected as for any vector element (§5.13).
+- Constant evaluation does not evaluate the access (clang 19 does not
+  either): a constexpr use is "must be initialized by a constant
+  expression".
+- Codegen (codegen.md "Vectors"): a glvalue access is an `LV` whose
+  `vidx` is `VecLane::Index` (one lane) or `VecLane::Swizzle` (several;
+  a swizzle of a swizzle lvalue composes onto the innermost vector);
+  a load is `extractelement`/`shufflevector`, a store inserts each
+  source element at its lane. A prvalue base is swizzled as a value.
+- Tests: `ext.vector/ext-vector-access.cpp` (run, including templates),
+  `ext.vector/ext-vector-access-diagnostics.cpp` (strict-diags).
+
+### 5.20 Variadic arguments (`expr.rs`, WP-311)
+- An argument for the ellipsis gets the default argument promotions
+  ([expr.call]/12) and is then checked once the call is built (clang
+  `checkVariadicArgument`; the call is still formed):
+  - an argument of type `void` (`g(1, f())` for `void f()`) is an error,
+    "cannot pass expression of type 'void' to variadic function";
+  - an object of class type with a non-trivial copy constructor, move
+    constructor or destructor (conditionally-supported, [expr.call]/12)
+    is the error-by-default warning `-Wnon-pod-varargs`, "cannot pass
+    object of non-trivial type 'T' through variadic function; call will
+    abort at runtime". It is a run-time behavior diagnostic: dropped in an
+    unevaluated operand, a constant-evaluated context, and the initializer
+    of a constexpr variable (local or not) or of a static data member's
+    first non-inline declaration (clang `DiagIfReachable` without a
+    statement reads the initializer's `ManglingContextDecl`); otherwise
+    emitted at once (`diag_runtime_behavior_now`);
+  - a braced-init-list is an error, "cannot pass initializer list to
+    variadic function" (§6), and the call is not formed.
+
+  Each points at the argument's begin. The callee is named as clang's
+  `getVariadicCallType` does: `constructor` for a constructor, `method`
+  for a non-static member function (a lambda's call operator included)
+  or a call through a bound member (`(x.*pmf)(...)`), `function`
+  otherwise.
+- In a dependent context the checks are not made (clang `checkCall`
+  returns for a dependent context); an instantiation makes them. A call
+  whose arguments are all non-dependent is shared by the instantiation
+  (spec/sema-templates.md §5.4) rather than rebuilt, so the definition
+  records each argument it would diagnose (`vararg_recheck`), and the
+  walk over a shared expression (§5.10's `mark_shared_expr_referenced`)
+  checks those arguments of the calls in it again, under the
+  instantiation's context notes.
+- Tests: `tests/conformance/expr.call/variadic-void-argument.cpp`,
+  `tests/conformance/expr.call/variadic-non-trivial-argument.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
     conversion sequence, with narrowing enforced for list-init
-    ([dcl.init.list]/7)
+    ([dcl.init.list]/7); a list element (`init_element`, an array or
+    aggregate member) converted through a user-defined conversion
+    checks its second standard conversion (`struct B { operator
+    double(); }; int a[] = {B{}};` narrows, clang
+    `checkNarrowing(SCS.After)`; WP-303)
   - references, binding directly or to a temporary
   - class objects by constructor ([dcl.init.general]/16.6.2.1; spec/sema-class.md
     §5): a direct-initialization from one expression of an unrelated class
@@ -3051,6 +3215,22 @@ warnings of the same group. Test:
 - **Results** are attached with `act_on_init`. `act_on_uninit` handles
   default-initialization: const objects without an initializer are an
   error, and incomplete types are diagnosed.
+- **Uninitialized definitions before the validity check**
+  (`uninit_array_or_reference`, clang `ActOnUninitializedDecl`, WP-308).
+  A non-`extern` variable definition without an initializer whose type
+  is an array of unknown bound is `definition of variable with array
+  type needs an explicit size or an initializer` (a `constexpr` one is
+  `constexpr variable 'c' must be initialized by a constant
+  expression`), even when the element type is dependent or the
+  declaration is already invalid, and the variable becomes invalid. An
+  invalid variable whose type is a non-dependent reference (`S::c &r;`
+  with no `S::c`, its type recovered to `int &`, spec/parse.md §2.1)
+  still reports `declaration of reference variable 'r' requires an
+  initializer`; no other check runs for an invalid variable.
+- **Initializer of an invalid variable** (clang `AddInitializerToDecl`,
+  WP-308): `act_on_init` discards it unchecked, so `S::c &r = 1;`
+  reports only the decl-specifier
+  (`tests/conformance/dcl.type.simple/unknown-type-recovers-to-int.cpp`).
 - **Constexpr variables:** `check_constexpr_init` evaluates the
   initializer of a `constexpr` variable, and of a const integral
   variable, which is usable in constant expressions. The value is
@@ -3092,7 +3272,8 @@ warnings of the same group. Test:
     except that a single class-type element for a non-class parameter
     notes the element's own conversion ([over.ics.list]/10: `no known
     conversion from 'N' to 'int' for 1st argument`).
-  - A list for the ellipsis of a variadic function is an error.
+  - A list for the ellipsis of a variadic function is an error (the
+    callee named as in §5.19).
 - **`return {...};`** ([stmt.return]/2, `act_on_return_list`):
   copy-list-initialization of the returned object.
 - **`x = {...}`** ([expr.assign]/8, `act_on_assign_list`): the list

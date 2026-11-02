@@ -690,6 +690,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::CXXThrowExpr
             | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::ConvertVectorExpr
+            | ExprKind::ExtVectorElementExpr
             | ExprKind::ImaginaryLiteral
             | ExprKind::CompoundLiteralExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
@@ -754,6 +755,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::BinaryConditionalOperator
+            | ExprKind::ChooseExpr
             | ExprKind::OffsetOfExpr
             | ExprKind::CXXNewExpr
             | ExprKind::CXXDeleteExpr => {
@@ -1473,12 +1475,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         // explicit specialization or instantiation is a reference line
         // (its tree prints at its lexical position). A template first
         // declared by a friend declaration lists them under its first
-        // declaration outside a class (as clang's JSON dump does).
-        if self.spec_owner(d) != d {
+        // declaration outside a class (as clang's JSON dump does). Every
+        // other redeclaration not introduced by a friend declaration
+        // lists each of them as a reference line.
+        let owner = self.spec_owner(d) == d;
+        if !owner && ast.decls.get(d).misc().friend() != FriendKind::None {
             return;
         }
         for &s in ast.templates.specs_of(ast.first(d)) {
             match ast.spec_info(s).map(|(_, i)| i.kind) {
+                Some(_) if !owner => kids.push((Node::SpecRef(s), None)),
                 Some(SpecKind::Undeclared | SpecKind::ImplicitInstantiation) => {
                     kids.push((Node::Decl(s), None));
                 }
@@ -2012,6 +2018,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 if n.has(ExprFlags::IMMEDIATE_ESCALATING) {
                     self.line.push_str(" immediate-escalating");
                 }
+            }
+            // clang `VisitExtVectorElementExpr`: the accessor.
+            ExprKind::ExtVectorElementExpr => {
+                self.line.push(' ');
+                self.line.push_str(self.ast.symbols().as_str(exprs.ext_vector_accessor(e)));
             }
             ExprKind::MemberExpr => {
                 self.line.push_str(if n.has(ExprFlags::ARROW) { " ->" } else { " ." });

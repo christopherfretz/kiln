@@ -75,6 +75,12 @@ impl Sema<'_, '_> {
         let Some((_, margs)) = self.spec_args(spec) else { return Err(()) };
         let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let pairs = self.inst_context_pairs(self.spec_pairs_ctx(spec, tmpl));
+        // An error the enclosing SFINAE frame captures while the signature
+        // is substituted (a narrowing check inside a `decltype` return
+        // type) fails the specialization even when the substitution itself
+        // returns `Ok`: memoize it as invalid, so the next deduction for
+        // the same arguments fails too ([temp.deduct.general]/8).
+        let trapped = self.sfinae_errors();
         let r = self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
@@ -82,7 +88,8 @@ impl Sema<'_, '_> {
             sub.function_spec_signature(pattern, spec)?;
             sub.function_spec_explicit(pattern, spec)
         });
-        if r.is_err() {
+        let captured = self.sfinae_errors() > trapped;
+        if r.is_err() || captured {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
             return Err(());
         }
@@ -301,7 +308,11 @@ impl Sema<'_, '_> {
                 return None;
             }
         };
-        if invalid {
+        // A parameter that names no type makes the declaration invalid,
+        // and clang matches no template for an invalid one
+        // (`CheckFunctionTemplateSpecialization` runs only for a valid
+        // declaration; WP-308).
+        if invalid || d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid)) {
             return None;
         }
         let name_loc = d.name_loc();
@@ -381,8 +392,21 @@ impl Sema<'_, '_> {
     ) -> Option<SpecMatch> {
         let mut matches: Vec<SpecMatch> = Vec::new();
         let mut failures = Vec::new();
+        // [temp.explicit]/9, [except.spec]/2: an explicit instantiation that
+        // writes no exception specification takes the template's (clang
+        // `adjustCCAndNoReturn(..., AdjustExceptionSpec)`; libstdc++'s
+        // `extern template bool has_facet<...>(const locale&)` of a
+        // `throw()` template).
+        let adopt = inst && matches!(self.written_exc_spec(ty), kiln_ast::types::ExcSpec::None);
         for &ft in templates {
-            match self.deduce_funcaddr(ft, explicit, ty, loc) {
+            let pattern_ty = self.pattern_of(ft).and_then(|p| self.ast.decls.get(p).ty());
+            // A dependent one is not compared by deduction.
+            let exc = pattern_ty.map(|pt| self.written_exc_spec(pt));
+            let target = match exc {
+                Some(exc) if adopt && exc.is_nothrow() => self.with_exc_spec(ty, exc),
+                _ => ty,
+            };
+            match self.deduce_funcaddr(ft, explicit, target, loc) {
                 Ok(s) => {
                     let sty = self.ast.decls.get(s).ty().unwrap_or(QualType::ERROR);
                     if self.same_ignoring_exc_spec(sty, ty) {
@@ -394,6 +418,9 @@ impl Sema<'_, '_> {
                         failures.push(n);
                     }
                 }
+                // An invalid template is not noted (clang
+                // `TemplateDeductionResult::Invalid`).
+                Err(f) if f.tdk == crate::templ::deduce::Tdk::Invalid => {}
                 Err(f) => failures.push(self.deduction_note(ft, &f, self.loc_of(ft))),
             }
         }

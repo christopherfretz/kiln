@@ -308,10 +308,15 @@ impl Sema<'_, '_> {
     pub(crate) fn ignore_parens(&self, e: ExprId) -> ExprId {
         let mut e = e;
         for _ in 0..256 {
-            if self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-                e = self.ast.exprs.operand(e);
-            } else {
-                break;
+            // clang `IgnoreParensSingleStep` also looks through a
+            // `__builtin_choose_expr` to its chosen operand.
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                ExprKind::ChooseExpr => match self.ast.exprs.choose_chosen(e) {
+                    Some(c) => e = c,
+                    None => break,
+                },
+                _ => break,
             }
         }
         e
@@ -360,6 +365,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CXXMemberCallExpr
                 | ExprKind::CXXPseudoDestructorExpr
                 | ExprKind::DesignatedInitUpdateExpr
+                | ExprKind::ExtVectorElementExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
                 ExprKind::CXXRewrittenBinaryOperator => {
@@ -1355,13 +1361,16 @@ impl Sema<'_, '_> {
                 return self.act_dependent_scope_ref(n, name, None, b, loc);
             }
             let text = self.decl_name_str(name);
-            let msg = match qualifier {
-                Some(q) => {
-                    self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q))
-                }
-                None => self.diag(Self::undeclared_use_id(name), loc).arg(text),
-            };
-            self.emit(msg);
+            if let Some(q) = qualifier {
+                // clang reports it through delayed typo correction, at the
+                // end of the full-expression.
+                let msg =
+                    self.diag(DiagId::sema_no_member, loc).arg(text).arg(self.qualifier_desc(q));
+                self.emit_delayed_typo(msg);
+            } else {
+                let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
+                self.emit(msg);
+            }
             return self.recover_err(&[], loc);
         };
         if found.decls.len() > 1
@@ -1372,7 +1381,27 @@ impl Sema<'_, '_> {
             // resolved at instantiation, like a lone one (below).
             return self.builder().dependent_member(None, true, name, false, nns, None, loc);
         }
+        // clang `LookupResult::resolveKind`: an invalid function template
+        // (one declared with a parameter type that names no type) is
+        // ignored beside other declarations, so `t3` naming an invalid
+        // template and a valid function is that function (WP-308).
+        let bad = |s: &Self, x: DeclId| {
+            s.kind_of(x) == DeclKind::FunctionTemplate && s.ast.decls.get(x).has(DeclFlags::INVALID)
+        };
+        let mut found = found;
         let mut d = d;
+        if found.decls.len() > 1 && found.decls.iter().any(|&x| !bad(self, x)) {
+            let keep: Vec<bool> = found.decls.iter().map(|&x| !bad(self, x)).collect();
+            if keep.contains(&false) {
+                let mut k = keep.iter();
+                found.decls.retain(|_| k.next().copied().unwrap_or(true));
+                if found.found.len() == keep.len() {
+                    let mut k = keep.iter();
+                    found.found.retain(|_| k.next().copied().unwrap_or(true));
+                }
+                d = found.decls[0];
+            }
+        }
         let any_tmpl = found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
         if any_tmpl
             && found.decls.iter().all(|&x| {
@@ -1669,9 +1698,12 @@ impl Sema<'_, '_> {
         loc: Loc,
         extra: Option<kiln_ast::expr::DeclRefExtra>,
     ) -> ExprId {
-        let shadow = extra
-            .and_then(|x| x.found_decl)
-            .filter(|_| extra.is_some_and(|x| x.template_args.is_none()));
+        // A variable template specialization records its template as the
+        // found decl, which is no using-shadow.
+        let shadow = extra.and_then(|x| x.found_decl).filter(|&f| {
+            extra.is_some_and(|x| x.template_args.is_none())
+                || self.kind_of(f) != DeclKind::VarTemplate
+        });
         let n = *self.ast.decls.get(d);
         match n.kind() {
             // [dcl.struct.bind]/1: a binding is not usable before its
@@ -2166,11 +2198,21 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_not_assignable, loc);
             return false;
         }
+        if self.has_duplicate_vector_lanes(e) {
+            self.error(DiagId::sema_duplicate_vector_components_not_mlvalue, loc);
+            return false;
+        }
         if self.ast.types.effective_quals(t).is_const() {
             let mut base = self.ignore_parens(e);
             // clang classifies a vector element through its vector.
             while self.ast.exprs.get(base).object_kind() == ObjectKind::VectorComponent
-                && self.ast.exprs.get(base).kind() == ExprKind::ArraySubscriptExpr
+                && match self.ast.exprs.get(base).kind() {
+                    ExprKind::ArraySubscriptExpr => true,
+                    ExprKind::ExtVectorElementExpr => {
+                        !self.ast.exprs.get(base).has(ExprFlags::ARROW)
+                    }
+                    _ => false,
+                }
             {
                 let v = ExprId::new(self.ast.exprs.get(base).a());
                 base = self.ignore_parens(v);
@@ -3976,7 +4018,8 @@ impl Sema<'_, '_> {
         for (i, &a) in args.iter().enumerate() {
             if let Some(l) = braced[i].take() {
                 if i >= n {
-                    self.braced_variadic_argument(&l);
+                    let kind = self.variadic_call_kind(named.map(|c| c.decl), callee);
+                    self.braced_variadic_argument(&l, kind);
                     return None;
                 }
                 conv_args.push(self.braced_argument(
@@ -4087,7 +4130,80 @@ impl Sema<'_, '_> {
             self.note_default_use(arg, p, call_begin);
             conv_args.push(arg);
         }
+        if have > n {
+            let kind = self.variadic_call_kind(named.map(|c| c.decl), callee);
+            self.check_variadic_args(&conv_args[n..have], kind);
+        }
         Some(conv_args)
+    }
+
+    /// How clang names the callee of a variadic call in its argument
+    /// diagnostics (`getVariadicCallType`, the `{function|block|method|
+    /// constructor}` select): 3 for a constructor, 2 for an instance
+    /// member function or a call through a bound member (`(x.*pmf)(...)`),
+    /// 0 otherwise.
+    pub(crate) fn variadic_call_kind(&self, decl: Option<DeclId>, callee: ExprId) -> u8 {
+        match decl {
+            Some(d) if self.kind_of(d) == DeclKind::CXXConstructor => 3,
+            Some(d) if self.is_instance_member(d) => 2,
+            None if self.ety(callee) == QualType::BOUND_MEMBER => 2,
+            Some(_) | None => 0,
+        }
+    }
+
+    /// The checks of the promoted arguments `args` passed for the
+    /// ellipsis ([expr.call]/12, clang `checkVariadicArgument`), made
+    /// once the call is built (neither stops it): an argument of type
+    /// `void` is an error ("cannot pass expression of type 'void' to
+    /// variadic ..."); an object of class type with a non-trivial copy
+    /// constructor, move constructor or destructor (conditionally-
+    /// supported) is the `-Wnon-pod-varargs` error-by-default warning, a
+    /// runtime-behavior diagnostic (not in an unevaluated operand or a
+    /// constant-evaluated context). Both point at the argument's begin;
+    /// `kind` is [`Sema::variadic_call_kind`]'s. clang skips the checks
+    /// in a dependent context and makes them when the template is
+    /// instantiated: an argument that would be diagnosed is recorded in
+    /// `vararg_recheck`, and an instantiation that shares its call checks
+    /// it then ([`Sema::mark_shared_expr_referenced`]).
+    pub(crate) fn check_variadic_args(&mut self, args: &[ExprId], kind: u8) {
+        let defer = self.in_template();
+        for &a in args {
+            if self.is_err_expr(a) || self.expr_is_type_dependent(a) {
+                continue;
+            }
+            let t = self.ety(a);
+            if defer {
+                if self.ast.types.is_void(t) || self.vararg_non_trivial(t) {
+                    let _ = self.vararg_recheck.insert(a, kind);
+                }
+                continue;
+            }
+            if self.ast.types.is_void(t) {
+                let msg = self
+                    .diag(DiagId::sema_cannot_pass_to_vararg, self.begin_loc(a))
+                    .arg(self.ty_arg(t))
+                    .arg(kind);
+                self.emit(msg);
+            } else if self.vararg_non_trivial(t) {
+                let msg = self
+                    .diag(DiagId::sema_non_pod_vararg, self.begin_loc(a))
+                    .arg(self.ty_arg(t))
+                    .arg(kind);
+                self.diag_runtime_behavior_now(msg);
+            }
+        }
+    }
+
+    /// clang `isValidVarArgType` returning `VAK_Undefined` in C++11 and
+    /// later: a complete class with a non-trivial copy constructor, move
+    /// constructor or destructor.
+    fn vararg_non_trivial(&self, t: QualType) -> bool {
+        use crate::class::SpecialKind as K;
+        let Some(r) = self.ast.types.as_record(t) else { return false };
+        let Some(r) = self.ast.definition(r) else { return false };
+        !self.has_trivial(r, K::CopyCtor)
+            || (self.has_special(r, K::MoveCtor) && !self.has_trivial(r, K::MoveCtor))
+            || !self.has_trivial(r, K::Dtor)
     }
 
     /// The type and value category of a call returning `ret`
@@ -4255,6 +4371,13 @@ impl Sema<'_, '_> {
         } else {
             (base, arrow)
         };
+        // clang `LookupMemberExpr`: `v.xy` / `p->xy` on an ext vector.
+        if qual.is_none()
+            && let Some(id) = name.as_ident()
+            && let Some(vt) = self.ext_vector_base(base, arrow)
+        {
+            return self.ext_vector_member(base, vt, id, loc, op_loc, arrow);
+        }
         let (b, obj_ty) = if arrow {
             // clang `LookupMemberExpr`: the pointee or element type, or a
             // function type as written.

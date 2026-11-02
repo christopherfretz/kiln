@@ -28,6 +28,11 @@ pub(crate) struct Folds {
     /// per use: (invocation, the enclosing default argument use whose
     /// source-location values apply, as [`crate::module`]'s `srcloc`).
     pub imm: FxHashMap<(ExprId, Option<ExprId>), ConstValueId>,
+    /// The variables (first declarations) whose type has a non-trivial
+    /// destructor but which have constant destruction ([expr.const]/7):
+    /// they need no destructor call (clang `VarDecl::needsDestruction`
+    /// is `DK_none` once `evaluateDestruction` succeeded).
+    pub const_destroyed: FxHashSet<DeclId>,
 }
 
 impl Folds {
@@ -95,7 +100,7 @@ impl SemaBridge for Bridge<'_> {
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let (cands, inits, imm, statics) = {
+    let (cands, inits, imm, statics, dtors) = {
         let mut c = Collect {
             ast,
             out: Vec::new(),
@@ -103,9 +108,10 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             imm: Vec::new(),
             defaults: FxHashSet::default(),
             statics: Vec::new(),
+            dtors: FxHashMap::default(),
         };
         c.tu();
-        (c.out, c.inits, c.imm, c.statics)
+        (c.out, c.inits, c.imm, c.statics, c.dtors)
     };
     let mut b = Bridge { ast, abi: target };
     let mut folds = Folds::default();
@@ -140,6 +146,19 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             folds.imm.insert(key, v);
         }
     }
+    // clang `Sema::FinalizeVarWithDestructor`: `evaluateValue`, then
+    // `evaluateDestruction` of that value (a `const` variable's object;
+    // any other's is outside its lifetime), manifestly constant-evaluated
+    // when the variable is constant-initialized.
+    let mut dtors: Vec<_> = dtors.into_iter().collect();
+    dtors.sort_unstable_by_key(|&(first, _)| first);
+    for (first, (d, init, is_static)) in dtors {
+        let value = init.and_then(|e| folds.get(e));
+        let const_context = is_static && (init.is_none() || value.is_some());
+        if oven.has_constant_destruction(&mut b, d, value, const_context) {
+            folds.const_destroyed.insert(first);
+        }
+    }
     folds
 }
 
@@ -160,6 +179,10 @@ struct Collect<'a> {
     /// Member accesses naming a `const` static data member, with that
     /// member's initializer: the access folds to its value.
     statics: Vec<(ExprId, ExprId)>,
+    /// Variables whose type has a non-trivial destructor, by first
+    /// declaration: the declaration with the initializer (if any), its
+    /// initializer, and whether it has static storage.
+    dtors: FxHashMap<DeclId, (DeclId, Option<ExprId>, bool)>,
 }
 
 impl Collect<'_> {
@@ -204,8 +227,14 @@ impl Collect<'_> {
     fn var(&mut self, d: DeclId, is_static: bool) {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return };
-        let Some(init) = v.init else { return };
         let Some(ty) = ast.decls.get(d).ty() else { return };
+        if !ast.types.is_reference(ty) && !ast.types.is_dependent(ty) && ast.needs_destruction(ty) {
+            let e = self.dtors.entry(ast.first(d)).or_insert((d, v.init, is_static));
+            if e.1.is_none() {
+                *e = (d, v.init, is_static);
+            }
+        }
+        let Some(init) = v.init else { return };
         let quals = ast.types.effective_quals(ty);
         // A reference is usable in constant expressions when its
         // initializer is constant ([expr.const]/4): its named uses read

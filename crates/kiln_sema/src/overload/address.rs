@@ -345,6 +345,7 @@ impl Sema<'_, '_> {
             for &(d, _) in &cands {
                 if self.kind_of(d) == DeclKind::FunctionTemplate
                     && let Err(f) = self.deduce_funcaddr(d, explicit, fnty, loc)
+                    && f.tdk != crate::templ::deduce::Tdk::Invalid
                 {
                     let at = self.ast.decls.get(d).loc();
                     failed.push((at, self.deduction_note(d, &f, at)));

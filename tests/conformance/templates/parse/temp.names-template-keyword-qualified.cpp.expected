@@ -1,0 +1,91 @@
+TranslationUnitDecl
+|-NamespaceDecl N
+| |-VarTemplateDecl v
+| | |-TemplateTypeParmDecl class depth 0 index 0 T
+| | |-VarDecl v 'int' cinit
+| | | `-IntegerLiteral 'int' 0
+| | `-VarTemplateSpecializationDecl referenced v 'int' implicit_instantiation
+| |   `-TemplateArgument type 'S'
+| |-FunctionTemplateDecl g
+| | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| | `-FunctionDecl g 'int (T)'
+| |   |-ParmVarDecl 'T'
+| |   `-CompoundStmt
+| |     `-ReturnStmt
+| |       `-IntegerLiteral 'int' 0
+| `-VarTemplateSpecializationDecl referenced v 'int' implicit_instantiation
+|   `-TemplateArgument type 'S'
+|-CXXRecordDecl referenced struct S definition
+| |-VarTemplateDecl w
+| | |-TemplateTypeParmDecl class depth 0 index 0 T
+| | `-VarDecl w 'int' static
+| `-FunctionTemplateDecl h
+|   |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|   `-CXXMethodDecl h 'int (T)' static implicit-inline
+|     |-ParmVarDecl 'T'
+|     `-CompoundStmt
+|       `-ReturnStmt
+|         `-IntegerLiteral 'int' 1
+|-FunctionTemplateDecl f1
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl f1 'auto (T) -> decltype(N::template v<T>)'
+|   `-ParmVarDecl 'T'
+|-FunctionTemplateDecl f2
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl f2 'auto (T) -> decltype(T::template w<int>)'
+|   `-ParmVarDecl 'T'
+|-FunctionTemplateDecl f3
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl f3 'auto (T) -> decltype(N::v<T>)'
+|   `-ParmVarDecl 'T'
+|-FunctionTemplateDecl f4
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl f4 'auto (T) -> decltype(S::template w<T>)'
+|   `-ParmVarDecl 'T'
+|-FunctionTemplateDecl b1
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl b1 'int (T)'
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator '<dependent type>' '+'
+|         |-CallExpr '<dependent type>'
+|         | |-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'g'
+|         | | `-TemplateArgument type 'T'
+|         | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|         `-CallExpr '<dependent type>'
+|           |-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'h'
+|           | `-TemplateArgument type 'T'
+|           `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|-FunctionTemplateDecl b2
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl b2 'int ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator '<dependent type>' '+'
+|         |-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'v'
+|         | `-TemplateArgument type 'T'
+|         `-DependentScopeDeclRefExpr '<dependent type>' lvalue
+|-ClassTemplateDecl X
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct X definition
+| | |-FunctionTemplateDecl f
+| | | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+| | | `-CXXMethodDecl f 'decltype(N::template v<U> + T::template w<U>) (U)'
+| | |   `-ParmVarDecl 'U'
+| | `-FunctionTemplateDecl g
+| |   |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+| |   `-CXXMethodDecl g 'decltype(N::template v<T>) (U)'
+| |     `-ParmVarDecl 'U'
+| `-ClassTemplateSpecializationDecl struct X definition implicit_instantiation
+|   |-TemplateArgument type 'S'
+|   |-FunctionTemplateDecl f
+|   | |-TemplateTypeParmDecl class depth 0 index 0 U
+|   | `-CXXMethodDecl f 'decltype(N::template v<U> + S::template w<U>) (U)'
+|   |   `-ParmVarDecl 'U'
+|   `-FunctionTemplateDecl g
+|     |-TemplateTypeParmDecl class depth 0 index 0 U
+|     `-CXXMethodDecl g 'decltype(N::v<S>) (U)'
+|       `-ParmVarDecl 'U'
+`-VarDecl x 'X<S>' callinit
+  `-CXXConstructExpr 'X<S>' 'void () noexcept'

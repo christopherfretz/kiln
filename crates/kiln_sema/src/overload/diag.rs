@@ -376,10 +376,19 @@ impl Sema<'_, '_> {
                         out.push(d.arg(self.ty_arg(ty)));
                     }
                 }
-                // clang `NoteDeductionGuide`: an implicit guide's notes
-                // say what it was synthesized as.
+                // clang `NoteImplicitDeductionGuide`: an implicit guide's
+                // notes say what it was synthesized as, as do those of
+                // every alias template guide (even one formed from a
+                // user-declared guide).
                 let cand = set.cand(c);
-                if let Some(Some(_)) = self.ctad_guide_kind(cand.func(), cand.template)
+                let synthesized = match self.ctad_guide_kind(cand.func(), cand.template) {
+                    Some(Some(_)) => true,
+                    Some(None) => {
+                        cand.template.is_some_and(|t| self.templ.ctad_alias.contains_key(&t))
+                    }
+                    None => false,
+                };
+                if synthesized
                     && let Some(t) = cand.template
                     && let Some(sig) = self.implicit_guide_signature(t)
                 {
@@ -596,7 +605,8 @@ fn deduction_rank(c: &Candidate) -> u8 {
             | Tdk::DeducedMismatch
             | Tdk::ConstraintsNotSatisfied
             | Tdk::NonDeducedMismatch
-            | Tdk::MiscellaneousDeductionFailure,
+            | Tdk::MiscellaneousDeductionFailure
+            | Tdk::Invalid,
         ) => 3,
         Some(Tdk::InstantiationDepth) => 4,
         Some(Tdk::InvalidExplicitArguments) => 5,
