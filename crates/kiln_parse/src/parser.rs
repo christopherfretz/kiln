@@ -22,6 +22,16 @@ use crate::tokens::TokenSource;
 /// skipping. Semantic errors produce an error expression instead.
 pub type PExpr = Option<ExprId>;
 
+/// Whether a dependent qualified name in the parameter-declaration being
+/// parsed is implicitly a type ([temp.res.general]/4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ParamTypename {
+    /// It is (a member, friend, qualified or lambda declarator, ...).
+    Implicit,
+    /// It is not: a missing `typename` is diagnosed.
+    Required,
+}
+
 /// The bracket kinds whose nesting [`Parser::bump`] tracks.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Bracket {
@@ -102,6 +112,12 @@ pub struct Parser<'a, 'sm> {
     /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
     /// declarator, not the parameter list ([dcl.fct]/14).
     pub(crate) pack_hint: bool,
+    /// The decl-specifier-seq of a parameter-declaration being parsed is
+    /// not one where a dependent qualified name is implicitly a type
+    /// ([temp.res.general]/4: a parameter of a function declared at
+    /// namespace or block scope with an unqualified declarator-id), so a
+    /// missing `typename` there is diagnosed.
+    pub(crate) param_typename: ParamTypename,
     /// Memoized [`Parser::skip_template_args`] results (spec/parse.md
     /// §2.5): parsing `A<B<C<...>>>` scans each nested list once, not
     /// once per enclosing level.
@@ -226,6 +242,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             greater_is_op: true,
             greater_off_depth: 0,
             pack_hint: false,
+            param_typename: ParamTypename::Implicit,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
             decltype_scope: None,

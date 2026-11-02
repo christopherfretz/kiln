@@ -108,6 +108,22 @@ field's type becomes the error type);
 static data member in a local class or in an anonymous/unnamed class;
 `virtual`/`explicit`/pure on the wrong kind of member.
 
+Friend functions of a local class ([class.friend]/11, WP-280): an unqualified
+friend function (identifier name) must redeclare a function declared in the
+innermost enclosing non-class scope (the block holding the class, its
+`Scope.locals`, matched by `pick_prev_function`); outer blocks and namespaces
+are not considered. Otherwise `no matching function found in local scope`,
+the friend is `INVALID` and redeclares nothing (`check_local_friend`; at the
+definition only, also in a function template, not again at instantiation). A
+function of the enclosing namespace with the friend's signature is suggested
+as clang's typo correction does: `no matching function 'f' found in local
+scope; did you mean '::f'?` + `'::f' declared here`. Divergences (clang's
+typo correction): a near miss in an outer block (clang adds `local declaration
+nearly matches`), a similarly named namespace function (clang suggests
+`'::outer'` for `outer2`), a using-declarator's target and an
+unnamed-namespace function are not suggested; operator friends are not
+checked. Test: `class.friend/local-class-friend-no-prior.cpp`.
+
 Out-of-line member definitions (`void S::f() {}`): `act_on_declarator` with a
 qualified declarator-id looks up the name in `S` only and picks the declaration
 with the same parameter-type-list, `this_quals` and `ref_qual` (template heads:
