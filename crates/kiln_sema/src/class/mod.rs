@@ -24,8 +24,8 @@ mod temporary;
 mod r#virtual;
 
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, TagKind};
-use kiln_ast::types::ExcSpec;
 use kiln_ast::expr::ExprKind;
+use kiln_ast::types::ExcSpec;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -359,7 +359,8 @@ impl Sema<'_, '_> {
             if self.ast.exprs.get(x).kind() == ExprKind::CXXThisExpr {
                 let implicit = self.ast.exprs.this_is_implicit(x);
                 let loc = self.ast.exprs.get(x).loc();
-                let msg = self.diag(DiagId::sema_this_static_member_func, loc).arg(u32::from(implicit));
+                let msg =
+                    self.diag(DiagId::sema_this_static_member_func, loc).arg(u32::from(implicit));
                 self.emit(msg);
                 return;
             }

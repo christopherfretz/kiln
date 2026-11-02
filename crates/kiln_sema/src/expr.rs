@@ -4163,8 +4163,7 @@ impl Sema<'_, '_> {
         if self.instantiation_fails(obj_ty, op_loc) {
             return self.recover_err(&[base], loc);
         }
-        let complete =
-            self.this_outside_member_body(rec) || self.require_complete(obj_ty, op_loc);
+        let complete = self.this_outside_member_body(rec) || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
             let msg = self
                 .diag(DiagId::sema_member_reference_incomplete, op_loc)

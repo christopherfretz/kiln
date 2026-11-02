@@ -31,7 +31,7 @@ use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
 use crate::qualified_decl::QualifiedDecl;
-use crate::scope::{Scope, ScopeKind};
+use crate::scope::{Ns, Scope, ScopeKind};
 use crate::type_diff::DiffArgs as _;
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
@@ -2512,7 +2512,16 @@ impl Sema<'_, '_> {
                             || k == DeclKind::FunctionTemplate
                     })
             };
-        let prev = if global_new_delete || deferred_friend {
+        // An invalid local-class friend redeclares nothing (clang returns
+        // after `DiagnoseInvalidRedeclaration`).
+        let bad_local_friend = friend
+            && d.qualifier.is_none()
+            && d.op_name.is_none()
+            && dname
+                .as_ident()
+                .is_some_and(|sym| self.check_local_friend(ctx, sym, new_fn, d.name_loc()));
+        invalid_redecl |= bad_local_friend;
+        let prev = if global_new_delete || deferred_friend || bad_local_friend {
             None
         } else if friend && d.qualifier.is_none() && self.in_templated_class(Some(lexical)) {
             // A friend of a templated class redeclares nothing until
@@ -4408,6 +4417,68 @@ impl Sema<'_, '_> {
 
     // -- function definitions ----------------------------------------------------
 
+    /// [class.friend]/11: an unqualified friend function declared in a
+    /// local class must redeclare a function declared in the innermost
+    /// enclosing non-class (block) scope; "no matching function found in
+    /// local scope" otherwise (clang `DiagnoseInvalidRedeclaration` with
+    /// `IsLocalFriend`). A function of namespace `ns` with the friend's
+    /// signature is suggested, as clang's typo correction does. Returns
+    /// whether the friend is invalid.
+    fn check_local_friend(&mut self, ns: DeclId, name: Symbol, new: NewFn, loc: Loc) -> bool {
+        let Some(c) = self.current_class() else { return false };
+        let record = c.record;
+        if !self.is_local_class(record) {
+            return false;
+        }
+        let Some(scope) =
+            self.scopes.iter().rev().find(|s| !s.is_transparent() && s.kind != ScopeKind::Record)
+        else {
+            return false;
+        };
+        if !scope.is_local() {
+            return false;
+        }
+        let found: Vec<DeclId> = scope
+            .locals
+            .iter()
+            .filter(|&&(s, x, ns)| {
+                s == name && ns == Ns::Ordinary && {
+                    let k = self.kind_of(x);
+                    k.payload() == kiln_ast::decl::PayloadClass::Function
+                        || k == DeclKind::FunctionTemplate
+                }
+            })
+            .map(|&(_, x, _)| x)
+            .collect();
+        if self.pick_prev_function(&found, new).is_some() {
+            return false;
+        }
+        let in_ns: Vec<DeclId> = self
+            .ast
+            .lookup_local(ns, DeclName::ident(name))
+            .iter_with_flags()
+            .filter(|&(x, fl)| {
+                !fl.contains(LookupFlags::ADL_ONLY) && self.kind_of(x) != DeclKind::UsingShadow
+            })
+            .map(|(x, _)| x)
+            .collect();
+        let msg = match self.pick_prev_function(&in_ns, new) {
+            Some(p) => {
+                let qual = format!("::{}", self.qualified_decl_name(p));
+                let note = self
+                    .diag(DiagId::note_entity_declared_here, self.ast.decls.get(p).loc())
+                    .arg(format!("'{qual}'"));
+                self.diag(DiagId::sema_no_matching_local_friend_suggest, loc)
+                    .arg(sym_str(self, name))
+                    .arg(qual)
+                    .with_note(note)
+            }
+            None => self.diag(DiagId::sema_no_matching_local_friend, loc),
+        };
+        self.emit(msg);
+        true
+    }
+
     /// Whether function (template) `f` is a friend declared in a
     /// templated class: it is a pattern that only declares the function
     /// when the class is instantiated ([temp.inst]/4, [temp.friend]), so
@@ -5638,9 +5709,7 @@ impl Sema<'_, '_> {
                 .iter()
                 .rev()
                 .find(|e| {
-                    e.0 == name
-                        && e.2 == crate::scope::Ns::Ordinary
-                        && self.kind_of(e.1) != DeclKind::UsingShadow
+                    e.0 == name && e.2 == Ns::Ordinary && self.kind_of(e.1) != DeclKind::UsingShadow
                 })
                 .map(|e| e.1);
         }
