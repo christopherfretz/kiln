@@ -4,7 +4,9 @@
 // pt::dt x;`), names that member class; the parser classifies `dt` by
 // the member class's pattern and the member class is instantiated.
 // libc++ `lognormal_distribution<>::param_type::distribution_type`
-// (rand.dist.norm.lognormal/param_types.pass.cpp). WP-296.
+// (rand.dist.norm.lognormal/param_types.pass.cpp); extends WP-288's
+// qualified-name-through-typedef.cpp with an alias-template member and an
+// out-of-class member class definition. WP-296.
 //@ expect: compile-ok
 
 template <class T = double> struct L {

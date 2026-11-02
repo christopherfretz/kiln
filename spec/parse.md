@@ -284,11 +284,6 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   template: the lookahead cannot instantiate, and an undefined class has
   no members to find (`typedef X<int> T; W<T::rebind<float>, int>`,
   WP-276).
-- Likewise a typedef qualifier `T::name` whose `T` names a member class
-  of a specialization that is not instantiated yet is classified by the
-  member class's pattern ([temp.inst]/3; `typedef L<>::P T; T::dt x;`
-  is a declaration; `Sema::classify_pattern_member`, WP-296,
-  `tests/conformance/temp.res/typedef-member-class-of-specialization-nns.cpp`).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp
