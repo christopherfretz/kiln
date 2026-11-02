@@ -596,6 +596,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - A declarator whose special declarator-id was malformed
     (`operator;`) takes the error type, so no `a type specifier is
     required` follows.
+  - At namespace scope a declaration with no decl-specifiers whose
+    first token is a name followed by `;`, `=`, `,`, `[`, `(` or `{`
+    (`at_implicit_int_declarator`; `y;`, `y();`) is a declarator, not
+    `expected unqualified-id`: Sema reports `a type specifier is
+    required for all declarations` at the name and declares it as an
+    invalid `int` (clang's implicit-int recovery, WP-371).
+  - Group stickiness (clang's `Declarator::InvalidType` surviving
+    `Declarator::clear`): after a declarator without a type, or one whose
+    type named an unexpanded pack (`Sema::take_declarator_type_invalid`,
+    spec/sema-templates.md), the later declarators of the group are
+    parsed but not declared and take no initializer.
   - A declaration with no declarator (`struct S;`,
     `union { int a; };`) goes to `act_on_decl_spec_only`.
   - That call returns the implicit object of an anonymous union, if
@@ -724,15 +735,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `template` (unsupported).
   - `decl-specifier-seq ;`: `act_on_friend(ds, base, None, loc)` for
     `friend class X;`, else `act_on_decl_spec_only`.
-  - No decl-specifiers and no special declarator (`member_without_type`,
-    WP-367): a non-type name followed by `;`, `=`, `,` or `[` is `a type
-    specifier is required for all declarations` at the name (clang's
-    implicit-int recovery, `err_missing_type_specifier`); `()` is
+  - No decl-specifiers and no special declarator: a name followed by
+    `;`, `=`, `,`, `[`, `(` or `{` (`at_implicit_int_declarator`) is
+    parsed as a member-declarator and declared as an invalid `int`
+    member (data member or, for `y();`, member function, so `S::y`
+    resolves and its uses are silent) after `a type specifier is
+    required for all declarations` at the name, once per declarator
+    (clang's implicit-int recovery, `err_missing_type_specifier`;
+    WP-371). Otherwise (`member_without_type`, WP-367) `()` is
     `expected member name or ';' after declaration specifiers` at the
-    `)` (clang's parenthesized declarator), anything else at the token.
-    The declaration is skipped to its `;` (clang declares an invalid
-    `int` member: later uses of the name differ).
-    `class.mem/member-without-type.cpp`.
+    `)` (clang's parenthesized declarator), anything else at the token,
+    and the declaration is skipped to its `;`.
+    `class.mem/member-without-type.cpp`,
+    `dcl.type/missing-type-specifier-implicit-int.cpp`.
   - A friend-type-specifier-list ([class.friend]/3, P2893, WP-359): with
     `friend` and the next token `...` or `,`, `parse_friend_type_list`
     takes each friend-type-specifier, an optional `...`, and calls

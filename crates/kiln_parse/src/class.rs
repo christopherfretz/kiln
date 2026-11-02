@@ -1258,28 +1258,40 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// A member declaration with no decl-specifiers that is not a special
-    /// member, skipped to its `;` ([dcl.spec.general]/3; also how a
-    /// friend-type-specifier-list that lacks its `;` recovers, since
-    /// nothing is skipped after it). A name that does not name a type and
-    /// is followed by `;`, `=`, `,` or `[` is a declarator without a type:
-    /// clang's "a type specifier is required for all declarations"
-    /// (`ParseImplicitInt`, `err_missing_type_specifier`), at the name.
-    /// `()` is clang's parenthesized declarator wanting a name, reported at
-    /// the `)`. Anything else is "expected member name or ';'".
+    /// A member declaration with no decl-specifiers that is neither a
+    /// special member nor a declarator without a type
+    /// ([`Parser::at_implicit_int_declarator`]), skipped to its `;`
+    /// ([dcl.spec.general]/3; also how a friend-type-specifier-list that
+    /// lacks its `;` recovers, since nothing is skipped after it). `()` is
+    /// clang's parenthesized declarator wanting a name, reported at the
+    /// `)`. Anything else is "expected member name or ';'".
     fn member_without_type(&mut self) {
-        let next = Self::punct_of(self.peek(1));
-        if self.ident_of(self.tok()).is_some()
-            && matches!(next, Some(Punct::Semi | Punct::Equal | Punct::Comma | Punct::LSquare))
-        {
-            self.error_here(DiagId::parse_missing_type_specifier);
-        } else {
-            if self.at(Punct::LParen) && next == Some(Punct::RParen) {
-                self.bump();
-            }
-            self.error_here(DiagId::parse_expected_member_name);
+        if self.at(Punct::LParen) && Self::punct_of(self.peek(1)) == Some(Punct::RParen) {
+            self.bump();
         }
+        self.error_here(DiagId::parse_expected_member_name);
         self.skip_to_semi();
+    }
+
+    /// True at a name that does not name a type followed by `;`, `=`,
+    /// `,`, `[`, `(` or `{`, where no decl-specifier was written: a
+    /// declarator without a type (`y;`, `y();`). clang declares it as an
+    /// invalid `int` after "a type specifier is required for all
+    /// declarations" at the name (`err_missing_type_specifier`), so later
+    /// uses of the name are not diagnosed again.
+    pub(crate) fn at_implicit_int_declarator(&self) -> bool {
+        self.ident_of(self.tok()).is_some()
+            && matches!(
+                Self::punct_of(self.peek(1)),
+                Some(
+                    Punct::Semi
+                        | Punct::Equal
+                        | Punct::Comma
+                        | Punct::LSquare
+                        | Punct::LParen
+                        | Punct::LBrace
+                )
+            )
     }
 
     /// The default member initializer of `decl`, saved for the complete
@@ -1342,7 +1354,10 @@ impl Parser<'_, '_> {
             self.act_on_member_decl_spec_only(&ds);
             return;
         }
-        if ds.is_empty() && !self.at_special_declarator(DeclaratorContext::Member) {
+        if ds.is_empty()
+            && !self.at_special_declarator(DeclaratorContext::Member)
+            && !self.at_implicit_int_declarator()
+        {
             self.member_without_type();
             return;
         }
@@ -1369,6 +1384,12 @@ impl Parser<'_, '_> {
             }
             let parts = mem::take(&mut self.late_fn);
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
+            // clang forms each member declarator's type anew: every one
+            // without a type is reported (`static y, z;`).
+            if !first && !ds.has_type_specifier() && !ds.invalid && !d.invalid && d.special.is_none()
+            {
+                self.s.error(DiagId::parse_missing_type_specifier, d.name_loc());
+            }
             let is_fn = d.is_function_declarator();
             let (has_width, width_failed) =
                 self.parse_member_declarator_tail(&mut d, ds.friend.is_some());

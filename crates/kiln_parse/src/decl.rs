@@ -2732,7 +2732,12 @@ impl Parser<'_, '_> {
             self.s.end_delayed_access_to(level, ds.tag);
             return decls;
         }
-        if ds.is_empty() && !self.at_special_declarator(ctx) {
+        // `y;` at namespace scope: a declarator without a type, declared
+        // as an invalid `int` (clang's `err_missing_type_specifier`).
+        if ds.is_empty()
+            && !self.at_special_declarator(ctx)
+            && !(ctx == DeclaratorContext::File && self.at_implicit_int_declarator())
+        {
             self.error_here(DiagId::parse_expected_unqualified_id);
             self.skip_to_semi();
             return decls;
@@ -2744,6 +2749,8 @@ impl Parser<'_, '_> {
         // binding declaration is alone in its group.
         let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;
         let mut declarators = 0usize;
+        let _ = self.s.take_declarator_type_invalid();
+        let mut type_invalid = false;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
@@ -2786,7 +2793,9 @@ impl Parser<'_, '_> {
             // clang's `ParseDeclGroup`: a later declarator of a
             // decl-specifier that named no type is parsed, not declared,
             // and takes no initializer (`u1 &a, &b;` reports `a` only).
-            if declarators > 0 && ds.type_error {
+            // So is one after a declarator whose type named an
+            // unexpanded pack (`Ts a, b;` reports `a` only).
+            if declarators > 0 && (ds.type_error || type_invalid) {
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }
@@ -2795,6 +2804,9 @@ impl Parser<'_, '_> {
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
+            // A declarator without a type is invalid too (`static y, z;`).
+            type_invalid |= self.s.take_declarator_type_invalid()
+                || (!ds.has_type_specifier() && !is_untyped_special(&d));
             self.s.end_delayed_access_to(level, v);
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);

@@ -539,6 +539,12 @@ pub struct Sema<'a, 'sm> {
     /// The class the last `friend class X;` declared ([`TagUse::Friend`]),
     /// taken by [`Sema::act_on_friend`] as the `FriendDecl`'s owned tag.
     pub(crate) friend_tag: Option<DeclId>,
+    /// Set when the last declarator's type was diagnosed invalid in a
+    /// way clang records on its `Declarator` (an unexpanded pack,
+    /// [temp.variadic]/12): clang's `ParseDeclGroup` reuses the
+    /// declarator, so the flag sticks and the group's later declarators
+    /// are parsed but not declared ([`Sema::take_declarator_type_invalid`]).
+    pub(crate) declarator_type_invalid: bool,
     /// The class template the last `template<..> friend class X;`
     /// befriended ([temp.friend]/1), taken by [`Sema::act_on_friend`].
     pub(crate) friend_class_template: Option<DeclId>,
@@ -728,6 +734,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
+            declarator_type_invalid: false,
             friend_class_template: None,
             inherited_defaults: kiln_source::fx::FxHashMap::default(),
             inherited_aligned: kiln_source::fx::FxHashMap::default(),

@@ -33,6 +33,7 @@ use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
 use crate::qualified_decl::QualifiedDecl;
 use crate::scope::{Ns, Scope, ScopeKind};
+use crate::templ::pack::PackOperand;
 use crate::type_diff::DiffArgs as _;
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
@@ -1375,7 +1376,15 @@ impl Sema<'_, '_> {
             // (A braced default argument is not searched: a gap.)
             Initializer::List(_) => Vec::new(),
         };
-        if !roots.into_iter().all(|e| self.check_default_arg_refs(e)) {
+        // [temp.variadic]/12: `void f(int = sizeof(Ts));` (clang
+        // reports at the argument's begin).
+        let unexpanded = !p.invalid
+            && self.lambdas.is_empty()
+            && roots.iter().any(|&e| {
+                let at = self.begin_loc(e);
+                self.diagnose_unexpanded_pack(PackOperand::Expr(e), "default argument", at)
+            });
+        if unexpanded || !roots.into_iter().all(|e| self.check_default_arg_refs(e)) {
             p.invalid = true;
             if let Some(d) = p.decl {
                 self.ast.decls.set_flags(d, DeclFlags::INVALID);
@@ -2028,6 +2037,14 @@ impl Sema<'_, '_> {
             self.check_explicit_inst_specifiers(ds, ty);
         }
         if special {
+            // [temp.variadic]/12: `S(Ts);`, `operator Ts();`.
+            if !invalid && ds.friend.is_none() {
+                let ty = match d.special {
+                    Some((SpecialName::Conversion(t), _)) if self.has_unexpanded_pack(t) => t,
+                    _ => ty,
+                };
+                invalid = self.diagnose_unexpanded_declarator(ty, "declaration type", d.name_loc());
+            }
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
@@ -2050,6 +2067,21 @@ impl Sema<'_, '_> {
         }
         if !invalid {
             self.warn_ambiguous_function(ds, d, ty);
+        }
+        // [temp.variadic]/12: `Ts x;`, `Ts f();`, `void g(Ts);` (after
+        // the vexing-parse warning, which clang's parser emits; a
+        // friend's is checked by `act_on_friend`).
+        if !invalid && ds.friend.is_none() {
+            let what = if d.ctx == DeclaratorContext::Member
+                && !ds.is_typedef()
+                && !self.ast.types.is_function(ty)
+                && !matches!(ds.storage, Some((StorageSpec::Static, _)))
+            {
+                "data member type"
+            } else {
+                "declaration type"
+            };
+            invalid = self.diagnose_unexpanded_declarator(ty, what, d.name_loc());
         }
         let Some((name, name_loc)) = d.name else {
             self.templ.cur = None;
@@ -2087,6 +2119,10 @@ impl Sema<'_, '_> {
             self.virtual_on_non_function(ds, d);
         }
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
+        // [dcl.spec.general]/3: a function or member declared with no
+        // type (`y();`, `struct S { y; };`) is an invalid `int` one, as
+        // clang's `ConvertDeclSpecToType`: later uses name it silently.
+        invalid |= !ds.has_type_specifier();
         let decl = if ds.is_typedef() {
             self.act_on_typedef(ds, ty, d, name, false)
         } else if self.ast.types.is_function(ty) {
@@ -2101,7 +2137,6 @@ impl Sema<'_, '_> {
             // the declarator-id) is invalid after "a type specifier is
             // required", as clang's `ConvertDeclSpecToType`, so it is not
             // checked further (no default-initialization error, WP-330).
-            invalid |= !ds.has_type_specifier();
             // [dcl.constexpr]/6: a constexpr object is const.
             let ty = if ds.constexpr.is_some() && !self.ast.types.is_reference(ty) {
                 self.ast.types.qualify(ty, Quals::CONST)
@@ -2686,6 +2721,11 @@ impl Sema<'_, '_> {
         let mut attrs = attrs.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
+        // [temp.variadic]/12: `using U = Ts;`.
+        if self.diagnose_unexpanded_declarator(ty, "declaration type", name_loc) {
+            self.declarator_type_invalid = false;
+            self.ast.decls.set_flags(td, DeclFlags::INVALID);
+        }
         if type_loc.is_valid() && self.is_dependent_type(ty) {
             self.type_spec_locs.insert(td, type_loc);
         }
@@ -4215,7 +4255,10 @@ impl Sema<'_, '_> {
             p => p,
         };
         let ambiguous = self.diagnose_ambiguous_qualified_var(name, d);
-        if ambiguous {
+        // A variable declared with no type is invalid and not merged
+        // (clang's `MergeVarDecl` returns at an invalid new declaration):
+        // `y; y;` reports the missing type twice, no redefinition.
+        if ambiguous || !ds.has_type_specifier() {
             prev = None;
         }
         // [dcl.link]/6-7: a C-linkage variable of another scope.
