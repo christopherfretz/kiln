@@ -477,6 +477,10 @@ impl Sema<'_, '_> {
         }
         let fparams: Vec<ParamInfo> =
             if shape == Shape::Dtor { Vec::new() } else { params.clone() };
+        // A parameter that names no type makes the function invalid
+        // (clang's `ActOnFunctionDeclarator`): an invalid constructor is
+        // not a user-declared one and no candidate (WP-318).
+        *invalid |= fparams.iter().any(|p| p.invalid);
         let (defaults, redefined) = self.merge_default_args(prev_ok, false, &fparams);
         if redefined {
             prev_ok = None;
