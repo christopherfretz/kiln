@@ -91,6 +91,10 @@ pub enum TypeSpecKind {
     Int,
     /// `__int128`.
     Int128,
+    /// `_BitInt ( constant-expression )` (C23 bit-precise integer, a
+    /// clang extension in C++; spec/types.md §5.3): the width is in
+    /// [`DeclSpec::bit_int_width`].
+    BitInt,
     /// `float`.
     Float,
     /// `double`.
@@ -138,6 +142,7 @@ impl TypeSpecKind {
             TypeSpecKind::Char32 => "char32_t",
             TypeSpecKind::Int => "int",
             TypeSpecKind::Int128 => "__int128",
+            TypeSpecKind::BitInt => "_BitInt",
             TypeSpecKind::Float => "float",
             TypeSpecKind::Double => "double",
             TypeSpecKind::Float128 => "__float128",
@@ -217,6 +222,9 @@ pub struct DeclSpec {
     pub type_loc: Option<Loc>,
     /// The type of a [`TypeSpecKind::Named`] specifier.
     pub named: Option<QualType>,
+    /// The width operand of a [`TypeSpecKind::BitInt`] specifier and the
+    /// `_BitInt` keyword's location.
+    pub bit_int_width: Option<(ExprId, Loc)>,
     /// The class or enumeration declared or defined by this
     /// decl-specifier-seq (`struct S { }`, `enum E : int;`).
     pub tag: Option<DeclId>,
@@ -449,7 +457,11 @@ impl DeclSpec {
     fn check_base_sign(&self, new_is_base: bool) -> Result<(), SpecError> {
         let ok = matches!(
             self.base,
-            TypeSpecKind::None | TypeSpecKind::Char | TypeSpecKind::Int | TypeSpecKind::Int128
+            TypeSpecKind::None
+                | TypeSpecKind::Char
+                | TypeSpecKind::Int
+                | TypeSpecKind::Int128
+                | TypeSpecKind::BitInt
         ) || self.sign == Sign::None;
         if ok {
             return Ok(());

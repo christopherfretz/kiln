@@ -42,6 +42,8 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Float
             | Kw::Double
             | Kw::Int128
+            | Kw::BitInt
+            | Kw::ExtInt
             | Kw::Float128
             | Kw::Float16
             | Kw::Float32
@@ -745,6 +747,10 @@ impl Parser<'_, '_> {
                 Kw::Char32 => ds.set_base(TypeSpecKind::Char32, None, loc),
                 Kw::Int => ds.set_base(TypeSpecKind::Int, None, loc),
                 Kw::Int128 => ds.set_base(TypeSpecKind::Int128, None, loc),
+                Kw::BitInt | Kw::ExtInt => {
+                    self.parse_bit_int_into(&mut ds, k, loc);
+                    continue;
+                }
                 Kw::Float => ds.set_base(TypeSpecKind::Float, None, loc),
                 Kw::Double => ds.set_base(TypeSpecKind::Double, None, loc),
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
@@ -935,6 +941,42 @@ impl Parser<'_, '_> {
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc) {
             ds.invalid = true;
             self.spec_error(&e, loc);
+        }
+    }
+
+    /// `_BitInt ( constant-expression )` (or the deprecated `_ExtInt`), a
+    /// C23 bit-precise integer type clang accepts in C++ as an extension
+    /// (clang `DiagnoseBitIntUse`, `ParseExtIntegerArgument`; spec/types.md
+    /// §5.3). The width is checked when the type is formed
+    /// ([`kiln_sema::Sema::build_bit_int_type`]), where the sign is known.
+    fn parse_bit_int_into(&mut self, ds: &mut DeclSpec, k: Kw, loc: Loc) {
+        let id = if k == Kw::ExtInt {
+            DiagId::parse_ext_int_deprecated
+        } else {
+            DiagId::parse_bit_int_extension
+        };
+        self.s.error(id, loc);
+        self.bump();
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'_BitInt'")
+                .arg("'('");
+            self.emit(d);
+            return;
+        };
+        let Some(e) = self.with_greater_op(true, Self::parse_constant_expr) else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return;
+        };
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        match ds.set_base(TypeSpecKind::BitInt, None, loc) {
+            Ok(()) => ds.bit_int_width = Some((e, loc)),
+            Err(e) => {
+                ds.invalid = true;
+                self.spec_error(&e, loc);
+            }
         }
     }
 
@@ -1502,7 +1544,10 @@ impl Parser<'_, '_> {
         let ty = self.s.type_from_declspec(&base);
         // [dcl.enum]/2, [dcl.spec.auto.general]/5.
         let at = base.type_loc.unwrap_or(base.loc);
-        Some(self.s.type_specifier_placeholder_check(ty, at))
+        let ty = self.s.type_specifier_placeholder_check(ty, at);
+        // clang: at the type's location, a `_BitInt`'s keyword.
+        let at = base.bit_int_width.map_or(at, |(_, kw)| kw);
+        self.s.check_enum_fixed_type(Some(ty), at)
     }
 
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {

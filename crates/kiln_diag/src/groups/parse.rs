@@ -3,10 +3,12 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 AmbiguousEllipsis = "ambiguous-ellipsis" [];
+BitIntExtension = "bit-int-extension" [];
 Cxx20Extensions = "c++20-extensions" [];
 Cxx26Extensions = "c++26-extensions" [];
 CxxAttributeExtension = "cxx-attribute-extension" [];
 DeprecatedMissingCommaVariadicParameter = "deprecated-missing-comma-variadic-parameter" [];
+DeprecatedType = "deprecated-type" [];
 DuplicateDeclSpecifier = "duplicate-decl-specifier" [];
 EmptyDecomposition = "empty-decomposition" [];
 GnuCaseRange = "gnu-case-range" [];

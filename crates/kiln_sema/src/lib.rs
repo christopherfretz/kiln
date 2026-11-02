@@ -17,6 +17,7 @@
 mod absolute_value;
 mod align_redecl;
 mod asm;
+mod bit_int;
 mod bitfield_constant;
 mod builtins;
 pub mod class;

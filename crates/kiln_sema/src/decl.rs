@@ -225,6 +225,11 @@ impl Sema<'_, '_> {
                 self.ast.types.auto_type(kw, None, c, args, false)
             }
             TypeSpecKind::Named => ds.named.unwrap_or(QualType::ERROR),
+            // [dcl.type.simple] (C23 6.7.2, a clang extension in C++).
+            TypeSpecKind::BitInt => match ds.bit_int_width {
+                Some((w, _)) => self.build_bit_int_type(unsigned, w, ds.loc),
+                None => QualType::ERROR,
+            },
         };
         let base = match ds.complex {
             Some(cloc) => self.complex_of_declspec(ds, base, cloc),
@@ -5884,17 +5889,30 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2).
-    fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) {
+    /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2);
+    /// clang (`CheckEnumUnderlyingType`) takes only the standard integer
+    /// types, so a bit-precise one is rejected too (spec/types.md §5.3).
+    /// An invalid one recovers to `int`, as clang's `ActOnTag` does. The
+    /// parser checks the enum-base at its type (`loc`, as clang); an
+    /// instantiated dependent one is checked again in [`Self::act_on_tag`].
+    pub fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) -> Option<QualType> {
         if let Some(f) = fixed {
-            let ok = self.ast.types.is_integral(f)
+            let bit_int = matches!(self.ast.types.canonical_view(f), TypeView::BitInt { .. });
+            let ok = (self.ast.types.is_integral(f) && !bit_int)
                 || self.is_error_type(f)
                 || self.ast.types.is_dependent(f);
             if !ok {
-                let msg = self.diag(DiagId::sema_enum_invalid_underlying, loc).arg(self.ty_arg(f));
+                let id = if bit_int {
+                    DiagId::sema_enum_bit_int_underlying
+                } else {
+                    DiagId::sema_enum_invalid_underlying
+                };
+                let msg = self.diag(id, loc).arg(self.ty_arg(f));
                 self.emit(msg);
+                return Some(QualType::INT);
             }
         }
+        fixed
     }
 
     /// Checks a definition's member specialization header, then returns
@@ -6027,7 +6045,7 @@ impl Sema<'_, '_> {
         }
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
-        self.check_enum_fixed_type(fixed, loc);
+        let fixed = self.check_enum_fixed_type(fixed, loc);
         let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
         let head = self.tag_template_head(is_enum, qualifier, use_);
         let mut prev = None;

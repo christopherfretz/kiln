@@ -930,6 +930,22 @@ impl Sema<'_, '_> {
                 }
                 self.deduce_array_bound(size, asize, d)
             }
+            // clang `DeduceTemplateArgumentsByTypeMatch`: `_BitInt(N)`
+            // deduces `N` from the argument's width as an `int`
+            // (spec/types.md §5.3); the signedness must match. A dependent
+            // width deduces as a dependent array bound does (clang only
+            // marks it used; kiln's partial-specialization deducibility
+            // check deduces the arguments against themselves).
+            TypeView::DependentBitInt { signed, width } => {
+                let w = match av {
+                    TypeView::BitInt { signed: s, width: n } if s == signed => Ok(u64::from(n)),
+                    TypeView::DependentBitInt { signed: s, width: aw } if s == signed => {
+                        Err(ExprOperand::Profile(aw))
+                    }
+                    _ => return mismatch(d),
+                };
+                self.deduce_bound(ExprOperand::Profile(width), Some(w), d, true)
+            }
             TypeView::Function(pf) => {
                 let TypeView::Function(af) = av else { return mismatch(d) };
                 let t = &self.ast.types;
@@ -1030,7 +1046,6 @@ impl Sema<'_, '_> {
             | TypeView::PackIndexing { .. }
             | TypeView::TypeOf { .. }
             | TypeView::UnaryTransform { .. }
-            | TypeView::DependentBitInt { .. }
             | TypeView::Splice { .. }
             | TypeView::Atomic(_) => Tdk::Success,
             // A dependent record (a member of the current instantiation)
@@ -1053,6 +1068,18 @@ impl Sema<'_, '_> {
         asize: Option<Result<u64, ExprOperand>>,
         d: &mut DeducedArgs,
     ) -> Tdk {
+        self.deduce_bound(size, asize, d, false)
+    }
+
+    /// [`Self::deduce_array_bound`]; an undeduced parameter type takes
+    /// `int` (a `_BitInt` width) if `int_bound`, else `size_t`.
+    fn deduce_bound(
+        &mut self,
+        size: ExprOperand,
+        asize: Option<Result<u64, ExprOperand>>,
+        d: &mut DeducedArgs,
+        int_bound: bool,
+    ) -> Tdk {
         let e = match size {
             ExprOperand::Expr(e) => Some(e),
             ExprOperand::Profile(p) => self.ast.types.profile_expr(p),
@@ -1065,7 +1092,9 @@ impl Sema<'_, '_> {
             Some(Ok(n)) => {
                 // The value has the parameter's type ([temp.deduct.type]/17);
                 // an undeduced type uses `size_t`.
-                let ty = self.nttp_param_type(e).unwrap_or_else(|| self.size_type());
+                let ty = self.nttp_param_type(e).unwrap_or_else(|| {
+                    if int_bound { QualType::INT } else { self.size_type() }
+                });
                 let v = self.int_const(ty, i128::from(n));
                 TemplateArg::value(self.ast.types.canonical(ty), v)
             }

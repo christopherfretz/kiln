@@ -975,6 +975,11 @@ impl Sema<'_, '_> {
                 self.type_packs(QualType::unqual(class), out, depth + 1);
                 self.type_packs(pointee, out, depth + 1);
             }
+            TypeView::DependentBitInt { width, .. } => {
+                if let Some(e) = t.profile_expr(width) {
+                    self.expr_packs(e, out, depth + 1);
+                }
+            }
             TypeView::DependentSizedArray { elem, size }
             | TypeView::DependentVector { elem, size, .. } => {
                 self.type_packs(elem, out, depth + 1);

@@ -38,6 +38,7 @@ keywords! {
     Asm = "asm" | "__asm" | "__asm__";
     Atomic = "_Atomic";
     Auto = "auto";
+    BitInt = "_BitInt";
     Bool = "bool";
     Break = "break";
     Case = "case";
@@ -78,6 +79,7 @@ keywords! {
     Float32x = "_Float32x";
     Float64x = "_Float64x";
     Bf16 = "__bf16";
+    ExtInt = "_ExtInt";
     Fp16 = "__fp16";
     For = "for";
     Friend = "friend";
