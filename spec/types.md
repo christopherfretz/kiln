@@ -509,7 +509,11 @@ with clang's. Options (`PrintOptions`): `canonical` (print `canonical(q)`),
 `desugar` (print `desugar_top(q)`, the AST dump's second string),
 `full_scope` (qualify every name; default for canonical, off for sugar,
 which prints as written), `suppress_tag` (omit written `struct`/`enum`
-keywords). Presets: `SUGARED`, `CANONICAL` (canonical + full scope),
+keywords), `c_policy` (clang's default C policy: `_Bool`, tag keywords),
+`no_parens` (print `ParenType` as its inner type) and `split_closers`
+(clang's `SplitTemplateClosers`: `P<P<int> >`; the layout dump).
+`write_arg_list_c` prints a specialization's arguments under the C policy
+(canonical, scoped, keywords, split closers) for the layout dump. Presets: `SUGARED`, `CANONICAL` (canonical + full scope),
 `DESUGARED`. Declaration names, expressions and constant values come from
 the caller through the `TypeNames` trait (implemented by `Ast`); `RawNames`
 prints placeholders for AST-less use. Entry points: `print_type`,

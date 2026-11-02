@@ -5,7 +5,6 @@
 // locale::facet::_S_get_c_name()); <locale> and 25 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): protected static member through a dependent base rejected
 struct locale {
   class facet {
   protected:

@@ -621,9 +621,29 @@ impl Substituter<'_, '_, '_> {
                 let ns = self.sema.ast.using_target(d).ok_or(SubstFail)?;
                 Ok(self.sema.act_on_using_directive(ns, loc))
             }
+            // A block-scope using-enum-declaration ([enum.udecl]; clang
+            // `TemplateDeclInstantiator::VisitUsingEnumDecl`): the named
+            // enumeration is mapped to the instantiation's (a local or
+            // member enumeration of the pattern) and its enumerators are
+            // redeclared in the instantiation's block scope.
+            DeclKind::UsingEnum => {
+                let e = self.sema.ast.using_target(d).ok_or(SubstFail)?;
+                let e = self.find_instantiated_decl(e, loc)?;
+                let written = self.sema.decl_name(e);
+                Ok(self.sema.using_enum_of(e, &written, loc))
+            }
             DeclKind::CXXRecord => Ok(self.local_class(d, None)),
             DeclKind::Enum => {
                 let x = self.enum_decl(d)?;
+                self.locals.insert(d, super::DeclOrPack::Decl(x));
+                Ok(x)
+            }
+            // A block-scope function declaration ([basic.scope.block],
+            // [temp.inst]/3): declared again with the substituted
+            // signature in the instantiation's block, where a local
+            // class's friend finds it ([class.friend]/11).
+            DeclKind::Function => {
+                let x = self.function_decl(d, DeclaratorContext::Block, None)?;
                 self.locals.insert(d, super::DeclOrPack::Decl(x));
                 Ok(x)
             }
