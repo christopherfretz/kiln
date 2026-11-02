@@ -1900,6 +1900,21 @@ sema.
     `-fconstexpr-steps`, pinned with `oven:` budgets, plus one-step-short
     twins with clang's notes.
 
+### Coroutines — rejected (WP-351)
+A coroutine is never a constexpr function ([dcl.constexpr]/3; Sema
+rejects `constexpr`/`consteval` coroutines and drops the implicit
+constexpr of a coroutine lambda, sema.md §7.13), so a constant
+evaluation reaches one only through a call Sema already reports as
+"non-constexpr function ... cannot be used in a constant expression",
+or through a `__builtin_coro_*` builtin, which is not a constexpr
+builtin (no note, as clang). Defensively, the compiler lowers a
+`CoawaitExpr`, `CoyieldExpr` or `DependentCoawaitExpr` and a
+`CoroutineBodyStmt` or `CoreturnStmt` to a trap reporting clang's
+generic "subexpression not valid in a constant expression" at the
+expression or statement; no coroutine frame is ever built at compile
+time. Test: `tests/conformance/dcl.fct.def.coroutine/
+constant_evaluation.cpp`.
+
 ## Status and what remains
 Implemented (M2): integers of every width incl. `__int128`, `bool`,
 character types, binary32/64, x87 `long double`, binary128, enums;

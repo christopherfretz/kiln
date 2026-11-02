@@ -110,7 +110,7 @@ impl Cg<'_> {
     }
 
     /// `EnterCXXTryStmt` for the implicit `catch (...)` of a coroutine
-    /// body (spec/codegen.md §7c).
+    /// body (spec/codegen.md §7o).
     pub(crate) fn enter_catch_all(&mut self) {
         let blk = self.f.fir.create_block();
         self.push_catch(vec![Handler { rtti: None, blk }]);

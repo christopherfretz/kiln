@@ -1,4 +1,4 @@
-//! Coroutines (spec/codegen.md §7c, WP-351): a port of clang's
+//! Coroutines (spec/codegen.md §7o, WP-351): a port of clang's
 //! `CGCoroutine.cpp` for the switched-resume lowering. The function is
 //! emitted pre-split (`presplitcoroutine`) with the `llvm.coro.*`
 //! intrinsics; LLVM's CoroEarly/CoroSplit/CoroCleanup passes (run by the
@@ -405,7 +405,6 @@ impl Cg<'_> {
             && kind == AwaitKind::Init
             && self.resume_can_throw(p.resume)
         {
-            let _ = h;
             let flag = self.f.fir.alloca(LTy::I1, 1);
             self.coro_data().resume_eh = Some(flag);
             let t = V::C(self.m.const_bool(true));

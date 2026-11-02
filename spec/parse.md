@@ -842,6 +842,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `'x' does not refer to the name of a parameter pack`.
   - The unparenthesized form is "not supported yet".
 
+- **Coroutine operators (WP-351):**
+  - `co_await cast-expression` ([expr.await]/1) is a unary operator
+    parsed in `parse_cast_expr` (clang's `ParseCastExpression`,
+    `kw_co_await`); it goes to `act_on_coawait(operand, kw_loc)`.
+  - A yield-expression ([expr.yield]/1) is an alternative of
+    assignment-expression, tried before the conditional-expression
+    (like `throw`): `co_yield assignment-expression` or
+    `co_yield braced-init-list` (the list goes through
+    `act_on_braced_arg`), then `act_on_coyield(operand, kw_loc)`.
+  - `operator co_await` is an overloadable operator name (§4.1).
+  - Where the keyword may appear (a function body, not a handler, not
+    unevaluated) is Sema's call (spec/sema.md §"Coroutines").
+
 ### 5.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
 `ParseCXXDeleteExpression`; `parse_cast_expr` dispatches at `new`,
@@ -1050,6 +1063,12 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   - `case`, `default`, `identifier:`
   - A label at the end of a block labels a null statement (C++23).
 - **Jumps:** `goto`, `break`, `continue`, `return`.
+- **`co_return`** ([stmt.return.coroutine]/1, WP-351):
+  `co_return expr-or-braced-init-list? ;` (`parse_coreturn`, clang's
+  `ParseReturnStatement` for `kw_co_return`) goes to
+  `act_on_coreturn(operand, kw_loc)`. A failed operand skips to the
+  enclosing `}` and eats a `;`; a missing `;` is
+  `expected ';' after co_return statement`.
 - **`if constexpr`, `if consteval`, `if !consteval`** ([stmt.if]):
   - `if constexpr ( [init-statement] condition )` takes the ordinary
     `if` path; the condition goes to `act_on_constexpr_condition`
@@ -1247,8 +1266,7 @@ in `kiln_diag` for now; nothing emits them.
     nested-name-specifier)
   - reflection beyond the `-freflection` spike (§5.2): expression,
     dependent and template splices, `^^` of a template-id
-  - `co_await`/`co_yield`
-- **Statements:** range-based `for`, `co_return`, contracts.
+- **Statements:** range-based `for`, contracts.
 
 **Landed (WP-100).** `try` compound-statement handler-seq ([except.pre]/1)
 in `stmt.rs`: a handler is `catch ( exception-declaration )

@@ -1145,7 +1145,8 @@ impl Sema<'_, '_> {
             if failed || self.ast.decls.get(v).has(DeclFlags::INVALID) {
                 return None;
             }
-            let ds = self.act_on_decl_stmt(&[v], floc);
+            // The `DeclStmt` marks the variable as a local of the body.
+            let _ = self.act_on_decl_stmt(&[v], floc);
             let r = self.build_decl_ref(v, floc);
             let r = self.implicit_move(r);
             let (conv, stash) = self.capturing(|s| {
@@ -1166,7 +1167,7 @@ impl Sema<'_, '_> {
             };
             self.release(stash, Vec::new());
             return_value = gro;
-            result_decl = Some((v, ds));
+            result_decl = Some(v);
             return_stmt = Some(self.builder().return_stmt(Some(conv), None, floc));
         }
         // makeReturnOnAllocFailure.
@@ -1220,12 +1221,11 @@ impl Sema<'_, '_> {
             allocate,
             deallocate,
             return_value,
-            result_decl: result_decl.map(|r| r.0),
+            result_decl,
             return_stmt,
             return_on_alloc_failure,
             param_moves,
         };
-        let _ = result_decl;
         Some(self.builder().coroutine_body_stmt(data, floc))
     }
 
@@ -1293,11 +1293,10 @@ impl Sema<'_, '_> {
             self.ast.decls.get(n).ctx().is_none_or(|c| self.kind_of(c) != DeclKind::CXXRecord)
         });
         if requires_nothrow && (new.is_none() || is_global) {
-            let Some((ns, found)) = self.std_lookup("nothrow") else {
+            let Some((_, found)) = self.std_lookup("nothrow") else {
                 self.error(DiagId::sema_implicit_coroutine_std_nothrow_type_not_found, loc);
                 return None;
             };
-            let _ = ns;
             let nt = self.build_decl_ref(found[0], loc);
             place = vec![nt];
             let g = self.alloc_fns(promise_ty, OO::New, true, loc);

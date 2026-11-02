@@ -181,7 +181,7 @@ pub(crate) struct Fx {
     /// `DidCallStackSave`).
     pub did_stack_save: bool,
     /// The coroutine being emitted (clang `CurCoro`, spec/codegen.md
-    /// §7c).
+    /// §7o).
     pub coro: Option<Box<crate::coro::CoroData>>,
 }
 

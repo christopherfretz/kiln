@@ -216,8 +216,10 @@ pub struct CoroutineBodyData {
     /// The `__coro_gro` variable holding the result of
     /// `get_return_object()` when its type is not the return type.
     pub result_decl: Option<DeclId>,
-    /// `return __coro_gro;` (`None` when the return value is initialized
-    /// directly or the function returns `void`).
+    /// The return to the caller at the first suspension: `return
+    /// __coro_gro;` (converted to the return type) with a
+    /// [`Self::result_decl`], `return get_return_object();` when its type
+    /// is the return type, `None` when the function returns `void`.
     pub return_stmt: Option<StmtId>,
     /// `return P::get_return_object_on_allocation_failure();`.
     pub return_on_alloc_failure: Option<StmtId>,

@@ -92,7 +92,7 @@ pub(crate) enum Cleanup {
     /// destructor, even if that destructor throws (`CallDtorDelete`).
     DtorDelete { op_delete: DeclId, ptr: V, ty: QualType },
     /// Frees a coroutine frame: `if (coro.free(id, begin)) deallocate`
-    /// (clang `CallCoroDelete`, spec/codegen.md §7c).
+    /// (clang `CallCoroDelete`, spec/codegen.md §7o).
     CoroDelete { dealloc: kiln_ast::ExprId },
     /// `coro.end(null, true)` on the exceptions path out of a coroutine
     /// (clang `CallCoroEnd`): the ramp resumes unwinding, a resumed

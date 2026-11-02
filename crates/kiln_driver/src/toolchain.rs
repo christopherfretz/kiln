@@ -351,7 +351,7 @@ pub enum Tool {
     /// `llvm-as`: IR to bitcode (`-c -emit-llvm`).
     LlvmAs,
     /// `opt`: the coroutine lowering before `llc` (only for a module
-    /// with a `presplitcoroutine` function).
+    /// that declares an `llvm.coro.*` intrinsic).
     Opt,
     /// `clang++`: the link step.
     Linker,

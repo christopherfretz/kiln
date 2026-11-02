@@ -366,7 +366,7 @@ impl Collect<'_> {
                 self.stmt(ast.stmts.catch_block(s));
             }
             // Every piece of a coroutine body is emitted (spec/codegen.md
-            // §7c).
+            // §7o).
             StmtKind::CoroutineBodyStmt => {
                 let c = *ast.stmts.coroutine_body(s);
                 for m in ast.lists.iter::<StmtId>(c.param_moves).collect::<Vec<_>>() {
