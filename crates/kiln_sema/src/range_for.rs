@@ -317,11 +317,9 @@ impl Sema<'_, '_> {
         let declared = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
         let (items, kind, init_ty) = match &init {
             Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, self.ety(*e)),
-            Initializer::List(l) => (
-                crate::templ::auto::auto_list_items(l, true),
-                AutoInit::CopyList,
-                QualType::VOID,
-            ),
+            Initializer::List(l) => {
+                (crate::templ::auto::auto_list_items(l, true), AutoInit::CopyList, QualType::VOID)
+            }
             Initializer::Paren(..) => (Vec::new(), AutoInit::Paren, QualType::ERROR),
         };
         let is_list = matches!(init, Initializer::List(_));

@@ -480,7 +480,8 @@ impl Sema<'_, '_> {
         {
             return false;
         }
-        let (Some(pa), Some(pb)) = (self.declared_param_types(a, sa), self.declared_param_types(b, sb))
+        let (Some(pa), Some(pb)) =
+            (self.declared_param_types(a, sa), self.declared_param_types(b, sb))
         else {
             return false;
         };

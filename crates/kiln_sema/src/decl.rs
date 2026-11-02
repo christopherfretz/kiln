@@ -4504,9 +4504,11 @@ impl Sema<'_, '_> {
             Initializer::Paren(es, ..) => {
                 (es.iter().copied().map(Some).collect(), AutoInit::Paren, None)
             }
-            Initializer::List(l) if direct => {
-                (crate::templ::auto::auto_list_items(l, false), AutoInit::DirectList, Some(l.lbrace))
-            }
+            Initializer::List(l) if direct => (
+                crate::templ::auto::auto_list_items(l, false),
+                AutoInit::DirectList,
+                Some(l.lbrace),
+            ),
             Initializer::List(l) => {
                 (crate::templ::auto::auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace))
             }

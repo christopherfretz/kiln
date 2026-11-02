@@ -835,11 +835,7 @@ impl Sema<'_, '_> {
             // suggests `->` (clang `BuildPseudoDestructorExpr`).
             if !arrow
                 && self.ast.types.is_pointer(obj_ty)
-                && self
-                    .ast
-                    .types
-                    .pointee(obj_ty)
-                    .is_some_and(|p| self.same_unqual(p, destroyed))
+                && self.ast.types.pointee(obj_ty).is_some_and(|p| self.same_unqual(p, destroyed))
             {
                 let msg = self
                     .diag(DiagId::sema_member_reference_suggestion, op_loc)

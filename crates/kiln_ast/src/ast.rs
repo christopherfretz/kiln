@@ -387,10 +387,8 @@ impl Ast {
         let mut cur = self.primary_context(self.redecl_context(ctx));
         for _ in 0..4096 {
             self.lookup.add_using_directive(cur, nominated);
-            let inline = self
-                .decls
-                .namespace(cur)
-                .is_some_and(crate::decl::NamespaceData::is_inline);
+            let inline =
+                self.decls.namespace(cur).is_some_and(crate::decl::NamespaceData::is_inline);
             match self.decls.get(cur).ctx() {
                 Some(p) if inline => cur = self.primary_context(self.redecl_context(p)),
                 _ => return,

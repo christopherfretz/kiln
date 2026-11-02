@@ -21,8 +21,8 @@ use kiln_source::Loc;
 use kiln_diag::DiagId;
 
 use crate::Sema;
-use crate::init::InitValue;
 use crate::declspec::{DeclSpec, TypeSpecKind};
+use crate::init::InitValue;
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
 
