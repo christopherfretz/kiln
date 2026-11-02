@@ -531,6 +531,8 @@ impl Substituter<'_, '_, '_> {
             // `BuildFunctionType` after the parameters).
             let ret_loc = self.sema.type_spec_locs.get(&d).copied().unwrap_or(loc);
             self.check_return_type(ret, ret_loc)?;
+            let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
+            self.check_param_types(&ptys, ret_loc)?;
             // A dependent `noexcept(expr)` waits until needed (WP-112).
             let exc = if lazy_exc {
                 kiln_ast::types::ExcSpec::Deferred(d)
@@ -761,6 +763,8 @@ impl Substituter<'_, '_, '_> {
         let sig = params.and_then(|params| {
             let ret = self.ty(p.ret(), loc)?;
             self.check_return_type(ret, loc)?;
+            let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
+            self.check_param_types(&ptys, loc)?;
             // DR1330 ([temp.inst]/14): a dependent `noexcept(expr)` is
             // not part of deduction; it is substituted when needed (clang
             // `InitFunctionInstantiation` -> `EST_Uninstantiated`), from

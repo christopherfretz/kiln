@@ -145,8 +145,17 @@ _Float16` is accepted, `_Complex __fp16` is an error
 (`err_invalid_complex_spec`, spelled `'_Complex half'` as in clang).
 `__fp16` is storage-only: the usual unary conversions promote it to `float`
 (spec/sema-conv.md), and codegen converts it through `float`
-(spec/codegen.md). Not diagnosed: clang's x86 errors for an `__fp16`
-parameter or return type.
+(spec/codegen.md). On x86-64 (clang `allowHalfArgsAndReturns` is false)
+an `__fp16` parameter or return type is an error,
+`sema_parameters_retval_fp16` "{parameters cannot|function return value
+cannot} have __fp16 type; did you forget * ?" (WP-302): in a declarator at
+the parameter's (or the declarator's) name, without a fix-it, after which
+the declarator's type is the error type (clang marks it invalid); in a
+substituted function type (a template specialization's signature, an
+alias template) at the declaration's begin with the `*` fix-it, a
+substitution failure. AArch64 accepts both. The location of an abstract
+type-id's function declarator (`using F = __fp16(int);`) is the `(`,
+where clang uses the token after it.
 
 Ids 34..=47 are the AArch64 SVE ACLE builtins (WP-155), in this order:
 `__SVInt8_t`, `__SVInt16_t`, `__SVInt32_t`, `__SVInt64_t`, `__SVUint8_t`,

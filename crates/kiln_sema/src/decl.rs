@@ -913,6 +913,30 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         return QualType::ERROR;
                     }
+                    // [basic.extended.fp] (clang): `__fp16` is a storage-only
+                    // type where the target passes no half values, checked
+                    // as clang's `GetFullTypeForDeclarator` (no fix-it).
+                    let mut fp16_bad = false;
+                    if self.is_fp16_arg_disallowed(ty) {
+                        let at = d.name.map_or(d.loc, |n| n.1);
+                        let msg = self.diag(DiagId::sema_parameters_retval_fp16, at).arg("1");
+                        self.emit(msg);
+                        fp16_bad = true;
+                    }
+                    for p in params {
+                        if self.is_fp16_arg_disallowed(p.ty) {
+                            let at = p.decl.map_or_else(
+                                || p.name.map_or(p.loc, |n| n.1),
+                                |pd| self.ast.decls.get(pd).loc(),
+                            );
+                            let msg = self.diag(DiagId::sema_parameters_retval_fp16, at).arg("0");
+                            self.emit(msg);
+                            fp16_bad = true;
+                        }
+                    }
+                    if fp16_bad {
+                        return QualType::ERROR;
+                    }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
@@ -2954,9 +2978,15 @@ impl Sema<'_, '_> {
         {
             let _ = self.templ.trailing_arrow.insert(f, *arrow);
         }
+        // Where a substituted signature's return and parameter types are
+        // diagnosed (clang `BuildFunctionType` at the declaration's
+        // begin, §5.6).
         if let Some(tl) = ds.type_loc
             && tl != d.name_loc()
-            && self.ast.types.proto(ty).is_some_and(|p| self.ast.types.is_dependent(p.ret()))
+            && self.ast.types.proto(ty).is_some_and(|p| {
+                self.ast.types.is_dependent(p.ret())
+                    || self.ast.types.params(&p).iter().any(|&q| self.ast.types.is_dependent(q))
+            })
         {
             self.type_spec_locs.insert(f, tl);
         }
@@ -7450,4 +7480,14 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         }
         _ => return None,
     })
+}
+
+impl Sema<'_, '_> {
+    /// Whether `ty` is `__fp16` and the target passes no half values in
+    /// parameters or return values (clang `allowHalfArgsAndReturns`:
+    /// true on `AArch64`, false on x86-64).
+    pub(crate) fn is_fp16_arg_disallowed(&self, ty: QualType) -> bool {
+        self.abi.triple.arch == kiln_abi::target::Arch::X86_64
+            && self.ast.types.canonical(ty).ty() == QualType::HALF.ty()
+    }
 }

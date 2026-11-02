@@ -42,6 +42,9 @@ impl Substituter<'_, '_, '_> {
     /// return type is an array or function type fails (clang
     /// `BuildFunctionType`).
     pub(crate) fn check_return_type(&mut self, ret: QualType, loc: Loc) -> SubstResult<()> {
+        if self.sema.is_fp16_arg_disallowed(ret) {
+            return self.fp16_arg_error(true, loc);
+        }
         let t = &self.sema.ast.types;
         if !t.is_array(ret) && !t.is_function(ret) {
             return Ok(());
@@ -52,6 +55,27 @@ impl Substituter<'_, '_, '_> {
             .diag(DiagId::sema_func_returning_array_function, loc)
             .arg(which)
             .arg(self.sema.ty_arg(ret));
+        self.sema.emit(d);
+        Err(SubstFail)
+    }
+
+    /// clang's `BuildFunctionType`: a substituted `__fp16` parameter
+    /// fails where the target passes no half values (with the `*`
+    /// fix-it; the return type is checked by
+    /// [`Self::check_return_type`]).
+    pub(crate) fn check_param_types(&mut self, params: &[QualType], loc: Loc) -> SubstResult<()> {
+        if params.iter().any(|&p| self.sema.is_fp16_arg_disallowed(p)) {
+            return self.fp16_arg_error(false, loc);
+        }
+        Ok(())
+    }
+
+    fn fp16_arg_error(&mut self, ret: bool, loc: Loc) -> SubstResult<()> {
+        let d = self
+            .sema
+            .diag(DiagId::sema_parameters_retval_fp16, loc)
+            .arg(if ret { "1" } else { "0" })
+            .fixit(kiln_diag::FixIt::insert(loc, "*"));
         self.sema.emit(d);
         Err(SubstFail)
     }
@@ -198,6 +222,7 @@ impl Substituter<'_, '_, '_> {
                 let out = self.expand_types(&params, loc);
                 self.type_begin = outer;
                 let out = out?;
+                self.check_param_types(&out, self.type_begin.unwrap_or(loc))?;
                 let exc = match self.sema.ast.types.exc_spec(&p) {
                     ExcSpec::NoexceptExpr {
                         expr,
