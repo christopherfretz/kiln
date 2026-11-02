@@ -26,8 +26,8 @@
 #if __FLT16_IS_IEC_60559__ != 1 || __FLT128_IS_IEC_60559__ != 1 || __BFLT16_IS_IEC_60559__ != 0
 #error "IS_IEC_60559"
 #endif
-#ifdef __FLT32X_MANT_DIG__
-#error "kiln has no _Float32x"
+#if __FLT32X_MANT_DIG__ != 53 || !defined(__FLT64X_MANT_DIG__) // float-nx.cpp, WP-380
+#error "GCC's __FLT32X_*__ / __FLT64X_*__"
 #endif
 template<class T, class U> constexpr bool same = false;
 template<class T> constexpr bool same<T, T> = true;
