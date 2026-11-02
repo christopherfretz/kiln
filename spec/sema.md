@@ -3934,8 +3934,8 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   defined in a constexpr {function|constructor} before C++23", with the
   type's "not literal because" notes, and marks the function invalid.
   Variables whose own declaration was already diagnosed are checked too;
-  templates (checked per specialization by clang's diagnoser only when
-  instantiated) and lambdas are skipped. A local whose initialization sema
+  function templates, their specializations and lambda call operators are
+  not checked yet (open). A local whose initialization sema
   rejected (no viable constructor) is marked invalid, and evaluating its
   declaration fails with no note (spec/oven.md "Classes").
   From C++23 clang 22 no longer applies `CheckLiteralType` during
