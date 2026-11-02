@@ -801,7 +801,7 @@ impl Substituter<'_, '_, '_> {
 
     /// Whether `c` is the pattern of a class template or of a class
     /// template partial specialization.
-    fn is_class_pattern(&self, c: DeclId) -> bool {
+    pub(crate) fn is_class_pattern(&self, c: DeclId) -> bool {
         let first = self.sema.ast.first(c);
         self.sema.kind_of(c) == DeclKind::CXXRecord
             && (self.sema.ast.described_template(first).is_some()
@@ -866,7 +866,7 @@ impl Substituter<'_, '_, '_> {
     /// True if none of the outermost `n` levels is substituted (a level of
     /// undeduced arguments keeps its parameters, as a class template's
     /// does in the guide of a constructor template, WP-134).
-    fn levels_retained(&self, n: u16) -> bool {
+    pub(crate) fn levels_retained(&self, n: u16) -> bool {
         (0..n).all(|k| {
             self.args.level(k).is_none_or(|l| {
                 l.mode == crate::templ::args::LevelMode::Retain

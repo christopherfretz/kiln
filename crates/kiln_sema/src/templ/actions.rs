@@ -1643,7 +1643,7 @@ impl Sema<'_, '_> {
     /// injected-class-name names class template `tmpl` ([temp.local]/1):
     /// its pattern, one of its partial specializations or one of its
     /// specializations.
-    fn injected_class_for(&self, tmpl: DeclId) -> Option<DeclId> {
+    pub(crate) fn injected_class_for(&self, tmpl: DeclId) -> Option<DeclId> {
         let tmpl = self.ast.first(tmpl);
         // Lexically enclosing classes (a friend defined in its class),
         // then semantically enclosing ones (an out-of-line member

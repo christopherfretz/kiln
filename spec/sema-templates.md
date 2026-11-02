@@ -902,7 +902,8 @@ partial's and not to the primary's (`current_instantiation` →
 `own_args_partial`, only while entering a declarator context). Without
 it the head was matched against the primary and diagnosed as "requires
 clause differs". libstdc++ ranges:6380 (`chunk_view<_Vp>::_Iterator`).
-Test: `temp.spec.partial.member/libstdcxx-out-of-line-member-of-constrained-partial-same-args.cpp`.
+Tests: `temp.spec.partial.member/libstdcxx-out-of-line-member-of-constrained-partial-same-args.cpp`,
+`temp.mem.class/libstdcxx-constrained-partial-spec-member-def.cpp`.
 
 Out-of-class partial specializations of a member template (WP-150):
 `template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
@@ -2990,6 +2991,23 @@ whose head the notes name. It evaluates:
     in a namespace (with no `this`), the substitution runs inside
     `in_inst_context(namespace)` (`sat_atom_uncached`, WP-201; libc++
     `ranges::__movable_box` concepts checked from `<string_view>`).
+  - Static member functions and function templates of a class template
+    pattern named by an unqualified callee (`ok<U...>()`) are not looked
+    up again: the callee keeps the declarations and becomes a qualified
+    reference (`retained_static_members` → `qualified_callee`), each
+    mapped to the member of the substituted specialization by
+    `find_instantiated_decl`. This is what makes the implicit deduction
+    guide of a constructor (template) work, whose requires-clause is
+    checked outside the class ([over.match.class.deduct]/1; libstdc++
+    tuple:980 under `views::single(tuple{})`). Test:
+    `over.match.class.deduct/libstdcxx-guide-constraint-names-static-member.cpp`.
+  - A member function template specialization the pattern already
+    selected (`ok<int>()` with non-dependent arguments, resolved at the
+    definition) is named again as the same specialization of the
+    instantiated member template (`respecialized_member_template`); the
+    pattern's own specialization stayed value-dependent. Test:
+    `temp.constr.decl/libstdcxx-member-template-call-in-requires-clause.cpp`.
+    WP-332.
   - A substitution failure means not satisfied, with the captured
     diagnostic recorded.
   - Otherwise the expression must have type exactly `bool`. Anything else

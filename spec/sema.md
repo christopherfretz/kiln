@@ -1238,6 +1238,13 @@ and returns the scope it names:
   variable becomes invalid and the initializer is dropped.
 - **`static_assert`** ([dcl.pre]/10) requires a converted constant
   expression of type `bool`.
+  - In a template definition (`in_template()`, or a context flagged
+    `DEPENDENT_CTX`) the condition is not evaluated, even when it is not
+    value-dependent (P2593R1, a DR; clang's
+    `CurContext->isDependentContext()`): `else static_assert(false);` in
+    a discarded branch is fine, and the instantiation that keeps it
+    fails (libstdc++ ranges:9507; WP-332). Test:
+    `dcl.pre/static-assert-false-in-template-definition.cpp`.
   - On failure it reports
     `static assertion failed due to requirement '…'`, with the
     condition printed by `TypeNames::write_expr`, plus the message if

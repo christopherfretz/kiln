@@ -245,6 +245,9 @@ impl Substituter<'_, '_, '_> {
                     let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                     return Ok(self.sema.act_dependent_scope_ref(nns, name, None, begin, loc));
                 }
+                if let Some(r) = self.respecialized_member_template(d, loc)? {
+                    return Ok(r);
+                }
                 let i = self.find_instantiated_decl(d, loc)?;
                 // The qualifier as written survives ([temp.inst]; clang's
                 // `TransformDeclRefExpr` transforms the qualifier loc).
@@ -1326,7 +1329,7 @@ impl Substituter<'_, '_, '_> {
             }
             _ => None,
         };
-        if !adl {
+        if !adl || self.retained_static_members(&decls) {
             // `N::g(p)` keeps its written begin (the qualifier) for the
             // call-site notes that report it ([expr.const]).
             let begin = self.sema.ast.templates.expr_begin.get(c).copied();
@@ -1378,6 +1381,75 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(r)
+    }
+
+    /// `d`, a specialization of a member function template of a class
+    /// template pattern that the pattern already selected (`ok<int>()`
+    /// in a requires-clause, resolved at the definition): the same
+    /// specialization of the member template of the instantiated class
+    /// (clang keeps the call dependent and resolves it then). `None`
+    /// when `d` is no such specialization or its template stays.
+    fn respecialized_member_template(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+    ) -> SubstResult<Option<ExprId>> {
+        let Some((ft, args)) = self.sema.ast.spec_info(d).map(|(_, s)| (s.template, s.args)) else {
+            return Ok(None);
+        };
+        if self.sema.kind_of(ft) != DeclKind::FunctionTemplate
+            || !self.sema.ast.decls.get(ft).flags().contains(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
+        {
+            return Ok(None);
+        }
+        let it = self.find_instantiated_decl(ft, loc)?;
+        if it == ft {
+            return Ok(None);
+        }
+        let l = self.args(args, loc)?;
+        let ty = &self.sema.ast.types;
+        let flat: Vec<TemplateArg> = ty
+            .args(l)
+            .iter()
+            .flat_map(|&a| match a.view() {
+                ArgView::Pack(p) => ty.args(p).to_vec(),
+                _ => vec![a],
+            })
+            .collect();
+        let tn = self.sema.template_name_for(it);
+        match self.sema.act_template_id(tn, &flat, loc, loc) {
+            Ok(crate::templ::actions::TemplateIdRef::Value(x)) => Ok(Some(x)),
+            Ok(crate::templ::actions::TemplateIdRef::Overload(x)) => {
+                Ok(Some(self.sema.resolve_single_template_id(x)))
+            }
+            _ => Err(SubstFail),
+        }
+    }
+
+    /// Whether `decls` are static member functions (or function
+    /// templates) of a class template pattern, named outside the class or
+    /// while its own level is kept: the deduction guide of a constructor template
+    /// ([over.match.class.deduct]/1.2) naming `ok<U...>()` in its
+    /// requires-clause. They are kept as found (clang's
+    /// `TransformUnresolvedLookupExpr` transforms each declaration), not
+    /// looked up again from the guide's namespace scope, and are found in
+    /// the deduced specialization when the guide's constraints are
+    /// checked (libstdc++ tuple:980 `__disambiguating_constraint`).
+    fn retained_static_members(&mut self, decls: &[DeclId]) -> bool {
+        let Some(&d0) = decls.first() else { return false };
+        let Some(parent) = self.sema.ast.decls.get(d0).ctx() else { return false };
+        if !self.is_class_pattern(parent) {
+            return false;
+        }
+        decls.iter().all(|&d| {
+            let d = self.sema.ast.strip_shadow(d);
+            let f = match self.sema.kind_of(d) {
+                DeclKind::FunctionTemplate => self.sema.templated_function(d),
+                _ => Some(d),
+            };
+            self.sema.ast.decls.get(d).ctx() == Some(parent)
+                && f.is_some_and(|f| self.sema.is_static_method(f))
+        })
     }
 
     /// Whether `d`, found by an unqualified lookup at a template's
