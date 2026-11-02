@@ -1641,19 +1641,7 @@ impl Parser<'_, '_> {
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition && self.s.tag_body_skipped(d) {
-            // A redefinition, diagnosed: its body is skipped and the
-            // declarators it heads get an error type (clang's invalid
-            // anonymous tag; spec/sema.md §4.4).
-            self.skip_class_body();
-            ds.invalid = true;
-            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
-            let spelling = match keyword {
-                TagKeyword::Struct => "struct",
-                TagKeyword::Class => "class",
-                TagKeyword::Union => "union",
-                _ => "enum",
-            };
-            self.check_after_tag_definition(spelling, false);
+            self.skip_redefined_tag_body(ds, keyword, kw_loc);
             return;
         }
         if use_ == TagUse::Definition {
@@ -1810,6 +1798,22 @@ impl Parser<'_, '_> {
             };
             self.check_after_tag_definition(spelling, false);
         }
+    }
+
+    /// A redefinition, diagnosed by sema: its body is skipped and the
+    /// declarators it heads get an error type (clang's invalid anonymous
+    /// tag; spec/sema.md §4.4).
+    fn skip_redefined_tag_body(&mut self, ds: &mut DeclSpec, keyword: TagKeyword, kw_loc: Loc) {
+        self.skip_class_body();
+        ds.invalid = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+        let spelling = match keyword {
+            TagKeyword::Struct => "struct",
+            TagKeyword::Class => "class",
+            TagKeyword::Union => "union",
+            _ => "enum",
+        };
+        self.check_after_tag_definition(spelling, false);
     }
 
     /// Skips a class body that is not defined (`[: bases] { ... }`).

@@ -215,7 +215,7 @@ impl Cg<'_> {
         let v = if self.f.fir.ty(&self.m, v) == LTy::I1 {
             self.cast(CastOp::ZExt, v, mty)
         } else {
-            self.to_memory(v, q, mty)
+            self.emit_to_memory(v, q, mty)
         };
         self.store(v, p, al, vol);
     }

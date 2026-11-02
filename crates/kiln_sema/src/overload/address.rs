@@ -473,7 +473,7 @@ impl Sema<'_, '_> {
         if !complain {
             return None;
         }
-        let Some(m) = self.ovl.members.get(&x) else { return None };
+        let m = self.ovl.members.get(&x)?;
         let name = self.decl_name_str(m.name);
         let mut cands = m.decls.clone();
         cands.reverse();

@@ -410,6 +410,21 @@ impl Sema<'_, '_> {
         Ok(())
     }
 
+    /// The checks a class template-id with dependent arguments gets when
+    /// it is formed (spec/sema-templates.md §4.7).
+    pub(crate) fn check_dependent_class_args(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> Result<(), ()> {
+        let locs = std::mem::take(&mut self.templ.arg_locs);
+        let r = self.check_dependent_template_template_args(tmpl, args, &locs, loc);
+        self.templ.arg_locs = locs;
+        r?;
+        self.check_expanded_pack_arity(tmpl, args, loc)
+    }
+
     /// The definition-time part of the argument check for a template-id
     /// whose arguments are dependent (spec/sema-templates.md §4.7): an
     /// argument for a template template parameter must name a template
@@ -418,7 +433,7 @@ impl Sema<'_, '_> {
     /// `H<N>` and `H<Y<T>>` are rejected at the argument when the
     /// enclosing template is defined. Alignment stops at the first pack
     /// expansion (it may cover any number of parameters).
-    pub(crate) fn check_dependent_template_template_args(
+    fn check_dependent_template_template_args(
         &self,
         tmpl: DeclId,
         args: &[TemplateArg],
@@ -874,10 +889,11 @@ impl Sema<'_, '_> {
         loc: Loc,
         prior: &[TemplateArg],
     ) -> Result<TemplateArg, ()> {
-        let dependent = self.ast.types.arg_flags(def).intersects(
-            TypeFlags::DEPENDENT_INSTANTIATION
-                | TypeFlags::UNEXPANDED_PACK,
-        );
+        let dependent = self
+            .ast
+            .types
+            .arg_flags(def)
+            .intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK);
         if !dependent {
             let at = self.templ.default_locs.get(&p).copied().unwrap_or(loc);
             return self.check_template_arg(tmpl, depth, p, def, at, prior);

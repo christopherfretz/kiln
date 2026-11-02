@@ -881,12 +881,12 @@ impl Cg<'_> {
         }
         let p = self.scalar_tls_addr(a.v);
         let v = self.load(a.ty, p, a.align, vol);
-        self.from_memory(v, q)
+        self.emit_from_memory(v, q)
     }
 
     /// clang `EmitFromMemory`: a `bool` is truncated to `i1`, a
     /// `_BitInt(N)` from its slot to `iN`.
-    pub fn from_memory(&mut self, v: V, q: QualType) -> V {
+    pub fn emit_from_memory(&mut self, v: V, q: QualType) -> V {
         if self.is_bool_value(q) {
             return self.cast(CastOp::Trunc, v, LTy::I1);
         }
@@ -898,7 +898,7 @@ impl Cg<'_> {
 
     /// clang `EmitToMemory`: a `bool` is zero-extended to its slot `mty`,
     /// a `_BitInt(N)` sign- or zero-extended.
-    pub fn to_memory(&mut self, v: V, q: QualType, mty: LTy) -> V {
+    pub fn emit_to_memory(&mut self, v: V, q: QualType, mty: LTy) -> V {
         let vt = self.f.fir.ty(&self.m, v);
         if vt == mty {
             return v;
@@ -930,7 +930,7 @@ impl Cg<'_> {
         if self.vec_store(v, a, q, vol) {
             return;
         }
-        let v = self.to_memory(v, q, a.ty);
+        let v = self.emit_to_memory(v, q, a.ty);
         let p = self.scalar_tls_addr(a.v);
         self.store(v, p, a.align, vol);
     }

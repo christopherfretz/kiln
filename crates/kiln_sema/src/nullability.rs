@@ -7,8 +7,8 @@
 
 use kiln_ast::QualType;
 use kiln_ast::types::{TypeAttrKind, TypeView};
-use kiln_source::Loc;
 use kiln_diag::DiagId;
+use kiln_source::Loc;
 
 use crate::Sema;
 use crate::declspec::{Chunk, DeclSpec, Declarator, DeclaratorContext, NullSpec, ParamInfo};
