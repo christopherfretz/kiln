@@ -692,6 +692,13 @@ impl Sema<'_, '_> {
     /// integral type and promoted. Starts the switch body. `loc` is the
     /// `switch` keyword, where clang reports a non-integral condition.
     pub fn act_on_start_switch(&mut self, cond: ExprId, loc: Loc) -> ExprId {
+        // [temp.variadic]/12, as a condition ([`Sema::act_on_condition`]).
+        let cond = if self.diagnose_unexpanded_written(cond, "expression", None) {
+            let at = self.begin_loc(cond);
+            self.recover_err(&[], at)
+        } else {
+            cond
+        };
         let ty0 = self.ast.exprs.get(cond).ty();
         let t = &self.ast.types;
         let tv = t.as_atomic(ty0).unwrap_or(ty0);
@@ -856,6 +863,12 @@ impl Sema<'_, '_> {
     /// evaluates it: the `ConstantExpr` (or `e`) and its value, `None`
     /// when dependent, invalid or outside a valid switch.
     fn convert_case_value(&mut self, e: ExprId, case_loc: Loc) -> (ExprId, Option<i128>) {
+        // [temp.variadic]/12: clang's `ActOnCaseExpr` ends the value as a
+        // full-expression ("expression", at its begin).
+        if self.diagnose_unexpanded_written(e, "expression", None) {
+            let at = self.begin_loc(e);
+            return (self.recover_err(&[], at), None);
+        }
         let Some(sw) = self.func.as_ref().and_then(|f| f.switches.last()) else {
             self.error(DiagId::sema_case_not_in_switch, case_loc);
             return (e, None);

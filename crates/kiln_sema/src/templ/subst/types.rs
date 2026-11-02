@@ -38,6 +38,23 @@ impl Substituter<'_, '_, '_> {
         Ok(self.sema.ast.types.qualify(inner, q.quals()))
     }
 
+    /// [depr.volatile.type]/2: a volatile-qualified return type that
+    /// substitution formed from the dependent `pattern` return type
+    /// (clang's `BuildFunctionType` when the type is rebuilt; a
+    /// non-dependent one was warned at its definition).
+    pub(crate) fn check_volatile_return(&mut self, pattern: QualType, ret: QualType, loc: Loc) {
+        if self.sema.std >= kiln_lex::Std::Cxx20
+            && self.sema.ast.types.is_dependent(pattern)
+            && self.sema.ast.types.effective_quals(ret).contains(kiln_ast::types::Quals::VOLATILE)
+        {
+            let d = self
+                .sema
+                .diag(DiagId::sema_deprecated_volatile_return, loc)
+                .arg(self.sema.ty_arg(ret));
+            self.sema.emit(d);
+        }
+    }
+
     /// One declarator operator applied to `base` with the declarator's
     /// checks.
     /// [temp.deduct.general]/11.10: a substituted function type whose
@@ -277,7 +294,9 @@ impl Substituter<'_, '_, '_> {
                 let ret = self.ty(p.ret(), loc)?;
                 // clang reports at the function type's begin (its return
                 // type, the declaration's decl-specifiers), not the name.
-                self.check_return_type(ret, self.type_begin.unwrap_or(loc))?;
+                let at = self.type_begin.unwrap_or(loc);
+                self.check_return_type(ret, at)?;
+                self.check_volatile_return(p.ret(), ret, at);
                 let params = self.sema.ast.types.params(&p).to_vec();
                 let outer = self.type_begin.take();
                 let out = self.expand_types(&params, loc);
