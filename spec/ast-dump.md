@@ -497,11 +497,14 @@ type>'`:
   clang; the substituted declarator keeps the trailing-return bit and a
   plain `auto` base (`templ/subst/decls.rs` `function_decl`)
   (`tests/conformance/temp.inst/member-trailing-return-ast.cpp`).
-
-Known gaps:
-- A function parameter named inside its own declarator's trailing
-  return type (`auto f(T t) -> decltype(t.x)`) is unsupported, so the
-  type prints with `...` for the expression.
+- **`decltype` expressions in substituted members** (WP-330): a
+  `decltype` trailing return type of a member of an implicit class
+  instantiation prints its substituted expression as clang's
+  `StmtPrinter`: a substituted `T()` (`CXXScalarValueInitExpr`) prints
+  as the type followed by `()` (`decltype(u + int())`), and a parameter
+  named in its own declarator's trailing return type prints by name
+  (`decltype(t.x)`)
+  (`tests/conformance/temp.inst/member-decltype-return-ast.cpp`).
 
 **Implicit class instantiations (landed, WP-070a).** Normative:
 - `ClassTemplateSpecializationDecl <tag> <name>`, plus `definition

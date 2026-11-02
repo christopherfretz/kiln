@@ -1,0 +1,50 @@
+TranslationUnitDecl
+|-TypeAliasDecl referenced I 'int'
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct A definition
+| | |-FunctionTemplateDecl f
+| | | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+| | | `-CXXMethodDecl f 'auto (U) -> decltype(u + T())'
+| | |   `-ParmVarDecl referenced u 'U'
+| | |-CXXMethodDecl g 'auto (T) -> decltype(t + T())'
+| | | `-ParmVarDecl referenced t 'T'
+| | `-CXXMethodDecl h 'auto (T) -> decltype(t + I() + T{} + (T)0)'
+| |   `-ParmVarDecl referenced t 'T'
+| |-ClassTemplateSpecializationDecl struct A definition implicit_instantiation
+| | |-TemplateArgument type 'int'
+| | |-FunctionTemplateDecl f
+| | | |-TemplateTypeParmDecl class depth 0 index 0 U
+| | | `-CXXMethodDecl f 'auto (U) -> decltype(u + int())'
+| | |   `-ParmVarDecl referenced u 'U'
+| | |-CXXMethodDecl g 'auto (int) -> decltype(t + int())'
+| | | `-ParmVarDecl referenced t 'int'
+| | `-CXXMethodDecl h 'auto (int) -> decltype(t + I() + int{} + (int)0)'
+| |   `-ParmVarDecl referenced t 'int'
+| `-ClassTemplateSpecializationDecl struct A definition implicit_instantiation
+|   |-TemplateArgument type 'long'
+|   |-FunctionTemplateDecl f
+|   | |-TemplateTypeParmDecl class depth 0 index 0 U
+|   | `-CXXMethodDecl f 'auto (U) -> decltype(u + long())'
+|   |   `-ParmVarDecl referenced u 'U'
+|   |-CXXMethodDecl g 'auto (long) -> decltype(t + long())'
+|   | `-ParmVarDecl referenced t 'long'
+|   `-CXXMethodDecl h 'auto (long) -> decltype(t + I() + long{} + (long)0)'
+|     `-ParmVarDecl referenced t 'long'
+|-VarDecl a 'A<int>' callinit
+| `-CXXConstructExpr 'A<int>' 'void () noexcept'
+|-VarDecl b 'A<long>' callinit
+| `-CXXConstructExpr 'A<long>' 'void () noexcept'
+|-CXXRecordDecl referenced struct P definition
+| `-FieldDecl referenced x 'int'
+|-ClassTemplateDecl B
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct B definition
+| | `-CXXMethodDecl k 'auto (T) -> decltype(t.x)'
+| |   `-ParmVarDecl referenced t 'T'
+| `-ClassTemplateSpecializationDecl struct B definition implicit_instantiation
+|   |-TemplateArgument type 'P'
+|   `-CXXMethodDecl k 'auto (P) -> decltype(t.x)'
+|     `-ParmVarDecl referenced t 'P'
+`-VarDecl c 'B<P>' callinit
+  `-CXXConstructExpr 'B<P>' 'void () noexcept'
