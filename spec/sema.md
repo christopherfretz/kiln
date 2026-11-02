@@ -1436,6 +1436,11 @@ specification as written (`TypeNames` prints ` noexcept`,
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
+- *Function references* ([dcl.init.ref]/4, [conv.fctptr]). A function
+  type `T noexcept` is reference-compatible with `T`; the rule and its
+  identity ranking are in spec/sema-conv.md (WP-290). More tests:
+  `tests/conformance/dcl.init.ref/function-noexcept-binding.cpp`,
+  `function-noexcept-binding-run.cpp`.
 - **Invalid function declarations** (WP-288; clang's
   `ActOnFunctionDeclarator`, `MergeFunctionDecl`, `LookupResult::resolveKind`).
   A function declaration is invalid at its source when it has an

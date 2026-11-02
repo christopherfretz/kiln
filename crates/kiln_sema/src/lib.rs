@@ -267,6 +267,11 @@ pub struct Sema<'a, 'sm> {
     /// declared with the same qualifier, so it redeclares `N::f`
     /// ([dcl.meaning.general]/2.3, [temp.friend]/1; WP-273).
     pub(crate) friend_qualifiers: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// Where `override` / `final` were written on each member function
+    /// whose override control is deferred to instantiation (a dependent
+    /// class or type; `check_override_control`): the instantiation is
+    /// declared with these locations ([class.virtual]/5).
+    pub(crate) virt_spec_locs: kiln_source::fx::FxHashMap<DeclId, (Option<Loc>, Option<Loc>)>,
     /// A friend function template of a class template is being
     /// instantiated (`friend_function_template`): a qualified one that
     /// matches no template is not diagnosed (clang).
@@ -626,6 +631,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
             ref_locs: kiln_source::fx::FxHashMap::default(),
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
+            virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),

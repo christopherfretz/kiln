@@ -27,6 +27,10 @@ pub struct EvalRecord {
     /// Bytes this evaluation added to the `ConstStore` (newly interned
     /// content only).
     pub frozen_bytes: u64,
+    /// Static-space bytes held when the evaluation ended (live static
+    /// objects plus the free ranges between them; the space persists
+    /// across evaluations, so this is the translation unit's so far).
+    pub static_bytes: u64,
     /// Wall-clock microseconds (not deterministic).
     pub wall_us: u64,
     /// Whether the evaluation produced a value.
@@ -34,7 +38,7 @@ pub struct EvalRecord {
 }
 
 /// The counters summed over a translation unit's evaluations (`peak_bytes`
-/// and `peak_arena` are the maximum).
+/// and `peak_arena` are the maximum; `static_bytes` is a high-water mark).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EvalTotals {
     /// Sum of `steps`.
@@ -51,6 +55,10 @@ pub struct EvalTotals {
     pub peak_arena: u64,
     /// Sum of `frozen_bytes`.
     pub frozen_bytes: u64,
+    /// The most static space held at any point of the translation unit,
+    /// including work no record covers (`Oven::has_constant_destruction`,
+    /// `try_fold`); at least every record's `static_bytes`.
+    pub static_bytes: u64,
     /// Sum of `wall_us`.
     pub wall_us: u64,
     /// Number of evaluations.
@@ -75,9 +83,16 @@ impl EvalStats {
         t.allocs += r.allocs;
         t.peak_arena = t.peak_arena.max(r.peak_arena);
         t.frozen_bytes += r.frozen_bytes;
+        t.static_bytes = t.static_bytes.max(r.static_bytes);
         t.wall_us += r.wall_us;
         t.evaluations += 1;
         self.records.push(r);
+    }
+
+    /// Raises the `static_bytes` total to the static space's high-water
+    /// mark `n`.
+    pub fn note_static_peak(&mut self, n: u64) {
+        self.totals.static_bytes = self.totals.static_bytes.max(n);
     }
 
     /// The evaluations.

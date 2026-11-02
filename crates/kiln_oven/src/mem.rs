@@ -423,6 +423,14 @@ pub(crate) struct Memory {
     free: VecDeque<u32>,
     pub live: Vec<u32>,
     pub statics: Vec<Alloc>,
+    /// Dead static slots ([`Memory::free_static`]), reused (with the next
+    /// generation) by [`Memory::alloc_static`] outside a trial.
+    sfree: Vec<u32>,
+    /// Free ranges of the static space below `stat.top` (base, length),
+    /// sorted by base and coalesced: what dead static objects held.
+    sholes: Vec<(u64, u64)>,
+    /// The most static space ever held (`Memory::static_peak`).
+    stat_peak: u64,
     /// Heap allocations, by slot minus [`HEAP_BIT`].
     pub hslots: Vec<Alloc>,
     /// Dead heap slots (first-in first-out, as `free`).
@@ -491,6 +499,9 @@ impl Memory {
             free: VecDeque::new(),
             live: Vec::new(),
             statics: Vec::new(),
+            sfree: Vec::new(),
+            sholes: Vec::new(),
+            stat_peak: 0,
             hslots: Vec::new(),
             hfree: VecDeque::new(),
             bins: Bins::default(),
@@ -520,7 +531,12 @@ impl Memory {
             + space(&self.stat)
             + (self.slots.capacity() + self.statics.capacity() + self.hslots.capacity())
                 * size_of::<Alloc>()
-            + (self.free.capacity() + self.live.capacity() + self.hfree.capacity()) * 4
+            + (self.free.capacity()
+                + self.live.capacity()
+                + self.hfree.capacity()
+                + self.sfree.capacity())
+                * 4
+            + self.sholes.capacity() * size_of::<(u64, u64)>()
             + self.bins.footprint()
             + self.unions.capacity() * (size_of::<(UKey, u32)>() + 1)
             + self.union_alts.capacity() * (size_of::<(UKey, u64)>() + 1)
@@ -649,16 +665,37 @@ impl Memory {
         Ok(Ptr { slot, generation, past: false, off: 0 }.encode())
     }
 
-    /// Allocates a static object (initialized by the caller).
+    /// Allocates a static object (initialized by the caller). Outside a
+    /// trial it reuses what dead static objects held (first fit) and a
+    /// dead slot (its next generation, so a pointer to the dead object
+    /// stays stale); under a checkpoint it only grows the space, so a
+    /// static object made since the checkpoint is fresh (its base is at
+    /// or above the checkpoint's static top).
     pub fn alloc_static(&mut self, ty: OTy, size: u64, fl: u8, origin: Origin) -> u64 {
-        let base = self.stat.top;
-        let end = base + size.max(1).next_multiple_of(GRAN);
-        self.stat.grow(end);
-        self.stat.set_init(base, end - base, false);
-        self.stat.set_ptr(base, end - base, false);
-        self.stat.top = end;
-        let idx = self.statics.len() as u32;
-        self.statics.push(Alloc {
+        let len = size.max(1).next_multiple_of(GRAN);
+        let reuse = !self.in_trial();
+        let hole = if reuse { self.sholes.iter().position(|&(_, l)| l >= len) } else { None };
+        let base = match hole {
+            Some(i) => {
+                let (b, l) = self.sholes[i];
+                if l == len {
+                    self.sholes.remove(i);
+                } else {
+                    self.sholes[i] = (b + len, l - len);
+                }
+                b
+            }
+            None => {
+                let b = self.stat.top;
+                self.stat.grow(b + len);
+                self.stat.top = b + len;
+                self.stat_peak = self.stat_peak.max(self.stat.top);
+                b
+            }
+        };
+        self.stat.set_init(base, len, false);
+        self.stat.set_ptr(base, len, false);
+        let a = Alloc {
             base: base as u32,
             size: size as u32,
             generation: 0,
@@ -667,19 +704,41 @@ impl Memory {
             ty,
             origin,
             frame: 0,
-        });
-        Ptr { slot: idx | STATIC_BIT, generation: 0, past: false, off: 0 }.encode()
+        };
+        let (idx, generation) = match if reuse { self.sfree.pop() } else { None } {
+            Some(i) => {
+                let g = self.statics[i as usize].generation + 1;
+                self.statics[i as usize] = Alloc { generation: g, ..a };
+                (i, g)
+            }
+            None => {
+                self.statics.push(a);
+                (self.statics.len() as u32 - 1, 0)
+            }
+        };
+        Ptr { slot: idx | STATIC_BIT, generation, past: false, off: 0 }.encode()
     }
 
-    /// Frees static allocation `p` if it is the last one made (a
-    /// scratch object, `Oven::has_constant_destruction`); else keeps it.
-    pub fn pop_static(&mut self, p: u64, types: &Types) {
+    /// Frees static allocation `p` (a scratch object,
+    /// `Oven::has_constant_destruction`): its slot is dead (a pointer to
+    /// it is stale once the slot is reused) and its range is free for
+    /// [`Memory::alloc_static`]; free ranges at the top of the static
+    /// space give it back, so the space held does not grow with the
+    /// number of dead static objects, wherever they lie (WP-060,
+    /// spec/oven.md "Memory"). A pointer that is not to a live static
+    /// object is ignored.
+    pub fn free_static(&mut self, p: u64, types: &Types) {
         let pp = Ptr::decode(p);
-        let idx = pp.slot & !STATIC_BIT;
-        if pp.space() != Sp::Static || idx as usize + 1 != self.statics.len() {
+        if pp.is_fn() || pp.space() != Sp::Static {
             return;
         }
-        let Some(a) = self.statics.pop() else { return };
+        let idx = pp.slot & !STATIC_BIT;
+        let Some(a) = self.statics.get_mut(idx as usize) else { return };
+        if !a.live || a.generation != pp.generation {
+            return;
+        }
+        a.live = false;
+        let a = *a;
         if a.flags & flags::HAS_UNION != 0 {
             let key = Ptr::alloc_key(p);
             for &(o, ut) in types.unions(a.ty) {
@@ -687,15 +746,59 @@ impl Memory {
                 self.union_alts.remove(&UKey::new(key, o, ut));
             }
         }
-        self.stat.top = u64::from(a.base);
+        if a.generation < GEN_MAX {
+            self.sfree.push(idx);
+        }
+        let (base, len) = (u64::from(a.base), u64::from(a.size).max(1).next_multiple_of(GRAN));
+        // Insert the range, coalescing with its neighbours.
+        let i = self.sholes.partition_point(|&(b, _)| b < base);
+        let mut range = (base, len);
+        if i < self.sholes.len() && self.sholes[i].0 == base + len {
+            range.1 += self.sholes.remove(i).1;
+        }
+        if i > 0 && self.sholes[i - 1].0 + self.sholes[i - 1].1 == base {
+            self.sholes[i - 1].1 += range.1;
+        } else {
+            self.sholes.insert(i, range);
+        }
+        // Give back a free range at the top, but never below the top an
+        // open checkpoint saw: objects above it are fresh to the trial
+        // (their writes are not logged), so the range below must not be
+        // handed out again before the checkpoint closes.
+        let floor = self.trial.cps.last().map_or(0, |c| c.stat_top);
+        if let Some(&(b, l)) = self.sholes.last()
+            && b + l == self.stat.top
+            && self.stat.top > floor
+        {
+            if b >= floor {
+                self.stat.top = b;
+                self.sholes.pop();
+            } else {
+                self.stat.top = floor;
+                if let Some(h) = self.sholes.last_mut() {
+                    h.1 = floor - b;
+                }
+            }
+        }
+    }
+
+    /// Bytes of the static space held: live static objects plus the free
+    /// ranges between them ([`Memory::free_static`]).
+    pub fn static_top(&self) -> u64 {
+        self.stat.top
+    }
+
+    /// The most static space ever held ([`Memory::static_top`]'s
+    /// high-water mark): it persists across evaluations, so this is the
+    /// translation unit's.
+    pub fn static_peak(&self) -> u64 {
+        self.stat_peak
     }
 
     /// The allocation a (non-null, non-function) pointer designates.
     pub fn alloc_of(&self, p: Ptr) -> Result<&Alloc, MemFault> {
         let a = match p.space() {
-            Sp::Static => {
-                return self.statics.get((p.slot & !STATIC_BIT) as usize).ok_or(MemFault::Stale);
-            }
+            Sp::Static => self.statics.get((p.slot & !STATIC_BIT) as usize),
             Sp::Heap => self.hslots.get((p.slot - HEAP_BIT) as usize),
             Sp::Frame => self.slots.get(p.slot as usize),
         }
@@ -721,7 +824,10 @@ impl Memory {
     pub fn alloc_any(&self, p: Ptr) -> Option<&Alloc> {
         match p.space() {
             _ if p.is_fn() => None,
-            Sp::Static => self.statics.get((p.slot & !STATIC_BIT) as usize),
+            Sp::Static => self
+                .statics
+                .get((p.slot & !STATIC_BIT) as usize)
+                .filter(|a| a.generation == p.generation),
             Sp::Heap => self
                 .hslots
                 .get((p.slot - HEAP_BIT) as usize)
@@ -2144,5 +2250,81 @@ mod tests {
         assert!(m.footprint() <= foot + 64 * 1024, "footprint is flat: {}", m.footprint());
         assert_eq!(m.heap_count, 1);
         assert!(m.allocated > 1000 * 4096, "cumulative counters keep the work done");
+    }
+
+    fn snew(m: &mut Memory, size: u64) -> u64 {
+        m.alloc_static(OTy(0), size, 0, Origin::None)
+    }
+
+    /// WP-060, spec/oven.md "Memory": every dead static object is
+    /// reclaimed, not only the most recent one, so the static space held
+    /// does not grow with the number of dead statics.
+    #[test]
+    fn dead_statics_are_reclaimed_wherever_they_lie() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let keep = snew(&mut m, 8);
+        put(&mut m, keep, 7).unwrap();
+        // A scratch object followed by a permanent one: the scratch is not
+        // the most recent static when it dies.
+        let mut perm = Vec::new();
+        for i in 0..64 {
+            let scratch = snew(&mut m, 256);
+            put(&mut m, scratch, i).unwrap();
+            let p = snew(&mut m, 8);
+            put(&mut m, p, i).unwrap();
+            m.free_static(scratch, &t);
+            assert!(m.check(scratch, 8, false).is_err(), "dead");
+            perm.push(p);
+        }
+        // 64 permanent 8-byte objects plus at most one scratch hole.
+        assert!(m.static_top() <= 8 + 64 * 8 + 256, "{}", m.static_top());
+        assert_eq!(get(&m, keep), Some(7));
+        for (i, &p) in perm.iter().enumerate() {
+            assert_eq!(get(&m, p), Some(i as u64));
+        }
+        // A reused slot has a new generation: the old pointer is stale,
+        // and freeing it again is ignored.
+        let a = snew(&mut m, 16);
+        m.free_static(a, &t);
+        let b = snew(&mut m, 16);
+        assert_eq!(Ptr::decode(a).slot, Ptr::decode(b).slot);
+        assert_eq!(m.check(a, 8, false).err(), Some(MemFault::Stale));
+        m.free_static(a, &t);
+        assert!(m.check(b, 8, true).is_ok());
+        // Free ranges at the top are given back, coalescing neighbours
+        // (sizes past the scratch hole, so these come from the top).
+        let top = m.static_top();
+        let (x, y) = (snew(&mut m, 520), snew(&mut m, 1000));
+        m.free_static(x, &t);
+        assert!(m.static_top() > top);
+        m.free_static(y, &t);
+        assert_eq!(m.static_top(), top);
+        // Fresh memory for a new object is uninitialized.
+        let z = snew(&mut m, 256);
+        assert_eq!(get(&m, z), None);
+    }
+
+    /// Statics freed inside a checkpoint are not handed out again before
+    /// it closes, and the top never falls below what the checkpoint saw
+    /// (objects above it are fresh: their writes are not logged).
+    #[test]
+    fn dead_statics_in_a_trial() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let old = snew(&mut m, 64);
+        let top = m.static_top();
+        m.checkpoint(TrialMode::Transactional);
+        m.free_static(old, &t);
+        assert_eq!(m.static_top(), top, "not below the checkpoint's top");
+        let n = snew(&mut m, 64);
+        assert!(base(&m, n) >= top, "no reuse inside a trial");
+        assert_ne!(Ptr::decode(n).slot, Ptr::decode(old).slot);
+        m.free_static(n, &t);
+        assert_eq!(m.static_top(), top);
+        m.commit();
+        let r = snew(&mut m, 64);
+        assert_eq!(base(&m, r), 0, "reused once the trial closed");
+        assert_eq!(m.static_top(), top);
     }
 }

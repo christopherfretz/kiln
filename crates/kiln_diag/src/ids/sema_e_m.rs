@@ -26,6 +26,7 @@ sema_explicit_inst_after_spec_ignored = Warning [InstantiationAfterSpecializatio
 sema_explicit_inst_constexpr = Error (0) "explicit instantiation cannot be 'constexpr'";
 sema_explicit_inst_declaration_after_definition = Error (0) "explicit instantiation declaration (with 'extern') follows explicit instantiation definition (without 'extern')";
 sema_explicit_inst_duplicate = Error (1) "duplicate explicit instantiation of '{0}'";
+sema_explicit_inst_exception_spec_mismatch = Error (0) "exception specification in explicit instantiation does not match instantiated one";
 sema_explicit_inst_inline = Error (0) "explicit instantiation cannot be 'inline'";
 sema_explicit_inst_nontemplate_type = Error (1) "explicit instantiation of non-templated type '{0}'";
 sema_explicit_inst_not_known = Error (1) "explicit instantiation of '{0}' does not refer to a function template, variable template, member function, member class, or static data member";

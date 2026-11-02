@@ -253,7 +253,7 @@ impl Oven {
         };
         self.regs[0] = u128::from(p);
         let ok = self.exec(b, df, 0).is_ok() && self.leak_notes(b).is_none();
-        self.mem.pop_static(p, &self.types);
+        self.mem.free_static(p, &self.types);
         ok
     }
 

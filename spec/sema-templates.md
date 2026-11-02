@@ -2246,9 +2246,8 @@ formed it:
      relies on it
      (`tests/conformance/temp.deduct.call/noexcept-function-pointer-argument.cpp`,
      `libstdcxx-deduce-noexcept-fnptr.cpp`).
-     Deviation: binding `void (&)(int)` to a `noexcept` function is not
-     yet reference-compatible in kiln ([dcl.init.ref]/4, `ics.rs`
-     `ref_related`), so such a call is "not viable" after deduction.
+     Binding `void (&)(int)` to a `noexcept` function after deduction is
+     reference-compatible ([dcl.init.ref]/4, see spec/sema-conv.md).
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
    the `FunctionTemplateSpecialization` decl. It has the substituted
    type and is a declaration only.
@@ -2650,20 +2649,50 @@ instantiation.
 For `template<> R f<args>(params)` or `template<> R f(params)`, and for
 `template R f(params);`:
 1. Collect the function templates named `f` in the scope.
-2. Deduce each one from the declared function type ([temp.deduct.decl]).
-   An explicit instantiation that writes no exception specification
-   takes each template's non-dependent nothrow one first ([temp.explicit]/9,
-   [except.spec]/2; clang `adjustCCAndNoReturn(..., AdjustExceptionSpec)`;
-   WP-294, libstdc++'s `extern template bool has_facet<...>(const
-   locale&)` of a `throw()` template,
-   `tests/conformance/temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp`).
-   Deviations: a written mismatching specification is "does not refer
-   to a function template" where clang says "exception specification in
-   explicit instantiation does not match instantiated one"; an explicit
-   specialization differing only in its exception specification is "no
-   function template matches" where clang matches it and reports the
-   redeclaration mismatch; a template with a dependent `noexcept(expr)`
-   does not match an instantiation without one.
+2. Deduce each one from the declared function type ([temp.deduct.decl];
+   `deduce_decl`). Neither top-level exception specification takes part.
+   Nothing is deduced from it, so `template void f() noexcept;` of
+   `template <bool B> void f() noexcept(B)` is "couldn't infer template
+   argument 'B'". The template's specification is not substituted with
+   the explicit arguments, so `noexcept(T::value)` is no substitution
+   failure. This is clang's `adjustCCAndNoReturn(..., AdjustExceptionSpec)`.
+   A mismatch elsewhere in the type prints both whole types with their
+   specifications ("could not match 'void (int) noexcept' against 'void
+   (long)'"). Then the specialization's specification is instantiated
+   if it is still pending ([temp.inst]/14) and compared (WP-322):
+   - **Explicit instantiation** ([temp.explicit]/9, [except.spec]/5;
+     `check_inst_exc_spec`, clang `ActOnExplicitInstantiation` →
+     `CheckEquivalentExceptionSpec`). One that writes no specification
+     takes the template's. This covers libstdc++'s `extern template bool
+     has_facet<...>(const locale&)` of a `throw()` template
+     (`tests/conformance/temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp`).
+     One that writes a specification must agree with the instantiated
+     one: both non-throwing, or both potentially-throwing. Here no
+     specification does not match `noexcept(false)`: clang does not set
+     `AllowNoexceptAllMatchWithNoSpec`, and a failed instantiation counts
+     as none. Otherwise the error is "exception specification in
+     explicit instantiation does not match instantiated one", at the
+     decl-specifiers. Its note "explicit instantiation refers here" is
+     at the specialization's latest declaration: the template, or an
+     earlier explicit specialization. The explicit instantiation then
+     has no effect, and this is checked before §4.5's kind checks.
+   - **Explicit specialization, or a friend naming a specialization**
+     ([temp.expl.spec], [except.spec]/5; `check_spec_exc_spec`, clang
+     `MergeFunctionDecl`). It redeclares the specialization, whose
+     specification is the instantiated one, moved to the new name. One
+     that writes none where the instantiated one is non-throwing gets
+     "'h<int>' is missing exception specification 'noexcept'". Any other
+     mismatch gets "exception specification in declaration does not
+     match previous declaration". Each has "previous declaration is
+     here" at the new name, and the declaration is invalid. Here no
+     specification matches `noexcept(false)`. The check comes after the
+     after-instantiation check (§4.5).
+   Tests: `tests/conformance/temp.explicit/exception-spec-match.cpp`,
+   `tests/conformance/temp.expl.spec/exception-spec-redeclaration.cpp`.
+   Left: a friend whose noexcept-specifier waits for the end of its
+   class is not compared, where clang checks it later. Instantiating an
+   explicit instantiation definition does not instantiate a pending
+   specification, which clang does in `InstantiateFunctionDefinition`.
 3. Take the most specialized of those that succeed (§6.7).
 4. If none or several remain, the errors are clang's: "no function
    template matches function template specialization 'f'" and

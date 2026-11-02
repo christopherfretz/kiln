@@ -545,6 +545,30 @@ virtual base 'A'`).
   declared here: type mismatch at 1st parameter ('int' vs 'long')`),
   `non-virtual member function marked 'override' hides virtual member
   function`.
+  Which checks run follows clang's `CheckOverrideControl` (WP-322): a
+  member function counts as virtual for them when declared `virtual` or
+  when it overrides something (clang `isVirtual`), so a `static` member
+  that overrides a base virtual keeps its `override`/`final` (no `only
+  virtual ...` error, no `-Winconsistent-missing-override`; the static
+  mismatch is the error, reported at `}`). A function with both
+  specifiers that is not virtual gets the `'final'` error at `final` and
+  the `'override'` one at `override`; a non-virtual pure function gets
+  only the pure error. In a dependent class (dependent base or type) the
+  checks wait for instantiation and report at the specifier's own column
+  (`Sema::virt_spec_locs`, the instantiated declarator's
+  `virt_override`/`virt_final`), with clang's `in instantiation of`
+  note. Outside a class definition (`'override' specifier is not allowed
+  outside a class definition`, also on a non-virtual or static member's
+  out-of-line definition and a free function) and in a friend
+  declaration (`'override' is invalid in friend declarations`) the
+  specifier is rejected by the parser and no virtual check runs; a
+  `requires`-clause after a virt-specifier is a parse error (`expected
+  ';' at end of declaration list`) after the specifier's own check, and
+  a virtual function's requires-clause is rejected again at
+  instantiation. Diagnostic order matches clang (the corpus compares
+  diagnostic sets; the order was checked by hand). Tests:
+  `tests/conformance/class.virtual/override-control-static-template.cpp`,
+  `override-control-requires-out-of-line.cpp`.
 - **consteval** mismatch either way: `consteval function 'f' cannot override a
   non-consteval function` (and converse).
 - **Pure/abstract**: `= 0` only on virtuals (`'p' is not virtual and cannot be
