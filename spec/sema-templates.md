@@ -1473,6 +1473,11 @@ like clang's.
 | `InjectedClassName` | §4.7 |
 | `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`; a member goes through `member_map` of the enclosing specialization, and the member class is instantiated if completeness is needed |
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
+| `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
+
+`_BitInt(N)` and splice types never reach the substituter yet: the parser
+does not accept `_BitInt` and rejects a dependent splice. Any other kind
+gives the NYI diagnostic "substitution into this type".
 
 ### 5.4 Expressions
 
@@ -1538,6 +1543,28 @@ recomputed exactly as for non-template code (clang's
     [expr.assign]/8), a returned list and a for-range-initializer;
     elsewhere a `CXXStdInitializerListExpr` list-initializes its
     substituted `std::initializer_list` type ([dcl.init.list]/5).
+  - (WP-301) a nested element of a braced list, a braced argument of a
+    paren constructor call (`P p({a, 1}, b)`), and a braced argument of a
+    member, `operator()` or `operator[]` call are rebuilt as lists by
+    `call_arg_list`. That function stops at the first `CXXDefaultArgExpr`;
+  - a list-initializing `CXXConstructExpr` operand is formed again
+    through `init_from_list_at` of the substituted type
+    ([dcl.init.list]/3.7). A single-argument non-list construct is its
+    substituted argument;
+  - a compound literal `(T){...}` (C99 extension) is rebuilt from its
+    peeled initializer as a list, and `act_on_compound_literal` runs
+    again;
+  - an analyzed `new` expression (one whose direct operands were not
+    dependent, e.g. `new S[2]{{a}, {a, 1}}`) is formed again by
+    `act_on_cxx_new` from the substituted placement arguments, the
+    array bound as written, and the initializer as written: `(...)`
+    stays a paren list, with its braced items kept braced (P0960
+    `new S[3]({a, 1}, {a})`), and `{...}` stays a list. An implicit
+    value-initialization is an empty initializer of the written style
+    ([expr.new]/24).
+
+  A non-list `CXXConstructExpr` operand with zero or two or more
+  arguments outside an initializer still gives the NYI diagnostic.
 
 ### 5.5 Statements
 
