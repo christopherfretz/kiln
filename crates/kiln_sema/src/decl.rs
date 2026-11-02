@@ -5911,12 +5911,7 @@ impl Sema<'_, '_> {
                             None => self.diag(DiagId::sema_static_assert_failed, cloc),
                         }
                     } else {
-                        let mut req = String::new();
-                        kiln_ast::types::TypeNames::write_expr(
-                            &kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types(),
-                            inner,
-                            &mut req,
-                        );
+                        let req = self.requirement_text(inner);
                         let at = self.begin_loc(inner);
                         match text {
                             Some(t) => self
@@ -5949,7 +5944,7 @@ impl Sema<'_, '_> {
     /// The conjunct of the failed condition `c` that evaluates to false
     /// (clang's `findFailedBooleanCondition`), without parentheses and
     /// implicit conversions. Literal conjuncts are skipped.
-    fn failed_condition(&mut self, c: ExprId) -> ExprId {
+    pub(crate) fn failed_condition(&mut self, c: ExprId) -> ExprId {
         let mut terms = Vec::new();
         self.conjunction_terms(c, &mut terms);
         for &t in &terms {
@@ -5964,6 +5959,18 @@ impl Sema<'_, '_> {
             }
         }
         self.ignore_paren_imp_casts(c)
+    }
+
+    /// A failed condition as clang's `findFailedBooleanCondition`
+    /// describes it (`is_ptr<int>::value`).
+    pub(crate) fn requirement_text(&self, c: ExprId) -> String {
+        let mut req = String::new();
+        kiln_ast::types::TypeNames::write_expr(
+            &kiln_ast::dump::AstNames::new(&self.ast).canonical_expr_types(),
+            c,
+            &mut req,
+        );
+        req
     }
 
     fn conjunction_terms(&self, e: ExprId, out: &mut Vec<ExprId>) {

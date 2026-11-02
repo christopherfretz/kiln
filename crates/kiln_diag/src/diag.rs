@@ -174,6 +174,12 @@ impl Diag {
         self.id
     }
 
+    /// The `i`th template argument, as rendered (clang's
+    /// `PartialDiagnostic::getStringArg`).
+    pub fn arg_at(&self, i: usize) -> Option<&str> {
+        self.args.get(i).map(String::as_str)
+    }
+
     /// Adds a secondary span with a label (the label shows in JSON only).
     pub fn span(mut self, span: Span, label: impl Into<String>) -> Diag {
         self.labels.push(Label { span, text: label.into() });

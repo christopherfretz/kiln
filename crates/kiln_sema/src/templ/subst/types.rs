@@ -297,11 +297,14 @@ impl Substituter<'_, '_, '_> {
                 let loc = self.written(WrittenKey::Type(q), loc);
                 let found = self.sema.lookup_qualified(ctx, name, LookupKind::Ordinary);
                 let Some(&d) = found.decls.first() else {
-                    let d = self
-                        .sema
-                        .diag(DiagId::sema_typename_nested_not_found, loc)
-                        .arg(crate::decl::sym_str(self.sema, name))
-                        .arg(self.ctx_arg(ctx));
+                    let d = match self.enable_if_failure(nns, n, name, ctx) {
+                        Some(d) => d,
+                        None => self
+                            .sema
+                            .diag(DiagId::sema_typename_nested_not_found, loc)
+                            .arg(crate::decl::sym_str(self.sema, name))
+                            .arg(self.ctx_arg(ctx)),
+                    };
                     self.sema.emit(d);
                     return Err(SubstFail);
                 };
@@ -584,6 +587,69 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// A context for diagnostics: `'X<int>'` or `namespace 'n'`.
+    /// clang `isEnableIf` + `CheckTypenameType`: `typename
+    /// enable_if<C, T>::type` names no type. `written` is the qualifier
+    /// as written, `n` as substituted. With a condition that is not a
+    /// literal (after substitution) the conjunct that failed is named at
+    /// its location; otherwise the `enable_if` is, at its first argument
+    /// as written (spec/sema-templates.md §5.7.1).
+    fn enable_if_failure(
+        &mut self,
+        written: kiln_ast::ids::NnsId,
+        n: kiln_ast::ids::NnsId,
+        name: kiln_source::symbol::Symbol,
+        ctx: DeclId,
+    ) -> Option<kiln_diag::Diag> {
+        if crate::decl::sym_str(self.sema, name) != "type" {
+            return None;
+        }
+        let first_arg = |s: &Self, nns| {
+            let kiln_ast::types::Nns::Type { ty, .. } = s.sema.ast.types.nns_view(nns) else {
+                return None;
+            };
+            let TypeView::TemplateSpecialization { name, args, .. } =
+                s.sema.ast.types.view(ty.ty())
+            else {
+                return None;
+            };
+            Some((name, s.sema.ast.types.args(args).first().copied()?))
+        };
+        let (tname, arg) = first_arg(self, n)?;
+        let tmpl = self.sema.ast.types.template_decl(tname)?;
+        if self.sema.kind_of(tmpl) != DeclKind::ClassTemplate
+            || self.sema.decl_name(tmpl) != "enable_if"
+        {
+            return None;
+        }
+        let cond = match arg.view() {
+            ArgView::Expr { expr, .. } => {
+                let k = self.sema.ast.exprs.get(self.sema.ignore_paren_casts(expr)).kind();
+                (k != kiln_ast::expr::ExprKind::CXXBoolLiteralExpr).then_some(expr)
+            }
+            _ => None,
+        };
+        if let Some(c) = cond {
+            let failed = self.sema.failed_condition(c);
+            let at = self.sema.begin_loc(failed);
+            let text = self.sema.requirement_text(failed);
+            return Some(
+                self.sema
+                    .diag(DiagId::sema_typename_nested_not_found_requirement, at)
+                    .arg(text)
+                    .range(self.sema.expr_range(failed)),
+            );
+        }
+        let at = match first_arg(self, written).map(|(_, a)| a.view()) {
+            Some(ArgView::Expr { expr, .. }) => self.sema.begin_loc(expr),
+            _ => self.sema.ast.decls.get(ctx).loc(),
+        };
+        Some(
+            self.sema
+                .diag(DiagId::sema_typename_nested_not_found_enable_if, at)
+                .arg(self.ctx_arg(ctx)),
+        )
+    }
+
     pub(crate) fn ctx_arg(&self, ctx: DeclId) -> String {
         match self.sema.kind_of(ctx) {
             // Fully qualified, unsugared (clang: `'S::In'`, `'S::M<int>'`).

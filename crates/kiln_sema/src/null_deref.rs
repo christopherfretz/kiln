@@ -26,7 +26,7 @@ impl Sema<'_, '_> {
     /// clang `Expr::IgnoreParenCasts`: parentheses, `__extension__`,
     /// every cast, full-expressions, materialized temporaries and
     /// substituted non-type template parameters.
-    fn ignore_paren_casts(&self, e: ExprId) -> ExprId {
+    pub(crate) fn ignore_paren_casts(&self, e: ExprId) -> ExprId {
         let mut e = e;
         for _ in 0..256 {
             let k = self.ast.exprs.get(e).kind();
