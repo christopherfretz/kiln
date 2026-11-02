@@ -1566,7 +1566,7 @@ impl Compiler<'_> {
                     self.stmt(i);
                 }
                 if let Some(v) = d.cond_var {
-                    self.decl(v);
+                    self.decl_one(v);
                 }
                 match kind {
                     // Constant evaluation is always manifestly constant-evaluated.
@@ -1584,6 +1584,7 @@ impl Compiler<'_> {
                         let j = match d.cond {
                             Some(c) => {
                                 let r = self.rv(c);
+                                self.cond_bindings(d.cond_var);
                                 Some(self.jmp_if(r, false))
                             }
                             None => None,
@@ -1759,13 +1760,17 @@ impl Compiler<'_> {
         let mut exit = None;
         if kind != StmtKind::DoStmt {
             if let Some(v) = d.cond_var {
-                self.decl(v);
+                self.decl_one(v);
             }
             if let Some(c) = d.cond {
                 let m = self.next;
                 let r = self.rv(c);
+                // The bindings' registers live as long as the loop (the
+                // statement's caller resets `next`).
+                if !self.cond_bindings(d.cond_var) {
+                    self.next = m;
+                }
                 exit = Some(self.jmp_if(r, false));
-                self.next = m;
             }
         }
         let cont_depth = self.scopes.len();
@@ -2075,6 +2080,17 @@ impl Compiler<'_> {
         for h in holding_vars(self.b.ast(), d) {
             self.decl_one(h);
         }
+    }
+
+    /// A condition variable's tuple-like bindings, initialized after the
+    /// condition is evaluated ([stmt.pre]/4, P0963).
+    /// Whether there were any.
+    fn cond_bindings(&mut self, v: Option<DeclId>) -> bool {
+        let hs = v.map(|v| holding_vars(self.b.ast(), v)).unwrap_or_default();
+        for &h in &hs {
+            self.decl_one(h);
+        }
+        !hs.is_empty()
     }
 
     fn decl_one(&mut self, d: DeclId) {

@@ -618,7 +618,11 @@ belong to WP-017, which builds them on `macro_defined` and
   - `# 1 "<built-in>" 3`;
   - the sorted base macros, adjusted for the dialect and the
     macro-changing flags (`PredefConfig`; the effects are measured in
-    `resource/README.md`);
+    `resource/README.md`), and the feature-test macros kiln implements
+    beyond the clang 19 base: `__cpp_explicit_this_parameter` `202110L`
+    from C++23 (`__cplusplus >= 202302L`; P0847 with lambdas, WP-356),
+    as clang 22 defines it and at every compatibility level (clang 19
+    leaves it undefined);
   - clang 19's `#pragma push_macro("__GCC_DESTRUCTIVE_SIZE")` and
     `push_macro("__GCC_CONSTRUCTIVE_SIZE")`, so that `-D` may redefine
     them without a warning;
