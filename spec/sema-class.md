@@ -1102,6 +1102,18 @@ an error (§3.4).
   prvalue class, discarded-value expressions where clang materializes.
 - At `act_on_full_expr` (M2): if `cleanup.needs`, wrap in `ExprWithCleanups`
   (aux `side_effects`) and reset.
+- A constant-expression finished by `act_on_constant_full_expr` while an
+  enclosing full-expression is being built (a template argument converted
+  mid-expression: `use(D(3)) + C<1>::v`, `f<1>(D(3))`, a defaulted
+  `enable_if_t<..., int> = 0` parameter substituted by overload
+  resolution) keeps that full-expression's pending cleanups when it has no
+  temporaries of its own (`has_own_temporaries`: no
+  `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`, `CXXDefaultArgExpr`
+  or `CXXDefaultInitExpr` outside a nested `ExprWithCleanups`), so the
+  enclosing temporaries are still destroyed at its end ([intro.execution]/5;
+  clang's `ConstantEvaluated` context restores `ParentCleanup`; WP-296,
+  `tests/conformance/class.temporary/run-template-argument-keeps-full-expression-cleanups.cpp`).
+  One with temporaries of its own still takes and resets the state.
 
 ### 5.4 Lifetime extension ([class.temporary]/6–8)
 When a reference is bound to a temporary — the result of a temporary
