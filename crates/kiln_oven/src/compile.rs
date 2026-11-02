@@ -2188,11 +2188,13 @@ impl Compiler<'_> {
         let q = n.ty().unwrap_or(QualType::INT);
         if let Some(init) = v.init
             && self.cur_fn.is_some()
+            && !(self.o.clang_compat >= 22 && self.b.cxx23())
             && !is_literal_type(ast, q)
         {
             // clang `CheckLiteralType` (from `EvaluateInPlace`): a local
             // variable of non-literal type, named with its initializer's
-            // whole (array) type.
+            // whole (array) type. clang 22 drops the check from C++23 on
+            // (P2448R2): its constructor or destructor decides.
             let t = Oven::type_name(ast, ast.exprs.get(init).ty().without_quals());
             self.trap(
                 init,

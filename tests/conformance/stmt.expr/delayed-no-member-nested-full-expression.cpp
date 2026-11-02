@@ -28,7 +28,7 @@
 //@ diag: 47:12 error "no member named 'nom' in 'S'"
 //@ diag: 45:14 error "no member named 'nom' in 'S'"
 //@ requires: clang<22
-// clang 22 no longer emits error: expected ')'; WP-355 residual
+// WP-399 (typo correction): clang 22 has no delayed typo correction, so its parser recovery after the unknown member differs.
 struct S { static int m; };
 void f(int);
 void g(int, int);

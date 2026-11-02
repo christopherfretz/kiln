@@ -35,7 +35,7 @@
 //@ diag: 44:14 error "no member named 'nom1' in 'S'"
 //@ diag: 45:18 error "no member named 'nom2' in 'S'"
 //@ requires: clang<22
-// clang 22 emits error: expected ';' after expression; WP-355 residual
+// WP-399 (typo correction): clang 22 has no delayed typo correction, so its parser recovery after the unknown member differs.
 struct S { static int m; };
 int arr[3];
 int g(int);

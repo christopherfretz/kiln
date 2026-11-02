@@ -12,7 +12,7 @@
 //@ diag: 23:15 error "constexpr variable 'c' must be initialized by a constant expression"
 //@ diag: 23:27 note "non-literal type 'NL' cannot be used in a constant expression"
 //@ requires: clang<22
-// clang 22 emits error: constexpr variable 'a' must be initialized by a constant expression; WP-355 residual
+// WP-355 residual: clang 22 drops the by-value argument literal-type check in C++23 (P2448R2); kiln's is in compile/class.rs (WP-388's file).
 struct NL { constexpr NL() {} constexpr NL(const NL &) {} ~NL() {} };
 struct L { int x = 0; };
 constexpr int v(int, ...) { return 1; }

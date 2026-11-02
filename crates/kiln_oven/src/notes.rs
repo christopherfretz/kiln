@@ -259,6 +259,16 @@ impl Oven {
                 )
             }
             Fault::Invalid => (site.loc, "subexpression not valid in a constant expression".into()),
+            Fault::EnumRange { v, min, max } => {
+                let t = site.e.map_or_else(String::new, |e| Self::type_name(ast, ast.exprs.get(e).ty()));
+                (
+                    site.loc,
+                    format!(
+                        "integer value {v} is outside the valid range of values [{min}, {max}] \
+                         for the enumeration type '{t}'"
+                    ),
+                )
+            }
             Fault::Quiet => (site.loc, String::new()),
             // clang 22 note_constexpr_pointer_arith_unspecified; clang 19's
             // generic note.

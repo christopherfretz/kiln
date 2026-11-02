@@ -22,8 +22,8 @@ pub struct Config {
     /// `KILN_LLVM_DIR` (`spec/harness.md` "Oracle toolchain").
     pub llvm_dir: PathBuf,
     /// kiln++'s `-fclang-compat`: the major of `llvm_dir`, so kiln
-    /// identifies as the clang whose libc++ it compiles. 19 is kiln's
-    /// default and is not passed.
+    /// identifies as the clang whose libc++ it compiles. Always passed
+    /// (kiln++'s default is 22 since WP-394).
     pub clang_compat: u32,
     /// The libc++ to use when it is not `llvm_dir`'s own.
     pub libcxx: Option<LibcxxTree>,
@@ -74,9 +74,7 @@ impl Config {
             "-D_LIBCPP_ENABLE_EXPERIMENTAL".to_owned(),
         ]
         .into();
-        if self.clang_compat != 19 {
-            v.push(format!("-fclang-compat={}", self.clang_compat));
-        }
+        v.push(format!("-fclang-compat={}", self.clang_compat));
         if let Some(t) = &self.libcxx {
             v.extend(["-nostdinc++".to_owned(), "-isystem".to_owned()]);
             v.push(t.include.display().to_string());

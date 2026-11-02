@@ -1,21 +1,4 @@
 Dumping D::B:
-CXXConstructorDecl used B 'void (int, int)'
-|-ParmVarDecl 'int'
-`-ParmVarDecl 'int'
-
-Dumping D::B:
-CXXConstructorDecl B 'void (double)'
-`-ParmVarDecl 'double'
-
-Dumping D::B:
-CXXConstructorDecl implicit constexpr B 'void (const B &)' inline default trivial noexcept-unevaluated
-`-ParmVarDecl 'const B &'
-
-Dumping D::B:
-CXXConstructorDecl implicit constexpr B 'void (B &&)' inline default trivial noexcept-unevaluated
-`-ParmVarDecl 'B &&'
-
-Dumping D::B:
 CXXConstructorDecl implicit used B 'void (int, int) noexcept(false)' inline
 |-ParmVarDecl implicit 'int'
 |-ParmVarDecl implicit 'int'

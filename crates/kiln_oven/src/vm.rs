@@ -193,6 +193,14 @@ pub(crate) enum Fault {
     },
     /// clang's generic `Error(E)`: "subexpression not valid".
     Invalid,
+    /// An unscoped enumeration without a fixed underlying type given a
+    /// value outside its range (clang 22; [expr.static.cast]/9): the
+    /// value as printed, and the range.
+    EnumRange {
+        v: Box<str>,
+        min: i128,
+        max: i128,
+    },
     /// A failure clang reports with no note and no call stack, so the
     /// error lands at the declaration (clang 22's `__builtin_abs` of the
     /// most negative value).
@@ -745,6 +753,13 @@ impl Oven {
                     // (`-Wenum-constexpr-conversion`) only where a constant
                     // expression proper is required (spec/oven.md
                     // "Integration"); elsewhere the cast is not checked.
+                    // clang 22 (`note_constexpr_unscoped_enum_out_of_range`):
+                    // the value makes any evaluation non-constant (a speculative
+                    // one goes on, as clang's `CCEDiag` when folding).
+                    if oob && self.clang_compat >= 22 && !self.run.silent {
+                        let v = if fs { raw.cast_signed().to_string() } else { raw.to_string() };
+                        fail!(Fault::EnumRange { v: v.into(), min, max });
+                    }
                     if oob {
                         self.run.impure += 1;
                         if self.run.enum_check && !self.run.silent {

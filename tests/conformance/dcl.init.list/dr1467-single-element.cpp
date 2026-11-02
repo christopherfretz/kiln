@@ -11,7 +11,7 @@
 //@ diag: 27:18 error "call to deleted constructor of 'Z'"
 //@ diag: 26:17 note "'Z' has been explicitly marked deleted here"
 //@ requires: clang<22
-// clang 22 no longer emits error: no matching constructor for initialization of 'X'; WP-355 residual
+// WP-355 residual: clang 22 no longer applies the DR1467 single-element copy when an initializer_list constructor exists (CWG2137: explicit/deleted list ctors chosen); kiln still does.
 #include "Inputs/initializer_list.h"
 
 struct X { X(); explicit X(const X&); X(std::initializer_list<int>); };

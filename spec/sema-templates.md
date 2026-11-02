@@ -3730,8 +3730,9 @@ headers. They are implemented in M3 because they cost one row each:
 clang 22.1 `SemaTypeTraits.cpp`. kiln accepts them at every
 `-fclang-compat` level, a superset of clang 19 (which lacks them); only
 `__has_builtin` follows the level (spec/pp.md "clang compatibility
-level"). Likewise `__is_referenceable`, which clang 22 removed, stays
-implemented, and `__has_builtin` answers 0 for it at level 22.
+level"). The exception is `__is_referenceable`, which clang 22 removed:
+at level 22 it is an ordinary identifier (the parser's keyword table
+omits it) and `__has_builtin` answers 0 for it (WP-394).
 - `__builtin_is_virtual_base_of(B,D)` ([meta.rel], P2985; clang 20):
   false unless both are non-union classes; `D` must then be complete
   ("incomplete type 'X' where a complete type is required" plus the
@@ -3782,8 +3783,15 @@ implemented, and `__has_builtin` answers 0 for it at level 22.
 
 The operand's value category depends on the trait. The C++23 pair takes
 a non-reference `U` as a prvalue ([meta.unary.prop]), while
-`__reference_binds_to_temporary` takes it as an xvalue (clang). The
+`__reference_binds_to_temporary` takes it as an xvalue (clang 19). At
+`-fclang-compat=22` `__reference_binds_to_temporary` is evaluated as
+`__reference_constructs_from_temporary` (prvalue `U`) and warns
+`sema_deprecated_builtin` naming it, as clang 22 (WP-394). The
 `converts` form copy-initializes; the other two direct-initialize.
+
+A deprecated trait spelling warns where it is written and again at each
+instantiation that rebuilds it (under the instantiation note), as clang's
+`BuildTypeTrait` (WP-394).
 
 ### 9.2 Type transforms (`UnaryTransform` types)
 

@@ -21,7 +21,7 @@
 //@ diag: 26:12 note "virtual base class declared here"
 //@ diag: 34:21 note "virtual base class declared here"
 //@ requires: clang<22
-// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
+// WP-388 (vbase construction): clang 22 notes the inherited constructor of a virtual base, not the non-literal type.
 struct V { constexpr V(int v) : v(v) {} int v; };
 struct M : virtual V { using V::V; };
 struct N : V { using V::V; };

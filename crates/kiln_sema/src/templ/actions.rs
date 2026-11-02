@@ -1992,7 +1992,14 @@ impl Sema<'_, '_> {
     /// chain's common data, so the first declaration's parameter names
     /// print. A friend declared in a templated class does not count: clang
     /// links it into the chain only at instantiation.
+    /// At `-fclang-compat=22` the type belongs to the definition, so the
+    /// definition's parameter names print (spec/sema.md §1.1).
     pub(crate) fn injected_params_template(&self, c: DeclId) -> Option<DeclId> {
+        if self.clang_compat >= 22
+            && let Some(t) = self.ast.definition(c).and_then(|d| self.ast.described_template(d))
+        {
+            return Some(t);
+        }
         let own =
             self.ast.redecls_of(c).filter_map(|d| self.ast.described_template(d)).filter(|&t| {
                 self.ast.decls.get(t).misc().friend() == FriendKind::None
