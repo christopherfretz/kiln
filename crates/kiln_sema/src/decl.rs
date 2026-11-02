@@ -242,8 +242,33 @@ impl Sema<'_, '_> {
             }
             _ => base,
         };
-        let cv = ds.cv;
+        let mut cv = ds.cv;
+        if let Some(rloc) = ds.cv_locs[2]
+            && cv.contains(Quals::RESTRICT)
+            && !self.restrict_ok(base)
+        {
+            // C99 6.7.3p2 (clang `BuildQualifiedType`,
+            // `err_typecheck_invalid_restrict_not_pointer`): only a pointer
+            // or reference may be restrict-qualified; the qualifier is
+            // dropped (`__restrict int h();`, WP-371).
+            let msg = self.diag(DiagId::sema_typecheck_invalid_restrict_not_pointer, rloc);
+            let msg = msg.arg(self.ty_arg(base));
+            self.emit(msg);
+            cv = cv - Quals::RESTRICT;
+        }
         if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
+    }
+
+    /// True if `restrict` may qualify `ty`: a pointer, reference or
+    /// member pointer, or a type not known yet (dependent, a placeholder,
+    /// an error).
+    fn restrict_ok(&self, ty: QualType) -> bool {
+        self.is_error_type(ty)
+            || self.is_dependent_type(ty)
+            || self.is_undeduced_auto(ty)
+            || self.ast.types.is_pointer(ty)
+            || self.ast.types.is_reference(ty)
+            || self.ast.types.canonical_kind(ty) == kiln_ast::types::TypeKind::MemberPointer
     }
 
     /// `_Complex T` for the type `base` named by the other specifiers of

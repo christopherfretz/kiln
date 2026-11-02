@@ -1203,6 +1203,10 @@ impl Parser<'_, '_> {
     fn unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
         let next = self.tok_at(end);
         self.ident_of(next).is_some()
+            // A type-specifier keyword: `restrict int f();` (`restrict` is
+            // no keyword in C++; clang's `ParseImplicitInt` default case).
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member | DeclaratorContext::Block)
+                && self.kw_of(next).is_some_and(is_type_specifier_kw))
             || (matches!(
                 ctx,
                 DeclaratorContext::File

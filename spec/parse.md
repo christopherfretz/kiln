@@ -200,6 +200,15 @@ clang's `Parser` over `Preprocessor::Lex`.
   recovers to `int` (`unknown_type_follows` accepts a ptr-operator in
   those contexts). `const u7 &c;` is likewise "unknown type name 'u7'"
   plus the `int &` consequence, not "a type specifier is required".
+  An undeclared name followed by a type-specifier keyword
+  (`restrict int f();`, `foo const v = 1;`; `restrict` is no keyword in
+  C++) is "unknown type name" in a namespace, class or block-scope
+  declaration (clang's `ParseImplicitInt` default case; at block scope
+  `undeclared_before_type_keyword` makes the statement a declaration),
+  and the type, width and sign specifiers after a `type_error` are
+  dropped silently (clang's `TST_error`; `DeclSpec::set_base`,
+  `set_width`, `set_sign`; WP-371,
+  `class.friend/restrict-atomic-decl-specifiers.cpp`).
   Once a decl-specifier names no type (`DeclSpec::type_error`), the
   later declarators of the group are skipped up to the `;`, as clang's
   `ParseDeclGroup`, so `u5 &x1, &x2;` and `S::c &x3, &x4;` report once

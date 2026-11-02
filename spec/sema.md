@@ -619,6 +619,16 @@ Redeclaration and linkage rules:
   with an initializer`, `remove parentheses`).
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
+- A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
+  `BuildQualifiedType`; WP-371) on a type that is not a pointer,
+  reference or member pointer (and not dependent, an undeduced
+  placeholder or an error) is "restrict requires a pointer or reference
+  ('int' is invalid)" at the qualifier, which is dropped
+  (`type_from_declspec_at`, so `__restrict int *p;` qualifies `int` and
+  is diagnosed). It is reported once per declaration group where clang
+  reports it per declarator. `_Atomic int g();` (friend or not) is
+  accepted, as clang 19 and 22 do;
+  `class.friend/restrict-atomic-decl-specifiers.cpp`.
 - `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
   over the declared type of an unparenthesized id-expression or member
   access, else `T&&`/`T&`/`T` by value category. The operand is
