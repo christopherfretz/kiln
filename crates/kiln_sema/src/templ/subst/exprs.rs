@@ -11,7 +11,7 @@ use kiln_ast::expr::{
 };
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::names::{DeclName, DeclNameView};
-use kiln_ast::types::{ArgView, BuiltinType, Nns};
+use kiln_ast::types::{ArgView, BuiltinType, Nns, TemplateArg};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
@@ -299,7 +299,28 @@ impl Substituter<'_, '_, '_> {
                 }
                 let name = self.member_name(name, loc)?;
                 // A member template-id `x.f<args>` (§6.4).
-                let targs = match self.sema.ovl.members.get(&e).and_then(|m| m.targs) {
+                // A member function template specialization the pattern
+                // already selected (`throw_error<X>()` through an implicit
+                // `this` in a class template, resolved at the definition)
+                // is named again with its arguments: looked up by name
+                // alone, the template could not deduce them.
+                // A pack's elements are written one by one.
+                let resolved = match self.sema.ast.spec_info(m) {
+                    Some((_, s)) if self.sema.kind_of(s.template) == DeclKind::FunctionTemplate => {
+                        let ty = &self.sema.ast.types;
+                        let flat: Vec<TemplateArg> = ty
+                            .args(s.args)
+                            .iter()
+                            .flat_map(|&a| match a.view() {
+                                ArgView::Pack(l) => ty.args(l).to_vec(),
+                                _ => vec![a],
+                            })
+                            .collect();
+                        Some(self.sema.ast.types.arg_list(&flat))
+                    }
+                    _ => None,
+                };
+                let targs = match self.sema.ovl.members.get(&e).and_then(|m| m.targs).or(resolved) {
                     Some(l) => Some(self.args(l, loc)?),
                     None => None,
                 };
@@ -1077,12 +1098,7 @@ impl Substituter<'_, '_, '_> {
 
     /// The argument `a` of the non-type parameter `shown`, wrapped in
     /// `SubstNonTypeTemplateParmExpr`.
-    fn nttp_replacement(
-        &mut self,
-        a: kiln_ast::types::TemplateArg,
-        shown: DeclId,
-        loc: Loc,
-    ) -> SubstResult<ExprId> {
+    fn nttp_replacement(&mut self, a: TemplateArg, shown: DeclId, loc: Loc) -> SubstResult<ExprId> {
         let r = match a.view() {
             ArgView::Value { ty, value } => self.value_literal(ty, value, loc)?,
             ArgView::Expr { expr, .. } => expr,

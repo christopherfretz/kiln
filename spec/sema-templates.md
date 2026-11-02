@@ -1172,6 +1172,16 @@ class name" at `B`
 - Alias substitution is in the immediate context: a failure inside a
   deduction is SFINAE, including for args the alias does not use
   (CWG1558, the `void_t` idiom).
+- Which alias failures are SFINAE (WP-274, clang 19): everything found
+  while substituting the alias's arguments into its aliased type under a
+  `Some(true)` frame — a missing member type (`enable_if<false>::type`,
+  `T::type`), an invalid type, a failed nested alias. A failure inside a
+  class *definition* the alias instantiates (a member of `enable_if<..>`
+  whose body is ill-formed) is a hard error under that class's
+  `Some(false)` frame. Outside deduction (a class member's type, a
+  non-template) the alias's failure is a hard error with the "in
+  instantiation of template type alias" note. The enable_if diagnostics
+  are §5.7.1.
 - A pack expansion as the argument for a non-pack parameter is
   diagnosed when the alias is dependent: "pack expansion used as argument
   for non-pack parameter of alias template" (clang, CWG1430).
@@ -1601,6 +1611,47 @@ pub enum Tdk { Invalid, InstantiationDepth, Incomplete, IncompletePack, Inconsis
 **Memory.** Types and nodes that a failed substitution created are
 retained, since the AST is append-only. They are metered as
 `templ.sfinae_discarded` (§11.3).
+
+#### 5.7.1 `enable_if` failures (clang 19, WP-274)
+
+clang words a missing `type` in `enable_if` specially. This changes the
+text and location only, never whether the failure is SFINAE; the
+mechanism above is the same for every name. kiln matches clang:
+
+- **Recognition** (`Substituter::enable_if_failure`, clang `isEnableIf`):
+  the name is `type` and its qualifier substitutes to a specialization
+  of a class template named `enable_if`. The *condition* is its first
+  argument when that is still an expression which, after parens and
+  casts, is not a `bool` literal.
+- **With a condition**: `failed requirement 'C'; 'enable_if' cannot be
+  used to disable this declaration` at the failed conjunct (`C` is the
+  first false operand of a `&&` chain, `failed_condition`, printed as in
+  `static_assert`).
+- **Without one** (the argument is already a value, as through an alias,
+  or a literal): `no type named 'type' in 'enable_if<false, int>';
+  'enable_if' cannot be used to disable this declaration` at the written
+  first argument (in an alias: the alias pattern's argument, since alias
+  substitution does not carry written locations, §4.10).
+- **`enable_if_t` rewrite** (`alias_template_type`, clang
+  `CheckTemplateIdType`): when substituting an alias named `enable_if_t`
+  or `__enable_if_t` fails in a SFINAE context and the captured first
+  error is the "without a condition" form, it is replaced by the "with a
+  condition" form for the alias's own first argument, kept at the old
+  location. Here a literal is not skipped (`requirement 'false'`).
+- **Notes** (`deduction_note`, clang `DiagnoseBadDeduction`): the "with a
+  condition" error gives `candidate template ignored: requirement 'C'
+  was not satisfied [with ...]` at the template; the "without" error
+  gives `candidate template ignored: disabled by 'enable_if' [with ...]`
+  at the error's location. Every other substitution failure keeps
+  `candidate template ignored: substitution failure [with ...]: <error>`.
+
+| Form (P = int) | Note |
+| --- | --- |
+| `typename enable_if<is_ptr<P>::value && B, int>::type` | requirement 'is_ptr<int>::value' |
+| `enable_if_t<is_ptr<P>::value, int>`, also via another alias | requirement 'is_ptr<int>::value' |
+| `enable_if_t<false, T>` | requirement 'false' |
+| `my_t<is_ptr<P>::value, int>` (alias not named `enable_if_t`) | disabled by 'enable_if', at `my_t`'s pattern |
+| `typename enable_if<B, int>::type` with NTTP `B` | disabled by 'enable_if', at `B` |
 
 ### 5.8 Written locations of dependent names
 
