@@ -673,7 +673,15 @@ The normative description is spec/driver.md "Code generation". In short:
   native AArch64 host has and an x86-64 host cross-targeting aarch64 (the
   GitHub runner) does not, so the flag keeps the comparison independent of
   the host. A `//@ args: <opts>` line in a case appends
-  `<opts>` to both command lines after it (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
+  `<opts>` to both command lines after it (WP-165). A
+  `//@ module: <name>=<path>` line (path relative to the case, lines in
+  dependency order) names a module interface unit the case imports: kiln
+  gets `-fmodule-file=<name>=<path>` and builds it in-process
+  (spec/modules.md §1); clang first precompiles it with `--precompile`
+  and the same flags (plus the earlier lines' BMIs) into a scratch
+  directory and gets `-fmodule-file=<name>=<bmi>` (WP-376). A
+  `//@ min-oracle: <N>` line compares the case only under oracle release
+  N or later; under an older oracle kiln's IR must still verify. A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
   corpus is 226 programs (ABI classification of 1- to 32-byte structs,

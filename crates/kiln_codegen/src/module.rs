@@ -709,7 +709,7 @@ impl<'a> Cg<'a> {
         ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|v| v.spec.is_inline()))
     }
 
-    fn discardable_var(&self, d: DeclId) -> bool {
+    pub(crate) fn discardable_var(&self, d: DeclId) -> bool {
         if mangle::is_internal_symbol(self.ast, d) {
             return true;
         }

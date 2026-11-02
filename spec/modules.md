@@ -256,8 +256,39 @@ module unit itself emits everything. A non-inline definition in an
 imported unit's global module fragment is emitted in the importer too
 (deviation 7).
 
-Module initializers (`_ZGIW...`) are not emitted or called in part A
-(follow-up for part B, needed to link against clang-built module objects).
+**Module initializers** (Itanium ABI §3.2.6, clang 22
+`EmitCXXModuleInitFunc`; `kiln_codegen/src/module_init.rs` and
+`global_init.rs`). [basic.start.dynamic]/5 orders a variable after those
+of every unit its unit has an interface dependency on; the initializer
+functions implement that across object files:
+
+- An interface or partition unit (interface or implementation partition)
+  defines `define void @_ZGIW<module>[WP<partition>]()`: external, not
+  `dso_local`, the initialization-function attributes, in
+  `.text.startup`, an `@llvm.global_ctors` entry (priority 65535) in
+  place of `_GLOBAL__sub_I_<file>`. When it calls anything, its body is
+  guarded by `@<name>__in_chrg = internal global i8 0, align 1`: load,
+  `icmp eq 0`, a branch weighted `!{"branch_weights", i32 1, i32 1023}`,
+  then `store i8 1` before the calls, so that it runs once however many
+  importers call it. It calls the initializers of its imports, the
+  `export import`ed ones first, then the others in source order (each
+  once), then its own ordered `__cxx_global_var_init`s. With nothing to
+  call the body is just `ret void` and there is no guard.
+- Any other unit (non-module, implementation unit) calls its direct
+  imports' initializers, in import order (an implementation unit's
+  implicit import of its primary interface first), at the start of
+  `_GLOBAL__sub_I_<file>`, which is then emitted even with no
+  initializers of its own.
+- An imported unit's initializer is declared (`declare void @_ZGIW...()`,
+  no attributes, created just before the calling function) and called
+  only when it does something (clang `NamedModuleHasInit`): the unit, in
+  any fragment, defines a namespace-scope variable that clang must emit
+  (`DeclMustBeEmitted`: a definition that is not discardable, or one with
+  a dynamic initializer or a non-trivial destructor), or one of its
+  named-module imports' initializers does something. A unit with only
+  functions, such as libc++'s `std` (whose GMF is all inline/template
+  code), has an empty initializer that importers do not call. Header
+  units have no initializer.
 
 Mangling (Itanium `<module-name>`, clang 22): an entity at namespace scope
 attached to named module `A.B` with linkage gets `W1AW1B` before its
@@ -290,15 +321,16 @@ and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
   appends a deserialised unit with fresh `DeclId`s and change points, and
   its `UnitInfo`; lookup does not change.
 - §6 dedup is replaced by real ODR merging when deserialising.
-- Module initializers, `-fmodule-output`, `--precompile`, and a two-step
-  clang oracle mode in the harness.
+- `-fmodule-output`, `--precompile`, and a two-step clang oracle mode in
+  the `cargo xtask test` harness (module initializers are emitted from
+  the in-memory model, §7).
 
 ## 10. Deviations
 
 1. No BMI; modules are built from source per invocation (§1).
 2. Visibility is not enforced during template instantiation (§5).
 3. Cross-unit merging by source position and length, not by ODR (§6).
-4. No module initializer functions (§7).
+4. (Retired: module initializers are emitted, §7.)
 5. `#include` is never translated into an import (§3).
 6. Attributes on module / import declarations are ignored (§3).
 7. Non-inline definitions in an imported unit's global module fragment are
@@ -335,4 +367,11 @@ and 4 UNSUPPORTED (the 4 are `.sh.cpp` tests whose RUN lines build BMIs).
   `import-order.cpp`: [cpp.pre] tokenisation and import rules.
 - `tests/mangle/modules.cpp`, `module_partition.cpp`: `_ZW` names,
   differential against clang (spec/abi.md §8.19).
+- `basic.start.dynamic/module-init-run.cpp`: four module units and an
+  importer; the order and once-only property of their dynamic
+  initialization ([basic.start.dynamic]/5, §7).
+- `tests/codegen/module_init_*.cpp`: IR goldens of the module
+  initializers against clang 22 (interface, partition, empty, importer,
+  import-only, implementation unit), using the IR-diff corpus's
+  `//@ module:` two-step mode (spec/codegen.md §6).
 - libc++'s `std/modules/` through `cargo xtask libcxx` (§8).

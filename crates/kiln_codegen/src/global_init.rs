@@ -697,25 +697,28 @@ impl Cg<'_> {
         while matches!(self.gi.ordered.last(), Some(None)) {
             self.gi.ordered.pop();
         }
-        if !self.gi.ordered.is_empty() {
+        // [basic.start.dynamic]/5 via the Itanium ABI §3.2.6 module
+        // initializers: the imported units' `_ZGIW` run first (clang
+        // declares them right before the calling function).
+        let own_module_init = self.own_module_init_name();
+        let mut fns = self.imported_module_inits();
+        fns.extend(self.gi.ordered.iter().flatten().copied());
+        if let Some(name) = own_module_init {
+            let f = self.module_init_function(&name)?;
+            let saved = std::mem::replace(&mut self.f, Fx::empty());
+            self.start_init_fn(f);
+            let r = self.emit_module_init_body(&name, &fns);
+            let r = r.and_then(|()| self.finish_init_fn(f, self.ast.tu));
+            self.f = saved;
+            r?;
+            self.gi.ctors.push((DONE, f, None));
+        } else if !fns.is_empty() {
             let name =
                 format!("_GLOBAL__sub_I_{}", transformed_file_name(&self.opts.source_filename));
             let f = self.init_function(&name)?;
             let saved = std::mem::replace(&mut self.f, Fx::empty());
             self.start_init_fn(f);
-            let fns: Vec<FuncId> = self.gi.ordered.iter().flatten().copied().collect();
-            for callee in fns {
-                let fn_ty = self.m.func(callee).ty();
-                self.f.fir.push(
-                    Op::Call {
-                        fn_ty,
-                        callee: V::C(Value::func(callee)),
-                        args: Vec::new(),
-                        opts: Box::new(CallOpts::default()),
-                    },
-                    LTy::VOID,
-                );
-            }
+            self.emit_init_calls(&fns);
             let r = self.finish_init_fn(f, self.ast.tu);
             self.f = saved;
             r?;
@@ -745,6 +748,70 @@ impl Cg<'_> {
             let elems: Vec<Value> = used.into_iter().map(gval).collect();
             self.appending_global("llvm.used", LTy::PTR, &elems, Some("llvm.metadata"))?;
         }
+        Ok(())
+    }
+
+    /// Plain calls of the `void()` functions `fns`, in order.
+    fn emit_init_calls(&mut self, fns: &[FuncId]) {
+        for &callee in fns {
+            let fn_ty = self.m.func(callee).ty();
+            self.f.fir.push(
+                Op::Call {
+                    fn_ty,
+                    callee: V::C(Value::func(callee)),
+                    args: Vec::new(),
+                    opts: Box::new(CallOpts::default()),
+                },
+                LTy::VOID,
+            );
+        }
+    }
+
+    /// The external `void()` module initializer `name` in
+    /// `.text.startup` (clang `EmitCXXModuleInitFunc`).
+    fn module_init_function(&mut self, name: &str) -> R<FuncId> {
+        let f = self.startup_function(name, &[])?;
+        self.m.func_mut(f).linkage = Linkage::External;
+        Ok(f)
+    }
+
+    /// The body of module initializer `name`: when it calls anything,
+    /// guarded by the internal `i8` `<name>__in_chrg` so that it runs
+    /// once however many importers call it (clang `EmitCXXGlobalInitFunc`
+    /// with a `TlsGuard`-weighted branch, 1 : 1023).
+    fn emit_module_init_body(&mut self, name: &str, fns: &[FuncId]) -> R<()> {
+        if fns.is_empty() {
+            return Ok(());
+        }
+        let g = self.m.add_global(&format!("{name}__in_chrg"), LTy::I8);
+        let zero8 = self.m.const_int(LTy::I8, 0);
+        if let Err(e) = self.m.set_initializer(g, Some(zero8)) {
+            return err(None, format!("bad module initializer guard: {e:?}"));
+        }
+        let gm = self.m.global_mut(g);
+        gm.linkage = Linkage::Internal;
+        gm.align = Some(1);
+        let gp = V::C(gval(g));
+        let init = self.f.fir.create_block();
+        let end = self.f.fir.create_block();
+        let li =
+            self.f.fir.push(Op::Load { ty: LTy::I8, ptr: gp, mem: MemOpts::aligned(1) }, LTy::I8);
+        let needs = self.icmp(IntPredicate::Eq, li, V::C(zero8));
+        let br = self.f.fir.push(Op::CondBr { c: needs, t: init, f: end }, LTy::VOID);
+        let s = self.m.md_string(b"branch_weights");
+        let w1 = self.m.const_int(LTy::I32, 1);
+        let w2 = self.m.const_int(LTy::I32, 1023);
+        let (Ok(m1), Ok(m2)) = (self.m.md_const(w1), self.m.md_const(w2)) else {
+            return err(None, "bad branch weights");
+        };
+        let md = self.m.md_tuple(&[Some(s), Some(m1), Some(m2)]);
+        let k = self.m.md_kind("prof");
+        self.f.fir.add_md(Fir::last_inst(br), k, md);
+        self.emit_block(init, false);
+        let one = V::C(self.m.const_int(LTy::I8, 1));
+        self.store(one, gp, 1, false);
+        self.emit_init_calls(fns);
+        self.emit_block(end, false);
         Ok(())
     }
 

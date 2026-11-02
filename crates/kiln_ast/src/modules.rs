@@ -125,6 +125,20 @@ impl ModuleTable {
             && self.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
     }
 
+    /// The unit whose preprocessor key is `key`.
+    pub fn unit_by_key(&self, key: &str) -> Option<u16> {
+        let i = self.units.iter().position(|u| u.key == key)?;
+        u16::try_from(i).ok()
+    }
+
+    /// True if `d` is owned by an imported named-module unit, in its
+    /// purview or its global module fragment: a non-inline definition
+    /// belongs to that unit's object file (spec/modules.md §7).
+    pub fn is_imported_named_unit_decl(&self, d: DeclId) -> bool {
+        let o = self.owner(d);
+        o.unit != 0 && self.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
+    }
+
     /// Heap bytes.
     pub fn heap_bytes(&self) -> usize {
         self.points.capacity() * size_of::<(u32, Owner)>()

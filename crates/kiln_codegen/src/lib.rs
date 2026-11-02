@@ -35,6 +35,7 @@ mod global_init;
 mod lambda;
 mod memptr;
 mod module;
+mod module_init;
 mod new_delete;
 mod null_init;
 mod stmt;
