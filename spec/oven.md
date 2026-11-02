@@ -561,28 +561,44 @@ literal is one instruction and one step, not an interpreted loop.
   `tryEvaluateBuiltinObjectSize`): for a pointer into a known complete
   object the bytes from the pointer to the end of the whole object
   (types 0/2) or of the closest subobject (types 1/3), 0 past the end;
-  an operand with side effects is not evaluated and gives the unknown
-  value (-1 for types 0/1, 0 for 2/3); a null or function pointer or an
-  object of incomplete type is not a constant (clang 19's
-  `ConstantExpression` mode).
-  `__builtin_assume_aligned` evaluates to its pointer operand (the
-  offset is evaluated). `__builtin_shufflevector` (`vec_shuffle`)
+  a null or function pointer or an object of incomplete type is not a
+  constant (clang 19's `ConstantExpression` mode). WP-292: the operand
+  is looked through parentheses and no-op / bit casts of pointer
+  prvalues (clang `ignorePointerCastsAndParens`, so `(const char *)&s`
+  designates `s`) and evaluated speculatively (`Op::Speculate`): the
+  left operands of top-level commas, also under an array decay, are
+  skipped (clang ignores a failing comma operand); an operand with a
+  remaining side effect gives the unknown value (-1 for types 0/1, 0 for
+  2/3) without being evaluated, as clang fails the modification of an
+  object from before the trial (register-promoted locals are not rolled
+  back by `Speculate`, so this is decided statically); otherwise a
+  failed trial gives the unknown value when the operand has side effects
+  in clang's `HasSideEffects` sense (a call to a function that is not
+  `const`/`pure` included, `SIDE` set) and the note "subexpression not
+  valid in a constant expression" at the call otherwise.
+  `__builtin_assume_aligned` (kbc 23, `ASSUME_ALIGNED`, sub 1 with an
+  offset) evaluates to its pointer operand after clang's check: the
+  complete object's alignment (`SemaBridge::decl_align`, clang
+  `getDeclAlign`: the declared `alignas`/`aligned`, else the type's, a
+  reference as a pointer, an x86-64 array of 16 bytes or more at least
+  16; a heap or temporary object its type's) must be at least the
+  asserted one ("alignment of the base pointee object (N bytes) is less
+  than the asserted M bytes"), and the byte offset minus `off` a
+  multiple of it ("offset of the aligned pointer from the base pointee
+  object (N bytes) is not a multiple of the asserted M bytes"; without
+  an object, "value of the aligned pointer (N) is not a multiple ...");
+  both notes are at the pointer operand. `__builtin_shufflevector` (`vec_shuffle`)
   concatenates the two operands' lanes and picks by index; a -1 lane is
   the note `index for __builtin_shufflevector not within the bounds of
   the input vectors; index of -1 found at position N is not permitted in
-  a constexpr context`. The `*f128` builtins with a `long double` twin
+  a constexpr context`, which clang emits as an error-level note
+  (`Note::is_error`, spec/diag.md §6). The two-argument mask form is not
+  a constant (generic note; clang 19 crashes on it). The `*f128` builtins with a `long double` twin
   evaluate as the twin (quad-precision `softfloat` arithmetic);
   `powi`, `verbose_trap`, `copysignf16` and the other `*f128` names
-  trap "subexpression not valid", as clang 19. **Divergences:** clang
-  reports the -1 shuffle index as an error, kiln as the note of the
-  failed evaluation; assume_aligned does not check the pointer's
-  alignment (clang: "alignment of the base pointee object (N bytes) is
-  less than the asserted M bytes"); an object-size operand with side
-  effects gives the unknown value (clang evaluates the pointer anyway,
-  e.g. 4 for `__builtin_object_size(p++, 0)` of an `int`), and an
-  operand cast to another pointer type (`(const char *)&s`) is
-  rejected as a reinterpreting cast (clang's object-size evaluation
-  looks through it).
+  trap "subexpression not valid", as clang 19. **Divergences:** only
+  top-level commas of an object-size operand are skipped (clang ignores
+  a failing comma operand at any depth, e.g. `&a[(f(), 1)]`).
 
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,

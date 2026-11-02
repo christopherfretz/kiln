@@ -387,6 +387,10 @@ Diag::new(DiagId::pp_macro_redefined, name_span)
   §8 maps them to the file.
 - `Diag` is `#[must_use]`. Notes MUST only be attached, never emitted
   directly; free-text messages exist only for notes.
+- `.error_note(text, span)` attaches a free-text note that prints and
+  counts as an `error` (clang emits some `err_` ids as constant-evaluation
+  notes, for example the -1 `__builtin_shufflevector` index). It follows
+  its parent like any note.
 
 ### 6.1 Template type diffing (`%diff`)
 

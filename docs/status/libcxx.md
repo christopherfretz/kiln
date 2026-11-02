@@ -11,6 +11,7 @@ passes when run as the compiler under `cargo xtask libcxx` (contract:
 | Date | kiln main | Scope | pass | fail | xfail | unsupported | pass rate | wall |
 |---|---|---|---|---|---|---|---|---|
 | 2026-11-02 | 68822097 | same 10% sample (790 tests) after WP-268…276, 279, 280, 282, 287 | 724 | 41 | 3 | 22 (3 driver) | **94.3%** | 24 min, -j 3, debug kiln, 20 s timeout |
+| 2026-11-02 | c74c7353 | same 10% sample (790 tests) after WP-286, 288, 289, 291, 295 (#52–#56) | 748 | 17 | 3 | 22 (3 driver) | **97.4%** | 26 min, -j 3, debug kiln, 20 s timeout, box loaded (6 implementers) |
 | 2026-11-01 | 1b340ab5 | 10% stratified sample, 790 `std/` tests (every 10th in sorted order) | 555 | 210 | 3 | 22 (3 driver) | 72.3% | 21 min, -j 3, debug kiln, 20 s timeout |
 
 Pass rate = pass / total; `unsupported` are tests the driver skips (`.verify.cpp`
@@ -29,6 +30,24 @@ Only failures are printed; cluster them with
 `grep "FAIL (" sample.log | sed 's/.* — //' | sed "s/'[^']*'/'X'/g" | sort | uniq -c | sort -rn`.
 The log elides symbols as `…`; reproduce a cluster with `kiln++ -fsyntax-only`
 and the harness flags (`spec/libcxx.md`).
+
+## Failure clusters, 2026-11-02 sample on c74c7353 (17 failures)
+
+| Count | Diagnostic | Where | WP |
+|---|---|---|---|
+| 3 | run: assertion failed (filesystem perms as root) | filesystems status / is_block_file / replace_filename | WP-297 (env UNSUPPORTED; clang fails identically) |
+| 3 | verify: deprecated warning expected but not seen | codecvt_char16_t_char, unary_negate, storage.iterator | WP-297 |
+| 1 | verify: static_assert expected (relops_bool_conv) | variant.relops | WP-297 / WP-296 |
+| 3 | NYI: substitution into CXXParenListInitExpr / CXXStdInitializerListExpr | time.zone zonedtime ×2, charconv.msvc | WP-296 (PR #57) |
+| 1 | reinterpret_cast nullptr_t→integral not allowed | formatter.pointer | WP-296 (PR #57) |
+| 1 | cannot delete expression (full-expression cleanups) | pointer_deleter | WP-296 (PR #57) |
+| 1 | address of overloaded function does not match ([over.over]/3) | variant robust_against_adl | WP-296 (PR #57) |
+| 1 | NYI: atomic constraint value-dependent after substitution | container.adaptors.format | WP-298 |
+| 1 | no matching function (format.range formatter) | format.range.formatter | WP-298 |
+| 1 | no matching function for call (ranges.remove_if) | alg.remove/ranges.remove_if | NEW → WP-304 |
+| 1 | coroutine expressions not supported | support.coroutines | M4 |
+
+Expected after PR #57, WP-297 and WP-298 land: 16 of 17 fixed (one coroutine test deferred to M4).
 
 ## Failure clusters, 2026-11-02 sample (41 failures)
 

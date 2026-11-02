@@ -2011,6 +2011,8 @@ impl Parser<'_, '_> {
                         | Kw::Float
                         | Kw::Double
                         | Kw::Float128
+                        | Kw::Float16
+                        | Kw::Fp16
                         | Kw::Bool
                         | Kw::Class
                         | Kw::Struct

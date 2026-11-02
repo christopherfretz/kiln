@@ -1,0 +1,34 @@
+TranslationUnitDecl
+|-FunctionTemplateDecl get
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 ... I
+| `-FunctionDecl get 'auto (T, I...)'
+|   |-ParmVarDecl referenced m 'T'
+|   |-ParmVarDecl referenced is 'I...' pack
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXOperatorCallExpr '<dependent type>' '[]'
+|         |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'operator[]' empty
+|         |-DeclRefExpr 'T' lvalue ParmVar 'm' 'T'
+|         `-PackExpansionExpr '<dependent type>' lvalue
+|           `-DeclRefExpr 'I' lvalue ParmVar 'is' 'I...'
+|-FunctionTemplateDecl two
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl two 'auto (T)'
+|   |-ParmVarDecl referenced m 'T'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CXXOperatorCallExpr '<dependent type>' '[]'
+|         |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'operator[]' empty
+|         |-DeclRefExpr 'T' lvalue ParmVar 'm' 'T'
+|         |-IntegerLiteral 'int' 1
+|         `-IntegerLiteral 'int' 2
+`-FunctionTemplateDecl one
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl one 'auto (T)'
+    |-ParmVarDecl referenced m 'T'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-ArraySubscriptExpr '<dependent type>' lvalue
+          |-DeclRefExpr 'T' lvalue ParmVar 'm' 'T'
+          `-IntegerLiteral 'int' 1

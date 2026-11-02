@@ -192,6 +192,8 @@ impl Sema<'_, '_> {
                 }
             }
             TypeSpecKind::Float128 => QualType::FLOAT128,
+            TypeSpecKind::Float16 => QualType::FLOAT16,
+            TypeSpecKind::Fp16 => QualType::HALF,
             // [dcl.type.auto.deduct]/4 (clang
             // `err_decltype_auto_cannot_be_combined`).
             TypeSpecKind::DecltypeAuto if !ds.cv.is_empty() => {
@@ -249,12 +251,14 @@ impl Sema<'_, '_> {
                 | TypeSpecKind::Float
                 | TypeSpecKind::Double
                 | TypeSpecKind::Float128
+                | TypeSpecKind::Float16
         );
         if !ok {
             if !ds.invalid && !self.is_error_type(base) {
                 // clang `DeclSpec::getSpecifierName(TST_typename)`.
                 let name = match ds.base {
                     TypeSpecKind::Named => "type-name",
+                    TypeSpecKind::Fp16 => "half",
                     b => b.spelling(),
                 };
                 let msg = self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(name);
@@ -5550,6 +5554,23 @@ impl Sema<'_, '_> {
     /// `then_semi` says the `}` is followed by `;`: an unnamed class so
     /// followed is an anonymous struct/union ([class.union.anon]), which
     /// must be known before the definition's bits freeze.
+    /// A `[[no_unique_address]]` field of empty class type, a subobject
+    /// of zero size ([intro.object]/9) that leaves its class empty
+    /// ([meta.unary.prop] `is_empty`; clang `FieldDecl::isZeroSize`).
+    fn is_zero_size_field(&self, f: DeclId) -> bool {
+        let nua =
+            self.ast.decls.field(f).is_some_and(FieldData::no_unique_address) || self.has_nua(f);
+        nua && self
+            .ast
+            .decls
+            .get(f)
+            .ty()
+            .and_then(|t| self.ast.types.as_record(t))
+            .and_then(|d| self.ast.definition(d))
+            .and_then(|d| self.ast.decls.record(d))
+            .is_some_and(|x| x.defn.contains(DefinitionBits::EMPTY))
+    }
+
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
         let mut build = if self.classes.last().is_some_and(|c| c.record == r) {
@@ -5616,8 +5637,9 @@ impl Sema<'_, '_> {
             if anon_union {
                 bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
             }
-            if !(fd.is_some_and(|x| x.bit_width.is_some())
-                && self.ast.decls.get(f).name().is_empty())
+            if (fd.is_none_or(|x| x.bit_width.is_none())
+                || !self.ast.decls.get(f).name().is_empty())
+                && !self.is_zero_size_field(f)
             {
                 any_named = true;
             }

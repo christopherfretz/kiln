@@ -4,7 +4,6 @@
 // bits/charconv.h; <format>, <print>, <iostream>, 24 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): unknown type name '_Float16'
 _Float16 h = 1.5f16;
 static_assert(sizeof(_Float16) == 2);
 template<class T, class U> constexpr bool same = false;

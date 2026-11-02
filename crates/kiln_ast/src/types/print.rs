@@ -85,6 +85,21 @@ pub trait TypeNames {
     /// (spec/ast.md §9.3).
     fn write_value(&self, ty: QualType, value: ConstValueId, out: &mut String);
 
+    /// [`Self::write_value`] with its type shown (a literal suffix or a
+    /// cast; clang `TemplateArgument::print` with `IncludeType`).
+    fn write_value_typed(&self, ty: QualType, value: ConstValueId, out: &mut String) {
+        self.write_value(ty, value, out);
+    }
+
+    /// Whether argument `index` of template `template` (a template or one
+    /// of its specializations) prints with its type: the parameter is a
+    /// non-type parameter with a deduced type (clang
+    /// `TemplateParameterList::shouldIncludeTypeForArgument`).
+    fn arg_includes_type(&self, template: DeclId, index: usize) -> bool {
+        let _ = (template, index);
+        false
+    }
+
     /// Writes the spelling of identifier `sym`.
     fn write_symbol(&self, sym: Symbol, out: &mut String);
 
@@ -291,7 +306,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
 /// Renders template-argument list `l` as written (clang's
 /// `printTemplateArgumentList`: `<int, N>`), appending to `out`.
 pub fn write_arg_list(ctx: &TypeContext, names: &dyn TypeNames, l: ArgListId, out: &mut String) {
-    arg_list_with_scope(ctx, names, l, false, out);
+    arg_list_with_scope(ctx, names, l, false, None, out);
 }
 
 /// [`write_arg_list`] with every type argument's scope printed (clang
@@ -303,7 +318,19 @@ pub fn write_arg_list_scoped(
     l: ArgListId,
     out: &mut String,
 ) {
-    arg_list_with_scope(ctx, names, l, true, out);
+    arg_list_with_scope(ctx, names, l, true, None, out);
+}
+
+/// [`write_arg_list_scoped`] of the arguments of template (or
+/// specialization) `template` ([`write_arg_list_of`]).
+pub fn write_arg_list_scoped_of(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    template: DeclId,
+    l: ArgListId,
+    out: &mut String,
+) {
+    arg_list_with_scope(ctx, names, l, true, Some(template), out);
 }
 
 fn arg_list_with_scope(
@@ -311,6 +338,7 @@ fn arg_list_with_scope(
     names: &dyn TypeNames,
     l: ArgListId,
     scope: bool,
+    template: Option<DeclId>,
     out: &mut String,
 ) {
     let mut p = Printer {
@@ -326,8 +354,21 @@ fn arg_list_with_scope(
         diag_desugar: false,
         depth: 0,
     };
-    p.arg_list(l, false);
+    p.arg_list_prefix(l, false, usize::MAX, template, false);
     *out = p.out;
+}
+
+/// [`write_arg_list`] of the arguments of template (or specialization)
+/// `template`, whose values print with their type where its parameter
+/// asks for it ([`TypeNames::arg_includes_type`]).
+pub fn write_arg_list_of(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    template: DeclId,
+    l: ArgListId,
+    out: &mut String,
+) {
+    arg_list_with_scope(ctx, names, l, false, Some(template), out);
 }
 
 /// [`write_arg_list`] of the first `len` arguments of `l` (`<>` when
@@ -352,7 +393,7 @@ pub fn write_arg_list_prefix(
         diag_desugar: false,
         depth: 0,
     };
-    p.arg_list_prefix(l, false, len);
+    p.arg_list_prefix(l, false, len, None, false);
     *out = p.out;
 }
 
@@ -891,7 +932,7 @@ impl Printer<'_> {
                 }
                 self.decl(d, self.scope);
                 if let Some(args) = self.names.specialization_args(d) {
-                    self.arg_list(args, false);
+                    self.arg_list_prefix(args, false, usize::MAX, Some(d), false);
                 }
                 self.space_before_ph();
             }
@@ -1427,7 +1468,8 @@ impl Printer<'_> {
         } else {
             self.template_name(name, if self.scope { Qual::Fully } else { Qual::None });
         }
-        self.arg_list(args, false);
+        let template = self.ctx.template_decl(name);
+        self.arg_list_prefix(args, false, usize::MAX, template, false);
     }
 
     /// [`Printer::diag_desugar`]: `q` with its sugar looked through, down
@@ -1593,11 +1635,21 @@ impl Printer<'_> {
 
     /// clang's `printTemplateArgumentList` (`printTo`).
     fn arg_list(&mut self, l: ArgListId, is_pack: bool) {
-        self.arg_list_prefix(l, is_pack, usize::MAX);
+        self.arg_list_prefix(l, is_pack, usize::MAX, None, false);
     }
 
-    /// [`Self::arg_list`] of the first `len` arguments of `l`.
-    fn arg_list_prefix(&mut self, l: ArgListId, is_pack: bool, len: usize) {
+    /// [`Self::arg_list`] of the first `len` arguments of `l`; the
+    /// arguments of `template` when known, whose values print typed per
+    /// [`TypeNames::arg_includes_type`] (`pack_typed` for the elements of
+    /// a pack, which share one parameter).
+    fn arg_list_prefix(
+        &mut self,
+        l: ArgListId,
+        is_pack: bool,
+        len: usize,
+        template: Option<DeclId>,
+        pack_typed: bool,
+    ) {
         if self.depth >= MAX_DEPTH {
             self.push(if is_pack { "..." } else { "<...>" });
             return;
@@ -1608,15 +1660,28 @@ impl Printer<'_> {
             self.push("<");
         }
         let mut first = true;
-        for a in ctx.args(l).iter().take(len) {
+        for (i, a) in ctx.args(l).iter().take(len).enumerate() {
             let start;
+            let typed = if is_pack {
+                pack_typed
+            } else {
+                template.is_some_and(|t| self.names.arg_includes_type(t, i))
+            };
             match a.view() {
                 ArgView::Pack(inner) => {
                     if !ctx.args(inner).is_empty() && !first {
                         self.push(", ");
                     }
                     start = self.out.len();
-                    self.arg_list(inner, true);
+                    self.arg_list_prefix(inner, true, usize::MAX, None, typed);
+                }
+                ArgView::Value { ty, value } if typed => {
+                    if !first {
+                        self.push(", ");
+                    }
+                    start = self.out.len();
+                    let names = self.names;
+                    names.write_value_typed(ty, value, &mut self.out);
                 }
                 v => {
                     if !first {
