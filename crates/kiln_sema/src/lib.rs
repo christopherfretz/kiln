@@ -47,6 +47,7 @@ mod jump_scope;
 pub mod lambda;
 pub mod literal;
 mod literal_op;
+mod local_friend;
 pub mod lookup;
 pub mod names;
 pub mod new_delete;

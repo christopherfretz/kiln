@@ -28,6 +28,7 @@ use crate::declspec::{
     SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 use crate::init::{InitValue, Initializer};
+use crate::local_friend::LocalFriend;
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
 use crate::qualified_decl::QualifiedDecl;
@@ -1622,7 +1623,7 @@ impl Sema<'_, '_> {
 
     /// The innermost namespace (or the translation unit) enclosing the
     /// current context.
-    fn enclosing_namespace(&self) -> Option<DeclId> {
+    pub(crate) fn enclosing_namespace(&self) -> Option<DeclId> {
         let mut ns = self.ctx;
         for _ in 0..10_000 {
             if matches!(
@@ -2656,18 +2657,23 @@ impl Sema<'_, '_> {
             };
         // An invalid local-class friend redeclares nothing (clang returns
         // after `DiagnoseInvalidRedeclaration`).
-        let bad_local_friend = friend
-            && d.qualifier.is_none()
-            && d.op_name.is_none()
-            && dname
-                .as_ident()
-                .is_some_and(|sym| self.check_local_friend(ctx, sym, new_fn, d.name_loc()));
+        let local_friend = if friend && d.qualifier.is_none() {
+            self.check_local_friend(dname, new_fn, d.name_loc())
+        } else {
+            LocalFriend::NotLocal
+        };
+        let bad_local_friend = local_friend == LocalFriend::Invalid;
         invalid_redecl |= bad_local_friend;
         // An invalid declaration (an illegal storage class, an invalid
         // parameter) redeclares nothing either: clang checks it against no
         // previous declaration (`ActOnFunctionDeclarator`).
         let prev = if global_new_delete || deferred_friend || invalid_decl || bad_local_friend {
             None
+        } else if let LocalFriend::Redeclares(p) = local_friend
+            && !self.in_templated_class(Some(lexical))
+        {
+            // The block-scope declaration it redeclares ([class.friend]/11).
+            Some(p)
         } else if friend && d.qualifier.is_none() && self.in_templated_class(Some(lexical)) {
             // A friend of a templated class redeclares nothing until
             // instantiated (see `is_dependent_friend_fn`); a non-dependent
@@ -3267,6 +3273,15 @@ impl Sema<'_, '_> {
                 if p.type_loc.is_valid() && p.type_loc != p.loc && self.is_dependent_type(p.ty) {
                     self.type_spec_locs.insert(pd, p.type_loc);
                 }
+            }
+            // A block-scope function's, where the local-friend notes
+            // point (`check_local_friend`).
+            if p.type_loc.is_valid()
+                && p.type_loc != p.range.0
+                && self.kind_of(f) == DeclKind::Function
+                && self.in_local_scope()
+            {
+                self.type_spec_locs.insert(pd, p.type_loc);
             }
             if p.ref_loc.is_valid() && self.is_dependent_type(p.ty) {
                 self.ref_locs.insert(pd, p.ref_loc);
@@ -4701,68 +4716,6 @@ impl Sema<'_, '_> {
     }
 
     // -- function definitions ----------------------------------------------------
-
-    /// [class.friend]/11: an unqualified friend function declared in a
-    /// local class must redeclare a function declared in the innermost
-    /// enclosing non-class (block) scope; "no matching function found in
-    /// local scope" otherwise (clang `DiagnoseInvalidRedeclaration` with
-    /// `IsLocalFriend`). A function of namespace `ns` with the friend's
-    /// signature is suggested, as clang's typo correction does. Returns
-    /// whether the friend is invalid.
-    fn check_local_friend(&mut self, ns: DeclId, name: Symbol, new: NewFn, loc: Loc) -> bool {
-        let Some(c) = self.current_class() else { return false };
-        let record = c.record;
-        if !self.is_local_class(record) {
-            return false;
-        }
-        let Some(scope) =
-            self.scopes.iter().rev().find(|s| !s.is_transparent() && s.kind != ScopeKind::Record)
-        else {
-            return false;
-        };
-        if !scope.is_local() {
-            return false;
-        }
-        let found: Vec<DeclId> = scope
-            .locals
-            .iter()
-            .filter(|&&(s, x, ns)| {
-                s == name && ns == Ns::Ordinary && {
-                    let k = self.kind_of(x);
-                    k.payload() == kiln_ast::decl::PayloadClass::Function
-                        || k == DeclKind::FunctionTemplate
-                }
-            })
-            .map(|&(_, x, _)| x)
-            .collect();
-        if self.pick_prev_function(&found, new).is_some() {
-            return false;
-        }
-        let in_ns: Vec<DeclId> = self
-            .ast
-            .lookup_local(ns, DeclName::ident(name))
-            .iter_with_flags()
-            .filter(|&(x, fl)| {
-                !fl.contains(LookupFlags::ADL_ONLY) && self.kind_of(x) != DeclKind::UsingShadow
-            })
-            .map(|(x, _)| x)
-            .collect();
-        let msg = match self.pick_prev_function(&in_ns, new) {
-            Some(p) => {
-                let qual = format!("::{}", self.qualified_decl_name(p));
-                let note = self
-                    .diag(DiagId::note_entity_declared_here, self.ast.decls.get(p).loc())
-                    .arg(format!("'{qual}'"));
-                self.diag(DiagId::sema_no_matching_local_friend_suggest, loc)
-                    .arg(sym_str(self, name))
-                    .arg(qual)
-                    .with_note(note)
-            }
-            None => self.diag(DiagId::sema_no_matching_local_friend, loc),
-        };
-        self.emit(msg);
-        true
-    }
 
     /// [except.spec]/5 at the definition of a templated class
     /// (clang `CheckEquivalentExceptionSpec` from `MergeFunctionDecl`,
