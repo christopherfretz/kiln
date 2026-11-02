@@ -93,7 +93,12 @@ panic and never silently wrong IR.
 ### 2a. Emission order (WP-172)
 Function and global positions in the module are **creation order** (the
 first `get_fn`/`get_gvar` of a name creates its declaration); a later
-definition fills the existing declaration in place. Emission order still
+definition fills the existing declaration in place. A declaration whose
+mangled name already names a function of the same type is that function
+(clang `GetOrCreateLLVMFunction`): a runtime function codegen declared
+first (`__cxa_allocate_exception` for a `throw`) and a user's
+`extern "C"` redeclaration of it in another namespace ([dcl.link]/7)
+share one symbol, never a renamed `name.1` copy. Emission order still
 matters, because it decides where declarations created inside a body
 land, the order in which comdats are created (at definition), and
 nounwind inference: clang's `TryMarkNoThrow` marks a definition
@@ -692,7 +697,11 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
     ignored.
 - **Member-expression folds** (`ScalarExprEmitter::VisitMemberExpr`): an
   integral or enumeration `MemberExpr` that the Oven folds becomes a
-  constant, after the object is evaluated for side effects.
+  constant, after the object is evaluated for side effects. A `const`
+  non-volatile static data member named this way (`this->b.w`) folds to
+  its variable's constant initializer even when the object does not fold
+  (clang `tryToConvertMemberExprToDeclRefExpr`): the read is not an
+  odr-use ([basic.def.odr]/5) and needs no out-of-line definition.
 - **Pointers to members** (`memptr.rs`; Itanium §2.3, the ARM variant on
   AArch64; see spec/abi.md §8.6):
   - `&C::m` constants and Oven `Scalar::MemberPtr` constants, with
