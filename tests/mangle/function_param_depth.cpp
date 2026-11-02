@@ -72,3 +72,13 @@ void use() {
   r6(1);
   lambdas();
 }
+// Deduction against a target type substitutes the signature alone
+// ([temp.deduct.funcaddr], [temp.explicit]/7): `t` there is a substituted
+// parameter, not the pattern's.
+template <class T> void xi(T t, decltype(t) u) {}
+template void xi<int>(int, int);
+template <class T> void xn(T t, void (*p)(decltype(t))) {}
+template void xn(long, void (*)(long));
+template <> void xi<char>(char, char) {}
+void (*pxi)(short, short) = xi<short>;
+void (*pxi2)(unsigned, unsigned) = &xi;

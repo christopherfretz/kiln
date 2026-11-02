@@ -676,6 +676,14 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             if self.levels_retained(self.sema.ctx_template_levels(parent)) {
                 return Ok(d);
             }
+            // A parameter of the pattern named in its own signature
+            // (`decltype(t)`) while only the function type is substituted
+            // (deduction against a target type, [temp.deduct.funcaddr]):
+            // a substituted parameter, as clang's
+            // `TransformFunctionTypeParams` makes.
+            if node.kind() == DeclKind::ParmVar {
+                return self.nested_prototype_param(d, loc);
+            }
             return self.unimplemented("reference to a member of a dependent context", loc);
         }
         if self.sema.kind_of(inst_parent) == DeclKind::CXXRecord {
