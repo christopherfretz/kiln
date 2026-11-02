@@ -5,7 +5,7 @@
 //! written).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeFlags, TypeView};
+use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeFlags, TypeOfOperand, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -340,6 +340,17 @@ impl Substituter<'_, '_, '_> {
                 self.sema.exit_decltype(e.ok());
                 let e = e?;
                 self.sema.act_on_decltype(e, loc, loc).ok_or(SubstFail)
+            }
+            // GNU `typeof` (spec/sema.md §5.8).
+            TypeView::TypeOf { operand: TypeOfOperand::Type(t), unqual, .. } => {
+                let t = self.ty(t, loc)?;
+                Ok(self.sema.ast.types.typeof_type(t, unqual))
+            }
+            TypeView::TypeOf { operand: TypeOfOperand::Expr(e), unqual, .. } => {
+                self.sema.enter_unevaluated();
+                let e = self.expr(e);
+                self.sema.exit_unevaluated();
+                self.sema.act_on_typeof_expr(e?, loc, unqual).ok_or(SubstFail)
             }
             TypeView::Auto { keyword, deduced, concept, args, pack } => match deduced {
                 // Deduced from a type-dependent initializer

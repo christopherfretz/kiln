@@ -73,16 +73,6 @@ impl Bef {
     }
 }
 
-/// Diagnostics a range-based `for` step holds back (`Sema::diag_capture`).
-#[derive(Debug, Default)]
-pub(crate) struct HeldDiags {
-    /// The instantiation depth when the step began.
-    pub(crate) depth: usize,
-    /// Each diagnostic, with whether it already carries its context notes
-    /// (raised deeper than `depth`).
-    pub(crate) diags: Vec<(Diag, bool)>,
-}
-
 /// clang's `ForRangeStatus`.
 enum Status {
     Success,
@@ -135,25 +125,24 @@ impl Sema<'_, '_> {
     // -- diagnostics capture ----------------------------------------------------
 
     /// Runs `f` with its diagnostics stash back; returns them in order.
-    fn capturing<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> (R, Vec<(Diag, bool)>) {
-        let held = HeldDiags { depth: self.inst.stack.len(), diags: Vec::new() };
-        let old = self.diag_capture.replace(Some(held));
+    fn capturing<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> (R, Vec<Diag>) {
+        let old = self.diag_capture.replace(Some((self.inst.stack.len(), Vec::new())));
         let r = f(self);
-        let stash = self.diag_capture.replace(old).unwrap_or_default().diags;
+        let stash = self.diag_capture.replace(old).map(|c| c.1).unwrap_or_default();
         (r, stash)
     }
 
     /// Emits `stash`, the last with `notes` attached (clang's standalone
     /// notes continue the diagnostic before them).
-    fn release(&self, mut stash: Vec<(Diag, bool)>, notes: Vec<Diag>) {
-        if let Some((mut last, ctx)) = stash.pop() {
+    fn release(&self, mut stash: Vec<Diag>, notes: Vec<Diag>) {
+        if let Some(mut last) = stash.pop() {
             for n in notes {
                 last = last.with_note(n);
             }
-            stash.push((last, ctx));
+            stash.push(last);
         }
-        for (d, ctx) in stash {
-            self.emit_held(d, ctx);
+        for d in stash {
+            self.emit(d);
         }
     }
 

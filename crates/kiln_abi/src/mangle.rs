@@ -2109,6 +2109,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.dependent_template_spec(nns, name, args);
             }
             TypeView::DependentDecltype(p) => self.dependent_decltype(ast.types.profile_expr(p)),
+            // A type-dependent GNU `typeof(e)` (clang: a bare vendor name).
+            TypeView::TypeOf { .. } => self.out.push_str("u6typeof"),
             // A dependent transform: `u <vendor builtin name> I <base> E`.
             TypeView::UnaryTransform { kind, base, .. } => {
                 self.out.push('u');

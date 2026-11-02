@@ -12,9 +12,11 @@
 
 use kiln_ast::consts::{ConstStore, PrintOptions, Scalar};
 use kiln_ast::types::RecordLayout;
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, ReflectionId, StmtId};
 use kiln_diag::Diag;
-use kiln_oven::{Budget, EvalContext, EvalFailure, Oven, SemaBridge, Subobject, SubobjectId};
+use kiln_oven::{
+    Budget, EvalContext, EvalFailure, MetaOp, Note, Oven, SemaBridge, Subobject, SubobjectId,
+};
 use kiln_source::{Loc, Span};
 
 use crate::Sema;
@@ -92,6 +94,39 @@ impl SemaBridge for Bridge<'_, '_, '_> {
     fn diag(&mut self, d: Diag) {
         d.emit(self.sema.diags);
     }
+
+    // Reflection (WP-267 spike): sema's halves are in `reflect.rs`.
+    fn meta_intrinsic(&self, f: DeclId) -> Option<MetaOp> {
+        self.sema.meta_intrinsic_of(f)
+    }
+
+    fn reflect_type_of(&mut self, r: ReflectionId, loc: Loc) -> Result<ReflectionId, Vec<Note>> {
+        self.sema.reflect_type_of(r, loc)
+    }
+
+    fn reflect_name(&mut self, r: ReflectionId, loc: Loc) -> Result<ConstValueId, Vec<Note>> {
+        self.sema.reflect_name(r, loc)
+    }
+
+    fn reflect_members(
+        &mut self,
+        r: ReflectionId,
+        loc: Loc,
+        oven: &mut Oven,
+    ) -> Result<Vec<ReflectionId>, Vec<Note>> {
+        self.sema.reflect_members(r, loc, oven)
+    }
+
+    fn define_member(
+        &mut self,
+        cls: ReflectionId,
+        ty: ReflectionId,
+        name: &str,
+        loc: Loc,
+        oven: &mut Oven,
+    ) -> Result<ReflectionId, Vec<Note>> {
+        self.sema.define_member(cls, ty, name, loc, oven)
+    }
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -160,13 +195,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         {
             return None;
         }
-        debug_assert!(self.oven.is_none(), "ensure_body outside an evaluation");
-        let lent = std::mem::replace(oven, Oven::new(oven.budget()));
-        self.oven = Some(lent);
-        self.instantiate_function_definition(f, poi);
-        if let Some(o) = self.oven.take() {
-            *oven = o;
-        }
+        self.lend_oven(oven, |s| s.instantiate_function_definition(f, poi));
         self.defined_body(f)
     }
 

@@ -17,12 +17,13 @@ pub enum Std {
     Cxx20,
     /// C++23: `\u{...}` and `\N{...}`.
     Cxx23,
-    /// C++26: `^^`, `[:`, `:]` (P2996).
+    /// C++26 (with `reflection`: `^^`, `[:`, `:]`, P2996).
     Cxx26,
 }
 
 /// Options fixed for the lifetime of a [`crate::Lexer`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent command-line switches")]
 pub struct LexOptions {
     /// Language standard. Default: [`Std::Cxx26`].
     pub std: Std,
@@ -38,12 +39,22 @@ pub struct LexOptions {
     /// instead of treating them as whitespace. Default: `false`. Can be
     /// changed later with [`crate::Lexer::set_keep_comments`].
     pub keep_comments: bool,
+    /// `-freflection` (P2996): lex `^^`, `[:` and `:]` as single tokens
+    /// (C++26 only). Default: `false`; like clang and GCC 16, the tokens
+    /// exist only in reflection mode, so `^^` is otherwise `^` `^`.
+    pub reflection: bool,
 }
 
 impl LexOptions {
     /// Options for `std` with every other field at its default.
     pub const fn new(std: Std) -> Self {
-        LexOptions { std, trigraphs: false, dollar_in_identifiers: true, keep_comments: false }
+        LexOptions {
+            std,
+            trigraphs: false,
+            dollar_in_identifiers: true,
+            keep_comments: false,
+            reflection: false,
+        }
     }
 }
 

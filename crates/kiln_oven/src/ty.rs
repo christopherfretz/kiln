@@ -45,6 +45,10 @@ pub(crate) enum TyKind {
     MemPtr {
         func: bool,
     },
+    /// `std::meta::info` (WP-267 spike): a `ReflectionId` index stored as
+    /// 8 plain bytes, 0 for the null reflection; frozen as
+    /// `Scalar::Reflection`.
+    Reflection,
     /// Incomplete or not representable in M2 (member pointers,
     /// vectors, ...): it has no storage the VM can touch.
     Opaque,
@@ -110,6 +114,13 @@ pub(crate) struct Types {
     /// differently qualified elements (`const E[3]`, `E[3]`) are one
     /// type, as clang's `getUnqualifiedArrayType` makes them.
     const_arrays: FxHashMap<(OTy, u64), OTy>,
+    /// Class slots interned while the class had no definition or was
+    /// still being defined (`S*` in a constant expression inside `S`'s
+    /// member-specification): kept `Opaque` and rebuilt in place once
+    /// the class is complete ([`Types::refresh`]), so pointers already
+    /// naming the slot stay valid and no layout of an incomplete class
+    /// is computed or cached (WP-267).
+    provisional: Vec<OTy>,
 }
 
 /// Evaluates an integral constant already checked by sema (bit-field
@@ -257,6 +268,9 @@ impl Types {
     pub fn intern(&mut self, bridge: &mut dyn SemaBridge, q: QualType) -> OTy {
         let c = bridge.ast().types.canonical(q).without_quals();
         if let Some(&t) = self.map.get(&c) {
+            if !self.provisional.is_empty() && self.provisional.contains(&t) {
+                self.upgrade(bridge, t);
+            }
             return t;
         }
         let t = self.build(bridge, c);
@@ -356,6 +370,7 @@ impl Types {
                     BuiltinType::Void => TyKind::Void,
                     BuiltinType::Bool => TyKind::Bool,
                     BuiltinType::NullPtr => TyKind::NullPtr,
+                    BuiltinType::MetaInfo => TyKind::Reflection,
                     BuiltinType::Char => TyKind::Int { width: 8, signed: target.char_signed },
                     BuiltinType::WChar => {
                         TyKind::Int { width: (size * 8) as u8, signed: target.wchar_signed }
@@ -488,8 +503,62 @@ impl Types {
         }
     }
 
-    fn record(&mut self, bridge: &mut dyn SemaBridge, c: QualType, d: DeclId) -> OTy {
+    /// Rebuilds every provisional class slot whose class is now
+    /// complete; called before each evaluation (a class completes
+    /// between evaluations, or inside one through a lent Oven).
+    pub fn refresh(&mut self, bridge: &mut dyn SemaBridge) {
+        let mut i = 0;
+        while i < self.provisional.len() {
+            let t = self.provisional[i];
+            if self.upgrade(bridge, t) {
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    /// Rebuilds provisional slot `t` in place if its class is complete
+    /// now; whether it did (it is then no longer provisional).
+    fn upgrade(&mut self, bridge: &mut dyn SemaBridge, t: OTy) -> bool {
+        let c = self.info(t).q;
         let ast = bridge.ast();
+        let Some(d) = ast.types.as_record(c) else { return false };
+        if Self::incomplete(ast, d) {
+            return false;
+        }
+        self.provisional.retain(|&p| p != t);
+        self.record_into(bridge, c, d, Some(t));
+        true
+    }
+
+    /// Whether class `d` has no definition or is still being defined.
+    fn incomplete(ast: &Ast, d: DeclId) -> bool {
+        ast.definition(d).is_none_or(|def| {
+            ast.decls
+                .record(def)
+                .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::BEING_DEFINED))
+        })
+    }
+
+    fn record(&mut self, bridge: &mut dyn SemaBridge, c: QualType, d: DeclId) -> OTy {
+        self.record_into(bridge, c, d, None)
+    }
+
+    /// Builds class type `c` (declaration `d`), into the reserved slot
+    /// `slot` when one is given (an upgraded provisional slot).
+    fn record_into(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        c: QualType,
+        d: DeclId,
+        slot: Option<OTy>,
+    ) -> OTy {
+        let ast = bridge.ast();
+        if Self::incomplete(ast, d) {
+            let t = self.simple(c, 0, 1, TyKind::Opaque);
+            self.provisional.push(t);
+            return t;
+        }
         let Some(def) = ast.definition(d) else {
             return self.simple(c, 0, 1, TyKind::Opaque);
         };
@@ -537,7 +606,14 @@ impl Types {
             })
             .collect();
         // Reserve the slot first so self-referential pointers terminate.
-        let me = self.simple(c, size, align.max(1), TyKind::Opaque);
+        let me = match slot {
+            Some(t) => {
+                let i = &mut self.infos[t.0 as usize];
+                (i.size, i.align) = (size, align.max(1));
+                t
+            }
+            None => self.simple(c, size, align.max(1), TyKind::Opaque),
+        };
         self.map.insert(c, me);
         let mut fields = Vec::with_capacity(fdecls.len());
         let (mut has_union, mut has_ptr) = (union, false);

@@ -22,6 +22,7 @@ use crate::{Oven, SemaBridge};
 mod bitcast;
 mod builtins;
 mod life;
+mod meta;
 mod virt;
 
 pub(crate) use builtins::BiFault;
@@ -455,6 +456,8 @@ impl Oven {
                 None => 0,
             };
             Ok(u128::from(p))
+        } else if aux & 0xff == crate::kbc::bi::META {
+            self.exec_meta(b, pc, fb, aux >> 8, (a, bb, c), (t1, t2))
         } else {
             self.builtin(b.ast(), aux, a, bb, c, t1, t2)
         }
@@ -2075,7 +2078,9 @@ impl Oven {
             TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) => {
                 (!s.is_init(abs, value_len(info.size, info.kind))).then_some((field, t))
             }
-            TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } => Some((field, t)),
+            TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } | TyKind::Reflection => {
+                Some((field, t))
+            }
             TyKind::Array { elem, n } => {
                 let es = self.types.size(elem);
                 (0..n).find_map(|i| {

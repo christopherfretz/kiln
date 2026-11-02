@@ -20,6 +20,9 @@ sema_spaceship_narrowing_const = Error (2) "argument to 'operator<=>' evaluates 
 sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be narrowed from type {0} to {1}";
 sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";
 sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
+sema_splice_not_constant = Error (0) "splice operand must be a constant expression";
+sema_splice_not_info = Error (1) "splice operand of type {0} is not a reflection";
+sema_splice_not_type = Error (0) "splice in a type position does not designate a type";
 sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
 sema_standalone_tag_qualifier = Error (1) "forward declaration of {0:class|struct|union|enum} cannot have a nested name specifier";
 sema_statement_requires_integer = Error (1) "statement requires expression of integer type ({0} invalid)";
@@ -117,6 +120,7 @@ sema_udl_no_operator = Error (2) "no matching literal operator for call to {0} w
 sema_udl_no_operator_raw = Error (3) "no matching literal operator for call to {0} with argument of type {1} or {2}, and no matching literal operator template";
 sema_udl_no_operator_string = Error (3) "no matching literal operator for call to {0} with arguments of types {1} and {2}, and no matching literal operator template";
 sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
+sema_undeclared_use = Error (1) "use of undeclared '{0}'";
 sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
 // ----- WP-220 (-Wundefined-var-template; clang `InstantiateVariableDefinition`)
 sema_undefined_var_template = Warning [UndefinedVarTemplate] (1) "instantiation of variable '{0}' required here, but no definition is available";
@@ -182,6 +186,7 @@ sema_va_start_type_is_undefined = Warning [Varargs] (1) "passing {0:an object th
 sema_var_partial_spec_redecl_scope = Error (2) "variable template partial specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_var_spec_not_in_enclosing_ns = Error (2) "variable template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_var_template_spec_type = Error (4) "type {2} of {0:explicit instantiation|explicit specialization|partial specialization|redeclaration} of '{1}' does not match expected type {3}";
+sema_variable_sized_type_in_struct = ExtWarn [GnuVariableSizedTypeNotAtEnd] (2) "field '{0}' with variable sized type {1} not at the end of a struct or class is a GNU extension";
 sema_vector_element_sizes_not_equal = WarningError [VecElemSize] (2) "vector operands do not have the same elements sizes ({0} and {1})";
 sema_vector_implicit_truncation = Error (3) "cannot convert between {0:scalar|vector} type {1} and vector type {2} as implicit conversion would cause truncation";
 sema_vector_invalid_element_type = Error (1) "invalid vector element type {0}";
@@ -207,3 +212,4 @@ sema_vla_unsupported = Error (0) "variable length arrays are not supported yet";
 sema_void_only_param = Error (0) "'void' must be the first and only parameter if specified";
 sema_void_var = Error (1) "variable has incomplete type {0}";
 sema_zero_array_size_sfinae = Error (0) "zero-length arrays are not permitted in C++";
+sema_zero_length_array = Extension [ZeroLengthArray] (0) "zero size arrays are an extension";

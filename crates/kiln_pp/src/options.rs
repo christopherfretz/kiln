@@ -73,6 +73,8 @@ pub struct PpOptions {
     /// Fixed `__TIMESTAMP__` spelling (without quotes). `None` uses the
     /// modification time of the file if known, else `??? ??? ?? ??:??:?? ????`.
     pub timestamp: Option<String>,
+    /// `-freflection`: lex the P2996 tokens `^^`, `[:`, `:]` (C++26).
+    pub reflection: bool,
 }
 
 impl PpOptions {
@@ -90,6 +92,7 @@ impl PpOptions {
             max_include_depth: 200,
             reproducible_time: None,
             timestamp: None,
+            reflection: false,
         }
     }
 
@@ -99,6 +102,7 @@ impl PpOptions {
         o.trigraphs = self.trigraphs;
         o.dollar_in_identifiers = self.dollar_in_identifiers;
         o.keep_comments = self.keep_comments || self.keep_macro_comments;
+        o.reflection = self.reflection;
         o
     }
 

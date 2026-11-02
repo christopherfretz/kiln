@@ -218,7 +218,7 @@ impl Sema<'_, '_> {
         self.builder().expression_trait_expr(t, e, value, QualType::BOOL, loc, rparen)
     }
 
-    fn expr_has_error(&self, e: ExprId) -> bool {
+    pub(crate) fn expr_has_error(&self, e: ExprId) -> bool {
         self.ast.exprs.get(e).deps().contains(ExprDeps::ERROR)
     }
 
