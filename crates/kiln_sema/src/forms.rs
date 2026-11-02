@@ -111,28 +111,44 @@ impl Sema<'_, '_> {
         ics
     }
 
-    /// The number of scalar subobjects of aggregate `ty` that brace
-    /// elision can reach; `None` when unbounded or unknown.
-    pub(crate) fn scalar_leaves(&self, ty: QualType) -> Option<u64> {
+    /// The most initializer-clauses a braced-init-list for aggregate `ty`
+    /// can hold once brace elision is applied ([dcl.init.aggr]/16):
+    /// the sum over its elements (bases, then fields; the first member
+    /// of a union) of [`Self::element_list_capacity`]. `None` when
+    /// unbounded or unknown.
+    pub(crate) fn aggregate_list_capacity(&self, ty: QualType) -> Option<u64> {
         if self.ast.types.is_array(ty) {
             let n = self.ast.types.array_size(ty)?;
             let elem = self.ast.types.element(ty)?;
-            return self.scalar_leaves(elem)?.checked_mul(n);
+            return self.element_list_capacity(elem)?.checked_mul(n);
         }
         let Some(r) = self.ast.types.as_record(ty) else { return Some(1) };
         let def = self.ast.definition(r).unwrap_or(r);
         let union = self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union);
-        let fields = self.init_fields(def);
         let mut total: u64 = 0;
-        for f in fields {
-            let ft = self.ast.decls.get(f).ty()?;
-            let n = self.scalar_leaves(ft)?;
+        for b in self.init_bases(def) {
+            total = total.checked_add(self.element_list_capacity(b)?)?;
+        }
+        for f in self.init_fields(def) {
+            let n = self.element_list_capacity(self.ast.decls.get(f).ty()?)?;
             if union {
                 return Some(n);
             }
             total = total.checked_add(n)?;
         }
         Some(total)
+    }
+
+    /// The most initializer-clauses one element of type `ty` can take
+    /// from an enclosing list: a scalar or non-aggregate class takes
+    /// one; a subaggregate takes its own elements by brace elision, but
+    /// always at least one (a braced list or an expression of its type),
+    /// so an empty class or `std::array<T, 0>` member still takes `{}`.
+    fn element_list_capacity(&self, ty: QualType) -> Option<u64> {
+        if !self.is_aggregate(ty) {
+            return Some(1);
+        }
+        Some(self.aggregate_list_capacity(ty)?.max(1))
     }
 
     /// Reports a braced-init-list argument for the ellipsis of a
