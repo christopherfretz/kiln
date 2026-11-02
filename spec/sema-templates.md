@@ -264,10 +264,24 @@ unambiguous type-id and then a closing `>` before `;`
 "non-template declaration found by name lookup" at the declaration
 (`Sema::potential_template_name`,
 `Sema::diagnose_expr_intended_as_template_name`). The expression becomes
-an error, and a following `(args)` is still parsed. In C++20 the same
+an error, and a following `(args)` is still parsed. The expression is
+also invalid as clang's `ExprError` (`Parser::expr_invalid`): the rest of
+a `= initializer` is skipped to the next declarator's `,` or the `;`, and
+an expression statement to its `;`, with no "expected ';'" for a
+following `{}` (`int q = p<long>(3) + v<S>{};`). In C++20 the same
 spelling on an overload set of functions is the P0846 reading above.
-Clang's C++17 `ext_adl_only_template_id` warning (a template found only
-by ADL) is not implemented. Tests:
+Before C++20 a call `f<args>(…)` whose `f` ordinary lookup did not find
+(only argument-dependent lookup found its templates) is clang's
+extension warning "use of function template name with no prior
+declaration in function call with explicit template arguments is a C++20
+extension" (`sema_ext_adl_only_template_id`, `-Wc++20-extensions`) at the
+name, after the call's own diagnostics, also when overload resolution
+fails (clang's `ActOnCallExpr` check of the callee). A dependent call
+warns at the definition and again per instantiation (`per_instantiation`,
+spec/diag.md §7.4); a non-dependent one in a template once. A call where
+ADL finds no template is an undeclared identifier with no warning.
+Tests: `temp.names/adl-only-template-id-cxx17.cpp`,
+`temp.names/non-template-followed-by-args-recovery.cpp`,
 `temp.names/non-template-followed-by-args-cxx17.cpp`,
 `temp.names/non-template-followed-by-args.cpp`.
 

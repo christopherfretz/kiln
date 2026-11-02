@@ -2799,7 +2799,18 @@ impl Parser<'_, '_> {
         };
         // The initializer, with its conversions, is potentially evaluated.
         let quiet = self.s.enter_var_initializer(v);
+        let outer_invalid = std::mem::replace(&mut self.expr_invalid, false);
         let init = self.parse_initializer(d.init_style, d.is_function_declarator());
+        // clang's `ParseDeclarationAfterDeclaratorAndAttributes`: an
+        // invalid `= expression` (`ExprError`, `expr_invalid`) skips to
+        // the next declarator's `,` or the `;`, with no "expected ';'"
+        // for what is left of it (`int q = 1 + v<S>{};`).
+        if std::mem::replace(&mut self.expr_invalid, outer_invalid)
+            && d.init_style == Some(InitStyle::C)
+            && matches!(init, Ok(Some(Initializer::Expr(_))))
+        {
+            self.skip_until(&[Punct::Comma], true, false);
+        }
         self.s.act_on_exit_declarator_scope(entered);
         let r = self.finish_declarator_initializer(d, v, init);
         self.s.exit_var_initializer(quiet);
