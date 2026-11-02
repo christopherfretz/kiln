@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::types::UnaryTransformKind;
-use kiln_ast::{DeclId, ExprId, NnsId};
+use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::LiteralOptions;
 use kiln_lex::{LexOptions, Punct, Std, TokFlags, TokKind, Token};
@@ -1106,11 +1106,15 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         lo
     }
 
-    /// The index of the `::` when a `decltype ( expression ) ::` starts
-    /// at token `i` ([expr.prim.id.qual]: a *computed-type-specifier* as
-    /// the first component of a nested-name-specifier). `decltype(auto)`
-    /// is never one.
+    /// The index of the `::` when a `decltype ( expression ) ::` or a
+    /// pack-index-specifier `T ... [ expression ] ::` starts at token `i`
+    /// ([expr.prim.id.qual]: a *computed-type-specifier* as the first
+    /// component of a nested-name-specifier; [dcl.type.pack.index]).
+    /// `decltype(auto)` is never one.
     pub(crate) fn decltype_scope_end(&self, i: usize) -> Option<usize> {
+        if self.ident_of(self.tok_at(i)).is_some() {
+            return self.pack_index_scope_end(i);
+        }
         if self.kw_of(self.tok_at(i)) != Some(Kw::Decltype)
             || self.tok_at(i + 1).kind != TokKind::Punct(Punct::LParen)
             || (self.kw_of(self.tok_at(i + 2)) == Some(Kw::Auto)
@@ -1119,6 +1123,19 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             return None;
         }
         let after = self.skip_balanced(i + 1)?;
+        (self.tok_at(after).kind == TokKind::Punct(Punct::ColonColon)).then_some(after)
+    }
+
+    /// [`Parser::decltype_scope_end`] for `T ... [ expression ] ::` with
+    /// `T` a type name (C++26 [dcl.type.pack.index]).
+    fn pack_index_scope_end(&self, i: usize) -> Option<usize> {
+        if self.tok_at(i + 1).kind != TokKind::Punct(Punct::Ellipsis)
+            || self.tok_at(i + 2).kind != TokKind::Punct(Punct::LSquare)
+            || !matches!(self.scan_name(i), Some((e, NameClass::Type(..), _)) if e == i + 1)
+        {
+            return None;
+        }
+        let after = self.skip_balanced(i + 2)?;
         (self.tok_at(after).kind == TokKind::Punct(Punct::ColonColon)).then_some(after)
     }
 
@@ -1157,7 +1174,11 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             return true;
         }
         let loc = self.loc();
-        let (_, ty) = self.parse_decltype_specifier();
+        let ty = if self.ident().is_some() {
+            self.parse_pack_index_scope(loc)
+        } else {
+            self.parse_decltype_specifier().1
+        };
         if !self.at(Punct::ColonColon) {
             return false;
         }
@@ -1165,6 +1186,25 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.decltype_scope =
             Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
         true
+    }
+
+    /// At a `T ... [ expression ] ::` ([`Parser::pack_index_scope_end`]),
+    /// parses the pack-index-specifier up to the `::`. `None` after an
+    /// error.
+    fn parse_pack_index_scope(&mut self, loc: Loc) -> Option<QualType> {
+        let Some((_, NameClass::Type(ty, d), name)) = self.scan_name(self.pos) else {
+            return None;
+        };
+        self.bump();
+        self.s.mark_type_referenced(d);
+        self.s.check_type_name_access(name, None, d, loc);
+        match self.parse_pack_index(loc) {
+            Ok(Some((ellipsis, index, _))) => {
+                let ty = self.s.act_pack_indexing_type_named(ty, name, loc, ellipsis, index);
+                (!self.s.is_error_type(ty)).then_some(ty)
+            }
+            _ => None,
+        }
     }
 
     /// The index of the last `::` of the qualified name at token `i`
@@ -1205,7 +1245,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         match ast.decls.get(q).kind() {
             DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => true,
             DeclKind::Typedef | DeclKind::TypeAlias => {
-                let ty = ast.decls.get(q).ty().unwrap_or(kiln_ast::QualType::ERROR);
+                let ty = ast.decls.get(q).ty().unwrap_or(QualType::ERROR);
                 ast.types.as_record(ty).is_some_and(|r| {
                     ast.definition(r).is_none() && ast.spec_info(ast.first(r)).is_some()
                 })
@@ -1509,7 +1549,7 @@ pub(crate) fn is_template_class(c: NameClass) -> bool {
 /// A class or alias template specialization scans as a type.
 fn type_if_args(c: NameClass) -> NameClass {
     match c {
-        NameClass::TypeTemplate(d) => NameClass::Type(kiln_ast::QualType::DEPENDENT, d),
+        NameClass::TypeTemplate(d) => NameClass::Type(QualType::DEPENDENT, d),
         c => c,
     }
 }

@@ -70,7 +70,7 @@ Columns:
 
 | Paper | Feature | `__cpp_*` macro (kiln / clang 22) | Status | Corpus tests | Notes |
 |---|---|---|---|---|---|
-| P2662R3 | Pack indexing | `__cpp_pack_indexing` 202311L / 202311L | done | `conformance/templates/packs/temp.variadic-pack-index-expr.cpp`<br>`conformance/templates/packs/temp.variadic-pack-index-type.cpp` | |
+| P2662R3 | Pack indexing | `__cpp_pack_indexing` 202311L / 202311L | done | `conformance/templates/packs/temp.variadic-pack-index-expr.cpp`<br>`conformance/templates/packs/temp.variadic-pack-index-type.cpp`<br>`conformance/dcl.type.pack.index/nested-name-specifier.cpp` | |
 | P2169R4 | Placeholder variables `_` | `__cpp_placeholder_variables` 202306L / 202306L | done | `conformance/basic.scope.scope/p2169-probe.cpp`<br>`conformance/basic.scope.scope/p2169-placeholder.cpp`<br>`conformance/basic.scope.scope/p2169-placeholder-diags.cpp`<br>`conformance/basic.scope.scope/p2169-placeholder-cxx23.cpp` | WP-356. |
 | P2573R2 | `= delete("reason")` | `__cpp_deleted_function` 202403L / 202403L | done | `conformance/dcl.fct.def.delete/redeclaration.cpp`<br>`conformance/dcl.fct.def.delete/templates.cpp`<br>`conformance/dcl.fct.def.delete/uses.cpp` | |
 | P2741R3 | User-generated `static_assert` messages | `__cpp_static_assert` 202306L / 202306L | done | `conformance/dcl.pre/p2741-probe.cpp`<br>`conformance/dcl.pre/p2741-static-assert-message.cpp`<br>`conformance/dcl.pre/p2741-static-assert-message-ok.cpp`<br>`conformance/dcl.pre/p2741-static-assert-message-diags.cpp`<br>`conformance/dcl.pre/p2741-static-assert-message-cxx23.cpp` | WP-356; the message is evaluated by the Oven. Diagnostics follow clang 22 (`requires: clang>=22`). |

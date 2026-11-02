@@ -2103,6 +2103,18 @@ impl Parser<'_, '_> {
         };
         self.s.check_type_name_access(name, q, d, id_loc);
         let ty = self.named_type(ty, d);
+        // `Ts...[i]` (C++26 [dcl.type.pack.index]: a computed-type-specifier
+        // is a class-or-decltype).
+        let ty = match self.parse_pack_index(id_loc) {
+            Ok(Some((ellipsis, index, _))) => {
+                self.s.act_pack_indexing_type_named(ty, name, id_loc, ellipsis, index)
+            }
+            Ok(None) => ty,
+            Err(()) => return None,
+        };
+        if self.s.is_error_type(ty) {
+            return None;
+        }
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
         Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs })
     }
