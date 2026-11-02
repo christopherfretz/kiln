@@ -178,18 +178,6 @@ impl Sema<'_, '_> {
                 .function(f)
                 .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
                 .unwrap_or_default();
-            // The specialization was declared from an earlier declaration
-            // whose parameters may be named differently: the body sees
-            // the definition's names (clang instantiates the parameters
-            // from the definition), so `T e_in` then a local `T e` is no
-            // redefinition of a forward declaration's `e`.
-            if pp.len() == fp.len() {
-                for (&a, &b) in pp.iter().zip(&fp) {
-                    let name = s.ast.decls.get(a).name();
-                    s.ast.decls.set_name(b, name);
-                }
-            }
-            s.act_on_start_function_def(f);
             let lbrace = s.ast.stmts.get(body).loc();
             let rbrace = if s.ast.stmts.get(body).kind() == kiln_ast::stmt::StmtKind::CompoundStmt {
                 s.ast.stmts.rbrace(body)
@@ -200,6 +188,14 @@ impl Sema<'_, '_> {
             sub.entity = Some(f);
             sub.map_contexts(&pairs);
             sub.map_params(&pp, &fp);
+            // The specialization was declared from an earlier declaration
+            // whose parameters may be named differently: the body sees
+            // the definition's names (clang instantiates the parameters
+            // from the definition), so `T e_in` then a local `T e` is no
+            // redefinition of a forward declaration's `e`; an expanded
+            // pack's elements take the pack's name.
+            sub.rename_params_from_pattern(&pp);
+            sub.sema.act_on_start_function_def(f);
             if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
                 // A constructor template's ctor-initializer, as a class
                 // template member's (`templ/class.rs`).
