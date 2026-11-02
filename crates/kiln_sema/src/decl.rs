@@ -4764,21 +4764,15 @@ impl Sema<'_, '_> {
         true
     }
 
-    /// Whether function (template) `f` is a friend declared in a
-    /// templated class: it is a pattern that only declares the function
-    /// when the class is instantiated ([temp.inst]/4, [temp.friend]), so
-    /// another friend declaration does not redeclare it and two such
-    /// definitions are not a redefinition before then (libc++ `expected` and its `void` partial
-    /// specialization both define `operator==(const expected&, const
-    /// unexpected<_E2>&)`; clang's `CheckForFunctionRedefinition`).
     /// [except.spec]/5 at the definition of a templated class
     /// (clang `CheckEquivalentExceptionSpec` from `MergeFunctionDecl`,
     /// which runs for a friend of a dependent context too): the function
     /// of namespace `ns` that non-dependent unqualified friend `new`
     /// redeclares, found as for a friend of a non-templated class. The
-    /// friend stays out of its redeclaration chain until instantiated;
-    /// the instantiation's own check then repeats only what was reported
-    /// here, which deduplication drops (spec/diag.md §7.4).
+    /// friend stays out of its redeclaration chain until instantiated.
+    /// The instantiation's own check repeats what was reported here,
+    /// which deduplication drops (spec/diag.md §7.4) unless a
+    /// `noexcept(expr)` was compared again (`per_instantiation_exc`).
     fn pattern_friend_prev(&mut self, ns: DeclId, dname: DeclName, new: NewFn) -> Option<DeclId> {
         let found: Vec<DeclId> = self
             .ast
@@ -4796,6 +4790,13 @@ impl Sema<'_, '_> {
         self.same_ignoring_exc_spec(pty, new.ty).then_some(p)
     }
 
+    /// Whether function (template) `f` is a friend declared in a
+    /// templated class: it is a pattern that only declares the function
+    /// when the class is instantiated ([temp.inst]/4, [temp.friend]), so
+    /// another friend declaration does not redeclare it and two such
+    /// definitions are not a redefinition before then (libc++ `expected` and its `void` partial
+    /// specialization both define `operator==(const expected&, const
+    /// unexpected<_E2>&)`; clang's `CheckForFunctionRedefinition`).
     pub(crate) fn is_dependent_friend_fn(&self, f: DeclId) -> bool {
         let f = if self.kind_of(f) == DeclKind::FunctionTemplate {
             self.pattern_of(f).unwrap_or(f)
