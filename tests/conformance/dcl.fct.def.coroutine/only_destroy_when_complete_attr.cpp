@@ -4,6 +4,8 @@
 //@ expect: compile-fail
 //@ std: c++20
 //@ strict-diags
+//@ requires: clang<22
+// clang 22 prints attribute names scoped (`'clang::coro_only_destroy_when_complete'`); WP-377 owns the compat-22 wording
 //@ diag: 11:3 warning "'coro_only_destroy_when_complete' attribute only applies to classes"
 //@ diag: 12:3 warning "'coro_only_destroy_when_complete' attribute only applies to classes"
 //@ diag: 13:10 error "'coro_only_destroy_when_complete' attribute takes no arguments"

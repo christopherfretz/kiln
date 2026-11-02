@@ -7,6 +7,8 @@
 // template keep their pattern's position.
 //@ expect: compile-fail
 //@ strict-diags
+//@ requires: clang<22
+// clang 22 prints attribute names scoped (`'gnu::cold'`); WP-377 owns the compat-22 wording
 //@ diag: 38:27 warning "attribute 'cold' ignored, because it cannot be applied to a type"
 //@ diag: 69:25 error "the expression 'co_await __promise.final_suspend()' is required to be non-throwing"
 //@ diag: 70:17 note "in instantiation of function template specialization 'f<0>' requested here"
