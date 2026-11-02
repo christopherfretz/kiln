@@ -5,7 +5,6 @@
 // and 36 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): deduction from a pointer to a noexcept function fails
 template<typename R, typename Ret = R, typename C, typename... B>
 Ret stoa(R (*conv)(const C *, C **, B...), const C *s, B... b) {
   C *e;

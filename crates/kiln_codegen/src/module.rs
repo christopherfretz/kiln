@@ -1568,7 +1568,7 @@ impl<'a> Cg<'a> {
             }
         };
         let is_ref = ast.types.is_reference(ty);
-        let needs_dtor = !is_ref && self.destructed_class(ty).is_some();
+        let needs_dtor = !is_ref && self.var_destructed_class(first, ty).is_some();
         let ity = self.m.const_type(init);
         let g = if let Some(&g) = self.gvars.get(&first) {
             // A declaration created by an earlier use has the memory type;

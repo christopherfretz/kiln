@@ -1312,6 +1312,40 @@ clang 19 `CGAtomic` at -O0, mirrored:
   exact on aarch64 and x86_64; `tests/conformance/cstdarg.syn/va-arg.cpp`
   and `va-arg-complex.cpp` (run).
 
+### Constant destruction (WP-294)
+A variable needs destruction (a cleanup at scope exit, a `__cxa_atexit`
+registration, a guard for a static local, a non-`constant` global,
+`DeclMustBeEmitted`) when its type is a class, or an array of classes,
+with a non-trivial destructor, **unless it has constant destruction**
+([expr.const]/7; clang `VarDecl::needsDestruction` is `DK_none` once
+`Sema::FinalizeVarWithDestructor`'s `evaluateDestruction` succeeded).
+Clang evaluates that for every variable (block-scope, static local,
+namespace-scope or static member; not parameters, temporaries or
+references) whose destructor is non-trivial and `constexpr`, implicit
+ones included. "Empty body" is not the rule: a user-provided
+non-`constexpr` `~U() {}` is always called, and a `constexpr` destructor
+that only uses `this`, locals or constexpr helpers is not. The fold
+prepass (§3, `fold.rs`) runs the destruction through the TU's Oven
+(`Oven::has_constant_destruction`) and records such variables in
+`Folds::const_destroyed`; `Cg::var_destructed_class` is
+`destructed_class` for every other variable, and every site above uses
+it. The object the destructor sees:
+- a `const` variable (its type is `const`-qualified): readable and
+  writable (clang `lifetimeStartedInEvaluation`), holding its
+  initializer's folded value or, if that does not fold, indeterminate
+  (`const A a{n};` with a destructor that only writes is elided); its
+  `mutable` members are outside their lifetime, so reading or writing
+  them fails ([expr.const]/5.9);
+- any other variable: outside its lifetime ([expr.const]/5.16), so any
+  read or write of a subobject fails (`S s;` with `~S() { x = 0; }` is
+  called, with `~S() { int *p = &x; }` is not).
+
+The destruction is manifestly constant-evaluated when the variable has
+static storage and is constant-initialized
+(`__builtin_is_constant_evaluated()` is then true). A leak or any
+failure keeps the call. `tests/codegen/dtor_constant_destruction.cpp`
+checks every case above against clang on both triples.
+
 ## 7f. Landed (WP-178): dynamic initialization (`global_init.rs`)
 Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
 [basic.start.term], [stmt.dcl]/3).

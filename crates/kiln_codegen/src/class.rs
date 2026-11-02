@@ -101,6 +101,17 @@ impl Cg<'_> {
         self.has_nontrivial_dtor(rd).then_some(rd)
     }
 
+    /// The class whose destructor variable `d` of type `q` needs at the
+    /// end of its lifetime (clang `VarDecl::needsDestruction`):
+    /// [`Cg::destructed_class`], unless `d` has constant destruction
+    /// ([expr.const]/7, [`crate::fold::Folds::const_destroyed`]).
+    pub(crate) fn var_destructed_class(&self, d: DeclId, q: QualType) -> Option<DeclId> {
+        if self.folds.const_destroyed.contains(&self.ast.first(d)) {
+            return None;
+        }
+        self.destructed_class(q)
+    }
+
     /// Which copy/move special member `f` is (clang
     /// `isCopyOrMoveConstructor` / `isCopyAssignmentOperator` /
     /// `isMoveAssignmentOperator`).
