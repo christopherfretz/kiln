@@ -451,7 +451,9 @@ impl Sema<'_, '_> {
     /// nested-name-specifier naming `qualifier`, if any), when the parser
     /// commits to it ([class.access]/4; spec/sema-class.md §2.4). The
     /// lookup is redone only for a class member: it gives the naming
-    /// class and the using-shadow the name was found through.
+    /// class and the using-shadow the name was found through. A type
+    /// name is also a use of its declaration ([dcl.attr.deprecated]/4,
+    /// clang's `getTypeName` → `DiagnoseUseOfDecl`).
     pub fn check_type_name_access(
         &mut self,
         name: Symbol,
@@ -460,6 +462,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         self.check_name_access_as(name, qualifier, d, loc, LookupKind::Ordinary);
+        self.diagnose_type_name_use(d, loc);
     }
 
     /// [`Sema::check_type_name_access`] for a name `d` found by a lookup
@@ -1040,6 +1043,7 @@ impl Sema<'_, '_> {
     pub fn begin_delayed_access(&mut self) {
         let exempt = std::mem::take(&mut self.exempt_next_delay);
         self.delayed_access_depth.push((self.delayed_access.len(), self.ctx, exempt));
+        self.begin_delayed_deprecation();
     }
 
     /// Makes the next delay point drop its checks instead of running
@@ -1075,15 +1079,16 @@ impl Sema<'_, '_> {
     /// delay point (clang's `redelay`), or run now if there is none.
     pub fn end_delayed_access_to_enclosing(&mut self, level: usize, drop: bool) {
         let mut start = None;
+        let popped = self.delayed_access_depth.len().saturating_sub(level);
         while self.delayed_access_depth.len() > level {
             start = self.delayed_access_depth.pop().map(|(s, _, _)| s);
         }
+        self.pop_delayed_deprecations(popped, drop);
         let Some(start) = start else { return };
         if drop {
             self.delayed_access.truncate(start.min(self.delayed_access.len()));
         } else if self.delayed_access_depth.is_empty() {
-            self.delayed_access_depth.push((start, self.ctx, false));
-            self.end_delayed_access(None);
+            self.run_delayed_access(start, false, None);
         }
     }
 
@@ -1092,6 +1097,14 @@ impl Sema<'_, '_> {
     /// them in the current context).
     pub fn end_delayed_access(&mut self, decl: Option<DeclId>) {
         let Some((start, _, exempt)) = self.delayed_access_depth.pop() else { return };
+        let level = self.depr_points.len().saturating_sub(1);
+        self.end_delayed_deprecation_to(level, decl);
+        self.run_delayed_access(start, exempt, decl);
+    }
+
+    /// Runs (or, `exempt`, drops) the delayed access checks from `start`
+    /// on in the context of `decl`.
+    fn run_delayed_access(&mut self, start: usize, exempt: bool, decl: Option<DeclId>) {
         let start = start.min(self.delayed_access.len());
         let checks: Vec<AccessCheck> = self.delayed_access.drain(start..).collect();
         if checks.is_empty() || exempt {
