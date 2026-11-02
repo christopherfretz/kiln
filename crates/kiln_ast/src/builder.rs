@@ -2602,8 +2602,27 @@ impl<'a> AstBuilder<'a> {
     /// A GNU statement expression `({ ... })`: `body` is the compound
     /// statement; the value is its last expression statement's (`ty`,
     /// `void` when there is none). `loc` is the `(`, `rparen` the `)`.
-    pub fn stmt_expr(&mut self, body: StmtId, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
-        let deps = self.type_deps(ty);
+    /// `result` is that last expression; `dependent_ctx`: the expression
+    /// appears in a dependent context, where it is always value- and
+    /// instantiation-dependent (clang's `computeDependence(StmtExpr*,
+    /// TemplateDepth)`). A pack is never expanded across it.
+    pub fn stmt_expr(
+        &mut self,
+        body: StmtId,
+        ty: QualType,
+        result: Option<ExprId>,
+        dependent_ctx: bool,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        if let Some(r) = result {
+            deps = deps.with(self.deps(r));
+        }
+        if dependent_ctx {
+            deps = deps.with(ExprDeps::VALUE_INST);
+        }
+        let deps = deps.without(ExprDeps::UNEXPANDED_PACK);
         let e = self.simple(
             ExprKind::StmtExpr,
             ValueCategory::PRValue,

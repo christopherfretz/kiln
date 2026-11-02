@@ -512,13 +512,21 @@ impl Sema<'_, '_> {
     /// template-id or concept-id `e` (an `UnresolvedLookupExpr` or
     /// `ConceptSpecializationExpr`); dependent signatures and
     /// requires-clauses mangle it (`clsr3stdE7declvalIT_EE`,
-    /// `Qsr3stdE7same_asIT_iE`, spec/abi.md §8.15–§8.16).
+    /// `Qsr3stdE7same_asIT_iE`, spec/abi.md §8.15–§8.16), or of the
+    /// `DeclRefExpr` naming a variable template specialization, which
+    /// prints it (`decltype(N::v<int>)`).
     pub fn set_template_id_qualifier(&mut self, e: ExprId, nns: NnsId) {
         if matches!(
             self.ast.exprs.get(e).kind(),
             ExprKind::UnresolvedLookupExpr | ExprKind::ConceptSpecializationExpr
         ) {
             let _ = self.ast.templates.expr_nns.insert(e, nns);
+        } else if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
+            && self.ast.exprs.decl_ref_extra(e).is_some()
+        {
+            // A variable template specialization (`N::v<int>`) keeps its
+            // qualifier as written (clang's `DeclRefExpr` qualifier).
+            let _ = self.ast.exprs.set_decl_ref_qualifier(e, nns);
         }
     }
 

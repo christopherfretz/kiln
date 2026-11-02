@@ -174,6 +174,15 @@ clang's `Parser` over `Preprocessor::Lex`.
   follows, as in clang, so `X<T>::m d, e;` is an expression statement.
   `tests/conformance/dcl.ambig.res/dependent-qualified-param-or-init.cpp`
   covers this.
+  An undeclared unqualified name in that parameter clause, not followed
+  by `(`, `::` or `<` and not declared earlier in the scanned
+  declaration, is ambiguous without the flag (clang's `ANK_Unresolved`),
+  so `void a(u1);` and `int e(u4 *p);` are function declarations (WP-300).
+  The parameter's decl-specifier parse then reports "unknown type name
+  'u1'" (`unknown_type_follows`, clang `ParseImplicitInt`), the type is
+  the error type and the function is still declared; once a parameter is
+  invalid, `merge_default_args` skips "missing default argument"
+  (`tests/conformance/dcl.ambig.res/undeclared-parameter-type.cpp`).
   A member-pointer ptr-operator (`member_pointer_end`) is scanned as
   `::`? (`template`? name (`<args>`)? `::`)+ `*`: each component is
   classified in the context of the previous one; template arguments
@@ -897,11 +906,29 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   after expression` at the end of the expression, and nothing is skipped:
   the next statement starts at the current token (clang's
   `ExpectAndConsumeSemi`), so `X<U>::m d, e;` goes on to report `d` and `e`.
-  A statement `Q::name ident` whose class template specialization
+  A statement `Q::name ...` whose class template specialization
   qualifier `Q` is undefined or failed to instantiate (diagnosed when the
-  qualifier was parsed ahead) is neither: it is skipped to `;` silently
+  qualifier was parsed ahead) is neither, whatever follows the name
+  (`Q::name *g;`, `Q::name & r;`): it is skipped to `;` silently
   and declares nothing (clang's `ClassifyName` `NC_Error`,
   `at_failed_scope_declaration`).
+  A statement `S::name ...` with `S` a non-dependent class or namespace
+  (or `::`) that has no `name` (`unresolved_scope_name`, clang's
+  `ANK_Unresolved` after a scope) is decided by the declarator
+  (`is_simple_declaration`, WP-300): `S::name(e);`, `S::name *g;`,
+  `S::type d;` are declarations whose decl-specifier reports `no type
+  named 'name' in 'S'` (`in namespace 'N'`, `in the global namespace`;
+  `parse_type_name_spec`), and `S::name = 1;` is an expression (`no
+  member named`). An identifier after the name that is a non-type, or
+  undeclared before `(`, makes it an expression (clang annotates it,
+  and no declarator accepts the annotation): `S::pn y(e);`. Deviation:
+  clang delays the `no member named` of such an expression to the end
+  of the full-expression (typo correction), so it follows the `expected
+  ';'`; kiln reports it first. The same decl-specifier rule applies at
+  namespace scope (`N::gt gv;`) and in a parameter clause, where the
+  name is ambiguous (`param_decl_specifier`: `void a1(S::pn);` declares
+  a function)
+  (`tests/conformance/stmt.ambig/qualified-unresolved-name.cpp`).
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed

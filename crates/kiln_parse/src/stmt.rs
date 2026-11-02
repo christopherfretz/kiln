@@ -226,7 +226,7 @@ impl Parser<'_, '_> {
         true
     }
 
-    /// A statement `Q::name ident` whose qualifier failed
+    /// A statement `Q::name ...` whose qualifier failed
     /// ([`Parser::at_failed_scope_declaration`]) is skipped silently.
     /// True when skipped.
     fn skip_failed_scope_stmt(&mut self) -> bool {
@@ -527,7 +527,7 @@ impl Parser<'_, '_> {
         }
         let cond = self.parse_paren_condition("if");
         if constexpr {
-            self.s.exit_constant_evaluated();
+            self.s.exit_constant_evaluated(None);
         }
         let Some((init, (var, c))) = cond else {
             self.s.pop_scope();

@@ -1130,6 +1130,7 @@ impl Sema<'_, '_> {
             default_arg: DefaultArg::None,
             range: (ds.loc, d.name_loc()),
             type_loc: ds.type_loc.unwrap_or(ds.loc),
+            ref_loc: if d.ellipsis.is_none() { Self::outer_ref_loc(d) } else { Loc::INVALID },
             decl: None,
             explicit_object: d.explicit_object,
         }
@@ -2338,6 +2339,7 @@ impl Sema<'_, '_> {
             let _ = self.ast.decls.cold.begin_loc.insert(td, ds.loc);
             self.note_type_spec_loc(td, ds, d.name_loc());
         }
+        self.note_ref_loc(td, d, underlying);
         if invalid {
             self.ast.decls.set_flags(td, DeclFlags::INVALID);
         }
@@ -2346,6 +2348,24 @@ impl Sema<'_, '_> {
         }
         self.register_local(name, td);
         td
+    }
+
+    /// The outermost `&`/`&&` of `d` when its declared type is a
+    /// reference (its first chunk), else invalid.
+    pub(crate) fn outer_ref_loc(d: &Declarator) -> Loc {
+        match d.chunks.first() {
+            Some(Chunk::LRef { loc } | Chunk::RRef { loc }) => *loc,
+            _ => Loc::INVALID,
+        }
+    }
+
+    /// Records the outermost `&`/`&&` of declaration `id` of dependent
+    /// type `ty` declared by `d` ([`Sema::ref_locs`]).
+    pub(crate) fn note_ref_loc(&mut self, id: DeclId, d: &Declarator, ty: QualType) {
+        let l = Self::outer_ref_loc(d);
+        if l.is_valid() && self.is_dependent_type(ty) {
+            self.ref_locs.insert(id, l);
+        }
     }
 
     /// `using name = type-id;` ([dcl.typedef]/2).
@@ -3166,6 +3186,9 @@ impl Sema<'_, '_> {
                     self.type_spec_locs.insert(pd, p.type_loc);
                 }
             }
+            if p.ref_loc.is_valid() && self.is_dependent_type(p.ty) {
+                self.ref_locs.insert(pd, p.ref_loc);
+            }
             if p.invalid {
                 self.ast.decls.set_flags(pd, DeclFlags::INVALID);
             }
@@ -3259,7 +3282,12 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        if let Some(first) = out.iter().position(Option::is_some) {
+        // clang skips the trailing check once a parameter is invalid
+        // (`void f(int = 1, u8, int);` with undeclared `u8` reports only
+        // the unknown type name).
+        if let Some(first) = out.iter().position(Option::is_some)
+            && !params.iter().any(|p| p.invalid)
+        {
             for (i, p) in params.iter().enumerate().skip(first + 1) {
                 if out[i].is_some() || p.default_arg != DefaultArg::None || p.invalid {
                     continue;
@@ -3413,6 +3441,7 @@ impl Sema<'_, '_> {
         }
         if self.is_dependent_type(ty) {
             self.note_type_spec_loc(f, ds, d.name_loc());
+            self.note_ref_loc(f, d, ty);
         }
         if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
@@ -3777,6 +3806,7 @@ impl Sema<'_, '_> {
             let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
             self.note_type_spec_loc(v, ds, d.name_loc());
         }
+        self.note_ref_loc(v, d, ty);
         self.lambda_mangle.var = Some(v);
         if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             // The constrained placeholder's diagnostics point here.
@@ -5229,6 +5259,7 @@ impl Sema<'_, '_> {
                 } else if use_ == TagUse::Reference {
                     self.mark_type_referenced(p);
                     self.check_name_access_as(n, qualifier, p, nloc, LookupKind::Tag);
+                    self.diagnose_type_name_use(p, nloc);
                     return p;
                 } else if use_ == TagUse::Definition {
                     if let Some(def) = self.ast.definition(p) {
