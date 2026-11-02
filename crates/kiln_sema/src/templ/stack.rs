@@ -206,6 +206,12 @@ pub struct InstantiationStack {
     /// on its own and reports a shared decl-specifier error once per
     /// declarator ([temp.inst]/3; spec/sema-templates.md §10.2).
     pub(crate) member_salt: u32,
+    /// The position of the braced-init-list element being initialized,
+    /// hashed with the enclosing lists' (0 = none), mixed into
+    /// [`Self::context_key`]: the elements of an expanded pack
+    /// `{a[I]...}` share one location, and clang reports each one
+    /// ([temp.variadic]/8; spec/sema.md §9).
+    pub(crate) element_salt: u64,
 }
 
 impl InstantiationStack {
@@ -250,6 +256,9 @@ impl InstantiationStack {
         }
         if self.member_salt != 0 {
             self.member_salt.hash(&mut h);
+        }
+        if self.element_salt != 0 {
+            self.element_salt.hash(&mut h);
         }
         // 0 means "no context"; keep it reserved.
         h.finish().max(1)

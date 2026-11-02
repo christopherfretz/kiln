@@ -1752,8 +1752,29 @@ impl Sema<'_, '_> {
     }
 
     /// One element of an aggregate: a nested list, a brace-elided
-    /// sub-aggregate ([dcl.init.aggr]/16) or an expression.
+    /// sub-aggregate ([dcl.init.aggr]/16) or an expression. Inside an
+    /// instantiation the element's position salts the deduplication
+    /// context, so each element of an expanded pack reports.
     fn init_element(
+        &mut self,
+        ty: QualType,
+        items: &[InitItem],
+        pos: &mut usize,
+        at: Loc,
+    ) -> ExprId {
+        if self.inst.stack.is_empty() {
+            return self.init_element_at(ty, items, pos, at);
+        }
+        let saved = self.inst.stack.element_salt;
+        let mut h = kiln_source::fx::FxHasher::default();
+        std::hash::Hash::hash(&(saved, *pos), &mut h);
+        self.inst.stack.element_salt = std::hash::Hasher::finish(&h).max(1);
+        let r = self.init_element_at(ty, items, pos, at);
+        self.inst.stack.element_salt = saved;
+        r
+    }
+
+    fn init_element_at(
         &mut self,
         ty: QualType,
         items: &[InitItem],
