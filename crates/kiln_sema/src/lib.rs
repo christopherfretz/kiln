@@ -294,6 +294,10 @@ pub struct Sema<'a, 'sm> {
     /// The type `__builtin_va_list` names (its typedef sugar; the `A` of
     /// a builtin signature), once declared.
     pub(crate) va_list_type: Option<QualType>,
+    /// The typedefs and alias-declarations naming an ext vector type
+    /// directly, in declaration order: an element access names its
+    /// result through the first that matches (clang `ExtVectorDecls`).
+    pub(crate) ext_vector_typedefs: Vec<DeclId>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -450,6 +454,13 @@ pub struct Sema<'a, 'sm> {
     /// deduction for a rewritten `operator==`; a hard error keeps its
     /// context notes).
     pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>)>>,
+    /// The "no member named" errors of qualified-ids held back until the
+    /// end of the enclosing expression statement (clang's delayed typo
+    /// correction, `TypoExpr`), while `typo_delay` is non-zero
+    /// ([`Sema::begin_delayed_typos`], WP-308).
+    delayed_typos: Vec<Diag>,
+    /// The nesting depth of [`Sema::begin_delayed_typos`].
+    typo_delay: u32,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -614,6 +625,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             deferring_call_ref: false,
             reverse_using_shadows: false,
             va_list_type: None,
+            ext_vector_typedefs: Vec::new(),
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
@@ -656,6 +668,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
             diag_capture: std::cell::RefCell::new(None),
+            delayed_typos: Vec::new(),
+            typo_delay: 0,
             range_for_outer_depth: None,
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
@@ -789,6 +803,39 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         inst_notes.extend(outer);
         d.prepend_notes(inst_notes);
         d.emit(self.diags);
+    }
+
+    /// Starts holding back the diagnostics clang reports through delayed
+    /// typo correction (a qualified-id that names no member, `S::nom`)
+    /// until the matching [`Sema::end_delayed_typos`]. clang corrects a
+    /// `TypoExpr` when the full-expression is finished, after the parser
+    /// has checked the `;` of an expression statement, so `S::nom y;`
+    /// reports "expected ';' after expression" first (WP-308). Returns
+    /// the mark to end with; scopes nest.
+    pub fn begin_delayed_typos(&mut self) -> usize {
+        self.typo_delay += 1;
+        self.delayed_typos.len()
+    }
+
+    /// Ends the scope begun at `mark`, emitting the diagnostics it held
+    /// in order.
+    pub fn end_delayed_typos(&mut self, mark: usize) {
+        self.typo_delay = self.typo_delay.saturating_sub(1);
+        let held = self.delayed_typos.split_off(mark.min(self.delayed_typos.len()));
+        for d in held {
+            self.emit(d);
+        }
+    }
+
+    /// Emits `d`, or holds it back inside a [`Sema::begin_delayed_typos`]
+    /// scope (outside any instantiation, where a SFINAE context must see
+    /// it).
+    pub(crate) fn emit_delayed_typo(&mut self, d: Diag) {
+        if self.typo_delay > 0 && self.inst.stack.is_empty() {
+            self.delayed_typos.push(d);
+        } else {
+            self.emit(d);
+        }
     }
 
     /// Emits a diagnostic with no arguments at `loc`.

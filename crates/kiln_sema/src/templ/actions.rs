@@ -273,6 +273,12 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<(DeclId, NnsId)> {
         let n = self.ast.types.nns(Nns::Type { prefix, ty, template_kw });
+        // A dependent `X<args>::` is completed at instantiation; its point
+        // of instantiation is where the template-id was written (§5.8,
+        // clang `RequireCompleteDeclContext`'s last qualifier name).
+        if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+            self.note_written_loc(WrittenKey::Nns(n), loc);
+        }
         if let Some(p) = self.current_instantiation(tmpl, ty) {
             return Some((p, n));
         }
@@ -533,6 +539,22 @@ impl Sema<'_, '_> {
             // A variable template specialization (`N::v<int>`) keeps its
             // qualifier as written (clang's `DeclRefExpr` qualifier).
             let _ = self.ast.exprs.set_decl_ref_qualifier(e, nns);
+        }
+    }
+
+    /// Records the `template` keyword at `kw` (if written) after the
+    /// qualifier of the name `e` (`N::template v<T>`), which the AST
+    /// printer writes back as clang's `hasTemplateKeyword` (WP-308).
+    pub fn set_template_kw(&mut self, e: ExprId, kw: Option<Loc>) {
+        if let Some(kw) = kw
+            && matches!(
+                self.ast.exprs.get(e).kind(),
+                ExprKind::DeclRefExpr
+                    | ExprKind::UnresolvedLookupExpr
+                    | ExprKind::DependentScopeDeclRefExpr
+            )
+        {
+            let _ = self.ast.templates.template_kw.insert(e, kw);
         }
     }
 

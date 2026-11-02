@@ -177,6 +177,12 @@ pub trait PrintEnv {
     fn type_name(&self, ty: QualType, out: &mut String) {
         let _ = write!(out, "#t{}", ty.ty().index());
     }
+    /// Appends a template argument's integral type as its cast prints
+    /// it (clang `printIntegral` with `IncludeType`): the canonical type,
+    /// fully qualified (`(n::E)5`).
+    fn arg_type_name(&self, ty: QualType, out: &mut String) {
+        self.type_name(ty, out);
+    }
     /// Appends the enumerator of enumeration `ty` with value `bits`
     /// (qualified, `E::X`); returns false if there is none.
     fn enumerator(&self, ty: QualType, bits: &IntBits<'_>, out: &mut String) -> bool {
@@ -362,7 +368,7 @@ impl Printer<'_> {
             IntStyle::Enum | IntStyle::Cast if !typed => bits.write_decimal(signed, out),
             IntStyle::Enum | IntStyle::Cast => {
                 out.push('(');
-                self.env.type_name(ty, out);
+                self.env.arg_type_name(ty, out);
                 out.push(')');
                 bits.write_decimal(signed, out);
             }
