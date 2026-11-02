@@ -490,6 +490,11 @@ warning. A selected rewritten `==` must return cv `bool`, else clang's
   `<NullToPointer>`). Its failure: "invalid operands to binary expression
   ('int' and 'std::strong_ordering')" + "while rewriting comparison as call
   to 'operator<=>' declared here".
+- Reversed `x <=> y` ([over.match.oper]/9): `CXXRewrittenBinaryOperator` →
+  `resolve_operator(<=>, [0, y <=> x])`, so the ordering is inverted
+  (`nullopt <=> optional`). Its class-typed result is emitted by codegen
+  through the semantic form
+  (tests/conformance/over.match.oper/reversed-spaceship.cpp).
 
 Only the semantic form is stored and dumped (consistent with ast.md §5.6).
 

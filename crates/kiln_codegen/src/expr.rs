@@ -2963,6 +2963,11 @@ impl Cg<'_> {
                 r
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
+            // clang `AggExprEmitter::VisitCXXRewrittenBinaryOperator`: the
+            // semantic form (a reversed `<=>` gives a class result).
+            ExprKind::CXXRewrittenBinaryOperator => {
+                self.agg_visit(ast.exprs.rewritten_semantic(e), dest, zeroed)
+            }
             ExprKind::AtomicExpr => self.emit_atomic_expr(e, Some(dest)).map(|_| ()),
             ExprKind::VAArgExpr => self.emit_va_arg(e, Some(dest)).map(|_| ()),
             ExprKind::CXXThrowExpr => self.emit_throw(e, true),
