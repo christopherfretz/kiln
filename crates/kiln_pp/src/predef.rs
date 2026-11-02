@@ -315,6 +315,32 @@ fn apply_p1467(m: &mut BTreeMap<String, String>) {
     }
 }
 
+/// `__cpp_*` macros for features kiln implements beyond clang 19, at clang
+/// 22's values in the same modes (docs/status/cxx-features.md).
+fn apply_beyond_clang19(m: &mut BTreeMap<String, String>) {
+    let cplusplus = m.get("__cplusplus").and_then(|v| v.trim_end_matches('L').parse::<u32>().ok());
+    // C++20 modules (spec/modules.md §4): clang 22's value, from C++20
+    // on (clang 19 does not define it).
+    if cplusplus.is_some_and(|v| v >= 202_002) {
+        set(m, "__cpp_modules", "1");
+    }
+    // [cpp.predefined] (P0847, C++23): kiln implements explicit object
+    // parameters, members and lambdas; clang 19 leaves the macro
+    // undefined, clang 22 defines it from C++23.
+    if cplusplus.is_some_and(|v| v >= 202_302) {
+        set(m, "__cpp_explicit_this_parameter", "202110L");
+    }
+    apply_p1467(m);
+    // Features kiln implements beyond clang 19, at clang 22's values
+    // in the same modes (docs/status/cxx-features.md): P1061
+    // structured binding packs (C++17 on) and P2893 variadic friends
+    // (every C++ mode).
+    if m.contains_key("__cpp_structured_bindings") {
+        set(m, "__cpp_structured_bindings", "202411L");
+    }
+    set(m, "__cpp_variadic_friend", "202403L");
+}
+
 /// Applies the dialect and flag deltas (measured against clang 19; see
 /// `resource/README.md`).
 fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
@@ -376,28 +402,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
-        let cplusplus =
-            m.get("__cplusplus").and_then(|v| v.trim_end_matches('L').parse::<u32>().ok());
-        // C++20 modules (spec/modules.md §4): clang 22's value, from C++20
-        // on (clang 19 does not define it).
-        if cplusplus.is_some_and(|v| v >= 202_002) {
-            set(m, "__cpp_modules", "1");
-        }
-        // [cpp.predefined] (P0847, C++23): kiln implements explicit object
-        // parameters, members and lambdas; clang 19 leaves the macro
-        // undefined, clang 22 defines it from C++23.
-        if cplusplus.is_some_and(|v| v >= 202_302) {
-            set(m, "__cpp_explicit_this_parameter", "202110L");
-        }
-        apply_p1467(m);
-        // Features kiln implements beyond clang 19, at clang 22's values
-        // in the same modes (docs/status/cxx-features.md): P1061
-        // structured binding packs (C++17 on) and P2893 variadic friends
-        // (every C++ mode).
-        if m.contains_key("__cpp_structured_bindings") {
-            set(m, "__cpp_structured_bindings", "202411L");
-        }
-        set(m, "__cpp_variadic_friend", "202403L");
+        apply_beyond_clang19(m);
     }
     for n in ["__PIC__", "__pic__", "__PIE__", "__pie__"] {
         m.remove(n);
