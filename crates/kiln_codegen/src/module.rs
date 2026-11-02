@@ -876,8 +876,7 @@ impl<'a> Cg<'a> {
         let noinline = self.has_fn_attr(d, K::NOINLINE);
         let optnone = self.has_fn_attr(d, K::OPTNONE);
         let always = self.has_fn_attr(d, K::ALWAYS_INLINE);
-        let should_optnone =
-            !self.opts.optimize && !always && !self.has_fn_attr(d, K::MINSIZE);
+        let should_optnone = !self.opts.optimize && !always && !self.has_fn_attr(d, K::MINSIZE);
         if optnone || should_optnone {
             DefInline::OptNone
         } else if self.has_fn_attr(d, K::NAKED) {

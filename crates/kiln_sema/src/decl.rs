@@ -8258,7 +8258,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
-        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax == AttrSyntax::Gnu) else {
+        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope, syntax) else {
             let id = if gnu && matches!(n.as_str(), "visibility" | "section" | "format") {
                 DiagId::parse_attribute_ignored
             } else {
@@ -8840,8 +8840,9 @@ fn attr_kind_of(
     std: bool,
     gnu: bool,
     clang_scope: bool,
-    gnu_syntax: bool,
+    syntax: AttrSyntax,
 ) -> Option<AttrKind> {
+    let gnu_syntax = syntax == AttrSyntax::Gnu;
     Some(match (n, std, gnu) {
         ("nodiscard", true, _) | ("warn_unused_result", _, true) => AttrKind::NODISCARD,
         ("maybe_unused", true, _) => AttrKind::MAYBE_UNUSED,

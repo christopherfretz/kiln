@@ -155,7 +155,7 @@ impl Sema<'_, '_> {
     }
 
     /// `main` at namespace scope of the global namespace.
-    fn is_main_function(&self, f: DeclId) -> bool {
+    pub(crate) fn is_main_function(&self, f: DeclId) -> bool {
         self.decl_name(f) == "main"
             && self
                 .ast

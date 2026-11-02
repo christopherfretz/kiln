@@ -384,16 +384,19 @@ impl Sema<'_, '_> {
         };
         let prior = |s: &Self, k: AttrKind| {
             s.ast.redecls_of(d).filter(|&r| r != d).find_map(|r| {
-                s.ast.lists.iter::<AttrId>(s.ast.attrs.of_decl(r)).map(|a| *s.ast.attrs.get(a)).find(
-                    |n| n.kind == k,
-                )
+                s.ast
+                    .lists
+                    .iter::<AttrId>(s.ast.attrs.of_decl(r))
+                    .map(|a| *s.ast.attrs.get(a))
+                    .find(|n| n.kind == k)
             })
         };
         let own_optnone = own(self, AttrKind::OPTNONE);
         let prior_optnone = prior(self, AttrKind::OPTNONE);
         let Some(optnone) = own_optnone.or(prior_optnone) else { return };
         let mut losers = Vec::new();
-        for (k, name) in [(AttrKind::ALWAYS_INLINE, "always_inline"), (AttrKind::MINSIZE, "minsize")]
+        for (k, name) in
+            [(AttrKind::ALWAYS_INLINE, "always_inline"), (AttrKind::MINSIZE, "minsize")]
         {
             if let Some(l) = own(self, k) {
                 losers.push((l, name));

@@ -615,7 +615,9 @@ fn escape_len(t: &[u8]) -> (usize, usize) {
 
 impl Sema<'_, '_> {
     /// The `naked` attribute on some declaration of function `f` (clang
-    /// `getAttr<NakedAttr>()`, inherited by redeclarations).
+    /// `getAttr<NakedAttr>()`, inherited by redeclarations). A naked
+    /// function gets no fall-off or noreturn check (clang
+    /// `ActOnFinishFunctionBody`; `Sema::end_function_body`).
     pub(crate) fn naked_attr(&self, f: DeclId) -> Option<kiln_ast::attr::AttrNode> {
         use kiln_ast::attr::AttrKind;
         self.ast.decls.function(f)?;

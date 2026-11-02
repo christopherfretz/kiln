@@ -1327,14 +1327,7 @@ impl Sema<'_, '_> {
             self.late_analysis(state.decl, body, state.has_fallthrough);
             return wrapped;
         }
-        let is_main = self.decl_name(state.decl) == "main"
-            && self
-                .ast
-                .decls
-                .get(state.decl)
-                .ctx()
-                .is_some_and(|c| self.ast.redecl_context(c) == self.ast.tu);
-        if !is_main && !naked {
+        if !naked && !self.is_main_function(state.decl) {
             let lambda = self.is_lambda_call_op(state.decl);
             match self.falls_off(body) {
                 Falloff::Never => {}
