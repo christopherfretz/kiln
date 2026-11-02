@@ -724,7 +724,10 @@ impl Sema<'_, '_> {
     /// declarator (before its body opens): a default argument of its
     /// parameters. The lambda's own packs there are those of its
     /// *template-parameter-list*.
-    pub(crate) fn split_lambda_packs(&mut self, op: crate::templ::pack::PackOperand) -> Vec<DeclId> {
+    pub(crate) fn split_lambda_packs(
+        &mut self,
+        op: crate::templ::pack::PackOperand,
+    ) -> Vec<DeclId> {
         let Some(top) = self.lambdas.last() else { return Vec::new() };
         let base = top.scope_base;
         let packs = self.unexpanded_packs(op);

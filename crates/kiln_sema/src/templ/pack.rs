@@ -761,7 +761,12 @@ impl Sema<'_, '_> {
     }
 
     /// "`what` contains unexpanded parameter pack[s] 'P'..." at `at`.
-    pub(crate) fn report_unexpanded_packs(&mut self, packs: &[DeclId], what: &'static str, at: Loc) {
+    pub(crate) fn report_unexpanded_packs(
+        &mut self,
+        packs: &[DeclId],
+        what: &'static str,
+        at: Loc,
+    ) {
         let names: Vec<String> = packs.iter().map(|&d| self.decl_name(d)).collect();
         let quoted: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
         let list = match quoted.as_slice() {

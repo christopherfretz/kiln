@@ -19,8 +19,8 @@ use kiln_diag::FixIt;
 use kiln_source::{Loc, Span};
 
 use crate::Sema;
-use crate::declspec::Declarator;
 use crate::decl::TagUse;
+use crate::declspec::Declarator;
 use crate::templ::deduce::{DeducedArgs, Tdk};
 
 /// A declarator-id `v<args>` naming variable template `template` after a
