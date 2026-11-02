@@ -57,6 +57,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Result<DeclId, ()> {
         let tmpl = self.ast.first(tmpl);
+        let poi = self.templ.deduce_poi.take().unwrap_or(loc);
         if let Some(s) = self.ast.templates.find_spec(tmpl, args.canonical) {
             if self.ast.decls.get(s).has(DeclFlags::INVALID) {
                 return Err(());
@@ -88,7 +89,7 @@ impl Sema<'_, '_> {
             self.ast.templates.update_spec(i, |s| {
                 s.kind = SpecKind::ImplicitInstantiation;
                 s.from = pattern;
-                s.point_of_instantiation = loc;
+                s.point_of_instantiation = poi;
             });
         }
         let Some((_, margs)) = self.spec_args(spec) else { return Err(()) };
@@ -100,6 +101,7 @@ impl Sema<'_, '_> {
         // returns `Ok`: memoize it as invalid, so the next deduction for
         // the same arguments fails too ([temp.deduct.general]/8).
         let trapped = self.sfinae_errors();
+        let held = self.sfinae_warnings();
         let r = self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
@@ -107,6 +109,10 @@ impl Sema<'_, '_> {
             sub.function_spec_signature(pattern, spec)
         });
         let captured = self.sfinae_errors() > trapped;
+        let warnings = self.take_sfinae_warnings(held);
+        if !warnings.is_empty() && r.is_ok() && !captured {
+            let _ = self.templ.suppressed_diags.insert(spec, warnings);
+        }
         if r.is_err() || captured {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
             return Err(());

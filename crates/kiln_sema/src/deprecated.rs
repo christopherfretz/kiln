@@ -120,6 +120,9 @@ impl Sema<'_, '_> {
     /// declarator, at parse time) the warning waits for the declaration
     /// ([`Sema::flush_delayed_deprecations`]).
     pub(crate) fn diagnose_deprecated(&mut self, d: DeclId, loc: Loc) {
+        // clang's `DiagnoseUseOfDecl` reports a specialization's held-back
+        // substitution warnings first (spec/sema-templates.md §5.7).
+        self.emit_suppressed_diags(d);
         let Some((a, owner)) = self.deprecation_of(d) else { return };
         let attr = *self.ast.attrs.get(a);
         let name = self.name_for_diagnostic(d);

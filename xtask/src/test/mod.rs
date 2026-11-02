@@ -238,6 +238,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         oracle_kind,
         oracle_clang,
         llvm_dir: toolchain.llvm_dir(),
+        llvm_major: toolchain.version,
         update: opts.update,
         scratch,
         compile_timeout: Duration::from_secs(120),

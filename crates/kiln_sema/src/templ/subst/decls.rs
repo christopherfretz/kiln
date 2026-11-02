@@ -574,6 +574,7 @@ impl Substituter<'_, '_, '_> {
             // `BuildFunctionType` after the parameters).
             let ret_loc = self.sema.type_spec_locs.get(&d).copied().unwrap_or(loc);
             self.check_return_type(ret, ret_loc)?;
+            self.check_volatile_return(p.ret(), ret, ret_loc);
             let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
             self.check_param_types(&ptys, ret_loc)?;
             // A dependent `noexcept(expr)` waits until needed (WP-112).
@@ -840,6 +841,8 @@ impl Substituter<'_, '_, '_> {
         let sig = params.and_then(|params| {
             let ret = self.ty(p.ret(), loc)?;
             self.check_return_type(ret, loc)?;
+            let ret_loc = self.sema.type_spec_locs.get(&pat).copied().unwrap_or(loc);
+            self.check_volatile_return(p.ret(), ret, ret_loc);
             let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
             self.check_param_types(&ptys, loc)?;
             // DR1330 ([temp.inst]/14): a dependent `noexcept(expr)` is

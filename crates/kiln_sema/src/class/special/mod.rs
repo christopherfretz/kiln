@@ -387,8 +387,15 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
             return;
         }
+        // The declaration kiln makes for an explicit specialization's
+        // specialization (`template<> void f<int>() = delete;`) does not
+        // count (clang skips its implicit one the same way).
         if let Some(p) = self.ast.prev(f)
             && self.ast.definition(p).is_none_or(|d| d == f)
+            && !(self.ast.prev(p).is_none()
+                && self.ast.spec_info(p).is_some_and(|(_, s)| {
+                    s.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
+                }))
         {
             let m = self.diag(DiagId::sema_deleted_not_first, loc);
             let m = self.note_prev(m, p, false);
@@ -396,9 +403,13 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
             return;
         }
-        self.ast.decls.mark_function(f, FnSpec::new().with_deleted(true));
-        if let Some(m) = msg {
-            let _ = self.ast.decls.cold.delete_message.insert(f, m);
+        // Deletion is read off the first declaration: an explicit
+        // specialization's is kiln's specialization declaration.
+        for g in [f, first] {
+            self.ast.decls.mark_function(g, FnSpec::new().with_deleted(true));
+            if let Some(m) = msg {
+                let _ = self.ast.decls.cold.delete_message.insert(g, m);
+            }
         }
     }
 }
