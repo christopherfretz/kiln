@@ -1108,7 +1108,8 @@ impl Sema<'_, '_> {
             return None;
         }
         let fty = self.ast.decls.get(f).ty()?;
-        let proto = self.ast.types.proto(fty)?;
+        // As written: the new guide's parameters print with `g`'s sugar.
+        let proto = self.ast.types.proto_of(fty.ty())?;
         let ret = proto.ret();
         let ptys: Vec<QualType> = self.ast.types.params(proto).to_vec();
         let variadic = proto.variadic();
