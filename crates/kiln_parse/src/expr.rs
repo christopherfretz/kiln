@@ -1669,6 +1669,21 @@ impl Parser<'_, '_> {
                 Err(()) => Some(self.s.act_on_error_expr(&[], nl)),
             };
         }
+        // [temp.names]/3 (P0846): an unqualified name that lookup finds
+        // nothing or only functions for, followed by `<`, is a
+        // template-name; ADL finds the template at the call
+        // (`get<0>(c)` for `std::complex`). Only taken when a
+        // template-argument-list closed by `>(` follows.
+        if qual.is_none()
+            && self.at(Punct::Less)
+            && matches!(class, NameClass::Undeclared | NameClass::Value(_))
+            && let Some((close, false)) = self.skip_template_args(self.pos())
+            && self.tok_at(close + 1).kind == TokKind::Punct(Punct::LParen)
+            && self.s.is_assumed_template_name(name)
+        {
+            let (args, _, _) = self.parse_template_arg_list()?;
+            return Some(self.s.act_on_assumed_template_id(name, &args, nl));
+        }
         if qual.is_none()
             && class == NameClass::Undeclared
             && self.at(Punct::LParen)

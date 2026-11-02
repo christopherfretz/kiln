@@ -373,6 +373,29 @@ impl Ast {
         }
     }
 
+    /// Records a using-directive in namespace or translation unit `ctx`
+    /// nominating namespace `nominated` ([namespace.udir]). The directive
+    /// is also recorded in each enclosing namespace of which `ctx` is an
+    /// inline member ([namespace.def.general]/7: the members, and so the
+    /// using-directives, of an inline namespace are seen from its
+    /// enclosing namespace), so [`LookupTables::using_directives`] of a
+    /// namespace covers its inline namespace set.
+    ///
+    /// [`LookupTables::using_directives`]: crate::lookup::LookupTables::using_directives
+    pub fn add_using_directive(&mut self, ctx: DeclId, nominated: DeclId) {
+        let nominated = self.first(nominated);
+        let mut cur = self.primary_context(self.redecl_context(ctx));
+        for _ in 0..4096 {
+            self.lookup.add_using_directive(cur, nominated);
+            let inline =
+                self.decls.namespace(cur).is_some_and(crate::decl::NamespaceData::is_inline);
+            match self.decls.get(cur).ctx() {
+                Some(p) if inline => cur = self.primary_context(self.redecl_context(p)),
+                _ => return,
+            }
+        }
+    }
+
     /// The declarations named `name` in context `ctx` (its own table:
     /// no hiding, using-directives or ADL; those rules are sema's). Each
     /// result is the latest declaration of its entity, in order of first
@@ -387,6 +410,51 @@ impl Ast {
     }
 
     // -- classes (spec/sema-class.md §8.1) ------------------------------
+
+    /// Whether `d` is a destroying operator delete
+    /// ([basic.stc.dynamic.deallocation]/5, clang
+    /// `FunctionDecl::isDestroyingOperatorDelete`): a class member
+    /// `operator delete` whose second parameter is
+    /// `std::destroying_delete_t`.
+    pub fn is_destroying_operator_delete(&self, d: DeclId) -> bool {
+        let decl = self.decls.get(d);
+        if decl.kind() != DeclKind::CXXMethod
+            || decl.name().as_operator() != Some(crate::names::OverloadedOperator::Delete)
+        {
+            return false;
+        }
+        let Some(proto) = decl.ty().and_then(|t| self.types.proto(t)) else { return false };
+        let Some(&p1) = self.types.params(proto).get(1) else { return false };
+        self.types.as_record(p1).is_some_and(|r| self.is_std_named(r, "destroying_delete_t"))
+    }
+
+    /// Whether `d` is named `name` and declared in namespace `::std`,
+    /// through inline namespaces (clang `isInStdNamespace`).
+    pub fn is_std_named(&self, d: DeclId, name: &str) -> bool {
+        let named = |x: DeclId, n: &str| {
+            self.decls.get(x).name().as_ident().is_some_and(|s| self.symbols().as_str(s) == n)
+        };
+        if !named(d, name) {
+            return false;
+        }
+        let mut ns = self.decls.get(d).ctx();
+        for _ in 0..64 {
+            let Some(n) = ns else { return false };
+            let Some(data) = self.decls.namespace(n) else { return false };
+            if !data.is_inline() {
+                break;
+            }
+            ns = self.decls.get(n).ctx();
+        }
+        ns.is_some_and(|n| {
+            self.decls.get(n).kind() == DeclKind::Namespace
+                && named(n, "std")
+                && self.decls.get(n).ctx().is_some_and(|c| {
+                    let c = self.redecl_context(c);
+                    self.decls.get(c).kind() == DeclKind::TranslationUnit
+                })
+        })
+    }
 
     /// The destructor of class `record`, if one has been declared (a table
     /// read: never declares the implicit destructor, which is sema's job).

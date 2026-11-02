@@ -245,6 +245,13 @@ pub struct Sema<'a, 'sm> {
     /// decomposition declared in a template, which instantiation
     /// deduces anew (the pattern's own may be deduced, spec/sema.md).
     pub(crate) decomp_written: std::collections::HashMap<DeclId, QualType>,
+    /// The structured binding packs `...xs` declared so far (P1061,
+    /// spec/sema.md §4.9).
+    pub(crate) binding_packs: std::collections::HashSet<DeclId>,
+    /// A binding pack decomposed once its element count is known: the
+    /// bindings it expanded into, which replace it in its decomposition's
+    /// binding list (instantiation maps the pattern pack to them).
+    pub(crate) binding_pack_elems: std::collections::HashMap<DeclId, kiln_ast::ListId>,
     /// clang `RefsMinusAssignments`: per local variable, its references
     /// minus those that are the target of a discarded assignment, and
     /// whether it is a condition variable (clang `isCXXCondDecl`)
@@ -442,9 +449,6 @@ pub struct Sema<'a, 'sm> {
     /// The depth of `synth` whose notes were last printed (clang
     /// `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) synth_noted: std::cell::Cell<usize>,
-    /// The internal `__builtin_memcpy` declaration (spec/sema-class.md
-    /// §4.5), once declared.
-    pub(crate) memcpy_decl: Option<DeclId>,
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
@@ -650,6 +654,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unowned_params: std::collections::HashSet::new(),
             requires_param_scopes: 0,
             decomp_written: std::collections::HashMap::new(),
+            binding_packs: std::collections::HashSet::new(),
+            binding_pack_elems: std::collections::HashMap::new(),
             refs_minus_assign: std::collections::HashMap::new(),
             attr_macros: (0, Vec::new()),
             declared_returns: kiln_source::fx::FxHashMap::default(),
@@ -701,7 +707,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             vtable_uses: Vec::new(),
             vtables_used: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
-            memcpy_decl: None,
             delegating: Vec::new(),
             ctor_entity: None,
             ctor_diag_ty: None,

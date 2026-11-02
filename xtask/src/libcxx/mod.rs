@@ -44,6 +44,9 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
   -j, --jobs <n>         tests in parallel (default 2; an upper bound under a
                          MAKEFLAGS jobserver, see spec/harness.md)
   --timeout <secs>       test binary timeout (default 30)
+  --run-timeout-long <secs>
+                         test binary timeout of a long test: REQUIRES: long_tests,
+                         or listed in xtask/src/libcxx/slow_tests.txt (default 240)
   --compile-timeout <secs>
                          compile/link step timeout (default 120; --profile debug: 300)
   --mem-limit <MiB>      address-space cap per process (default 8192; 0: none)
@@ -109,6 +112,8 @@ pub struct Options {
     pub list: bool,
     pub jobs: usize,
     pub run_timeout: Duration,
+    /// `--run-timeout-long`: the run limit of a long test.
+    pub long_run_timeout: Duration,
     /// `--compile-timeout`; `None` is [`Profile::compile_timeout`].
     pub compile_timeout: Option<Duration>,
     pub mem_limit_mib: u64,
@@ -131,6 +136,7 @@ impl Default for Options {
             list: false,
             jobs: 2,
             run_timeout: Duration::from_secs(30),
+            long_run_timeout: Duration::from_secs(240),
             compile_timeout: None,
             mem_limit_mib: process::DEFAULT_MEM_LIMIT_MIB,
             report: None,
@@ -194,6 +200,10 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                     v.parse().ok().filter(|&n| n > 0).ok_or_else(|| format!("bad --jobs `{v}`"))?;
             }
             "--timeout" => o.run_timeout = parse_secs("--timeout", &value("--timeout")?)?,
+            "--run-timeout-long" => {
+                o.long_run_timeout =
+                    parse_secs("--run-timeout-long", &value("--run-timeout-long")?)?;
+            }
             "--compile-timeout" => {
                 o.compile_timeout =
                     Some(parse_secs("--compile-timeout", &value("--compile-timeout")?)?);
@@ -409,7 +419,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
         return Err("no tests selected".into());
     }
     let cfg_cache = load_local_cfgs(&test_root, &tests);
-    let features = features::all();
+    let features = features::detect();
     let feature_refs: Vec<&str> = features.iter().map(String::as_str).collect();
 
     if opts.list {
@@ -422,8 +432,19 @@ fn execute(opts: &Options) -> Result<bool, String> {
                 || run::prepare(kind, &text, &local_cfgs(&cfg_cache, &test_root, p), &feature_refs),
                 |r| Err(Outcome::Unsupported(r)),
             ) {
-                Ok((_, _, Some(x))) => format!("run (XFAIL: {x})"),
-                Ok(_) => "run".to_owned(),
+                Ok((d, _, xfail)) => {
+                    let mut v = "run".to_owned();
+                    if let Some(x) = xfail {
+                        let _ = write!(v, " (XFAIL: {x})");
+                    }
+                    if let Some(why) = run::is_long(rel, &d) {
+                        let _ = write!(v, " (long: {why})");
+                    }
+                    if d.allow_retries > 0 {
+                        let _ = write!(v, " (ALLOW_RETRIES: {})", d.allow_retries);
+                    }
+                    v
+                }
                 Err(o) => o.to_string(),
             };
             println!("{:<13} {rel}  {verdict}", kind.label());
@@ -451,6 +472,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
         features: features.clone(),
         compile_timeout: opts.compile_timeout(),
         run_timeout: opts.run_timeout,
+        long_run_timeout: opts.long_run_timeout,
         mem: MemLimit::from_mib(opts.mem_limit_mib),
         probe,
         scratch: scratch.clone(),
@@ -598,6 +620,13 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
     if let Some(t) = opts.compile_timeout {
         let _ = write!(command, " --compile-timeout {}", t.as_secs_f64());
     }
+    let defaults = Options::default();
+    if opts.run_timeout != defaults.run_timeout {
+        let _ = write!(command, " --timeout {}", opts.run_timeout.as_secs_f64());
+    }
+    if opts.long_run_timeout != defaults.long_run_timeout {
+        let _ = write!(command, " --run-timeout-long {}", opts.long_run_timeout.as_secs_f64());
+    }
     let _ = write!(command, " -j {}", opts.jobs);
     let mut flags = cfg.base_compile_flags();
     for f in &mut flags {
@@ -620,15 +649,16 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
         command,
         compile_flags: format!("{} <ADDITIONAL_COMPILE_FLAGS> <test>", flags.join(" ")),
         link_flags: format!("t.o -o t.exe {}", Config::link_flags().join(" ")),
-        features: features::all().iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", "),
+        features: cfg.features.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", "),
         limits: format!(
-            "{} per process (kiln: plus its stack reservation); compile/link timeout {} s; run timeout {} s; -j {}",
+            "{} per process (kiln: plus its stack reservation); compile/link timeout {} s; run timeout {} s ({} s for long tests); -j {}",
             cfg.mem.map_or_else(
                 || "no memory cap".to_owned(),
                 |m| format!("{} MiB address space", m.mib)
             ),
             cfg.compile_timeout.as_secs(),
             cfg.run_timeout.as_secs_f64(),
+            cfg.long_run_timeout.as_secs_f64(),
             opts.jobs
         ),
         rss_source: cfg.probe.source_id().to_owned(),

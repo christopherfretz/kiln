@@ -812,7 +812,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 i += 1;
             }
             let name = self.ident_of(self.tok_at(i))?;
-            let mut class = self.s.classify_name(name, qual);
+            // A name before `::` is looked up for a scope only
+            // ([basic.lookup.qual]/1).
+            let mut class = if self.tok_at(i + 1).kind == TokKind::Punct(Punct::ColonColon) {
+                self.s.classify_nested_name(name, qual)
+            } else {
+                self.s.classify_name(name, qual)
+            };
             if dep_tid && matches!(class, NameClass::Type(..)) {
                 class = NameClass::Dependent;
             }
@@ -1197,6 +1203,21 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// scope it names (`Err` after an error).
     pub(crate) fn decltype_scope_qual_at(&self, i: usize) -> Option<Result<DeclId, ()>> {
         self.decltype_scope_at(i).map(|d| d.qual.map(|q| q.0).ok_or(()))
+    }
+
+    /// After a nested-name-specifier that failed just past one of its
+    /// `::`s: skips the components that follow it
+    /// ([`Parser::skip_qualified_rest`]).
+    pub(crate) fn skip_after_failed_qualifier(&mut self) {
+        let Some(cc) = self.pos.checked_sub(1) else { return };
+        if self.tok_at(cc).kind != TokKind::Punct(Punct::ColonColon) {
+            return;
+        }
+        if let Some(end) = self.skip_qualified_rest(cc) {
+            while self.pos < end {
+                self.bump();
+            }
+        }
     }
 
     /// The index after the components following the `::` at token `cc`,

@@ -230,7 +230,7 @@ impl Sema<'_, '_> {
     /// empty slice when there is no base-clause. Invalid specifiers are
     /// diagnosed and dropped; the class stays valid.
     pub fn act_on_base_specifiers(&mut self, r: DeclId, specs: &[BaseSpecInfo]) {
-        self.attach_bases(r, specs);
+        let _ = self.attach_bases(r, specs);
     }
 
     /// `public:` / `protected:` / `private:` at `loc` in the class being
@@ -262,6 +262,34 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         let base = self.ctad_friend_check(ds, base, d);
         self.declare_friend(ds, base, d, friend_loc)
+    }
+
+    /// One friend-type-specifier of a friend-type-specifier-list
+    /// (`friend A, struct B, Ts...;`, [class.friend]/3, P2893), whose type
+    /// is `base`; `ellipsis` is its `...`, making it a pack expansion
+    /// ([temp.variadic]/5.6) that befriends each element when its class
+    /// template is instantiated. A `...` after a type that names no pack
+    /// is "pack expansion does not contain any unexpanded parameter
+    /// packs" at the `...` (nothing is declared). Returns the `Friend`
+    /// declaration.
+    pub fn act_on_friend_type(
+        &mut self,
+        ds: &DeclSpec,
+        base: QualType,
+        ellipsis: Option<Loc>,
+        friend_loc: Loc,
+    ) -> Option<DeclId> {
+        let base = match ellipsis {
+            Some(at) if !self.is_error_type(base) && !self.has_unexpanded_pack(base) => {
+                self.friend_tag = None;
+                self.error(DiagId::sema_pack_expansion_without_packs, at);
+                return None;
+            }
+            Some(_) if self.is_error_type(base) => base,
+            Some(_) => self.ast.types.pack_expansion(base, None),
+            None => base,
+        };
+        self.act_on_friend(ds, base, None, friend_loc)
     }
 
     /// `= default;` after the declarator of function `f`

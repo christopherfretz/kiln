@@ -148,7 +148,16 @@ included). The defects found so far, each with the test that records it:
 tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)
 with kiln. It reimplements the subset of lit that the gates need: suffix
 classification, `REQUIRES`/`UNSUPPORTED`/`XFAIL` with lit's boolean grammar
-over a static feature set, and `ADDITIONAL_COMPILE_FLAGS`. `--gate m3` is
+over a static feature set (plus the `locale.*` features, detected from
+`locale -a`), `ADDITIONAL_COMPILE_FLAGS`, and `ALLOW_RETRIES`. Long tests
+(`REQUIRES: long_tests`, or listed in `xtask/src/libcxx/slow_tests.txt`) run
+under `--run-timeout-long` (240 s) instead of `--timeout` (30 s).
+`scripts/provision-locales.sh` (Debian, as root; idempotent) generates the
+seven locales libc++'s tests ask for (`en_US.UTF-8`, `fr_FR.UTF-8`,
+`ja_JP.UTF-8`, `ru_RU.UTF-8`, `zh_CN.UTF-8`, `cs_CZ.ISO8859-2`,
+`fr_CA.ISO8859-1`); without it about 150 localization, iostreams, `<regex>`,
+`<format>` and `<chrono>` tests are UNSUPPORTED. Run it once per container
+before a libc++ run (`spec/libcxx.md` "Feature set"). `--gate m3` is
 the M3 exit gate. A run's `--report` regenerates the per-directory table and
 the error-cluster table of a status page (`docs/status/libcxx-m3.md`). It is
 run by hand or periodically, and the pass rate is tracked there. The

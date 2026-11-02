@@ -27,8 +27,8 @@ deviation is listed in §1.5.
 | Declarations | class, function, variable and alias templates; member templates; concepts; abbreviated function templates; friend templates | `export` and modules reachability (M4) |
 | Specialization | implicit instantiation, partial and explicit specialization, explicit instantiation (declaration and definition) | — |
 | Deduction | calls, explicit args, defaults, address of overload set, conversion functions, `auto`/`decltype(auto)`, NTTP `auto`, partial ordering | deducing `this` (M4) |
-| CTAD | implicit guides from constructors and constructor templates, the copy guide, user-declared guides, aggregate CTAD (P1816), alias CTAD (P1814), guides of member templates of instantiated class templates, [over.match.list] phase 1 (WP-071b, WP-134) | inherited-ctor CTAD (P2582; clang 19 has no support) |
-| Packs | type, value and template packs; expansion in every context in §2.7; folds; `sizeof...`; pack indexing P2662 | structured-binding packs P1061 (clang 19 has no support, M4); variadic friends P2893 (M4); expansion statements P1306 (M6, with reflection) |
+| CTAD | implicit guides from constructors and constructor templates, the copy guide, user-declared guides, aggregate CTAD (P1816), alias CTAD (P1814), inherited-constructor guides (P2582, §6.6.1), guides of member templates of instantiated class templates, [over.match.list] phase 1 (WP-071b, WP-134) | inherited-ctor guides through a base named by the injected-class-name (`using G::F::F;`), and an alias template of a class template that inherits constructors |
+| Packs | type, value and template packs; expansion in every context in §2.7; folds; `sizeof...`; pack indexing P2662 | expansion statements P1306 (M6, with reflection) |
 | Concepts | normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto` | fold-expanded constraints P2963 (clang 19 has no support, M4); concept and variable-template template parameters P2841 (M5) |
 | Reflection | — | splices as template arguments (M6) |
 
@@ -345,6 +345,7 @@ All of these are built by sema actions, which compute dependence as in
 | `obj.f(args)` that names an overload set of members | `UnresolvedMemberExpr` |
 | `a op b` with a type-dependent operand | `CXXOperatorCallExpr` whose callee is an `UnresolvedLookupExpr` holding the operator functions found by unqualified lookup at definition ([temp.dep.candidate]); if none are found, a `BinaryOperator`/`UnaryOperator` of dependent type (clang) |
 | `typename T::type` | `DependentName` type (canonical keyword `typename`, types.md §18) |
+| `class-key T::X` (`struct`/`class`/`union`/`enum`) with a dependent qualifier, as a reference or in `friend class-key T::X;` ([dcl.type.elab]/1-3, [class.friend]/3; WP-332) | `DependentName` type with the class-key as its keyword (parser `parse_tag_specifier`, clang `ActOnDependentTag`); with `friend`, a friend type. Instantiation (`dependent_tag_name`) looks up a tag of the substituted class: none gives `no struct named 'X' in 'Q'`, a tag of the other kind `use of 'X' with tag type that does not match previous declaration`. Gap: a found typedef reports the first (clang: `type alias 'X' cannot be referenced with the 'struct' specifier`) |
 | `typename T::template X<U>` | `DependentTemplateSpecialization` type |
 | `X<T>` where `X` is a class template | dependent `TemplateSpecialization` type |
 | `T(args)` / `T{args}` with dependent `T` | `CXXUnresolvedConstructExpr` (list flag) |
@@ -493,6 +494,7 @@ type parameter named `auto:N`, as in clang's dump.
 | function parameter pack | `void f(T... t)` | declarator | yes |
 | template parameter pack that is a pack expansion | `template<T... v>` | §2.1 | yes |
 | initializer-list / call arguments | `f(a...)`, `{a...}`, `T(a...)` | expression-list | yes |
+| braced-init-list pattern ([temp.variadic]/5.4, WP-332) | `{{t, 1}...}`, `f({t, 1}...)`, `: m{{t, 1}...}`, `{.m = {t}...}` | `parse_init_list` / expression-list: `act_pack_expansion_list` keeps the list unanalyzed (an `InitListExpr` of type `void`) under a `PackExpansionExpr`; instantiation (`init_items`, `written_list`, `call_arg_list`) rebuilds one braced-init-list (or braced argument) per element | yes |
 | base-specifier-list | `struct D : B<T>... {}` | base clause (WP-065) | yes |
 | mem-initializer-list | `D() : B<T>(0)... {}` | ctor-initializer (WP-065) | yes |
 | template-argument-list | `X<T...>` | §2.2 | yes |
@@ -503,8 +505,8 @@ type parameter named `auto:N`, as in clang's dump.
 | fold-expression | `(t + ...)` | parenthesized primary | yes |
 | pack-index | `t...[0]`, `T...[0]` | postfix and type | yes |
 | attribute-list | `[[a...]]` | — | rejected, as clang |
-| structured-binding pack | `auto [...xs] = e` | — | M4 |
-| friend pack | `friend T...;` | — | M4 |
+| structured-binding pack | `auto [...xs] = e` | decomposition declarator (P1061, §7.1) | yes |
+| friend pack | `friend T...;` | friend-type-specifier-list (P2893, §7.1) | yes |
 
 A pattern that names no unexpanded pack is "pack expansion does not
 contain any unexpanded parameter packs" at the `...`
@@ -640,6 +642,7 @@ never recomputed (ast.md §5). The rules follow [temp.dep.expr],
 | `CXXFoldExpr` | its operands' deps without UNEXPANDED_PACK (for the pack operand) |
 | `UnresolvedLookupExpr` | TYPE \| VALUE \| INST if any explicit template arg is dependent; otherwise `requires_adl` decides at the `CallExpr` |
 | a lambda in a dependent context | INST |
+| a named or C-style cast to a dependent type (`dependent_cast`) | its type's deps; the value category is the target's, read through sugar (`static_cast<result_type>(b)` with `typedef X<R>& result_type;` is an lvalue, rebuilt as a reference cast; libstdc++ future:751; WP-332, test `expr.static.cast/libstdcxx-dependent-cast-to-reference-typedef.cpp`) |
 | any of the above with an error operand | plus ERROR |
 
 INST alone means the expression mentions a template parameter but neither
@@ -908,6 +911,32 @@ with the enclosing specialization's levels plus the deduced arguments
 (`template <forward_range T> struct cat<T>` in libc++'s
 `lazy_split_view`; WP-276).
 
+Member bodies of an in-class partial specialization of a member class
+template ([temp.local]/8, [class.mem.general]/7; WP-332): the bodies,
+default arguments and *noexcept-specifier*s are parsed after the
+outermost enclosing class is complete, and the replay re-enters the
+partial's own template parameter scope (`act_on_reenter_template_scopes`
+takes a partial specialization's parameter list from its
+`PartialSpecInfo`, as it takes a member class template's from its
+template), so `I` in `template<class I> struct cmp<I, void> { int f()
+{ return I(1); } };` names the parameter. libstdc++ stl_list.h:189,
+chrono:2449, ranges:1888. Tests:
+`temp.spec.partial.member/libstdcxx-member-partial-spec-params-in-body.cpp`,
+`temp.spec.partial.member/libstdcxx-constrained-member-partial-spec.cpp`.
+
+Out-of-line members of a partial specialization whose argument list is
+the primary's own (`template<class V> requires fw<V> class C<V>`;
+[temp.spec.partial.member]/1, [temp.over.link]/6; WP-332): the qualifier
+`C<V>::` in `template<class V> requires fw<V> template<bool B> class
+C<V>::It` names the partial, not the primary, when the matching
+enclosing template head's requires-clause is equivalent to the
+partial's and not to the primary's (`current_instantiation` →
+`own_args_partial`, only while entering a declarator context). Without
+it the head was matched against the primary and diagnosed as "requires
+clause differs". libstdc++ ranges:6380 (`chunk_view<_Vp>::_Iterator`).
+Tests: `temp.spec.partial.member/libstdcxx-out-of-line-member-of-constrained-partial-same-args.cpp`,
+`temp.mem.class/libstdcxx-constrained-partial-spec-member-def.cpp`.
+
 Out-of-class partial specializations of a member template (WP-150):
 `template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
 - The parser takes `Outer<T>::` as a tag qualifier and enters its scope
@@ -1101,6 +1130,11 @@ errors.
      that already has attributes. `[[deprecated]]` names a function
      template specialization with its arguments (`'f<int>' is
      deprecated`, clang `getNameForDiagnostic`).
+   - A member typedef or alias-declaration gets the pattern's `aligned`
+     attributes, a dependent operand substituted (`var_align_attrs` in
+     `typedef_decl_in`; clang `InstantiateAttrs`; WP-335): libc++'s
+     `atomic_ref` names its object through `typedef _Tp _Aligned_Tp
+     __attribute__((aligned(required_alignment)))`.
    - **member declarations**. [temp.inst]/3 decides what happens to each
      kind of member:
 
@@ -1201,6 +1235,12 @@ class name" at `B`
   canonical type is the dependent `A<T…>` (types.md T6).
 - `A` followed by `<`, or used as a template template argument, is the
   template-name ([temp.local]/1–2).
+- A template argument `ns::A` or `C::A` whose qualifier is a namespace
+  or the class `A` is a member of finds the template itself, never an
+  injected-class-name, so inside `A`'s own definition it is a template
+  template argument too (the parser's `names_member_template`; libstdc++
+  `_UnClos<__negate, std::_Expr, _Clos>` in `_Expr`, WP-332). Test:
+  `tests/conformance/temp.local/libstdcxx-qualified-template-name-in-own-class.cpp`.
 - Substituting an `InjectedClassName` gives
   `Record(get_class_spec(tmpl, level args))`. It always hits the map,
   because the specialization exists.
@@ -2287,6 +2327,15 @@ A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the
 result is `MiscellaneousDeductionFailure` (clang).
+A non-type argument of `P` that is not a deduced parameter but a value
+already (a written constant, or an explicitly given parameter substituted
+into `P`, [temp.deduct]/2) is compared with `A`'s value during the match:
+unequal values are `NonDeducedMismatch`, so the base walk moves on to the
+next base (`check_nondeduced_value`; clang converts the substituted
+argument to an integral one). `std::get<1>(tuple)` matches
+`_Tuple_impl<1, _Head, _Tail...>` against the second base, not the first
+(`tests/conformance/temp.deduct.call/libstdcxx-base-explicit-nttp-mismatch.cpp`,
+WP-332).
 
 A dependent class template-id `P` written with fewer arguments than its
 template has is first completed with the template's default arguments
@@ -2526,13 +2575,16 @@ built and cached in `guides[X]` (from the definition's template, never a
 friend first declaration's deeper head, §4.8.1):
 - one implicit guide per constructor of the primary pattern;
 - the copy-deduction candidate `X(X<T…>) -> X<T…>`;
-- every namespace-scope `CXXDeductionGuide` declared so far.
+- every namespace-scope `CXXDeductionGuide` declared so far;
+- the guides from inherited constructors (§6.6.1), formed on each use
+  (the base may gain user guides later) and cached per source guide.
 Building it uses the `BuildingDeductionGuides` frame.
 
 The set then goes through overload resolution with the initializer as
 the arguments. The result type is the guide's return type, after
-substitution. If several best guides tie, the [over.match.best]/2.10–12
-tie-breakers apply.
+substitution (for a guide from an inherited constructor, mapped to the
+derived class, §6.6.1). If several best guides tie, the
+[over.match.best.general]/2.10–13 tie-breakers apply.
 
 For list-initialization, overload resolution is [over.match.list]:
 initializer-list guides first, with the whole list as the argument.
@@ -2593,7 +2645,56 @@ with the argument's template, after which the placeholder is deduced as
 above (libc++ `ranges::to`; WP-198).
 
 **Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
-implemented and what is deferred (P2582 inherited-constructor guides).
+implemented and what is deferred.
+
+#### 6.6.1 Guides from inherited constructors (P2582, `ctad/inherit.rs`)
+
+[over.match.class.deduct]/1, last paragraph (C++23): when class template
+`C` is defined and inherits constructors from a direct base denoted in its
+base-specifier-list by `B`, let `A` be the alias template
+`template<C's parameters> using A = B;`. If `A` is deducible, the guides
+of `A` are guides of `C`, each with its return type `R` replaced by
+`CC<R>::type`: the specialization of `C` whose arguments are deduced from
+`R` against `B`.
+- **Which bases** (`inherited_ctor_bases`): each `Using` or (dependent)
+  `UnresolvedUsingValue` member of `C`'s pattern definition named by a
+  constructor name, whose nested-name-specifier is a type equal
+  (canonically) to a non-pack base-specifier's type. Only a `B` that is a
+  specialization of a class template contributes. The definition's
+  `HAS_INHERITED_CTOR` bit short-circuits the scan.
+- **Deducible** `A`: every template parameter of `C` is deduced from `B`
+  against itself (`alias_deducible(C, B, B)`; an undeduced pack is
+  empty). `template<class T> struct E : B<int> { using B<int>::B; };`
+  gets no guides from `B`.
+- **Forming** (`inherited_guide`, cached in `ctad_alias_cache` under
+  `(C, g)`): the guides of `B`'s template are its full set (implicit,
+  copy, user-declared; no aggregate candidate), except ones it inherited
+  itself. A guide template goes through the alias transform
+  (`build_alias_guide(C, B, g)`, §6.6), so its deducibility constraint
+  (`templ.ctad_alias`) is exactly that `CC<R>` matches. A non-template
+  guide is cloned with `C<...>` as its return type, or dropped when `CC<R>`
+  does not match. Each formed guide is recorded in `templ.ctad_inherited`.
+- **Result** (`ctad_result_type`): the selected guide template's
+  substituted `R` is deduced against `B` and `C`'s injected-class-name is
+  substituted with the deduced arguments.
+- **Ranking** ([over.match.best.general]/2.10, `better`): a guide not
+  formed from an inherited constructor beats one that is when their
+  parameters for the arguments have the same types (`same_guide_params`).
+  It comes before /2.11 (user-declared over implicit).
+- **Notes** print such a guide as an alias guide is printed:
+  `requires __is_deducible(C, B<X *>) C(X *) -> B<X *>` (no clang text
+  exists).
+- `__cpp_deduction_guides` stays 201703L, as in clang 19 and 22.
+- **Not done:** a base named through the injected-class-name
+  (`using G::F::F;` in the standard's example) fails earlier, in
+  using-declaration lookup. Guides `B` inherited itself, and an alias
+  template whose target inherits constructors, contribute nothing.
+
+Tests: `tests/conformance/over.match.class.deduct/p2582-inherited-guides.cpp`
+(the standard's example with `F<U, T, int>` written out, constructor
+templates, user guide templates, /2.10, packs, casts and `new`),
+`.../p2582-not-deducible.cpp` (`D`, `E` and a non-matching `R`),
+`.../run-p2582.cpp`, `.../p2582-probe.cpp`.
 
 The M3 exit headers need only the user-declared guides:
 `array(_Tp, _Up...)`, the `span` guides and the `basic_string_view`
@@ -2621,9 +2722,21 @@ guides.
    deducing f2's params from f1's synthesized types succeeds for every
    pair. Packs follow /8–11. The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
-5. **Constraints.** If both directions succeed and the template-heads are
-   equivalent, the more constrained one wins
-   ([temp.func.order]/6, P2113; subsumption §8.4).
+5. **Constraints.** If both directions succeed, the more constrained one
+   wins ([temp.func.order]/6, P2113; subsumption §8.4), but only when the
+   constraints are comparable (`constraints_comparable`, clang
+   `getMoreSpecializedTemplate`; WP-339): the template-parameter-lists
+   and the function parameter lists (all declared parameters, after the
+   /3 object parameter and reversal) have the same length (/6.1), the
+   corresponding template parameters are equivalent ignoring their
+   type-constraints (same kind, packness, non-type parameter type,
+   template template parameter head) and the positionally corresponding
+   parameter types are the same ignoring top-level cv (/6.2.2), and, for
+   a conversion, the conversion types are the same. Otherwise neither is
+   more specialized: for CTAD the later [over.match.best]/2.11-2.13
+   tie-breakers decide (a constrained constructor guide
+   `zt(const tp<D>&) requires C` against the user guide `zt(tp<D>)` of a
+   two-parameter class template: the user guide wins).
 6. **Result.** `Some(winner)` or `None` (ambiguous).
 
 `po_cache: (f1, f2, ctx, nargs) → Option<DeclId>` is valid because
@@ -2828,6 +2941,43 @@ The `SpecKind` transitions are those of §4.5.
 | function parameter pack (instantiated) | N `ParmVar`s; a reference that cannot expand yet is a `FunctionParmPackExpr` |
 | pack substituted while an inner pattern is still unexpanded | `SubstTemplateTypeParmPack`, `SubstNonTypeTemplateParmPackExpr` |
 | using-declaration pack | a `UsingPack` decl |
+| structured binding pack (pattern, P1061) | a `Binding` in `Sema::binding_packs`, of type `PackExpansion(DEPENDENT)` |
+| structured binding pack (decomposed) | N `IMPLICIT` `Binding`s of the pack's name (`Sema::binding_pack_elems`) that replace it in the decomposition's binding list (`Decls::expand_decomp_bindings`) |
+| friend pack (P2893) | a `Friend` whose `FriendTarget::Type` is `PackExpansion(T)` |
+
+**Structured binding packs** ([dcl.struct.bind]/1, [temp.variadic]/5,
+P1061, WP-359). `auto [a, ...xs] = e;` is allowed only in a templated
+entity (`sema_pack_outside_template`, clang 22 "pack declaration outside
+of template"), with at most one pack (`sema_decomp_decl_multiple_packs`
+with `note_previous_binding_pack`); either error drops the declaration,
+as clang does. Before C++26 it warns `parse_ext_binding_pack`
+(`-Wc++26-extensions`). In the pattern the decomposition is never
+decomposed, even for a non-dependent initializer (clang 22): every
+binding is dependent and the pack an unexpanded `PackExpansion(DEPENDENT)`.
+`is_pack_decl` counts the pack, so `sizeof...(xs)`, `xs...`, folds and
+`xs...[i]` see it. When the instantiated decomposition knows its element
+count `n` (array, tuple-like, member-wise), `expand_binding_pack`
+introduces `n - (bindings - 1)` implicit bindings of the pack's name and
+the count check treats the pack as that many names
+(`wrong_number_of_bindings` when there are fewer elements than non-pack
+names; its text is clang 19's "decomposes into N elements", where clang 22
+says "binds to": a wording follow-up). The
+substituter then maps the pattern pack to that list (`remap_binding_pack`
+after the declaration statement, `DeclOrPack::Pack`), so later expansions
+expand over the new bindings. If the decomposition failed, the pack goes
+into `failed_locals` and its uses fail silently (already diagnosed). A
+pack in a generic lambda whose levels are retained stays a pack. Tests
+`tests/conformance/dcl.struct.bind/pack*.cpp`, `run-pack-fold.cpp`.
+
+**Friend packs** ([class.friend]/3, [temp.variadic]/5.9, P2893, WP-359):
+`friend Ts...;` is a `Friend` of type `PackExpansion(Ts)`
+(`act_on_friend_type`); `friend_decl` in the substituter expands it into
+one `act_on_friend` per element. A friend type or function naming an
+unexpanded pack outside an expansion is `sema_unexpanded_pack`
+("friend declaration contains unexpanded parameter pack 'Ts'"); a `...`
+whose pattern names no pack is "pack expansion does not contain any
+unexpanded parameter packs". The friend-type-specifier-list parse is in
+spec/parse.md.
 
 An unexpanded pack is the `UNEXPANDED_PACK` bit on types, expressions and
 template args. Every *full-expression*, declarator, base-specifier and
@@ -2876,6 +3026,19 @@ takes its initializer's dependence without `UNEXPANDED_PACK`
     accepted). `Sema::diagnose_unexpanded_pack` (`templ/pack.rs`, emits
     `sema_unexpanded_pack`; WP-302) is the reusable collector and
     diagnostic for the remaining sites.
+
+**By-copy captures of template-local classes** ([expr.prim.lambda.capture]/10,
+/15, [temp.dep.type]/7, WP-332). In a template definition, a local class
+of the template or a member class of the current instantiation
+(`DEPENDENT_CTX`) declares no implicit special members (clang
+`CanDeclareSpecialMemberFunction`). A by-copy capture (simple or
+implicit) or a structured binding of an object of such a class keeps the
+plain reference as its initializer (`init_subobject_from`), and an
+init-capture of such a dependent class type keeps its initializer
+unconverted, as a variable does (`defer_dependent_init`). The copy is
+selected and checked when the template is instantiated. Test:
+`expr.prim.lambda/libstdcxx-copy-capture-local-class-in-template.cpp`
+(libstdc++ pstl/algorithm_impl.h:1978).
 
 ### 7.2 Expansion: `expand(pattern, site) -> Result<Expansion, SubstFail>`
 
@@ -3108,6 +3271,23 @@ whose head the notes name. It evaluates:
     in a namespace (with no `this`), the substitution runs inside
     `in_inst_context(namespace)` (`sat_atom_uncached`, WP-201; libc++
     `ranges::__movable_box` concepts checked from `<string_view>`).
+  - Static member functions and function templates of a class template
+    pattern named by an unqualified callee (`ok<U...>()`) are not looked
+    up again: the callee keeps the declarations and becomes a qualified
+    reference (`retained_static_members` → `qualified_callee`), each
+    mapped to the member of the substituted specialization by
+    `find_instantiated_decl`. This is what makes the implicit deduction
+    guide of a constructor (template) work, whose requires-clause is
+    checked outside the class ([over.match.class.deduct]/1; libstdc++
+    tuple:980 under `views::single(tuple{})`). Test:
+    `over.match.class.deduct/libstdcxx-guide-constraint-names-static-member.cpp`.
+  - A member function template specialization the pattern already
+    selected (`ok<int>()` with non-dependent arguments, resolved at the
+    definition) is named again as the same specialization of the
+    instantiated member template (`respecialized_member_template`); the
+    pattern's own specialization stayed value-dependent. Test:
+    `temp.constr.decl/libstdcxx-member-template-call-in-requires-clause.cpp`.
+    WP-332.
   - A substitution failure means not satisfied, with the captured
     diagnostic recorded.
   - Otherwise the expression must have type exactly `bool`. Anything else
@@ -3131,7 +3311,14 @@ whose head the notes name. It evaluates:
     constraint that stays value-dependent after substitution",
     `sat_atom_uncached` in `templ/concepts/sat.rs`), and the fix for any
     reachable case is in the substitution, not this guard. No known
-    program reaches it (libc++ M3 gate, WP-325).
+    program reaches it (libc++ M3 gate, WP-325). One did (WP-335,
+    libc++'s pstl `__cpp17_destructible` = `requires(_Tp __v) {
+    __v.~_Tp(); }`): an implicit member of a non-template class
+    declared while a template definition was being parsed (`S x;` in a
+    function template body declares `S::~S()`) took `DEPENDENT_CTX`
+    from the ambient `dependent_depth`, so `v.~S()` was
+    instantiation-dependent after substitution. Implicit members now
+    follow their class's dependence (`declare_implicit`, spec/sema-class.md §8).
 - **`And` and `Or`** short-circuit from left to right.
 - **Context.** Atomic constraints are substituted in the context of the
   constrained entity's declaration (its semantic `DeclContext`, via
@@ -3307,7 +3494,7 @@ trait of its own.
 | `__is_convertible(F,T)` / `__is_nothrow_convertible(F,T)` | `conv_check(F,T).ok` (and `.nothrow`). WP-131 landed them (and `__is_convertible_to`): `To` void is true only for `From` void; `To` function or array, or `From` void, is false; otherwise the copy-initialization of a `To` from an opaque `declval<From>()` operand under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `conv_check` |
 | `__is_constructible(T,A…)` / `__is_trivially_constructible` / `__is_nothrow_constructible` | `init_check(T, A…, Direct)`: `.ok`, `.ok && .trivial`, `.ok && .nothrow`. A reference `T` takes exactly one argument; it still counts as constructible when the reference binds to a temporary created by an implicit conversion (clang 19; only `__reference_constructs_from_temporary` excludes that). WP-131 landed `__is_constructible` and `__is_nothrow_constructible`: a temporary's direct-initialization (value-initialization for no arguments) built on opaque `declval` operands under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `init_check` |
 | `__is_assignable(T,U)` / `__is_trivially_assignable` / `__is_nothrow_assignable` | `declval<T>() = declval<U>()` is well-formed (unevaluated), and is trivial / cannot throw. `__is_nothrow_assignable` landed in WP-131 (`!can_throw` of the WP-130 assignment) | `init_check(Assign)` |
-| `__is_destructible(T)` / `__is_nothrow_destructible(T)` / `__is_trivially_destructible(T)` | [meta.unary.prop] (`void`, functions and arrays of unknown bound are false) | `cls.dtor` |
+| `__is_destructible(T)` / `__is_nothrow_destructible(T)` / `__is_trivially_destructible(T)` | [meta.unary.prop] (`void`, functions and arrays of unknown bound are false); the destructor's uninstantiated noexcept-specifier is instantiated first ([temp.inst]/14, WP-335) | `cls.dtor` |
 
 Two more behave the same way but are only probed, not used, by the M3
 headers. They are implemented in M3 because they cost one row each:
@@ -4120,7 +4307,16 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   a member (`DP<V, IP>` in `Outer<int>`) is reported at the template-id,
   not at the argument, since substituted types keep no argument
   locations.
-- P0846 (ADL for an unknown name followed by `<`) is not implemented.
+- P0846 ([temp.names]/3, WP-336): an unqualified name that ordinary
+  lookup finds nothing (no builtin) or only non-member functions for,
+  followed by a template-argument-list closed by `>(`, is assumed a
+  template-name (`Sema::is_assumed_template_name`). It becomes an ADL
+  `UnresolvedLookupExpr` carrying the explicit arguments
+  (`act_on_assumed_template_id`); substitution keeps the arguments when
+  the definition-context set is empty, so ADL at instantiation deduces
+  with them (`get<0>(c)` for `std::complex`). Without the `>(` lookahead
+  `<` stays less-than (clang also assumes a template there and
+  diagnoses).
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is
   unsupported.
@@ -5558,7 +5754,7 @@ Goldens mask `*_us`.
 - `fold_big.cpp` (a fold over 4096 elements);
 - `libcxx_m3.cpp` (includes the 8 exit headers and instantiates their
   typical uses);
-- the mirrorbind synthetic corpus, when WP-030 delivers it.
+- the reference-workload synthetic corpus, when WP-030 delivers it.
 
 *Landed (WP-086).* `cargo xtask bench` passes kiln
 `-fkiln-instantiation-report=json` for every entry of the `frontend`
@@ -5866,10 +6062,10 @@ Each question has a recommendation (R).
     lowering and codegen iterative along binary spines in M3, and test
     with `fold-65536.cpp`. Otherwise kiln depends on the stack guard and
     fails where clang succeeds.
-17. **Q17: Deferred C++26 features**: structured-binding packs (P1061),
-    fold-expanded constraints (P2963), variadic friends (P2893) and
-    concept template parameters (P2841). **R:** M4/M5, when the clang
-    oracle supports them.
+17. **Q17: Deferred C++26 features**: fold-expanded constraints (P2963)
+    and concept template parameters (P2841). **R:** M4/M5, when the clang
+    oracle supports them. Structured-binding packs (P1061) and variadic
+    friends (P2893) landed in WP-359 against clang 22 (§7.1).
 
 ### Supervisor decisions
 
@@ -5891,5 +6087,5 @@ Each question has a recommendation (R).
 | Q14 | Subsumption cap 65,536 clauses, diagnosed as an error. |
 | Q15 | Reserved depths recorded in types.md §5.3; user templates limited to depth < 0x7FF0. |
 | Q16 | Dumper, Oven lowering and codegen are iterative along binary spines in M3, tested by `fold-65536.cpp` (owner: WP-072 adds the test; each walker's owner crate fixes its walker; the Oven's `compile.rs` is WP-076's). |
-| Q17 | P1061, P2963, P2893, P2841 deferred to M4/M5. |
+| Q17 | P2963, P2841 deferred to M4/M5; P1061, P2893 landed (WP-359). |
 | Q3 (2026-10-31) | Measured in WP-106 (§14 Q3): sharing saves 0.8% of `inst.bytes` on `libcxx_m3.cpp` (≤3% counting literal leaves), below the 15% bar. Q3 is closed: sharing stays as the substituter's base case via `needs_rebuild`; no `ExprDeps::LOCAL` bit, no `-fno-share-nondependent` flag. |

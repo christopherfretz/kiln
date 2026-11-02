@@ -58,6 +58,7 @@ cargo xtask libcxx [options] [<dir>...]
 | `--list` | Print each selected test's kind and pre-run verdict (`run`, `run (XFAIL: …)`, `UNSUPPORTED (…)`). Nothing is compiled. |
 | `-j, --jobs <n>` | Tests in parallel. Default 2. |
 | `--timeout <secs>` | Test-binary run limit. Default 30. |
+| `--run-timeout-long <secs>` | Test-binary run limit of a long test (see "Timeouts and retries"). Default 240. |
 | `--compile-timeout <secs>` | Limit of each compile and link step. Default 120 s for `harness` and `release`, 300 s for `debug` (also with `--compiler`: the default follows `--profile`). |
 | `--mem-limit <MiB>` | Address-space cap for every process (`spec/harness.md` "Resource limits"). kiln steps get kiln's stack reservation on top. Default 8192. `0` means no cap. |
 | `--report <file.md>` | Write the generated region of a status page (see "Report"). |
@@ -164,6 +165,7 @@ A keyword must not directly follow a letter, a digit or `_`.
 | `ADDITIONAL_COMPILE_FLAGS(<feature>): f…` | Appended after the plain flags when `<feature>` is exactly in the feature set. |
 | `FILE_DEPENDENCIES: a, b` | Each file, relative to the test's directory, is copied into the scratch directory. A missing file, a glob or a `%{…}` makes the test UNSUPPORTED (`driver: FILE_DEPENDENCIES`). |
 | `MODULE_DEPENDENCIES:` | UNSUPPORTED (`driver: modules`). |
+| `ALLOW_RETRIES: N` | A failing run step is retried up to `N` more times (see "Timeouts and retries"). `N` must be an integer, and the keyword may appear once; otherwise the test is an ERROR (lit's `ParserKind.INTEGER`). |
 | any `RUN:` | UNSUPPORTED (`driver: RUN lines`). Custom scripts are not interpreted. |
 
 If a flag contains a `%{…}` substitution, the test is UNSUPPORTED (`driver:
@@ -199,22 +201,45 @@ ERROR.
 
 ## Feature set
 
-The feature set is static. It describes the configuration below and is
-defined in `xtask/src/libcxx/features.rs`. There is no compiler-identity
+The feature set is static except for the `locale.*` features, which are
+detected (below). It describes the configuration below and is defined in
+`xtask/src/libcxx/features.rs`. There is no compiler-identity
 feature (`clang`, `gcc`, `clang-19`, `apple-clang`), so tests that XFAIL or
 skip one particular compiler run normally under kiln. `kiln` itself is in
-the set.
+the set. `gcc-style-warnings` is in the set although its name says `gcc`:
+lit derives it for every compiler that understands `-Wno-<group>` flags
+(clang and GCC, not `cl.exe`), and libc++ 19 uses it only in
+`ADDITIONAL_COMPILE_FLAGS(gcc-style-warnings): -Wno-...` lines, which kiln
+accepts (`depr.numeric.limits.has.denorm/deprecated.verify.cpp` needs its
+`-Wno-unused-value`).
 
 `c++26`, `c++experimental`, `large_tests`, `long_tests`,
 `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`,
-`-fsized-deallocation`, `has-fconstexpr-steps`, `verify-support`,
+`-fsized-deallocation`, `gcc-style-warnings`, `has-fconstexpr-steps`, `verify-support`,
 `libcpp-abi-version=1`, `libcpp-hardening-mode=none`,
 `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`,
 `buildhost=linux`, `linux`, `can-create-symlinks`, `has-64-bit-atomics`,
 `has-unix-headers`, `kiln`, `target=aarch64-unknown-linux-gnu`.
 
+**Locales.** `locale.<name>` is in the set when `locale -a` lists the
+locale, for the seven names libc++'s `features.py` knows: `cs_CZ.ISO8859-2`,
+`en_US.UTF-8`, `fr_CA.ISO8859-1`, `fr_FR.UTF-8`, `ja_JP.UTF-8`,
+`ru_RU.UTF-8` and `zh_CN.UTF-8` (`features::LOCALES`). Both sides are
+compared after glibc's codeset normalization (`_nl_normalize_codeset`):
+the codeset keeps only its letters, lowercased, and digits, with an `iso`
+prefix when only digits remain. So `en_US.utf8` is `en_US.UTF-8` and
+`cs_CZ.iso88592` is `cs_CZ.ISO8859-2`. A locale listed without a codeset
+(`fr_CA`) does not count. lit instead asks `setlocale` in a probe program;
+on glibc that accepts exactly the names `locale -a` lists, normalized the
+same way. A run without `locale` on `PATH` has no `locale.*` feature.
+`scripts/provision-locales.sh` generates the seven (Debian; as root): it
+installs `locales` when `locale-gen` is missing, adds the entries to
+`/etc/locale.gen` (the ISO-8859 ones under a name that carries the codeset,
+`cs_CZ.ISO-8859-2 ISO-8859-2`) and runs `locale-gen`. It is idempotent and
+exits 0 at once when all seven are present. `glibc-old-ru_RU-decimal-point`
+(glibc older than 2.27) is never in the set.
+
 Some features are deliberately missing:
-- no `locale.*`: only `C`, `C.UTF-8` and `POSIX` exist;
 - no `has-1024-bit-atomics`;
 - no `add-latomic-workaround`;
 - no `host-has-gdb`;
@@ -240,8 +265,9 @@ A few tests cannot pass on this host however they are compiled: built
 with clang 19 they fail at the same assertion. They are UNSUPPORTED with
 an `env:` reason, before any directive is read (`run::env_unsupported`,
 also in `--list`), only while the condition holds:
-- run as root (effective uid 0 in `/proc/self/status`, as in the agent
-  containers): 23 filesystem tests that expect `permissions(dir,
+- run as root (effective uid 0: the second field of `Uid:` in
+  `/proc/self/status`, as in the agent containers), reason `env: running as
+  root: perms::none does not deny access`: 23 filesystem tests that expect `permissions(dir,
   perms::none)` to make `dir/file` inaccessible get no `EACCES`, since
   root bypasses permission checks (`ROOT_UNSUPPORTED` in `run.rs`, e.g.
   `fs.op.status/status.pass.cpp`, `fs.op.is_block_file/is_block_file.pass.cpp`,
@@ -252,10 +278,56 @@ also in `--list`), only while the condition holds:
   and `create_directory(p, attrs)` cannot copy the attributes
   (`HOST_FS_UNSUPPORTED`: `fs.op.hard_lk_ct/hard_link_count.pass.cpp`,
   `fs.op.create_directory/create_directory_with_attributes.pass.cpp`).
+- an aarch64 host (`COMPILER_RT_UNSUPPORTED`: `numeric.ops.sat/mul_sat.pass.cpp`):
+  LLVM lowers the signed 128-bit `__builtin_mul_overflow` to a `__muloti4`
+  libcall that only compiler-rt's builtins define, and the GNU link line
+  (clang's and kiln's) links libgcc, which has none; the link fails. x86_64
+  expands the multiply inline.
+- the system tzdata (`/usr/share/zoneinfo/tzdata.zi`, first line
+  `# version YYYYx`) at 2024b or later (`TZDATA_Z_UNSUPPORTED`:
+  `time.zone.members/sys_info.zdump.pass.cpp`): `tzdata.zi` spells numeric
+  abbreviations `%z`, which libc++ 19's tzdb parser keeps verbatim, so
+  `sys_info::abbrev` differs from `zdump`'s.
+- glibc's `en_US.UTF-8` groups digits by `3` only (`LC_ALL=en_US.UTF-8
+  locale -k grouping` prints exactly `grouping=3`; glibc 2.41 in the
+  agent containers), reason `env: glibc en_US.UTF-8 grouping is 3, the
+  test expects 3;3`: the two `grouping.pass.cpp` tests of
+  `locale.moneypunct.byname` and `locale.numpunct.byname` assert `"\3\3"`
+  on every non-Windows, non-AIX target (`GROUPING_UNSUPPORTED`).
 
 A test joins a list only after its clang 19 build is shown to fail at the
-same assertion under the same condition; both lists are sorted (unit
+same assertion under the same condition; the lists are sorted (unit
 test `env_exclusions`).
+
+## Timeouts and retries
+
+A test binary runs under `--timeout` (default 30 s), or under
+`--run-timeout-long` (default 240 s) when the test is long:
+- a `REQUIRES:` expression names `long_tests` as a plain identifier. lit's
+  `long_tests` parameter defaults to true, so `long_tests` is in the
+  feature set and these tests run; lit gives them no other limit, so the
+  driver's longer limit is what keeps them from timing out on a loaded
+  host (`rand.dist.bern.geo/eval.pass.cpp`,
+  `rand.dist.bern.negbin/eval.pass.cpp`,
+  `rand.dist.samp.discrete/eval.pass.cpp`);
+- or the test is listed in `xtask/src/libcxx/slow_tests.txt`: one path
+  per line (relative to `libcxx/test`), then the reason, sorted, `#`
+  comments. A test joins only after it is shown to time out under
+  `--timeout` and pass under the long limit (today
+  `ofstream.members/buffered_writes.pass.cpp`, slow on the host-shared
+  scratch mount, `thread.semaphore/lost_wakeup.pass.cpp` and
+  `charconv.msvc/test.pass.cpp`).
+
+`--list` shows `(long: REQUIRES: long_tests)` or `(long:
+slow_tests.txt)` after `run`, and `(ALLOW_RETRIES: N)` when the test has
+it. Compile and link steps always use `--compile-timeout`.
+
+**`ALLOW_RETRIES: N`.** lit reruns a failing test up to `N` more times
+and reports the last attempt. The driver reruns only the run step: the
+compile and link steps are deterministic, so rerunning them reaches the
+same binary. Any failing run (non-zero exit, a signal, TIMEOUT, KILLED) is
+retried. A test that passes on a retry is a PASS, and `-v` shows `passed
+on attempt k of n`. The run's wall time counts every attempt.
 
 ## Commands
 
@@ -270,8 +342,13 @@ kiln++ -std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread \
      -I <llvm-project>/libcxx/test/support  <ADDITIONAL_COMPILE_FLAGS>  \
      (-fsyntax-only | -c -o t.o)  <test>
 kiln t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi
-./t.exe                     # cwd = scratch, --timeout, --mem-limit
+./t.exe                     # cwd = scratch, --timeout, --mem-limit, no TZ
 ```
+
+The test binary runs without `TZ` in its environment, as under lit (whose
+`config.environment` does not pass it on): `current_zone()` is then the
+system's `/etc/localtime`, which the `current_zone.pass.cpp` tests compare
+against.
 
 This mirrors lit's `llvm-libc++-shared.cfg` at its defaults: the newest
 standard, experimental features enabled, no warnings, and no `-Werror`. The
@@ -376,7 +453,12 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 - `directives.rs`: classification table, keywords, verdicts, `END.`,
   `lit.local.cfg`.
 - `cluster.rs`: normalization, message extraction, counting, crash keys.
-- `run.rs`: verdict order, outcome rules.
+- `run.rs`: verdict order, outcome rules; `env_exclusions` (the lists
+  are sorted, the root reason, `Uid:` parsing); `slow_tests_list`
+  (`slow_tests.txt` is sorted, every entry has a reason, which tests are
+  long); `allow_retries_reruns_the_binary` (a fake compiler whose test
+  script fails twice, then passes: PASS with 2 retries, FAIL with 1; a
+  timeout is retried under the given limit).
 - `report.rs`: counts, page rendering (with the `kiln build profile` row),
   marker splicing.
 - `mod.rs`: options, discovery, `lit.local.cfg` lookup;
@@ -387,7 +469,11 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   `.toolchain/libcxx-<tag>` checkouts side by side, the legacy
   `.toolchain/llvm-project` for the default tag only).
 - `features.rs`: the set is sorted and unique, with no compiler-identity
-  feature.
+  feature and no static `locale.*`; `locale_names_normalize_like_glibc`;
+  `locale_features_from_locale_a` (no locales, the provisioned seven, a
+  bare `fr_CA`).
+- `directives.rs`: `allow_retries_and_long_tests` (`ALLOW_RETRIES:` must
+  be one integer; which `REQUIRES:` mark a test long).
 
 ## Open questions
 
@@ -407,7 +493,8 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   means kiln's diagnostic differs from clang 19's, not that the library is
   rejected. Whether kiln should match clang's diagnostic text for all of
   these, or only for the ones a test pins, is open.
-- **Static features.** The feature set is hand-maintained for one host.
+- **Static features.** Apart from the locales, the feature set is
+  hand-maintained for one host.
   lit derives it by probing the compiler (`features.py`). Probing kiln
   would make the set honest for flags kiln does not implement yet.
 - **Compiler-identity XFAILs.** With no `clang` feature,

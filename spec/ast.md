@@ -309,6 +309,15 @@ fields used by fewer than ~5% of decls of a kind go there.
 - Lookup *rules* (hiding, using-directives, ADL, two-phase) are sema's;
   the AST answers `lookup_local(ctx, name) -> &[DeclId]` and
   `members(ctx) -> impl Iterator<DeclId>` (lexical order).
+- **Using-directives** (WP-339): `using_dirs: FxHashMap<DeclId,
+  Vec<DeclId>>` records, per namespace or TU (primary context), the
+  namespaces its namespace-scope `using namespace` directives nominate
+  (first declarations, deduplicated, in source order).
+  `Ast::add_using_directive(ctx, n)` records one, also on each enclosing
+  namespace of an inline `ctx` up to the first non-inline one
+  ([namespace.def.general]/7); `LookupTables::using_directives(ctx)` and
+  `has_no_using_directives()` read them. Adding one bumps the table
+  generation. Block-scope directives are sema's scope stack.
 
 ### 4.4 Redeclaration chains
 `RedeclGroup { first: DeclId, latest: DeclId, definition: Option<DeclId> }`

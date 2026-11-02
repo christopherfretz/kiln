@@ -207,7 +207,14 @@ impl Substituter<'_, '_, '_> {
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
         self.copy_begin_loc(d, v, ty);
         self.locals.insert(d, DeclOrPack::Decl(v));
-        self.var_align_attrs(v, d);
+        if ctx == DeclaratorContext::Member {
+            // A static data member's attributes, `[[deprecated]]` among
+            // them ([dcl.attr.deprecated]/4 warns a use of
+            // `C<int>::x`; clang `InstantiateAttrs`).
+            self.class_attrs(v, d);
+        } else {
+            self.var_align_attrs(v, d);
+        }
         // A constrained placeholder's diagnostics point at its
         // type-constraint, as in the pattern.
         if let Some(&l) = self.sema.inst.concepts.placeholder_locs.get(&d) {
@@ -225,8 +232,26 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn decomp_decl(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<DeclId> {
         let (_, v) = self.decomp_declare(d, ctx)?;
         self.var_init(d, v)?;
+        self.remap_binding_pack(d);
         self.sema.diagnose_unused_inst_var(d, v);
         Ok(v)
+    }
+
+    /// Once instantiated decomposition of pattern `d` is complete, its
+    /// structured binding pack (P1061) names the bindings it expanded
+    /// into (spec/sema-templates.md §7.1); a pack whose decomposition
+    /// failed makes every use fail (already diagnosed). A pack that is
+    /// still dependent (a generic lambda's, its levels retained) stays.
+    pub(crate) fn remap_binding_pack(&mut self, d: DeclId) {
+        let old = self.sema.decomp_binding_list(d);
+        let Some(&p) = old.iter().find(|b| self.sema.binding_packs.contains(b)) else { return };
+        let Some(&DeclOrPack::Decl(np)) = self.locals.get(&p) else { return };
+        if let Some(&l) = self.sema.binding_pack_elems.get(&np) {
+            self.locals.insert(p, DeclOrPack::Pack(l));
+        } else if !self.sema.is_pack_decl(np) {
+            self.locals.remove(&p);
+            self.failed_locals.push(p);
+        }
     }
 
     /// Declares pattern decomposition `d` uninitialized: the declaration
@@ -241,6 +266,14 @@ impl Substituter<'_, '_, '_> {
         let ty = self.named_decl_ty(d, t, loc)?;
         let ds = self.pattern_declspec(d, ty);
         let mut dr = Declarator::new(ctx, loc);
+        // `auto [a, b]{x}` is direct-list-initialized: `e` deduces the
+        // type of `x`, not `std::initializer_list` ([dcl.struct.bind]/1,
+        // [dcl.type.auto.deduct]/2.1).
+        if let Some(x) = self.sema.ast.decls.var(d)
+            && x.init.is_some()
+        {
+            dr.init_style = Some(x.spec.init_style());
+        }
         let old = self.sema.decomp_binding_list(d);
         let ids = old
             .iter()
@@ -249,7 +282,7 @@ impl Substituter<'_, '_, '_> {
                 crate::declspec::BindingId {
                     name: n.name().as_ident().unwrap_or(Symbol::from_index(0)),
                     loc: n.loc(),
-                    ellipsis: None,
+                    ellipsis: self.sema.binding_packs.contains(&b).then_some(n.loc()),
                     attrs: Vec::new(),
                 }
             })
@@ -311,6 +344,7 @@ impl Substituter<'_, '_, '_> {
         let Some(v) = v else { return Err(SubstFail) };
         self.copy_begin_loc(d, v, ty);
         self.locals.insert(d, DeclOrPack::Decl(v));
+        self.class_attrs(v, d);
         if self.sema.kind_of(v) == DeclKind::Var {
             self.sema.inst.deferred_inits.insert(v);
         }
@@ -1153,6 +1187,7 @@ impl Substituter<'_, '_, '_> {
             if failed {
                 self.sema.ast.decls.set_flags(a, DeclFlags::INVALID);
             }
+            self.var_align_attrs(a, d);
             return Ok(a);
         }
         let mut ds = self.pattern_declspec(d, ty);
@@ -1162,6 +1197,11 @@ impl Substituter<'_, '_, '_> {
         if failed {
             self.sema.ast.decls.set_flags(td, DeclFlags::INVALID);
         }
+        // A typedef's `__attribute__((aligned(N)))` is instantiated with
+        // it (clang `InstantiateAttrs`; libc++'s `atomic_ref` names its
+        // object as `typedef _Tp _Aligned_Tp
+        // __attribute__((aligned(required_alignment)))`).
+        self.var_align_attrs(td, d);
         self.copy_begin_loc(d, td, ty);
         Ok(td)
     }
@@ -1312,16 +1352,37 @@ impl Substituter<'_, '_, '_> {
         }
         match self.sema.ast.decls.friend_target(d) {
             FriendTarget::Type { ty, owned_tag } => {
-                if owned_tag.is_some() {
+                // `friend struct Z;` that first declared `Z` in the
+                // enclosing namespace: the instantiation befriends the
+                // same class (not dependent). A tag declared in a local
+                // scope would need its instantiated declaration.
+                if let Some(t) = owned_tag
+                    && !self.sema.ast.decls.get(t).ctx().is_some_and(|c| {
+                        matches!(
+                            self.sema.kind_of(c),
+                            DeclKind::Namespace | DeclKind::TranslationUnit
+                        )
+                    })
+                {
                     return self.unimplemented("friend class declared in a class template", loc);
                 }
-                let ty = self.ty(ty, loc)?;
-                let mut ds = DeclSpec::new(loc);
-                ds.base = TypeSpecKind::Named;
-                ds.named = Some(ty);
-                ds.type_loc = Some(loc);
-                ds.friend = Some(loc);
-                Ok(self.sema.act_on_friend(&ds, ty, None, loc))
+                // `friend Ts...;` ([class.friend]/3, P2893): one friend
+                // per element of the expansion.
+                let tys = if crate::templ::pack::type_pattern(self.sema, ty).is_some() {
+                    self.expand_types(&[ty], loc)?
+                } else {
+                    vec![self.ty(ty, loc)?]
+                };
+                let mut last = None;
+                for ty in tys {
+                    let mut ds = DeclSpec::new(loc);
+                    ds.base = TypeSpecKind::Named;
+                    ds.named = Some(ty);
+                    ds.type_loc = Some(loc);
+                    ds.friend = Some(loc);
+                    last = self.sema.act_on_friend(&ds, ty, None, loc).or(last);
+                }
+                Ok(last)
             }
             FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::ClassTemplate => {
                 // `template<class U> friend class X;` names a namespace

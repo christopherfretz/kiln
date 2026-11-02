@@ -92,7 +92,7 @@ public.
 | member function | `CXXMethod` | in-class definition implicitly inline; `static` → `FnStorage::Static`; cv/ref-qualifiers into `FuncProto.this_quals`/`ref_qual` (types.md §5.4); `virtual`, `= 0`, `override`, `final` (§3.4) |
 | constructor / destructor / conversion | `CXXConstructor` / `CXXDestructor` / `CXXConversion` | `DeclName` tag 2/3/4 keyed by the canonical class `TypeId` / target `QualType` (ast.md §3) |
 | nested class / enum / typedef / alias | M2 kinds, ctx = class | access applies to the name; nested class is a member ([class.access.nest]) |
-| friend | `Friend` (payload: friend decl or type) | §2.4; a friend function first declared in a class is a member of the innermost enclosing namespace, hidden from ordinary lookup ([namespace.memdef]/3, [class.friend]/7): it is entered in that namespace's lookup table with `LookupFlags::ADL_ONLY` (sema-overload.md §2.2, decision 7), which ordinary lookup skips and ADL (WP-068a) finds; no side table. A later namespace-scope redeclaration is entered without the flag and is visible to ordinary lookup. A friend's redeclaration lookup in that namespace sees hidden friends but not the members of its inline namespaces (clang's `FilterLookupForScope` without `AllowInlineNamespace`), so a hidden friend `iter_move` does not clash with an inline-namespace CPO object of that name (WP-169) |
+| friend | `Friend` (payload: friend decl or type) | §2.4; a friend-type-specifier-list (`friend A, Ts...;`, [class.friend]/3, P2893) declares one `Friend` per specifier through `act_on_friend_type`, a pack expansion one of type `PackExpansion(Ts)` expanded per element at instantiation (spec/sema-templates.md §7.1); a friend function first declared in a class is a member of the innermost enclosing namespace, hidden from ordinary lookup ([namespace.memdef]/3, [class.friend]/7): it is entered in that namespace's lookup table with `LookupFlags::ADL_ONLY` (sema-overload.md §2.2, decision 7), which ordinary lookup skips and ADL (WP-068a) finds; no side table. A later namespace-scope redeclaration is entered without the flag and is visible to ordinary lookup. A friend's redeclaration lookup in that namespace sees hidden friends but not the members of its inline namespaces (clang's `FilterLookupForScope` without `AllowInlineNamespace`), so a hidden friend `iter_move` does not clash with an inline-namespace CPO object of that name (WP-169) |
 | access-specifier | `AccessSpec` | changes `ClassBuild.access`; kept for the dump |
 | `using` member | WP-062 (`Using`, `UsingShadow`) | shadow access = the using-declaration's; inheriting constructors §4.10 |
 | member template | WP-070 | |
@@ -1843,7 +1843,12 @@ Constructors, destructors, conversion functions, `= default` and
   destructor name. It runs in the class of a qualified id-expression and
   in the class of a member access. It also runs in the nominated class of
   a member using-declaration. An unqualified `operator=` runs
-  `declare_implicit_named_in_scope` over the enclosing class scopes. `declare_implicit` sets triviality from the
+  `declare_implicit_named_in_scope` over the enclosing class scopes.
+  An implicit member (and its parameters) is in a dependent context
+  exactly when its class is ([temp.dep]/1): `declare_implicit` sets
+  `dependent_depth` from the class's `DEPENDENT_CTX` around the
+  declaration, since the first use of a non-template class may sit in a
+  template definition (WP-335). `declare_implicit` sets triviality from the
   class bits, or for copy/move members of a class with `NEEDS_OVL_*` from
   `selected_all_trivial` (clang `SpecialMemberIsTrivial`, §4.3); `constexpr`
   follows the C++23+ rules (§4.6).
@@ -2055,11 +2060,33 @@ access, out-of-line declarator scope.**
   type's destructor as a qualified member of that class (non-virtual,
   and a base class's destructor is allowed: `this->B::~B()`). A
   qualified destructor template-id (`p->N::~X<T>()`) is a gap.
+  Inside a class template (its pattern, a partial specialization, or an
+  out-of-line member), a destructor name found as the pattern's
+  injected-class-name names the injected-class-name type
+  (`Sema::injected_named`, [temp.local]/1), so `this->~S()` matches the
+  current instantiation's object type at the type check of
+  [expr.prim.id.dtor]/2 (WP-336). A non-dependent destructor
+  `MemberExpr` in a template (`p->~P()`, `b->B::~B()` with
+  non-dependent `p`, `b`) is formed again at instantiation through
+  `rebuild_member_destructor` with the destructor's (instantiated)
+  class, qualified as written; access is then checked in the
+  instantiated member (WP-336).
+  Test for the injected-class-name case:
+  `tests/conformance/expr.prim.id.dtor/libstdcxx-injected-class-name-dtor-in-template.cpp`
+  (libstdc++ shared_ptr_base.h:625, WP-332). A dependent qualifier
+  (`this->B<T>::~B()`) is still `templ_unimplemented` ("a dependent
+  destructor name").
   A pseudo-destructor on a scalar or dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
   expression only, and the Oven does not end the object's lifetime (as
-  for an explicit destructor call; a gap).
+  for an explicit destructor call; a gap). A pointer to a class is a
+  scalar object too ([expr.prim.id.dtor]/2): `p.~P()` with `P` naming
+  `S*` is a pseudo-destructor call (libc++'s `__cpp17_destructible` on
+  iterator types; WP-339); only when the destructor name denotes the
+  pointee (`p.~S()`) does `finish_member_destructor` report clang's
+  "member reference type 'S *' is a pointer; did you mean to use '->'?"
+  (clang `BuildPseudoDestructorExpr`).
 - *Member not found* ([expr.ref]/7.4, [class.member.lookup]/1): "no
   member named 'm' in 'C'" names the object's class without its
   cv-qualifiers (`member_access`; clang prints the record, so a
@@ -2197,7 +2224,7 @@ lands.
 Performance and memory (bench.md): `bench/frontend/classes.cpp` (generated: 5k
 classes, depth-6 hierarchies, 20 members each, implicit members never used)
 gates `Ast::memory()` bytes per class — the lazy policy must keep unused
-implicit members at zero bytes — and a mirrorbind-style synthetic (many small
+implicit members at zero bytes — and a reference-workload-style synthetic (many small
 polymorphic classes) for `final_overrider`/vtable cache size.
 
 ## 11. Open questions (with recommendation)

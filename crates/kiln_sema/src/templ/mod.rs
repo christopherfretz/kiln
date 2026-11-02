@@ -211,7 +211,12 @@ pub struct TemplState {
     /// template it aliases ([over.match.class.deduct]/3, P1814): the
     /// alias template and its defining-type-id.
     pub(crate) ctad_alias: kiln_source::fx::FxHashMap<DeclId, (DeclId, QualType)>,
-    /// The guide formed for (alias template, source guide), if any.
+    /// Each guide formed from a guide of a base class template whose
+    /// constructors the class template inherits ([over.match.class.deduct]/1,
+    /// P2582): that class template and the base as written.
+    pub(crate) ctad_inherited: kiln_source::fx::FxHashMap<DeclId, (DeclId, QualType)>,
+    /// The guide formed for (alias template or inheriting class template,
+    /// source guide), if any.
     pub(crate) ctad_alias_cache: kiln_source::fx::FxHashMap<(DeclId, DeclId), Option<DeclId>>,
     /// The `using` keyword of each alias declaration in a template:
     /// where clang declares the guides formed for an alias template.
@@ -302,6 +307,9 @@ pub struct InstState {
     pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
     /// Drop the next error passed to `emit` (set by `incomplete_note`).
     pub(crate) suppress_next_error: std::cell::Cell<bool>,
+    /// The template-id whose arguments `check_template_args` converts:
+    /// its template name, the point of a `PriorArgSubstitution` frame.
+    pub(crate) template_id_loc: Option<Loc>,
     /// The mem-initializers of constructor definitions in a template, as
     /// parsed, and their `:` (clang keeps the pattern's unresolved
     /// `CXXCtorInitializer`s for `InstantiateMemInitializers`).
@@ -1091,12 +1099,23 @@ impl Sema<'_, '_> {
     /// Re-enters the template parameter scopes of `f`'s template (and of
     /// the class templates around it that are not open) for a body parsed
     /// after its declaration (a member function template of a class,
-    /// [class.mem]/7). Returns how many heads were pushed.
+    /// [class.mem]/7). A member class template partial specialization's
+    /// own parameters are re-entered the same way ([temp.spec.partial.member],
+    /// [temp.local]/8: they are in scope in its member bodies). Returns
+    /// how many heads were pushed.
     pub fn act_on_reenter_template_scopes(&mut self, f: DeclId) -> usize {
-        let Some(t) = self.ast.described_template(f) else { return 0 };
-        let Some(info) = self.ast.template_info(t).copied() else { return 0 };
-        let list = *self.ast.templates.param_list(info.params);
-        if self.templ.heads.iter().any(|h| h.list == Some(info.params)) {
+        let params_id = match self.ast.described_template(f) {
+            Some(t) => match self.ast.template_info(t) {
+                Some(info) => info.params,
+                None => return 0,
+            },
+            None => match self.ast.partial_spec_info(f) {
+                Some((_, ps)) => ps.params,
+                None => return 0,
+            },
+        };
+        let list = *self.ast.templates.param_list(params_id);
+        if self.templ.heads.iter().any(|h| h.list == Some(params_id)) {
             return 0;
         }
         let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
@@ -1105,7 +1124,7 @@ impl Sema<'_, '_> {
             l_angle: list.l_angle,
             depth: list.depth,
             params: params.clone(),
-            list: Some(info.params),
+            list: Some(params_id),
             taken: true,
             invented: false,
         });

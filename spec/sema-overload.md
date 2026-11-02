@@ -462,7 +462,9 @@ than `ics2[k]` and the first applicable of:
    parameter types;
 8. /2.8 `c2` rewritten, `c1` not;
 9. /2.9 both rewritten, `c2` reversed, `c1` not;
-10. /2.10–2.13 CTAD guides (§2.8): inherited-constructor guides; declared
+10. /2.10–2.13 CTAD guides (§2.8): a guide not from an inherited
+    constructor beats one that is, when the parameter types for the
+    arguments are the same (P2582, spec/sema-templates.md §6.6.1); declared
     guide beats generated; copy deduction candidate; non-template-ctor guide
     beats template-ctor guide.
 
@@ -617,6 +619,9 @@ added as needed) over the last call.
 ```rust
 pub struct AllocFns { pub new_fn: DeclId, pub delete_fn: Option<DeclId>,
                       pub pass_align: bool, pub sized_delete: bool }
+// as built (overload/alloc.rs): AllocFns { fns, in_class, naming: Option<DeclId> }
+// `naming`: the class a class-scope candidate set was found in, for the
+// access check of [expr.new]/19 and [expr.delete]/12 (WP-335).
 fn find_allocation_functions(&mut self, ty: QualType, array: bool, global_only: bool,
     placement: &[ExprId], loc: SourceLoc) -> Option<AllocFns>;
 fn find_deallocation_function(&mut self, ty: QualType, array: bool, global_only: bool,
@@ -1064,8 +1069,8 @@ Where the code differs from (or details) the design above:
   `noexcept` ([except.spec]/9).
 - **Gaps (owners).** Reversed and rewritten operator function template
   candidates are not formed (see §10.7). No access
-  check on class `operator new`/`delete`; no destroying
-  `operator delete` (WP-061 follow-up). `x.operator+=(2)` (member access
+  check on class `operator new`/`delete`. Destroying
+  `operator delete` is selected per sema.md §5.9 (WP-336). `x.operator+=(2)` (member access
   naming an operator-function-id) is a parse error: `act_on_member` and
   `member_access` take a `Symbol`, not a `DeclName` (parser follow-up).
   No `note_equality_comparison_to_assign` ("use '=' to turn this equality
@@ -1215,7 +1220,7 @@ types first (interface PR, docs/AGENTS.md); 068b starts from that.
 | **068b** operators | `overload/{oper,builtin,arrow,alloc}.rs`; `expr.rs` one dispatch call per binary/unary/subscript site; `decl.rs` `check_operator_decl`; operator ids | §2.4–2.5, §5, §6, surrogates, memoized built-in tables | `over.match.oper`, `over.built`, `over.call.object`, `over.oper`, `over.ref`, `class.compare` (rewrites), `expr.new` (lookup); 144/121-note relational ambiguity per target; `__float128` per target |
 
 Shared `expr.rs` edits are disjoint (068b: one dispatch call per site), as
-are the diag-id blocks. **Bench** `bench/overload/` (mirrorbind-style): 200
+are the diag-id blocks. **Bench** `bench/overload/` (reference-workload-style): 200
 overloads × 1000 calls, a 50-deep `->` chain, 10k class `a < b`; records
 `ovl.*`, wall time, peak memory (spec/bench.md gates).
 
