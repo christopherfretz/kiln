@@ -116,6 +116,12 @@ sema_template_spec_needs_header = Error (0) "template specialization requires 't
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
 sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
 sema_this_static_member_func = Error (1) "'this' cannot be{0:| implicitly} used in a static member function declaration";
+// [basic.stc.thread]: GNU `__thread` / C11 `_Thread_local` (static TLS; WP-396)
+sema_thread_dynamic_init = Error (0) "initializer for thread-local variable must be a constant expression";
+// [dcl.stc]/4: `thread_local` on every declaration, of one kind (WP-396)
+sema_thread_non_thread = Error (1) "thread-local declaration of '{0}' follows non-thread-local declaration";
+sema_thread_nontrivial_dtor = Error (0) "type of thread-local variable has non-trivial destruction";
+sema_thread_thread_different_kind = Error (2) "thread-local declaration of '{0}' with {1:static|dynamic} initialization follows declaration with {1:dynamic|static} initialization";
 sema_three_way_vector_comparison = Error (0) "three-way comparison between vectors is not supported";
 sema_throw_disabled = Error (0) "cannot use 'throw' with exceptions disabled";
 sema_throw_in_nothrow_func = Warning [Exceptions] (1) "'{0}' has a non-throwing exception specification but can still throw";

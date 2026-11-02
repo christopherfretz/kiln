@@ -2147,10 +2147,13 @@ return gets clang's `retval` temporary, erased when unused.
 
 clang `CodeGenModule::setTLSMode`, `ItaniumCXXABI::EmitThreadLocalInitFuncs`
 and `EmitThreadLocalVarDeclLValue` mirrored ([basic.stc.thread],
-[basic.start.dynamic]/7, [basic.start.term]/1, Itanium ABI §3.4). Every
-`thread_local`, `_Thread_local` or `__thread` variable is a C++ dynamic
-TLS variable (sema does not yet tell `__thread` apart, kiln_sema
-`decl.rs` `TlsKind::Static`).
+[basic.start.dynamic]/7, [basic.start.term]/1, Itanium ABI §3.4). A
+`thread_local` variable is a C++ dynamic TLS variable (`TlsKind::Dynamic`).
+A `__thread` or `_Thread_local` variable is clang `TLS_Static`
+(`TlsKind::Static`, WP-396): it is a `thread_local` global with no
+`_ZTW`/`_ZTH`, reached through `@llvm.threadlocal.address`. Sema
+guarantees it a constant initializer and a trivial destructor
+(spec/sema.md §4.10).
 
 - **Globals.** A thread-local variable's global (namespace-scope, static
   data member, function-local, its `_ZGV` guard and the `_ZGR` of a
@@ -2190,8 +2193,7 @@ TLS variable (sema does not yet tell `__thread` apart, kiln_sema
 - Tests: `tests/codegen/thread_local.cpp`,
   `tests/codegen/module_thread_local.cpp` (oracle 22),
   `tests/conformance/basic.stc.thread/module-tls-run.cpp`.
-- **Remaining:** `__thread`/`_Thread_local` as clang `TLS_Static` (no
-  wrapper, constant initialization only); clang emits a template
+- **Remaining:** clang emits a template
   variable's initializer after the TU's functions (deferred) where kiln
   emits it at first use, so `thread_local.cpp` has no thread-local
   variable template.

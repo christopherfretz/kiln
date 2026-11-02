@@ -2463,6 +2463,65 @@ diagnostics and IR.
   - Clang 19 rejects a capture of a binding by a lambda in a constant
     expression, and kiln accepts it.
 
+### 4.10 Static thread-local storage (`static_tls.rs`, WP-396)
+
+[basic.stc.thread], [dcl.stc]/4; clang `TLS_Static`. `DeclSpec::thread_static`
+records a `__thread` or `_Thread_local` spelling, and `var_spec` then gives
+the variable `TlsKind::Static`. `thread_local` gives `TlsKind::Dynamic`.
+Codegen gives only dynamic TLS a `_ZTW` wrapper and `_ZTH` initializer
+(spec/codegen.md §7p). For every *definition* of a static TLS variable,
+`check_static_tls` (clang `CheckCompleteVariableDeclaration`) runs after
+the initializer, or after default initialization, and before the
+`constinit` check:
+
+- A non-dependent, non-reference type that is destructed is
+  `type of thread-local variable has non-trivial destruction` at the
+  variable.
+- Otherwise the initializer is walked by `static_init_culprit` (clang
+  `Expr::isConstantInitializer`), and the first part that fails is
+  `initializer for thread-local variable must be a constant expression`
+  at that part. The walk looks through:
+  - parentheses, cleanups, temporaries, `__extension__` and
+    substituted non-type template parameters;
+  - trivial constructions of a trivially destructible class;
+  - value-preserving casts (no-op, to-union, constructor conversion,
+    atomic, null-to-pointer);
+  - the elements of an array or record list. A glvalue element binds a
+    reference, so it must fold as an address.
+
+  An empty list passes. Anything else must fold with the lax Oven entry
+  (`Sema::fold_rvalue`, clang `isEvaluatable`). A reference's
+  initializer must fold as an address, which is done by folding a
+  synthetic `&e`.
+- Both diagnostics carry `note: use 'thread_local' to allow this` at the
+  variable from C++11 on. They are emitted `per_instantiation`, because
+  clang repeats them at every instantiation (an exception to spec/diag.md
+  §7.4).
+- An instantiation-dependent initializer is checked when it is
+  instantiated, as is the destructor of a variable whose type is
+  dependent.
+- **Compat 19** (`clang_compat < 20`):
+  - clang 19 also rejects an instantiation-dependent initializer in the
+    template definition, at the initializer, unless it is a braced list.
+  - It does not look through a scalar's one-element list, so
+    `__thread int x{f()};` is reported at the `{`.
+- Redeclarations (clang `MergeVarDecl`, `check_tls_redecl`): a
+  redeclaration whose thread storage kind differs from the previous one
+  is reported before any redefinition check. The texts are
+  `thread-local declaration of 'x' follows non-thread-local declaration`,
+  the reverse, and `thread-local declaration of 'x' with
+  static/dynamic initialization follows declaration with
+  dynamic/static initialization`. The note is `previous definition is
+  here` or `previous declaration is here`. The declaration is still
+  merged. This applies at namespace scope and to out-of-class static data
+  members.
+- **Residual:** at compat 19, the single-argument dependent paren
+  initializer `static __thread T w(T(1));` is reported at the `T`. clang 19
+  reports it at the `(` of its `ParenListExpr`, which kiln does not keep.
+- Tests: `basic.stc.thread/static-tls-init.cpp`, `tls-redecl.cpp`,
+  `static-tls-template.cpp`, `static-tls-dependent.cpp` (clang>=22) and
+  `static-tls-dependent-19.cpp` (clang<22).
+
 ## 5. Expressions (`expr.rs`, `conv/`)
 - **Typed nodes:** each `act_on_*` builds clang's typed node, with
   implicit conversions spelled out as `ImplicitCastExpr`

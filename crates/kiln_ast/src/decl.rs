@@ -888,9 +888,13 @@ pub enum TlsKind {
     /// Not thread-local.
     #[default]
     None = 0,
-    /// `thread_local` with static (constant) initialization.
+    /// Static TLS: `__thread` / `_Thread_local` (clang `TLS_Static`),
+    /// whose initialization is constant ([basic.start.static]/2) and
+    /// whose type is trivially destructible; accessed directly, with no
+    /// `_ZTW` wrapper.
     Static = 1,
-    /// `thread_local` with dynamic initialization.
+    /// `thread_local` (clang `TLS_Dynamic`): may be dynamically
+    /// initialized and destroyed ([basic.stc.thread]).
     Dynamic = 2,
 }
 

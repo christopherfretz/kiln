@@ -706,8 +706,13 @@ impl Parser<'_, '_> {
                 Kw::Register => ds.set_storage(StorageSpec::Register, loc),
                 Kw::Mutable => ds.set_storage(StorageSpec::Mutable, loc),
                 Kw::ThreadLocal => {
-                    thread_spelling = Some(self.spelling_of(&self.tok()));
-                    set_flag(&mut ds.thread_local, loc, "thread_local")
+                    let sp = self.spelling_of(&self.tok());
+                    let r = set_flag(&mut ds.thread_local, loc, "thread_local");
+                    if r.is_ok() {
+                        ds.thread_static = sp != "thread_local";
+                    }
+                    thread_spelling = Some(sp);
+                    r
                 }
                 Kw::Constexpr | Kw::Consteval | Kw::Constinit => {
                     set_constexpr_kind(&mut ds, k, loc)
