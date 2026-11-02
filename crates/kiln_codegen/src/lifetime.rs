@@ -2,7 +2,7 @@
 //! `CallLifetimeEnd` and its `VarBypassDetector`.
 //!
 //! clang emits `llvm.lifetime.start`/`.end` around local variables and
-//! temporaries when optimizing, and in a coroutine always (CoroSplit uses
+//! temporaries when optimizing, and in a coroutine always (`CoroSplit` uses
 //! them to keep short-lived locals out of the frame). kiln emits them in
 //! coroutines only ([`Fx::lifetime_markers`]); a variable that a `goto`
 //! or a `switch` jumps past gets none, because its lifetime would be

@@ -312,12 +312,12 @@ fn function_order_is_stable() {
 }
 
 /// A generator whose lifetime ends inside its caller: at `-O2` the
-/// default pipeline's coroutine passes (CoroEarly, CoroSplit, CoroElide,
-/// CoroCleanup, spec/driver.md "IR optimization") inline the ramp, elide
+/// default pipeline's coroutine passes (`CoroEarly`, `CoroSplit`, `CoroElide`,
+/// `CoroCleanup`, spec/driver.md "IR optimization") inline the ramp, elide
 /// the heap frame ([dcl.fct.def.coroutine]/9 lets the allocation be
 /// omitted) and lower every `llvm.coro.*` call, as clang 19's `-O2` does;
 /// at `-O0` the ramp still calls `operator new`.
-const ELIDE: &str = r#"namespace std {
+const ELIDE: &str = r"namespace std {
 template <class R, class... A> struct coroutine_traits { using promise_type = typename R::promise_type; };
 template <class P = void> struct coroutine_handle;
 template <> struct coroutine_handle<void> {
@@ -367,7 +367,7 @@ int sum(int n) {
   for (g.h.resume(); !g.h.done(); g.h.resume()) s += g.h.promise().v;
   return s;
 }
-"#;
+";
 
 #[test]
 fn coro_elide_at_o2() {

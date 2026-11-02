@@ -430,7 +430,7 @@ pub fn needs_coro_lowering(ir: &str) -> bool {
 
 /// The `opt` runs between the frontend and the IR's consumer, if any:
 /// at `-O1` and above the default pipeline of the level (which places
-/// CoroEarly, CoroSplit, CoroElide and CoroCleanup where clang's does);
+/// `CoroEarly`, `CoroSplit`, `CoroElide` and `CoroCleanup` where clang's does);
 /// at `-O0` clang's O0 coroutine lowering (`CoroConditionalWrapper` in
 /// `buildO0DefaultPipeline`: `CoroEarly`, `CoroSplit`, `CoroCleanup`,
 /// then `GlobalDCE`), only for a module that needs it. The first run

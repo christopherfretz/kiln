@@ -165,6 +165,7 @@ pub struct PrintArgs {
 }
 
 /// Flags that change predefined macros; `None` keeps clang's default.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PredefArgs {
     /// `-O<n>`.

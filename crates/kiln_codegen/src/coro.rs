@@ -1,7 +1,7 @@
 //! Coroutines (spec/codegen.md §7o, WP-351): a port of clang's
 //! `CGCoroutine.cpp` for the switched-resume lowering. The function is
 //! emitted pre-split (`presplitcoroutine`) with the `llvm.coro.*`
-//! intrinsics; LLVM's CoroEarly/CoroSplit/CoroCleanup passes (run by the
+//! intrinsics; LLVM's `CoroEarly`/`CoroSplit`/`CoroCleanup` passes (run by the
 //! driver, spec/driver.md) build the frame and the resume/destroy clones.
 
 use kiln_ast::decl::builtin as id;
@@ -777,7 +777,12 @@ impl Cg<'_> {
         }
         extra.push(Attr::Flag(AttrKind::PresplitCoroutine));
         let ast = self.ast;
-        let ret = ast.decls.get(d).ty().and_then(|t| ast.types.proto(t)).map(|p| p.ret());
+        let ret = ast
+            .decls
+            .get(d)
+            .ty()
+            .and_then(|t| ast.types.proto(t))
+            .map(kiln_ast::types::FuncProto::ret);
         if ret.and_then(|r| ast.types.as_record(r)).is_some_and(|r| {
             self.fn_attr(r, kiln_ast::attr::AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE).is_some()
         }) {

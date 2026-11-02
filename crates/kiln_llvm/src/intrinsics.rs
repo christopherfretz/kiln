@@ -509,7 +509,7 @@ pub enum Coro {
     AwaitSuspendVoid,
     /// `i1 @llvm.coro.await.suspend.bool(ptr, ptr, ptr)`.
     AwaitSuspendBool,
-    /// `void @llvm.coro.await.suspend.handle(ptr, ptr, ptr)`: CoroSplit
+    /// `void @llvm.coro.await.suspend.handle(ptr, ptr, ptr)`: `CoroSplit`
     /// resumes the handle the wrapper returns with a `musttail` call.
     AwaitSuspendHandle,
 }

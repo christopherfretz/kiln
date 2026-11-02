@@ -1,7 +1,7 @@
 //! LLVM `PromoteMemToReg` for a single alloca (spec/codegen.md §7p).
 //!
 //! clang's `FinishFunction` promotes the normal-cleanup destination slot
-//! of a coroutine to SSA values ("Eliminate CleanupDestSlot alloca by
+//! of a coroutine to SSA values ("Eliminate `CleanupDestSlot` alloca by
 //! replacing it with SSA values and PHIs if the current function is a
 //! coroutine"), so the coroutine passes see a `phi` instead of a memory
 //! round trip. This is a faithful port of LLVM 19's algorithm for one
@@ -376,8 +376,7 @@ impl Fir {
         let mut changed = true;
         while changed {
             changed = false;
-            for k in 0..phis.len() {
-                let p = phis[k];
+            for &p in &phis {
                 if self.insts[p as usize].block.is_none() {
                     continue;
                 }
