@@ -4339,8 +4339,15 @@ explicit specialization errors remain. The blockers are:
     (`Tdk::ConstraintsNotSatisfied`, `DeductionFailure::sat`, and the
     note "candidate template ignored: constraints not satisfied
     [with …]" plus its chain).
-  - `ensure_template_constraints` checks class and variable template
-    specializations (`get_class_spec`, `get_var_spec`).
+  - `ensure_template_constraints` checks class, variable and alias
+    template specializations (`get_class_spec`, `get_var_spec`,
+    `alias_template_type`; [temp.names]/9). An alias is checked when its
+    arguments and template name are not dependent, before the aliased
+    type is substituted; inside a requires-expression or deduction the
+    error is a substitution failure, so `requires { typename
+    std::projected<int, F>; }` is false
+    (tests/conformance/expr.prim.req.type/constrained-alias-template.cpp,
+    temp.constr.decl/alias-template-unsatisfied.cpp; WP-309).
   - `order.rs::deduce_partial` checks a partial specialization's head
     constraints after matching.
   - `find_partial_decl` tells same-argument partial specializations
