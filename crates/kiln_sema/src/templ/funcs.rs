@@ -408,8 +408,21 @@ impl Sema<'_, '_> {
     ) -> Option<SpecMatch> {
         let mut matches: Vec<SpecMatch> = Vec::new();
         let mut failures = Vec::new();
+        // [temp.explicit]/9, [except.spec]/2: an explicit instantiation that
+        // writes no exception specification takes the template's (clang
+        // `adjustCCAndNoReturn(..., AdjustExceptionSpec)`; libstdc++'s
+        // `extern template bool has_facet<...>(const locale&)` of a
+        // `throw()` template).
+        let adopt = inst && matches!(self.written_exc_spec(ty), kiln_ast::types::ExcSpec::None);
         for &ft in templates {
-            match self.deduce_funcaddr(ft, explicit, ty, loc) {
+            let pattern_ty = self.pattern_of(ft).and_then(|p| self.ast.decls.get(p).ty());
+            // A dependent one is not compared by deduction.
+            let exc = pattern_ty.map(|pt| self.written_exc_spec(pt));
+            let target = match exc {
+                Some(exc) if adopt && exc.is_nothrow() => self.with_exc_spec(ty, exc),
+                _ => ty,
+            };
+            match self.deduce_funcaddr(ft, explicit, target, loc) {
                 Ok(s) => {
                     let sty = self.ast.decls.get(s).ty().unwrap_or(QualType::ERROR);
                     if self.same_ignoring_exc_spec(sty, ty) {

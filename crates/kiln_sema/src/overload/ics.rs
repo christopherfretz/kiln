@@ -854,11 +854,145 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Whether `l` can initialize aggregate `to` as far as overload
-    /// resolution checks: not too many elements, and no subobject
-    /// designated twice ([`Sema::designators_override`]).
-    fn aggregate_list_fits(&self, l: &InitList, to: QualType) -> bool {
+    /// Whether `l` can initialize aggregate `to` ([over.ics.list]/8:
+    /// "if the initializer list can initialize `to` by aggregate
+    /// initialization"; clang's verify-only `InitListChecker`). An
+    /// undesignated list is walked under brace elision
+    /// ([`Sema::aggregate_list_walk`]); a designated one, or one the walk
+    /// does not model, is bounded by the element count and the
+    /// designators ([`Sema::designators_override`]).
+    fn aggregate_list_fits(&mut self, l: &InitList, to: QualType) -> bool {
+        if l.items.iter().all(|i| i.designator.is_empty()) {
+            let mut pos = 0;
+            if let Some(ok) = self.aggregate_list_walk(to, &l.items, &mut pos, true) {
+                return ok;
+            }
+        }
         l.items.len() as u64 <= self.aggregate_capacity(to) && !self.designators_override(to, l)
+    }
+
+    /// The elements of aggregate `to` in initialization order
+    /// ([dcl.init.aggr]/2: bases, then non-static data members without
+    /// unnamed bit-fields; a union's first member; `n` copies of an
+    /// array's element type): each type and the field it is (for the
+    /// default-initialization of the elements a list leaves out).
+    /// `None` for an array without a bound or a vector.
+    fn aggregate_elements(&mut self, to: QualType) -> Option<Vec<(QualType, Option<DeclId>)>> {
+        if self.ast.types.is_array(to) {
+            let n = self.ast.types.array_size(to)?;
+            let elem = self.ast.types.element(to)?;
+            let n = usize::try_from(n).ok().filter(|&n| n <= 1 << 16)?;
+            return Some(vec![(elem, None); n]);
+        }
+        let r = self.ast.types.as_record(to)?;
+        if !self.require_complete_silent(to, Loc::INVALID) {
+            return None;
+        }
+        let def = self.ast.definition(r).unwrap_or(r);
+        let mut out: Vec<(QualType, Option<DeclId>)> =
+            self.init_bases(def).into_iter().map(|b| (b, None)).collect();
+        let union =
+            self.ast.decls.record(def).is_some_and(|x| x.tag == kiln_ast::decl::TagKind::Union);
+        for f in self.init_fields(def) {
+            out.push((self.ast.decls.get(f).ty()?, Some(f)));
+            if union {
+                break;
+            }
+        }
+        Some(out)
+    }
+
+    /// Walks the undesignated clauses `items[*pos..]` initializing
+    /// aggregate `to` ([dcl.init.aggr]/4-5, /16, verify-only): each
+    /// element takes a braced list whole (its own list conversion), or
+    /// an expression that converts to it; an expression that does not
+    /// convert to a subaggregate starts brace elision, the subaggregate
+    /// taking the following clauses for its own elements. `braced` is
+    /// false under brace elision (the walk stops at the subaggregate's
+    /// last element); a braced list must be used up. The elements left
+    /// over are initialized from their default member initializers or
+    /// from `{}` (a reference member without one is ill-formed, /5.3).
+    /// Brace elision into an aggregate without elements is ill-formed
+    /// (clang `err_empty_scalar_initializer`'s aggregate form). `None`
+    /// when the walk meets something it does not model (an unbounded
+    /// array, a vector, an incomplete class).
+    pub(crate) fn aggregate_list_walk(
+        &mut self,
+        to: QualType,
+        items: &[InitItem],
+        pos: &mut usize,
+        braced: bool,
+    ) -> Option<bool> {
+        let elems = self.aggregate_elements(to)?;
+        if !braced && elems.is_empty() {
+            return Some(false);
+        }
+        let opts = IcsOptions::NONE;
+        let mut next = 0;
+        while next < elems.len() && *pos < items.len() {
+            let (ety, _) = elems[next];
+            next += 1;
+            match &items[*pos].value {
+                InitValue::List(sub) => {
+                    *pos += 1;
+                    if self.list_ics(sub, ety, opts).is_bad() {
+                        return Some(false);
+                    }
+                }
+                InitValue::Expr(e) => {
+                    let e = *e;
+                    if self.vector_parts(ety).is_some() {
+                        return None;
+                    }
+                    let xty = self.ast.exprs.get(e).ty();
+                    if self.is_error_type(xty) {
+                        return None;
+                    }
+                    let a = self.arg_info(e);
+                    let elide = if self.ast.types.is_array(ety) {
+                        let el = self.ast.types.element(ety).unwrap_or(QualType::ERROR);
+                        !(self.is_char_type(el) && self.string_lit_of(e).is_some())
+                    } else if let Some(r) = self.ast.types.as_record(ety) {
+                        self.is_aggregate(ety)
+                            && self.ast.types.as_record(xty).is_none_or(|x| {
+                                self.ast.first(x) != self.ast.first(r)
+                                    && !is_derived_from(self, x, r)
+                                    && self.try_implicit_conversion(&a, ety, opts).is_bad()
+                            })
+                    } else {
+                        false
+                    };
+                    if elide {
+                        if !self.aggregate_list_walk(ety, items, pos, false)? {
+                            return Some(false);
+                        }
+                    } else {
+                        *pos += 1;
+                        if self.try_implicit_conversion(&a, ety, opts).is_bad() {
+                            return Some(false);
+                        }
+                    }
+                }
+            }
+        }
+        if braced && *pos < items.len() {
+            return Some(false);
+        }
+        let empty = InitList { items: Vec::new(), lbrace: Loc::INVALID, rbrace: Loc::INVALID };
+        for &(ety, f) in &elems[next..] {
+            let Some(f) = f else { continue };
+            if self.field_has_nsdmi(f) || self.is_anonymous_member(f) {
+                continue;
+            }
+            if self.ast.types.is_reference(ety) {
+                return Some(false);
+            }
+            if self.ast.types.as_record(ety).is_some() && self.list_ics(&empty, ety, opts).is_bad()
+            {
+                return Some(false);
+            }
+        }
+        Some(true)
     }
 
     /// The most elements a braced-init-list for aggregate `to` can have

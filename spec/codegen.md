@@ -227,7 +227,24 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     clang `EmitLValueForFieldInitialization` does (WP-286;
     `tests/codegen/bitfield_member_init.cpp`,
     `tests/conformance/class.base.init/bitfield-default-member-init-run.cpp`);
-  - `++`/`--` on bool, integers, floats and pointers, including bit-fields.
+  - `++`/`--` on bool, integers, floats and pointers, including bit-fields;
+  - ext-vector element access (clang `EmitExtVectorElementExpr`, WP-312;
+    `tests/codegen/ext_vector_element.cpp`): the base vector's lvalue
+    (a prvalue base is stored to a temporary first; a glvalue access
+    chain `v.even.y` composes its lanes onto the root vector). One lane
+    is a vector-element lvalue (`VecLane::Index`, `extractelement`/
+    `insertelement` with an `i64` index); several are a
+    `VecLane::Swizzle` lvalue: a load is a one-operand `shufflevector`
+    of the loaded vector, a store (`store_swizzle`, clang
+    `EmitStoreThroughExtVectorComponentLValue`) shuffles the value into
+    the loaded vector, widening it first when the vector is longer than
+    the swizzle, and stores the whole vector back.
+- Variable alignment (clang `getDeclAlign`, WP-312;
+  `tests/codegen/alignas_variable.cpp`): `var_align` is
+  `kiln_abi::layout::decl_align` (spec/abi.md §3.2), so an `alignas` or
+  `aligned` attribute sets the `align` of a global, a static local, a
+  local's or `catch` variable's `alloca`, and of the loads and stores
+  through them.
 - Calls:
   - a call site gets `nounwind` only when the callee's prototype is
     nothrow, or the direct callee has a `NoThrow` attribute (a
@@ -718,8 +735,7 @@ The normative description is spec/driver.md "Code generation". In short:
   throwing one waits for EH. The placement-argument alignment is
   approximated by `pointer_with_align` (declaration alignment for named
   variables, array elements and members; otherwise the pointee type's
-  alignment). Corpus cases do not use `alignas` on globals (ignored by
-  codegen, a pre-existing gap) or `if (c && new T)` (clang folds the
+  alignment). Corpus cases do not use `if (c && new T)` (clang folds the
   non-null `new` in `EmitBranchOnBoolExpr`; kiln emits the branch). The
   `class` vs `struct` `memset` distinction is implemented but not
   covered (access specifiers do not parse yet).
@@ -1311,6 +1327,40 @@ clang 19 `CGAtomic` at -O0, mirrored:
 - **Validation:** `tests/codegen/va_arg.cpp` and `va_arg_complex.cpp`
   exact on aarch64 and x86_64; `tests/conformance/cstdarg.syn/va-arg.cpp`
   and `va-arg-complex.cpp` (run).
+
+### Constant destruction (WP-294)
+A variable needs destruction (a cleanup at scope exit, a `__cxa_atexit`
+registration, a guard for a static local, a non-`constant` global,
+`DeclMustBeEmitted`) when its type is a class, or an array of classes,
+with a non-trivial destructor, **unless it has constant destruction**
+([expr.const]/7; clang `VarDecl::needsDestruction` is `DK_none` once
+`Sema::FinalizeVarWithDestructor`'s `evaluateDestruction` succeeded).
+Clang evaluates that for every variable (block-scope, static local,
+namespace-scope or static member; not parameters, temporaries or
+references) whose destructor is non-trivial and `constexpr`, implicit
+ones included. "Empty body" is not the rule: a user-provided
+non-`constexpr` `~U() {}` is always called, and a `constexpr` destructor
+that only uses `this`, locals or constexpr helpers is not. The fold
+prepass (§3, `fold.rs`) runs the destruction through the TU's Oven
+(`Oven::has_constant_destruction`) and records such variables in
+`Folds::const_destroyed`; `Cg::var_destructed_class` is
+`destructed_class` for every other variable, and every site above uses
+it. The object the destructor sees:
+- a `const` variable (its type is `const`-qualified): readable and
+  writable (clang `lifetimeStartedInEvaluation`), holding its
+  initializer's folded value or, if that does not fold, indeterminate
+  (`const A a{n};` with a destructor that only writes is elided); its
+  `mutable` members are outside their lifetime, so reading or writing
+  them fails ([expr.const]/5.9);
+- any other variable: outside its lifetime ([expr.const]/5.16), so any
+  read or write of a subobject fails (`S s;` with `~S() { x = 0; }` is
+  called, with `~S() { int *p = &x; }` is not).
+
+The destruction is manifestly constant-evaluated when the variable has
+static storage and is constant-initialized
+(`__builtin_is_constant_evaluated()` is then true). A leak or any
+failure keeps the call. `tests/codegen/dtor_constant_destruction.cpp`
+checks every case above against clang on both triples.
 
 ## 7f. Landed (WP-178): dynamic initialization (`global_init.rs`)
 Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],

@@ -104,6 +104,50 @@ impl Parser<'_, '_> {
         self.parse_using_attrs(&attrs)
     }
 
+    /// The token index after the `[[...]]` / `alignas(...)` specifiers at
+    /// the current token (the current index if there are none).
+    fn after_cxx11_attrs(&self) -> Option<usize> {
+        let mut i = self.pos();
+        loop {
+            let t = self.tok_at(i);
+            if Self::punct_of(t) == Some(Punct::LSquare)
+                && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::LSquare)
+            {
+                i = self.skip_balanced(i)?;
+            } else if self.kw_of(t) == Some(Kw::Alignas) {
+                i = self.skip_balanced(i + 1)?;
+            } else {
+                return Some(i);
+            }
+        }
+    }
+
+    /// A C++11 attribute-specifier-seq before a declaration that takes
+    /// none: a namespace-definition, a static_assert-declaration, or (for
+    /// `alignas`, `[[...]] using` being an extension) a using-declaration
+    /// or alias-declaration (clang `ProhibitAttributes`: "an attribute
+    /// list cannot appear here"). Reports and drops it.
+    pub(crate) fn discard_attrs_before_unattributed_decl(&mut self) {
+        let alignas = self.at_kw(Kw::Alignas);
+        if !alignas && !self.at_cxx11_attr() {
+            return;
+        }
+        let Some(j) = self.after_cxx11_attrs() else { return };
+        let next = self.kw_of(self.tok_at(j));
+        let bad = match next {
+            Some(Kw::Namespace | Kw::StaticAssert) => true,
+            Some(Kw::Inline) => self.kw_of(self.tok_at(j + 1)) == Some(Kw::Namespace),
+            Some(Kw::Using) => alignas,
+            _ => false,
+        };
+        if bad {
+            let at = self.loc();
+            let mut attrs = Vec::new();
+            self.parse_attributes(&mut attrs);
+            self.s.error(DiagId::parse_attributes_not_allowed, at);
+        }
+    }
+
     /// True at any attribute-specifier.
     pub(crate) fn at_attr(&self) -> bool {
         self.at_cxx11_attr() || matches!(self.kw(), Some(Kw::Alignas | Kw::Attribute))

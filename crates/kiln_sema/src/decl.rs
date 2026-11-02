@@ -1154,6 +1154,8 @@ impl Sema<'_, '_> {
         }
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
+        // [dcl.align]/1: not on a function parameter.
+        self.reject_alignas(&mut attrs, 0);
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
         let declared = ty;
         ty = self.adjust_param_type(ty);
@@ -2001,7 +2003,7 @@ impl Sema<'_, '_> {
             self.check_using_shadow_conflict(decl, dn);
         }
         if !attrs.is_empty() {
-            self.check_decl_attrs(decl, &attrs);
+            self.check_decl_attrs(decl, &mut attrs);
         }
         self.add_known_function_attrs(decl, &mut attrs);
         if !attrs.is_empty() {
@@ -2051,7 +2053,7 @@ impl Sema<'_, '_> {
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
-            self.check_decl_attrs(decl, &attrs);
+            self.check_decl_attrs(decl, &mut attrs);
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
         Some(decl)
@@ -2465,6 +2467,7 @@ impl Sema<'_, '_> {
         }
         self.check_using_shadow_conflict(td, DeclName::ident(name));
         if !attrs.is_empty() {
+            self.check_alignas_subject(td, &mut attrs);
             let _ = self.builder().attach_attrs(td, &attrs);
         }
         td
@@ -5207,24 +5210,6 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// The template head of a class template redeclaration that creates
-    /// no new decl (`template<class T> struct C;` again): equivalent to
-    /// the template's ([temp.over.link]/6), then checked for default
-    /// arguments ([temp.param]/12, /14).
-    fn check_redeclared_class_head(&mut self, p: DeclId) {
-        if let Some(list) = self.templ.cur.take()
-            && let Some(t) = self.ast.described_template(p)
-            && let Some(old) = self
-                .head_comparable_decl(t)
-                .and_then(|c| self.ast.template_info(c))
-                .map(|i| i.params)
-            && self.check_template_heads_match(list, old)
-        {
-            self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
-            self.inherit_redeclared_defaults(t, list);
-        }
-    }
-
     /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2).
     fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) {
         if let Some(f) = fixed {
@@ -5421,19 +5406,19 @@ impl Sema<'_, '_> {
                     // decl (below), which an incomplete-type note names.
                     && !member_class_spec
                 {
-                    // A redeclaration creates no new decl (a deviation:
-                    // clang adds a `ClassTemplateDecl` per redeclaration),
-                    // but its template head is still checked against the
-                    // template's ([temp.param]/12, /14). One of a class
-                    // only a friend declaration introduced makes it
-                    // visible ([namespace.memdef]/3): a new decl (below).
                     // `[extern] template struct C<args>::I;` explicitly
                     // instantiates a member class ([temp.explicit]/3).
-                    if qualifier.is_none() || !self.act_on_explicit_member_class_inst(p, nloc) {
-                        self.check_redeclared_class_head(p);
-                        self.note_class_template_redecl(p, head.is_some(), nloc);
+                    let inst =
+                        qualifier.is_some() && self.act_on_explicit_member_class_inst(p, nloc);
+                    // A class template redeclaration is a new decl with a
+                    // `ClassTemplateDecl` of its own (clang
+                    // `CheckClassTemplate`; `finish_template_pattern`
+                    // checks its head, [temp.param]/12, /14). A class
+                    // redeclaration creates none, unless only a friend
+                    // declaration introduced it ([namespace.memdef]/3).
+                    if inst || head.is_none() {
+                        return p;
                     }
-                    return p;
                 }
             } else if let Some(q) = qualifier {
                 self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
@@ -5477,16 +5462,6 @@ impl Sema<'_, '_> {
             self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
-    }
-
-    /// Records the name of a class template redeclaration that created no
-    /// decl (`templ.class_redecl_loc`), for notes naming the declaration
-    /// lookup finds.
-    fn note_class_template_redecl(&mut self, p: DeclId, template: bool, nloc: Loc) {
-        if template {
-            let latest = self.ast.latest(p);
-            let _ = self.templ.class_redecl_loc.insert(latest, nloc);
-        }
     }
 
     /// The elaborated-type-specifier of `friend class X;`
@@ -6526,6 +6501,16 @@ impl Sema<'_, '_> {
             }
             return None;
         }
+        if ds.is_empty() && !ds.attrs.is_empty() {
+            // An attribute-declaration (`alignas(8);`, [dcl.pre]/1): an
+            // alignment-specifier there appertains to nothing.
+            let mut attrs = ds.attrs.clone();
+            let n = attrs.len();
+            self.reject_alignas(&mut attrs, u8::MAX);
+            if attrs.len() != n {
+                return None;
+            }
+        }
         if !ds.invalid {
             self.error(DiagId::sema_no_declarators, ds.loc);
         }
@@ -7107,11 +7092,47 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
+    /// Class `q` printed as its injected-class-name type when it is a
+    /// class template's pattern or a partial specialization (see
+    /// [`Sema::qualifier_desc`]); `None` for any other class.
+    fn current_instantiation_desc(&self, q: DeclId) -> Option<String> {
+        let first = self.ast.first(q);
+        if let Some((_, info)) = self.ast.partial_spec_info(first) {
+            let mut s = self.decl_name(q);
+            let names = crate::names::SemaNames::new(self);
+            let canon = self.ast.types.canonical_args(info.args);
+            kiln_ast::types::write_arg_list(&self.ast.types, &names, canon, &mut s);
+            return Some(s);
+        }
+        let t = self.ast.described_template(first)?;
+        let params: Vec<String> = self
+            .template_params(t)
+            .iter()
+            .map(|&p| {
+                let mut n = self.decl_name(p);
+                if self.ast.template_parm(p).is_some_and(|x| x.pack) {
+                    n.push_str("...");
+                }
+                n
+            })
+            .collect();
+        Some(format!("{}<{}>", self.decl_name(q), params.join(", ")))
+    }
+
     /// How a qualifier context is named in "no member named 'x' in ...".
     pub fn qualifier_desc(&self, q: DeclId) -> String {
         match self.ast.decls.get(q).kind() {
             DeclKind::Namespace => format!("namespace '{}'", self.qualified_decl_name(q)),
             DeclKind::TranslationUnit => "the global namespace".to_owned(),
+            // A class template's pattern or a partial specialization is
+            // printed as its injected-class-name type (clang's
+            // `getTypeDeclType`, an `InjectedClassNameType`): unqualified,
+            // the pattern with its parameters (`'V<T>'`, a pack `'P<T...>'`),
+            // a partial specialization with its canonical arguments
+            // (`'V<type-parameter-0-0 *>'`) ([temp.dep.type]/1).
+            DeclKind::CXXRecord if self.current_instantiation_desc(q).is_some() => {
+                format!("'{}'", self.current_instantiation_desc(q).unwrap_or_default())
+            }
             // clang prints the context's qualified name (the canonical
             // type: `'N::B'`, not `'B' (aka 'N::B')`).
             _ => {
@@ -7390,14 +7411,18 @@ impl Sema<'_, '_> {
         if attrs.is_empty() {
             return;
         }
-        self.check_decl_attrs(d, attrs);
-        let _ = self.builder().attach_attrs(d, attrs);
+        let mut attrs = attrs.to_vec();
+        self.check_decl_attrs(d, &mut attrs);
+        let _ = self.builder().attach_attrs(d, &attrs);
     }
 
-    /// Checks attributes against the declaration they appertain to.
-    pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
+    /// Checks attributes against the declaration they appertain to,
+    /// dropping the `alignas` specifiers that cannot apply to it
+    /// ([`Sema::check_alignas_subject`]).
+    pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        self.check_alignas_subject(d, attrs);
         let kind = self.ast.decls.get(d).kind();
-        for &a in attrs {
+        for &a in attrs.iter() {
             let node = *self.ast.attrs.get(a);
             if node.kind == AttrKind::ASSUME {
                 // [dcl.attr.assume]/1: a statement attribute.
@@ -7416,11 +7441,7 @@ impl Sema<'_, '_> {
                     (!kind.is_function()).then_some("functions, classes, or enumerations")
                 }
                 AttrKind::ALIGNED => {
-                    if matches!(kind, DeclKind::Function | DeclKind::Typedef | DeclKind::TypeAlias)
-                        && node.syntax == AttrSyntax::Keyword
-                    {
-                        Some("variables, data members and tag types")
-                    } else if node.b != 0 || node.a != 0 {
+                    if node.b != 0 || node.a != 0 {
                         self.check_underaligned(d, node);
                         None
                     } else {
@@ -7459,6 +7480,88 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+
+    /// [dcl.align]/1: an `alignas` specifier applies to a variable that
+    /// is not a function parameter, a `catch` variable or declared
+    /// `register`, to a non-bit-field data member, or to a class; clang
+    /// rejects it (an error, and the specifier is dropped) elsewhere: on
+    /// any other kind of declaration "only applies to variables, data
+    /// members and tag types" (`diagAppertainsToDecl` for the keyword),
+    /// on the excluded variables, bit-fields and enumerations "cannot be
+    /// applied to ..." (`validateAlignasAppliedType`).
+    pub(crate) fn check_alignas_subject(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        let kind = self.ast.decls.get(d).kind();
+        let which = match kind {
+            DeclKind::Var
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::VarTemplatePartialSpecialization => self.ast.decls.var(d).and_then(|v| {
+                if v.spec.is_exception_var() {
+                    Some(2u8)
+                } else if v.spec.storage() == VarStorage::Register {
+                    Some(1)
+                } else {
+                    None
+                }
+            }),
+            DeclKind::ParmVar => Some(0),
+            DeclKind::Field => {
+                self.ast.decls.field(d).is_some_and(|f| f.bit_width.is_some()).then_some(3)
+            }
+            DeclKind::Enum => Some(4),
+            DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization => None,
+            _ => Some(u8::MAX),
+        };
+        if let Some(which) = which {
+            self.reject_alignas(attrs, which);
+        }
+    }
+
+    /// Drops (and reports) the `alignas` specifiers in `attrs`: `which`
+    /// selects the "cannot be applied to" subject of
+    /// `sema_alignas_wrong_decl_type`, `u8::MAX` the "only applies to"
+    /// error.
+    fn reject_alignas(&mut self, attrs: &mut Vec<AttrId>, which: u8) {
+        attrs.retain(|&a| {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::ALIGNED || node.syntax != AttrSyntax::Keyword {
+                return true;
+            }
+            let msg = if which == u8::MAX {
+                self.diag(DiagId::sema_attribute_wrong_decl_type_error, node.loc)
+                    .arg("'alignas'")
+                    .arg("variables, data members and tag types")
+            } else {
+                self.diag(DiagId::sema_alignas_wrong_decl_type, node.loc)
+                    .arg("'alignas'")
+                    .arg(which)
+            };
+            self.emit(msg);
+            false
+        });
+    }
+
+    /// `alignas` specifiers written where only type attributes may
+    /// appear: at the end of a decl-specifier-seq (`char alignas(8) c;`),
+    /// after a ptr-operator or after an array declarator. An
+    /// alignment-specifier is not a type attribute ([dcl.align]/1, clang
+    /// `err_attribute_not_type_attr`); the parser drops them.
+    pub fn act_on_type_position_attrs(&mut self, attrs: &[AttrId]) {
+        for &a in attrs {
+            let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::ALIGNED && node.syntax == AttrSyntax::Keyword {
+                let msg = self.diag(DiagId::sema_alignas_type_attr, node.loc).arg("'alignas'");
+                self.emit(msg);
+            }
+        }
+    }
+
+    /// True if `a` is an alignment-specifier (`alignas`).
+    pub fn is_alignas_attr(&self, a: AttrId) -> bool {
+        let node = self.ast.attrs.get(a);
+        node.kind == AttrKind::ALIGNED && node.syntax == AttrSyntax::Keyword
     }
 
     /// GNU `malloc` / `alloc_size` / `alloc_align` on function `d`: the

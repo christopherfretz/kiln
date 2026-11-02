@@ -245,6 +245,7 @@ impl Sema<'_, '_> {
         let depth = self.template_param_depth(ft);
         let n = params.len();
         let mut d = DeducedArgs::new(depth, n);
+        d.loc = loc;
         let Some(templated) = self.templated_function(ft) else {
             return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
         };
@@ -407,10 +408,15 @@ impl Sema<'_, '_> {
             }
         }
         // Arity ([temp.deduct.call]/1: a parameter without an argument
-        // is not deduced from).
+        // is not deduced from). A function parameter pack anywhere (clang
+        // `isTemplateVariadic`) leaves the check to the specialization's
+        // viability: a non-trailing one is a non-deduced context, deduced
+        // empty, so `f(1, 2, 3)` of `f(T..., U)` is `f<int>` with "requires
+        // 1 argument".
         let nargs = args.len();
         let fn_pack = ptys.last().and_then(|&t| crate::templ::pack::type_pattern(self, t));
-        if call.is_some() && nargs > ptys.len() + retained && !variadic && fn_pack.is_none() {
+        let any_pack = ptys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
+        if call.is_some() && nargs > ptys.len() + retained && !variadic && !any_pack {
             return Err(DeductionFailure::new(Tdk::TooManyArguments, d));
         }
         if call.is_some() && nargs < self.fn_min_args(templated) {
@@ -662,6 +668,7 @@ impl Sema<'_, '_> {
     /// [temp.deduct.call]/4. Probed by deducing `p` from itself.
     fn has_deducible_params(&mut self, p: QualType, d: &DeducedArgs, pattern: bool) -> bool {
         let mut probe = DeducedArgs::new(d.depth, d.args.len());
+        probe.loc = d.loc;
         // The packs a pack expansion's pattern names, element-wise.
         if pattern {
             probe.pack_cur = Some(Vec::new());
@@ -696,6 +703,7 @@ impl Sema<'_, '_> {
     /// The template parameter packs pack expansion pattern `p` names.
     fn pattern_packs(&mut self, p: QualType, d: &DeducedArgs) -> Vec<u16> {
         let mut probe = DeducedArgs::new(d.depth, d.args.len());
+        probe.loc = d.loc;
         probe.pack_cur = Some(Vec::new());
         self.deduce(p, p, TdfFlags::NONE, &mut probe);
         probe.pack_cur.unwrap_or_default().into_iter().map(|x| x.0).collect()
@@ -818,11 +826,21 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        // A function lvalue binds a reference to the function type without
+        // `noexcept` ([dcl.init.ref]/4, reference-compatible).
+        if self.ast.types.is_function(ca) {
+            let (pa, pd) = (self.ast.types.pointer_to(ca), self.ast.types.pointer_to(cd));
+            if crate::conv::is_function_pointer_conversion(self, pa, pd) {
+                return None;
+            }
+        }
         // /4.3: a derived class (or pointer to one) of a simple-template-id.
         if let TypeView::Pointer(pp) = self.ast.types.canonical_view(op) {
             op = self.ast.types.canonical(pp);
+            // clang strips the pointers only to a class (`A`'s pointee).
             if let (TypeView::Pointer(x), TypeView::Pointer(y)) =
                 (self.ast.types.canonical_view(ca), self.ast.types.canonical_view(cd))
+                && self.ast.types.as_record(x).is_some()
             {
                 ca = self.ast.types.canonical(x);
                 cd = self.ast.types.canonical(y);
@@ -995,7 +1013,12 @@ impl Sema<'_, '_> {
         if matches!(t.canonical_view(at), TypeView::Pointer(_) | TypeView::MemberPointer { .. }) {
             flags = flags.union(TdfFlags::IGNORE_QUALIFIERS);
         }
-        flags = flags.union(TdfFlags::DERIVED_CLASS);
+        // /4.2: a (pointer to a, reference to a) function type deduces
+        // regardless of `noexcept`, as clang's type match does; the
+        // function pointer conversion is checked on the deduced `A`
+        // (`deduced_a_mismatch`).
+        flags =
+            flags.union(TdfFlags::DERIVED_CLASS).union(TdfFlags::ALLOW_COMPATIBLE_FUNCTION_TYPE);
         self.deduce(p, at, flags, d)
     }
 

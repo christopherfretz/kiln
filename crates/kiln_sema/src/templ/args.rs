@@ -249,13 +249,7 @@ impl Sema<'_, '_> {
                         && self.ast.described_template(x).is_some()
                 })
             })
-            .map_or_else(
-                || self.ast.decls.get(tmpl).loc(),
-                |p| match self.templ.class_redecl_loc.get(&p) {
-                    Some(&l) => l,
-                    None => self.ast.decls.get(p).loc(),
-                },
-            );
+            .map_or_else(|| self.ast.decls.get(tmpl).loc(), |p| self.ast.decls.get(p).loc());
         let d = self
             .diag(DiagId::sema_template_arg_list_different_arity, loc)
             .arg(u32::from(too_many))

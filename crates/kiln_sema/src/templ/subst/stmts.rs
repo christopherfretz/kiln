@@ -597,6 +597,7 @@ impl Substituter<'_, '_, '_> {
             DeclKind::Var if self.sema.ast.decls.decomp_bindings(d).is_some() => {
                 self.decomp_decl(d, DeclaratorContext::Block)
             }
+            DeclKind::Var if self.is_anonymous_object(d) => self.local_anonymous_object(d),
             DeclKind::Var => self.var_decl(d, DeclaratorContext::Block),
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 let x = self.typedef_decl_in(d, DeclaratorContext::Block)?;

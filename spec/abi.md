@@ -153,6 +153,24 @@ The maximum over all redeclarations wins. A value of 0 is ignored
 ([dcl.align]/4). Packing is `PACKED` (66); `[[no_unique_address]]` is
 `FieldData::NO_UNIQUE_ADDRESS`.
 
+### 3.2 Declaration alignment (`layout::decl_align`, WP-312)
+`decl_align(ast, d, target, for_alignof)` is clang's
+`ASTContext::getDeclAlign(d, ForAlignof)`, in bytes, at least 1:
+- a variable with an alignment attribute: the attribute's alignment
+  alone ([dcl.align]/5; a GNU `aligned` may lower it);
+- otherwise its type's; a reference is its referee for `alignof`
+  (`for_alignof`) and a pointer for storage; for storage an x86-64 array
+  of at least 16 bytes is raised to 16 (`LargeArrayMinWidth`);
+- a data member: the strictest of its attribute and type, capped by
+  what its offset guarantees in the class (the class alignment, or the
+  lowest set bit of a non-zero offset); in a packed class, or when
+  packed itself, its attribute's alignment only.
+
+No minimum global alignment applies on the M2 targets. Users: codegen
+`var_align` (global, `alloca`, `catch` and static-local storage), the
+Oven's `SemaBridge::decl_align` (`__builtin_assume_aligned`) and
+`SemaBridge::alignof_decl` (`alignof` of an expression naming `d`).
+
 ## 4. Class properties
 - **POD for the purpose of layout** (Itanium §1.1: the C++03 POD
   definition, clang `isPOD`). A class is *not* POD if any of these holds:
@@ -595,7 +613,19 @@ points, thunks and method indices are clang's.
     data size (clang 19 `lowerUnion(isNonVirtualBaseType)`), which a
     potentially-overlapping member of that union type uses (WP-289);
   - `IrRecord::base_index` and `vbase_index` map each base to its
-    element.
+    element;
+  - padding (clang `insertPadding`) fills the gap before each member
+    with storage. Those members are disjoint and sorted by offset: an
+    empty `[[no_unique_address]]` member has no storage (several may
+    share an offset, with each other and with the next member), a
+    potentially-overlapping one is stored as its base-subobject type,
+    and a bit-field run as its access units. That is an internal
+    invariant (clang's `assert(Offset >= Size)`): the gap is a
+    `checked_sub`, debug-asserted, and a violation drops the padding
+    rather than wrapping. No diagnostic, since no input reaches it
+    (WP-294; `tests/layout/nua_overlap_bitfields.cpp` and
+    `tests/codegen/record_type_nua_bitfields.cpp` cover both shapes on
+    both triples).
 - **Argument passing** (`call.rs`): `can_pass_in_registers` follows
   clang's `canPassInRegisters`. A class with a non-trivial copy or move
   constructor or destructor, or with all of them deleted, is passed

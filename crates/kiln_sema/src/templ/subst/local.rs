@@ -54,11 +54,14 @@ impl Substituter<'_, '_, '_> {
         self.sema.ast.templates.set_instantiated_from(x, d);
         self.locals.insert(d, DeclOrPack::Decl(x));
         if defined {
+            // A block-scope anonymous union ([class.union.anon]): its
+            // object is the declaration statement's next declaration.
+            let anon = self.is_anonymous_record(d);
             if let Some(v) = methods {
-                self.class_body(x, d, Some(v));
+                self.class_body_with(x, d, Some(v), anon);
             } else {
                 let mut v = Vec::new();
-                self.class_body(x, d, Some(&mut v));
+                self.class_body_with(x, d, Some(&mut v), anon);
                 self.local_methods(x, &v);
             }
         }
