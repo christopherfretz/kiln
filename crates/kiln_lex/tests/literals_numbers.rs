@@ -160,6 +160,12 @@ fn lex_fcon_suffixes_and_errors() {
     assert_eq!(diags_in("1.0F128", Std::Cxx23), []);
     assert_eq!(diags_in("1.0f16", Std::Cxx17), []);
     assert_eq!(diags_in("1.0Bf16", Std::Cxx23), [D::InvalidSuffix { floating: true }]);
+    // WP-380: GCC's `_FloatNx` suffixes (lower-case `x` only), a pedantic
+    // extension in every mode.
+    assert_eq!(suffix("1.0f32x", Std::Cxx23), FloatSuffix::F32x);
+    assert_eq!(suffix("0x1p3F64x", Std::Cxx11), FloatSuffix::F64x);
+    assert_eq!(diags_in("1.0f64x", Std::Cxx26), [D::FloatSuffixGnu]);
+    assert_eq!(diags_in("1.0f32X", Std::Cxx23), [D::InvalidSuffix { floating: true }]);
     assert_eq!(diags("1.0ll"), [D::InvalidSuffix { floating: true }]);
     assert_eq!(diags("1.0z"), [D::InvalidSuffix { floating: true }]);
     assert_eq!(diags("1.0u"), [D::InvalidSuffix { floating: true }]);

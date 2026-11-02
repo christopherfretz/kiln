@@ -2647,6 +2647,25 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   calls to intrinsics and its implicit `format` / `alloc_size`
   attributes on the library names (`-Wformat*` on `sprintf`) are not
   modelled; only the `__builtin_` printf rows carry `format` (below).
+- **GCC's implicit library builtins** (WP-380, `record_gnu_lib_twin`;
+  `Sema::gnu_lib_builtins`, set by the driver for `-stdlib=libstdc++`,
+  the default): libstdc++'s `<cmath>` double overloads are `using
+  ::ceil;` etc., so its C++23 constexpr `std::ceil(double)` (P0533)
+  relies on GCC folding the C library function as a builtin. A first
+  declaration recognized as a library function above whose name is
+  `ceil`, `floor`, `trunc`, `round`, `fabs`, `fmin`, `fmax` or
+  `copysign` (or the `f`/`l` variant) records its `__builtin_` twin
+  (`builtin::gnu_lib_twin`; the `gnu_lib_twin` cold data);
+  redeclarations inherit it. Only the Oven reads it: a call folds as the
+  twin (spec/oven.md "Builtins"); every other rule (attributes, codegen,
+  diagnostics) treats the call as ordinary. GCC 14 is the reference:
+  `rint`/`nearbyint` are not folded (GCC leaves them to the rounding
+  mode at run time) and `sqrt`, which GCC folds, is not (the Oven has no
+  `__builtin_sqrt`; clang folds neither). Under `-stdlib=libc++` nothing
+  is recorded, as clang (libc++'s `constexpr-cxx23-clang.pass.cpp`
+  requires `::ceil` to stay non-constant). A C++-linkage or class-scope
+  `ceil`, or one with another type, is an ordinary function
+  (`tests/conformance/c.math/gnu-lib-builtins*.cpp`).
 - **Custom-checked builtins** (WP-270): the generic
   `__builtin_{add,sub,mul}_overflow` (`builtin_overflow`) and the
   alignment of `__builtin_alloca_with_align` (`check_alloca_align`) are
@@ -3666,8 +3685,12 @@ clang 19's C99/GNU complex support in C++:
   `__real` keeps the operand's value category. `__imag` does for a
   complex operand, and is a zero prvalue otherwise.
 - **`__builtin_complex(re, im)`**: two operands of the same real floating
-  type `T` give `_Complex T`. Other operand types are diagnosed as clang
-  does.
+  type `T` give `_Complex T`, including `__bf16` (`_Complex __bf16`,
+  which clang 19/22 also give though they reject the spelled type).
+  `_Float16` and `__fp16` are rejected at the callee ("'_Complex
+  _Float16' is invalid", "'_Complex half' is invalid") below
+  `-fclang-compat=22` and accepted from 22, as the matching clang does
+  (WP-380). Other operand types are diagnosed as clang does.
 - **List initialization** (clang `CheckComplexType`): `{re, im}`
   initializes the parts, each converted as a list element with narrowing
   checked. A third clause is excess. One clause initializes from a
@@ -3949,6 +3972,28 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `undeclared_template_id_before_ident`; libc++
   `locale.stdcvt/remove.verify.cpp`, WP-358). Test:
   `tests/conformance/temp.names/undeclared-template-id-type.cpp`.
+  At block scope `X<...>` before a ptr-operator or a cv-qualifier
+  (`undeclared<int> *p;`) is ambiguous and the declarator decides, as for
+  an undeclared name before a ptr-operator (spec/parse.md; `kiln_parse`
+  `undeclared_template_id_before_ptr_operator`; `w<int> & i + 1;` stays
+  an expression). Test:
+  `tests/conformance/temp.names/undeclared-template-id-stmt.cpp` (WP-372).
+- **Undeclared template-id in an expression** ([temp.names]/3.3,
+  WP-372): an undeclared unqualified `X<...>` that is not called
+  (`(undeclared<int> * 2)`, `undeclared<int>[3]`, `&undeclared<1>`) still
+  takes the list as template arguments and reports only "use of
+  undeclared identifier 'X'" (clang 22 returns `ExprError` for the
+  annotated template-id). Before a binary operator or a closing token
+  (`)`, `]`, `}`, `,`, `;`, `:`) the result is an error expression, so
+  the enclosing expression and declaration go on and diagnose their other
+  operands and declarators; before anything else (`(undeclared<int> 5)`)
+  it is a parse error the enclosing construct skips. Followed by `::` it
+  is "no template named 'X'" (clang's `ActOnCXXNestedNameSpecifier`).
+  Clang 19 adds "expected ')'" / "expected ';'" after some of these forms
+  (delayed typo correction); kiln follows clang 22 at every compat level.
+  `kiln_parse` `parse_id_expression_rest`. Tests:
+  `tests/conformance/temp.names/undeclared-template-id-expr.cpp`,
+  `undeclared-template-id-expr-22.cpp` (`requires: clang>=22`).
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.

@@ -503,6 +503,13 @@ literal is one instruction and one step, not an interpreted loop.
   parsed as clang's `StringRef::getAsInteger(0)`: decimal, `0` octal,
   `0x` hex, `0b` binary, `0o` octal; an empty string is payload 0; any
   other argument is not a constant), and the source-location builtins (below).
+- **GCC's implicit library builtins (WP-380):** a direct call of a
+  function with no builtin id but a `gnu_lib_twin` (spec/sema.md §5.4:
+  the C library `ceil`/`floor`/`trunc`/`round`/`fabs`/`fmin`/`fmax`/
+  `copysign` and their `f`/`l` variants under `-stdlib=libstdc++`) is
+  lowered as a call of the twin `__builtin_` function, so it folds with
+  the twin's rules; under `-stdlib=libc++` such a call is a call of a
+  non-constexpr function, as in clang.
 - **Atomics (WP-154):** `__atomic_always_lock_free`, `__atomic_is_lock_free`
   and `__c11_atomic_is_lock_free` fold through `bi::LOCK_FREE` as clang
   19's `IntExprEvaluator`: a power-of-two size within the target's inline
@@ -1819,11 +1826,30 @@ a statement expression) is materialized and its parts loaded.
   division by zero (`handleFloatFloatBinOp`).
 - **`++`/`--`** step the real part only (clang `IncDecSubobjectHandler`);
   overflow notes name the element type.
-- **Rejected with the generic note**, as in clang 19: compound
-  assignment to a complex object (`CompoundAssignSubobjectHandler`), after
-  both operands are evaluated.
+- **Compound assignment** (`+= -= *= /=`, WP-380) with a complex left
+  or right operand folds as in GCC; clang 19 and 22 fail with the generic
+  note (`CompoundAssignSubobjectHandler`), and kiln deliberately accepts
+  more (its constexpr reference is GCC; nothing valid is rejected). The
+  right operand is evaluated first ([expr.assign]/1), then the left
+  object's parts are read, `E1 op E2` is computed in `ComputeResultTy`
+  exactly as the binary operator (Annex G for `*`/`/`), and the parts are
+  converted back to the left operand's element type and stored. Other
+  compound operators on complex operands are rejected by Sema.
+- **`_Complex __bf16`** (WP-380): each operation is computed in
+  `_Complex float` (the parts converted up, the float rules above) and
+  each part is rounded to bf16 once at its end, as GCC's run-time
+  `__mulsc3`/`__divsc3` and kiln's codegen compute it. This matches
+  GCC 14's folding of a single operation (it folds `*`/`/` correctly
+  rounded with MPC, the binary32 result for bf16 operands but in rare
+  cancellation cases). Two documented differences: GCC keeps bf16
+  intermediates of one expression in float (excess precision, for scalar
+  `__bf16` too) where kiln rounds every operation, as clang does for
+  scalars; and clang's evaluator, which reaches bf16 complex values only
+  through `__builtin_complex`, rounds each partial product. For `float`
+  and wider elements kiln keeps clang's Annex G formula, where GCC
+  rounds correctly with MPC (an open question for M6).
 - Tests: `tests/conformance/ext.complex/constexpr.cpp`,
-  `imaginary.cpp`.
+  `imaginary.cpp`, `compound-assign.cpp`, `complex-bf16-rounding.cpp`.
 
 ### Exceptions — Landed (WP-357, WP-368)
 P3068 (C++26, `__cpp_constexpr_exceptions` 202411L): a throw-expression,

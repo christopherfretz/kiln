@@ -5,8 +5,9 @@
 // exponent functions, nextafter/nexttoward, signbit and the comparison
 // macros; nextafter(_Float16/__bf16) via __builtin_nextafterf16/f16b).
 // Its double overloads are `using ::ceil;` etc., C library declarations
-// GCC folds as implicit builtins; kiln does not yet treat them as builtins,
-// so this test calls only the overloads libstdc++ defines itself.
+// GCC folds as implicit builtins (kiln too since WP-380, for the subset in
+// gnu-lib-builtins.cpp); this test calls the overloads libstdc++ defines
+// itself.
 // frexp/modf/remquo are not constexpr in libstdc++ 14.
 // Expectations from g++ 14, which accepts this file.
 //@ expect: compile-ok

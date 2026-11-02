@@ -167,9 +167,9 @@ pub(crate) fn float_kind(b: BuiltinType, long_double: FloatFormat) -> Option<Flo
         BuiltinType::Float16 | BuiltinType::Half => FloatKind::Half,
         BuiltinType::BFloat16 => FloatKind::BFloat16,
         BuiltinType::Float | BuiltinType::Float32 => FloatKind::Single,
-        BuiltinType::Double | BuiltinType::Float64 => FloatKind::Double,
+        BuiltinType::Double | BuiltinType::Float64 | BuiltinType::Float32x => FloatKind::Double,
         BuiltinType::Float128 | BuiltinType::StdFloat128 => FloatKind::Quad,
-        BuiltinType::LongDouble => match long_double {
+        BuiltinType::LongDouble | BuiltinType::Float64x => match long_double {
             FloatFormat::IeeeSingle => FloatKind::Single,
             FloatFormat::X87Extended => FloatKind::X87Extended,
             FloatFormat::IeeeQuad => FloatKind::Quad,

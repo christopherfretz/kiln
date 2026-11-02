@@ -620,8 +620,8 @@ impl<'a> AstNames<'a> {
             20 | 26 => FloatKind::Half,
             21 => FloatKind::BFloat16,
             22 | 48 => FloatKind::Single,
-            23 | 49 => FloatKind::Double,
-            24 => match self.ast.types.target().long_double {
+            23 | 49 | 51 => FloatKind::Double,
+            24 | 52 => match self.ast.types.target().long_double {
                 FloatFormat::IeeeHalf => FloatKind::Half,
                 FloatFormat::BFloat => FloatKind::BFloat16,
                 FloatFormat::IeeeSingle => FloatKind::Single,

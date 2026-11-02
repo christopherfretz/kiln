@@ -198,6 +198,8 @@ impl Sema<'_, '_> {
             TypeSpecKind::Float32 => QualType::FLOAT32,
             TypeSpecKind::Float64 => QualType::FLOAT64,
             TypeSpecKind::StdFloat128 => QualType::STD_FLOAT128,
+            TypeSpecKind::Float32x => QualType::FLOAT32X,
+            TypeSpecKind::Float64x => QualType::FLOAT64X,
             TypeSpecKind::BFloat16 => QualType::BFLOAT16,
             TypeSpecKind::Fp16 => QualType::HALF,
             // [dcl.type.auto.deduct]/4 (clang
@@ -291,6 +293,8 @@ impl Sema<'_, '_> {
                 | TypeSpecKind::Float32
                 | TypeSpecKind::Float64
                 | TypeSpecKind::StdFloat128
+                | TypeSpecKind::Float32x
+                | TypeSpecKind::Float64x
         );
         // WP-365: GCC's `_Complex __bf16`, spelled directly or through a
         // type-name (libstdc++ `<complex>`'s `__complex__ decltype(0.0bf16)`
@@ -2245,6 +2249,7 @@ impl Sema<'_, '_> {
         self.finish_decl_alignment(decl, &mut attrs);
         self.add_known_function_attrs(decl, &mut attrs);
         self.recognize_builtin_decl(decl, &mut attrs);
+        self.record_gnu_lib_twin(decl);
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
