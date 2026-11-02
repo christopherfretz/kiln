@@ -1123,6 +1123,16 @@ an error (§3.4).
   guaranteed elision (`S s2 = make();` dumps `ExprWithCleanups >
   CXXBindTemporaryExpr > CallExpr`); kiln does the same and the Oven/codegen
   treat such a bind as a no-op.
+- A by-value class parameter is a temporary the caller destroys at the end of
+  the full-expression ([expr.call]/7; clang `shouldBindAsTemporary` is true
+  for a parameter entity). This holds however the parameter is initialized:
+  from an expression (`convert_to_class` / `construct_from_class` with
+  `ConvCtx::Argument`), or copy-list-initialized from a braced-init-list
+  argument or a braced default argument. In the braced case
+  `init_list_entity` binds its prvalue result when the context is
+  `ConvCtx::Argument` (WP-310; before that fix the parameter of `f({1, 2})`
+  was never destroyed;
+  `tests/conformance/expr.call/run-braced-arg-temporary-destroyed.cpp`).
 - `materialize_temporary(e, bound_to_lvalue_ref)` (temporary
   materialization, [conv.rval]; WP-067b owns it and the
   `MaterializeTemporaryExpr`/`CXXBindTemporaryExpr`/`ExprWithCleanups`

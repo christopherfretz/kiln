@@ -1567,6 +1567,18 @@ recomputed exactly as for non-template code (clang's
   no switch). The checks clang would redo by rebuilding it are replayed
   from what the definition recorded: designator warnings of a list
   (WP-196) and `-Wnull-dereference` (spec/sema.md §5.15, WP-235).
+  A shared operand can sit inside a full-expression that is rebuilt
+  (`B b(S{2});`, `use(t, S{1})` with `t` dependent). Its temporaries
+  still belong to that full-expression. `note_shared_temporaries` sets
+  `cleanup.needs` for each `MaterializeTemporaryExpr`. It sets `needs`
+  and `side_effects` for each `CXXBindTemporaryExpr`, and does what
+  `note_default_use` does for each `CXXDefaultArgExpr`. The walk skips
+  nested `ExprWithCleanups`, lambdas and unevaluated operands. The rebuilt
+  full-expression therefore gets its `ExprWithCleanups`, and the
+  temporaries die at its end ([class.temporary]/4). Before WP-310 they
+  died at scope exit, because the cleanup flag that clang's rebuild sets
+  (`MaybeBindToTemporary`) was never raised;
+  `tests/conformance/class.temporary/run-template-shared-operand-temporary-destroyed.cpp`.
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);

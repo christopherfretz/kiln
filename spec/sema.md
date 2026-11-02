@@ -268,7 +268,16 @@ Redeclaration and linkage rules:
   is not `extern`, else
   `redeclaration of 'x' with a different type`. The note says
   `previous definition is here` if the previous declaration was a
-  definition, else `previous declaration is here`.
+  definition, else `previous declaration is here`. Array types that
+  differ only in the presence of a major bound are not a mismatch
+  ([basic.link]/11), in either order, also for the out-of-class
+  definition of a static data member (which therefore redeclares the
+  member rather than adding a second one to the class); a redeclaration
+  that omits the bound takes the earlier declaration's bound
+  ([dcl.array]/8; `redecl_var_type`, clang's `MergeVarDeclTypes`):
+  `extern int a[4]; int a[] = {1};` and `struct S { static int b[4]; };
+  int S::b[] = {1};` both declare `int[4]`
+  (tests/conformance/class.static.data/omitted-bound-redecl.cpp, WP-310).
 - **Linkage** ([basic.link]): `static`, `extern`, `extern "C"`, members
   of unnamed namespaces, and `const` variables at namespace scope.
 - **Block-scope variables** (`merge_local_var`, clang's `MergeVarDecl`;
@@ -2783,6 +2792,28 @@ clang 19's C99/GNU complex support in C++:
   is called without an object argument. It is diagnosed with clang's
   `diagnoseInstanceReference` wording ("call to non-static member
   function without an object argument").
+
+### 5.18 `-Wabsolute-value` (`absolute_value.rs`, WP-310)
+clang's `CheckAbsoluteValueFunction`, unsigned-argument case, run on every
+non-dependent call of a named function after argument conversion (also in
+instantiations). The callee is an absolute value function when it is an
+implicit builtin `__builtin_abs`/`labs`/`llabs`/`fabs`/`fabsf`/`fabsl`/
+`cabs`/`cabsf`/`cabsl`, a declaration recognized as the library builtin
+`abs`/`labs`/`llabs`/`fabs`/`fabsf`/`fabsl` (§5.4, `lib_builtin_info`), or a
+function named `abs` whose context (inline namespaces and linkage
+specifications skipped) is `::std`. With exactly one argument whose type,
+parentheses and implicit casts stripped, is an unsigned integer type
+(clang `isUnsignedIntegerType`: `bool`, unsigned and unsigned-character
+types, unsigned `_BitInt`, a complete unscoped enumeration with an unsigned
+underlying type): warning `sema_unsigned_abs` "taking the absolute value of
+unsigned type 'T' has no effect" (group `absolute-value`, on by default) at
+the callee's begin, with note `note_remove_abs` "remove the call to 'F'
+since unsigned values cannot be negative" over the callee; F is `std::abs`
+for the `std` function, else the builtin's spelling (libc++'s
+`std::abs(uc)` resolves to the C library's `::abs`, so F is `abs`). Not
+implemented: clang's pointer-argument, wrong-function-kind and too-small
+warnings of the same group. Test:
+`tests/conformance/c.math.abs/absolute-value-unsigned.cpp`.
 
 ### 5.19 Ext-vector element access (`vector_ops.rs`, WP-307)
 clang's `ext_vector_type` element access (`v.x`, `v.xy`, `p->zw`;

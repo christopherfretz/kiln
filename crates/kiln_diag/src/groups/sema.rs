@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+AbsoluteValue = "absolute-value" [];
 AbstractFinalClass = "abstract-final-class" [];
 AddressOfPackedMember = "address-of-packed-member" [];
 AmbiguousReversedOperator = "ambiguous-reversed-operator" [];

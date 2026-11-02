@@ -135,7 +135,12 @@ reverses segment (1). Verified: `void f(int); void f(double); void(*p)(char)
 `UseArgumentDependentLookup`) for qualified or parenthesized callees,
 implicit builtins, or when ordinary lookup found a class member, a
 block-scope function declaration (not a using-declaration), or anything
-that is not a function or function template.
+that is not a function or function template. The suppression holds for a
+call made dependent by its arguments too: `dependent_call` keeps an implicit
+builtin callee as its `DeclRefExpr` instead of an ADL `UnresolvedLookupExpr`,
+so instantiating `__builtin_addressof(x)` with `x` a `Holder<Incomplete>*`
+does not instantiate `Holder<Incomplete>` ([temp.inst]/2; WP-310,
+`temp.inst/builtin-call-no-adl-completion.cpp`).
 
 **Associated entities** (/3), `associated_entities(ty, &mut AssocSet)`:
 pointers/references/arrays → element; function types → parameters and
