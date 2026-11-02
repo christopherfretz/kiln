@@ -2881,6 +2881,12 @@ impl Parser<'_, '_> {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
             self.parse_trailing_requires(&mut d);
+            // The declarator's end (clang `PrevTokLocation` once
+            // `ParseDeclarator` returns): its last token, not counting a
+            // trailing C++11 attribute-specifier-seq; an asm label and GNU
+            // attributes extend it (as for a member declarator, class.rs).
+            let e = self.prev_lo();
+            d.end = if e == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { e };
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
@@ -2889,12 +2895,19 @@ impl Parser<'_, '_> {
                 self.skip_until(&[], true, false);
                 break;
             };
+            if label.is_some() {
+                d.end = self.prev_lo();
+            }
             d.asm_label = label;
             // Only GNU attributes follow (clang's `MaybeParseGNUAttributes`
             // in `ParseDeclGroup` and `ParseAsmAttributesAfterDeclarator`):
             // a C++11 attribute-specifier-seq here ends the declarator, and
             // the `;` (or function body, below) expected there is reported.
+            self.gnu_attr_end = Loc::INVALID;
             self.parse_gnu_attr_seq(&mut d.attrs);
+            if self.gnu_attr_end != Loc::INVALID {
+                d.end = self.gnu_attr_end;
+            }
             if !d.has_name() {
                 if !d.invalid {
                     self.error_here(DiagId::parse_expected_unqualified_id);
@@ -2946,6 +2959,14 @@ impl Parser<'_, '_> {
             d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
+            // A bodiless function declaration's end, where notes about it
+            // point (`ColdDeclData::declarator_end`).
+            if let Some(f) = v
+                && d.end != Loc::INVALID
+                && self.s.ast.decls.function(f).is_some_and(|x| x.body.is_none())
+            {
+                let _ = self.s.ast.decls.cold.declarator_end.insert(f, d.end);
+            }
             // A declarator without a type is invalid too (`static y, z;`).
             type_invalid |= self.s.take_declarator_type_invalid()
                 || (!ds.has_type_specifier() && !is_untyped_special(&d));
