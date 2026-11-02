@@ -11,9 +11,9 @@
 //! leaves the union with no active member, not dead, and the bytes do not
 //! tell the two apart.
 
-use super::{Cleanup, Fault};
+use super::{Cleanup, Fault, NO_CALL, UNWIND_ONLY};
 use crate::Oven;
-use crate::kbc::ak;
+use crate::kbc::{Op, ak};
 use kiln_ast::Ast;
 use kiln_ast::decl::DeclKind;
 
@@ -32,6 +32,9 @@ impl Oven {
     /// Whether the `ty` object at `raw` is one whose lifetime an explicit
     /// destruction ended (no byte of it within a lifetime).
     fn life_ended(&self, raw: u64, ty: OTy) -> bool {
+        if !self.mem.unconstructed.is_empty() && self.mem.empty_unconstructed(raw, ty) {
+            return true;
+        }
         let i = self.types.info(ty);
         !i.has_union
             && !matches!(i.kind, TyKind::Record { union: true, .. })
@@ -57,13 +60,56 @@ impl Oven {
         Ok(())
     }
 
-    /// Before a registered destruction runs (`run_cleanup`).
-    pub(super) fn cleanup_life(&self, c: &Cleanup) -> Result<(), Fault> {
+    /// Before a registered destruction runs (`run_cleanup`, the running
+    /// function's frame at `fb`).
+    pub(super) fn cleanup_life(&self, c: &Cleanup, fb: usize) -> Result<(), Fault> {
         // Registered destructions are of frame objects.
         if !self.mem.life_frame || c.this == 0 || !self.tracked(c.this) {
             return Ok(());
         }
-        self.destroy_check(c.this, c.ty)
+        match self.destroy_check(c.this, c.ty) {
+            // An empty base its constructor never ran, destroyed by its
+            // derived class's destructor: clang prints the base's lvalue
+            // as the derived object (WP-401); the empty base's address
+            // alone would designate the member sharing it.
+            Err(Fault::DestroyEnded { .. }) if self.mem.empty_unconstructed(c.this, c.ty) => {
+                let derived = self.stack.last().and_then(|fr| {
+                    let f = &self.funcs[fr.func as usize];
+                    Some((self.regs[fb + f.this_reg? as usize] as u64, f.this_ty?))
+                });
+                let (p, ty) = derived.unwrap_or((c.this, c.ty));
+                Err(Fault::DestroyEnded { p, ty })
+            }
+            r => r,
+        }
+    }
+
+    /// The instruction a fault of `cleanup_life` for `c` (run at `pc`) is
+    /// reported at: a subobject destroyed by its destructor's epilogue
+    /// (`PushCleanup` aux 2) at the outermost such destructor's call (the
+    /// `delete`), as clang's `HandleDestructionImpl` passes its call range
+    /// down (WP-401); any other destruction at `pc`.
+    pub(super) fn cleanup_fault_pc(&self, c: &Cleanup, pc: usize) -> usize {
+        let sub = |at: usize| {
+            self.code
+                .get(at)
+                .is_some_and(|&w| Op::from_u8(w as u8) == Op::PushCleanup && (w >> 8) & 2 != 0)
+        };
+        if !sub((c.pc & !UNWIND_ONLY) as usize) {
+            return pc;
+        }
+        let frames = self.stack.get(self.run.entry + 1..).unwrap_or_default();
+        let mut at = pc;
+        for fr in frames.iter().rev() {
+            if fr.call_pc == NO_CALL {
+                break;
+            }
+            at = fr.call_pc as usize;
+            if !sub(at) {
+                break;
+            }
+        }
+        at
     }
 
     /// Releasing the frame objects above `mark` (leaving a scope: `All`;

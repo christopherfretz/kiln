@@ -540,7 +540,8 @@ impl Compiler<'_> {
     /// lifetime (`EndLife` aux 8), so an access is "... object outside
     /// its lifetime" and a frozen result notes "constructor of base class
     /// 'B' is not called" (spec/oven.md "Object lifetime", WP-390). An
-    /// empty base has no bytes to mark.
+    /// empty base has no bytes to mark: it is recorded by identity
+    /// (WP-401).
     fn unconstructed_bases(&mut self, inits: &[CtorInit], this: u32, cls: OTy, loc: Loc) {
         let covered: Vec<usize> = inits
             .iter()
@@ -558,6 +559,25 @@ impl Compiler<'_> {
             let m = self.next;
             let q = self.elem_ptr_loc(this, fi.offset, loc);
             self.emit_loc(Op::EndLife, 8, &[q, fi.ty.0], loc);
+            self.next = m;
+        }
+        // Empty bases are kept apart from `fields` (aux 16: no bytes).
+        let ebases = self.o.types.empty_bases(cls).to_vec();
+        if ebases.is_empty() {
+            return;
+        }
+        let inited: Vec<OTy> = inits
+            .iter()
+            .filter(|c| c.kind == CtorInitKind::Base)
+            .map(|c| self.ty(QualType::unqual(TypeId::new(c.target))))
+            .collect();
+        for (bt, off) in ebases {
+            if inited.contains(&bt) {
+                continue;
+            }
+            let m = self.next;
+            let q = self.elem_ptr_loc(this, off, loc);
+            self.emit_loc(Op::EndLife, 8 | 16, &[q, bt.0], loc);
             self.next = m;
         }
     }

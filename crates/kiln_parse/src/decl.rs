@@ -102,6 +102,7 @@ pub(crate) fn is_decl_specifier_kw(k: Kw) -> bool {
                 | Kw::Virtual
                 | Kw::Explicit
                 | Kw::Friend
+                | Kw::Noreturn
                 | Kw::Alignas
                 | Kw::Attribute
                 | Kw::Declspec
@@ -724,7 +725,21 @@ impl Parser<'_, '_> {
                 }
                 Kw::Inline => set_flag(&mut ds.inline, loc, "inline"),
                 Kw::Virtual => set_flag(&mut ds.virtual_, loc, "virtual"),
+                // [class.friend]/1: only in a class; elsewhere diagnosed
+                // and dropped (clang's `err_friend_invalid_in_context`).
+                Kw::Friend
+                    if !matches!(ctx, DeclaratorContext::Member | DeclaratorContext::TypeName) =>
+                {
+                    let d = self.s.diag(DiagId::sema_friend_invalid_in_context, loc);
+                    self.emit(d);
+                    Ok(())
+                }
                 Kw::Friend => set_flag(&mut ds.friend, loc, "friend"),
+                Kw::Noreturn => {
+                    let d = self.s.diag(DiagId::parse_c11_noreturn, loc);
+                    self.emit(d);
+                    set_flag(&mut ds.noreturn, loc, "_Noreturn")
+                }
                 Kw::Explicit => {
                     let r = set_flag(&mut ds.explicit, loc, "explicit");
                     if self.peek_is(1, Punct::LParen) {
