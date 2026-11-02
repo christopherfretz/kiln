@@ -431,7 +431,16 @@ Redeclaration and linkage rules:
   `act_on_start_this_scope(member, quals)` / `act_on_end_this_scope`
   bracket a member function's exception specification and trailing
   return type, where `this` has type `cv X*`; member access into the
-  class being defined is allowed there.
+  class being defined is allowed there (and in NSDMIs, default
+  arguments and bodies, which run after `}`). Anywhere else before the
+  class's `}` (a static data member initializer, an array bound, an
+  alias, a `decltype` member type, a `static_assert`) `((S*)0)->m()`
+  is `member access into incomplete type 'S'` with the note
+  `definition of 'S' is not complete until the closing '}'` (clang's
+  `isThisOutsideMemberFunctionBody`; `Sema::this_outside_member_body`;
+  WP-280; test `expr.ref/member-access-class-being-defined.cpp`).
+  Divergence: clang reports nothing further in a class after its first
+  error there, kiln keeps diagnosing (e.g. a later `S s;` member).
 - **`-Wvexing-parse`**: a function declarator the parser chose over a
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses
@@ -1050,9 +1059,18 @@ specification as written (`TypeNames` prints ` noexcept`,
   `defer_late_noexcept(f, d)` gives `f`'s type `ExcSpec::Deferred(f)`
   and puts `f` in `unparsed_exc`. The parser brackets the replay with
   `act_on_start_delayed_exception_spec(f) -> bool` (a `this` scope with
-  `f`'s cv-qualifiers unless `f` is static, [expr.prim.this]/2) and
+  `f`'s cv-qualifiers, [expr.prim.this]/2) and
   `act_on_end_this_scope`. `act_on_exception_spec(f, spec)` then sets
   the written spec on every redeclaration (`set_member_exception_spec`).
+  A static `f` gets an unqualified `this` scope too, as in clang, so a
+  non-static member named in its spec is found as `this->m`.
+  `act_on_exception_spec` then reports the first `CXXThisExpr` in the
+  operand: `'this' cannot be [implicitly] used in a static member
+  function declaration` (`sema_this_static_member_func`,
+  [expr.prim.this]/3; clang `checkThisInStaticMemberFunctionExceptionSpec`;
+  WP-280, `class.mem.general/static-member-noexcept-this.cpp`). Clang
+  diagnoses it again when a class template's static member is
+  instantiated; kiln diagnoses only the pattern (a follow-up).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as
@@ -1182,6 +1200,17 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
   replayed. A redeclaration written without a spec then takes
   `merge_missing_exc_spec` (`'m' is missing exception specification
   'noexcept(S::x)'`), and otherwise gets the mismatch error.
+- *A class template's friend redeclaring a function* (WP-280): when
+  the class is instantiated, the friend's lazy spec is instantiated at
+  once (`function_decl` in `templ/subst/decls.rs`) and checked against
+  the function's *first* declaration, which clang's note names. So a
+  later friend is not measured against an earlier friend that was
+  already diagnosed as mismatched. Test:
+  `temp.friend/friend-redecl-exception-spec-at-instantiation.cpp`.
+  Divergences (follow-ups): clang also checks at template definition
+  time a friend whose type is not dependent; kiln checks only at
+  instantiation. Kiln also matches a later namespace-scope declaration
+  against the pattern friend, where clang waits for the instantiation.
 - *Unparsed through the redeclaration chain*: `exc_unparsed(f)` is true
   when `f`, its first declaration, or the pattern it waits on is in
   `unparsed_exc`. Both `resolve_exc_for_type` and
@@ -3097,7 +3126,10 @@ template saved in `range_for_outer_depth` for instantiations).
   (`trailing_notes`) attach to the held error before it is held.
   One such deeper SFINAE context is deducing a converting constructor
   template for a rewritten `operator==` candidate of `__begin != __end`
-  (WP-271). (WP-274.)
+  (WP-271); another is the requires-expression of libc++
+  `sentinel_wrapper::operator==` instantiated by `__begin != __end`
+  (WP-280, `temp.inst/range-for-member-substitution-context.cpp`).
+  (WP-274.)
 - **Templates.** A type-dependent range (or loop-variable type) keeps
   only `__range` and the loop variable in the pattern; instantiation
   (`templ/subst/stmts.rs` `range_for`) substitutes the range under a new
