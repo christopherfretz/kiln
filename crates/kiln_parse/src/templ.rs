@@ -1060,7 +1060,16 @@ impl Parser<'_, '_> {
     /// `&&`, and diagnosed at the result's expression location.
     fn parse_constraint_primary(&mut self) -> Option<ExprId> {
         let non_primary = self.at_non_primary_constraint_start();
-        let e = if non_primary { self.parse_cast_expr()? } else { self.parse_primary_expr()? };
+        let e = if non_primary {
+            self.parse_cast_expr()?
+        } else if let Some(crate::keywords::BuiltinKw::Trait(t)) = self.builtin_kw_at(self.pos()) {
+            // A builtin type trait is a primary-expression here, as in
+            // clang's `ParseCastExpression(PrimaryExprOnly)`:
+            // `requires __is_trivially_destructible(T)`.
+            self.parse_type_trait(t)
+        } else {
+            self.parse_primary_expr()?
+        };
         let postfix = self.at(Punct::Period)
             || self.at(Punct::PlusPlus)
             || self.at(Punct::MinusMinus)

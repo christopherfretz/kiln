@@ -1070,7 +1070,12 @@ duration. Applies to variables, references in aggregate-initialized objects
 of a reference to a temporary (`returning reference to local temporary object`
 [-Wreturn-stack-address]), a mem-initializer reference member (§4.9), a
 temporary in a `new`-initializer or a function argument (full-expression
-lifetime).
+lifetime). A `.` member access is followed only when it designates a
+non-static data member of non-reference type ([class.temporary]/6.7): a
+reference member denotes what it was bound to, so `int &r = make().first;`
+(with `int &first`) extends nothing and `return make().first;` is not
+`returning reference to local temporary object`, for the extension, the
+return check and the `-Wreturn-stack-address` walk alike (WP-276).
 
 **P2718R0 (C++23 range-for)**: temporaries in the *for-range-initializer* are
 extended to `__range` (clang 19 dump: `MaterializeTemporaryExpr 'S' xvalue
@@ -1516,7 +1521,8 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   / with `static`, pure-specifier on a non-virtual, `override`/`final` on
   a non-member, the overridden-method search over all bases
   (`overridden_methods`, same name + `is_method_overload` false: same
-  parameter-type-list, cv- and ref-qualifiers), implicit virtualness,
+  parameter-type-list, cv- and ref-qualifiers; operator functions such
+  as `operator()` included, WP-276), implicit virtualness,
   `override` that overrides nothing, overriding a `final` function,
   covariant returns ([class.virtual]/8, `check_override_return`, clang
   `CheckOverridingFunctionReturnType`, with [class.access.base]

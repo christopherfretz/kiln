@@ -69,7 +69,7 @@ impl NormTable {
 use kiln_ast::DeclId;
 use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::ids::RawId;
-use kiln_ast::types::TemplateArg;
+use kiln_ast::types::{ArgView, TemplateArg};
 
 use crate::Sema;
 use crate::templ::subst::Substituter;
@@ -158,6 +158,7 @@ impl Sema<'_, '_> {
                 s.args(l, n.loc()).ok()?
             }
         };
+        let args = self.concept_mapping_args(c, args);
         let canonical = self.ast.types.canonical_args(args);
         if self.inst.concepts.checking.contains(&(c, canonical)) {
             return None;
@@ -167,5 +168,30 @@ impl Sema<'_, '_> {
         let r = self.normalize(ce, Some((c, canonical)), depth + 1);
         self.inst.concepts.checking.pop();
         Some(r)
+    }
+
+    /// The written arguments `args` of a concept-id of `c`, shaped as its
+    /// parameter mapping: the arguments for a trailing parameter pack are
+    /// grouped into one pack argument ([temp.arg.general]/4), so the
+    /// concept's own constraint substitutes `A...` element-wise and the
+    /// mapping is the same whichever route named the concept.
+    fn concept_mapping_args(&mut self, c: DeclId, args: ArgListId) -> ArgListId {
+        let params = self.template_params(c);
+        let Some((&last, fixed)) = params.split_last() else { return args };
+        if !self.ast.template_parm(last).is_some_and(|x| x.pack) {
+            return args;
+        }
+        let written: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
+        if written.len() < fixed.len()
+            || written[..fixed.len()].iter().any(|&a| self.is_pack_expansion_arg(a))
+            || (written.len() == params.len()
+                && matches!(written[fixed.len()].view(), ArgView::Pack(_)))
+        {
+            return args;
+        }
+        let tail = self.ast.types.arg_list(&written[fixed.len()..]);
+        let mut out = written[..fixed.len()].to_vec();
+        out.push(TemplateArg::pack(tail));
+        self.ast.types.arg_list(&out)
     }
 }

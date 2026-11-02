@@ -3822,7 +3822,8 @@ impl Sema<'_, '_> {
     }
 
     /// A list or parenthesized initializer that depends on a template
-    /// parameter: kept for instantiation; returns whether it was.
+    /// parameter, or any initializer of a dependent class type: kept for
+    /// instantiation; returns whether it was.
     fn defer_dependent_init(&mut self, v: DeclId, ty: QualType, init: &Initializer) -> bool {
         if let Initializer::List(l) = init
             && (self.ast.types.is_dependent(ty) || self.init_list_type_dependent(l))
@@ -3833,8 +3834,20 @@ impl Sema<'_, '_> {
             self.set_dependent_var_init(v, e);
             return true;
         }
+        // A class that is (a member of) the current instantiation is a
+        // dependent type ([temp.dep.type]/7): its constructors are chosen
+        // at instantiation, as clang's `AddInitializerToDecl` does, since a
+        // parameter of that type gives no ranking in the template.
+        let dependent_class =
+            self.ast.types.is_dependent(ty) && self.ast.types.as_record(ty).is_some();
+        if let Initializer::Expr(e) = init
+            && dependent_class
+        {
+            self.set_dependent_var_init(v, *e);
+            return true;
+        }
         if let Initializer::Paren(es, l, r) = init
-            && es.len() > 1
+            && (es.len() > 1 || (dependent_class && !es.is_empty()))
             && (self.ast.types.is_dependent(ty)
                 || es.iter().any(|&a| self.expr_is_type_dependent(a)))
         {
@@ -6269,6 +6282,18 @@ impl Sema<'_, '_> {
             && self.kind_of(q) == DeclKind::ClassTemplate
         {
             return self.classify_template_member(q, name);
+        }
+        // A typedef naming a class template specialization that is not
+        // instantiated yet (`typedef X<int> T; T::name<...>`): the
+        // lookahead cannot instantiate, so classify by the template as
+        // for `X<int>::name` (WP-276).
+        if let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::CXXRecord
+            && self.ast.definition(q).is_none()
+            && let Some((_, spec)) = self.ast.spec_info(q)
+            && spec.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
+        {
+            return self.classify_template_member(spec.template, name);
         }
         if let Some(q) = qualifier
             && self.kind_of(q) == DeclKind::TypeAliasTemplate
