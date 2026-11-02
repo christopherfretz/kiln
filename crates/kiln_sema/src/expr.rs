@@ -2882,6 +2882,15 @@ impl Sema<'_, '_> {
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
         }
+        // [expr.ref]/7.3.2: a bound member function operand can only be
+        // called; clang's `CheckPlaceholderExpr` rejects the operator.
+        if !matches!(op, BinaryOp::PtrMemD | BinaryOp::PtrMemI)
+            && let Some(&x) =
+                [l, r].iter().find(|&&x| self.ast.exprs.get(x).ty() == QualType::BOUND_MEMBER)
+        {
+            self.diagnose_bound_member(x);
+            return self.recover_err(&[l, r], loc);
+        }
         self.check_arithmetic_null(op, l, r, loc);
         if !matches!(op, BinaryOp::Assign | BinaryOp::Comma | BinaryOp::PtrMemD | BinaryOp::PtrMemI)
             && (self.is_vector_type(self.ety(l)) || self.is_vector_type(self.ety(r)))

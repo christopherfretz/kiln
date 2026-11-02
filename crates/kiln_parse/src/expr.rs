@@ -1298,6 +1298,21 @@ impl Parser<'_, '_> {
             let (args, _, _) = self.parse_template_arg_list()?;
             let l = self.s.ast.types.arg_list(&args);
             e = self.s.act_on_dependent_member_template_args(e, l);
+        } else if self.at(Punct::Less)
+            && let Some(sym) = name.as_ident()
+            && let Some(found) = self.s.member_named_non_template(e)
+            && let Some(close) = self.potential_angle_close()
+        {
+            // `a.g<int>(1)` with `g` no template: the template argument
+            // list is skipped and the access is an error (clang's
+            // `checkPotentialAngleBracket` after a member access).
+            while self.pos() < close {
+                let _ = self.bump();
+            }
+            let _ = self.split_greater();
+            self.s.diagnose_expr_intended_as_template_name(sym, found, nl);
+            self.expr_invalid = true;
+            return Some(self.s.act_on_error_expr(&[e], nl));
         }
         Some(e)
     }

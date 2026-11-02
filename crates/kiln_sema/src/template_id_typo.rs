@@ -199,18 +199,47 @@ impl Sema<'_, '_> {
         TemplateIdTypo::Recovered(self.recover_err(&[], loc))
     }
 
-    /// clang's `DiagnoseEmptyLookup` before typo correction: `name`
-    /// declared in a class enclosing the current context (a member
-    /// function whose template-id ordinary lookup set aside). "member
-    /// 'x' used before its declaration" when it is a member of that
-    /// class, "explicit qualification required to use member 'x' from
-    /// dependent base class" when it is inherited -- or when the one
-    /// function of the set callable with no arguments was picked out
-    /// (clang's lookup result then has no naming class) -- with a
-    /// "member is declared here" per declaration and, in a non-static
-    /// member function of that class, a `this->` fix-it; then the
-    /// recovery of a typo correction to those functions.
+    /// clang 22's `DiagnoseEmptyLookup` before typo correction of the
+    /// template-id `name<...>` not called: `name` declared in a class
+    /// enclosing the current context (a member function whose
+    /// template-id ordinary lookup set aside) is diagnosed
+    /// ([`Sema::diagnose_member_found_in_class`]) and recovered as a typo
+    /// correction to those functions would be.
     fn template_id_class_member(&mut self, name: Symbol, loc: Loc) -> Option<TemplateIdTypo> {
+        let decls = self.diagnose_member_found_in_class(name, loc, true)?;
+        let member = decls.iter().map(|&d| self.ast.strip_shadow(d)).find(|&d| {
+            self.kind_of(d) == DeclKind::CXXMethod && !self.is_static_method(d)
+        });
+        if let Some(m) = member {
+            self.typo_member_not_called(m, true, loc);
+            return Some(TemplateIdTypo::Recovered(self.recover_err(&[], loc)));
+        }
+        let dn = self.ast.decls.get(self.ast.strip_shadow(decls[0])).name();
+        Some(TemplateIdTypo::Recovered(
+            self.builder().unresolved_lookup(dn, &decls, false, None, None, loc),
+        ))
+    }
+
+    /// clang's `DiagnoseEmptyLookup` class walk and
+    /// `DiagnoseDependentMemberLookup` for the unqualified `name` at `loc`
+    /// whose lookup came up empty: the first class enclosing the current
+    /// context that declares or inherits `name` gets "member 'x' used
+    /// before its declaration" when it declares it, "explicit
+    /// qualification required to use member 'x' from dependent base
+    /// class" when it inherits it, with a "member is declared here" per
+    /// declaration and, in a non-static member function of that class, a
+    /// `this->` fix-it. `pick` (no explicit template arguments reached
+    /// clang's overload check): of several declarations, the one function
+    /// callable with no arguments alone is named, and as the lookup then
+    /// has no naming class it counts as inherited. The declarations
+    /// diagnosed; `None` (nothing diagnosed) when no class declares
+    /// `name`.
+    pub(crate) fn diagnose_member_found_in_class(
+        &mut self,
+        name: Symbol,
+        loc: Loc,
+        pick: bool,
+    ) -> Option<Vec<DeclId>> {
         let mut dc = Some(self.ctx);
         let mut hit = None;
         for _ in 0..10_000 {
@@ -234,7 +263,7 @@ impl Sema<'_, '_> {
                     && self.fn_min_args(d) == 0
             })
             .collect();
-        let picked = callable.len() == 1;
+        let picked = pick && callable.len() == 1;
         if picked {
             decls = callable;
         }
@@ -261,17 +290,17 @@ impl Sema<'_, '_> {
             msg = msg.with_note(self.diag(DiagId::note_member_declared_at, at));
         }
         self.emit(msg);
-        let member = decls.iter().map(|&d| self.ast.strip_shadow(d)).find(|&d| {
-            self.kind_of(d) == DeclKind::CXXMethod && !self.is_static_method(d)
-        });
-        if let Some(m) = member {
-            self.typo_member_not_called(m, true, loc);
-            return Some(TemplateIdTypo::Recovered(self.recover_err(&[], loc)));
+        Some(decls)
+    }
+
+    /// Whether an unqualified member name here can be an implicit member
+    /// access: in a non-static member function, or outside any function
+    /// in a default member initializer.
+    pub(crate) fn implicit_this_available(&self) -> bool {
+        match &self.func {
+            Some(f) => f.this_ty.is_some(),
+            None => !self.nsdmi_this.is_empty(),
         }
-        let dn = self.ast.decls.get(first).name();
-        Some(TemplateIdTypo::Recovered(
-            self.builder().unresolved_lookup(dn, &decls, false, None, None, loc),
-        ))
     }
 
     /// Where clang's "declared here" note for `d` points: its name, or
@@ -291,7 +320,7 @@ impl Sema<'_, '_> {
     /// was unqualified), else "call to non-static member function without
     /// an object argument".
     fn typo_member_not_called(&mut self, m: DeclId, implicit: bool, loc: Loc) {
-        let in_method = implicit && self.func.as_ref().is_some_and(|f| f.this_ty.is_some());
+        let in_method = implicit && self.implicit_this_available();
         let msg = if in_method {
             let no_args = self
                 .ast
