@@ -541,6 +541,15 @@ name unqualified, as clang prints a `TemplateSpecializationType`. So
 `(aka 'K<K<ns::S>>')` and `'KA'` for `using KA = ns::K<SA>` is
 `(aka 'K<ns::S>')`, while a plain record argument such as `SA` prints
 `ns::S` (WP-291; deviations, if any, are recorded in spec/diag.md §11).
+A specialization named `nns::template J<A>` with a non-dependent `nns`
+keeps its template name as `Qualified(nns, J, template_kw)` sugar, and
+the keyword prints wherever the name prints unqualified, as clang's
+`TemplateName::print` does: `'O::template J<SA>' (aka 'template
+J<ns::S>')`. A template template argument written `nns template J`
+prints as written (`Q<O::template J>`, `Q< ::O::template J>`); one
+written without the keyword prints fully qualified (`Q<O::J>`,
+`Q<ns::T2>` for `T2` found by a using-directive) (WP-300;
+`tests/conformance/temp.names/template-keyword-qualified-printing.cpp`).
 A dependent type whose canonical form would name
 `type-parameter-D-I` gets no `aka` (clang's `Desugar` keeps the
 parameter's name, which the canonical printer cannot). The `aka` is

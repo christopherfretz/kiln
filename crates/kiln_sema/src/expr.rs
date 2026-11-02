@@ -492,9 +492,21 @@ impl Sema<'_, '_> {
     /// place, so its temporaries are still destroyed at its end
     /// ([intro.execution]/5, [class.temporary]/4; clang's
     /// `ConstantEvaluated` context restores `ParentCleanup`).
+    ///
+    /// A constant-expression with temporaries of its own gets its own
+    /// `ExprWithCleanups`; the enclosing full-expression's state from
+    /// before it began (recorded by [`Sema::exit_constant_evaluated`] or
+    /// the substituter) is then restored, so `use(D(3)) + C<D(1).v>::v`
+    /// still destroys `D(3)` at its end. A default template argument is
+    /// substituted and converted in a context of its own
+    /// ([`Sema::default_template_arg`]).
     pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
         let outer = self.set_aside_outer_immediates(e);
-        let pending = (!self.has_own_temporaries(e)).then(|| std::mem::take(&mut self.cleanup));
+        let pending = if self.has_own_temporaries(e) {
+            self.take_constant_outer_cleanups(e)
+        } else {
+            Some(std::mem::take(&mut self.cleanup))
+        };
         self.constant_full_expr += 1;
         let r = self.act_on_full_expr(e);
         self.constant_full_expr -= 1;

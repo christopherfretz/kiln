@@ -75,6 +75,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// substituted function type returning an array or function is
     /// diagnosed ([dcl.fct]/11). Cleared inside function parameters.
     pub(crate) type_begin: Option<Loc>,
+    /// The written outermost `&`/`&&` of the declarator whose type is
+    /// substituted ([`crate::Sema::ref_locs`]): the first reference
+    /// rebuilt takes it (clang's `ReferenceTypeLoc`).
+    pub(crate) ref_loc: Option<Loc>,
     /// How many lambda bodies are being rebuilt (a shared expression in
     /// one still captures `this`).
     pub(crate) lambda_bodies: u32,
@@ -85,6 +89,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// Variable initializers that failed to substitute (the variable is
     /// invalid, its declaration statement is not: clang keeps it).
     pub(crate) init_failures: u32,
+    /// The pattern's value expression of the innermost statement
+    /// expression being rebuilt: its expression statement ends the
+    /// statement expression (`act_on_stmt_expr_result`).
+    pub(crate) stmt_expr_result: Option<kiln_ast::ExprId>,
     /// Block-scope dependent using-declarations of the pattern whose
     /// instantiation failed (diagnosed): their uses are invalid without
     /// another diagnostic (clang's invalid `UsingDecl`).
@@ -134,9 +142,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             pairs: Vec::new(),
             declarator_name: None,
             type_begin: None,
+            ref_loc: None,
             lambda_bodies: 0,
             stmt_failed: false,
             init_failures: 0,
+            stmt_expr_result: None,
             failed_usings: Vec::new(),
             partial_pack: None,
             written_locs: true,
@@ -286,7 +296,12 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         match a.view() {
             ArgView::Type(t) => Ok(TemplateArg::ty(self.ty(t, loc)?)),
             ArgView::Expr { expr, .. } => {
+                // A constant-expression ([temp.arg.nontype]/1): converted
+                // later, it keeps the enclosing full-expression's cleanups
+                // (spec/sema-class.md §5.3).
+                let outer = self.sema.cleanup;
                 let e = self.expr(expr)?;
+                self.sema.note_constant_outer_cleanups(e, outer);
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
             ArgView::Template(n) => Ok(TemplateArg::template(self.template_name(n, loc)?)),

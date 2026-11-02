@@ -1502,10 +1502,13 @@ impl Printer<'_> {
         match self.ctx.template_name_view(n) {
             TemplateName::Template(d) => self.decl(d, qual == Qual::Fully || self.scope),
             TemplateName::Qualified { nns, template_kw, underlying } => {
-                if qual == Qual::Fully {
+                // clang keeps a template template argument written
+                // `nns template name` as written (`Q<O::template J>`):
+                // only a name without the keyword prints fully qualified.
+                if qual == Qual::Fully && !template_kw {
                     self.template_name(underlying, Qual::Fully);
                 } else {
-                    if qual == Qual::AsWritten {
+                    if qual != Qual::None {
                         self.nns(nns);
                     }
                     if template_kw {

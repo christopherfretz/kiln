@@ -1602,6 +1602,27 @@ impl ExprArena {
         }
     }
 
+    /// Records the nested-name-specifier `nns` written before the
+    /// template-id that `DeclRefExpr` `e` names (`N::v<int>`, a variable
+    /// template specialization), known only once the parser has the
+    /// expression. Write-once; `e` must carry extras.
+    ///
+    /// # Panics
+    /// If `e` is not a `DeclRefExpr`.
+    pub fn set_decl_ref_qualifier(&mut self, e: ExprId, nns: NnsId) -> Result<(), AlreadySet> {
+        let n = self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::DeclRefExpr, "expected DeclRefExpr, found {:?}", n.kind);
+        let slot = "DeclRefExpr.qualifier";
+        let Some(x) = self.declref_extras.get_mut(n.b as usize).filter(|_| n.b != 0) else {
+            return Err(AlreadySet { slot, existing: 0 });
+        };
+        if x.qualifier.is_some() {
+            return Err(AlreadySet { slot, existing: 0 });
+        }
+        x.qualifier = Some(nns);
+        Ok(())
+    }
+
     /// Marks the call `e` (`CallExpr` or `CXXOperatorCallExpr`) as calling
     /// a function found only by argument-dependent lookup (clang's
     /// `UsesADL`, dumped `adl`).
