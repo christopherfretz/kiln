@@ -418,7 +418,12 @@ virtual/private/protected bases), `POLYMORPHIC`, `ABSTRACT` (§3.4), `EMPTY`,
 ([class.prop]/1, using eligibility of the would-be implicit members, which
 needs no declaration), `LITERAL` ([basic.types.general]/10), `STRUCTURAL`
 ([temp.param]/7) follow the standard text with clang's interpretation where it
-differs. Which implicit members have been declared is sema-side state
+differs. `EMPTY` ([meta.unary.prop] `is_empty`, clang
+`CXXRecordDecl::isEmpty`) ignores unnamed bit-fields and the subobjects of
+zero size ([intro.object]/9): a `[[no_unique_address]]` field whose type is
+an `EMPTY` class (not an array of one; clang `FieldDecl::isZeroSize`; WP-292,
+test `templates/builtins/meta.unary.prop-is-empty-no-unique-address.cpp`).
+Which implicit members have been declared is sema-side state
 (`Sema.implicit_declared: FxHashMap<DeclId, u8>`), not a definition bit, so the
 AST stays frozen.
 
