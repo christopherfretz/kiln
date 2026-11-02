@@ -4306,7 +4306,7 @@ impl Sema<'_, '_> {
             // vector (`v.xy`; spec/sema.md §5.8).
             if let Some(sym) = name.as_ident()
                 && qual.is_none()
-                && self.vector_parts(bt).is_some_and(|p| p.is_ext())
+                && self.vector_parts(bt).is_some_and(VecParts::is_ext)
             {
                 return self.act_on_ext_vector_member(base, sym, loc, op_loc);
             }
@@ -4537,7 +4537,7 @@ impl Sema<'_, '_> {
     /// ignoring parentheses) needs its class's layout, so the class must
     /// be complete (`struct U { int i; static_assert(alignof(i) == 4); }`
     /// is an error at the operand; [class.mem.general]/8: a
-    /// static_assert is not a complete-class context).
+    /// `static_assert` is not a complete-class context).
     fn alignof_member_of_incomplete_class(&mut self, e: ExprId) -> bool {
         // clang reports at the operand's own exprLoc (a ParenExpr: its `(`).
         let inner = self.ignore_parens(e);
