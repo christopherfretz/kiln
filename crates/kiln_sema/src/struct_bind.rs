@@ -117,11 +117,38 @@ impl Sema<'_, '_> {
             let at = if ds.constraint_loc.is_valid() { ds.constraint_loc } else { ds.loc };
             self.error(DiagId::sema_decomp_decl_constraint, at);
         }
+        if !self.check_binding_packs(&dc) {
+            return None;
+        }
         let v = self.declare_decomposition(ds, ty, d, &dc, invalid);
         if self.in_template() {
             self.decomp_written.insert(v, ty);
         }
         Some(v)
+    }
+
+    /// [dcl.struct.bind]/1 (P1061): at most one sb-identifier is a
+    /// structured binding pack, and only in a templated entity (clang
+    /// 22 `err_pack_outside_template`, `err_decomp_decl_multiple_ellipsis`;
+    /// the declaration is dropped, as in clang). False after a diagnostic.
+    fn check_binding_packs(&mut self, dc: &crate::declspec::Decomposition) -> bool {
+        let mut first: Option<Loc> = None;
+        for b in &dc.ids {
+            let Some(e) = b.ellipsis else { continue };
+            if !self.in_template() {
+                self.error(DiagId::sema_pack_outside_template, e);
+                return false;
+            }
+            if let Some(p) = first {
+                let msg = self
+                    .diag(DiagId::sema_decomp_decl_multiple_packs, e)
+                    .with_note(self.diag(DiagId::note_previous_binding_pack, p));
+                self.emit(msg);
+                return false;
+            }
+            first = Some(e);
+        }
+        true
     }
 
     /// Declares the bindings `dc` and then the unnamed variable of type
@@ -132,20 +159,11 @@ impl Sema<'_, '_> {
         ty: QualType,
         d: &Declarator,
         dc: &crate::declspec::Decomposition,
-        mut invalid: bool,
+        invalid: bool,
     ) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let mut bindings = Vec::with_capacity(dc.ids.len());
-        let mut pack_reported = false;
         for b in &dc.ids {
-            if let Some(e) = b.ellipsis
-                && !pack_reported
-            {
-                // P1061 (C++26): structured binding packs.
-                self.unsupported("a structured binding pack", e);
-                pack_reported = true;
-                invalid = true;
-            }
             self.check_template_param_shadow(b.name, b.loc);
             if let Some(&p) = self.prev_candidates(b.name, None).last() {
                 let name = self.ast.symbols().as_str(b.name).to_owned();
@@ -162,6 +180,9 @@ impl Sema<'_, '_> {
                 let _ = self.builder().attach_attrs(bd, &attrs);
             }
             self.register_local(b.name, bd);
+            if b.ellipsis.is_some() {
+                self.binding_packs.insert(bd);
+            }
             bindings.push(bd);
         }
         let spec = self.var_spec(ds, d);
@@ -305,10 +326,18 @@ impl Sema<'_, '_> {
             self.invalidate_bindings(v);
             return;
         }
-        if self.ast.types.is_dependent(vty) || undeduced {
-            // Decomposed at instantiation.
+        let has_pack = bindings.iter().any(|b| self.binding_packs.contains(b));
+        if self.ast.types.is_dependent(vty) || undeduced || has_pack && self.in_template() {
+            // Decomposed at instantiation; a binding pack (P1061) is an
+            // unexpanded pack of dependent type until then, whatever
+            // the initializer (as clang 22).
             for b in bindings {
-                self.ast.decls.set_ty(b, QualType::DEPENDENT);
+                let t = if self.binding_packs.contains(&b) {
+                    self.ast.types.pack_expansion(QualType::DEPENDENT, None)
+                } else {
+                    QualType::DEPENDENT
+                };
+                self.ast.decls.set_ty(b, t);
             }
             return;
         }
@@ -337,6 +366,49 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             self.invalidate_bindings(v);
         }
+    }
+
+    /// [dcl.struct.bind]/1 (P1061): with a structured binding pack among
+    /// `bindings`, once `e` is known to have `n` elements the pack
+    /// introduces `n - (bindings - 1)` bindings of its name, which replace
+    /// it in `v`'s binding list (instantiation maps the pattern pack to
+    /// them, spec/sema-templates.md §7.1). The flattened list, or `None`
+    /// after a count diagnostic (the pack counts as one name).
+    fn expand_binding_pack(
+        &mut self,
+        v: DeclId,
+        dty: QualType,
+        bindings: &[DeclId],
+        n: u64,
+    ) -> Option<Vec<DeclId>> {
+        let Some(p) = bindings.iter().position(|b| self.binding_packs.contains(b)) else {
+            return Some(bindings.to_vec());
+        };
+        let fixed = (bindings.len() - 1) as u64;
+        if fixed > n {
+            self.wrong_number_of_bindings(v, dty, bindings.len(), n);
+            return None;
+        }
+        let pack = bindings[p];
+        let pn = *self.ast.decls.get(pack);
+        let lexical = self.ast.decls.lexical_ctx(pack);
+        let mut elems = Vec::new();
+        for _ in 0..n - fixed {
+            let mut h = DeclHead::new(pn.ctx().unwrap_or(self.ast.tu), pn.name(), pn.loc());
+            h.lexical = lexical;
+            h.flags = DeclFlags::IMPLICIT;
+            elems.push(self.builder().binding(h));
+        }
+        let el = self.ast.lists.push(&elems);
+        self.binding_pack_elems.insert(pack, el);
+        let mut flat = bindings[..p].to_vec();
+        flat.extend_from_slice(&elems);
+        flat.extend_from_slice(&bindings[p + 1..]);
+        let list = self.ast.lists.push(&flat);
+        if self.ast.decls.expand_decomp_bindings(v, list, &elems).is_err() {
+            return None;
+        }
+        Some(flat)
     }
 
     /// `type 'P' decomposes into 2 elements, but 3 names were provided`.
@@ -372,6 +444,7 @@ impl Sema<'_, '_> {
     /// [dcl.struct.bind]/3: `e[i]`.
     fn decompose_array(&mut self, v: DeclId, dty: QualType, bindings: &[DeclId]) -> bool {
         let n = self.ast.types.array_size(dty).unwrap_or(0);
+        let Some(bindings) = self.expand_binding_pack(v, dty, bindings, n) else { return false };
         if bindings.len() as u64 != n {
             self.wrong_number_of_bindings(v, dty, bindings.len(), n);
             return false;
@@ -532,6 +605,7 @@ impl Sema<'_, '_> {
         n: u64,
         bindings: &[DeclId],
     ) -> bool {
+        let Some(bindings) = self.expand_binding_pack(v, dty, bindings, n) else { return false };
         if bindings.len() as u64 != n {
             self.wrong_number_of_bindings(v, dty, bindings.len(), n);
             return false;
@@ -766,6 +840,9 @@ impl Sema<'_, '_> {
                 && s.ast.decls.field(f).is_some_and(|x| x.bit_width.is_some()))
         };
         let count = fields.iter().filter(|&&f| named(self, f)).count();
+        let Some(bindings) = self.expand_binding_pack(v, dty, bindings, count as u64) else {
+            return false;
+        };
         let bad_count = |s: &mut Self| {
             s.wrong_number_of_bindings(v, dty, bindings.len(), count as u64);
             false
