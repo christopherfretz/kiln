@@ -84,11 +84,13 @@ directives are also ERRORs.
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
 | `requires: clang>=X[.Y[.Z]]` | Run only when every clang the test runs is at least version `X.Y.Z` (missing components are 0). The clangs the test runs are the compiler under test when its kind is clang, and the oracle when its kind is clang and the test compares with it (`oracle` in effect, or `layout`/`vtables`, and an oracle configured). The version is the `X.Y.Z` after `clang version ` in the `--version` line; a clang whose version cannot be read never meets the requirement. Otherwise **SKIP** with the reason `requires clang>=X.Y.Z; the compiler is clang <version>` (or `the oracle is ...`; `... names no clang version` when it cannot be read). With no clang involved (kiln without an oracle, or a non-clang oracle) the requirement is met. For tests that a known defect of an older clang breaks (docs/VALIDATION.md, known oracle defects; WP-239). |
 | `requires: clang<X[.Y[.Z]]` | The complement: run only when every clang the test runs is OLDER than `X.Y.Z`; same clangs, same version reading (an unreadable version never meets it), and the SKIP reason `requires clang<X.Y.Z; the oracle is clang <version>`. Both bounds may appear (the lower is reported first). For an expectation a later clang release changed and kiln has not followed yet — the oracle-switch residual (docs/status/wp-184-oracle-switch.md); kiln alone (no clang run) still runs the test. WP-355. |
+| `min-oracle: N` | Run only when every clang the test runs (the same clangs as `requires: clang>=`) is release `N` or later (`N` a positive major version); otherwise **SKIP** with the reason `min-oracle N; the compiler is clang <version>`. The line `crates/kiln_codegen/tests/ir_vs_clang.rs` reads for an IR case that follows a newer clang where an older one differs (that test compares such a case only under oracle `N` or later); kiln alone (no clang run) still runs the test, at its usual `-fclang-compat`. WP-405. |
+| `module: <name>=<path>` | A module interface unit the test imports, `<path>` relative to the test's directory (an absolute path is an ERROR); repeatable, each `<name>` once, listed in dependency order. Only for `compile-ok` (not `verify`), `compile-fail` and `no-crash` tests. kiln gets `-fmodule-file=<name>=<source>` (it builds the unit in-process); clang first precompiles each unit, in order, with `<clang> -std=<std> <args> <earlier units' -fmodule-file=...> --precompile -x c++-module <source> -o <scratch>/<name>.pcm` and then gets `-fmodule-file=<name>=<bmi>`; either way the flags follow `args` and precede the test file. A missing unit or one clang rejects is **ERROR**; a compiler that is neither kiln nor clang **SKIP**s. The same lines `ir_vs_clang` reads (spec/codegen.md §6, "IR-diff corpus"). WP-405. |
 | `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. The oracle is a clang, so `skip(clang)` also implies `oracle: none`: a `run`, `pp` or `verify` test clang cannot compile is not compared with the oracle when kiln runs it (its own expectations, `stdout`/`exit`, `.expected` or `expected-*` comments, are the reference), and `oracle: clang` with `skip(clang)` is an error. `layout` and `vtables` tests keep the oracle (it is their only reference). |
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, each `requires` kind (`target-`, `clang>=`), `verify`, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, each `requires` kind (`target-`, `clang>=`, `clang<`), `min-oracle`, `verify`, each `module` name, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -618,8 +620,8 @@ The outcomes are evaluated in this order:
 
 1. The file cannot be read, or its directives are invalid: **ERROR**.
 2. A `skip` marker applies: **SKIP**.
-   So does an unmet `requires: target-<arch>`, `requires: clang>=X.Y.Z` or `requires: clang<X.Y.Z`
-   (target first).
+   So does an unmet `requires: target-<arch>`, `requires: clang>=X.Y.Z`,
+   `min-oracle: N` or `requires: clang<X.Y.Z` (in that order).
 3. The test is kiln-specific and the compiler is not kiln: **SKIP**.
 4. The test runs. A process that runs out of memory under the cap is
    **KILLED** ("Resource limits"), and a broken test (missing `stdout-file`
@@ -794,6 +796,11 @@ infrastructure error. Parse errors name their line.
   arguments, working directory and environment survive the wrapper;
   `mem_limit_stops_a_hog`; `out_of_memory_signatures`;
   `kiln_stack_reservation`).
+- `module:` / `min-oracle:` (WP-405): `module_and_min_oracle_directives`
+  (directives.rs) and the `xtask/fixtures/basic` fixtures
+  `pass-module.cpp` (two chained units precompiled by clang),
+  `skip-min-oracle.cpp` and `error-module-missing-file.cpp`; the
+  `tests/codegen/module_*.cpp` corpus under kiln and clang.
 - `xtask/src/jobs.rs`: the jobserver client ("Jobserver") over a private
   fifo: `MAKEFLAGS` parsing (fifo form, last word wins, descriptor forms
   ignored), no jobserver is free, a non-fifo is rejected, concurrency stays

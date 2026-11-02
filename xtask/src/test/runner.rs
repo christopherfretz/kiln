@@ -193,6 +193,10 @@ impl Test<'_> {
                 format!("not supported by this compiler (kiln-specific `{directive}` directive)");
             return (Status::Skip, Some(reason), String::new());
         }
+        if !spec.modules.is_empty() && kind == CompilerKind::Other {
+            let reason = "not supported by this compiler (`module:` needs kiln or clang)";
+            return (Status::Skip, Some(reason.to_owned()), String::new());
+        }
         if spec.verify && kind == CompilerKind::Other {
             let reason = "not supported by this compiler (`verify` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
@@ -212,6 +216,14 @@ impl Test<'_> {
                 let reason = format!("no oracle (`{name}` is checked against the oracle's dump)");
                 return (Status::Skip, Some(reason), String::new());
             }
+        }
+        if let Err(p) = self.precompile_modules(&spec) {
+            return match p {
+                Problem::Killed { mib, details } => {
+                    (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
+                }
+                Problem::Fail(d) | Problem::Broken(d) => (Status::Error, None, d),
+            };
         }
         let outcome = match spec.expect {
             Expect::CompileOk => self.compile_ok(&spec),
@@ -288,11 +300,75 @@ impl Test<'_> {
             c.arg(format!("-fclang-compat={n}"));
         }
         c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+        if program == self.cfg.compiler {
+            c.args(self.module_flags(spec, spec.modules.len()));
+        }
         c.arg(&self.case.name);
         if let Some(o) = out {
             c.arg("-o").arg(o);
         }
         c
+    }
+
+    /// The `module:` source of `path` (relative to the test's directory).
+    fn module_source(&self, path: &Path) -> PathBuf {
+        self.case.path.parent().unwrap_or(&self.cfg.root).join(path)
+    }
+
+    /// The `-fmodule-file=<name>=<file>` flags of the first `n` `module:`
+    /// lines for the compiler under test: kiln builds each from its source,
+    /// clang reads the BMI [`Self::precompile_modules`] wrote.
+    fn module_flags(&self, spec: &TestSpec, n: usize) -> Vec<std::ffi::OsString> {
+        let kiln = self.cfg.compiler_kind == CompilerKind::Kiln;
+        spec.modules[..n]
+            .iter()
+            .map(|(name, path)| {
+                let file = if kiln { self.module_source(path) } else { self.bmi(name) };
+                let mut f = std::ffi::OsString::from(format!("-fmodule-file={name}="));
+                f.push(file);
+                f
+            })
+            .collect()
+    }
+
+    fn bmi(&self, name: &str) -> PathBuf {
+        self.dir.join(format!("{name}.pcm"))
+    }
+
+    /// For clang, precompiles each `module:` unit in order (`--precompile
+    /// -x c++-module`, the test's `-std` and `args:`, the earlier units'
+    /// BMIs) into the scratch directory, as `ir_vs_clang` does. A unit the
+    /// compiler rejects makes the test broken.
+    fn precompile_modules(&mut self, spec: &TestSpec) -> Check {
+        if spec.modules.is_empty() || self.cfg.compiler_kind != CompilerKind::Clang {
+            return Ok(());
+        }
+        self.scratch()?;
+        for (i, (name, path)) in spec.modules.iter().enumerate() {
+            let src = self.module_source(path);
+            if !src.is_file() {
+                return Err(Problem::Broken(format!(
+                    "`module: {name}={}`: no such file {}",
+                    path.display(),
+                    src.display()
+                )));
+            }
+            let mut c = Command::new(&self.cfg.compiler);
+            c.current_dir(&self.cfg.root);
+            c.arg(format!("-std={}", spec.std));
+            c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+            c.args(self.module_flags(spec, i));
+            c.args(["--precompile", "-x", "c++-module"]).arg(&src).arg("-o").arg(self.bmi(name));
+            let o = self.exec("the compiler", &c, self.cfg.compile_timeout)?;
+            if !o.success() {
+                return Err(Problem::Broken(format!(
+                    "the compiler could not precompile module `{name}` ({})\n{}",
+                    o.describe_end(),
+                    indent(&o.stderr_str())
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The `-fclang-compat=<major>` kiln is run with: the oracle clang's

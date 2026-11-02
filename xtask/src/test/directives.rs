@@ -7,7 +7,7 @@
 //! is an error, so a misplaced directive can never be silently ignored.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use crate::util::header::{
     self, C_STDS, CXX_STDS, DirectiveError, OvenBudget, parse_oven, split_args,
@@ -292,6 +292,14 @@ pub struct TestSpec {
     /// (an expectation a later release changed, kept until kiln follows it;
     /// docs/status/wp-184-oracle-switch.md "Residual"); otherwise a SKIP.
     pub requires_clang_below: Option<ClangVersion>,
+    /// `module: <name>=<path>`: the module interface units the test
+    /// imports, in dependency order, paths relative to the test's directory
+    /// (`spec/harness.md` "Modules"; the same lines `ir_vs_clang` reads).
+    pub modules: Vec<(String, PathBuf)>,
+    /// `min-oracle: N`: every clang the test runs must be release N or
+    /// later; otherwise a SKIP (`ir_vs_clang` compares the case only under
+    /// such an oracle).
+    pub min_oracle: Option<u32>,
 }
 
 /// A clang that a test runs, for `requires: clang>=`: what it is to the
@@ -355,6 +363,14 @@ impl TestSpec {
                 Some(v) if v >= want => None,
                 Some(v) => Some(format!("{need}; {} is clang {}", c.role, version_str(v))),
                 None => Some(format!("{need}; {} names no clang version", c.role)),
+            })
+        });
+        let at_least = at_least.or_else(|| {
+            let n = self.min_oracle?;
+            clangs.iter().find_map(|c| match c.version {
+                Some(v) if v[0] >= n => None,
+                Some(v) => Some(format!("min-oracle {n}; {} is clang {}", c.role, version_str(v))),
+                None => Some(format!("min-oracle {n}; {} names no clang version", c.role)),
             })
         });
         at_least.or_else(|| {
@@ -428,6 +444,10 @@ struct Parser {
     diag_line: usize,
     requires_clang: Option<ClangVersion>,
     requires_clang_below: Option<ClangVersion>,
+    modules: Vec<(String, PathBuf)>,
+    /// Line of the first `module:` (0: none).
+    module_line: usize,
+    min_oracle: Option<u32>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
@@ -471,6 +491,9 @@ impl Parser {
             diag_line: 0,
             requires_clang: None,
             requires_clang_below: None,
+            modules: Vec::new(),
+            module_line: 0,
+            min_oracle: None,
             run_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
@@ -604,6 +627,12 @@ impl Parser {
             },
             "skip" | "xfail" => self.marker(line, name, qualifier, value),
             "requires" => self.requires_directive(line, value),
+            "module" => self.module_directive(line, value),
+            "min-oracle" => match value.parse::<u32>() {
+                Ok(_) if self.min_oracle.is_some() => self.err(line, "duplicate `min-oracle`"),
+                Ok(n) if n > 0 => self.min_oracle = Some(n),
+                _ => self.err(line, format!("`min-oracle` must be a clang major release, got `{value}`")),
+            },
             _ => self.err(line, format!("unknown directive `{name}`")),
         }
     }
@@ -699,6 +728,27 @@ impl Parser {
                 line,
                 "a memory budget is written `mem<=N`, N a positive number of MiB (e.g. `//@ mem<=512`)",
             ),
+        }
+    }
+
+    /// `module: <name>=<path>`: a module interface unit the test imports;
+    /// each name at most once.
+    fn module_directive(&mut self, line: usize, value: &str) {
+        let Some((name, path)) = value.split_once('=').map(|(n, p)| (n.trim(), p.trim())) else {
+            self.err(line, "expected `module: <name>=<path>`");
+            return;
+        };
+        if name.is_empty() || path.is_empty() || name.contains(char::is_whitespace) {
+            self.err(line, "expected `module: <name>=<path>`");
+        } else if Path::new(path).is_absolute() {
+            self.err(line, "a `module` path is relative to the test's directory");
+        } else if self.modules.iter().any(|(n, _)| n == name) {
+            self.err(line, format!("duplicate `module` `{name}`"));
+        } else {
+            if self.module_line == 0 {
+                self.module_line = line;
+            }
+            self.modules.push((name.to_owned(), PathBuf::from(path)));
         }
     }
 
@@ -895,6 +945,16 @@ impl Parser {
             let line = self.inst_report_line;
             self.err(line, "`inst-report` only applies to `compile-ok` and `compile-fail` tests");
         }
+        if self.module_line != 0
+            && (verify
+                || !matches!(expect, Expect::CompileOk | Expect::CompileFail | Expect::NoCrash))
+        {
+            let line = self.module_line;
+            self.err(
+                line,
+                "`module` only applies to `compile-ok`, `compile-fail` and `no-crash` tests",
+            );
+        }
         if expect == Expect::Pp {
             for line in std::mem::take(&mut self.oven_lines) {
                 self.err(line, "`oven` does not apply to `pp` tests (nothing is evaluated)");
@@ -960,6 +1020,8 @@ impl Parser {
             verify,
             requires_clang: self.requires_clang,
             requires_clang_below: self.requires_clang_below,
+            modules: self.modules,
+            min_oracle: self.min_oracle,
         })
     }
 }
@@ -1004,6 +1066,8 @@ fn is_known_key(k: &str) -> bool {
             | "pp-compare"
             | "ast-filter"
             | "requires"
+            | "module"
+            | "min-oracle"
     )
 }
 
@@ -1343,6 +1407,40 @@ mod tests {
         }
         let e = errs("//@ requires: clang<22\n//@ requires: clang<23\n");
         assert!(e.iter().any(|e| e.contains("duplicate `requires: clang<`")), "{e:?}");
+    }
+
+    /// WP-405: `module:` and `min-oracle:`, as `ir_vs_clang` reads them.
+    #[test]
+    fn module_and_min_oracle_directives() {
+        let s =
+            ok("//@ module: a=Inputs/a.cppm\n//@ module: b = Inputs/b.cppm\n//@ min-oracle: 22\n");
+        let names: Vec<_> =
+            s.modules.iter().map(|(n, p)| (n.as_str(), p.to_str().unwrap())).collect();
+        assert_eq!(names, [("a", "Inputs/a.cppm"), ("b", "Inputs/b.cppm")]);
+        assert_eq!(s.min_oracle, Some(22));
+        let c19 = ClangRun { role: "the compiler", version: Some([19, 1, 7]) };
+        let c22 = ClangRun { role: "the compiler", version: Some([22, 1, 8]) };
+        assert_eq!(s.unmet_requirement("aarch64", &[]), None, "kiln alone runs no clang");
+        assert_eq!(s.unmet_requirement("aarch64", &[c22]), None);
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[c19]).as_deref(),
+            Some("min-oracle 22; the compiler is clang 19.1.7")
+        );
+        let e = errs("//@ module: a=x.cppm\n//@ module: a=y.cppm\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `module` `a`")), "{e:?}");
+        for bad in ["a", "=x.cppm", "a=", "a=/abs.cppm"] {
+            assert!(!errs(&format!("//@ module: {bad}\n")).is_empty(), "{bad}");
+        }
+        let e = errs("//@ expect: run\n//@ module: a=x.cppm\n");
+        assert!(e.iter().any(|e| e.contains("`module` only applies")), "{e:?}");
+        let e = errs("//@ verify\n//@ module: a=x.cppm\n");
+        assert!(e.iter().any(|e| e.contains("`module` only applies")), "{e:?}");
+        for bad in ["0", "x", "22.1"] {
+            let e = errs(&format!("//@ min-oracle: {bad}\n"));
+            assert!(e.iter().any(|e| e.contains("`min-oracle` must be")), "{bad}: {e:?}");
+        }
+        let e = errs("//@ min-oracle: 22\n//@ min-oracle: 23\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `min-oracle`")), "{e:?}");
     }
 
     #[test]
