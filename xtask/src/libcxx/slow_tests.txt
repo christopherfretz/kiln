@@ -6,5 +6,6 @@
 # One test per line: its path relative to libcxx/test, then the reason.
 # Sorted by path (unit test `slow_tests_list`). A test joins only after it
 # is shown to pass with the long limit and time out with `--timeout`.
+std/input.output/file.streams/fstreams/ofstream.members/buffered_writes.pass.cpp  many buffered fstream write patterns, each to a fresh file; 0.7 s on tmpfs, ~7 s on the host-shared scratch mount, >30 s there at -j 3 on a loaded host
 std/thread/thread.semaphore/lost_wakeup.pass.cpp  10k threads x 1000 acquire/release rounds; ~60 s at -O0 on a loaded host
 std/utilities/charconv/charconv.msvc/test.pass.cpp  MSVC STL's exhaustive to_chars/from_chars sweep; ~45 s at -O0

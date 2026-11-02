@@ -299,7 +299,8 @@ A test binary runs under `--timeout` (default 30 s), or under
   per line (relative to `libcxx/test`), then the reason, sorted, `#`
   comments. A test joins only after it is shown to time out under
   `--timeout` and pass under the long limit (today
-  `thread.semaphore/lost_wakeup.pass.cpp` and
+  `ofstream.members/buffered_writes.pass.cpp`, slow on the host-shared
+  scratch mount, `thread.semaphore/lost_wakeup.pass.cpp` and
   `charconv.msvc/test.pass.cpp`).
 
 `--list` shows `(long: REQUIRES: long_tests)` or `(long:
