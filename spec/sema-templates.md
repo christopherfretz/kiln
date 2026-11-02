@@ -634,7 +634,15 @@ Diagnosed at definition, as clang does:
 - A non-dependent expression that is ill-formed (`int x = "a";`), or a
   non-dependent call with no viable candidate.
 - A member of the current instantiation that is not found when the class
-  has no dependent bases: "no member named 'x' in 'A<T>'".
+  has no dependent bases: "no member named 'x' in 'A<T>'". The class prints
+  as its injected-class-name type, like clang's DeclContext printing
+  (`Sema::current_instantiation_desc`, WP-315):
+  - The pattern prints unqualified with its parameters' names: `V<T>`,
+    and `P<T...>` for a pack.
+  - A partial specialization prints with its canonical arguments:
+    `V<type-parameter-0-0 *>`.
+  - A non-template nested class prints qualified (`W::I`).
+  - Test: tests/conformance/temp.dep.type/no-member-in-current-instantiation-name.cpp.
 - A missing `typename` or `template` (§2.3), a redefined default
   argument, a malformed template head.
 
@@ -2824,6 +2832,19 @@ pub enum NormNode {                         // 12 B, hash-consed in NormTable
   are grouped into one pack argument ([temp.arg.general]/4), so `C<F, T, T>`
   written directly and `C<F, A...>` reached by substituting `A := {T, T}`
   give the same mapping (and identical atoms).
+  Before the mapping is shaped, a concept-id written with fewer arguments
+  than `C` has parameters is completed with `C`'s default template
+  arguments, each substituted with the arguments before it
+  (`concept_default_args`, [temp.arg.general]/4, [temp.param]/12, WP-315).
+  Substitution runs under `ConstraintSubstitution`; if a default fails
+  there, or a written argument is a pack expansion, the list stays as written.
+  So `K<T>` with `template <class T, class U = int> concept K` and
+  `K<T, int>` give the same mapping. Without this, the atoms of the
+  two spellings would differ and two candidates whose constraints
+  differ only in that spelling would be ambiguous instead of ordered
+  ([temp.constr.order]; libc++'s `indirectly_comparable` with
+  `projected<I, identity>`). Test:
+  tests/conformance/temp.constr.order/concept-default-argument-parameter-mapping.cpp.
 - Anything else gives an `Atomic` node.
 
 **Identity** ([temp.constr.atomic]/2). Two atomic constraints are
@@ -4729,8 +4750,15 @@ explicit specialization errors remain. The blockers are:
   error (the captured diagnostic is emitted, nothing is assumed). A
   value-dependent result is *satisfied* only while the levels themselves
   are dependent (a retained level or a dependent argument: a partial
-  check during the definition); with concrete levels it is "not yet
-  implemented". Fold-expanded constraints `(C<Ts> && ...)` evaluate
+  check during the definition). With concrete levels, a dependent result
+  means the substituter left something incomplete, which is a kiln bug. It
+  is reported as "not yet implemented" rather than assumed either way, and
+  no known program reaches it. libc++'s `sized_sentinel_for` and
+  `assignable_from` used to reach it through an ADL call to an abbreviated
+  hidden friend. They are now satisfied normally, because that friend is a
+  function template ([dcl.fct]/22; WP-307 (1),
+  tests/conformance/temp.constr.atomic/abbreviated-friend-template.cpp;
+  re-checked by WP-315). Fold-expanded constraints `(C<Ts> && ...)` evaluate
   through the substituted fold.
 - `atom_cache` (§8.3): `ConceptState::atom_cache: (atom ExprId,
   Vec<canonical ArgListId>) → (bool, records)`; `sat_atom` wraps
