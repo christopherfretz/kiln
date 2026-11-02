@@ -2340,7 +2340,8 @@ do not cascade, and `typeid` of an error type stops before its
 in an alias or type template parameter default gives clang's "requires
 template arguments" (its `TemplateTypeArg` context), not "argument
 deduction not allowed". Positions that deduce or invent are unaffected:
-variables, `new`, NTTPs, return types, structured bindings, conditions,
+variables, `new`, NTTPs, return types, structured bindings (a `typedef` one
+gets only the decomposition error, `dcl.struct.bind/specifiers.cpp`), conditions,
 range-for, conversion functions, generic lambdas and abbreviated templates.
 Tests: `dcl.spec.auto/p5-auto-not-allowed.cpp` (every position above),
 `dcl.spec.auto/p5-auto-allowed.cpp`,

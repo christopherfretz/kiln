@@ -284,6 +284,11 @@ impl Sema<'_, '_> {
     /// non-static data member, a catch handler and an enum-base by their
     /// own checks.
     fn auto_declarator_site(d: &Declarator) -> Option<u8> {
+        // A structured binding declaration (also a `typedef` one, which
+        // gets only the decomposition error, as in clang) is checked by its own rules.
+        if d.decomp.is_some() {
+            return None;
+        }
         if d.typedef {
             return Some(site::TYPEDEF);
         }
@@ -298,9 +303,8 @@ impl Sema<'_, '_> {
 
     /// [dcl.spec.auto.general]/2-5 for the decl-specifier type `base` of
     /// declarator `d` whose type-specifier is at `spec_loc`: a placeholder
-    /// where `d`'s position allows none is reported there; the parameter
-    /// of a requires-expression then has type `int` (clang's recovery),
-    /// any other declarator the error type. Called by
+    /// where `d`'s position allows none is reported there, and the
+    /// declarator's type is then the error type. Called by
     /// [`Sema::type_for_declarator_at`] after the deduced class type
     /// check.
     pub(crate) fn auto_declarator_check(
