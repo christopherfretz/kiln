@@ -2004,6 +2004,15 @@ access, out-of-line declarator scope.**
   type's destructor as a qualified member of that class (non-virtual,
   and a base class's destructor is allowed: `this->B::~B()`). A
   qualified destructor template-id (`p->N::~X<T>()`) is a gap.
+  Inside a class template, a destructor name that finds the
+  injected-class-name (`this->~X()`, `this->X::~X()`) names the dependent
+  `X<P...>` ([temp.local]/1, `injected_tag_type`), so it is a
+  `CXXPseudoDestructorExpr` checked against the specialization at
+  instantiation, not the pattern class (libstdc++ shared_ptr_base.h:625,
+  WP-332; test
+  `tests/conformance/expr.prim.id.dtor/libstdcxx-injected-class-name-dtor-in-template.cpp`).
+  A dependent qualifier (`this->B<T>::~B()`) is still
+  `templ_unimplemented` ("a dependent destructor name").
   A pseudo-destructor on a scalar or dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
