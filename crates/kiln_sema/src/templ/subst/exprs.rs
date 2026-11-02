@@ -55,6 +55,7 @@ impl Substituter<'_, '_, '_> {
             }
             self.sema.mark_shared_expr_referenced(e);
             self.sema.reissue_designator_warnings(e);
+            self.sema.note_shared_temporaries(e);
             return Ok(e);
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
@@ -540,7 +541,8 @@ impl Substituter<'_, '_, '_> {
                     let tn = self.sema.template_name_for(t);
                     return match self.sema.act_template_id(tn, &args, loc, loc) {
                         Ok(crate::templ::actions::TemplateIdRef::Value(x)) => {
-                            // The qualifier as written (`S::template w<U>`).
+                            // Printed with its substituted qualifier.
+                            self.sema.set_template_id_begin(x, begin, loc);
                             self.sema.set_template_id_qualifier(x, nns);
                             Ok(x)
                         }

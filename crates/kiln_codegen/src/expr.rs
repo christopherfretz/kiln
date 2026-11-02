@@ -151,8 +151,11 @@ impl Cg<'_> {
         let q = n.ty();
         Ok(Some(match n.kind() {
             ExprKind::ParenExpr => return self.emit_scalar_opt(ast.exprs.operand(e)),
+            // clang `ScalarExprEmitter::VisitCompoundLiteralExpr`: a load
+            // of the literal's temporary.
             ExprKind::CompoundLiteralExpr => {
-                return self.emit_scalar_opt(ast.exprs.compound_literal_init(e));
+                let lv = self.compound_literal_lvalue(e)?;
+                self.load_lv(lv)
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {
@@ -1821,6 +1824,9 @@ impl Cg<'_> {
                 };
                 Ok(self.ref_lvalue(p, q))
             }
+            ExprKind::CompoundLiteralExpr if !self.is_aggregate(q) => {
+                self.compound_literal_lvalue(e)
+            }
             ExprKind::MaterializeTemporaryExpr
             | ExprKind::CallExpr
             | ExprKind::CXXOperatorCallExpr
@@ -1978,6 +1984,24 @@ impl Cg<'_> {
             self.push_temporary_cleanup(e, tmp);
         }
         Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
+    }
+
+    /// clang `EmitCompoundLiteralLValue` for a scalar, vector or complex
+    /// literal in a function: its initializer stored into a fresh
+    /// temporary (`EmitAnyExprToMem`; a C++ literal is not destroyed here).
+    pub(crate) fn compound_literal_lvalue(&mut self, e: ExprId) -> R<LV> {
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let init = ast.exprs.compound_literal_init(e);
+        let tmp = self.temp(q);
+        if self.is_complex(q) {
+            let v = self.emit_complex(init)?;
+            self.cx_store(v, tmp, q);
+        } else {
+            let v = self.emit_scalar(init)?;
+            self.store_scalar(v, tmp, q);
+        }
+        Ok(LV { addr: tmp, q, bf: None, vidx: None })
     }
 
     /// clang `EmitCastLValue`.

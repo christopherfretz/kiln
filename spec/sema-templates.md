@@ -445,7 +445,7 @@ type parameter named `auto:N`, as in clang's dump.
 | mem-initializer-list | `D() : B<T>(0)... {}` | ctor-initializer (WP-065) | yes |
 | template-argument-list | `X<T...>` | §2.2 | yes |
 | using-declarator-list | `using B<T>::f...;` | using-decl (WP-062) | yes |
-| alignment-specifier | `alignas(T...)` | attributes | yes |
+| alignment-specifier | `alignas(T...)`, `alignas(N...)` | `parse_alignas`; one `ALIGNED` per element at instantiation (spec/sema.md §4.5, WP-302) | yes |
 | lambda capture | `[t...]`, `[...x = t]` | WP-075 | yes |
 | `sizeof...` | `sizeof...(T)` | primary expression | yes |
 | fold-expression | `(t + ...)` | parenthesized primary | yes |
@@ -1559,6 +1559,18 @@ recomputed exactly as for non-template code (clang's
   no switch). The checks clang would redo by rebuilding it are replayed
   from what the definition recorded: designator warnings of a list
   (WP-196) and `-Wnull-dereference` (spec/sema.md §5.15, WP-235).
+  A shared operand can sit inside a full-expression that is rebuilt
+  (`B b(S{2});`, `use(t, S{1})` with `t` dependent). Its temporaries
+  still belong to that full-expression. `note_shared_temporaries` sets
+  `cleanup.needs` for each `MaterializeTemporaryExpr`. It sets `needs`
+  and `side_effects` for each `CXXBindTemporaryExpr`, and does what
+  `note_default_use` does for each `CXXDefaultArgExpr`. The walk skips
+  nested `ExprWithCleanups`, lambdas and unevaluated operands. The rebuilt
+  full-expression therefore gets its `ExprWithCleanups`, and the
+  temporaries die at its end ([class.temporary]/4). Before WP-310 they
+  died at scope exit, because the cleanup flag that clang's rebuild sets
+  (`MaybeBindToTemporary`) was never raised;
+  `tests/conformance/class.temporary/run-template-shared-operand-temporary-destroyed.cpp`.
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);
@@ -2296,6 +2308,13 @@ the guide's arguments into such a typedef substitutes its underlying type
 and keeps the typedef as sugar, without instantiating the class
 (`Substituter::class_not_instantiated`). clang's guide transform clones
 the typedef instead.
+Any other member of the pattern that a guide's parameter types name (a
+static data member or enumerator, `span<O, rank_>` in libc++'s
+`layout_stride::mapping`, or a member of a member class) is found in the
+specialization the substituted injected-class-name `X<P...>` names: that
+class is completed and the member instantiated from the pattern member
+is used ([temp.inst]/3; `Substituter::pattern_specialization`, clang's
+`FindInstantiatedDecl` on a deduction guide; WP-302).
 
 The guide of a constructor template may also name other members of the
 class template in its signature or template parameters: a member class,
@@ -2544,10 +2563,12 @@ takes its initializer's dependence without `UNEXPANDED_PACK`
     pattern init-capture maps positionally to its new variables.
   - Gap: an init-capture `[x = ts]` whose initializer names an
     unexpanded pack outside an expansion is not diagnosed ("initializer
-    contains unexpanded parameter pack"). Nor is any other site: the
-    unexpanded-pack check described above is not implemented
-    (`sema_unexpanded_pack` has no emitter; `T x;`, `ts;` in a variadic
-    template are accepted).
+    contains unexpanded parameter pack"). Nor is any other site except
+    an `alignas` operand: the general unexpanded-pack check described
+    above is not implemented (`T x;`, `ts;` in a variadic template are
+    accepted). `Sema::diagnose_unexpanded_pack` (`templ/pack.rs`, emits
+    `sema_unexpanded_pack`; WP-302) is the reusable collector and
+    diagnostic for the remaining sites.
 
 ### 7.2 Expansion: `expand(pattern, site) -> Result<Expansion, SubstFail>`
 

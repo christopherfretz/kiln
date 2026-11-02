@@ -995,7 +995,9 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     `warn_unused_result`, with or without `__` around the name.
     `alignas` has its own parser.
   - Other arguments are skipped as balanced tokens.
-  - `alignas(type-id)` is recognised by `scan_name`.
+  - `alignas(type-id)` is recognised by `scan_name`; a trailing `...`
+    makes the operand a pack expansion (`act_on_alignas_operand`,
+    spec/sema.md §4.5).
 - **Sema's role:** Sema (`act_on_attribute`) decides what is known,
   checks the argument count and kinds, and encodes the arguments
   (spec/sema.md §4.5).

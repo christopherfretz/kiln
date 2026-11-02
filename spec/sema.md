@@ -268,7 +268,16 @@ Redeclaration and linkage rules:
   is not `extern`, else
   `redeclaration of 'x' with a different type`. The note says
   `previous definition is here` if the previous declaration was a
-  definition, else `previous declaration is here`.
+  definition, else `previous declaration is here`. Array types that
+  differ only in the presence of a major bound are not a mismatch
+  ([basic.link]/11), in either order, also for the out-of-class
+  definition of a static data member (which therefore redeclares the
+  member rather than adding a second one to the class); a redeclaration
+  that omits the bound takes the earlier declaration's bound
+  ([dcl.array]/8; `redecl_var_type`, clang's `MergeVarDeclTypes`):
+  `extern int a[4]; int a[] = {1};` and `struct S { static int b[4]; };
+  int S::b[] = {1};` both declare `int[4]`
+  (tests/conformance/class.static.data/omitted-bound-redecl.cpp, WP-310).
 - **Linkage** ([basic.link]): `static`, `extern`, `extern "C"`, members
   of unnamed namespaces, and `const` variables at namespace scope.
 - **Block-scope variables** (`merge_local_var`, clang's `MergeVarDecl`;
@@ -999,7 +1008,29 @@ and returns the scope it names:
     Namespace attributes are not parsed yet, so a deprecated namespace
     is not a deprecated context.
   - `maybe_unused` suppresses unused warnings.
-  - `alignas` is validated as a power of two and fed into layout.
+  - `alignas` is validated as a power of two and fed into layout
+    (`check_alignment_expr`). `requested alignment is not a power of 2`
+    and `requested alignment must be ... or smaller` are reported at the
+    attribute token, as clang's `AddAlignedAttr` does, not at the
+    expression.
+  - `alignas` operands ([dcl.align]/1, [temp.variadic]/5,
+    `act_on_alignas_operand`, WP-302): `alignas(T...)` / `alignas(e...)`
+    build a pack expansion (a type operand through
+    `act_pack_expansion_type`, so an expansion with no pack is `pack
+    expansion does not contain any unexpanded parameter packs` at the
+    `...`). An operand that contains an unexpanded pack without `...` is
+    `expression contains unexpanded parameter pack 'Ts'` at the operand's
+    begin (`sema_unexpanded_pack`, `diagnose_unexpanded_pack` in
+    `templ/pack.rs`; a type-id operand counts as an `alignof` expression;
+    two names print `packs 'A' and 'B'`, more `packs 'A', 'B', ...`), and
+    the attribute is dropped. Instantiation expands the operand and
+    attaches one `ALIGNED` attribute per element (clang's
+    `instantiateDependentAlignedAttr`), so the strictest wins and an empty
+    pack leaves the natural alignment; each element is re-checked at the
+    attribute token (spec/sema-templates.md §2.7). On variables the
+    attributes are copied too (`var_align_attrs`), but variable alignment
+    is not yet consumed by `alignof` or codegen (xfail
+    `tests/conformance/dcl.align/variable-alignas.cpp`).
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
 
 ### 4.6 Namespaces, linkage specifications, static_assert
@@ -1045,8 +1076,17 @@ and returns the scope it names:
     `static assertion failed due to requirement '…'`, with the
     condition printed by `TypeNames::write_expr`, plus the message if
     there is one. A variable template-id prints its explicit arguments
-    (`is_v<ND>`, clang `VisitDeclRefExpr`); its qualifier is not yet
-    kept on the `DeclRefExpr` (clang prints `!std::is_same_v<…>`).
+    (`is_v<ND>`, clang `VisitDeclRefExpr`) after its qualifier as
+    written (`ns::S::z<char>`, `::ns::f<int *>`): the parser and the
+    instantiation of a qualified or `T::template` variable template-id
+    record the nested-name-specifier on the `DeclRefExpr`
+    (`set_template_id_qualifier` → `ExprArena::set_decl_ref_qualifier`)
+    and its begin (the diagnostic's column) at the qualifier. In an
+    instantiation the qualifier is substituted: `A::` in the pattern of
+    `A` names the specialization (`A<int>::y`), and a substituted
+    parameter head prints its canonical replacement without scope
+    (`T::y` with `T = ns::S` prints `S::y`, clang's
+    `NestedNameSpecifier::print` `SuppressScope`) (WP-302).
   - Evaluation notes follow (§8).
 
 ### 4.7 Exception specifications (`except.rs`)
@@ -2772,6 +2812,28 @@ clang 19's C99/GNU complex support in C++:
   is called without an object argument. It is diagnosed with clang's
   `diagnoseInstanceReference` wording ("call to non-static member
   function without an object argument").
+
+### 5.18 `-Wabsolute-value` (`absolute_value.rs`, WP-310)
+clang's `CheckAbsoluteValueFunction`, unsigned-argument case, run on every
+non-dependent call of a named function after argument conversion (also in
+instantiations). The callee is an absolute value function when it is an
+implicit builtin `__builtin_abs`/`labs`/`llabs`/`fabs`/`fabsf`/`fabsl`/
+`cabs`/`cabsf`/`cabsl`, a declaration recognized as the library builtin
+`abs`/`labs`/`llabs`/`fabs`/`fabsf`/`fabsl` (§5.4, `lib_builtin_info`), or a
+function named `abs` whose context (inline namespaces and linkage
+specifications skipped) is `::std`. With exactly one argument whose type,
+parentheses and implicit casts stripped, is an unsigned integer type
+(clang `isUnsignedIntegerType`: `bool`, unsigned and unsigned-character
+types, unsigned `_BitInt`, a complete unscoped enumeration with an unsigned
+underlying type): warning `sema_unsigned_abs` "taking the absolute value of
+unsigned type 'T' has no effect" (group `absolute-value`, on by default) at
+the callee's begin, with note `note_remove_abs` "remove the call to 'F'
+since unsigned values cannot be negative" over the callee; F is `std::abs`
+for the `std` function, else the builtin's spelling (libc++'s
+`std::abs(uc)` resolves to the C library's `::abs`, so F is `abs`). Not
+implemented: clang's pointer-argument, wrong-function-kind and too-small
+warnings of the same group. Test:
+`tests/conformance/c.math.abs/absolute-value-unsigned.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

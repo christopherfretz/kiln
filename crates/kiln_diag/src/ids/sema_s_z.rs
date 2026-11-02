@@ -131,7 +131,7 @@ sema_undeclared_use = Error (1) "use of undeclared '{0}'";
 sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
 // ----- WP-220 (-Wundefined-var-template; clang `InstantiateVariableDefinition`)
 sema_undefined_var_template = Warning [UndefinedVarTemplate] (1) "instantiation of variable '{0}' required here, but no definition is available";
-sema_unexpanded_pack = Error (2) "{0} contains unexpanded parameter pack {1}";
+sema_unexpanded_pack = Error (2) "{0} contains unexpanded parameter pack{1}";
 sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
 sema_unimplemented_template_feature = Error (1) "kiln: not yet implemented: {0}";
 sema_uninit_self_reference_in_init = Warning [Uninitialized] (1) "variable {0} is uninitialized when used within its own initialization";
@@ -146,6 +146,7 @@ sema_unreachable_code_break = WarningOff [UnreachableCodeBreak] (0) "'break' wil
 sema_unreachable_code_return = WarningOff [UnreachableCodeReturn] (0) "'return' will never be executed";
 sema_unreachable_fallthrough_attr = WarningOff [UnreachableCodeFallthrough] (0) "fallthrough annotation in unreachable code";
 sema_unreachable_loop_increment = WarningOff [UnreachableCodeLoopIncrement] (0) "loop will run at most once (loop increment never executed)";
+sema_unsigned_abs = Warning [AbsoluteValue] (1) "taking the absolute value of unsigned type {0} has no effect";
 sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
 sema_unused_but_set_parameter = WarningOff [UnusedButSetParameter] (1) "parameter {0} set but not used";
 sema_unused_but_set_variable = WarningOff [UnusedButSetVariable] (1) "variable {0} set but not used";

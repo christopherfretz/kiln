@@ -5,7 +5,7 @@
 //! compiler (`libcxx/utils/libcxx/test/{params,features}.py`). This driver
 //! does not run lit, so the set is fixed here: what that configuration
 //! derives for libc++ 19.1.7 (Debian `libc++-19-dev`) on
-//! aarch64-unknown-linux-gnu with its default parameters, with two
+//! aarch64-unknown-linux-gnu with its default parameters, with three
 //! deliberate differences:
 //!
 //! - no compiler-identity features (`clang`, `clang-19`, `gcc`,
@@ -16,7 +16,14 @@
 //!   (`has-unix-headers`, `has-64-bit-atomics`) are taken as clang 19 sees
 //!   this machine, not as kiln does today, so the set does not move when
 //!   kiln changes. Probes of compiler *flags* (`has-fconstexpr-steps`,
-//!   `-fsized-deallocation`, `verify-support`) are kiln's answers.
+//!   `-fsized-deallocation`, `verify-support`) are kiln's answers;
+//! - `libcpp-hardening-mode=none` is present although lit adds it only when
+//!   the `hardening_mode` parameter is set: it is what the installed
+//!   `__config_site` builds (`_LIBCPP_HARDENING_MODE_DEFAULT` is
+//!   `_LIBCPP_HARDENING_MODE_NONE`), so `.assert.pass.cpp` death tests that
+//!   lit gates with `UNSUPPORTED: libcpp-hardening-mode=none` are skipped
+//!   instead of failing with "child did not die" (clang++-19 fails them the
+//!   same way).
 
 /// The C++ standard the suite is run in, as a lit feature and a flag.
 pub const STD: &str = "c++26";
@@ -45,6 +52,9 @@ const FEATURES: &[&str] = &[
     "libcpp-abi-version=1",
     "libcpp-has-no-availability-markup",
     "libcpp-has-thread-api-pthread",
+    // `_LIBCPP_HARDENING_MODE_DEFAULT` in the installed `__config_site`
+    // (Debian: none); see the module doc.
+    "libcpp-hardening-mode=none",
     // Target and host.
     "buildhost=linux",
     "can-create-symlinks",
@@ -78,6 +88,7 @@ mod tests {
         assert!(all.iter().any(|f| f == STD));
         assert!(all.iter().any(|f| f == "kiln"));
         assert!(all.iter().any(|f| f == "verify-support"));
+        assert!(all.iter().any(|f| f == "libcpp-hardening-mode=none"));
         for f in &all {
             for bad in ["clang", "gcc", "msvc", "apple-clang"] {
                 assert!(
