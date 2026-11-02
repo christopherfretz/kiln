@@ -308,6 +308,11 @@ pub struct Sema<'a, 'sm> {
     /// a reference to `void` is diagnosed there (clang's
     /// `ReferenceTypeLoc`; [dcl.ref]/1).
     pub(crate) ref_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where a `constexpr` special member function's declaration
+    /// begins, when not at its name: a constexpr defaulted special member
+    /// of a class with virtual bases is diagnosed there before C++26
+    /// (clang `getBeginLoc`; [dcl.fct.def.default]/3, P3533R2).
+    pub(crate) constexpr_begin_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// The namespace named by the qualifier of each friend function (or
     /// function template pattern) declared with a qualified name in a
     /// templated class (`friend void N::f(T);`): its instantiation is
@@ -742,6 +747,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
             ref_locs: kiln_source::fx::FxHashMap::default(),
+            constexpr_begin_locs: kiln_source::fx::FxHashMap::default(),
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
             virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
