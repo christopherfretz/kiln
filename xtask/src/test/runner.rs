@@ -256,15 +256,7 @@ impl Test<'_> {
             Expect::Ir => self.dump(&spec, DumpKind::Ir),
             Expect::NoCrash => self.no_crash(&spec),
         };
-        // The GCC oracle judges the test's verdict whether or not kiln met
-        // it (so an `xfail(kiln)` test's expectation is still checked).
-        let outcome = if matches!(outcome, Ok(()) | Err(Problem::Fail(_)))
-            && matches!(spec.expect, Expect::CompileOk | Expect::CompileFail)
-        {
-            self.check_gcc_verdict(&spec).and(outcome)
-        } else {
-            outcome
-        };
+        let outcome = self.with_gcc_verdict(&spec, outcome);
         // Budgets are checked once the kind's own checks pass.
         let outcome = outcome.and_then(|()| self.check_oven(&spec));
         let outcome = outcome.and_then(|()| self.check_inst_report(&spec));

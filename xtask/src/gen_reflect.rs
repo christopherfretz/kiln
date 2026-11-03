@@ -410,7 +410,7 @@ pub fn write_or_check(
     n: usize,
     check: bool,
 ) -> Result<Option<PathBuf>, String> {
-    if n % s.step != 0 {
+    if !n.is_multiple_of(s.step) {
         return Err(format!("shape {} needs N to be a multiple of {}", s.id, s.step));
     }
     let path = dir.join(format!("{}.cpp", s.id));

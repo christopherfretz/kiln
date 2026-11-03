@@ -642,6 +642,21 @@ fn measure_all(
 
 /// Compares the measurements with the baselines of the compiler's kind and
 /// prints the table and the failures. Returns the loaded baseline files.
+/// The baseline file of every judged entry's group.
+fn load_baselines(
+    cx: &Ctx<'_>,
+    entries: &[Entry],
+) -> Result<BTreeMap<String, BaselineFile>, String> {
+    let mut files = BTreeMap::new();
+    for e in entries.iter().filter(|e| !slice::is_slice(&e.id)) {
+        if !files.contains_key(&e.group) {
+            let path = cx.layout.baselines.join(format!("{}.json", e.group));
+            files.insert(e.group.clone(), BaselineFile::load(&path, &e.group)?);
+        }
+    }
+    Ok(files)
+}
+
 fn judge_all(
     opts: &Options,
     cx: &Ctx<'_>,
@@ -652,16 +667,7 @@ fn judge_all(
     oracle_run: Option<&CompilerRun>,
 ) -> Result<(Report, BTreeMap<String, BaselineFile>), String> {
     // Compare with the baselines of the compiler's kind.
-    let mut files: BTreeMap<String, BaselineFile> = BTreeMap::new();
-    for e in entries.iter().filter(|e| !slice::is_slice(&e.id)) {
-        if !files.contains_key(&e.group) {
-            let f = BaselineFile::load(
-                &cx.layout.baselines.join(format!("{}.json", e.group)),
-                &e.group,
-            )?;
-            files.insert(e.group.clone(), f);
-        }
-    }
+    let files = load_baselines(cx, entries)?;
     let mut report = Report { entries: entries.len(), ..Report::default() };
     let mut rows = Vec::new();
     let mut failures = String::new();

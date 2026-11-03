@@ -86,10 +86,22 @@ impl Test<'_> {
         Ok(if o.success() { Verdict::Accepted } else { Verdict::Rejected(o.stderr_str()) })
     }
 
+    /// The GCC oracle judges a compile test's verdict whether or not kiln
+    /// met it (so an `xfail(kiln)` test's expectation is still checked).
+    pub(super) fn with_gcc_verdict(&mut self, spec: &TestSpec, outcome: Check) -> Check {
+        if matches!(outcome, Ok(()) | Err(Problem::Fail(_)))
+            && matches!(spec.expect, Expect::CompileOk | Expect::CompileFail)
+        {
+            self.check_gcc_verdict(spec).and(outcome)
+        } else {
+            outcome
+        }
+    }
+
     /// `compile-ok`/`compile-fail`: GCC's verdict must be the test's; if it
     /// is not, the expectation is in doubt and the test is broken (ERROR,
     /// never masked by `xfail`; `skip(gcc)` is not the fix, a wrong test is).
-    pub(super) fn check_gcc_verdict(&mut self, spec: &TestSpec) -> Check {
+    fn check_gcc_verdict(&mut self, spec: &TestSpec) -> Check {
         let Some(gcc) = self.gcc_applies(spec) else { return Ok(()) };
         let verdict = self.gcc_compile(&gcc, spec, &["-fsyntax-only"], None)?;
         match (spec.expect, verdict) {

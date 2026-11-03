@@ -76,6 +76,7 @@ exit status: 0 all passed (xfail/skip allowed), 1 a test failed/xpassed/errored/
 
 /// Parsed command line.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct Options {
     pub compiler: Option<PathBuf>,
     /// `--oracle`; `None` is `clang++-N` of [`crate::oracle::Oracle::from_env`].

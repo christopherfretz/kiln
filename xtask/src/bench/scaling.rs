@@ -59,13 +59,14 @@ pub fn judge(shape: &str, small: &Point, large: &Point) -> Vec<String> {
     if let (Some(a), Some(b)) = (small.rss_kb, large.rss_kb) {
         ratio("peak RSS", a as f64, b as f64);
     }
-    if let (Some(a), Some(b)) = (small.counters, large.counters) {
-        if FLAT_ARENA.contains(&shape) && b.peak_arena > a.peak_arena {
-            out.push(format!(
-                "peak_arena grows from {} to {} (must not depend on N)",
-                a.peak_arena, b.peak_arena
-            ));
-        }
+    if let (Some(a), Some(b)) = (small.counters, large.counters)
+        && FLAT_ARENA.contains(&shape)
+        && b.peak_arena > a.peak_arena
+    {
+        out.push(format!(
+            "peak_arena grows from {} to {} (must not depend on N)",
+            a.peak_arena, b.peak_arena
+        ));
     }
     out
 }
@@ -82,7 +83,7 @@ pub fn run(
     let shape = gen_reflect::shape(name)
         .ok_or_else(|| format!("unknown --scaling shape `{name}` (s1..s6)"))?;
     let n = opts.scaling_n.unwrap_or(shape.default_n);
-    if n % shape.step != 0 {
+    if !n.is_multiple_of(shape.step) {
         return Err(format!("shape {} needs --n to be a multiple of {}", shape.id, shape.step));
     }
     std::fs::create_dir_all(scratch)
@@ -228,15 +229,16 @@ pub fn render(points: &[Point]) -> String {
             c(p, |c| c.evaluations)
         );
     }
-    if let [a, b] = points {
-        if a.failed.is_none() && b.failed.is_none() {
-            #[allow(clippy::cast_precision_loss)]
-            let rss = match (a.rss_kb, b.rss_kb) {
-                (Some(x), Some(y)) if x > 0 => format!("{:.2}x", y as f64 / x as f64),
-                _ => "-".to_owned(),
-            };
-            let _ = writeln!(s, "| 4N/N | {:.2}x | {rss} | | | | |", b.wall_ms / a.wall_ms);
-        }
+    if let [a, b] = points
+        && a.failed.is_none()
+        && b.failed.is_none()
+    {
+        #[allow(clippy::cast_precision_loss)]
+        let rss = match (a.rss_kb, b.rss_kb) {
+            (Some(x), Some(y)) if x > 0 => format!("{:.2}x", y as f64 / x as f64),
+            _ => "-".to_owned(),
+        };
+        let _ = writeln!(s, "| 4N/N | {:.2}x | {rss} | | | | |", b.wall_ms / a.wall_ms);
     }
     s
 }
@@ -265,13 +267,13 @@ mod tests {
     #[test]
     fn scaling_gate() {
         let a = point(100, 100.0, 1000, 512);
-        assert!(judge("s1", &a, &point(400, 400.0, 4000, 512)).is_empty());
+        assert_eq!(judge("s1", &a, &point(400, 400.0, 4000, 512)), Vec::<String>::new());
         let v = judge("s1", &a, &point(400, 470.0, 4700, 1024));
         assert_eq!(v.len(), 3, "{v:?}");
         assert!(v[0].starts_with("wall time grows 4.70x"), "{v:?}");
         assert!(v[2].contains("peak_arena grows from 512 to 1024"), "{v:?}");
         // S3 and S6 evaluations grow with N by design.
-        assert!(judge("s3", &a, &point(400, 400.0, 4000, 4096)).is_empty());
+        assert_eq!(judge("s3", &a, &point(400, 400.0, 4000, 4096)), Vec::<String>::new());
         let table = render(&[a.clone(), point(400, 300.0, 2000, 512)]);
         assert!(table.contains("| 100 | 100 | 1.0 | 0 | 0 | 512 | 0 |"), "{table}");
         assert!(table.contains("| 4N/N | 3.00x | 2.00x |"), "{table}");
