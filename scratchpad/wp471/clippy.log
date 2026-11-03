@@ -1,0 +1,11 @@
+    Checking kiln_lex v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_lex)
+    Checking kiln_source v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_source)
+   Compiling kiln_driver v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_driver)
+    Checking kiln_diag v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_diag)
+    Checking xtask v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/xtask)
+    Checking kiln_ast v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_ast)
+    Checking kiln_codegen v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_codegen)
+    Checking kiln_pp v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_pp)
+    Checking kiln_llvm v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_llvm)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.00s
+EXIT 0

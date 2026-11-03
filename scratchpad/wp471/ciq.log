@@ -1,0 +1,2589 @@
+xtask ci: cargo fmt --all --check
+xtask ci: cargo clippy --workspace --all-targets -- -D warnings
+    Checking kiln_source v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_source)
+   Compiling kiln_diag v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_diag)
+    Checking kiln_llvm v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_llvm)
+   Compiling kiln_driver v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_driver)
+    Checking kiln_lex v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_lex)
+    Checking kiln_ast v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_ast)
+    Checking kiln_pp v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_pp)
+    Checking kiln_abi v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_abi)
+    Checking kiln_oven v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_oven)
+    Checking xtask v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/xtask)
+    Checking kiln_sema v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_sema)
+    Checking kiln_codegen v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_codegen)
+    Checking kiln_parse v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_parse)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.20s
+xtask ci: cargo test --workspace
+   Compiling kiln_diag v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_diag)
+   Compiling kiln_ast v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_ast)
+   Compiling kiln_pp v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_pp)
+   Compiling kiln_abi v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_abi)
+   Compiling kiln_oven v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_oven)
+   Compiling kiln_sema v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_sema)
+   Compiling kiln_codegen v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_codegen)
+   Compiling xtask v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/xtask)
+   Compiling kiln_parse v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_parse)
+error[E0463]: can't find crate for `kiln_abi`
+ --> crates/kiln_oven/tests/common/parse.rs:9:5
+  |
+9 | use kiln_abi::Target;
+  |     ^^^^^^^^ can't find crate
+
+error[E0463]: can't find crate for `kiln_ast`
+  --> crates/kiln_oven/tests/common/parse.rs:10:5
+   |
+10 | use kiln_ast::consts::{FloatKind, IntBits, Scalar};
+   |     ^^^^^^^^ can't find crate
+
+error[E0463]: can't find crate for `kiln_oven`
+  --> crates/kiln_oven/tests/common/parse.rs:23:5
+   |
+23 | use kiln_oven::{Budget, Oven};
+   |     ^^^^^^^^^ can't find crate
+
+For more information about this error, try `rustc --explain E0463`.
+error: could not compile `kiln_oven` (test "smoke") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0463]: can't find crate for `kiln_ast`
+ --> crates/kiln_parse/src/asm.rs:4:5
+  |
+4 | use kiln_ast::expr::ExprKind;
+  |     ^^^^^^^^ can't find crate
+
+error[E0463]: can't find crate for `kiln_sema`
+  --> crates/kiln_parse/src/attr.rs:13:5
+   |
+13 | use kiln_sema::Declarator;
+   |     ^^^^^^^^^ can't find crate
+
+error: could not compile `kiln_parse` (lib) due to 2 previous errors
+error[E0463]: can't find crate for `kiln_ast`
+  --> crates/kiln_sema/src/absolute_value.rs:22:5
+   |
+22 | use kiln_ast::decl::{DeclKind, builtin};
+   |     ^^^^^^^^ can't find crate
+
+error[E0463]: can't find crate for `kiln_abi`
+ --> crates/kiln_sema/src/asm.rs:6:5
+  |
+6 | use kiln_abi::asm::{self as tasm, AsmOperandCounts, AsmPiece, AsmStringError, ConstraintInfo};
+  |     ^^^^^^^^ can't find crate
+
+error[E0463]: can't find crate for `kiln_oven`
+  --> crates/kiln_sema/src/bit_int.rs:15:5
+   |
+15 | use kiln_oven::{EvalContext, EvalKind};
+   |     ^^^^^^^^^ can't find crate
+
+error: could not compile `kiln_sema` (lib test) due to 3 previous errors
+xtask ci: [retry] cargo test --workspace failed with error[E0463] (can't find crate: an artifact vanished mid-build); rerunning it once
+xtask ci: cargo test --workspace
+   Compiling kiln_sema v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_sema)
+   Compiling kiln_oven v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_oven)
+   Compiling kiln_parse v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_parse)
+   Compiling kiln_pp v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_pp)
+   Compiling kiln_driver v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_driver)
+   Compiling kiln_codegen v0.0.1 (/Volumes/AgentWork/kiln-helper/kiln/.worktrees/wp-471/crates/kiln_codegen)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 03s
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_abi-39b472cfe1cae676)
+
+running 14 tests
+test target::tests::builtin_sizes ... ok
+test irtype::tests::sve_builtins_lower_to_scalable_vectors ... ok
+test target::tests::bit_int_layout ... ok
+test asm::tests::input_constraints_tie ... ok
+test asm::tests::output_constraints ... ok
+test asm::tests::simplify ... ok
+test asm::tests::global_register_variables ... ok
+test asm::tests::clobbers ... ok
+test asm::tests::template ... ok
+test target::tests::triple_spellings_and_aliases ... ok
+test dump_blocks::tests::record_layout_blocks_drop_builtins ... ok
+test dump_blocks::tests::vtable_blocks_are_a_set_without_original_maps ... ok
+test layout::tests::ensure_layout_refuses_an_incomplete_class ... ok
+test vtable::tests::non_dynamic_classes_are_rejected_without_caching ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/layout_bases.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/layout_bases-b8dd0daba9fc2e1b)
+
+running 8 tests
+test subobject_table_preorder ... ok
+test bit_fields_after_base ... ok
+test no_unique_address_member_after_empty_base ... ok
+test base_alignment_and_alignas ... ok
+test pragma_pack_caps_alignment ... ok
+test empty_base_same_type_rule ... ok
+test mixed_bases_and_empty_members ... ok
+test tail_padding_reuse_and_pod ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/layout_rules.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/layout_rules-5548b0090fbf845f)
+
+running 30 tests
+test fundamental_types_per_target ... ok
+test type_size_align_and_cache_fill ... ok
+test dump_format ... ok
+test bit_field_straddling_its_unit_moves ... ok
+test union_members_at_zero ... ok
+test bit_int_layout ... ok
+test vector_layout ... ok
+test packed_struct_has_byte_alignment ... ok
+test empty_class_has_size_one ... ok
+test bit_fields_pack_within_their_unit ... ok
+test atomic_layout ... ok
+test member_pointers ... ok
+test primary_base_label_compares_classes ... ok
+test aligned_attribute_without_argument ... ok
+test enum_layout ... ok
+test unnamed_bit_field_alignment ... ok
+test arrays_of_records ... ok
+test user_constructor_makes_non_pod ... ok
+test struct_fields_in_order_with_padding ... ok
+test aligned_typedefs ... ok
+test wide_bit_field ... ok
+test zero_width_bit_field ... ok
+test packed_field_and_explicit_alignment ... ok
+test no_unique_address_empty_members_overlap ... ok
+test alignas_member_and_class ... ok
+test flexible_and_zero_length_arrays ... ok
+test virtual_bases_diamond ... ok
+test vptr_and_non_virtual_primary_base ... ok
+test tail_padding_reuse_via_no_unique_address ... ok
+test nearly_empty_virtual_primary_base ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests/layout_vs_clang.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/layout_vs_clang-78b847d22ec3ea4d)
+
+running 1 test
+test layout_matches_clang ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/vtable_rules.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/vtable_rules-a5ff6db6d08c5a72)
+
+running 5 tests
+test non_virtual_this_thunk ... ok
+test destructor_slots ... ok
+test virtual_this_thunk_and_vbase_offset ... ok
+test covariant_return_thunk ... ok
+test diamond_construction_vtables_and_vtt ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/vtable_vs_clang.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/vtable_vs_clang-9a1f2124359085c8)
+
+running 1 test
+test vtables_match_clang ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_ast-bcadf213514f723f)
+
+running 21 tests
+test class::tests::final_overrider_binary_search ... ok
+test consts::float::tests::half_bfloat_x87_quad ... ok
+test consts::fltstr::tests::note_double ... ok
+test consts::fltstr::tests::round_trip_default ... ok
+test consts::tests::node_and_side_record_sizes ... ok
+test ids::tests::id_roundtrip_and_limits ... ok
+test ids::tests::qualtype_bits ... ok
+test lists::tests::push_and_read ... ok
+test ids::tests::zero_index_panics - should panic ... ok
+test lookup::tests::set_meter_tracks_the_sets ... ok
+test modules::tests::owner_change_points ... ok
+test names::tests::encodings_roundtrip ... ok
+test reflect::tests::full_table_refuses_new_reflections ... ok
+test reflect::tests::reflect_expr_past_the_limit_has_no_value ... ok
+test strings::tests::dedup_by_encoding_and_bytes ... ok
+test consts::fltstr::tests::note_other_kinds ... ok
+test strings::tests::escapes ... ok
+test types::intern::tests::second_word_reaches_the_low_bits ... ok
+test types::intern::tests::find_insert_and_collisions ... ok
+test consts::float::tests::generic_matches_std_f32 ... ok
+test consts::float::tests::generic_matches_std_f64 ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.30s
+
+     Running tests/builder.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/builder-c03e0bc51c031b43)
+
+running 27 tests
+test conditional_category_expr_cond ... ok
+test class_member_list_frozen_class_mem ... ok
+test decl_ref_to_const_var_with_dependent_init_temp_dep_constexpr_2 ... ok
+test decl_ref_with_dependent_type_temp_dep_expr_3 ... ok
+test casts_drop_type_dependence_temp_dep_expr_3 ... ok
+test attach_attributes_dcl_attr_grammar ... ok
+test constant_expr_value_once_expr_const ... ok
+test constant_expr_value_dependent_panics_temp_dep_constexpr - should panic ... ok
+test gcc_type_class ... ok
+test inline_namespaces_namespace_def_7 ... ok
+test literals_are_not_dependent_temp_dep_expr ... ok
+test late_member_panics_class_mem - should panic ... ok
+test member_access_categories_expr_ref_6 ... ok
+test name_independent_declarations_p2169_basic_scope_scope_5 ... ok
+test memory_report_instantiation_row_spec_ast_15_q6 ... ok
+test operator_categories_expr_unary_assign_comma_sub ... ok
+test operators_propagate_dependence_temp_dep_expr_1 ... ok
+test overload_sets_over_pre_class_name ... ok
+test paren_and_call_categories_expr_prim_paren_expr_call ... ok
+test primary_categories_expr_prim ... ok
+test ptr_mem_requires_category_expr_mptr_oper - should panic ... ok
+test recovery_and_error_propagation_spec_ast_5_3 ... ok
+test redeclaration_groups_basic_def ... ok
+test sizeof_is_value_dependent_only_temp_dep_constexpr_3 ... ok
+test statements_round_trip_stmt ... ok
+test transparent_contexts_dcl_link_dcl_enum_class_union_anon ... ok
+test write_once_slots_spec_ast_2_4 ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/builder_class.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/builder_class-52a24e410378e9e7)
+
+running 17 tests
+test definition_bits_dynamic_class_virtual ... ok
+test access_spec_is_a_member_class_access_spec ... ok
+test functional_and_dynamic_casts_expr_type_conv ... ok
+test lifetime_extended_temporary_class_temporary ... ok
+test construct_expr_payload_class_ctor ... ok
+test default_init_this_and_member_call_class_this ... ok
+test temporaries_categories_class_temporary ... ok
+test nrvo_and_pending_default_arg_class_copy_elision ... ok
+test hidden_friend_is_adl_only_namespace_memdef ... ok
+test paren_list_array_loop_typeid_expr_typeid ... ok
+test append_implicit_member_after_complete_class_mem ... ok
+test ctor_inits_round_trip_class_base_init ... ok
+test hidden_friend_in_overload_set_basic_lookup_argdep ... ok
+test overrides_write_once_class_virtual ... ok
+test ctor_inits_on_method_panics - should panic ... ok
+test materialize_full_expression_with_extension_panics - should panic ... ok
+test append_implicit_member_requires_implicit - should panic ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/consts.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/consts-112a589d3e969a46)
+
+running 15 tests
+test malformed_images_are_rejected ... ok
+test aggregate_with_nested_relocations ... ok
+test malformed_scalars_are_rejected ... ok
+test every_scalar_kind_roundtrips ... ok
+test memory_report ... ok
+test reloc_widths ... ok
+test print_scalars ... ok
+test dedup_of_a_thousand_int_array ... ok
+test sizes ... ok
+test shadow_covers_image_exactly ... ok
+test print_aggregates ... ok
+test int_widths_roundtrip ... ok
+test type_is_part_of_identity ... ok
+test union_active_member_is_identity ... ok
+test wide_bitint_roundtrip ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dump.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/dump-a1500f7f4c852017)
+
+running 22 tests
+test golden_storage ... ok
+test golden_scoped_fixed_enums ... ok
+test golden_filter_local ... ok
+test golden_while_do ... ok
+test golden_bitfield_access ... ok
+test golden_deleted ... ok
+test option_canonical_types ... ok
+test option_implicit ... ok
+test golden_unscoped_enum_values ... ok
+test option_locs_and_files ... ok
+test golden_if_constexpr_consteval ... ok
+test golden_switch_cases ... ok
+test golden_spec_example ... ok
+test golden_extern_c ... ok
+test filter_by_name_and_kind ... ok
+test golden_implicit_move ... ok
+test per_kind_declarations ... ok
+test golden_static_assert ... ok
+test option_ids ... ok
+test golden_if_init_else ... ok
+test no_trailing_whitespace ... ok
+test stable_and_writer_agnostic ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/dump_class.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/dump_class-52be561182889c58)
+
+running 2 tests
+test class_members ... ok
+test class_expressions ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/layout.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/layout-192a17a841f1d4ee)
+
+running 4 tests
+test class_side_records_spec_sema_class_8_1 ... ok
+test header_sizes_spec_ast_4_1_5_1_6_7 ... ok
+test ids_are_niche_optimized_spec_ast_2_1 ... ok
+test payload_sizes_spec_ast_4_2_4_4 ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/profile_expr.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/profile_expr-3d908a200f7f3c96)
+
+running 11 tests
+test different_operators_differ ... ok
+test different_literals_differ ... ok
+test function_parameters_compare_by_index ... ok
+test parentheses_are_kept ... ok
+test profile_records_dependence ... ok
+test same_expression_twice_is_equal ... ok
+test sizeof_of_different_parameters_differs ... ok
+test operand_order_matters ... ok
+test template_parameters_compare_by_position ... ok
+test unary_opcode_matters ... ok
+test deep_nesting_does_not_overflow ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/types_core.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/types_core-56caba9046354efc)
+
+running 18 tests
+test builtins_are_preinterned ... ok
+test array_qualifiers_go_to_the_element ... ok
+test array_size_expr_is_sugar ... ok
+test dependent_equivalence_through_profiles ... ok
+test exception_specs_cxx14 ... ok
+test exception_specs_cxx17 ... ok
+test exhaustion_is_not_a_panic ... ok
+test function_canonical_drops_param_cv_and_trailing ... ok
+test hash_consing ... ok
+test layout_cache ... ok
+test record_and_enum_types_are_distinct_and_stable ... ok
+test sizes ... ok
+test reference_collapsing ... ok
+test substitution_sugar ... ok
+test sugar_canonicalizes ... ok
+test template_parameters_and_dependence ... ok
+test template_specializations ... ok
+test memory_report ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/types_mem.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/types_mem-b7a9240bf3972b1b)
+
+running 1 test
+test per_type_costs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/types_print.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/types_print-e76d25c516567c34)
+
+running 11 tests
+test builtin_like ... ok
+test dependent ... ok
+test functions ... ok
+test member_pointers_and_references ... ok
+test pointers_and_arrays ... ok
+test qualifiers ... ok
+test sugar_pairs ... ok
+test template_names ... ok
+test templates ... ok
+test unnamed_and_raw ... ok
+test deep_nesting_is_bounded ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_codegen-989e0635b1c96028)
+
+running 1 test
+test tests::frame_pointer_matches_clang ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ir_vs_clang.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/ir_vs_clang-b9598ab1f7ff30e5)
+
+running 7 tests
+test ir_norm::tests::unname_locals_renumbers_pass_created_names ... ok
+test ir_norm::tests::comments_outside_strings_only ... ok
+test ir_norm::tests::structural_sorts_comdat_and_global_runs ... ok
+test ir_norm::tests::structural_keeps_byval_align_and_abi_attrs ... ok
+test ir_norm::tests::abi_slice_is_the_signatures_and_types ... ok
+test ir_norm::tests::structural_strips_release_noise ... ok
+test ir_matches_clang ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 56.51s
+
+     Running tests/lower.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/lower-773d9e03cf4496cd)
+
+running 5 tests
+test hand_written_coro_id ... ok
+test expansion_statement_lowers_in_order ... ok
+test wide_signed_mul_overflow_is_inline ... ok
+test coro_end_follows_llvm_major ... ok
+test lowering_matches_clang ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.68s
+
+     Running tests/mangle_vs_clang.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/mangle_vs_clang-01f6d4d923fc9773)
+
+running 1 test
+test mangling_matches_clang ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.99s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_diag-32aa409ff61e12e1)
+
+running 14 tests
+test columns::tests::column_map ... ok
+test columns::tests::non_printable ... ok
+test columns::tests::tabs_expand_by_bytes_since_previous_tab ... ok
+test template::tests::check_counts ... ok
+test template::tests::render_basic ... ok
+test text::tests::add_range ... ok
+test verify::regex::tests::alternation ... ok
+test verify::regex::tests::anchors ... ok
+test verify::regex::tests::errors_use_llvm_wording ... ok
+test verify::regex::tests::brackets ... ok
+test verify::regex::tests::escape_metachars ... ok
+test verify::regex::tests::literals_and_search ... ok
+test verify::regex::tests::repetition_and_groups ... ok
+test verify::regex::tests::long_subject_is_linear ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/engine.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/engine-1e38e392bf24ddc6)
+
+running 8 tests
+test fatal_suppresses_rest ... ok
+test dedup_context ... ok
+test dedup ... ok
+test summary ... ok
+test error_limit ... ok
+test queries_and_records ... ok
+test system_header_warnings_suppressed ... ok
+test shared_across_threads ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ids.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/ids-fc6404d19c3d69cb)
+
+running 5 tests
+test check_rejects_mismatches ... ok
+test render_templates ... ok
+test compat_19_rows_mirror_their_base ... ok
+test kinds_and_groups ... ok
+test every_template_matches_its_arg_count ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/json.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/json-137346397b41009d)
+
+running 4 tests
+test escaping ... ok
+test lines_are_balanced ... ok
+test macro_notes_and_levels ... ok
+test structure ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/policy.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/policy-58c307fcb72156f1)
+
+running 4 tests
+test bad_option_values ... ok
+test pragma_state_by_location ... ok
+test warning_flag_matrix ... ok
+test unknown_options ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/text_render.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/text_render-a478ca3f25d7cc35)
+
+running 9 tests
+test single_line_with_ranges ... ok
+test invalid_utf8_bytes ... ok
+test tabs_multiline_and_line_directives ... ok
+test display_flags ... ok
+test crlf_and_cr ... ok
+test macro_backtrace_limit ... ok
+test colors_and_option_names ... ok
+test nested_macro_chain ... ok
+test locationless_and_fatal ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/verify.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/verify-75197e7f45b588d0)
+
+running 16 tests
+test prefix_validity ... ok
+test prefixes ... ok
+test bad_line_forms ... ok
+test missing_braces ... ok
+test mismatch_report ... ok
+test frontend_and_newlines ... ok
+test line_forms ... ok
+test no_directives ... ok
+test all_matched ... ok
+test markers ... ok
+test word_start_and_multiple ... ok
+test no_diagnostics_conflicts ... ok
+test regex_directives ... ok
+test notes ... ok
+test duplicate_directives ... ok
+test counts ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_driver-2da177177dad1ddb)
+
+running 44 tests
+test args::tests::lang_by_extension_and_mode ... ok
+test codegen_cmd::tests::opt_levels ... ok
+test codegen_cmd::tests::always_inline_detection ... ok
+test args::tests::mode_from_program_name ... ok
+test codegen_cmd::tests::coro_lowering_detection ... ok
+test constexpr_opts::tests::defaults_are_clangs ... ok
+test codegen_cmd::tests::output_names ... ok
+test args::tests::deps_and_print ... ok
+test args::tests::joined_and_separate ... ok
+test args::tests::equals_forms_and_x ... ok
+test args::tests::outline_atomics_last_wins ... ok
+test codegen_cmd::tests::sources_and_linker_inputs ... ok
+test args::tests::x_precedence ... ok
+test args::tests::driver_mode_flag_last_wins ... ok
+test codegen_cmd::tests::phases ... ok
+test args::tests::frame_pointer_flags_last_win ... ok
+test args::tests::verify_errors ... ok
+test args::tests::verify_prefixes ... ok
+test args::tests::complex_range_last_wins ... ok
+test args::tests::diag_and_predef_flags ... ok
+test args::tests::strict_aliasing_last_wins ... ok
+test args::tests::errors ... ok
+test constexpr_opts::tests::errors_and_others ... ok
+test args::tests::clang_compat_level ... ok
+test args::tests::lax_vector_conversions ... ok
+test codegen_cmd::tests::link_order ... ok
+test constexpr_opts::tests::flags ... ok
+test deps::tests::defaults ... ok
+test deps::tests::escaping ... ok
+test deps::tests::list_filters_and_dedups ... ok
+test deps::tests::wrapping_and_phony ... ok
+test link::tests::missing_tool_is_a_diagnostic ... ok
+test link::tests::rendering ... ok
+test templ_opts::tests::bad_values ... ok
+test templ_opts::tests::defaults_are_clangs ... ok
+test templ_opts::tests::flags ... ok
+test templ_opts::tests::stack_size ... ok
+test time::tests::epochs ... ok
+test toolchain::tests::gcc_versions ... ok
+test toolchain::tests::llvm_config_versions ... ok
+test toolchain::tests::llvm_dir_majors ... ok
+test toolchain::tests::stds ... ok
+test toolchain::tests::targets ... ok
+test toolchain::tests::llvm_major_probe ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/main.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln-3d66dcf98e0e28f4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/codegen.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/codegen-e3410982624afed3)
+
+running 11 tests
+test print_commands ... ok
+test missing_tools ... ok
+test verbose_prints_commands ... ok
+test kiln_and_kilnpp ... ok
+test emit_llvm_text ... ok
+test driver_errors_and_warnings ... ok
+test coro_wrappers_before_passes_match_clang19 ... ok
+test function_order_is_stable ... ok
+test coro_elide_at_o2 ... ok
+test compile_only_outputs ... ok
+test compile_and_link ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/driver.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/driver-3dfd243b1f86ff73)
+
+running 21 tests
+test version_and_no_inputs ... ok
+test reproducible_time ... ok
+test include_stack_like_clang ... ok
+test argument_errors ... ok
+test preprocess_stdin ... ok
+test errors_exit_1_with_summary ... ok
+test builtin_buffer_like_clang ... ok
+test dependencies ... ok
+test macros_only ... ok
+test bit_width_and_static_assert_ranges_like_clang ... ok
+test exception_spec_fixits_and_ranges_like_clang ... ok
+test literal_conversion_and_macro_argument_ranges_like_clang ... ok
+test system_header_warnings_like_clang ... ok
+test module_missing_import_notes ... ok
+test module_adl_example ... ok
+test fixits_in_macro_expansions_like_clang ... ok
+test syntax_only ... ok
+test outline_atomics_ignored_on_x86_64 ... ok
+test lax_vector_conversions_like_clang ... ok
+test driver_modes ... ok
+test verbose_search_lists_match_clang ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/erroneous_init.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/erroneous_init-0a29ab82041dbbf7)
+
+running 4 tests
+test flag_values ... ok
+test cxx26_fills_by_default ... ok
+test max_size_and_remark ... ok
+test cxx23_and_uninitialized_do_not_fill ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/oven_classes.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/oven_classes-4d2e30a397f2cec3)
+
+running 5 tests
+test class_counters ... ok
+test member_pointer_intern_cast_round_trip ... ok
+test constant_destruction ... ok
+test static_temporaries ... ok
+test deep_spines ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.50s
+
+     Running tests/record_layouts.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/record_layouts-a2666d1dba9fb0d7)
+
+running 2 tests
+test flag_spellings_and_action ... ok
+test record_layouts_match_clang ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.65s
+
+     Running tests/verify.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/verify-3f20ea52b5501ff2)
+
+running 5 tests
+test verify_requires_syntax_only ... ok
+test directives_after_fatal_error_are_read ... ok
+test report_matches_clang_19 ... ok
+test all_matched_is_success ... ok
+test same_as_clang_19 ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+     Running tests/vtable_layouts.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/vtable_layouts-033405bf055306b4)
+
+running 2 tests
+test flag_action ... ok
+test vtable_layouts_match_clang ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_lex-e07ed28f336ffbe7)
+
+running 13 tests
+test unicode::tests::nfc_normalization_test ... ignored, needs NormalizationTest.txt (KILN_UCD_NORMALIZATION_TEST)
+test phase::tests::decode_splices_and_trigraphs ... ok
+test golden_tests::golden_lex_literals_tokens ... ok
+test golden_tests::golden_lex_pptoken_recovery ... ok
+test golden_tests::golden_lex_pptoken_mixed ... ok
+test golden_tests::golden_lex_pptoken_munch_numbers_literals ... ok
+test unicode::tests::xid_tables ... ok
+test unicode::tests::o_e_hyphen ... ok
+test unicode::tests::aliases_and_misses ... ok
+test golden_tests::golden_lex_literals_values ... ok
+test unicode::tests::nr2_names ... ok
+test unicode::tests::hangul_syllable_names ... ok
+test unicode::tests::every_table_name_round_trips ... ok
+
+test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+     Running tests/comments.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/comments-c27fe5aafc67d842)
+
+running 10 tests
+test lex_comment_unterminated ... ok
+test lex_comment_block_end_spliced ... ok
+test lex_comment_inside_literal ... ok
+test lex_comment_block_does_not_nest ... ok
+test lex_comment_slash_star_slash ... ok
+test lex_comment_block_multiline_no_start_of_line ... ok
+test lex_comment_no_diags ... ok
+test lex_comment_line_spliced ... ok
+test lex_comment_kept ... ok
+test lex_comment_is_whitespace ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/flags_directives.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/flags_directives-290b6d4770914c58)
+
+running 9 tests
+test lex_flags_splice_not_space ... ok
+test lex_in_range ... ok
+test lex_directive_splice_continues ... ok
+test lex_flags_start_of_line_and_leading_space ... ok
+test lex_directive_eod ... ok
+test lex_header_name_fallback ... ok
+test lex_header_name_special_chars ... ok
+test lex_header_name_mode_off ... ok
+test lex_header_name ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/identifiers.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/identifiers-9b0cf7b3f25e76ea)
+
+running 14 tests
+test lex_name_interned ... ok
+test lex_name_ascii ... ok
+test lex_universal_char_basic_set ... ok
+test lex_name_not_nfc ... ok
+test lex_name_dollar ... ok
+test lex_universal_char_invalid_code_points ... ok
+test lex_name_xid_continue_at_start ... ok
+test lex_universal_char_named_malformed ... ok
+test lex_universal_char_not_a_ucn ... ok
+test lex_name_utf8_xid ... ok
+test lex_name_not_nfc_maybe ... ok
+test lex_universal_char_named_cjk ... ok
+test lex_universal_char_in_identifier ... ok
+test lex_universal_char_named_in_identifier ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/literals.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/literals-2835789ea0f293f1)
+
+running 14 tests
+test lex_literal_spliced ... ok
+test lex_literal_prefix_not_adjacent ... ok
+test lex_literal_unterminated ... ok
+test lex_literal_raw_delimiter ... ok
+test lex_ext_reserved_suffix ... ok
+test lex_ext_ud_suffix ... ok
+test lex_literal_raw_string ... ok
+test lex_ext_library_suffixes_after_string ... ok
+test lex_literal_empty_char ... ok
+test lex_literal_encoding_prefixes ... ok
+test lex_literal_raw_string_splice_in_prefix ... ok
+test lex_literal_escapes ... ok
+test lex_literal_raw_unterminated ... ok
+test lex_literal_prefix_gating ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/literals_escapes.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/literals_escapes-d82378c89da27a5d)
+
+running 11 tests
+test lex_ccon_octal_escape ... ok
+test lex_ccon_unknown_and_nonstandard_escapes ... ok
+test lex_ccon_delimited_escapes ... ok
+test lex_ccon_hex_escape ... ok
+test lex_string_raw_no_escapes ... ok
+test lex_ccon_simple_escapes ... ok
+test lex_ccon_escape_ranges ... ok
+test lex_charset_cxx03_ucn_restrictions ... ok
+test lex_universal_char_in_literals ... ok
+test lex_ccon_error_gating_matches_clang ... ok
+test lex_universal_char_named_in_literals ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/literals_numbers.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/literals_numbers-22ab4f21c68f9c70)
+
+running 11 tests
+test gnu_imaginary_suffix ... ok
+test lex_ext_numeric_ud_suffix ... ok
+test lex_fcon_f32 ... ok
+test lex_fcon_suffixes_and_errors ... ok
+test lex_icon_bases ... ok
+test lex_fcon_values ... ok
+test lex_icon_diag_ranges ... ok
+test lex_icon_digit_separators ... ok
+test lex_icon_errors ... ok
+test lex_icon_fcon_extensions ... ok
+test lex_icon_suffixes ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/literals_values.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/literals_values-8a7550cc9d5e2cd5)
+
+running 12 tests
+test lex_ccon_malformed_spellings ... ok
+test lex_string_diag_locate_through_splices ... ok
+test cpp_cond_char_values ... ok
+test lex_ccon_multichar ... ok
+test lex_ccon_too_large ... ok
+test lex_ccon_single_values ... ok
+test lex_ext_ud_suffix ... ok
+test lex_string_encodings ... ok
+test lex_string_raw_values ... ok
+test lex_string_decode_encode_decode ... ok
+test lex_string_uneval ... ok
+test lex_string_encode_decode_round_trip ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/numbers.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/numbers-cac3bc75289e0fcc)
+
+running 7 tests
+test lex_ppnumber_identifier_continue ... ok
+test lex_ppnumber_p_sign_pre_cxx17 ... ok
+test lex_ppnumber_digit_separator ... ok
+test lex_ppnumber_maximal ... ok
+test lex_ppnumber_exponent_sign ... ok
+test lex_ppnumber_start ... ok
+test lex_ppnumber_separator_not_followed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/operators.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/operators-6b6ea7d63febbbc2)
+
+running 9 tests
+test lex_pptoken_stray_non_ascii ... ok
+test lex_pptoken_less_colon_colon ... ok
+test lex_operators_reflect ... ok
+test lex_digraph ... ok
+test lex_operators_spaceship ... ok
+test lex_pptoken_splice_brackets ... ok
+test lex_pptoken_other_char ... ok
+test lex_pptoken_maximal_munch ... ok
+test lex_operators_all ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/phases.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/phases-106c37bc379ba64d)
+
+running 13 tests
+test lex_phases_1_bom_skipped ... ok
+test lex_phases_1_trigraph_backslash_splice ... ok
+test lex_phases_1_trigraphs_disabled ... ok
+test lex_phases_2_no_newline_at_eof ... ok
+test lex_phases_1_trigraphs_enabled ... ok
+test lex_phases_2_backslash_space_newline ... ok
+test lex_phases_2_spelling_and_span ... ok
+test lex_phases_null_is_whitespace ... ok
+test lex_phases_2_splice_crlf_and_cr ... ok
+test lex_phases_2_backslash_newline_at_eof ... ok
+test lex_phases_2_splice_inside_punct_and_number ... ok
+test lex_phases_2_splice_inside_identifier ... ok
+test lex_phases_unicode_whitespace ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/recovery_fuzz.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/recovery_fuzz-c17c373b2eb900f9)
+
+running 7 tests
+test lex_recovery_eof_sticky ... ok
+test lex_recovery_garbage ... ok
+test lex_fuzz_literal_decoders ... ok
+test lex_fuzz_directive_mode ... ok
+test lex_phases_sparse_splices_fuzz ... ok
+test lex_fuzz_random_bytes ... ok
+test cpp_cond_skip_plain_line_rest_preserves_line_starts ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_llvm-b1ac784eab86d538)
+
+running 2 tests
+test float::tests::conversions ... ok
+test float::tests::double_syntax ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/builder.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/builder-9b95b3673906b769)
+
+running 13 tests
+test layout_sizes ... ok
+test terminators ... ok
+test constant_interning ... ok
+test detached_blocks ... ok
+test bad_orderings ... ok
+test function_rules ... ok
+test phi_rules ... ok
+test type_interning ... ok
+test replace_function ... ok
+test move_function_to_end ... ok
+test replace_function_with_alias ... ok
+test determinism ... ok
+test type_mismatches ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/corpus.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/corpus-00dcd7bce00c89c0)
+
+running 44 tests
+test captures_none_at_llvm_21 ... ok
+test cfg_shapes ... ok
+test binary_operators ... ok
+test constant_expressions ... ok
+test aliases_and_comdats ... ok
+test byte_strings ... ok
+test header ... ok
+test getelementptr ... ok
+test gc_section_align ... ok
+test comparisons ... ok
+test nocreateundeforpoison_at_llvm_22 ... ok
+test debug_info ... ok
+test atomics ... ok
+test calls ... ok
+test funclet_eh ... ok
+test calling_conventions ... ok
+test function_properties ... ok
+test aggregate_initializers ... ok
+test vector_splats_at_llvm_20 ... ok
+test aggregate_values ... ok
+test declarations ... ok
+test attribute_groups ... ok
+test function_constants ... ok
+test global_properties ... ok
+test inline_asm ... ok
+test float_constants ... ok
+test conversions ... ok
+test int_constants ... ok
+test intrinsic_declarations ... ok
+test itanium_eh ... ok
+test metadata ... ok
+test large_function ... ok
+test names_and_numbering ... ok
+test memory_access ... ok
+test parameter_attributes ... ok
+test simple_function ... ok
+test multiway_branches ... ok
+test scalable_and_target_ext_declarations ... ok
+test phi_select_freeze ... ok
+test varargs ... ok
+test vector_operations ... ok
+test x86_64_header ... ok
+test x86_64_signatures ... ok
+test struct_types ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+     Running tests/differential.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/differential-6b6892d495d5efdd)
+
+running 17 tests
+test all_programs_covered ... ok
+test tls ... ok
+test logic ... ok
+test labels ... ok
+test switch ... ok
+test loop_ ... ok
+test pointers ... ok
+test bits ... ok
+test calls ... ok
+test globals ... ok
+test add ... ok
+test varargs ... ok
+test atomics ... ok
+test builtins ... ok
+test structs ... ok
+test vla ... ok
+test floats ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_oven-34e1381092eaaf28)
+
+running 43 tests
+test arith::tests::int_ops ... ok
+test arith::tests::apfloat_strings ... ok
+test bigint::tests::decimal ... ok
+test bigint::tests::shifts_and_canon ... ok
+test compile::builtins::tests::nan_payload_radix ... ok
+test bigint::tests::arithmetic_matches_i128 ... ok
+test complex::tests::annex_g_double ... ok
+test complex::tests::integer_ops ... ok
+test complex::tests::scalbn_ilogb ... ok
+test mem::tests::dead_statics_in_a_trial ... ok
+test mem::tests::delete_faults ... ok
+test mem::tests::dead_statics_are_reclaimed_wherever_they_lie ... ok
+test mem::tests::deleted_objects_are_detected ... ok
+test mem::tests::frame_and_heap_counters ... ok
+test mem::tests::granules_are_logged_once_per_checkpoint ... ok
+test mem::tests::heap_of_a_context ... ok
+test mem::tests::medium_blocks_reuse_their_class ... ok
+test mem::tests::nested_checkpoints ... ok
+test mem::tests::failed_trials_hold_no_memory ... ok
+test mem::tests::reset_clears_the_heap ... ok
+test mem::tests::mixed_churn_fragmentation_is_bounded ... ok
+test mem::tests::rollback_restores_interleaved_writes ... ok
+test mem::tests::small_blocks_reuse_last_freed ... ok
+test mem::tests::speculative_trials_refuse_outside_effects ... ok
+test mem::tests::size_classes ... ok
+test mem::tests::the_limit_bounds_frame_and_heap_together ... ok
+test mem::tests::unbacked_statics_hold_no_bytes ... ok
+test mem::tests::unions_and_flags_are_restored ... ok
+test mem::tests::void_tags_intern_then_spill ... ok
+test memo::tests::lru_evicts_least_recent ... ok
+test softfloat::math::tests::exponents ... ok
+test softfloat::math::tests::next ... ok
+test softfloat::math::tests::fused ... ok
+test softfloat::math::tests::remainders ... ok
+test softfloat::math::tests::rounding_matches_native ... ok
+test softfloat::tests::generic_matches_native_double ... ok
+test softfloat::tests::x87_basics ... ok
+test mem::tests::freeing_the_top_block_lowers_the_top ... ok
+test mem::tests::large_blocks_carve_best_fit ... ok
+test softfloat::math::tests::square_root ... ok
+test mem::tests::rollback_frees_allocations_and_revives_frees ... ok
+test mem::tests::footprint_is_flat_over_churn ... ok
+test mem::tests::doubling_buffer_coalesces_and_lowers_the_top ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/bench.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/bench-d4a1cfbfa60fe9ca)
+
+running 4 tests
+test bench_fib25 ... ignored, benchmark
+test bench_fib25_memo ... ignored, benchmark
+test bench_sieve10k ... ignored, benchmark
+test bench_sort1k_structs ... ignored, benchmark
+
+test result: ok. 0 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/expr_const.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/expr_const-3d553372512395be)
+
+running 32 tests
+test expr_const_4_const_integral_usable_ok ... ok
+test expr_const_5_24_string_literals ... ok
+test expr_const_5_24_past_end_equality ... ok
+test expr_const_5_15_reinterpret_cast_type_changing ... ok
+test expr_const_5_16_decrement_bitfield_global ... ok
+test expr_const_5_15_reinterpret_cast ... ok
+test expr_const_5_16_modify_const ... ok
+test expr_const_5_24_relational_unrelated ... ok
+test expr_const_5_14_void_ptr ... ok
+test expr_const_5_16_assign_global ... ok
+test expr_const_5_14_void_ptr_round_trip_ok ... ok
+test expr_const_5_24_specified_comparisons_ok ... ok
+test expr_const_5_24_frozen_string_literals ... ok
+test expr_const_5_3_non_constexpr_direct ... ok
+test expr_const_5_16_compound_assign_global ... ok
+test expr_const_5_11_indeterminate ... ok
+test expr_const_5_16_modify_outside ... ok
+test expr_const_5_4_undefined_function ... ok
+test expr_const_5_3_non_constexpr_function ... ok
+test expr_const_5_2_static_local ... ok
+test expr_const_5_10_inactive_member ... ok
+test expr_const_5_10_active_member_change_ok ... ok
+test expr_const_5_16_modify_within_ok ... ok
+test expr_const_5_2_static_constexpr_local_ok ... ok
+test expr_const_5_7_depth_limit ... ok
+test expr_const_5_8_undefined_behavior ... ok
+test expr_const_5_9_constexpr_init ... ok
+test expr_const_5_9_lifetime_within_ok ... ok
+test expr_const_5_9_non_const_global ... ok
+test expr_const_5_9_non_constant_initializer ... ok
+test expr_const_5_9_volatile ... ok
+test expr_const_5_7_step_limit ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running tests/float.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/float-b27e1cfd8ab9b94d)
+
+running 8 tests
+test conv_double_rounding ... ok
+test conv_fpint_integral_to_floating ... ok
+test conv_fpint_floating_to_integral ... ok
+test expr_unary_and_compound_floating ... ok
+test basic_fundamental_long_double_x87 ... ok
+test basic_fundamental_float_arithmetic ... ok
+test basic_fundamental_double_arithmetic ... ok
+test expr_rel_floating_comparisons ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/limits.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/limits-63d785844e295577)
+
+running 11 tests
+test expr_const_5_7_step_limit_note ... ok
+test memo_purity ... ok
+test expr_const_5_7_depth_limit_note ... ok
+test implimits_memory_budget ... ok
+test implimits_depth_match_clang ... ok
+test report_golden ... ok
+test implimits_steps_match_clang ... ok
+test memory_reset_peak_stable ... ok
+test provisional_globals_do_not_grow ... ok
+test lax_globals_do_not_grow ... ok
+test memo_hits_charge_recorded_costs ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/nested.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/nested-cd890f24051ff06c)
+
+running 6 tests
+test a_function_whose_body_is_being_made_available_is_undefined ... ok
+test nested_evaluations_are_not_memoized_through ... ok
+test equal_aggregates_freeze_to_one_constant ... ok
+test nested_calls_count_from_the_depth_that_started_them ... ok
+test a_nested_evaluation_runs_inside_a_bridge_callback ... ok
+test nested_evaluations_share_the_step_budget ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/new_delete.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/new_delete-9fafd17ae533a482)
+
+running 7 tests
+test expr_const_heap_result ... ok
+test expr_const_5_20_leak ... ok
+test expr_new_bound_negative ... ok
+test expr_new_scalar_and_array_roundtrip ... ok
+test expr_new_counters ... ok
+test memo_skips_allocating_calls ... ok
+test expr_delete_faults ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/ops.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/ops-3fdb92edcddd7369)
+
+running 30 tests
+test conv_integral ... ok
+test expr_comma ... ok
+test expr_rel_logical ... ok
+test expr_cond ... ok
+test expr_shift ... ok
+test expr_bitwise_unary ... ok
+test expr_mul_add_widths ... ok
+test conv_floating ... ok
+test conv_ptr_null ... ok
+test expr_incr ... ok
+test expr_ref_struct ... ok
+test lex_literals ... ok
+test expr_sizeof_alignof ... ok
+test basic_scope ... ok
+test expr_pointer_arith ... ok
+test dcl_init_aggr ... ok
+test dcl_enum ... ok
+test expr_cast_void ... ok
+test expr_assign ... ok
+test dcl_constexpr_vars ... ok
+test expr_call ... ok
+test expr_call_indirect ... ok
+test class_union ... ok
+test class_bit ... ok
+test long_double_x87 ... ok
+test pointers_to_members_of_objects ... ok
+test stmt_dcl_static_constexpr_local ... ok
+test stmt_loops ... ok
+test stmt_return_nested ... ok
+test stmt_switch ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/smoke.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/smoke-b3a29e0ab2599d38)
+
+running 2 tests
+test expr_const_arith ... ok
+test dcl_constexpr_recursion ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/ub.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/ub-50fe579425a7101f)
+
+running 56 tests
+test ub_cmp_string_literals ... ok
+test ub_modify_global ... ok
+test ub_null_arith ... ok
+test ub_cmp_cross_alloc ... ok
+test ub_lifetime_scope_then_return ... ok
+test ub_modify_constexpr_global ... ok
+test ub_float_div_zero ... ok
+test ub_null_fn_ptr ... ok
+test ub_oob_non_array ... ok
+test ub_lifetime_ended ... ok
+test ub_float_to_int_range ... ok
+test ub_float_to_int_implicit ... ok
+test ub_oob_negative_index ... ok
+test ub_index_past_end_read_struct ... ok
+test ub_modify_string_literal ... ok
+test ub_cmp_past_end ... ok
+test ub_lifetime_returned_local ... ok
+test ub_div_zero ... ok
+test ub_null_dot_deref ... ok
+test ub_null_deref ... ok
+test ub_null_arrow ... ok
+test ub_modify_const_local ... ok
+test ub_null_subscript_member ... ok
+test ub_enum_range ... ok
+test ub_oob_read_past_end ... ok
+test ub_oob_subscript ... ok
+test ub_overflow_compound ... ok
+test ub_overflow_div ... ok
+test ub_overflow_increment ... ok
+test ub_overflow_int128 ... ok
+test ub_overflow_int_add ... ok
+test ub_overflow_int_mul ... ok
+test ub_overflow_long_long_mul ... ok
+test ub_overflow_long_sub ... ok
+test ub_overflow_negate ... ok
+test ub_overflow_rem ... ok
+test ub_overflow_unsigned_promoted ... ok
+test ub_ptr_sub_cross_array ... ok
+test ub_ptr_sub_null ... ok
+test ub_ptr_sub_subarrays ... ok
+test ub_pun_reinterpret ... ok
+test ub_pun_void_cast ... ok
+test ub_read_extern_const ... ok
+test ub_read_non_const ... ok
+test ub_read_non_constexpr_double ... ok
+test ub_rem_zero ... ok
+test ub_shift_long_too_wide ... ok
+test ub_shift_negative ... ok
+test ub_shift_too_wide ... ok
+test ub_shift_unsigned_too_wide ... ok
+test ub_uninit_increment ... ok
+test ub_uninit_member ... ok
+test ub_uninit_read ... ok
+test ub_union_compound_assign ... ok
+test ub_union_inactive ... ok
+test ub_union_via_pointer ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_parse-d4af0c32cae203ed)
+
+running 13 tests
+test templ::tests::type_param_terminators ... ok
+test class::tests::capture_default_arg_conditional ... ok
+test class::tests::replay_partial_consumption ... ok
+test class::tests::capture_and_replay_default_arg ... ok
+test class::tests::seq_simple_class ... ok
+test class::tests::seq_friends ... ok
+test class::tests::seq_bases_and_access ... ok
+test class::tests::seq_function_definitions ... ok
+test class::tests::seq_final_and_declarator ... ok
+test class::tests::seq_nested_nsdmi_phase ... ok
+test class::tests::seq_missing_semi_recovers ... ok
+test class::tests::seq_unterminated_class ... ok
+test class::tests::nsdmi_sees_later_members ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/class.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/class-a68a7cc53e4aeeae)
+
+running 22 tests
+test expr_prim_this ... ok
+test class_friend_defines_type ... ok
+test explicit_object_parameter_at_namespace_scope ... ok
+test class_literal_operator_member ... ok
+test class_explicit_object_parameter ... ok
+test class_member_paren_is_function ... ok
+test class_member_attrs_and_mutable ... ok
+test class_special_declarator_ids ... ok
+test class_unterminated ... ok
+test class_final ... ok
+test class_out_of_line_definitions ... ok
+test expr_ref_qualified_member ... ok
+test class_constexpr_specifiers ... ok
+test class_nsdmi_deferred ... ok
+test class_friend_special_names ... ok
+test class_member_qualifiers ... ok
+test class_defaulted_deleted ... ok
+test class_access_label_recovery ... ok
+test class_bit_fields ... ok
+test class_virt_and_pure_specifiers ... ok
+test class_ctor_initializers ... ok
+test class_missing_semi ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/decl.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/decl-af37f8eb30919a72)
+
+running 51 tests
+test basic_link_conflicting_types ... ok
+test class_mem_self_typed_field ... ok
+test dcl_fct_def_body_on_non_function ... ok
+test class_ctor_declaration_recognised ... ok
+test dcl_enum_scoped_no_implicit_conversion ... ok
+test basic_def_odr_redefinition ... ok
+test basic_lookup_ambiguous ... ok
+test dcl_asm_label ... ok
+test class_union_anonymous ... ok
+test dcl_attr_nodiscard ... ok
+test dcl_enum_redefinition ... ok
+test class_mem_incomplete_field ... ok
+test dcl_array_negative_bound ... ok
+test dcl_attr_deprecated ... ok
+test dcl_attr_nodiscard_type ... ok
+test dcl_constexpr_requires_constant ... ok
+test dcl_constexpr_implies_const ... ok
+test dcl_enum_unscoped ... ok
+test class_bit_width ... ok
+test dcl_enum_fixed_overflow ... ok
+test dcl_array_bound_folded ... ok
+test dcl_align ... ok
+test class_union_anon ... ok
+test dcl_fct_variadic ... ok
+test dcl_init_aggr ... ok
+test dcl_init_aggr_excess ... ok
+test dcl_init_list_narrowing ... ok
+test dcl_init_string_too_long ... ok
+test dcl_link_extern_c ... ok
+test dcl_asm_label_diagnostics ... ok
+test dcl_pre_static_assert ... ok
+test dcl_ptr_cv ... ok
+test dcl_mptr_template_id_qualifier_disambiguation ... ok
+test dcl_ref_requires_init ... ok
+test dcl_type_conflicting_specifiers ... ok
+test dcl_type_simple_combinations ... ok
+test dcl_typedef_and_alias ... ok
+test dcl_typedef_invalid_redefinition_not_previous ... ok
+test gnu_attribute_unknown_ignored ... ok
+test namespace_def_qualified ... ok
+test enum_udecl ... ok
+test except_spec_forms ... ok
+test namespace_alias ... ok
+test namespace_udecl_declarators ... ok
+test namespace_udecl_class_scope ... ok
+test namespace_udecl_conflicts ... ok
+test namespace_udecl_using_if_exists ... ok
+test namespace_udir ... ok
+test namespace_unnamed ... ok
+test recovery_missing_semi ... ok
+test namespace_udecl_errors ... ok
+
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/ensure_body.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/ensure_body-14b943856a69a472)
+
+running 5 tests
+test speculative_fold_does_not_instantiate ... ok
+test marked_before_pattern_definition_is_instantiated_at_end_of_tu ... ok
+test nested_evaluation_in_instantiated_body ... ok
+test instantiates_unmarked_member_once ... ok
+test instantiation_errors_are_reported ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/expr.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/expr-417aa8da00d52ac2)
+
+running 32 tests
+test expr_sizeof_pack ... ok
+test expr_shift_counts ... ok
+test expr_prim_id_undeclared ... ok
+test expr_reinterpret_cast ... ok
+test expr_precedence ... ok
+test expr_type_conv ... ok
+test expr_incr ... ok
+test expr_alignof ... ok
+test expr_ass ... ok
+test expr_const_cast ... ok
+test expr_cast_c_style ... ok
+test expr_add_pointer ... ok
+test expr_call_variadic_promotion ... ok
+test expr_static_cast ... ok
+test expr_const_folding ... ok
+test expr_cond ... ok
+test expr_ref ... ok
+test expr_call_arity ... ok
+test expr_mul_div_by_zero ... ok
+test expr_sizeof ... ok
+test expr_sub ... ok
+test dcl_ambig_res ... ok
+test expr_type_conv_errors ... ok
+test builtin_is_constant_evaluated ... ok
+test expr_unary_noexcept ... ok
+test lex_ext_udl_rejected ... ok
+test expr_unary_op ... ok
+test lex_nullptr_bool ... ok
+test lex_string_concat ... ok
+test gnu_extensions ... ok
+test throw_and_typeid ... ok
+test stmt_ambig ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/new_delete.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/new_delete-dbe09809e049e73b)
+
+running 10 tests
+test new_global ... ok
+test new_paren_type_id ... ok
+test new_placement_then_paren_type_id ... ok
+test new_auto ... ok
+test new_placement_disambiguation ... ok
+test new_postfix_requires_parens ... ok
+test delete_forms ... ok
+test new_initializer_forms ... ok
+test new_array_declarators ... ok
+test delete_operand_errors ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/sema.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/sema-0c348fce3ba2580f)
+
+running 7 tests
+test basic_def_odr_use ... ok
+test expr_const_aggregate_members ... ok
+test dcl_constexpr_needs_constant_init ... ok
+test dcl_enum_enumerator_types ... ok
+test dcl_enum_best_type ... ok
+test basic_link_local_extern ... ok
+test stmt_pre_condition_scope ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/special.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/special-4bf54a381d3819c6)
+
+running 10 tests
+test special_static_destructor_redeclared ... ok
+test special_defaulted_function_deleted ... ok
+test special_implicit_members_lazy_and_eager ... ok
+test special_defaulted_signatures ... ok
+test special_move_selected_copy_is_trivial ... ok
+test special_defaulted_triviality ... ok
+test special_deleted_redeclarations ... ok
+test special_declarator_checks ... ok
+test special_variable_checks ... ok
+test special_deleted_uses ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/stmt.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/stmt-d1a446fee289de9b)
+
+running 21 tests
+test delayed_no_member_nested_in_expression_statement ... ok
+test stmt_condition_needs_init ... ok
+test stmt_case_outside_switch ... ok
+test stmt_block_scope ... ok
+test stmt_recovery_missing_semi ... ok
+test stmt_switch_case_not_constant ... ok
+test delayed_no_member_after_missing_semi ... ok
+test stmt_if_condition_decl ... ok
+test stmt_loops ... ok
+test stmt_dcl_static_local ... ok
+test stmt_return ... ok
+test stmt_break_outside ... ok
+test stmt_goto_labels ... ok
+test stmt_if_consteval ... ok
+test stmt_if_constexpr ... ok
+test stmt_expr_unused ... ok
+test stmt_if_init ... ok
+test stmt_return_fall_off ... ok
+test stmt_return_conversion ... ok
+test stmt_switch ... ok
+test delayed_typo_correction_points ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/templ.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/templ-6f85d314cfcd9560)
+
+running 8 tests
+test double_angle_closes_two_lists ... ok
+test less_than_after_dependent_name ... ok
+test less_than_without_template_name ... ok
+test param_kind_decision ... ok
+test template_args_after_function_template_name ... ok
+test missing_template_keyword ... ok
+test param_order_rules ... ok
+test nested_template_ids_scan_memo ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+
+     Running tests/tokens.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/tokens-a1c05c49d9f407e7)
+
+running 12 tests
+test module_import_not_found ... ok
+test cpp_pragma_visibility_pop_unbalanced ... ok
+test cpp_pragma_diagnostic_ignored ... ok
+test cpp_pragma_pack_unsupported ... ok
+test module_declaration_parses ... ok
+test cpp_pragma_visibility_unknown ... ok
+test cpp_pragma_pack_missing_lparen ... ok
+test cpp_replace_tokens_reach_parser ... ok
+test lex_digraph_alternative_token_from_macro ... ok
+test cpp_pragma_op_pack ... ok
+test cpp_pragma_pack_applied ... ok
+test window_matches_whole_buffer ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_pp-363bd511df24109f)
+
+running 17 tests
+test builtin::tests::keywords_sorted ... ok
+test builtin::tests::dates ... ok
+test ifeval::tests::op_punct_matches_operator_names ... ok
+test pragma::tests::destringize_forms ... ok
+test directive::tests::cpp_pre_dir_table_matches_names ... ok
+test predef::tests::char_signedness ... ok
+test predef::tests::flag_deltas ... ok
+test predef::tests::clang_compat_levels ... ok
+test predef::tests::layout_and_cmdline ... ok
+test predef::tests::kiln_feature_macros ... ok
+test search::tests::join_and_parent ... ok
+test search::tests::normalization ... ok
+test ifeval::tests::cpp_cond_plain_decimal_matches_classify_number ... ok
+test search::tests::suggest_include_name_follows_clang ... ok
+test predef::tests::kiln_constexpr_feature_macros ... ok
+test predef::tests::explicit_this_parameter_macro ... ok
+test predef::tests::p1467_macros ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpp_comments.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_comments-2d1de7e3dc0d1dc7)
+
+running 1 test
+test comment_handler_sees_lexed_comments ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpp_cond.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_cond-c9497bb2b345e0c4)
+
+running 25 tests
+test ifdef_ifndef ... ok
+test conditional_in_macro_args ... ok
+test defined_in_function_like_macro ... ok
+test elif_chain ... ok
+test ifdef_non_identifier ... ok
+test elif_after_else ... ok
+test arithmetic ... ok
+test missing_expression ... ok
+test if_true_false ... ok
+test elifdef_elifndef ... ok
+test extra_tokens_after_endif ... ok
+test defined_operator ... ok
+test true_false_keywords ... ok
+test missing_paren ... ok
+test nested_skipped_groups ... ok
+test defined_in_macro ... ok
+test has_include_in_skipped ... ok
+test else_after_else ... ok
+test endif_without_if ... ok
+test division_by_zero ... ok
+test skipped_group_ignores_bad_directives ... ok
+test skipped_elif_not_evaluated ... ok
+test else_branches ... ok
+test undefined_identifier_is_zero ... ok
+test unterminated_conditional ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/cpp_cond_skip_fuzz.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_cond_skip_fuzz-2bfbc9e7d563a5b0)
+
+running 1 test
+test cpp_cond_random_skipped_groups ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s
+
+     Running tests/cpp_embed.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_embed-79210588502743e1)
+
+running 18 tests
+test has_embed_defined ... ok
+test has_embed_values ... ok
+test embed_clang_prefixed_params ... ok
+test embed_duplicate_param ... ok
+test embed_angled ... ok
+test embed_basic ... ok
+test embed_negative_limit ... ok
+test embed_unknown_param ... ok
+test embed_prefix_suffix ... ok
+test embed_limit ... ok
+test embed_macro_name ... ok
+test embed_empty_prefix_suffix_dropped ... ok
+test embed_not_found ... ok
+test embed_limit_zero_if_empty ... ok
+test embed_empty_nothing ... ok
+test embed_binary_bytes ... ok
+test embed_limit_macro ... ok
+test embed_empty_if_empty ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpp_include.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_include-86f20e8f2d361903)
+
+running 22 tests
+test include_quoted_and_angled ... ok
+test include_guard_if_not_paren_defined ... ok
+test include_nested ... ok
+test include_guard_if_not_defined ... ok
+test import_directive ... ok
+test include_guard_tokens_after ... ok
+test include_macro_angled_pieces ... ok
+test system_header ... ok
+test include_not_found ... ok
+test include_guard ... ok
+test pragma_system_header ... ok
+test include_unterminated_conditional_in_header ... ok
+test include_guard_tokens_before ... ok
+test include_guard_undefined_between ... ok
+test include_next ... ok
+test include_depth_line_numbers ... ok
+test include_macro_name ... ok
+test include_extra_tokens ... ok
+test include_last_line_without_newline ... ok
+test include_guard_else ... ok
+test include_macros_visible ... ok
+test include_malformed ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpp_line.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_line-a03290de16022f71)
+
+running 21 tests
+test line_macro_expanded ... ok
+test line_number_and_file ... ok
+test line_in_nested_multiline_invocation ... ok
+test line_marker_gnu ... ok
+test conditionally_supported_directive ... ok
+test ident_directive ... ok
+test assert_unassert ... ok
+test line_bad_filename ... ok
+test line_out_of_range ... ok
+test line_number ... ok
+test unknown_directive ... ok
+test line_marker_bad_flags ... ok
+test error_empty ... ok
+test null_directive ... ok
+test error_directive ... ok
+test error_unterminated_literal ... ok
+test line_missing_number ... ok
+test line_not_digit_sequence ... ok
+test line_in_multiline_invocation ... ok
+test line_marker_push_pop ... ok
+test warning_directive ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpp_module.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_module-8acfbef55de5e8a6)
+
+running 8 tests
+test import_private_partition ... ok
+test module_decl_text ... ok
+test module_as_identifier ... ok
+test module_tokens_expanded ... ok
+test module_not_at_line_start ... ok
+test import_header_unit ... ok
+test module_name_is_macro ... ok
+test global_module_fragment ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpp_options.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_options-70765457ccf4189f)
+
+running 6 tests
+test command_line_define ... ok
+test keep_comments_not_in_macros ... ok
+test keep_macro_comments_in_args ... ok
+test keep_comments ... ok
+test keep_macro_comments ... ok
+test include_depth_limit ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpp_pragma.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_pragma-979c40c5791e3ffb)
+
+running 24 tests
+test pragma_once_header ... ok
+test push_macro_undefined ... ok
+test pragma_message_macro_concat ... ok
+test clang_macro_annotations_malformed ... ok
+test pragma_omp_expanded ... ok
+test pragma_diagnostic ... ok
+test poison ... ok
+test push_pop_macro ... ok
+test pragma_in_macro_args ... ok
+test pragma_operator_in_macro ... ok
+test poison_existing_macro ... ok
+test pragma_operator_wide_strings ... ok
+test pragma_operator_once ... ok
+test pragma_system_header_in_main ... ok
+test pragma_message_malformed ... ok
+test pragma_stdc ... ok
+test pragma_message ... ok
+test pragma_not_macro_expanded ... ok
+test unknown_pragma_passed_through ... ok
+test pragma_operator_malformed ... ok
+test pragma_operator ... ok
+test pragma_once_in_main_file ... ok
+test pragma_mark_region ... ok
+test clang_macro_annotations ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/cpp_predefined.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_predefined-edb1c1e0566d225e)
+
+running 19 tests
+test cplusplus ... ok
+test counter ... ok
+test file_and_line ... ok
+test flt_eval_method ... ok
+test has_include ... ok
+test feature_test_macros ... ok
+test is_identifier ... ok
+test line_continued_line ... ok
+test has_cpp_attribute ... ok
+test include_level ... ok
+test has_include_outside_if ... ok
+test has_include_malformed ... ok
+test undef_builtin ... ok
+test date_time_shape ... ok
+test builtin_macro_defined ... ok
+test has_include_next_in_main ... ok
+test has_cpp_attribute_malformed ... ok
+test line_in_macro_argument ... ok
+test building_module ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/cpp_replace.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_replace-1938af479105e5f8)
+
+running 36 tests
+test function_like_without_parens ... ok
+test function_like_name_as_object ... ok
+test directive_inside_arguments ... ok
+test empty_arguments ... ok
+test function_like ... ok
+test missing_whitespace_after_name ... ok
+test bad_parameter_list ... ok
+test nested_parens_in_args ... ok
+test too_few_arguments ... ok
+test define_defined ... ok
+test missing_macro_name ... ok
+test gnu_named_variadic ... ok
+test predefined_undef ... ok
+test too_many_arguments ... ok
+test undef ... ok
+test argument_with_unbalanced_macro ... ok
+test object_like_empty ... ok
+test duplicate_parameter ... ok
+test identical_redefinition ... ok
+test incompatible_redefinition ... ok
+test keyword_macro ... ok
+test invocation_spans_lines ... ok
+test unterminated_invocation ... ok
+test builtin_redefinition ... ok
+test va_args_outside_variadic ... ok
+test arguments_fully_expanded ... ok
+test va_opt_basic ... ok
+test object_like ... ok
+test va_opt_empty_expansion ... ok
+test va_opt_nested ... ok
+test va_opt_outside_variadic ... ok
+test va_opt_standard_example ... ok
+test va_opt_stringize_and_paste ... ok
+test va_opt_unterminated ... ok
+test variadic ... ok
+test variadic_only ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/cpp_rescan.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_rescan-8026989c3bfba143)
+
+running 14 tests
+test obj_with_paren_after ... ok
+test self_reference_object ... ok
+test directive_like_result_not_directive ... ok
+test nested_self_reference ... ok
+test deep_nesting ... ok
+test macro_in_directive_line ... ok
+test function_name_from_rescan ... ok
+test arguments_from_outside_expansion ... ok
+test scope_undef_redefine ... ok
+test rescan_object ... ok
+test self_reference_function ... ok
+test function_name_at_end_of_expansion ... ok
+test painted_blue_stays_blue ... ok
+test pragma_in_expansion_not_directive ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpp_stringize.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/cpp_stringize-27e66c9dd1603cbf)
+
+running 25 tests
+test stringize_raw_string ... ok
+test stringize_digraph ... ok
+test concat_not_expanded ... ok
+test stringize_unexpanded ... ok
+test stringize_comments ... ok
+test stringize_object_like ... ok
+test concat_basic ... ok
+test concat_empty ... ok
+test standard_example_1 ... ok
+test concat_at_edges ... ok
+test concat_result_rescanned ... ok
+test stringize_non_parameter ... ok
+test standard_example_2 ... ok
+test concat_invalid ... ok
+test concat_ud_literals ... ok
+test stringize_escapes ... ok
+test concat_stringize_order ... ok
+test standard_example_6 ... ok
+test standard_example_4 ... ok
+test concat_gnu_comma ... ok
+test standard_example_5 ... ok
+test concat_placemarker_chain ... ok
+test concat_creates_comment ... ok
+test stringize_variadic ... ok
+test stringize_basic ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/features.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/features-3deac94957dae1a7)
+
+running 11 tests
+test oracle_defects_are_narrow ... ok
+test has_builtin_under_both_levels ... ok
+test standard_attribute_values ... ok
+test triples_and_target_flags ... ok
+test clang_extension_values ... ok
+test probed_builtins_match_recorded_clang_answers ... ok
+test is_target_matches_clang ... ok
+test header_queries_match_clang ... ok
+test table_matches_clang_in_every_configuration ... ok
+test flag_combinations_match_clang ... ok
+test each_flag_matches_clang ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.37s
+
+     Running tests/hooks.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/hooks-3be2bb08dd666d76)
+
+running 6 tests
+test include_next_lookup_from ... ok
+test custom_if_evaluator ... ok
+test custom_include_resolver ... ok
+test custom_feature_queries ... ok
+test markers ... ok
+test custom_callbacks ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/ifeval.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/ifeval-41392856ab5c2d46)
+
+running 15 tests
+test has_warning ... ok
+test has_include ... ok
+test defined_from_macro ... ok
+test comma_operator ... ok
+test has_cpp_attribute ... ok
+test identifiers_are_zero ... ok
+test division_by_zero ... ok
+test embed_parameters_use_eval_value ... ok
+test signed_overflow ... ok
+test defined_operator ... ok
+test character_literals ... ok
+test unevaluated_operands_are_silent ... ok
+test malformed_expressions ... ok
+test clang_feature_queries ... ok
+test intmax_arithmetic_and_conversions ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/ifeval_conformance.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/ifeval_conformance-ef62d85b22434485)
+
+running 2 tests
+test torture_cases ... ok
+test conformance_cases ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/ifeval_differential.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/ifeval_differential-013120f9d06563a7)
+
+running 1 test
+test differential_vs_clang ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+     Running tests/print.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/print-47c5c35c84f55fd0)
+
+running 5 tests
+test print_macros_dm ... ok
+test line_gaps ... ok
+test line_directives ... ok
+test line_markers ... ok
+test line_marker_flags ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/resolver.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/resolver-61b6ed4e0be975c1)
+
+running 14 tests
+test user_dir_duplicating_system_dir_is_dropped ... ok
+test search_list_order_and_dedup ... ok
+test pragma_once_by_file_identity ... ok
+test search_order_across_groups ... ok
+test has_include_and_has_include_next ... ok
+test system_and_extern_c_flags ... ok
+test angled_skips_includer_dir_and_quote_dirs ... ok
+test quoted_finds_includer_dir_first ... ok
+test include_next_continues_after_found_dir ... ok
+test not_found_and_absolute ... ok
+test include_next_from_relatively_found_header ... ok
+test include_next_in_main_file_searches_from_start ... ok
+test embed_lookup ... ok
+test depth_limit ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_sema-a3a96d3a7e3d0114)
+
+running 34 tests
+test stack_guard::tests::remaining_arithmetic ... ok
+test stack_guard::tests::stack_size_values ... ok
+test class::ctorinit::tests::in_order_and_gaps_are_fine ... ok
+test int_overflow::tests::groups ... ok
+test templ::builtins::table::tests::every_trait_has_a_row ... ok
+test templ::args::tests::single_level ... ok
+test templ::args::tests::lookup_reads_substituted_levels_only ... ok
+test stack_guard::tests::disabled_guard_passes ... ok
+test templ::args::tests::retained_depth_skips_substituted_levels ... ok
+test templ::builtins::table::tests::checked_arithmetic_rows ... ok
+test templ::builtins::table::tests::clang22_builtins ... ok
+test templ::builtins::table::tests::every_transform_has_a_row ... ok
+test class::ctorinit::tests::one_swap_is_one_warning ... ok
+test class::ctorinit::tests::several_out_of_order ... ok
+test stack_guard::tests::installed_guard_tracks_recursion ... ok
+test templ::builtins::table::tests::overload_traits_are_staged_off ... ok
+test conv::soft::tests::convert_and_print ... ok
+test conv::soft::tests::single_and_half ... ok
+test conv::soft::tests::apfloat_diag_strings ... ok
+test conv::soft::tests::round_matches_std_for_double ... ok
+test templ::builtins::table::tests::p0533_rows ... ok
+test templ::builtins::table::tests::table_names_are_unique ... ok
+test class::r#virtual::graph::tests::nested_virtual_bases_in_graph_order ... ok
+test class::r#virtual::graph::tests::ensure_virtuals_caches_complete_classes_only ... ok
+test templ::builtins::table::tests::wp282_library_rows ... ok
+test class::r#virtual::graph::tests::virtual_diamond_dominance ... ok
+test class::r#virtual::graph::tests::numbering_non_virtual_diamond ... ok
+test class::r#virtual::graph::tests::virtual_diamond_two_final_overriders ... ok
+test templ::report::tests::json_escapes ... ok
+test templ::report::tests::self_excludes_children ... ok
+test templ::stack::tests::checking_frames_do_not_count ... ok
+test impcast::tests::token_end_measures_shift_tokens_and_split_greaters ... ok
+test templ::stack::tests::elision_keeps_head_and_tail ... ok
+test templ::stack::tests::notes_print_once_per_depth ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/class_members.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/class_members-856480dabb4f8b29)
+
+running 9 tests
+test pointer_to_data_member_through_derived_object ... ok
+test single_candidate_member_call ... ok
+test member_found_in_base_converts_the_object ... ok
+test private_member_is_inaccessible_outside_the_class ... ok
+test ambiguous_member_lookup_is_diagnosed ... ok
+test member_of_private_base_is_inaccessible ... ok
+test pointer_to_member_of_unrelated_class ... ok
+test non_const_member_on_const_object ... ok
+test member_call_arity_and_missing_call ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/class_stubs.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/class_stubs-d3f81440e71eedcb)
+
+running 5 tests
+test class_build_tracks_the_class_being_defined ... ok
+test calls_every_class_makes_are_silent ... ok
+test defaulted_and_deleted_landed_in_067a ... ok
+test class_features_once_stubbed_are_silent ... ok
+test class_features_landed_in_066b ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/constfold.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/constfold-cd93ba6896c2ad93)
+
+running 8 tests
+test expr_const_variable_not_usable ... ok
+test expr_const_signed_overflow ... ok
+test conv_fpint_truncates ... ok
+test conv_integral_wraps ... ok
+test expr_arith_folds ... ok
+test expr_const_div_by_zero ... ok
+test expr_shift_too_far ... ok
+test expr_cond_short_circuit ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/conv_arith.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/conv_arith-35f4e1ce1417b56f)
+
+running 23 tests
+test fixed_enum_promotes_as_underlying_conv_prom_4 ... ok
+test unsigned_wins_at_equal_rank_expr_arith_conv_1_5_3 ... ok
+test integer_to_floating_operand_expr_arith_conv_1_4 ... ok
+test floating_rank_expr_arith_conv_1_4_2 ... ok
+test integral_promotion_leaves_floats_conv_prom ... ok
+test enum_and_integer_expr_arith_conv_1_5 ... ok
+test small_integers_promote_to_int_conv_prom_1 ... ok
+test unsigned_counterpart_expr_arith_conv_1_5_5 ... ok
+test bool_promotes_to_int_conv_prom_7 ... ok
+test scoped_enum_with_other_ill_formed_expr_arith_conv_1_1 ... ok
+test scoped_enum_not_promoted_conv_prom ... ok
+test bit_fields_promote_by_width_conv_prom_5 ... ok
+test compound_assign_promotes_lhs_type_expr_ass_6 ... ok
+test non_arithmetic_operands_expr_arith_conv ... ok
+test same_scoped_enum_expr_arith_conv_1_1 ... ok
+test signed_represents_unsigned_expr_arith_conv_1_5_4 ... ok
+test compound_assign_left_untouched_expr_ass_7 ... ok
+test promoted_same_type_expr_arith_conv_1_5_1 ... ok
+test compound_assign_promotes_bit_field_lhs_expr_ass_6 ... ok
+test unscoped_enum_promotes_conv_prom_3 ... ok
+test character_types_promote_by_range_conv_prom_2 ... ok
+test different_enums_ill_formed_expr_arith_conv_1_3 ... ok
+test enum_with_floating_ill_formed_expr_arith_conv_1_2 ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/conv_errors.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/conv_errors-876235c4426bc8aa)
+
+running 12 tests
+test dcl_init_general_16_7_class_without_conversion_functions ... ok
+test conv_qual_3_initialization_drops_qualifiers ... ok
+test conv_general_4_scoped_enum_condition ... ok
+test dcl_init_general_16_9_arithmetic_pointer_mismatch ... ok
+test dcl_init_ref_5_4_4_rvalue_reference_to_lvalue ... ok
+test dcl_init_ref_5_2_non_const_lvalue_reference ... ok
+test expr_assign_3_integer_pointer_mismatch ... ok
+test stmt_return_2_return_object ... ok
+test dcl_init_ref_5_drops_qualifiers ... ok
+test conv_mem_2_virtual_and_ambiguous_base ... ok
+test expr_assign_3_pointer_mismatch ... ok
+test conv_ptr_3_ambiguous_base ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/conv_ics.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/conv_ics-9f4e8c1b08656ea2)
+
+running 11 tests
+test table_of_ranks_over_ics_scs_3 ... ok
+test derived_pointer_conversions_over_ics_rank_4_4 ... ok
+test fewer_qualifiers_better_over_ics_rank_3_2_5 ... ok
+test to_types_after_each_step_over_ics_scs ... ok
+test fixed_enum_to_underlying_over_ics_rank_4_2 ... ok
+test derived_member_pointer_conversions_over_ics_rank_4_4 ... ok
+test null_pointer_not_ordered_over_ics_rank_4_4 ... ok
+test identity_is_subsequence_over_ics_rank_3_2_1 ... ok
+test rank_orders_over_ics_rank_3_2_2 ... ok
+test pointer_to_bool_worse_over_ics_rank_4_1 ... ok
+test equal_rank_floating_over_ics_rank_4_3 ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/conv_literal.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/conv_literal-c6b0bf681374257e)
+
+running 15 tests
+test float_const_interns_lex_fcon ... ok
+test string_literal_types_lex_string_10 ... ok
+test non_decimal_unsuffixed_lex_icon_3 ... ok
+test character_literal_types_lex_ccon ... ok
+test correctly_rounded_lex_fcon_3 ... ok
+test suffix_types_lex_fcon_3 ... ok
+test long_double_quad_on_aarch64_lex_fcon_3 ... ok
+test extended_suffixes_lex_fcon ... ok
+test decimal_unsuffixed_lex_icon_3 ... ok
+test suffixes_lex_icon_3 ... ok
+test size_t_suffixes_lex_icon_3 ... ok
+test implicitly_unsigned_lex_icon_4 ... ok
+test too_large_lex_icon_4 ... ok
+test size_t_out_of_range_lex_icon_4 ... ok
+test out_of_range_lex_fcon_3 ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/conv_narrowing.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/conv_narrowing-520b2c452fcc15a8)
+
+running 9 tests
+test integer_constant_in_range_dcl_init_list_7_4 ... ok
+test caller_supplied_value_dcl_init_list_7 ... ok
+test floating_lower_rank_variable_dcl_init_list_7_2 ... ok
+test floating_lower_rank_constant_dcl_init_list_7_2 ... ok
+test integer_to_floating_dcl_init_list_7_3 ... ok
+test floating_to_integer_dcl_init_list_7_1 ... ok
+test integer_constant_out_of_range_dcl_init_list_7_4 ... ok
+test enum_target_uses_underlying_dcl_init_list_7_4 ... ok
+test integer_variable_dcl_init_list_7_4 ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/conv_standard.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/conv_standard-3b15fe84b4d9e5f8)
+
+running 33 tests
+test derived_to_base_pointer_conv_ptr_3 ... ok
+test pointer_to_void_conv_ptr_2 ... ok
+test array_to_pointer_conv_array_1 ... ok
+test null_pointer_conversion_conv_ptr_1 ... ok
+test boolean_conversions_conv_bool_1 ... ok
+test base_to_derived_member_pointer_conv_mem_2 ... ok
+test array_to_bool_conv_array_1_conv_bool ... ok
+test array_of_const_conv_array_1 ... ok
+test function_to_pointer_then_fctptr_conv_func_1 ... ok
+test function_to_pointer_conv_func_1 ... ok
+test prvalue_needs_no_conversion_conv_lval_1 ... ok
+test lvalue_to_rvalue_conv_lval_1 ... ok
+test integral_conversions_conv_integral_1 ... ok
+test function_pointer_conversion_conv_fctptr_1 ... ok
+test array_decay_then_qualification_conv_array_1 ... ok
+test lvalue_to_rvalue_drops_cv_conv_lval_1 ... ok
+test float_promotion_conv_fpprom_1 ... ok
+test nullptr_to_bool_direct_only_conv_bool_1 ... ok
+test class_pointer_to_void_conv_ptr_2 ... ok
+test floating_integral_conv_fpint ... ok
+test null_member_pointer_conv_mem_1 ... ok
+test promotion_rank_conv_prom_1 ... ok
+test no_conversion_to_enum_or_from_scoped_conv_integral ... ok
+test qualification_cannot_drop_const_conv_qual ... ok
+test floating_conversions_conv_double_1 ... ok
+test qualification_member_pointer_conv_qual_3 ... ok
+test qualification_multi_level_conv_qual_3 ... ok
+test qualification_needs_const_above_conv_qual_3 ... ok
+test qualification_one_level_conv_qual_3 ... ok
+test qualification_through_array_conv_qual_3 ... ok
+test results_are_prvalues_conv_general_6 ... ok
+test scoped_enum_not_to_bool_conv_bool ... ok
+test unscoped_enum_to_integer_conv_integral_1 ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/entity_identity.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/entity_identity-4ca079d506adb090)
+
+running 2 tests
+test redeclarations_are_one_entity_basic_def_1 ... ok
+test out_of_line_members_and_friends_are_the_entity_class_friend_1 ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/lookup_flags.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/lookup_flags-f75d5b68ee886667)
+
+running 1 test
+test hidden_friend_is_adl_only_namespace_memdef_3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/templ_deduce.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/templ_deduce-4b7c3a279284a0e7)
+
+running 12 tests
+test other_depth_parameters_are_not_deduced ... ok
+test array_element_type ... ok
+test pointer_deduces_pointee ... ok
+test deduce_args_lists ... ok
+test function_type_deduces_return_and_params ... ok
+test cv_param_strips_its_qualifiers ... ok
+test reference_kinds_must_match ... ok
+test member_pointer_deduces_class_and_member ... ok
+test non_dependent_mismatch_is_noted ... ok
+test function_pointer_conflicting_deductions ... ok
+test cv_param_against_unqualified_is_underqualified ... ok
+test incomplete_note_names_first_undeduced ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/lib.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/kiln_source-2a091572a6d5c4ba)
+
+running 7 tests
+test arena::tests::chunk_start_matches_locate ... ok
+test arena::tests::locate_is_contiguous ... ok
+test arena::tests::push_get_partition ... ok
+test symbol::tests::locate_is_contiguous ... ok
+test symbol::tests::interner_is_sync ... ok
+test symbol::tests::intern_roundtrip_and_dedup ... ok
+test symbol::tests::intern_cache_is_per_interner_safe ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/unit.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/unit-1e4ac0732bb26c3d)
+
+running 25 tests
+test cpp_include_file_kind_marks_per_inclusion ... ok
+test cpp_line_presumed_line_saturates ... ok
+test cpp_line_presumed_locations ... ok
+test cpp_line_directive_order_and_replacement ... ok
+test cpp_line_presumed_for_macro_locations ... ok
+test cpp_include_inclusion_ranges_alias_the_buffer ... ok
+test cpp_replace_multiline_invocation_span ... ok
+test cpp_rescan_macro_name_from_expansion ... ok
+test cpp_rescan_expanded_from_notes_walk ... ok
+test add_expansion_rejects_unallocated_spelling - should panic ... ok
+test cpp_rescan_nested_expansion_spelling_and_expansion ... ok
+test lex_phases_columns_are_bytes ... ok
+test lex_phases_line_col_round_trip ... ok
+test lex_phases_line_text_strips_terminators ... ok
+test loc_and_span_sizes ... ok
+test loc_past_end_panics - should panic ... ok
+test unknown_macro_locations ... ok
+test loc_partitioning_and_offset_of ... ok
+test virtual_buffers ... ok
+test manager_is_shareable_across_threads ... ok
+test text_borrow_survives_appends ... ok
+test lex_phases_invalid_utf8_replacement_positions ... ok
+test lex_phases_line_table_matches_bytewise_reference ... ok
+test cpp_include_file_identity_by_canonical_path ... ok
+test cpp_rescan_same_entry_fast_paths_match_slow_walk ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.57s
+
+     Running unittests src/main.rs (/Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/deps/xtask-0736a8ab1cdf7413)
+
+running 254 tests
+test bench::entry::tests::hashes_are_stable ... ok
+test bench::compare::tests::memory_threshold ... ok
+test bench::compare::tests::constexpr_counters ... ok
+test bench::compare::tests::instantiation_counters ... ok
+test bench::perf_md::tests::keeps_the_hand_written_section ... ok
+test bench::compare::tests::improvements_and_advisories ... ok
+test bench::compare::tests::threshold_overrides ... ok
+test bench::compare::tests::time_regression_needs_every_run_slower ... ok
+test bench::entry::tests::defaults ... ok
+test bench::perf_md::tests::splits_out_the_slice_section ... ok
+test bench::perf_md::tests::the_committed_page_parses ... ok
+test bench::compare::tests::tables_and_ratios ... ok
+test bench::record::tests::instantiation_report_totals ... ok
+test bench::entry::tests::rejects_bad_headers ... ok
+test bench::entry::tests::mode_std_args_oven ... ok
+test bench::record::tests::timestamps ... ok
+test bench::perf_md::tests::rejects_what_it_cannot_merge ... ok
+test bench::record::tests::baselines_without_the_newer_counters_still_load ... ok
+test bench::record::tests::baseline_file_round_trips_without_samples ... ok
+test bench::perf_md::tests::merges_rows ... ok
+test bench::perf_md::tests::reads_the_pre_instantiation_layout ... ok
+test bench::perf_md::tests::reads_the_legacy_layout ... ok
+test bench::perf_md::tests::stale_rows ... ok
+test bench::perf_md::tests::recomputes_the_means_over_the_merged_table ... ok
+test bench::slice::tests::distributions ... ok
+test bench::slice::tests::aggregates_rows ... ok
+test bench::record::tests::run_record_round_trips ... ok
+test bench::slice::tests::help_lists_the_entry ... ok
+test bench::slice::tests::ids_and_entries ... ok
+test bench::slice::tests::loads ... ok
+test bench::slice::tests::parses_the_list ... ok
+test bench::slice::tests::selection_is_explicit ... ok
+test bench::slice::tests::shows_flags_without_checkout_paths ... ok
+test bench::slice::tests::the_committed_list_parses ... ok
+test bench::stats::tests::median_drops_min_and_max ... ok
+test bench::stats::tests::spread ... ok
+test bench::tests::parses_the_command_line ... ok
+test bench::tests::results_names_never_collide ... ok
+test clang_ast::tests::clang22_lambda_has_explicit_parameters_is_ignored ... ok
+test clang_ast::tests::clang22_template_instantiation_pattern_is_ignored ... ok
+test clang_ast::tests::mapping_table_covers_m2 ... ok
+test clang_ast::tests::side_channel_methods ... ok
+test clang_ast::tests::side_channel_pack_elements_and_declarations ... ok
+test clang_ast::tests::side_channel_reads_cast_written_types ... ok
+test clang_ast::tests::side_channel_template_template_parameters ... ok
+test clang_ast::tests::side_channel_specialization_arguments ... ok
+test clang_ast::tests::string_literals_are_respelled ... ok
+test clang_ast::tests::filter_names_contexts_by_side_channel_arguments ... ok
+test clang_ast::tests::constexpr_values_come_from_the_text_dump ... ok
+test clang_ast::tests::text_dump_side_channel ... ok
+test clang_ast::tests::type_shapes ... ok
+test clang_ast::tests::value_tree_forms ... ok
+test clang_ast::tests::unmapped_input_is_an_error_naming_it ... ok
+test clang_ast::tests::values_print_as_kiln_does ... ok
+test clang_ast::tests::namespaces_and_using_declarations ... ok
+test diag_split::tests::id_areas ... ok
+test clang_ast::tests::class_features_reproduce ... ok
+test diag_split::tests::id_rows_and_groups ... ok
+test diag_split::tests::layout_sorts_and_places_groups ... ok
+test diag_split::tests::replay_by_name ... ok
+test clang_ast::tests::spec_example_reproduces ... ok
+test diag_split::tests::replay_merges_subgroups ... ok
+test diag_split::tests::rows_and_comments ... ok
+test diag_split::tests::tail_blocks ... ok
+test entity_lint::lint_flags_raw_decl_comparisons ... ok
+test clang_ast::tests::filter_names_specialization_contexts ... ok
+test entity_lint::lint_ignores_other_comparisons_and_allowed_lines ... ok
+test features::tests::parses_good_fixture ... ok
+test features::tests::rejects_text_without_a_table ... ok
+test entity_lint::reflection_code_compares_entities_not_decl_ids ... ok
+test features::tests::reports_bad_rows_with_lines ... ok
+test features::tests::static_checks ... ok
+test gen_pp::tests::cli ... ok
+test jobs::tests::no_jobserver_is_free ... ok
+test jobs::tests::parses_makeflags ... ok
+test jobs::tests::rejects_a_non_fifo ... ok
+test jobs::tests::jobserver_cli ... ok
+test libcxx::boolexpr::tests::expressions ... ok
+test libcxx::boolexpr::tests::parse_errors ... ok
+test libcxx::boolexpr::tests::regex_subset ... ok
+test libcxx::cluster::tests::counting ... ok
+test libcxx::cluster::tests::crashes ... ok
+test jobs::tests::release_all_returns_held_and_spare_bytes ... ok
+test libcxx::cluster::tests::messages ... ok
+test libcxx::cluster::tests::normalization ... ok
+test libcxx::cluster::tests::verify_report_keys ... ok
+test jobs::tests::refill_tops_up_without_blocking ... ok
+test libcxx::directives::tests::allow_retries_and_long_tests ... ok
+test jobs::tests::tokens_return_on_panic ... ok
+test libcxx::directives::tests::classification ... ok
+test libcxx::directives::tests::keywords ... ok
+test libcxx::directives::tests::local_cfg ... ok
+test libcxx::directives::tests::local_cfg_mirror ... ok
+test libcxx::directives::tests::local_cfg_substitutions_and_features ... ok
+test libcxx::directives::tests::run_lines ... ok
+test libcxx::directives::tests::verdicts ... ok
+test libcxx::directives::tests::verify_directives ... ok
+test libcxx::features::tests::config_site_19 ... ok
+test libcxx::features::tests::config_site_20_spelling ... ok
+test libcxx::features::tests::locale_features_from_locale_a ... ok
+test libcxx::features::tests::locale_names_normalize_like_glibc ... ok
+test libcxx::features::tests::set_is_sorted_unique_and_has_no_compiler_identity ... ok
+test libcxx::features::tests::target_features_from_the_triple ... ok
+test libcxx::features::tests::thread_api_from_config_site_and_target ... ok
+test libcxx::report::tests::counting_and_groups ... ok
+test libcxx::report::tests::page ... ok
+test libcxx::report::tests::splicing ... ok
+test libcxx::run::tests::clang_defect_xfail_list ... ok
+test libcxx::run::tests::clang_mode_flags ... ok
+test libcxx::run::tests::judging ... ok
+test libcxx::run::tests::mount_lookup ... ok
+test libcxx::run::tests::env_exclusions ... ok
+test libcxx::run::tests::outcomes ... ok
+test libcxx::run::tests::preparation ... ok
+test libcxx::run::tests::preparation_of_scripts ... ok
+test gen_pp::tests::no_crash_plan ... ok
+test libcxx::run::tests::slow_tests_list ... ok
+test libcxx::run::tests::syntax_args_follow_the_runner ... ok
+test libcxx::run::tests::tails ... ok
+test libcxx::run::tests::xfail_ignored_list ... ok
+test libcxx::script::tests::checks ... ok
+test libcxx::script::tests::expansion ... ok
+test features::tests::checks_the_real_table_parses ... ok
+test libcxx::script::tests::line_kinds ... ok
+test libcxx::script::tests::quoting ... ok
+test libcxx::tests::discovery_and_local_cfgs ... ok
+test libcxx::tests::gates ... ok
+test libcxx::tests::options ... ok
+test libcxx::tests::profiles_and_compile_timeouts ... ok
+test libcxx::tests::tag_selection ... ok
+test jobs::tests::implicit_token_frees_a_waiter ... ok
+test libstdcxx::report::tests::page ... ok
+test libstdcxx::report::tests::percentiles ... ok
+test libstdcxx::report::tests::splicing ... ok
+test libstdcxx::report::tests::summary ... ok
+test libstdcxx::run::tests::judging ... ok
+test libstdcxx::tests::globs ... ok
+test libstdcxx::tests::options ... ok
+test libstdcxx::tests::enumeration ... ok
+test oracle::tests::both_releases_parse ... ok
+test oracle::tests::garbage_names_the_accepted_values ... ok
+test oracle::tests::unset_and_empty_are_22 ... ok
+test test::compare::tests::diff_edges ... ok
+test test::compare::tests::diff_shows_changes_with_context ... ok
+test test::compare::tests::normalization ... ok
+test test::diag_parse::tests::bipartite_assignment_beats_greedy ... ok
+test test::diag_parse::tests::clang_dup_groups_count_twice_under_clang_only ... ok
+test test::diag_parse::tests::earliest_marker_wins ... ok
+test test::diag_parse::tests::error_accepts_fatal_and_same_diag_not_reused ... ok
+test test::diag_parse::tests::explain_lists_everything ... ok
+test test::diag_parse::tests::grouping ... ok
+test test::diag_parse::tests::matching_is_order_insensitive_across_groups ... ok
+test test::diag_parse::tests::mismatches ... ok
+test test::diag_parse::tests::parses_clang_output ... ok
+test test::directives::tests::arg_splitting ... ok
+test test::directives::tests::ast_directives ... ok
+test test::directives::tests::c_std_values ... ok
+test test::directives::tests::defaults_without_header ... ok
+test test::directives::tests::diag_clang_dup ... ok
+test test::directives::tests::diag_forms ... ok
+test test::directives::tests::errors_are_reported_with_lines ... ok
+test test::directives::tests::inst_report_directive ... ok
+test test::directives::tests::layout_and_vtables_directives ... ok
+test test::directives::tests::markers_and_qualifiers ... ok
+test test::directives::tests::mem_budget ... ok
+test test::directives::tests::misplaced_and_inapplicable_directives ... ok
+test test::directives::tests::module_and_min_oracle_directives ... ok
+test test::directives::tests::no_crash_kind ... ok
+test test::directives::tests::oven_budget ... ok
+test test::directives::tests::pp_directives_and_placeholders ... ok
+test test::directives::tests::requires_clang_below_directive ... ok
+test test::directives::tests::requires_clang_directive ... ok
+test test::directives::tests::requires_llvm_directive ... ok
+test test::directives::tests::requires_target_directive ... ok
+test test::directives::tests::requires_target_uses_the_pinned_target ... ok
+test test::directives::tests::run_directives ... ok
+test test::directives::tests::run_inputs ... ok
+test test::directives::tests::skip_clang_implies_oracle_none ... ok
+test test::directives::tests::skip_clang_rejected_without_golden ... ok
+test jobs::tests::bounds_concurrency_by_pool_plus_implicit ... ok
+test test::directives::tests::stdout_file_and_oracle_none ... ok
+test test::directives::tests::validation_md_example ... ok
+test test::directives::tests::verify_directive ... ok
+test test::inst_report::tests::extracts_report_rows_and_masks_timings ... ok
+test test::inst_report::tests::golden_mask_is_idempotent_and_skips_blank_lines ... ok
+test test::inst_report::tests::mask_leaves_other_fields_alone ... ok
+test test::inst_report::tests::no_report_is_empty ... ok
+test test::pp_tokens::tests::literals_and_identifiers_by_spelling ... ok
+test test::pp_tokens::tests::markers_give_presumed_locations ... ok
+test test::pp_tokens::tests::path_normalization ... ok
+test test::pp_tokens::tests::punctuators_compare_by_kind ... ok
+test test::pp_tokens::tests::report_shows_hunk_with_locations ... ok
+test test::pp_tokens::tests::std_mapping ... ok
+test test::pp_tokens::tests::whitespace_is_ignored_token_boundaries_are_not ... ok
+test test::report::tests::formatting ... ok
+test test::report::tests::parity_report ... ok
+test test::runner::compat_tests::compat_level ... ok
+test test::runner::compat_tests::ir_normalize_drops_producer_lines_and_comments ... ok
+test test::runner::compat_tests::ir_tests_name_the_target_triple ... ok
+test test::tests::ci_gate_honours_failure_counts ... ok
+test test::tests::ci_retries_only_missing_crates_once ... ok
+test test::tests::cli_parsing ... ok
+test test::tests::json_field_extraction ... ok
+test gen_pp::tests::generates_idempotently ... ok
+test util::header::tests::oven_budgets ... ok
+test util::header::tests::scan_rejects_late_directives ... ok
+test util::header::tests::scan_splits_keys_and_flags ... ok
+test util::json::tests::non_finite_numbers_print_as_null ... ok
+test util::json::tests::reads_foreign_json ... ok
+test util::json::tests::rejects_malformed_json ... ok
+test util::json::tests::depth_limit_is_configurable ... ok
+test util::json::tests::round_trip_preserves_order_and_values ... ok
+test util::oven_report::tests::checks_budgets ... ok
+test util::oven_report::tests::parses_a_report ... ok
+test util::oven_report::tests::rejects_malformed_reports ... ok
+test util::process::tests::kiln_stack_reservation ... ok
+test libcxx::tests::checkouts_coexist ... ok
+test util::process::tests::feeds_stdin ... ok
+test util::process::tests::measured_run_times_out_and_kills_the_group ... ok
+test libcxx::run::tests::compile_fail_records_first_error_or_verifies ... ok
+test util::process::tests::out_of_memory_signatures ... ok
+test test::tests::dump_fixtures_with_clang ... ok
+test util::process::tests::mem_limit_wraps_transparently ... ok
+up
+e
+test util::process::tests::run_step_without_table ... ok
+test util::process::tests::shown_quotes ... ok
+Terminated
+test util::process::tests::run_step_is_registered_and_terminated ... okterm
+
+test util::process::tests::run_step_ignoring_term_is_killed ... ok
+test util::process::tests::shutdown_kills_and_reaps_live_children ... ok
+test util::tests::clang_version_from_version_line ... ok
+test util::tests::compiler_kind_from_version ... ok
+test util::process::tests::times_out ... ok
+test util::tests::kilnpp_is_made_beside_kiln ... ok
+test util::process::tests::times_out_and_kills_the_group ... ok
+test util::process::tests::captures_and_reports_exit ... ok
+test test::tests::update_rewrites_existing_goldens ... ok
+test test::tests::filter_and_no_tests ... ok
+test util::process::tests::mem_limit_stops_a_hog ... ok
+test util::process::tests::measured_run_reports_wall_and_rss ... ok
+test test::tests::ast_fixtures_with_clang ... ok
+test libcxx::run::tests::script_lines_run_in_order ... ok
+test test::tests::oven_budgets_with_a_fake_kiln ... ok
+test test::tests::dump_fixtures_with_a_fake_kiln ... ok
+test test::tests::ast_fixtures_with_a_fake_kiln ... ok
+test test::tests::skip_clang_drops_the_oracle ... ok
+test test::tests::oracle_mismatches_are_detected ... ok
+test libcxx::run::tests::allow_retries_reruns_the_binary ... ok
+test test::tests::memory_limits_with_a_fake_hog ... ok
+test bench::tests::smoke_record_compare_regress ... ok
+test bench::tests::perf_md_merges_across_recordings ... ok
+test bench::tests::constexpr_counters_with_a_fake_kiln ... ok
+test bench::tests::instantiation_counters_with_a_fake_kiln ... ok
+test libcxx::run::tests::fresh_scripts_execute_while_other_threads_fork ... ok
+test test::tests::fixtures_produce_expected_statuses ... ok
+test test::tests::seed_corpus_passes_with_clang has been running for over 60 seconds
+test test::tests::seed_corpus_passes_with_clang ... ok
+
+test result: ok. 254 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 104.60s
+
+   Doc-tests kiln_abi
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kiln_ast
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kiln_codegen
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kiln_diag
+
+running 3 tests
+test crates/kiln_diag/src/diag.rs - diag::Diag (line 118) ... ignored
+test crates/kiln_diag/src/lib.rs - (line 7) ... ignored
+test crates/kiln_diag/src/template.rs - template::check (line 23) ... ok
+
+test result: ok. 1 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crates/kiln_diag/src/template.rs - template::check (line 19) - compile fail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+all doctests ran in 0.66s; merged doctests compilation took 0.55s
+   Doc-tests kiln_driver
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kiln_lex
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kiln_llvm
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kiln_oven
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kiln_parse
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kiln_pp
+
+running 1 test
+test crates/kiln_pp/src/ifeval.rs - ifeval::IfEval (line 30) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.66s; merged doctests compilation took 0.66s
+   Doc-tests kiln_sema
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kiln_source
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+xtask ci: building kiln (cargo build --profile dev -p kiln_driver)
+xtask ci: cargo xtask test --compiler /Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/kiln++
+running 3882 tests with /Volumes/AgentWork/kiln-helper/.build/target-wp-471/debug/kiln++ (kiln), oracle: clang++-22, 8 jobs (jobserver fifo:/run/kiln/jobserver.fifo), mem limit: 8192 MiB
+XFAIL  tests/conformance/ast/class.implicit/eager.cpp (injected-class-names are not declared yet (spec/sema-class.md §2.2); the special members match)
+XFAIL  tests/conformance/ast/namespace.udecl/instantiated-shadow-order.cpp (injected-class-names are not declared yet (spec/sema-class.md §2.2); the shadow order matches)
+SKIP   tests/conformance/basic.extended.fp/bf16-call-result-x86_64-run.cpp (requires target-x86_64; the default target is aarch64)
+XFAIL  tests/conformance/class.union/constexpr-placement-same-type.cpp (a pointer is an allocation and an offset without clang's designator; either member of one type at one offset may be the constructed one (Memory::union_alts, WP-233 deviation))
+XFAIL  tests/conformance/expr.reflect/reflect-splice.cpp (reflection (P2996: `^^`, splices) is not implemented yet)
+SKIP   tests/conformance/ext.c11.atomic/alignment-warning-compat19-run.cpp (requires clang<22.0.0; the oracle is clang 22.1.8)
+SKIP   tests/conformance/ext.c11.atomic/alignment-warning-x86_64-run.cpp (requires target-x86_64; the default target is aarch64)
+SKIP   tests/conformance/ext.complex/libstdcxx-complex-float128-x86_64.cpp (requires target-x86_64; the default target is aarch64)
+SKIP   tests/conformance/ext.vector/ir-psabi-internal-x86_64.cpp (requires clang<22.0.0; the oracle is clang 22.1.8)
+XFAIL  tests/conformance/stmt.contract.assert/contract-assert.cpp (contracts (P2900: `contract_assert`) are not implemented yet)
+SKIP   tests/conformance/stmt.expand/control.cpp (requires clang>=23.0.0; the oracle is clang 22.1.8)
+SKIP   tests/conformance/stmt.expand/enumerating.cpp (requires clang>=23.0.0; the oracle is clang 22.1.8)
+SKIP   tests/conformance/stmt.expand/references.cpp (requires clang>=23.0.0; the oracle is clang 22.1.8)
+SKIP   tests/conformance/templates/builtins/has-builtin-probe-19.cpp (requires clang<22.0.0; the oracle is clang 22.1.8)
+SKIP   tests/differential/pp/torture/lex.name-ucn-paste-19.cpp (requires clang<22.0.0; the oracle is clang 22.1.8)
+XFAIL  tests/stress/dump-friend-template-cycle.cpp (in an instantiation, kiln dumps the befriended template's pattern (U at depth 1, no specialization list) where clang dumps it instantiated (depth 0, the specializations); the memory budget is checked regardless (KILLED is never masked))
+test result: ok. 3866 passed; 0 failed; 6 xfail; 0 xpass; 10 skipped; 0 errors; 0 killed; 3882 tests in 113.37s
+xtask ci: corpus (clang++-22 self-check): skipped (--quick)
+xtask ci: corpus (kiln): test result: ok. 3866 passed; 0 failed; 6 xfail; 0 xpass; 10 skipped; 0 errors; 0 killed; 3882 tests in 113.37s
+EXIT 0

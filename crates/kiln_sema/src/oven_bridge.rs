@@ -12,10 +12,11 @@
 
 use kiln_ast::consts::{ConstStore, PrintOptions, Scalar};
 use kiln_ast::types::RecordLayout;
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, ReflectionId, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{
-    Budget, EvalContext, EvalFailure, MetaOp, Note, Oven, SemaBridge, Subobject, SubobjectId,
+    Budget, EvalContext, EvalFailure, MetaCtx, MetaError, MetaOp, MetaOut, Oven, SemaBridge,
+    Subobject, SubobjectId,
 };
 use kiln_source::{Loc, Span};
 
@@ -129,41 +130,37 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         d.emit(self.sema.diags);
     }
 
-    // Reflection (WP-267 spike): sema's halves are in `reflect.rs`.
+    // Reflection: sema's halves are in `meta/` (spec/reflection.md §3).
     fn meta_intrinsic(&self, f: DeclId) -> Option<MetaOp> {
         self.sema.meta_intrinsic_of(f)
     }
 
-    fn reflect_type_of(&mut self, r: ReflectionId, loc: Loc) -> Result<ReflectionId, Vec<Note>> {
-        self.sema.reflect_type_of(r, loc)
-    }
-
-    fn reflect_name(&mut self, r: ReflectionId, loc: Loc) -> Result<ConstValueId, Vec<Note>> {
-        self.sema.reflect_name(r, loc)
-    }
-
-    fn reflect_members(
+    fn meta(
         &mut self,
-        r: ReflectionId,
-        loc: Loc,
+        op: MetaOp,
+        args: &[u128],
+        out: &mut MetaOut,
+        ctx: &MetaCtx,
         oven: &mut Oven,
-    ) -> Result<Vec<ReflectionId>, Vec<Note>> {
-        self.sema.reflect_members(r, loc, oven)
-    }
-
-    fn define_member(
-        &mut self,
-        cls: ReflectionId,
-        ty: ReflectionId,
-        name: &str,
-        loc: Loc,
-        oven: &mut Oven,
-    ) -> Result<ReflectionId, Vec<Note>> {
-        self.sema.define_member(cls, ty, name, loc, oven)
+    ) -> Result<(), MetaError> {
+        self.sema.meta(op, args, out, ctx, oven)
     }
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
+    /// Runs `f` with the running Oven (`oven`, from a bridge callback)
+    /// lent back to sema, so the work can evaluate (nested, R-OVEN-1).
+    pub(crate) fn lend_oven<R>(&mut self, oven: &mut Oven, f: impl FnOnce(&mut Self) -> R) -> R {
+        debug_assert!(self.oven.is_none(), "lend_oven outside an evaluation");
+        let lent = std::mem::replace(oven, Oven::new(oven.budget()));
+        self.oven = Some(lent);
+        let r = f(self);
+        if let Some(o) = self.oven.take() {
+            *oven = o;
+        }
+        r
+    }
+
     /// Runs `f` with the Oven taken out of `self` and a bridge over the
     /// rest (spec/sema-templates.md §4.11, R-OVEN-1). `eval_loc` is the
     /// evaluation's location if it is manifestly constant-evaluated (the

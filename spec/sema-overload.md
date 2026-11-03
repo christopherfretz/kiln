@@ -1152,11 +1152,12 @@ Where the code differs from (or details) the design above:
   `operator delete` without an exception specification is implicitly
   `noexcept` ([except.spec]/9).
 - **Gaps (owners).** Reversed and rewritten operator function template
-  candidates are not formed (see §10.7). No access
-  check on class `operator new`/`delete`. Destroying
-  `operator delete` is selected per sema.md §5.9 (WP-336). `x.operator+=(2)` (member access
-  naming an operator-function-id) is a parse error: `act_on_member` and
-  `member_access` take a `Symbol`, not a `DeclName` (parser follow-up).
+  candidates are not formed (see §10.7). Access
+  checks on class `operator new`/`delete`: sema.md §5.9 (WP-457). Destroying
+  `operator delete` is selected per sema.md §5.9 (WP-336). `x.operator+=(2)`, `x.operator()(1)`,
+  `x.operator[](0)` and `x.operator T()` (member access naming an
+  operator- or conversion-function-id) resolve as the operator syntax
+  does, in templates too (verified by WP-457 triage).
   No `note_equality_comparison_to_assign` ("use '=' to turn this equality
   comparison into an assignment") anywhere in kiln (sema follow-up).
   `aka` of a template specialization with an expression argument prints

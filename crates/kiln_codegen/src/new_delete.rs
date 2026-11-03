@@ -1180,6 +1180,7 @@ impl Cg<'_> {
                     return true;
                 }
                 let Some(rd) = ast.types.as_record(n.ty()) else { return false };
+                let rd = ast.definition(rd).unwrap_or(rd);
                 if ast.decls.record(rd).map(|r| r.tag) != Some(TagKind::Struct) {
                     return false;
                 }
@@ -1246,13 +1247,22 @@ impl Cg<'_> {
         } else if ast.is_destroying_operator_delete(od) {
             // [expr.delete]/7: a destroying operator delete runs no
             // destructor; it is responsible for destroying the object.
-            let virt =
-                t.as_record(dt).and_then(|r| self.class_def(r)).and_then(|d| ast.destructor(d));
-            if virt.is_some_and(|d| ast.decls.function(d).is_some_and(|f| f.spec.is_virtual())) {
-                return err(
-                    loc,
-                    "destroying delete through a virtual destructor is not supported yet",
-                );
+            // clang `EmitDestroyingObjectDelete`: through a virtual
+            // destructor, the deleting destructor of the dynamic type
+            // (which calls that class's destroying delete) is called
+            // virtually, never devirtualized (`emitVirtualObjectDelete`).
+            let def = t.as_record(dt).and_then(|r| self.class_def(r));
+            if let Some(def) = def
+                && let Some(dtor) = ast.destructor(def)
+                && ast.decls.function(dtor).is_some_and(|f| f.spec.is_virtual())
+            {
+                let fty = ast.decls.get(ast.first(dtor)).ty().expect("destructor type");
+                let sig = self.call_sig_this(fty, false, &[], Some(def));
+                let (_, al) = self.size_align(dt);
+                let fp = self.virtual_fn_ptr(dtor, Some(mangle::Structor::Deleting), p, al)?;
+                self.call_vals(&sig, fp, None, Some(p), &[], &[], None, &[])?;
+                self.emit_block(end, false);
+                return Ok(());
             }
         } else if cookie == 0 && self.emit_object_delete(e, arg, p, dt, loc)? {
             self.emit_block(end, false);
@@ -1478,12 +1488,14 @@ impl Cg<'_> {
         let mut vals = vec![CallArg::Scalar(ptr)];
         let mut arg_tys = vec![p0];
         let mut i = 1;
+        let mut tag_slot = None;
         // A destroying operator delete ([expr.delete]/10) takes the
         // (empty) `std::destroying_delete_t` tag by value next.
         if ast.is_destroying_operator_delete(od)
             && let Some(&q) = params.get(1)
         {
             let tag = self.temp(q);
+            tag_slot = Some(tag.v);
             vals.push(CallArg::Agg(tag));
             arg_tys.push(q);
             i = 2;
@@ -1531,6 +1543,13 @@ impl Cg<'_> {
             return err(loc, "this deallocation function is not supported yet");
         }
         self.emit_new_delete_call(od, &vals, &arg_tys, loc)?;
+        // clang erases the tag's alloca when the ABI ignored the empty
+        // argument (x86-64), keeping it where it was passed (AArch64).
+        if let Some(a) = tag_slot
+            && self.f.fir.uses(a) == 0
+        {
+            self.f.fir.erase(Fir::last_inst(a));
+        }
         Ok(())
     }
 }
