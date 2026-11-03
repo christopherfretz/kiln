@@ -100,7 +100,7 @@ XPASS under kiln with libc++ 22.1.8).
 | (c) | 1 | `-fexperimental-library` rejected | driver flag + `__has_feature(experimental_library)`, link `-lc++experimental` | `args.rs` `experimental_library`, `codegen_cmd.rs` `link_experimental_library` |
 | (c) | 1 | `copy_file.pass` under a 110+ character scratch `TMPDIR` | harness scratch `t<index>` under a short temp root | xtask `short_scratch_paths` |
 | (d) | 1 | `thread_create_failure`: `RLIMIT_NPROC` does not limit root | UNSUPPORTED when run as root (`ROOT_NPROC_UNSUPPORTED`) | xtask `env_exclusions` |
-| (d) | 1 | `gcount`: two `INT_MAX` strings need more than the 3072 MiB cap | UNSUPPORTED below 9216 MiB (`MEM_UNSUPPORTED`, an estimate) | xtask `env_exclusions` |
+| (d) | 1 | `gcount`: two `INT_MAX` strings need more than the 3072 MiB cap | UNSUPPORTED below 7168 MiB (`MEM_UNSUPPORTED`, measured 6660 MiB; WP-491) | xtask `env_exclusions` |
 
 ## Fixed in WP-446
 

@@ -406,8 +406,8 @@ pub const ROOT_NPROC_REASON: &str = "env: running as root: RLIMIT_NPROC does not
 /// test runs. Sorted.
 const MEM_UNSUPPORTED: &[(&str, u64, &str)] = &[(
     "std/input.output/string.streams/stringstream/stringstream.members/gcount.pass.cpp",
-    9216,
-    "an INT_MAX - 1 byte payload plus a stringbuf grown past INT_MAX (2 + 2 + 4 GiB at the last regrowth)",
+    7168,
+    "an INT_MAX - 1 byte payload plus a stringbuf regrown past INT_MAX (2 + 1.5 + 3 GiB at the last regrowth, 6660 MiB measured)",
 )];
 
 /// With the scratch directory (`TMPDIR`) on a host-shared filesystem (a
