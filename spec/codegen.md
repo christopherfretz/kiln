@@ -1008,10 +1008,7 @@ The normative description is spec/driver.md "Code generation". In short:
 
 ### Deviations
 - **TBAA gaps (WP-412).** Atomic loads
-  and stores (`atomic.rs`) carry no `!tbaa`. An unnamed class's struct
-  node uses kiln's `Ut_` mangling, which does not number a second
-  unnamed class in the same scope (`Ut0_`), so its node name can differ
-  from clang's.
+  and stores (`atomic.rs`) carry no `!tbaa`.
 - **clang 22 codegen (WP-355, WP-386).** At `-fclang-compat=22` kiln
   follows clang 22 where §6a says; elsewhere its IR is clang 19's under
   every level. The oracle-22 `DEVIATIONS` entries record the rest of

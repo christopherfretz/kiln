@@ -34,6 +34,11 @@ pub struct AnonIds {
     /// named class or enumeration directly in a function among those of
     /// the same name there, in declaration order.
     local_tags: Option<FxHashMap<DeclId, u32>>,
+    /// Unnamed-type discriminators (built on first use): the index of
+    /// each unnamed class or enumeration without a typedef name for
+    /// linkage among those of its class or function, in declaration
+    /// order.
+    unnamed_tags: Option<FxHashMap<DeclId, u32>>,
     /// Whether the module has any `abi_tag` attribute (computed on first
     /// use): without one no name carries implicit tags.
     abi_tags: Option<bool>,
@@ -85,6 +90,52 @@ impl AnonIds {
         });
         table.get(&d).copied().unwrap_or(0)
     }
+
+    /// The `<unnamed-type-name>` discriminator index of unnamed class or
+    /// enumeration `d` (first declaration): how many unnamed tags without
+    /// a typedef name for linkage (anonymous unions and structs included,
+    /// closure types not) its class or function declares before it, in
+    /// any nested block (clang's mangling number less one,
+    /// `ItaniumNumberingContext::getManglingNumber(const TagDecl *)`
+    /// keyed by the null identifier; `Sema::handleTagNumbering`). An
+    /// instantiated class declares its members in its pattern's order.
+    fn unnamed_tag(&mut self, ast: &Ast, d: DeclId) -> u32 {
+        let table = self.unnamed_tags.get_or_insert_with(|| {
+            let mut counts: FxHashMap<DeclId, u32> = FxHashMap::default();
+            let mut t = FxHashMap::default();
+            for x in ast.decls.ids() {
+                if let Some(c) = unnamed_tag_ctx(ast, x) {
+                    let c = counts.entry(c).or_insert(0);
+                    t.insert(x, *c);
+                    *c += 1;
+                }
+            }
+            t
+        });
+        table.get(&ast.first(d)).copied().unwrap_or(0)
+    }
+}
+
+/// The class or function an unnamed class or enumeration without a
+/// typedef name for linkage is numbered under (`<unnamed-type-name>`);
+/// `None` for other declarations, redeclarations and closure types.
+fn unnamed_tag_ctx(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    let n = ast.decls.get(d);
+    if !matches!(n.kind(), DeclKind::CXXRecord | DeclKind::Enum) || ast.first(d) != d {
+        return None;
+    }
+    let c = n.ctx()?;
+    let ck = ast.decls.get(c).kind();
+    if !(is_function_kind(ck) || is_record_kind(ck)) {
+        return None;
+    }
+    if !matches!(ast.names.view(n.name()), DeclNameView::Empty) {
+        return None;
+    }
+    if ast.decls.typedef_for_anon(d).is_some() || ast.closure_lambda(d).is_some() {
+        return None;
+    }
+    Some(c)
 }
 
 /// The (function, name) a named class or enumeration declared directly
@@ -421,7 +472,17 @@ fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
         if is_unnumbered_closure(ast, d) {
             return false;
         }
-    } else if decl_name(ast, d).is_empty() && ast.decls.typedef_for_anon(d).is_none() {
+    } else if decl_name(ast, d).is_empty()
+        && ast.decls.typedef_for_anon(d).is_none()
+        && effective_ctx(ast, d).is_none_or(|c| {
+            let k = ast.decls.get(c).kind();
+            !is_function_kind(k) && !is_record_kind(k)
+        })
+    {
+        // Only a namespace-scope unnamed class lacks linkage outright
+        // (clang `getLVForNamespaceScopeDecl` `hasNameForLinkage`); a
+        // member or local one takes its enclosing class's or function's
+        // (`getLVForClassMember`, `getLVForLocalDecl`).
         return false;
     }
     if in_anon_ns(ast, d) {
@@ -1753,8 +1814,17 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     let fname = decl_name(ast, f);
                     self.source_name(&fname);
                 } else if nm.is_empty() {
-                    // An unnamed class without a typedef name for linkage.
-                    self.out.push_str("Ut_");
+                    // An unnamed class or enumeration without a typedef
+                    // name for linkage: `Ut [ <number> ] _`, the n-th
+                    // (from 2) of its scope numbered `n - 2`.
+                    match self.anon.unnamed_tag(ast, d) {
+                        0 => self.out.push_str("Ut_"),
+                        i => {
+                            self.out.push_str("Ut");
+                            self.out.push_str(&(i - 1).to_string());
+                            self.out.push('_');
+                        }
+                    }
                 } else {
                     self.source_name(&nm);
                 }
