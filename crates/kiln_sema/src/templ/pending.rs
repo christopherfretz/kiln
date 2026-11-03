@@ -70,14 +70,19 @@ impl Sema<'_, '_> {
     /// `InstantiateFunctionDefinition`, the requesting definition's frame
     /// stays on the instantiation stack while its scope drains, so the
     /// nested instantiations carry its "in instantiation of … requested
-    /// here" note (and count toward the depth limit).
+    /// here" note (and count toward the depth limit). A function
+    /// definition is handed to codegen before what it requires (pre-order,
+    /// `InstantiateFunctionDefinition`'s `HandleTopLevelDecl`), a variable
+    /// definition after it (post-order, `InstantiateVariableDefinition`'s
+    /// `PassToConsumerRAII` runs once its nested `perform` is done).
     fn drain_pending_instantiations(&mut self) {
-        type Saved = (std::collections::VecDeque<PendingInst>, Vec<(DeclId, Loc)>, bool);
+        type Saved =
+            (std::collections::VecDeque<PendingInst>, Vec<(DeclId, Loc)>, bool, Option<DeclId>);
         let mut saved: Vec<Saved> = Vec::new();
         loop {
             if self.inst.fatal {
                 self.inst.pending.clear();
-                for (q, _, resumed) in &mut saved {
+                for (q, _, resumed, _) in &mut saved {
                     q.clear();
                     if *resumed {
                         let _ = self.inst.stack.pop();
@@ -90,7 +95,7 @@ impl Sema<'_, '_> {
                 let outer = std::mem::take(&mut self.inst.pending);
                 let outer_vt = std::mem::take(&mut self.vtable_uses);
                 let prev = self.inst.drain_capture.replace((self.inst.stack.len(), None));
-                self.instantiate_pending(p);
+                let var_def = self.instantiate_pending(p);
                 let frame = std::mem::replace(&mut self.inst.drain_capture, prev).and_then(|c| c.1);
                 // Keep the definition's frame for what it required (not
                 // timed or charged again: the report saw it once).
@@ -103,7 +108,7 @@ impl Sema<'_, '_> {
                     self.inst.stack.push(f);
                     true
                 });
-                saved.push((outer, outer_vt, resumed));
+                saved.push((outer, outer_vt, resumed, var_def));
                 // `GlobalEagerInstantiationScope::perform`.
                 self.define_used_vtables();
                 continue;
@@ -113,17 +118,22 @@ impl Sema<'_, '_> {
                 continue;
             }
             // Leave the scope: its queue and vtable uses are exhausted.
-            let Some((outer, outer_vt, resumed)) = saved.pop() else { return };
+            let Some((outer, outer_vt, resumed, var_def)) = saved.pop() else { return };
             if resumed {
                 let _ = self.inst.stack.pop();
+            }
+            if let Some(d) = var_def {
+                self.ast.templates.add_end_of_tu_def(d);
             }
             self.inst.pending = outer;
             self.vtable_uses = outer_vt;
         }
     }
 
-    /// Instantiates one queued definition and records it for codegen.
-    fn instantiate_pending(&mut self, p: PendingInst) {
+    /// Instantiates one queued definition and records it for codegen: a
+    /// function at once, a variable returned to be recorded once what it
+    /// requires is instantiated.
+    fn instantiate_pending(&mut self, p: PendingInst) -> Option<DeclId> {
         if self.ast.templates.is_late_explicit_inst(self.ast.first(p.decl)) {
             // Explicitly instantiated before its template was defined:
             // codegen defines these itself (`emit_late_explicit_insts`).
@@ -140,7 +150,7 @@ impl Sema<'_, '_> {
                     self.undefined_explicit_inst(p.decl, p.poi);
                 }
             }
-            return;
+            return None;
         }
         let is_var = self.kind_of(p.decl) == kiln_ast::decl::DeclKind::Var;
         if is_var
@@ -155,35 +165,41 @@ impl Sema<'_, '_> {
             // its own definition (spec/codegen.md §2a).
             self.instantiate_late_var_spec(p.decl, p.poi);
             if self.ast.decls.var(p.decl).is_some_and(|v| v.init.is_some()) {
-                self.ast.templates.add_end_of_tu_def(p.decl);
-                return;
+                return Some(p.decl);
             }
         }
         if is_var && self.inst.deferred_inits.contains(&p.decl) {
             // A deferred inline static data member (WP-186).
             self.instantiate_static_member_init(p.decl, p.poi);
-            if !self.inst.deferred_inits.contains(&p.decl) {
-                self.ast.templates.add_end_of_tu_def(p.decl);
-            }
-            return;
+            return (!self.inst.deferred_inits.contains(&p.decl)).then_some(p.decl);
         }
         let had = self.ast.definition(p.decl).is_some();
         let redecls = self.ast.redecls_of(p.decl).count();
+        // A variable template specialization's definition is the
+        // specialization itself, its initializer instantiated in place.
+        let spec_def =
+            is_var && self.is_var_spec(p.decl) && self.inst.member_defs.contains(&p.decl);
         if is_var {
             self.instantiate_static_member_def(p.decl, p.poi);
         } else {
             self.instantiate_function_definition(p.decl, p.poi);
         }
-        // clang's `InstantiateFunctionDefinition` hands the new
-        // definition to the consumer (`HandleTopLevelDecl`) here, before
-        // the instantiations it requires; codegen replays the order
-        // (spec/codegen.md §2a).
+        // clang's `InstantiateFunctionDefinition` hands the new definition
+        // to the consumer (`HandleTopLevelDecl`) here, before the
+        // instantiations it requires; `InstantiateVariableDefinition`
+        // after them (the drain records it). Codegen replays the order
+        // (spec/codegen.md §2a), so a variable's dynamic initialization
+        // follows the TU's own.
         let defined = if is_var {
             self.ast.redecls_of(p.decl).count() > redecls
+                || (spec_def && !self.inst.member_defs.contains(&p.decl))
         } else {
             !had && self.ast.definition(p.decl).is_some()
         };
         if defined {
+            if is_var {
+                return Some(p.decl);
+            }
             self.ast.templates.add_end_of_tu_def(p.decl);
         } else if is_var && self.inst.member_defs.contains(&p.decl) {
             self.undefined_explicit_inst(p.decl, p.poi);
@@ -191,6 +207,7 @@ impl Sema<'_, '_> {
         } else if self.is_var_spec(p.decl) && self.var_pattern_def(p.decl).is_none() {
             self.undefined_var_template(p.decl, p.poi);
         }
+        None
     }
 
     /// Whether a class enclosing member `d` is explicitly instantiated

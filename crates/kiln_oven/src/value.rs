@@ -101,6 +101,13 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
     // const-qualified integral or enumeration type.
     info.usable = constexpr || ast.types.is_reference(c) || (info.is_const && integral);
     let q = ast.types.effective_quals(info.ty);
+    // A namespace-scope array compound literal of `const` type is read
+    // through its initializer (clang `handleLValueToRValueConversion`
+    // evaluates the literal's initializer; a non-`const` one is not
+    // constant; WP-466).
+    if ast.decls.compound_literal_of(d).is_some() {
+        info.usable = q.is_const() && !q.is_volatile();
+    }
     info.lax = !info.usable
         && q.is_const()
         && !q.is_volatile()

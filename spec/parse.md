@@ -1775,8 +1775,6 @@ in `kiln_diag` for now; nothing emits them.
 - **Other expressions:**
   - lambdas; `new`/`delete` of class types (§5.1)
   - `dynamic_cast` semantics, polymorphic `typeid`
-  - class and array compound literals, compound literals at namespace
-    scope
   - class `T()`, `T{…}` and `T(a, b)` temporaries
   - fold expressions
   - braced-init-list subscripts and functional-cast operands

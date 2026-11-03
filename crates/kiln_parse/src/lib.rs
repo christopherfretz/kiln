@@ -77,6 +77,9 @@ pub struct ParseOptions {
     /// GCC's implicit library builtins (`-stdlib=libstdc++`;
     /// [`kiln_sema::Sema::gnu_lib_builtins`]).
     pub gnu_lib_builtins: bool,
+    /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
+    /// [`kiln_sema::Sema::sve`]).
+    pub sve: bool,
 }
 
 impl Default for ParseOptions {
@@ -94,6 +97,7 @@ impl Default for ParseOptions {
             lax_vector_conversions: kiln_sema::LaxVectorConversions::All,
             clang_compat: 22,
             gnu_lib_builtins: false,
+            sve: false,
         }
     }
 }
@@ -220,6 +224,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.clang_compat = opts.clang_compat;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;
+    s.sve = opts.sve;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;
