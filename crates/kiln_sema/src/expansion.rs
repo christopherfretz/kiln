@@ -222,10 +222,12 @@ impl Sema<'_, '_> {
         r2
     }
 
-    /// The iterating form ([stmt.expand]/5.2): `static constexpr auto&&
-    /// range = init; static constexpr auto begin = begin-expr, end =
-    /// end-expr;`, then per element `static constexpr auto iter = begin
-    /// + i;` and the element `*iter`. The prelude and the elements.
+    /// The iterating form ([stmt.expand]/5.2): the prelude
+    /// `static constexpr auto&& range = init;` (or `auto`, see
+    /// [`Sema::expansion_fallback`]) and
+    /// `static constexpr auto begin = begin-expr, end = end-expr;`, then
+    /// per element `static constexpr auto iter = begin + i;` and the
+    /// element `*iter`. The prelude and the elements.
     fn expansion_iterating(
         &mut self,
         e: ExprId,

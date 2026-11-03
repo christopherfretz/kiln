@@ -641,7 +641,7 @@ const CASES: &[(&str, Mode, &str)] = &[
 /// [stmt.expand] (P1306R5): an expansion statement lowers to one block
 /// per element, in order, with no back-edge; `break` leaves all of them
 /// and `continue` ends the current one (spec/codegen.md "Expansion
-/// statements"). FileCheck is not installed: the order and the branch
+/// statements"). `FileCheck` is not installed: the order and the branch
 /// structure are checked on the IR text.
 #[test]
 fn expansion_statement_lowers_in_order() {
