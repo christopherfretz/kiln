@@ -57,6 +57,43 @@ pub(crate) enum BiFault {
     /// a pointer to no object is not (2,
     /// `note_constexpr_baa_value_insufficient_alignment`).
     Align { kind: u8, v: i64, align: u64 },
+    /// WP-416: the alignment `hi:lo` (`signed`) of an align builtin on a
+    /// `w`-bit integer is not a positive power of two
+    /// (`note_constexpr_invalid_alignment`), or (`big`) exceeds 2^(w-1)
+    /// (`note_constexpr_alignment_too_big`).
+    AlignArg { lo: u64, hi: u64, w: u8, signed: bool, big: bool },
+}
+
+/// `bi::ALIGN` (WP-416; clang `getBuiltinAlignArguments` and
+/// `IntExprEvaluator` `BI__builtin_align_up` & co.): `a` rounded up or
+/// down to the alignment `b`, wrapping in the source type, or whether it
+/// is a multiple of it; operation 3 only checks the alignment (clang
+/// evaluates and checks it before the source).
+fn align(sub: u32, a: u128, b: u128, t2: u32) -> Result<u128, Fault> {
+    let (w, s, op) = (sub & 0xFF, sub >> 8 & 1 != 0, sub >> 9 & 3);
+    let signed = t2 >> 8 & 1 != 0;
+    let fault = |big| {
+        Fault::Bi(BiFault::AlignArg {
+            lo: b as u64,
+            hi: (b >> 64) as u64,
+            w: u8::try_from(w).unwrap_or(u8::MAX),
+            signed,
+            big,
+        })
+    };
+    if (signed && (b as i128) < 0) || !b.is_power_of_two() {
+        return Err(fault(false));
+    }
+    if (1..=128).contains(&w) && b > 1u128 << (w - 1) {
+        return Err(fault(true));
+    }
+    let m = b - 1;
+    Ok(match op {
+        3 => 0,
+        0 => crate::arith::canon(a.wrapping_add(m) & !m, w, s),
+        1 => crate::arith::canon(a & !m, w, s),
+        _ => u128::from(a & m == 0),
+    })
 }
 
 /// `bi::OVERFLOW` (WP-270; clang `BI__builtin_*_overflow`): the
@@ -207,6 +244,7 @@ impl Oven {
                     && (sub >> 8 & 1 != 0 || a == 1 || u128::from(t1) >= a);
                 if yes || sub >> 9 & 1 != 0 { Ok(u128::from(yes)) } else { Err(Fault::Invalid) }
             }
+            bi::ALIGN => align(sub, a, b, t2),
             bi::BSWAP => {
                 let w = sub & 0xFF;
                 Ok((a & mask(w)).swap_bytes() >> (128 - w))

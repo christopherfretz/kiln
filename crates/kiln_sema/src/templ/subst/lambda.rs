@@ -20,6 +20,7 @@ use crate::declspec::{Chunk, Declarator, DeclaratorContext};
 use crate::init::Initializer;
 use crate::lambda::{LambdaCaptureSpec, LambdaIntroducer, LambdaSpecifiers};
 use crate::templ::pack::Expansion;
+use crate::templ::stack::FrameKind;
 
 impl Substituter<'_, '_, '_> {
     /// The lambda-expression `e` of the pattern.
@@ -95,10 +96,34 @@ impl Substituter<'_, '_, '_> {
         self.lambda_constraints(head.map(|h| h.0), call_op, new_op);
         self.lambda_default_args(call_op, new_op);
         let rbrace = self.sema.ast.stmts.rbrace(body);
+        // The body is substituted under a frame of its own, so an error in
+        // it says "while substituting into a lambda expression here" (at
+        // the body's `{`) above the enclosing specialization's notes, and
+        // is never a substitution failure (CWG2672; clang
+        // `TransformLambdaExpr`, spec/sema-templates.md §10.1).
+        let lbrace = self.sema.ast.stmts.get(body).loc();
+        if !self.sema.push_inst_frame(FrameKind::LambdaSubstitution, new_op, new_op, lbrace) {
+            self.sema.act_on_lambda_error(lambda);
+            self.forget_pattern_params(call_op);
+            return Err(SubstFail);
+        }
+        let (errors, body_errors) = (self.sema.diags.error_count(), self.sema.inst.body_errors);
         self.lambda_bodies += 1;
         let b = self.body(body);
         self.lambda_bodies -= 1;
+        self.sema.pop_inst_frame();
         self.forget_pattern_params(call_op);
+        // A body that reported an error of its own (not one of another
+        // body instantiated meanwhile) fails the lambda-expression, as
+        // clang's `TransformLambdaExpr` returns `ExprError` for an invalid
+        // body: no closure with a `void` call operator is left to cascade
+        // ("cannot initialize ... with an rvalue of type 'void'"), and the
+        // enclosing statement fails like any other (§5.5).
+        let nested = self.sema.inst.body_errors.saturating_sub(body_errors);
+        if self.sema.diags.error_count().saturating_sub(errors) > nested {
+            self.sema.act_on_lambda_error(lambda);
+            return Err(SubstFail);
+        }
         if self.probe_done() {
             // The body reached the pack a probe looks for (the statement
             // failed and was recovered): the probe fails here instead of

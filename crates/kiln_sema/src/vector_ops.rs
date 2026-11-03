@@ -862,6 +862,150 @@ impl Sema<'_, '_> {
         };
         Some((vec![a], elem))
     }
+
+    /// clang's `checkMathBuiltinElementType` (no restriction): a vector, or
+    /// a real type other than `bool` or an enumeration
+    /// (`ConstantMatrixType::isValidElementType`).
+    fn elementwise_math_type(&self, q: QualType) -> bool {
+        self.is_vector_type(q)
+            || (self.ast.types.is_arithmetic(q)
+                && self.ast.types.builtin(q) != Some(BuiltinType::Bool))
+    }
+
+    /// `__builtin_elementwise_abs` (clang `BI__builtin_elementwise_abs`;
+    /// spec/sema.md §5.4). Compat 22: the lvalue conversion only, and the
+    /// (element) type must not be an unsigned integer (`bool` and an
+    /// unscoped enumeration with an unsigned underlying type count). clang
+    /// 22 accepts any other operand type (a pointer, a class); kiln also
+    /// rejects those with the same message. Compat 19: the usual unary
+    /// conversions, then a vector, integer or floating type that is not
+    /// unsigned. The result has the (converted) argument's type.
+    pub(crate) fn builtin_elementwise_abs(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let new = self.clang_compat >= 22;
+        let a = if new {
+            conv::lvalue_to_rvalue(self, args[0])
+        } else {
+            conv::usual_unary_conversions(self, args[0])
+        };
+        let t = conv::strip_cv(self, self.ety(a));
+        if self.ast.types.canonical(t).without_quals() == QualType::ERROR {
+            return None;
+        }
+        let elem = self.vector_parts(t).map_or(t, |p| p.elem);
+        let math = self.elementwise_math_type(t);
+        let unsigned = self.is_unsigned_integer_type(elem);
+        let what = match (new, math) {
+            _ if math && !unsigned => return Some((vec![a], t)),
+            (true, _) => "scalar or vector of signed integer or floating-point types",
+            (false, true) => "signed integer or floating point type",
+            (false, false) => "vector, integer or floating point type",
+        };
+        let msg = self
+            .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
+            .arg(0)
+            .arg(what)
+            .arg(self.ty_arg(t));
+        self.emit(msg);
+        None
+    }
+
+    /// `__builtin_elementwise_max` / `_min` (clang `BuiltinElementwiseMath`;
+    /// spec/sema.md §5.4). Compat 22: both arguments decay (no promotion);
+    /// the first must be a vector or a non-`bool`, non-enumeration
+    /// arithmetic type, and the second must have the same unqualified
+    /// type. Compat 19: the usual arithmetic conversions (comparison)
+    /// first, so `max(short, long)` is `long`; operands without a common
+    /// type are `of different types`, then the common type is checked. The
+    /// result has the (common) argument type.
+    pub(crate) fn builtin_elementwise_minmax(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let new = self.clang_compat >= 22;
+        let err = |s: &Self, e: ExprId| {
+            s.ast.types.canonical(s.ety(e)).without_quals() == QualType::ERROR
+        };
+        let (a, b, res) = if new {
+            let a = conv::decay(self, args[0]);
+            let b = conv::decay(self, args[1]);
+            if err(self, a) || err(self, b) {
+                return None;
+            }
+            (a, b, conv::strip_cv(self, self.ety(a)))
+        } else {
+            let a = conv::usual_unary_conversions(self, args[0]);
+            let b = conv::usual_unary_conversions(self, args[1]);
+            if err(self, a) || err(self, b) {
+                return None;
+            }
+            let (ta, tb) = (self.ety(a), self.ety(b));
+            let arith = |s: &Self, q| s.ast.types.is_arithmetic(q);
+            if self.ast.types.same_unqualified(ta, tb) {
+                (a, b, conv::strip_cv(self, ta))
+            } else if arith(self, ta) && arith(self, tb) {
+                match conv::usual_arithmetic_conversions_kind(
+                    self,
+                    a,
+                    b,
+                    conv::ArithConvKind::Comparison,
+                ) {
+                    Ok(r) => r,
+                    Err(e) if e.id != DiagId::sema_invalid_operands => {
+                        let at = self.begin_loc(a);
+                        self.emit_conv_error(e, at);
+                        return None;
+                    }
+                    Err(_) => (a, b, QualType::ERROR),
+                }
+            } else {
+                (a, b, QualType::ERROR)
+            }
+        };
+        let (ta, tb) = (self.ety(a), self.ety(b));
+        let at = self.begin_loc(a);
+        if !new && (res == QualType::ERROR || !self.ast.types.same_unqualified(ta, tb)) {
+            let msg = self
+                .diag(DiagId::sema_call_different_arg_types, at)
+                .arg(self.ty_arg(ta))
+                .arg(self.ty_arg(tb));
+            self.emit(msg);
+            return None;
+        }
+        if !self.elementwise_math_type(res) {
+            let what = if new {
+                "vector, integer or floating-point type"
+            } else {
+                "vector, integer or floating point type"
+            };
+            let msg = self
+                .diag(DiagId::sema_builtin_arg_must_be, at)
+                .arg(0)
+                .arg(what)
+                .arg(self.ty_arg(res));
+            self.emit(msg);
+            return None;
+        }
+        if new && !self.ast.types.same_unqualified(ta, tb) {
+            let msg = self
+                .diag(DiagId::sema_call_different_arg_types, at)
+                .arg(self.ty_arg(ta))
+                .arg(self.ty_arg(tb));
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a, b], res))
+    }
 }
 
 // -- vector conditionals --------------------------------------------------------

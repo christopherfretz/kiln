@@ -1770,6 +1770,17 @@ and returns the scope it names:
       `union`, `enum`, `enum class` or `enum struct`), after the
       parser's error for the position, if any. Not for an anonymous
       record.
+    - GNU attributes right after a class definition's closing brace
+      (`struct S { ... } __attribute__((packed));`, WP-416) are not
+      decl-specifier attributes: as clang's `ParseCXXMemberSpecification`
+      the parser reads them there and `act_on_record_trailing_attrs`
+      checks them against the class and appends them to its own
+      attributes before `act_on_finish_record_definition`, so `packed` /
+      `aligned` there shape its layout (also for a class template and
+      its specializations), with no warning, whether or not declarators
+      follow. Not yet for an enumeration's closing brace (still
+      `place it after "enum"`). Test:
+      `tests/conformance/dcl.attr.grammar/gnu-attributes-after-class-body.cpp`.
     - on a non-declaration statement: `'X' attribute cannot be applied
       to a statement` per declaration attribute
       (`act_on_stmt_decl_attrs`); on a block-scope asm-declaration
@@ -2845,7 +2856,12 @@ the initializer, or after default initialization, and before the
     WP-320, test `expr.sizeof/incomplete-operand-location.cpp`)
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
-    `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
+    `mark_part_of_explicit_cast`. `const_cast` between pointers needs
+    them similar with identical levels (`conv::similar_same_levels`,
+    [expr.const.cast]/3: `int A::**` to `const int A::**` is allowed,
+    `int *(*)[2]` to `const int *(*)[]` is not, like clang's
+    `UnwrapSimilarTypes` without `AllowPiMismatch`; WP-162, test
+    `expr.const.cast/similar-multilevel.cpp`). To a reference (`expr/ref_cast.rs`,
     WP-207): `const_cast<T&&>` (and the C-style cast's const step) of a
     class prvalue of the same unqualified class materializes it
     (`MaterializeTemporaryExpr`, [expr.const.cast]/3) and is a `NoOp`
@@ -2939,9 +2955,17 @@ the initializer, or after default initialization, and before the
   plain one). Unrelated classes have no composite type (`incompatible
   operand types ('int A::*' and 'int B::*')` for `?:`). This is what
   libc++'s `common_with`, `common_reference` and
-  `equality_comparable_with` see through `decltype(b ? x : y)`. Not
-  yet: multi-level cv-combination (`int **` vs `const int **` is
-  `const int *const *`).
+  `equality_comparable_with` see through `decltype(b ? x : y)`. Two
+  similar types of any depth ([conv.qual]/2: pointer, same-class member
+  pointer and array levels down to the same innermost type) combine,
+  before the one-level path, to their cv-combined type
+  (`conv::cv_combined_type`, [conv.qual]/3, WP-162): the union of the
+  cv-qualifiers at each level, `const` added to every level above one
+  that differs (`int **` vs `const int **` is `const int *const *`,
+  `int (*)[3]` vs `const int (*)[3]` is `const int (*)[3]`). `B **` vs
+  `D **` and `int **` vs `long **` are not similar and have none. Tests
+  `expr.cond/composite-pointer-multilevel*.cpp`,
+  `conv.qual/multilevel-compare-run.cpp`.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -3129,6 +3153,41 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     a power of 2 (`requested alignment is not a power of 2`), warned above
     2^32 (`-Wbuiltin-assume-aligned-alignment`); `off` converts to
     `size_t`. The call is a `void *` prvalue.
+  - `__builtin_align_up` / `__builtin_align_down` / `__builtin_is_aligned`
+    (custom, `builtin_align`, clang `BuiltinAlignment`; WP-416): two
+    arguments. The source must be an integer (not `bool` or an
+    enumeration) or a pointer to an object (an array decays): `operand of
+    type T where arithmetic or pointer type is required` at the source.
+    The alignment must be an integer (not `bool` or an enumeration; `used
+    type T where integer is required`); when it is a constant it must be
+    at least 1 (`requested alignment must be 1 or greater`), at most
+    2^(N-1) for an N-bit source (pointers: the index width; `requested
+    alignment must be M or smaller`) and a power of 2 (`requested
+    alignment is not a power of 2`), and 1 is warned
+    (`-Wtautological-compare`: `aligning a value to 1 byte is a no-op` /
+    `... is always true`). The call has the source's unqualified type,
+    `bool` for `__builtin_is_aligned`.
+  - `__builtin_frame_address(level)` (an `I` constant, `check_builtin_ice_args`):
+    `level` in [0, 65535] (`argument value V is outside the valid range`
+    at the callee); a nonzero level warns `calling '__builtin_frame_address'
+    with a nonzero argument is unsafe` (`-Wframe-address`, in `-Wall`).
+    `__builtin_debugtrap()` takes no argument.
+  - `__builtin_elementwise_abs(x)` / `_max(x, y)` / `_min(x, y)` (custom,
+    `vector_ops.rs`; WP-416), by compatibility level. At 22 (clang 22
+    `BuiltinElementwiseMath`): the operands are lvalue-converted (arrays
+    decay) and keep their types; `abs` takes a signed integer, floating or
+    vector of them (`1st argument must be a scalar or vector of signed
+    integer or floating-point types (was T)`; kiln also rejects a pointer,
+    class or scoped enumeration operand clang 22 lets through), `max` /
+    `min` an integer, floating or vector operand (`... must be a vector,
+    integer or floating-point type`) and two operands of the same type
+    (`arguments are of different types`). At 19: the usual unary
+    conversions first, then for `max` / `min` the usual arithmetic
+    conversions when both operands are arithmetic, then the same-type
+    check and clang 19's wording (`... signed integer or floating point
+    type`, `... vector, integer or floating point type`).
+    `tests/conformance/ext.gnu.builtins/elementwise-args*.cpp`,
+    `align-frame-address-args.cpp`.
   - `__builtin_object_size` / `__builtin_dynamic_object_size`: the type
     argument (an `I` constant) must be in [0, 3] (`argument value V is
     outside the valid range [0, 3]` at the callee), checked after
@@ -3397,7 +3456,12 @@ for them.
     minus such targets. Not for a reference, class, dependent,
     `[[maybe_unused]]` or `_` variable, a parenthesized assignment, or a
     compound assignment/increment of a volatile one; diagnosed with the
-    unused variables in location order.
+    unused variables in location order. A reference an instantiation
+    shares with its pattern counts again (`mark_shared_expr_referenced`,
+    clang `TransformDeclRefExpr`), balancing the assignment its
+    instantiated statement subtracts: a variable captured by a generic
+    or explicit-object lambda and assigned in its body is not diagnosed
+    (WP-162, test `stmt.dcl/unused-but-set-variable-generic-lambda.cpp`).
   - Namespace-scope variables (WP-217, `unused_file_scope.rs`, clang
     `ShouldWarnIfUnusedFileScopedDecl`): at the end of the translation
     unit, a variable with internal linkage declared in the main file and
@@ -5320,6 +5384,19 @@ and unevaluated operands:
 
 ## 7. Statements (`stmt.rs`)
 - **Compound statements and scopes:** see §2.
+- **Discarded volatile glvalues** ([expr.context]/2, WP-416; clang
+  `IgnoredValueConversions` / `isReadIfDiscardedInCPlusPlus11`). From
+  C++11, `ignored_value_conversions(e)` applies the lvalue-to-rvalue
+  conversion (`conv::lvalue_to_rvalue`, so not to a class or array) to a
+  discarded-value expression that is a non-dependent glvalue of
+  volatile-qualified type and, ignoring parentheses, an id-expression, a
+  subscript, a member access, an indirection, a `.*` / `->*`, a comma
+  whose right operand qualifies, or a conditional (also `a ?: b`) both of
+  whose arms qualify. It runs on an expression statement and a `for`
+  increment (before `act_on_full_expr`), the left operand of a built-in
+  comma, and the operand of a cast to `void`. A call returning a volatile
+  reference is not read. Such a `.*` / `->*` is not `expression result
+  unused` (clang sees the cast).
 - **`if`, `while`, `for`:** condition conversion to `bool` (contextual
   conversion), plus `cond_var` for condition declarations
   (`act_on_condition_var`). A condition variable of function type

@@ -153,6 +153,7 @@ sema_type_attribute_wrong_type = Warning [IgnoredAttributes] (2) "{0} only appli
 sema_type_defined_in_for_range = Error (0) "types may not be defined in a for range declaration";
 sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
 sema_typecheck_decl_incomplete_type = Error (1) "variable has incomplete type {0}";
+sema_typecheck_expect_scalar_operand = Error (1) "operand of type {0} where arithmetic or pointer type is required";
 sema_typecheck_incomplete_array_needs_initializer = Error (0) "definition of variable with array type needs an explicit size or an initializer";
 // C99 6.7.3p2 (WP-371)
 sema_typecheck_invalid_restrict_not_pointer = Error (1) "restrict requires a pointer or reference ({0} is invalid)";

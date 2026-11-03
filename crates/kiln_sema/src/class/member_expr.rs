@@ -204,6 +204,7 @@ impl Sema<'_, '_> {
             let this = self.builder().this_expr(this_ty, true, loc);
             let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
             self.diagnose_deprecated(d, loc);
+            self.check_sve_use(d, loc);
             let e = self.member_of_object(this, obj_ty, class, true, d, shadow, nns, loc);
             if qualified && !self.is_err_expr(e) {
                 self.member_refs
@@ -420,6 +421,7 @@ impl Sema<'_, '_> {
         self.check_member_access(via, naming, Some(def), loc);
         // clang `DiagnoseUseOfDecl` in `BuildMemberReferenceExpr`.
         self.diagnose_deprecated(m, loc);
+        self.check_sve_use(m, loc);
         self.member_of_object(b, obj_ty, def, arrow, m, found.shadow(0), nns, loc)
     }
 

@@ -1210,15 +1210,17 @@ impl<'a> Cg<'a> {
     /// clang `getMinimumObjectSize` and `getNaturalTypeAlignment(T,
     /// forPointeeType)` of an object reached through a pointer or
     /// reference: `(dereferenceable bytes, alignment)`, the size `None` for
-    /// an incomplete type (whose alignment is 1). Classes use their
-    /// non-virtual size and alignment.
+    /// an incomplete type (whose alignment is 1, except an array of unknown
+    /// bound, aligned as its element: `getTypeAlignInChars`). Classes use
+    /// their non-virtual size and alignment.
     pub fn pointee_layout(&mut self, p: QualType) -> (Option<u64>, u64) {
         let ast = self.ast;
         match ast.types.canonical_view(p) {
             // getMinimumClassObjectSize / getClassPointerAlignment: a
             // final class is known to be a complete object.
             TypeView::Record(d) => self.this_layout(d),
-            TypeView::IncompleteArray(_) | TypeView::Function(_) => (None, 1),
+            TypeView::IncompleteArray(e) => (None, self.size_align(e).1),
+            TypeView::Function(_) => (None, 1),
             _ if ast.types.is_void(p) => (None, 1),
             _ => {
                 let (s, a) = self.size_align(p);
@@ -1779,12 +1781,11 @@ impl<'a> Cg<'a> {
         let g = self.m.add_global(&name, lt);
         // clang `GetOrCreateLLVMGlobal`: `getDeclAlign(D)`.
         let align = self.var_align(first);
+        let constant = constant_storage(ast, ty);
         let gv = self.m.global_mut(g);
         gv.linkage = Linkage::External;
         gv.align = Some(align);
-        // clang `GetOrCreateLLVMGlobal`: `isConstantStorage(Ctx, false,
-        // false)`; a later definition here sets its own constness.
-        gv.is_constant = declared_constant_storage(ast, ty);
+        gv.is_constant = constant;
         self.gvars.insert(first, g);
         self.mark_tls(first, g, false);
         self.available_externally(first, g, ty)?;
@@ -2153,22 +2154,19 @@ pub(crate) fn has_mutable(ast: &Ast, ty: QualType) -> bool {
     })
 }
 
-/// clang `QualType::isConstantStorage(Ctx, /*ExcludeCtor=*/false,
-/// /*ExcludeDtor=*/false)`, the constness of a global created from a
-/// declaration: a reference, or a `const` type (or array of one) whose
-/// base element is not a class.
-fn declared_constant_storage(ast: &Ast, ty: QualType) -> bool {
+/// clang `QualType::isConstantStorage(Ctx, false, false)`, the constness
+/// `GetOrCreateLLVMGlobal` gives a declaration: a reference (its slot is
+/// never rebound), or a `const` object whose base element type is not a
+/// class (one might be constructed or destroyed at run time).
+fn constant_storage(ast: &Ast, ty: QualType) -> bool {
     if ast.types.is_reference(ty) {
         return true;
-    }
-    if !ast.types.effective_quals(ty).is_const() {
-        return false;
     }
     let mut t = ast.types.canonical(ty);
     while let Some(e) = ast.types.element(t) {
         t = ast.types.canonical(e);
     }
-    ast.types.as_record(t).is_none()
+    ast.types.effective_quals(ty).is_const() && ast.types.as_record(t).is_none()
 }
 
 /// `Value` of a global.
