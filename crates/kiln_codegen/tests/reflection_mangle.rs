@@ -147,8 +147,7 @@ fn distinct_reflections_distinct_internal_symbols() {
 #[test]
 fn second_literal_uses_substitution() {
     let (ir, ..) = lower(SHAPES, "two");
-    let two: BTreeSet<_> =
-        symbols(&ir, "_Z3twoILu6__info").into_iter().map(|(s, _)| s).collect();
+    let two: BTreeSet<_> = symbols(&ir, "_Z3twoILu6__info").into_iter().map(|(s, _)| s).collect();
     assert_eq!(two.len(), 2, "{two:?}");
     for s in &two {
         let rest = s.strip_prefix("_Z3twoILu6__info").unwrap();
@@ -186,9 +185,8 @@ fn deterministic() {
 #[test]
 fn two_thousand_specializations() {
     const N: usize = 2000;
-    let mut src = String::from(
-        "using info = decltype(^^int);\ntemplate <info R> int spec() { return 1; }\n",
-    );
+    let mut src =
+        String::from("using info = decltype(^^int);\ntemplate <info R> int spec() { return 1; }\n");
     for i in 0..N {
         let _ = writeln!(src, "struct C{i} {{}};");
     }
