@@ -2956,11 +2956,20 @@ diagnostics and IR.
     ([dcl.pre]/6), plus `constexpr` and `constinit` in C++26 (P2686R5,
     WP-454; gated on `-std`, not on `-fclang-compat`). Another storage
     class, `consteval`, `inline`, or `constexpr`/`constinit` before
-    C++26 is `decomposition declaration cannot be declared 'constexpr'`
-    (clang 22: `structured binding declaration ...`), or `... with
-    'static constexpr' specifiers` when there are several, at the first
-    one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
-    error rather than an extension warning; kiln follows it. A
+    C++26 is `structured binding declaration cannot be declared
+    'constexpr'`, one error per such specifier at its location (the
+    storage class, then `inline`, then the constexpr kind; clang 22,
+    WP-468). At `-fclang-compat` < 22 it is clang 19's single
+    `decomposition declaration cannot be declared 'constexpr'`, or `...
+    with 'register constexpr' specifiers` when there are several, at the
+    first one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
+    error rather than an extension warning; kiln follows it. At block
+    scope an `inline` is also `inline declaration of 'a' not allowed in
+    block scope` at `inline`, naming the first binding: [dcl.inline]'s
+    rule for every block-scope variable (`var_spec`, clang
+    `err_inline_declaration_block_scope`; the variable is not inline),
+    both compat levels. Tests: `dcl.struct.bind/specifiers-each*.cpp`,
+    `dcl.inline/block-scope.cpp`. A
     `consteval` is also `consteval can only be used in function
     declarations` (`sema_consteval_wrong_decl_kind`). The declaration
     continues: a `constexpr` is still applied, which makes `e` const,

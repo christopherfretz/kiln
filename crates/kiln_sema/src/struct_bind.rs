@@ -96,7 +96,21 @@ impl Sema<'_, '_> {
             bad.push(("inline", l));
         }
         self.decomp_cxx20_specifiers(ds, !bad.is_empty());
-        if let Some(&(first, l)) = bad.first() {
+        if self.clang_compat >= 22 {
+            // clang 22: one error per specifier, at its location, the
+            // storage class first, then `inline`, then the constexpr kind.
+            let rank = |kw: &str| match kw {
+                "inline" => 1,
+                "constexpr" | "consteval" | "constinit" => 2,
+                _ => 0,
+            };
+            bad.sort_by_key(|b| rank(b.0));
+            for &(kw, l) in &bad {
+                let msg = self.diag(DiagId::sema_decomp_decl_spec, l).arg(format!("'{kw}'"));
+                self.emit(msg);
+            }
+        } else if let Some(&(first, l)) = bad.first() {
+            // clang 19: one error at the first, naming them all.
             let arg = if bad.len() == 1 {
                 format!("'{first}'")
             } else {
