@@ -158,9 +158,10 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
                 // is false, a cast only a fold performs continues), and a
                 // value makes it a static initializer all the same. The
                 // variable is not constant-initialized, so neither its
-                // uses nor its destruction see the value. Scalars and
-                // vectors only (spec/codegen.md "Static initialization").
-                None if is_scalar(b.ast, var) => {
+                // uses nor its destruction see the value. Scalars,
+                // vectors and initializer lists (spec/codegen.md "Static
+                // initialization").
+                None if is_scalar(b.ast, var) || is_init_list(b.ast, e) => {
                     let v = oven.fold_rvalue(&mut b, e);
                     if v.is_some() {
                         refolded.insert(e);
@@ -236,6 +237,18 @@ fn is_scalar(ast: &Ast, d: DeclId) -> bool {
                 | TypeView::Vector { .. }
         )
     })
+}
+
+/// Whether initializer `e` is an initializer list: clang's
+/// `ConstExprEmitter` emits each element with `tryEmitPrivateForMemory`,
+/// which folds an element it cannot emit directly with `EvaluateAsRValue`
+/// (outside a constant context once constant initialization failed), so
+/// a list whose elements all fold is a static initializer (`H h =
+/// {(void (*)())&f, 1};`, WP-492). A constructor call is not: the
+/// emitter takes only a trivial one, and a list with temporaries
+/// (`ExprWithCleanups`) is left dynamic.
+fn is_init_list(ast: &Ast, e: ExprId) -> bool {
+    ast.exprs.get(e).kind() == ExprKind::InitListExpr
 }
 
 /// Collects the candidate expressions.

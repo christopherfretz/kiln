@@ -1296,7 +1296,7 @@ impl Oven {
             VarEvalState::NotConstant => match info.init {
                 // Not constant-initialized: a fold reads the value of its
                 // initializer evaluated non-manifestly (below).
-                Some(init) if info.usable && self.run.nesting < MAX_NESTING => {
+                Some(init) if (info.usable || info.lax) && self.run.nesting < MAX_NESTING => {
                     self.refold_var_init(b, g, d, ty, init, top, hu)
                 }
                 _ => self.external(b, ty, d),
@@ -1311,7 +1311,7 @@ impl Oven {
                 }
                 match self.eval_var_init(b, g, d, ty, init, top, hu, lax_read, true) {
                     Ok(p) => p,
-                    Err(_) if info.usable && !lax_read => {
+                    Err(_) if info.usable && !lax_read || info.lax && lax_read => {
                         self.refold_var_init(b, g, d, ty, init, top, hu)
                     }
                     Err(p) => p,

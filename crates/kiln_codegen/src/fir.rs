@@ -770,6 +770,20 @@ impl Fir {
         V::I(n)
     }
 
+    /// [`Fir::insert_before_last`] through the function's builder (clang
+    /// `Builder.restoreIP(Block, Block->back())` then `Builder.CreateX`):
+    /// `LoopInfoStack::InsertHelper` gives it the active access group,
+    /// as [`Fir::push`] does.
+    pub fn builder_insert_before_last(&mut self, b: Blk, op: Op, ty: TypeId) -> V {
+        let grouped = op.may_access_memory();
+        let v = self.insert_before_last(b, op, ty);
+        if let (true, Some(k), Some(g), V::I(n)) = (grouped, self.access_kind, self.access_group, v)
+        {
+            self.insts[n as usize].md.push((k, g));
+        }
+        v
+    }
+
     /// Inserts `op` where LLVM's `CGBuilderTy(Inst->getParent(),
     /// std::next(Inst))` would after the instruction `at`: right after it,
     /// or for an `invoke` at the first insertion point of its normal
@@ -811,6 +825,47 @@ impl Fir {
         let pos = insts.iter().position(|&x| x == at).expect("instruction in its block");
         insts.insert(pos, n);
         V::I(n)
+    }
+
+    /// A copy of the whole buffer for another function (LLVM
+    /// `CloneFunction`), or `None` when a block was already made in the
+    /// original function for a `blockaddress` ([`Fir::block_id`]).
+    pub fn clone_body(&self) -> Option<Fir> {
+        if self.blocks.iter().any(|b| b.llvm.is_some()) {
+            return None;
+        }
+        Some(Fir {
+            insts: self.insts.clone(),
+            blocks: self.blocks.clone(),
+            layout: self.layout.clone(),
+            allocas: self.allocas.clone(),
+            params: self.params.clone(),
+            cur: None,
+            igoto: self.igoto,
+            access_group: None,
+            access_kind: self.access_kind,
+        })
+    }
+
+    /// The placed blocks in layout order.
+    pub fn layout(&self) -> &[Blk] {
+        &self.layout
+    }
+
+    /// The first `store` of `v` in block `b`.
+    pub fn first_store_of(&self, b: Blk, v: V) -> Option<u32> {
+        self.blocks[b.0 as usize]
+            .insts
+            .iter()
+            .copied()
+            .find(|&i| matches!(self.insts[i as usize].op, Op::Store { val, .. } if val == v))
+    }
+
+    /// Replaces the stored value of `store` `i` (LLVM `setOperand(0)`).
+    pub fn set_store_val(&mut self, i: u32, v: V) {
+        if let Op::Store { val, .. } = &mut self.insts[i as usize].op {
+            *val = v;
+        }
     }
 
     /// Moves instruction `i` immediately before instruction `at` (LLVM
