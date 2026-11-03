@@ -438,6 +438,12 @@ impl Sema<'_, '_> {
         let mut prior: Vec<TemplateArg> = Vec::with_capacity(params.len());
         let mut failed = false;
         let mut wi = 0usize;
+        let mut open = false;
+        // A pack expansion is checked against the parameters only as
+        // written: substitution forms the template-id of an element that
+        // is itself an expansion (`remove_const_t<Ts...>` for `_Types` :=
+        // `{Ts...}` in a fold) on the way to re-forming the expansion.
+        let written = self.inst.stack.is_empty();
         for &p in &params {
             if self.ast.template_parm(p).is_some_and(|x| x.pack) {
                 while wi < checked {
@@ -446,12 +452,31 @@ impl Sema<'_, '_> {
                     failed |= f;
                     wi += 1;
                 }
+                open = true;
                 break;
             }
             if wi >= checked {
                 // After a pack expansion the rest are known once it is
-                // substituted.
+                // substituted; an alias template or a concept takes no
+                // pack expansion for a parameter that is not a pack
+                // ([temp.alias]/2, CWG1430; clang's
+                // `err_template_expansion_into_fixed_list`).
                 if expansion.is_some() {
+                    let alias = match self.kind_of(tmpl) {
+                        _ if !written => None,
+                        DeclKind::TypeAliasTemplate => Some(0u32),
+                        DeclKind::Concept => Some(1),
+                        _ => None,
+                    };
+                    if let Some(k) = alias {
+                        let d = self
+                            .diag(DiagId::sema_template_expansion_into_fixed_list, arg_loc(wi))
+                            .arg(k);
+                        let d = self.note_param_here(d, p);
+                        self.emit(d);
+                        return Err(());
+                    }
+                    open = true;
                     break;
                 }
                 // A default is substituted with the arguments before it
@@ -471,8 +496,8 @@ impl Sema<'_, '_> {
             wi += 1;
         }
         // Too many even before a pack expansion (`R<int, int, int, T...>`
-        // for two parameters).
-        if wi < checked {
+        // for two parameters), or a pack expansion left over.
+        if wi < checked || (written && !open && wi < args.len()) {
             self.diag_template_arity(tmpl, true, loc);
             return Err(());
         }
