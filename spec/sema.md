@@ -1010,7 +1010,8 @@ Redeclaration and linkage rules:
   `decltype` (no function declarator of its own) is only the type of a
   non-static member function, of a typedef or alias-declaration, of a
   template type argument (a type trait's operand parses as one), of a
-  type parameter's default, or the pointee of a pointer to member. As a
+  type parameter's default, the operand of `^^` (it declares nothing;
+  GCC 16.1 agrees, WP-477), or the pointee of a pointer to member. As a
   non-member function at namespace or block scope (`extern` included), a
   static member function, a friend, a parameter, a handler, or in a
   type-id (`sizeof`, `new`, a trailing return type) it is clang's
