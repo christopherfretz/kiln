@@ -787,29 +787,45 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        let _ = has_const_param;
-        let constexpr_ok = self.defaulted_is_constexpr(bits, k);
+        let mut constexpr_ok = self.defaulted_is_constexpr(class, k, has_const_param);
+        // CWG1358: a defaulted member of an instantiation stays constexpr
+        // (clang `isTemplateInstantiation`); kiln keeps the virtual-base
+        // rule there.
+        let instantiated = self.ast.instantiated_from(f).is_some();
+        if instantiated && (k.is_assign() || !self.vbases_forbid_constexpr(bits)) {
+            constexpr_ok = true;
+        }
         let spec = self.fn_spec(f);
-        if spec.constexpr_kind() == kiln_ast::decl::ConstexprKind::Constexpr && !constexpr_ok {
-            // [dcl.fct.def.default]/3 with [dcl.constexpr]/3 before C++26
-            // (clang `err_incorrect_defaulted_constexpr_with_vb`, at the
-            // declaration's start, a note per virtual base).
+        let checked = match self.std {
+            s if s >= kiln_lex::Std::Cxx20 => true,
+            s if s >= kiln_lex::Std::Cxx14 => k != K::Dtor,
+            _ => k.is_ctor(),
+        };
+        let ck = spec.constexpr_kind();
+        if ck != kiln_ast::decl::ConstexprKind::None && !constexpr_ok && checked && !instantiated {
             let at = self.constexpr_begin_locs.get(&f).copied().unwrap_or(floc);
-            let mut msg = self.diag(DiagId::sema_defaulted_constexpr_with_vbase, at).arg(k.index());
-            for (_, b) in self.virtual_bases(class) {
-                msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
+            let consteval = ck == kiln_ast::decl::ConstexprKind::Consteval;
+            if !consteval && bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+                // [dcl.fct.def.default]/3 with [dcl.constexpr]/3 before
+                // C++26 (clang `err_incorrect_defaulted_constexpr_with_vb`,
+                // at the declaration's start, a note per virtual base).
+                let mut msg =
+                    self.diag(DiagId::sema_defaulted_constexpr_with_vbase, at).arg(k.index());
+                for (_, b) in self.virtual_bases(class) {
+                    msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
+                }
+                self.emit(msg);
+            } else {
+                // A subobject's member is not constexpr before C++23
+                // (P2448R2; clang `err_incorrect_defaulted_constexpr`).
+                let msg = self
+                    .diag(DiagId::sema_defaulted_constexpr_incorrect, at)
+                    .arg(k.index())
+                    .arg(u8::from(consteval));
+                self.emit(msg);
             }
-            self.emit(msg);
             // clang `setInvalidDecl`: overload resolution skips it.
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
-            had_error = true;
-        } else if spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None && !constexpr_ok {
-            // todo: clang `err_incorrect_defaulted_constexpr` for a
-            // consteval one ("cannot be marked consteval before C++23").
-            self.unsupported(
-                "a consteval defaulted special member of a class with virtual bases",
-                floc,
-            );
             had_error = true;
         }
         if first {

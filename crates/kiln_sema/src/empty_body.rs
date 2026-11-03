@@ -146,7 +146,7 @@ impl Sema<'_, '_> {
     }
 
     /// Where statement `s` begins (clang `Stmt::getBeginLoc`).
-    fn stmt_begin_loc(&self, s: StmtId) -> Loc {
+    pub(crate) fn stmt_begin_loc(&self, s: StmtId) -> Loc {
         let n = self.ast.stmts.get(s);
         if n.kind() == StmtKind::ExprStmt {
             self.begin_loc(self.ast.stmts.expr_stmt_expr(s))

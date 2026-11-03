@@ -1436,6 +1436,17 @@ destroying a derived object (with a non-trivial destructor) whose
 trivially destructible base was never constructed, which kiln does
 not check.
 
+*A virtual base without a mem-initializer (WP-400).* When the most
+derived constructor names no mem-initializer for a virtual base, Sema
+default-initializes it ([class.base.init]/9); a base whose default
+constructor is trivial has its lifetime begun with indeterminate
+contents, so it is *not* an unconstructed base: reading a member is
+"read of uninitialized object is not allowed in a constant expression",
+writing it first is fine, and a default member initializer of the base
+runs. This is clang's behaviour for the non-virtual analog, so
+`unconstructed_bases` deliberately leaves virtual bases out (test
+`tests/conformance/class.base.init/vbase-default-initialized-cxx26.cpp`).
+
 *Deviations from clang 19.* A class
 whose subobjects' lifetimes all ended one by one is diagnosed at its
 implicit destruction as if destroyed itself. An explicit call of a virtual destructor ends only the lifetime of
@@ -1985,6 +1996,19 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   class type, to a declared or a variadic parameter (clang
   `EvaluateCallArg` → `EvaluateInPlace`): a non-literal one traps at the
   argument before it is initialized (WP-320, sema.md §5.20).
+  At `-fclang-compat=22` from C++23 none of these `CheckLiteralType`
+  traps is made (clang 22 dropped it with P2448): a non-literal object
+  fails only at the non-constexpr constructor its creation calls
+  (`literal_check_relaxed`, WP-400). Constructing a class with a virtual
+  base through a constexpr constructor (before C++26) instead traps
+  "cannot construct object of type 'X' with virtual base class in a
+  constant expression" at the construct expression, with no frame for
+  the constructor (clang `HandleConstructorCall`; test
+  `expr.const/constexpr-vbase-construct-cxx23.cpp`).
+- A local variable that sema marked invalid (its initialization was
+  already diagnosed) traps silently when its declaration is evaluated,
+  so the enclosing constant expression reports only its own error
+  (clang's invalid-declaration evaluation failure; WP-400).
 - Covariant return adjustment through a pointer to member function:
   `Fault::Invalid` (stub, follow-up of WP-077).
 - Freezing a pointer to a `typeid` object (`constexpr auto *p =
@@ -2065,14 +2089,23 @@ subobject reads its word and dispatches on the complete object's dynamic
 type (`locate`, then the final overrider's subobject through
 `sub_addr`); `dynamic_cast` and `typeid` find the most derived object and
 the target the same way (`cast_target`, `PolyInfo::vvptrs`/`at`).
-`covariance` returns `None` (`Fault::Invalid`) for a covariant return
-adjustment into a virtual base.
+A covariant return whose method return class is (in) a virtual base of
+the overrider's return class (WP-400) is `CovAdj::VBase(class, k)` in the
+`adj` register (`cov_word`: high half 1; a plain offset is sign-extended),
+and `CovAdj` converts the returned pointer as `Op::VBase` does, through
+the returned object's most derived object (`sub_addr`), so a more derived
+dynamic type of the returned object is honoured
+(`expr.const/constexpr-covariant-virtual-base-cxx26.cpp`).
 
 **`base_owner`.** The search for the most derived object (used by
 `sub_addr` and by the exception handler match of a thrown pointer to a
 subobject, "Exceptions") descends through array elements, members and
 base fields, the virtual-base fields included, so a subobject inside an
-enclosing object's virtual base is found.
+enclosing object's virtual base is found. In a union it searches only the
+active member (`Memory::unions` at the union's key; every member while no
+single active one is recorded), so a member whose class has the searched
+class at the same offset is not mistaken for the most derived object
+(WP-400, `class.union/constexpr-virtual-base-in-union-cxx26.cpp`).
 
 **Tests.** `tests/conformance/class.mi/constexpr-virtual-*`
 (C++23 rejection with clang's notes, C++26 acceptance, diamond and
@@ -2089,23 +2122,12 @@ peak, 1536 arena, no growth per round).
 **Interface changes.** `Op::VBase`; `SetVptr` aux 1;
 `Func::base_obj`, `Oven::func_index_base`, `Oven::base_funcs`,
 `Callee::Base`; `Virt::subs`; `Types::{nv_view, class_of, same_class,
-vbase_start}`; `covariance` returns `Option<i64>`. Sema: a rejected
+vbase_start}`; `covariance` returns `Option<u128>` (a `cov_word`,
+WP-400). Sema: a rejected
 constexpr defaulted special member (C++23) is marked invalid, as clang's
 `setInvalidDecl`.
 
 **Left for later.**
-- clang 19/22 in C++23 accept some defaulted constexpr special members
-  of classes with virtual bases (its `DefaultedDefaultConstructorIsConstexpr`
-  / `DefaultedDestructorIsConstexpr` flags are last-write-wins over the
-  subobjects); kiln rejects them (it rejected them before, as
-  unsupported).
-- Covariant return adjustment into a virtual base (`Fault::Invalid`).
-- `base_owner` in a union takes the first member in which the search
-  succeeds, not the active one.
-- Codegen of a constant global of a class with virtual bases.
-- Sema's final-overrider and used-virtual-member walks are exponential in
-  the depth of a virtual lattice (`class/virtual/graph.rs`,
-  `class/virtual/used.rs`).
 - `vcall` caches neither relative words nor overriders found in a virtual
   base.
 

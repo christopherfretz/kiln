@@ -2213,6 +2213,13 @@ impl Compiler<'_> {
             }
             return;
         }
+        if n.has(kiln_ast::decl::DeclFlags::INVALID) {
+            // A variable whose declaration sema already diagnosed (no
+            // viable constructor, say): the evaluation fails with no note,
+            // as clang's on the erroneous declaration.
+            self.trap_loc(n.loc(), String::new());
+            return;
+        }
         if is_reference_var(ast, d) {
             let r = self.reg();
             if let Some(init) = v.init {
@@ -2228,13 +2235,14 @@ impl Compiler<'_> {
         let q = n.ty().unwrap_or(QualType::INT);
         if let Some(init) = v.init
             && self.cur_fn.is_some()
-            && !(self.o.clang_compat >= 22 && self.b.cxx23())
+            && !self.literal_check_relaxed()
             && !is_literal_type(ast, q)
         {
             // clang `CheckLiteralType` (from `EvaluateInPlace`): a local
             // variable of non-literal type, named with its initializer's
             // whole (array) type. clang 22 drops the check from C++23 on
-            // (P2448R2): its constructor or destructor decides.
+            // (P2448R2: [basic.types.general]/10 no longer constrains
+            // constant evaluation): its constructor or destructor decides.
             let t = Oven::type_name(ast, ast.exprs.get(init).ty().without_quals());
             self.trap(
                 init,

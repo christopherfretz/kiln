@@ -97,6 +97,17 @@ impl AttrKind {
     /// only destroyed once suspended at its final suspend point, so its
     /// LLVM function carries `coro_only_destroy_when_complete` (WP-370).
     pub const CORO_ONLY_DESTROY_WHEN_COMPLETE: AttrKind = AttrKind(104);
+    /// `optnone` / `clang::optnone` on a function (clang
+    /// `OptimizeNoneAttr`): its definition is `optnone noinline` at every
+    /// optimization level; it wins over `always_inline` and `minsize`
+    /// (WP-405).
+    pub const OPTNONE: AttrKind = AttrKind(105);
+    /// `minsize` / `clang::minsize` on a function (clang `MinSizeAttr`):
+    /// its definition is `minsize` (WP-405).
+    pub const MINSIZE: AttrKind = AttrKind(106);
+    /// GNU `naked` on a function (clang `NakedAttr`): no prologue or
+    /// epilogue; the body holds only asm statements (WP-405).
+    pub const NAKED: AttrKind = AttrKind(107);
 }
 
 /// Attribute syntax.

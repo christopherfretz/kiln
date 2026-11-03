@@ -72,13 +72,40 @@ struct Target {
     delta: i64,
     ov: DeclId,
     pure: bool,
-    /// A covariant return ([class.virtual]/8): the offset of the called
-    /// function's return class in the overrider's.
-    cov: i64,
+    /// A covariant return ([class.virtual]/8), [`cov_word`] encoded.
+    cov: u128,
     /// The overrider's subobject (its index in the dynamic type's graph)
     /// is (in) a virtual base: `delta` holds only in a complete object,
     /// so the address is found through the most derived object.
     to: Option<u16>,
+}
+
+/// A covariant return adjustment ([class.virtual]/8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CovAdj {
+    /// Add this byte offset to the returned pointer.
+    Off(i64),
+    /// Convert the returned pointer to class `.0` to its (virtual)
+    /// subobject `.1` (as `Op::VBase`).
+    VBase(OTy, u16),
+}
+
+/// The register word of a [`CovAdj`]: an offset sign-extended (high half
+/// 0 or all ones), a virtual-base conversion with high half 1.
+pub(crate) fn cov_word(c: CovAdj) -> u128 {
+    match c {
+        CovAdj::Off(o) => o as u128,
+        CovAdj::VBase(t, k) => (1u128 << 64) | (u128::from(t.0) << 16) | u128::from(k),
+    }
+}
+
+/// Decodes [`cov_word`].
+pub(crate) fn cov_adj(w: u128) -> CovAdj {
+    if (w >> 64) as u64 == 1 {
+        CovAdj::VBase(OTy((w >> 16) as u32), w as u16)
+    } else {
+        CovAdj::Off(w as i64)
+    }
 }
 
 /// The Oven's per-class caches (insert-only: the class graph of a
@@ -469,7 +496,7 @@ impl Oven {
             return None;
         }
         let root = self.alloc_any(p)?.ty;
-        let (md, at) = self.base_owner(b, root, u64::from(p.off), 0, true, cls)?;
+        let (md, at) = self.base_owner(b, (root, raw), u64::from(p.off), 0, true, cls)?;
         Some((self.poly_info(b, md) as usize, at))
     }
 
@@ -491,7 +518,7 @@ impl Oven {
         method: DeclId,
         cls: OTy,
         raw: u64,
-    ) -> Result<(u32, u64, i64), Fault> {
+    ) -> Result<(u32, u64, u128), Fault> {
         let d = self.read_vptr(b.ast(), raw, cls, ak::MEMBER_CALL)?;
         let key = (d.cls, d.off as u64, method);
         let t = match self.virt.dispatch.get(&key) {
@@ -535,18 +562,20 @@ impl Oven {
         let ast = b.ast();
         let pure = ast.decls.function(ast.first(ov)).is_some_and(|f| f.spec.is_pure());
         let func = self.func_index(ast, ov);
-        // A covariant return into a virtual base is not adjusted yet.
         let cov = self.covariance(b, method, ov).ok_or(Fault::Invalid)?;
         let delta = to.off as i64 - from.off as i64;
         let to = (to.virt || d.rel).then_some(s2.index() as u16);
         Ok(Target { func, delta, ov, pure, cov, to })
     }
 
-    /// The return adjustment of a call of `method` that runs `ov`: the
-    /// offset of the class `method` returns a pointer or reference to in
-    /// the class `ov` returns one to (0 if they are the same).
-    /// `None` when that class is (in) a virtual base.
-    fn covariance(&mut self, b: &mut dyn SemaBridge, method: DeclId, ov: DeclId) -> Option<i64> {
+    /// The return adjustment of a call of `method` that runs `ov`
+    /// ([`cov_word`]): the offset of the class `method` returns a pointer
+    /// or reference to in the class `ov` returns one to (0 if they are
+    /// the same), or, when that class is (in) a virtual base, its
+    /// subobject in `ov`'s class, found through the returned object's
+    /// most derived object at `Op::CovAdj` (clang's
+    /// `HandleCovariantReturnAdjustment` cast path).
+    fn covariance(&mut self, b: &mut dyn SemaBridge, method: DeclId, ov: DeclId) -> Option<u128> {
         let ret_class = |b: &mut dyn SemaBridge, f: DeclId| {
             let ast = b.ast();
             let def = ast.definition(f).unwrap_or(f);
@@ -565,9 +594,10 @@ impl Oven {
             return Some(0);
         }
         let i = self.poly_info(b, to);
-        match self.virt.infos[i as usize].subs.iter().find(|s| s.cls == tm) {
-            Some(s) if s.virt => None,
-            s => Some(s.map_or(0, |s| s.off as i64)),
+        let subs = &self.virt.infos[i as usize].subs;
+        match subs.iter().position(|s| s.cls == tm) {
+            Some(k) if subs[k].virt => Some(cov_word(CovAdj::VBase(to, u16::try_from(k).ok()?))),
+            k => Some(cov_word(CovAdj::Off(k.map_or(0, |k| subs[k].off as i64)))),
         }
     }
 
@@ -704,11 +734,13 @@ impl Oven {
     /// object of type `t` at offset `abs`: `t` itself when `cand` (a
     /// complete object, member or array element), else, descending through
     /// array elements, members and non-virtual bases, the innermost such
-    /// object containing the byte.
+    /// object containing the byte. In a union only the active member is
+    /// searched (any member while the active one is not known); `raw`
+    /// names the allocation the union keys are in.
     fn base_owner(
         &mut self,
         b: &mut dyn SemaBridge,
-        t: OTy,
+        (t, raw): (OTy, u64),
         rel: u64,
         abs: u64,
         cand: bool,
@@ -720,7 +752,7 @@ impl Oven {
                 if es == 0 || rel / es >= n {
                     return None;
                 }
-                self.base_owner(b, elem, rel % es, abs + rel / es * es, true, cls)
+                self.base_owner(b, (elem, raw), rel % es, abs + rel / es * es, true, cls)
             }
             TyKind::Record { union, .. } => {
                 if cand && !union {
@@ -729,19 +761,28 @@ impl Oven {
                         return Some((t, abs));
                     }
                 }
+                // [class.union]/2: at most one member is active.
+                let active = if union {
+                    self.mem.unions.get(&Ptr::union_key(raw, abs, t)).copied()
+                } else {
+                    None
+                };
                 let fields: Vec<_> = self
                     .types
                     .fields(t)
                     .iter()
-                    .filter(|f| {
-                        f.width.is_none()
+                    .enumerate()
+                    .filter(|&(i, f)| {
+                        active.is_none_or(|a| a as usize == i)
+                            && f.width.is_none()
                             && rel >= f.offset
                             && rel < f.offset + self.types.size(f.ty).max(1)
                     })
-                    .copied()
+                    .map(|(_, f)| *f)
                     .collect();
                 fields.into_iter().find_map(|f| {
-                    self.base_owner(b, f.ty, rel - f.offset, abs + f.offset, !f.base, cls)
+                    let at = abs + f.offset;
+                    self.base_owner(b, (f.ty, raw), rel - f.offset, at, !f.base, cls)
                 })
             }
             _ => None,
