@@ -3028,12 +3028,18 @@ diagnostics and IR.
       integral constant expression`.
     - Each binding gets a holding variable of type `tuple_element<i,
       E>::type&` (lvalue `e`) or `&&`, with the binding's name. The
-      index `i` is a `size_t` value argument or, at
+      index `i` of `tuple_element` is a `size_t` value argument or, at
       `-fclang-compat=22`, a `size_t` integer literal written as an
       expression argument (`tuple_element<0UL, E>`; §1.1). It is
       initialized with `e.get<i>()` when a member template `get` has a
       non-type first parameter, else with an ADL-only `get<i>(xvalue
-      e)`, which prints `adl`.
+      e)`, which prints `adl`. The `get` index is always a `size_t`
+      integer literal written as an expression argument (clang
+      `getTrivialIntegralTemplateArgument`), so it is converted to the
+      type of each candidate's template parameter
+      ([temp.arg.nontype]/2): `template <int I> get` is specialized and
+      mangled with an `int` argument (`ILi0E`), not `size_t` (WP-467;
+      `tests/codegen/struct_bind_get_mangling.cpp`).
     - The binding's type is `tuple_element<i, E>::type`, as written,
       and its expression a `DeclRefExpr` to the holding variable.
     - `tuple_element` is checked after the `get` call. An incomplete

@@ -765,7 +765,14 @@ impl Sema<'_, '_> {
             let t = self.ety(e);
             e = self.builder().implicit_cast(CastKind::NoOp, e, t, ValueCategory::XValue);
         }
-        let idx = self.size_t_arg(i as u64);
+        // `get<i>`: `i` is written as a `std::size_t` integer literal
+        // (clang `getTrivialIntegralTemplateArgument`), so it is
+        // converted to the type of `get`'s parameter like any written
+        // argument: `template <int I> get` is `get<0>` with an `int`
+        // argument, mangled `ILi0E` ([temp.arg.nontype]/2).
+        let size_t = self.size_type();
+        let lit = self.ast.builder().int_literal(size_t, i as u64, Radix::Decimal, loc);
+        let idx = TemplateArg::expr(lit, None);
         let targs = self.ast.types.arg_list(&[idx]);
         // An empty lookup is not recovered (clang `DiagnoseEmptyLookup`
         // in `BuildRecoveryCallExpr`); a failed overload resolution is.
