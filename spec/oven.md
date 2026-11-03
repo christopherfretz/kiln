@@ -2291,7 +2291,13 @@ GNU `vector_size` and clang `ext_vector_type` values are stored as an
 array of their lanes (`TyKind::Array`, `Types::is_vector`). The array is
 padded to the vector's own size and alignment, so an `ext_vector_type(3)`
 occupies 4 lanes and the 4th is indeterminate. A vector of `bool` (bits)
-stays `Opaque`: it has no value model yet. The operations are in
+stays `Opaque`: it has no value model yet, so its constant evaluation is
+"not supported" and a namespace-scope `bool`-vector variable gets dynamic
+initialization (clang emits a `<N x i1>` constant). clang 19 folds
+`bool`-vector lists, `!`, `& | ^ ~`, `==`, `__builtin_convertvector` both
+ways and `__builtin_bit_cast`; clang 22 also subscripts and reduces them.
+The planned model is packed bits, lane `i` at bit `i` (follow-up to
+WP-187). The operations are in
 `compile/vector.rs`. The accept/reject boundary is clang 19's
 `VectorExprEvaluator`:
 - **Folded:** arithmetic, bitwise, shift and comparison operators, lane
@@ -2329,8 +2335,12 @@ stays `Opaque`: it has no value model yet. The operations are in
 - **Rejected without a note** (clang 19 fails silently): a `?:` with a
   vector condition, and ext-vector element access on a vector object
   (`v.x` for a variable `v`, the error at the expression's begin).
-- clang 20+ folds subscripts, reductions and vector-condition `?:`. The
-  boundary moves with the oracle at the clang 22 switch (M3 to M4).
+- At `-fclang-compat=22` subscripts (read and written) and
+  `__builtin_reduce_*` fold, as clang 20+ does (WP-394;
+  `ext.vector/constexpr-diagnostics-clang22.cpp`). A `?:` with a vector
+  condition fails silently in clang 22 as well, so it stays rejected.
+  The compat-19 boundary above holds until the oracle switch (WP-184,
+  M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
   (`kiln_codegen/src/consts.rs`).
 

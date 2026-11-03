@@ -121,15 +121,24 @@ impl Sema<'_, '_> {
             }
             self.diagnose_int_in_bool_context(src);
         }
+        // clang `CheckImplicitConversion`: a scalar converted to a vector
+        // (an ext-vector splat) is checked against the element type, and
+        // the diagnostics name the vector.
+        let shown = to;
+        let to = match self.vector_parts(to) {
+            Some(_) if self.vector_parts(from).is_some() => return,
+            Some(v) => v.elem,
+            None => to,
+        };
         let bit_int = matches!(self.ast.types.canonical_view(to), TypeView::BitInt { .. });
         if !bit_int && self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
         }
         if self.ast.types.builtin(from).and_then(|b| float_kind(self, b)).is_some() {
-            self.floating_imp_cast(src, to, cc);
+            self.floating_imp_cast(src, shown, cc);
             return;
         }
-        self.integer_constant_imp_cast(src, to, cc);
+        self.integer_constant_imp_cast(src, to, shown, cc);
     }
 
     /// clang's `DiagnoseAlwaysNonNullPointer` for the conversion of `e`
@@ -317,13 +326,13 @@ impl Sema<'_, '_> {
     /// exactly `to`'s width turns negative (`isSameWidthConstantConversion`;
     /// not for a hexadecimal, octal or binary literal). The arms of a
     /// conditional are checked separately. A runtime-behavior diagnostic.
-    fn integer_constant_imp_cast(&mut self, e: ExprId, to: QualType, cc: Loc) {
+    fn integer_constant_imp_cast(&mut self, e: ExprId, to: QualType, shown: QualType, cc: Loc) {
         let n = *self.ast.exprs.get(e);
         if n.kind() == ExprKind::ConditionalOperator {
             for arm in self.ast.exprs.cond_arms(e) {
                 let a = self.strip_impcast(arm);
                 if self.ast.exprs.get(a).ty() != to {
-                    self.integer_constant_imp_cast(a, to, cc);
+                    self.integer_constant_imp_cast(a, to, shown, cc);
                 }
             }
             return;
@@ -370,7 +379,7 @@ impl Sema<'_, '_> {
         let d = self
             .diag(DiagId::sema_constant_conversion, n.loc())
             .arg(self.ty_arg(from))
-            .arg(self.ty_arg(to))
+            .arg(self.ty_arg(shown))
             .arg(v.to_string())
             .arg(converted.to_string())
             .range(range)
@@ -413,7 +422,12 @@ impl Sema<'_, '_> {
         }
         let Some((kind, bits)) = self.float_literal_value(e) else { return };
         let is_bool = self.ast.types.builtin(to) == Some(BuiltinType::Bool);
-        let (w, signed) = if is_bool {
+        let (w, signed) = if let Some(v) = self.vector_parts(to) {
+            // A vector target: clang's `getIntWidth` is the whole
+            // vector's size, so only a fractional part is reported.
+            let bits = crate::target::size_align(&self.ast, to, self.abi()).map_or(64, |s| s.0 * 8);
+            (u32::try_from(bits).unwrap_or(u32::MAX), int_signed(self, v.elem))
+        } else if is_bool {
             (1, false)
         } else {
             (int_width(self, to).unwrap_or(64), int_signed(self, to))

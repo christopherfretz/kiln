@@ -1586,6 +1586,34 @@ and returns the scope it names:
     a `vector_size` vector) gives a `DependentVector` (spec/types.md);
     after substitution it is diagnosed at the size operand (clang: at
     the attribute name).
+    In a type-id (`sizeof`/`alignof`, a cast, a template argument, a
+    new-type-id; not an alias-declaration, whose attributes go to the
+    alias) the decl-specifier attributes modify the decl-specifier type
+    as type attributes (`Sema::apply_type_id_vector_attrs`, clang
+    `processTypeAttrs`), so `ext_vector_type` is accepted at clang 19
+    too (WP-187; `ext.vector/type-id-run.cpp`).
+    Diagnostics (WP-187, `ext.vector/*-diagnostics.cpp`):
+    - A type argument whose desugaring reaches a vector typedef stops at
+      that typedef as written, with its scope: `'B' (aka 'X::v')`,
+      `'A<long>' (aka 't1<long>::v')` (clang 22, at
+      `-fclang-compat=22`, keeps a dependent name's keyword: `(aka
+      'typename t1<long>::v')`)
+      (`kiln_ast::types::vector_diag_arg`, used by `Sema::ty_arg` and
+      codegen; clang's `Desugar` keeps the Elaborated name of a vector).
+    - Comparing an integer vector with itself is
+      `-Wtautological-compare` (`self-comparison always evaluates to a
+      constant`), as for a scalar; a floating vector is not.
+    - A scalar converted to a vector (a splat) is checked as a conversion
+      to the element type, naming the vector: a lossy floating literal is
+      `-Wliteral-conversion`, an integer constant that does not fit is
+      `-Wconstant-conversion`. As in clang, a floating value is measured
+      against the whole vector's width, so `1e20` into a vector of 4 `int`
+      is silent.
+    - A designated list for a vector warns `-Wc99-designator` at each
+      array designator (and about mixing designated and non-designated
+      elements) and is then `initialization of non-aggregate type T with
+      a designated initializer list` (a vector is not an aggregate), at
+      the variable or at a nested list's brace.
   - GNU `malloc` (function with a pointer result, else `'malloc'
     attribute only applies to return values that are pointers`; on a
     non-function `... only applies to functions`), `alloc_size(n[, m])`
@@ -4118,7 +4146,9 @@ The vector operators themselves are summarized in spec/types.md
   - Codegen: a GNU condition is `icmp ne 0` plus `select`. An ext
     condition is the sign-bit mask blend (`icmp slt 0`, `sext`, `and`,
     `or`, with float arms bitcast to the condition type), as clang
-    emits it for C++. A `bool` ext-vector condition is *M4*.
+    emits it for C++. A `bool` ext-vector condition (accepted from clang
+    20: clang 19 rejects its lane size) is one `select` on its `<N x i1>`
+    lanes (WP-187; `ext.vector/ir-bool-conditional*.cpp`).
 - **Scalar condition with a vector arm** (`scalar_cond_vector_operands`):
   converted to `bool` as usual, and the arms are converted as for a
   binary vector operator without `bool` vectors. A `bool`-vector arm is
