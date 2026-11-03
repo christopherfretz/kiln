@@ -1165,7 +1165,23 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   function list (`Module::move_function_to_end`, WP-113). Deleting destructors (D0) are WP-080.
   Structor references go through `structor_ref`. A cache hit on the base
   variant still queues it for definition, because clang's `EmitDeferred`
-  is depth-first.
+  is depth-first. The D1 alias copies D2's visibility.
+- **Base-object destructor aliases** (WP-423; `Cg::try_base_dtor_alias`,
+  clang `CodeGenModule::TryEmitBaseDestructorAsAlias`): at -O1+ only, and
+  not for a `weak_odr` (explicit-instantiation, COMDAT) or
+  `available_externally` D2, a destructor whose body is an empty
+  compound statement, in a class with no virtual bases and no field of a
+  class type with a destructor, whose unique non-virtual base with a
+  non-trivial destructor sits at offset 0, gets no D2 body: its D2 is
+  the base's D2. The check runs before D2 is declared, and the base D2
+  is declared first, as in clang. A discardable D2 (`linkonce_odr`,
+  `internal`) is replaced (RAUW, `Module::replace_function`) unless the
+  base D2 is `available_externally`. Otherwise D2 becomes an `alias`
+  (`unnamed_addr`, external, `dso_local`, D2's visibility) of the base
+  D2, unless that is only a declaration or weak for the linker
+  (`linkonce_odr`, `weak_odr`). D1 then aliases (or is replaced by) the
+  resulting D2 symbol; LLVM 19's `GlobalOpt` folds the alias chain.
+  `tests/codegen/dtor_base_alias_o1.cpp`.
 - **Constructor bodies** (`EmitConstructorBody`): base initializers at an
   `i8` GEP with the `min_align` alignment and `getOverlapForBaseInit`,
   then member initializers in declaration order. Delegating constructors
