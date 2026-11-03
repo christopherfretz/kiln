@@ -1269,6 +1269,25 @@ impl Module {
         }
     }
 
+    /// Replace all the operands of a `distinct` tuple (a placeholder
+    /// filled in once its operands are known, as LLVM's temporary nodes).
+    pub fn md_set_operands(
+        &mut self,
+        node: MetadataId,
+        new: &[Option<MetadataId>],
+    ) -> IrResult<()> {
+        match &mut self.md[node.index()] {
+            MdNode::Tuple { distinct: true, ops } => {
+                *ops = new.into();
+                Ok(())
+            }
+            _ => Err(IrError::new(
+                IrErrorKind::BadMetadata,
+                "md_set_operands needs a distinct tuple",
+            )),
+        }
+    }
+
     /// Append operands to named metadata `!name = !{...}` (created if new).
     pub fn add_named_metadata(&mut self, name: &str, ops: &[MetadataId]) {
         if let Some(e) = self.named_md.iter_mut().find(|e| &*e.0 == name) {

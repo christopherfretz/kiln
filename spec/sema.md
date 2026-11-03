@@ -645,7 +645,8 @@ Redeclaration and linkage rules:
   redeclarations" (§4.7).
 - **GNU asm labels** (`act_on_asm_label`, clang's
   `ActOn{Function,Variable}Declarator` and `mergeDeclAttributes`): a
-  function or variable declarator's label becomes an `AsmLabel`
+  function (also a member function, WP-449) or variable declarator's
+  label becomes an `AsmLabel`
   attribute, first in the declaration's attribute list, and its
   `StringLitId` is recorded in the `asm_label` cold data of the entity's
   first declaration, which the mangler reads (spec/abi.md). A typedef's

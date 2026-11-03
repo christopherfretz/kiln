@@ -366,10 +366,16 @@ impl Collect<'_> {
                 if n.kind() == StmtKind::AttributedStmt {
                     for a in ast.lists.iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s)) {
                         let node = *ast.attrs.get(a);
-                        if node.kind == kiln_ast::attr::AttrKind::ASSUME
-                            && let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a)
-                        {
-                            self.expr(e);
+                        let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a) else {
+                            continue;
+                        };
+                        match node.kind {
+                            kiln_ast::attr::AttrKind::ASSUME => self.expr(e),
+                            // A loop hint's value is folded, not emitted
+                            // (clang `EvaluateKnownConstInt` in
+                            // `LoopInfoStack::push`).
+                            kiln_ast::attr::AttrKind::LOOP_HINT => self.out.push(e),
+                            _ => {}
                         }
                     }
                 }
