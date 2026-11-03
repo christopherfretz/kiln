@@ -131,6 +131,11 @@ pub(crate) struct RunState {
     /// The overflows recorded under `ub_check`: the instruction's pc and
     /// the wrapped value, sign-extended.
     pub overflows: Vec<(u32, i128)>,
+    /// The evaluation is a potential-constant-expression check
+    /// ([`crate::Oven::evaluate_call`], clang's
+    /// `CheckingPotentialConstantExpression`): `-Wconstant-evaluated` is
+    /// not reported, nested evaluations included.
+    pub potential: bool,
 }
 
 impl RunState {
@@ -431,6 +436,9 @@ impl Oven {
     /// `std::is_constant_evaluated` (`aux` = 1) called directly by it,
     /// in an evaluation that is always constant.
     fn always_true_diag(&self, b: &mut dyn SemaBridge, pc: usize, aux: u32) {
+        if self.run.potential {
+            return;
+        }
         let depth = self.stack.len() - self.run.entry;
         let (name, at) = match (depth, aux) {
             (1, _) => ("__builtin_is_constant_evaluated", pc),

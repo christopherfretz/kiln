@@ -5813,10 +5813,33 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   operator with the right operand's range, through the runtime-behaviour
   deferral (clang `CheckShiftOperands` / `CheckMultiplyDivideOperands` /
   `CheckRemainderOperands` with `IsCompAssign`).
+- **Never constant (WP-468).** A `constexpr` or `consteval` function
+  that can never be constant is ill-formed, no diagnostic required
+  ([dcl.constexpr]/6); clang runs `isPotentialConstantExpr` on each
+  written definition when `CheckConstexprFunctionBodies` is on: before
+  C++23, else only under `-Winvalid-constexpr` (the last of
+  `-Winvalid-constexpr` / `-Wno-invalid-constexpr` decides,
+  `DiagEngine::group_flag`; `-Weverything`, `-Werror=` and pragmas do
+  not turn it on). Kiln checks the narrow shape a body overflow makes
+  (`constexpr_body.rs` `check_never_constant`, after the body's own
+  `-Winteger-overflow`): a non-member or static member function without
+  parameters, not in a template or an instantiation, not invalid, whose
+  call (`Oven::evaluate_call`) fails in its own body with the one note
+  `value N is outside the range of representable values of type 'T'`
+  (`g + 1`, `++i` on `INT_MAX`, `i += 1`). It reports `{constexpr|
+  consteval} function never produces a constant expression`
+  (`sema_constexpr_never_constant`, an error by default, group
+  `invalid-constexpr`) at the function's name with that note. A failure
+  in a callee (clang is silent too), an unsigned wrap or a narrowing are
+  not reported. Not yet: other failures clang reports (a call to a
+  non-constexpr function, a step limit), functions with parameters (a
+  read of one fails silently in clang), non-static members, lambdas and
+  constructors.
 - Tests: `expr.add/integer-overflow-folded.cpp`,
   `expr.add/integer-overflow-constexpr-error.cpp`,
   `expr.pre/integer-overflow-in-call.cpp`,
-  `expr.ass/compound-assign-overflow.cpp`.
+  `expr.ass/compound-assign-overflow.cpp`,
+  `dcl.constexpr/never-constant-overflow-cxx{20,23,26}.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

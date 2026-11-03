@@ -354,6 +354,17 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(None, |oven, b| oven.fold_for_overflow(b, e))
     }
 
+    /// [`Oven::evaluate_call`] of `f` without arguments at `at`: the
+    /// failure, with its notes, if the call is not a constant expression.
+    pub(crate) fn evaluate_call(&mut self, f: DeclId, at: Loc) -> Result<(), EvalFailure> {
+        if (self.stack_exhausted() || self.stack_low())
+            && !self.stack_ok(crate::stack_guard::StackPhase::ConstantEvaluation, at)
+        {
+            return Ok(());
+        }
+        self.with_oven(Some(at), |oven, b| oven.evaluate_call(b, f, at))
+    }
+
     /// The stack guard's check before entering the Oven (P4 (c)): the
     /// evaluation may instantiate, which re-enters sema.
     #[inline]

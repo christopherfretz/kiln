@@ -287,6 +287,36 @@ impl Oven {
         }
     }
 
+    /// Runs a call of function `f` without arguments at `at`
+    /// ([`crate::Oven::evaluate_call`]): its result, frozen.
+    pub(crate) fn eval_call(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        f: DeclId,
+        at: Loc,
+        fb: u32,
+    ) -> Result<ConstValueId, EvalFailure> {
+        self.run.object = None;
+        let Some(stub) = self.compile_call(b, f, at) else {
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        };
+        self.let_pending.clear();
+        self.exec(b, stub, fb)?;
+        // A `void` call has no value: `true` stands for it.
+        let (ty, v) = match self.funcs[stub as usize].ret {
+            RetKind::Scalar(ty) => (ty, self.regs[fb as usize]),
+            _ => (self.types.intern(b, QualType::BOOL), 1),
+        };
+        let r = self.freeze_scalar(b, ty, v, at).map_err(|f| match f {
+            Freeze::Fault(k) => EvalFailure::silent(k),
+            Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
+        });
+        match self.leak_notes(b) {
+            None => r,
+            Some(_) => Err(EvalFailure::silent(FailKind::NotConstant)),
+        }
+    }
+
     /// Runs the destruction of variable `d` (`Oven::has_constant_destruction`):
     /// whether it succeeds without leaking.
     pub(crate) fn destroy_var(

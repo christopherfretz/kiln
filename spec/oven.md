@@ -309,6 +309,17 @@ the evaluator's flattened type table.
   constant-evaluated, silent, not recorded, never cached; fails if the
   evaluation leaks an allocation. `at` locates the evaluation for the
   depth check.
+- `Oven::evaluate_call(bridge, f, at) -> Result<(), EvalFailure>`
+  (WP-468, clang `Expr::isPotentialConstantExpr` for a function without
+  parameters, spec/sema.md §5.28 "Never constant"): evaluates a call of
+  `f` without arguments in a stub (`compile_call`, the call's site at
+  `at`), manifestly constant-evaluated, with notes; the result, if any,
+  is frozen and dropped. The failure's last note is the call's `in call
+  to`. A function with parameters, a variadic one, or one returning a
+  reference or an aggregate is not evaluated (`Ok`), nor is anything
+  inside another evaluation. Not recorded in the stats; a success is
+  memoized as any call (`Func::memo`), so a later use of the function
+  costs a lookup.
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.

@@ -403,13 +403,19 @@ enum Job {
     /// ([`Oven::evaluate_with_params`]; the bindings in `subst_binds`):
     /// `at` locates it.
     Subst { cond: Option<ExprId>, at: ExprId },
+    /// A call of function `f` without arguments at `at`
+    /// ([`Oven::evaluate_call`]).
+    Call { f: DeclId, at: Loc },
 }
 
 impl Job {
-    /// The expression located in a depth-limit failure.
-    fn expr(self) -> ExprId {
+    /// The location of a depth-limit failure.
+    fn loc(self, ast: &Ast) -> Loc {
         match self {
-            Job::Expr(e) | Job::Chars { size: e, .. } | Job::Subst { at: e, .. } => e,
+            Job::Expr(e) | Job::Chars { size: e, .. } | Job::Subst { at: e, .. } => {
+                ast.exprs.get(e).loc()
+            }
+            Job::Call { at, .. } => at,
         }
     }
 }
@@ -432,6 +438,9 @@ pub struct Oven {
     /// The next outermost evaluation checks for undefined behaviour
     /// ([`Oven::fold_for_overflow`]).
     ub_check_next: bool,
+    /// The next outermost evaluation is [`Oven::evaluate_call`]'s
+    /// (`vm::Run::potential`).
+    potential_next: bool,
     /// The next outermost or nested evaluation is plainly
     /// constant-evaluated ([`EvalContext::plain`], [`Oven::plain`]).
     plain_next: bool,
@@ -534,6 +543,7 @@ impl Oven {
             cxx_year: 2026,
             cev_warn_next: false,
             ub_check_next: false,
+            potential_next: false,
             plain_next: false,
             types: Types::default(),
             code: Vec::new(),
@@ -735,6 +745,33 @@ impl Oven {
         let r = self.eval_job(bridge, job, None, true, false, true).0.ok();
         self.subst_binds = saved;
         r
+    }
+
+    /// Evaluates a call of function `f` without arguments at `at`, with
+    /// its notes, manifestly constant-evaluated (as clang's
+    /// `Expr::isPotentialConstantExpr` runs the body of a `constexpr`
+    /// function without parameters; spec/oven.md "Evaluation entry
+    /// points"): the failure if it is not a constant expression, its last
+    /// note the call's "in call to". A function with parameters, or
+    /// returning a reference or an aggregate, is not evaluated (`Ok`).
+    /// Not recorded in the statistics; outside an outermost evaluation,
+    /// `Ok`.
+    pub fn evaluate_call(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        f: DeclId,
+        at: Loc,
+    ) -> Result<(), EvalFailure> {
+        if self.ctx_depth != 0 {
+            return Ok(());
+        }
+        self.potential_next = true;
+        let r = self.eval_job(bridge, Job::Call { f, at }, None, false, false, true).0;
+        self.potential_next = false;
+        match r {
+            Err(e) if e.notes.is_empty() => Ok(()),
+            r => r.map(|_| ()),
+        }
     }
 
     /// Folds `e` if it is a constant expression; never reports anything
@@ -1020,6 +1057,7 @@ impl Oven {
             Job::Expr(e) => self.eval_inner(b, e, object, fb),
             Job::Chars { size, data } => self.eval_chars(b, size, data, fb),
             Job::Subst { cond, at } => self.eval_subst(b, cond, at, fb),
+            Job::Call { f, at } => self.eval_call(b, f, at, fb),
         }
     }
 
@@ -1052,6 +1090,7 @@ impl Oven {
         self.run.fold = silent && !const_context;
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
         self.run.ub_check = std::mem::take(&mut self.ub_check_next);
+        self.run.potential = std::mem::take(&mut self.potential_next);
         self.run.overflows.clear();
         self.run.plain = std::mem::take(&mut self.plain_next);
         self.run.counters = vm::Counters::default();
@@ -1104,7 +1143,7 @@ impl Oven {
             let notes = if silent {
                 Vec::new()
             } else {
-                let loc = bridge.ast().exprs.get(e.expr()).loc();
+                let loc = e.loc(bridge.ast());
                 vec![Note::new(
                     loc,
                     format!(
