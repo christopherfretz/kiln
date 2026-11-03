@@ -3161,6 +3161,34 @@ caller's full-expression ([class.temporary]/3; clang
 - Tests: `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`
   (both oracles),
   `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`.
+## 7x. Landed (WP-454): braced expansion elements, constexpr structured bindings
+
+No lowering changed; the new forms reach codegen as existing AST.
+
+- A braced element of an expansion-init-list (`template for (P p : {{1,
+  2}, {.x = 3}})`, spec/sema.md §7.6a) is the per-element block `{ P p
+  = {...}; body }`. The expansion variable's list-initialization, its
+  temporaries and its destructor are emitted as for any block-scope
+  `P p = {...};`: each element's temporaries die at the end of its
+  declaration's full-expression and `p` at the end of its block, before
+  the next element starts. Tests:
+  `stmt.expand/braced-elements-run.cpp` (constructor and destructor
+  order), `stmt.expand/braced-elements.cpp` (the Oven's order).
+- A `constexpr` structured binding (P2686R5, spec/sema.md §4.9) emits
+  `e` and its holding variables as `constexpr` variables: a namespace-
+  scope `e` and its tuple-like holding references are constant globals
+  (`@x = constant ptr @_ZGR1x_`, as clang); a block-scope non-`static`
+  one calls `get` at run time, as clang does. Test:
+  `dcl.struct.bind/p2686-run.cpp`.
+- Left:
+  - A `static constexpr` block-scope tuple-like decomposition's holding
+    references get a guarded dynamic initializer, where clang
+    constant-initializes them: `fold::Collect::local_decl` does not
+    visit the holding variables of a local decomposition, so no fold
+    exists for `static_local` (values are right; WP-453 owns
+    `fold.rs`).
+  - An unreferenced namespace-scope `constexpr` decomposition's `e`
+    (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
 ## 7v. Landed (WP-456): `PseudoObjectExpr`
 
 The synthesized three-way comparison of a defaulted `operator<=>`
@@ -3250,6 +3278,15 @@ categories, compared with clang 22 and clang 19 on both targets).
   definition) and the dead D0 block clang appends to a labelled virtual
   destructor; local classes and instantiations in the incomplete-class
   walk.
+
+## Landed sections after WP-488: `spec/landed/codegen/`
+
+From WP-488 on, a work package's Landed section is not appended here: it
+is its own file, `spec/landed/codegen/WP-NNN.md` (title line
+`# WP-NNN — <title>`, the same content as a section above), so open pull
+requests never conflict on the end of this file (spec/README.md "Landed
+sections"). They are as normative as this file; read that directory
+after the numbered Landed sections above.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
