@@ -62,6 +62,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::OPTNONE => "OptimizeNone",
         AttrKind::MINSIZE => "MinSize",
         AttrKind::NAKED => "Naked",
+        AttrKind::INIT_PRIORITY => "InitPriority",
         _ => return None,
     })
 }

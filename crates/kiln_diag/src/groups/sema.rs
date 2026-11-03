@@ -64,6 +64,7 @@ ImplicitlyUnsignedLiteral = "implicitly-unsigned-literal" [];
 InaccessibleBase = "inaccessible-base" [];
 InconsistentMissingOverride = "inconsistent-missing-override" [];
 IncrementBool = "increment-bool" [];
+InitPriorityReserved = "init-priority-reserved" [];
 InitializerOverrides = "initializer-overrides" [];
 InlineNamespaceReopenedNoninline = "inline-namespace-reopened-noninline" [];
 InstantiationAfterSpecialization = "instantiation-after-specialization" [];

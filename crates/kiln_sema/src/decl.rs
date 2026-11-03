@@ -8836,6 +8836,9 @@ impl Sema<'_, '_> {
         if kind == AttrKind::ENUM_EXTENSIBILITY {
             return self.enum_extensibility_attribute(syntax, args, loc);
         }
+        if kind == AttrKind::INIT_PRIORITY {
+            return self.init_priority_attribute(syntax, &shown, args, loc);
+        }
         // `preferred_name(typedef-name)`: the type in `b`, checked
         // against its class template in `check_decl_attrs`.
         if kind == AttrKind::PREFERRED_NAME {
@@ -9445,6 +9448,7 @@ fn attr_kind_of(
         ("hot", _, true) => AttrKind::HOT,
         ("naked", _, true) => AttrKind::NAKED,
         ("may_alias", _, true) => AttrKind::MAY_ALIAS,
+        ("init_priority", _, true) => AttrKind::INIT_PRIORITY,
         // clang `Clang<"optnone">` / `Clang<"minsize">` spellings:
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,

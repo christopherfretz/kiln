@@ -113,6 +113,11 @@ impl AttrKind {
     /// the `omnipotent char` alias class at `-O1`+ (spec/codegen.md
     /// "TBAA"; WP-423).
     pub const MAY_ALIAS: AttrKind = AttrKind(108);
+    /// GNU `init_priority(N)` on a namespace-scope variable of class type
+    /// (clang `InitPriorityAttr`): `a` is the priority, its dynamic
+    /// initializer runs from the `_GLOBAL__I_<N>` constructor of priority
+    /// `N` ([basic.start.dynamic]; spec/codegen.md §7f; WP-189).
+    pub const INIT_PRIORITY: AttrKind = AttrKind(109);
 }
 
 /// Attribute syntax.
