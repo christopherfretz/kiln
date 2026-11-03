@@ -231,7 +231,7 @@ impl Sema<'_, '_> {
     /// clang `tryExprAsCall` for function `d` of type `t`, then whether
     /// the call is `bool`: every parameter has a default argument.
     fn zero_arg_call_returns_bool(&self, d: DeclId, t: QualType) -> bool {
-        let kiln_ast::types::TypeView::Function(p) = self.ast.types.view(t.ty()) else {
+        let TypeView::Function(p) = self.ast.types.view(t.ty()) else {
             return false;
         };
         self.ast.types.builtin(self.ast.types.canonical(p.ret())) == Some(BuiltinType::Bool)
