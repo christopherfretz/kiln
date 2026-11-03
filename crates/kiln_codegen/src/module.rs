@@ -169,6 +169,8 @@ pub(crate) struct Cg<'a> {
     pub anon: mangle::AnonIds,
     /// Dynamic initialization of static-storage variables.
     pub gi: crate::global_init::GlobalInits,
+    /// TBAA node caches (`!tbaa`, `!tbaa.struct`).
+    pub tbaa: crate::tbaa::TbaaCache,
 }
 
 impl<'a> Cg<'a> {
@@ -235,6 +237,7 @@ impl<'a> Cg<'a> {
             f: Fx::empty(),
             gi: crate::global_init::GlobalInits::default(),
             anon: mangle::AnonIds::new(),
+            tbaa: crate::tbaa::TbaaCache::default(),
         }
     }
 
@@ -2126,6 +2129,7 @@ impl<'a> Cg<'a> {
             m.add_module_flag_i32(7, "frame-pointer", v);
         }
         m.add_ident(&self.opts.ident);
+        self.tbaa_errno();
     }
 }
 

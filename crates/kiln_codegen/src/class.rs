@@ -960,11 +960,13 @@ impl Cg<'_> {
         let lv = if kind == CtorInitKind::IndirectField {
             let chain: Vec<DeclId> = ast.lists.iter(ast.indirect_field_chain(field)).collect();
             let mut base = this;
+            let mut btb = crate::tbaa::Tb::Type;
             let mut lv = None;
             for f in chain {
                 let q = ast.decls.get(f).ty().expect("field type");
-                let l = self.field_lvalue_init(base, f, q)?;
+                let l = self.field_lvalue_init_tb(base, btb, f, q)?;
                 base = l.addr;
+                btb = l.tb;
                 lv = Some(l);
             }
             lv.expect("indirect field chain")
@@ -975,7 +977,8 @@ impl Cg<'_> {
         let fq = lv.q;
         if self.referee(fq).is_some() {
             let p = self.emit_ref_binding(init)?;
-            self.store(p, lv.addr.v, lv.addr.align, false);
+            let st = self.store(p, lv.addr.v, lv.addr.align, false);
+            self.tbaa_mark(st, fq, lv.tb);
             return Ok(());
         }
         let addr = lv.addr;
@@ -1499,7 +1502,9 @@ impl Cg<'_> {
             // /8), which a one-byte copy would clobber.
             if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
                 let size = self.copy_size(rd, overlap);
-                self.memcpy(dest, src.addr.v, src.addr.align, size, false);
+                let c = self.memcpy(dest, src.addr.v, src.addr.align, size, false);
+                let cq = self.class_type(rd);
+                self.tbaa_struct_copy(c, cq);
             }
             return Ok(());
         }
@@ -1562,15 +1567,20 @@ impl Cg<'_> {
         if self.class_def(rd).is_some_and(|def| self.tys.layouter().is_empty(def)) {
             return;
         }
-        self.memcpy(dest, src.v, src.align, size, volatile);
+        let c = self.memcpy(dest, src.v, src.align, size, volatile);
+        let q = self.class_type(rd);
+        self.tbaa_struct_copy(c, q);
     }
 
     /// `EmitAggregateCopy` of an object of type `q` (see
-    /// [`Self::agg_copy_record`]).
+    /// [`Self::agg_copy_record`]); the copy carries `!tbaa.struct`.
     pub(crate) fn agg_copy(&mut self, q: QualType, dest: Addr, src: Addr, size: u64, vol: bool) {
         match self.ast.types.canonical_view(q) {
             TypeView::Record(rd) => self.agg_copy_record(rd, dest, src, size, vol),
-            _ => self.memcpy(dest, src.v, src.align, size, vol),
+            _ => {
+                let c = self.memcpy(dest, src.v, src.align, size, vol);
+                self.tbaa_struct_copy(c, q);
+            }
         }
     }
 
@@ -1691,7 +1701,9 @@ impl Cg<'_> {
                 // clang `EmitAggregateCopy`: empty classes are ignored.
                 if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
                     let size = self.copy_size(rd, true);
-                    self.memcpy(this, src.addr.v, src.addr.align, size, false);
+                    let c = self.memcpy(this, src.addr.v, src.addr.align, size, false);
+                    let cq = self.class_type(rd);
+                    self.tbaa_struct_copy(c, cq);
                 }
                 return Ok(Some(this.v));
             }
@@ -1894,6 +1906,7 @@ impl Cg<'_> {
             return err(Some(self.ast.decls.get(vb).loc()), "no vbase offset for the virtual base");
         };
         let vt = self.load(LTy::PTR, this.v, this.align, false);
+        self.tbaa_vptr(vt);
         let o = self.i64c(i128::from(oo));
         let p = self.gep(LTy::I8, vt, vec![o], false);
         Ok(self.load(LTy::I64, p, 8, false))

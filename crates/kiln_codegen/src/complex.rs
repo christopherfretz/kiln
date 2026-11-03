@@ -13,6 +13,7 @@ use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::{ExprId, QualType};
 use kiln_llvm::{BinOp, Flags, FloatPredicate, IntPredicate, TypeId as LTy, Value};
 
+use crate::tbaa::Tb;
 use crate::ComplexRange;
 use crate::expr::{Callee, LV, Opaque};
 use crate::fir::{Fir, Op, V};
@@ -855,7 +856,7 @@ impl Cg<'_> {
             return Ok(lv);
         }
         let addr = self.cx_part_addr(lv.addr, lv.q, u32::from(imag));
-        Ok(LV { addr, q, bf: None, vidx: None })
+        Ok(LV { addr, q, bf: None, vidx: None, tb: Tb::Type })
     }
 
     /// clang `EmitCompare` on complex operands (`==` and `!=` only).
