@@ -175,9 +175,14 @@ impl Substituter<'_, '_, '_> {
         }
         self.sema.scopes.push(s);
         self.sema.ast.templates.dependent_depth += 1;
+        let ol = *self.sema.ast.templates.param_list(info.params);
+        let old: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(ol.params).collect();
+        let cmp = self.friend_cmp_constraints(&old, ol.requires, pattern);
+        let saved_cmp = std::mem::replace(&mut self.sema.friend_cmp_constraints, cmp);
         let saved = std::mem::replace(&mut self.sema.instantiating_friend_template, true);
         let r = self.function_decl(pattern, DeclaratorContext::Member, Some(loc));
         self.sema.instantiating_friend_template = saved;
+        self.sema.friend_cmp_constraints = saved_cmp;
         self.sema.act_on_finish_template_decl();
         self.sema.templ.cur = None;
         let fd = r?;
@@ -211,6 +216,46 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(fd)
+    }
+
+    /// The constraints of friend template pattern `pattern` (those of
+    /// its template parameters `old`, its head's requires-clause `req`
+    /// and its trailing requires-clause) mapped to their substitution,
+    /// for redeclaration matching only (`Sema::friend_cmp_constraints`):
+    /// the redeclared friend keeps the pattern's constraints, whose own
+    /// parameters are one level deeper than the namespace scope
+    /// template's (`template<class T1, three_way_comparable C> friend
+    /// auto operator<=>(const stack<T1, C>&, ...)` in libc++ 22's
+    /// `stack`). A constraint that substitutes to a non-dependent one
+    /// names only the enclosing class's parameters ([temp.friend]/9):
+    /// it is not mapped, so the friend stays apart.
+    fn friend_cmp_constraints(
+        &mut self,
+        old: &[DeclId],
+        req: Option<kiln_ast::ExprId>,
+        pattern: DeclId,
+    ) -> kiln_source::fx::FxHashMap<kiln_ast::ExprId, kiln_ast::ExprId> {
+        let mut cs: Vec<kiln_ast::ExprId> = old
+            .iter()
+            .filter_map(|&p| self.sema.ast.template_parm(p).and_then(|i| i.constraint))
+            .collect();
+        cs.extend(req);
+        cs.extend(self.sema.ast.templates.trailing_requires.get(pattern).copied());
+        let mut m = kiln_source::fx::FxHashMap::default();
+        for c in cs {
+            if let Ok(e) = self.expr(c)
+                && self
+                    .sema
+                    .ast
+                    .exprs
+                    .get(e)
+                    .deps()
+                    .intersects(kiln_ast::expr::ExprDeps::TYPE_VALUE_INST)
+            {
+                m.insert(c, e);
+            }
+        }
+        m
     }
 
     /// Declares the pattern of a member template (the head is open).

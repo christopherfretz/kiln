@@ -214,7 +214,7 @@ A keyword must not directly follow a letter, a digit or `_`.
 | `ADDITIONAL_COMPILE_FLAGS: f…` | Whitespace-split. Appended to the compile line in file order. |
 | `ADDITIONAL_COMPILE_FLAGS(<feature>): f…` | Appended after the plain flags when `<feature>` is exactly in the feature set. |
 | `FILE_DEPENDENCIES: a, b` | Each file, relative to the test's directory, is copied into the scratch directory. A missing file, a glob or a `%{…}` makes the test UNSUPPORTED (`driver: FILE_DEPENDENCIES`). |
-| `MODULE_DEPENDENCIES:` | `std` and `std.compat` need nothing: kiln builds them in-process from libc++'s module sources (spec/modules.md §2). Any other module makes the test UNSUPPORTED (`driver: modules`). |
+| `MODULE_DEPENDENCIES:` | `std` and `std.compat` need no build step: kiln builds them in-process from libc++'s module sources (spec/modules.md §2). With a package tree ("Toolchain") kiln's own search would find the system libc++'s `std.cppm`, not the tree's, so the test gets `-fprebuilt-module-path=<prefix>/share/libc++/v1` for the tree's `<prefix>/include/c++/v1` when that directory holds `std.cppm` (kiln mode only; `Config::module_source_flags`). Any other module makes the test UNSUPPORTED (`driver: modules`). |
 | `ALLOW_RETRIES: N` | A failing run step is retried up to `N` more times (see "Timeouts and retries"). `N` must be an integer, and the keyword may appear once; otherwise the test is an ERROR (lit's `ParserKind.INTEGER`). |
 | `RUN:` | Read only in `.sh.<ext>` tests, where they are the steps (see "RUN lines"); a line ending in `\` continues on the next `RUN:` line. Elsewhere `format.py` ignores them, and so does the driver. |
 
@@ -539,6 +539,13 @@ The verdict is reached in this order:
 5. XFAIL, unless the test is in `run.rs` `XFAIL_IGNORED` (path and
    reason; empty since WP-418, when the driver took lit's `-Werror`: the
    `libcxx/selftest/*/werror.*` tests now XFAIL as under lit).
+6. XFAIL as well, under kiln only (not in clang mode) and with libc++ 22
+   or later headers, for a test in `run.rs` `CLANG_DEFECT_XFAIL` (path and
+   reason): its `TEST_COMPILER_CLANG` branch asserts a clang defect kiln
+   does not share (kiln defines `__clang__`). Today the two
+   `*_comparable_with.compile.pass.cpp` tests that pin llvm.org/PR171438
+   (WP-446; docs/status/libcxx-m5.md). Passing such a test is an XPASS:
+   kiln has taken on the defect.
 
 | Outcome | Meaning |
 |---|---|
@@ -651,7 +658,7 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 - `run.rs`: verdict order, outcome rules; `env_exclusions` (the lists
   are sorted, the root reason, `Uid:` parsing); `slow_tests_list`
   (`slow_tests.txt` is sorted, every entry has a reason, which tests are
-  long); `xfail_ignored_list` (sorted, every entry has a reason);
+  long); `xfail_ignored_list` (sorted, every entry has a reason); `clang_defect_xfail_list` (sorted, kiln only, libc++ 22+);
   `compile_fail_records_first_error_or_verifies` (WP-163: the first
   error with its directories dropped, `(no error line)`, a compile that
   succeeds, and a directive-bearing test run as verify);
