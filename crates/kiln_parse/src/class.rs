@@ -1118,6 +1118,10 @@ impl Parser<'_, '_> {
                 self.parse_static_assert();
                 true
             }
+            _ if self.at_consteval_block() => {
+                self.parse_consteval_block();
+                true
+            }
             (_, Some(Kw::Using)) => {
                 self.parse_using();
                 true
