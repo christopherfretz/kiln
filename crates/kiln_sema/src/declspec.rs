@@ -181,8 +181,15 @@ pub struct DeclSpec {
     pub constinit: Option<Loc>,
     /// `inline` written at.
     pub inline: Option<Loc>,
-    /// `thread_local` written at.
+    /// `thread_local` (or `__thread` / `_Thread_local`) written at.
     pub thread_local: Option<Loc>,
+    /// The thread storage kind `thread_local` stands for:
+    /// [`TlsKind::Static`](kiln_ast::decl::TlsKind::Static) when spelled
+    /// `__thread` or `_Thread_local` (clang `TSCS___thread` /
+    /// `TSCS__Thread_local`: a constant initializer and a trivially
+    /// destructible type), else `Dynamic` (unused while `thread_local`
+    /// is `None`).
+    pub thread_kind: kiln_ast::decl::TlsKind,
     /// `consteval` written at.
     pub consteval: Option<Loc>,
     /// `virtual` written at ([dcl.fct.spec]).

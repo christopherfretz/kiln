@@ -13,6 +13,11 @@
 //@ expect: compile-ok
 //@ strict-diags
 //@ skip(clang): clang 19/22 constant-evaluate none of these builtins
+// clang -Wconstant-logical-operand (spec/sema.md §5.25): an int-valued
+// builtin as the right operand of `&&` folds, as in clang 22.
+//@ diag: 43:43 warning "use of logical '&&' with constant operand"
+//@ diag: 43:43 note "use '&' for a bitwise operation"
+//@ diag: 43:43 note "remove constant to silence this warning"
 // binary128.
 static_assert(__builtin_ceilf128(0x1.0000000000000000000000000001p0f128) == 2);
 static_assert(__builtin_floorf128(-0x1.ffffffffffffffffffffffffffffp111f128) == -0x1p112f128);

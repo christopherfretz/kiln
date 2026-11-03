@@ -1279,6 +1279,13 @@ impl Oven {
                 Op::Speculate => {
                     let func = self.stack[self.stack.len() - 1].func;
                     match self.speculate(b, func, pc + 4, fb, arg!(1), aux & 1 != 0) {
+                        // clang `EvaluateBuiltinConstantP` outside a
+                        // constant context: a lax fold (`EvaluateAsInt`)
+                        // of a non-constant argument fails rather than
+                        // folding to 0.
+                        Ok(false) if aux & 2 != 0 && self.run.lax && !self.run.const_context => {
+                            fail!(Fault::Invalid)
+                        }
                         Ok(c) => reg!(0) = u128::from(c),
                         Err(f) => fail!(f),
                     }

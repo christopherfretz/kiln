@@ -43,7 +43,9 @@ impl Cg<'_> {
         }
         self.m.global_mut(g).thread_local = Some(TlsModel::GeneralDynamic);
         let first = self.ast.first(d);
-        if !local && !self.gi.tls_vars.contains(&first) {
+        // Only `thread_local` (clang `TLS_Dynamic`) variables get `_ZTW`
+        // wrappers; `__thread` ones are always accessed directly.
+        if !local && self.is_dynamic_tls(first) && !self.gi.tls_vars.contains(&first) {
             self.gi.tls_vars.push(first);
         }
     }
@@ -79,11 +81,21 @@ impl Cg<'_> {
         })
     }
 
-    /// clang `usesThreadWrapperFunction`: the variable may need
-    /// destruction or is not known to be constant-initialized.
+    /// Whether thread-local variable `d` is `thread_local` (clang
+    /// `TLS_Dynamic`) rather than `__thread` / `_Thread_local`.
+    fn is_dynamic_tls(&self, d: DeclId) -> bool {
+        self.ast.decls.var(d).is_some_and(|v| v.spec.tls() == TlsKind::Dynamic)
+    }
+
+    /// clang `EmitGlobalVarDeclLValue` + `usesThreadWrapperFunction`: a
+    /// `thread_local` variable that may need destruction or is not known
+    /// to be constant-initialized (never a `__thread` one).
     pub(crate) fn uses_thread_wrapper(&self, d: DeclId) -> bool {
         let ast = self.ast;
         let first = ast.first(d);
+        if !self.is_dynamic_tls(first) {
+            return false;
+        }
         let Some(ty) = ast.decls.get(first).ty() else { return true };
         if !ast.types.is_reference(ty) && self.var_destructed_class(first, ty).is_some() {
             return true;
