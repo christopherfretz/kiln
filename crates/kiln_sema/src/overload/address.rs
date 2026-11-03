@@ -179,6 +179,11 @@ impl Sema<'_, '_> {
 
     /// The matching non-template candidates of `ule` for `target`.
     fn address_candidates(&mut self, ule: ExprId, target: QualType) -> Vec<(DeclId, DeclId)> {
+        // [over.over]/3 via clang: explicit template arguments skip the
+        // non-templates (only a typo-corrected set has both).
+        if self.ast.templates.expr_targs.get(ule).is_some() {
+            return Vec::new();
+        }
         let cands = self.ule_candidates(ule);
         self.matching_candidates(cands, target)
     }
@@ -399,6 +404,21 @@ impl Sema<'_, '_> {
         ctx: AddrCtx,
         at: Loc,
     ) -> Option<ExprId> {
+        self.resolve_address_of_overloaded_noted(e, target, complain, ctx, at, None)
+    }
+
+    /// [`Sema::resolve_address_of_overloaded`] with `extra` appended to
+    /// the failure's notes (clang's `emitBadConversionNotes`: "passing
+    /// argument to parameter 'p' here" for a default argument).
+    pub(crate) fn resolve_address_of_overloaded_noted(
+        &mut self,
+        e: ExprId,
+        target: QualType,
+        complain: bool,
+        ctx: AddrCtx,
+        at: Loc,
+        extra: Option<Diag>,
+    ) -> Option<ExprId> {
         if let Some((x, _)) = self.implicit_member_operand(e)
             && let [(d, f)] = self.implicit_member_candidates(x, target)[..]
         {
@@ -500,6 +520,7 @@ impl Sema<'_, '_> {
         }
         failed.sort_by_key(|&(at, _)| at);
         notes.extend(failed.into_iter().map(|(_, n)| n));
+        notes.extend(extra);
         self.emit(notes.into_iter().fold(msg, Diag::with_note));
         None
     }
@@ -714,28 +735,33 @@ impl Sema<'_, '_> {
         self.plain_candidate_note(d)
     }
 
+    /// The one non-template function or static member function (and its
+    /// found declaration) of the overload set `e`, explicit template
+    /// arguments ignored: clang's `resolveAddressOfSingleOverloadCandidate`.
+    /// Only typo correction builds a set of a non-template with template
+    /// arguments (spec/sema.md "Undeclared template-ids").
+    /// `e` may be parenthesized and under `&` ([`Sema::overload_operand`]);
+    /// the result is the set's `UnresolvedLookupExpr`, the function and
+    /// its found declaration.
+    pub(crate) fn single_overload_candidate(&self, e: ExprId) -> Option<(ExprId, DeclId, DeclId)> {
+        let (ule, _) = self.overload_operand(e)?;
+        let [(d, found)] = self.ule_candidates(ule)[..] else { return None };
+        (matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
+            && !self.is_class_member_ref(d))
+        .then_some((ule, d, found))
+    }
+
     /// An operand `e` that is an overload set of one non-template
-    /// function or static member function without template arguments: the reference to that
-    /// function (clang's `resolveAndFixAddressOfSingleOverloadCandidate`
-    /// in `CheckPlaceholderExpr`), else `e`. Only typo correction builds
-    /// such a set (spec/sema.md "Undeclared template-ids").
+    /// function ([`Sema::single_overload_candidate`]): the reference to
+    /// that function (clang's `resolveAndFixAddressOfSingleOverloadCandidate`
+    /// in `CheckPlaceholderExpr`), else `e`.
     pub(crate) fn resolve_single_overload_candidate(&mut self, e: ExprId) -> ExprId {
-        if self.ast.exprs.get(e).kind() != ExprKind::UnresolvedLookupExpr
-            || self.ast.exprs.get(e).ty() != QualType::OVERLOAD
-            || self.ast.templates.expr_targs.get(e).is_some()
-        {
-            return e;
-        }
-        let [(d, found)] = self.ule_candidates(e)[..] else { return e };
-        if !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
-            || self.is_class_member_ref(d)
-        {
-            return e;
-        }
-        let naming = self.ovl.ule_found.get(&e).and_then(|x| x.naming);
-        let nns = self.ast.templates.expr_nns.get(e).copied();
-        let loc = self.ast.exprs.get(e).loc();
-        self.finish_overload_ref(d, found, naming, loc, nns, e, true)
+        let Some((ule, d, found)) = self.single_overload_candidate(e) else { return e };
+        let naming = self.ovl.ule_found.get(&ule).and_then(|x| x.naming);
+        let nns = self.ast.templates.expr_nns.get(ule).copied();
+        let loc = self.ast.exprs.get(ule).loc();
+        let r = self.finish_overload_ref(d, found, naming, loc, nns, ule, true);
+        self.rebuild_over(e, ule, r)
     }
 
     /// An expression of overloaded-function type used without a target

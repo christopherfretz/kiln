@@ -279,6 +279,7 @@ pub fn lvalue_to_rvalue(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
 /// ([conv.func]) conversions, else the lvalue-to-rvalue conversion
 /// (clang's `DefaultFunctionArrayLvalueConversion`).
 pub fn decay(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
+    let e = s.resolve_single_overload_candidate(e);
     let n = *s.ast.exprs.get(e);
     let t = n.ty();
     if s.ast.types.is_dependent(t) {
