@@ -111,7 +111,7 @@ not check it: its first header cell is not `Paper`.
 | WP-474 | M6-05: splices in every position, including dependent ones | todo | | Type splices exist from the spike. |
 | WP-475 | M6-06: result materialization, the names family, `std::meta::exception` (P3560) | todo | | |
 | WP-476 | M6-07: queries and predicates, parameters (P3096) | todo | | `type_of` is ported (WP-470). |
-| WP-477 | M6-08: type traits family | todo | | |
+| WP-477 | M6-08: [meta.reflection.traits], delegating to the builtin trait engine ([spec/reflection-traits.md](../../spec/reflection-traits.md)) | done | `conformance/meta.reflection.traits/*.cpp`<br>`conformance/meta.reflection.traits/traits-zoo.cpp` (generated) | Range forms take `(const info*, size_t)` (`kiln_meta_traits.h`); the `reflection_range` rows and `type_order` fail with a note until WP-475 / `strong_ordering`. Swappable, invocable, `common_*`, `unwrap_*`, tuple and variant queries instantiate the TU's `std::` templates. |
 | WP-478 | M6-09: members, access contexts (P3547), layout, annotation queries | todo | | Includes implicit special members (D4). |
 | WP-479 | M6-10: values and static storage (P3491), `refl_bytes` | todo | | |
 | WP-480 | M6-11: `define_aggregate`, `data_member_spec`, `__kiln_define_member` rules (D7) | todo | | |
