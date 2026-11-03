@@ -5388,6 +5388,20 @@ impl Sema<'_, '_> {
         let fail = match overload {
             Some(e) => AutoFail::Incompatible(e),
             None => match self.deduce_auto(declared, &items, kind) {
+                // clang 19's placeholder-typed specialization
+                // (`undeduced_var_spec_use_19`) deduces only itself; any
+                // other variable "deduced" from it is rejected (clang 19
+                // accepts it and crashes generating code).
+                Ok(t) if self.contains_undeduced_auto(t) => {
+                    if self.undeduced_var_spec_use_19(v) {
+                        self.templ.self_typed_var_specs.push(v);
+                        return Some(t);
+                    }
+                    match items.iter().flatten().next() {
+                        Some(&e) => AutoFail::Incompatible(e),
+                        None => AutoFail::Error,
+                    }
+                }
                 Ok(t) => {
                     let at = self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or(loc);
                     // `constexpr C decltype(auto) x = e;`: the constraint

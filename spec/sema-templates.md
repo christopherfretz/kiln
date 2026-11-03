@@ -2446,10 +2446,17 @@ impl Sema<'_, '_> {
   deduction notes of the overload-set complaint (`addr_no_match_notes`).
   It puts the warnings back into the entry for the specialization's
   first use (`drop_template_id_warnings`). Inside SFINAE nothing is
-  parked. Gap: clang stores a deduction's warnings only when that
-  deduction succeeds, so its clang 22 context notes name the later use;
-  kiln's keep the failed one's location. Test
-  `over.over/template-id-no-match{,-19}.cpp`.
+  parked. clang stores a deduction's warnings only when that deduction
+  succeeds, so from clang 22 on their context notes name the later use:
+  the drop records the template-id's location
+  (`SpecialState.dropped_tid_warnings`), and the next take of the entry
+  (`take_suppressed_diags`, from `resolve_single_template_id` and
+  `emit_suppressed_diags`) moves the notes there to the use's location
+  (`Diag::relocate_notes`; WP-424). Gap: the restored warnings are the
+  failed use's, so a later *call* also reports the warning of the
+  explicit arguments' substitution into the whole function type, which
+  clang's call deduction does not make (clang reports only the signature
+  substitution's). Tests `over.over/template-id-no-match{,-19,-restored}.cpp`.
 - Fatal errors are always reported: the depth limit and stack
   exhaustion.
 
