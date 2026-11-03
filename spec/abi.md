@@ -665,6 +665,15 @@ points, thunks and method indices are clang's.
     potentially-overlapping member of that union type uses (WP-289);
   - `IrRecord::base_index` and `vbase_index` map each base to its
     element;
+  - a `_BitInt(N)` member, array element or object is the integer of
+    its ABI size (`i256` for `_BitInt(200)`), unless LLVM allocates that
+    `iN` in a different number of bytes than the type's size, when it is
+    the byte array `[size x i8]` (`_BitInt(129)`: `i129` allocates 32
+    bytes, the type 24; clang `typeRequiresSplitIntoByteArray`); a value
+    is loaded and stored as the integer of the size either way
+    (`IrTypes::convert_load_store`, clang `convertTypeForLoadStore`),
+    and a constant initializer of a byte-array slot is emitted as bytes
+    (WP-465; `tests/codegen/bit_int_wide_record.cpp`);
   - padding (clang `insertPadding`) fills the gap before each member
     with storage. Those members are disjoint and sorted by offset: an
     empty `[[no_unique_address]]` member has no storage (several may

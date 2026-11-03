@@ -208,6 +208,17 @@ impl<'a> IrTypes<'a> {
         self.convert_mem(q)
     }
 
+    /// clang `convertTypeForLoadStore`: the type a value of type `q` is
+    /// loaded and stored as. A `_BitInt(N)` is the integer of its ABI size
+    /// even where its in-memory type is a byte array
+    /// ([`Self::convert_mem`]); otherwise the in-memory type.
+    pub fn convert_load_store(&mut self, q: QualType) -> IrType {
+        if let TypeView::BitInt { width, .. } = self.ast().types.canonical_view(q) {
+            return IrType::Int(self.target().bit_int_size_align_bits(width).0 as u32);
+        }
+        self.convert_mem(q)
+    }
+
     /// clang `ConvertTypeForMem`: the type of an object in memory.
     pub fn convert_mem(&mut self, q: QualType) -> IrType {
         let ast = self.ast();
@@ -215,9 +226,18 @@ impl<'a> IrTypes<'a> {
             TypeView::Builtin(b) => self.builtin(b),
             // clang `ConvertTypeForMem`: `_BitInt(N)` in memory is the
             // integer of its ABI size (`i8` for `_BitInt(7)`, `i64` for
-            // `_BitInt(33)`, `i256` for `_BitInt(200)` on x86_64).
+            // `_BitInt(33)`, `i256` for `_BitInt(200)` on x86_64), unless
+            // LLVM's alloc size of `iN` differs from that size, when it is
+            // the byte array of the size (`[24 x i8]` for
+            // `_BitInt(129)`: `i129` allocates 32 bytes; clang
+            // `typeRequiresSplitIntoByteArray`).
             TypeView::BitInt { width, .. } => {
-                IrType::Int(self.target().bit_int_size_align_bits(width).0 as u32)
+                let bits = self.target().bit_int_size_align_bits(width).0;
+                if self.size_align(&IrType::Int(width)).0 != bits / 8 {
+                    IrType::bytes(bits / 8)
+                } else {
+                    IrType::Int(bits as u32)
+                }
             }
             TypeView::Pointer(_)
             | TypeView::LValueRef(_)
