@@ -1,5 +1,8 @@
 //@ mode: pp
 //@ args: -stdlib=libc++
+// budget-time: 1.5x kiln's median when recorded (WP-487: 1176 ms at load
+// ~20); the pre-WP-487 quadratic `#define`/`#undef` path took 2443-3180 ms.
+//@ budget-time: 1765
 // The shape of a real translation unit's preprocessing: the whole libc++
 // include graph (file lookup, include guards, large skipped regions), then a
 // header-style configuration layer -- feature probing with `__has_include`,

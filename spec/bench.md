@@ -150,6 +150,7 @@ scanner is shared; the keys are not.
 | `threshold-mem: <PCT>` | This entry's allowed peak-RSS regression (default 2). |
 | `threshold-steps: <PCT>` | This entry's allowed constexpr `steps` regression (default 0). |
 | `threshold-bytes: <PCT>` | This entry's allowed constexpr `bytes`/`peak_bytes`/`peak_arena`/`frozen_bytes`/`static_bytes` regression (default 2). |
+| `budget-time: <ms>` | An absolute wall-clock budget for kiln, in milliseconds (a positive number): kiln's **fastest** run must not take longer (load only ever adds time, as in the time-regression rule). Checked on every kiln run, `--record` included, so re-recording cannot absorb a slowdown past it; a breach fails the entry (`over the time budget: ...`) and the entry is not recorded. Other compilers are not held to it. Host-specific like the baselines: set it at ~1.5x the recorded kiln median on the recording host, next to the number it guards (`bench/pp/headers.cpp`, WP-487). |
 | `xfail(kiln): <reason>` | The entry is expected to fail under kiln; the reason names the owning WP. A kiln failure then counts as `xfail` (row status `xfail (<reason>)`, summary `, N xfail`), not as a failure; a kiln compile that succeeds fails the entry (`XPASS: … remove the marker`). Other compilers measure the entry as usual. A missing reason or a repeat is an error. |
 
 | Mode | Flags |
@@ -519,7 +520,8 @@ Nothing from `<dir>` is written; `-v` adds the failing cases' paths.
 - `xtask/src/bench/tests.rs` `parses_the_command_line`: `--mem-limit` and
   its default.
 - `xtask/src/bench/entry.rs`: directive defaults, every key, rejected headers,
-  source hashes; `xfail(kiln)` (reason, repeat).
+  source hashes; `xfail(kiln)` (reason, repeat); `budget-time` (value,
+  repeat).
 - `xtask/src/gen_reflect.rs`: same N gives identical bytes, the header,
   the committed files current, every shape's directives parsing with the
   owner in `xfail(kiln)`, a bad N refused, the FNV-1a digest.
@@ -559,6 +561,9 @@ Nothing from `<dir>` is written; `-v` adds the failing cases' paths.
   (see `spec/harness.md`): recorded, unchanged, within an entry's
   `threshold-bytes:`, a one-step regression, a `--threshold-steps` override,
   an improvement, an over-budget entry, and clang recording no counters;
+  `time_budget_with_a_fake_kiln` over `xtask/fixtures/bench/budget/`: a
+  `budget-time:` breach failing the entry with and without `--record` (not
+  recorded), a run inside the budget passing, and clang not held to it;
   the instantiation counters with the same fake kiln over
   `xtask/fixtures/bench/frontend/`: recorded in the baseline and `perf.md`,
   unchanged, a one-instantiation regression despite wide thresholds,

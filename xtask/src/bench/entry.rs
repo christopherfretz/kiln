@@ -70,6 +70,10 @@ pub struct BenchSpec {
     /// feature family has not landed); a kiln failure is then XFAIL and a
     /// kiln measurement XPASS, which fails the run (`spec/bench.md`).
     pub xfail_kiln: Option<String>,
+    /// `budget-time: <ms>`: kiln's fastest run must not take longer
+    /// (checked on every kiln run, `--record` included; other compilers
+    /// are not judged by it).
+    pub budget_time_ms: Option<f64>,
 }
 
 /// Directives that belong to `cargo xtask test` and mean nothing here.
@@ -99,6 +103,7 @@ const KEYS: &[&str] = &[
     "threshold-mem",
     "threshold-steps",
     "threshold-bytes",
+    "budget-time",
 ];
 
 /// Parses an entry's directive header. All errors are collected.
@@ -110,6 +115,7 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
     let mut oven: Vec<(usize, OvenBudget)> = Vec::new();
     let mut thresholds = ThresholdOverrides::default();
     let mut xfail_kiln = None;
+    let mut budget_time_ms = None;
     for d in directives {
         let mut err = |m: String| errors.push(DirectiveError { line: d.line, message: m });
         if d.key.replace(' ', "") == "xfail(kiln)" {
@@ -176,6 +182,11 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
                     None => err(format!("bad `{k}` value `{value}` (a non-negative percentage)")),
                 }
             }
+            "budget-time" => match value.parse::<f64>() {
+                _ if budget_time_ms.is_some() => err("duplicate `budget-time`".into()),
+                Ok(ms) if ms.is_finite() && ms > 0.0 => budget_time_ms = Some(ms),
+                _ => err(format!("bad `budget-time` value `{value}` (a positive number of ms)")),
+            },
             k => err(format!("unknown directive `{k}`")),
         }
     }
@@ -201,6 +212,7 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
         oven: oven.into_iter().map(|(_, b)| b).collect(),
         thresholds,
         xfail_kiln,
+        budget_time_ms,
     })
 }
 
@@ -340,6 +352,7 @@ mod tests {
                 oven: vec![],
                 thresholds: ThresholdOverrides::default(),
                 xfail_kiln: None,
+                budget_time_ms: None,
             }
         );
     }
@@ -359,6 +372,8 @@ mod tests {
             "int x;\n",
         ))
         .unwrap();
+        assert_eq!(s.budget_time_ms, None);
+        assert_eq!(parse_spec("//@ budget-time: 1300.5\n").unwrap().budget_time_ms, Some(1300.5));
         assert_eq!(s.mode, Mode::EmitLlvm);
         assert_eq!(s.std, "c++20");
         assert_eq!(s.args, ["-stdlib=libc++", "-DX=a b", "-O1"]);
@@ -429,6 +444,16 @@ mod tests {
         assert_eq!(
             errs("//@ xfail(kiln)\n"),
             ["line 1: `xfail(kiln)` requires a reason (the owning WP)"]
+        );
+        for bad in ["0", "-5", "fast", "inf", "NaN"] {
+            assert_eq!(
+                errs(&format!("//@ budget-time: {bad}\n")),
+                [format!("line 1: bad `budget-time` value `{bad}` (a positive number of ms)")]
+            );
+        }
+        assert_eq!(
+            errs("//@ budget-time: 9\n//@ budget-time: 9\n"),
+            ["line 2: duplicate `budget-time`"]
         );
         assert_eq!(
             errs("//@ xfail(kiln): WP-1\n//@ xfail(kiln): WP-2\n"),

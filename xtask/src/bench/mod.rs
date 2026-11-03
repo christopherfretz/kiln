@@ -1011,6 +1011,20 @@ fn measure_slice(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subj
     sample(cx, e, spec, s, &cmd, cap, none, (flags, hash))
 }
 
+/// Why kiln's fastest run `min_ms` (of `runs`) breaks the entry's `budget-time:`, if
+/// it does; other compilers are not held to the budget (spec/bench.md
+/// "Directives"). The fastest run, as in the time-regression rule: load
+/// only ever adds time, so a budget breach means every run was over.
+fn over_time_budget(spec: &BenchSpec, s: &Subject, min_ms: f64, runs: usize) -> Option<String> {
+    let budget = spec.budget_time_ms.filter(|_| s.id.kind == CompilerKind::Kiln)?;
+    (min_ms > budget).then(|| {
+        format!(
+            "over the time budget: the fastest of {runs} runs took {min_ms:.1} ms, \
+             `budget-time: {budget}` allows {budget} ms"
+        )
+    })
+}
+
 /// Runs `cmd` `cx.runs` times and summarises the runs; `flags` is the
 /// recorded flag string and `hash` the entry's source hash.
 #[allow(clippy::too_many_arguments)]
@@ -1061,6 +1075,9 @@ fn sample(
         }
     }
     let Some(w) = Summary::of(&walls) else { return Outcome::Failed("no runs".into()) };
+    if let Some(why) = over_time_budget(spec, s, w.min, walls.len()) {
+        return Outcome::Failed(why);
+    }
     // Peak RSS only counts when every run reported it.
     #[allow(clippy::cast_precision_loss)]
     let max_rss_kb = if rss.len() == walls.len() {

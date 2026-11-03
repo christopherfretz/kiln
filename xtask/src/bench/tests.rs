@@ -363,6 +363,39 @@ fn instantiation_counters_with_a_fake_kiln() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `budget-time:` (spec/bench.md "Directives"): kiln's fastest run over
+/// the budget fails the entry, `--record` or not, and the entry is not
+/// recorded; a run inside it passes; clang is not held to it. With the fake
+/// kiln (skipped when clang++-19 is not installed).
+#[test]
+fn time_budget_with_a_fake_kiln() {
+    let clang = Path::new("clang++-19");
+    if identify(clang).is_err() {
+        eprintln!("skipping: clang++-19 not available");
+        return;
+    }
+    let dir = scratch("budget");
+    let lay = layout(&dir);
+    let kiln = lay.root.join("xtask/fixtures/fake-kiln/kiln");
+    let (over, under) = ([lay.bench.join("budget/over.cpp")], [lay.bench.join("budget/under.cpp")]);
+    for record in [false, true] {
+        let opts = Options { runs: 1, record, ..Options::default() };
+        let r = execute(&opts, &lay, &kiln, &over).unwrap();
+        assert!(r.failing && r.failed == 1, "{r:?}");
+    }
+    let budget = lay.baselines.join("budget.json");
+    assert!(
+        BaselineFile::load(&budget, "budget").map_or(true, |f| !f.entries.contains_key("over")),
+        "an over-budget entry is not recorded"
+    );
+    let opts = Options { runs: 1, record: true, ..Options::default() };
+    let r = execute(&opts, &lay, &kiln, &under).unwrap();
+    assert!(!r.failing && r.failed == 0, "{r:?}");
+    let r = execute(&opts, &lay, clang, &over).unwrap();
+    assert!(!r.failing && r.failed == 0, "{r:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// `--record` with `--compare-with` merges into `perf.md` (spec/bench.md
 /// "Recording"): a fresh page when there is none, a filtered recording keeps
 /// the other rows, a re-recording replaces its row, stale rows are marked
@@ -440,6 +473,8 @@ fn perf_md_merges_across_recordings() {
         ids(&page),
         [
             "broken/error",
+            "budget/over",
+            "budget/under",
             "frontend/inst",
             "frontend/no-report",
             "oven/counted",

@@ -380,7 +380,10 @@ threshold (default 5% time, 2% memory, 0% steps, 2% constexpr bytes; an entry
 can set its own with `threshold-*:` directives, and `--threshold-*` options
 override both). The counters are deterministic, so they catch evaluator
 regressions that host noise would hide in the timings, and `oven:` budgets
-on bench entries are enforced too. The time rule compares the fastest current run
+on bench entries are enforced too, as is a `budget-time:` directive: an
+absolute ceiling on kiln's fastest run that holds even under `--record`, so a
+re-recording cannot absorb a regression past it (`bench/pp/headers.cpp`
+carries one at 1.5x its recorded kiln time, WP-487). The time rule compares the fastest current run
 with the baseline median so host load does not read as a regression, and a
 baseline taken with a different compiler version, host or entry source is
 advisory only. The same corpus is run through clang to produce the
