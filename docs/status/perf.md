@@ -253,3 +253,74 @@ clang row. The remaining time is the per-element instantiation of the body
 An earlier pair of debug runs gave 12.68 s before and 10.56 s after. A
 range of more than 2^20 library-iterator elements is now counted rather
 than rejected.
+
+### WP-502: GCC 16.1 in CI (2026-11-03)
+
+**Choice: `container: gcc:16.1.0-trixie` in both jobs** (the preferred
+form; spec/harness.md "GCC oracle", docs/VALIDATION.md "GitHub Actions"),
+with `KILN_GCC=/usr/local/bin/g++` and `KILN_REQUIRE_GCC=1` in the job
+env. The fallback (`debian:trixie` plus an `actions/cache` restore of the
+GCC layer into `/opt/gcc-16`) applies only if the image's measured per-job
+delta exceeds 60 s. The fallback would still download the 163.5 / 176.4 MB
+GCC layer from the cache, need an `ldconfig` step, and add a cache key to
+keep in step, so it saves at most the base-layer pull. The image's
+preinstalled git removes the `Install git` step (5-7 s), and its
+build tools make the `build-essential` part of the apt step a no-op.
+
+New work inside the steps:
+- **The action's GCC check**, `-dumpfullversion` plus a `<meta>` TU with
+  `-fsyntax-only`, takes 0.5 s on the dev host.
+- **The four `oracle: gcc` tests** in `tests/conformance/meta.reflection.ci/`
+  add one GCC compile, link and run each, in both corpus runs: 0.7 s
+  of GCC together on the dev host, spread over the corpus's parallel jobs.
+- **The xtask unit test `require_gcc_makes_a_missing_gcc_an_error`**
+  takes under 0.1 s.
+
+**CI time, from the PR run.** The WP-483 column is the baseline above
+(run 41641461340). The PR column is the PR's first CI run, 41676776320
+(wp/502 at 71afe3dcf). Both come from `gh run view <id> --repo
+christopherfretz/kiln --log`, one row per step, taken from the step and
+`xtask ci:` timestamps. Like the baseline, the fmt-and-clippy row leaves
+out the xtask build.
+
+| Step | `check` WP-483 | `check` PR | delta | `check-x86_64` WP-483 | `check-x86_64` PR | delta |
+|---|--:|--:|--:|--:|--:|--:|
+| Initialize containers (image pull) | 5 s | 21 s | +16 s | 4 s | 25 s | +21 s |
+| Install git (removed) | 7 s | 0 s | -7 s | 5 s | 0 s | -5 s |
+| Checkout | 2 s | 5 s | +3 s | 3 s | 6 s | +3 s |
+| apt toolchain + GCC check | 12 s | 12 s | 0 s | 12 s | 12 s | 0 s |
+| Rust toolchain + cache | 10 s | 8 s | -2 s | 12 s | 15 s | +3 s |
+| `xtask ci`: fmt, clippy | 24 s | 24 s | 0 s | 20 s | 27 s | +7 s |
+| `xtask ci`: cargo test | 264 s | 190 s | -74 s | 214 s | 187 s | -27 s |
+| `xtask ci`: clang 22 self-check | 64 s | 69 s | +5 s | 67 s | 72 s | +5 s |
+| `xtask ci`: kiln corpus | 160 s | 175 s | +15 s | 141 s | 192 s | +51 s |
+| `KILN_ORACLE=19 xtask ci --quick`: fmt, clippy | 4 s | 0 s | -4 s | 3 s | 0 s | -3 s |
+| `--quick`: cargo test | 210 s | 15 s | -195 s | 178 s | 15 s | -163 s |
+| `--quick`: kiln corpus | 159 s | 173 s | +14 s | 140 s | 189 s | +49 s |
+| Job total | 938 s (15.6 min) | 711 s (11.9 min) | -227 s | 812 s (13.5 min) | 760 s (12.7 min) | -52 s |
+
+Most of each job's net change comes from things other than WP-502:
+- **The two `--quick` savings rows are WP-488.** The baseline run predates
+  WP-488. The PR's second pass is `--quick --oracle-only`, which skips fmt
+  and clippy and runs only `cargo test -p kiln_codegen --test ir_vs_clang`.
+- **The corpus grew by 74 tests between the runs** (3868 to 3942).
+- **The rest of the corpus and cargo-test movement is runner variance.**
+  The four GCC comparisons account for about 1 s of the corpus rows.
+
+The cost WP-502 itself adds is image cost:
+- **What it is:** `Initialize containers` plus `Install git`, against the
+  old pair.
+- **`check`:** 21 s against 12 s, so +9 s.
+- **`check-x86_64`:** 25 s against 9 s, so +16 s.
+- **The GCC check:** inside the noise of the apt step.
+
+A same-code control confirms this: main at ec90dc214, run 41674865717,
+on `debian:trixie` with WP-488. Its container + git pair is 12 s / 14 s,
+against the PR's 21 s / 25 s.
+
+Both jobs print `g++ (GCC) 16.1.0` in `Install the toolchain packages`
+and `4 compared with gcc` in both kiln-corpus summary lines.
+
+**Conclusion:** the `gcc:16.1.0-trixie` image costs +9 s (`check`) and
++16 s (`check-x86_64`) per job, well under the 60 s threshold, so the
+image stays and the `actions/cache` fallback is not taken.
