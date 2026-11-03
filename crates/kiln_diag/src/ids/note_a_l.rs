@@ -134,6 +134,7 @@ note_for_range_member_begin_end_ignored = Note (2) "member is not a candidate be
 note_format_security_fixit = Note (0) "treat the string as an argument to avoid this";
 note_forward_declaration = Note (1) "forward declaration of {0}";
 note_forward_template_decl = Note (0) "forward declaration of template entity is here";
+note_from_diagnose_if = Note (1) "from 'diagnose_if' attribute on '{0}':";
 note_function_returns_const = Note (2) "function {0} which returns const-qualified type {1} declared here";
 note_function_style_cast_add_parentheses = Note (0) "add enclosing parentheses to perform a function-style cast";
 note_function_template_deduction_instantiation_here = Note (1) "while substituting deduced template arguments into function template {0}";
@@ -160,6 +161,7 @@ note_inst_declaration_hint = Note (1) "add an explicit instantiation declaration
 note_instantiation_contexts_suppressed = Note (2) "(skipping {0} context{1} in backtrace; use -ftemplate-backtrace-limit=0 to see all)";
 note_instantiation_required_here = Note (1) "{0:implicit|explicit} instantiation first required here";
 note_it_delegates_to = Note (0) "it delegates to";
+note_kiln_injected_here = Note (0) "member injected here";
 note_lambda_capture_by_ref = Note (1) "capture '{0}' by reference";
 note_lambda_capture_by_value = Note (1) "capture '{0}' by value";
 note_lambda_capture_here = Note (1) "{0:captured|captured by reference|implicitly captured due to use|implicitly captured by reference due to use} here";

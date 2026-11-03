@@ -480,9 +480,11 @@ also in `--list`), only while the condition holds:
   --mem-limit <m> MiB is below the <need> MiB it needs: <why>`
   (`MEM_UNSUPPORTED`, path, MiB and why): `stringstream.members/gcount.pass.cpp`
   needs an `INT_MAX - 1` byte payload plus a `stringbuf` grown past
-  `INT_MAX`, about 2 + 2 + 4 GiB at the last regrowth, so 9216 MiB (an
-  estimate: it cannot be measured on this host above 3 GiB; clang 22 fails
-  under 3072 MiB too, WP-461). With `--mem-limit 0` (no cap) or one at
+  `INT_MAX`, 2 + 1.5 + 3 GiB at the last regrowth: 6660 MiB of address
+  space, measured on a scaled copy (docs/VALIDATION.md "libc++ memory
+  exclusions"; the run itself exceeds the host's 3 GiB per-process
+  budget), so 7168 MiB (WP-491; clang 22 fails under 3072 MiB too,
+  WP-461). With `--mem-limit 0` (no cap) or one at
   least that large, the test runs.
 - the test's `TMPDIR` on a host-shared bind mount (the mount holding it
   in `/proc/self/mountinfo` has type `fakeowner`, `fuse.grpcfuse` or

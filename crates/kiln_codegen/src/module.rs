@@ -1294,6 +1294,14 @@ impl<'a> Cg<'a> {
         self.ir(&t)
     }
 
+    /// The IR type a value of type `q` is loaded and stored as
+    /// (`convertTypeForLoadStore`): `iN` of a `_BitInt`'s ABI size where
+    /// its in-memory type is a byte array, else [`Self::mty`].
+    pub fn lsty(&mut self, q: QualType) -> LTy {
+        let t = self.tys.convert_load_store(q);
+        self.ir(&t)
+    }
+
     /// `sizeof` and `alignof` of `q`.
     pub fn size_align(&mut self, q: QualType) -> (u64, u64) {
         let l = self.tys.layouter().type_layout(q);
@@ -1718,11 +1726,17 @@ impl<'a> Cg<'a> {
         on.chain(off).collect::<Vec<_>>().join(",")
     }
 
-    /// `vscale_range(1,16)` on a function definition with the `sve`
-    /// target feature (clang `StartFunction`; not on the thunks and
-    /// helpers clang builds without a `CodeGenFunction`).
+    /// `vscale_range(N/128,N/128)` under `-msve-vector-bits=N`, else
+    /// `vscale_range(1,16)` with the `sve` target feature, on a function
+    /// definition (clang `getVScaleRange` in `StartFunction`; not on the
+    /// thunks and helpers clang builds without a `CodeGenFunction`).
     pub fn vscale_attr(&self, out: &mut Vec<Attr>) {
-        if self.opts.sve && !self.is_x86() {
+        if self.is_x86() {
+            return;
+        }
+        if let Some(n) = self.opts.sve_vector_bits {
+            out.push(Attr::VScaleRange(n / 128, n / 128));
+        } else if self.opts.sve {
             out.push(Attr::VScaleRange(1, 16));
         }
     }

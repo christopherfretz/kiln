@@ -17,7 +17,7 @@ use kiln_codegen::{AutoVarInit, CodegenOptions, emit_with_diags};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Group};
 use kiln_lex::Interner;
 use kiln_parse::{ParseOptions, parse_preprocessed};
-use kiln_pp::PicModel;
+use kiln_pp::{ClangCompat, PicModel};
 use kiln_sema::target::Target;
 use kiln_source::{SourceManager, Span};
 
@@ -210,7 +210,7 @@ impl CodegenJob<'_> {
             target.types.char_signed = signed;
         }
         let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
-        let feats = crate::features::resolve(a, job.toolchain.target.is_aarch64()).0;
+        let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
             std: job.std.lex,
             gnu: job.std.gnu,
@@ -224,6 +224,7 @@ impl CodegenJob<'_> {
             clang_compat: a.predef.clang_compat.major(),
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == StdLib::LibStdCxx,
             sve: feats.sve,
+            cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
@@ -237,7 +238,11 @@ impl CodegenJob<'_> {
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
                 target_features: feats.extra.clone(),
-                sve: feats.sve,
+                // clang 19's `vscale_range` also needs NEON (its `SveMode`).
+                sve: feats.sve
+                    && (a.predef.clang_compat == ClangCompat::Clang22
+                        || feats.enabled().iter().any(|f| f == "neon")),
+                sve_vector_bits: feats.sve_vector_bits,
                 complex_range: a.complex_range(),
                 opt_level: opt_level(a.opt_flag.as_deref()),
                 opt_size: opt_size(a.opt_flag.as_deref()),

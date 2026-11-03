@@ -127,7 +127,8 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -verify-ignore-unexpected[=<levels>] -Xclang <arg> -fconstexpr-steps=
 -fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
 -fconstexpr-report= -ftemplate-depth= -ftemplate-backtrace-limit=
--fkiln-instantiation-report[=all|json] -fkiln-stack-size= -c -S -emit-llvm -O<n> -g (ignored) -l -L -Wl,
+-fkiln-instantiation-report[=all|json] -fkiln-stack-size= -fkiln-dump-cfg
+-fkiln-cfg-stats -fkiln-cfg-max-elems= -c -S -emit-llvm -O<n> -g (ignored) -l -L -Wl,
 -fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
 -v --version.
 See spec/driver.md.
@@ -157,6 +158,9 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
             .note(DiagId::drv_verify_prefix_spelling, Span::INVALID),
         ArgError::UnsupportedValue(o, v) => {
             Diag::new(DiagId::drv_unsupported_option_argument, Span::INVALID).arg(o).arg(v)
+        }
+        ArgError::UnsupportedForTarget(o, t) => {
+            Diag::new(DiagId::drv_unsupported_opt_for_target, Span::INVALID).arg(o).arg(t)
         }
     };
     d.emit(engine);
@@ -249,6 +253,10 @@ fn check_action(args: &Args, drv: &DiagEngine<'_>) {
             .then_some("-fdump-record-layouts without -fsyntax-only"))
         .or((action != Action::SyntaxOnly && args.dump_vtable_layouts)
             .then_some("-fdump-vtable-layouts without -fsyntax-only"))
+        .or((action != Action::SyntaxOnly && args.dump_cfg)
+            .then_some("-fkiln-dump-cfg without -fsyntax-only"))
+        .or((action != Action::SyntaxOnly && args.cfg_stats)
+            .then_some("-fkiln-cfg-stats without -fsyntax-only"))
         .or((action != Action::SyntaxOnly && args.verify.is_some())
             .then_some("-verify without -fsyntax-only"));
     if let Some(what) = not_impl {
@@ -414,7 +422,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         }),
     };
     let tc = Toolchain::new(target, args.sysroot.as_deref(), args.resource_dir.as_deref());
-    for e in &features::resolve(&args, tc.target.is_aarch64()).1 {
+    for e in &features::resolve(&args, &tc.target).1 {
         emit_arg_error(e, &drv);
     }
     if args.help {

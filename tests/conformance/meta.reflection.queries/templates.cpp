@@ -7,7 +7,7 @@
 // false for a template itself, a type alias that names a specialization,
 // and a member of a specialization. Answers checked against GCC 16.1
 // (-freflection). Member templates of a class are reached through
-// __kiln_member_at (^^ of an operator-function-id does not parse yet).
+// members_of (^^ of an operator-function-id does not parse yet).
 // template_of / template_arguments_of are WP-482's.
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
@@ -29,7 +29,7 @@ struct S {
   template <class T> void mt();            // 3
   void nf();                               // 4
 };
-consteval info m(unsigned long i) { return __kiln_member_at(^^S, i); }
+consteval info m(unsigned long i) { return members_of(^^S, access_context::unchecked())[i]; }
 void plain();
 
 static_assert(is_template(^^CT) && is_class_template(^^CT) && !is_alias_template(^^CT));

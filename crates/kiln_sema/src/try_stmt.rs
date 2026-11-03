@@ -12,8 +12,6 @@ use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
-pub(crate) mod reach;
-
 use crate::Sema;
 use crate::conv::bases::{BaseSearch, find_base};
 use crate::conv::{self, ConvCtx};
@@ -370,8 +368,9 @@ impl Sema<'_, '_> {
     /// throw-expression in the body of a function with a non-throwing
     /// exception specification ([except.spec]/5) that no enclosing handler
     /// of the function catches ([except.handle]/3) — `std::terminate` is
-    /// called ([except.terminate]). Only the throws reachable in the body
-    /// count (`reach.rs`, clang's CFG walk).
+    /// called ([except.terminate]). Only the throws reachable in the
+    /// body's graph count (spec/sema.md §7.5.1); a body with no
+    /// throw-expression builds none.
     pub(crate) fn check_throw_in_nothrow(&mut self, f: DeclId, body: StmtId) {
         let t = &self.ast.types;
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
@@ -385,21 +384,15 @@ impl Sema<'_, '_> {
         if found.is_empty() {
             return;
         }
-        let Some(mut found) = self.reachable_escaping_throws(body) else { return };
+        let Some(mut found) = self.with_cfg(body, Self::cfg_escaping_throws) else {
+            return;
+        };
         if found.is_empty() {
             return;
         }
         // clang visits the CFG blocks, built back to front.
         found.sort_by_key(|&e| std::cmp::Reverse(self.ast.exprs.get(e).loc()));
-        let mut fname = self.decl_name(f);
-        // A function template specialization prints with its arguments
-        // (clang's `getNameForDiagnostic`: `'k<int>'`).
-        if let Some((_, info)) = self.ast.spec_info(f)
-            && self.kind_of(info.template) == DeclKind::FunctionTemplate
-        {
-            let names = crate::names::SemaNames::new(self);
-            kiln_ast::types::write_arg_list(&self.ast.types, &names, info.args, &mut fname);
-        }
+        let fname = self.fn_diag_name(f);
         let floc = self.ast.decls.get(f).loc();
         let dealloc = self.ast.decls.get(f).name().as_operator().is_some_and(|o| {
             matches!(o, OverloadedOperator::Delete | OverloadedOperator::ArrayDelete)
@@ -452,7 +445,7 @@ impl Sema<'_, '_> {
 
     /// The expressions directly in statement `s` and its sub-statements
     /// (in that order).
-    fn stmt_parts(&self, s: StmtId, exprs: &mut Vec<ExprId>, subs: &mut Vec<StmtId>) {
+    pub(crate) fn stmt_parts(&self, s: StmtId, exprs: &mut Vec<ExprId>, subs: &mut Vec<StmtId>) {
         let st = &self.ast.stmts;
         match st.get(s).kind() {
             StmtKind::ExprStmt => exprs.push(st.expr_stmt_expr(s)),
@@ -508,7 +501,7 @@ impl Sema<'_, '_> {
     /// Whether some handler of the enclosing try-blocks catches the throw
     /// `e` (clang `isThrowCaught`: a catch-all, the same type, or a base
     /// class, through one reference or pointer level).
-    fn throw_caught(&self, e: ExprId, tries: &[StmtId]) -> bool {
+    pub(crate) fn throw_caught(&self, e: ExprId, tries: &[StmtId]) -> bool {
         let t = &self.ast.types;
         let thrown = self.ast.exprs.throw_operand(e).map(|o| self.ast.exprs.get(o).ty());
         for &tr in tries.iter().rev() {

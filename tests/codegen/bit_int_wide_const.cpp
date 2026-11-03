@@ -3,7 +3,7 @@
 // "`_BitInt`"): the frozen value is emitted as an `iN` constant in its
 // ABI-sized slot, as clang emits it. Where BITINT_MAXWIDTH allows (x86_64).
 // Widths are chosen so the iN store size equals its alloc size (no byte-array
-// slot), which is a separate kiln_abi layout question.
+// slot); the byte-array slots are bit_int_wide_record.cpp.
 #if __BITINT_MAXWIDTH__ >= 256
 using s200 = _BitInt(200);
 using u256 = unsigned _BitInt(256);

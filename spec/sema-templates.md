@@ -924,7 +924,15 @@ asks exactly one of:
   (`is_same<void, void_t<decltype(e)>>::value`, whose qualifier is
   instantiation-dependent, as a `DeclRefExpr`'s qualifier makes it):
   substituting it again is what makes a failure in `e` a deduction
-  failure ([temp.deduct.general]/8).
+  failure ([temp.deduct.general]/8). The dependence may sit only in an
+  operand type: `sizeof(void_t<decltype(e)>*)`, `alignof(...)` and a
+  type trait's operands (`__is_same(first_t<int, decltype(e)>, int)`)
+  count (`args.rs` `type_instantiation_dependent`). Such an argument's
+  *canonical* form is still its converted value, as clang's is:
+  `enable_if<sizeof(first_t<int, decltype(T::x)>) == 4>` names the
+  specialization `enable_if<true>` (its `::type` is found at the
+  definition), while the written argument is what a partial
+  specialization's deduction substitutes again (WP-465).
 
 `sizeof...(U)` with `U` bound to a list holding pack expansions (an alias
 template named `N<Ts...>`) is the value-dependent `k + sizeof...(P1) +
@@ -1593,11 +1601,14 @@ errors.
      and `-Wdeprecated-declarations` see them on the specialization. A
      dependent `alignas` operand is substituted; other arguments are
      shared with the pattern (no attribute kind that kiln evaluates takes
-     a dependent operand on a function yet). A friend is skipped (it may
-     redeclare a function with its own attributes), as is a declaration
-     that already has attributes. `[[deprecated]]` names a function
+     a dependent operand on a function yet). A befriended function gets them
+     too (a hidden friend found by ADL; WP-491); a declaration that
+     already has attributes is skipped. `[[deprecated]]` names a function
      template specialization with its arguments (`'f<int>' is
-     deprecated`, clang `getNameForDiagnostic`).
+     deprecated`, clang `getNameForDiagnostic`). A function template
+     specialization also takes the `nodiscard`/`pure`/`const` of the
+     template's other declarations (`function_spec_attrs`;
+     spec/landed/sema/WP-491.md).
    - A member typedef or alias-declaration gets the pattern's `aligned`
      attributes, a dependent operand substituted (`var_align_attrs` in
      `typedef_decl_in`; clang `InstantiateAttrs`; WP-335): libc++'s
@@ -1621,6 +1632,18 @@ errors.
 | friend | declaration; a hidden friend's definition is in `instantiated_from` | odr-use (§4.9) |
 | anonymous struct or union, unnamed member class | definition, with the unnamed member object and the injected `IndirectField`s (`subst/anon.rs`) | — |
 | unnamed bit-field | declaration, width substituted (a non-dependent width's `ConstantExpr` is not wrapped again) | — |
+
+A member function whose definition is instantiated from an out-of-line
+pattern definition (a user-written body, or `= default`) is located at that
+definition from then on (clang `InstantiateFunctionDefinition` copies the
+pattern definition's location and declarator end;
+`AstBuilder::relocate_to_pattern_definition`, WP-428): diagnostics in the
+instantiated body that point at the function (a reference member a
+constructor does not initialize), its "in defaulted ... first required here"
+note, and later candidate and "declared here" notes name the out-of-line
+definition. A member whose definition was not instantiated stays at its
+in-class declaration. Test:
+`tests/conformance/temp.inst/out-of-line-definition-location.cpp`.
 
 6. Complete the class:
    - implicit special-member declarations (S3C);
@@ -2297,7 +2320,10 @@ recomputed exactly as for non-template code (clang's
 - **An NTTP reference** becomes `SubstNonTypeTemplateParmExpr {param,
   pack_index, replacement}`. The replacement is:
   - an `IntegerLiteral` (or the matching literal) built from the
-    `ConstValueId`;
+    `ConstValueId`; for a `_BitInt(N)` (any N; WP-465) too, and for a
+    wide `_BitInt` (N > 128) or a value outside `i128` (an
+    `unsigned __int128` above its maximum) a wide literal holding the
+    argument's exact constant (`temp.arg.nontype/{bit-int-wide,int128}-value.cpp`);
   - for a class-type NTTP, a `DeclRefExpr` to the `TemplateParamObject`
     (§6.10);
   - for a reference or pointer NTTP, the entity expression;
@@ -4458,7 +4484,7 @@ trait of its own.
 | `__has_virtual_destructor(T)` | complete; its destructor is virtual | `cls` |
 | `__has_unique_object_representations(T)` | complete; [meta.unary.prop]: no padding bits; floating types are false; member pointers per the Itanium ABI | `abi.record_layout` + `tc` |
 | `__is_trivially_equality_comparable(T)` | clang 19 (WP-166): not an enum or array; for a class, `const T& == const T&` (built under a SFINAE frame from the TU) selects a defaulted `operator==` whose parameters are `const T&` (or `T` when trivially copyable), recursively for every base and field (reference or enum fields fail; a union fails); then unique object representations without the trivially-copyable requirement | `cls` + `abi` + lookup |
-| `__is_trivially_relocatable(T)` | clang 19 (WP-166): a class that can be passed in registers (`canPassInRegisters`, as `__can_pass_in_regs`), or any other complete object type; references, functions and `void` are false. At `-fclang-compat=22` it also warns `sema_deprecated_builtin` (`-Wdeprecated-builtins`) naming `__builtin_is_cpp_trivially_relocatable`, as clang 22 (WP-355) | `cls` |
+| `__is_trivially_relocatable(T)` | clang 19 (WP-166): a class that can be passed in registers (`canPassInRegisters`, as `__can_pass_in_regs`), or any other complete object type; references, functions and `void` are false. At `-fclang-compat=22` it also warns `sema_deprecated_builtin` (`-Wdeprecated-builtins`) naming `__builtin_is_cpp_trivially_relocatable`, as clang 22 (WP-355), where written and again per instantiation that rebuilds it; at 19 it does not (tests `ext.traits/is-trivially-relocatable-deprecated.cpp`, `-19.cpp`; WP-486) | `cls` |
 | `__is_base_of(B,D)` | both are classes (not unions), `D` is complete when the two differ, and `B` is `D` or a base of `D` (cv ignored) | `cls.bases` (S3C) |
 | `__is_convertible(F,T)` / `__is_nothrow_convertible(F,T)` | `conv_check(F,T).ok` (and `.nothrow`). WP-131 landed them (and `__is_convertible_to`): `To` void is true only for `From` void; `To` function or array, or `From` void, is false; otherwise the copy-initialization of a `To` from an opaque `declval<From>()` operand under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `conv_check` |
 | `__is_constructible(T,A…)` / `__is_trivially_constructible` / `__is_nothrow_constructible` | `init_check(T, A…, Direct)`: `.ok`, `.ok && .trivial`, `.ok && .nothrow`. A reference `T` takes exactly one argument; it still counts as constructible when the reference binds to a temporary created by an implicit conversion (clang 19; only `__reference_constructs_from_temporary` excludes that). WP-131 landed `__is_constructible` and `__is_nothrow_constructible`: a temporary's direct-initialization (value-initialization for no arguments) built on opaque `declval` operands under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `init_check` |

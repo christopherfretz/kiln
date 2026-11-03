@@ -322,3 +322,86 @@ fn markers() {
 fn pp_spell(sm: &SourceManager, t: &kiln_lex::Token) -> String {
     sm.span_text(t.span).map_or_else(|| "?".to_owned(), str::to_owned)
 }
+
+/// `src`'s attribute-macro history ([`Preprocessor::attr_macros`]) as
+/// `name@def_line-end_line tokens` (`-` for a definition still in effect),
+/// and the history's generation number.
+fn attr_history(src: &str) -> (Vec<String>, u32) {
+    let interner = Interner::new();
+    let sm = SourceManager::new();
+    let main = sm.add_virtual("t.cpp", src.to_owned()).unwrap();
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let mut pp = Preprocessor::new(&sm, &engine, &interner, PpOptions::new(Std::Cxx26));
+    pp.enter_main_file(main);
+    print_preprocessed(&mut pp, PrintOptions::default(), &mut String::new());
+    let line = |l: kiln_source::Loc| sm.line_col(l).map_or("-".to_owned(), |p| p.line.to_string());
+    let (generation, macros) = pp.attr_macros();
+    let v = macros
+        .iter()
+        .map(|m| format!("{}@{}-{} {}", m.name, line(m.def), line(m.end), m.tokens))
+        .collect();
+    (v, generation)
+}
+
+/// [cpp.scope]/1: an attribute macro's definition is in effect from its
+/// `#define` to the `#undef`, redefinition or `#pragma pop_macro` that ends
+/// it; the history records both ends (`-Wimplicit-fallthrough`'s fix-it
+/// spelling, clang `getLastMacroWithSpelling`). Other macros' directives
+/// leave it alone.
+#[test]
+fn cpp_scope_attr_macro_history() {
+    let src = "\
+#define A [[nodiscard]]
+#define B 1
+#define F(x) [[x]]
+#undef B
+#undef A
+#define A [[likely]]
+#define A [[fallthrough]]
+#define C [[gnu::section(\"s\")]]
+#define C [[maybe_unused]]
+#define C 0
+#pragma push_macro(\"A\")
+#undef A
+#pragma pop_macro(\"A\")
+";
+    let (v, _) = attr_history(src);
+    assert_eq!(
+        v,
+        [
+            "A@1-5 [ [ nodiscard ] ]",
+            "A@6-7 [ [ likely ] ]",
+            "A@7-12 [ [ fallthrough ] ]",
+            "C@9-10 [ [ maybe_unused ] ]",
+            "A@13-- [ [ fallthrough ] ]",
+        ]
+    );
+}
+
+/// WP-487: a configuration header re-included many times, each pass
+/// defining and undefining attribute macros among many other directives.
+/// Every pass adds its entries, the history keeps them in order, and
+/// only the last pass's definitions are open (the lookup that ends a
+/// definition is per name, not a scan of the history; the bench entry
+/// `pp/headers` times it).
+#[test]
+fn cpp_scope_attr_macro_history_churn() {
+    let mut src = String::new();
+    for pass in 0..2000 {
+        src.push_str("#define X [[no_unique_address]]\n#define Y [[likely]]\n");
+        for i in 0..20 {
+            writeln!(src, "#define P{i} {pass}\n#undef P{i}").unwrap();
+        }
+        src.push_str("#undef X\n");
+        if pass != 1999 {
+            src.push_str("#undef Y\n");
+        }
+    }
+    let (v, generation) = attr_history(&src);
+    assert_eq!(v.len(), 4000);
+    let open: Vec<&String> = v.iter().filter(|e| e.contains("-- ")).collect();
+    assert_eq!(open, ["Y@87958-- [ [ likely ] ]"]);
+    assert!(v[0].starts_with("X@1-43 ") && v[1].starts_with("Y@2-44 "), "{:?}", &v[..2]);
+    // One generation step per definition and per end.
+    assert_eq!(generation, 4000 + 3999);
+}

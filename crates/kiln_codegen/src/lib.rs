@@ -82,6 +82,9 @@ pub struct CodegenOptions {
     /// `AArch64` only: the `sve` target feature is on, so function
     /// definitions carry `vscale_range(1,16)` (clang `getVScaleRange`).
     pub sve: bool,
+    /// `AArch64` only: `-msve-vector-bits=N`, so function definitions
+    /// carry `vscale_range(N/128,N/128)` with or without `sve`.
+    pub sve_vector_bits: Option<u32>,
     /// How `_Complex` floating multiply and divide are lowered
     /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
     /// `LangOptions::ComplexRange`).
@@ -264,6 +267,7 @@ impl Default for CodegenOptions {
             outline_atomics: true,
             target_features: Vec::new(),
             sve: false,
+            sve_vector_bits: None,
             complex_range: ComplexRange::Full,
             opt_level: 0,
             opt_size: 0,

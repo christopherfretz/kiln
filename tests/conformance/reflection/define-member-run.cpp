@@ -1,5 +1,5 @@
 //@ expect: run
-//@ args: -freflection -I tests/support
+//@ args: -Wno-kiln-extension -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
 //@ stdout: 1 42 c 24

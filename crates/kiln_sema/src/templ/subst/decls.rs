@@ -664,11 +664,23 @@ impl Substituter<'_, '_, '_> {
     ) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
-        let TypeView::Function(p) = self.sema.ast.types.view(t.ty()) else {
-            return self.unimplemented("function declared with a typedef of function type", loc);
+        // `F m;` with `typedef R F(P...)` (no function declarator,
+        // [dcl.fct]/13): the function type is substituted with its sugar
+        // (clang `TransformTypedefType`) and declared again the same way,
+        // so the declaration builds the parameters from it.
+        let (p, sig) = match self.sema.ast.types.view(t.ty()) {
+            TypeView::Function(p) => (p, Some(self.function_sig(d, &p, friend, loc)?)),
+            _ => match self.sema.sugared_proto(t) {
+                Some(p) => (p, None),
+                None => return self.unimplemented("function declared with this type", loc),
+            },
         };
         let info = p.info();
-        let (params, ret, exc) = self.function_sig(d, &p, friend, loc)?;
+        let via_typedef = sig.is_none();
+        let (params, ret, exc) = match sig {
+            Some(sig) => sig,
+            None => (Vec::new(), self.ty(t, loc)?, kiln_ast::types::ExcSpec::None),
+        };
         let lazy_exc = matches!(exc, kiln_ast::types::ExcSpec::Deferred(x) if x == d);
         let mut ds = self.pattern_declspec(d, ret);
         // `explicit(expr)`: substituted, so the declaration resolves it
@@ -706,24 +718,27 @@ impl Substituter<'_, '_, '_> {
         // then `-> R` ([dcl.fct]/2), so the instantiation's type keeps the
         // trailing form (`auto (int) -> int`, clang's
         // `TransformFunctionProtoType`; WP-318).
-        let trailing = (info.trailing_return() && ds.base != TypeSpecKind::None).then(|| {
-            let arrow = self.sema.templ.trailing_arrow.get(&d).copied().unwrap_or(loc);
-            (ret, arrow)
-        });
+        let trailing = (info.trailing_return() && ds.base != TypeSpecKind::None && !via_typedef)
+            .then(|| {
+                let arrow = self.sema.templ.trailing_arrow.get(&d).copied().unwrap_or(loc);
+                (ret, arrow)
+            });
         if trailing.is_some() {
             ds.named = Some(self.sema.plain_auto_type());
         }
-        dr.chunks.push(Chunk::Function {
-            params,
-            variadic: info.variadic(),
-            loc,
-            rparen: loc,
-            exc,
-            quals: info.this_quals(),
-            ref_qual: info.ref_qual(),
-            trailing,
-            ambiguous: false,
-        });
+        if !via_typedef {
+            dr.chunks.push(Chunk::Function {
+                params,
+                variadic: info.variadic(),
+                loc,
+                rparen: loc,
+                exc,
+                quals: info.this_quals(),
+                ref_qual: info.ref_qual(),
+                trailing,
+                ambiguous: false,
+            });
+        }
         let fs = self.sema.ast.decls.function(d).map(|x| x.spec);
         if let Some(s) = fs {
             // Where the pattern's specifiers were written, when its
@@ -783,11 +798,12 @@ impl Substituter<'_, '_, '_> {
         }
         // The pattern's attributes (`const`, `pure`, `[[noreturn]]`,
         // `[[nodiscard]]`, ...), as clang `InitFunctionInstantiation` →
-        // `InstantiateAttrs` (WP-182). A friend may redeclare a function
-        // that has its own.
-        if friend.is_none() {
-            self.class_attrs(f, d);
-        }
+        // `InstantiateAttrs` (WP-182). A befriended function gets them
+        // too (`[[nodiscard]] friend It operator+(It, int)`, a hidden
+        // friend found by ADL, [dcl.attr.nodiscard]/2; WP-491); one
+        // redeclaring a function keeps that function's own as well, on
+        // its earlier declarations.
+        self.class_attrs(f, d);
         // [expr.prim.this]/3: `this` in a static member function's
         // *noexcept-specifier* is diagnosed again in each instantiation
         // of the class, at the pattern's `this` (clang
@@ -972,8 +988,9 @@ impl Substituter<'_, '_, '_> {
         self.forget_pattern_params(pat);
         self.defer_default_args(pat, spec);
         // The pattern's attributes (clang `InitFunctionInstantiation` →
-        // `InstantiateAttrs`; WP-182).
-        self.class_attrs(spec, pat);
+        // `InstantiateAttrs`; WP-182), merged with its other
+        // declarations' unused-result attributes (WP-491).
+        self.function_spec_attrs(spec, pat);
         Ok(())
     }
 

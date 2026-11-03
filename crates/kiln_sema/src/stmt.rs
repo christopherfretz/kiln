@@ -2,6 +2,7 @@
 //! and iteration statements, `case`/`default`, jumps, labels and `goto`,
 //! `return` (spec/sema.md §7).
 
+use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{DeclFlags, DeclKind, DeclMisc, NewDecl, Payload};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprDeps, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::ids::RawId;
@@ -16,7 +17,8 @@ use kiln_source::symbol::Symbol;
 use std::collections::HashSet;
 
 use crate::Sema;
-use crate::conv::{self, ConvCtx};
+use crate::conv::{self, ConvCtx, SecondStep, StandardConversion};
+use crate::overload::Ics;
 use crate::scope::{Scope, ScopeKind};
 
 /// A label of the current function.
@@ -40,6 +42,10 @@ pub(crate) struct SwitchState {
     /// GNU case ranges `lo ... hi` seen, with their `lo` and `hi`
     /// expressions (checked when the switch ends).
     pub ranges: Vec<(i128, i128, ExprId, ExprId)>,
+    /// Case values outside `i128` (an `unsigned __int128` above
+    /// `i128::MAX`, a wide `_BitInt`): their normalized words, decimal
+    /// spelling and location, for the duplicate check only.
+    pub wide_values: Vec<(Vec<u64>, String, Loc)>,
     /// The `CaseStmt`/`DefaultStmt`s, in source order.
     pub cases: Vec<StmtId>,
     /// The first `default:`.
@@ -114,6 +120,10 @@ pub struct FnState {
     /// `ExpressionEvaluationContextRecord::VolatileAssignmentLHSs`,
     /// [`Sema::note_volatile_assign`]), warned at the end of the body.
     pub(crate) volatile_assigns: Vec<ExprId>,
+    /// The expression count when the body began: the body's calls are
+    /// among the expressions built after it (the `-Winfinite-recursion`
+    /// prefilter, [`Sema::check_infinite_recursion`]).
+    pub(crate) expr_start: u32,
 }
 
 impl FnState {
@@ -139,6 +149,7 @@ impl FnState {
             first_return: None,
             modified_params: Vec::new(),
             volatile_assigns: Vec::new(),
+            expr_start: 0,
         }
     }
 }
@@ -868,6 +879,7 @@ impl Sema<'_, '_> {
                 cond_ty,
                 values: Vec::new(),
                 ranges: Vec::new(),
+                wide_values: Vec::new(),
                 cases: Vec::new(),
                 default: None,
                 invalid,
@@ -910,8 +922,12 @@ impl Sema<'_, '_> {
     /// `ConstantExpr` (or `e` when invalid).
     pub fn act_on_case_value(&mut self, e: ExprId, case_loc: Loc) -> ExprId {
         let (ce, value) = self.convert_case_value(e, case_loc);
-        let Some(iv) = value else { return ce };
-        let loc = self.ast.exprs.get(e).loc();
+        let Some(iv) = value else {
+            self.wide_duplicate_case(e, ce);
+            return ce;
+        };
+        // clang reports (and remembers) a case at its value's begin.
+        let loc = self.begin_loc(e);
         let dup = self
             .func
             .as_ref()
@@ -927,6 +943,35 @@ impl Sema<'_, '_> {
             s.values.push((iv, loc));
         }
         ce
+    }
+
+    /// The duplicate check of a case value `e` (converted: `ce`) outside
+    /// `i128`, by its exact bits.
+    fn wide_duplicate_case(&mut self, e: ExprId, ce: ExprId) {
+        if self.ast.exprs.get(ce).kind() != ExprKind::ConstantExpr {
+            return;
+        }
+        let Some(v) = self.ast.exprs.constant_value(ce) else { return };
+        let Some(Scalar::Int { bits, signed, .. }) = self.ast.consts.scalar(v) else { return };
+        let words = bits.words().to_vec();
+        let loc = self.begin_loc(e);
+        let Some(sw) = self.func.as_ref().and_then(|f| f.switches.last()) else { return };
+        if sw.invalid {
+            return;
+        }
+        if let Some((_, text, prev)) = sw.wide_values.iter().find(|w| w.0 == words).cloned() {
+            let d = self
+                .diag(DiagId::sema_duplicate_case, loc)
+                .arg(text)
+                .with_note(self.diag(DiagId::note_duplicate_case_prev, prev));
+            self.emit(d);
+            return;
+        }
+        let mut text = String::new();
+        bits.write_decimal(signed, &mut text);
+        if let Some(s) = self.func.as_mut().and_then(|f| f.switches.last_mut()) {
+            s.wide_values.push((words, text, loc));
+        }
     }
 
     /// The bounds of a GNU case range `case lo ... hi:`, each converted
@@ -1001,6 +1046,10 @@ impl Sema<'_, '_> {
             return (e, None);
         }
         let loc = self.ast.exprs.get(e).loc();
+        let narrowed = match self.case_cce_check(e, cond_ty) {
+            Ok(n) => n,
+            Err(r) => return r,
+        };
         let conv = match conv::implicit_convert(self, e, cond_ty, ConvCtx::Initialization) {
             Ok(c) => c,
             Err(err) => {
@@ -1011,22 +1060,116 @@ impl Sema<'_, '_> {
         let at = self.begin_loc(e);
         match self.eval_const(conv, kiln_oven::EvalContext::converted(at)) {
             Ok(v) => {
-                let iv = self.const_int(v).unwrap_or(0);
-                let cv = self.int_const(cond_ty, iv);
+                // A value outside `i128` keeps its own (exact) constant
+                // and has no `i128` key.
+                let iv = self.const_int(v);
+                let cv = match iv {
+                    Some(iv) => self.int_const(cond_ty, iv),
+                    None => v,
+                };
                 let ce = self.builder().constant_expr(conv, Some(cv));
                 let ce = self.act_on_constant_full_expr(ce);
-                (ce, (!invalid).then_some(iv))
+                self.case_narrowing(narrowed, at, cond_ty);
+                (ce, iv.filter(|_| !invalid))
             }
             Err(mut f) => {
                 // [stmt.switch]/2: a converted constant expression (clang's
                 // `CheckConvertedConstantExpression`, CCEK_CaseValue),
                 // reported at the value's first token.
+                let full = self.act_on_constant_full_expr(conv);
+                self.case_narrowing(narrowed, at, cond_ty);
                 let at = Self::fold_lone_invalid(&mut f, at);
                 let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
                 let d = Self::with_failure_notes(msg, f);
                 self.emit(d);
-                (self.act_on_constant_full_expr(conv), None)
+                (full, None)
             }
+        }
+    }
+
+    /// [stmt.switch]/2, [expr.const]/12 (clang
+    /// `BuildConvertedConstantExpression`, `CCEK_CaseValue`): a case value is
+    /// a converted constant expression of the promoted condition type. With
+    /// no implicit conversion sequence to it, or one whose (last) standard
+    /// conversion is not allowed there (a floating-integral conversion, a
+    /// boolean conversion from a pointer, ...), it is an error at the
+    /// value's first token naming its type as written, and the case is
+    /// dropped (`Err`, the recovered value). Otherwise the value a
+    /// narrowing integral conversion changes, if any (`Ok`), reported by
+    /// `case_narrowing` after the full-expression's conversion warnings, as
+    /// in clang.
+    fn case_cce_check(
+        &mut self,
+        e: ExprId,
+        cond_ty: QualType,
+    ) -> Result<Option<i128>, (ExprId, Option<i128>)> {
+        let written = self.ast.exprs.get(e).ty();
+        let at = self.begin_loc(e);
+        let pty = conv::strip_cv(self, cond_ty);
+        if written != QualType::OVERLOAD && !self.ast.types.is_dependent(written) {
+            let info = self.arg_info(e);
+            let ics = self.try_implicit_conversion(&info, pty, crate::overload::IcsOptions::NONE);
+            let scs = match ics {
+                Ics::Standard(s) => Some(s),
+                Ics::UserDefined(u) => Some(u.after),
+                _ => None,
+            };
+            let id = if ics.is_bad() {
+                Some(DiagId::sema_cce_not_implicitly_convertible)
+            } else if scs.is_some_and(|s| !self.case_second_allowed(&s)) {
+                Some(DiagId::sema_cce_conversion_not_allowed)
+            } else {
+                None
+            };
+            if let Some(id) = id {
+                let d = self
+                    .diag(id, at)
+                    .arg(self.ty_arg(written))
+                    .arg(self.ty_arg(pty))
+                    .range(self.expr_range(e));
+                self.emit(d);
+                return Err((self.recover_err(&[e], at), None));
+            }
+        }
+        let c = conv::lvalue_to_rvalue(self, e);
+        let cty = conv::strip_cv(self, self.ast.exprs.get(c).ty());
+        let t = &self.ast.types;
+        if !(t.is_integral(pty) && (t.is_integral(cty) || t.as_enum(cty).is_some())) {
+            return Ok(None);
+        }
+        Ok(self.fold_int(c).filter(|&raw| !self.int_fits(pty, raw)))
+    }
+
+    /// clang `CheckConvertedConstantConversions`: the second standard
+    /// conversions allowed in a converted constant expression of integral
+    /// or enumeration type ([expr.const]/12; narrowing is checked apart).
+    fn case_second_allowed(&self, scs: &StandardConversion) -> bool {
+        match scs.second {
+            SecondStep::Identity
+            | SecondStep::IntegralPromotion
+            | SecondStep::IntegralConversion => true,
+            SecondStep::BooleanConversion => {
+                self.ast.types.is_integral(scs.from) || conv::is_unscoped_enum(self, scs.from)
+            }
+            SecondStep::PointerConversion | SecondStep::MemberPointerConversion => {
+                self.is_nullptr_type(scs.from)
+            }
+            _ => false,
+        }
+    }
+
+    /// The narrowing of a case value `raw` to the condition type (clang
+    /// `ext_cce_narrowing`: a `-Wc++11-narrowing` error by default; clang
+    /// goes on with the converted value), at the value's first token `at`.
+    fn case_narrowing(&mut self, raw: Option<i128>, at: Loc, cond_ty: QualType) {
+        if let Some(raw) = raw {
+            let pty = conv::strip_cv(self, cond_ty);
+            let d = self
+                .diag(DiagId::sema_cce_narrowing_value, at)
+                .arg("case value")
+                .arg(raw.to_string())
+                .arg(self.ty_arg(pty));
+            self.emit(d);
         }
     }
 
@@ -1359,6 +1502,7 @@ impl Sema<'_, '_> {
     /// the function scope).
     pub(crate) fn begin_function_body(&mut self, f: DeclId, ret: QualType) {
         let mut state = FnState::new(f, ret);
+        state.expr_start = u32::try_from(self.ast.exprs.len()).unwrap_or(0);
         // An immediate function's body is an immediate function context
         // ([expr.const]/16).
         state.rt_quiet = u32::from(self.is_consteval_kind(f));
@@ -1410,6 +1554,35 @@ impl Sema<'_, '_> {
 
     /// Finishes a function body; returns the body to attach (a
     /// coroutine's is wrapped in its `CoroutineBodyStmt`).
+    /// Plans the body's graph, built at its first query (spec/sema.md
+    /// §7.5.1), and emits the deferred runtime-behavior diagnostics,
+    /// dropping those anchored to an expression the graph proves
+    /// unreachable.
+    fn flush_runtime_diags(
+        &mut self,
+        f: DeclId,
+        body: StmtId,
+        runtime_diags: Vec<(kiln_diag::Diag, Option<ExprId>)>,
+        has_fallthrough: bool,
+    ) {
+        let dead = if self.diags.uncompilable_error_count() > 0 || self.in_template() {
+            None
+        } else {
+            let wanted: HashSet<ExprId> = runtime_diags.iter().filter_map(|(_, e)| *e).collect();
+            let probe = !wanted.is_empty();
+            self.cfg_plan(f, body, wanted, has_fallthrough);
+            if probe { self.with_cfg(body, |_, c| c.unreachable_probes()) } else { None }
+        };
+        for (msg, anchor) in runtime_diags {
+            if let (Some(dead), Some(e)) = (&dead, anchor)
+                && dead.contains(&e)
+            {
+                continue;
+            }
+            self.emit(msg);
+        }
+    }
+
     pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) -> StmtId {
         self.leave_function_scope();
         let coroutine = self.coro_state().is_some_and(|c| c.first.is_some());
@@ -1455,6 +1628,11 @@ impl Sema<'_, '_> {
         if state.has_switch || state.has_indirect_goto || !state.labels.is_empty() {
             self.check_jump_scopes(body);
         }
+        // clang 22 `inferNoReturnAttr` (`PopFunctionScopeInfo`, ahead of
+        // the analysis-based warnings; also in a dependent context).
+        if self.diags.uncompilable_error_count() == 0 && !coroutine {
+            self.infer_noreturn(state.decl, body);
+        }
         // The deferred runtime-behavior diagnostics, ahead of the flow
         // warnings (clang `PopFunctionScopeInfo` / `IssueWarnings`). A
         // function template's are flushed unfiltered (clang finishes its
@@ -1470,27 +1648,20 @@ impl Sema<'_, '_> {
         if self.in_template() && !self.is_named_function_template(state.decl) {
             state.runtime_diags.retain(|(_, anchor)| anchor.is_none());
         }
-        let dead = if self.diags.uncompilable_error_count() > 0 || self.in_template() {
-            None
-        } else {
-            let wanted: HashSet<ExprId> =
-                state.runtime_diags.iter().filter_map(|(_, e)| *e).collect();
-            if wanted.is_empty() { None } else { self.unreachable_exprs(body, wanted) }
-        };
-        for (msg, anchor) in state.runtime_diags {
-            if let (Some(dead), Some(e)) = (&dead, anchor)
-                && dead.contains(&e)
-            {
-                continue;
-            }
-            self.emit(msg);
-        }
+        let runtime_diags = std::mem::take(&mut state.runtime_diags);
+        self.flush_runtime_diags(state.decl, body, runtime_diags, state.has_fallthrough);
         let ret = state.ret;
         // clang skips its analysis-based warnings once an error occurred
         // (`hasUncompilableErrorOccurred`: not a warning promoted by
         // `-Werror`), and in dependent contexts.
         if self.diags.uncompilable_error_count() > 0 || self.in_template() {
             return wrapped;
+        }
+        if self.cfg_stats {
+            self.stats_body_cfg();
+        }
+        if self.cfg_dump {
+            self.dump_body_cfg();
         }
         // clang `ActOnFinishFunctionBody`: no fall-off check for a
         // `naked` function (nor for `main`, below).
@@ -1502,7 +1673,7 @@ impl Sema<'_, '_> {
             if !naked && self.falls_off(body) != Falloff::Never {
                 self.error(DiagId::sema_falloff_noreturn, rbrace);
             }
-            self.late_analysis(state.decl, body, state.has_fallthrough);
+            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
             return wrapped;
         }
         // A coroutine that falls off its end calls `return_void()` when
@@ -1511,13 +1682,19 @@ impl Sema<'_, '_> {
             && wrapped != body
             && self.ast.stmts.coroutine_body(wrapped).on_fallthrough.is_some();
         if self.ast.types.is_void(ret) || self.is_error_type(ret) || coro_void {
-            self.late_analysis(state.decl, body, state.has_fallthrough);
+            if !naked && !coroutine && self.ast.types.is_void(ret) {
+                self.suggest_noreturn(state.decl, body);
+            }
+            self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
             return wrapped;
         }
         if !naked && !self.is_main_function(state.decl) {
             let lambda = self.is_lambda_call_op(state.decl);
             match self.falls_off(body) {
                 Falloff::Never => {}
+                // clang 22: the body ends in a throw or a call of a
+                // function inferred `noreturn`.
+                _ if !coroutine && self.ends_in_inferred_noreturn(body) => {}
                 Falloff::Always if lambda => {
                     self.error(DiagId::sema_falloff_nonvoid_lambda, rbrace);
                 }
@@ -1534,7 +1711,7 @@ impl Sema<'_, '_> {
                 Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
             }
         }
-        self.late_analysis(state.decl, body, state.has_fallthrough);
+        self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start);
         wrapped
     }
 
@@ -1602,7 +1779,7 @@ impl Sema<'_, '_> {
     /// Whether `f` is the pattern of a function template declared by
     /// name (a generic lambda's call operator is not: clang finishes it
     /// as a function of a dependent context).
-    fn is_named_function_template(&self, f: DeclId) -> bool {
+    pub(crate) fn is_named_function_template(&self, f: DeclId) -> bool {
         !self.is_lambda_call_op(f)
             && (self.ast.described_template(f).is_some()
                 || self.ast.described_template(self.ast.first(f)).is_some())
@@ -1613,11 +1790,22 @@ impl Sema<'_, '_> {
         self.ast.is_noreturn_fn(f)
     }
 
-    /// Whether control can reach the end of the function body `s`
-    /// (clang `CheckFallThrough` over the body's CFG, mirrored by the
-    /// reachability walk; spec/sema.md §7.5).
+    /// How control reaches the end of the function body `s` (clang
+    /// `CheckFallThrough` over the body's graph; spec/sema.md §7.5.1):
+    /// `Never` when it does not (or there is no graph), `Maybe` when the
+    /// body also returns, throws out or calls a `noreturn` function on a
+    /// live path, else `Always`.
     fn falls_off(&mut self, s: StmtId) -> Falloff {
-        self.fall_off_kind(s)
+        match self.with_cfg(s, |_, c| c.exit_kinds()) {
+            Some(k) if k.plain => {
+                if k.ret || k.fake || k.abnormal {
+                    Falloff::Maybe
+                } else {
+                    Falloff::Always
+                }
+            }
+            _ => Falloff::Never,
+        }
     }
 
     pub(crate) fn is_noreturn_call(&self, e: ExprId) -> bool {

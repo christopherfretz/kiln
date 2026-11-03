@@ -180,25 +180,27 @@ impl Preprocessor<'_, '_> {
     }
 
     /// Records that `name`'s definition changed at `at`: `def` is the new
-    /// definition (`None` for `#undef`). Cheap unless an attribute macro
-    /// is involved.
+    /// definition (`None` for `#undef`). O(1) unless `def` is itself an
+    /// attribute macro: the definition `name` ends is found through
+    /// `attr_live`, never by scanning the history, which grows with every
+    /// attribute-macro `#define` of the translation unit (a header
+    /// re-included N times with `#define X [[...]]` ... `#undef X` made
+    /// every directive O(N) before WP-487).
     pub(crate) fn note_macro_change(&mut self, name: Symbol, def: Option<&MacroDef>, at: Loc) {
         let attr = def.filter(|d| {
             !d.function_like
                 && d.body.len() >= 2
                 && d.body[..2].iter().all(|t| matches!(t.tok.kind, TokKind::Punct(Punct::LSquare)))
         });
-        if attr.is_none() && self.attr_macros.is_empty() {
+        if attr.is_none() && self.attr_live.is_empty() {
             return;
         }
-        let text = self.interner.as_str(name);
-        if let Some(live) =
-            self.attr_macros.iter_mut().rev().find(|m| !m.end.is_valid() && *m.name == *text)
-        {
-            live.end = at;
+        if let Some(i) = self.attr_live.remove(&name) {
+            self.attr_macros[i].end = at;
             self.attr_macro_gen = self.attr_macro_gen.wrapping_add(1);
         }
         let Some(d) = attr else { return };
+        let text = self.interner.as_str(name);
         let mut tokens = String::new();
         for t in &d.body {
             let s = match t.tok.kind {
@@ -212,6 +214,7 @@ impl Preprocessor<'_, '_> {
             }
             tokens.push_str(s);
         }
+        self.attr_live.insert(name, self.attr_macros.len());
         self.attr_macros.push(AttrMacro {
             name: text.into(),
             def: at,

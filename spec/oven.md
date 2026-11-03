@@ -173,6 +173,13 @@ the evaluator's flattened type table.
   inactive union member path ([expr.const]/5.10); then, for reads,
   uninitialized bytes ([expr.const]/5.11) and representation compatibility
   (pointer bytes read as a pointer only).
+  A local is kept in a register only when the compile-time pre-scan
+  (`Scan`) sees no address of it; a glvalue cast that drops `const`
+  (`const_cast<int&>(c) = 2`, `(int&)c`) counts as one, so the write
+  reaches the const allocation and faults (WP-465;
+  `expr.const/5.8/modify-const-cast-away.cpp`). Const is a flag of the
+  allocation: a const member of a non-const object written through a
+  cast (`*(int*)&s.m = 3`) is not detected yet.
 - **Freeze/thaw**: a successful result is frozen into the AST's
   `ConstStore` (scalars inline; aggregates as a byte image with pointer
   relocations, padding and active union members; pointers as
@@ -613,7 +620,7 @@ choice and must not move a budget.
 | Key | Meaning |
 |---|---|
 | `loc` | `"file:line:col"` of the evaluated construct (1-based line and column; the file as the driver names it in diagnostics, so it may itself contain `:`), or `null` when there is none (a compiler-synthesized evaluation). For a template instantiation, the point of the construct in the template, not the point of instantiation. |
-| `kind` | `static_assert`; `init` (the initializer of a `constexpr`/`constinit` variable or a constant initialization); `template_arg` (a template argument, including default arguments); `consteval` (an immediate invocation); `if_constexpr` (the condition); `constraint` (a constraint satisfaction check, M3); `other` (array bounds, enumerator values, `case` labels, `alignas`, `noexcept` and `explicit` specifiers, bit-field widths, splices, ...). |
+| `kind` | `static_assert`; `init` (the initializer of a `constexpr`/`constinit` variable or a constant initialization); `template_arg` (a template argument, including default arguments); `consteval` (an immediate invocation); `consteval_block` (a `consteval` block, P2996); `if_constexpr` (the condition); `constraint` (a constraint satisfaction check, M3); `other` (array bounds, enumerator values, `case` labels, `alignas`, `noexcept` and `explicit` specifiers, bit-field widths, splices, ...). |
 | `steps` | Statements executed, counted exactly as clang counts `-fconstexpr-steps` (see "Limits and metrics"), including the recorded steps of memoized calls (as for the budget, so the count does not depend on cache state). |
 | `bytes` | Abstract-memory bytes allocated over the evaluation (cumulative, each object rounded up to the 8-byte granule: frames, temporaries and dynamic allocations; a freed byte stays counted). |
 | `peak_bytes` | The maximum number of abstract-memory bytes live at once (`frame.top + heap_live`, see "Transient allocation"). |
@@ -852,16 +859,41 @@ literal is one instruction and one step, not an interpreted loop.
   a member the mem-initializer list skips has begun (clang
   default-initializes it). Nothing is emitted, so the check costs no
   instruction (`meta.const.eval/is-within-lifetime-construction.cpp`).
+  A complete-object constructor (P3533R2) first records
+  `(pc, CTOR_STEP_VBASE | j)` before each virtual-base initializer: while
+  virtual base `j` is initialized, later virtual bases and all
+  non-virtual subobjects have not begun; from the first non-virtual step
+  on, the virtual bases have. A base-subobject constructor initializes
+  none and records no such step (WP-465;
+  `meta.const.eval/is-within-lifetime-virtual-base-cxx26.cpp`, kiln only).
   A pointer into the variable whose initializer is being evaluated
   (`RunState::object`, clang's `EvaluatingDecl`) fails with `... cannot be
   called with a pointer to an object whose lifetime has not yet begun`
   (`BiFault::Lifetime` kind 3;
-  `meta.const.eval/is-within-lifetime-not-begun-errors.cpp`).
-  Known gaps: an aggregate or array member being list-initialized reads
-  as within its lifetime as a whole (clang: its later elements are not);
-  virtual bases are not tracked; a consteval constructor's immediate
-  invocation initializing a variable is evaluated as a temporary, so it
-  answers false where clang reports kind 3.
+  `meta.const.eval/is-within-lifetime-not-begun-errors.cpp`). That
+  includes the RESOLVING placeholder a self-reference such as `constexpr
+  C c(&c)` reads while `c` is evaluated (`Origin::Global` of the same
+  first declaration; a local constexpr variable mid-initialization
+  resolves to such an object too, kept in `provisional` for that
+  evaluation only), so a consteval constructor's immediate invocation
+  handed `&c` fails the same way (WP-465;
+  `meta.const.eval/is-within-lifetime-consteval-var.cpp`).
+  A member list-initialized by its mem-initializer (an `InitListExpr` or
+  parenthesized list of a non-union class or array) records a step per
+  element, recursively for an element that is such a list itself
+  (`CTOR_STEP_ELEM | i`, the element's offset from `this` and size in
+  `CtorStep::off`/`len`; `CTOR_STEP_RECORD` for an element of class
+  type): while an element is initialized, a subobject ending before it
+  and an aggregate holding it have begun; the element itself, everything
+  after it (explicit, omitted or array-filler elements: clang initializes
+  them in order) has not; inside an element of class type the frames
+  above decide (WP-465;
+  `meta.const.eval/is-within-lifetime-member-list-init.cpp`).
+  Known gaps: `this` inside a consteval constructor whose immediate invocation
+  initializes a variable, member, parameter or local temporary is the
+  thunk's temporary, so it is answered where clang reports kind 3
+  (clang accepts it when the invocation is nested in a temporary, member
+  access or comma of a static-storage initializer).
 - **Temporaries:** a `MaterializeTemporaryExpr` with full-expression
   storage (a `bit_cast` or builtin operand bound to a reference
   parameter) is an lvalue in the Oven, its object living until the end of
@@ -2639,12 +2671,30 @@ Type rules: spec/types.md §21.
   is copied at its own source location so a note points where clang's
   does. Freeze writes `Scalar::Int` with exactly `IntBits::words_for(N)`
   words; thaw re-extends them over the slot.
-- *Not yet evaluated, wide only* (trap "kiln: conversion between a _BitInt
-  wider than 128 bits and a floating type is not supported in constant
-  evaluation yet", or the generic wide-`_BitInt` trap kept in
-  `compile.rs` `rv_inner` as a safety net): conversions to and from
-  floating types, wide bit-fields, `switch` on a wide value, `<=>`, and
-  integer literals wider than 128 bits (clang has none in C++).
+- *Floating conversions, bit-fields, `switch`, `<=>`, literals* (WP-465).
+  `TO_FLOAT` converts the exact value to a float kind
+  (`softfloat::from_limbs`: the top 128 significant bits plus a sticky
+  bit, rounded to nearest even; past the format's range it is infinity,
+  as clang folds it); `FROM_FLOAT` truncates toward zero
+  (`softfloat::trunc_limbs`) and faults `FloatRange` when the result does
+  not fit N bits (a negative value for an unsigned type, NaN, infinity),
+  noted at the operand's begin with the destination type as written and its
+  `aka` (the note names every typedef so, narrow ones too). A compound
+  assignment with a floating computation type converts the wide left
+  operand to it and the result back. A wide bit-field is a
+  `Place::Bits` read by `LOAD_BITS` into a temporary (sign- or
+  zero-extended from its width) and written by `STORE_BITS` (truncated to
+  the width), for initialization, assignment, compound assignment and
+  `++`/`--`; freezing copies its bytes one at a time under a per-byte mask.
+  `switch` on a wide condition compares it with each case value converted
+  to the condition's type (`wide_case_cmp`: `CMP` EQ, or GE/LE for a GNU
+  range); sema keeps a case value outside `i128` as its exact constant
+  (spec/sema.md §7). `<=>` of two wide operands of the same type is two
+  `CMP`s giving the ordering. An `IntegerLiteral` wider than 128 bits
+  (only a substituted non-type template argument: C++ has no `wb` suffix)
+  is built from its 128-bit chunks, most significant first (`FROM`, `SHL`
+  by 128, `OR`). The generic wide-`_BitInt` trap in `compile.rs`
+  `rv_inner` remains as a safety net for any other expression form.
 
 ### Complex values — Landed (WP-211)
 A GNU `_Complex T` object is stored as `T[2]` (`ty.rs`): the real part,

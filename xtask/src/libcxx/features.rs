@@ -89,6 +89,10 @@ const FEATURES: &[&str] = &[
     "std-at-least-c++26",
     // Flags kiln accepts (lit probes them with hasCompileFlag).
     "-fsized-deallocation",
+    // `hasCompileFlag("-Wuser-defined-warnings")`: kiln evaluates
+    // `diagnose_if` (spec/sema.md). lit's action adds the flag; its
+    // warnings are on by default, so the harness need not.
+    "diagnose-if-support",
     // kiln understands `-Wno-<group>` (features.py `_isAnyClangOrGCC`);
     // see the module doc.
     "gcc-style-warnings",

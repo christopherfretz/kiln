@@ -309,6 +309,25 @@ impl Sema<'_, '_> {
             Scalar::Bool { ty: t, value: v != 0 }
         } else {
             let (w, signed) = int_info(&self.ast, t).unwrap_or((64, true));
+            if w > 128 {
+                // A wide `_BitInt`: `v` extended over its words.
+                let n = IntBits::words_for(w);
+                let fill = if v < 0 { u64::MAX } else { 0 };
+                let mut words: Vec<u64> = (0..n)
+                    .map(|i| match i {
+                        0 => v as u64,
+                        1 => (v >> 64) as u64,
+                        _ => fill,
+                    })
+                    .collect();
+                if w % 64 != 0 {
+                    words[n - 1] &= (1u64 << (w % 64)) - 1;
+                }
+                if let Some(bits) = IntBits::from_words(w, &words) {
+                    let scalar = Scalar::Int { ty: t, signed, bits };
+                    return self.ast.consts.push_scalar(scalar).expect("integer constants intern");
+                }
+            }
             Scalar::Int { ty: t, signed, bits: IntBits::from_i128(w.clamp(1, 128), v) }
         };
         self.ast.consts.push_scalar(scalar).expect("integer constants intern")
@@ -4416,7 +4435,7 @@ impl Sema<'_, '_> {
             let ty = self.dependent_subscript_type(base, idx);
             return self.builder().subscript(base, idx, ty, loc);
         }
-        if self.is_vector_type(self.ety(base)) {
+        if self.is_vector_type(self.ety(base)) || self.is_sve_vector(self.ety(base)) {
             return self.vector_subscript(base, idx, loc);
         }
         let b = conv::decay(self, base);
@@ -4724,6 +4743,7 @@ impl Sema<'_, '_> {
             overloadable: self.kind_of(d) == DeclKind::Function
                 && self.ast.decls.builtin_id(d).is_none()
                 && adl_single == Some(callee),
+            enable_if: true,
         });
         let Some(conv_args) =
             self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
@@ -4986,9 +5006,21 @@ impl Sema<'_, '_> {
             self.check_variadic_args(&conv_args[n..have], kind);
         }
         if let Some(c) = named
+            && c.enable_if
             && !self.check_enable_if_direct(c.decl, callee, &conv_args, loc)
         {
             return None;
+        }
+        // clang `checkCall`: also a static member function named by a
+        // member access (`x.s(1)`), which is not `named` here.
+        let checked = named.map(|c| c.decl).or_else(|| {
+            let x = self.ignore_parens(callee);
+            (self.ast.exprs.get(x).kind() == ExprKind::MemberExpr)
+                .then(|| self.ast.exprs.decl(x))
+                .filter(|&d| self.is_static_method(d))
+        });
+        if let Some(f) = checked {
+            self.check_diagnose_if_call(f, &conv_args, rparen);
         }
         Some(conv_args)
     }
@@ -6307,6 +6339,11 @@ pub(crate) struct CallCallee {
     /// A non-member function named by an id-expression: clang reports
     /// arity errors through overload resolution ("no matching function").
     pub(crate) overloadable: bool,
+    /// Whether the call checks the function's `enable_if` conditions
+    /// itself: not when overload resolution chose the function (it
+    /// checked them, binding an explicit object member function's
+    /// arguments as clang does, [`Sema::check_enable_if`]).
+    pub(crate) enable_if: bool,
 }
 
 /// An overload set in the order clang lists it: an unqualified lookup

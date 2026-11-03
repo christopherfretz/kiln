@@ -988,7 +988,8 @@ impl Cg<'_> {
             return v;
         }
         let p = self.scalar_tls_addr(a.v);
-        let v = self.load(a.ty, p, a.align, vol);
+        let ty = self.scalar_access_ty(a.ty, q);
+        let v = self.load(ty, p, a.align, vol);
         self.tbaa_mark(v, q, tb);
         if self.is_bool_value(q) && self.opts.optimize() && a.ty == LTy::I8 {
             self.bool_range(v);
@@ -1023,6 +1024,18 @@ impl Cg<'_> {
             return self.cast(op, v, mty);
         }
         v
+    }
+
+    /// The type a scalar of type `q` in an object of IR type `ty` is
+    /// loaded or stored as: a `_BitInt` whose in-memory type is a byte
+    /// array is accessed as the integer of its size (clang
+    /// `convertTypeForLoadStore`).
+    fn scalar_access_ty(&mut self, ty: LTy, q: QualType) -> LTy {
+        if !matches!(self.ast.types.canonical_view(q), TypeView::BitInt { .. }) || ty != self.mty(q)
+        {
+            return ty;
+        }
+        self.lsty(q)
     }
 
     /// `iN` when `q` (or its `_Atomic` value type) is `_BitInt(N)` stored
@@ -1065,7 +1078,8 @@ impl Cg<'_> {
             self.tbaa_mark(st, q, tb);
             return st;
         }
-        let v = self.emit_to_memory(v, q, a.ty);
+        let ty = self.scalar_access_ty(a.ty, q);
+        let v = self.emit_to_memory(v, q, ty);
         let p = self.scalar_tls_addr(a.v);
         let st = self.store(v, p, a.align, vol);
         self.tbaa_mark(st, q, tb);
@@ -1608,6 +1622,27 @@ impl Cg<'_> {
     /// `fpto[su]i` from them.
     fn fold_wide_cast(&mut self, op: CastOp, v: V, to: LTy) -> Option<V> {
         let soft = |k: FloatKind| !matches!(k, FloatKind::Single | FloatKind::Double);
+        if let (CastOp::Trunc | CastOp::ZExt | CastOp::SExt, V::C(c)) = (op, v)
+            && let Some(ConstData::Int { ty, value: IntValue::Big(words) }) = self.m.const_of(c)
+            && let Some(w) = self.m.types.int_width(*ty)
+            && self.m.types.int_width(to).is_some()
+        {
+            // A constant wider than 128 bits (a `_BitInt(N)` stored in its
+            // slot): sign-extend the words past bit `w` for `sext`.
+            let mut words = words.to_vec();
+            let neg =
+                op == CastOp::SExt && (words[(w as usize - 1) / 64] >> ((w - 1) % 64)) & 1 == 1;
+            if neg {
+                let top = (w as usize - 1) / 64;
+                let used = w % 64;
+                if used != 0 {
+                    words[top] |= u64::MAX << used;
+                }
+                let tw = self.m.types.int_width(to).unwrap_or(w) as usize;
+                words.resize(tw.div_ceil(64).max(words.len()), u64::MAX);
+            }
+            return Some(V::C(self.m.const_int_words(to, &words)));
+        }
         if let Some((_, a, w)) = self.cint(v) {
             let tk =
                 float_kind(to).filter(|&k| matches!(k, FloatKind::Half | FloatKind::BFloat16))?;
@@ -1742,7 +1777,8 @@ impl Cg<'_> {
     fn cmp_ty(&mut self, l: V) -> LTy {
         let t = self.f.fir.ty(&self.m, l);
         match self.m.types.vector_info(t) {
-            Some((_, n, _)) => self.m.types.vector(LTy::I1, n),
+            Some((_, n, true)) => self.m.types.scalable_vector(LTy::I1, n),
+            Some((_, n, false)) => self.m.types.vector(LTy::I1, n),
             None => LTy::I1,
         }
     }
@@ -1767,7 +1803,10 @@ impl Cg<'_> {
             ConstData::Poison(t) => (*t, 2),
             _ => return None,
         };
-        let (et, n, _) = self.m.types.vector_info(ty)?;
+        let (et, n, scalable) = self.m.types.vector_info(ty)?;
+        if scalable {
+            return None;
+        }
         let e = match data {
             0 => self.m.const_zero(et),
             1 => self.m.const_undef(et),
@@ -1809,8 +1848,15 @@ impl Cg<'_> {
         let t = self.f.fir.ty(&self.m, a);
         let et = self.m.types.vector_info(t).map_or(LTy::I8, |x| x.0);
         let b = b.unwrap_or_else(|| V::C(self.m.const_poison(t)));
-        let rt = self.m.types.vector(et, mask.len() as u32);
-        if let Some(k) = self.fold_shuffle(a, b, &mask, t) {
+        let scalable = self.m.types.vector_info(t).is_some_and(|x| x.2);
+        let rt = if scalable {
+            // An SVE splat's `zeroinitializer` mask (clang
+            // `CreateVectorSplat`); never folded here.
+            self.m.types.scalable_vector(et, mask.len() as u32)
+        } else {
+            self.m.types.vector(et, mask.len() as u32)
+        };
+        if !scalable && let Some(k) = self.fold_shuffle(a, b, &mask, t) {
             return V::C(k);
         }
         self.f.fir.push(Op::ShuffleVector { a, b, mask }, rt)
@@ -1907,12 +1953,16 @@ impl Cg<'_> {
     }
 
     /// `IRBuilder::CreateVectorSplat`: a constant splat folds.
-    pub fn splat(&mut self, v: V, n: u32) -> V {
-        let et = self.f.fir.ty(&self.m, v);
-        let vt = self.m.types.vector(et, n);
+    /// `vt` is the result vector type (fixed, or an SVE scalable one).
+    pub fn splat(&mut self, v: V, vt: LTy) -> V {
+        let (n, scalable) = self.m.types.vector_info(vt).map_or((1, false), |x| (x.1, x.2));
         if let V::C(c) = v {
-            let elems = vec![c; n as usize];
-            if let Ok(k) = self.m.const_vector(&elems) {
+            let k = if scalable {
+                self.m.const_splat(vt, c)
+            } else {
+                self.m.const_vector(&vec![c; n as usize])
+            };
+            if let Ok(k) = k {
                 return V::C(k);
             }
         }
@@ -2005,6 +2055,9 @@ impl Cg<'_> {
         if let Some((_, a, w)) = self.cint(v) {
             let tw = self.m.types.int_width(to);
             let r = match (op, tw) {
+                (CastOp::ZExt, Some(t)) if t > 128 => {
+                    Some(V::C(self.m.const_int_words(to, &[a as u64, (a >> 64) as u64])))
+                }
                 (CastOp::Trunc | CastOp::ZExt, Some(_)) => {
                     Some(V::C(self.m.const_int(to, a as i128)))
                 }

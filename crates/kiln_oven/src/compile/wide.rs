@@ -7,19 +7,16 @@
 //! objects and writes its result's (`Op::Wide`), so a prvalue operand is
 //! evaluated into a temporary (`wide_place`) and a result into the object
 //! it initializes (`wide_init`). Conversions to and from a narrow integer
-//! go through a register (`wide::FROM`, `wide::TO`); a conversion to or
-//! from a floating type is not supported yet (it traps).
+//! go through a register (`wide::FROM`, `wide::TO`), as do those to and
+//! from a floating type (`wide::TO_FLOAT`, `wide::FROM_FLOAT`).
 
 use kiln_ast::ExprId;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 
-use super::{Access, Compiler, Place, cmp_of, eval_int, int_of, skip_parens};
+use super::{Access, Compiler, Place, cmp_of, eval_int, float_code, int_of, int_op, skip_parens};
 use crate::kbc::{Op, ak, wide};
 use crate::mem::Origin;
-use crate::ty::OTy;
-
-const FLOAT: &str = "kiln: conversion between a _BitInt wider than 128 bits and a floating type \
-                     is not supported in constant evaluation yet";
+use crate::ty::{OTy, TyKind};
 
 impl Compiler<'_> {
     /// Whether expression `e` has a wide `_BitInt` type.
@@ -43,14 +40,83 @@ impl Compiler<'_> {
     /// temporary holding the prvalue (an lvalue-to-rvalue conversion's
     /// read is a copy, so that its failure is noted at the operand, as
     /// clang notes it).
-    fn wide_place(&mut self, e: ExprId) -> u32 {
+    pub(super) fn wide_place(&mut self, e: ExprId) -> u32 {
         let e = skip_parens(self.ast(), e);
         let n = self.node(e);
         if n.value_category().is_glvalue() {
-            return self.lv_mem(e, Access::Read);
+            let place = self.lv(e, Access::Read);
+            let ty = self.ety(e);
+            return self.wide_read_place(place, ty, ak::READ, false, e);
         }
         let ty = self.ety(e);
         self.materialize(e, ty)
+    }
+
+    /// The address of the wide value of type `ty` at `place`: a
+    /// bit-field's is a temporary it is read into (`rmw`: the read of a
+    /// read-modify-write, access kind `k`).
+    fn wide_read_place(&mut self, place: Place, ty: OTy, k: u32, rmw: bool, e: ExprId) -> u32 {
+        match place {
+            Place::Mem(p) => p,
+            Place::Bits { p, bit, width } => {
+                let t = self.wide_temp(ty, e);
+                let f = if rmw { wide::RMW } else { 0 };
+                let x = bit | width << 3;
+                self.wide(wide::LOAD_BITS | wide::INIT | f, k, [t, p, 0], ty, x, e);
+                t
+            }
+            Place::Reg(_) | Place::Lane { .. } => {
+                self.trap(e, "kiln: internal: the address of a register value was taken");
+                self.reg()
+            }
+        }
+    }
+
+    /// Writes the wide value at `src` back to bit-field `place` (a no-op
+    /// for an object, which the operation wrote in place).
+    fn wide_write_bits(&mut self, place: Place, src: u32, ty: OTy, k: u32, init: bool, e: ExprId) {
+        if let Place::Bits { p, bit, width } = place {
+            let f = if init { wide::INIT } else { 0 };
+            self.wide(wide::STORE_BITS | f, k, [p, src, 0], ty, bit | width << 3, e);
+        }
+    }
+
+    /// Initializes the wide bit-field of declared type `ty` at `q` (bit
+    /// `bit`, `width` bits) from `x`, or with zero for `None`.
+    pub(super) fn wide_field_init(
+        &mut self,
+        x: Option<ExprId>,
+        q: u32,
+        ty: OTy,
+        bw: (u32, u32),
+        e: ExprId,
+    ) {
+        let at = x.unwrap_or(e);
+        let t = self.wide_temp(ty, at);
+        match x {
+            Some(x) => self.init(x, t, ty),
+            None => {
+                self.emit_at(Op::ZeroInit, 0, &[t, ty.0], e);
+            }
+        }
+        let place = Place::Bits { p: q, bit: bw.0, width: bw.1 };
+        self.wide_write_bits(place, t, ty, ak::INIT, true, at);
+    }
+
+    /// The value of integer literal `e` as little-endian 128-bit chunks.
+    fn literal_chunks(&self, e: ExprId) -> Vec<u128> {
+        let ast = self.ast();
+        if let Some(v) = ast.exprs.int_value(e) {
+            return vec![u128::from(v)];
+        }
+        let words = match ast.exprs.literal_const(e).and_then(|c| ast.consts.scalar(c)) {
+            Some(kiln_ast::consts::Scalar::Int { bits, .. }) => bits.words().to_vec(),
+            _ => return vec![eval_int(ast, e).unwrap_or(0)],
+        };
+        words
+            .chunks(2)
+            .map(|c| u128::from(c[0]) | c.get(1).map_or(0, |&h| u128::from(h) << 64))
+            .collect()
     }
 
     /// A fresh temporary of wide type `ty`.
@@ -89,13 +155,39 @@ impl Compiler<'_> {
         let init = wide::INIT;
         match n.kind() {
             ExprKind::IntegerLiteral => {
-                let v = eval_int(self.ast(), e).unwrap_or(0);
-                let r = self.reg();
-                self.konst(r, v);
-                self.wide(wide::FROM | init, 0, [p, r, 0], ty, 128, e);
+                // A literal wider than 128 bits (a substituted non-type
+                // template argument; C++ spells none): its 128-bit chunks,
+                // most significant first, shifted in.
+                let chunks = self.literal_chunks(e);
+                if chunks.len() <= 1 {
+                    let v = chunks.first().copied().unwrap_or(0);
+                    let r = self.reg();
+                    self.konst(r, v);
+                    self.wide(wide::FROM | init, 0, [p, r, 0], ty, 128, e);
+                    return true;
+                }
+                let (r, cnt) = (self.reg(), self.reg());
+                self.konst(cnt, 128);
+                let mut acc = self.wide_temp(ty, e);
+                self.konst(r, chunks[chunks.len() - 1]);
+                self.wide(wide::FROM | init, 0, [acc, r, 0], ty, 128, e);
+                for &c in chunks[..chunks.len() - 1].iter().rev() {
+                    let (sh, lo, next) =
+                        (self.wide_temp(ty, e), self.wide_temp(ty, e), self.wide_temp(ty, e));
+                    self.wide(wide::SHL | init, 0, [sh, acc, cnt], ty, 128, e);
+                    self.konst(r, c);
+                    self.wide(wide::FROM | init, 0, [lo, r, 0], ty, 128, e);
+                    self.wide(wide::OR | init, 0, [next, sh, lo], ty, 0, e);
+                    acc = next;
+                }
+                self.wide(wide::MOV | init, 0, [p, acc, 0], ty, 0, e);
             }
             ExprKind::CXXScalarValueInitExpr => {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
+            }
+            ExprKind::SubstNonTypeTemplateParmExpr => {
+                let r = self.ast().exprs.subst_replacement(e);
+                self.init_inner(r, p, ty);
             }
             ExprKind::InitListExpr => {
                 let inits = self.ast().exprs.init_list_inits(e);
@@ -112,7 +204,7 @@ impl Compiler<'_> {
                 let ot = self.ety(op);
                 match self.ast().exprs.cast_kind(e) {
                     CastKind::LValueToRValue => {
-                        let a = self.lv_mem(op, Access::Read);
+                        let a = self.wide_place(op);
                         self.wide(wide::MOV | init, 0, [p, a, 0], ty, 0, e);
                     }
                     CastKind::NoOp if !n.value_category().is_glvalue() => {
@@ -129,7 +221,16 @@ impl Compiler<'_> {
                         let x = self.narrow_code(ot);
                         self.wide(wide::FROM | init, 0, [p, r, 0], ty, x, e);
                     }
-                    CastKind::FloatingToIntegral => self.trap(e, FLOAT),
+                    CastKind::FloatingToIntegral => {
+                        // clang reports an out-of-range value at the
+                        // operand's begin.
+                        let r = self.rv(op);
+                        let x = self.float_x(ot);
+                        let at = self.sites_len();
+                        self.wide(wide::FROM_FLOAT | init, 0, [p, r, 0], ty, x, e);
+                        let begin = self.begin(op);
+                        self.o.sites[at..].iter_mut().for_each(|s| s.loc = begin);
+                    }
                     _ => return false,
                 }
             }
@@ -144,12 +245,14 @@ impl Compiler<'_> {
                         self.wide(sub | init, 0, [p, a, 0], ty, 0, e);
                     }
                     UnaryOp::PostInc | UnaryOp::PostDec => {
-                        let Place::Mem(q) = self.lv_rmw(x, e) else { return false };
+                        let place = self.lv_rmw(x, e);
                         let inc = op == UnaryOp::PostInc;
                         let k = if inc { ak::INCREMENT } else { ak::DECREMENT };
+                        let q = self.wide_read_place(place, ty, k, true, e);
                         self.wide(wide::MOV | init, 0, [p, q, 0], ty, 0, e);
                         let sub = if inc { wide::INC } else { wide::DEC };
                         self.wide(sub | wide::RMW, k, [q, q, 0], ty, 0, e);
+                        self.wide_write_bits(place, q, ty, k, false, e);
                     }
                     _ => return false,
                 }
@@ -178,10 +281,14 @@ impl Compiler<'_> {
         // [expr.assign]/1: the right operand is sequenced first.
         let src = self.wide_place(b);
         let saved = self.rmw_loc.replace(self.node(e).loc());
-        let dst = self.lv_mem(a, Access::Write);
+        let place = self.lv(a, Access::Write);
         self.rmw_loc = saved;
-        self.wide(wide::MOV, ak::ASSIGN, [dst, src, 0], ty, 0, e);
-        Place::Mem(dst)
+        match place {
+            Place::Mem(dst) => self.wide(wide::MOV, ak::ASSIGN, [dst, src, 0], ty, 0, e),
+            Place::Bits { .. } => self.wide_write_bits(place, src, ty, ak::ASSIGN, false, e),
+            Place::Reg(_) | Place::Lane { .. } => self.unsupported(e),
+        }
+        place
     }
 
     /// `a op= b` with a wide `_BitInt` operand or computation type.
@@ -198,8 +305,7 @@ impl Compiler<'_> {
         };
         let shift = matches!(sub, wide::SHL | wide::SHR);
         if self.o.types.wide(ct).is_none() && !shift {
-            self.trap(e, FLOAT);
-            return Place::Mem(self.reg());
+            return self.wide_float_compound(e, lhs, lty, x.rhs, ct);
         }
         let k = ak::COMPOUND;
         // The right operand, converted to the computation type.
@@ -221,11 +327,18 @@ impl Compiler<'_> {
                 self.wide(wide::FROM | wide::INIT, 0, [t, r, 0], ct, rx, e);
                 (t, 0)
             } else {
-                self.trap(e, FLOAT);
+                self.unsupported(e);
                 return Place::Mem(self.reg());
             }
         };
         let place = self.lv_rmw(lhs, e);
+        // A wide bit-field: computed in a temporary, written back.
+        let bits = matches!(place, Place::Bits { .. }) && self.o.types.wide(lty).is_some();
+        let (place, bf) = if bits {
+            (Place::Mem(self.wide_read_place(place, lty, k, true, e)), Some(place))
+        } else {
+            (place, None)
+        };
         let ct = if shift { lty } else { ct };
         match place {
             Place::Mem(q) if lty == ct => {
@@ -252,16 +365,120 @@ impl Compiler<'_> {
             }
             _ => self.unsupported(e),
         }
+        if let (Some(bf), Place::Mem(t)) = (bf, place) {
+            self.wide_write_bits(bf, t, lty, k, false, e);
+            return bf;
+        }
         place
+    }
+
+    /// `x` of `wide::TO_FLOAT`/`wide::FROM_FLOAT` for floating type `t`.
+    fn float_x(&mut self, t: OTy) -> u32 {
+        match self.kind(t) {
+            TyKind::Float(k) => float_code(k),
+            _ => float_code(kiln_ast::consts::FloatKind::Double),
+        }
+    }
+
+    /// `a op= b` of floating computation type `ct` with a wide operand
+    /// ([expr.ass]/7: `a = a op b`, `a` evaluated once): the wide side
+    /// converted to `ct`, the result converted back to `a`'s type.
+    fn wide_float_compound(
+        &mut self,
+        e: ExprId,
+        lhs: ExprId,
+        lty: OTy,
+        rhs: ExprId,
+        ct: OTy,
+    ) -> Place {
+        let op = self.ast().exprs.binary_op(e);
+        let Some(iop) = int_op(op) else {
+            self.unsupported(e);
+            return Place::Mem(self.reg());
+        };
+        let k = ak::COMPOUND;
+        let fx = self.float_x(ct);
+        let rt = self.ety(rhs);
+        let b = self.reg();
+        if self.o.types.wide(rt).is_some() {
+            let src = self.wide_place(rhs);
+            self.wide(wide::TO_FLOAT, 0, [b, src, 0], rt, fx, e);
+        } else {
+            let r = self.rv_copy(rhs);
+            self.convert(r, rt, ct, b, e);
+        }
+        let bf = self.lv_rmw(lhs, e);
+        let a = self.reg();
+        let wide_lhs = self.o.types.wide(lty).is_some();
+        let place = if wide_lhs && matches!(bf, Place::Bits { .. }) {
+            Place::Mem(self.wide_read_place(bf, lty, k, true, e))
+        } else {
+            bf
+        };
+        match place {
+            Place::Mem(q) if wide_lhs => {
+                self.wide(wide::TO_FLOAT | wide::RMW, k, [a, q, 0], lty, fx, e);
+            }
+            _ if !wide_lhs => {
+                let old = self.reg();
+                self.load(place, lty, k, e, old);
+                self.convert(old, lty, ct, a, e);
+            }
+            _ => {
+                self.unsupported(e);
+                return place;
+            }
+        }
+        let res = self.reg();
+        self.arith(iop, ct, rt, res, a, b, e);
+        if let Place::Mem(q) = place
+            && wide_lhs
+        {
+            self.wide(wide::FROM_FLOAT, k, [q, res, 0], lty, fx, e);
+            self.wide_write_bits(bf, q, lty, k, false, e);
+        } else {
+            let new = self.reg();
+            self.convert(res, ct, lty, new, e);
+            self.store(place, new, lty, k, e);
+        }
+        bf
     }
 
     /// `++`/`--` of the wide object at `place`.
     pub(super) fn wide_inc_dec(&mut self, place: Place, ty: OTy, op: UnaryOp, e: ExprId) {
-        let Place::Mem(q) = place else { return self.unsupported(e) };
         let inc = matches!(op, UnaryOp::PostInc | UnaryOp::PreInc);
         let k = if inc { ak::INCREMENT } else { ak::DECREMENT };
         let sub = if inc { wide::INC } else { wide::DEC };
+        let q = self.wide_read_place(place, ty, k, true, e);
         self.wide(sub | wide::RMW, k, [q, q, 0], ty, 0, e);
+        self.wide_write_bits(place, q, ty, k, false, e);
+    }
+
+    /// Register `dst` = the comparison `c` (`cmp`) of the wide values at
+    /// `a` and `b`, of type `ty`.
+    pub(super) fn wide_cmp_at(&mut self, c: u32, dst: u32, [a, b]: [u32; 2], ty: OTy, e: ExprId) {
+        self.wide(wide::CMP, 0, [dst, a, b], ty, c, e);
+    }
+
+    /// Register `dst` = the comparison `c` of the wide switch condition
+    /// at `cond` (type `ty`) with the case value `v`.
+    pub(super) fn wide_case_cmp(&mut self, c: u32, dst: u32, cond: u32, ty: OTy, v: ExprId) {
+        let vt = self.ety(v);
+        let b = if vt == ty {
+            self.wide_place(v)
+        } else if self.o.types.wide(vt).is_some() {
+            let src = self.wide_place(v);
+            let t = self.wide_temp(ty, v);
+            self.wide(wide::CAST | wide::INIT, 0, [t, src, 0], ty, vt.0, v);
+            t
+        } else {
+            let r = self.rv(v);
+            let x = self.narrow_code(vt);
+            let t = self.wide_temp(ty, v);
+            self.wide(wide::FROM | wide::INIT, 0, [t, r, 0], ty, x, v);
+            t
+        };
+        self.wide(wide::CMP, 0, [dst, cond, b], ty, c, v);
     }
 
     /// The comparison `e` of wide operands into register `dst`.
@@ -291,7 +508,11 @@ impl Compiler<'_> {
                 let x = self.narrow_code(ty);
                 self.wide(wide::TO, 0, [dst, a, 0], ot, x, e);
             }
-            CastKind::IntegralToFloating => self.trap(e, FLOAT),
+            CastKind::IntegralToFloating => {
+                let a = self.wide_place(op);
+                let x = self.float_x(ty);
+                self.wide(wide::TO_FLOAT, 0, [dst, a, 0], ot, x, e);
+            }
             _ => self.unsupported(e),
         }
     }

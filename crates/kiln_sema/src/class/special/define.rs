@@ -1107,6 +1107,7 @@ impl Sema<'_, '_> {
                     && !self.is_function_spec(m)
                     && self.copy_or_move_ctor_param(m, class);
                 let args = self.ctor_args(am, call.args, call.narrowing, explicit_first, loc)?;
+                self.check_diagnose_if_call(am, &args, loc);
                 let zeroing = call.info.zeroing || call.value_init && !self.is_user_provided(m);
                 let info = ConstructInfo { zeroing, ..call.info };
                 let e = match call.temp_end {
@@ -1384,7 +1385,15 @@ impl Sema<'_, '_> {
     /// data member, is assigned from the corresponding subobject of the
     /// parameter; then `return *this;`.
     fn define_assign(&mut self, f: DeclId, class: DeclId, kind: SpecialKind) -> bool {
-        let loc = self.ast.decls.get(f).loc();
+        // clang `DefineImplicitCopyAssignment` / `...MoveAssignment`: the
+        // body is located at the end of the declaration (the last token
+        // of its declarator; an implicit declaration's is its location).
+        let ends = &self.ast.decls.cold.declarator_end;
+        let loc = ends
+            .get(f)
+            .or_else(|| self.ast.instantiated_from(f).and_then(|p| ends.get(p)))
+            .copied()
+            .unwrap_or_else(|| self.ast.decls.get(f).loc());
         let moving = kind == SpecialKind::MoveAssign;
         let Some((p, other_ty)) = self.special_param() else { return false };
         let Some(this_ty) = self.func.as_ref().and_then(|s| s.this_ty) else { return false };
@@ -1530,9 +1539,20 @@ impl Sema<'_, '_> {
             let tq = self.ast.types.effective_quals(self.ety(to));
             let moving = self.ast.exprs.get(from).value_category() == ValueCategory::XValue;
             let k = if moving { SpecialKind::MoveAssign } else { SpecialKind::CopyAssign };
-            let Selected::Found(op) = self.select_special(c, k, fq, tq) else {
-                self.unsupported("selecting the assignment operator", loc);
-                return None;
+            let op = match self.select_special(c, k, fq, tq) {
+                Selected::Found(op) => op,
+                // Reached only where the implicit definition is not
+                // checked for deletion first (an instantiated out-of-line
+                // `= default`): clang builds the call and reports the use
+                // of the deleted operator ([dcl.fct.def.delete]/2).
+                Selected::Deleted(op) => {
+                    self.diagnose_deleted_use(op, loc);
+                    return None;
+                }
+                _ => {
+                    self.unsupported("selecting the assignment operator", loc);
+                    return None;
+                }
             };
             self.mark_function_referenced(op, loc);
             let callee = self.builder().member(to, op, QualType::BOUND_MEMBER, false, loc, None);

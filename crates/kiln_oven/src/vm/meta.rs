@@ -53,13 +53,10 @@ impl Oven {
             }
         }
         let trial = self.run.fold || self.mem.in_trial();
-        let ctx = MetaCtx {
-            scope: None,
-            loc: self.site(pc).loc,
-            plainly: self.plain(),
-            trial,
-            elem: OTy(t1),
-        };
+        // The function whose body holds the call (thunks have none).
+        let scope = self.stack.last().and_then(|f| self.funcs[f.func as usize].decl);
+        let ctx =
+            MetaCtx { scope, loc: self.site(pc).loc, plainly: self.plain(), trial, elem: OTy(t1) };
         match op.purity() {
             Purity::Stable => {}
             Purity::PointDependent => self.run.impure += 1,
@@ -91,6 +88,12 @@ impl Oven {
                 }
                 MetaErrorKind::NotImplemented { .. } => self.meta_trap(e.notes),
             });
+        }
+        if op.purity() == Purity::Mutating {
+            // `define_aggregate` completed a class: its provisional slot
+            // is rebuilt now, so the rest of this evaluation sees it
+            // complete (spec/reflection.md §6.2; O(1) when nothing did).
+            self.types.refresh(b);
         }
         let cur = self.stack[self.stack.len() - 1].func;
         let top = fb + self.funcs[cur as usize].nregs as usize + 1;
