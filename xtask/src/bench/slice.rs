@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use super::compare::{self, RatioRow, ThresholdOverrides};
 use super::entry::{BenchSpec, Entry, Mode};
+use crate::util::{CompilerId, CompilerKind};
 
 /// The group directory under the bench root, and the entry id prefix.
 pub const GROUP: &str = "libcxx-slice";
@@ -72,6 +73,35 @@ pub fn split_inputs(bench_root: &Path, inputs: &[PathBuf]) -> (bool, Vec<PathBuf
     (selected, rest)
 }
 
+/// The oldest clang major the slice measures: libc++ 22's
+/// `<__configuration/compiler.h>` warns "Libc++ only supports Clang 20 and
+/// later" and the runner's `-Werror` makes that an error, so an older clang
+/// fails every test and its ratios would mean nothing.
+pub const MIN_CLANG_MAJOR: u32 = 20;
+
+/// Refuses a clang that cannot be the slice's comparison point (WP-487):
+/// one older than [`MIN_CLANG_MAJOR`], or whose `--version` names no
+/// version. `role` is `--compare-with` or `--compiler`, `shown` the path as
+/// given. kiln, GCC and other compilers pass (the floor is clang's).
+pub fn check_clang_floor(id: &CompilerId, role: &str, shown: &str) -> Result<(), String> {
+    if id.kind != CompilerKind::Clang {
+        return Ok(());
+    }
+    let floor = MIN_CLANG_MAJOR;
+    let why = match id.clang_version() {
+        Some([major, ..]) if major >= floor => return Ok(()),
+        Some([major, minor, patch]) => format!("is clang {major}.{minor}.{patch}"),
+        None => "names no clang version".to_owned(),
+    };
+    Err(format!(
+        "{role} `{shown}` {why} (`{}`): bench/{GROUP} needs clang {floor} or later, because \
+         the libc++ headers of {TAG} reject older clangs (\"Libc++ only supports Clang {floor} and \
+         later\" under the runner's -Werror), so every test would fail and the ratios would \
+         compare nothing; use a clang {floor}+ such as `--compare-with clang++-22`",
+        id.version
+    ))
+}
+
 /// The entry id of a listed test.
 pub fn id_of(rel: &str) -> String {
     format!("{GROUP}/{}", rel.strip_suffix(".cpp").unwrap_or(rel))
@@ -92,6 +122,7 @@ pub fn spec() -> BenchSpec {
         oven: Vec::new(),
         thresholds: ThresholdOverrides::default(),
         xfail_kiln: None,
+        budget_time_ms: None,
     }
 }
 
@@ -510,6 +541,25 @@ mod tests {
         assert!(section.contains("| `std/c.pass` | FAIL | 100.0 | - | - | 4.0 | - |"), "{section}");
         assert!(section.contains("first 12.5, mean 12.5, max 12.5"), "{section}");
         assert!(section.ends_with("|\n"), "{section}");
+    }
+
+    /// The oracle floor (WP-487): clang 20+ passes, clang 19 and a clang
+    /// with no readable version are refused with the reason, other kinds pass.
+    #[test]
+    fn refuses_clang_older_than_20() {
+        let id = |kind, v: &str| CompilerId { kind, version: v.into() };
+        let ok = |v| check_clang_floor(&id(CompilerKind::Clang, v), "--compare-with", "cc");
+        assert!(ok("Debian clang version 20.1.8 (1)").is_ok());
+        assert!(ok("Ubuntu clang version 22.1.0").is_ok());
+        assert!(ok("clang version 23.0.0git (https://x y)").is_ok());
+        let e = ok("Debian clang version 19.1.7 (3+b1)").unwrap_err();
+        assert!(e.starts_with("--compare-with `cc` is clang 19.1.7 (`Debian clang"), "{e}");
+        assert!(e.contains("needs clang 20 or later") && e.contains("clang++-22"), "{e}");
+        let e = ok("clang version unknown").unwrap_err();
+        assert!(e.contains("names no clang version"), "{e}");
+        for kind in [CompilerKind::Kiln, CompilerKind::Gcc, CompilerKind::Other] {
+            assert!(check_clang_floor(&id(kind, "x version 1"), "--compiler", "x").is_ok());
+        }
     }
 
     #[test]

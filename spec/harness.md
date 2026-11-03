@@ -691,6 +691,11 @@ The run header names the default cap (`mem limit: <N> MiB` or `none`).
 `cargo xtask bench` applies the same cap to its measured compiles
 (`spec/bench.md` "Resource limits").
 
+Bench budgets are the bench's own: `mem<=N` caps a measured compile's
+address space as above, and `budget-time: <ms>` (spec/bench.md
+"Directives") fails a bench entry whose fastest kiln run takes longer,
+`--record` included, so a re-record cannot absorb a regression past it.
+
 ## Jobserver
 
 Every agent on the host shares one CPU/memory budget, so xtask is a GNU

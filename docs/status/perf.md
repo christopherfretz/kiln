@@ -44,9 +44,9 @@ The latest recording:
 | `overload/calls` | syntax | 1725.9 | 768.4 | 2.25x | 13.8 | 92.3 | 0.15x | - | 2026-11-03T123217 |
 | `overload/ctors` | syntax | 575.1 | 525.9 | 1.09x | 12.2 | 87.5 | 0.14x | - | 2026-11-03T123217 |
 | `overload/less-10k` | syntax | 2010.3 | 2562.0 | 0.78x | 17.3 | 93.7 | 0.18x | - | 2026-11-03T123217 |
-| `pp/headers` | pp | 2443.4 | 657.5 | 3.72x | 100.5 | 154.7 | 0.65x | - | 2026-11-03T123217 |
-| `pp/repetition` | pp | 440.7 | 811.4 | 0.54x | 235.3 | 210.0 | 1.12x | - | 2026-11-03T123217 |
-| `pp/xmacro` | pp | 857.7 | 799.4 | 1.07x | 298.7 | 217.5 | 1.37x | - | 2026-11-03T123217 |
+| `pp/headers` | pp | 1199.2 | 799.3 | 1.50x | 100.1 | 153.8 | 0.65x | - | 2026-11-03T204453 |
+| `pp/repetition` | pp | 541.5 | 965.2 | 0.56x | 234.9 | 209.8 | 1.12x | - | 2026-11-03T204453 |
+| `pp/xmacro` | pp | 927.6 | 886.5 | 1.05x | 298.3 | 217.4 | 1.37x | - | 2026-11-03T204453 |
 | `runtime/generator-iterate` | run | 28.6 | 28.0 | 1.02x | 3.1 | 3.1 | 1.00x | - | 2026-11-03T123217 |
 
 Ratios below 1.00x mean kiln is faster or leaner; FAIL means the entry did not compile. `kiln instantiations` is the totals row of kiln's template instantiation report for `frontend` entries: implicit instantiations / AST KiB they retained (spec/sema-templates.md §11.4). `Recorded` is the timestamp of the recording that measured the row (its results file and baselines carry the same stamp); a row recorded before the latest recording was measured with that recording's compilers and host. A row marked (stale) is an entry no longer in `bench/`: it stays until a recording of the whole corpus and is left out of the means. The means are taken over the other rows, from the ms and MB columns as shown.
@@ -194,6 +194,42 @@ sweeps"):
 | GCC 16.1, `--runs 1` | 500 | 2407 ms | 347.0 MiB | 8075 ms | 1089.7 MiB | 3.35x | 3.14x | ok |
 | kiln release | 100 | - | - | - | - | - | - | xfail (WP-478: `'meta' file not found`) |
 
+### WP-487: the `pp/headers` regression (2026-11-03)
+
+**Cause.** `git bisect run --first-parent 83ba262d0..3946da255` (657
+first-parent commits; release kiln++ per step; min of 3 `-E` runs of the
+entry without its libc++ includes, threshold 1.5 s) named `203242dcd`
+(PR #27, WP-234): every `#define`/`#undef` scanned the whole
+attribute-macro history once one attribute macro existed, and the entry's
+5120 passes each redefine two (`[[no_unique_address]]`, `[[likely]]`), so
+the scan was quadratic. Last good step 728-766 ms, first bad 2163-2204 ms
+on that half; the libc++-include half moved only 347 to 374 ms over the
+whole range (header search and include guards are not involved).
+
+**Fix.** An index from name to the live history entry
+(`Preprocessor::attr_live`, spec/pp.md "Performance obligations"). Same
+binaries, interleaved, min of 3, load 17-23:
+
+| `-E bench/pp/headers.cpp` | ms |
+|---|---|
+| kiln `83ba262d0` (the 2026-10-28 baseline, 866 ms then) | 1199-1276 |
+| kiln main `3946da255` (before) | 3180 |
+| kiln WP-487 (after) | 1290-1459 |
+| clang 19 | 783-933 |
+
+The recorder's numbers above (1199 ms, 1.50x clang) are the after state at
+load 22. Under callgrind an 80-pass reduction runs 148.6M instructions
+against 139.2M at `83ba262d0` and 152.8M before the fix; the remaining
++7% is spread over the lexer (`Lexer::next` +4.2M from PR #23 WP-143's
+comment recording changing its inlining) and +1.4M of startup, not one
+hotspot. `bench/pp/headers.cpp` now carries `budget-time: 1765` (1.5x the
+1176 ms median of the first post-fix recording), so `cargo xtask bench`
+fails, `--record` included, if it regresses past that.
+
+**Other `pp/*` rows.** None is over 1.5x clang: `pp/repetition` is 0.56x
+time and 1.12x memory, `pp/xmacro` 1.05x time and 1.37x memory (both
+re-recorded here, noisy at load 22).
+
 ### WP-317: the 2026-11-03 re-recording
 
 The table above and every `bench/baselines/*.json` were re-recorded with a
@@ -207,7 +243,8 @@ include standard headers, `<array>`, `<algorithm>` or `<string>`, where the
 measured 39.6 ms in the recording and 16.3 ms in a rerun a minute later.
 `pp/headers` is not noise: kiln -E takes 2.4 s where the 2026-10-28
 baseline had 0.9 s (spread 0.4% over three reruns, output identical to
-clang's), a preprocessor regression in between that has not been bisected.
+clang's), a preprocessor regression in between: bisected and fixed by
+WP-487 (below).
 
 ### WP-313: libc++ `experimental/simd` instantiation throughput (2026-11-02)
 
