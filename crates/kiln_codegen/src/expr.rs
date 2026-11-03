@@ -4414,14 +4414,14 @@ impl Cg<'_> {
             if let Some(c) = fold.filter(|_| constexpr || constant_init()) {
                 // A constant the lowering cannot spell yet (bit-fields,
                 // base subobjects) is initialized as written instead,
-                // which has the same effect for a local.
+                // which has the same effect for a local, its padding
+                // filled first (clang stores the constant with it).
                 if let Ok(k) = self.const_value(c, q, Some(init), true) {
                     let k = self.auto_init_constant(d, k);
                     return self.stores_for_constant(d, addr, k, self.is_volatile(q));
                 }
-            } else {
-                self.auto_init_prefill(d, q, addr, init);
             }
+            self.auto_init_prefill(d, q, addr, init);
             return self.emit_agg_into(init, addr, false);
         }
         if self.is_complex(q) {
