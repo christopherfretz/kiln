@@ -399,12 +399,57 @@ impl Cg<'_> {
             return Ok(r);
         }
         let name = mangle::mangle_structor(self.ast, &mut self.anon, first, v);
-        let sig = self.structor_sig(first, Some(v))?;
-        let f = self.declare_fn(&name, first, &sig)?;
-        self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
+        // Every variant of a structor with an asm label takes the label
+        // (clang `getMangledName` of each `GlobalDecl`): they are one
+        // function, the first variant defined ([`Cg::emit_structor_def`]).
+        let shared = if self.labelled_structor(first) { self.m.get_function(&name) } else { None };
+        let f = match shared {
+            Some(f) if self.m.resolve(Value::func(f)) == Value::func(f) => f,
+            _ => {
+                let sig = self.structor_sig(first, Some(v))?;
+                let f = self.declare_fn(&name, first, &sig)?;
+                self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
+                f
+            }
+        };
         let r = (Value::func(f), f);
         self.sfns.insert((first, v), r);
         Ok(r)
+    }
+
+    /// Whether constructor or destructor `first` has an asm label.
+    pub(crate) fn labelled_structor(&self, first: DeclId) -> bool {
+        mangle::asm_label(self.ast, first).is_some()
+    }
+
+    /// The labelled structor function `f` for a definition of variant `v`
+    /// of `first`: `None` when an earlier variant already defined the
+    /// label (clang appends the later variant's body as unreachable
+    /// blocks, or skips an alias; spec/abi.md §1), else `f`, retyped
+    /// when the variant's signature differs (a base-object variant with
+    /// a VTT parameter; clang `GetOrCreateLLVMFunction`).
+    fn labelled_structor_def(
+        &mut self,
+        d: DeclId,
+        first: DeclId,
+        v: Structor,
+        f: FuncId,
+    ) -> R<Option<FuncId>> {
+        if !self.labelled_structor(first) {
+            return Ok(Some(f));
+        }
+        if !self.m.func(f).is_declaration() {
+            return Ok(None);
+        }
+        let sig = self.structor_sig(first, Some(v))?;
+        if self.m.func(f).ty() != sig.fn_ty {
+            if let Err(e) = self.m.retype_function_to_end(f, sig.fn_ty) {
+                return err(Some(self.ast.decls.get(d).loc()), format!("cannot define {e:?}"));
+            }
+            self.set_decl_attrs(f, first, &sig);
+            self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
+        }
+        Ok(Some(f))
     }
 
     /// Queues the definition of variant `v` of `first` for emission if
@@ -577,6 +622,7 @@ impl Cg<'_> {
                     return Ok(());
                 }
                 let (_, f) = self.declare_structor(first, v)?;
+                let Some(f) = self.labelled_structor_def(d, first, v, f)? else { return Ok(()) };
                 let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
                 let r = self.gen_code(d, f, Some(Structor::Base));
                 self.f = saved;
@@ -592,13 +638,19 @@ impl Cg<'_> {
                     if !self.m.func(f).is_declaration() {
                         return Ok(());
                     }
+                    let Some(f) = self.labelled_structor_def(d, first, v, f)? else {
+                        return Ok(());
+                    };
                     let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
                     let r = self.gen_code(d, f, Some(Structor::Complete));
                     self.f = saved;
                     r?;
                     return self.emit_thunks(d, Some(v));
                 }
-                if self.complete_is_rauw(d) {
+                if self.complete_is_rauw(d) || self.labelled_structor(first) {
+                    // A labelled one is the base variant's function (clang
+                    // `emitConstructorDestructorAlias` skips an alias whose
+                    // name is defined).
                     let f = self.base_fn(first, true)?;
                     self.sfns.insert((first, v), (Value::func(f), f));
                     if let Some(&p) = self.ph_of.get(&(first, v)) {
@@ -649,6 +701,7 @@ impl Cg<'_> {
                 if !self.m.func(f).is_declaration() || !self.d0_done.insert(first) {
                     return Ok(());
                 }
+                let Some(f) = self.labelled_structor_def(d, first, v, f)? else { return Ok(()) };
                 let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
                 let r = self.gen_code(d, f, Some(Structor::Deleting));
                 self.f = saved;
@@ -695,7 +748,10 @@ impl Cg<'_> {
         declared: Option<FuncId>,
     ) -> R<bool> {
         let ast = self.ast;
-        if !self.opts.optimize() || ast.decls.get(d).kind() != DeclKind::CXXDestructor {
+        if !self.opts.optimize()
+            || ast.decls.get(d).kind() != DeclKind::CXXDestructor
+            || self.labelled_structor(first)
+        {
             return Ok(false);
         }
         let linkage = self.fn_def_linkage(d);

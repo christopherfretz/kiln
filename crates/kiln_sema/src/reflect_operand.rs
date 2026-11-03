@@ -117,9 +117,40 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> ExprId {
-        let info = self.meta_info_type();
+        match self.kind_of(d) {
+            // A type found by name (an injected-class-name hidden from the
+            // type-id parse, say): its type.
+            DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::CXXRecord | DeclKind::Enum => {
+                match self.ast.decls.get(d).ty() {
+                    Some(t) => self.act_on_reflect_type(t, loc, end),
+                    None => self.reflect_bad_operand(name_loc, loc),
+                }
+            }
+            // [expr.reflect]/7: an id-expression naming a non-type template
+            // parameter is ill-formed.
+            DeclKind::NonTypeTemplateParm => {
+                let text = self.decl_name(d);
+                let e = self.diag(DiagId::sema_reflect_nttp, name_loc).arg(text);
+                self.emit(e);
+                let info = self.meta_info_type();
+                self.recover(info, &[], loc)
+            }
+            DeclKind::CXXConstructor => self.reflect_overload_set(name_loc, loc),
+            _ => match self.reflectee_of_decl(d) {
+                Some(r) => self.make_reflect_expr(r, loc, end),
+                None => self.reflect_bad_operand(name_loc, loc),
+            },
+        }
+    }
+
+    /// The reflectee of the entity declaration `d` declares, keyed as
+    /// `^^` keys it (spec/reflection-repr.md §1): a namespace, alias,
+    /// template, value entity, or a type (its declared type, a typedef's
+    /// alias kept). `None` for anything else (a constructor, a template
+    /// parameter, a declaration with no entity).
+    pub(crate) fn reflectee_of_decl(&mut self, d: DeclId) -> Option<Reflectee> {
         let first = self.ast.first(d);
-        let r = match self.kind_of(d) {
+        Some(match self.kind_of(d) {
             DeclKind::Namespace | DeclKind::TranslationUnit => Reflectee::Namespace(first),
             DeclKind::NamespaceAlias => Reflectee::NamespaceAlias(first),
             DeclKind::ClassTemplate
@@ -142,26 +173,12 @@ impl Sema<'_, '_> {
             | DeclKind::CXXMethod
             | DeclKind::CXXConversion
             | DeclKind::CXXDestructor => Reflectee::Decl(first),
-            // A type found by name (an injected-class-name hidden from the
-            // type-id parse, say): its type.
             DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::CXXRecord | DeclKind::Enum => {
-                match self.ast.decls.get(d).ty() {
-                    Some(t) => return self.act_on_reflect_type(t, loc, end),
-                    None => return self.reflect_bad_operand(name_loc, loc),
-                }
+                let t = self.ast.decls.get(d).ty().filter(|&t| t != QualType::ERROR)?;
+                Reflectee::Type(self.ast.reflection_type(t))
             }
-            // [expr.reflect]/7: an id-expression naming a non-type template
-            // parameter is ill-formed.
-            DeclKind::NonTypeTemplateParm => {
-                let text = self.decl_name(d);
-                let e = self.diag(DiagId::sema_reflect_nttp, name_loc).arg(text);
-                self.emit(e);
-                return self.recover(info, &[], loc);
-            }
-            DeclKind::CXXConstructor => return self.reflect_overload_set(name_loc, loc),
-            _ => return self.reflect_bad_operand(name_loc, loc),
-        };
-        self.make_reflect_expr(r, loc, end)
+            _ => return None,
+        })
     }
 
     /// The `CXXReflectExpr` of `r`, an expression of consteval-only type

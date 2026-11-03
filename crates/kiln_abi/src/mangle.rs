@@ -163,8 +163,12 @@ fn local_tag_key(ast: &Ast, d: DeclId) -> Option<(DeclId, kiln_source::symbol::S
 /// inline namespace set ([namespace.def.general]/3) mangles under the
 /// namespace it is written in, its lexical context, as clang does
 /// (`namespace A { inline namespace I { namespace R {} } namespace R {
-/// int y; } }` gives `_ZN1A1R1yE`; spec/sema.md §4.6).
+/// int y; } }` gives `_ZN1A1R1yE`; spec/sema.md §4.6), and a block-scope
+/// `extern` declaration belongs to its namespace ([`local_extern_ns`]).
 fn effective_ctx(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    if let Some(ns) = local_extern_ns(ast, d) {
+        return Some(ns);
+    }
     if ast.decls.get(d).kind() == DeclKind::Namespace
         && let Some(lex) = ast.decls.lexical_ctx(d)
     {
@@ -236,6 +240,38 @@ pub enum Structor {
     Base,
     /// `D0`: the deleting destructor.
     Deleting,
+}
+
+/// The innermost enclosing namespace (or the translation unit) of a
+/// block-scope function or `extern` variable declaration, which names
+/// the namespace-scope entity ([basic.link]/6; clang
+/// `mangleNameWithAbiTags` walks a local container out to its namespace
+/// for an entity with linkage): `void f() { extern void g(int); }`
+/// declares `_Z1gi`, not `_ZZ1fvE1gi`, also in an instantiation of a
+/// function template.
+pub fn local_extern_ns(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    let n = ast.decls.get(d);
+    let extern_var = match n.kind() {
+        DeclKind::Function => false,
+        DeclKind::Var => true,
+        _ => return None,
+    };
+    let c = n.ctx()?;
+    if !is_function_kind(ast.decls.get(c).kind()) {
+        return None;
+    }
+    if extern_var && ast.decls.var(d).is_none_or(|v| v.spec.storage() != VarStorage::Extern) {
+        return None;
+    }
+    let mut c = Some(c);
+    for _ in 0..10_000 {
+        let ctx = c?;
+        if matches!(ast.decls.get(ctx).kind(), DeclKind::Namespace | DeclKind::TranslationUnit) {
+            return Some(ctx);
+        }
+        c = ast.decls.get(ctx).ctx();
+    }
+    None
 }
 
 /// True if `d` is declared inside an `extern "C"` linkage specification
@@ -665,7 +701,7 @@ fn var_type_has_tags(ast: &Ast, d: DeclId) -> bool {
 }
 
 fn in_global_ns(ast: &Ast, d: DeclId) -> bool {
-    let mut c = ast.decls.get(d).ctx();
+    let mut c = local_extern_ns(ast, d).or_else(|| ast.decls.get(d).ctx());
     while let Some(ctx) = c {
         match ast.decls.get(ctx).kind() {
             DeclKind::TranslationUnit => return true,

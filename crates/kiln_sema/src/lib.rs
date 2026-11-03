@@ -63,6 +63,7 @@ mod local_friend;
 pub mod lookup;
 mod loop_hint;
 mod macro_fixit;
+mod meta;
 pub mod modules;
 pub mod names;
 pub mod new_delete;
@@ -210,8 +211,7 @@ pub struct Sema<'a, 'sm> {
     /// `typeid` is an error otherwise.
     pub rtti: bool,
     /// `-freflection` (P2996 spike, WP-267; default off): `^^`, type
-    /// splices and the kiln reflection intrinsics (spec/sema.md
-    /// "Reflection (spike, -freflection)").
+    /// splices and the reflection intrinsics (spec/reflection.md).
     pub reflection: bool,
     /// [`Sema::is_consteval_only_type`] of the complete classes seen
     /// (keyed by definition).

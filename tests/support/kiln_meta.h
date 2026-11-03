@@ -1,8 +1,8 @@
 // kiln-internal std::meta surface for the WP-267 reflection spike
-// (-freflection; spec/sema.md "Reflection (spike, -freflection)"). Not
-// P2996's <meta>: only the names the spike implements. The functions with
+// (-freflection; spec/reflection.md §1.3). Not P2996's <meta>: only the
+// names the spike implements. The functions with
 // no body are consteval intrinsics the Oven dispatches by qualified name
-// (spec/oven.md "Reflection runtime").
+// and signature (spec/reflection.md §3).
 #pragma once
 
 namespace std::meta {

@@ -1,4 +1,4 @@
-//! Reflections (spec/ast.md §10).
+//! Reflections (spec/reflection.md §2).
 //!
 //! WP-267 spike (`-freflection`): the table interns the entity a
 //! `std::meta::info` value designates. A [`ReflectionId`] is a dense index
@@ -9,7 +9,7 @@
 //! the null reflection and an all-zero (value-initialized)
 //! `std::meta::info` is null.
 //!
-//! Mapping (spec/reflection-repr.md; P2996R13 [expr.reflect],
+//! Mapping (spec/reflection.md §2, spec/reflection-repr.md; P2996R13 [expr.reflect],
 //! [meta.reflection]): the id *is* the identity — two reflections are
 //! equal iff their ids are. Every variant is keyed so that equal entities
 //! intern equal:
@@ -28,7 +28,7 @@ use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::types::TypeView;
 use kiln_source::fx::FxHashMap;
 
-/// The entity a reflection designates (spec/ast.md §10,
+/// The entity a reflection designates (spec/reflection.md §2.2,
 /// spec/reflection-repr.md §1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Reflectee {
@@ -147,7 +147,7 @@ impl Reflectee {
     }
 }
 
-/// Interned reflections (spec/ast.md §10).
+/// Interned reflections (spec/reflection.md §2.2).
 #[derive(Debug)]
 pub struct ReflectionTable {
     items: Vec<Reflectee>,

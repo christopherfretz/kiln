@@ -94,17 +94,32 @@ Columns:
 | P2865R6 | Removing deprecated array comparisons | — | done | `conformance/expr.eq/p2865-probe.cpp`<br>`conformance/expr.eq/p2865-array-comparison.cpp`<br>`conformance/expr.eq/p2865-array-comparison-cxx20.cpp` | WP-356. clang 19 only warns (probe `xfail(clang)`). |
 | P3176R1 | The Oxford variadic comma | — | done | `conformance/dcl.fct/p3176-probe.cpp`<br>`conformance/dcl.fct/p3176-variadic-comma.cpp`<br>`conformance/dcl.fct/p3176-variadic-comma-cxx23.cpp` | WP-356. clang 19 lacks the deprecation (probe `xfail(clang)`). |
 
-## C++26 reflection
+## C++26 reflection (M6)
 
-Behind `-freflection` (no `__cpp_impl_reflection` yet: it is defined once
-the paper is complete). Not in clang 22: written reason for the M4 exit;
-the tests are `skip(clang)`. Contracts: [spec/reflection-repr.md](../../spec/reflection-repr.md)
-(representation, `^^`, identity, consteval-only) and spec/reflection.md
-(splices, queries, injection).
+One row per M6 work package (docs/ROADMAP.md M6). The contract is
+[spec/reflection.md](../../spec/reflection.md), and the papers are listed in
+its §1. All rows need `-freflection` (§1.4). The reference compiler is GCC 16.1.
+This table is per work package, not per paper, so `cargo xtask features` does
+not check it: its first header cell is not `Paper`.
 
-| Paper | Feature | `__cpp_*` macro (kiln / clang 22) | Status | Corpus tests | Notes |
-|---|---|---|---|---|---|
-| P2996R13 | Reflection for C++26 | `__cpp_impl_reflection` — / — | partial | `conformance/expr.reflect/global-namespace.cpp`<br>`conformance/expr.reflect/namespace.cpp`<br>`conformance/expr.reflect/namespace-alias.cpp`<br>`conformance/expr.reflect/type.cpp`<br>`conformance/expr.reflect/templates.cpp`<br>`conformance/expr.reflect/template-id-specializations.cpp`<br>`conformance/expr.reflect/enumerator.cpp`<br>`conformance/expr.reflect/structured-binding.cpp`<br>`conformance/expr.reflect/variable.cpp`<br>`conformance/expr.reflect/data-member.cpp`<br>`conformance/expr.reflect/member-function.cpp`<br>`conformance/expr.reflect/parameter.cpp`<br>`conformance/expr.reflect/template-member-remap.cpp`<br>`conformance/expr.reflect/equality-matrix.cpp`<br>`conformance/expr.reflect/alias-vs-dealias-identity.cpp`<br>`conformance/expr.reflect/rejected-operands.cpp`<br>`conformance/expr.reflect/nttp-info-kinds.cpp`<br>`conformance/expr.reflect/ast-dump.cpp`<br>`conformance/basic.types.general/consteval-only.cpp`<br>`conformance/basic.types.general/consteval-only-escalation-run.cpp`<br>`conformance/reflection/reflect-operator.cpp`<br>`conformance/reflection/value-model.cpp`<br>`conformance/reflection/value-model-neg.cpp`<br>`conformance/reflection/queries.cpp`<br>`conformance/reflection/splice-type.cpp` | Done (WP-472): the reflectee set, `^^` for every operand kind (`::`, types with a top-level alias kept, namespaces and aliases, templates, template-ids, variables, functions, members, enumerators, bindings, parameters, dependent `^^T`), overload-set and NTTP rejection, identity by id, `template <info R>` arguments of every kind (vendor mangling `Lu6__info<id>E`, TU-local), the stable dump form, and the consteval-only rules for types, variables, functions and expressions. Not yet: operator, conversion-function and destructor names after `^^`, dependent qualified names and template-ids; consteval-only member functions of consteval-only classes; the full query families, splices beyond the WP-267 type splice, `define_aggregate`, the real mangling (spec/reflection.md). GCC 16.1 makes `^^J == ^^I` for `using J = I;`; kiln follows the paper (`alias-vs-dealias-identity.cpp`). |
+| WP | Scope | Status | Tests | Notes |
+|---|---|---|---|---|
+| WP-470 | M6-01: spec/reflection.md, the dispatch skeleton (op families, purity classes, `SemaBridge::meta`) | done | `conformance/reflection/dispatch-inline-ns.cpp`<br>`conformance/reflection/memo-purity.cpp` | The four spike ops are ported unchanged; `info` parameters are memo-eligible; `memo_hits` report counter. |
+| WP-471 | M6-02: spike hardening (incomplete-class layout, `Sema::same_entity`, table overflow, type-table epoch) | todo | | |
+| WP-472 | M6-03: representation and the `^^` operator (alias sugar, templates, namespaces, values) | done | `conformance/expr.reflect/global-namespace.cpp`<br>`conformance/expr.reflect/namespace.cpp`<br>`conformance/expr.reflect/namespace-alias.cpp`<br>`conformance/expr.reflect/type.cpp`<br>`conformance/expr.reflect/templates.cpp`<br>`conformance/expr.reflect/template-id-specializations.cpp`<br>`conformance/expr.reflect/enumerator.cpp`<br>`conformance/expr.reflect/structured-binding.cpp`<br>`conformance/expr.reflect/variable.cpp`<br>`conformance/expr.reflect/data-member.cpp`<br>`conformance/expr.reflect/member-function.cpp`<br>`conformance/expr.reflect/parameter.cpp`<br>`conformance/expr.reflect/template-member-remap.cpp`<br>`conformance/expr.reflect/equality-matrix.cpp`<br>`conformance/expr.reflect/alias-vs-dealias-identity.cpp`<br>`conformance/expr.reflect/rejected-operands.cpp`<br>`conformance/expr.reflect/nttp-info-kinds.cpp`<br>`conformance/expr.reflect/ast-dump.cpp`<br>`conformance/basic.types.general/consteval-only.cpp`<br>`conformance/basic.types.general/consteval-only-escalation-run.cpp` | Contract: spec/reflection-repr.md. Every `Reflectee` variant; `^^` for every operand kind except operator, conversion-function and destructor names and dependent qualified names / template-ids (unsupported diagnostics); a top-level alias is kept (`^^J != ^^I` for `using J = I;`, where GCC 16.1 says equal); `template <info R>` of every kind with a TU-local vendor mangling `Lu6__info<id>E`; the consteval-only variable, function and expression rules of §4.1 (gap: member functions of a consteval-only class). |
+| WP-473 | M6-04: consteval blocks (P3289), plainly constant-evaluated, consteval-only types | todo | | |
+| WP-474 | M6-05: splices in every position, including dependent ones | todo | | Type splices exist from the spike. |
+| WP-475 | M6-06: result materialization, the names family, `std::meta::exception` (P3560) | todo | | |
+| WP-476 | M6-07: queries and predicates, parameters (P3096) | todo | | `type_of` is ported (WP-470). |
+| WP-477 | M6-08: type traits family | todo | | |
+| WP-478 | M6-09: members, access contexts (P3547), layout, annotation queries | todo | | Includes implicit special members (D4). |
+| WP-479 | M6-10: values and static storage (P3491), `refl_bytes` | todo | | |
+| WP-480 | M6-11: `define_aggregate`, `data_member_spec`, `__kiln_define_member` rules (D7) | todo | | |
+| WP-481 | M6-12: annotations (P3394), syntax and storage | todo | | |
+| WP-482 | M6-13: `substitute`, `can_substitute`, template queries | todo | | |
+| WP-483 | M6-14: validation and perf infrastructure (GCC differential, `bench/reflect`, report fields) | todo | | |
+| WP-484 | M6-15: libstdc++ `<meta>` and the feature macros | todo | | |
+| WP-485 | M6-16: reflection mangling and codegen of entities templated on `info` | todo | | |
 
 ## DR-level papers
 

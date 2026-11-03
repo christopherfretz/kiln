@@ -42,6 +42,7 @@ mod kbc;
 mod mem;
 mod memo;
 mod memptr;
+mod meta;
 mod notes;
 pub mod report;
 mod softfloat;
@@ -55,12 +56,16 @@ use std::time::Instant;
 pub use kiln_ast::class::{Subobject, SubobjectId};
 use kiln_ast::consts::ConstStore;
 use kiln_ast::types::RecordLayout;
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, ReflectionId, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
 pub use failure::{EvalFailure, FailKind, Note};
+pub use meta::{
+    AccessOp, AnnotOp, DefineOp, ExtOp, MAX_META_ARGS, MemberOp, MetaCtx, MetaError, MetaErrorKind,
+    MetaOp, MetaOut, OvenFault, Purity, QueryOp, TemplOp, TraitOp, ValueOp, info_arg,
+};
 pub use stats::{EvalRecord, EvalStats, EvalTotals};
 
 use compile::{Func, Global, Site, TrapInfo};
@@ -185,51 +190,6 @@ impl EvalContext {
     }
 }
 
-/// A reflection intrinsic the Oven evaluates natively (spec/oven.md
-/// "Reflection runtime"; WP-267 spike, `-freflection`): a call of a
-/// function the bridge recognizes by its declaration
-/// ([`SemaBridge::meta_intrinsic`]) compiles to `Op::Builtin` (`bi::META`)
-/// and runs through the `reflect_*`/`define_member` bridge methods. Every
-/// one is impure: a call that reached one is never memoized.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum MetaOp {
-    /// `std::meta::type_of(r)`: the type of the entity `r` reflects.
-    TypeOf,
-    /// `std::meta::name_of(r)`: its name, as a `const char *` into a
-    /// frozen string literal object (the spike's stand-in for
-    /// `std::string_view`).
-    NameOf,
-    /// `std::meta::__kiln_members_count(r)`: the number of members of the
-    /// class `r` reflects (completing it on demand).
-    MembersCount,
-    /// `std::meta::__kiln_member_at(r, i)`: its `i`th member, in
-    /// declaration order.
-    MemberAt,
-    /// `__kiln_define_member(cls, type, name)`: adds a non-static data
-    /// member to the class under definition (the spike's experiment).
-    DefineMember,
-}
-
-impl MetaOp {
-    const ALL: [MetaOp; 5] = [
-        MetaOp::TypeOf,
-        MetaOp::NameOf,
-        MetaOp::MembersCount,
-        MetaOp::MemberAt,
-        MetaOp::DefineMember,
-    ];
-
-    /// The op's code in the instruction's `sub` field.
-    pub(crate) fn code(self) -> u32 {
-        self as u32
-    }
-
-    /// The op of `code`.
-    pub(crate) fn from_code(code: u32) -> Option<MetaOp> {
-        Self::ALL.get(code as usize).copied()
-    }
-}
-
 /// What the Oven needs from sema. The Oven never holds a borrow of the
 /// AST across calls: sema may mutate it (instantiation on demand,
 /// interning constants) between and during evaluations.
@@ -323,10 +283,8 @@ pub trait SemaBridge {
         let _ = (t, v);
     }
 
-    // Reflection (WP-267 spike, `-freflection`; spec/oven.md "Reflection
-    // runtime"). A failure is the notes explaining it (the first is the
-    // reason, reported at its location); no notes is a silent failure.
-    // The defaults (a bridge without reflection) recognize nothing.
+    // Reflection (`-freflection`; spec/reflection.md §3). The defaults (a
+    // bridge without reflection) recognize nothing.
 
     /// The reflection intrinsic `f` is, if any (consulted when a direct
     /// call of `f` is compiled).
@@ -335,60 +293,27 @@ pub trait SemaBridge {
         None
     }
 
-    /// `type_of(r)` for the call at `loc`.
+    /// Runs intrinsic `op` on `args` (one value per declared parameter:
+    /// an `info`'s [`kiln_ast::ReflectionId`] bits, a scalar's value, the address
+    /// of anything else) and writes the result to `out`. `oven` is the
+    /// running evaluator: it reads operands from its memory
+    /// ([`Oven::meta_c_string`]) and is lent back to sema for anything
+    /// that evaluates. A `Mutating` op is never called in a trial.
     ///
     /// # Errors
-    /// If `r` does not reflect an entity with a type.
-    fn reflect_type_of(&mut self, r: ReflectionId, loc: Loc) -> Result<ReflectionId, Vec<Note>> {
-        let _ = (r, loc);
-        Err(Vec::new())
-    }
-
-    /// `name_of(r)`: the frozen `const char *` value pointing to a string
-    /// literal object holding the name.
-    ///
-    /// # Errors
-    /// If `r` reflects nothing with a name.
-    fn reflect_name(&mut self, r: ReflectionId, loc: Loc) -> Result<ConstValueId, Vec<Note>> {
-        let _ = (r, loc);
-        Err(Vec::new())
-    }
-
-    /// The members of the class `r` reflects, in declaration order,
-    /// completing it first if it is an implicitly instantiable
-    /// specialization (with `oven` lent back to sema, as `ensure_body`).
-    ///
-    /// # Errors
-    /// If `r` does not reflect a complete class type.
-    fn reflect_members(
+    /// The notes of a failure that makes the evaluation not a constant
+    /// expression (none: a silent failure), an unimplemented op, or an
+    /// evaluator fault.
+    fn meta(
         &mut self,
-        r: ReflectionId,
-        loc: Loc,
+        op: MetaOp,
+        args: &[u128],
+        out: &mut MetaOut,
+        ctx: &MetaCtx,
         oven: &mut Oven,
-    ) -> Result<Vec<ReflectionId>, Vec<Note>> {
-        let _ = (r, loc, oven);
-        Err(Vec::new())
-    }
-
-    /// Adds the non-static data member `name` of type `ty` to the class
-    /// `cls` (which must be the class under definition) and returns its
-    /// reflection: the AST MUTATES while this evaluation runs. Only in a
-    /// manifestly constant-evaluated context (never in a speculative
-    /// fold). `oven` is lent back to sema for nested evaluations.
-    ///
-    /// # Errors
-    /// If the context does not permit it, an operand is not what is
-    /// required, or `name` is already a member.
-    fn define_member(
-        &mut self,
-        cls: ReflectionId,
-        ty: ReflectionId,
-        name: &str,
-        loc: Loc,
-        oven: &mut Oven,
-    ) -> Result<ReflectionId, Vec<Note>> {
-        let _ = (cls, ty, name, loc, oven);
-        Err(Vec::new())
+    ) -> Result<(), MetaError> {
+        let _ = (op, args, out, ctx, oven);
+        Err(MetaError::silent())
     }
 }
 
@@ -512,6 +437,7 @@ pub struct Oven {
 struct Inner {
     steps: u64,
     frozen: u64,
+    memo_hits: u64,
     wall_us: u64,
 }
 
@@ -645,6 +571,7 @@ impl Oven {
             peak_arena: c.arena,
             frozen_bytes: c.frozen,
             static_bytes: self.mem.static_top(),
+            memo_hits: c.memo_hits,
             wall_us: c.wall_us,
             ok: r.is_ok(),
         });
@@ -682,6 +609,7 @@ impl Oven {
             peak_arena: c.arena,
             frozen_bytes: c.frozen,
             static_bytes: self.mem.static_top(),
+            memo_hits: c.memo_hits,
             wall_us: c.wall_us,
             ok: r.is_ok(),
         });
@@ -916,6 +844,7 @@ impl Oven {
         let start = Instant::now();
         self.types.refresh(bridge);
         let frozen0 = bridge.consts().content_bytes();
+        let hits0 = self.memo.hits;
         let inner0 = std::mem::take(&mut self.inner);
         let (r, c) = if self.ctx_depth == 0 {
             self.eval_outermost(bridge, e, object, silent, enum_check, const_context)
@@ -924,10 +853,12 @@ impl Oven {
         };
         let wall_us = start.elapsed().as_micros() as u64;
         let frozen = bridge.consts().content_bytes().saturating_sub(frozen0);
+        let memo_hits = self.memo.hits.saturating_sub(hits0);
         let inner = std::mem::replace(&mut self.inner, inner0);
         if self.ctx_depth > 0 {
             self.inner.steps += c.steps;
             self.inner.frozen += frozen;
+            self.inner.memo_hits += memo_hits;
             self.inner.wall_us += wall_us;
         }
         let cost = Cost {
@@ -938,6 +869,7 @@ impl Oven {
             calls: c.calls,
             allocs: c.allocs,
             frozen: frozen.saturating_sub(inner.frozen),
+            memo_hits: memo_hits.saturating_sub(inner.memo_hits),
             wall_us: wall_us.saturating_sub(inner.wall_us),
         };
         (r, cost)
@@ -1141,5 +1073,6 @@ struct Cost {
     calls: u64,
     allocs: u64,
     frozen: u64,
+    memo_hits: u64,
     wall_us: u64,
 }
