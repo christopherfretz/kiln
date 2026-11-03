@@ -210,16 +210,16 @@ spec/ast-dump.md (the shadow filter).
 
 | Bucket | WP-377 | WP-394 | What remains, and why |
 |---|---|---|---|
-| Constant-evaluation and `static_assert` operand notes | 19 | 4 + 2 | `consteval-address`: P2564 escalation of a template taking a consteval function's address. `non-literal-argument`: the by-value argument literal check is in `kiln_oven/src/compile/class.rs` (WP-388's file). `namespace-scope-diagnostics` (GNU compound literal): clang 22 points at the non-constant element and also reports variable-template instantiations. `static-assert-concept-atom-expr`: clang 22's type-trait explainer notes. Pinned `// WP-388` (vbase construction): `class.inhctor.init/constexpr-vbase`, `expr.const/non-literal-local`. |
+| Constant-evaluation and `static_assert` operand notes | 19 | 4 + 2 | WP-413 fixed the four: `consteval-address` (P2564 escalation of a specialization), `non-literal-argument` (no by-value argument literal check), `namespace-scope-diagnostics` (element locations, dependent literals checked at definition) and `static-assert-concept-atom-expr` (type-trait explainer notes, `is_trivially_copyable` only). Pinned `// WP-388` (vbase construction): `class.inhctor.init/constexpr-vbase`, `expr.const/non-literal-local` — WP-388 has landed and both are only the clang 19 halves of splits whose clang 22 behaviour is tested (`constexpr-vbase-22.cpp`, `non-literal-local-22.cpp`), so nothing is left to burn down. |
 | Scoped names in `aka`/args | 13 | 0 | |
 | GNU/vendor extensions | 9 | 0 | |
 | Attribute names, `nodiscard` | 2 | 0 | |
 | CTAD guide notes | 1 | 0 | |
 | `-Wswitch`, array and self-comparison | 1 | 0 | |
 | Template template notes | 3 | 0 | |
-| Single cases | 21 | 2 + 3 | `dr1467-single-element`: clang 22 no longer applies the single-element copy when an initializer-list constructor exists. `access-in-substitution`: clang 22 skips access checks while deducing an explicit instantiation's candidates. Pinned `// WP-399` (typo correction, clang 22 has no delayed typo correction): the three `stmt.expr/delayed-*` tests. |
-| **Pinned total** | 69 | 13 (8 `WP-355 residual`, 2 `WP-388`, 3 `WP-399`) | |
-| AST goldens `xfail(kiln)` | 5 | 2 | Fixed: inheriting-ctor shadows (harness filter), `::B` cast type as written, redeclaration parameters. Left: `temp.alias-dependent-template-template-arg-ast` (clang 22 keeps the first-written `QualifiedTemplateName`; kiln stores canonical template template arguments, which needs sugared arguments in `check_template_args`, WP-390's file) and `temp.deduct.guide-ast-dump` (clang 21+ does not deduce template candidates when a non-template candidate is a perfect match; kiln needs two-phase overload resolution). |
+| Single cases | 21 | 2 + 3 | WP-413 fixed `dr1467-single-element` (CWG2137 at clang 20+) and `access-in-substitution` (no access checks while deducing explicit-specialization candidates). Pinned `// WP-399` (typo correction, clang 22 has no delayed typo correction): the three `stmt.expr/delayed-*` tests. |
+| **Pinned total** | 69 | 13 (8 `WP-355 residual`, 2 `WP-388`, 3 `WP-399`); 5 after WP-413 (no `WP-355 residual` left) | |
+| AST goldens `xfail(kiln)` | 5 | 2; 0 after WP-413 | Fixed: inheriting-ctor shadows (harness filter), `::B` cast type as written, redeclaration parameters; WP-413: `temp.alias-dependent-template-template-arg-ast` (the first-written `QualifiedTemplateName` is kept) and `temp.deduct.guide-ast-dump` (CTAD resolves non-template guides first). |
 
 The exit target (15 or fewer) is met, so the default is flipped. The
 stratum A sample at the flip is in docs/status/libcxx.md.

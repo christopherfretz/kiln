@@ -377,7 +377,7 @@ clang-independent unit tests of representative values.
 #### clang compatibility level (WP-263)
 
 ```rust
-#[derive(Default)] pub enum ClangCompat { #[default] Clang19, Clang22 }
+#[derive(Default)] pub enum ClangCompat { Clang19, #[default] Clang22 }  // default 22 since WP-413
 impl ClangCompat { pub const ALL: &[ClangCompat]; pub fn from_major(u32) -> Option<ClangCompat>; pub fn major(self) -> u32; }
 impl ClangFeatures { pub fn with_compat(self, ClangCompat) -> ClangFeatures; pub fn compat(&self) -> ClangCompat; }
 pub struct PredefConfig { pub clang_compat: ClangCompat, .. }

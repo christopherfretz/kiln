@@ -297,7 +297,19 @@ SFINAE context are never delayed, so they run in the template's context and
 an inaccessible name is a substitution failure (`candidate template ignored:
 substitution failure [with T = C, U = typename C::P]: 'P' is a private member
 of 'C'`), for an explicit instantiation and for a call in any declaration's
-declarator alike (tests/conformance/temp.explicit/access-in-substitution.cpp).
+declarator alike (clang 19, `-fclang-compat<22`:
+tests/conformance/temp.explicit/access-in-substitution-clang19.cpp). From
+clang 21 on (`-fclang-compat>=22`) the deduction of an explicit
+specialization's or instantiation's candidates (`match_function_spec_in`)
+runs with access checks suppressed (`inst.suppress_access`, clang
+`SuppressAccessChecks`): an access error in its SFINAE context is no
+substitution failure, only the note's reason when the candidate fails for
+another reason (`int N = T::obj` with a non-constant `obj`); constraint
+satisfaction still checks access (`satisfy` clears the flag). Deviation: a
+later call reuses the specialization so formed, where clang 22 reports the
+access error at the call; clang 22 also fails the instantiation after an
+earlier failed call deduced the same arguments (order-dependent, not copied)
+(tests/conformance/temp.explicit/access-in-substitution.cpp).
 A default template argument that was formed but diagnosed is shown in the
 note's argument list, as clang keeps it (`deduce_call.rs`). The template arguments of a
 class-head `X<args>` that declares or defines a specialization (partial or
@@ -1538,7 +1550,7 @@ members with an NSDMI.
 | copy-init from `T`/derived | elision for prvalue `T`; else copy/move ctor (derived glvalue: `DerivedToBase` then ctor) |
 | copy-init from other type | user-defined conversion (S3O): `ConstructorConversion` around `CXXConstructExpr`, or `UserDefinedConversion` around the conversion call; `explicit` ctors excluded (`no viable conversion from 'int' to 'T4'` + candidate notes incl. `explicit constructor is not a candidate`) |
 | list-init, aggregate | `InitListExpr`: C++17 base elements first (each initialized from its element, brace elision applies), then fields; designated initializers name direct members only, bases are then initialized from `{}`. A base element's outermost constructor call is `NonVirtualBase` (clang `EK_Base`; codegen calls C2) when it copies/moves a source of the base or a derived class (a same-class prvalue is materialized first, §5.5) or braced/value-initializes (or fills) a non-aggregate base (`as_base_subobject`); a converting constructor's temporary (`D{5, 6}`) stays `Complete`. Paren aggregate init does the same |
-| list-init, non-aggregate | a single undesignated element of `T` or a derived class first (DR1467 as clang applies it to every class): initialized from it as from `T x = e` (copy-list) or `T x(e)` (direct-list), so no initializer-list ctor is considered and a copy-list init never picks an explicit ctor; the elided prvalue carries no `InitListExpr` wrapper and the ctor no `list` flag (clang's `RewrapReferenceInitList` / `IsInitListCopy`, a dump-only deviation shared with the aggregate case). Otherwise [over.match.list] two phases (initializer-list ctors, then all ctors); `CXXConstructExpr` with `list`; narrowing as M2; a nested braced-init-list element (`G g{{1, 2}}`) is a braced call argument converted by [over.ics.list] (WP-152); designators remain `sema_unsupported` |
+| list-init, non-aggregate | at `-fclang-compat<22` (clang 19), a single undesignated element of `T` or a derived class first (DR1467 as clang 19 applies it to every class): initialized from it as from `T x = e` (copy-list) or `T x(e)` (direct-list), so no initializer-list ctor is considered and a copy-list init never picks an explicit ctor; the elided prvalue carries no `InitListExpr` wrapper and the ctor no `list` flag (clang's `RewrapReferenceInitList` / `IsInitListCopy`, a dump-only deviation shared with the aggregate case). Otherwise [over.match.list] two phases (initializer-list ctors, then all ctors); `CXXConstructExpr` with `list`; narrowing as M2; a nested braced-init-list element (`G g{{1, 2}}`) is a braced call argument converted by [over.ics.list] (WP-152); designators remain `sema_unsupported`. At `-fclang-compat>=22` (clang 20+, CWG2137 [over.match.list], [over.ics.list]) the shortcut is gone: [over.match.list] runs first, so `B{b}` picks `B(std::initializer_list<B>)`; only when no initializer-list ctor is viable, a single element that is a prvalue of `T` (cv-unqualified same class) initializes the object directly (elision, [dcl.init.general]/17.6.1), outside base-subobject init. Tests: `dcl.init.list/dr1467-single-element{,-clang19}.cpp` |
 | reference to class | derived-to-base glvalue binding, else temporary through conversion (`materialize_temporary`, §5.3) |
 
 ### 5.7 `std::initializer_list`

@@ -396,6 +396,11 @@ pub struct InstState {
     pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
     /// Drop the next error passed to `emit` (set by `incomplete_note`).
     pub(crate) suppress_next_error: std::cell::Cell<bool>,
+    /// Deducing the candidates of an explicit specialization or
+    /// instantiation at clang 22 (§6.9): an access error inside a SFINAE
+    /// context is no substitution failure, only the reason shown if the
+    /// deduction fails otherwise (clang 21+ `SuppressAccessChecks`).
+    pub(crate) suppress_access: std::cell::Cell<bool>,
     /// The template-id whose arguments `check_template_args` converts:
     /// its template name, the point of a `PriorArgSubstitution` frame.
     pub(crate) template_id_loc: Option<Loc>,
@@ -725,6 +730,15 @@ impl Sema<'_, '_> {
         if self.clang_compat >= 22 {
             let _ = self.templ.keyless_ttps.insert(p);
         }
+    }
+
+    /// A template template parameter's default (at `at`) names variable
+    /// template or concept `a` ([temp.arg.template]/1): at clang
+    /// compatibility 22 it is a template argument of the wrong kind, the
+    /// parameter gets no default (clang 19 reports the parser's "must be a
+    /// class template" instead).
+    pub fn act_on_wrong_kind_ttp_default(&mut self, a: DeclId, at: Loc) {
+        self.reject_keyless_ttp_arg(a, at);
     }
 
     /// clang 22's rejection of template `a` as the argument (at `at`)

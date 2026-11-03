@@ -1249,7 +1249,10 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   designated objects, and constructing an object that holds no data
   (`Types::holds_no_data`) by placement touches no byte (the member
   sharing its address keeps its value)
-  (`expr.new/p2747-placement-voidified-through-memory*.cpp`).
+  (`expr.new/p2747-placement-voidified-through-memory*.cpp`). The
+  exception is an empty complete object or array element (libc++'s
+  `vector<bitset<0>>`; see "Architecture" above): it owns its byte
+  (`basic.life/constexpr-empty-allocator-storage.cpp`).
 - *Casts from `void *`* (C++26, P2738R1, [expr.static.cast]/14): `VoidCast
   [dst, p, T]` aux 0 (a `static_cast` from `cv void *` to `cv T *`
   outside `std::allocator<T>::allocate`) succeeds for null and when the
@@ -2062,6 +2065,17 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   constant expression" at the construct expression, with no frame for
   the constructor (clang `HandleConstructorCall`; test
   `expr.const/constexpr-vbase-construct-cxx23.cpp`).
+  A by-value class argument is the callee's parameter object: allocated
+  with `Origin::Var` of the parameter in the callee's first declaration
+  (clang's canonicalized `APValue` base), so its destructor's "in call
+  to 'p.~X()'" note names that parameter (`'.~X()'` when unnamed) and
+  sits at its location, at both levels. A class argument passed through
+  the ellipsis with a non-trivial copy or move constructor or destructor
+  (clang `isValidVarArgType` = `VAK_Undefined`, which sema rewrites to
+  `(__builtin_trap(), arg)`) traps "subexpression not valid" at the
+  argument's begin, after the literal-type check (WP-413; tests
+  `expr.call/param-object-destruction-const.cpp`,
+  `expr.const/non-literal-argument.cpp` and its `-clang19` split).
 - A local variable that sema marked invalid (its initialization was
   already diagnosed) traps silently when its declaration is evaluated,
   so the enclosing constant expression reports only its own error

@@ -249,10 +249,18 @@ impl Tu {
     }
 }
 
+/// An Oven at `-fclang-compat=19`: the expected texts of these tests are
+/// clang 19's (the library default is 22 since WP-413; spec/sema.md §1.1).
+pub fn oven19(budget: Budget) -> Oven {
+    let mut oven = Oven::new(budget);
+    oven.set_clang_compat(19);
+    oven
+}
+
 /// Runs `src` with the default budget; panics with the rendered failure.
 pub fn ok(src: &str) -> Tu {
     let mut tu = Tu::new(src);
-    let mut oven = Oven::new(Budget::default());
+    let mut oven = oven19(Budget::default());
     if let Err(f) = tu.run(&mut oven) {
         panic!("unexpected failure ({:?}):\n{}", f.kind, f.text);
     }
@@ -266,7 +274,7 @@ pub fn fails(src: &str) -> Failed {
 
 pub fn fails_with(src: &str, budget: Budget) -> Failed {
     let mut tu = Tu::new(src);
-    let mut oven = Oven::new(budget);
+    let mut oven = oven19(budget);
     match tu.run(&mut oven) {
         Ok(()) => panic!("expected a failure:\n{src}"),
         Err(f) => f,

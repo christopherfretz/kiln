@@ -14,7 +14,7 @@
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::BinaryOp;
 use kiln_ast::templates::Requirement;
-use kiln_ast::types::{TagKeyword, TemplateArg, TemplateName};
+use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TemplateName};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std, TokKind};
@@ -858,41 +858,103 @@ impl Parser<'_, '_> {
     }
 
     /// `= id-expression` of template template parameter `p`
-    /// ([temp.param]/10).
+    /// ([temp.param]/10): the default must name a class template, an
+    /// alias template or a template template parameter, written as a
+    /// whole template argument (clang's `ParseTemplateTemplateArgument`).
+    /// Anything else is "must be a class template" at the token after
+    /// what was parsed, and the parameter is skipped to `,`/`>` (false).
+    /// A variable template or concept is, at clang compatibility 22, a
+    /// template argument of the wrong kind (clang 22 parses it as a
+    /// template name for P2841's template template parameters).
     fn parse_template_template_param_default(&mut self, p: DeclId) -> bool {
         let Some(eq) = self.eat(Punct::Equal) else {
             return true;
         };
         // The default argument's location (clang's diagnostics point there).
         let at = self.loc();
-        let Ok(qual) = self.parse_nested_name_nns() else { return false };
-        // `nns template name` with a dependent `nns` ([temp.names]/5).
+        // An invalid qualifier (`K::x` with `K` a class template) was
+        // diagnosed; the name after it is still consumed, then rejected.
+        let (qual, bad_qual) = match self.parse_nested_name_nns() {
+            Ok(q) => (q, false),
+            Err(()) => (None, true),
+        };
+        // `nns template name` ([temp.names]/5).
+        let template_kw = qual.is_some() && self.eat_kw(Kw::Template).is_some();
         let dep = qual.as_ref().is_some_and(|q| self.s.is_dependent_ctx(q.ctx));
-        if dep {
-            self.eat_kw(Kw::Template);
+        // A template-id (`K<int>`) is one annotation token to clang, so the
+        // error points at its start and the skip passes its arguments.
+        if let Some(n) = self.ident()
+            && self.kw().is_none()
+            && Self::punct_of(self.peek(1)) == Some(Punct::Less)
+            && !bad_qual
+            && matches!(
+                self.s.classify_name(n, qual.map(|q| q.ctx)),
+                NameClass::TypeTemplate(_)
+                    | NameClass::VarTemplate(_)
+                    | NameClass::Concept(_)
+                    | NameClass::FunctionTemplate(_)
+            )
+        {
+            let d =
+                self.s.diag(DiagId::parse_default_template_template_param_not_template, self.loc());
+            self.bump();
+            let _ = self.parse_template_arg_list();
+            self.emit(d);
+            return false;
         }
-        let Some(n) = self.ident() else {
-            self.error_here(DiagId::parse_expected_unqualified_id);
+        let name = match self.ident() {
+            Some(n) if self.kw().is_none() => Some((n, self.bump().span.lo)),
+            _ => None,
+        };
+        let ellipsis = self.eat(Punct::Ellipsis);
+        let at_end = matches!(
+            Self::punct_of(self.tok()),
+            Some(Punct::Comma | Punct::Greater | Punct::GreaterGreater)
+        );
+        let arg = match name {
+            Some((n, nl)) if at_end && !bad_qual => {
+                if let (true, true, Some(q)) = (dep, template_kw, qual) {
+                    let tn = self
+                        .s
+                        .ast
+                        .types
+                        .template_name(TemplateName::DependentIdentifier { nns: q.nns, name: n });
+                    Some(tn)
+                } else {
+                    match self.s.classify_name(n, qual.map(|q| q.ctx)) {
+                        NameClass::TypeTemplate(d) => Some(self.s.template_name_for(d)),
+                        NameClass::VarTemplate(d) | NameClass::Concept(d)
+                            if self.s.clang_compat >= 22 =>
+                        {
+                            if ellipsis.is_none() {
+                                self.s.act_on_wrong_kind_ttp_default(d, nl);
+                                return true;
+                            }
+                            None
+                        }
+                        _ => None,
+                    }
+                }
+            }
+            _ => None,
+        };
+        // A pack expansion of a name that is not a pack makes the
+        // argument invalid ([temp.variadic]/5).
+        let arg = match (arg, ellipsis) {
+            (Some(_), Some(l)) => {
+                let d = self.s.diag(DiagId::sema_pack_expansion_without_packs, l);
+                self.emit(d);
+                None
+            }
+            (a, _) => a,
+        };
+        let Some(tn) = arg else {
+            let d =
+                self.s.diag(DiagId::parse_default_template_template_param_not_template, self.loc());
+            self.emit(d);
             return false;
         };
-        let nl = self.bump().span.lo;
-        if let (true, Some(q)) = (dep, qual) {
-            let tn = self
-                .s
-                .ast
-                .types
-                .template_name(TemplateName::DependentIdentifier { nns: q.nns, name: n });
-            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq, at);
-            return true;
-        }
-        if let NameClass::TypeTemplate(d) = self.s.classify_name(n, qual.map(|q| q.ctx)) {
-            let tn = self.s.template_name_for(d);
-            self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq, at);
-        } else {
-            let text = self.s.ast.symbols().as_str(n).to_owned();
-            let d = self.s.diag(DiagId::sema_no_template_named, nl).arg(text);
-            self.emit(d);
-        }
+        self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq, at);
         true
     }
 
@@ -965,11 +1027,32 @@ impl Parser<'_, '_> {
         if !self.at_greater() {
             loop {
                 locs.push(self.loc());
+                let bare = self.at_bare_var_or_concept_arg();
+                let name_loc = self.template_arg_name_loc();
                 let Some(a) = self.parse_template_argument() else {
                     ok = false;
                     break;
                 };
                 args.push(a);
+                // A template name argument is located at its name, after
+                // any qualifier (clang's `TemplateArgumentLoc::getLocation`).
+                if let (ArgView::Template(_), Some(n), Some(at)) =
+                    (a.view(), name_loc, locs.last_mut())
+                {
+                    *at = n;
+                }
+                // An invalid argument ends the list (clang's
+                // `ParseTemplateArgumentList`): a variable template or
+                // concept named alone is invalid as an expression.
+                if bare
+                    && matches!(a.view(), ArgView::Expr { expr, .. } if self.s.is_error_expr(expr))
+                    && let Some((close, _)) = end
+                {
+                    while self.pos() < close && !self.at_eof() {
+                        self.bump();
+                    }
+                    break;
+                }
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }
@@ -1035,6 +1118,54 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// Whether the next template-argument is a variable template or
+    /// concept named alone (followed by the argument's end).
+    fn at_bare_var_or_concept_arg(&self) -> bool {
+        matches!(
+            self.scan_name_qual_at(self.pos()),
+            Some((end, false, NameClass::VarTemplate(_) | NameClass::Concept(_), _, _))
+                if self.bare_name_ends_at(end) && self.at_template_arg_end(end)
+        )
+    }
+
+    /// Where the template name of a qualified template-argument naming a
+    /// template is (`N::K` is at `K`), if the next argument is one.
+    fn template_arg_name_loc(&self) -> Option<Loc> {
+        match self.scan_name_qual_at(self.pos())? {
+            (
+                end,
+                false,
+                NameClass::TypeTemplate(_) | NameClass::VarTemplate(_) | NameClass::Concept(_),
+                _,
+                Some(_),
+            ) if end > self.pos() + 1 && self.bare_name_ends_at(end) => {
+                Some(self.tok_at(end - 1).span.lo)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the name scanned up to token `end` ends with its
+    /// identifier (no template arguments follow it).
+    fn bare_name_ends_at(&self, end: usize) -> bool {
+        end > 0 && self.ident_of(self.tok_at(end - 1)).is_some()
+    }
+
+    /// Whether token `i` ends a template-argument.
+    fn at_template_arg_end(&self, i: usize) -> bool {
+        matches!(
+            Self::punct_of(self.tok_at(i)),
+            Some(
+                Punct::Comma
+                    | Punct::Greater
+                    | Punct::GreaterGreater
+                    | Punct::Ellipsis
+                    | Punct::GreaterEqual
+                    | Punct::GreaterGreaterEqual
+            )
+        )
+    }
+
     /// Whether qualified lookup in `q` found class template `d` itself:
     /// `q` is a namespace or `d`'s own class, never a class whose lookup
     /// finds an injected-class-name.
@@ -1063,22 +1194,34 @@ impl Parser<'_, '_> {
         let d = match class {
             _ if dep_name => None,
             NameClass::TypeTemplate(d) => Some(d),
+            // A variable template or concept alone is a template name at
+            // clang 22 (P2841, `ParseTemplateTemplateArgument`); the
+            // argument check reports it against its parameter.
+            // (The scan takes a variable template's arguments: `v<T>`
+            // is an expression.)
+            NameClass::VarTemplate(_) | NameClass::Concept(_) if !self.bare_name_ends_at(end) => {
+                return None;
+            }
+            NameClass::VarTemplate(d) | NameClass::Concept(d) if self.s.clang_compat >= 22 => {
+                Some(d)
+            }
+            NameClass::Concept(_) => None,
             _ => return None,
         };
-        if split
-            || !matches!(
-                Self::punct_of(self.tok_at(end)),
-                Some(
-                    Punct::Comma
-                        | Punct::Greater
-                        | Punct::GreaterGreater
-                        | Punct::Ellipsis
-                        | Punct::GreaterEqual
-                        | Punct::GreaterGreaterEqual
-                )
-            )
-        {
+        if split || !self.at_template_arg_end(end) {
             return None;
+        }
+        // Before clang 22 a concept alone is a concept-id missing its
+        // arguments: "too few template arguments for concept".
+        if let NameClass::Concept(c) = class
+            && d.is_none()
+            && !dep_name
+        {
+            let loc = self.tok_at(end - 1).span.lo;
+            while self.pos() < end {
+                self.bump();
+            }
+            return Some(self.s.act_bare_concept_template_arg(c, loc));
         }
         let Some(d) = d else {
             let qual = self.parse_nested_name_nns().ok()??;
@@ -1109,7 +1252,10 @@ impl Parser<'_, '_> {
         // its qualifier and keyword as written ([temp.names]/5).
         let template_kw = end >= 2 && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template);
         let underlying = self.s.template_name_for(d);
-        if template_kw
+        // A qualified variable template or concept keeps its qualifier
+        // for the argument check's "use of variable template 'N::v'".
+        let var_or_concept = matches!(class, NameClass::VarTemplate(_) | NameClass::Concept(_));
+        if (template_kw || var_or_concept)
             && qual.is_some()
             && let Ok(Some(q)) = self.parse_nested_name_nns()
         {
@@ -1117,7 +1263,7 @@ impl Parser<'_, '_> {
             self.bump();
             let tn = self.s.ast.types.template_name(TemplateName::Qualified {
                 nns: q.nns,
-                template_kw: true,
+                template_kw,
                 underlying,
             });
             return Some(TemplateArg::template(tn));

@@ -105,21 +105,10 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // `[N x ptr]` instead of `i64` / `[N x i64]` (the same registers).
     ("srcloc_immediate", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("struct_pointers", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    // clang 22 drops the comdat of an `internal` template parameter
-    // object and of the specializations it is an argument of (`fa<Arr{
-    // ...}>`); at `-fclang-compat=22` kiln drops only the object's.
-    ("linkage_internal_nttp", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
-    ("linkage_internal_nttp", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     // clang 22 names members of an unnamed class `(unnamed struct)::N` in
     // IR type names (19: `(anonymous struct)`).
     ("lambda_names", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("lambda_names", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    // clang 20+ implements CWG2137 ([over.match.list], [over.ics.list]):
-    // `B{b}` picks `B(std::initializer_list<B>)` where clang 19 and kiln
-    // copy-construct (CWG1467 alone). kiln is the one to change (sema;
-    // WP-184 residual).
-    ("dr1467_single_element", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("dr1467_single_element", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 22 lowers `modf` to the `llvm.modf` intrinsic (19: a `modff`
     // libcall).
     ("builtins_math", "aarch64-unknown-linux-gnu", "22", Allow::Abi),

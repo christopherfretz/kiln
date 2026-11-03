@@ -142,8 +142,8 @@ fn env_kind(name: &str) -> Option<EnvKind> {
 }
 
 /// clang's [`FeatureQueries`] for one target, standard, set of driver
-/// options and [`ClangCompat`] level (clang 19 unless
-/// [`ClangFeatures::with_compat`] says otherwise).
+/// options and [`ClangCompat`] level (`ClangCompat::default()`, clang 22,
+/// unless [`ClangFeatures::with_compat`] says otherwise).
 ///
 /// `-march`/`-mcpu`/`-m<feature>` are not modeled: `__has_builtin` answers
 /// for target builtins are those of the triple's default CPU.
@@ -171,7 +171,7 @@ impl ClangFeatures {
             flags.iter().copied().filter(|f| f.supported() & bit != 0).collect();
         flags.sort_unstable();
         flags.dedup();
-        Some(ClangFeatures { triple, bit, flags, compat: ClangCompat::Clang19 })
+        Some(ClangFeatures { triple, bit, flags, compat: ClangCompat::default() })
     }
 
     /// These answers at compatibility level `compat`.
