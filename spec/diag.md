@@ -188,8 +188,13 @@ umbrella yet.
 |---|---|---|
 | `all` | `most`, `switch`, `switch-bool`, `vla-cxx-extension` | `intro.compliance/wall-*.cpp`, `dcl.array/vla-gnu-mode-wall.cpp` |
 | `most` | `comment`, `format`, `multichar`, `range-loop-construct`, `reorder`, `return-type`, `tautological-compare`, `trigraphs`, `uninitialized`, `unknown-pragmas`, `unused`, `overloaded-virtual` | `intro.compliance/wmost-members.cpp`, `intro.compliance/wmost-tautological-compare.cpp` |
+| `bool-conversion` | `pointer-bool-conversion`, `undefined-bool-conversion` | `intro.compliance/wbool-conversion-members.cpp` |
 | `unused-value` | `unused-comparison`, `unused-result`, `unevaluated-expression` | `intro.compliance/wunused-value-unevaluated.cpp` |
 | `gnu` | `gnu-case-range`, `gnu-designator`, `vla-extension`, `gnu-folding-constant`, `gnu-imaginary-constant`, `gnu-include-next`, `gnu-line-marker`, `gnu-pointer-arith`, `gnu-string-literal-operator-template`, `gnu-zero-line-directive`, `gnu-zero-variadic-macro-arguments` | `ext.gnu.extension/wgnu-*.cpp` |
+
+`conversion` holds `bool-conversion`, `literal-conversion`,
+`constant-conversion` and `null-conversion` (WP-408 added
+`bool-conversion`, whose warnings are on by default).
 
 `unevaluated-expression` is reached from `most` through `unused` ⊃
 `unused-value`, as in clang, so `-Wmost -Wno-unused-value` turns it off.

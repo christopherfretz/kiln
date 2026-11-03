@@ -2527,7 +2527,10 @@ diagnostics and IR.
     (sema-class.md §8.3, "Landed (WP-066b)"); overloaded member
     functions wait for WP-068a
   - **ext-vector element access:** §5.19
-  - **subscripts:** either operand order
+  - **subscripts:** either operand order; a pointer to function as the
+    pointer operand is "subscript of pointer to function type 'void ()'"
+    at the pointer operand's begin (clang `CreateBuiltinArraySubscriptExpr`,
+    WP-408, test `expr.sub/subscript-function-pointer.cpp`)
   - **`sizeof`/`alignof`:** of types and expressions, using
     `kiln_abi` layout; `alignof` of an expression naming a variable or
     data member uses its declared alignment (§4.5). An invalid operand
@@ -4135,6 +4138,25 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   undeclared identifier", when the functions belong to several
   namespaces, or are found both directly and through a using-declaration
   (several using-declarations included).
+- **Recovered overload set** ([temp.names]/3, WP-408; clang 22): the
+  overload set a corrected uncalled template-id stands for is a
+  placeholder. A condition and a conditional's arms resolve its one
+  candidate first (`resolve_single_overload_candidate`), so `if
+  (val<int>)` warns that the address of '::val<int>' is always true and
+  an arm decays to the function pointer; a placeholder type (`auto`,
+  `auto *`, `auto &`, `decltype(auto)`) does not deduce from it
+  ("address of overloaded function 'val' does not match required type
+  'int (int)'" with "candidate function"); a default argument converts
+  it to the parameter type with "passing argument to parameter" after;
+  `sizeof`/`alignof` resolve it and reject the function type; `.m` on
+  it is "base of member reference is a function; perhaps you meant to
+  call it with no arguments?" and `->m` "member reference base type 'S
+  ()' is not a structure or union". The corrected name prints with its
+  qualifier (`typo_nns`; none when the path crosses a class). Tests:
+  `tests/conformance/temp.names/undeclared-template-id-recovery-22.cpp`,
+  `expr.cond/undeclared-template-id-arm-22.cpp`,
+  `expr.sizeof/undeclared-template-id-operand-22.cpp` (and `-19.cpp`,
+  clang 19's delayed correction of the same operands).
 - **Template-id typo candidates** ([temp.names]/3, WP-399; clang 22's
   `CorrectTypo` from `DiagnoseEmptyLookup`, `correct_template_id_typo`):
   for an uncalled template-id whose name ordinary lookup finds nothing or
@@ -4712,7 +4734,13 @@ Each rule names the libc++ test it fixed and its corpus test.
 - **Compound statements and scopes:** see §2.
 - **`if`, `while`, `for`:** condition conversion to `bool` (contextual
   conversion), plus `cond_var` for condition declarations
-  (`act_on_condition_var`).
+  (`act_on_condition_var`). A condition variable of function type
+  (`decltype(auto) x = f`) is "a function type is not allowed here" at
+  its declarator after the failed initialization ([stmt.pre]/5, clang
+  `CheckConditionVariable`; WP-408, test
+  `stmt.pre/condition-decltype-auto-function.cpp`). The condition
+  resolves a lone overload candidate before converting
+  (`resolve_single_overload_candidate`).
 - **`act_on_if(kind, init, cond_var, cond, then, els, loc)`** builds
   every `IfKind`:
   - **`if constexpr`** ([stmt.if]/2): `act_on_constexpr_condition(e)`
