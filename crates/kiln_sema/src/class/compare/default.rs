@@ -643,11 +643,21 @@ impl Sema<'_, '_> {
         }
         // A specialization's implicit `==` is instantiated from its
         // pattern's (clang `InstantiateClass` instantiates the pattern's
-        // implicit declaration; spec/sema-class.md §8.3).
+        // implicit declaration; spec/sema-class.md §4.12).
         if let Some(pe) = pattern_eq {
             self.builder().member_of_spec(r, f, pe);
         }
         let _ = self.special.cmp.implicit_eq.insert(s, f);
         f
+    }
+
+    /// Whether `m` is the `FriendDecl` of an implicit friend `operator==`
+    /// ([class.compare.default]/4): a class template's specialization
+    /// does not instantiate it but declares its own, linked to the
+    /// pattern's (spec/sema-class.md §4.12 *Templates*).
+    pub(crate) fn is_implicit_friend(&self, m: DeclId) -> bool {
+        self.ast.decls.get(m).kind() == DeclKind::Friend
+            && matches!(self.ast.decls.friend_target(m),
+                kiln_ast::decl::FriendTarget::Decl(t) if self.ast.decls.get(t).has(DeclFlags::IMPLICIT))
     }
 }

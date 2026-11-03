@@ -1646,16 +1646,7 @@ impl Substituter<'_, '_, '_> {
         // default member initializers are not instantiated).
         for m in members {
             let n = *sub.sema.ast.decls.get(m);
-            if n.flags().contains(DeclFlags::IMPLICIT) {
-                continue;
-            }
-            // The `FriendDecl` of an implicit friend `operator==`
-            // ([class.compare.default]/4) too: the specialization declares
-            // its own, linked to this one (spec/sema-class.md §8.3).
-            if n.kind() == DeclKind::Friend
-                && let kiln_ast::decl::FriendTarget::Decl(t) = sub.sema.ast.decls.friend_target(m)
-                && sub.sema.ast.decls.get(t).has(DeclFlags::IMPLICIT)
-            {
+            if n.flags().contains(DeclFlags::IMPLICIT) || sub.sema.is_implicit_friend(m) {
                 continue;
             }
             if n.has(DeclFlags::INVALID)

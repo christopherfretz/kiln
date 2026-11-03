@@ -2602,6 +2602,19 @@ impl ExprArena {
             })
     }
 
+    /// The children of `PseudoObjectExpr` `n`: its semantic expressions,
+    /// each bound `OpaqueValueExpr` by its source (so every subexpression
+    /// is visited once); the syntactic form shares the sources and is not
+    /// a child.
+    fn pseudo_children(&self, n: &ExprNode, lists: &IdLists, v: &mut Vec<ExprId>) {
+        for c in lists.iter::<ExprId>(ListId::new(n.a)).skip(1) {
+            let src = (self.get(c).kind == ExprKind::OpaqueValueExpr)
+                .then(|| ExprId::from_raw(self.get(c).a))
+                .flatten();
+            v.push(src.unwrap_or(c));
+        }
+    }
+
     /// The child expressions of `e` in dump order (§11): the expressions
     /// `e` owns, as clang's `Stmt::children`. Shared subexpressions are
     /// not children (the dump prints them, §11): the source of an
@@ -2700,17 +2713,7 @@ impl ExprArena {
             ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)).take(5));
             }
-            // The semantic expressions, each bound `OpaqueValueExpr` by its
-            // source (so every subexpression is visited once); the
-            // syntactic form shares the sources and is not a child.
-            ExprKind::PseudoObjectExpr => {
-                for c in lists.iter::<ExprId>(ListId::new(n.a)).skip(1) {
-                    let src = (self.get(c).kind == ExprKind::OpaqueValueExpr)
-                        .then(|| ExprId::from_raw(self.get(c).a))
-                        .flatten();
-                    v.push(src.unwrap_or(c));
-                }
-            }
+            ExprKind::PseudoObjectExpr => self.pseudo_children(n, lists, &mut v),
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr

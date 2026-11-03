@@ -1,5 +1,5 @@
 //! The synthesized three-way comparison ([class.spaceship]/1; clang
-//! `BuildSynthesizedThreeWayComparison`, spec/sema-class.md §8.3): in a
+//! `BuildSynthesizedThreeWayComparison`, spec/sema-class.md §4.12): in a
 //! defaulted `operator<=>` whose declared return type `R` is a
 //! comparison category, a subobject pair `a`, `b` with no usable `<=>`
 //! compares as
@@ -63,8 +63,8 @@ impl Sema<'_, '_> {
             let v = self.build_decl_ref(var, Loc::INVALID);
             let v = self.three_way_ok(v)?;
             result = Some(match (result, cmp) {
-                (Some(rest), Some(c)) => {
-                    let e = self.act_on_conditional(c, v, rest, loc);
+                (Some(tail), Some(c)) => {
+                    let e = self.act_on_conditional(c, v, tail, loc);
                     self.three_way_ok(e)?
                 }
                 _ => v,
