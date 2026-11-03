@@ -79,6 +79,16 @@ reviewable diff (roughly: one module, one spec section, < ~2k lines).
    checkout MERGE_HEAD --` (your rows are replayed from `HEAD`, nothing is
    lost; code changes outside the tables in those files must be re-applied
    by hand, the tool warns).
+10. A WP's "Landed" spec section goes in its own file,
+   `spec/landed/<spec>/WP-NNN.md` (first line `# WP-NNN — <title>`, the
+   body shaped as the spec's existing Landed sections), never appended
+   to the end of `spec/<spec>.md`: two open PRs appending to the same
+   spec conflict, and each landing then forces a re-merge and a full CI
+   run of the others (spec/README.md "Landed sections"). Do not number
+   it (`§7x`, `§8.NN`); existing sections stay where they are. `cargo
+   xtask ci` fails on a file there without a `| WP-NNN |` row in
+   `docs/BACKLOG.md`, so the WP must have its row (the supervisor adds
+   it when briefing).
 
 ## Review gates (supervisor)
 

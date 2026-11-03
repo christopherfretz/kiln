@@ -2899,11 +2899,31 @@ diagnostics and IR.
     `dcl.struct.bind/p0963-binding-condition*.cpp`,
     `dcl.struct.bind/p0963-switch-condition.cpp`.
   - Only `static`, `thread_local`, `auto` and cv are allowed
-    ([dcl.pre]/6). Another storage class, `constexpr`, `consteval`,
-    `constinit` or `inline` is `decomposition declaration cannot be
-    declared 'constexpr'`, or `... with 'static constexpr' specifiers`
-    when there are several, at the first one. The declaration continues:
-    a `constexpr` is still applied, which makes `e` const, as in clang.
+    ([dcl.pre]/6), plus `constexpr` and `constinit` in C++26 (P2686R5,
+    WP-454; gated on `-std`, not on `-fclang-compat`). Another storage
+    class, `consteval`, `inline`, or `constexpr`/`constinit` before
+    C++26 is `decomposition declaration cannot be declared 'constexpr'`
+    (clang 22: `structured binding declaration ...`), or `... with
+    'static constexpr' specifiers` when there are several, at the first
+    one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
+    error rather than an extension warning; kiln follows it. A
+    `consteval` is also `consteval can only be used in function
+    declarations` (`sema_consteval_wrong_decl_kind`). The declaration
+    continues: a `constexpr` is still applied, which makes `e` const,
+    as in clang.
+  - **P2686R5.** A `constexpr` decomposition is a constexpr variable
+    `e`: its initializer must be a constant expression
+    (`check_constexpr_init`, the same diagnostics and notes as any
+    `constexpr` variable, including the element-wise copy of an array
+    `e` in `init_decomposition_array`), and its bindings are then usable
+    in constant expressions ([expr.const]/4, the binding expression
+    refers to `e`). A tuple-like type's holding variables are
+    `constexpr` too, so each `get` call is constant-evaluated at the
+    declaration. `constinit` is recorded on `e` (`record_constinit`)
+    and checked like any `constinit` variable. `static constexpr`,
+    block scope, namespace scope, templates and the P1061 pack form
+    compose unchanged. Tests: `dcl.struct.bind/p2686-*.cpp`,
+    `dcl.struct.bind/specifiers-constexpr.cpp` (c++23).
   - Before C++20 (P1091R3, [dcl.pre]/6) `static` and `thread_local`
     (`__thread`, `_Thread_local`) are an extension:
     `structured binding declaration declared 'static' is a C++20
@@ -3017,9 +3037,11 @@ diagnostics and IR.
   (`kiln_oven` `holding_vars`, codegen `emit_var_decl`). A use of a
   binding evaluates or emits its binding expression. A namespace-scope
   `e` mangles as `_ZDC1a1bE` (`kiln_abi` `mangle_decomp.rs`, `DC
-  <source-name>+ E`, never `L`-prefixed). A `constexpr` decomposition is
-  rejected, so constant bindings come from a `const` `e` with a
-  constant initializer, which is usable in constant expressions.
+  <source-name>+ E`, never `L`-prefixed). Constant bindings come from
+  a `constexpr` `e` (C++26, P2686R5) or, as before, a `const` `e` with
+  a constant initializer that is usable in constant expressions; the
+  Oven needs no new rule, since
+  usability is that of `e` and the holding variables.
 - **Fixed on the way.**
   - A reference that cannot bind (to `void`, or to a non-class type
     with no conversion) is `reference to type 'int' could not bind to
@@ -3029,7 +3051,10 @@ diagnostics and IR.
     specialization fully qualified (`Sema::decl_ty_str`, clang's
     printing of `getTypeDeclType`).
 - **Left.**
-  - `constexpr` structured bindings (P2686; clang 19 rejects them too).
+  - P2686R5's constexpr-referenceable automatic objects: a block-scope
+    non-`static` `constexpr` decomposition whose bindings are
+    references (`constexpr auto& [a] = ...` of a local) still needs `e`
+    to have static storage; clang 22 rejects these too.
   - Instantiating binding attributes.
   - The NoOp `'const M'` cast clang adds when a const class `e` is
     copy-initialized from a prvalue.
@@ -6448,17 +6473,44 @@ not supported yet`.
   ([stmt.expand]/5). An inner pattern that depends on the element is
   expanded within it. The form is chosen on the substituted initializer:
   - *enumerating*: an expansion-init-list; element i is its i-th
-    expression. A braced or designated element is unsupported
-    (`unsupported`, not a crash).
+    initializer-clause. The list is an expression-list
+    ([stmt.expand]/1), so a top-level designator is `expected
+    expression` (clang 23 parses it with `ParseExpressionList`). A
+    braced element (WP-454) is kept as written, a `void`-typed
+    `InitListExpr` (`dependent_init_list`; a braced pack expansion
+    `{x}...` is expanded in a template as a call argument's is), and
+    `Substituter::initializer` turns the select it replaces into
+    `Initializer::List`: the for-range-declaration is
+    copy-list-initialized exactly as `decl = {...};` ([stmt.expand]/5.1,
+    [dcl.init.list]/3; designated lists against an aggregate per
+    [dcl.init.list]/3.1, `auto` deducing `std::initializer_list` per
+    element, a structured binding of it ill-formed as for `auto [a, b] =
+    {1, 2};`). Each element's temporaries belong to its own block
+    `{ decl = {...}; body }`, so codegen and the Oven destroy them at that
+    block's end like any block-scope declaration's.
   - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
     member `begin`/`end` are found or ADL finds viable candidates;
     `static constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
     through a per-element `static constexpr auto __iter = __begin + i`.
-    N is counted by evaluating `__begin + i != __end` for i = 0, 1, ...
-    (kiln deviation: the paper defines N as `__end - __begin`; the count
-    agrees for random-access iterators and also works without
-    `operator-`), capped at 2^20 (`sema_expansion_size_not_constant`
-    when an evaluation fails).
+    N is the first i for which `__begin + i != __end` is false
+    ([stmt.expand]/5.2 counts with `++` in a consteval lambda; `__begin +
+    i` is what each element uses). *Fast path* (WP-454,
+    `expansion_size_difference`): when `__begin` and `__end` have the same
+    type and it is (a) a pointer to a complete object type, or (b) a
+    specialization of libc++'s `std::__wrap_iter`, `std::__bounded_iter`
+    or `std::__static_bounded_iter`, or libstdc++'s
+    `__gnu_cxx::__normal_iterator`, whose first template argument is a
+    pointer (the iterators of `std::array`, `std::span`,
+    `std::basic_string_view`, `std::basic_string` and `std::vector` are
+    these or pointers), N is `__end - __begin` evaluated once, when that
+    is a constant expression with a non-negative integral value. For
+    these types `+`, `-` and `!=` are the pointer's, so the count is the
+    same. Any other iterator, or a failed or negative difference, is
+    counted incrementally, one evaluation per i, capped at 2^20
+    (`sema_expansion_size_not_constant` when an evaluation fails or the
+    cap is reached); the fast path has no cap. A class iterator whose `!=`
+    disagrees with its `-` gets the comparison's count
+    (`tests/conformance/stmt.expand/iterating-count.cpp`).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
     (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
     for-range-declaration the declaration is `static constexpr`.
@@ -6470,15 +6522,14 @@ not supported yet`.
   captured diagnostics, `stash_has_error`: a failed constant
   initialization does not mark the variable INVALID), it is retried by
   value, a copy, each attempt in a block scope of its own. The copy stands
-  in for P2686 (constexpr references to automatic variables), which kiln
-  does not implement: the paper's `constexpr std::array` local example
-  works. When both fail, the first attempt's diagnostics are emitted.
+  in for P2686's constexpr-referenceable automatic objects, which kiln
+  does not implement (§4.9): the paper's `constexpr std::array` local
+  example works. When both fail, the first attempt's diagnostics are emitted.
 - **Holding variables.** The holding variables of a `constexpr` structured
   binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
   Oven sees initialized constants rather than a static variable's
-  definition. A user-written `constexpr` structured binding is still
-  rejected (`structured binding declaration cannot be declared
-  'constexpr'`).
+  definition. User-written `constexpr` structured bindings are §4.9
+  (P2686R5, WP-454).
 - **Return type deduction.** A `return` in the pattern of an expansion
   statement of a non-template function does not deduce the placeholder
   return type (`in_template_outside_expansions`); its expansions do.
@@ -6493,7 +6544,7 @@ not supported yet`.
   every `-fclang-compat` (`KILN_FEATURES`; clang 22 does not define it).
 - **Left.** `define_static_array` and reflection ranges (kiln's
   `members_of` returns a `member_list` aggregate without `begin`/`end`);
-  braced or designated init-list elements; P2686.
+  P2686's constexpr-referenceable automatic objects (§4.9).
 - Validation: `tests/conformance/stmt.expand/` (all `requires: clang>=23`),
   `tests/codegen/expansion_stmt.cpp`, `kiln_codegen` test
   `expansion_statement_lowers_in_order`.
