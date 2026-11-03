@@ -920,10 +920,30 @@ impl Sema<'_, '_> {
         if member && !ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
             return ty;
         }
+        self.reject_qualified_fn_type(ty, ds.loc, member)
+    }
+
+    /// Reports `ty`, a function type with a cv-qualifier-seq or
+    /// ref-qualifier, as clang's `err_invalid_qualified_function_type`
+    /// "of type" form at `loc` ("static member function of type" when
+    /// `static_member`, else "non-member function of type") and returns it
+    /// without the qualifiers. Any other type is returned unchanged.
+    pub(crate) fn reject_qualified_fn_type(
+        &mut self,
+        ty: QualType,
+        loc: Loc,
+        static_member: bool,
+    ) -> QualType {
+        let Some(p) = self.ast.types.proto(ty).copied() else { return ty };
+        let info = p.info();
+        let (q, r) = (info.this_quals(), info.ref_qual());
+        if q.is_empty() && r == RefQual::None {
+            return ty;
+        }
         let spelled = crate::class::members::method_quals_spelling(q, r);
         let m = self
-            .diag(DiagId::sema_qualified_fn_type, ds.loc)
-            .arg(u8::from(member))
+            .diag(DiagId::sema_qualified_fn_type, loc)
+            .arg(u8::from(static_member))
             .arg(self.ty_arg(ty))
             .arg(spelled);
         self.emit(m);

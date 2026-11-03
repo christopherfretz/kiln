@@ -1026,8 +1026,15 @@ Redeclaration and linkage rules:
   variable / static data member instantiated with function type T" at its
   name (clang `VisitFieldDecl`/`VisitVarDecl`, [temp.inst]/17); a member
   function's parameter of that type is not diagnosed (it adjusts to a
-  pointer). Not yet: `friend F;` naming a qualified function typedef (an
-  elaborated friend type, clang errors). Tests
+  pointer). `friend F;` naming a qualified function typedef (plain or
+  nested-name-qualified, `friend N::R;`) is the "non-member function of
+  type" form at the start of the declaration (`class/friend.rs`
+  `declare_friend_type`, WP-469); an unqualified function typedef is an
+  ignored non-class friend type ([class.friend]/3), and a dependent
+  `friend T;` substituting to a qualified function type is not diagnosed
+  (a non-dependent one in a template is reported once, in the pattern;
+  clang 19 and 22). Tests
+  `class.friend/friend-qualified-function-typedef.cpp`,
   `dcl.fct/qualified-function-typedef.cpp`,
   `dcl.fct/qualified-function-type-id.cpp`,
   `dcl.fct/qualified-function-instantiation.cpp`,
