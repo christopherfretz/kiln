@@ -285,6 +285,9 @@ pub enum ArgError {
     /// An option whose value kiln does not support: `(option, value)`
     /// ("unsupported argument '{v}' to option '{opt}'"; `--driver-mode=`).
     UnsupportedValue(String, String),
+    /// An option the target does not support: `(option, triple)`
+    /// ("unsupported option '{opt}' for target '{triple}'").
+    UnsupportedForTarget(String, String),
 }
 
 /// The parsed command line.
@@ -417,6 +420,8 @@ pub struct Args {
     pub march: Option<String>,
     /// `-mcpu=<cpu>[+ext...]` as written (the last wins).
     pub mcpu: Option<String>,
+    /// `-msve-vector-bits=<bits|scalable>` as written (the last wins).
+    pub sve_vector_bits: Option<String>,
     /// `-target-feature <+name|-name>` (clang's `-Xclang` option), in order.
     pub target_features: Vec<String>,
     /// `-f[no-]omit-frame-pointer` (the last wins; `Some(true)` omits);
@@ -601,13 +606,15 @@ impl Args {
         }
     }
 
-    /// `-march=` / `-mcpu=` (the last of each wins; resolved by
+    /// `-march=` / `-mcpu=` / `-msve-vector-bits=` (the last of each wins; resolved by
     /// [`crate::features::resolve`]). Returns false if `arg` is neither.
     fn target_flag(&mut self, arg: &str) -> bool {
         if let Some(v) = arg.strip_prefix("-march=") {
             self.march = Some(v.to_owned());
         } else if let Some(v) = arg.strip_prefix("-mcpu=") {
             self.mcpu = Some(v.to_owned());
+        } else if let Some(v) = arg.strip_prefix("-msve-vector-bits=") {
+            self.sve_vector_bits = Some(v.to_owned());
         } else {
             return false;
         }

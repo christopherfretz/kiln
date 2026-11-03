@@ -1025,12 +1025,29 @@ Redeclaration and linkage rules:
   variable / static data member instantiated with function type T" at its
   name (clang `VisitFieldDecl`/`VisitVarDecl`, [temp.inst]/17); a member
   function's parameter of that type is not diagnosed (it adjusts to a
-  pointer). Not yet: `friend F;` naming a qualified function typedef (an
-  elaborated friend type, clang errors). Tests
+  pointer). `friend F;` naming a qualified function typedef (plain or
+  nested-name-qualified, `friend N::R;`) is the "non-member function of
+  type" form at the start of the declaration (`class/friend.rs`
+  `declare_friend_type`, WP-469); an unqualified function typedef is an
+  ignored non-class friend type ([class.friend]/3), and a dependent
+  `friend T;` substituting to a qualified function type is not diagnosed
+  (a non-dependent one in a template is reported once, in the pattern;
+  clang 19 and 22). Tests
+  `class.friend/friend-qualified-function-typedef.cpp`,
   `dcl.fct/qualified-function-typedef.cpp`,
   `dcl.fct/qualified-function-type-id.cpp`,
   `dcl.fct/qualified-function-instantiation.cpp`,
   `dcl.decl.general/qualified-function-decltype.cpp`.
+- A function declared through a typedef of function type (`typedef int
+  G(int) const; struct S { G g; };`, [dcl.fct]/13) has no parameter
+  declarations of its own; `act_on_function` synthesizes one unnamed
+  parameter per prototype parameter (clang `BuildParmVarDeclForTypedef`),
+  so a later out-of-class definition's parameters map onto them and its
+  body instantiates with them bound. In a class template the member
+  substitutes through the sugared function type (`subst/decls.rs`
+  `function_decl`: no declarator chunk, no trailing return; WP-469), for a
+  plain, cv-qualified, static, nested-class or dependent (`typedef T
+  H(T); H h;`) typedef. Test `temp.inst/member-function-typedef.cpp`.
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
 - A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
@@ -5126,6 +5143,29 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `ext.vector/element-access-constexpr-diagnostics.cpp` (strict-diags),
   `ext.vector/bool-element-access-diagnostics{,-clang22}.cpp`,
   `tests/codegen/ext_vector_element.cpp`.
+
+### 5.19a Vector subscript (`vector_ops.rs`, WP-469)
+`v[i]` with a vector `v` on the left (clang `CreateBuiltinArraySubscriptExpr`;
+`vector_subscript`):
+- A GNU/ext vector or an SVE vector type (`isSveVLSBuiltinType`: every
+  sizeless builtin but `__SVCount_t`, whose subscript is
+  "subscripted value is not an array, pointer, or vector", as is `i[v]` with an SVE `v`)
+  is subscripted in place: a prvalue base is materialized (CWG1213), the
+  index must be an integer or unscoped enumeration ("array subscript is not
+  an integer"), and the result is the element type (an SVE vector's
+  `getSveEltType`: `signed char` … `double`, `__fp16`, `__bf16`) with the
+  base's qualifiers and value category, an `ObjectKind::VectorComponent`
+  unless a prvalue.
+- `svbool_t` cannot be subscripted: `sema_subscript_svbool` ("subscript of
+  svbool_t is not allowed", clang `err_subscript_svbool_t`), at the `[`,
+  before the index is checked.
+- The element cannot have its address taken ("address of vector element
+  requested") or bind a non-const reference ("non-const reference cannot
+  bind to vector element"). Divergence: clang does not apply the second
+  rule to SVE vectors (`refersToVectorElement` tests `isVectorType`) and
+  binds the reference to the vector's address; kiln keeps it.
+- Tests `ext.arm.sve/subscript.cpp`, `subscript-element-reference.cpp`,
+  `ir-subscript.cpp` (codegen: spec/codegen.md §7aa).
 
 ### 5.20 Variadic arguments (`expr.rs`, WP-311)
 - An argument for the ellipsis gets the default argument promotions

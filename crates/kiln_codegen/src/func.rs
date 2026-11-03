@@ -1777,7 +1777,8 @@ impl Cg<'_> {
     fn cmp_ty(&mut self, l: V) -> LTy {
         let t = self.f.fir.ty(&self.m, l);
         match self.m.types.vector_info(t) {
-            Some((_, n, _)) => self.m.types.vector(LTy::I1, n),
+            Some((_, n, true)) => self.m.types.scalable_vector(LTy::I1, n),
+            Some((_, n, false)) => self.m.types.vector(LTy::I1, n),
             None => LTy::I1,
         }
     }
@@ -1802,7 +1803,10 @@ impl Cg<'_> {
             ConstData::Poison(t) => (*t, 2),
             _ => return None,
         };
-        let (et, n, _) = self.m.types.vector_info(ty)?;
+        let (et, n, scalable) = self.m.types.vector_info(ty)?;
+        if scalable {
+            return None;
+        }
         let e = match data {
             0 => self.m.const_zero(et),
             1 => self.m.const_undef(et),
@@ -1844,8 +1848,15 @@ impl Cg<'_> {
         let t = self.f.fir.ty(&self.m, a);
         let et = self.m.types.vector_info(t).map_or(LTy::I8, |x| x.0);
         let b = b.unwrap_or_else(|| V::C(self.m.const_poison(t)));
-        let rt = self.m.types.vector(et, mask.len() as u32);
-        if let Some(k) = self.fold_shuffle(a, b, &mask, t) {
+        let scalable = self.m.types.vector_info(t).is_some_and(|x| x.2);
+        let rt = if scalable {
+            // An SVE splat's `zeroinitializer` mask (clang
+            // `CreateVectorSplat`); never folded here.
+            self.m.types.scalable_vector(et, mask.len() as u32)
+        } else {
+            self.m.types.vector(et, mask.len() as u32)
+        };
+        if !scalable && let Some(k) = self.fold_shuffle(a, b, &mask, t) {
             return V::C(k);
         }
         self.f.fir.push(Op::ShuffleVector { a, b, mask }, rt)
@@ -1942,12 +1953,16 @@ impl Cg<'_> {
     }
 
     /// `IRBuilder::CreateVectorSplat`: a constant splat folds.
-    pub fn splat(&mut self, v: V, n: u32) -> V {
-        let et = self.f.fir.ty(&self.m, v);
-        let vt = self.m.types.vector(et, n);
+    /// `vt` is the result vector type (fixed, or an SVE scalable one).
+    pub fn splat(&mut self, v: V, vt: LTy) -> V {
+        let (n, scalable) = self.m.types.vector_info(vt).map_or((1, false), |x| (x.1, x.2));
         if let V::C(c) = v {
-            let elems = vec![c; n as usize];
-            if let Ok(k) = self.m.const_vector(&elems) {
+            let k = if scalable {
+                self.m.const_splat(vt, c)
+            } else {
+                self.m.const_vector(&vec![c; n as usize])
+            };
+            if let Ok(k) = k {
                 return V::C(k);
             }
         }
