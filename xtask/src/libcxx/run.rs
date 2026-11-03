@@ -1167,16 +1167,16 @@ mod tests {
         std::fs::create_dir_all(&share).unwrap();
         let include = base.join("include").join("c++").join("v1");
         cfg.libcxx = Some(LibcxxTree { include, lib: "/tree/lib".into() });
-        assert!(cfg.module_source_flags().is_empty());
+        assert_eq!(cfg.module_source_flags(), Vec::<String>::new());
         cfg.clang = false;
-        assert!(cfg.module_source_flags().is_empty());
+        assert_eq!(cfg.module_source_flags(), Vec::<String>::new());
         std::fs::write(share.join("std.cppm"), "").unwrap();
         assert_eq!(
             cfg.module_source_flags(),
             [format!("-fprebuilt-module-path={}", share.display())]
         );
         cfg.clang = true;
-        assert!(cfg.module_source_flags().is_empty());
+        assert_eq!(cfg.module_source_flags(), Vec::<String>::new());
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1311,7 +1311,7 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted, paths);
         let (rel, reason) = CLANG_DEFECT_XFAIL[0];
-        assert!(!reason.is_empty());
+        assert_ne!(reason, "");
         assert_eq!(clang_defect_xfail(rel, false, Some(220_108)), Some(reason));
         assert_eq!(clang_defect_xfail(rel, true, Some(220_108)), None);
         assert_eq!(clang_defect_xfail(rel, false, Some(190_107)), None);
