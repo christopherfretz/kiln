@@ -4728,6 +4728,28 @@ impl Sema<'_, '_> {
         (independent, local)
     }
 
+    /// A variable `n` redeclared at `at` over `p` of a compatible type:
+    /// a second definition (`ext`: the new declaration is `extern`,
+    /// `prev_def`: `p` is a definition; [basic.def.odr]/1) or a different
+    /// language linkage ([dcl.link]/6, clang
+    /// `err_different_language_linkage`). Whether one was reported.
+    fn diagnose_var_redecl_conflict(
+        &mut self,
+        p: DeclId,
+        n: &str,
+        at: Loc,
+        ext: bool,
+        prev_def: bool,
+    ) -> bool {
+        if !ext && prev_def {
+            let msg = self.diag(DiagId::sema_redefinition, at).arg(n);
+            let msg = self.note_prev(msg, p, true);
+            self.emit(msg);
+            return true;
+        }
+        self.diagnose_language_linkage_redecl(p, n, at, prev_def)
+    }
+
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
@@ -4774,14 +4796,7 @@ impl Sema<'_, '_> {
                     let prev_def = self.is_var_definition(p);
                     let n = sym_str(self, name);
                     self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
-                    if !ext && prev_def {
-                        let msg = self.diag(DiagId::sema_redefinition, d.name_loc()).arg(&n);
-                        let msg = self.note_prev(msg, p, true);
-                        self.emit(msg);
-                        redefined = true;
-                    } else if self.diagnose_language_linkage_redecl(p, &n, d.name_loc(), prev_def)
-                    {
-                        // [dcl.link]/6 (clang `err_different_language_linkage`).
+                    if self.diagnose_var_redecl_conflict(p, &n, d.name_loc(), ext, prev_def) {
                         redefined = true;
                     } else {
                         prev_ok = Some(p);

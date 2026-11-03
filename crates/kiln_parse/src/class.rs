@@ -22,8 +22,8 @@ use kiln_sema::{
     BaseSpecInfo, Chunk, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId,
     MemInitInfo, NameClass, SpecialName, StorageSpec, TypeSpecKind,
 };
-use kiln_source::{Loc, Span};
 use kiln_source::symbol::Symbol;
+use kiln_source::{Loc, Span};
 
 use crate::decl::{is_deduction_guide, is_untyped_special};
 use crate::keywords::Kw;
@@ -489,6 +489,14 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::RParen, Punct::Comma], true, false);
             self.eat(Punct::RParen);
         }
+    }
+
+    /// "expected member name" at the current token, highlighting the
+    /// decl-specifier-seq `ds_range` (clang's `DS.getSourceRange()`, from
+    /// a leading attribute-specifier-seq).
+    fn error_expected_member_name(&mut self, ds_range: Span) {
+        let e = self.s.diag(DiagId::parse_expected_member_name, self.loc()).range(ds_range);
+        self.emit(e);
     }
 
     /// clang's `SkipMalformedDecl`: skips to the end of a broken member
@@ -1249,7 +1257,8 @@ impl Parser<'_, '_> {
             self.s.plain_auto_type()
         } else if !ds.has_type_specifier() && is_untyped_special(d) {
             QualType::VOID
-        } else if !ds.has_type_specifier() && (d.invalid || (!d.has_name() && !self.at(Punct::Colon)))
+        } else if !ds.has_type_specifier()
+            && (d.invalid || (!d.has_name() && !self.at(Punct::Colon)))
         {
             // A malformed special declarator-id (`operator;`) is reported;
             // clang adds nothing about the type. Nor does it for a
@@ -1417,8 +1426,6 @@ impl Parser<'_, '_> {
         }
         let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
         let is_typedef = ds.is_typedef();
-        // clang's `DS.getSourceRange()`, highlighted by "expected member
-        // name" (from a leading attribute-specifier-seq).
         let ds_range = Span::new(ds.lead_cxx11.unwrap_or(ds.loc), self.prev_end());
         let mut base_ty: Option<QualType> = None;
         let mut restrict_error = None;
@@ -1449,9 +1456,7 @@ impl Parser<'_, '_> {
                 self.parse_member_declarator_tail(&mut d, ds.friend.is_some());
             if !d.has_name() && !has_width {
                 if !d.invalid {
-                    let at = self.loc();
-                    let e = self.s.diag(DiagId::parse_expected_member_name, at).range(ds_range);
-                    self.emit(e);
+                    self.error_expected_member_name(ds_range);
                 }
                 self.skip_until(&[Punct::RBrace], true, false);
                 if first {

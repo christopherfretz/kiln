@@ -4816,13 +4816,26 @@ value is used); no parentheses or implicit casts are looked through.
   to a boolean", `int-in-bool-context`) at the operator, from
   `builtin_binary` before the operands are converted.
 - clang's `'*' in boolean context` is C only and not issued.
-- Deviation: clang checks a template's non-dependent full-expressions
-  again in each instantiation and repeats these warnings there; kiln
-  reports them once, in the definition.
+- Templates ([temp.inst], WP-419): `check_implicit_conversions` skips a
+  value- or type-dependent full-expression (clang's
+  `CheckImplicitConversions`), so `return N << 1;` and `(x << 1) && N`
+  are checked only in each instantiation. A non-dependent one is checked
+  in the definition and again in each instantiation, which runs the walk
+  on the shared tree from its `act_on_condition` / `act_on_return` /
+  full-expression actions. The warnings above are
+  `per_instantiation()` (spec/diag.md §7.4), so each instantiation
+  reports them again with its instantiation note. In an instantiation
+  the walk also re-runs the `&&` / `||` enumerator check on each
+  operator of the full-expression (`recheck_enum_constants_in_bool`;
+  clang rebuilds every operator, kiln shares non-dependent ones); an
+  operator rebuilt by substitution is then reported twice at one
+  location and context and deduplicated. A substituted non-type
+  argument is not an integer literal (`a ? N : 5` is not warned).
 - Tests: `expr.shift/shift-bool-always.cpp`,
   `expr.shift/shift-in-bool-context-{19,22}.cpp`,
   `expr.cond/cond-int-constants-bool.cpp`,
-  `conv.bool/enum-constant-in-bool*.cpp`.
+  `conv.bool/enum-constant-in-bool*.cpp`,
+  `conv.bool/int-in-bool-per-instantiation-{19,22}.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -5664,6 +5677,13 @@ build their fix-its as clang does, as edits of the file:
   fix-it of the note does not map, the note keeps its message and loses
   all of its fix-its (clang `mergeFixits`): `if (X 1)` with
   `#define X h() && !` gets the note without `/* DISABLES CODE */ (`.
+- A token's end is measured from the source text (`Sema::token_end`):
+  an identifier, a number or the longest punctuator ([lex.operators];
+  `>>` and `>>=` included). A one-character `>` that the parser split
+  off a `>>` or `>>=` closing a template argument list ([temp.names]/4;
+  `Parser::split_greater` calls `Sema::note_split_greater`) measures
+  one character, as clang measures the split token. Unit test:
+  `impcast::tests::token_end_measures_shift_tokens_and_split_greaters`.
 - Tests: `kiln_driver` `fixits_in_macro_expansions_like_clang` (stderr of
   clang 19 and 22), `expr.log.and/constant-operand-macro-fixits.cpp`.
 

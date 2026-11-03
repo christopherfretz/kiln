@@ -162,19 +162,14 @@ impl Sema<'_, '_> {
     /// specification keeps the old one.
     pub(crate) fn has_incompatible_language_linkage(&self, old: DeclId) -> bool {
         let first = self.ast.first(old);
-        let in_record = self
-            .ast
-            .decls
-            .get(first)
-            .ctx()
-            .is_some_and(|c| {
-                matches!(
-                    self.kind_of(c),
-                    DeclKind::CXXRecord
-                        | DeclKind::ClassTemplateSpecialization
-                        | DeclKind::ClassTemplatePartialSpecialization
-                )
-            });
+        let in_record = self.ast.decls.get(first).ctx().is_some_and(|c| {
+            matches!(
+                self.kind_of(c),
+                DeclKind::CXXRecord
+                    | DeclKind::ClassTemplateSpecialization
+                    | DeclKind::ClassTemplatePartialSpecialization
+            )
+        });
         if in_record || kiln_abi::mangle::has_internal_linkage(&self.ast, first) {
             return false;
         }
