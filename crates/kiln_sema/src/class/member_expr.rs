@@ -1688,14 +1688,16 @@ impl Sema<'_, '_> {
     }
 
     /// Reports the names of non-static members used without an object
-    /// ([expr.prim.id.general]/4) at the end of a full-expression.
-    pub(crate) fn flush_member_refs(&mut self) {
+    /// ([expr.prim.id.general]/4) at the end of a full-expression; true
+    /// if one was reported.
+    pub(crate) fn flush_member_refs(&mut self) -> bool {
         if self.member_refs.is_empty() {
-            return;
+            return false;
         }
         let mut refs: Vec<(ExprId, MemberRef)> = self.member_refs.drain().collect();
         refs.sort_by_key(|(e, _)| e.index());
         let in_static = self.func.as_ref().is_some_and(|f| self.is_static_method(f.decl));
+        let mut reported = false;
         for (e, r) in refs {
             if !r.error {
                 continue;
@@ -1710,7 +1712,9 @@ impl Sema<'_, '_> {
                     .arg(self.decl_name(r.decl))
             };
             self.emit(msg);
+            reported = true;
         }
+        reported
     }
 
     /// A bound member function used other than as a callee
