@@ -392,7 +392,7 @@ impl ConstStore {
     /// aggregate, or `None` if it is not pointer-like: a pointer, null
     /// pointer, null data-member pointer or data-member pointer is one
     /// pointer; a member-function pointer (null or not) is two (Itanium); a
-    /// reflection is 8 bytes (spec/oven.md "Reflection runtime").
+    /// reflection is 8 bytes (spec/reflection.md §2.1).
     pub fn reloc_width(&self, id: ConstValueId) -> Option<u32> {
         self.pools.reloc_width(id)
     }

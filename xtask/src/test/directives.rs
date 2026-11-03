@@ -1730,7 +1730,11 @@ mod tests {
         let s = ok("//@ oven: bytes<=4096 steps<=100\n");
         assert_eq!(
             s.oven,
-            [OvenBudget { at: None, limits: vec![(Counter::Steps, 100), (Counter::Bytes, 4096)] }]
+            [OvenBudget {
+                at: None,
+                limits: vec![(Counter::Steps, 100), (Counter::Bytes, 4096)],
+                floors: vec![]
+            }]
         );
         assert!(s.is_kiln_specific());
         assert!(!ok("int x;\n").is_kiln_specific());

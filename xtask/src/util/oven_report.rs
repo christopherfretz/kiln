@@ -49,6 +49,8 @@ pub struct Counters {
     pub peak_arena: u64,
     pub frozen_bytes: u64,
     pub static_bytes: u64,
+    /// Calls answered from the memo table (0 in a report predating it).
+    pub memo_hits: u64,
     pub wall_us: u64,
     /// How many evaluations these counters cover.
     pub evaluations: u64,
@@ -66,6 +68,7 @@ impl Counters {
             Counter::FrozenBytes => self.frozen_bytes,
             Counter::StaticBytes => self.static_bytes,
             Counter::Evaluations => self.evaluations,
+            Counter::MemoHits => self.memo_hits,
         }
     }
 
@@ -85,6 +88,7 @@ impl Counters {
             peak_arena: self.peak_arena.max(o.peak_arena),
             frozen_bytes: self.frozen_bytes.saturating_add(o.frozen_bytes),
             static_bytes: self.static_bytes.max(o.static_bytes),
+            memo_hits: self.memo_hits.saturating_add(o.memo_hits),
             wall_us: self.wall_us.saturating_add(o.wall_us),
             evaluations: self.evaluations.saturating_add(o.evaluations),
         }
@@ -94,6 +98,7 @@ impl Counters {
     pub fn describe(&self) -> String {
         Counter::ALL
             .iter()
+            .chain(&Counter::EXTRA)
             .map(|c| format!("{}={}", c.name(), self.get(*c)))
             .collect::<Vec<_>>()
             .join(" ")
@@ -166,7 +171,7 @@ impl Report {
         let total = total.ok_or("no `total` line (it must be the last line)")?;
         let sum = evaluations.iter().fold(Counters::default(), |acc, e| acc.combine(&e.counters));
         let mut bad = Vec::new();
-        for c in Counter::ALL {
+        for c in Counter::ALL.into_iter().chain(Counter::EXTRA) {
             // The static space is also used by work no evaluation records
             // (spec/oven.md "Reporting protocol"): its total is a
             // high-water mark, at least every evaluation's.
@@ -258,6 +263,7 @@ fn counters(j: &Json, total: bool) -> Result<Counters, String> {
         frozen_bytes: n("frozen_bytes")?,
         // Added after the other counters: an older report lacks it.
         static_bytes: if j.get("static_bytes").is_some() { n("static_bytes")? } else { 0 },
+        memo_hits: if j.get("memo_hits").is_some() { n("memo_hits")? } else { 0 },
         wall_us: n("wall_us")?,
         evaluations: if total { n("evaluations")? } else { 0 },
     })
@@ -298,12 +304,24 @@ pub fn check_budgets(
                 );
             }
         }
+        for &(c, floor) in &b.floors {
+            if got.get(c) < floor {
+                let _ = writeln!(
+                    out,
+                    "oven: {what}: {} is {}, under the floor of {floor}",
+                    c.name(),
+                    got.get(c)
+                );
+            }
+        }
     }
     if out.is_empty() { Ok(()) } else { Err(out) }
 }
 
 fn describe_limits(b: &OvenBudget) -> String {
-    b.limits.iter().map(|(c, n)| format!("{}<={n}", c.name())).collect::<Vec<_>>().join(" ")
+    let le = b.limits.iter().map(|(c, n)| format!("{}<={n}", c.name()));
+    let ge = b.floors.iter().map(|(c, n)| format!("{}>={n}", c.name()));
+    le.chain(ge).collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -342,7 +360,7 @@ mod tests {
         assert_eq!(
             r.total.describe(),
             "steps=116 bytes=172 peak_bytes=50 calls=10 allocs=4 peak_arena=64 frozen_bytes=140 \
-             static_bytes=0 evaluations=4"
+             static_bytes=0 evaluations=4 memo_hits=0"
         );
         // Located aggregation: line 3 of t.cpp only (not h.h, not the null loc).
         let at3 = r.at(3, None, &in_t);
@@ -459,6 +477,14 @@ mod tests {
              oven: total: peak_bytes is 50, over the budget of 49\n\
              oven: at 3:15: calls is 1, over the budget of 0\n\
              oven: no evaluation reported at 9 of the test file (budget steps<=1)\n"
+        );
+        // Floors (`>=`) and the optional `memo_hits` counter.
+        assert_eq!(check_budgets(&r, &[b("steps>=116 memo_hits<=0")], &in_t), Ok(()));
+        let e = check_budgets(&r, &[b("memo_hits>=1"), b("9 calls>=1")], &in_t).unwrap_err();
+        assert_eq!(
+            e,
+            "oven: total: memo_hits is 0, under the floor of 1\n\
+             oven: no evaluation reported at 9 of the test file (budget calls>=1)\n"
         );
     }
 }
