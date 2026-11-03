@@ -788,8 +788,31 @@ literal is one instruction and one step, not an interpreted loop.
   the designator). Known gap: a pointer to an inactive member stored in a
   variable first (`int *p = &u.a; is_within_lifetime(p)`) reads as within
   its lifetime when the active member has the same offset and type
-  (clang: false); clang's "object whose lifetime has not yet begun" note
-  (a `this` pointer during construction) is not modelled.
+  (clang: false): the Oven pointer would need a member designator that
+  survives loads, stores and arithmetic (follow-up). A subobject of an
+  object under construction whose lifetime has not yet begun is not
+  within it (clang: the subobject has no value yet; WP-445): each
+  compiled constructor that initializes subobjects records `(pc, i)`
+  steps in `Oven::ctor_steps` (from `pc` on, entries `..i` of the
+  class's non-virtual `fields` have begun, entry `i` is being
+  initialized, `u32::MAX`: all), and `not_yet_begun` walks the
+  constructor frames on the stack whose `this` holds `p` (the frame's
+  pc is its callee's `call_pc`): a subobject after entry `i`, or entry
+  `i` itself when it is a non-class, non-array member, answers false. A
+  base or class member being initialized is left to the frames above it;
+  a member the mem-initializer list skips has begun (clang
+  default-initializes it). Nothing is emitted, so the check costs no
+  instruction (`meta.const.eval/is-within-lifetime-construction.cpp`).
+  A pointer into the variable whose initializer is being evaluated
+  (`RunState::object`, clang's `EvaluatingDecl`) fails with `... cannot be
+  called with a pointer to an object whose lifetime has not yet begun`
+  (`BiFault::Lifetime` kind 3;
+  `meta.const.eval/is-within-lifetime-not-begun-errors.cpp`).
+  Known gaps: an aggregate or array member being list-initialized reads
+  as within its lifetime as a whole (clang: its later elements are not);
+  virtual bases are not tracked; a consteval constructor's immediate
+  invocation initializing a variable is evaluated as a temporary, so it
+  answers false where clang reports kind 3.
 - **Temporaries:** a `MaterializeTemporaryExpr` with full-expression
   storage (a `bit_cast` or builtin operand bound to a reference
   parameter) is an lvalue in the Oven, its object living until the end of

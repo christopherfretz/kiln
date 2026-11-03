@@ -753,7 +753,8 @@ impl Oven {
         let what = match kind {
             0 => "a null pointer",
             1 => "a function pointer",
-            _ => "a one-past-the-end pointer",
+            2 => "a one-past-the-end pointer",
+            _ => "a pointer to an object whose lifetime has not yet begun",
         };
         (loc, format!("'{name}' cannot be called with {what}"))
     }

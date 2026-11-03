@@ -734,6 +734,12 @@ impl Oven {
                 matches!(c.o.types.scal(p.ty), Some(Scal::Int { .. } | Scal::Bool | Scal::Float(_)))
             })
             && !matches!(ret, RetKind::Scalar(t) if c.o.types.scal(t) == Some(Scal::Ptr));
+        let steps = std::mem::take(&mut c.ctor_steps);
+        if steps.is_empty() {
+            self.ctor_steps.remove(&idx);
+        } else {
+            self.ctor_steps.insert(idx, steps.into_boxed_slice());
+        }
         let f = &mut self.funcs[idx as usize];
         f.entry = entry;
         f.state = FState::Ready;
@@ -821,6 +827,9 @@ pub(crate) struct Compiler<'a> {
     /// Comma left operands not evaluated: the ignored values of the
     /// `__builtin_object_size` trial being compiled (WP-302).
     skip_effects: Vec<ExprId>,
+    /// The construction progress of the constructor being compiled
+    /// ([`Oven::ctor_steps`]).
+    ctor_steps: Vec<(u32, u32)>,
 }
 
 /// The value an `OpaqueValueExpr` stands for.
@@ -864,6 +873,7 @@ impl<'a> Compiler<'a> {
             array_index: None,
             srcloc: None,
             skip_effects: Vec::new(),
+            ctor_steps: Vec::new(),
         }
     }
 

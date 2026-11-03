@@ -550,6 +550,9 @@ impl Oven {
             Ok(self.exc.uncaught() as u128)
         } else if aux & 0xff == crate::kbc::bi::META {
             self.exec_meta(b, pc, fb, aux >> 8, (a, bb, c), (t1, t2))
+        } else if aux & 0xff == crate::kbc::bi::LIFETIME {
+            let r = self.builtin(b.ast(), aux, a, bb, c, t1, t2)?;
+            Ok(if r != 0 && self.not_yet_begun(pc, a as u64, t1) { 0 } else { r })
         } else {
             self.builtin(b.ast(), aux, a, bb, c, t1, t2)
         }
