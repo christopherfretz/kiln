@@ -66,6 +66,10 @@ pub struct BenchSpec {
     pub oven: Vec<OvenBudget>,
     /// `threshold-*:` overrides of the default regression thresholds.
     pub thresholds: ThresholdOverrides,
+    /// `xfail(kiln): <reason>`: kiln is expected to reject the entry (a
+    /// feature family has not landed); a kiln failure is then XFAIL and a
+    /// kiln measurement XPASS, which fails the run (`spec/bench.md`).
+    pub xfail_kiln: Option<String>,
 }
 
 /// Directives that belong to `cargo xtask test` and mean nothing here.
@@ -105,8 +109,17 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
     let mut args = Vec::new();
     let mut oven: Vec<(usize, OvenBudget)> = Vec::new();
     let mut thresholds = ThresholdOverrides::default();
+    let mut xfail_kiln = None;
     for d in directives {
         let mut err = |m: String| errors.push(DirectiveError { line: d.line, message: m });
+        if d.key.replace(' ', "") == "xfail(kiln)" {
+            match d.value.filter(|v| !v.is_empty()) {
+                None => err("`xfail(kiln)` requires a reason (the owning WP)".into()),
+                Some(_) if xfail_kiln.is_some() => err("duplicate `xfail(kiln)`".into()),
+                Some(v) => xfail_kiln = Some(v.to_owned()),
+            }
+            continue;
+        }
         let base = d.key.split('(').next().unwrap_or(d.key).trim();
         if TEST_ONLY.contains(&base) {
             err(format!(
@@ -187,6 +200,7 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
         args,
         oven: oven.into_iter().map(|(_, b)| b).collect(),
         thresholds,
+        xfail_kiln,
     })
 }
 
@@ -222,7 +236,7 @@ pub fn discover(
     for input in inputs {
         let input = canonical(input)?;
         if input.is_dir() {
-            walk(&bench_root, &input, &mut files)
+            walk(&bench_root, &input, input == bench_root, &mut files)
                 .map_err(|e| format!("{}: {e}", input.display()))?;
         } else {
             files.push(input);
@@ -266,7 +280,12 @@ fn canonical(p: &Path) -> Result<PathBuf, String> {
     fs::canonicalize(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
-fn walk(bench_root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+/// Groups that a walk of the whole bench root leaves out: they run only
+/// when named (`bench/reflect` needs a reflection compiler, `spec/bench.md`
+/// "Reflection shapes").
+const EXPLICIT_ONLY: &[&str] = &["reflect"];
+
+fn walk(bench_root: &Path, dir: &Path, all: bool, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<Result<_, _>>()?;
     entries.sort_by_key(fs::DirEntry::file_name);
     for e in entries {
@@ -277,9 +296,11 @@ fn walk(bench_root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Resul
         }
         let path = e.path();
         if e.file_type()?.is_dir() {
-            let reserved = dir == bench_root && RESERVED.contains(&name.as_ref());
-            if !reserved && name != "Inputs" {
-                walk(bench_root, &path, out)?;
+            let top = dir == bench_root;
+            let reserved = top && RESERVED.contains(&name.as_ref());
+            let skipped = top && all && EXPLICIT_ONLY.contains(&name.as_ref());
+            if !reserved && !skipped && name != "Inputs" {
+                walk(bench_root, &path, false, out)?;
             }
         } else if path.extension().is_some_and(|x| x == "cpp") {
             out.push(path);
@@ -318,6 +339,7 @@ mod tests {
                 args: vec![],
                 oven: vec![],
                 thresholds: ThresholdOverrides::default(),
+                xfail_kiln: None,
             }
         );
     }
@@ -403,6 +425,22 @@ mod tests {
             ["line 1: `threshold-mem` requires a value (`threshold-mem: ...`)"]
         );
         assert!(errs("//@ run-args: x\n")[0].contains("`cargo xtask test` directive"));
+        assert!(errs("//@ xfail(clang): x\n")[0].contains("`cargo xtask test` directive"));
+        assert_eq!(
+            errs("//@ xfail(kiln)\n"),
+            ["line 1: `xfail(kiln)` requires a reason (the owning WP)"]
+        );
+        assert_eq!(
+            errs("//@ xfail(kiln): WP-1\n//@ xfail(kiln): WP-2\n"),
+            ["line 2: duplicate `xfail(kiln)`"]
+        );
+    }
+
+    /// `xfail(kiln)` (spec/bench.md "Reflection shapes").
+    #[test]
+    fn xfail_kiln() {
+        let s = parse_spec("//@ xfail(kiln): WP-478 members\n").unwrap();
+        assert_eq!(s.xfail_kiln.as_deref(), Some("WP-478 members"));
     }
 
     #[test]

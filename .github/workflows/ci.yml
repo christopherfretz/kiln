@@ -19,6 +19,9 @@ jobs:
     # against those clangs on that host (search paths, target defaults,
     # va_list); target-dependent tests pin aarch64 or `requires:` it.
     runs-on: ubuntu-24.04-arm
+    # Not gcc:16.1.0-trixie: its ~540 MB pull costs more per job than the GCC
+    # oracle saves (docs/status/perf.md "CI time"), so KILN_GCC stays unset
+    # here and `oracle: gcc` comparisons are skipped (spec/harness.md).
     container: debian:trixie
     env:
       KILN_REQUIRE_LLVM: "1"
