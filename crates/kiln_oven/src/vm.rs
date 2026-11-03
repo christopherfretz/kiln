@@ -118,6 +118,11 @@ pub(crate) struct RunState {
     /// usable in constant expressions. Cleared in nested evaluations, a
     /// global's initialization and `__builtin_constant_p`.
     pub cev_warn: bool,
+    /// The evaluation is plainly constant-evaluated
+    /// ([`crate::EvalContext::plain`]): set for the outermost or nested
+    /// evaluation that asked for it, false in every other (nested ones
+    /// included); read through [`crate::Oven::plain`].
+    pub plain: bool,
 }
 
 impl RunState {
@@ -547,6 +552,9 @@ impl Oven {
             // Operands `[dst, base, n, _, t1, t2]` (`base`/`n` raw).
             let (base, n) = (arg(1), arg(2));
             return self.exec_meta(b, pc, fb, aux >> 8, (base, n), (t1, t2));
+        }
+        if aux & 0xff == crate::kbc::bi::META_EXC {
+            return self.exec_meta_exc(b, pc, fb);
         }
         let (a, bb, c) = (reg(1), reg(2), reg(3));
         if aux & 0xff == crate::kbc::bi::THAW_PTR {
@@ -1388,10 +1396,21 @@ impl Oven {
                     pc += 5;
                 }
                 Op::IsConstEval => {
-                    let cc = self.run.const_context;
-                    reg!(0) = u128::from(cc);
-                    if cc && (!self.run.silent || self.run.cev_warn) {
-                        self.always_true_diag(b, pc, aux);
+                    if aux & 2 != 0 {
+                        // `__kiln_plainly_constant_evaluated()` (WP-473).
+                        reg!(0) = u128::from(self.plain());
+                    } else if aux & 4 != 0 {
+                        // A constexpr local's initializer: its own
+                        // evaluation, never plainly (spec/consteval-blocks.md §3).
+                        reg!(0) = u128::from(std::mem::take(&mut self.run.plain));
+                    } else if aux & 8 != 0 {
+                        self.run.plain = reg!(0) != 0;
+                    } else {
+                        let cc = self.run.const_context;
+                        reg!(0) = u128::from(cc);
+                        if cc && (!self.run.silent || self.run.cev_warn) {
+                            self.always_true_diag(b, pc, aux);
+                        }
                     }
                     pc += 2;
                 }
@@ -1707,8 +1726,9 @@ impl Oven {
         if memo {
             // A call's result can depend on the evaluation context
             // (`__builtin_is_constant_evaluated` in a callee): the context
-            // is part of the key.
-            let func = callee | u32::from(self.run.const_context) << 31;
+            // is part of the key, with the plain bit (consteval blocks).
+            let func =
+                callee | u32::from(self.run.const_context) << 31 | u32::from(self.plain()) << 30;
             let mut key = MemoKey { func, args: [0; MAX_ARGS] };
             for (i, p) in f.params.iter().enumerate() {
                 key.args[i] = self.regs[nb + p.reg as usize];
@@ -1827,7 +1847,13 @@ impl Oven {
 
     /// A heap allocation of `elem` (`n == u64::MAX`) or `elem[n]`,
     /// zero-filled with [`new_aux::ZERO`].
-    fn new_alloc(&mut self, elem: OTy, n: u64, aux: u32, origin: Origin) -> Result<u64, Fault> {
+    pub(crate) fn new_alloc(
+        &mut self,
+        elem: OTy,
+        n: u64,
+        aux: u32,
+        origin: Origin,
+    ) -> Result<u64, Fault> {
         let (ty, fl) = if n == u64::MAX {
             (elem, 0)
         } else if aux & new_aux::STD != 0 {
@@ -1883,7 +1909,7 @@ impl Oven {
         }
     }
 
-    fn ptr_add(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
+    pub(crate) fn ptr_add(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
         if raw == 0 {
             return if i == 0 { Ok(0) } else { Err(Fault::NullArith) };
         }
@@ -1904,7 +1930,7 @@ impl Oven {
         Ok(Ptr::with_off(raw, start + new * es, new == n))
     }
 
-    fn ptr_sub(&self, p: u64, q: u64, elem: OTy) -> Result<i64, Fault> {
+    pub(crate) fn ptr_sub(&self, p: u64, q: u64, elem: OTy) -> Result<i64, Fault> {
         if p == 0 && q == 0 {
             return Ok(0);
         }
@@ -2466,7 +2492,14 @@ impl Oven {
         })
     }
 
-    fn store(&mut self, raw: u64, ty: OTy, v: u128, k: u32, init: bool) -> Result<(), Fault> {
+    pub(crate) fn store(
+        &mut self,
+        raw: u64,
+        ty: OTy,
+        v: u128,
+        k: u32,
+        init: bool,
+    ) -> Result<(), Fault> {
         let info = *self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);

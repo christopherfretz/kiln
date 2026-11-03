@@ -9,12 +9,10 @@
 //! [`kiln_oven::SemaBridge::meta`]; their sema halves are in `meta/`
 //! (spec/reflection.md §3).
 
-use kiln_ast::consts::Scalar;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -35,34 +33,16 @@ impl Sema<'_, '_> {
     /// of type `std::meta::info` reflecting a type.
     pub fn act_on_splice_type(&mut self, e: ExprId, open: Loc, close: Loc) -> Option<QualType> {
         let _ = close;
-        if self.expr_has_error(e) {
-            return None;
-        }
-        let at = self.begin_loc(e);
-        if self.expr_is_value_dependent(e) || self.is_dependent_type(self.ast.exprs.get(e).ty()) {
-            self.unsupported("dependent splice", open);
-            return None;
-        }
-        let ety = self.ast.exprs.get(e).ty();
-        if !self.is_meta_info(ety) {
-            let d = self.diag(DiagId::sema_splice_not_info, at).arg(self.ty_arg(ety));
-            self.emit(d);
-            return None;
-        }
-        let e = crate::conv::decay(self, e);
-        let v = match self.eval_const(e, EvalContext::new(EvalKind::Other, at)) {
-            Ok(v) => v,
-            Err(f) => {
-                let d = self.diag(DiagId::sema_splice_not_constant, at);
-                let d = Self::with_failure_notes(d, f);
-                self.emit(d);
-                return None;
+        let r = match self.splice_entity(e) {
+            crate::splice::Spliced::Error => return None,
+            crate::splice::Spliced::Dependent => {
+                let p = self.dependent_profile(e);
+                return Some(self.ast.types.splice_type(e, Some(p), None));
             }
+            crate::splice::Spliced::Entity(r) => r,
         };
-        let r = match self.ast.consts.scalar(v) {
-            Some(Scalar::Reflection { id, .. }) => self.ast.reflections.get(id),
-            _ => Reflectee::Null,
-        };
+        let at = self.begin_loc(e);
+        let _ = open;
         if let Reflectee::Type(t) = r {
             Some(t)
         } else {

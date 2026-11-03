@@ -18,6 +18,7 @@ mod access;
 mod annot;
 mod define;
 mod ext;
+pub mod materialize;
 mod member;
 mod query;
 mod templ;
@@ -249,8 +250,10 @@ pub struct MetaCtx {
     /// The call's location (the position of the evaluation point, and
     /// where failure notes point).
     pub loc: Loc,
-    /// The evaluation is plainly constant-evaluated ([expr.const]; the
-    /// only context that may inject). Always false until WP-473.
+    /// The evaluation is plainly constant-evaluated: a consteval
+    /// block's ([expr.const.core]/2.32, the only context in which
+    /// `define_aggregate` may inject); [`crate::Oven::plain`]
+    /// (spec/consteval-blocks.md §3).
     pub plainly: bool,
     /// The evaluation is a trial (a fold, `__builtin_constant_p`, a
     /// speculative checkpoint): a `Mutating` op never reaches the bridge.
@@ -272,6 +275,17 @@ pub enum MetaOut {
     Info(ReflectionId),
     /// A frozen pointer value, thawed as the call's (pointer) result type.
     Frozen(ConstValueId),
+    /// A string view (`materialize::Shape::Str`): a frozen pointer to the
+    /// characters of a static string object, and its length.
+    Str(ConstValueId, u64),
+    /// A `source_location` (`materialize::Shape::SrcLoc`): the frozen
+    /// `const __impl *` it holds, null for `source_location{}`.
+    SrcLoc(Option<ConstValueId>),
+    /// Two scalars (`materialize::Shape::Pair`).
+    Pair(u128, u128),
+    /// A `vector<info>` (`materialize::Shape::Vector`) of the first `n`
+    /// reflections the bridge wrote to [`crate::Oven::meta_infos`].
+    Infos(u32),
 }
 
 /// Why an intrinsic failed.

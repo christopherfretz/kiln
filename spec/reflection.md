@@ -45,10 +45,12 @@ Section references in brackets are to the C++26 IS.
    its tests.
 6. **Extensions.** `__kiln_define_member` (§6.3) is the only one. It
    requires `-freflection` and warns under `-Wkiln-extension` (D7,
-   → WP-480). `std::meta::name_of` and `__kiln_members_count` /
-   `__kiln_member_at` are test-header conveniences over the spike's
-   intrinsics. They are not IS and are retired when the names family and
-   `members_of` land (→ WP-475, WP-478).
+   → WP-480). `std::meta::name_of`, `__kiln_members_count` /
+   `__kiln_member_at` and the recipe helpers of §3.5
+   (`__kiln_reflection_range`, `__kiln_member_offset`,
+   `__kiln_access_context`) are test-header conveniences, not IS.
+   `name_of` stays beside `identifier_of`; the member helpers are
+   retired when `members_of` lands (→ WP-478).
 7. **Out of scope for M6.** Token injection (P3294), reflection of
    attributes (P3385), expressions or statements, `define_class` beyond
    aggregates, function or body injection, link-compatible reflection
@@ -172,8 +174,10 @@ the IS equality ([expr.eq]):
 
 ### 3.2 The instruction and the bridge entry point
 - The call compiles to `Op::Builtin` with aux `bi::META | code << 8`, where
-  `code` is `family << 8 | row`, and operands `[dst, base, n, 0, elem,
-  result type]`. The `n` arguments are evaluated into the consecutive
+  `code` is `family << 8 | row`, and operands `[dst, base, n, site + 1,
+  elem, result type]`. `site` indexes the call's compile-time record (its
+  callee, the recipes of §3.5 and the throw of §8.2); 0 means none. The
+  `n` arguments are evaluated into the consecutive
   registers `base..base+n`. A class or array argument is passed by
   address (a glvalue's address, or a materialized temporary's); a pointer
   argument records its element type as `elem` (what `meta_c_string`
@@ -216,9 +220,12 @@ fn meta(&mut self, op: MetaOp, args: &[u128], out: &mut MetaOut,
 - **Results** (`MetaOut`): `Scalar(u128)` (a `bool` or an integer of the
   call's result type), `Info(ReflectionId)`, or `Frozen(ConstValueId)` (a
   frozen value, thawed as the call's result type; today a pointer, such
-  as `name_of`'s string). A successful call that writes nothing is an
-  internal error ("kiln: internal: 'X' produced no result"). Class-typed
-  results (§3.5) are added as a `MetaOut` variant by → WP-475.
+  as `name_of`'s string). The class-typed results of §3.5 are
+  `Str(ConstValueId, len)`, `SrcLoc(Option<ConstValueId>)`,
+  `Pair(u128, u128)` and `Infos(n)` (the `n` reflections the bridge left
+  in `Oven::meta_infos`). A successful call that writes nothing, or a
+  variant the call's recipe does not take, is an internal error ("kiln:
+  internal: 'X' produced no result of its type").
 - **String operands** are read with `Oven::meta_c_string(p, ctx)`: up to
   the NUL, at most 4096 code units (more is an invalid name). An unreadable
   pointer is the Oven's own fault, reported as for any other load.
@@ -282,7 +289,8 @@ this list and the tables is a spec bug, fixed in the same change.
   `is_base`, `has_default_member_initializer`, `has_parent`.
 - **Query · Stable · WP-475**: `has_identifier`, `identifier_of`,
   `u8identifier_of`, `display_string_of`, `u8display_string_of`,
-  `source_location_of`.
+  `source_location_of` (§3.9), and the helpers `__kiln_reflection_range`,
+  `__kiln_member_offset`, `__kiln_access_context` (§3.5).
 - **Query · PointDependent · WP-476**: `has_default_argument`,
   `is_defaulted`, `is_complete_type`, `is_enumerable_type`.
 - **Trait · Stable · WP-477**: `is_void_type`, `is_null_pointer_type`,
@@ -352,30 +360,67 @@ The context the VM passes with every call:
 |---|---|---|
 | `scope: Option<DeclId>` | the scope of the evaluation point, for `access_context::current()` and namespace `members_of`; `None` means the bridge's current context | always `None` until → WP-473 sets it from the evaluation context |
 | `loc: Loc` | the call's location: the position half of the evaluation point, and where failure notes point | implemented |
-| `plainly: bool` | the evaluation is plainly constant-evaluated (§4.2), the only context that may inject | always `false` until → WP-473 |
+| `plainly: bool` | the evaluation is plainly constant-evaluated (§4.2), the only context that may inject | implemented: set from `Oven::plain()` (`EvalContext::plain`, WP-473) |
 | `trial: bool` | the evaluation is a trial: `run.fold`, or an open memory checkpoint | implemented |
 | `elem` (crate-private) | the element type of the call's last pointer argument | implemented |
 
 The evaluation point is the pair `(scope, loc)`. A `PointDependent` op
 answers as of that point.
 
-### 3.5 Materialized results (→ WP-475)
-- Ops returning a class object (`vector<info>`, `string_view`,
-  `u8string_view`, `member_offset`, `access_context`, `source_location`,
-  `meta::exception`) build it from a *recipe* that sema resolves when the
-  call is compiled: the library type's layout and the constructor or
-  aggregate shape to fill. The Oven then constructs the object in the
-  call's result slot.
-- `vector<info>` is built through the library's own allocator path, so it
-  is an ordinary `std::allocator` allocation, reclaimed on `delete` like
-  every transient.
-- Name strings are frozen string objects cached per `Symbol`. The thaw
-  cache maps each one to a single static-storage object per TU, so a name
-  query allocates nothing per call. The spike's `name_of` already works
-  this way.
-- Until a library type's recipe exists, the test header wraps the scalar
-  intrinsics (`kiln_meta.h`'s `members_of<R>()` builds a `member_list<N>`
-  from `__kiln_members_count`/`__kiln_member_at`).
+### 3.5 Materialized results and range arguments
+- **Recipes.** When a call of an intrinsic is compiled, the Oven asks sema
+  for the call's *shapes* (`SemaBridge::meta_shape`): one for a
+  class-typed result, one for each `reflection_range` parameter. It then
+  matches each shape against the class's layout, once per call site, into
+  a *recipe*: the offsets and types of the scalar leaves the object is
+  built from (at most 4 leaves, nesting depth at most 8; a union or a
+  bit-field leaf does not match). The match is by layout, not by header:
+  libc++'s, libstdc++'s and `tests/support/kiln_meta.h`'s classes all
+  qualify.
+
+  | Shape | Results of | Layout required | Filled from |
+  |---|---|---|---|
+  | `Str` | `identifier_of`, `display_string_of`, `symbol_of` (`string_view`); the `u8` forms (`u8string_view`) | a `const C *` (C the op's character type) and an integer size, either order | the frozen string's address and length |
+  | `SrcLoc` | `source_location_of` | one pointer (to an `__impl` of `file_name`, `function_name`, `line`, `column`) | a frozen `__impl`, or null |
+  | `Vector` | every op returning `vector<info>` | three `info *` (begin, end, end of capacity) in offset order | a fresh allocation (below) |
+  | `Pair` | `offset_of` (`member_offset`), `access_context::current` and the `access_context` factories | two scalar leaves in offset order | the two values |
+  | `Range` | each `reflection_range` parameter (`substitute`, `can_substitute`, …) | `(info *, size)` (`span`, `initializer_list`), `(begin, end, …)` (`vector`), or an array of `info` (`array<info, N>`, a built-in array) | read before the call as a pointer and a length |
+
+- **Mismatch.** A result or argument class that does not match its shape
+  is not an error of the declaration: the call compiles to a trap, and
+  evaluating it is not a constant expression with the note "'T' cannot
+  be used by 'F': it does not hold …" at the call. A call of an op with
+  no shape returning a class is the same trap.
+- **`vector<info>`.** The elements are one `ARRAY | STD` heap allocation
+  of `n` `info`, exactly as `std::allocator<info>::allocate(n)` makes, and
+  their lifetimes begin as by `construct_at`. The vector owns it: its
+  destructor's `deallocate` reclaims it, and one that escapes the
+  evaluation is the ordinary transient-allocation error. An empty result
+  allocates nothing (three null pointers).
+- **Strings.** Each (reflection, string kind) is computed once per TU and
+  frozen as a NUL-terminated array of `char` or `char8_t`; identical text
+  shares one frozen object, and its thaw is one static-storage object per
+  TU. A names query therefore allocates nothing per call (`allocs` 0)
+  and repeating it costs no static bytes (`names/budget.cpp`). The
+  spike's `name_of` is kept and works the same way. The string's
+  encoding is UTF-8; the ordinary-literal encoding is assumed to be
+  UTF-8 as well.
+- **`source_location`.** The `__impl` is the one
+  `__builtin_source_location` would produce for the declaration's
+  presumed location, with an empty function name, so equal locations
+  share it.
+- **Range arguments.** The Oven passes the bridge a packed `data | n <<
+  64` in place of the argument, read with `Oven::meta_range_len` and
+  `meta_range_at`. The range is not copied. A range whose elements cannot
+  be read (uninitialized, out of the object) is the evaluator's ordinary
+  fault.
+- **Test helpers.** `__kiln_reflection_range(r)` (the range as a
+  `vector<info>`), `__kiln_member_offset(bytes, bits)` and
+  `__kiln_access_context(scope, cls)` exercise the `Range`, `Vector` and
+  `Pair` recipes before the ops that use them land (`Query` family,
+  WP-475). `kiln_meta.h` still provides `members_of<R>()` over
+  `__kiln_members_count`/`__kiln_member_at` until WP-478's
+  `vector`-returning list ops.
 
 ### 3.6 Memoization
 - A function whose parameters include `std::meta::info` is eligible for
@@ -435,26 +480,37 @@ answers as of that point.
 - Performance budgets for the reflection bench shapes (S1–S6) and the
   4N scaling gate are recorded in docs/status/perf.md by → WP-483.
 
+### 3.9 The names family
+- [meta.reflection.names] (P2996R13) as implemented by
+  `kiln_sema/src/meta/names.rs`. A query whose answer is not defined
+  fails with `Failed` and the note shown (thrown per §8.2).
+
+  | Function | Result |
+  |---|---|
+  | `has_identifier(r)` | whether `identifier_of(r)` succeeds |
+  | `identifier_of(r)`, `u8identifier_of(r)` | a class, enumeration, enumerator, variable, function, data member, namespace, namespace alias, type alias or template (a `Template` reflection answers for its templated declaration): the identifier it was declared with; an unnamed class or enumeration with a typedef name for linkage ([dcl.typedef]/9): that name; a literal operator: its suffix. A type: as its alias when it is a cv-unqualified typedef or alias-declaration type (not an alias template specialization), else as its class or enumeration when it is a cv-unqualified one. Otherwise (a specialization, a constructor, destructor, operator or conversion function, an unnamed entity, the global namespace, any other type or value) fails: "'R' has no identifier" |
+  | `display_string_of(r)`, `u8display_string_of(r)` | implementation-defined; never fails: a type prints as in diagnostics (`const int *`), a declaration as its name, anything else as `^^…` |
+  | `source_location_of(r)` | the location of the declared name, with an empty `function_name`; a reflection with no declaration (a fundamental or compound type, a value, the translation unit) gives `source_location{}` |
+
+- Template parameters and lambdas (their `identifier_of`) are deferred,
+  with type aliases as reflections distinct from their types (§2.2).
+
 ## 4. The consteval boundary
 
-### 4.1 Consteval-only types (→ WP-473)
-- `std::meta::info`, and every type that contains one (a class with an
-  `info` member or base, an array of, pointer to or reference to such a
-  type, a function type involving one), is *consteval-only*
-  ([basic.types.general]).
-- A variable of consteval-only type must be `constexpr`, or a local of an
-  immediate function, or appear in an immediate-function context. An
-  expression of consteval-only type is immediate-escalating
-  ([expr.const]): a `^^` or splice in a `constexpr` function makes that
-  function immediate when the rules for escalation allow it, and is
-  ill-formed otherwise.
-- No value of consteval-only type reaches codegen. An object of such a
-  type that would survive to emission is an error at its declaration,
-  never a codegen failure. Today, codegen's constant emitter is the
-  backstop: it rejects such a value with "reflection values cannot be
-  emitted" (`kiln_codegen/src/consts.rs`).
+### 4.1 Consteval-only types
+- The consteval-only rules (which types are consteval-only; the
+  variable, function and expression checks; template leaf tracking) are
+  specified once, in `spec/reflection-repr.md` §6. The escalation
+  behaviour of a consteval-only expression in an immediate-escalating
+  function (the function becomes immediate, with
+  `note_immediate_function_reason_consteval_only`) is specified in
+  `spec/consteval-blocks.md` §4.
+- No value of consteval-only type reaches codegen. Codegen's constant
+  emitter stays as the backstop for the known gaps: it rejects such a
+  value with "reflection values cannot be emitted"
+  (`kiln_codegen/src/consts.rs`).
 
-### 4.2 Plainly constant-evaluated (→ WP-473)
+### 4.2 Plainly constant-evaluated
 - An evaluation is *plainly constant-evaluated* ([expr.const]) when it is
   the evaluation of a consteval block (`consteval { … }`, P3289) or of
   another construct the IS lists as such. GCC 16.1 is the reference for
@@ -478,36 +534,67 @@ answers as of that point.
   `checkpoint(TrialMode::Full)` and rolls back on failure. Interned
   reflections survive the rollback (append-only, §2.4) (→ WP-482).
 
-## 5. Splicing (→ WP-474)
-The grammar is in spec/parse.md §5.2. This section gives the semantics.
+## 5. Splicing (WP-474)
+The grammar is in spec/parse.md §5.2. This section gives the semantics;
+the sema is `kiln_sema/src/splice.rs` (`Sema::splice_entity` reads every
+position's operand).
 
 - **Operand.** The splice operand is a converted constant expression of
-  type `std::meta::info` ([basic.splice]). A non-`info` operand gets
-  "splice operand of type {0} is not a reflection", and a non-constant one
-  gets "splice operand must be a constant expression" followed by the
-  Oven's notes (implemented for type splices: `reflection/splice-type-neg.cpp`).
+  type `std::meta::info` ([basic.splice]), in every position. A non-`info`
+  operand gets "splice operand of type {0} is not a reflection", and a
+  non-constant one gets "splice operand must be a constant expression"
+  followed by the Oven's notes (`basic.splice/p1-not-info.cpp`,
+  `basic.splice/p1-not-constant.cpp`, `reflection/splice-type-neg.cpp`).
 - **Designated entity.** The splice designates the operand's `Reflectee`.
   Each grammar position accepts these kinds:
 
   | Position | Syntax | Accepts | Status |
   |---|---|---|---|
-  | type | `typename [: r :]` [dcl.type.splice]; `[: r :]` as a template type argument | a type or a type alias | implemented when not dependent |
-  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, value or object, or a data member (in a pointer-to-member context) | → WP-474 |
-  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a non-static data member, a member function, or a base subobject (P3293) | → WP-474 |
-  | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration | → WP-474 |
-  | template | `template [: r :] < args >` [temp.names] | a template | → WP-474 |
-  | namespace | `using namespace [: r :];` | a namespace | → WP-474 (GCC 16.1 is the reference) |
+  | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); `[: r :]` as a template type argument | a type or a type alias | implemented (`dcl.type.splice/`) |
+  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`) |
+  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category) | implemented; the base form is untested until `bases_of` (WP-478) |
+  | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
+  | template | `template [: r :] < args >` [temp.names] | a template | → WP-482 |
+  | namespace | `using namespace [: r :];` | a namespace other than the global namespace, not dependent ([namespace.udir]/1) | implemented (`namespace.udir/`) |
 
   A misfit gets "splice in a {position} position does not designate a
-  {kind}". The type position's misfit wording is implemented as "splice in
-  a type position does not designate a type".
+  {kinds}" (`sema_splice_not_type`, `_not_expression`, `_not_member`,
+  `_not_scope`, `_not_namespace`). A constructor or destructor is
+  ill-formed in any splice-expression, the member access form included
+  (`sema_splice_special_member`, [expr.prim.splice]/2). A splice-scope-
+  specifier in a declarative nested-name-specifier (an out-of-line
+  definition's declarator-id, a class-head-name or enum-head-name) gets
+  `sema_splice_declarative_scope` ([expr.prim.id.qual]/3; GCC 16.1 accepts
+  some of these). A dependent using-directive splice gets
+  `sema_splice_dependent_namespace` at the template definition (GCC 16.1
+  accepts it) and the global namespace `sema_splice_global_namespace`.
+- **Member functions.** A member-function splice is not a qualified-id, so
+  `e.[: ^^B::f :]()` of a virtual `f` is a virtual call ([expr.call]/2; the
+  [dcl.contract.func] example). `&[: ^^B::f :]` is a pointer to member.
+- **Access.** Splices are not access-checked: a splice of a private member
+  is valid from anywhere (P2996; GCC 16.1 agrees). Access is the business of
+  the query that produced the reflection (`access_context`, WP-478).
 - **Dependent splices.** A value-dependent operand produces a `Splice`
-  type node, a `CXXSpliceExpr` or a splice nested-name-specifier. It is
-  resolved when substitution makes the operand non-dependent (templ/subst).
-  Today a dependent operand is "unsupported: dependent splice".
-- **Fast path.** When the operand is a substituted NTTP or another frozen
-  constant, sema reads the id directly without starting an Oven run. Each
-  distinct `R` in `[: R :]` costs one instantiation, as expected.
+  type node (a type splice), a `CXXSpliceExpr` (an expression or member
+  splice; with the object expression when that or the operand is
+  dependent) or an `Nns::Splice` (a scope splice; the nested-name-specifier
+  is always dependent). Each is resolved by the `templ/subst` arm for its
+  kind when substitution makes the operand non-dependent, through the same
+  `splice.rs` entry points as a non-dependent splice, so a misfit is
+  reported in the specialization with its instantiation note
+  (`temp.dep/splice-*.cpp`).
+- **Fast path.** When the operand is already a frozen reflection, sema
+  reads its id without an Oven run: through parentheses, implicit casts
+  and a substituted NTTP (`SubstNonTypeTemplateParmExpr`), a `ConstantExpr`
+  (its stored value), a `CXXReflectExpr` (its reflection) or a
+  `DeclRefExpr` to a constexpr `info` variable whose value is computed.
+  Each hit counts in `Sema::splice_fast_count()` (not an Oven counter, so
+  the constexpr report does not show it); every other operand is
+  evaluated as a constant expression. 1,000 type, 1,000 expression and
+  1,000 scope splices of three frozen operands start no evaluation
+  (`basic.splice/frozen-operand-fast-path.cpp`: `evaluations<=4`, the
+  three initializers and a static_assert). Each distinct `R` in `[: R :]`
+  costs one instantiation, as expected.
 - **NTTPs.** A substituted `info` template argument is rebuilt as the
   `CXXReflectExpr` of the same entity (implemented).
 
@@ -627,33 +714,92 @@ each specialization evaluates its own.
 - User input never panics a bridge method: every failure path returns a
   `MetaError`.
 
-### 8.2 `std::meta::exception` (→ WP-475)
-- In the IS, a failing library function throws `std::meta::exception`
-  ([meta.reflection.exception]), carrying `what()`, `u8what()`, `from()`
-  (the reflection of the function that threw) and `where()` (a
-  `source_location`). GCC 16.1 lets a consteval function catch it.
-- kiln throws it through the P3068 constexpr-exceptions path: a `Failed`
-  error with notes becomes a thrown `meta::exception` whose message is
-  the first note's text, whose `from` is `^^fn`, and whose `where` is
-  `MetaCtx::loc`. An uncaught exception makes the expression not a
-  constant expression, and the notes are reported as they are today.
-- A silent failure is never thrown: trials stay silent.
-- Until → WP-475 lands, a failure is an uncatchable trap. That is the
-  spike behaviour, and the reflection tests expect it.
+### 8.2 `std::meta::exception`
+- **The class.** When a call of an intrinsic is compiled, sema looks up
+  `std::meta::exception` (`SemaBridge::meta_exception`). It is used only
+  if it is a complete class with a non-deleted constructor of three
+  parameters `(S, std::meta::info, L)`, `S` a by-value `u8string_view` or
+  `string_view` and `L` a by-value `source_location`, both trivially
+  destructible; the `u8string_view` one is preferred (P3560R2's order).
+- **When it is thrown.** A `Failed` error with notes from a call that is
+  not in a trial (§4.3), and that a try block of the running evaluation
+  encloses, is thrown: the call sets the site's flag register and the
+  block compiled after it runs `bi::META_EXC` (spec/oven.md), which fills
+  the message, `from` and `where` and constructs the object with that
+  constructor; it is then thrown as by a throw-expression (P3068R6), and
+  unwinds and is caught like any other exception. The message is the
+  first note's text; `from` is `^^F`, the reflection of the intrinsic
+  called; `where` is the call's location (function name empty).
+- **Uncaught.** An exception no handler catches makes the evaluation not
+  a constant expression with P3068's note "unhandled exception: W" (`W`
+  its `what()`), at the throwing call.
+- **Not thrown.** A failure outside every try block traps as before (the
+  first note is the message, then the call stack, the remaining notes),
+  and so does one when the class is not declared or does not qualify,
+  and before C++26. A silent failure and
+  any failure in a trial are never thrown: a trial stays silent and an
+  enclosing handler sees nothing (`exception/trial-silent.cpp`).
+- `kiln_meta.h`'s class copies the message into its own `new[]` buffers
+  (`char` and `char8_t`), so a copy outlives the original. With a
+  standard library whose `std::exception` is not usable in constant
+  expressions (libc++ 19, libstdc++ 14) it derives from a local
+  polymorphic base with the same `what()`.
 - Where kiln has no clang wording to match, diagnostics follow GCC
   16.1's shape. Wording parity is out of scope (§1.7).
 
-### 8.3 Mangling placeholder (→ WP-485)
-- A reflection inside a template argument of an emitted symbol mangles
-  in a kiln vendor form. The form is deterministic within the TU, cached
-  per `ReflectionId`, and flagged in spec/abi.md §8 as "not
-  link-compatible". WP-102 later adopts GCC's Itanium form.
-- Today every reflection argument mangles as the generic unsupported
-  expression `XLi0EE` (`kiln_abi/src/mangle.rs`). Two specializations
-  that differ only in a reflection argument therefore collide. Until
-  → WP-485 lands, such a TU must not emit both.
-- A consteval-only value reaching codegen is the error of §4.1, not a
-  mangling question.
+### 8.3 Mangling placeholder (WP-485)
+- **Form.** A reflection inside a template argument of an emitted symbol
+  mangles as a kiln vendor literal (`kiln_abi/src/mangle.rs`,
+  `Mangler::scalar_value`):
+
+  ```
+  <expr-primary> ::= L <info-type> <number> E    # a reflection value
+  <info-type>    ::= u6__info                    # std::meta::info
+  ```
+
+  `<number>` is the reflection's `ReflectionId` index in decimal (§2.3;
+  the null reflection is 0). `<info-type>` is the mangling of the type
+  `std::meta::info` everywhere (`template <class T>` with `T = info`
+  gives `_Z1kIu6__infoEiv`), and it is a substitution candidate like any
+  vendor type, so a second literal in one symbol writes `LS<seq>_<id>E`
+  and later substitutions count past it: `two<^^I, ^^J>` is
+  `_Z3twoILu6__info4ELS0_5EEiv`, `h<^^P>(Box<P>, P)` is
+  `_Z1hILu6__info3E1PEi3BoxIT0_ES3_`. The literal composes wherever a
+  template argument value does: in a pack (`J…E`), a nested
+  template-id's arguments, a class-type NTTP's `Xtl … E`, and a template
+  parameter object's `_ZTA`.
+- **Properties.** Deterministic within the TU (the id is allocated at the
+  reflection's first evaluation, so the same source gives the same ids).
+  Distinct reflections give distinct strings, because the id is the
+  identity of §2.3: a type and its alias (`^^int`, `^^I`, `^^J`) are
+  three literals. The encoding reads only the id, never the reflectee, so
+  no cache is needed: the id is both the key and the payload, written in
+  at most ten digits. `AnonIds::reflection_literals()` counts the
+  literals written for the module; the 2,000-specialization test of
+  `crates/kiln_codegen/tests/reflection_mangle.rs` asserts it.
+- **Linkage.** The id is TU-local, so the same `f<^^int>` in two TUs has
+  two different strings, and two different reflections could share one.
+  A template argument holding a reflection (directly, inside a class-type
+  NTTP's value, or in a template parameter object) therefore makes the
+  specialization, and everything mangled under it (its statics, vtable,
+  RTTI, guards), internal (`mangle::value_externally_visible`, the
+  unique-external rule of spec/abi.md §8.22). Each TU has its
+  own copy: `S<^^int>::count` is not shared across TUs, and the RTTI of
+  `S<^^int>` compares unequal across them. The form is **not
+  link-compatible with GCC or clang** (spec/abi.md §8).
+- **Follow-up (→ WP-102).** WP-102 switches to GCC 16.1's encoding
+  (cxx-abi issue #208: `std::meta::info` is `Dm`, a value is
+  `L Dm <kind> … E` naming the reflectee), at which point the
+  specializations get their normal linkage again. Its link-compat test: a
+  two-TU program, one TU compiled by kiln and one by `g++-16`, each
+  defining and calling `template <std::meta::info R> int f()` for
+  `^^int`, an alias, a namespace-scope variable and a data member, with
+  `inline` statics, linked together; the run checks the shared statics
+  and `&f<^^int>` agree.
+- A consteval-only value reaching codegen stays the error of §4.1, not a
+  mangling question: a non-template `info` variable with static storage
+  that is not `constexpr` is rejected before any symbol exists
+  (`expr.reflect/reflection-mangle-neg.cpp`).
 
 ## 9. Tests and status
 - **Format.** Reflection tests are kiln goldens: `//@ args: -freflection

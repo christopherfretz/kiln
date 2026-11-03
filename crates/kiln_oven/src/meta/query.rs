@@ -101,5 +101,16 @@ super::meta_family! {
         IsBase = ("is_base", "i", Stable, 476);
         HasDefaultMemberInitializer = ("has_default_member_initializer", "i", Stable, 476);
         HasParent = ("has_parent", "i", Stable, 476);
+        /// `std::meta::__kiln_reflection_range(r)`: a `vector<info>` of
+        /// the `reflection_range` `r` (the range-argument and vector-result
+        /// recipes under test; spec/reflection.md §3.5).
+        KilnReflectionRange = ("__kiln_reflection_range", "x", Stable, 475);
+        /// `std::meta::__kiln_member_offset(bytes, bits)`: a
+        /// `member_offset` (the pair recipe under test, until WP-478's
+        /// `offset_of`).
+        KilnMemberOffset = ("__kiln_member_offset", "xx", Stable, 475);
+        /// `std::meta::__kiln_access_context(scope, designating)`: an
+        /// `access_context` (the pair recipe with `info` members).
+        KilnAccessContext = ("__kiln_access_context", "ii", Stable, 475);
     }
 }

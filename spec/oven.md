@@ -2891,6 +2891,15 @@ Specified in **`spec/reflection.md`** §3:
   typed-copy rule (§2.1, §2.5);
 - the `bi::META` instruction and the `SemaBridge::meta` entry point
   (§3.2);
+- `bi::META_EXC` (31; operands `[dst, what, at, site + 1]`): run only in
+  the block after a `bi::META` call whose failure is thrown (§8.2). It
+  writes the reflection of the failing intrinsic to `dst` and builds the
+  message (`Str` recipe) at `what` and the call's `source_location` at
+  `at` from the pending failure, which the block then passes to the
+  `std::meta::exception` constructor and throws as a throw-expression
+  ("Exceptions" above). `SemaBridge::meta_exception` names the
+  constructor when the call is compiled, `SemaBridge::meta_throw` makes
+  the values when the call fails;
 - the purity classes and the per-op table (§3.3);
 - `MetaCtx` (§3.4) and materialized results (§3.5);
 - memoization (§3.6);
@@ -2969,6 +2978,20 @@ sema.
   | `EvalContext::new(Other, loc)` | `other` | no | array bounds, bit-field widths, other enumerators, `alignas`, array designators |
   | `EvalContext::new(TemplateArg / Consteval / IfConstexpr, loc)` | as named | yes | M3 |
   | `EvalContext::new(Constraint, loc)` | `constraint` | yes | M3: constraint satisfaction (an atomic constraint's value) |
+| `EvalContext::consteval_block(loc)` | `consteval_block` | yes | a consteval-block-declaration (WP-473); the only constructor that sets `plain` |
+
+  `EvalContext::plain` (WP-473, `spec/consteval-blocks.md` §3) is the
+  plainly constant-evaluated bit: true only for a consteval block's
+  evaluation ([expr.const.core]/2.32), the one context in which injection
+  may mutate. It becomes `run.plain` for that evaluation (a nested
+  evaluation starts from its own context's bit and restores the
+  enclosing one); `Oven::plain()` is `run.plain && !run.fold &&
+  !mem.in_trial()`, so `try_fold`, `__builtin_constant_p` operands and
+  every other trial read false. `Op::IsConstEval` aux 2 reads it
+  (`__kiln_plainly_constant_evaluated()`); aux 4 / aux 8 save-and-clear
+  / restore it around a constexpr local's initializer, which is its own
+  manifestly constant-evaluated expression. The call memo key carries
+  `Oven::plain()` at bit 30 next to `const_context` at bit 31.
 
 - **Nested evaluation** (R-OVEN-1, spec/sema-templates.md §4.11). The
   Oven calls `SemaBridge::ensure_body(f, oven)` the first time it compiles

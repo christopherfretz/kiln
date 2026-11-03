@@ -882,6 +882,20 @@ impl Substituter<'_, '_, '_> {
                 }
                 _ => Ok(e),
             },
+            // spec/reflection.md §5: a dependent splice resolves once its
+            // operand (and object) are substituted.
+            ExprKind::CXXSpliceExpr => {
+                let op = ex(self).splice_operand(e);
+                let base = ex(self).splice_base(e);
+                let op = self.expr(op)?;
+                Ok(match base {
+                    None => self.sema.act_on_splice_expr(op, loc, end),
+                    Some((b, arrow)) => {
+                        let b = self.expr(b)?;
+                        self.sema.act_on_member_splice(b, op, loc, end, loc, arrow)
+                    }
+                })
+            }
             ExprKind::ArrayTypeTraitExpr => {
                 let t = ex(self).type_trait(e);
                 let q = ex(self).array_trait_type(e);
