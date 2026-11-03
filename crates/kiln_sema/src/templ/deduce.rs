@@ -295,6 +295,7 @@ impl Sema<'_, '_> {
         as_: &[QualType],
         d: &mut DeducedArgs,
         level: u32,
+        top: bool,
     ) -> Tdk {
         for (k, &p) in ps.iter().enumerate() {
             if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(p.ty()) {
@@ -303,16 +304,38 @@ impl Sema<'_, '_> {
                 }
                 let rest = as_.get(k..).unwrap_or(&[]).to_vec();
                 return self.deduce_pack_elements(rest.len(), d, |s, i, d| {
+                    let pattern = if top { s.forwarding_to_lvalue(pattern, rest[i], d) } else { pattern };
                     s.deduce_ty(pattern, rest[i], TdfFlags::NONE, d, level)
                 });
             }
             let Some(&a) = as_.get(k) else { return Tdk::MiscellaneousDeductionFailure };
+            let p = if top { self.forwarding_to_lvalue(p, a, d) } else { p };
             let r = self.deduce_ty(p, a, TdfFlags::NONE, d, level);
             if r != Tdk::Success {
                 return r;
             }
         }
         if as_.len() == ps.len() { Tdk::Success } else { Tdk::MiscellaneousDeductionFailure }
+    }
+
+    /// [temp.deduct.type]/10: in the top-level parameter-type-list of a
+    /// function type deduced against the address target or a declaration
+    /// ([temp.deduct.funcaddr], [temp.deduct.decl]), a forwarding
+    /// reference `T&&` paired with an lvalue reference `A` is adjusted to
+    /// `T` (clang `TDF_TopLevelParameterTypeList`).
+    fn forwarding_to_lvalue(&self, p: QualType, a: QualType, d: &DeducedArgs) -> QualType {
+        let t = &self.ast.types;
+        match t.canonical_view(p) {
+            TypeView::RValueRef(inner)
+                if inner.quals().is_empty()
+                    && matches!(t.canonical_view(a), TypeView::LValueRef(_))
+                    && matches!(t.canonical_view(inner),
+                        TypeView::CanonTemplateTypeParm { depth, .. } if depth as u16 == d.depth) =>
+            {
+                inner
+            }
+            _ => p,
+        }
     }
 
     /// Deduces a pack expansion from `n` elements (§6.2): `f(i)`
@@ -970,7 +993,8 @@ impl Sema<'_, '_> {
                 if r != Tdk::Success {
                     return r;
                 }
-                let r = self.deduce_type_list(&pps, &aps, d, next);
+                let top = flags.contains(TdfFlags::TOP_LEVEL_PARAMETER_TYPE_LIST);
+                let r = self.deduce_type_list(&pps, &aps, d, next, top);
                 if r != Tdk::Success {
                     return r;
                 }

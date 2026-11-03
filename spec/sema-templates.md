@@ -2859,6 +2859,15 @@ reference strips `P`'s qualifiers first). WP-418,
 `tests/conformance/temp.deduct.type/cwg1584-cv-function.cpp` (libc++
 `std::is_within_lifetime(const T*)` rejects function pointers).
 
+`TopLevelParameterTypeList` ([temp.deduct.type]/10) is set for the
+function type deduced against an address target or a declaration
+([temp.deduct.funcaddr], [temp.deduct.decl]) and reaches only that type's
+own parameter-type-list: there a forwarding reference `T&&` (or the
+pattern `Args&&` of a pack) paired with an lvalue reference `U&` is
+adjusted to `T`, deducing `T = U&` (`int (*)(int&) = f` for
+`template <class... Args> int f(Args&&...)`). WP-446,
+`tests/conformance/temp.deduct.funcaddr/forwarding-reference-{lvalue,conflict}.cpp`.
+
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the
