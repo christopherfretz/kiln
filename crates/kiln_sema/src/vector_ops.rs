@@ -81,7 +81,7 @@ impl Sema<'_, '_> {
     }
 
     /// The size in bits of a scalar type (`None` if incomplete).
-    fn scalar_bits(&self, q: QualType) -> Option<u64> {
+    pub(crate) fn scalar_bits(&self, q: QualType) -> Option<u64> {
         crate::target::size_align(&self.ast, q, self.abi()).map(|(s, _)| s * 8)
     }
 
@@ -213,9 +213,10 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `hasIntegerRepresentation`: an integer or unscoped
-    /// enumeration type, or a vector of integers.
-    fn has_integer_repr(&self, q: QualType) -> bool {
+    /// enumeration type, or a vector (GNU or SVE) of integers.
+    pub(crate) fn has_integer_repr(&self, q: QualType) -> bool {
         let q = self.vector_parts(q).map_or(q, |p| p.elem);
+        let q = self.sve_parts(q).map_or(q, |(e, _)| e);
         self.ast.types.is_integral(q) || conv::is_unscoped_enum(self, q)
     }
 
@@ -227,7 +228,7 @@ impl Sema<'_, '_> {
         (first, second)
     }
 
-    fn vector_diag2(&mut self, id: DiagId, a: QualType, b: QualType, loc: Loc) {
+    pub(crate) fn vector_diag2(&mut self, id: DiagId, a: QualType, b: QualType, loc: Loc) {
         let (x, y) = self.ty_arg_pair(a, b);
         let msg = self.diag(id, loc).arg(x).arg(y);
         self.emit(msg);
@@ -459,7 +460,7 @@ impl Sema<'_, '_> {
 
     /// clang's `isRealType` (integers, unscoped enumerations, real
     /// floating types).
-    fn is_scalar_real(&self, q: QualType) -> bool {
+    pub(crate) fn is_scalar_real(&self, q: QualType) -> bool {
         self.ast.types.is_arithmetic(q) || conv::is_unscoped_enum(self, q)
     }
 
@@ -498,13 +499,20 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `tryGCCVectorConvertAndSplat` (inverted: true on success):
-    /// splats the scalar `scalar` to the type of the GNU vector `vec` when
+    /// splats the scalar `scalar` to the type of the GNU or SVE vector `vec` when
     /// the conversion to its element type cannot truncate.
-    fn gcc_vector_convert_and_splat(&mut self, scalar: &mut ExprId, vec: ExprId) -> bool {
+    pub(crate) fn gcc_vector_convert_and_splat(
+        &mut self,
+        scalar: &mut ExprId,
+        vec: ExprId,
+    ) -> bool {
         let sty = conv::strip_cv(self, self.ety(*scalar));
         let vty = conv::strip_cv(self, self.ety(vec));
-        let Some(p) = self.vector_parts(vty) else { return false };
-        let elem = p.elem;
+        let Some(elem) =
+            self.vector_parts(vty).map(|p| p.elem).or_else(|| self.sve_parts(vty).map(|(e, _)| e))
+        else {
+            return false;
+        };
         if !self.is_scalar_real(elem) || !self.is_scalar_real(sty) {
             return false;
         }
@@ -1040,6 +1048,71 @@ impl Sema<'_, '_> {
             return None;
         }
         if new && !self.ast.types.same_unqualified(ta, tb) {
+            let msg = self
+                .diag(DiagId::sema_call_different_arg_types, at)
+                .arg(self.ty_arg(ta))
+                .arg(self.ty_arg(tb));
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a, b], res))
+    }
+
+    /// `__builtin_elementwise_add_sat` / `_sub_sat` (clang
+    /// `BI__builtin_elementwise_add_sat`; spec/sema.md §5.4). Compat 22
+    /// (`BuiltinElementwiseMath` with the integer restriction): both
+    /// arguments decay (no promotion); the first must be a scalar or vector
+    /// of integer type (`bool` and an unscoped enumeration count), then the
+    /// second must have the same unqualified type. Compat 19: the checks of
+    /// `__builtin_elementwise_max` (usual conversions first), then the
+    /// (element) type must be an integer type. The result has the (common)
+    /// argument type.
+    pub(crate) fn builtin_elementwise_sat(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        let int_elem = |s: &Self, q: QualType| {
+            let elem = s.vector_parts(q).map_or(q, |p| p.elem);
+            s.is_integer_type(elem)
+        };
+        if self.clang_compat < 22 {
+            let (args, res) = self.builtin_elementwise_minmax(args, rparen)?;
+            if !int_elem(self, res) {
+                let a = args[0];
+                let msg = self
+                    .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
+                    .arg(0)
+                    .arg("vector of integers")
+                    .arg(self.ty_arg(self.ety(a)));
+                self.emit(msg);
+                return None;
+            }
+            return Some((args, res));
+        }
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let a = conv::decay(self, args[0]);
+        let b = conv::decay(self, args[1]);
+        let (ta, tb) = (self.ety(a), self.ety(b));
+        let err =
+            |s: &Self, q: QualType| s.ast.types.canonical(q).without_quals() == QualType::ERROR;
+        if err(self, ta) || err(self, tb) {
+            return None;
+        }
+        let res = conv::strip_cv(self, ta);
+        let at = self.begin_loc(a);
+        if !int_elem(self, res) {
+            let msg = self
+                .diag(DiagId::sema_builtin_arg_must_be, at)
+                .arg(0)
+                .arg("scalar or vector of integer types")
+                .arg(self.ty_arg(res));
+            self.emit(msg);
+            return None;
+        }
+        if !self.ast.types.same_unqualified(ta, tb) {
             let msg = self
                 .diag(DiagId::sema_call_different_arg_types, at)
                 .arg(self.ty_arg(ta))

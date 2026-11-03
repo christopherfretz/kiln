@@ -1131,6 +1131,10 @@ impl Sema<'_, '_> {
                     let t = self.alias_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
                 }
+                // The arguments before the expansion are checked, and an
+                // expansion for a parameter that is not a pack is an error
+                // (§3.2).
+                self.check_dependent_template_args(d, args, l)?;
                 Ok(TemplateIdRef::Type(
                     self.ast.types.template_specialization(name, list, None, true),
                 ))
@@ -1148,6 +1152,9 @@ impl Sema<'_, '_> {
                     };
                     return Ok(TemplateIdRef::Value(self.build_decl_ref_extra(v, l, Some(extra))));
                 }
+                // Checked against the parameters even so (clang
+                // `CheckTemplateArgumentList`, §3.2).
+                self.check_dependent_template_args(d, args, l)?;
                 self.check_var_template_own_init(d, list, l)?;
                 let n = self.ast.decls.get(d).name();
                 let dep_name = self

@@ -373,8 +373,11 @@ impl Sema<'_, '_> {
     /// kind of each argument against its parameter (a type for a type
     /// parameter, a template for a template template parameter, whose
     /// parameters are matched as [temp.arg.template]/3 says, an
-    /// expression for a non-type parameter). Non-type arguments are
-    /// converted once substituted. A dependent `T::x` for a type
+    /// expression for a non-type parameter). A non-dependent non-type
+    /// argument is converted, a value-dependent one only checked for a
+    /// conversion its type cannot make; a missing argument takes its
+    /// default, substituted with the prior arguments and checked as
+    /// they are. A dependent `T::x` for a type
     /// parameter is "did you forget 'typename'?" and the check goes on,
     /// as clang's does; any other failure ends it. Only the arguments
     /// before a pack expansion are checked, and not the arity; a
@@ -393,7 +396,20 @@ impl Sema<'_, '_> {
         r
     }
 
-    fn check_dependent_template_args_at(
+    pub(crate) fn check_dependent_template_args_at(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        locs: &[Loc],
+        loc: Loc,
+    ) -> Result<(), ()> {
+        let saved = self.inst.template_id_loc.replace(loc);
+        let r = self.check_dependent_template_args_in(tmpl, args, locs, loc);
+        self.inst.template_id_loc = saved;
+        r
+    }
+
+    fn check_dependent_template_args_in(
         &mut self,
         tmpl: DeclId,
         args: &[TemplateArg],
@@ -406,6 +422,12 @@ impl Sema<'_, '_> {
         if params.iter().any(|p| self.templ.expanded_packs.contains_key(p)) {
             return Ok(());
         }
+        // The `>` of the template-id as written (the "while checking a
+        // default template argument" frame), as the full check finds it.
+        let r_angle = match self.templ.r_angle {
+            Some((first, r)) if first == locs.first().copied() => r,
+            _ => loc,
+        };
         // A pack expansion may cover any number of parameters: the
         // arguments before it are checked, the arity is not.
         let expansion = args.iter().position(|&a| self.is_pack_expansion_arg(a));
@@ -416,39 +438,75 @@ impl Sema<'_, '_> {
         let mut prior: Vec<TemplateArg> = Vec::with_capacity(params.len());
         let mut failed = false;
         let mut wi = 0usize;
+        let mut open = false;
+        // A pack expansion is checked against the parameters only as
+        // written: substitution forms the template-id of an element that
+        // is itself an expansion (`remove_const_t<Ts...>` for `_Types` :=
+        // `{Ts...}` in a fold) on the way to re-forming the expansion.
+        let written = self.inst.stack.is_empty();
         for &p in &params {
             if self.ast.template_parm(p).is_some_and(|x| x.pack) {
                 while wi < checked {
-                    failed |=
+                    let (f, _) =
                         self.check_dependent_arg(tmpl, depth, p, args[wi], arg_loc(wi), &prior)?;
+                    failed |= f;
                     wi += 1;
                 }
+                open = true;
                 break;
             }
             if wi >= checked {
-                // The rest have defaults, checked once substituted.
-                if expansion.is_none() && self.template_default(p).is_none() {
+                // After a pack expansion the rest are known once it is
+                // substituted; an alias template or a concept takes no
+                // pack expansion for a parameter that is not a pack
+                // ([temp.alias]/2, CWG1430; clang's
+                // `err_template_expansion_into_fixed_list`).
+                if expansion.is_some() {
+                    let alias = match self.kind_of(tmpl) {
+                        _ if !written => None,
+                        DeclKind::TypeAliasTemplate => Some(0u32),
+                        DeclKind::Concept => Some(1),
+                        _ => None,
+                    };
+                    if let Some(k) = alias {
+                        let d = self
+                            .diag(DiagId::sema_template_expansion_into_fixed_list, arg_loc(wi))
+                            .arg(k);
+                        let d = self.note_param_here(d, p);
+                        self.emit(d);
+                        return Err(());
+                    }
+                    open = true;
+                    break;
+                }
+                // A default is substituted with the arguments before it
+                // and checked, as for a non-dependent template-id.
+                let Some(def) = self.template_default(p) else {
                     self.diag_template_arity(tmpl, false, loc);
                     return Err(());
-                }
-                break;
+                };
+                let a =
+                    self.checked_default_template_arg(tmpl, depth, p, def, loc, r_angle, &prior)?;
+                prior.push(a);
+                continue;
             }
-            failed |= self.check_dependent_arg(tmpl, depth, p, args[wi], arg_loc(wi), &prior)?;
-            prior.push(args[wi]);
+            let (f, a) = self.check_dependent_arg(tmpl, depth, p, args[wi], arg_loc(wi), &prior)?;
+            failed |= f;
+            prior.push(a);
             wi += 1;
         }
         // Too many even before a pack expansion (`R<int, int, int, T...>`
-        // for two parameters).
-        if wi < checked {
+        // for two parameters), or a pack expansion left over.
+        if wi < checked || (written && !open && wi < args.len()) {
             self.diag_template_arity(tmpl, true, loc);
             return Err(());
         }
         if failed { Err(()) } else { Ok(()) }
     }
 
-    /// One argument of [`Self::check_dependent_template_args`]: `Ok(true)`
-    /// after the recoverable missing-`typename` error, `Err` after any
-    /// other.
+    /// One argument of [`Self::check_dependent_template_args`], with the
+    /// argument it converts to: `Ok((true, a))` after the recoverable
+    /// missing-`typename` error, `Err` after any other.
     fn check_dependent_arg(
         &mut self,
         tmpl: DeclId,
@@ -457,7 +515,7 @@ impl Sema<'_, '_> {
         a: TemplateArg,
         at: Loc,
         prior: &[TemplateArg],
-    ) -> Result<bool, ()> {
+    ) -> Result<(bool, TemplateArg), ()> {
         match (self.kind_of(p), a.view()) {
             (DeclKind::TemplateTypeParm, ArgView::Expr { expr, .. })
                 if self.ast.exprs.get(expr).kind()
@@ -466,19 +524,44 @@ impl Sema<'_, '_> {
                 let d = self.diag(DiagId::sema_template_arg_must_be_type_suggest, at);
                 let d = self.note_param_here(d, p);
                 self.emit(d);
-                Ok(true)
+                Ok((true, a))
             }
-            // Non-type arguments are converted once substituted.
-            (DeclKind::NonTypeTemplateParm, ArgView::Expr { .. } | ArgView::Value { .. }) => {
-                Ok(false)
+            // A parameter whose type needs dependent prior arguments, or
+            // the pattern of a parameter pack's types (`template<Ts...
+            // a>`), takes its argument once substituted.
+            (DeclKind::NonTypeTemplateParm, ArgView::Expr { .. })
+                if self.nttp_type_pending(p, prior) =>
+            {
+                Ok((false, a))
             }
+            // A non-type argument is converted, a value-dependent one
+            // only checked for its conversion (the dependent template-id
+            // keeps its arguments as written).
             (_, ArgView::Type(_) | ArgView::Template(_) | ArgView::Expr { .. }) => {
-                self.check_template_arg(tmpl, depth, p, a, at, prior).map(|_| false)
+                self.check_template_arg(tmpl, depth, p, a, at, prior).map(|a| (false, a))
             }
             // A profiled or substituted value is checked when the
             // template-id is.
-            _ => Ok(false),
+            _ => Ok((false, a)),
         }
+    }
+
+    /// Whether the type of non-type parameter `p` is dependent and cannot
+    /// be substituted with `prior` yet: they are dependent, or `p` is a
+    /// parameter pack (not an expanded one, §3.2).
+    fn nttp_type_pending(&self, p: DeclId, prior: &[TemplateArg]) -> bool {
+        if self.templ.nttp_elem.is_some() {
+            return false;
+        }
+        let declared = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        self.ast.types.is_dependent(declared)
+            && (self.ast.template_parm(p).is_some_and(|x| x.pack)
+                || prior.iter().any(|&a| {
+                    self.ast
+                        .types
+                        .arg_flags(a)
+                        .intersects(TypeFlags::DEPENDENT | TypeFlags::UNEXPANDED_PACK)
+                }))
     }
 
     /// The arity check of the dependent template-id `tmpl<args>` whose
@@ -674,17 +757,18 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 Err(())
             }
-            // A value-dependent argument (of an alias template named
-            // with dependent arguments) is checked when it is substituted
-            // ([temp.res.general]/6), and so is an instantiation-dependent
-            // one (`is_same<void, void_t<decltype(e)>>::value`): folding it
-            // now would drop the substitution failure of `e`
-            // ([temp.deduct.general]/8; clang keeps it as written).
+            // A value-dependent argument is evaluated when it is
+            // substituted ([temp.res.general]/6), and so is an
+            // instantiation-dependent one (`is_same<void,
+            // void_t<decltype(e)>>::value`): folding it now would drop the
+            // substitution failure of `e` ([temp.deduct.general]/8; clang
+            // keeps it as written). One of a known type is checked for its
+            // conversion now (§3.2).
             (DeclKind::NonTypeTemplateParm, ArgView::Expr { expr, .. })
                 if self.expr_is_value_dependent(expr)
                     || self.type_instantiation_dependent(expr) =>
             {
-                Ok(a)
+                self.check_value_dependent_nttp_arg(tmpl, depth, p, expr, at, prior).map(|()| a)
             }
             (DeclKind::NonTypeTemplateParm, ArgView::Expr { expr, .. }) => {
                 self.convert_nttp_arg(tmpl, depth, p, expr, at, prior)
@@ -848,22 +932,18 @@ impl Sema<'_, '_> {
         false
     }
 
-    /// `e` converted to the type of non-type parameter `p` as a
-    /// converted constant expression ([temp.arg.nontype]/2) and
-    /// evaluated: a `Value` argument.
-    #[allow(clippy::too_many_lines)]
-    fn convert_nttp_arg(
+    /// The type of non-type parameter `p` for an argument at `at`: its
+    /// declared type (an expanded pack's element type), or that type
+    /// substituted with the `prior` arguments and checked. `Err` after a
+    /// diagnostic or for an erroneous type.
+    fn nttp_arg_param_type(
         &mut self,
         tmpl: DeclId,
         depth: u16,
         p: DeclId,
-        e: ExprId,
         at: Loc,
         prior: &[TemplateArg],
-    ) -> Result<TemplateArg, ()> {
-        if self.is_err_expr(e) {
-            return Err(());
-        }
+    ) -> Result<QualType, ()> {
         // A type substituted from prior arguments is substituted under a
         // frame and checked at the parameter (clang `CheckTemplateArgument`:
         // `CheckNonTypeTemplateParameterType(NTTPType, NTTP->getLocation())`).
@@ -893,10 +973,117 @@ impl Sema<'_, '_> {
         if substituted {
             self.pop_inst_frame();
         }
-        let mut pty = r?;
+        let pty = r?;
         if self.is_error_type(pty) {
             return Err(());
         }
+        Ok(pty)
+    }
+
+    /// The definition-time check of value-dependent argument `e` for
+    /// non-type parameter `p` (clang `CheckConvertedConstantExpression`,
+    /// which runs on a value-dependent argument whose type is known,
+    /// [temp.arg.nontype]/2, [expr.const]/12; §3.2): with no implicit
+    /// conversion sequence to the parameter's type it is "not implicitly
+    /// convertible"; a sequence a converted constant expression may not
+    /// use is "not allowed". A value-dependent integral argument may
+    /// still be a null pointer constant, so it converts to a pointer,
+    /// member pointer or `std::nullptr_t` only by a disallowed
+    /// conversion. Narrowing is checked once the value is known; a
+    /// type-dependent argument, a parameter of dependent, deduced or
+    /// class type are checked once substituted. `Err` after a
+    /// diagnostic.
+    fn check_value_dependent_nttp_arg(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        e: ExprId,
+        at: Loc,
+        prior: &[TemplateArg],
+    ) -> Result<(), ()> {
+        let ety = self.ast.exprs.get(e).ty();
+        if self.is_err_expr(e) || ety == QualType::OVERLOAD || self.ast.types.is_dependent(ety) {
+            return Ok(());
+        }
+        // A type substituted from dependent prior arguments stays
+        // dependent: checked once they are substituted.
+        if self.nttp_type_pending(p, prior) {
+            return Ok(());
+        }
+        let pty = self.nttp_arg_param_type(tmpl, depth, p, at, prior)?;
+        let t = &self.ast.types;
+        if t.is_dependent(pty)
+            || t.as_record(pty).is_some()
+            || matches!(t.canonical_view(pty), TypeView::Auto { .. })
+            || self.is_ctad_placeholder(pty)
+            || self.placeholder_keyword(pty).is_some()
+        {
+            return Ok(());
+        }
+        let from = self.begin_loc(e);
+        let from = if from.is_valid() { from } else { at };
+        let pdecl = Some(self.ast.decls.get(p).loc());
+        let t = &self.ast.types;
+        let src = conv::strip_cv(self, ety);
+        let nullish = t.is_integral(src)
+            && (t.is_pointer(pty) || self.is_member_pointer(pty) || self.is_nullptr_type(pty));
+        let disallowed = if nullish {
+            true
+        } else {
+            let info = self.arg_info(e);
+            let ics = self.try_implicit_conversion(&info, pty, crate::overload::IcsOptions::NONE);
+            if ics.is_bad() {
+                let d = self
+                    .diag(DiagId::sema_cce_not_implicitly_convertible, from)
+                    .arg(self.ty_arg(ety))
+                    .arg(self.ty_arg(pty))
+                    .range(self.expr_range(e));
+                let d = self.note_nttp_param(d, pdecl);
+                self.emit(d);
+                return Err(());
+            }
+            let scs = match ics {
+                Ics::Standard(s) => Some(s),
+                Ics::UserDefined(u) => Some(u.after),
+                _ => None,
+            };
+            let to = conv::strip_cv(self, pty);
+            let t = &self.ast.types;
+            let int_like = |q| t.is_integral(q) || t.as_enum(q).is_some();
+            scs.is_some_and(|scs| !self.cce_second_allowed(&scs))
+                || (int_like(to) && t.is_floating(src))
+                || (t.is_floating(to) && int_like(src))
+        };
+        if disallowed {
+            let d = self
+                .diag(DiagId::sema_cce_conversion_not_allowed, from)
+                .arg(self.ty_arg(ety))
+                .arg(self.ty_arg(pty));
+            let d = self.note_nttp_param(d, pdecl);
+            self.emit(d);
+            return Err(());
+        }
+        Ok(())
+    }
+
+    /// `e` converted to the type of non-type parameter `p` as a
+    /// converted constant expression ([temp.arg.nontype]/2) and
+    /// evaluated: a `Value` argument.
+    #[allow(clippy::too_many_lines)]
+    fn convert_nttp_arg(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        e: ExprId,
+        at: Loc,
+        prior: &[TemplateArg],
+    ) -> Result<TemplateArg, ()> {
+        if self.is_err_expr(e) {
+            return Err(());
+        }
+        let mut pty = self.nttp_arg_param_type(tmpl, depth, p, at, prior)?;
         if self.ast.types.is_dependent(pty) {
             // `template<class T, T V>` with a dependent `T`: converted
             // when substituted.

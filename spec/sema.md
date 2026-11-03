@@ -894,6 +894,28 @@ Redeclaration and linkage rules:
   volatile warns as a volatile return type does: at a class member's
   instantiation, and for a deduced function template specialization at
   its first use. Tests: `depr.volatile.type/volatile-param{,-19,-cxx17}.cpp`.
+- **Volatile increment, decrement, assignment and structured bindings**
+  ([depr.volatile.type]/1-3, C++20 and later; WP-432, clang
+  `CheckIncrementDecrementOperand` / `CheckAssignmentOperands` /
+  `ActOnDecompositionDeclarator`):
+  - `++` / `--` (prefix or postfix) of a volatile-qualified object warns
+    `increment|decrement of object of volatile-qualified type T is
+    deprecated` at the operator, after the modifiable check
+    (`check_volatile_inc_dec`, `sema_deprecated_volatile_incdec`);
+  - a simple assignment to a volatile-qualified object outside an
+    unevaluated operand records its left operand (`note_volatile_assign`);
+    discarding the assignment's value (`ignored_value_conversions`, after
+    parentheses and implicit casts) drops it (`discard_volatile_assign`);
+    one still recorded when the function body, a namespace-scope
+    initializer or the translation unit ends warns `use of result of
+    assignment to object of volatile-qualified type T is deprecated` at
+    the left operand's begin (`sema_deprecated_volatile_assign`). A
+    compound assignment never warns (clang 19 and 22 do not);
+  - a `volatile` structured binding declaration warns `volatile
+    qualifier in structured binding declaration is deprecated` at the
+    `volatile` keyword (`sema_deprecated_volatile_binding`).
+  All [-Wdeprecated-volatile]. Tests:
+  `depr.volatile.type/volatile-incdec-assign{,-cxx17}.cpp`.
 - **A `...` in a non-parameter declarator** ([temp.variadic]/5): the
   parser keeps it in `Declarator::ellipsis`; `type_for_declarator_at`
   reports `only function and template parameters can be parameter
@@ -942,6 +964,22 @@ Redeclaration and linkage rules:
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses
   with an initializer`, `remove parentheses`).
+- **Function qualifiers where none are allowed** ([dcl.fct]/6, clang
+  `err_invalid_qualified_function_type`, WP-435): a cv- or
+  ref-qualifier on a non-member or friend function is "non-member
+  function cannot have 'Q' qualifier", on an explicit-object member
+  function "explicit object member function cannot have 'Q'
+  qualifier", both at the first qualifier (`Declarator::fn_qual_locs`)
+  with every qualifier spelled; the qualifiers are dropped from the
+  function type, so an instantiation does not report them again and
+  `void f() const; void f() {}` declares one function. A free function
+  with an explicit object parameter reports that first, a friend after;
+  an explicit-object static or virtual member reports the qualifier
+  first, then "cannot appear in a static/virtual function" (the
+  declaration is invalid). A static member function's qualifier error
+  is also at its first qualifier. Tests
+  `dcl.fct/nonmember-function-qualifiers.cpp`,
+  `dcl.fct/explicit-object-qualifiers-template.cpp`.
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
 - A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
@@ -1479,7 +1517,14 @@ and returns the scope it names:
   - an unfixed one's initializer is an integral constant expression that
     may fold (`fold_not_ice`, below)
   - an unfixed one gets its type from the enumerators' range (the best
-    type), and the enumerators are then retyped to the enumeration
+    type), and the enumerators are then retyped to the enumeration; a
+    `packed` one (clang `computeBestEnumTypes` with `IsPacked`, WP-432)
+    takes the smallest of `signed char` / `short` (with negative values)
+    or `unsigned char` / `unsigned short` that holds the range, else
+    the usual best type, and still promotes to `int`. A member
+    enumeration of a class template gets its attributes at
+    instantiation. Tests `dcl.enum/packed-underlying-type.cpp`,
+    `tests/codegen/enum_packed.cpp`
   - `replace_enumerator_init` records the converted initializer
 - **Bit-fields** ([class.bit]; `bit_width`, clang `VerifyBitField`):
   - a named bit-field's type must be integral or an enumeration, checked
@@ -1844,8 +1889,8 @@ and returns the scope it names:
       attributes before `act_on_finish_record_definition`, so `packed` /
       `aligned` there shape its layout (also for a class template and
       its specializations), with no warning, whether or not declarators
-      follow. Not yet for an enumeration's closing brace (still
-      `place it after "enum"`). Test:
+      follow. An enumeration's closing brace takes them the same way
+      (WP-432, before `act_on_finish_enum_definition`). Test:
       `tests/conformance/dcl.attr.grammar/gnu-attributes-after-class-body.cpp`.
     - on a non-declaration statement: `'X' attribute cannot be applied
       to a statement` per declaration attribute
@@ -3098,6 +3143,14 @@ the initializer, or after default initialization, and before the
   `D **` and `int **` vs `long **` are not similar and have none. Tests
   `expr.cond/composite-pointer-multilevel*.cpp`,
   `conv.qual/multilevel-compare-run.cpp`.
+- **C-style cast of a parenthesized list** (clang
+  `ParseSimpleExpressionList`, WP-435): in `(T)(a, b, c)` the parser
+  parses every element first, then builds the comma operators left to
+  right at the operand's `(` (`Parser::parse_paren_list_rest`), so the
+  elements' own diagnostics come before the commas' and a comma's
+  diagnostic is at the `(`; a nested `((a, b))` keeps its own comma
+  locations, and a `{` element is "expected expression". Test
+  `expr.comma/cast-paren-list.cpp`.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -3336,7 +3389,22 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     `level` in [0, 65535] (`argument value V is outside the valid range`
     at the callee); a nonzero level warns `calling '__builtin_frame_address'
     with a nonzero argument is unsafe` (`-Wframe-address`, in `-Wall`).
+    `__builtin_return_address(level)` (WP-432) is checked the same way,
+    with its own name in the warning
+    (`ext.gnu.builtins/return-address-args.cpp`).
     `__builtin_debugtrap()` takes no argument.
+  - `__builtin_elementwise_add_sat(x, y)` / `_sub_sat(x, y)` (custom,
+    `vector_ops.rs` `builtin_elementwise_sat`; WP-432). At 22
+    (`BuiltinElementwiseMath` with clang 22's integer restriction): both
+    operands are lvalue-converted (arrays decay, no promotion); the first
+    must be a scalar or vector of integer type (`bool` and an unscoped
+    enumeration count; `1st argument must be a scalar or vector of
+    integer types (was T)`), then the second must have the same
+    unqualified type (`arguments are of different types`). At 19: `max`
+    / `min`'s conversions and checks, then the (element) type must be an
+    integer (`1st argument must be a vector of integers (was T)`). The
+    call has the (common) operand type.
+    `ext.gnu.builtins/elementwise-sat-{args,constexpr}{,-clang22}.cpp`.
   - `__builtin_elementwise_abs(x)` / `_max(x, y)` / `_min(x, y)` (custom,
     `vector_ops.rs`; WP-416), by compatibility level. At 22 (clang 22
     `BuiltinElementwiseMath`): the operands are lvalue-converted (arrays
@@ -4617,7 +4685,17 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   rejected (no viable constructor) is marked invalid, and evaluating its
   declaration fails with no note (spec/oven.md "Classes").
   From C++23 clang 22 no longer applies `CheckLiteralType` during
-  evaluation (spec/oven.md); clang 19 does. Tests:
+  evaluation (spec/oven.md); clang 19 does.
+- The same walk applies the statement rule (clang
+  `CheckConstexprFunctionStmt`; WP-444): a GNU `goto *p` is allowed at
+  no language level, "statement not allowed in {constexpr|consteval}
+  {function|constructor}" at the `goto` when it comes before any
+  non-literal variable, the function made invalid as above. Before
+  C++23 a body that breaks neither rule but holds a label or a `goto`
+  gets "use of this statement in a constexpr {function|constructor} is
+  a C++23 extension" (`-Wc++23-extensions`) at the first one. Tests
+  `tests/conformance/stmt.goto/computed-goto-constexpr-body{,-cxx20}.cpp`.
+  Tests of the variable rule:
   `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
   `tests/conformance/dcl.constexpr/non-literal-local-template-cxx{20,23}.cpp`,
   `tests/conformance/dcl.constexpr/non-literal-local-lambda-cxx20.cpp`,
@@ -5882,6 +5960,29 @@ and unevaluated operands:
   `possible target of asm goto statement` note and `jump exits …`
   notes). Leaving scopes through `goto` is fine; codegen runs their
   cleanups (spec/codegen.md).
+- **Landed (WP-444): GNU computed goto.** `act_on_indirect_goto`
+  ([stmt.goto], GNU): an operand with an unexpanded pack is diagnosed
+  and the statement dropped; otherwise, unless type-dependent, it is
+  converted to `const void *` as by assignment (clang
+  `CheckSingleAssignmentConstraints`; a non-pointer operand gets that
+  conversion's error), made a full-expression, and the function is
+  marked as holding an indirect goto, which runs the jump-scope checker.
+  `VerifyIndirectJumps` (`verify_indirect_jumps`): with no `&&l` in the
+  body the first indirect goto is "indirect goto in function with no
+  address-of-label expressions"; otherwise each scope holding an
+  indirect goto must reach each scope holding an address-taken label by
+  leaving only scopes without an "exits" note and then entering only
+  scopes without a "bypasses" note, else "cannot jump from this
+  indirect goto statement to one of its possible targets" at the
+  `goto`, "possible target of indirect goto statement" at the label and
+  one note per scope (one jump and one label stand for each scope, in
+  clang's `DenseMap` order, `dense_map_order`). Unlike a direct `goto`,
+  leaving a scope with a destructor is an error (an indirect goto runs no
+  cleanups). `&&l` in a lambda or local class names a label of that
+  body, so a label of the enclosing function is "use of undeclared
+  label" there. A `&&l` in a template's body is instantiation-dependent
+  (spec/sema-templates.md). Tests:
+  `tests/conformance/stmt.goto/computed-goto-{jump-scope,lambda,dispatch-run,reachability}.cpp`.
 - `[[noreturn]]`: the fall-off analysis (§4.3) treats a call as not
   returning when any redeclaration of the callee is `[[noreturn]]`,
   including member calls.
@@ -5946,8 +6047,12 @@ and unevaluated operands:
   walked (a `noexcept` operand is, as clang's CFG does); a GNU case range
   is reached when the constant condition is in `[lo, hi]` and counts
   toward enumeration coverage (WP-205). Not modeled: implicit
-  destructors marked `noreturn`; indirect `goto` needs no model because
-  kiln does not parse `&&label` / `goto *p`. The fall-off analysis
+  destructors marked `noreturn`. A live GNU indirect `goto *p` reaches
+  every label whose address the body takes (clang's indirect-goto block
+  and `AddressTakenLabels`: `&&l` outside lambdas and unevaluated
+  operands, found once per walk by `addr_taken_labels`) and does not
+  fall through (WP-444, `stmt.goto/computed-goto-reachability.cpp`).
+  The fall-off analysis
   behind -Wreturn-type / -Winvalid-noreturn (`falls_off` →
   `fall_off_kind`, WP-219) is the same walk run to a fixed point,
   classifying the live predecessors of the exit as in clang

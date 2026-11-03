@@ -8,14 +8,17 @@
 //! of a declaration that is itself deprecated (clang's delayed
 //! diagnostics, `ShouldDiagnoseAvailabilityInContext`).
 //!
-//! Also the deprecated volatile-qualified parameter types of
-//! [depr.volatile.type]/2 (`-Wdeprecated-volatile`).
+//! Also the deprecated uses of volatile of [depr.volatile.type]
+//! (`-Wdeprecated-volatile`): volatile-qualified parameter types, the
+//! increment / decrement of a volatile object, the use of the result of
+//! an assignment to one, and a volatile structured binding declaration.
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::DeclKind;
+use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::ids::RawId;
 use kiln_ast::templates::SpecKind;
-use kiln_ast::{AttrId, DeclId, ExprId};
+use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
@@ -327,6 +330,83 @@ impl Sema<'_, '_> {
     /// parameter of a function declarator is deprecated, warned at the
     /// parameter (clang `GetFullTypeForDeclarator`; the caller checks the
     /// language mode).
+    /// [depr.volatile.type]/3 (C++20 [expr.ass]/5): a simple assignment
+    /// to volatile-qualified `lhs` is deprecated unless it is a
+    /// discarded-value expression or an unevaluated operand (clang
+    /// `CheckAssignmentOperands` records the left operand; a discarded
+    /// one is dropped by [`Sema::discard_volatile_assign`]; the rest are
+    /// warned at the end of the body or initializer,
+    /// [`Sema::warn_volatile_assigns`]).
+    pub(crate) fn note_volatile_assign(&mut self, lhs: ExprId) {
+        if self.std < kiln_lex::Std::Cxx20
+            || self.unevaluated > 0
+            || !self.ast.types.effective_quals(self.ety(lhs)).is_volatile()
+        {
+            return;
+        }
+        match self.func.as_mut() {
+            Some(f) => f.volatile_assigns.push(lhs),
+            None => self.volatile_assigns.push(lhs),
+        }
+    }
+
+    /// clang `CheckUnusedVolatileAssignment`: discarded-value expression
+    /// `e`, ignoring parentheses and implicit conversions, is a simple
+    /// assignment whose use is not deprecated.
+    pub(crate) fn discard_volatile_assign(&mut self, e: ExprId) {
+        let list = match self.func.as_ref() {
+            Some(f) => &f.volatile_assigns,
+            None => &self.volatile_assigns,
+        };
+        if list.is_empty() {
+            return;
+        }
+        let mut x = e;
+        while matches!(
+            self.ast.exprs.get(x).kind(),
+            ExprKind::ParenExpr | ExprKind::ImplicitCastExpr
+        ) {
+            x = self.ast.exprs.operand(x);
+        }
+        let ex = &self.ast.exprs;
+        if ex.get(x).kind() != ExprKind::BinaryOperator || ex.binary_op(x) != BinaryOp::Assign {
+            return;
+        }
+        let lhs = ex.children(x, &self.ast.lists)[0];
+        let list = match self.func.as_mut() {
+            Some(f) => &mut f.volatile_assigns,
+            None => &mut self.volatile_assigns,
+        };
+        list.retain(|&l| l != lhs);
+    }
+
+    /// Warns the volatile assignments of [`Sema::note_volatile_assign`]
+    /// still pending at the end of their body or initializer (clang
+    /// `PopExpressionEvaluationContext`), at the left operand.
+    pub(crate) fn warn_volatile_assigns(&mut self, pending: Vec<ExprId>) {
+        for l in pending {
+            let at = self.begin_loc(l);
+            let d = self
+                .diag(DiagId::sema_deprecated_volatile_assign, at)
+                .arg(self.ty_arg(self.ety(l)));
+            self.emit(d);
+        }
+    }
+
+    /// [depr.volatile.type]/1 (C++20 [expr.pre.incr]/1, [expr.post.incr]/1):
+    /// an increment or decrement of a volatile-qualified operand of type
+    /// `t` is deprecated, warned at operator `loc` (clang
+    /// `CheckIncrementDecrementOperand`).
+    pub(crate) fn check_volatile_inc_dec(&mut self, inc: bool, t: QualType, loc: Loc) {
+        if self.std >= kiln_lex::Std::Cxx20 && self.ast.types.effective_quals(t).is_volatile() {
+            let d = self
+                .diag(DiagId::sema_deprecated_volatile_incdec, loc)
+                .arg(if inc { "0" } else { "1" })
+                .arg(self.ty_arg(t));
+            self.emit(d);
+        }
+    }
+
     pub(crate) fn check_volatile_params(&mut self, params: &[ParamInfo]) {
         for p in params {
             if !self.ast.types.effective_quals(p.ty).contains(kiln_ast::types::Quals::VOLATILE) {

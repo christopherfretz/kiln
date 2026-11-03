@@ -315,6 +315,9 @@ ops! {
     // `cce::PTR_TO_INT`: `dst` = the integer of such a pointer (any other
     // pointer fails).
     Cce = 3,
+    // [dst, expr]: the address a GNU `&&label` (`AddrLabelExpr` `expr`)
+    // evaluates to (`Oven::label_addr`; spec/oven.md "Label addresses")
+    LabelAddr = 2,
 }
 
 /// The sub-operations of `Op::Wide`. Binary ones are `*d = *a op *b`
@@ -461,6 +464,15 @@ pub(crate) mod bi {
     /// `INT_OP`: `__builtin_abs`/`labs`/`llabs` of the canonical signed
     /// `a` (WP-365); the most negative value is undefined (a fault).
     pub const IABS: u32 = 6;
+    /// `INT_OP`: `__builtin_elementwise_add_sat` of canonical signed
+    /// `a`, `b` (WP-432; clamped to the `w`-bit range).
+    pub const SADD_SAT: u32 = 7;
+    /// `INT_OP`: `__builtin_elementwise_add_sat`, unsigned.
+    pub const UADD_SAT: u32 = 8;
+    /// `INT_OP`: `__builtin_elementwise_sub_sat`, signed.
+    pub const SSUB_SAT: u32 = 9;
+    /// `INT_OP`: `__builtin_elementwise_sub_sat`, unsigned.
+    pub const USUB_SAT: u32 = 10;
     // WP-270: checked arithmetic.
     /// `__builtin_{add,sub,mul}_overflow` on canonical `a`, `b`: sub = op
     /// (0 add, 1 sub, 2 mul) | `a` signed << 2 | `b` signed << 3 | result
@@ -513,6 +525,17 @@ pub(crate) mod bi {
     /// `getBuiltinAlignArguments`: a negative or non-power-of-two
     /// alignment, or one above 2^(width-1), is a fault).
     pub const ALIGN: u32 = 26;
+    /// WP-432: `__builtin_align_up` / `align_down` / `is_aligned` (sub
+    /// 0 / 1 / 2) of the pointer `a` (to elements of type `t1`) to the
+    /// checked alignment `b` (clang `PointerExprEvaluator` and
+    /// `IntExprEvaluator`): the known alignment of `a` is its complete
+    /// object's (a variable's declared alignment, else its type's) at
+    /// `a`'s byte offset. `is_aligned` is 1 when that is at least `b`, 0
+    /// when the object's is but the offset's is not; `align_up` / `down`
+    /// is `a` when its alignment is at least `b`, else `a` with its offset
+    /// rounded when the object's is; otherwise a fault
+    /// (`BiFault::AlignRun`). Executed with the bridge.
+    pub const PTR_ALIGN: u32 = 28;
     /// `std::uncaught_exceptions()` / `__builtin_uncaught_exceptions()`
     /// ([except.uncaught]/1, P3068): the number of exceptions thrown and
     /// not yet caught in this evaluation (a nested evaluation counts its

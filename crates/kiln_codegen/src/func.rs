@@ -560,6 +560,7 @@ impl Cg<'_> {
         if eh_spec {
             self.pop_terminate();
         }
+        self.finish_indirect_goto()?;
         self.finish_eh();
         self.emit_unreachable_if_used();
         // FinishFunction: a coroutine's cleanup destination slot becomes
@@ -595,11 +596,14 @@ impl Cg<'_> {
         let mut extra = Vec::new();
         let const_pure = crate::builtins::const_pure_attrs(self.ast, d, &sig, &mut extra);
         self.coro_fn_attrs(d, &mut extra);
+        // A thunk is `nounwind` only by its method's type or attributes
+        // (clang `ConstructAttributeList(IsThunk)`): `generateThunk` never
+        // runs `TryMarkNoThrow` over its body.
         let nothrow_def = sig.nothrow
             || const_pure
             || self.ast.has_nothrow_attr(d)
             || !self.opts.exceptions
-            || self.no_throw_calls();
+            || (thunk.is_none() && self.no_throw_calls());
         let noreturn = self.ast.is_noreturn_fn(d);
         let inline = if thunk.is_some() && !self.opts.optimize() {
             crate::module::DefInline::OptNone

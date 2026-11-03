@@ -186,9 +186,35 @@ name, before "must be called"; a chosen overloaded operator function at the
 operator (a call to an object at its `(`), after return-type deduction; a
 lambda call operator with an SVE parameter or (deduced) return type at the
 lambda's `[`, at the end of its body (instantiated generic ones included).
-Not yet as clang: SVE arithmetic/comparison operators (kiln: "invalid
-operands"), a comma inside `(T)(a, b)` (clang reports it at the `(`),
-and a namespace-scope `auto` variable deduced as an SVE type. Lowering is
+A comma inside `(T)(a, b)` is at the `(` (the cast's operand is an
+expression list, spec/sema.md). An automatic SVE variable so reported is
+invalid: its uses build no operator diagnostics (clang's `RecoveryExpr`).
+A namespace-scope `auto` variable deduced as an SVE type is checked as a
+written one ("non-local variable with sizeless type").
+
+Operators (WP-435, `sve.rs` `sve_binary`, clang
+`CheckSizelessVectorOperands`): `+ - * /` take two vectors of one type or
+a vector and a scalar the vector's element type can hold without
+truncation (splatted, as GNU vectors); `% & | ^` also need an integer
+element (`svbool_t` counts); shifts an integer element and the same
+element count (`svbool_t` is invalid); a different element count is
+"vector operands do not have the same number of elements", a non-scalar
+non-vector operand "cannot convert between vector and non-scalar values",
+a truncating scalar "implicit conversion would cause truncation",
+`svbool_t` under arithmetic "invalid operands". Comparisons yield
+`svbool_t` for `svbool_t` operands, else the signed SVE vector of the
+same element width and count; `<=>` is "three-way comparison between
+vectors is not supported". `&&`/`||` report "value of type T is not
+contextually convertible to 'bool'" at the first failing operand, then
+"invalid operands". Unary `+`/`-` apply to any SVE vector, `~` to an
+integer one (`svbool_t` counts); `!` and `++`/`--` are errors. A
+subscript of, or arithmetic on, a pointer to a sizeless type is
+"subscript of pointer to sizeless type" at the `[` / "arithmetic on a
+pointer to sizeless type" at the operator. Not yet as clang: the SVE `?:`
+(clang's vector-condition rules); a use of an invalid SVE local where the
+parser classifies the name (statement start, after a `(` that could open
+a type-id) — clang reports it again there, kiln does not; there is no
+`+sve`, so only the no-SVE-target behaviour is reachable. Lowering is
 `<vscale x N x T>` (`__SVCount_t`: `target("aarch64.svcount")`); mangling is
 the vendor-extended `u<len><name>`, a substitution candidate.
 

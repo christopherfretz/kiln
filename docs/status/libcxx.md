@@ -162,6 +162,9 @@ expression is odr-used). The 2 remaining are WP-416's: 1
 `returning reference to local temporary object` not diagnosed in
 `<tuple>` (`make_from_tuple.verify`); 1 `no type named 'argument_type'`
 reported as `expected a type` (`variant.hash/hash.depr.verify`).
+WP-432 re-ran WP-416's 2 deprecated variable-template failures
+(`meta.unary.prop/is_pod.deprecated.verify`,
+`is_trivial.deprecated.verify`): both pass.
 
 **After WP-445** (the WP-418 correctness follow-ups), on wp/445 78c5a251
 merged with main b4e8dfb3, same flags (`-j 4 --mem-limit 3072`), 906.9 s
