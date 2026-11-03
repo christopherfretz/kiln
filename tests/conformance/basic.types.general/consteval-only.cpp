@@ -1,0 +1,61 @@
+// [basic.types.general], [expr.const] P2996R13: std::meta::info and the
+// types built from it are consteval-only. A variable of such a type is
+// constexpr, a function of one is consteval, and an expression of one
+// appears only in an immediate function context (an immediate-escalating
+// function escalates instead); no reflection reaches code generation.
+//@ expect: compile-fail
+//@ args: -freflection
+//@ skip(clang): clang 19 does not implement P2996 reflection
+//@ strict-diags
+//@ diag: 29:12 error "consteval-only variable 'cg' not declared 'constexpr'"
+//@ diag: 30:6 error "consteval-only variable 'gv' not declared 'constexpr'"
+//@ diag: 31:13 error "consteval-only variable 'ex' not declared 'constexpr'"
+//@ diag: 33:3 error "consteval-only variable 'w' not declared 'constexpr'"
+//@ diag: 35:7 error "consteval-only variable 'gp' not declared 'constexpr'"
+//@ diag: 40:6 error "function of consteval-only type must be declared 'consteval'"
+//@ diag: 41:16 error "function of consteval-only type must be declared 'consteval'"
+//@ diag: 41:30 error "consteval-only expressions are only allowed"
+//@ diag: 43:6 error "function of consteval-only type must be declared 'consteval'"
+//@ diag: 48:3 error "consteval-only expressions are only allowed"
+//@ diag: 50:7 error "consteval-only expressions are only allowed"
+//@ diag: 52:8 error "consteval-only variable 'p' not declared 'constexpr'"
+//@ diag: 53:8 error "consteval-only variable 'loc' not declared 'constexpr'"
+//@ diag: 55:27 error "consteval-only variable 'l' not declared 'constexpr'"
+//@ diag: 61:21 error "consteval-only expressions are only allowed"
+//@ diag: 56:37 error "consteval-only expressions are only allowed"
+//@ diag: 58:10 note "in instantiation of function template specialization"
+using info = decltype(^^int);
+constexpr info r = ^^int;
+const info cg = ^^int;                 // not constexpr
+info gv;                               // not constexpr
+extern info ex;                        // not constexpr
+struct W { info m; };
+W w{^^int};                            // a class with an info member
+constexpr W cw{^^int};                 // OK
+info* gp;                              // a pointer to info
+struct S { static constexpr info sm = ^^int; };  // OK
+constexpr bool b1 = r == ^^int;        // OK: manifestly constant-evaluated
+bool b2 = r == ^^int;                  // OK: constant initialization
+static_assert(r == ^^int);
+info f1();                             // not consteval
+constexpr info f2() { return ^^int; }  // not consteval; a plain constexpr function does not escalate
+consteval info f3() { return ^^int; }  // OK
+void f4(info);                         // a parameter of type info
+auto lam = [](info x) { return x == ^^int; };  // OK: the call operator escalates
+template <info R> int tf() { return 1; }
+int u = tf<^^int>();                   // OK: a template argument
+void plain() {
+  ^^int;                               // a plain function
+  constexpr info lr = ^^int;           // OK
+  if (lr == ^^int) {}                  // a run-time condition
+  if constexpr (lr == ^^int) {}        // OK
+  auto p = &r;                         // a pointer to info
+  info loc = ^^int;
+}
+constexpr int cf() { info l = ^^int; return 0; }  // not a template: no escalation
+template <class T> int g() { return ^^T == ^^int; }   // checked per instantiation
+template <class T> int h() { if constexpr (^^T == ^^int) return 1; return 0; }  // OK
+int gi = g<int>();
+template <class T> constexpr bool tfn() { info l = ^^T; return l == ^^int; }
+static_assert(tfn<int>());             // OK: escalates
+int main() { return r == ^^int; }      // a run-time expression

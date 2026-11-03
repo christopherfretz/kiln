@@ -2143,6 +2143,7 @@ impl Sema<'_, '_> {
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
             }
+            self.note_consteval_only_ref(e, d);
         } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
             let at = self.eloc(e);
             self.exc_spec_needed(d, at);

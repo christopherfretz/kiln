@@ -996,6 +996,9 @@ Specified in **`spec/reflection.md`**: `ReflectionTable` and the
 `Reflectee` variants (§2.2), identity and alias sugar (§2.3), and
 `define_aggregate`'s injected `Field`s, which are the one exception to
 §2.4's "frozen at `}`" (§6.2). Splice nodes are covered in §5.
+Each variant's key, the `^^` operand mapping, template arguments,
+printing and the consteval-only rules as implemented are in
+**`spec/reflection-repr.md`**.
 
 ## 11. The AST dump format
 Specified in **`spec/ast-dump.md`** (split out to keep both files

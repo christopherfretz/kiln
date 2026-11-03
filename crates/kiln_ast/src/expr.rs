@@ -2295,15 +2295,14 @@ impl ExprArena {
         n.b != 0
     }
 
-    /// The operand of a `CXXReflectExpr` (spec/sema.md "Reflection").
+    /// The operand of a `CXXReflectExpr` as written (spec/reflection-repr.md
+    /// §2): decoded from the node, so it is the dependent operand while
+    /// the expression is value-dependent. A `BaseSpec` operand (only ever
+    /// built from an interned value) reads as `Null` here; use
+    /// [`crate::Ast::reflect_operand`] for the interned entity.
     pub fn reflect_operand(&self, e: ExprId) -> crate::reflect::Reflectee {
-        use crate::reflect::Reflectee;
         let n = self.expect_kind(e, ExprKind::CXXReflectExpr);
-        match n.aux {
-            0 => Reflectee::Type(QualType::from_raw(n.a).unwrap_or(QualType::ERROR)),
-            1 => Reflectee::Decl(DeclId::new(n.a)),
-            _ => Reflectee::Null,
-        }
+        crate::reflect::Reflectee::decode(n.aux, n.a).unwrap_or(crate::reflect::Reflectee::Null)
     }
 
     /// The value of a `CXXReflectExpr`: `None` while dependent.

@@ -34,7 +34,11 @@ impl Sema<'_, '_> {
             Reflectee::Decl(d)
                 if matches!(
                     self.kind_of(d),
-                    DeclKind::Var | DeclKind::Field | DeclKind::Function | DeclKind::CXXMethod
+                    DeclKind::Var
+                        | DeclKind::Field
+                        | DeclKind::Function
+                        | DeclKind::CXXMethod
+                        | DeclKind::EnumConstant
                 ) =>
             {
                 self.ast.decls.get(d).ty()

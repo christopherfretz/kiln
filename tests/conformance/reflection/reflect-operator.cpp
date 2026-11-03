@@ -18,7 +18,7 @@ namespace Inner {}
 namespace M = N;
 
 static_assert(^^N == ^^N);
-static_assert(^^M == ^^N);
+static_assert(^^M != ^^N); // [expr.reflect]/5: the alias itself
 static_assert(^^N::Inner != ^^N);
 static_assert(^^N::v == ^^N::v);
 static_assert(^^N::f == ^^N::f);
