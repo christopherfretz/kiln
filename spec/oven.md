@@ -406,6 +406,18 @@ the evaluator's flattened type table.
   is a local variable read as a global): "pointer to '…' is not a
   constant expression" (or "reference to …" when the frozen type is a
   reference; clang `note_constexpr_non_global`), with "declared here".
+  At C++26 (P2686R5 [expr.const.init]/2, WP-467) the pointer is frozen as
+  `PtrBase::Decl(local)` instead when it is constexpr-referenceable from
+  the variable being initialized (`Oven::referenceable_from_object`:
+  `run.object` is a non-static local of the same function as the
+  referent's variable; a `static` one is not a local). Globals are
+  resolved once per Oven, so the check is made at the freeze, against
+  `run.object`, not at resolve time. `automatic_referent(ast, value)`
+  finds such a pointer anywhere in a frozen value (scalars, relocations,
+  pointer-to-constant chains), which sema uses for usability
+  (spec/sema.md §4.9) and codegen to skip the fold. Left: a lambda body
+  reading through such a pointer in its own `static_assert` is accepted
+  (the evaluation point is not known to the Oven).
 - Freezing a pointer or reference to a temporary lifetime-extended by
   the variable being initialized ([class.temporary]/6) rejects one whose
   type is destructed (`Ast::needs_destruction`: a non-trivial destructor

@@ -3102,6 +3102,37 @@ diagnostics and IR.
   a constant initializer that is usable in constant expressions; the
   Oven needs no new rule, since
   usability is that of `e` and the holding variables.
+- **Constexpr-referenceable automatic objects (C++26, P2686R5, WP-467).**
+  An object of automatic storage duration is constexpr-referenceable from
+  a point P when its variable (that of its complete object) and P have the
+  same smallest enclosing non-block scope and that scope is a function
+  parameter scope ([expr.const.init]/2; a lambda body is a scope of its
+  own). So at `-std=c++26`, `constexpr int& r = local;`, `constexpr int* p
+  = &parm;`, `constexpr auto& [a, b] = local_constexpr_struct;` and the
+  tuple-like form (`get<i>` of the local) are constant-initialized; a
+  `static`/`thread_local` one is not ([expr.const.init]/4: it must be
+  representable at namespace scope), nor is a pointer escaping its
+  function (`return &k;`). The rule is the Oven's pointer freeze
+  (spec/oven.md "Freezing"): the variable being initialized and the
+  referent's variable are both locals of the same function. Usability is
+  then scoped ([expr.const]/8-9): a variable whose frozen value designates
+  an automatic object (`kiln_oven::automatic_referent`, cached per
+  variable in `Sema::auto_referent`) is usable in constant expressions
+  only where `enclosing_function(ctx)` is that object's function
+  (`Sema::representable_here`), so in a lambda body naming such a
+  reference or pointer is an odr-use and it is captured. A
+  non-`constexpr` reference to a local is constant-initialized by the same
+  rule ([expr.const.init]/2), so it too is usable in constant expressions
+  and its names are `non_odr_use_constant`; neither clang 22 nor GCC 16
+  implements this (clang 22 only the structured-binding part), so tests of
+  it are `skip(clang)` and the clang-golden AST tests whose `e` is a
+  reference to a local are pinned to `-std=c++23`. A value read through
+  such a reference still needs a constant referent ([expr.const]/10:
+  `constexpr int& r = i; static_assert(r == 3);` reads non-const `i`).
+  Codegen does not fold an initializer or load whose value designates an
+  automatic object (spec/codegen.md `fold.rs`). Before C++26 the freeze
+  rejects as before. Validation: `tests/conformance/expr.const/constexpr-ref-automatic{,-errors,-run}.cpp`,
+  `tests/conformance/dcl.struct.bind/constexpr-ref-automatic.cpp`.
 - **Fixed on the way.**
   - A reference that cannot bind (to `void`, or to a non-class type
     with no conversion) is `reference to type 'int' could not bind to
@@ -3111,10 +3142,9 @@ diagnostics and IR.
     specialization fully qualified (`Sema::decl_ty_str`, clang's
     printing of `getTypeDeclType`).
 - **Left.**
-  - P2686R5's constexpr-referenceable automatic objects: a block-scope
-    non-`static` `constexpr` decomposition whose bindings are
-    references (`constexpr auto& [a] = ...` of a local) still needs `e`
-    to have static storage; clang 22 rejects these too.
+  - Lifetime-extended temporaries of an automatic `constexpr` reference
+    (`constexpr const int& r = 42;` in a function) are still rejected
+    (spec/oven.md "Freezing"); clang 22 and GCC 16 reject them too.
   - Instantiating binding attributes.
   - The NoOp `'const M'` cast clang adds when a const class `e` is
     copy-initialized from a prvalue.
@@ -6609,9 +6639,10 @@ not supported yet`.
   captured diagnostics, `stash_has_error`: a failed constant
   initialization does not mark the variable INVALID), it is retried by
   value, a copy, each attempt in a block scope of its own. The copy stands
-  in for P2686's constexpr-referenceable automatic objects, which kiln
-  does not implement (§4.9): the paper's `constexpr std::array` local
-  example works. When both fail, the first attempt's diagnostics are emitted.
+  in for P2686's constexpr-referenceable automatic objects for the range
+  (§4.9 implements them for user-written declarations; the range variable
+  is `static constexpr`, which [expr.const.init]/4 excludes): the paper's
+  `constexpr std::array` local example works. When both fail, the first attempt's diagnostics are emitted.
 - **Holding variables.** The holding variables of a `constexpr` structured
   binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
   Oven sees initialized constants rather than a static variable's

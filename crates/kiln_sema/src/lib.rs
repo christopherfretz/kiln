@@ -459,6 +459,11 @@ pub struct Sema<'a, 'sm> {
     /// is not a plain static lvalue, is constant-initialized (so usable
     /// in constant expressions, [expr.const]/4; WP-231): evaluated once.
     pub(crate) ref_usable: kiln_source::fx::FxHashMap<DeclId, bool>,
+    /// The automatic variable a variable's constant value refers to
+    /// (P2686R5; [`kiln_oven::automatic_referent`]), by the variable,
+    /// once its value is known: a use outside that variable's function
+    /// odr-uses it (`Sema::representable_here`).
+    pub(crate) auto_referent: kiln_source::fx::FxHashMap<DeclId, Option<DeclId>>,
     /// Loops whose body is a same-line null statement, awaiting their
     /// enclosing compound statement (`-Wempty-body`, WP-191).
     pub(crate) empty_loop_bodies:
@@ -957,6 +962,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             friend_cmp_constraints: kiln_source::fx::FxHashMap::default(),
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),
+            auto_referent: kiln_source::fx::FxHashMap::default(),
             empty_loop_bodies: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,

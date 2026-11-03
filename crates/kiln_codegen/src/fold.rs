@@ -171,7 +171,11 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             },
             None => oven.fold_rvalue(&mut b, e),
         };
-        if let Some(v) = v {
+        // A value holding the address of an automatic variable (a
+        // `constexpr` reference to a local, P2686R5) has no constant
+        // form: like clang's `ConstantEmitter`, which cannot emit it,
+        // codegen evaluates the expression at run time.
+        if let Some(v) = v.filter(|&v| kiln_oven::automatic_referent(b.ast, v).is_none()) {
             folds.expr.insert(e, v);
         }
     }

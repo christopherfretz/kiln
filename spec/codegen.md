@@ -88,6 +88,12 @@ panic and never silently wrong IR.
   read-through").
   Validation: `tests/codegen/const_fold_lax.cpp`,
   `tests/codegen/ref_const_fold.cpp`.
+  A fold whose value designates an automatic object (C++26 P2686R5
+  constexpr references and pointers to locals,
+  `kiln_oven::automatic_referent`) is not recorded: an LLVM constant
+  cannot hold an alloca's address, so the initializer is emitted at run
+  time and uses load the variable, as clang's `ConstantEmitter` falls back
+  (WP-467, `tests/conformance/expr.const/constexpr-ref-automatic-run.cpp`).
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
