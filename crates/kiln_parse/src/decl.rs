@@ -1296,8 +1296,10 @@ impl Parser<'_, '_> {
                         && self.qualified_unknown_type_follows(end, ctx))
                     || (end > start + 1
                         && self.incomplete_scope_name(start)
-                        && (!matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
-                            || self.qualified_unknown_type_follows(end, ctx))) =>
+                        && (!matches!(
+                            ctx,
+                            DeclaratorContext::File | DeclaratorContext::Member
+                        ) || self.qualified_unknown_type_follows(end, ctx))) =>
             {
                 self.unknown_qualified_type_spec(ds, loc);
                 true
