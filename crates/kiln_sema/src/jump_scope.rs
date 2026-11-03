@@ -164,6 +164,27 @@ impl Checker<'_, '_, '_> {
                     self.expr(op.expr, p);
                 }
             }
+            StmtKind::WhileStmt
+            | StmtKind::ForStmt
+            | StmtKind::DoStmt
+            | StmtKind::CXXForRangeStmt => self.loop_stmt(s, p),
+            StmtKind::CXXExpansionStmt => {
+                for c in self.sema.children(s) {
+                    self.stmt(c, p);
+                }
+            }
+            StmtKind::ReturnStmt => self.opt_expr(st.return_value(s), p),
+            StmtKind::CoreturnStmt => self.opt_expr(st.coreturn_operand(s), p),
+            StmtKind::CXXTryStmt => self.try_stmt(s, p),
+            _ => {}
+        }
+    }
+
+    /// A loop statement: its init, condition variable, condition,
+    /// increment and body all live in the loop's own scope.
+    fn loop_stmt(&mut self, s: StmtId, p: &mut u32) {
+        let st = &self.sema.ast.stmts;
+        match st.get(s).kind() {
             StmtKind::WhileStmt | StmtKind::ForStmt => {
                 let d = *st.loop_data(s);
                 self.opt_stmt(d.init, p);
@@ -194,15 +215,7 @@ impl Checker<'_, '_, '_> {
                 self.decl(d.loop_var, p);
                 self.stmt(d.body, p);
             }
-            StmtKind::CXXExpansionStmt => {
-                for c in self.sema.children(s) {
-                    self.stmt(c, p);
-                }
-            }
-            StmtKind::ReturnStmt => self.opt_expr(st.return_value(s), p),
-            StmtKind::CoreturnStmt => self.opt_expr(st.coreturn_operand(s), p),
-            StmtKind::CXXTryStmt => self.try_stmt(s, p),
-            _ => {}
+            _ => unreachable!("loop_stmt on a non-loop statement"),
         }
     }
 
