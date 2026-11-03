@@ -4920,6 +4920,19 @@ conversion to `bool` (`check_constant_logical_operand`):
 
 ## 7. Statements (`stmt.rs`)
 - **Compound statements and scopes:** see §2.
+- **Discarded volatile glvalues** ([expr.context]/2, WP-416; clang
+  `IgnoredValueConversions` / `isReadIfDiscardedInCPlusPlus11`). From
+  C++11, `ignored_value_conversions(e)` applies the lvalue-to-rvalue
+  conversion (`conv::lvalue_to_rvalue`, so not to a class or array) to a
+  discarded-value expression that is a non-dependent glvalue of
+  volatile-qualified type and, ignoring parentheses, an id-expression, a
+  subscript, a member access, an indirection, a `.*` / `->*`, a comma
+  whose right operand qualifies, or a conditional (also `a ?: b`) both of
+  whose arms qualify. It runs on an expression statement and a `for`
+  increment (before `act_on_full_expr`), the left operand of a built-in
+  comma, and the operand of a cast to `void`. A call returning a volatile
+  reference is not read. Such a `.*` / `->*` is not `expression result
+  unused` (clang sees the cast).
 - **`if`, `while`, `for`:** condition conversion to `bool` (contextual
   conversion), plus `cond_var` for condition declarations
   (`act_on_condition_var`).

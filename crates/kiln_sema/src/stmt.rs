@@ -3,7 +3,7 @@
 //! `return` (spec/sema.md §7).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DeclMisc, NewDecl, Payload};
-use kiln_ast::expr::{CastKind, ExprDeps, ExprKind, ValueCategory};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprDeps, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::ids::RawId;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{CaseData, IfData, IfKind, LoopData, StmtKind, SwitchData};
@@ -281,8 +281,60 @@ impl Sema<'_, '_> {
             self.diagnose_unused(e);
         }
         self.discard_assignment_ref(e);
+        let e = self.ignored_value_conversions(e);
         let e = self.act_on_full_expr(e);
         self.builder().expr_stmt(e)
+    }
+
+    /// clang `IgnoredValueConversions` for a discarded-value expression
+    /// ([expr.context]/2): from C++11, a glvalue of volatile-qualified
+    /// type of one of the forms [`Sema::is_read_if_discarded`] accepts
+    /// undergoes the lvalue-to-rvalue conversion (so the object is read).
+    pub(crate) fn ignored_value_conversions(&mut self, e: ExprId) -> ExprId {
+        if self.std >= kiln_lex::Std::Cxx11 && self.is_read_if_discarded(e) {
+            conv::lvalue_to_rvalue(self, e)
+        } else {
+            e
+        }
+    }
+
+    /// clang `Expr::isReadIfDiscardedInCPlusPlus11` ([expr.context]/2): a
+    /// glvalue of volatile-qualified (non-class, non-array) type that is,
+    /// ignoring parentheses, an id-expression, a subscript, a class member
+    /// access, an indirection, a pointer-to-member operation, a comma
+    /// expression whose right operand is one of these, or a conditional
+    /// expression both of whose arms are.
+    fn is_read_if_discarded(&self, e: ExprId) -> bool {
+        let n = self.ast.exprs.get(e);
+        let t = n.ty();
+        if !n.value_category().is_glvalue()
+            || self.ast.types.is_dependent(t)
+            || !self.ast.types.effective_quals(t).is_volatile()
+        {
+            return false;
+        }
+        let mut x = e;
+        while self.ast.exprs.get(x).kind() == ExprKind::ParenExpr {
+            x = self.ast.exprs.operand(x);
+        }
+        match self.ast.exprs.get(x).kind() {
+            ExprKind::DeclRefExpr | ExprKind::ArraySubscriptExpr | ExprKind::MemberExpr => true,
+            ExprKind::UnaryOperator => self.ast.exprs.unary_op(x) == UnaryOp::Deref,
+            ExprKind::BinaryOperator => match self.ast.exprs.binary_op(x) {
+                BinaryOp::PtrMemD | BinaryOp::PtrMemI => true,
+                BinaryOp::Comma => self.is_read_if_discarded(self.ast.exprs.operands(x)[1]),
+                _ => false,
+            },
+            ExprKind::ConditionalOperator => {
+                let [a, b] = self.ast.exprs.cond_arms(x);
+                self.is_read_if_discarded(a) && self.is_read_if_discarded(b)
+            }
+            ExprKind::BinaryConditionalOperator => {
+                let ops = self.ast.exprs.binary_conditional_operands(x, &self.ast.lists);
+                self.is_read_if_discarded(ops[0]) && self.is_read_if_discarded(ops[3])
+            }
+            _ => false,
+        }
     }
 
     /// A condition ([stmt.pre]/4): contextually converted to `bool`.
@@ -694,6 +746,7 @@ impl Sema<'_, '_> {
         let inc = inc.map(|e| {
             self.diagnose_unused(e);
             self.discard_assignment_ref(e);
+            let e = self.ignored_value_conversions(e);
             self.act_on_full_expr(e)
         });
         self.check_for_loop_analysis(cond_var, cond, inc, body);

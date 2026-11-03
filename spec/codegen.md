@@ -544,6 +544,19 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   of a non-final class) exceeds 1. Below 22 neither (clang 19). Metadata
   nodes are numbered in first-use order after the module flags and
   ident, as clang prints them.
+- **Pointee alignment of an array of unknown bound (WP-416).** clang
+  `getTypeAlignInChars` gives `T[]` its element's alignment, so
+  `pointee_layout` reports `(no size, align of T)`: an `int(&)[]` / `int
+  (*)[]` parameter is `nonnull align 4` (no `dereferenceable`) and loads
+  through it are `align 4`. A function type stays alignment 1.
+- **Zeroed array fillers (WP-416).** clang `EmitArrayInit` passes
+  `Dest.isZeroed()` to the filler's `EmitInitializationToLValue`: when
+  the whole array was zeroed first (`Agg a[2] = {}`, one `memset` of the
+  array), the filler loop skips the per-element zeroing of a
+  value-initialized aggregate element, so no per-element `memset`.
+- **Discarded volatile reads (WP-416).** A discarded volatile scalar
+  glvalue carries sema's `LValueToRValue` cast (spec/sema.md §7,
+  [expr.context]/2), lowered as a `load volatile` whose value is unused.
 
 ### 3.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,

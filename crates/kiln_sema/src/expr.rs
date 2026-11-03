@@ -1165,6 +1165,16 @@ impl Sema<'_, '_> {
                         self.unused_warning(r).map(|_| (DiagId::sema_unused_expr, loc, Vec::new()))
                     }
                     _ if op.is_assignment() => None,
+                    // A volatile scalar `.*` / `->*` result is read when
+                    // discarded ([expr.context]/2): clang sees the
+                    // `LValueToRValue` cast and does not warn.
+                    BinaryOp::PtrMemD | BinaryOp::PtrMemI
+                        if self.std >= kiln_lex::Std::Cxx11
+                            && self.ast.types.effective_quals(n.ty()).is_volatile()
+                            && self.ast.types.as_record(n.ty()).is_none() =>
+                    {
+                        None
+                    }
                     _ => Some((DiagId::sema_unused_expr, loc, Vec::new())),
                 }
             }
@@ -3055,6 +3065,9 @@ impl Sema<'_, '_> {
             BinaryOp::Comma => {
                 self.diagnose_comma_lhs(l);
                 self.discard_assignment_ref(l);
+                // clang `CheckCommaOperands`: the left operand is a
+                // discarded-value expression ([expr.comma]/1).
+                let l = self.ignored_value_conversions(l);
                 let ty = self.ety(r);
                 let res = self.builder().binary(op, l, r, ty, loc);
                 self.mark_bitfield_if(res, r);
@@ -5455,6 +5468,9 @@ impl Sema<'_, '_> {
                     return self.recover(ty, &[e], loc);
                 }
                 self.discard_assignment_ref(e);
+                // [expr.static.cast]/6: the operand is a discarded-value
+                // expression (clang `CastOperation::CheckToVoid`).
+                let e = self.ignored_value_conversions(e);
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             if style == CastStyle::Const {
