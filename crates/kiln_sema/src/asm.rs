@@ -72,6 +72,9 @@ impl Sema<'_, '_> {
                 return build(self, &ops);
             }
             out_infos.push(info);
+            if self.check_naked_parm_ref(op.expr) {
+                return None;
+            }
             let e = op.expr;
             let t = self.ast.exprs.get(e).ty();
             if self.type_dependent(e) || self.is_error_type(t) {
@@ -112,6 +115,9 @@ impl Sema<'_, '_> {
             }
             if self.ast.types.canonical_kind(t) == TypeKind::MemberPointer {
                 self.error(DiagId::sema_asm_pmf_through_constraint, b);
+                return None;
+            }
+            if self.check_naked_parm_ref(e) {
                 return None;
             }
             if info.allows_memory() && !info.allows_register() {
@@ -602,5 +608,102 @@ fn escape_len(t: &[u8]) -> (usize, usize) {
             (2 + digits, units)
         }
         _ => (2, 1),
+    }
+}
+
+// -- naked functions (WP-405) ---------------------------------------------------
+
+impl Sema<'_, '_> {
+    /// The `naked` attribute on some declaration of function `f` (clang
+    /// `getAttr<NakedAttr>()`, inherited by redeclarations). A naked
+    /// function gets no fall-off or noreturn check (clang
+    /// `ActOnFinishFunctionBody`; `Sema::end_function_body`).
+    pub(crate) fn naked_attr(&self, f: DeclId) -> Option<kiln_ast::attr::AttrNode> {
+        use kiln_ast::attr::AttrKind;
+        self.ast.decls.function(f)?;
+        self.ast.redecls_of(f).find_map(|r| {
+            self.ast
+                .lists
+                .iter::<kiln_ast::AttrId>(self.ast.attrs.of_decl(r))
+                .map(|a| *self.ast.attrs.get(a))
+                .find(|n| n.kind == AttrKind::NAKED)
+        })
+    }
+
+    /// A `naked` function's body holds only asm statements, null
+    /// statements and local register variables without an initializer
+    /// (clang `ActOnFinishFunctionBody`): the first other statement is
+    /// an error, with a note at the attribute, and invalidates `f`.
+    pub(crate) fn check_naked_body(&mut self, f: DeclId, body: StmtId) {
+        use kiln_ast::attr::AttrKind;
+        use kiln_ast::stmt::StmtKind;
+        let Some(naked) = self.naked_attr(f) else { return };
+        let stmts: Vec<StmtId> = if self.ast.stmts.get(body).kind() == StmtKind::CompoundStmt {
+            let l = self.ast.stmts.compound_body(body);
+            self.ast.lists.iter::<StmtId>(l).collect()
+        } else {
+            vec![body]
+        };
+        for s in stmts {
+            let kind = self.ast.stmts.get(s).kind();
+            if matches!(kind, StmtKind::GCCAsmStmt | StmtKind::NullStmt) {
+                continue;
+            }
+            if kind == StmtKind::DeclStmt {
+                let l = self.ast.stmts.decl_stmt_decls(s);
+                let register_vars = self.ast.lists.iter::<DeclId>(l).all(|d| {
+                    self.ast.decls.var(d).is_none_or(|v| {
+                        v.init.is_none()
+                            && self
+                                .ast
+                                .lists
+                                .iter::<kiln_ast::AttrId>(self.ast.attrs.of_decl(d))
+                                .any(|a| self.ast.attrs.get(a).kind == AttrKind::ASM_LABEL)
+                    })
+                });
+                if register_vars {
+                    continue;
+                }
+            }
+            let at = self.stmt_begin_loc(s);
+            let note = self.diag(DiagId::note_attribute, naked.loc);
+            let msg = self.diag(DiagId::sema_naked_non_asm_stmt, at).with_note(note);
+            self.emit(msg);
+            self.ast.decls.set_flags(f, kiln_ast::decl::DeclFlags::INVALID);
+            return;
+        }
+    }
+
+    /// An asm operand of a `naked` function may not name a parameter or
+    /// `this` (clang `CheckNakedParmReference`): reports one in `e`, in
+    /// clang's work-list order, and returns true.
+    fn check_naked_parm_ref(&mut self, e: ExprId) -> bool {
+        use kiln_ast::decl::DeclKind;
+        use kiln_ast::expr::ExprKind;
+        let Some(f) = self.func.as_ref().map(|s| s.decl) else { return false };
+        let Some(naked) = self.naked_attr(f) else { return false };
+        let mut work = vec![e];
+        while let Some(e) = work.pop() {
+            let id = match self.ast.exprs.get(e).kind() {
+                ExprKind::CXXThisExpr => Some(DiagId::sema_asm_naked_this_ref),
+                ExprKind::DeclRefExpr
+                    if self.ast.decls.get(self.ast.exprs.decl(e)).kind() == DeclKind::ParmVar =>
+                {
+                    Some(DiagId::sema_asm_naked_parm_ref)
+                }
+                _ => None,
+            };
+            if let Some(id) = id {
+                let at = self.begin_loc(e);
+                let note = self.diag(DiagId::note_attribute, naked.loc);
+                let msg = self.diag(id, at).with_note(note);
+                self.emit(msg);
+                return true;
+            }
+            let kids = self.ast.exprs.children(e, &self.ast.lists);
+            // clang's work list: last child first.
+            work.extend(kids);
+        }
+        false
     }
 }

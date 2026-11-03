@@ -908,6 +908,20 @@ impl Sema<'_, '_> {
                     star.with_offset(1),
                 )));
             }
+        } else if self.clang_compat >= 22 {
+            // clang 22 decides the macro-argument backtrace on the
+            // diagnostic's `R1`/`R2` as streamed (spec/diag.md §3.3): a
+            // built-in binary operator's two operands, else the
+            // expression with an unset (invalid) `R2`.
+            let x = self.ignore_parens(e);
+            if self.ast.exprs.get(x).kind() == ExprKind::BinaryOperator
+                && matches!(id, DiagId::sema_unused_expr | DiagId::sema_unused_comma_left_operand)
+            {
+                let [l, r] = self.ast.exprs.operands(x);
+                d = d.range(self.expr_range(l)).range(self.expr_range(r));
+            } else {
+                d = d.range(self.expr_range(e)).range(kiln_source::Span::INVALID);
+            }
         } else {
             d = d.range(self.expr_range(e));
         }
@@ -2928,6 +2942,71 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `-Wconstant-logical-operand` ([expr.log.and], [expr.log.or]; clang
+    /// `CheckLogicalOperands`): a non-`bool` integer left operand with a
+    /// right operand that folds to an integer probably meant `&` / `|`.
+    /// In C++ any folded value warns unless the right operand is `bool`
+    /// or written by a macro; otherwise only a value other than 0 or 1.
+    /// Not for an operator spelled in a macro or in an instantiation; an
+    /// enumerator operand with a value other than 0 or 1 suppresses it
+    /// (clang's `-Wint-in-bool-context` case).
+    fn check_constant_logical_operand(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) {
+        let enum_not_bool = |s: &Self, e: ExprId| {
+            s.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr && {
+                let d = s.ast.exprs.decl(e);
+                s.kind_of(d) == DeclKind::EnumConstant
+                    && s.ast
+                        .decls
+                        .enumerator(d)
+                        .and_then(|x| x.value)
+                        .and_then(|v| s.const_int(v))
+                        .is_some_and(|v| v != 0 && v != 1)
+            }
+        };
+        let (lt, rt) = (self.ety(l), self.ety(r));
+        let int_ty = |s: &Self, t: QualType| conv::is_integral_or_unscoped_enum(s, t);
+        if enum_not_bool(self, l)
+            || enum_not_bool(self, r)
+            || !int_ty(self, lt)
+            || self.ast.types.builtin(lt) == Some(BuiltinType::Bool)
+            || !int_ty(self, rt)
+            || self.expr_is_value_dependent(r)
+            || self.diags.sm().is_macro_loc(loc)
+            || !self.inst.stack.is_empty()
+        {
+            return;
+        }
+        let Some(v) = self.fold_rvalue_int(r) else { return };
+        if (self.ast.types.builtin(rt) == Some(BuiltinType::Bool)
+            || self.diags.sm().is_macro_loc(self.eloc(r)))
+            && (v == 0 || v == 1)
+        {
+            return;
+        }
+        let and = op == BinaryOp::LAnd;
+        let (text, bit) = if and { ("&&", "&") } else { ("||", "|") };
+        let op_span = kiln_source::Span::new(loc, loc.with_offset(2));
+        let mut d = self
+            .diag(DiagId::sema_constant_logical_operand, loc)
+            .arg(text)
+            .range(self.expr_range(r))
+            .with_note(
+                self.diag(DiagId::note_logical_instead_of_bitwise_change_operator, loc)
+                    .arg(bit)
+                    .fixit(kiln_diag::FixIt::replace(op_span, bit)),
+            );
+        if and {
+            let l_end = self.expr_end_loc(l);
+            let r_end = self.expr_range(r).hi;
+            let mut n = self.diag(DiagId::note_logical_instead_of_bitwise_remove_constant, loc);
+            if let Some(from) = self.token_end(l_end) {
+                n = n.fixit(kiln_diag::FixIt::remove(kiln_source::Span::new(from, r_end)));
+            }
+            d = d.with_note(n);
+        }
+        self.emit(d);
+    }
+
     /// The built-in binary operator `op` ([expr.mul] .. [expr.comma]).
     pub(crate) fn builtin_binary(
         &mut self,
@@ -2970,6 +3049,7 @@ impl Sema<'_, '_> {
                 res
             }
             BinaryOp::LAnd | BinaryOp::LOr => {
+                self.check_constant_logical_operand(op, l, r, loc);
                 let (Ok(l2), Ok(r2)) = (
                     conv::contextually_convert_to_bool(self, l),
                     conv::contextually_convert_to_bool(self, r),
@@ -3397,8 +3477,82 @@ impl Sema<'_, '_> {
         self.diag_runtime_behavior_now(msg);
     }
 
+    /// clang `Expr::isSameComparisonOperand` (simplified): through
+    /// parentheses and implicit conversions, the same variable, `this`,
+    /// or the same member of the same such operand.
+    fn same_comparison_operand(&self, l: ExprId, r: ExprId) -> bool {
+        let (l, r) = (self.ignore_paren_imp_casts(l), self.ignore_paren_imp_casts(r));
+        let (ln, rn) = (self.ast.exprs.get(l), self.ast.exprs.get(r));
+        if ln.kind() != rn.kind() {
+            return false;
+        }
+        match ln.kind() {
+            ExprKind::CXXThisExpr => true,
+            ExprKind::DeclRefExpr => {
+                let d = self.ast.exprs.decl(l);
+                d == self.ast.exprs.decl(r)
+                    && matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar)
+            }
+            ExprKind::MemberExpr => {
+                self.ast.exprs.decl(l) == self.ast.exprs.decl(r)
+                    && ln.has(ExprFlags::ARROW) == rn.has(ExprFlags::ARROW)
+                    && self.kind_of(self.ast.exprs.decl(l)) == DeclKind::Field
+                    && self.same_comparison_operand(
+                        self.ast.exprs.operand(l),
+                        self.ast.exprs.operand(r),
+                    )
+            }
+            _ => false,
+        }
+    }
+
+    /// clang `diagnoseTautologicalComparison`, self-comparison part:
+    /// `x == x` of a non-floating type always evaluates to `true`
+    /// (`==`, `<=`, `>=`), `false` (`!=`, `<`, `>`) or
+    /// `std::strong_ordering::equal` (`<=>`), where run-time behavior is
+    /// diagnosed. Not in a template instantiation nor from a macro; a
+    /// class operand only at clang 22, where an operator without a viable
+    /// candidate is checked as a built-in comparison (spec/sema.md §1.1).
+    /// Arrays are `diagnose_array_comparison`'s.
+    pub(crate) fn diagnose_self_comparison(
+        &mut self,
+        op: BinaryOp,
+        l: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) {
+        if self.inst.stack.depth() > 0 || !self.same_comparison_operand(l, r) {
+            return;
+        }
+        let t = self.ety(self.ignore_paren_imp_casts(l));
+        let ty = &self.ast.types;
+        if ty.is_array(t)
+            || ty.is_floating(t)
+            || ty.as_complex(t).is_some()
+            || self.vector_parts(t).is_some()
+            || (ty.as_record(t).is_some() && self.clang_compat < 22)
+            || self.is_nullptr_type(t)
+            || self.is_dependent_type(t)
+        {
+            return;
+        }
+        let begin_macro = |s: &Self, e: ExprId| s.begin_loc(e).is_macro();
+        if loc.is_macro() || begin_macro(self, l) || begin_macro(self, r) {
+            return;
+        }
+        let result = match op {
+            BinaryOp::EQ | BinaryOp::LE | BinaryOp::GE => 1,
+            BinaryOp::NE | BinaryOp::LT | BinaryOp::GT => 2,
+            BinaryOp::Cmp => 3,
+            _ => return,
+        };
+        let msg = self.diag(DiagId::sema_comparison_always, loc).arg(0).arg(result);
+        self.diag_runtime_behavior_now(msg);
+    }
+
     fn comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         self.diagnose_array_comparison(op, l, r, loc);
+        self.diagnose_self_comparison(op, l, r, loc);
         let l2 = conv::decay(self, l);
         let r2 = conv::decay(self, r);
         let (lt, rt) = (self.ety(l2), self.ety(r2));
@@ -4235,6 +4389,11 @@ impl Sema<'_, '_> {
         }
         if let Some(b) = self.builtin_callee(callee)
             && let Some(id) = self.ast.decls.builtin_id(b)
+        {
+            self.atomic_flag_order_check(id, args);
+        }
+        if let Some(b) = self.builtin_callee(callee)
+            && let Some(id) = self.ast.decls.builtin_id(b)
             && kiln_ast::decl::builtin::is_custom(id)
         {
             let has_braced = braced.iter().any(Option::is_some);
@@ -4381,12 +4540,22 @@ impl Sema<'_, '_> {
         // [temp.inst]/12: the default arguments this call uses are
         // instantiated now.
         if let Some(c) = named {
+            // Where the instantiation is required: the call's start; at
+            // clang 22 a member call's member name (`getExprLoc`).
+            let poi = if self.clang_compat >= 22
+                && self.ast.exprs.get(callee).kind() == ExprKind::MemberExpr
+                && !self.is_static_method(c.decl)
+            {
+                self.eloc(callee)
+            } else {
+                self.begin_loc(callee)
+            };
             for &p in pdecls.iter().take(n).skip(have) {
                 if self.diagnose_unparsed_default_arg(c.decl, p, callee) {
                     return None;
                 }
                 if self.inst.lazy_defaults.contains_key(&p)
-                    && !self.instantiate_lazy_default(c.decl, p, self.begin_loc(callee))
+                    && !self.instantiate_lazy_default(c.decl, p, poi)
                 {
                     return None;
                 }
@@ -4734,6 +4903,12 @@ impl Sema<'_, '_> {
         }
         if self.is_integral_or_enum(t) && !conv::is_scoped_enum(self, t) {
             return conv::integral_promotion(self, x);
+        }
+        // [expr.call]/12 (CWG722): a `std::nullptr_t` argument is
+        // converted to `void *`; clang 22 builds the `NullToPointer` cast.
+        if self.clang_compat >= 22 && self.is_nullptr_type(t) {
+            let vp = self.ast.types.pointer_to(QualType::VOID);
+            return conv::implicit_convert(self, x, vp, ConvCtx::Argument).unwrap_or(x);
         }
         x
     }

@@ -12,7 +12,7 @@
 //@ diag: 17:31 error "integer value 5 is outside the valid range of values [0, 1] for the enumeration type 'E'"
 //@ diag: 17:31 error "integer value -1 is outside the valid range of values [0, 1] for the enumeration type 'E'"
 //@ requires: clang<22
-// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
+// clang 19 spelling; enum-range-clang22.cpp has clang 22's (WP-394).
 enum E { A, B };
 constexpr E f(int v) { return (E)v; }
 static_assert(f(5) == 5);

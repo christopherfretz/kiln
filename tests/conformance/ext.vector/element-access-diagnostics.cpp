@@ -22,7 +22,7 @@
 //@ diag: 49:54 error "illegal vector component name 'q'"
 //@ diag: 50:11 note "in instantiation of function template specialization 'get<float __attribute__((ext_vector_type(4)))>' requested here"
 //@ requires: clang<22
-// clang 22 emits error: illegal vector component name 'q'; WP-355 residual
+// clang 19 spelling; element-access-diagnostics-clang22.cpp has clang 22's (WP-394).
 typedef float f4 __attribute__((ext_vector_type(4)));
 typedef float f2 __attribute__((ext_vector_type(2)));
 typedef float f3 __attribute__((ext_vector_type(3)));

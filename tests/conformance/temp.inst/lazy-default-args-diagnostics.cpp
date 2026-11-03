@@ -9,7 +9,7 @@
 //@ diag: 19:8 note "candidate constructor (the implicit move constructor) not viable: no known conversion from 'const int' to 'B &&' for 1st argument"
 //@ diag: 14:12 note "passing argument to parameter 'x' here"
 //@ requires: clang<22
-// clang 22 no longer emits error: no viable conversion from 'const int' to 'B'; WP-355 residual
+// clang 19 spelling; lazy-default-args-diagnostics-clang22.cpp has clang 22's (WP-394).
 template <class T> struct A {
   void f(T x = T::value) {}
   static int g(int y = T::nope) { return y; }

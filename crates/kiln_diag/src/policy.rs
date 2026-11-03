@@ -45,6 +45,9 @@ pub(crate) struct Policy {
     ext_behavior: Severity,
     /// Drop warnings located in system headers (no `-Wsystem-headers`).
     pub(crate) suppress_system: bool,
+    /// The clang compat level, which selects the group tree
+    /// ([`crate::Group::compat_subgroups`]).
+    pub(crate) compat: u32,
 }
 
 impl Policy {
@@ -77,6 +80,7 @@ impl Policy {
             enable_all: false,
             ext_behavior,
             suppress_system: true,
+            compat: opts.clang_compat,
         };
         let mut reports = Vec::new();
         for report in [false, true] {
@@ -132,7 +136,7 @@ impl Policy {
                 }
             } else if !report {
                 self.group_as_error(spec, positive);
-            } else if group_members(flavor, spec).is_none() {
+            } else if group_members(flavor, spec, self.compat).is_none() {
                 out.push(unknown_option(flavor, "-Werror=", spec));
             }
             return;
@@ -154,13 +158,13 @@ impl Policy {
                 }
             } else if !report {
                 self.group_as_fatal(spec, positive);
-            } else if group_members(flavor, spec).is_none() {
+            } else if group_members(flavor, spec, self.compat).is_none() {
                 out.push(unknown_option(flavor, "-Wfatal-errors=", spec));
             }
             return;
         }
         if report {
-            if group_members(flavor, opt).is_none() {
+            if group_members(flavor, opt, self.compat).is_none() {
                 out.push(unknown_option(flavor, if positive { "-W" } else { "-Wno-" }, opt));
             }
         } else {
@@ -183,7 +187,7 @@ impl Policy {
             return;
         }
         if report {
-            if group_members(flavor, opt).is_none() {
+            if group_members(flavor, opt, self.compat).is_none() {
                 out.push(unknown_option(flavor, if positive { "-R" } else { "-Rno-" }, opt));
             }
         } else {
@@ -203,7 +207,7 @@ impl Policy {
     }
 
     fn set_group(&mut self, flavor: Flavor, group: &str, sev: Severity) {
-        for id in group_members(flavor, group).unwrap_or_default() {
+        for id in group_members(flavor, group, self.compat).unwrap_or_default() {
             self.set_severity(id, sev);
         }
     }
@@ -224,7 +228,7 @@ impl Policy {
             self.set_group(Flavor::WarningOrError, group, Severity::Error);
             return;
         }
-        for id in group_members(Flavor::WarningOrError, group).unwrap_or_default() {
+        for id in group_members(Flavor::WarningOrError, group, self.compat).unwrap_or_default() {
             let m = &mut self.map[id as usize];
             if matches!(m.severity, Severity::Error | Severity::Fatal) {
                 m.severity = Severity::Warning;
@@ -239,7 +243,7 @@ impl Policy {
             self.set_group(Flavor::WarningOrError, group, Severity::Fatal);
             return;
         }
-        for id in group_members(Flavor::WarningOrError, group).unwrap_or_default() {
+        for id in group_members(Flavor::WarningOrError, group, self.compat).unwrap_or_default() {
             let m = &mut self.map[id as usize];
             if m.severity == Severity::Fatal {
                 m.severity = Severity::Error;

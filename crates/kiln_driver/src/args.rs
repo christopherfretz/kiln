@@ -164,6 +164,11 @@ pub struct PrintArgs {
     pub includes_too: bool,
 }
 
+/// The `-fclang-compat` level without the flag: clang 22 (WP-394; the
+/// oracle switch, spec/driver.md). The library default stays
+/// [`ClangCompat::Clang19`].
+pub const DEFAULT_CLANG_COMPAT: ClangCompat = ClangCompat::Clang22;
+
 /// Flags that change predefined macros; `None` keeps clang's default.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -391,6 +396,12 @@ pub struct Args {
     /// `-Woption-ignored` warning naming the last spelling. `None` is the
     /// target's default (on, as clang 19 on an `AArch64` Linux host).
     pub outline_atomics: Option<bool>,
+    /// `-f[no-]omit-frame-pointer` (the last wins; `Some(true)` omits);
+    /// `None` is the target's default (spec/codegen.md "Frame pointer").
+    pub omit_frame_pointer: Option<bool>,
+    /// `-m[no-]omit-leaf-frame-pointer` (the last wins; `Some(true)`
+    /// omits it in leaf functions); `None` is the target's default.
+    pub omit_leaf_frame_pointer: Option<bool>,
     /// The `_Complex` multiply/divide algorithm, the last of
     /// `-f[no-]cx-limited-range`, `-f[no-]cx-fortran-rules`,
     /// `-fcomplex-arithmetic=` and `-ffast-math` (basic); `None` is
@@ -436,6 +447,7 @@ impl Args {
             argv: argv.to_vec(),
             program: program_basename(argv0).to_owned(),
             mode: DriverMode::from_program_name(argv0),
+            predef: PredefArgs { clang_compat: DEFAULT_CLANG_COMPAT, ..PredefArgs::default() },
             ..Args::default()
         };
         let mut x: Option<Lang> = None;
@@ -550,6 +562,10 @@ impl Args {
             "-disable-llvm-passes" => self.disable_llvm_passes = true,
             "-moutline-atomics" => self.outline_atomics = Some(true),
             "-mno-outline-atomics" => self.outline_atomics = Some(false),
+            "-fomit-frame-pointer" => self.omit_frame_pointer = Some(true),
+            "-fno-omit-frame-pointer" => self.omit_frame_pointer = Some(false),
+            "-momit-leaf-frame-pointer" => self.omit_leaf_frame_pointer = Some(true),
+            "-mno-omit-leaf-frame-pointer" => self.omit_leaf_frame_pointer = Some(false),
             // Debug information is not generated (spec/codegen.md §5).
             "-g" | "-g0" | "-g1" | "-g2" | "-g3" | "-ggdb" | "-ggdb0" | "-ggdb1" | "-ggdb2"
             | "-ggdb3" => {}
@@ -849,7 +865,7 @@ mod tests {
 
     #[test]
     fn clang_compat_level() {
-        assert_eq!(parse("t.cpp").predef.clang_compat, ClangCompat::Clang19);
+        assert_eq!(parse("t.cpp").predef.clang_compat, ClangCompat::Clang22);
         let a = parse("-fclang-compat=22 t.cpp");
         assert_eq!(a.predef.clang_compat, ClangCompat::Clang22);
         assert_eq!(a.errors, []);
@@ -942,6 +958,20 @@ mod tests {
         assert_eq!(parse("-mno-outline-atomics a.cpp").outline_atomics, Some(false));
         let a = parse("-mno-outline-atomics -moutline-atomics a.cpp");
         assert_eq!((a.outline_atomics, a.errors), (Some(true), vec![]));
+    }
+
+    #[test]
+    fn frame_pointer_flags_last_win() {
+        let a = parse("a.cpp");
+        assert_eq!((a.omit_frame_pointer, a.omit_leaf_frame_pointer), (None, None));
+        let a = parse("-fomit-frame-pointer -fno-omit-frame-pointer a.cpp");
+        assert_eq!((a.omit_frame_pointer, a.errors), (Some(false), vec![]));
+        let a = parse("-fno-omit-frame-pointer -fomit-frame-pointer a.cpp");
+        assert_eq!(a.omit_frame_pointer, Some(true));
+        let a = parse("-mno-omit-leaf-frame-pointer -momit-leaf-frame-pointer a.cpp");
+        assert_eq!((a.omit_leaf_frame_pointer, a.errors), (Some(true), vec![]));
+        let a = parse("-momit-leaf-frame-pointer -mno-omit-leaf-frame-pointer a.cpp");
+        assert_eq!(a.omit_leaf_frame_pointer, Some(false));
     }
 
     #[test]

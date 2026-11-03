@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+sema_naked_non_asm_stmt = Error (0) "non-ASM statement in naked function is not supported";
 // ----- WP-197 (DR482 namespace extra qualification; ambiguous member types)
 sema_namespace_member_extra_qualification = Warning [ExtraQualification] (1) "extra qualification on member '{0}'";
 sema_need_header_before_typeid = Error (0) "you need to include <typeinfo> or import std before using the 'typeid' operator";
@@ -39,6 +40,7 @@ sema_non_object_not_modifiable = Error (1) "non-object type {0} is not assignabl
 sema_non_pod_vararg = WarningError [NonPodVarargs] (2) "cannot pass object of non-trivial type {0} through variadic {1:function|block|method|constructor}; call will abort at runtime";
 sema_non_static_static = Error (1) "non-static declaration of '{0}' follows static declaration";
 sema_non_template_in_template_id = Error (1) "'{0}' does not name a template but is followed by template arguments";
+sema_non_thread_thread = Error (1) "non-thread-local declaration of '{0}' follows thread-local declaration";
 sema_nonconst_member_fn_ptr = Error (0) "cannot create a non-constant pointer to member function";
 sema_nonlocal_sizeless = Error (1) "non-local variable with sizeless type {0}";
 sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined out-of-line";
@@ -198,5 +200,4 @@ sema_return_in_ctor_handler = Error (0) "return in the catch of a function try b
 sema_return_init_list = Error (1) "void function '{0}' must not return a value";
 sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";
 sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";
-sema_return_void_expr_in_nonvoid = Error (1) "non-void function '{0}' should return a value";
 sema_rvalue_ref_bind_to_lvalue = Error (2) "rvalue reference to type {0} cannot bind to lvalue of type {1}";

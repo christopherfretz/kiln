@@ -1041,6 +1041,25 @@ impl Sema<'_, '_> {
         self.builder().implicit_value_init(ty)
     }
 
+    /// Whether member `d` is lexically inside a class still being defined
+    /// (its default member initializers are not parsed yet).
+    fn in_class_being_defined(&self, d: DeclId) -> bool {
+        let mut c = self.ast.decls.get(d).ctx();
+        for _ in 0..256 {
+            let Some(r) = c else { return false };
+            if self
+                .ast
+                .decls
+                .record(r)
+                .is_some_and(|x| x.defn.contains(DefinitionBits::BEING_DEFINED))
+            {
+                return true;
+            }
+            c = self.ast.decls.lexical_ctx(r);
+        }
+        false
+    }
+
     /// A field with no initializer in an aggregate initialization: its
     /// default member initializer ([dcl.init.aggr]/5.1, a
     /// `CXXDefaultInitExpr`), else the value-initializing [`Sema::filler`].
@@ -1049,6 +1068,26 @@ impl Sema<'_, '_> {
         // A field whose initializer failed (clang: `BuildCXXDefaultInitExpr`
         // fails, the list is invalid).
         if self.ast.decls.get(f).has(DeclFlags::INVALID) {
+            // clang 22's aggregate initialization reports each use of a
+            // default member initializer it has no expression for (not
+            // parsed yet, or one that failed outside an instantiation),
+            // even after the field was invalidated (spec/sema.md §1.1).
+            let init = self.ast.decls.field(f).and_then(|x| x.init);
+            let unparsed = init.is_none() && self.in_class_being_defined(f);
+            let failed = init.is_none_or(|e| self.is_err_expr(e))
+                && self
+                    .ast
+                    .decls
+                    .get(f)
+                    .ctx()
+                    .is_none_or(|r| self.ast.instantiated_from(r).is_none());
+            if self.clang_compat >= 22
+                && self.field_has_nsdmi(f)
+                && (unparsed || failed)
+                && !self.inst.deferred_nsdmis.contains_key(&f)
+            {
+                self.default_member_init_not_yet_parsed(f, at);
+            }
             return self.recover(fty, &[], at);
         }
         if self.field_has_nsdmi(f) {

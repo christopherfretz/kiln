@@ -23,7 +23,7 @@
 //@ diag: 107:10 note "read of heap allocated object that has been deleted"
 //@ diag: 109:15 note "in call to 'use_after_free()'"
 //@ requires: clang<22
-// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
+// clang 19 spelling; constexpr-std-allocator-clang22.cpp has clang 22's (WP-394).
 using size_t = decltype(sizeof(0));
 void *operator new(size_t, void *p) noexcept { return p; }
 namespace std {

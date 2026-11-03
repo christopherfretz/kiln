@@ -249,6 +249,7 @@ impl Sema<'_, '_> {
     /// The built-in `<=>` on non-dependent operands ([expr.spaceship];
     /// clang's `CheckCompareOperands` for `BO_Cmp`).
     pub(crate) fn builtin_three_way(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+        self.diagnose_self_comparison(BinaryOp::Cmp, l, r, loc);
         let any_ptr = |s: &Self, e: ExprId| {
             let t = s.ety(e);
             s.ast.types.is_pointer(t) || s.is_member_pointer(t)

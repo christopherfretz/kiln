@@ -1377,8 +1377,9 @@ impl Sema<'_, '_> {
                     // clang streams the two `TemplateName`s as written: an
                     // unqualified name bare, `N::A` with its qualifier; a
                     // template taken from a class (no sugar) fully qualified.
+                    // clang 22 prints `A`'s template fully qualified always.
                     (ArgView::Template(pn), ArgView::Template(an)) => {
-                        let a = if d.info.second_from_decl {
+                        let a = if d.info.second_from_decl || self.clang_compat >= 22 {
                             self.arg_str(TemplateArg::template(an))
                         } else {
                             self.written_name_str(an)

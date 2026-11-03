@@ -27,7 +27,7 @@
 //@ diag: 43:43 error "first two arguments to '__builtin_shufflevector' must be vectors"
 //@ diag: 44:21 error "cannot initialize return object of type 'v4' (vector of 4 'int' values) with an rvalue of type '__attribute__((__vector_size__(5 * sizeof(int)))) int' (vector of 5 'int' values)"
 //@ requires: clang<22
-// clang 22 emits error: non-pointer argument to '__builtin_assume_aligned' is not allowed; WP-355 residual
+// clang 19 spelling; library-builtins-args-clang22.cpp has clang 22's (WP-394).
 typedef int v4 __attribute__((ext_vector_type(4)));
 typedef float f4 __attribute__((ext_vector_type(4)));
 const char *m = "x";

@@ -15,7 +15,7 @@
 //@ diag: 27:56 error "no member named 'q' in 'W::I'"
 //@ diag: 27:64 error "no member named 'r' in 'W<T>'"
 //@ requires: clang<22
-// clang 22 emits error: no member named 'zz' in 'N::V<T>'; WP-355 residual
+// clang 19 spelling; no-member-in-current-instantiation-name-clang22.cpp has clang 22's (WP-394).
 namespace N {
 template <class T> struct V { void f() { V::zz = 1; }
   static int g() { return V<T>::yy; } };

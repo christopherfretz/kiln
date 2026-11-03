@@ -59,6 +59,9 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::FLAG_ENUM => "FlagEnum",
         AttrKind::ENUM_EXTENSIBILITY => "EnumExtensibility",
         AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE => "CoroOnlyDestroyWhenComplete",
+        AttrKind::OPTNONE => "OptimizeNone",
+        AttrKind::MINSIZE => "MinSize",
+        AttrKind::NAKED => "Naked",
         _ => return None,
     })
 }
