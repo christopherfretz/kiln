@@ -144,6 +144,10 @@ pub struct Summary {
     pub counts: [usize; 5],
     pub failures: Vec<(Verdict, String)>,
     pub elapsed: Duration,
+    /// Measured runs only: the summed compile wall time and the largest
+    /// peak RSS (KiB) of any case.
+    pub compile_time: Duration,
+    pub max_rss_kb: Option<u64>,
 }
 
 impl Summary {
@@ -164,6 +168,28 @@ impl Summary {
             self.elapsed.as_secs_f64()
         )
     }
+
+    /// The extra line of a measured run.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn measured_line(&self) -> String {
+        let rss = self
+            .max_rss_kb
+            .map_or_else(|| "unavailable".to_owned(), |k| format!("{:.1} MiB", k as f64 / 1024.0));
+        format!(
+            "external: compile time {:.2}s in total, largest peak RSS {rss}",
+            self.compile_time.as_secs_f64()
+        )
+    }
+}
+
+/// One external compile may take this long.
+const TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Wall time and peak RSS of a measured external run (`xtask bench
+/// --external`): the probe and a scratch directory for its reports.
+pub struct Measure<'a> {
+    pub probe: &'a process::RssProbe,
+    pub scratch: &'a Path,
 }
 
 /// Runs every case under `dir` with `compiler` on `jobs` threads.
@@ -173,31 +199,42 @@ pub fn run(
     kind: CompilerKind,
     jobs: usize,
     cap: Option<MemLimit>,
+    measure: Option<&Measure<'_>>,
 ) -> Result<(usize, Summary), String> {
     let start = Instant::now();
     let cases = sources(dir)?;
     let next = AtomicUsize::new(0);
     let summary = Mutex::new(Summary::default());
+    let cap = cap.map(|c| {
+        if kind == CompilerKind::Kiln {
+            c.plus(process::kiln_stack_reservation_mib::<&str>(&[]))
+        } else {
+            c
+        }
+    });
     std::thread::scope(|s| {
-        for _ in 0..jobs.clamp(1, cases.len().max(1)) {
-            s.spawn(|| {
+        for worker in 0..jobs.clamp(1, cases.len().max(1)) {
+            let (next, summary, cases) = (&next, &summary, &cases);
+            s.spawn(move || {
                 while let Some(path) = cases.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    let mut cmd = process::limited(
-                        &command(compiler, kind, path, &["-fsyntax-only"]),
-                        cap.map(|c| {
-                            if kind == CompilerKind::Kiln {
-                                c.plus(process::kiln_stack_reservation_mib::<&str>(&[]))
-                            } else {
-                                c
+                    let cmd = command(compiler, kind, path, &["-fsyntax-only"]);
+                    let (v, wall, rss) = match measure {
+                        None => match process::run(&mut process::limited(&cmd, cap), TIMEOUT) {
+                            Ok(o) => (classify(&o), Duration::ZERO, None),
+                            Err(_) => (Verdict::Crashed, Duration::ZERO, None),
+                        },
+                        Some(m) => {
+                            let rss_file = m.scratch.join(format!("rss-{worker}.txt"));
+                            match process::run_measured(&cmd, m.probe, &rss_file, TIMEOUT, cap) {
+                                Ok(r) => (classify(&r.as_output()), r.wall, r.max_rss_kb),
+                                Err(_) => (Verdict::Crashed, Duration::ZERO, None),
                             }
-                        }),
-                    );
-                    let v = match process::run(&mut cmd, Duration::from_secs(120)) {
-                        Ok(o) => classify(&o),
-                        Err(_) => Verdict::Crashed,
+                        }
                     };
                     let mut s = summary.lock().expect("no worker panics while holding the lock");
                     s.counts[v as usize] += 1;
+                    s.compile_time += wall;
+                    s.max_rss_kb = s.max_rss_kb.max(rss);
                     if v.is_failure() {
                         let rel = path.strip_prefix(dir).unwrap_or(path);
                         s.failures.push((v, rel.display().to_string()));
@@ -243,7 +280,7 @@ pub fn execute(opts: &Options, outside_only: bool) -> Result<Summary, String> {
         .jobs
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(8)));
     let (total, summary) =
-        run(&dir, &compiler, kind, jobs, MemLimit::from_mib(opts.mem_limit_mib))?;
+        run(&dir, &compiler, kind, jobs, MemLimit::from_mib(opts.mem_limit_mib), None)?;
     if opts.verbose {
         for (v, name) in &summary.failures {
             println!("{:<9} {name}", v.label().to_uppercase());

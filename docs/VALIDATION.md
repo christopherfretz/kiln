@@ -17,6 +17,19 @@ and perf-sensitive behavior ships with a recorded baseline.
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/status/cxx-features.md`, checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every C++23/C++26 paper marked `done` has passing tests and clang 22's `__cpp_*` value |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
+| Reflection perf | `bench/reflect/` (shapes S1-S6 from `cargo xtask gen-reflect`; named explicitly), `cargo xtask bench --scaling <shape>` (spec/bench.md "Reflection shapes", "Scaling sweeps"); manual/nightly on the dev host, not part of `ci` | The §3.8 budgets of docs/plans/m6-reflection.md: `peak_arena` independent of N, linear wall time and RSS, kiln vs GCC 16.1 |
+| External corpora | `cargo xtask test --external <dir>` / `cargo xtask bench --external <dir>` on directories outside the repo (spec/harness.md "External corpora"); manual, never in `ci` | Never crash: private crash reproducers and the reference workload compile or fail cleanly; counts only reach the repo |
+
+**What runs where.** Merge-queue CI (`cargo xtask ci`, both jobs) runs the
+unit tests, the corpus in clang and kiln mode, and the `oven:` counter
+budgets the corpus carries; `oracle: gcc` comparisons run there only when
+the CI image provides GCC 16.1 (`KILN_GCC`; today it does not, and they are
+skipped, docs/status/perf.md "CI time"). On the dev host, where
+`scripts/env.sh` sets `KILN_GCC`, `cargo xtask test` also runs every
+`oracle: gcc` comparison. Off the queue, by hand or nightly on the dev
+host: `cargo xtask bench` (including `bench/reflect` and the vs-GCC table
+via `--compiler $KILN_GCC`), `--scaling` sweeps, `--external` corpora,
+`cargo xtask libcxx`, `libstdcxx` and `features`.
 
 ## Conformance test format
 
@@ -366,7 +379,12 @@ flags the libc++ runner gives each test, and reports per-test and aggregate
 ratios (time median, geometric mean, p90 and max; memory median and p90)
 with the box load; it is record-only, because only the ratio measured in one
 window means anything on this shared host, and its section of `perf.md` is
-re-recorded at each milestone. The contract is `spec/bench.md`.
+re-recorded at each milestone. The reflection shapes (`bench/reflect/`) are
+measured the same way when named, and `--scaling <shape>` checks their
+growth from N to 4N (4N/N above 4.6x on wall or RSS fails; a growing
+`peak_arena` fails on the shapes whose evaluations do not depend on N);
+both are off-queue, because a ratio of wall times needs a quiet host. The
+contract is `spec/bench.md`.
 
 ## Release candidates
 

@@ -7,6 +7,7 @@ mod compare;
 pub(crate) mod entry;
 mod perf_md;
 pub(crate) mod record;
+mod scaling;
 mod slice;
 mod stats;
 #[cfg(test)]
@@ -42,6 +43,17 @@ entries: every bench/<group>/<name>.cpp, plus, only when named explicitly,
                       (record-only: per-test and aggregate ratios against
                       --compare-with, e.g. clang++-22; never judged against
                       baselines)
+  bench/reflect:      the reflection shapes S1-S6 of `cargo xtask gen-reflect`
+
+off-queue modes (spec/bench.md, Scaling sweeps and External corpora):
+  --scaling <shape>        compile gen-reflect shape s1..s6 at N and 4N; report
+                           wall, peak RSS, the constexpr counters and the 4N/N
+                           ratios; fail above 4.6x or when peak_arena grows on
+                           s1/s2/s4/s5 (writes no records)
+  --n <N>                  N of --scaling (default: the shape's default N)
+  --external <dir>         compile every .c/.cpp under <dir> (outside the repo)
+                           once, serially, never-crash: print verdict counts,
+                           total compile time and the largest peak RSS only
 
 options:
   --compiler <path>        compiler to measure (default: build and use a release kiln++)
@@ -100,6 +112,11 @@ pub struct Options {
     pub mem_limit_mib: u64,
     pub verbose: bool,
     pub paths: Vec<PathBuf>,
+    /// `--scaling <shape>` and `--n` (`scaling`).
+    pub scaling: Option<String>,
+    pub scaling_n: Option<usize>,
+    /// `--external <dir>`.
+    pub external: Option<PathBuf>,
 }
 
 impl Default for Options {
@@ -115,6 +132,9 @@ impl Default for Options {
             mem_limit_mib: process::DEFAULT_MEM_LIMIT_MIB,
             verbose: false,
             paths: Vec::new(),
+            scaling: None,
+            scaling_n: None,
+            external: None,
         }
     }
 }
@@ -143,6 +163,14 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--baseline" => o.baseline = Some(PathBuf::from(value("--baseline")?)),
             "--compare-with" => o.compare_with = Some(PathBuf::from(value("--compare-with")?)),
             "--filter" => o.filter = Some(value("--filter")?),
+            "--scaling" => o.scaling = Some(value("--scaling")?),
+            "--external" => o.external = Some(PathBuf::from(value("--external")?)),
+            "--n" => {
+                let v = value("--n")?;
+                o.scaling_n = Some(
+                    v.parse().ok().filter(|&n| n > 0).ok_or_else(|| format!("bad --n `{v}`"))?,
+                );
+            }
             "--runs" => {
                 let v = value("--runs")?;
                 o.runs =
@@ -171,6 +199,17 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             f if f.starts_with('-') => return Err(format!("unknown option `{f}`")),
             _ => o.paths.push(PathBuf::from(arg)),
         }
+    }
+    if o.scaling_n.is_some() && o.scaling.is_none() {
+        return Err("`--n` needs `--scaling`".into());
+    }
+    if o.scaling.is_some() && o.external.is_some() {
+        return Err("`--scaling` and `--external` are separate runs".into());
+    }
+    if (o.scaling.is_some() || o.external.is_some())
+        && (o.record || o.compare_with.is_some() || !o.paths.is_empty())
+    {
+        return Err("`--scaling`/`--external` take no paths, `--record` or `--compare-with`".into());
     }
     Ok(Some(o))
 }
@@ -247,6 +286,9 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
             Some(c) => c.clone(),
             None => build_kiln(&root, &target, "bench", true)?,
         };
+        if opts.scaling.is_some() || opts.external.is_some() {
+            return off_queue(&opts, &root, &target, &compiler);
+        }
         let inputs: Vec<PathBuf> = if opts.paths.is_empty() {
             vec![layout.bench.clone()]
         } else {
@@ -265,6 +307,51 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// `--scaling` and `--external`: no records, no baselines.
+fn off_queue(
+    opts: &Options,
+    root: &Path,
+    target: &Path,
+    compiler: &Path,
+) -> Result<Report, String> {
+    let id = identify(compiler)?;
+    let scratch = scaling::scratch_dir(target);
+    let ok = if opts.scaling.is_some() {
+        scaling::run(opts, &scratch, compiler, &id)
+    } else {
+        external_run(opts, root, &scratch, compiler, id.kind)
+    };
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(Report { failing: !ok?, ..Report::default() })
+}
+
+/// `cargo xtask bench --external <dir>`: `cargo xtask test --external`'s
+/// never-crash run, one case at a time and measured.
+fn external_run(
+    opts: &Options,
+    root: &Path,
+    scratch: &Path,
+    compiler: &Path,
+    kind: CompilerKind,
+) -> Result<bool, String> {
+    use crate::test::external;
+    let given = opts.external.as_deref().unwrap_or(Path::new(""));
+    let dir = external::check_outside(given, root)?;
+    std::fs::create_dir_all(scratch)
+        .map_err(|e| format!("cannot create {}: {e}", scratch.display()))?;
+    let probe = RssProbe::detect(scratch);
+    let m = external::Measure { probe: &probe, scratch };
+    let cap = process::MemLimit::from_mib(opts.mem_limit_mib);
+    let (total, summary) = external::run(&dir, compiler, kind, 1, cap, Some(&m))?;
+    if opts.verbose {
+        for (v, name) in &summary.failures {
+            println!("{:<9} {name}", v.label().to_uppercase());
+        }
+    }
+    println!("{}\n{}", summary.line(total), summary.measured_line());
+    Ok(!summary.failed())
 }
 
 /// Shared state of one invocation.
