@@ -63,6 +63,9 @@ use kiln_source::fx::FxHashMap;
 
 pub use failure::{EvalFailure, FailKind, Note};
 pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
+pub use meta::member_cache::{
+    CachedList, MemberCache, MemberEntry, MemberList, filter_members, member_kind,
+};
 pub use meta::{
     AccessOp, AnnotOp, DefineOp, ExtOp, MAX_META_ARGS, MemberOp, MetaCtx, MetaError, MetaErrorKind,
     MetaOp, MetaOut, OvenFault, Purity, QueryOp, TemplOp, TraitOp, ValueOp, info_arg,

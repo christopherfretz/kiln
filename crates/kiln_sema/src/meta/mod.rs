@@ -4,11 +4,14 @@
 //! [`kiln_oven::SemaBridge::meta`]). One file per op family; an op no WP
 //! has implemented yet fails with a note naming its owner.
 
+mod access;
+mod annot;
 mod ext;
+pub(crate) mod member;
 pub(crate) mod names;
 mod query;
-mod traits;
 mod recipe;
+mod traits;
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::types::BuiltinType;
@@ -54,6 +57,9 @@ impl Sema<'_, '_> {
             MetaOp::Query(q) => self.meta_query(q, args, out, ctx),
             MetaOp::Ext(x) => self.meta_ext(x, args, out, ctx, oven),
             MetaOp::Trait(t) => self.meta_trait(t, args, out, ctx, oven),
+            MetaOp::Member(m) => self.meta_member(m, args, out, ctx, oven),
+            MetaOp::Access(a) => self.meta_access(a, args, out, ctx, oven),
+            MetaOp::Annot(a) => self.meta_annot(a, args, out, ctx, oven),
             _ => Err(MetaError::not_implemented(op, ctx.loc)),
         }
     }

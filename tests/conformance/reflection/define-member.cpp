@@ -30,9 +30,9 @@ struct S {
 static_assert(sizeof(S) == 24);
 static_assert(__builtin_offsetof(S, injected) == 8);
 static_assert(__builtin_offsetof(S, c) == 16);
-static_assert(__kiln_members_count(^^S) == 4);
-static_assert(name_is(__kiln_member_at(^^S, 1), "injected"));
-static_assert(type_of(__kiln_member_at(^^S, 1)) == ^^long);
+static_assert(nonstatic_data_members_of(^^S, access_context::unchecked()).size() == 3);
+static_assert(name_is(members_of(^^S, access_context::unchecked())[1], "injected"));
+static_assert(type_of(members_of(^^S, access_context::unchecked())[1]) == ^^long);
 constexpr S s{1, 2, 'c'};
 static_assert(s.injected == 2 && s.get() == 2 && s.c == 'c');
 constexpr long bump() { S x{1, 41, 'x'}; x.injected += 1; return x.get(); }
@@ -61,7 +61,7 @@ template <class T> struct G {
 };
 static_assert(sizeof(G<char>) == 2 && sizeof(G<long>) == 16);
 static_assert(G<int>{'a', 7}.get() == 7 && G<double>{'b', 1.5}.get() == 1.5);
-static_assert(__kiln_members_count(^^G<short>) == 3);
+static_assert(members_of(^^G<short>, access_context::unchecked()).size() == 9);
 
 // Several members from one evaluation, names built at compile time (a
 // member function would not be defined yet: [class.mem]/7).
@@ -86,4 +86,4 @@ template <class T> struct W {
 struct Outer { W<short> x; int y; };
 static_assert(sizeof(Outer) == 8 && __builtin_offsetof(Outer, y) == 4);
 static_assert(sizeof(W<double>) == 8);
-static_assert(name_is(__kiln_member_at(^^W<double>, 0), "w"));
+static_assert(name_is(members_of(^^W<double>, access_context::unchecked())[0], "w"));

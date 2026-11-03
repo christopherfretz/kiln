@@ -818,6 +818,9 @@ pub struct Sema<'a, 'sm> {
     /// The frozen strings and source locations of the `std::meta` names
     /// family, per reflection (`meta/names.rs`).
     pub(crate) meta_names: meta::names::NameCache,
+    /// The member lists and access scope of the `std::meta` member
+    /// queries (`meta/member.rs`; spec/reflection-members.md §2).
+    pub(crate) meta_members: meta::member::MemberState,
     /// The lambdas whose bodies are being analysed, innermost last
     /// (spec/sema-lambda.md; WP-075).
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
@@ -1042,6 +1045,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             abstract_noted: kiln_source::fx::FxHashSet::default(),
             srcloc: builtins::SrcLocCache::default(),
             meta_names: meta::names::NameCache::default(),
+            meta_members: meta::member::MemberState::default(),
             lambdas: Vec::new(),
             lambda_mangle: lambda::ManglingState::default(),
             size_t_sugar: size_t,
