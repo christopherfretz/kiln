@@ -81,20 +81,21 @@ Section references in brackets are to the C++26 IS.
 | Variant | Payload | Designates | Status |
 |---|---|---|---|
 | `Null` | — | the null reflection | implemented |
-| `Type(QualType)` | the type, alias sugar kept at the top (§2.3) | a type, or a type alias | implemented without alias sugar (→ WP-472) |
-| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, class, structured binding, namespace | implemented for the spike's operands; the rest → WP-472 |
-| `Namespace(DeclId)` | first declaration | a namespace (`^^::` is the TU) | today a `Decl`; split → WP-472 |
-| `NamespaceAlias(DeclId)` | the alias declaration | a namespace alias | → WP-472 |
-| `Template(TemplateNameId)` | the template name | a class, function, variable or alias template, or a concept | → WP-472 |
-| `Value(ConstValueId)` | a typed frozen value | a value (`reflect_constant`, a template argument) | → WP-479 |
-| `Object(ConstValueId)` | a pointer to a static-storage object | an object (`reflect_object`) | → WP-479 |
-| `BaseSpec(DeclId, u32)` | derived class's first declaration, base index | a direct base class relationship | → WP-478 |
-| `DataMemberSpec(DmsId)` | an interned spec | a `data_member_spec` result | → WP-480 |
+| `Type(QualType)` | the type, alias sugar kept at the top (§2.3) | a type, or a type alias | implemented, dependent `^^typename T::type` included (WP-519) |
+| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, structured binding | implemented: operator, conversion and destructor functions and dependent qualified names (`^^T::x`) included (WP-519; spec/reflection-repr.md §2) |
+| `Namespace(DeclId)` | first declaration | a namespace (`^^::` is the TU) | implemented |
+| `NamespaceAlias(DeclId)` | the alias declaration | a namespace alias | implemented |
+| `Template(TemplateNameId)` | the template name | a class, function, variable or alias template, or a concept | implemented, dependent `^^T::template m<U>` included (WP-519) |
+| `Value(ConstValueId)` | a typed frozen value | a value (`reflect_constant`, a template argument) | implemented (WP-479) |
+| `Object(ConstValueId)` | a pointer to a static-storage object | an object (`reflect_object`) | implemented (WP-479) |
+| `BaseSpec(DeclId, u32)` | derived class's first declaration, base index | a direct base class relationship | implemented (WP-478) |
+| `DataMemberSpec(DmsId)` | an interned spec | a `data_member_spec` result | implemented (WP-480) |
+| `FnParam(DeclId, u32)` | function's first declaration, parameter index | a function parameter (`parameters_of`) | implemented (WP-478) |
 | `Annotation(AnnId)` | one annotation occurrence | an annotation (§7) | → WP-481 |
 
-- Each variant's payload is at most 12 bytes. A compile-time assertion
-  on `size_of::<Reflectee>()` (at most 16 bytes) is added with the first
-  variant beyond the spike's three (→ WP-472).
+- Each variant's payload is at most 8 bytes: a compile-time assertion
+  keeps `size_of::<Reflectee>()` at most 12 bytes
+  (`kiln_ast/src/reflect.rs`).
 - `ReflectionTable::get` returns `Null` for an id it did not hand out.
 
 ### 2.3 Identity
@@ -108,10 +109,9 @@ the IS equality ([expr.eq]):
 - **Types** are canonicalized except for a type alias at the top: `^^const
   int == ^^int const` and `^^decltype(1) == ^^int`, but `^^Alias !=
   ^^int`, and `dealias(^^Alias) == ^^int` ([meta.reflection.queries];
-  GCC 16.1 agrees). *The spike canonicalizes every type* (`^^Alias ==
-  ^^int`); keeping the top-level alias → WP-472.
+  GCC 16.1 agrees; `expr.reflect/alias-vs-dealias-identity.cpp`).
 - **Values** are interned by type and content in `ConstStore`:
-  `reflect_constant(3) == reflect_constant(3)` (GCC 16.1 agrees; → WP-479).
+  `reflect_constant(3) == reflect_constant(3)` (GCC 16.1 agrees; WP-479).
 - **`data_member_spec`** results are interned by content: equal
   arguments give equal reflections (GCC 16.1 agrees; §6.1).
 - **Annotations** are distinct per occurrence, even with equal values
@@ -136,7 +136,7 @@ the IS equality ([expr.eq]):
 - `memcpy`/`memmove` between an `info` object and an object of another
   type is not a constant expression ("cannot constant evaluate 'memcpy'
   from object of type 'unsigned long' to object of type
-  'std::meta::info'"; implemented, a dedicated test → WP-472), and
+  'std::meta::info'"; implemented, no dedicated test yet), and
   `__builtin_bit_cast` to or from `info` is rejected by sema (not
   trivially copyable; implemented: `reflection/value-model-neg.cpp`).
 - The shadow therefore needs no reflection kind; it keeps only its init
@@ -876,6 +876,13 @@ each specialization evaluates its own.
   own copy: `S<^^int>::count` is not shared across TUs, and the RTTI of
   `S<^^int>` compares unequal across them. The form is **not
   link-compatible with GCC or clang** (spec/abi.md §8).
+- **Dependent operands.** A reflect-expression whose operand is still
+  dependent where the signature is mangled (`template <class T> void
+  f(K<^^T>)`, `K<^^T::x>`) has no id yet; it takes the unsupported
+  expression fallback of spec/abi.md (`XLi0EE`), so `f` above mangles as
+  `_Z1fI1SEv1KIXLi0EEE`. Two templates whose signatures differ only in
+  the reflect operand therefore collide; WP-102 gives the dependent
+  operand a real encoding.
 - **Follow-up (→ WP-102).** WP-102 switches to GCC 16.1's encoding
   (cxx-abi issue #208: `std::meta::info` is `Dm`, a value is
   `L Dm <kind> … E` naming the reflectee), at which point the

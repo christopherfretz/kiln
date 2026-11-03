@@ -73,11 +73,42 @@ The parser (`parse_reflect_expr`) and sema map the operand forms:
 - `^^template-id` (/6-7): a class or alias template specialization is a
   type; a variable template specialization is `Decl` of the
   specialization; a function template-id is `Decl` of the unique
-  specialization it selects without a target ([over.over]).
+  specialization it selects without a target ([over.over]). Defaulted
+  template arguments count: with `template <class T, class U = long>
+  void tf(T, U)` as the only `tf`, `^^tf<int> == ^^tf<int, long>`; two
+  viable templates are an overload set.
 - `^^id-expression` (/7): `Decl` of the entity it names after lookup — a
   variable (a `constexpr` one reflects the variable, not its value), a
   function, a static or non-static data member, a member function, an
   enumerator, a structured binding, a parameter.
+- `^^operator-function-id` / `^^conversion-function-id`, possibly
+  qualified (`^^S::operator=`, `^^S::operator()`, `^^S::operator int`,
+  `^^S::operator<=>`, a namespace-scope `^^operator+`): `Decl` of the
+  function when the name finds exactly one; `has_identifier` is false and
+  `identifier_of` fails ("'R' has no identifier").
+- `^^S::~S` (a destructor name, /7): `Decl` of the
+  destructor, the implicit one included (it is declared on demand). The
+  type-name after `~` must name S; `^^S::~U` and a pseudo-destructor
+  (`^^T::~T` with T scalar, at instantiation) are rejected. A
+  destructor, like a constructor, has no type: `type_of` fails ("'R' has
+  no type").
+- A dependent qualified name — `^^T::x`, `^^T::template m<U>`,
+  `^^typename T::type`, `^^typename T::template m<U>`, `^^ns::W<T>::x`,
+  `^^T::operator=`, `^^T::operator int`, `^^T::~T`, nested
+  (`^^T::template inner<U>::y`): the parser keeps the qualified-id as a
+  `DependentScopeDeclRefExpr` (or the dependent type for the `typename`
+  forms) and sema a dependent `CXXReflectExpr` naming it (§2 node
+  encoding, tag 12). Substitution resolves it through the ordinary
+  dependent-name path (`templ/subst/exprs.rs`
+  `reflect_dependent_name`, no string re-lookup) and reflects what the
+  qualified-id names: data member, static member, member function (one
+  function; several are an overload set), enumerator, member type (only
+  with `typename`), member template (only with `template`). Without
+  `typename`, a name that instantiates to a type or a class template is
+  "missing 'typename' prior to dependent type name 'S::type'"
+  ([temp.res.general]/4-5); a missing member is the ordinary "no member
+  named" error. A name of the current instantiation (`^^Box::m` inside
+  `Box<T>`) reflects the instantiated member, as `^^T` does.
 - `^^T` in a template: dependent; the `CXXReflectExpr` stores the
   pattern operand and substitution remaps it (`templ/subst/exprs.rs`),
   so a member of a class template reflects the instantiated member.
@@ -86,7 +117,10 @@ Ill-formed operands, each one error:
 
 - an overload set — several functions, several function templates, or
   the constructors of a class (`^^S::S`, [class.qual]/2): "cannot take
-  the reflection of an overload set";
+  the reflection of an overload set" (also an operator-function-id
+  naming several functions, a template-id selecting several
+  specializations, and a dependent name instantiating to several
+  functions);
 - a non-type template parameter: "'^^' cannot be applied to a non-type
   template parameter 'N'";
 - anything else — a parenthesized expression, a literal (consumed whole,
@@ -100,12 +134,11 @@ A base class is never an operand (`BaseSpec` reflections come only from
 **Node encoding.** A `CXXReflectExpr` of type `std::meta::info` stores
 the operand kind tag in `aux` (`Reflectee::tag`: Type 0, Decl 1, Null 2,
 Namespace 3, NamespaceAlias 4, Template 5, Value 6, Object 7, BaseSpec 8,
-DataMemberSpec 9, Annotation 10), the one-word payload in `a`, and in `b`
-the interned id, or 0 while the operand is dependent (`VALUE_INST`).
-
-Not supported yet (an "unsupported" diagnostic, never a wrong answer):
-operator-function-ids and destructor names after `^^`; dependent
-qualified names and template-ids (`^^T::m`, `^^T::template X<int>`).
+DataMemberSpec 9, Annotation 10, FnParam 11), the one-word payload in `a`,
+and in `b` the interned id, or 0 while the operand is dependent
+(`VALUE_INST`). A dependent qualified name has tag 12
+(`Reflectee::DEPENDENT_NAME_TAG`) with `a` the `ExprId` of its
+`DependentScopeDeclRefExpr`; the AST dump prints it as `name dependent`.
 
 ## 3. Identity
 
@@ -189,8 +222,21 @@ or non-static data member (cached per complete class). Sema enforces:
 - **Functions.** A function whose type is consteval-only must be
   `consteval`, unless it is immediate-escalating (a constexpr function
   template specialization, a lambda call operator, a defaulted special
-  member) (`sema_consteval_only_fn`). Instantiations of constexpr
-  templates are not re-checked.
+  member) (`sema_consteval_only_fn`). A defaulted function is never
+  checked. As in GCC 16.1 (CWG3115), the implicit object parameter
+  counts: an implicit object member function, constructor, destructor or
+  conversion function of a class that is consteval-only by the members
+  declared so far (`struct A { int f(); info r; int g(); }` rejects `g`
+  only) must be `consteval`; an explicit object parameter
+  counts as any parameter; static members are unaffected. Inside a
+  template the object-parameter rule is not applied to the pattern.
+  A function whose type becomes consteval-only by substitution
+  (`template <class T> void h(T)` as `h<info>`, a non-constexpr member
+  of `W<info>`) is checked when its definition is instantiated, at its
+  name (`check_consteval_only_inst`); a constexpr or defaulted pattern
+  escalates instead, and a pattern in a system header is not diagnosed
+  (libc++ 19 and libstdc++ 14 predate CWG3115 and instantiate
+  non-constexpr helpers for `vector<info>`; kiln extension).
 - **Expressions.** A potentially-evaluated expression of consteval-only
   type — a `CXXReflectExpr`, or a reference to a variable, parameter or
   binding of consteval-only type — must be in an immediate context or a
@@ -202,15 +248,16 @@ or non-static data member (cached per complete class). Sema enforces:
   like an immediate invocation (`escalate_consteval_only`; the reason
   note is specified in `spec/consteval-blocks.md` §4). When the variable being initialized is
   itself of consteval-only type, the variable rule reports it, not the
-  expression rule.
+  expression rule. A class member access (`g.s`, `p->m`) whose member
+  is of consteval-only type is such an expression even when the object
+  expression is not (GCC 16.1 accepts `g.s` and rejects `G::s`; kiln
+  rejects both).
 
 In a template, the leaves are recorded at definition time (where the
 evaluation context is known) and re-checked in each instantiation; the
 codegen backstop (`kiln_codegen/src/consts.rs` "reflection values cannot
 be emitted") is reached only through the gaps below.
 
-Known gaps (follow-ups): a member function of a consteval-only class is
-not itself consteval-only (GCC 16.1 counts the implicit object
-parameter); `this->m` / member access leaves are not tracked; a variable
-or function whose type becomes consteval-only only at instantiation is
-checked only through its uses.
+Known gaps (follow-ups): escalation through an implicit `this->m` leaf
+is untested; a defaulted `operator==` of a consteval-only class draws a
+spurious `-Wdefaulted-function-deleted` warning.
