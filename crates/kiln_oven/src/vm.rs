@@ -46,6 +46,8 @@ pub(crate) struct Counters {
     pub arena: u64,
     /// Heap allocations (`allocs`).
     pub allocs: u64,
+    /// Reflection bytes made (`refl_bytes`; [`crate::mem::Memory::refl`]).
+    pub refl: u64,
 }
 
 /// A memoizable call in progress: what it will be charged.
@@ -2574,7 +2576,7 @@ impl Oven {
     /// `handleTrivialCopy`), the source must be fully initialized
     /// ([expr.const]/5.9 via the lvalue-to-rvalue conversion of the
     /// object); a union copies its object representation unchecked.
-    fn copy_obj(
+    pub(crate) fn copy_obj(
         &mut self,
         dst: u64,
         src: u64,
