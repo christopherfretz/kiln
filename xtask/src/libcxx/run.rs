@@ -110,6 +110,28 @@ impl Config {
         v
     }
 
+    /// The flags a test with `MODULE_DEPENDENCIES: std` gets: kiln finds
+    /// `std.cppm` next to the libc++ headers `-stdlib=libc++` selects
+    /// (spec/modules.md §2), which under `-nostdinc++ -isystem` are not the
+    /// package tree's, so its `<prefix>/share/libc++/v1` is named with
+    /// `-fprebuilt-module-path` (looked up before the default). Nothing in
+    /// clang mode (clang wants a BMI there) or without a package tree.
+    pub fn module_source_flags(&self) -> Vec<String> {
+        if self.clang {
+            return Vec::new();
+        }
+        let Some(t) = &self.libcxx else { return Vec::new() };
+        // `<prefix>/include/c++/v1` -> `<prefix>/share/libc++/v1`.
+        let Some(prefix) = t.include.parent().and_then(Path::parent).and_then(Path::parent) else {
+            return Vec::new();
+        };
+        let share = prefix.join("share").join("libc++").join("v1");
+        if !share.join("std.cppm").is_file() {
+            return Vec::new();
+        }
+        vec![format!("-fprebuilt-module-path={}", share.display())]
+    }
+
     /// The flags of the link step, after the object. With a package tree,
     /// its archives are linked statically and `--as-needed` drops the
     /// driver's own trailing `-lc++`.
@@ -627,13 +649,16 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
         }
     };
     let features = cfg.feature_refs();
-    let (d, flags, xfail) = match prepare(kind, &text, &job.local_cfgs, &features) {
+    let (d, mut flags, xfail) = match prepare(kind, &text, &job.local_cfgs, &features) {
         Ok(p) => p,
         Err(o) => {
             r.outcome = o;
             return r;
         }
     };
+    if !d.module_dependencies.is_empty() {
+        flags.extend(cfg.module_source_flags());
+    }
     let xfail = xfail.filter(|_| xfail_ignored(&job.rel).is_none());
     // Named like lit's `%T` (`<test file>.dir`): `RUN:` lines can see it.
     let scratch = cfg.scratch.join(format!("t{}-{name}.dir", job.index));
@@ -1103,6 +1128,24 @@ mod tests {
         assert!(clang.contains("-nostdinc++ -isystem /llvm/include/c++/v1"));
         cfg.libcxx = Some(LibcxxTree { include: "/tree/inc".into(), lib: "/tree/lib".into() });
         assert!(cfg.base_compile_flags().join(" ").contains("-isystem /tree/inc"));
+        // A `MODULE_DEPENDENCIES: std` test is pointed at the package
+        // tree's `std.cppm`, in kiln mode only and only when it exists.
+        let base = std::env::temp_dir().join(format!("kiln-libcxx-modsrc-{}", std::process::id()));
+        let share = base.join("share").join("libc++").join("v1");
+        std::fs::create_dir_all(&share).unwrap();
+        let include = base.join("include").join("c++").join("v1");
+        cfg.libcxx = Some(LibcxxTree { include, lib: "/tree/lib".into() });
+        assert!(cfg.module_source_flags().is_empty());
+        cfg.clang = false;
+        assert!(cfg.module_source_flags().is_empty());
+        std::fs::write(share.join("std.cppm"), "").unwrap();
+        assert_eq!(
+            cfg.module_source_flags(),
+            [format!("-fprebuilt-module-path={}", share.display())]
+        );
+        cfg.clang = true;
+        assert!(cfg.module_source_flags().is_empty());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A `lit.local.cfg` that adds a feature satisfies `REQUIRES:` below

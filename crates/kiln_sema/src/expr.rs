@@ -156,11 +156,15 @@ impl Sema<'_, '_> {
         self.ast.types.is_integral(t) || self.ast.types.as_enum(t).is_some()
     }
 
+    /// A scalar type ([basic.types.general]/9): arithmetic, enumeration,
+    /// pointer, pointer-to-member and `std::nullptr_t`, plus GNU complex
+    /// (clang `isScalarType`).
     pub(crate) fn is_scalar(&self, t: QualType) -> bool {
         self.ast.types.is_arithmetic(t)
             || self.ast.types.as_complex(t).is_some()
             || self.ast.types.as_enum(t).is_some()
             || self.ast.types.is_pointer(t)
+            || self.is_member_pointer(t)
             || self.is_nullptr_type(t)
     }
 

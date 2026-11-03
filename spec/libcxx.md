@@ -214,7 +214,7 @@ A keyword must not directly follow a letter, a digit or `_`.
 | `ADDITIONAL_COMPILE_FLAGS: f…` | Whitespace-split. Appended to the compile line in file order. |
 | `ADDITIONAL_COMPILE_FLAGS(<feature>): f…` | Appended after the plain flags when `<feature>` is exactly in the feature set. |
 | `FILE_DEPENDENCIES: a, b` | Each file, relative to the test's directory, is copied into the scratch directory. A missing file, a glob or a `%{…}` makes the test UNSUPPORTED (`driver: FILE_DEPENDENCIES`). |
-| `MODULE_DEPENDENCIES:` | `std` and `std.compat` need nothing: kiln builds them in-process from libc++'s module sources (spec/modules.md §2). Any other module makes the test UNSUPPORTED (`driver: modules`). |
+| `MODULE_DEPENDENCIES:` | `std` and `std.compat` need no build step: kiln builds them in-process from libc++'s module sources (spec/modules.md §2). With a package tree ("Toolchain") kiln's own search would find the system libc++'s `std.cppm`, not the tree's, so the test gets `-fprebuilt-module-path=<prefix>/share/libc++/v1` for the tree's `<prefix>/include/c++/v1` when that directory holds `std.cppm` (kiln mode only; `Config::module_source_flags`). Any other module makes the test UNSUPPORTED (`driver: modules`). |
 | `ALLOW_RETRIES: N` | A failing run step is retried up to `N` more times (see "Timeouts and retries"). `N` must be an integer, and the keyword may appear once; otherwise the test is an ERROR (lit's `ParserKind.INTEGER`). |
 | `RUN:` | Read only in `.sh.<ext>` tests, where they are the steps (see "RUN lines"); a line ending in `\` continues on the next `RUN:` line. Elsewhere `format.py` ignores them, and so does the driver. |
 

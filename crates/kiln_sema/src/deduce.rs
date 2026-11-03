@@ -103,8 +103,9 @@ impl Sema<'_, '_> {
 
     /// `_Atomic ( t )` (C11 6.7.2.4, a clang extension in C++): the atomic
     /// type of `t`, or `None` after diagnosing an array, function,
-    /// reference, atomic or cv-qualified `t` (clang
-    /// `BuildAtomicType`). A dependent `t` is checked at instantiation.
+    /// reference, atomic, cv-qualified or `_BitInt` `t` (clang
+    /// `BuildAtomicType`, which rejects every bit-precise integer type).
+    /// A dependent `t` is checked at instantiation.
     pub fn act_on_atomic_type(&mut self, t: QualType, loc: Loc) -> Option<QualType> {
         if t == QualType::ERROR {
             return None;
@@ -118,6 +119,7 @@ impl Sema<'_, '_> {
                 TypeView::LValueRef(_) | TypeView::RValueRef(_) => Some(2),
                 TypeView::Atomic(_) => Some(3),
                 _ if !c.quals().is_empty() => Some(4),
+                TypeView::BitInt { .. } => Some(5),
                 _ => None,
             };
             if let Some(k) = bad {
