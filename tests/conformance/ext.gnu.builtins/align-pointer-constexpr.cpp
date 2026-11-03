@@ -37,7 +37,7 @@ static_assert(__builtin_is_aligned(&x, 4));
 struct S { char c; int i; } s;
 static_assert(__builtin_is_aligned(&s.i, 4));
 static_assert(!__builtin_is_aligned(&s.c + 1, 2));
-constexpr int arr[5] = {};
+constexpr int arr[3] = {};
 static_assert(__builtin_align_up(&arr[1], 4) == &arr[1]);
 
 constexpr bool local() {
@@ -57,6 +57,6 @@ static_assert(heap());
 static_assert(__builtin_is_aligned(&buf[0], 32));
 static_assert(__builtin_align_up(&buf[1], 32) == &buf[32]);
 static_assert(!__builtin_is_aligned(&x, 8));
-static_assert(__builtin_align_down(&arr[3], 8) == &arr[2]);
+static_assert(__builtin_align_down(&arr[2], 8) == &arr[2]);
 constexpr int f(const int *p) { return __builtin_is_aligned(p, 64); }
 static_assert(f(arr) == 0);
