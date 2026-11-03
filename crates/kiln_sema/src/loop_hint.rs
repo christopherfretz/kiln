@@ -125,6 +125,24 @@ impl Sema<'_, '_> {
         Some(a)
     }
 
+    /// Loop hint `a` with its dependent value substituted to `e` (clang
+    /// `TransformLoopHintAttr`): `a` itself when `e` is invalid; a value
+    /// of 0 or 1 makes it a hint that disables unrolling, whatever its
+    /// option.
+    pub(crate) fn instantiated_loop_hint(&mut self, a: AttrId, e: ExprId) -> AttrId {
+        let node = *self.ast.attrs.get(a);
+        let mut hint = LoopHint::unpack(node.b);
+        let Some(v) = self.check_loop_hint_expr(e, hint.spelling == LoopHintSpelling::Unroll)
+        else {
+            return a;
+        };
+        if matches!(v, Some(0 | 1)) {
+            hint.option = LoopHintOption::Unroll;
+            hint.state = LoopHintState::Disable;
+        }
+        self.loop_hint_attr(hint, node.loc, Some(e))
+    }
+
     /// The value of a checked loop hint value: `Some(None)` if it is
     /// value-dependent.
     fn loop_hint_value(&mut self, e: ExprId) -> Option<Option<i128>> {
