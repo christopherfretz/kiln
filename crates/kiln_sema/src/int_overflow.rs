@@ -18,6 +18,17 @@ const BUDGET: u32 = 1 << 16;
 /// Nesting of evaluated operators followed.
 const MAX_DEPTH: u32 = 256;
 
+/// What `overflow_leaf` found.
+enum Leaf {
+    /// An integer literal's value.
+    Int(i128),
+    /// A leaf whose value is not known: a read of a variable that is not
+    /// `const`, or a literal too wide for an `i128`.
+    Unknown,
+    /// Not a leaf.
+    No,
+}
+
 /// The walk's bounds.
 struct Walk {
     budget: u32,
@@ -239,20 +250,20 @@ impl Sema<'_, '_> {
             ExprKind::ConditionalOperator => {
                 let c = self.ast.exprs.children(e, &self.ast.lists);
                 let arms = self.ast.exprs.cond_arms(e);
-                return match self.fold_rvalue(c[0]).and_then(|v| self.const_truth(v)) {
-                    Some(t) => self.overflow_value(if t { arms[0] } else { arms[1] }, w, need),
-                    None => {
-                        let _ = self.overflow_value(c[0], w, false);
-                        let _ = self.overflow_value(arms[0], w, false);
-                        let _ = self.overflow_value(arms[1], w, false);
-                        None
-                    }
-                };
+                if let Some(t) = self.fold_rvalue(c[0]).and_then(|v| self.const_truth(v)) {
+                    return self.overflow_value(if t { arms[0] } else { arms[1] }, w, need);
+                }
+                let _ = self.overflow_value(c[0], w, false);
+                let _ = self.overflow_value(arms[0], w, false);
+                let _ = self.overflow_value(arms[1], w, false);
+                return None;
             }
             _ => {}
         }
-        if let Some(v) = self.overflow_leaf(e) {
-            return v;
+        match self.overflow_leaf(e) {
+            Leaf::Int(v) => return Some(v),
+            Leaf::Unknown => return None,
+            Leaf::No => {}
         }
         // Anything else: its operators are looked for, and it is folded
         // when there are none (a fold fails on an overflow inside).
@@ -263,27 +274,30 @@ impl Sema<'_, '_> {
     }
 
     /// The value of a leaf that needs no evaluation: an integer literal,
-    /// or (`Some(None)`) a read of a variable that is not `const`.
-    fn overflow_leaf(&self, e: ExprId) -> Option<Option<i128>> {
+    /// or (`Leaf::Unknown`) a read of a variable that is not `const`.
+    fn overflow_leaf(&self, e: ExprId) -> Leaf {
         let n = *self.ast.exprs.get(e);
         match n.kind() {
-            ExprKind::IntegerLiteral => Some(self.ast.exprs.int_value(e).map(i128::from)),
+            ExprKind::IntegerLiteral => match self.ast.exprs.int_value(e) {
+                Some(v) => Leaf::Int(i128::from(v)),
+                None => Leaf::Unknown,
+            },
             ExprKind::ImplicitCastExpr
                 if self.ast.exprs.cast_kind(e) == CastKind::LValueToRValue =>
             {
                 let r = self.ignore_parens(self.ast.exprs.operand(e));
                 if self.ast.exprs.get(r).kind() != ExprKind::DeclRefExpr {
-                    return None;
+                    return Leaf::No;
                 }
                 let d = self.ast.exprs.decl(r);
                 let dn = self.ast.decls.get(d);
-                let ty = dn.ty()?;
+                let Some(ty) = dn.ty() else { return Leaf::No };
                 let plain = matches!(dn.kind(), DeclKind::Var | DeclKind::ParmVar)
                     && !self.ast.types.is_reference(ty)
                     && !self.ast.types.effective_quals(ty).is_const();
-                plain.then_some(None)
+                if plain { Leaf::Unknown } else { Leaf::No }
             }
-            _ => None,
+            _ => Leaf::No,
         }
     }
 
@@ -343,7 +357,7 @@ fn group_digits(v: i128) -> String {
         out.push('-');
     }
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push('\'');
         }
         out.push(c);
