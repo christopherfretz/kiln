@@ -825,6 +825,34 @@ impl Parser<'_, '_> {
                 Kw::Typename => {
                     self.typename_pack_index = None;
                     let ty = self.parse_typename_specifier_in(Some(ctx));
+                    if std::mem::take(&mut self.typename_failed) {
+                        if ctx == DeclaratorContext::Block
+                            && let Some(n) = self.ident()
+                        {
+                            // At block scope the name is then taken for a
+                            // type-specifier whatever it names ("unknown
+                            // type name") when a declarator follows, else
+                            // for the declarator-id of a declaration with
+                            // no type-specifier (clang's `ParseImplicitInt`).
+                            let at = self.loc();
+                            if self.unknown_type_follows(self.pos() + 1, ctx) {
+                                let text = self.s.ast.symbols().as_str(n).to_owned();
+                                let d = self.s.diag(DiagId::sema_unknown_typename, at).arg(text);
+                                self.emit(d);
+                                self.bump();
+                                ds.type_error = true;
+                                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), at);
+                            } else {
+                                self.s.error(DiagId::parse_missing_type_specifier, at);
+                                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), at);
+                            }
+                            ds.invalid = true;
+                            break;
+                        }
+                        ds.invalid = true;
+                        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
+                        break;
+                    }
                     if ty.is_none() {
                         ds.invalid = true;
                     }
@@ -1562,6 +1590,48 @@ impl Parser<'_, '_> {
         Some(self.s.type_specifier_placeholder_check(ty, at))
     }
 
+    /// `parse_tag_qualifier`, and whether it failed (diagnosed it named
+    /// nothing): the template headers it would have matched are
+    /// discarded with it.
+    fn parse_tag_qualifier_checked(
+        &mut self,
+        ds: &mut DeclSpec,
+    ) -> (Option<kiln_sema::using::Qualifier>, bool) {
+        let was_invalid = ds.invalid;
+        let qual = self.parse_tag_qualifier(ds);
+        let failed = !was_invalid && ds.invalid;
+        if failed {
+            self.s.discard_spec_headers();
+        }
+        (qual, failed)
+    }
+
+    /// `struct NT<int> {}` naming a non-template (or after a qualifier
+    /// that named nothing): [temp.expl.spec]/1 specializes a template,
+    /// so this is clang's `err_explicit_spec_non_template`; the arguments
+    /// are skipped and `NT` itself declared.
+    fn skip_non_template_args(
+        &mut self,
+        keyword: TagKeyword,
+        (n, nloc): (Symbol, Loc),
+        qualifier: Option<DeclId>,
+        qual_failed: bool,
+    ) {
+        if !self.at(Punct::Less)
+            || !qual_failed
+                && matches!(self.s.classify_name(n, qualifier), NameClass::TypeTemplate(_))
+        {
+            return;
+        }
+        let Some((close, false)) = self.skip_template_args(self.pos()) else { return };
+        let what = format!("{} '{}'", keyword.spelling(), self.s.ast.symbols().as_str(n));
+        let d = self.s.diag(DiagId::sema_explicit_spec_non_template, nloc).arg(what);
+        self.emit(d);
+        while self.pos() <= close && self.tok().kind != TokKind::Eof {
+            self.bump();
+        }
+    }
+
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let keyword = match k {
@@ -1583,7 +1653,7 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
-        let qual = self.parse_tag_qualifier(ds);
+        let (qual, qual_failed) = self.parse_tag_qualifier_checked(ds);
         let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
@@ -1599,6 +1669,7 @@ impl Parser<'_, '_> {
         let fixed = if keyword == TagKeyword::Enum { self.parse_enum_base() } else { None };
         let is_class = keyword != TagKeyword::Enum;
         if is_class
+            && !qual_failed
             && self.at(Punct::Less)
             && let Some((n, nloc)) = name
             && let NameClass::TypeTemplate(t) = self.s.classify_name(n, qualifier)
@@ -1606,6 +1677,9 @@ impl Parser<'_, '_> {
         {
             self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, &attrs);
             return;
+        }
+        if is_class && let Some(name) = name {
+            self.skip_non_template_args(keyword, name, qualifier, qual_failed);
         }
         let mut final_loc = None;
         if is_class && name.is_some() {
@@ -1630,6 +1704,15 @@ impl Parser<'_, '_> {
             self.dependent_tag_reference(ds, q.nns, (n, nloc), keyword, kw_loc);
             return;
         }
+        if qual_failed && use_ != TagUse::Definition {
+            // The qualifier named nothing (diagnosed): no tag is declared
+            // or found (clang's invalid `CXXScopeSpec` recovery).
+            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+            return;
+        }
+        // A definition after a failed qualifier is parsed as an unnamed
+        // class, declaring nothing.
+        let name = if qual_failed { None } else { name };
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition {
@@ -1652,14 +1735,9 @@ impl Parser<'_, '_> {
             self.spec_error(&e, kw_loc);
         }
         if use_ == TagUse::Definition {
-            let spelling = match keyword {
-                TagKeyword::Struct => "struct",
-                TagKeyword::Class => "class",
-                TagKeyword::Union => "union",
-                _ => "enum",
-            };
+            // `keyword` is a class-key or `enum` here, never `None`.
             let could_be_bitfield = keyword == TagKeyword::Enum && ctx == DeclaratorContext::Member;
-            self.check_after_tag_definition(spelling, could_be_bitfield);
+            self.check_after_tag_definition(keyword.spelling(), could_be_bitfield);
         }
     }
 
@@ -2072,6 +2150,8 @@ impl Parser<'_, '_> {
             self.s.set_entering_context(saved);
             let qual = qual.unwrap_or_else(|()| {
                 d.invalid = true;
+                self.s.discard_spec_headers();
+                self.skip_nested_name_rest();
                 None
             });
             d.global_qualifier = global && qual.is_some();

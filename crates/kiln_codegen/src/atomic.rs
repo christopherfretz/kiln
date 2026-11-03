@@ -25,6 +25,7 @@ use crate::expr::LV;
 use crate::fir::{Blk, Fir, Op, V};
 use crate::func::Addr;
 use crate::module::{Cg, R, err};
+use crate::tbaa::Tb;
 
 /// An atomic access with `ordering` (`MemOpts` of a plain one otherwise).
 fn amem(align: u64, volatile: bool, ordering: Ordering, scope: SyncScope) -> MemOpts {
@@ -191,7 +192,7 @@ impl Cg<'_> {
             // clang `EmitAtomicInit`: a plain initialization.
             let Some(v1) = sub(1) else { return err(self.loc_of(e), "malformed AtomicExpr") };
             let addr = Addr { v: pv, ty: self.mty(atomic_q), align: palign };
-            self.atomic_init(v1, LV { addr, q: atomic_q, bf: None, vidx: None })?;
+            self.atomic_init(v1, LV { addr, q: atomic_q, bf: None, vidx: None, tb: Tb::Type })?;
             return Ok(None);
         }
         self.atomic_alignment_warnings(e, size, palign);

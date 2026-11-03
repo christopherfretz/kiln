@@ -49,6 +49,7 @@ pub mod init;
 mod init_dtor;
 mod int_in_bool;
 mod jump_scope;
+mod kind_conflict;
 pub mod lambda;
 pub mod literal;
 mod literal_op;
@@ -638,6 +639,13 @@ pub struct Sema<'a, 'sm> {
     /// The class the last `friend class X;` declared ([`TagUse::Friend`]),
     /// taken by [`Sema::act_on_friend`] as the `FriendDecl`'s owned tag.
     pub(crate) friend_tag: Option<DeclId>,
+    /// Set by the parser for the class declaration after an extraneous
+    /// `template<>` (`template<> struct S;`): clang's
+    /// `err_template_tag_noparams`, emitted by [`Sema::act_on_tag`] (after
+    /// the class-specifier's own errors, as clang's `ActOnTag`). One
+    /// naming a non-template class is also clang's "specialization of
+    /// member does not specialize an instantiated member".
+    pub extraneous_tag_head: Option<Diag>,
     /// Set when the last declarator's type was diagnosed invalid in a
     /// way clang records on its `Declarator` (an unexpanded pack,
     /// [temp.variadic]/12): clang's `ParseDeclGroup` reuses the
@@ -881,6 +889,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
+            extraneous_tag_head: None,
             declarator_type_invalid: false,
             lambda_packs: kiln_source::fx::FxHashMap::default(),
             declspec_restrict_error: None,

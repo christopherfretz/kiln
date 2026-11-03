@@ -260,6 +260,16 @@ clang's `Parser` over `Preprocessor::Lex`.
   declarator invalid). A type-requirement `typename Ts...[0];` is not a
   type-name and takes the same diagnostic
   (`temp.res.general/typename-unqualified-pack-index.cpp`).
+  A `typename` that fails before an unqualified name (`template<static
+  typename U>`, `typename Q q;`) does not consume the name, as clang: the
+  next diagnostic is at it and no "expected ';'" follows; at block scope
+  an unknown name is then "unknown type name 'Q'" (recovered as `int`)
+  and anything else "a type specifier is required for all declarations";
+  the declaration is invalid and redeclares nothing (WP-409,
+  `temp.param/typename-failed-recovery{,-non-type}.cpp`,
+  `temp.res/typename-failed-recovery.cpp`). A template-parameter-list
+  slot that is neither a parameter nor `,`/`>` is "expected ',' or '>' in
+  template-parameter-list" at the offending token.
   Once a decl-specifier names no type (`DeclSpec::type_error`), the
   later declarators of the group are skipped up to the `;`, as clang's
   `ParseDeclGroup`, so `u5 &x1, &x2;` and `S::c &x3, &x4;` report once
