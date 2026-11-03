@@ -8,8 +8,8 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ValueCategory;
-use kiln_ast::types::TemplateArg;
 use kiln_ast::names::DeclName;
+use kiln_ast::types::TemplateArg;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_source::Loc;
@@ -174,7 +174,10 @@ impl Sema<'_, '_> {
         // A lone function tied with a value: an initializer the value
         // cannot initialize leaves the function the one valid candidate
         // ([`Sema::settle_typo_tie`]).
-        let tie = fallback.as_ref().filter(|_| ambiguous && lone_func).and_then(|c| self.typo_value_type(c));
+        let tie = fallback
+            .as_ref()
+            .filter(|_| ambiguous && lone_func)
+            .and_then(|c| self.typo_value_type(c));
         let fallback = fallback.map(|c| self.template_id_typo_suggest(&typo, &c, loc));
         let expr = self.template_id_typo_expr(&probe, loc)?;
         Some(Speculation { expr, suggest, fallback, ambiguous, tie })
@@ -248,7 +251,13 @@ impl Sema<'_, '_> {
     /// A "did you mean" `d` for the name at `loc`: under clang 22 the
     /// name's range and, for an entity, the fix-it replacing it with
     /// `text`; under clang 19 the fix-it alone (WP-420).
-    fn typo_fixes(&self, d: kiln_diag::Diag, loc: Loc, text: &str, keyword: bool) -> kiln_diag::Diag {
+    fn typo_fixes(
+        &self,
+        d: kiln_diag::Diag,
+        loc: Loc,
+        text: &str,
+        keyword: bool,
+    ) -> kiln_diag::Diag {
         let name = kiln_source::Span::new(loc, self.token_end(loc).unwrap_or(loc));
         let d = if keyword && self.clang_compat >= 22 {
             d

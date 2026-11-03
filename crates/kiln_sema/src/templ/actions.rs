@@ -603,7 +603,11 @@ impl Sema<'_, '_> {
 
     /// [`Sema::potential_template_name`] for `name` looked up in the
     /// context `qual` when qualified (`::f<int>`, `N::f<int>`).
-    pub fn potential_template_name_in(&self, qual: Option<DeclId>, name: DeclName) -> Option<DeclId> {
+    pub fn potential_template_name_in(
+        &self,
+        qual: Option<DeclId>,
+        name: DeclName,
+    ) -> Option<DeclId> {
         let found = match qual {
             Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
             None => self.lookup_name_dn(name, LookupKind::Ordinary),

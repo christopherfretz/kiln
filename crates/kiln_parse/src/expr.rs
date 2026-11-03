@@ -1951,7 +1951,12 @@ impl Parser<'_, '_> {
             && let Some(close) = self.potential_angle_close()
         {
             let angles = self.skip_potential_angles(close);
-            self.s.diagnose_expr_intended_as_template_name(DeclName::ident(name), found, nl, angles);
+            self.s.diagnose_expr_intended_as_template_name(
+                DeclName::ident(name),
+                found,
+                nl,
+                angles,
+            );
             // clang's `checkPotentialAngleBracket` makes the name
             // `ExprError()`: the enclosing expression is invalid.
             self.expr_invalid = true;

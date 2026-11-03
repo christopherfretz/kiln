@@ -134,6 +134,41 @@ impl Sema<'_, '_> {
     /// (`-Wundefined-bool-conversion`). Not in unevaluated operands, nor
     /// when `e` or the context `cc` comes from a macro body; a weak
     /// declaration may be null.
+    /// Whether `x`, the operand of `&` (a `call` or not), is a reference:
+    /// a glvalue call, or a name of a reference variable or member.
+    fn is_reference_operand(&self, x: ExprId, call: bool) -> bool {
+        if call {
+            return self.ast.exprs.get(x).value_category() != ValueCategory::PRValue;
+        }
+        matches!(self.ast.exprs.get(x).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+            && self
+                .ast
+                .decls
+                .get(self.ast.exprs.decl(x))
+                .ty()
+                .is_some_and(|t| self.ast.types.is_reference(t))
+    }
+
+    /// `msg` with clang's "'f' returns a reference" note when the call
+    /// `x` has a direct callee (`getDirectCallee`: a function, not a
+    /// pointer to one).
+    fn note_reference_return(&self, msg: kiln_diag::Diag, x: ExprId) -> kiln_diag::Diag {
+        let direct = self.callee_decl(x).filter(|&f| {
+            self.ast
+                .decls
+                .get(f)
+                .ty()
+                .is_some_and(|t| self.ast.types.is_function(self.ast.types.canonical(t)))
+        });
+        match direct {
+            Some(f) => msg.with_note(
+                self.diag(DiagId::note_reference_is_return_value, self.ast.decls.get(f).loc())
+                    .arg(format!("'{}'", self.decl_name(f))),
+            ),
+            None => msg,
+        }
+    }
+
     fn always_non_null_pointer(&mut self, e: ExprId, cc: Loc) {
         if self.unevaluated > 0 {
             return;
@@ -175,31 +210,15 @@ impl Sema<'_, '_> {
                 kind,
                 ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
             );
-            let reference = if call {
-                self.ast.exprs.get(x).value_category() != ValueCategory::PRValue
-            } else {
-                named(self, x).is_some_and(|d| {
-                    self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_reference(t))
-                })
-            };
-            if reference {
+            if self.is_reference_operand(x, call) {
                 let at = self.expr_loc(x);
                 let range = Span::new(cc, self.token_end(cc).unwrap_or(cc));
                 let mut msg = self
                     .diag(DiagId::sema_address_of_reference_bool_conversion, at)
                     .range(self.expr_range(e))
                     .range(range);
-                // clang `getDirectCallee`: a function, not a pointer.
-                let direct = call.then(|| self.callee_decl(x)).flatten().filter(|&f| {
-                    self.ast.decls.get(f).ty().is_some_and(|t| {
-                        self.ast.types.is_function(self.ast.types.canonical(t))
-                    })
-                });
-                if let Some(f) = direct {
-                    msg = msg.with_note(
-                        self.diag(DiagId::note_reference_is_return_value, self.ast.decls.get(f).loc())
-                            .arg(format!("'{}'", self.decl_name(f))),
-                    );
+                if call {
+                    msg = self.note_reference_return(msg, x);
                 }
                 self.emit_after_typos(root, msg);
                 return;
