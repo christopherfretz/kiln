@@ -66,7 +66,11 @@ impl Sema<'_, '_> {
     /// or argument `param` ([`Sema::meta_shape`]): `extract<T>` of a
     /// class `T` is copied whole; the range of `reflect_constant_string`
     /// and `reflect_constant_array` is any contiguous range.
-    #[expect(clippy::unnecessary_wraps, reason = "meta_shape's signature")]
+    #[expect(
+        clippy::unnecessary_wraps,
+        clippy::unused_self,
+        reason = "meta_shape's per-family signature"
+    )]
     pub(super) fn value_shape(
         &self,
         v: ValueOp,
@@ -272,7 +276,9 @@ impl Sema<'_, '_> {
             while self.ast.types.is_array(t) {
                 match self.ast.types.element(t) {
                     Some(x) if self.ast.types.array_size(t).is_some() => t = x,
-                    _ => return fail(loc, format!("'{}' is not a structural type", self.ty_str(e))),
+                    _ => {
+                        return fail(loc, format!("'{}' is not a structural type", self.ty_str(e)));
+                    }
                 }
             }
             if !self.is_structural(t) {

@@ -351,7 +351,7 @@ impl Oven {
             Scalar::Bool { value, .. } => u128::from(value),
             Scalar::Float { bits, .. } => bits,
             Scalar::Reflection { id, .. } => u128::from(id.bits()),
-            _ => return None,
+            Scalar::MemberPtr { .. } => return None,
         })
     }
 }

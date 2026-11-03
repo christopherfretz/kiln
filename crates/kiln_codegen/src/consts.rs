@@ -197,7 +197,7 @@ impl Cg<'_> {
             _ => return None,
         };
         let img = ast.consts.aggregate(c)?;
-        if !img.relocs.is_empty() || unit == 0 || img.bytes.len() as u64 % unit != 0 {
+        if !img.relocs.is_empty() || unit == 0 || !(img.bytes.len() as u64).is_multiple_of(unit) {
             return None;
         }
         let n = img.bytes.len() as u64 / unit;
