@@ -1597,7 +1597,10 @@ errors.
      redeclare a function with its own attributes), as is a declaration
      that already has attributes. `[[deprecated]]` names a function
      template specialization with its arguments (`'f<int>' is
-     deprecated`, clang `getNameForDiagnostic`).
+     deprecated`, clang `getNameForDiagnostic`). A function template
+     specialization also takes the `nodiscard`/`pure`/`const` of the
+     template's other declarations (`function_spec_attrs`;
+     spec/landed/sema/WP-491.md).
    - A member typedef or alias-declaration gets the pattern's `aligned`
      attributes, a dependent operand substituted (`var_align_attrs` in
      `typedef_decl_in`; clang `InstantiateAttrs`; WP-335): libc++'s

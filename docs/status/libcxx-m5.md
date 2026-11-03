@@ -72,7 +72,6 @@ an XPASS is the cue to drop its row.
 
 | cause | count | WP | tests |
 |---|---:|---|---|
-| `[[nodiscard]]` on a later redeclaration of a function template is not merged (libc++ forward-declares `get`, `any_cast`, `begin`/`end` without it) | 7 | none yet | `nodiscard.verify` in array, complex.number, numarray, tuple, pairs, variant, any |
 | `[[nodiscard]]` hidden friend of a class template never warns | 5 | none yet | `nodiscard.verify` in range.filter, range.iota.view, range.repeat.view; join.with iterator `eq`, `iter_move` |
 | `-Wnonnull` "null passed to a callee that requires a non-null argument" | 5 | WP-433 | `nonnull.verify` in specialized.algorithms, mem.res, print.fun, basic.string, string.view |
 | `lifetimebound` "temporary bound to local reference … will be destroyed" | 4 | none yet | `lifetimebound.verify` in algorithms, as-lvalue, function.objects, utility/forward |
@@ -81,6 +80,15 @@ an XPASS is the cue to drop its row.
 | `alloc_align` "requested alignment is not a power of 2" | 1 | none yet | `allocate_vocabulary.attributes.verify` |
 | wording: the constraint note prints the substituted expression | 1 | none yet | `libcxx/algorithms/cpp17_iterator_concepts.verify` |
 | wording: `std::hash<std::monostate>` printed qualified | 1 | WP-432 | `variant.hash/hash.depr.verify` |
+
+## Fixed in WP-491
+
+The `M5_TRIAGED` rows these fix are gone from the ledger (each test was
+XPASS under kiln with libc++ 22.1.8).
+
+| class | count | construct / first error | fix | test |
+|---|---:|---|---|---|
+| (b) | 7 | `[[nodiscard]]` on a later redeclaration of a function template not merged (libc++ forward-declares `get`, `any_cast`, `begin`/`end` without it): `nodiscard.verify` in array, complex.number, numarray, tuple, pairs, variant, any | a function template specialization takes the unused-result attributes of every declaration of its template seen when it is formed (`function_spec_attrs`; spec/landed/sema/WP-491.md) | `dcl.attr.nodiscard/redeclared-function-template.cpp` |
 
 ## Fixed in WP-461
 

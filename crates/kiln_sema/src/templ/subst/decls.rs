@@ -972,8 +972,9 @@ impl Substituter<'_, '_, '_> {
         self.forget_pattern_params(pat);
         self.defer_default_args(pat, spec);
         // The pattern's attributes (clang `InitFunctionInstantiation` →
-        // `InstantiateAttrs`; WP-182).
-        self.class_attrs(spec, pat);
+        // `InstantiateAttrs`; WP-182), merged with its other
+        // declarations' unused-result attributes (WP-491).
+        self.function_spec_attrs(spec, pat);
         Ok(())
     }
 
