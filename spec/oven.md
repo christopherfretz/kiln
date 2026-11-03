@@ -2498,6 +2498,16 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   clang's "element size 1 * element count N is not a multiple of the
   byte size 8" note (`compile/bitcast.rs`). A source with an
   indeterminate lane byte is "indeterminate value".
+- *Shuffles* (WP-438): `__builtin_shufflevector` folds lane by lane at
+  either level. At compat 19 a shuffle whose lane count differs from its
+  operands' has clang 19's GNU-vector-of-`bool` type, `CK_BitCast` to
+  the ext vector (sema); kiln stores that GNU vector packed like a
+  `BoolVec`, but clang 19's `BitCastBuffer` writes it a byte per lane and
+  reads the smaller packed destination from its first bytes, so
+  `vm/bitcast.rs` `gnu_bool_vec_cast` gives lane `k` = source lane `k/8`
+  when `k % 8 == 0`, else false (`b8 w = shuffle(b4, b4, 0..7)` is
+  `0x01`), the value clang 19 folds and emits. At compat 22 the shuffle
+  has the ext vector type and no cast.
 - *Notes* print a bool vector argument lane by lane (`{true, false,
   ...}`, every lane, as clang).
 - *Codegen*: a constexpr or constant-initialized bool-vector variable
@@ -2514,7 +2524,9 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   result (`b4 L = I < 2`), a C-style or `static_cast`, an assignment or a
   `return` in a constexpr function. A `vector_size` or floating source
   has no conversion at all (sema).
-Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`,
+Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp` (shuffles:
+`bool-constexpr-shuffle-run.cpp`, `-19.cpp`;
+`tests/codegen/bool_vector_shuffle_const.cpp`),
 `ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
 `ext.vector/bool-from-int-vector-constexpr-clang22.cpp`.
 
