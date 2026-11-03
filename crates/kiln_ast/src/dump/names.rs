@@ -1357,7 +1357,10 @@ impl<'a> AstNames<'a> {
                 let (b, arrow, t) = exprs.pseudo_destructor(e);
                 self.expr(b, d, out);
                 out.push_str(if arrow { "->~" } else { ".~" });
-                write_type(&ast.types, self, t, PrintOptions::SUGARED, out);
+                match ast.templates.pseudo_dtor_name.get(e) {
+                    Some(&n) => out.push_str(ast.symbols().as_str(n)),
+                    None => write_type(&ast.types, self, t, PrintOptions::SUGARED, out),
+                }
             }
             _ => out.push_str("..."),
         }

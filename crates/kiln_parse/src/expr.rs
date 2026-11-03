@@ -17,7 +17,7 @@ use kiln_lex::literal::{
 };
 use kiln_lex::{Punct, Std, TokKind, Token};
 use kiln_sema::expr::CastStyle;
-use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent, SpecialName};
+use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent, SpecialName, TypeSpecKind};
 use kiln_source::{Loc, Span};
 
 use crate::decl::is_type_specifier_kw;
@@ -1266,6 +1266,18 @@ impl Parser<'_, '_> {
     /// ([expr.prim.id.dtor]).
     fn parse_member_destructor_name(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
         let tl = self.bump().span.lo;
+        if self.at_kw(Kw::Decltype) {
+            // `p->~decltype(*p)()`: the decltype-specifier denotes the
+            // destroyed type ([expr.prim.id.dtor]/1, [expr.prim.id.unqual]/1).
+            let dl = self.loc();
+            let (kind, ty) = self.parse_decltype_specifier();
+            if kind == TypeSpecKind::DecltypeAuto {
+                self.s.error(DiagId::parse_decltype_auto_invalid, dl);
+                return None;
+            }
+            let ty = ty?;
+            return Some(self.s.rebuild_member_destructor(e, ty, false, dl, loc, arrow));
+        }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_destructor_tilde_identifier);
             return None;
@@ -1458,6 +1470,18 @@ impl Parser<'_, '_> {
         let fl = self.bump().span.lo;
         self.bump();
         let tl = self.bump().span.lo;
+        if self.at_kw(Kw::Decltype) {
+            // `p->~decltype(*p)()`: the decltype-specifier denotes the
+            // destroyed type ([expr.prim.id.dtor]/1, [expr.prim.id.unqual]/1).
+            let dl = self.loc();
+            let (kind, ty) = self.parse_decltype_specifier();
+            if kind == TypeSpecKind::DecltypeAuto {
+                self.s.error(DiagId::parse_decltype_auto_invalid, dl);
+                return None;
+            }
+            let ty = ty?;
+            return Some(self.s.rebuild_member_destructor(e, ty, false, dl, loc, arrow));
+        }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_destructor_tilde_identifier);
             return None;
