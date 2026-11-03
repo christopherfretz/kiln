@@ -45,6 +45,8 @@ pub enum FeatureFlag {
     OpenMp,
     /// `-fdefine-target-os-macros`.
     DefineTargetOsMacros,
+    /// `-fexperimental-library`.
+    ExperimentalLibrary,
     /// `-fptrauth-intrinsics` (aarch64).
     PtrauthIntrinsics,
     /// `-fptrauth-calls` (aarch64).
@@ -106,6 +108,7 @@ impl FeatureFlag {
         FeatureFlag::FixedPoint,
         FeatureFlag::OpenMp,
         FeatureFlag::DefineTargetOsMacros,
+        FeatureFlag::ExperimentalLibrary,
         FeatureFlag::PtrauthIntrinsics,
         FeatureFlag::PtrauthCalls,
         FeatureFlag::PtrauthReturns,
@@ -147,6 +150,7 @@ impl FeatureFlag {
             FeatureFlag::FixedPoint => &["-ffixed-point"],
             FeatureFlag::OpenMp => &["-fopenmp"],
             FeatureFlag::DefineTargetOsMacros => &["-fdefine-target-os-macros"],
+            FeatureFlag::ExperimentalLibrary => &["-fexperimental-library"],
             FeatureFlag::PtrauthIntrinsics => &["-fptrauth-intrinsics"],
             FeatureFlag::PtrauthCalls => &["-fptrauth-calls"],
             FeatureFlag::PtrauthReturns => &["-fptrauth-returns"],
@@ -196,6 +200,7 @@ impl FeatureFlag {
             FeatureFlag::FixedPoint => 0x3fff,
             FeatureFlag::OpenMp => 0x3fff,
             FeatureFlag::DefineTargetOsMacros => 0x3fff,
+            FeatureFlag::ExperimentalLibrary => 0x3fff,
             FeatureFlag::PtrauthIntrinsics => 0x007f,
             FeatureFlag::PtrauthCalls => 0x007f,
             FeatureFlag::PtrauthReturns => 0x007f,
@@ -5495,6 +5500,8 @@ pub(super) static OVERLAYS: &[Overlay] = &[
         1,
         0x3fff,
     ),
+    Overlay(FeatureFlag::ExperimentalLibrary, Kind::Feature, "experimental_library", 1, 0x3fff),
+    Overlay(FeatureFlag::ExperimentalLibrary, Kind::Extension, "experimental_library", 1, 0x3fff),
     Overlay(FeatureFlag::PtrauthIntrinsics, Kind::Feature, "ptrauth_intrinsics", 1, 0x007f),
     Overlay(FeatureFlag::PtrauthIntrinsics, Kind::Extension, "ptrauth_intrinsics", 1, 0x007f),
     Overlay(FeatureFlag::PtrauthCalls, Kind::Feature, "ptrauth_calls", 1, 0x007f),

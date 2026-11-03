@@ -48,7 +48,7 @@ impl Sema<'_, '_> {
         match ty {
             Some(t) if t != QualType::ERROR => {
                 let t = self.ast.types.canonical(t);
-                Ok(self.ast.reflections.intern(Reflectee::Type(t)))
+                Ok(self.intern_reflection(Reflectee::Type(t), loc)?)
             }
             _ => fail(loc, format!("'{}' has no type", self.reflection_str(r))),
         }

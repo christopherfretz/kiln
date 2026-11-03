@@ -1703,6 +1703,20 @@ class name" at `B`
   the `pending` worklist with their POI. `end_of_tu_instantiations()`
   drains the worklist with a loop; an instantiation may push more entries
   onto it.
+- Each definition the drain instantiates is recorded in
+  `TemplateTables::end_of_tu_defs` for codegen (spec/codegen.md §2a),
+  in clang's order ([temp.point]/7: the end of the TU is a point of
+  instantiation). A function definition is recorded before the
+  instantiations it requires (pre-order, clang
+  `InstantiateFunctionDefinition`'s `HandleTopLevelDecl`). A variable
+  definition is recorded after them (post-order, clang
+  `InstantiateVariableDefinition`'s `PassToConsumerRAII`): a static data
+  member's out-of-line redeclaration and a variable template
+  specialization alike, including one whose initializer was instantiated
+  in place on the specialization itself (WP-440/WP-466,
+  `pending.rs` `instantiate_pending` returns it to the drain, which
+  records it once that definition's nested queue has drained;
+  `tests/codegen/var_template_init_order.cpp`).
 
 ### 4.7 Injected-class-name
 
@@ -2830,6 +2844,13 @@ formed it:
   `namespace.udecl/dependent-qualifier-location.cpp`). A non-dependent
   leading prefix (`N::X<T>::m`) or a leading `::` is not recorded, so
   such a qualifier reports at its first dependent component.
+- `act_on_atomic_type` records a dependent `_Atomic(T)` specifier or
+  `_Atomic T` qualifier (`WrittenKey::Type` of the atomic type) at its
+  `_Atomic`: an operand that substitution makes invalid (array, function,
+  reference, atomic, qualified, `_BitInt`) is reported there with the
+  instantiation note, as clang's `TransformAtomicType` does, not at the
+  declarator; an alias template reports at its `using` (`written_locs`
+  off; WP-461, `ext.c11.atomic/atomic-specifier-subst-loc.cpp`).
 - Recording happens only while parsing (the instantiation stack is
   empty), so instantiation never grows the table.
 - `Substituter::written(key, loc)` returns the recorded location nearest
