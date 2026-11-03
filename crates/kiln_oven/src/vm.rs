@@ -1483,6 +1483,15 @@ impl Oven {
             }
             c.pc &= !UNWIND_ONLY;
         }
+        if c.func == exc::LIFE_CHECK {
+            // A trivially destructible base: only its lifetime is checked
+            // (not while unwinding, which destroys no constructed object's
+            // base twice).
+            if !unwinding {
+                self.cleanup_life(&c, fb).map_err(|f| (f, self.cleanup_fault_pc(&c, pc)))?;
+            }
+            return Ok(None);
+        }
         if c.func >= exc::SENTINEL {
             // A try-block's marker or an exception's end (`vm/exc.rs`).
             match self.exc_cleanup(c).map_err(|f| (f, pc))? {
@@ -1519,7 +1528,9 @@ impl Oven {
         aux: u32,
         pc: usize,
     ) -> Result<(), Fault> {
-        if raw == 0 {
+        // A trivially destructible base can be outside its lifetime only
+        // if a constructor left it unconstructed (`Memory::set_unconstructed`).
+        if raw == 0 || (func == exc::LIFE_CHECK && self.mem.unconstructed.is_empty()) {
             return Ok(());
         }
         let (elem, n) = if aux & 1 != 0 {

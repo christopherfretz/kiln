@@ -423,7 +423,8 @@ impl Sema<'_, '_> {
                     let m = self
                         .diag(DiagId::sema_member_def_no_match, sloc)
                         .arg(what)
-                        .arg(self.qualified_decl_name(ctx));
+                        .arg(self.class_context_str(ctx));
+                    let m = self.with_class_defined_note(m, ctx);
                     self.emit(m);
                     redecl_invalid = true;
                 }
