@@ -390,6 +390,20 @@ impl Parser<'_, '_> {
     pub(crate) fn parse_using_attrs(&mut self, leading: &[AttrId]) -> Vec<DeclId> {
         let loc = self.bump().span.lo;
         if self.eat_kw(Kw::Namespace).is_some() {
+            // `using namespace [: r :];` ([namespace.udir]/1 with a
+            // splice-specifier).
+            if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
+                let ns =
+                    self.parse_splice_operand().and_then(|e| self.s.act_on_splice_namespace(e));
+                let Some(ns) = ns else {
+                    self.skip_to_semi();
+                    return Vec::new();
+                };
+                let d = self.s.act_on_using_directive(ns, loc);
+                self.s.act_on_decl_attrs(d, leading);
+                self.expect_semi_after("namespace name");
+                return vec![d];
+            }
             let Ok(qual) = self.parse_nested_name() else {
                 self.skip_to_semi();
                 return Vec::new();
@@ -716,6 +730,18 @@ impl Parser<'_, '_> {
                 {
                     break;
                 }
+                continue;
+            }
+            // A splice-type-specifier without `typename` in a type-only
+            // context ([dcl.type.splice]/1, [temp.res.general]/4); a
+            // splice followed by `::` was annotated as a scope above.
+            if self.at_splice() {
+                if ds.has_type_specifier() || self.typename_required(ctx) {
+                    break;
+                }
+                let ty = self.parse_splice_type();
+                ds.invalid |= ty.is_none();
+                let _ = ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc);
                 continue;
             }
             let Some(k) = self.kw() else { break };
@@ -1602,7 +1628,8 @@ impl Parser<'_, '_> {
         };
         if !(self.at(Punct::ColonColon)
             || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
-            || template_id_qual())
+            || template_id_qual()
+            || (self.at_splice() && self.decltype_scope_end(self.pos()).is_some()))
         {
             return None;
         }
@@ -1781,7 +1808,8 @@ impl Parser<'_, '_> {
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
         self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
-        let (qual, qual_failed) = self.parse_tag_qualifier_checked(ds);
+        let splice_qual = self.at_splice().then_some(qual_loc);
+        let (qual, mut qual_failed) = self.parse_tag_qualifier_checked(ds);
         let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
@@ -1815,6 +1843,19 @@ impl Parser<'_, '_> {
             final_loc = self.parse_class_virt_specifiers();
         }
         let use_ = self.tag_use(ds, is_class, final_loc);
+        // [expr.prim.id.qual]/3: the nested-name-specifier of a
+        // class-head-name or enum-head-name is declarative and cannot
+        // contain a splice-scope-specifier; the definition declares
+        // nothing.
+        if let Some(at) = splice_qual
+            && use_ == TagUse::Definition
+            && !qual_failed
+        {
+            self.s.error(DiagId::sema_splice_declarative_scope, at);
+            self.s.discard_spec_headers();
+            ds.invalid = true;
+            qual_failed = true;
+        }
         if name.is_none() && use_ != TagUse::Definition {
             if !ds.invalid {
                 self.error_here(DiagId::parse_expected_unqualified_id);
@@ -2138,6 +2179,7 @@ impl Parser<'_, '_> {
                     self.parse_member_pointer(d, star, Self::parse_declarator);
                     return;
                 }
+                self.reject_declarative_splice_scope(d);
                 self.parse_direct_declarator(d);
             }
         }
@@ -2360,6 +2402,25 @@ impl Parser<'_, '_> {
             d.ellipsis = Some(ellipsis);
         }
         false
+    }
+
+    /// [dcl.meaning]/1, [expr.prim.id.qual]/3: a splice-scope-specifier
+    /// never begins a declarative nested-name-specifier. The declaration
+    /// is dropped; the name after the qualifier is parsed for recovery.
+    fn reject_declarative_splice_scope(&mut self, d: &mut Declarator) {
+        if d.ctx != DeclaratorContext::TypeName
+            && self.at_splice()
+            && let Some(cc) = self.decltype_scope_end(self.pos())
+        {
+            self.s.error(DiagId::sema_splice_declarative_scope, self.loc());
+            d.invalid = true;
+            d.dropped = true;
+            self.s.discard_spec_headers();
+            while self.pos() <= cc {
+                self.bump();
+            }
+            self.skip_nested_name_rest();
+        }
     }
 
     /// noptr-declarator ([dcl.decl]): the declarator-id or `( declarator )`

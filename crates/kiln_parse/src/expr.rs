@@ -1327,6 +1327,13 @@ impl Parser<'_, '_> {
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
     fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
+        // `e.[: r :]`, `p->[: r :]` ([expr.ref]/1 with a splice-expression;
+        // `template [: r :]` is WP-482).
+        if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
+            let open = self.loc();
+            let (r, close) = self.parse_splice_specifier()?;
+            return Some(self.s.act_on_member_splice(e, r, open, close, loc, arrow));
+        }
         let mut template_kw = self.eat_kw(Kw::Template).is_some();
         // `p->T::~T()`, `p->N::T::~T()` on a scalar or dependent object: a
         // pseudo-destructor-name whose last `type-name ::` is not a
@@ -1671,9 +1678,9 @@ impl Parser<'_, '_> {
             }
             TokKind::Punct(Punct::LSquare) => return self.parse_lambda_expr(),
             TokKind::Punct(Punct::CaretCaret) => return self.parse_reflect_expr(),
-            TokKind::Punct(Punct::SpliceOpen) => {
-                self.unsupported("expression splice", loc);
-                return None;
+            // A splice-expression; `[: r :]::` is a qualifier (below).
+            TokKind::Punct(Punct::SpliceOpen) if self.decltype_scope_end(self.pos()).is_none() => {
+                return self.parse_splice_expr();
             }
             _ => {}
         }
