@@ -77,9 +77,10 @@ impl Sema<'_, '_> {
             .function(pattern)
             .map(|x| x.spec.with_escalated(false))
             .unwrap_or_default();
+        let sugared = self.settle_inst_sugar(args.sugared);
         let spec = self.builder().function_spec(
             tmpl,
-            args.sugared,
+            sugared,
             args.canonical,
             kind,
             QualType::ERROR,
