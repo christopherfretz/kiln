@@ -821,10 +821,6 @@ impl Sema<'_, '_> {
         r
     }
 
-    /// `e` converted to the type of non-type parameter `p` as a
-    /// converted constant expression ([temp.arg.nontype]/2) and
-    /// evaluated: a `Value` argument.
-    #[allow(clippy::too_many_lines)]
     /// Whether `e` is instantiation-dependent through a type or a
     /// qualifier (`is_same<void, void_t<decltype(x)>>::value`), whose
     /// substitution can fail. A reference to a local declaration of a
@@ -852,6 +848,10 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// `e` converted to the type of non-type parameter `p` as a
+    /// converted constant expression ([temp.arg.nontype]/2) and
+    /// evaluated: a `Value` argument.
+    #[allow(clippy::too_many_lines)]
     fn convert_nttp_arg(
         &mut self,
         tmpl: DeclId,
