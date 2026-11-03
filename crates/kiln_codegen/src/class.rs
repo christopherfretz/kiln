@@ -15,6 +15,7 @@ use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_llvm::{BinOp, Flags, FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
+use kiln_source::fx::FxHashSet;
 
 use crate::cleanup::Cleanup;
 use crate::fir::{Op, V};
@@ -562,11 +563,20 @@ impl Cg<'_> {
         match v {
             Structor::Base => {
                 self.squeued.insert((first, v));
-                let (_, f) = self.declare_structor(first, v)?;
-                if !self.m.func(f).is_declaration() || self.sdone.contains(&first) {
+                // The declaration if it is referenced already (clang
+                // `TryEmitBaseDestructorAsAlias` runs before
+                // `codegenCXXStructor` creates it).
+                let declared = self.sfns.get(&(first, v)).map(|e| e.1);
+                if declared.is_some_and(|f| !self.m.func(f).is_declaration())
+                    || self.sdone.contains(&first)
+                {
                     return Ok(());
                 }
                 self.sdone.insert(first);
+                if self.try_base_dtor_alias(d, first, declared)? {
+                    return Ok(());
+                }
+                let (_, f) = self.declare_structor(first, v)?;
                 let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
                 let r = self.gen_code(d, f, Some(Structor::Base));
                 self.f = saved;
@@ -597,9 +607,13 @@ impl Cg<'_> {
                     return self.emit_thunks(d, Some(v));
                 }
                 let f = self.base_fn(first, true)?;
+                // The base variant may itself be an alias
+                // ([`Cg::try_base_dtor_alias`]).
+                let target =
+                    self.sfns.get(&(first, Structor::Base)).map_or(Value::func(f), |e| e.0);
                 let name = mangle::mangle_structor(ast, &mut self.anon, first, v);
                 let fty = self.m.func(f).ty();
-                let a = match self.m.add_alias(&name, fty, Value::func(f)) {
+                let a = match self.m.add_alias(&name, fty, target) {
                     Ok(a) => a,
                     Err(e) => {
                         return err(
@@ -614,11 +628,13 @@ impl Cg<'_> {
                     Linkage::WeakOdr => Linkage::WeakOdr,
                     _ => Linkage::External,
                 };
+                let visibility = self.m.func(f).visibility;
                 {
                     let al = self.m.alias_mut(a);
                     al.linkage = linkage;
                     al.dso_local = true;
                     al.unnamed_addr = UnnamedAddr::Global;
+                    al.visibility = visibility;
                 }
                 let val = Value::alias(a);
                 self.sfns.insert((first, v), (val, f));
@@ -640,6 +656,148 @@ impl Cg<'_> {
                 self.emit_thunks(d, Some(v))
             }
         }
+    }
+
+    /// The linkage clang gives a definition of function `d`
+    /// (`getFunctionLinkage`, as [`Cg::set_def_linkage`] sets it).
+    fn fn_def_linkage(&self, d: DeclId) -> Linkage {
+        if self.fn_internal(d) {
+            Linkage::Internal
+        } else if self.is_available_externally_fn(self.ast.first(d)) {
+            Linkage::AvailableExternally
+        } else if self.is_explicit_inst_definition(d) {
+            Linkage::WeakOdr
+        } else if self.fn_is_inline(d) {
+            Linkage::LinkOnceOdr
+        } else {
+            Linkage::External
+        }
+    }
+
+    /// clang `TryEmitBaseDestructorAsAlias` (`-mconstructor-aliases`, at
+    /// -O1 and above; spec/codegen.md "Structor aliases"): the base-object
+    /// destructor `f` of definition `d` is not emitted when its body is
+    /// empty, its class has no virtual bases and no field needing
+    /// destruction, and exactly one non-virtual base, at offset zero, has
+    /// a non-trivial destructor. A discardable (`linkonce_odr`,
+    /// internal) one is replaced by that base's base-object destructor;
+    /// an external one becomes an alias of it when the base's is already
+    /// defined and not weak. A `weak_odr` one (clang `COMDAT` structor
+    /// codegen) is always emitted. `declared` is the base-object
+    /// declaration if one exists. Returns whether the base-object variant
+    /// is settled (no definition to emit).
+    fn try_base_dtor_alias(
+        &mut self,
+        d: DeclId,
+        first: DeclId,
+        declared: Option<FuncId>,
+    ) -> R<bool> {
+        let ast = self.ast;
+        if !self.opts.optimize || ast.decls.get(d).kind() != DeclKind::CXXDestructor {
+            return Ok(false);
+        }
+        let linkage = self.fn_def_linkage(d);
+        if matches!(linkage, Linkage::WeakOdr | Linkage::AvailableExternally) {
+            return Ok(false);
+        }
+        // A defaulted destructor's synthesized body is on its first
+        // declaration.
+        let body = ast.redecls_of(d).find_map(|r| ast.decls.function(r).and_then(|x| x.body));
+        let trivial_body = body.is_some_and(|b| {
+            ast.stmts.get(b).kind() == StmtKind::CompoundStmt
+                && ast.lists.get(ast.stmts.compound_body(b)).is_empty()
+        });
+        if !trivial_body || self.structor_has_vbases(d) {
+            return Ok(false);
+        }
+        let Some(rd) = ast.decls.get(d).ctx() else { return Ok(false) };
+        let Some(def) = self.class_def(rd) else { return Ok(false) };
+        let field_needs_dtor = ast.decls.members(def).any(|m| {
+            ast.decls.get(m).kind() == DeclKind::Field
+                && ast.decls.get(m).ty().is_some_and(|q| self.destructed_class(q).is_some())
+        });
+        if field_needs_dtor {
+            return Ok(false);
+        }
+        let mut unique = None;
+        for b in ast.decls.bases(def, &ast.lists) {
+            if b.is_virtual {
+                continue;
+            }
+            let Some(br) = ast.types.as_record(b.ty) else { continue };
+            if !self.has_nontrivial_dtor(br) {
+                continue;
+            }
+            if unique.is_some() {
+                return Ok(false);
+            }
+            unique = Some(br);
+        }
+        let Some(base) = unique else { return Ok(false) };
+        if self.base_offset(rd, base) != Some(0) {
+            return Ok(false);
+        }
+        let Some(bdtor) = self.class_def(base).and_then(|b| ast.destructor(b)) else {
+            return Ok(false);
+        };
+        let bfirst = ast.first(bdtor);
+        let target_linkage = self.fn_def_linkage(bfirst);
+        if matches!(linkage, Linkage::Internal | Linkage::LinkOnceOdr) {
+            // clang keeps an `available_externally` `always_inline` target
+            // unreferenced (libc++); the alias is then refused below.
+            if target_linkage == Linkage::AvailableExternally {
+                return Ok(false);
+            }
+            // `addReplacement`.
+            let bf = self.base_fn(bfirst, true)?;
+            let target = self.sfns.get(&(bfirst, Structor::Base)).map_or(Value::func(bf), |e| e.0);
+            if let Some(f) = declared
+                && let Err(e) = self.m.replace_function(f, target)
+            {
+                return err(Some(ast.decls.get(d).loc()), format!("cannot replace {e:?}"));
+            }
+            self.sfns.insert((first, Structor::Base), (target, bf));
+            return Ok(true);
+        }
+        let bf = self.base_fn(bfirst, true)?;
+        let target = self.sfns.get(&(bfirst, Structor::Base)).map_or(Value::func(bf), |e| e.0);
+        // No alias of a declaration (`isDeclarationForLinker`) or of a
+        // weak definition (different comdats in different TUs).
+        let declaration = match self.m.resolve(target).get() {
+            kiln_llvm::ValueRef::Func(g) => self.m.func(g).is_declaration(),
+            _ => false,
+        };
+        if declaration
+            || matches!(
+                target_linkage,
+                Linkage::LinkOnceOdr | Linkage::WeakOdr | Linkage::AvailableExternally
+            )
+        {
+            return Ok(false);
+        }
+        let r = if let Some(f) = declared {
+            let fty = self.m.func(f).ty();
+            self.m.replace_function_with_alias(f, fty, target)
+        } else {
+            let name = mangle::mangle_structor(ast, &mut self.anon, first, Structor::Base);
+            let fty = self.structor_sig(first, Some(Structor::Base))?.fn_ty;
+            self.m.add_alias(&name, fty, target)
+        };
+        let a = match r {
+            Ok(a) => a,
+            Err(e) => return err(Some(ast.decls.get(d).loc()), format!("cannot alias {e:?}")),
+        };
+        let visibility = self.m.func(bf).visibility;
+        {
+            // Destructors are always `unnamed_addr`; `SetCommonAttributes`.
+            let al = self.m.alias_mut(a);
+            al.linkage = Linkage::External;
+            al.dso_local = true;
+            al.unnamed_addr = UnnamedAddr::Global;
+            al.visibility = visibility;
+        }
+        self.sfns.insert((first, Structor::Base), (Value::alias(a), declared.unwrap_or(bf)));
+        Ok(true)
     }
 
     // ---- constructor and destructor bodies -----------------------------
@@ -1102,7 +1260,24 @@ impl Cg<'_> {
 
     /// clang `CXXRecordDecl::vbases()` order: per direct base, its
     /// virtual bases, then itself if virtual; each class once.
+    /// Each class is expanded once (`seen` holds the expanded classes
+    /// and the collected ones, first declarations): a second expansion
+    /// adds nothing, and re-expanding per path is exponential in a
+    /// lattice of virtual diamonds.
     fn collect_vbases(&self, r: DeclId, out: &mut Vec<DeclId>, depth: usize) {
+        let mut expanded = FxHashSet::default();
+        let mut have = FxHashSet::default();
+        self.collect_vbases_in(r, out, depth, &mut expanded, &mut have);
+    }
+
+    fn collect_vbases_in(
+        &self,
+        r: DeclId,
+        out: &mut Vec<DeclId>,
+        depth: usize,
+        expanded: &mut FxHashSet<DeclId>,
+        have: &mut FxHashSet<DeclId>,
+    ) {
         let ast = self.ast;
         if depth > 1024 {
             return;
@@ -1112,16 +1287,12 @@ impl Cg<'_> {
         for (bq, virt) in bases {
             let Some(b) = ast.types.as_record(bq) else { continue };
             let Some(bd) = self.class_def(b) else { continue };
-            if self.class_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
-                let mut inner = Vec::new();
-                self.collect_vbases(bd, &mut inner, depth + 1);
-                for c in inner {
-                    if !out.iter().any(|&x| ast.first(x) == ast.first(c)) {
-                        out.push(c);
-                    }
-                }
+            if self.class_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES)
+                && expanded.insert(ast.first(bd))
+            {
+                self.collect_vbases_in(bd, out, depth + 1, expanded, have);
             }
-            if virt && !out.iter().any(|&x| ast.first(x) == ast.first(bd)) {
+            if virt && have.insert(ast.first(bd)) {
                 out.push(bd);
             }
         }

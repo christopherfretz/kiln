@@ -457,6 +457,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     an outer bracket.
   - `skip_to_semi` skips to the end of the current declaration or
     statement.
+  - A declaration missing its `;` (`expect_declaration_semi`), when
+    the next token cannot start a declaration, is skipped by
+    `skip_malformed_decl` (clang `SkipMalformedDecl`: through a braced
+    body), not to the next `;` (WP-417).
+  - A direct-initializer (`(` or `{`) whose expression-list fails is
+    skipped through its closer and the declaration goes on (`void
+    f4(=) {}`, `int b(*= 2), c = 3;`; clang
+    `ParseDeclarationAfterDeclaratorAndAttributes`).
+    `parse_assignment_expr` with no operand before a binary operator
+    of assignment precedence or tighter reports `expected expression`
+    and still parses that operator's right operand on an error
+    expression (`int d = (|| 1);`). Test
+    `dcl.init.general/direct-init-recovery.cpp`.
   - Diagnostics use clang's wording and locations, for example:
     - `expected ';' after top level declarator`
     - `expected ';' at end of declaration`
@@ -1616,7 +1629,16 @@ in `stmt.rs`: a handler is `catch ( exception-declaration )
 compound-statement`, the declaration `...` or a type-specifier-seq with
 an optional (possibly abstract) declarator, sent to
 `act_on_exception_decl`; the handlers to `act_on_catch` and the whole to
-`act_on_try`. A `try` without a handler is `expected catch`. A
+`act_on_try`. The abstract declarator may be a parameter list
+(`catch (int(...))`, `catch (T())`: `parse_direct_declarator` takes
+`Parser::catch_declarator` for the outermost declarator and reads a `(`
+starting a parameter list as a function declarator, not a grouping
+paren; WP-417, `except.handle/catch-function-type.cpp`). A `...`
+before the declarator-id of a variable, member, exception or condition
+declarator (`int ...x;`, also before a ptr-operator or a grouping
+paren) is kept in `Declarator::ellipsis` and Sema reports "only
+function and template parameters can be parameter packs"
+(`temp.variadic/non-parameter-pack-declarator.cpp`). A `try` without a handler is `expected catch`. A
 function-try-block (`class.rs` captured prologue and the free-function
 path) parses `try`, then the ctor-initializer, then the body and its
 handlers; the body statement given to `act_on_finish_function_def` is the

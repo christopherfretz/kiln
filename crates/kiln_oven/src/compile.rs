@@ -20,7 +20,7 @@ use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::failure::Note;
-use crate::kbc::{Op, ak, cmp, int_aux};
+use crate::kbc::{Op, ak, cce, cmp, int_aux};
 use crate::mem::{Origin, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
@@ -1016,6 +1016,13 @@ impl<'a> Compiler<'a> {
         self.emit_loc(Op::Trap, 0, &[i], loc);
     }
 
+    /// Registers the note of a conditional trap (`Op::Cce`).
+    fn trap_index(&mut self, loc: Loc, msg: String) -> u32 {
+        let i = self.o.traps.len() as u32;
+        self.o.traps.push(TrapInfo { loc, msg, extra: Vec::new() });
+        i
+    }
+
     fn trap(&mut self, e: ExprId, msg: &str) {
         let loc = self.b.ast().exprs.get(e).loc();
         self.trap_loc(loc, msg.to_owned());
@@ -1148,6 +1155,10 @@ pub(crate) fn const_object(ast: &kiln_ast::Ast, q: QualType) -> bool {
     }
     c.has_const_bit()
 }
+
+/// clang's `note_constexpr_invalid_cast` for a conversion a
+/// `reinterpret_cast` performs ([expr.const]/5.15).
+const REINTERPRET_CONV: &str = "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression";
 
 /// clang's `note_constexpr_stmt_expr_unsupported`.
 const STMT_EXPR_UNSUPPORTED: &str =
@@ -2597,6 +2608,10 @@ impl Compiler<'_> {
                 }
             }
             ExprKind::UnaryExprOrTypeTraitExpr => self.trait_expr(e, dst, ty),
+            // An invalid class's layout is a placeholder: no note (clang).
+            ExprKind::OffsetOfExpr if self.ast().exprs.offsetof_invalid_record(e) => {
+                self.trap(e, "");
+            }
             ExprKind::OffsetOfExpr => {
                 let v = u128::from(self.ast().exprs.offsetof_value(e));
                 let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
@@ -3313,10 +3328,22 @@ impl Compiler<'_> {
         let ck = ast.exprs.cast_kind(e);
         let op = ast.exprs.operand(e);
         let ek = ast.exprs.get(e).kind();
-        if ek == ExprKind::CXXReinterpretCastExpr {
-            // [expr.const]/5.15, whatever conversion it performs.
-            self.trap(e, "reinterpret_cast is not allowed in a constant expression");
-            return;
+        let reinterpret = ek == ExprKind::CXXReinterpretCastExpr;
+        if reinterpret {
+            // [expr.const]/5.15, whatever conversion it performs. A fold
+            // continues past the conversions clang's does (`Op::Cce`).
+            let msg = "reinterpret_cast is not allowed in a constant expression";
+            if !matches!(
+                ck,
+                CastKind::NoOp
+                    | CastKind::BitCast
+                    | CastKind::IntegralToPointer
+                    | CastKind::PointerToIntegral
+            ) {
+                self.trap(e, msg);
+                return;
+            }
+            self.cce_check(e, msg);
         }
         match ck {
             CastKind::LValueToRValue => {
@@ -3324,7 +3351,7 @@ impl Compiler<'_> {
                 if q.quals_bits() & 2 != 0 {
                     let msg = format!(
                         "read of volatile-qualified type '{}' is not allowed in a constant expression",
-                        Oven::type_name(ast, q)
+                        Oven::type_name(self.ast(), q)
                     );
                     let loc = self.begin(op);
                     self.trap_loc(loc, msg);
@@ -3431,7 +3458,20 @@ impl Compiler<'_> {
                 let (fk, tk) = (self.kind(from), self.kind(ty));
                 let r = self.rv(op);
                 match (fk, tk) {
-                    (TyKind::Ptr(fp), TyKind::Ptr(tp)) => {
+                    (TyKind::Ptr(fp), TyKind::Ptr(tp))
+                        if reinterpret
+                            && !matches!(self.kind(fp), TyKind::Func)
+                            && !matches!(self.kind(tp), TyKind::Func) =>
+                    {
+                        // clang: a cast to the same type (`CK_NoOp`) keeps
+                        // the designator valid.
+                        if fp == tp {
+                            self.emit(Op::Mov, 0, &[dst, r]);
+                        } else {
+                            self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
+                        }
+                    }
+                    (TyKind::Ptr(fp), TyKind::Ptr(tp)) if !reinterpret => {
                         let fvoid = self.kind(fp) == TyKind::Void;
                         let tvoid = self.kind(tp) == TyKind::Void;
                         // clang permits any cast from `void *` within
@@ -3448,20 +3488,34 @@ impl Compiler<'_> {
                             self.emit(Op::VoidCast, crate::kbc::VOID_TAG, &[dst, r, fp.0]);
                         } else if tvoid || fp == tp || in_allocate {
                             self.emit(Op::Mov, 0, &[dst, r]);
-                        } else if fvoid && ek != ExprKind::CXXReinterpretCastExpr && !self.b.cxx26() {
-                            self.void_cast_pre26(e, op, r);
-                        } else if fvoid && ek != ExprKind::CXXReinterpretCastExpr {
+                        } else if fvoid && !self.b.cxx26() {
+                            self.void_cast_pre26(e, op, dst, r);
+                        } else if fvoid {
                             self.emit_at(Op::VoidCast, 0, &[dst, r, tp.0], e);
+                        } else if matches!(self.kind(fp), TyKind::Func)
+                            || matches!(self.kind(tp), TyKind::Func)
+                        {
+                            self.trap(e, REINTERPRET_CONV);
                         } else {
-                            self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression");
+                            self.cce(e, cce::PTR, dst, r, REINTERPRET_CONV);
                         }
                     }
-                    _ => self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression"),
+                    _ => self.trap(e, REINTERPRET_CONV),
                 }
             }
             CastKind::LValueToRValueBitCast => self.bit_cast(e, dst, None),
             CastKind::IntegralToPointer | CastKind::PointerToIntegral => {
-                self.trap(e, "cast that performs the conversions of a reinterpret_cast is not allowed in a constant expression");
+                // clang notes the cast before evaluating its operand.
+                if !reinterpret {
+                    self.cce_check(e, REINTERPRET_CONV);
+                }
+                let r = self.rv(op);
+                let aux = if ck == CastKind::IntegralToPointer {
+                    cce::INT_TO_PTR
+                } else {
+                    cce::PTR_TO_INT
+                };
+                self.cce(e, aux, dst, r, REINTERPRET_CONV);
             }
             _ => self.unsupported(e),
         }
@@ -3472,7 +3526,8 @@ impl Compiler<'_> {
     /// As clang, at the cast: a null operand names only the source type, a
     /// non-null one adds "in C++ standards before C++2c" (spec/oven.md
     /// "Casts from void *").
-    fn void_cast_pre26(&mut self, e: ExprId, op: ExprId, r: u32) {
+    /// A fold continues with the result pointing at nothing (`Op::Cce`).
+    fn void_cast_pre26(&mut self, e: ExprId, op: ExprId, dst: u32, r: u32) {
         let ast = self.ast();
         let src = Oven::quoted_aka(ast, ast.exprs.get(op).ty());
         let msg = format!("cast from {src} is not allowed in a constant expression");
@@ -3480,9 +3535,28 @@ impl Compiler<'_> {
         let nz = self.reg();
         self.emit(Op::PtrToBool, 0, &[nz, r]);
         let j = self.jmp_if(nz, true);
-        self.trap_loc(loc, msg.clone());
+        let t = self.trap_index(loc, msg.clone());
+        self.emit_loc(Op::Cce, cce::PTR, &[dst, r, t], loc);
+        let end = self.jmp();
         self.patch_here(j);
-        self.trap_loc(loc, format!("{msg} in C++ standards before C++2c"));
+        let t = self.trap_index(loc, format!("{msg} in C++ standards before C++2c"));
+        self.emit_loc(Op::Cce, cce::PTR, &[dst, r, t], loc);
+        self.patch_here(end);
+    }
+
+    /// `Op::Cce` `CHECK` with note `msg` at `e`: fails outside a fold.
+    fn cce_check(&mut self, e: ExprId, msg: &str) {
+        let loc = self.b.ast().exprs.get(e).loc();
+        let t = self.trap_index(loc, msg.to_owned());
+        self.emit_loc(Op::Cce, cce::CHECK, &[0, 0, t], loc);
+    }
+
+    /// `Op::Cce` conversion `aux` of register `r` into `dst`, failing
+    /// with note `msg` at `e` outside a fold.
+    fn cce(&mut self, e: ExprId, aux: u32, dst: u32, r: u32, msg: &str) {
+        let loc = self.b.ast().exprs.get(e).loc();
+        let t = self.trap_index(loc, msg.to_owned());
+        self.emit_loc(Op::Cce, aux, &[dst, r, t], loc);
     }
 
     /// The function an lvalue of function type designates, as a function

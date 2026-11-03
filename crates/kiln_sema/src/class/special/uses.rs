@@ -11,10 +11,10 @@
 //! declaration.
 
 use kiln_ast::decl::{DeclKind, DefinitionBits, InitStyle, VarSpec};
-use kiln_ast::expr::ConstructionKind;
+use kiln_ast::expr::{ConstructionKind, ExprKind, UnaryOp};
 use kiln_ast::types::Quals;
 use kiln_ast::{DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use super::SpecialKind;
@@ -122,11 +122,47 @@ impl Sema<'_, '_> {
         });
     }
 
+    /// The function template-id `e` was resolved to a specialization
+    /// whose signature's substitution held back the warnings `ds`: they
+    /// are reported at its use ([`SpecialState::pending_tid_warnings`]).
+    pub(crate) fn defer_template_id_warnings(&mut self, e: ExprId, d: DeclId, ds: Vec<Diag>) {
+        self.special.pending_tid_warnings.push((e, d, ds));
+    }
+
+    /// The template-id `e` (possibly in parentheses and under `&`) is
+    /// not used after all: its specialization keeps the held-back
+    /// warnings for its first use. (clang stores a deduction's warnings
+    /// only when it succeeds, so its context notes name the deduction of
+    /// that use; these keep this one's, BACKLOG WP-417 follow-up.)
+    pub(crate) fn drop_template_id_warnings(&mut self, e: ExprId) {
+        let mut x = e;
+        for _ in 0..64 {
+            if let Some(i) = self.special.pending_tid_warnings.iter().position(|w| w.0 == x) {
+                let (_, d, ds) = self.special.pending_tid_warnings.remove(i);
+                let slot = self.templ.suppressed_diags.entry(d).or_default();
+                if slot.is_empty() {
+                    *slot = ds;
+                }
+            }
+            let n = *self.ast.exprs.get(x);
+            x = match n.kind() {
+                ExprKind::ParenExpr => self.ast.exprs.operand(x),
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(x) == UnaryOp::AddrOf => {
+                    self.ast.exprs.operand(x)
+                }
+                _ => return,
+            };
+        }
+    }
+
     /// `outer`, a parenthesized expression or `&` built around `inner`:
     /// a pending deleted function template-id `inner` moves to `outer`,
     /// diagnosed at its start (clang resolves the overload set at the
     /// use of the whole operand).
     pub(crate) fn widen_pending_template_id(&mut self, inner: ExprId, outer: ExprId) {
+        if let Some(w) = self.special.pending_tid_warnings.iter_mut().find(|w| w.0 == inner) {
+            w.0 = outer;
+        }
         let Some(i) =
             self.special.pending_deleted.iter().position(|p| p.template_id && p.expr == inner)
         else {
@@ -142,6 +178,11 @@ impl Sema<'_, '_> {
     /// named by it is diagnosed as `call to deleted function` unless
     /// `dependent` (or `invalid`, an argument being in error).
     pub(crate) fn act_on_deleted_callee(&mut self, callee: ExprId, dependent: bool, invalid: bool) {
+        // A called template-id is used.
+        if let Some(i) = self.special.pending_tid_warnings.iter().position(|w| w.0 == callee) {
+            let (_, _, ds) = self.special.pending_tid_warnings.remove(i);
+            self.emit_held_warnings(ds);
+        }
         let Some(i) = self.special.pending_deleted.iter().position(|p| p.expr == callee) else {
             return;
         };
@@ -185,6 +226,9 @@ impl Sema<'_, '_> {
     /// At the end of a full-expression: a pending callee that no call
     /// consumed is a plain use.
     pub(crate) fn flush_pending_deleted(&mut self) {
+        for (_, _, ds) in std::mem::take(&mut self.special.pending_tid_warnings) {
+            self.emit_held_warnings(ds);
+        }
         let pending = std::mem::take(&mut self.special.pending_deleted);
         for p in pending {
             self.diagnose_deleted_use(p.decl, p.loc);

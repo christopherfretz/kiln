@@ -4,7 +4,13 @@
 // final-overrider computation, the vtable marking of every class's virtual
 // members, and member lookup and base-path searches through virtual bases.
 // clang's `MarkVirtualMembersReferenced` recursion is exponential in the
-// depth (about 2.5 s here); kiln walks each class once.
+// depth (about 2.5 s here); kiln walks each class once. The depth is
+// LATTICE_DEPTH (default 14; e.g. `args: -DLATTICE_DEPTH=16` or by hand).
+// virtual-lattice-emit.cpp measures the vtables and VTTs of the same shape.
+
+#ifndef LATTICE_DEPTH
+#define LATTICE_DEPTH 14
+#endif
 
 template <int N> struct D;
 template <> struct D<0> {
@@ -23,7 +29,7 @@ template <int N> struct D : B<N>, C<N> {
   int g() const override { return -N; }
 };
 int main() {
-  D<14> d;
+  D<LATTICE_DEPTH> d;
   D<0> &r = d;
   return r.f() + r.g();
 }

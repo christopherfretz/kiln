@@ -252,7 +252,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
         }
         self.flush_member_refs();
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             self.flush_pending_deleted();
         }
         self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate(b, e, ctx))
@@ -271,7 +271,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return (Vec::new(), Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant)));
         }
         self.flush_member_refs();
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             self.flush_pending_deleted();
         }
         self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate_chars(b, size, data, ctx))
@@ -341,6 +341,84 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return false;
         }
         self.with_oven(None, |oven, b| oven.is_constant_initialized(b, var))
+    }
+
+    /// clang's `-Wconstant-evaluated` for the initializer `e` of variable
+    /// `v` that is neither `constexpr` nor `constinit` (those report it
+    /// when checked): `CheckCompleteVariableDeclaration` evaluates the
+    /// initializer of every variable with static or thread storage, or
+    /// that might be usable in constant expressions (a `const`
+    /// non-volatile integral or enumeration variable, a reference), as a
+    /// constant initializer, so `__builtin_is_constant_evaluated()` or
+    /// `std::is_constant_evaluated()` called directly by it is always
+    /// true there, whether or not the initialization succeeds
+    /// ([`kiln_oven::Oven::warn_constant_evaluated`]; spec/sema.md
+    /// "Constant initialization"). Only an initializer that names one
+    /// of them is evaluated.
+    pub(crate) fn warn_constant_evaluated_init(&mut self, v: DeclId, e: ExprId) {
+        let n = *self.ast.decls.get(v);
+        let Some(data) = self.ast.decls.var(v) else { return };
+        if n.kind() != kiln_ast::decl::DeclKind::Var
+            || n.has(kiln_ast::decl::DeclFlags::INVALID)
+            || data.spec.is_constexpr()
+            || data.spec.is_constinit()
+        {
+            return;
+        }
+        let ty = n.ty().unwrap_or(QualType::ERROR);
+        let candidate = self.has_static_storage(v)
+            || data.spec.tls() != kiln_ast::decl::TlsKind::None
+            || self.ast.types.is_reference(ty)
+            || {
+                let q = self.ast.types.effective_quals(ty);
+                q.is_const() && !q.is_volatile() && self.is_integral_or_enum(ty)
+            };
+        if !candidate
+            || !self.calls_is_constant_evaluated(e)
+            || self.is_dependent_type(ty)
+            || self.expr_is_value_dependent(e)
+            || self.has_errors_in(e)
+            || !self.eval_stack_ok(e)
+        {
+            return;
+        }
+        self.with_oven(None, |oven, b| oven.warn_constant_evaluated(b, e, v));
+    }
+
+    /// Whether `e` calls `__builtin_is_constant_evaluated` or
+    /// `std::is_constant_evaluated` directly (a bounded walk; a lambda's
+    /// or a callee's body is not under `e`).
+    fn calls_is_constant_evaluated(&self, e: ExprId) -> bool {
+        use kiln_ast::expr::ExprKind;
+        let mut stack = vec![e];
+        let mut budget = 1usize << 16;
+        while let Some(x) = stack.pop() {
+            if budget == 0 {
+                return false;
+            }
+            budget -= 1;
+            if self.ast.exprs.get(x).kind() == ExprKind::CallExpr
+                && let Some(f) = self.callee_decl(x)
+                && (self.ast.decls.builtin_id(f)
+                    == Some(kiln_ast::decl::builtin::IS_CONSTANT_EVALUATED)
+                    || self.is_std_is_constant_evaluated(f))
+            {
+                return true;
+            }
+            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+        }
+        false
+    }
+
+    /// Whether function `f` is `std::is_constant_evaluated`.
+    fn is_std_is_constant_evaluated(&self, f: DeclId) -> bool {
+        self.ast
+            .decls
+            .get(f)
+            .name()
+            .as_ident()
+            .is_some_and(|s| self.ast.symbols().as_str(s) == "is_constant_evaluated")
+            && self.is_in_std_namespace(f)
     }
 
     /// The integer value of the scalar constant `v` (`bool` as 0/1), if

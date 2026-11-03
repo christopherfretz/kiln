@@ -192,8 +192,9 @@ pub(crate) struct Fx {
     /// value of `__builtin_coro_frame()` (clang
     /// `CurAwaitSuspendWrapper.FramePtr`).
     pub await_frame: Option<V>,
-    /// Emit lifetime markers (clang `ShouldEmitLifetimeMarkers`; set in
-    /// a coroutine, spec/codegen.md §7p).
+    /// Emit lifetime markers in this function even without optimization
+    /// (set in a coroutine, spec/codegen.md §7p); at -O1+ every function
+    /// has them ([`Cg::lifetime_markers_on`]).
     pub lifetime_markers: bool,
     /// The variables a jump bypasses, which get no lifetime markers
     /// (clang `Bypasses`).
@@ -496,6 +497,11 @@ impl Cg<'_> {
             self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));
         }
 
+        // GenerateCode: `Bypasses.Init` over the body when lifetime
+        // markers are on (a coroutine redoes it over its own body).
+        if self.lifetime_markers_on() && thunk.is_none() {
+            self.f.bypasses = Some(Box::new(crate::lifetime::detect_bypasses(ast, body)));
+        }
         match kind {
             _ if let Some(th) = thunk => {
                 self.f.mustprogress = false;
@@ -992,17 +998,19 @@ impl Cg<'_> {
         self.store_scalar_tb(v, a, q, Tb::Type);
     }
 
-    /// [`Self::store_scalar`] tagged with the access path `tb`.
-    pub fn store_scalar_tb(&mut self, v: V, a: Addr, q: QualType, tb: Tb) {
+    /// [`Self::store_scalar`] tagged with the access path `tb`; returns
+    /// the store.
+    pub fn store_scalar_tb(&mut self, v: V, a: Addr, q: QualType, tb: Tb) -> V {
         let vol = self.ast.types.effective_quals(q).is_volatile();
         if let Some(st) = self.vec_store(v, a, q, vol) {
             self.tbaa_mark(st, q, tb);
-            return;
+            return st;
         }
         let v = self.emit_to_memory(v, q, a.ty);
         let p = self.scalar_tls_addr(a.v);
         let st = self.store(v, p, a.align, vol);
         self.tbaa_mark(st, q, tb);
+        st
     }
 
     /// `memcpy(dst, src, n)`.

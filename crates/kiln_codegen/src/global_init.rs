@@ -868,6 +868,15 @@ impl Cg<'_> {
         self.emit_block(init, false);
         let one = V::C(self.m.const_int(LTy::I8, 1));
         self.store(one, gp, 1, false);
+        // `EmitInvariantStart`: the guard never changes again (-O1+).
+        if self.opts.optimize {
+            let f = kiln_llvm::intrinsics::invariant_start(&mut self.m);
+            let fn_ty = self.m.func(f).ty();
+            let size = V::C(self.m.const_int(LTy::I64, 1));
+            let callee = V::C(Value::func(f));
+            let opts = Box::default();
+            self.f.fir.push(Op::Call { fn_ty, callee, args: vec![size, gp], opts }, LTy::PTR);
+        }
         self.emit_init_calls(fns);
         self.emit_block(end, false);
         Ok(())
