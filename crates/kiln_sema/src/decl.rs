@@ -6533,6 +6533,52 @@ impl Sema<'_, '_> {
             .is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::INVALID))
     }
 
+    /// The definition bits read off `r`'s fields at its `}`
+    /// (`HAS_MUTABLE_FIELDS`, `HAS_VARIANT_MEMBERS`, `EMPTY`), and whether
+    /// a field of an invalid class type makes `r` invalid (spec/sema-class.md
+    /// §2.3).
+    fn record_field_bits(&mut self, r: DeclId, mut bits: DefinitionBits) -> (DefinitionBits, bool) {
+        let mut invalid = false;
+        let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
+        let mut any_named = false;
+        for f in fields {
+            if self.ast.decls.get(f).kind() != DeclKind::Field {
+                continue;
+            }
+            if self.has_invalid_class_type(f) {
+                self.ast.decls.set_flags(f, DeclFlags::INVALID);
+                invalid = true;
+            }
+            let fd = self.ast.decls.field(f).copied();
+            if fd.is_some_and(|x| x.flags & FieldData::MUTABLE != 0) {
+                bits = bits.with(DefinitionBits::HAS_MUTABLE_FIELDS);
+            }
+            let anon_union = self
+                .ast
+                .decls
+                .get(f)
+                .ty()
+                .and_then(|t| self.ast.types.as_record(t))
+                .and_then(|d| self.ast.decls.record(d))
+                .is_some_and(|x| {
+                    x.tag == TagKind::Union && x.defn.contains(DefinitionBits::ANONYMOUS)
+                });
+            if anon_union {
+                bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
+            }
+            if (fd.is_none_or(|x| x.bit_width.is_none())
+                || !self.ast.decls.get(f).name().is_empty())
+                && !self.is_zero_size_field(f)
+            {
+                any_named = true;
+            }
+        }
+        if !any_named {
+            bits = bits.with(DefinitionBits::EMPTY);
+        }
+        (bits, invalid)
+    }
+
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.scopes.pop();
         let mut build = self.classes.pop_if(|c| c.record == r);
@@ -6573,43 +6619,8 @@ impl Sema<'_, '_> {
                 bits = bits.with(DefinitionBits::LAMBDA_CAPTURES);
             }
         }
-        let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
-        let mut any_named = false;
-        for f in fields {
-            if self.ast.decls.get(f).kind() != DeclKind::Field {
-                continue;
-            }
-            if self.has_invalid_class_type(f) {
-                self.ast.decls.set_flags(f, DeclFlags::INVALID);
-                invalid = true;
-            }
-            let fd = self.ast.decls.field(f).copied();
-            if fd.is_some_and(|x| x.flags & FieldData::MUTABLE != 0) {
-                bits = bits.with(DefinitionBits::HAS_MUTABLE_FIELDS);
-            }
-            let anon_union = self
-                .ast
-                .decls
-                .get(f)
-                .ty()
-                .and_then(|t| self.ast.types.as_record(t))
-                .and_then(|d| self.ast.decls.record(d))
-                .is_some_and(|x| {
-                    x.tag == TagKind::Union && x.defn.contains(DefinitionBits::ANONYMOUS)
-                });
-            if anon_union {
-                bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
-            }
-            if (fd.is_none_or(|x| x.bit_width.is_none())
-                || !self.ast.decls.get(f).name().is_empty())
-                && !self.is_zero_size_field(f)
-            {
-                any_named = true;
-            }
-        }
-        if !any_named {
-            bits = bits.with(DefinitionBits::EMPTY);
-        }
+        let (mut bits, invalid_field) = self.record_field_bits(r, bits);
+        invalid |= invalid_field;
         // §5.8: flexible array members.
         if self.check_flexible_array_members(r) {
             bits = bits.with(DefinitionBits::HAS_FLEXIBLE_ARRAY_MEMBER);
