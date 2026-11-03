@@ -3061,15 +3061,13 @@ impl Cg<'_> {
             ra.extend(ret_extra.iter().cloned());
             ret = self.m.attr_set(&ra);
         }
-        let func = if sig.nothrow {
-            let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
-            fa.extend(extra.iter().cloned());
-            self.m.attr_set(&fa)
-        } else if !extra.is_empty() {
-            self.m.attr_set(extra)
-        } else {
-            AttrList::default().func
-        };
+        let mut fa = Vec::new();
+        if sig.nothrow {
+            fa.push(Attr::Flag(AttrKind::NoUnwind));
+        }
+        fa.extend(extra.iter().cloned());
+        self.call_size_attrs(fid, &mut fa);
+        let func = if fa.is_empty() { AttrList::default().func } else { self.m.attr_set(&fa) };
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
         let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);
         if let Some(a) = sret_addr {

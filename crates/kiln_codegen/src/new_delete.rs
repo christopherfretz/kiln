@@ -388,6 +388,7 @@ impl Cg<'_> {
         if sig.nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
+        self.call_size_attrs(Some(f), &mut fa);
         let mut ra = self.m.attrs_of(ret).to_vec();
         if af.replaceable && af.is_new {
             fa.push(Attr::AllocSize(0, None));
@@ -1206,8 +1207,9 @@ impl Cg<'_> {
         let Some(mut dt) = t.pointee(ast.exprs.get(arg).ty()) else {
             return err(loc, "delete of a non-pointer");
         };
+        let array_form = ast.exprs.get(e).has(ExprFlags::ARRAY_FORM);
         let mut cookie = 0;
-        if ast.exprs.get(e).has(ExprFlags::ARRAY_FORM) {
+        if array_form {
             let mut b = dt;
             while let Some(el) = t.element(b) {
                 b = el;
@@ -1246,6 +1248,14 @@ impl Cg<'_> {
             }
         } else if cookie == 0 && self.emit_object_delete(e, arg, p, dt, loc)? {
             self.emit_block(end, false);
+            return Ok(());
+        }
+        if !array_form && self.opts.opt_size > 1 && !ast.is_destroying_operator_delete(od) {
+            // clang `EmitObjectDelete` at -Oz: "When optimizing for size,
+            // call 'operator delete' unconditionally" — the
+            // `CallObjectDelete` cleanup is emitted in the end block.
+            self.emit_block(end, false);
+            self.emit_delete_call(od, ptr, dt, loc)?;
             return Ok(());
         }
         if cookie != 0 {

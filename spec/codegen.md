@@ -814,6 +814,37 @@ The normative description is spec/driver.md "Code generation". In short:
   internal one, kiln keeps it below `-fclang-compat=22`); it carries no
   `align`, as clang's.
 
+### Size optimization attributes (WP-412)
+- `CodegenOptions::opt_size` is clang's `CodeGenOpts.OptimizeSize`: 1 at
+  `-Os`, 2 at `-Oz` (the driver's `opt_size`). `Cg::size_attrs` gives
+  `optsize`, and `minsize` too at 2 (clang
+  `getTrivialDefaultFunctionAttributes`). They come with
+  `Cg::target_attrs`, so every function that has the target attributes
+  gets them: definitions (user functions, structor variants, thunks,
+  initialization functions, TLS wrappers, `__clang_call_terminate`) and
+  declarations (`Cg::declare_fn`, library builtins). Runtime functions
+  (`rt_fn`: `__cxa_atexit`, `__cxa_allocate_exception`, `__cxa_throw`, …)
+  and intrinsics have neither. An `optnone` function drops them: its
+  definition (`DefInline::OptNone`, clang
+  `SetLLVMFunctionAttributesForDefinition` removes them) and its
+  declaration (`Cg::optnone_fns`).
+- Call sites through clang `EmitCall` (`Fx::call_vals_to`: direct,
+  indirect and virtual calls, structor calls; replaceable allocation
+  calls) get `Cg::call_size_attrs`: the size attributes unless the
+  callee is in `Cg::optnone_fns`. Runtime calls, inline asm, intrinsic
+  calls and the plain calls of `__cxx_global_var_init` /
+  `__clang_call_terminate` / `_ZTH` have none.
+- Initialization functions (`__cxx_global_var_init`,
+  `_GLOBAL__sub_I_*`) are `noinline` only at `-O0`.
+- At `-Oz` a non-array delete-expression that does not deallocate
+  through a virtual deleting destructor or a destroying `operator
+  delete` calls `operator delete` unconditionally in the null check's
+  end block (clang `EmitObjectDelete`: "When optimizing for size, call
+  'operator delete' unconditionally").
+- Tests: `tests/codegen/optsize_os.cpp`, `optsize_oz.cpp`,
+  `delete_oz.cpp` (exact under oracle 19, structural under 22, both
+  targets).
+
 ### Always-inliner (WP-389)
 - clang's `-O0` pipeline (`buildO0DefaultPipeline`) runs
   `AlwaysInlinerPass` (without lifetime markers) before `-emit-llvm`
