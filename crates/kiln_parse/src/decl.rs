@@ -7,7 +7,7 @@ use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{DiagId, FixIt};
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
 use kiln_sema::DeclSite;
 use kiln_sema::declspec::SpecError;
@@ -1214,7 +1214,9 @@ impl Parser<'_, '_> {
             // only a type can be: the parse proper reports it ("no type
             // named 'name' in 'S'"; clang's `DiagnoseUnknownTypeName`).
             // At block scope the statement disambiguation chose a
-            // declaration already (`S::name(e);`, `S::name *g;`).
+            // declaration already (`S::name(e);`, `S::name *g;`). At
+            // namespace scope a variable or function `N::f` is reported
+            // the same way (`N::f(v);`, `N::f x;`).
             Some((end, NameClass::Undeclared, _))
                 if (end == start + 2
                     && self.at_decltype_scope()
@@ -1223,6 +1225,15 @@ impl Parser<'_, '_> {
                     || (end > start + 1
                         && self.unresolved_scope_name(start)
                         && self.qualified_unknown_type_follows(end, ctx)) =>
+            {
+                self.unknown_qualified_type_spec(ds, loc);
+                true
+            }
+            Some((end, NameClass::Value(_), _))
+                if ctx == DeclaratorContext::File
+                    && self.nontype_scope_name(start)
+                    && Self::punct_of(self.tok_at(end)) != Some(Punct::Less)
+                    && self.qualified_unknown_type_follows(end, ctx) =>
             {
                 self.unknown_qualified_type_spec(ds, loc);
                 true
@@ -1435,11 +1446,18 @@ impl Parser<'_, '_> {
     /// namespace or class scope, `<` (a class template:
     /// `std::codecvt_utf8<wchar_t> c;`, clang's `ParseImplicitInt` with
     /// `IsTemplateName`; at block scope `N::f<int> x;` is an expression).
+    /// At namespace scope a `(` that starts a declarator counts too
+    /// (`N::f(v);`, `N::f(*p)[2];`; clang's `ParseImplicitInt` runs
+    /// `TryParseDeclarator` after the name), while `N::f(1);` and
+    /// `N::f(int);` declare `N::f` with no type.
     fn qualified_unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
         ctx == DeclaratorContext::Block
             || self.unknown_type_follows(end, ctx)
             || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && Self::punct_of(self.tok_at(end)) == Some(Punct::Less))
+            || (ctx == DeclaratorContext::File
+                && Self::punct_of(self.tok_at(end)) == Some(Punct::LParen)
+                && self.declarator_may_start_at(end))
     }
 
     // -- class and enum specifiers ----------------------------------------------------
@@ -3079,7 +3097,35 @@ impl Parser<'_, '_> {
     /// `err_missing_type_specifier`).
     fn at_declarator_without_specifiers(&self, ctx: DeclaratorContext) -> bool {
         self.at_special_declarator(ctx)
-            || (ctx == DeclaratorContext::File && self.at_implicit_int_declarator())
+            || (ctx == DeclaratorContext::File
+                && (self.at_implicit_int_declarator()
+                    || self.at_qualified_implicit_int_declarator()))
+    }
+
+    /// At namespace scope, a qualified name for which lookup finds a
+    /// non-type or nothing (`R::f(1);`, `R::f;`, `R::h(int);`), followed
+    /// by what clang's `ParseImplicitInt` takes as the rest of a
+    /// declarator with no type: `;` `=` `,` `[` `{` `asm`, or a `(` that
+    /// cannot start a declarator (else the name was meant as a type,
+    /// [`Self::qualified_unknown_type_follows`]). The name is the
+    /// declarator-id of an invalid `int` declaration, after "a type
+    /// specifier is required" (WP-411).
+    fn at_qualified_implicit_int_declarator(&self) -> bool {
+        let i = self.pos();
+        let Some((end, false, class, _, Some(q))) = self.scan_name_qual_at(i) else {
+            return false;
+        };
+        if end <= i + 1
+            || self.s.is_dependent_ctx(q)
+            || !matches!(class, NameClass::Value(_) | NameClass::Undeclared)
+        {
+            return false;
+        }
+        match Self::punct_of(self.tok_at(end)) {
+            Some(Punct::Semi | Punct::Equal | Punct::Comma | Punct::LSquare | Punct::LBrace) => true,
+            Some(Punct::LParen) => !self.declarator_may_start_at(end),
+            _ => self.kw_of(self.tok_at(end)) == Some(Kw::Asm),
+        }
     }
 
     /// [temp.explicit]/3: declarator `d` of an explicit instantiation
@@ -3127,6 +3173,7 @@ impl Parser<'_, '_> {
         let (mut declarators, mut restrict) = (0usize, None);
         let _ = self.s.take_declarator_type_invalid();
         let mut type_invalid = false;
+        let mut semi_at = None;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
             self.parse_declarator(&mut d);
@@ -3172,6 +3219,13 @@ impl Parser<'_, '_> {
             // unexpanded pack (`Ts a, b;` reports `a` only).
             if declarators > 0 && (ds.type_error || type_invalid) {
                 if self.eat(Punct::Comma).is_none() {
+                    // clang's tentative `isCXXFunctionDeclarator` took the
+                    // `(` before reverting, leaving `PrevTokLocation` on it:
+                    // the missing `;` is reported after the `(`
+                    // (`R::f(v), g(v);`; WP-411).
+                    if self.at(Punct::LParen) {
+                        semi_at = Some(self.tok().span.hi);
+                    }
                     break;
                 }
                 continue;
@@ -3212,7 +3266,7 @@ impl Parser<'_, '_> {
         {
             self.s.act_on_decomposition_not_alone(l, v);
         }
-        self.expect_declaration_semi(ctx);
+        self.expect_declaration_semi(ctx, semi_at);
         decls
     }
 
@@ -3342,14 +3396,18 @@ impl Parser<'_, '_> {
     }
 
     /// The `;` ending a simple-declaration.
-    fn expect_declaration_semi(&mut self, ctx: DeclaratorContext) {
+    fn expect_declaration_semi(&mut self, ctx: DeclaratorContext, at: Option<Loc>) {
         if self.eat(Punct::Semi).is_none() {
             let id = if ctx == DeclaratorContext::File {
                 DiagId::parse_expected_semi_toplevel
             } else {
                 DiagId::parse_expected_semi_declaration
             };
-            self.s.error(id, self.expected_loc());
+            // clang's `ExpectAndConsume`: the `;` is inserted where it is
+            // reported, after the previous token.
+            let at = at.unwrap_or_else(|| self.expected_loc());
+            let msg = self.s.diag(id, at).fixit(FixIt::insert(at, ";"));
+            self.s.emit(msg);
             if !self.is_decl_spec_start() {
                 self.skip_to_semi();
             }

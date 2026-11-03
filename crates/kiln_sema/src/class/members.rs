@@ -199,6 +199,10 @@ impl Sema<'_, '_> {
                     self.error(DiagId::sema_nonstatic_member_out_of_line, loc);
                     invalid = true;
                 }
+                // A declaration with no type (`S::m;`, after "a type
+                // specifier is required") is invalid and merged with
+                // nothing (clang's `MergeVarDecl`; WP-411).
+                Some(_) if ds.type_error || !ds.has_type_specifier() => invalid = true,
                 Some(p) if self.kind_of(p) == DeclKind::Var => {
                     let p = self.ast.latest(p);
                     let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);

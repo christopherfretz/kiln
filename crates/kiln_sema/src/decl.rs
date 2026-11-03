@@ -3133,6 +3133,10 @@ impl Sema<'_, '_> {
         // erroneous default argument) is invalid (clang's
         // `ActOnFunctionDeclarator`).
         invalid_decl |= d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid));
+        // So is one whose decl-specifiers name no type (`f(int);`,
+        // `R::h(int);` after "a type specifier is required", or after an
+        // unknown type name; WP-411).
+        invalid_decl |= d.special.is_none() && (ds.type_error || !ds.has_type_specifier());
         let mut invalid_redecl = invalid_decl;
         // A redeclaration of an invalid declaration (below).
         let mut prev_invalid = false;
@@ -4393,6 +4397,9 @@ impl Sema<'_, '_> {
             .prev_candidates(name, Some(q))
             .into_iter()
             .filter(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function))
+            // An invalid declaration with no type (`R::v;`) merged with
+            // nothing and makes no lookup ambiguous (WP-411).
+            .filter(|&d| !self.ast.decls.get(d).has(DeclFlags::INVALID))
             .map(|d| self.ast.first(d))
             .collect();
         firsts.sort_unstable();
@@ -4528,10 +4535,27 @@ impl Sema<'_, '_> {
             p => p,
         };
         let ambiguous = self.diagnose_ambiguous_qualified_var(name, d);
+        // [dcl.meaning.general]/2.2: a qualified declarator-id names a
+        // member of its namespace; when lookup finds none, clang's
+        // `ActOnVariableDeclarator` reports "no member named" at the name
+        // and the variable is invalid (`int R::h;`, `R::h;`; WP-411).
+        let no_member = prev.is_none()
+            && !ambiguous
+            && d.qualifier.is_some()
+            && matches!(self.kind_of(ctx), DeclKind::Namespace | DeclKind::TranslationUnit)
+            && self.lookup_qualified(ctx, name, LookupKind::Ordinary).decls.is_empty();
+        if no_member {
+            let msg = self
+                .diag(DiagId::sema_no_member, d.name_loc())
+                .arg(sym_str(self, name))
+                .arg(self.qualifier_desc(ctx));
+            self.emit(msg);
+        }
         // A variable declared with no type is invalid and not merged
         // (clang's `MergeVarDecl` returns at an invalid new declaration):
-        // `y; y;` reports the missing type twice, no redefinition.
-        if ambiguous || !ds.has_type_specifier() {
+        // `y; y;` reports the missing type twice, no redefinition; so
+        // does one whose type named no type (`zz v;`, `R::f(v);`; WP-411).
+        if ambiguous || !ds.has_type_specifier() || ds.type_error {
             prev = None;
         }
         // [dcl.link]/6-7: a C-linkage variable of another scope.
@@ -4597,7 +4621,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || self.storage_invalidates_var(ds, d) {
+        if ambiguous || no_member || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
