@@ -9,6 +9,7 @@
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ValueCategory;
 use kiln_ast::types::TemplateArg;
+use kiln_ast::names::DeclName;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_source::Loc;
@@ -415,7 +416,7 @@ impl Sema<'_, '_> {
     /// ([`Sema::diagnose_member_found_in_class`]) and recovered as a typo
     /// correction to those functions would be.
     fn template_id_class_member(&mut self, name: Symbol, loc: Loc) -> Option<TemplateIdTypo> {
-        let decls = self.diagnose_member_found_in_class(name, loc, true)?;
+        let decls = self.diagnose_member_found_in_class(DeclName::ident(name), loc, true)?;
         let member = decls
             .iter()
             .map(|&d| self.ast.strip_shadow(d))
@@ -446,7 +447,7 @@ impl Sema<'_, '_> {
     /// `name`.
     pub(crate) fn diagnose_member_found_in_class(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         loc: Loc,
         pick: bool,
     ) -> Option<Vec<DeclId>> {
@@ -455,7 +456,7 @@ impl Sema<'_, '_> {
         for _ in 0..10_000 {
             let Some(d) = dc else { break };
             if self.kind_of(d) == DeclKind::CXXRecord {
-                let found = self.lookup_qualified(d, name, LookupKind::Ordinary);
+                let found = self.lookup_qualified_dn(d, name, LookupKind::Ordinary);
                 if !found.decls.is_empty() {
                     hit = Some((d, found.decls));
                     break;
@@ -491,7 +492,7 @@ impl Sema<'_, '_> {
         } else {
             DiagId::sema_found_in_dependent_base
         };
-        let mut msg = self.diag(id, loc).arg(sym_str(self, name));
+        let mut msg = self.diag(id, loc).arg(self.decl_name_str(name));
         if instance {
             msg = msg.fixit(FixIt::insert(loc, "this->"));
         }

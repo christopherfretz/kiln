@@ -1352,18 +1352,15 @@ impl Parser<'_, '_> {
             let l = self.s.ast.types.arg_list(&args);
             e = self.s.act_on_dependent_member_template_args(e, l);
         } else if self.at(Punct::Less)
-            && let Some(sym) = name.as_ident()
             && let Some(found) = self.s.member_named_non_template(e)
             && let Some(close) = self.potential_angle_close()
         {
-            // `a.g<int>(1)` with `g` no template: the template argument
-            // list is skipped and the access is an error (clang's
-            // `checkPotentialAngleBracket` after a member access).
-            while self.pos() < close {
-                let _ = self.bump();
-            }
-            let _ = self.split_greater();
-            self.s.diagnose_expr_intended_as_template_name(sym, found, nl);
+            // `a.g<int>(1)` (`this->operator+<int>(b)`) with `g` no
+            // template: the template argument list is skipped and the
+            // access is an error (clang's `checkPotentialAngleBracket`
+            // after a member access).
+            let angles = self.skip_potential_angles(close);
+            self.s.diagnose_expr_intended_as_template_name(name, found, nl, angles);
             self.expr_invalid = true;
             return Some(self.s.act_on_error_expr(&[e], nl));
         }
@@ -1938,14 +1935,12 @@ impl Parser<'_, '_> {
             && let NameClass::Value(_) = class
             && (qual.is_some()
                 || !(self.std >= Std::Cxx20 && self.s.is_assumed_template_name(name)))
-            && let Some(found) = self.s.potential_template_name_in(qual.map(|q| q.ctx), name)
+            && let Some(found) =
+                self.s.potential_template_name_in(qual.map(|q| q.ctx), DeclName::ident(name))
             && let Some(close) = self.potential_angle_close()
         {
-            while self.pos() < close {
-                let _ = self.bump();
-            }
-            let _ = self.split_greater();
-            self.s.diagnose_expr_intended_as_template_name(name, found, nl);
+            let angles = self.skip_potential_angles(close);
+            self.s.diagnose_expr_intended_as_template_name(DeclName::ident(name), found, nl, angles);
             // clang's `checkPotentialAngleBracket` makes the name
             // `ExprError()`: the enclosing expression is invalid.
             self.expr_invalid = true;
@@ -2003,6 +1998,17 @@ impl Parser<'_, '_> {
     /// `checkPotentialAngleBracket`): `<>` (or `<>>` from C++11), or `<`
     /// followed by an unambiguous type-id and a later `>` -- brackets
     /// balanced, not past a `;` or an unmatched closer.
+    /// Skips the potential template argument list at its `<` through its
+    /// `>` at token index `close` ([`Self::potential_angle_close`]),
+    /// splitting a `>>`; the locations of the `<` and the `>`.
+    fn skip_potential_angles(&mut self, close: usize) -> (Loc, Loc) {
+        let less = self.loc();
+        while self.pos() < close {
+            let _ = self.bump();
+        }
+        (less, self.split_greater())
+    }
+
     fn potential_angle_close(&self) -> Option<usize> {
         let less = self.pos();
         let next = self.tok_at(less + 1).kind;
@@ -2048,6 +2054,18 @@ impl Parser<'_, '_> {
         }
         if self.s.is_dependent_ctx(q.ctx) {
             return Some(self.s.act_dependent_scope_ref(q.nns, name, None, begin, nl));
+        }
+        // `::operator+<int>(a, b)` with `operator+` no template: as for a
+        // qualified identifier, clang's `checkPotentialAngleBracket`.
+        if self.at(Punct::Less)
+            && template_kw.is_none()
+            && let Some(found) = self.s.potential_template_name_in(Some(q.ctx), name)
+            && let Some(close) = self.potential_angle_close()
+        {
+            let angles = self.skip_potential_angles(close);
+            self.s.diagnose_expr_intended_as_template_name(name, found, nl, angles);
+            self.expr_invalid = true;
+            return Some(self.s.act_on_error_expr(&[], nl));
         }
         Some(self.s.act_on_id_expression_dn(name, nl, Some(q)))
     }

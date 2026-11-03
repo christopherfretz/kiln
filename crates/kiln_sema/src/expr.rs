@@ -1587,7 +1587,9 @@ impl Sema<'_, '_> {
                 // (`f(u 8, x)` skips to the `)`, WP-420).
                 self.emit_delayed_typo(msg, e);
             } else {
-                self.emit(msg);
+                // clang 22: the range of the name.
+                let end = self.token_end(loc).unwrap_or(loc);
+                self.emit(msg.range(kiln_source::Span::new(loc, end)));
             }
             return e;
         };

@@ -93,7 +93,12 @@ impl Sema<'_, '_> {
         }
         if cands.is_empty() {
             let text = self.decl_name_str(name);
-            let msg = self.diag(Self::undeclared_use_id(name), n.loc()).arg(text);
+            let mut msg = self.diag(Self::undeclared_use_id(name), n.loc()).arg(text);
+            if self.clang_compat >= 22 {
+                // clang 22: the range of the name's (first) token.
+                let end = self.token_end(n.loc()).unwrap_or(n.loc());
+                msg = msg.range(kiln_source::Span::new(n.loc(), end));
+            }
             self.emit(msg);
             return None;
         }
