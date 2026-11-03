@@ -5,7 +5,7 @@
 // "<=>"). Kiln returns the spelling as a pointer to a string literal
 // object, like name_of, until string_view results exist (WP-475), so the
 // test compares characters. Operator functions are reached through
-// __kiln_member_at (^^ of an operator-function-id does not parse yet).
+// members_of (^^ of an operator-function-id does not parse yet).
 // Answers checked against GCC 16.1 (-freflection), whose operators
 // numbering (op_new = 1, ..., op_comma) kiln_meta_queries.h copies.
 //@ args: -freflection -I tests/support
@@ -63,7 +63,7 @@ struct S {
   static void operator delete[](void*);      // 9
   operator int() const;                      // 10
 };
-consteval info m(unsigned long i) { return __kiln_member_at(^^S, i); }
+consteval info m(unsigned long i) { return members_of(^^S, access_context::unchecked())[i]; }
 
 static_assert(operator_of(m(0)) == operators::op_equals_equals);
 static_assert(operator_of(m(1)) == op_equals && operator_of(m(2)) == op_parentheses);

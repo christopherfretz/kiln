@@ -64,6 +64,14 @@ impl<'s> SemaNames<'s> {
         SemaNames { typed_args: Some(f), ..self }
     }
 
+    /// These names, printing a closure type in a scope as `(lambda)` at
+    /// every `-fclang-compat` level (kiln's own dumps, which no clang
+    /// prints: spec/sema.md §7.5.1).
+    #[must_use]
+    pub fn closures_as_lambda(self) -> Self {
+        SemaNames { closure_as_lambda: true, ..self }
+    }
+
     /// An explicit class template specialization named as a lookup
     /// context ("no type named 'x' in '`std::hash<monostate>`'"): clang's
     /// `TypePrinter::printTag` prints its arguments as written in the

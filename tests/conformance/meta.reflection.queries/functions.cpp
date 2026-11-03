@@ -12,7 +12,7 @@
 // user-provided ([dcl.fct.def.default]/5); one defaulted later is
 // user-provided. is_noexcept, is_const and the ref-qualifier predicates
 // also take a function type. Operator and conversion functions are
-// reached through __kiln_member_at until ^^operator== parses. Answers
+// reached through members_of until ^^operator== parses. Answers
 // checked against GCC 16.1 (-freflection).
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
@@ -63,7 +63,7 @@ struct S {
 S::S(S&&) noexcept = default;
 S& S::operator=(S&&) = default;
 
-consteval info m(unsigned long i) { return __kiln_member_at(^^S, i); }
+consteval info m(unsigned long i) { return members_of(^^S, access_context::unchecked())[i]; }
 
 static_assert(is_constructor(m(0)) && is_default_constructor(m(0)) && is_special_member_function(m(0)));
 static_assert(is_defaulted(m(0)) && is_user_declared(m(0)) && !is_user_provided(m(0)));
@@ -105,11 +105,11 @@ bool operator==(T, T);
 static_assert(is_user_provided(^^free_fn) && is_user_declared(^^free_fn));
 static_assert(!is_defaulted(^^free_fn) && !is_deleted(^^free_fn));
 static_assert(is_deleted(^^deleted_fn) && !is_user_provided(^^deleted_fn));
-static_assert(is_operator_function(__kiln_member_at(^^T, 0)));
+static_assert(is_operator_function(members_of(^^T, access_context::unchecked())[0]));
 static_assert(!is_operator_function(^^free_fn) && !is_literal_operator(^^free_fn));
 // is_literal_operator(^^operator""_x): ^^ of an operator-function-id
 // does not parse yet ("not supported yet"), and a literal operator is
-// never a class member, so __kiln_member_at cannot reach one.
+// never a class member, so members_of cannot reach one.
 
 // None of these holds for a non-function.
 int var;

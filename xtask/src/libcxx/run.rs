@@ -406,8 +406,8 @@ pub const ROOT_NPROC_REASON: &str = "env: running as root: RLIMIT_NPROC does not
 /// test runs. Sorted.
 const MEM_UNSUPPORTED: &[(&str, u64, &str)] = &[(
     "std/input.output/string.streams/stringstream/stringstream.members/gcount.pass.cpp",
-    9216,
-    "an INT_MAX - 1 byte payload plus a stringbuf grown past INT_MAX (2 + 2 + 4 GiB at the last regrowth)",
+    7168,
+    "an INT_MAX - 1 byte payload plus a stringbuf regrown past INT_MAX (2 + 1.5 + 3 GiB at the last regrowth, 6660 MiB measured)",
 )];
 
 /// With the scratch directory (`TMPDIR`) on a host-shared filesystem (a
@@ -641,10 +641,6 @@ const M5_TRIAGED: &[(&str, &str)] = &[
         "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
     ),
     (
-        "libcxx/containers/sequences/array/nodiscard.verify.cpp",
-        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
-    ),
-    (
         "libcxx/depr/depr.func.adaptor.typedefs/typedefs.depr_in_cxx17.verify.cpp",
         "missing \"'…' is deprecated\" on the C++17-deprecated adaptor typedefs (argument_type, result_type, …); no WP yet",
     ),
@@ -661,36 +657,8 @@ const M5_TRIAGED: &[(&str, &str)] = &[
         "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
     ),
     (
-        "libcxx/numerics/complex.number/nodiscard.verify.cpp",
-        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
-    ),
-    (
-        "libcxx/numerics/numarray/nodiscard.verify.cpp",
-        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::begin/std::end of valarray, forward-declared without it); no WP yet",
-    ),
-    (
         "libcxx/ranges/range.adaptors/range.adaptor.helpers/as-lvalue.lifetimebound.verify.cpp",
         "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.adaptors/range.filter/nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iter_move) never warns; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.adaptors/range.join.with/range.join.with.iterator/eq.nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (operator==) never warns; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.adaptors/range.join.with/range.join.with.iterator/iter_move.nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iter_move) never warns; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.factories/range.iota.view/nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iterator operator+/operator-) never warns; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.factories/range.repeat.view/nodiscard.verify.cpp",
-        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iterator operator+/operator-) never warns; no WP yet",
     ),
     (
         "libcxx/strings/basic.string/nonnull.verify.cpp",
@@ -709,16 +677,8 @@ const M5_TRIAGED: &[(&str, &str)] = &[
         "missing -Wthread-safety 'writing variable … requires holding shared_timed_mutex … exclusively'; no WP yet",
     ),
     (
-        "libcxx/utilities/any/nodiscard.verify.cpp",
-        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::any_cast, forward-declared without it); no WP yet",
-    ),
-    (
         "libcxx/utilities/function.objects/lifetimebound.verify.cpp",
         "missing [[clang::lifetimebound]] 'temporary bound to local reference … will be destroyed at the end of the full-expression'; no WP yet",
-    ),
-    (
-        "libcxx/utilities/tuple/nodiscard.verify.cpp",
-        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
     ),
     (
         "libcxx/utilities/utility/forward/lifetimebound.verify.cpp",
@@ -727,14 +687,6 @@ const M5_TRIAGED: &[(&str, &str)] = &[
     (
         "libcxx/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/allocate_vocabulary.attributes.verify.cpp",
         "missing alloc_align 'requested alignment is not a power of 2' on a constant argument; no WP yet",
-    ),
-    (
-        "libcxx/utilities/utility/pairs/nodiscard.verify.cpp",
-        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
-    ),
-    (
-        "libcxx/utilities/variant/nodiscard.verify.cpp",
-        "missing -Wunused-result: [[nodiscard]] on a later redeclaration of a function template is not merged (std::get, forward-declared without it); no WP yet",
     ),
     (
         "std/utilities/variant/variant.hash/hash.depr.verify.cpp",

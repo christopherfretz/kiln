@@ -1,0 +1,122 @@
+noret()
+ [B5 (ENTRY)]
+   Succs (1): B4
+ [B4]
+   1: x (DeclRefExpr)
+   2: x (ImplicitCastExpr)
+   3: x (ImplicitCastExpr)
+   T: if [B4.3]
+   Preds (1): B5
+   Succs (2): B3 B2
+ [B3]
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   Preds (1): B4
+   Succs (1): B1
+ [B2 (NORETURN)]
+   1: ab (DeclRefExpr)
+   2: ab (ImplicitCastExpr)
+   3: ab() (CallExpr)
+   Preds (1): B4
+   Succs (1): B0
+ [B1]
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   Preds (1): B3
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (2): B2 B1
+
+thrower()
+ [B4 (ENTRY)]
+   Succs (1): B3
+ [B3]
+   1: x (DeclRefExpr)
+   2: x (ImplicitCastExpr)
+   3: x (ImplicitCastExpr)
+   T: if [B3.3]
+   Preds (1): B4
+   Succs (2): B2 B1
+ [B2]
+   1: 1 (IntegerLiteral)
+   2: ... (CXXThrowExpr)
+   Preds (1): B3
+   Succs (1): B0
+ [B1]
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   Preds (1): B3
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (2): B2 B1
+
+handler()
+ [B5 (ENTRY)]
+   Succs (1): B4
+ [B4]
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   Preds (1): B5
+   Succs (1): B0
+ [B3]
+   T: try ...
+   Succs (2): B2 B1
+ [B2]
+  catch:
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   Preds (1): B3
+   Succs (1): B0
+ [B1]
+  catch:
+   Preds (1): B3
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (3): B4 B2 B1
+
+dtors()
+ [B4 (ENTRY)]
+   Succs (1): B3
+ [B3]
+   1:  (CXXConstructExpr)
+   2: decl d (DeclStmt)
+   3: x (DeclRefExpr)
+   4: x (ImplicitCastExpr)
+   5: x (ImplicitCastExpr)
+   T: if [B3.5]
+   Preds (1): B4
+   Succs (2): B2 B1
+ [B2]
+   1: ReturnStmt
+   2: d.~() (Implicit destructor)
+   Preds (1): B3
+   Succs (1): B0
+ [B1]
+   1: g (DeclRefExpr)
+   2: g (ImplicitCastExpr)
+   3: g() (CallExpr)
+   4: d.~() (Implicit destructor)
+   Preds (1): B3
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (2): B2 B1
+
+C::C()
+ [B2 (ENTRY)]
+   Succs (1): B1
+ [B1]
+   1: x (DeclRefExpr)
+   2: x (ImplicitCastExpr)
+   3: x (Member initializer)
+   4: 2 (IntegerLiteral)
+   5: 2 (Member initializer)
+   Preds (1): B2
+   Succs (1): B0
+ [B0 (EXIT)]
+   Preds (1): B1
+

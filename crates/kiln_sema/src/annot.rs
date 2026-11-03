@@ -115,9 +115,14 @@ impl Sema<'_, '_> {
             if node.kind != AttrKind::ANNOTATION {
                 return true;
             }
-            if let Some(e) = ExprId::from_raw(node.a)
+            // One attribute shared by several declarators is one
+            // annotation of each of their entities.
+            if let Some(&id) = self.annot_of_attr.get(&a) {
+                out.push(id);
+            } else if let Some(e) = ExprId::from_raw(node.a)
                 && let Some(id) = self.annotate(d, e, node.loc)
             {
+                self.annot_of_attr.insert(a, id);
                 out.push(id);
             }
             false

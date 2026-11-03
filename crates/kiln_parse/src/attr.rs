@@ -56,6 +56,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "nonnull"
             | "format"
             | "enable_if"
+            | "diagnose_if"
     )
 }
 
@@ -285,7 +286,7 @@ impl Parser<'_, '_> {
     }
 
     /// [`Parser::parse_gnu_attr_seq`] after declarator `d`, into its
-    /// attributes: the arguments of an `enable_if` after a function
+    /// attributes: the arguments of an `enable_if` or `diagnose_if` after a function
     /// declarator see its parameters (clang `ParseGNUAttributeArgs`
     /// re-enters the prototype scope, `ActOnReentrantPrototypeParam`).
     pub(crate) fn parse_declarator_gnu_attr_seq(&mut self, d: &mut Declarator) {
@@ -537,7 +538,7 @@ impl Parser<'_, '_> {
             };
             let loc = self.bump().span.lo;
             let args = match decl {
-                Some(d) if d.is_function_declarator() && self.is_enable_if(name) => {
+                Some(d) if d.is_function_declarator() && self.sees_params(name) => {
                     let scope = self.s.act_on_start_trailing_requires(d);
                     let args = self.parse_attr_args(name);
                     self.s.act_on_end_trailing_requires(scope);
@@ -559,10 +560,12 @@ impl Parser<'_, '_> {
         self.gnu_attr_end = self.prev_lo();
     }
 
-    /// Whether attribute name `name` is `enable_if` (or `__enable_if__`).
-    fn is_enable_if(&self, name: Symbol) -> bool {
+    /// Whether attribute name `name` is `enable_if` or `diagnose_if` (or
+    /// `__enable_if__`, `__diagnose_if__`), whose arguments see the
+    /// function's parameters.
+    fn sees_params(&self, name: Symbol) -> bool {
         let n = self.s.ast.symbols().as_str(name);
-        n.trim_start_matches("__").trim_end_matches("__") == "enable_if"
+        matches!(n.trim_start_matches("__").trim_end_matches("__"), "enable_if" | "diagnose_if")
     }
 
     /// The arguments of attribute `name`, if any: `Some(args)`, or `None`

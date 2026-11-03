@@ -45,7 +45,8 @@ in the WP-446 re-run and passes at 240 s under kiln and clang 22. It is
 in the long-test class, not a cluster.
 
 WP-460, which landed after this run, fixes 8 of the 9 (trivial_abi ×6,
-enable_if, std.compat; see "Fixed in WP-460"), leaving `make_from_tuple`.
+enable_if, std.compat; see "Fixed in WP-460"), leaving `make_from_tuple`,
+which already passed by then (see "Fixed in WP-491").
 
 ## Open clusters
 
@@ -56,7 +57,6 @@ the cell says otherwise.
 |---|---:|---|---|---|---|
 | (a) | 6 | `[[clang::trivial_abi]]`: attribute, then register passing/return of a non-trivial class (attr + codegen) | `unique_ptr`/`shared_ptr`/`weak_ptr` under `_LIBCPP_ABI_ENABLE_*_TRIVIAL_ABI`; kiln ignores the attribute ("unknown attribute 'trivial_abi' ignored") and returns through the caller's slot; run asserts | `class.temporary/trivial-abi-run.cpp` | `libcxx/memory/trivial_abi/*` (shared_ptr_arg, unique_ptr_arg, unique_ptr_array, unique_ptr_destruction_order, unique_ptr_ret, weak_ptr_ret) |
 | (a) | 1 | clang `enable_if` attribute (attr + overload viability, "candidate disabled: <msg>") | `_CmpUnspecifiedParam`'s literal-0 constructor (`<__compare/ordering.h>`); kiln ignores the attribute and accepts `strong_ordering < 1` | `dcl.attr/enable-if-attr.cpp` | `cmp.categories.pre/reject-other-than-literal-zero.verify` |
-| (a) | 1 | `<tuple>` P2748 (C++26): returning a reference bound to a temporary is ill-formed (accepts-invalid; WP-209/WP-432 follow-ups) | `make_from_tuple<const int&>(tuple<char>{})`: kiln gives the `static_assert` but not "returning reference to local temporary object" in `<tuple>` | the test itself | `make_from_tuple.verify` |
 | (a) | 1 | Modules: an imported unit built in-process keeps its GMF declarations apart from the importer's GMF (spec/modules.md §6) | `std.compat.cppm` over `std.cppm`, both GMFs including `<cstddef>`: "missing '#include <__cstddef/byte.h>'; 'byte' must be declared before it is used" at `__type_traits/is_trivially_lexicographically_comparable.h:50` | `module.global.frag/gmf-dedup-import-gmf.cpp` (+ `Inputs/gdx-*.cppm`) | `std/modules/std.compat.pass` |
 
 The `__builtin_elementwise_add_sat`/`_sub_sat` cluster (3) passes after
@@ -72,8 +72,6 @@ an XPASS is the cue to drop its row.
 
 | cause | count | WP | tests |
 |---|---:|---|---|
-| `[[nodiscard]]` on a later redeclaration of a function template is not merged (libc++ forward-declares `get`, `any_cast`, `begin`/`end` without it) | 7 | none yet | `nodiscard.verify` in array, complex.number, numarray, tuple, pairs, variant, any |
-| `[[nodiscard]]` hidden friend of a class template never warns | 5 | none yet | `nodiscard.verify` in range.filter, range.iota.view, range.repeat.view; join.with iterator `eq`, `iter_move` |
 | `-Wnonnull` "null passed to a callee that requires a non-null argument" | 5 | WP-433 | `nonnull.verify` in specialized.algorithms, mem.res, print.fun, basic.string, string.view |
 | `lifetimebound` "temporary bound to local reference … will be destroyed" | 4 | none yet | `lifetimebound.verify` in algorithms, as-lvalue, function.objects, utility/forward |
 | `-Wthread-safety` | 2 | none yet | `thread_safety.verify` in thread.shared_mutex, thread.shared_timed_mutex |
@@ -81,6 +79,17 @@ an XPASS is the cue to drop its row.
 | `alloc_align` "requested alignment is not a power of 2" | 1 | none yet | `allocate_vocabulary.attributes.verify` |
 | wording: the constraint note prints the substituted expression | 1 | none yet | `libcxx/algorithms/cpp17_iterator_concepts.verify` |
 | wording: `std::hash<std::monostate>` printed qualified | 1 | WP-432 | `variant.hash/hash.depr.verify` |
+
+## Fixed in WP-491
+
+The `M5_TRIAGED` rows these fix are gone from the ledger (each test was
+XPASS under kiln with libc++ 22.1.8).
+
+| class | count | construct / first error | fix | test |
+|---|---:|---|---|---|
+| (b) | 7 | `[[nodiscard]]` on a later redeclaration of a function template not merged (libc++ forward-declares `get`, `any_cast`, `begin`/`end` without it): `nodiscard.verify` in array, complex.number, numarray, tuple, pairs, variant, any | a function template specialization takes the unused-result attributes of every declaration of its template seen when it is formed (`function_spec_attrs`; spec/landed/sema/WP-491.md) | `dcl.attr.nodiscard/redeclared-function-template.cpp` |
+| (b) | 5 | a `[[nodiscard]]` hidden friend of a class template never warned: `nodiscard.verify` in range.filter, range.iota.view, range.repeat.view; join.with iterator `eq`, `iter_move` | an instantiated friend function gets the pattern's attributes (`friend_definition`/`function_decl`; spec/landed/sema/WP-491.md) | `dcl.attr.nodiscard/hidden-friend-class-template.cpp`, `hidden-friend-operator-clang{22,19}.cpp` |
+| (a) | 1 | P2748R5 in `<tuple>`: `make_from_tuple<const int&>(tuple<char>{})` returns a reference bound to a temporary (`make_from_tuple.verify`) | already passing at this row's re-check (the C++26 error, WP-445 era); WP-491 adds the pre-C++26 `-Wreturn-stack-address` warning level and the in-tree reproduction | `stmt.return/returned-temporary-make-from-tuple{,-cxx23}.cpp` |
 
 ## Fixed in WP-461
 
@@ -91,7 +100,7 @@ an XPASS is the cue to drop its row.
 | (c) | 1 | `-fexperimental-library` rejected | driver flag + `__has_feature(experimental_library)`, link `-lc++experimental` | `args.rs` `experimental_library`, `codegen_cmd.rs` `link_experimental_library` |
 | (c) | 1 | `copy_file.pass` under a 110+ character scratch `TMPDIR` | harness scratch `t<index>` under a short temp root | xtask `short_scratch_paths` |
 | (d) | 1 | `thread_create_failure`: `RLIMIT_NPROC` does not limit root | UNSUPPORTED when run as root (`ROOT_NPROC_UNSUPPORTED`) | xtask `env_exclusions` |
-| (d) | 1 | `gcount`: two `INT_MAX` strings need more than the 3072 MiB cap | UNSUPPORTED below 9216 MiB (`MEM_UNSUPPORTED`, an estimate) | xtask `env_exclusions` |
+| (d) | 1 | `gcount`: two `INT_MAX` strings need more than the 3072 MiB cap | UNSUPPORTED below 7168 MiB (`MEM_UNSUPPORTED`, measured 6660 MiB; WP-491) | xtask `env_exclusions` |
 
 ## Fixed in WP-446
 

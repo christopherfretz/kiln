@@ -3797,11 +3797,17 @@ impl Parser<'_, '_> {
     /// Records the end of bodiless function declaration `f`'s declarator
     /// `d`, where notes about it point (`ColdDeclData::declarator_end`).
     pub(crate) fn record_declarator_end(&mut self, f: Option<DeclId>, d: &Declarator) {
+        self.record_fn_end(f, d.end);
+    }
+
+    /// Records `end` as the end of bodiless function declaration `f`
+    /// (`ColdDeclData::declarator_end`).
+    pub(crate) fn record_fn_end(&mut self, f: Option<DeclId>, end: Loc) {
         if let Some(f) = f
-            && d.end != Loc::INVALID
+            && end != Loc::INVALID
             && self.s.ast.decls.function(f).is_some_and(|x| x.body.is_none())
         {
-            let _ = self.s.ast.decls.cold.declarator_end.insert(f, d.end);
+            let _ = self.s.ast.decls.cold.declarator_end.insert(f, end);
         }
     }
 
@@ -3949,6 +3955,10 @@ impl Parser<'_, '_> {
         let f = f.filter(|&f| self.s.ast.decls.function(f).is_some());
         decls.extend(f);
         if self.at(Punct::Equal) {
+            // A defaulted or deleted definition ends at its declarator
+            // too (clang `getEndLoc`; an implicit definition's body is
+            // located there).
+            self.record_declarator_end(f, d);
             self.parse_defaulted_or_deleted(f);
             return;
         }

@@ -120,6 +120,15 @@ impl Job<'_> {
         let mut cfg = PredefConfig::new(cplusplus);
         cfg.gnu = self.std.gnu;
         cfg.aarch64 = self.toolchain.target.is_aarch64();
+        if cfg.aarch64 {
+            // Errors were reported by the driver's own `resolve` pass.
+            let f = crate::features::resolve(self.args, &self.toolchain.target).0;
+            cfg.arm = kiln_pp::ArmTarget {
+                arch: f.arch,
+                features: f.enabled(),
+                sve_vector_bits: f.sve_vector_bits,
+            };
+        }
         cfg.opt = p.opt;
         cfg.exceptions = p.exceptions.unwrap_or(cplusplus);
         cfg.rtti = p.rtti.unwrap_or(cplusplus);

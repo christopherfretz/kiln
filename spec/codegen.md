@@ -3246,12 +3246,39 @@ No lowering changed; the new forms reach codegen as existing AST.
   `_GLOBAL__sub_I_*`, `__tls_init`: `init_fn_attrs`) carry
   `vscale_range(1,16)` (clang's `CodeGenFunction` for a target with SVE);
   the TLS wrapper and `__clang_call_terminate`, built outside it, do not.
-  Test `ext.arm.sve/ir-target-features-sve.cpp`.
-- Not yet: SVE constants (a scalar splat into a scalable vector, the zero
-  vector of `-v` or of a vector `?:` condition) are built as fixed vectors
-  and fail IR lowering (`expr.rs` integer/float constants, `func.rs`
-  `splat`); SVE allocas use alignment 1 (clang 16, `svbool_t` 2), from
-  `kiln_abi`'s target type table.
+  With `CodegenOptions::sve_vector_bits` (`-msve-vector-bits=N`, with or
+  without `sve`) the range is `vscale_range(N/128,N/128)` instead (WP-469).
+  Tests `ext.arm.sve/ir-target-features-sve.cpp`, `ir-sve-vector-bits.cpp`,
+  `ir-target-features-march-levels.cpp`.
+- SVE scalable vectors (WP-469; test `ext.arm.sve/ir-scalable-constants.cpp`):
+  - A constant splat into a scalable vector (`v + 1`, the `-1` of `~v`,
+    the zero of `-v`, a scalar `?:` arm) is `ConstData::Splat`
+    (`Module::const_splat`; `ConstantVector::getSplat`): an all-zero lane
+    folds to `zeroinitializer` (likewise undef/poison). It prints as
+    `splat (T c)` for LLVM 20+ and as LLVM 19's
+    `shufflevector (<vscale x N x T> insertelement (<vscale x N x T> poison,
+    T c, i64 0), <vscale x N x T> poison, <vscale x N x i32>
+    zeroinitializer)` before (`Module::ir_version`). A non-constant splat is
+    `insertelement poison, x, i64 0` + a scalable `shufflevector` with a
+    zero mask (`func.rs` `splat`, `shuffle`); no fixed-vector folding.
+  - A vector `?:` on a sizeless condition is element-wise: an `svbool_t`
+    condition selects directly at compat 22 and is compared
+    `icmp ne … zeroinitializer` at compat 19, as every other SVE condition
+    is; then `select`.
+  - A comparison yields `<vscale x N x i1>` (`cmp_ty`), zero-extended to the
+    result type unless that is `svbool_t` (`vec_cmp_result`); unsigned
+    lanes use the unsigned predicates, floats `fcmp oeq` etc.
+  - `v[i]` (spec/sema.md §5.19a) is a vector element lvalue as for a GNU
+    vector (`vec_subscript`, `LValue::MakeVectorElt`): `extractelement`
+    on a read, `insertelement` and a store back on a write (test
+    `ext.arm.sve/ir-subscript.cpp`).
+  - Allocas of a sizeless type are aligned as clang's `getTypeInfo`: 16
+    for an SVE data vector, 2 for `svbool_t` and `__SVCount_t`
+    (`kiln_abi` `target_types`; sizeof/alignof stay ill-formed in sema).
+  - Not yet: a C++26 erroneous-value (`-ftrivial-auto-var-init`) store is
+    emitted for an SVE local; clang emits none (`kiln_codegen`
+    `auto_init.rs`, WP-489). The test passes
+    `-ftrivial-auto-var-init=uninitialized`.
 ## 7v. Landed (WP-456): `PseudoObjectExpr`
 
 The synthesized three-way comparison of a defaulted `operator<=>`

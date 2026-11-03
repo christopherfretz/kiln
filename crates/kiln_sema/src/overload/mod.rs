@@ -423,6 +423,13 @@ pub(crate) struct OverloadScratch {
     /// without ADL (qualified, parenthesized, block-scope) reports the
     /// conversion directly. Consumed by [`Sema::act_on_call`].
     pub adl_single: Option<kiln_ast::ExprId>,
+    /// The member access an overloaded member call resolved to
+    /// ([`Sema::resolve_member_call`]): its `enable_if` conditions were
+    /// checked by overload resolution, so the call does not check them
+    /// again (clang checks them directly only for a call that did not
+    /// go through overload resolution). Consumed by
+    /// [`Sema::try_member_call`].
+    pub resolved_member: Option<kiln_ast::ExprId>,
     /// The conversion targets of complete classes, for built-in operator
     /// candidates (`sema.ovl.conv_types`).
     pub conv_types: kiln_source::fx::FxHashMap<DeclId, builtin::ConvTargets>,

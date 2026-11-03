@@ -370,6 +370,18 @@ impl Substituter<'_, '_, '_> {
                 let args = ex(self).call_args(e);
                 let callee = self.callee(callee)?;
                 let args = self.call_arg_list(args)?;
+                // A call of an explicit object member function (`o.f(x)`
+                // built as `f(o, x)`, P0847) is rebuilt as one.
+                let named = self.sema.ignore_parens(callee);
+                if ex(self).get(named).kind() == ExprKind::DeclRefExpr
+                    && !args.is_empty()
+                    && self.sema.has_explicit_object(ex(self).decl(named))
+                {
+                    let m = ex(self).decl(named);
+                    let at = ex(self).get(named).loc();
+                    let lparen = self.sema.begin_loc(callee);
+                    return Ok(self.sema.rebuild_explicit_object_call(m, at, &args, lparen, end));
+                }
                 // clang `TransformCallExpr`: the "fake" `(` is where the
                 // callee begins.
                 let lparen = self.sema.begin_loc(callee);

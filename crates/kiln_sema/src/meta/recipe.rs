@@ -9,7 +9,7 @@ use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{DeclId, QualType};
 use kiln_oven::{
-    AccessOp, DefineOp, ExcCtor, MemberOp, MetaOp, MetaThrow, QueryOp, Shape, TemplOp,
+    AccessOp, AnnotOp, DefineOp, ExcCtor, MemberOp, MetaOp, MetaThrow, QueryOp, Shape, TemplOp,
 };
 use kiln_source::Loc;
 
@@ -49,6 +49,7 @@ impl Sema<'_, '_> {
                     | MemberOp::EnumeratorsOf
                     | MemberOp::ParametersOf,
                 )
+                | M::Annot(AnnotOp::AnnotationsOf | AnnotOp::AnnotationsOfWithType)
                 | M::Template(TemplOp::TemplateArgumentsOf) => Ok(Some(Shape::Vector)),
                 M::Query(QueryOp::KilnMemberOffset | QueryOp::KilnAccessContext)
                 | M::Member(MemberOp::OffsetOf)
@@ -63,6 +64,23 @@ impl Sema<'_, '_> {
                 | M::Define(DefineOp::DefineAggregate),
                 1,
             ) => Some(Shape::Range),
+            // An access context (scope, designating class).
+            (
+                M::Member(
+                    MemberOp::MembersOf
+                    | MemberOp::BasesOf
+                    | MemberOp::StaticDataMembersOf
+                    | MemberOp::NonstaticDataMembersOf
+                    | MemberOp::SubobjectsOf,
+                )
+                | M::Access(
+                    AccessOp::IsAccessible
+                    | AccessOp::HasInaccessibleNonstaticDataMembers
+                    | AccessOp::HasInaccessibleBases
+                    | AccessOp::HasInaccessibleSubobjects,
+                ),
+                1,
+            ) => Some(Shape::Pair),
             _ => None,
         })
     }
@@ -182,7 +200,7 @@ impl Sema<'_, '_> {
         }
         let (_, u8) = self.meta_names.exc?;
         let what_cv = self.frozen_string(what, u8)?;
-        let from = self.intern_reflection(Reflectee::Decl(self.ast.first(callee)), loc).ok()?;
+        let from = self.intern_reflection(Reflectee::Decl(self.entity_decl(callee)), loc).ok()?;
         let at = self.meta_source_location(loc, "");
         Some(MetaThrow { what: what_cv, len: what.len() as u64, from, at })
     }

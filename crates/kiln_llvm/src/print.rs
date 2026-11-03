@@ -547,6 +547,48 @@ impl<'a> Printer<'a> {
         self.operand(w, v)
     }
 
+    /// `{ T a, … }`, or `<{ … }>` for a packed struct type.
+    fn struct_const(&self, w: Out<'_>, ty: TypeId, elems: &[Value]) -> fmt::Result {
+        let packed = self.m.types.struct_is_packed(ty);
+        if packed {
+            w.write_char('<')?;
+        }
+        w.write_char('{')?;
+        if !elems.is_empty() {
+            w.write_char(' ')?;
+            self.typed_list(w, elems)?;
+            w.write_char(' ')?;
+        }
+        w.write_char('}')?;
+        if packed {
+            w.write_char('>')?;
+        }
+        Ok(())
+    }
+
+    /// A scalable splat constant: `splat (T v)` for LLVM 20+; LLVM 19's
+    /// `shufflevector (<vscale x N x T> insertelement (<vscale x N x T>
+    /// poison, T v, i64 0), <vscale x N x T> poison, <vscale x N x i32>
+    /// zeroinitializer)` before.
+    fn splat(&self, w: Out<'_>, ty: TypeId, elem: Value) -> fmt::Result {
+        let m = self.m;
+        if m.ir_version >= 20 {
+            w.write_str("splat (")?;
+            self.typed(w, elem)?;
+            return w.write_char(')');
+        }
+        let n = m.types.vector_info(ty).map_or(0, |v| v.1);
+        w.write_str("shufflevector (")?;
+        self.ty(w, ty)?;
+        w.write_str(" insertelement (")?;
+        self.ty(w, ty)?;
+        w.write_str(" poison, ")?;
+        self.typed(w, elem)?;
+        w.write_str(", i64 0), ")?;
+        self.ty(w, ty)?;
+        write!(w, " poison, <vscale x {n} x i32> zeroinitializer)")
+    }
+
     #[allow(clippy::many_single_char_names)]
     fn constant(&self, w: Out<'_>, c: &ConstData) -> fmt::Result {
         let m = self.m;
@@ -581,23 +623,8 @@ impl<'a> Printer<'a> {
                 self.typed_list(w, elems)?;
                 w.write_char('>')
             }
-            ConstData::Struct { ty, elems } => {
-                let packed = m.types.struct_is_packed(*ty);
-                if packed {
-                    w.write_char('<')?;
-                }
-                w.write_char('{')?;
-                if !elems.is_empty() {
-                    w.write_char(' ')?;
-                    self.typed_list(w, elems)?;
-                    w.write_char(' ')?;
-                }
-                w.write_char('}')?;
-                if packed {
-                    w.write_char('>')?;
-                }
-                Ok(())
-            }
+            ConstData::Splat { ty, elem } => self.splat(w, *ty, *elem),
+            ConstData::Struct { ty, elems } => self.struct_const(w, *ty, elems),
             ConstData::Bytes { bytes, .. } => {
                 w.write_str("c\"")?;
                 write_escaped(w, bytes)?;
@@ -1806,6 +1833,7 @@ impl<'a> TypeFinder<'a> {
                     ConstData::Array { elems, .. }
                     | ConstData::Struct { elems, .. }
                     | ConstData::Vector { elems, .. } => elems.iter().for_each(|&e| self.value(e)),
+                    ConstData::Splat { elem, .. } => self.value(*elem),
                     ConstData::Gep { source, ops, .. } => {
                         self.ty(*source);
                         ops.iter().for_each(|&e| self.value(e));

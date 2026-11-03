@@ -1,16 +1,30 @@
-//! The `AArch64` target features of `-march=`, `-mcpu=` and
-//! `-target-feature` (spec/driver.md "Target features").
+//! The `AArch64` target features of `-march=`, `-mcpu=`,
+//! `-msve-vector-bits=` and `-target-feature` (spec/driver.md "Target
+//! features").
 //!
-//! kiln models the features clang's driver derives from the base
-//! architecture `armv8-a` and the CPU `generic`, plus the `sve` extension:
-//! `+sve` turns on `+fullfp16` and `+sve`, `+nosve` turns `sve` off again
-//! only if an earlier extension turned it on. `-march=` wins over
-//! `-mcpu=` (whose extensions are then ignored, as clang's are); the
-//! `-target-feature` list applies after both, the last naming a feature
-//! winning. Any other architecture, CPU or extension is an unsupported
-//! value.
+//! `-march=<arch>[+ext...]` names an architecture level (`armv8-a` ..
+//! `armv8.9-a`, `armv9-a` .. `armv9.5-a`, and `armv9.6-a`/`armv9.7-a` at
+//! `-fclang-compat=22`; also spelt without the `-`, case-insensitively)
+//! whose default features are on, then applies each `+ext` / `+noext` in
+//! order as LLVM's `AArch64::ExtensionSet` does: enabling a feature
+//! enables what it depends on, disabling an enabled one disables what
+//! depends on it, and every feature the level or an extension touched is
+//! listed (`+name` when finally on, `-name` when off).
+//! `-mcpu=generic[+ext...]` is `armv8-a` plus the `ete` and `trbe`
+//! features. `-march=` wins over `-mcpu=` (whose extensions are then
+//! ignored, as clang's are); the `-target-feature` list applies after
+//! both, the last naming a feature winning, with no dependency closure
+//! (as clang's `-cc1`). Any other architecture, CPU or extension is an
+//! unsupported value. The levels and the dependency graph are clang 19's
+//! or clang 22's by `-fclang-compat=` (measured with
+//! `clang-N -S -emit-llvm -march=...`).
+
+use std::collections::BTreeSet;
+
+use kiln_pp::ClangCompat;
 
 use crate::args::{ArgError, Args};
+use crate::toolchain::Target;
 
 /// The resolved target features beyond the target's base set.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -18,10 +32,17 @@ pub struct TargetFeatures {
     /// `sve` is finally on: the SVE types are usable and function
     /// definitions carry `vscale_range(1,16)`.
     pub sve: bool,
-    /// The extra `+name` / `-name` entries for the functions'
-    /// `target-features`, one per name (the last wins), in the order the
-    /// names first appeared.
+    /// The `+name` / `-name` entries for the functions' `target-features`
+    /// beyond the base `+fp-armv8,+neon,+v8a`, one per name (the last
+    /// wins): the architecture level's and the extensions' features in
+    /// name order, then the `-target-feature` ones in order.
     pub extra: Vec<String>,
+    /// The architecture version `(major, minor)`: `(8, 0)` for `armv8-a`,
+    /// `generic` and no option.
+    pub arch: (u8, u8),
+    /// `-msve-vector-bits=N` (128 .. 2048, a power of two); `None` for
+    /// `scalable` or no option.
+    pub sve_vector_bits: Option<u32>,
 }
 
 impl TargetFeatures {
@@ -36,65 +57,386 @@ impl TargetFeatures {
         }
     }
 
-    fn is_on(&self, name: &str) -> bool {
-        self.extra.iter().any(|e| e.starts_with('+') && &e[1..] == name)
+    /// The finally enabled feature names: the base `fp-armv8` and `neon`
+    /// with [`TargetFeatures::extra`] applied (the `__ARM_*` predefines
+    /// derive from them; spec/pp.md "Predefines").
+    pub fn enabled(&self) -> Vec<String> {
+        let mut on: BTreeSet<&str> = ["fp-armv8", "neon"].into_iter().collect();
+        for e in &self.extra {
+            match e.split_at(1) {
+                ("+", n) => on.insert(n),
+                (_, n) => on.remove(n),
+            };
+        }
+        on.into_iter().map(str::to_owned).collect()
+    }
+}
+
+/// The features `armv8.N-a` adds to `armv8.(N-1)-a` (the `v8.Na` name is
+/// the level's own).
+fn v8_level(n: u8, v22: bool) -> &'static [&'static str] {
+    match n {
+        1 => &["crc", "lse", "rdm", "v8.1a"],
+        2 => &["ras", "v8.2a"],
+        3 => &["ccidx", "complxnum", "jsconv", "pauth", "rcpc", "v8.3a"],
+        4 => &["dit", "dotprod", "flagm", "v8.4a"],
+        5 => &["bti", "predres", "sb", "ssbs", "v8.5a"],
+        6 => &["bf16", "i8mm", "v8.6a"],
+        7 if v22 => &["spe-eef", "v8.7a", "wfxt"],
+        7 => &["v8.7a", "wfxt"],
+        8 => &["hbc", "mops", "v8.8a"],
+        9 => &["cssc", "rasv2", "specres2", "v8.9a"],
+        _ => &[],
+    }
+}
+
+/// The features `armv9.N-a` adds to `armv9.(N-1)-a` beyond the `armv8`
+/// level it includes (`armv9.N-a` includes `armv8.(N+5)-a`, up to 8.9).
+fn v9_level(n: u8, v22: bool) -> &'static [&'static str] {
+    match n {
+        0 => &["fullfp16", "sve", "sve2", "v9a"],
+        1 => &["rme", "v9.1a"],
+        2 => &["mec", "v9.2a"],
+        3 => &["v9.3a"],
+        4 if v22 => &["sve2p1", "v9.4a"],
+        4 => &["v9.4a"],
+        5 => &["cpa", "faminmax", "lut", "v9.5a"],
+        6 => &["cmpbr", "lsui", "occmo", "v9.6a"],
+        7 => &["f16f32dot", "fprcvt", "sve2p2", "sve2p3", "v9.7a"],
+        _ => &[],
+    }
+}
+
+/// The architecture level of a lower-case `-march=` base name.
+fn parse_arch(s: &str, v22: bool) -> Option<(u8, u8)> {
+    let s = s.strip_prefix("armv")?;
+    let s = s.strip_suffix("-a").or_else(|| s.strip_suffix('a'))?;
+    let (major, minor) = match s.split_once('.') {
+        None => (s, 0),
+        Some((m, n)) => match n.as_bytes() {
+            [d @ b'1'..=b'9'] => (m, d - b'0'),
+            _ => return None,
+        },
+    };
+    match major {
+        "8" => Some((8, minor)),
+        "9" if minor <= if v22 { 7 } else { 5 } => Some((9, minor)),
+        _ => None,
+    }
+}
+
+/// The LLVM feature an `-march=` extension name enables or (as `no<name>`)
+/// disables.
+fn extension(name: &str, v22: bool) -> Option<&'static str> {
+    Some(match name {
+        "fp" => "fp-armv8",
+        "simd" => "neon",
+        "fp16" => "fullfp16",
+        "rdm" | "rdma" => "rdm",
+        "jscvt" => "jsconv",
+        "fcma" => "complxnum",
+        "memtag" => "mte",
+        "rng" => "rand",
+        "tme" if !v22 => "tme",
+        "f16f32dot" | "fprcvt" | "sve-aes" | "sve-aes2" | "sve-b16b16" | "sve-bitperm"
+        | "sve-f16f32mm" | "sve-sha3" | "sve-sm4" | "sve2p2" | "sve2p3"
+            if v22 =>
+        {
+            *[
+                "f16f32dot",
+                "fprcvt",
+                "sve-aes",
+                "sve-aes2",
+                "sve-b16b16",
+                "sve-bitperm",
+                "sve-f16f32mm",
+                "sve-sha3",
+                "sve-sm4",
+                "sve2p2",
+                "sve2p3",
+            ]
+            .iter()
+            .find(|n| **n == name)?
+        }
+        _ => *[
+            "aes",
+            "bf16",
+            "bti",
+            "crc",
+            "crypto",
+            "cssc",
+            "d128",
+            "dotprod",
+            "f32mm",
+            "f64mm",
+            "faminmax",
+            "flagm",
+            "fp16fml",
+            "gcs",
+            "i8mm",
+            "ls64",
+            "lse",
+            "lse128",
+            "lut",
+            "mops",
+            "pauth",
+            "predres",
+            "ras",
+            "rcpc",
+            "rcpc3",
+            "sb",
+            "sha2",
+            "sha3",
+            "sm4",
+            "ssbs",
+            "sve",
+            "sve2",
+            "sve2-aes",
+            "sve2-bitperm",
+            "sve2-sha3",
+            "sve2-sm4",
+            "sve2p1",
+            "the",
+        ]
+        .iter()
+        .find(|n| **n == name)?,
+    })
+}
+
+/// Splits `base+ext+...` into the base and the `+`-separated extensions.
+fn split(v: &str) -> (String, &str) {
+    v.split_once('+').map_or((v.to_owned(), ""), |(b, e)| (b.to_owned(), e))
+}
+
+/// The features feature `f` depends on (LLVM `ExtensionDependencies`):
+/// enabling `f` enables them, disabling one of them disables `f`.
+fn deps(f: &str, v22: bool) -> &'static [&'static str] {
+    match f {
+        "neon" | "jsconv" | "fullfp16" | "fprcvt" => &["fp-armv8"],
+        "complxnum" | "dotprod" | "rdm" | "aes" | "sha2" | "sm4" => &["neon"],
+        "bf16" | "i8mm" | "lut" | "faminmax" if v22 => &["neon"],
+        "fp16fml" | "f16f32dot" if v22 => &["fullfp16", "neon"],
+        "sha3" => &["sha2"],
+        "crypto" => &["aes", "sha2"],
+        "sve" | "fp16fml" => &["fullfp16"],
+        "sve2" | "f32mm" | "f64mm" | "sve-f16f32mm" => &["sve"],
+        "sve2p2" => &["sve2p1"],
+        "sve2p3" => &["sve2p2"],
+        // clang 22 splits each `sve2-x` into `sve-x` and `sve2`.
+        "sve-aes" => &["aes"],
+        "sve-sha3" => &["sha3"],
+        "sve-sm4" => &["sm4"],
+        "sve2-aes" if v22 => &["sve-aes", "sve2"],
+        "sve2-sha3" if v22 => &["sve-sha3", "sve2"],
+        "sve2-sm4" if v22 => &["sve-sm4", "sve2"],
+        "sve2-bitperm" if v22 => &["sve-bitperm", "sve2"],
+        "sve2-aes" => &["aes", "sve2"],
+        "sve2-sha3" => &["sha3", "sve2"],
+        "sve2-sm4" => &["sm4", "sve2"],
+        "sve2-bitperm" | "sve2p1" => &["sve2"],
+        "rcpc-immo" => &["rcpc"],
+        "rcpc3" => &["rcpc-immo"],
+        "lse128" => &["lse"],
+        "d128" => &["lse128"],
+        "rasv2" => &["ras"],
+        "specres2" => &["predres"],
+        "gcs" => &["chk"],
+        _ => &[],
+    }
+}
+
+/// Every feature with a dependency (the candidates of a disable cascade).
+const DEPENDENT: &[&str] = &[
+    "aes",
+    "bf16",
+    "complxnum",
+    "crypto",
+    "d128",
+    "dotprod",
+    "f16f32dot",
+    "f32mm",
+    "f64mm",
+    "faminmax",
+    "fprcvt",
+    "fp16fml",
+    "fullfp16",
+    "gcs",
+    "i8mm",
+    "jsconv",
+    "lse128",
+    "lut",
+    "neon",
+    "rasv2",
+    "rcpc-immo",
+    "rcpc3",
+    "rdm",
+    "sha2",
+    "sha3",
+    "sm4",
+    "specres2",
+    "sve",
+    "sve-aes",
+    "sve-f16f32mm",
+    "sve-sha3",
+    "sve-sm4",
+    "sve2",
+    "sve2-aes",
+    "sve2-bitperm",
+    "sve2-sha3",
+    "sve2-sm4",
+    "sve2p1",
+    "sve2p2",
+    "sve2p3",
+];
+
+/// LLVM's `AArch64::ExtensionSet` over one base architecture.
+struct ExtensionSet {
+    arch: (u8, u8),
+    v22: bool,
+    enabled: BTreeSet<&'static str>,
+    touched: BTreeSet<&'static str>,
+}
+
+impl ExtensionSet {
+    /// The set of architecture level `arch` with its default features on.
+    fn new(arch: (u8, u8), v22: bool) -> ExtensionSet {
+        let mut s = ExtensionSet { arch, v22, enabled: BTreeSet::new(), touched: BTreeSet::new() };
+        let v8 = if arch.0 == 9 { (arch.1 + 5).min(9) } else { arch.1 };
+        let mut level: Vec<&'static str> = vec!["fp-armv8", "neon"];
+        level.extend((1..=v8).flat_map(|n| v8_level(n, v22)));
+        if arch.0 == 9 {
+            level.extend((0..=arch.1).flat_map(|n| v9_level(n, v22)));
+        }
+        for f in level {
+            s.enable(f);
+        }
+        s
+    }
+
+    fn enable(&mut self, f: &'static str) {
+        if !self.enabled.insert(f) {
+            return;
+        }
+        self.touched.insert(f);
+        for &d in deps(f, self.v22) {
+            self.enable(d);
+        }
+        // `+crypto` from v8.4 on also enables `sha3` and `sm4`; `+fp16`
+        // implies `fp16fml` on v8.4 .. v8.9.
+        let v84 = self.arch >= (8, 4);
+        if f == "crypto" && v84 {
+            self.enable("sha3");
+            self.enable("sm4");
+        }
+        if f == "fullfp16" && v84 && self.arch.0 == 8 {
+            self.enable("fp16fml");
+        }
+    }
+
+    fn disable(&mut self, f: &'static str) {
+        // `-crypto` always disables `aes`, `sha2`, `sha3` and `sm4`; clang
+        // 22's `-sve2-x` also disables its `sve-x` (and `-sve2-bitperm`
+        // `sve2`).
+        let also: &[&'static str] = match f {
+            "crypto" => &["aes", "sha2", "sha3", "sm4"],
+            "sve2-aes" if self.v22 => &["sve-aes"],
+            "sve2-sha3" if self.v22 => &["sve-sha3"],
+            "sve2-sm4" if self.v22 => &["sve-sm4"],
+            "sve2-bitperm" if self.v22 => &["sve-bitperm", "sve2"],
+            _ => &[],
+        };
+        for &a in also {
+            self.disable(a);
+        }
+        if !self.enabled.remove(f) {
+            return;
+        }
+        self.touched.insert(f);
+        for &d in DEPENDENT {
+            if deps(d, self.v22).contains(&f) {
+                self.disable(d);
+            }
+        }
     }
 
     /// Applies the `+ext` list of `-march=`/`-mcpu=` (case-insensitive,
     /// as clang's), or returns `None` for an extension kiln does not know.
     fn extensions(&mut self, exts: &str) -> Option<()> {
-        for e in exts.split('+') {
-            match e.to_ascii_lowercase().as_str() {
-                "sve" => {
-                    self.set("fullfp16", true);
-                    self.set("sve", true);
-                }
-                "nosve" if self.is_on("sve") => self.set("sve", false),
-                "nosve" => {}
-                _ => return None,
+        for e in exts.split('+').filter(|e| !e.is_empty()) {
+            let e = e.to_ascii_lowercase();
+            match e.strip_prefix("no").and_then(|n| extension(n, self.v22)) {
+                Some(f) => self.disable(f),
+                None => self.enable(extension(&e, self.v22)?),
             }
         }
         Some(())
     }
+
+    /// The touched features as `+name` / `-name`, minus the base set.
+    fn into_features(self, f: &mut TargetFeatures) {
+        f.arch = self.arch;
+        for &t in &self.touched {
+            let on = self.enabled.contains(t);
+            if !(on && ["fp-armv8", "neon", "v8a"].contains(&t)) {
+                f.set(t, on);
+            }
+        }
+    }
 }
 
-/// Resolves the target features of `args` for a target that is `AArch64`
-/// (`aarch64`) or not. On a non-`AArch64` target `-march=`/`-mcpu=` are
-/// unsupported values and `-target-feature` is ignored. Every error is
+/// Resolves the target features of `args` for `target`. Off `AArch64`,
+/// `-march=`/`-mcpu=` are unsupported values, `-msve-vector-bits=` is an
+/// unsupported option and `-target-feature` is ignored. Every error is
 /// returned; the features are those of the valid options.
-pub fn resolve(args: &Args, aarch64: bool) -> (TargetFeatures, Vec<ArgError>) {
-    let mut f = TargetFeatures::default();
+pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) {
+    let mut f = TargetFeatures { arch: (8, 0), ..TargetFeatures::default() };
     let mut errors = Vec::new();
     let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
-    if !aarch64 {
+    if !target.is_aarch64() {
         if let Some(v) = &args.march {
             errors.push(unsupported("-march=", v));
         }
         if let Some(v) = &args.mcpu {
             errors.push(unsupported("-mcpu=", v));
         }
+        if args.sve_vector_bits.is_some() {
+            let t = args.target.as_deref().unwrap_or(target.triple);
+            errors.push(ArgError::UnsupportedForTarget("-msve-vector-bits=".to_owned(), t.into()));
+        }
         return (f, errors);
     }
+    let v22 = args.predef.clang_compat == ClangCompat::Clang22;
     if let Some(v) = &args.march {
-        let (base, exts) = v.split_once('+').map_or((v.as_str(), None), |(b, e)| (b, Some(e)));
-        let ok =
-            base.eq_ignore_ascii_case("armv8-a") && exts.is_none_or(|e| f.extensions(e).is_some());
-        if !ok {
-            f = TargetFeatures::default();
-            errors.push(unsupported("-march=", v));
+        let (base, exts) = split(v);
+        let set = parse_arch(&base.to_ascii_lowercase(), v22).and_then(|arch| {
+            let mut s = ExtensionSet::new(arch, v22);
+            s.extensions(exts).map(|()| s)
+        });
+        match set {
+            Some(s) => s.into_features(&mut f),
+            None => errors.push(unsupported("-march=", v)),
         }
     } else if let Some(v) = &args.mcpu {
-        let (base, exts) = v.split_once('+').map_or((v.as_str(), None), |(b, e)| (b, Some(e)));
-        // `generic` is clang's `-mcpu=` default CPU plus the `ete` and
-        // `trbe` features it names explicitly.
-        f.set("ete", true);
-        f.set("trbe", true);
-        let ok =
-            base.eq_ignore_ascii_case("generic") && exts.is_none_or(|e| f.extensions(e).is_some());
-        if !ok {
-            f = TargetFeatures::default();
+        let (base, exts) = split(v);
+        let mut s = ExtensionSet::new((8, 0), v22);
+        if base.eq_ignore_ascii_case("generic") && s.extensions(exts).is_some() {
+            // `generic` is clang's `-mcpu=` default CPU plus the `ete` and
+            // `trbe` features it names explicitly.
+            f.set("ete", true);
+            f.set("trbe", true);
+            s.into_features(&mut f);
+        } else {
             errors.push(unsupported("-mcpu=", v));
         }
+    }
+    match args.sve_vector_bits.as_deref() {
+        None | Some("scalable") => {}
+        Some(v) => match v.parse::<u32>() {
+            Ok(n) if (128..=2048).contains(&n) && n.is_power_of_two() => {
+                f.sve_vector_bits = Some(n);
+            }
+            _ => errors.push(unsupported("-msve-vector-bits=", v)),
+        },
     }
     for t in &args.target_features {
         match t.split_at_checked(1) {
@@ -113,7 +455,8 @@ mod tests {
     fn res(s: &str, aarch64: bool) -> (TargetFeatures, Vec<ArgError>) {
         let a = Args::parse(&s.split_whitespace().map(str::to_owned).collect::<Vec<_>>());
         assert_eq!(a.errors, []);
-        resolve(&a, aarch64)
+        let t = Target::parse(if aarch64 { "aarch64-linux-gnu" } else { "x86_64-linux-gnu" });
+        resolve(&a, &t.unwrap())
     }
 
     /// `"<sve> <extra,...>"`.
@@ -131,6 +474,7 @@ mod tests {
         assert_eq!(feats("-march=ARMv8-A+SVE a.cpp"), "true +fullfp16,+sve");
         assert_eq!(feats("-march=armv8-a+nosve a.cpp"), "false ");
         assert_eq!(feats("-march=armv8-a+sve+nosve a.cpp"), "false +fullfp16,-sve");
+        assert_eq!(feats("-march=armv8-a+sve2+nosve a.cpp"), "false +fullfp16,-sve,-sve2");
         // The last `-march=` wins.
         assert_eq!(feats("-march=armv8-a+sve -march=armv8-a a.cpp"), "false ");
     }
@@ -156,15 +500,87 @@ mod tests {
     }
 
     #[test]
+    fn levels() {
+        assert_eq!(feats("-march=armv8.1-a a.cpp"), "false +crc,+lse,+rdm,+v8.1a");
+        assert_eq!(feats("-march=armv8.1a a.cpp"), "false +crc,+lse,+rdm,+v8.1a");
+        let (f, _) = res("-march=armv9.2-a a.cpp", true);
+        assert_eq!((f.sve, f.arch), (true, (9, 2)));
+        assert!(f.extra.contains(&"+v8.7a".to_owned()) && f.extra.contains(&"+mec".to_owned()));
+        assert!(f.extra.contains(&"+spe-eef".to_owned()));
+        let (f, _) = res("-fclang-compat=19 -march=armv9.2-a a.cpp", true);
+        assert!(!f.extra.contains(&"+spe-eef".to_owned()));
+        assert_eq!(res("-march=armv9.7-a a.cpp", true).1, []);
+    }
+
+    #[test]
+    fn extension_closure() {
+        assert_eq!(feats("-march=armv8-a+crypto a.cpp"), "false +aes,+crypto,+sha2");
+        assert_eq!(feats("-march=armv8-a+crc+nocrc a.cpp"), "false -crc");
+        assert_eq!(feats("-march=armv8-a+nocrc a.cpp"), "false ");
+        assert_eq!(feats("-march=armv8-a+crypto+noaes a.cpp"), "false -aes,-crypto,-sha2");
+        assert_eq!(feats("-march=armv8-a+nofp a.cpp"), "false -fp-armv8,-neon");
+        assert_eq!(feats("-march=armv8-a+fp16fml+nofp16 a.cpp"), "false -fp16fml,-fullfp16");
+        // `+fp16` implies `fp16fml` on v8.4 .. v8.9; `+crypto` adds `sha3`
+        // and `sm4` from v8.4.
+        let x = |s: &str| res(s, true).0.extra;
+        assert!(x("-march=armv8.4-a+sve a.cpp").contains(&"+fp16fml".to_owned()));
+        assert!(!x("-march=armv9-a+fp16 a.cpp").contains(&"+fp16fml".to_owned()));
+        assert!(x("-march=armv9-a+crypto a.cpp").contains(&"+sm4".to_owned()));
+        let nofp = x("-march=armv9-a+nofp a.cpp");
+        for n in ["-complxnum", "-dotprod", "-fullfp16", "-jsconv", "-rdm", "-sve", "-sve2"] {
+            assert!(nofp.contains(&n.to_owned()), "{n}");
+        }
+        assert_eq!(
+            feats("-march=armv8-a+sve2-aes a.cpp"),
+            "true +aes,+fullfp16,+sve,+sve-aes,+sve2,+sve2-aes"
+        );
+        assert_eq!(
+            feats("-fclang-compat=19 -march=armv8-a+sve2-aes a.cpp"),
+            "true +aes,+fullfp16,+sve,+sve2,+sve2-aes"
+        );
+        // clang 22's `sve-bitperm` stands alone, but disabling it (through
+        // `sve2-bitperm`) also disables `sve2`.
+        assert_eq!(feats("-march=armv8-a+sve-bitperm a.cpp"), "false +sve-bitperm");
+        assert_eq!(
+            feats("-march=armv8-a+sve2-bitperm+nosve-bitperm a.cpp"),
+            "true +fullfp16,+sve,-sve-bitperm,-sve2,-sve2-bitperm"
+        );
+        assert_eq!(
+            feats("-march=armv8-a+f16f32dot+nosimd a.cpp"),
+            "false -f16f32dot,+fullfp16,-neon"
+        );
+        assert_eq!(res("-fclang-compat=19 -march=armv8-a+sve-bitperm a.cpp", true).1.len(), 1);
+    }
+
+    #[test]
+    fn sve_vector_bits() {
+        assert_eq!(res("-msve-vector-bits=256 a.cpp", true).0.sve_vector_bits, Some(256));
+        assert_eq!(res("-msve-vector-bits=scalable a.cpp", true).0.sve_vector_bits, None);
+        let u = |v: &str| vec![ArgError::UnsupportedValue("-msve-vector-bits=".into(), v.into())];
+        assert_eq!(res("-msve-vector-bits=100 a.cpp", true).1, u("100"));
+        assert_eq!(res("-msve-vector-bits=4096 a.cpp", true).1, u("4096"));
+        let t =
+            ArgError::UnsupportedForTarget("-msve-vector-bits=".into(), "x86_64-linux-gnu".into());
+        assert_eq!(res("--target=x86_64-linux-gnu -msve-vector-bits=256 a.cpp", false).1, [t]);
+    }
+
+    #[test]
     fn unsupported_values() {
         let u = |o: &str, v: &str| ArgError::UnsupportedValue(o.into(), v.into());
         assert_eq!(res("-march=armv8-a+foo a.cpp", true).1, [u("-march=", "armv8-a+foo")]);
-        assert_eq!(res("-march=armv9-a a.cpp", true).1, [u("-march=", "armv9-a")]);
+        assert_eq!(res("-march=armv7-a a.cpp", true).1, [u("-march=", "armv7-a")]);
+        assert_eq!(res("-march=armv8.0-a a.cpp", true).1, [u("-march=", "armv8.0-a")]);
+        assert_eq!(res("-march=armv8-a+tme a.cpp", true).1, [u("-march=", "armv8-a+tme")]);
+        assert_eq!(res("-fclang-compat=19 -march=armv8-a+tme a.cpp", true).1, []);
+        assert_eq!(
+            res("-fclang-compat=19 -march=armv9.6-a a.cpp", true).1,
+            [u("-march=", "armv9.6-a")]
+        );
         assert_eq!(res("-mcpu=cortex-a57 a.cpp", true).1, [u("-mcpu=", "cortex-a57")]);
         assert_eq!(res("-target-feature sve a.cpp", true).1, [u("-target-feature", "sve")]);
         assert_eq!(res("-march=armv8-a+sve a.cpp", false).1, [u("-march=", "armv8-a+sve")]);
         // `-target-feature` is ignored on a non-`AArch64` target.
-        assert_eq!(res("-target-feature +sve a.cpp", false), (TargetFeatures::default(), vec![]));
-        assert_eq!(res("-march=armv8-a+foo a.cpp", true).0, TargetFeatures::default());
+        assert_eq!(res("-target-feature +sve a.cpp", false).0.extra, Vec::<String>::new());
+        assert_eq!(res("-march=armv8-a+foo a.cpp", true).0.extra, Vec::<String>::new());
     }
 }

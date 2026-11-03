@@ -721,6 +721,48 @@ belong to WP-017, which builds them on `macro_defined` and
   are defined in every C++ mode too (WP-380; spec/types.md §5.1). Tests:
   `conformance/basic.extended.fp/p1467-macros.cpp`, `-cxx17.cpp`,
   `float-nx.cpp`, `float-nx-x86.cpp`, `float-nx-aarch64.cpp`.
+
+  **AArch64 target macros (WP-469, [cpp.predefined]/2, Arm ACLE "Feature
+  test macros").** The base files are `armv8-a` (`fp-armv8` + `neon`).
+  On AArch64, `apply_flags` removes every macro of `ARM_TARGET_MACROS`
+  (`__ARM_ARCH`, `__ARM_FP`, `__ARM_NEON`, `__ARM_NEON_FP`,
+  `__ARM_BF16_FORMAT_ALTERNATIVE` and the `__ARM_FEATURE_*` that a target
+  feature governs) and redefines them from `PredefConfig::arm`
+  (`ArmTarget { arch, features, sve_vector_bits }`, filled by the driver
+  from `-march=` / `-mcpu=` / `-msve-vector-bits=` / `-target-feature`,
+  spec/driver.md "Target features"), as clang's
+  `AArch64TargetInfo::getTargetDefines` does:
+  - `__ARM_ARCH` is the major version; `__ARM_FP 0xE` with `fp-armv8`;
+    `__ARM_NEON 1` / `__ARM_NEON_FP 0xE` with `fp-armv8` and `neon`.
+  - The level alone gives `QRDMX` (v8.1), `COMPLEX` and `JCVT` (v8.3),
+    `FRINT` (v8.5); armv9.k counts as v8.(k+5).
+  - One feature each: `CRC32` (crc), `ATOMICS` (lse), `DOTPROD`, `BTI`,
+    `BF16` + `BF16_SCALAR_ARITHMETIC` + `BF16_VECTOR_ARITHMETIC` +
+    `__ARM_BF16_FORMAT_ALTERNATIVE` (bf16), `MATMUL_INT8` (i8mm), `AES`,
+    `SHA2`, `CRYPTO` (aes and sha2), `SHA3` + `SHA512` (sha3), `SM3` +
+    `SM4` (sm4), `RCPC` (`3` with rcpc3, else `1`), `PAUTH`,
+    `MEMORY_TAGGING` (mte), `RNG` (rand), `MOPS`, `LS64`, `GCS`,
+    `SYSREG128` (d128), `TME`, and with clang 22 `CSSC`, `FPRCVT`,
+    `SVE2p2`, `SVE_AES2`, `SVE_B16B16`, `SVE_F16F32MM`.
+  - FP16: `FP16_SCALAR_ARITHMETIC` with `fullfp16` or `sve` (clang 22 also
+    `sve-bitperm`/`sve-aes`); `FP16_VECTOR_ARITHMETIC` with that and
+    NEON; `FP16_FML` with NEON and `fp16fml`.
+  - SVE mode is `sve` with NEON: `SVE 1`, `SVE_VECTOR_OPERATORS 2`, and
+    `SVE_BF16`, `SVE_MATMUL_INT8`, `SVE_MATMUL_FP32` (f32mm),
+    `SVE_MATMUL_FP64` (f64mm) with their feature. `SVE2`, `SVE2p1`,
+    `SVE2_SHA3`, `SVE2_SM4` follow their feature; `SVE2_AES` /
+    `SVE2_BITPERM` follow `sve2-aes` / `sve2-bitperm` in clang 19 and
+    `sve2` with `sve-aes` / `sve-bitperm` in clang 22.
+    `__ARM_FEATURE_SVE_BITS N` with `-msve-vector-bits=N`.
+  - clang 19 (`-fclang-compat=19`) also sets `crc`, `lse` (v8.1), `rcpc`
+    (v8.3), `dotprod` (v8.4), `bti` (v8.5), `bf16`, `i8mm` (v8.6) and, on
+    v9, `sve2` and `fullfp16` from the level whatever the extensions say
+    (its `setArchFeatures`), and defines `__ARM_NEON_SVE_BRIDGE 1` only in
+    SVE mode; clang 22 follows the features and always defines it.
+  Tests: `conformance/cpp.predefined/arm-feature-macros-*.cpp` (pp tests
+  of `arm-feature-macros.h` against both oracles: baseline, `+sve`,
+  `+sve2`, `+fp16`, `+sve2+fp16`, levels, `-msve-vector-bits=`), and
+  `predef.rs` `arm_target_macros`.
 - **`__GNUC__` stays clang's 4 (`__GNUC_MINOR__` 2), decided by WP-380.**
   glibc declares `typedef double _Float32x;` and `typedef long double
   _Float64x;` (and the `_Float32`/`_Float64`/`_Float128` typedefs, and
@@ -869,6 +911,25 @@ it through kiln_diag's fatal handling; the core itself carries on.
   (`cpp_cond_plain_decimal_matches_classify_number`,
   `cpp_pre_dir_table_matches_names`, the debug assertion in `spelling()`,
   and the randomized same-entry tests in kiln_source).
+- **Directives cost O(1) in the macro history** (WP-487). Every
+  `#define`/`#undef` reports to `Preprocessor::note_macro_change`, which
+  keeps the attribute-macro history (`attr_macros`, for
+  `-Wimplicit-fallthrough`'s fix-it). The entry still in effect for a
+  name is found through the `attr_live` index (name to history index),
+  never by scanning the history, and a directive returns at once when it
+  neither defines an attribute macro nor touches a live one. Before
+  WP-487 each directive scanned the whole history once any attribute
+  macro existed, which made `bench/pp/headers.cpp` (5120 re-entries, two
+  attribute macros redefined per pass) quadratic: 2.4 s against 0.9 s.
+  `hooks.rs` `cpp_scope_attr_macro_history` pins the history's contents
+  and `cpp_scope_attr_macro_history_churn` its shape under 4000 redefines.
+  The include path itself (header-search cache, `#pragma once`, the
+  guard detector) was measured and is not where the time went: the
+  libc++-include half of the bench moved 347 to 374 ms over the window.
+- **Bench budget.** `bench/pp/headers.cpp` carries a `budget-time:`
+  directive (spec/bench.md) at 1.5x its recorded kiln median, so
+  `cargo xtask bench` fails, even under `--record`, when `-E` on it
+  regresses past that.
 - **Speed and memory against clang.** `-E` on all libc++ 19 headers must
   take at most 1.5x clang's time and use no more than clang's peak RSS.
   The baseline is in `bench/baselines/pp.json` (M1 gate).

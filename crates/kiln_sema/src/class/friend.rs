@@ -187,6 +187,18 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        // [dcl.fct]/6: a qualified function typedef (`typedef int G()
+        // const; friend G;`) is not the type of a non-static member
+        // function; clang `err_invalid_qualified_function_type` at the
+        // start of the declaration (the friend is ignored either way,
+        // [class.friend]/3). A dependent type is not checked when it
+        // substitutes (clang is silent for `friend T;` with `T = G`), and
+        // a non-dependent one was reported in the pattern.
+        let base = if self.inst.stack.in_instantiation_record() {
+            base
+        } else {
+            self.reject_qualified_fn_type(base, ds.loc, false)
+        };
         let loc = ds.type_loc.unwrap_or(friend_loc);
         let target = FriendTarget::Type { ty: base, owned_tag: owned };
         let fd = self.builder().friend(record, loc, target);
