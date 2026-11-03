@@ -145,6 +145,12 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         // lax as clang's `EvaluateAsRValue`: a `const double` or
         // `const _Atomic(int)` variable reads as its value.
         let v = match inits.get(&e) {
+            // A `constexpr` variable sema already evaluated keeps that
+            // value: its initializer is manifestly constant-evaluated
+            // either way, and only sema's bridge runs the reflection
+            // intrinsics (`constexpr bool b = type_of(R) == ^^int;` in an
+            // emitted body, spec/reflection.md §8.3).
+            Some(&var) if sema_value(b.ast, var).is_some() => sema_value(b.ast, var),
             Some(&var) => match oven.fold_constant_init(&mut b, e, var) {
                 // clang `ConstantEmitter::tryEmitPrivateForVarInit`: an
                 // initializer that is not constant is folded again outside
@@ -152,9 +158,10 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
                 // is false, a cast only a fold performs continues), and a
                 // value makes it a static initializer all the same. The
                 // variable is not constant-initialized, so neither its
-                // uses nor its destruction see the value. Scalars and
-                // vectors only (spec/codegen.md "Static initialization").
-                None if is_scalar(b.ast, var) => {
+                // uses nor its destruction see the value. Scalars,
+                // vectors and initializer lists (spec/codegen.md "Static
+                // initialization").
+                None if is_scalar(b.ast, var) || is_init_list(b.ast, e) => {
                     let v = oven.fold_rvalue(&mut b, e);
                     if v.is_some() {
                         refolded.insert(e);
@@ -200,6 +207,15 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     folds
 }
 
+/// The value sema computed for `constexpr` variable `d`'s initializer.
+fn sema_value(ast: &Ast, d: DeclId) -> Option<ConstValueId> {
+    let v = ast.decls.var(d)?;
+    match v.eval.state() {
+        kiln_ast::decl::VarEvalState::Value(c) if v.spec.is_constexpr() => Some(c),
+        _ => None,
+    }
+}
+
 /// Whether variable `d` has a scalar type (arithmetic, enumeration,
 /// pointer or pointer to member) or a vector type: clang
 /// `ConstantEmitter::tryEmitPrivate` folds either with `EvaluateAsRValue`
@@ -217,6 +233,18 @@ fn is_scalar(ast: &Ast, d: DeclId) -> bool {
                 | TypeView::Vector { .. }
         )
     })
+}
+
+/// Whether initializer `e` is an initializer list: clang's
+/// `ConstExprEmitter` emits each element with `tryEmitPrivateForMemory`,
+/// which folds an element it cannot emit directly with `EvaluateAsRValue`
+/// (outside a constant context once constant initialization failed), so
+/// a list whose elements all fold is a static initializer (`H h =
+/// {(void (*)())&f, 1};`, WP-492). A constructor call is not: the
+/// emitter takes only a trivial one, and a list with temporaries
+/// (`ExprWithCleanups`) is left dynamic.
+fn is_init_list(ast: &Ast, e: ExprId) -> bool {
+    ast.exprs.get(e).kind() == ExprKind::InitListExpr
 }
 
 /// Collects the candidate expressions.

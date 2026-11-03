@@ -58,6 +58,14 @@ enum Shape {
     TypeOrder,
 }
 
+/// A quiet engine answer: a value, or a type the caller reflects once
+/// the quiet evaluation is over (interning can fail, which is fatal and
+/// diagnosed: spec/sema.md, WP-471).
+enum Answer {
+    Out(MetaOut),
+    Type(QualType),
+}
+
 /// The second argument a copy/move/default trait implies.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Implied {
@@ -367,7 +375,7 @@ impl Sema<'_, '_> {
         shape: Shape,
         tys: &[QualType],
         loc: Loc,
-    ) -> Result<MetaOut, LibFailure> {
+    ) -> Result<Answer, LibFailure> {
         let none = LibFailure::NoMember;
         match shape {
             Shape::Engine(t) => {
@@ -383,7 +391,7 @@ impl Sema<'_, '_> {
                     o.0 = t;
                 }
                 let v = self.eval_type_trait(t, ops, loc, loc).ok_or(none)?;
-                Ok(MetaOut::Scalar(u128::from(v)))
+                Ok(Answer::Out(MetaOut::Scalar(u128::from(v))))
             }
             Shape::LibBool(name) | Shape::LibType(name) => {
                 let mut inline = [TemplateArg::NULL; RANGE_INLINE + 2];
@@ -399,10 +407,10 @@ impl Sema<'_, '_> {
                 }
                 if let Shape::LibBool(_) = shape {
                     let v = self.library_trait_value(name, targs, loc)?;
-                    return Ok(MetaOut::Scalar(u128::from(v != 0)));
+                    return Ok(Answer::Out(MetaOut::Scalar(u128::from(v != 0))));
                 }
                 let t = self.library_trait_type(name, targs, loc)?;
-                Ok(MetaOut::Info(self.type_reflection(t, loc)))
+                Ok(Answer::Type(t))
             }
             _ => Err(none),
         }
@@ -481,10 +489,10 @@ impl Sema<'_, '_> {
         tys: &[QualType],
         args: &[u128],
         loc: Loc,
-    ) -> Result<MetaOut, LibFailure> {
+    ) -> Result<Answer, LibFailure> {
         let bool_out = |v: Option<bool>| v.map(|b| MetaOut::Scalar(u128::from(b)));
         let none = LibFailure::NoMember;
-        Ok(match shape {
+        Ok(Answer::Out(match shape {
             Shape::Engine(t) => {
                 let ops = [(tys[0], loc), (tys.get(1).copied().unwrap_or(QualType::ERROR), loc)];
                 bool_out(self.eval_type_trait(t, &ops[..tys.len()], loc, loc)).ok_or(none)?
@@ -507,11 +515,11 @@ impl Sema<'_, '_> {
             }
             Shape::Transform(k) => {
                 let t = self.apply_unary_transform(k, tys[0], loc).ok_or(none)?;
-                MetaOut::Info(self.type_reflection(t, loc))
+                return Ok(Answer::Type(t));
             }
             Shape::AddQuals(q) => {
                 let t = self.add_quals_transform(tys[0], q);
-                MetaOut::Info(self.type_reflection(t, loc))
+                return Ok(Answer::Type(t));
             }
             Shape::IsReflection => MetaOut::Scalar(u128::from(self.is_meta_info_type(tys[0]))),
             Shape::IsStructural => bool_out(self.is_structural_type(tys[0], loc)).ok_or(none)?,
@@ -530,16 +538,16 @@ impl Sema<'_, '_> {
             }
             Shape::LibType(name) => {
                 let t = self.library_trait_type(name, &[TemplateArg::ty(tys[0])], loc)?;
-                MetaOut::Info(self.type_reflection(t, loc))
+                return Ok(Answer::Type(t));
             }
             Shape::LibIndexed(name) => {
                 let i = args.first().map_or(0, |&v| u64::try_from(v).unwrap_or(u64::MAX));
                 let targs = [self.size_t_arg(i), TemplateArg::ty(tys[0])];
                 let t = self.library_trait_type(name, &targs, loc)?;
-                MetaOut::Info(self.type_reflection(t, loc))
+                return Ok(Answer::Type(t));
             }
             Shape::Range | Shape::TypeOrder => return Err(none),
-        })
+        }))
     }
 
     /// The argument a copy/move trait of `t` implies: `const T&` or
@@ -559,18 +567,17 @@ impl Sema<'_, '_> {
     }
 
     /// The reflection of `t`, canonical ([meta.reflection.traits]/5: the
-    /// result is never an alias). A full reflection table is the fatal
-    /// `sema_too_many_reflections` (the null reflection stands in).
-    fn type_reflection(&mut self, t: QualType, loc: Loc) -> ReflectionId {
+    /// result is never an alias).
+    fn type_reflection(&mut self, t: QualType, loc: Loc) -> Result<ReflectionId, MetaError> {
         let t = self.ast.types.canonical(t);
-        self.intern_reflection(Reflectee::Type(t), loc).unwrap_or(ReflectionId::NULL)
+        Ok(self.intern_reflection(Reflectee::Type(t), loc)?)
     }
 
     /// `out` from a quiet evaluation, or the failure as a note.
     fn trait_result(
-        &self,
+        &mut self,
         op: TraitOp,
-        r: Result<MetaOut, LibFailure>,
+        r: Result<Answer, LibFailure>,
         failure: Option<TraitFailure>,
         out: &mut MetaOut,
         loc: Loc,
@@ -596,8 +603,12 @@ impl Sema<'_, '_> {
             (Some(TraitFailure::Unimplemented), _) => {
                 fail(loc, format!("kiln: '{}' is not implemented yet", op.name()))
             }
-            (None, Ok(v)) => {
+            (None, Ok(Answer::Out(v))) => {
                 *out = v;
+                Ok(())
+            }
+            (None, Ok(Answer::Type(t))) => {
+                *out = MetaOut::Info(self.type_reflection(t, loc)?);
                 Ok(())
             }
             (None, Err(f)) => fail(loc, lib_failure_note(op, f)),

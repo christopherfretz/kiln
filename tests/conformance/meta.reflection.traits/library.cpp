@@ -26,5 +26,7 @@ static_assert(unwrap_reference(^^std::reference_wrapper<B>) == ^^B&);
 static_assert(unwrap_reference(^^B) == ^^B);
 static_assert(unwrap_ref_decay(^^const std::reference_wrapper<int>&) == ^^int&);
 static_assert(unwrap_ref_decay(^^int[2]) == ^^int*);
-// ^^std::common_type_t<int, long> would reflect the alias ([expr.reflect]).
-static_assert(common_type({^^int, ^^long}) == ^^long);
+// The result is the canonical type; `^^` keeps the alias (P2996R13
+// [meta.reflection.traits]/5, [expr.reflect]), so compare the types.
+static_assert(is_same_type(common_type({^^int, ^^long}), ^^std::common_type_t<int, long>));
+static_assert(common_type({^^int, ^^long}) != ^^std::common_type_t<int, long>);

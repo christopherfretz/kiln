@@ -262,9 +262,10 @@ whether the op may run in a trial (§4.3):
 this list and the tables is a spec bug, fixed in the same change.
 
 - **Query · Stable · WP-470, done**: `type_of`.
-- **Query · Stable · WP-476**: `object_of`, `constant_of`, `parent_of`,
+- **Query · Stable · WP-476, done** (contract: spec/reflection-queries.md):
+  `object_of`, `constant_of`, `parent_of`,
   `dealias`, `has_template_arguments`, `operator_of`, `symbol_of`,
-  `u8symbol_of`, `variable_of`, `return_type_of`, `is_function_parameter`,
+  `u8symbol_of`, `return_type_of`, `is_function_parameter`,
   `is_explicit_object_parameter`, `is_vararg_function`, `is_public`,
   `is_protected`, `is_private`, `is_virtual`, `is_pure_virtual`,
   `is_override`, `is_final`, `is_deleted`, `is_user_provided`,
@@ -291,8 +292,9 @@ this list and the tables is a spec bug, fixed in the same change.
   `u8identifier_of`, `display_string_of`, `u8display_string_of`,
   `source_location_of` (§3.9), and the helpers `__kiln_reflection_range`,
   `__kiln_member_offset`, `__kiln_access_context` (§3.5).
-- **Query · PointDependent · WP-476**: `has_default_argument`,
-  `is_defaulted`, `is_complete_type`, `is_enumerable_type`.
+- **Query · PointDependent · WP-476, done**: `variable_of`,
+  `has_default_argument`, `is_defaulted`, `is_complete_type`,
+  `is_enumerable_type`.
 - **Trait · Stable · WP-477**: `is_void_type`, `is_null_pointer_type`,
   `is_integral_type`, `is_floating_point_type`, `is_array_type`,
   `is_pointer_type`, `is_lvalue_reference_type`, `is_rvalue_reference_type`,
@@ -342,8 +344,11 @@ this list and the tables is a spec bug, fixed in the same change.
 - **Value · Stable · WP-479**: `extract`, `reflect_constant`,
   `reflect_object`, `reflect_function`, `reflect_constant_string`,
   `reflect_constant_array`.
-- **Template · Stable · WP-482**: `template_of`, `template_arguments_of`.
-- **Template · PointDependent · WP-482**: `can_substitute`, `substitute`.
+- **Template · Stable · WP-482**: `template_of`, `template_arguments_of`
+  (implemented, `kiln_sema/src/meta/templ.rs`; spec/landed/reflection/WP-482.md).
+- **Template · PointDependent · WP-482**: `can_substitute`, `substitute`
+  (implemented: a SFINAE frame inside a Transactional Oven trial, memoized
+  on the (template, arguments) key; spec/landed/reflection/WP-482.md).
 - **Define · Stable · WP-480**: `data_member_spec`, `is_data_member_spec`.
 - **Define · Mutating · WP-480**: `define_aggregate`.
 - **Annot · PointDependent · WP-478**: `annotations_of`,
@@ -489,7 +494,7 @@ answers as of that point.
   | Function | Result |
   |---|---|
   | `has_identifier(r)` | whether `identifier_of(r)` succeeds |
-  | `identifier_of(r)`, `u8identifier_of(r)` | a class, enumeration, variable, function, data member or namespace: the identifier it was declared with; an unnamed class or enumeration with a typedef name for linkage ([dcl.typedef]/9): that name; a literal operator: its suffix. A type: as its class or enumeration when it is a cv-unqualified one. Otherwise (a specialization, a constructor, destructor, operator or conversion function, an unnamed entity, the global namespace, any other type or value) fails: "'R' has no identifier" |
+  | `identifier_of(r)`, `u8identifier_of(r)` | a class, enumeration, enumerator, variable, function, data member, namespace, namespace alias, type alias or template (a `Template` reflection answers for its templated declaration): the identifier it was declared with; an unnamed class or enumeration with a typedef name for linkage ([dcl.typedef]/9): that name; a literal operator: its suffix. A type: as its alias when it is a cv-unqualified typedef or alias-declaration type (not an alias template specialization), else as its class or enumeration when it is a cv-unqualified one. Otherwise (a specialization, a constructor, destructor, operator or conversion function, an unnamed entity, the global namespace, any other type or value) fails: "'R' has no identifier" |
   | `display_string_of(r)`, `u8display_string_of(r)` | implementation-defined; never fails: a type prints as in diagnostics (`const int *`), a declaration as its name, anything else as `^^…` |
   | `source_location_of(r)` | the location of the declared name, with an empty `function_name`; a reflection with no declaration (a fundamental or compound type, a value, the translation unit) gives `source_location{}` |
 
@@ -532,39 +537,75 @@ answers as of that point.
   (implemented). If the evaluation is also manifestly constant-evaluated,
   that evaluation reports the failure.
 - `can_substitute` runs its instantiation-time evaluations under
-  `checkpoint(TrialMode::Full)` and rolls back on failure. Interned
-  reflections survive the rollback (append-only, §2.4) (→ WP-482).
+  a Transactional checkpoint and rolls back on failure. Interned
+  reflections survive the rollback (append-only, §2.4); so does nothing
+  else: no instantiation-report row, no diagnostic, no Oven bytes
+  (implemented, WP-482: `reflection/substitute-trial-rollback.cpp`).
 
-## 5. Splicing (→ WP-474)
-The grammar is in spec/parse.md §5.2. This section gives the semantics.
+## 5. Splicing (WP-474)
+The grammar is in spec/parse.md §5.2. This section gives the semantics;
+the sema is `kiln_sema/src/splice.rs` (`Sema::splice_entity` reads every
+position's operand).
 
 - **Operand.** The splice operand is a converted constant expression of
-  type `std::meta::info` ([basic.splice]). A non-`info` operand gets
-  "splice operand of type {0} is not a reflection", and a non-constant one
-  gets "splice operand must be a constant expression" followed by the
-  Oven's notes (implemented for type splices: `reflection/splice-type-neg.cpp`).
+  type `std::meta::info` ([basic.splice]), in every position. A non-`info`
+  operand gets "splice operand of type {0} is not a reflection", and a
+  non-constant one gets "splice operand must be a constant expression"
+  followed by the Oven's notes (`basic.splice/p1-not-info.cpp`,
+  `basic.splice/p1-not-constant.cpp`, `reflection/splice-type-neg.cpp`).
 - **Designated entity.** The splice designates the operand's `Reflectee`.
   Each grammar position accepts these kinds:
 
   | Position | Syntax | Accepts | Status |
   |---|---|---|---|
-  | type | `typename [: r :]` [dcl.type.splice]; `[: r :]` as a template type argument | a type or a type alias | implemented when not dependent |
-  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, value or object, or a data member (in a pointer-to-member context) | → WP-474 |
-  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a non-static data member, a member function, or a base subobject (P3293) | → WP-474 |
-  | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration | → WP-474 |
-  | template | `template [: r :] < args >` [temp.names] | a template | → WP-474 |
-  | namespace | `using namespace [: r :];` | a namespace | → WP-474 (GCC 16.1 is the reference) |
+  | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); `[: r :]` as a template type argument | a type or a type alias | implemented (`dcl.type.splice/`) |
+  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`) |
+  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category) | implemented; the base form is untested until `bases_of` (WP-478) |
+  | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
+  | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression | implemented (`temp.names/splice-*.cpp`; spec/landed/reflection/WP-482.md) |
+  | namespace | `using namespace [: r :];` | a namespace other than the global namespace, not dependent ([namespace.udir]/1) | implemented (`namespace.udir/`) |
 
   A misfit gets "splice in a {position} position does not designate a
-  {kind}". The type position's misfit wording is implemented as "splice in
-  a type position does not designate a type".
+  {kinds}" (`sema_splice_not_type`, `_not_expression`, `_not_member`,
+  `_not_scope`, `_not_namespace`); a splice before a template argument
+  list that designates no template gets "splice before a template
+  argument list does not designate a template"
+  (`sema_splice_not_template`). A constructor or destructor is
+  ill-formed in any splice-expression, the member access form included
+  (`sema_splice_special_member`, [expr.prim.splice]/2). A splice-scope-
+  specifier in a declarative nested-name-specifier (an out-of-line
+  definition's declarator-id, a class-head-name or enum-head-name) gets
+  `sema_splice_declarative_scope` ([expr.prim.id.qual]/3; GCC 16.1 accepts
+  some of these). A dependent using-directive splice gets
+  `sema_splice_dependent_namespace` at the template definition (GCC 16.1
+  accepts it) and the global namespace `sema_splice_global_namespace`.
+- **Member functions.** A member-function splice is not a qualified-id, so
+  `e.[: ^^B::f :]()` of a virtual `f` is a virtual call ([expr.call]/2; the
+  [dcl.contract.func] example). `&[: ^^B::f :]` is a pointer to member.
+- **Access.** Splices are not access-checked: a splice of a private member
+  is valid from anywhere (P2996; GCC 16.1 agrees). Access is the business of
+  the query that produced the reflection (`access_context`, WP-478).
 - **Dependent splices.** A value-dependent operand produces a `Splice`
-  type node, a `CXXSpliceExpr` or a splice nested-name-specifier. It is
-  resolved when substitution makes the operand non-dependent (templ/subst).
-  Today a dependent operand is "unsupported: dependent splice".
-- **Fast path.** When the operand is a substituted NTTP or another frozen
-  constant, sema reads the id directly without starting an Oven run. Each
-  distinct `R` in `[: R :]` costs one instantiation, as expected.
+  type node (a type splice), a `CXXSpliceExpr` (an expression or member
+  splice; with the object expression when that or the operand is
+  dependent) or an `Nns::Splice` (a scope splice; the nested-name-specifier
+  is always dependent). Each is resolved by the `templ/subst` arm for its
+  kind when substitution makes the operand non-dependent, through the same
+  `splice.rs` entry points as a non-dependent splice, so a misfit is
+  reported in the specialization with its instantiation note
+  (`temp.dep/splice-*.cpp`).
+- **Fast path.** When the operand is already a frozen reflection, sema
+  reads its id without an Oven run: through parentheses, implicit casts
+  and a substituted NTTP (`SubstNonTypeTemplateParmExpr`), a `ConstantExpr`
+  (its stored value), a `CXXReflectExpr` (its reflection) or a
+  `DeclRefExpr` to a constexpr `info` variable whose value is computed.
+  Each hit counts in `Sema::splice_fast_count()` (not an Oven counter, so
+  the constexpr report does not show it); every other operand is
+  evaluated as a constant expression. 1,000 type, 1,000 expression and
+  1,000 scope splices of three frozen operands start no evaluation
+  (`basic.splice/frozen-operand-fast-path.cpp`: `evaluations<=4`, the
+  three initializers and a static_assert). Each distinct `R` in `[: R :]`
+  costs one instantiation, as expected.
 - **NTTPs.** A substituted `info` template argument is rebuilt as the
   `CXXReflectExpr` of the same entity (implemented).
 
@@ -795,17 +836,59 @@ each specialization evaluates its own.
 - Where kiln has no clang wording to match, diagnostics follow GCC
   16.1's shape. Wording parity is out of scope (§1.7).
 
-### 8.3 Mangling placeholder (→ WP-485)
-- A reflection inside a template argument of an emitted symbol mangles
-  in a kiln vendor form. The form is deterministic within the TU, cached
-  per `ReflectionId`, and flagged in spec/abi.md §8 as "not
-  link-compatible". WP-102 later adopts GCC's Itanium form.
-- Today every reflection argument mangles as the generic unsupported
-  expression `XLi0EE` (`kiln_abi/src/mangle.rs`). Two specializations
-  that differ only in a reflection argument therefore collide. Until
-  → WP-485 lands, such a TU must not emit both.
-- A consteval-only value reaching codegen is the error of §4.1, not a
-  mangling question.
+### 8.3 Mangling placeholder (WP-485)
+- **Form.** A reflection inside a template argument of an emitted symbol
+  mangles as a kiln vendor literal (`kiln_abi/src/mangle.rs`,
+  `Mangler::scalar_value`):
+
+  ```
+  <expr-primary> ::= L <info-type> <number> E    # a reflection value
+  <info-type>    ::= u6__info                    # std::meta::info
+  ```
+
+  `<number>` is the reflection's `ReflectionId` index in decimal (§2.3;
+  the null reflection is 0). `<info-type>` is the mangling of the type
+  `std::meta::info` everywhere (`template <class T>` with `T = info`
+  gives `_Z1kIu6__infoEiv`), and it is a substitution candidate like any
+  vendor type, so a second literal in one symbol writes `LS<seq>_<id>E`
+  and later substitutions count past it: `two<^^I, ^^J>` is
+  `_Z3twoILu6__info4ELS0_5EEiv`, `h<^^P>(Box<P>, P)` is
+  `_Z1hILu6__info3E1PEi3BoxIT0_ES3_`. The literal composes wherever a
+  template argument value does: in a pack (`J…E`), a nested
+  template-id's arguments, a class-type NTTP's `Xtl … E`, and a template
+  parameter object's `_ZTA`.
+- **Properties.** Deterministic within the TU (the id is allocated at the
+  reflection's first evaluation, so the same source gives the same ids).
+  Distinct reflections give distinct strings, because the id is the
+  identity of §2.3: a type and its alias (`^^int`, `^^I`, `^^J`) are
+  three literals. The encoding reads only the id, never the reflectee, so
+  no cache is needed: the id is both the key and the payload, written in
+  at most ten digits. `AnonIds::reflection_literals()` counts the
+  literals written for the module; the 2,000-specialization test of
+  `crates/kiln_codegen/tests/reflection_mangle.rs` asserts it.
+- **Linkage.** The id is TU-local, so the same `f<^^int>` in two TUs has
+  two different strings, and two different reflections could share one.
+  A template argument holding a reflection (directly, inside a class-type
+  NTTP's value, or in a template parameter object) therefore makes the
+  specialization, and everything mangled under it (its statics, vtable,
+  RTTI, guards), internal (`mangle::value_externally_visible`, the
+  unique-external rule of spec/abi.md §8.22). Each TU has its
+  own copy: `S<^^int>::count` is not shared across TUs, and the RTTI of
+  `S<^^int>` compares unequal across them. The form is **not
+  link-compatible with GCC or clang** (spec/abi.md §8).
+- **Follow-up (→ WP-102).** WP-102 switches to GCC 16.1's encoding
+  (cxx-abi issue #208: `std::meta::info` is `Dm`, a value is
+  `L Dm <kind> … E` naming the reflectee), at which point the
+  specializations get their normal linkage again. Its link-compat test: a
+  two-TU program, one TU compiled by kiln and one by `g++-16`, each
+  defining and calling `template <std::meta::info R> int f()` for
+  `^^int`, an alias, a namespace-scope variable and a data member, with
+  `inline` statics, linked together; the run checks the shared statics
+  and `&f<^^int>` agree.
+- A consteval-only value reaching codegen stays the error of §4.1, not a
+  mangling question: a non-template `info` variable with static storage
+  that is not `constexpr` is rejected before any symbol exists
+  (`expr.reflect/reflection-mangle-neg.cpp`).
 
 ## 9. Tests and status
 - **Format.** Reflection tests are kiln goldens: `//@ args: -freflection

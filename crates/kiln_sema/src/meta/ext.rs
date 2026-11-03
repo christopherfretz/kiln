@@ -137,7 +137,8 @@ impl Sema<'_, '_> {
             })
             .collect();
         // Each member keyed as `^^` keys it (a nested type or alias is a
-        // type, a member template a template; spec/reflection-repr.md §1).
+        // type, a member template a template; spec/reflection-repr.md §1),
+        // one reflection per entity (`Sema::entity_decl`).
         members
             .into_iter()
             .map(|m| {

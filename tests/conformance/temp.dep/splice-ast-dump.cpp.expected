@@ -1,0 +1,25 @@
+Dumping test:
+NamespaceDecl test
+|-FunctionTemplateDecl f
+| |-NonTypeTemplateParmDecl referenced 'std::meta::info' depth 0 index 0 R
+| `-FunctionDecl f 'int (S)'
+|   |-ParmVarDecl referenced s 'S'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator '<dependent type>' '+'
+|         |-CXXSpliceExpr '<dependent type>' lvalue
+|         | `-DeclRefExpr 'std::meta::info' NonTypeTemplateParm 'R' 'std::meta::info'
+|         `-CXXSpliceExpr '<dependent type>' lvalue .
+|           |-DeclRefExpr 'S' lvalue ParmVar 's' 'S'
+|           `-DeclRefExpr 'std::meta::info' NonTypeTemplateParm 'R' 'std::meta::info'
+`-FunctionTemplateDecl g
+  |-NonTypeTemplateParmDecl referenced 'std::meta::info' depth 0 index 0 R
+  |-TemplateTypeParmDecl referenced class depth 0 index 1 T
+  `-FunctionDecl g 'int (T *)'
+    |-ParmVarDecl referenced t 'T *'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-CXXSpliceExpr '<dependent type>' lvalue ->
+          |-DeclRefExpr 'T *' lvalue ParmVar 't' 'T *'
+          `-DeclRefExpr 'std::meta::info' NonTypeTemplateParm 'R' 'std::meta::info'
+

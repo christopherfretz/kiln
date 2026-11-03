@@ -39,6 +39,7 @@ always present).
 | `BaseSpec(DeclId, u32)` | the `i`-th direct base-specifier of a class | first declaration of the class, index | `base` |
 | `DataMemberSpec(DmsId)` | a data member description (`data_member_spec`; spec/reflection.md §6.1) | the content-interned description in the Oven's `DmsTable` (type, name `Symbol`, alignment, width, `no_unique_address`) | `data-member-spec` |
 | `Annotation(AnnId)` | an annotation (reserved) | id | `annotation` |
+| `FnParam(DeclId, u32)` | the `i`-th parameter of a function (P3096 `parameters_of`, → WP-478) | first declaration of the function, index | `parameter` |
 
 Declaration-keyed variants (`Decl`, `Namespace`, `NamespaceAlias`) are
 found through a dense `DeclId index -> ReflectionId` vector (4 B per
@@ -113,10 +114,17 @@ Two reflections are equal iff their ids are equal ([expr.eq]/6): `==` on
 place identity is decided, so every key in §1 must map equal entities to
 the same `Reflectee`:
 
-- a redeclaration reflects its first declaration;
+- a redeclaration reflects its first declaration, and a friend
+  declaration of a function the function it declares: every declaration
+  key is `Sema::entity_decl` (spec/sema.md §4 "Entity identity"), so
+  `info` equality is `Sema::same_entity`;
 - a type, as §1;
 - a template, through its canonical name;
 - a value or object, by content-interned store value.
+
+Interning a new reflection past the table's limit is the fatal
+`sema_too_many_reflections` (`Sema::intern_reflection`; `^^` through
+`Sema::build_reflect_expr`), never a panic (WP-471).
 
 `tests/conformance/expr.reflect/equality-matrix.cpp` checks a 29-by-29
 matrix of every operand kind (each equal only to itself, and to its
@@ -139,10 +147,11 @@ kind names its own specialization and equal reflections share one
 
 Mangling: until the Itanium ABI defines reflection mangling, kiln emits a
 vendor-extended literal `L u6__info <id> E`, where `<id>` is the
-reflection id's index within the translation unit (`_Z1kILu6__info3EEiv`).
-That keeps distinct reflections distinct within a TU. It is not stable
-across TUs; a specialization keyed by a reflection should have internal
-linkage until the real mangling lands.
+reflection id's index within the translation unit (`_Z1kILu6__info3EEiv`;
+spec/reflection.md §8.3 has the grammar). That keeps distinct reflections
+distinct within a TU. It is not stable across TUs, so a specialization
+keyed by a reflection has internal linkage (WP-485) until the real
+mangling lands (→ WP-102).
 
 ## 5. Printing
 
@@ -159,6 +168,7 @@ template-argument printing use the same `<form>` (`dump/names.rs`):
 | `Decl`, `Namespace`, `NamespaceAlias`, `Template` | `^^` + the qualified name (`^^ns::f`, `^^S::m`) |
 | `Value` / `Object` | `^^(value of type T)` / `^^(object of type T)` |
 | `BaseSpec` | `^^(base #i of C)` |
+| `FnParam` | `^^(parameter #i of f)` |
 | `DataMemberSpec` / `Annotation` | `^^(data member spec #n)` / `^^(annotation #n)` |
 
 The form is stable: tests may match it. Golden:

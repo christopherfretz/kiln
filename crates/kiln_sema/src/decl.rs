@@ -878,8 +878,9 @@ impl Sema<'_, '_> {
     /// ref-qualifier that `d` (whose decl-specifiers are `ds`) declares
     /// through a typedef-name or `decltype` (no function declarator) is
     /// only the type of a non-static member function, of a typedef or
-    /// alias-declaration, of a template type argument, of a type
-    /// parameter's default or of a reflect-expression (P2996R13). Anything else (a non-member function at
+    /// alias-declaration, of a template type argument or of a type
+    /// parameter's default; the operand of `^^` declares nothing, so it
+    /// may name one ([expr.reflect]; GCC 16.1). Anything else (a non-member function at
     /// namespace or block scope, a static member function, a friend, a
     /// parameter, a type-id) is clang's `err_invalid_qualified_function_type`
     /// in its "of type" form, at the start of the declaration, and the
@@ -3577,7 +3578,7 @@ impl Sema<'_, '_> {
                 && self.templ.cur.is_none()
                 && dname.as_ident().is_some() =>
             {
-                let p = self.extern_c_prev(name, false, d.name_loc());
+                let p = self.extern_c_prev(name, false, new_fn.is_static, d.name_loc());
                 extern_c_redecl = p.is_some();
                 p
             }
@@ -5049,7 +5050,9 @@ impl Sema<'_, '_> {
         prev = prev.filter(|_| !unmerged);
         // [dcl.link]/6-7: a C-linkage variable of another scope.
         let prev = match prev {
-            None if d.qualifier.is_none() => self.extern_c_prev(name, true, d.name_loc()),
+            None if d.qualifier.is_none() => {
+                self.extern_c_prev(name, true, spec.storage() == VarStorage::Static, d.name_loc())
+            }
             p => p,
         };
         // An invalid decl-specifier (`typename Q b;`) was reported: the

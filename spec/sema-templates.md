@@ -2236,9 +2236,14 @@ like clang's.
 
 `DependentBitInt{signed, width}` substitutes the width expression and
 rebuilds the type through `Sema::build_bit_int_type`, which checks the
-width then (spec/types.md §21; WP-404). Splice types never reach the
-substituter yet: the parser rejects a dependent splice. Any other kind
-gives the NYI diagnostic "substitution into this type".
+width then (spec/types.md §21; WP-404). A dependent `Splice` type
+substitutes its operand and re-runs `Sema::act_on_splice_type`; the
+dependent `CXXSpliceExpr` (an expression or member splice) and
+`Nns::Splice` likewise re-run `act_on_splice_expr` /
+`act_on_member_splice` and `act_on_nested_name_splice`, so the
+designated entity is checked in the specialization (spec/reflection.md
+§5; WP-474). Any other kind gives the NYI diagnostic "substitution into
+this type".
 
 ### 5.4 Expressions
 
@@ -4555,6 +4560,12 @@ a non-reference `U` as a prvalue ([meta.unary.prop]), while
 `__reference_constructs_from_temporary` (prvalue `U`) and warns
 `sema_deprecated_builtin` naming it, as clang 22 (WP-394). The
 `converts` form copy-initializes; the other two direct-initialize.
+A prvalue operand of a non-class, non-array type has its cv-qualifiers
+dropped ([expr.type]/2), so
+`__reference_constructs_from_temporary(int&&, const int)` is true. This
+holds at every `-fclang-compat` level, since clang 19's false is a bug
+that clang 22 and GCC 16.1 do not have (WP-477;
+`builtin.reference-from-temporary-cv{,-19}.cpp`).
 
 A deprecated trait spelling warns where it is written and again at each
 instantiation that rebuilds it (under the instantiation note), as clang's

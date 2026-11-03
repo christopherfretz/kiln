@@ -428,7 +428,8 @@ then `Ast::first`); code that means "same entity" never compares
 `DeclId`s, which differ between redeclarations. Reflections are interned
 by `entity_decl`, so `info` equality is `same_entity`. `cargo test -p
 xtask` lints the reflection code (`kiln_sema/src/reflect.rs`,
-`kiln_sema/src/meta/`, `kiln_oven/src/meta/`) for raw `DeclId` `==`,
+`reflect_operand.rs`, `reflect_limit.rs`, `kiln_sema/src/meta/`,
+`kiln_oven/src/meta/`) for raw `DeclId` `==`,
 `!=` and `assert_eq!`; a line that really means the declaration carries
 `// same_entity: raw ok`.
 
@@ -1009,7 +1010,8 @@ Redeclaration and linkage rules:
   `decltype` (no function declarator of its own) is only the type of a
   non-static member function, of a typedef or alias-declaration, of a
   template type argument (a type trait's operand parses as one), of a
-  type parameter's default, or the pointee of a pointer to member. As a
+  type parameter's default, the operand of `^^` (it declares nothing;
+  GCC 16.1 agrees, WP-477), or the pointee of a pointer to member. As a
   non-member function at namespace or block scope (`extern` included), a
   static member function, a friend, a parameter, a handler, or in a
   type-id (`sizeof`, `new`, a trailing return type) it is clang's
@@ -2323,6 +2325,33 @@ and returns the scope it names:
     "non-static declaration follows static" for a braceless `extern
     "C++" int v;` after `static int v;`.
     Tests: `dcl.link/language-linkage-redecl-errors.cpp`.
+  - **Which entities have C language linkage** ([dcl.link]/4-5, WP-492;
+    clang `getDeclLanguageLinkage`, `isInExternCContext`):
+    `kiln_abi::mangle::is_extern_c` is the single computation (mangling,
+    `noundef` on returns, and every sema check above). A function or
+    variable has it when its first declaration is lexically inside an
+    `extern "C"` specification (the innermost one deciding), walking
+    the lexical contexts through namespaces, functions and classes
+    (`in_extern_c_context`), and it has external linkage. So a
+    block-scope function or `extern` variable declaration in a function
+    (or a member function defined in a class) inside `extern "C"`, and
+    a friend declared in a class there, name the plain C symbol
+    (`void outer() { void lf(int); }` calls `lf`). A class member has
+    C++ linkage; an entity with internal linkage has none and is
+    mangled as an internal name: `extern "C" { static int sx; }` is
+    `_ZL2sx`, `namespace M { static void mf(); }` in it `_ZN1ML2mfEv`,
+    and a `const` variable in a braced specification is internal
+    (`_ZL2ci`; only a braceless `extern "C" const int c = 1;` is
+    external, [dcl.link]/8). A function or variable of an unnamed
+    namespace first declared in an `extern "C"` context keeps external
+    linkage (clang `getLVForNamespaceScopeDecl`) and its plain name.
+    `Sema::extern_c` neither records nor links a `static` declaration,
+    so two `extern "C" { static int x; }` in different namespaces are
+    distinct entities. Not implemented: the
+    `__attribute__((used))` static-in-`extern "C"` aliases (clang
+    `EmitStaticExternCAliases`; kiln does not emit `used` statics at
+    all yet). Tests: `tests/codegen/extern_c_linkage.cpp`,
+    `dcl.link/static-and-local-in-extern-c-run.cpp`.
 - **Internal linkage from a `const` type** ([basic.link]/3.2, WP-466):
   a namespace-scope non-template, non-inline variable that is neither
   `extern` nor previously declared with external linkage has internal

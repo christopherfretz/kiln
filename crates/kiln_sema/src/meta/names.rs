@@ -15,6 +15,7 @@
 use kiln_ast::decl::DeclKind;
 use kiln_ast::names::DeclNameKind;
 use kiln_ast::reflect::Reflectee;
+use kiln_ast::types::TypeView;
 use kiln_ast::{ConstValueId, DeclId, ReflectionId};
 use kiln_oven::{ExcCtor, MetaCtx, MetaError, MetaOut, Oven, QueryOp, info_arg};
 use kiln_source::Loc;
@@ -154,18 +155,30 @@ impl Sema<'_, '_> {
     /// constructors, destructors, operator and conversion functions (and
     /// their templates), unnamed entities and other types.
     fn identifier(&self, r: ReflectionId) -> Option<Ident> {
+        self.decl_identifier(self.named_decl(r)?)
+    }
+
+    /// The declaration whose name the names family reports for `r`: a
+    /// variable, function, member or enumerator; a namespace or namespace
+    /// alias; a template; a type alias (kept by `^^`, spec/reflection-repr.md
+    /// §1); the class or enumeration a cv-unqualified type denotes.
+    /// `None` for other types, alias template specializations and
+    /// reflections of no declaration (values, objects, base specifiers).
+    fn named_decl(&self, r: ReflectionId) -> Option<DeclId> {
         match self.ast.reflections.get(r) {
             Reflectee::Type(t) => {
                 if !t.quals().is_empty() {
                     return None;
                 }
-                let d = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t))?;
-                self.decl_identifier(d)
+                match self.ast.types.view(t.ty()) {
+                    TypeView::Typedef { decl, .. } => return Some(decl),
+                    TypeView::TemplateSpecialization { alias: true, .. } => return None,
+                    _ => {}
+                }
+                self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t))
             }
-            // `Namespace`/`NamespaceAlias` are their own kinds (WP-472).
-            Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
-                self.decl_identifier(d)
-            }
+            Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => Some(d),
+            Reflectee::Template(n) => self.ast.types.template_decl(n),
             _ => None,
         }
     }
@@ -209,7 +222,12 @@ impl Sema<'_, '_> {
     fn display_string(&self, r: ReflectionId) -> String {
         let s = match self.ast.reflections.get(r) {
             Reflectee::Type(t) => self.ty_str(t),
-            Reflectee::Decl(d) => self.decl_name(d),
+            Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
+                self.decl_name(d)
+            }
+            Reflectee::Template(n) => {
+                self.ast.types.template_decl(n).map(|d| self.decl_name(d)).unwrap_or_default()
+            }
             _ => String::new(),
         };
         if s.is_empty() { self.reflection_str(r) } else { s }
@@ -218,19 +236,13 @@ impl Sema<'_, '_> {
     /// `source_location_of(r)` ([meta.reflection.names]/7): the location
     /// of the (first) declaration `r` reflects, with an empty function
     /// name; `None` (a `source_location{}`) for the global namespace,
-    /// types other than classes and enumerations, and reflections of no
-    /// declaration.
+    /// types other than classes, enumerations and aliases, and reflections
+    /// of no declaration.
     fn meta_location_of(&mut self, r: ReflectionId) -> Option<ConstValueId> {
         if let Some(&cv) = self.meta_names.locs.get(&r) {
             return Some(cv);
         }
-        let d = match self.ast.reflections.get(r) {
-            Reflectee::Type(t) => {
-                self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t))?
-            }
-            Reflectee::Decl(d) => d,
-            _ => return None,
-        };
+        let d = self.named_decl(r)?;
         if self.kind_of(d) == DeclKind::TranslationUnit {
             return None;
         }

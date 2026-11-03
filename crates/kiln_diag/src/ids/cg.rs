@@ -11,4 +11,6 @@ cg_auto_var_init_too_large = Remark [AutoVarInit] (3) "erroneous value of variab
 // clang `warn_avx_calling_convention`: {0} is 0 for a return, 1 for an
 // argument; {2} the target feature (`avx`, `avx512f`).
 cg_avx_calling_convention = Warning [Psabi] (3) "AVX vector {0:return|argument} of type {1} without '{2}' enabled changes the ABI";
+// clang `err_duplicate_mangled_name` (`GetOrCreateLLVMFunction`); WP-492.
+cg_duplicate_mangled_name = Error (1) "definition with same mangled name '{0}' as another definition";
 cg_error = Error (1) "{0}";

@@ -15,12 +15,29 @@
 
 #if defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)
 #include <exception>
+#include <initializer_list>
 #include <source_location>
 #include <string_view>
 #include <vector>
 #else
 namespace std {
 using __kiln_size_t = decltype(sizeof 0);
+
+// A pointer and a size (libc++'s layout); the compiler fills them from
+// the backing array ([dcl.init.list]/5).
+template <class E>
+class initializer_list {
+  const E* __begin_;
+  __kiln_size_t __size_;
+
+ public:
+  using value_type = E;
+  using size_type = __kiln_size_t;
+  constexpr initializer_list() noexcept : __begin_(nullptr), __size_(0) {}
+  constexpr __kiln_size_t size() const noexcept { return __size_; }
+  constexpr const E* begin() const noexcept { return __begin_; }
+  constexpr const E* end() const noexcept { return __begin_ + __size_; }
+};
 
 class exception {
  public:
@@ -146,6 +163,15 @@ consteval std::u8string_view u8identifier_of(info r);
 consteval std::string_view display_string_of(info r);
 consteval std::u8string_view u8display_string_of(info r);
 consteval std::source_location source_location_of(info r);
+
+// [meta.reflection.substitute] (WP-482). The arguments are any
+// contiguous range of info (a braced list, an array, a vector).
+consteval info template_of(info r);
+consteval std::vector<info> template_arguments_of(info r);
+template <class R = std::initializer_list<info>>
+consteval bool can_substitute(info templ, R&& arguments);
+template <class R = std::initializer_list<info>>
+consteval info substitute(info templ, R&& arguments);
 
 // The spike's name query (identifier_of as a NTBS; retired by WP-484).
 consteval const char* name_of(info r);

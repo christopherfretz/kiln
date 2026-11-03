@@ -823,9 +823,10 @@ pub enum DeclSite {
     TypeParamDefault,
     /// A declarator rebuilt by template substitution (already checked).
     Subst,
-    /// The type-id of a reflect-expression `^^type-id`: as
-    /// [`DeclSite::Plain`], except that a function type with a
-    /// cv-qualifier-seq or ref-qualifier is allowed ([dcl.fct]/6).
+    /// The type-id operand of `^^` ([expr.reflect]): as
+    /// [`DeclSite::Plain`], except that a cv- or ref-qualified function
+    /// type may be reflected (it declares nothing: [dcl.fct]/6 restricts
+    /// declarations; GCC 16.1 accepts `^^int() const`).
     Reflect,
 }
 

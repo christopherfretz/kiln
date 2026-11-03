@@ -42,12 +42,23 @@ pub struct AnonIds {
     /// Whether the module has any `abi_tag` attribute (computed on first
     /// use): without one no name carries implicit tags.
     abi_tags: Option<bool>,
+    /// Reflection template-argument literals written (`L u6__info <n> E`,
+    /// spec/reflection.md §8.3), over every symbol mangled for the module.
+    refl_literals: u64,
 }
 
 impl AnonIds {
     /// An empty table.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// How many reflection template-argument literals the symbols mangled
+    /// with this table contain (spec/reflection.md §8.3): each costs one
+    /// decimal write of its `ReflectionId`, never a read of the reflectee,
+    /// so this is also the mangler's whole reflection workload.
+    pub fn reflection_literals(&self) -> u64 {
+        self.refl_literals
     }
 
     /// The id of class `d` (first declaration), assigning the next one
@@ -274,13 +285,41 @@ pub fn local_extern_ns(ast: &Ast, d: DeclId) -> Option<DeclId> {
     None
 }
 
-/// True if `d` is declared inside an `extern "C"` linkage specification
-/// (the innermost one wins).
+/// True if the function or variable `d` has C language linkage
+/// ([dcl.link]/4-5; clang `getDeclLanguageLinkage`, `isExternC`): its
+/// first declaration is lexically inside an `extern "C"` linkage
+/// specification, through enclosing functions and classes
+/// ([`in_extern_c_context`]: a block-scope `extern` declaration, or a
+/// friend declared in a class, in an `extern "C"` block), and it has
+/// external linkage. A class member has C++ language linkage; an entity
+/// with internal linkage (`extern "C" { static int x; }`, a `const`
+/// variable in a braced specification) or a local variable has none,
+/// and is mangled (`_ZL1x`).
 pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
-    let mut c = ast.decls.get(d).ctx();
-    while let Some(ctx) = c {
-        let n = ast.decls.get(ctx);
-        match n.kind() {
+    let first = ast.first(d);
+    let n = ast.decls.get(first);
+    let Some(c) = n.ctx() else { return false };
+    let ck = ast.decls.get(c).kind();
+    if is_record_kind(ck) {
+        return false;
+    }
+    if is_function_kind(ck)
+        && n.kind() != DeclKind::Function
+        && ast.decls.var(first).is_none_or(|v| v.spec.storage() != VarStorage::Extern)
+    {
+        return false;
+    }
+    in_extern_c_context(ast, first) && !has_internal_linkage(ast, first)
+}
+
+/// True if `d` is lexically inside an `extern "C"` linkage
+/// specification, the innermost one deciding, through any enclosing
+/// namespaces, functions and classes (clang `isInExternCContext`).
+pub fn in_extern_c_context(ast: &Ast, d: DeclId) -> bool {
+    let mut c = ast.decls.lexical_ctx(d);
+    for _ in 0..10_000 {
+        let Some(ctx) = c else { return false };
+        match ast.decls.get(ctx).kind() {
             DeclKind::LinkageSpec => {
                 return ast
                     .decls
@@ -288,12 +327,9 @@ pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
                     .is_some_and(|s| s.linkage_lang() == Some(LinkageLang::C));
             }
             DeclKind::TranslationUnit => return false,
-            // Class members and local entities never have C language
-            // linkage.
-            k if is_record_kind(k) || is_function_kind(k) => return false,
             _ => {}
         }
-        c = n.ctx();
+        c = ast.decls.lexical_ctx(ctx);
     }
     false
 }
@@ -363,7 +399,7 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
                 && !v.spec.is_inline()
                 && (!ast.modules.active || ast.module_attachment(first).is_none())
                 && v.spec.storage() != VarStorage::Extern
-                && !is_extern_c(ast, first)
+                && !ast.decls.is_single_line_linkage(first)
                 && !matches!(v.templ.get(), Some((TemplLinkKind::Specialization, _)))
         }
         _ => false,
@@ -462,6 +498,10 @@ fn value_externally_visible(ast: &Ast, value: ConstValueId) -> bool {
             PtrBase::StringLit { .. } | PtrBase::Const(_) | PtrBase::Label { .. } => false,
         },
         ConstValue::Scalar(Scalar::MemberPtr { member, .. }) => !is_internal_symbol(ast, member),
+        // A reflection mangles as its translation-unit-local id (§8.3 of
+        // spec/reflection.md), so a specialization on one must not be
+        // merged with another TU's: it has internal linkage.
+        ConstValue::Scalar(Scalar::Reflection { .. }) => false,
         ConstValue::Scalar(_) => true,
         ConstValue::Aggregate(img) => {
             img.relocs.iter().all(|r| value_externally_visible(ast, r.value))
@@ -562,7 +602,17 @@ fn is_file_context(ast: &Ast, d: DeclId) -> bool {
 /// linkage.
 pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     let first = ast.first(d);
-    if internal_by_storage(ast, first) || in_anon_ns(ast, first) {
+    if internal_by_storage(ast, first) {
+        return true;
+    }
+    // A namespace-scope function or variable of an unnamed namespace
+    // first declared in an `extern "C"` context keeps external linkage
+    // (clang `getLVForNamespaceScopeDecl`).
+    if in_anon_ns(ast, first)
+        && !(matches!(ast.decls.get(first).kind(), DeclKind::Function | DeclKind::Var)
+            && is_file_context(ast, first)
+            && in_extern_c_context(ast, first))
+    {
         return true;
     }
     // A local entity has no linkage unless its function is inline or a
@@ -2168,13 +2218,21 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     self.out.push('E');
                 }
             }
-            // Vendor stand-in (spec/reflection-repr.md §4) until the
-            // real reflection mangling: `L u6__info <id> E`, the
-            // translation unit's reflection id, so distinct reflections
-            // never collide within a TU.
+            // The vendor placeholder until WP-102 (spec/reflection.md
+            // §8.3): `L <info-type> <number> E`, the number the
+            // translation unit's `ReflectionId` index, which is the
+            // reflection's identity ([temp.type]/2), so equal reflections
+            // mangle equal and distinct ones distinct. The reflectee is
+            // never read. `<info-type>` is `u6__info`, a substitution
+            // candidate (the second literal of a symbol is `LS<n>_<id>E`).
+            // Not stable across translation units: an entity with such an
+            // argument has internal linkage (`value_externally_visible`).
             Scalar::Reflection { id, .. } => {
                 use std::fmt::Write as _;
-                let _ = write!(self.out, "Lu6__info{}E", id.index());
+                self.out.push('L');
+                self.ty(ty);
+                let _ = write!(self.out, "{}E", id.index());
+                self.anon.refl_literals += 1;
             }
         }
     }
@@ -2662,8 +2720,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
         let view = ast.types.canonical_view(q);
         match view {
-            // A vendor extended type (`u <source-name>`) is substitutable.
-            TypeView::Builtin(b) if !b.is_sizeless() => {
+            // A vendor extended type (`u <source-name>`) is substitutable:
+            // the SVE types and `std::meta::info` (`u6__info`, §8.3 of
+            // spec/reflection.md).
+            TypeView::Builtin(b) if !b.is_sizeless() && b != BuiltinType::MetaInfo => {
                 self.out.push_str(self.builtin_str(b));
                 return;
             }
@@ -2904,6 +2964,9 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         B::SvBfloat16 => "u14__SVBfloat16_t",
         B::SvBool => "u10__SVBool_t",
         B::SvCount => "u11__SVCount_t",
+        // The vendor placeholder for `std::meta::info` until WP-102
+        // (GCC 16.1 writes `Dm`; spec/reflection.md §8.3).
+        B::MetaInfo => "u6__info",
         _ => "u7unknown",
     }
 }
