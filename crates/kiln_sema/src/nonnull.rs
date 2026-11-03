@@ -36,10 +36,11 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return None;
             };
-            if self.ast.exprs.get(e).deps().intersects(ExprDeps::VALUE | ExprDeps::TYPE) {
-                return None;
-            }
-            let Some(v) = self.fold_int(e) else {
+            // A value-dependent index is not an integer constant either
+            // (clang checks the attribute on the template pattern).
+            let dependent =
+                self.ast.exprs.get(e).deps().intersects(ExprDeps::VALUE | ExprDeps::TYPE);
+            let Some(v) = (!dependent).then(|| self.fold_int(e)).flatten() else {
                 let msg = self
                     .diag(DiagId::sema_attribute_param_not_ice, loc)
                     .arg("'nonnull'")
@@ -130,7 +131,7 @@ impl Sema<'_, '_> {
         if written.is_empty()
             && !node.loc.is_macro()
             && !variadic
-            && !params.iter().any(|&p| self.nonnull_pointer_type(p))
+            && !params.iter().any(|&p| self.ast.types.is_dependent(p) || self.nonnull_pointer_type(p))
         {
             let msg = self.diag(DiagId::sema_attribute_nonnull_no_pointers, node.loc);
             self.emit(msg);
@@ -167,10 +168,11 @@ impl Sema<'_, '_> {
     }
 
     /// clang `isValidPointerAttrType` without references: a pointer
-    /// (through a reference) or a dependent type.
+    /// (through a reference), or a dependent type from clang 22 on
+    /// (clang 19 warns on a template parameter type).
     fn nonnull_pointer_type(&self, t: QualType) -> bool {
         let t = self.non_reference(t);
-        self.ast.types.is_dependent(t) || self.ast.types.is_pointer(t)
+        (self.clang_compat >= 22 && self.ast.types.is_dependent(t)) || self.ast.types.is_pointer(t)
     }
 
     /// `nonnull` parameter attributes (`void f(__attribute__((nonnull))

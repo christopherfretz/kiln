@@ -335,9 +335,11 @@ the target:
    for `&f` of a function, a weak declaration, a reference-returning
    call (`&g()`), an unevaluated operand, or a source or conversion
    point in a macro body. The walk visits a binary operator's right
-   operand first, so `f && g` warns for `g` first. Not implemented:
-   `-Wtautological-pointer-compare` (`f == nullptr`) and clang's
-   reference-returning call note (`CheckForReference`). Tests:
+   operand first, so `f && g` warns for `g` first. The classification is
+   spec/sema.md §5.27's (`null_compare.rs` `always_non_null`, WP-421),
+   which adds the reference-returning call note, the `returns_nonnull`
+   call and `nonnull` parameter forms, the lambda conversion, and the
+   context token's range. Tests: `conv.bool/pointer-bool-conversion.cpp`,
    `tests/conformance/expr.unary.op/pointer-bool-conversion.cpp`,
    `expr.log.and/pointer-bool-conversion-operands.cpp`,
    `intro.compliance/wbool-conversion-members.cpp`.
