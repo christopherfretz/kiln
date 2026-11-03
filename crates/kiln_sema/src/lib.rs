@@ -47,7 +47,9 @@ mod impcast;
 mod implicit_fallthrough;
 pub mod init;
 mod init_dtor;
+mod int_in_bool;
 mod jump_scope;
+mod kind_conflict;
 pub mod lambda;
 pub mod literal;
 mod literal_op;
@@ -386,6 +388,11 @@ pub struct Sema<'a, 'sm> {
     /// reference to a reference collapses), so the pack check still
     /// runs on it ([dcl.fct]/16; [`Sema::type_for_declarator_at`]).
     pub(crate) declarator_int_recovery: bool,
+    /// The declarator whose type is being formed declares a non-static
+    /// data member: a variable length array bound that does not fold is
+    /// clang's `err_typecheck_field_variable_size` there
+    /// ([`Sema::type_for_declarator_at`]).
+    pub(crate) declarator_field: bool,
     /// Replaying a non-dependent class-scope using-declaration of a
     /// pattern: clang walks the pattern's shadow list, which is newest
     /// first, so the instantiation's shadows come in reverse (WP-159).
@@ -626,6 +633,13 @@ pub struct Sema<'a, 'sm> {
     /// The class the last `friend class X;` declared ([`TagUse::Friend`]),
     /// taken by [`Sema::act_on_friend`] as the `FriendDecl`'s owned tag.
     pub(crate) friend_tag: Option<DeclId>,
+    /// Set by the parser for the class declaration after an extraneous
+    /// `template<>` (`template<> struct S;`): clang's
+    /// `err_template_tag_noparams`, emitted by [`Sema::act_on_tag`] (after
+    /// the class-specifier's own errors, as clang's `ActOnTag`). One
+    /// naming a non-template class is also clang's "specialization of
+    /// member does not specialize an instantiated member".
+    pub extraneous_tag_head: Option<Diag>,
     /// Set when the last declarator's type was diagnosed invalid in a
     /// way clang records on its `Declarator` (an unexpanded pack,
     /// [temp.variadic]/12): clang's `ParseDeclGroup` reuses the
@@ -804,6 +818,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             declarator_int_recovery: false,
+            declarator_field: false,
             reverse_using_shadows: false,
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),
@@ -867,6 +882,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
+            extraneous_tag_head: None,
             declarator_type_invalid: false,
             lambda_packs: kiln_source::fx::FxHashMap::default(),
             declspec_restrict_error: None,

@@ -552,7 +552,10 @@ impl Sema<'_, '_> {
                 None => self.qualified_decl_name(f.template),
             },
             // clang streams the `FunctionTemplateDecl` itself: unqualified.
-            FrameKind::DeducedArgSubstitution | FrameKind::ExplicitArgSubstitution => {
+            // clang shows the explicit substitution's (still empty)
+            // deduced-argument list: nothing after the name but a space.
+            FrameKind::ExplicitArgSubstitution => format!("'{}' ", self.decl_name(f.template)),
+            FrameKind::DeducedArgSubstitution => {
                 let name = self.decl_name(f.template);
                 match f.args {
                     Some(l) => format!("'{name}' {}", self.template_args_desc(f.template, l)),
@@ -622,7 +625,9 @@ impl Sema<'_, '_> {
         if self.templ.suppressed_diags.is_empty() {
             return;
         }
-        if let Some(ds) = self.templ.suppressed_diags.remove(&d) {
+        // The entry stays, empty: a later deduction forming the same
+        // specialization adds nothing to it (clang keeps it too).
+        if let Some(ds) = self.templ.suppressed_diags.get_mut(&d).map(std::mem::take) {
             for x in ds {
                 // From clang 22 on they carry their own context notes and
                 // take none of the use's.
@@ -632,6 +637,28 @@ impl Sema<'_, '_> {
                     self.emit(x);
                 }
             }
+        }
+    }
+
+    /// Keeps the warnings `held` back by the phases of a deduction that
+    /// formed `spec` before its signature was substituted (the explicit
+    /// arguments', the defaults'), ahead of the signature's own (clang
+    /// `FinishTemplateArgumentDeduction`: the deduction's diagnostics are
+    /// stored only when `spec` has no entry yet; `fresh`, this deduction
+    /// formed it, and made that entry).
+    pub(crate) fn keep_deduction_warnings(&mut self, spec: DeclId, fresh: bool, held: Vec<Diag>) {
+        if held.is_empty() {
+            return;
+        }
+        match self.templ.suppressed_diags.entry(spec) {
+            std::collections::hash_map::Entry::Vacant(v) => {
+                let _ = v.insert(held);
+            }
+            std::collections::hash_map::Entry::Occupied(mut o) if fresh => {
+                let own = std::mem::replace(o.get_mut(), held);
+                o.get_mut().extend(own);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {}
         }
     }
 

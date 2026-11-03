@@ -3,11 +3,13 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 sema_early_catch_all = Error (0) "catch-all handler must come last";
+sema_ellipsis_in_declarator_not_parameter = Error (0) "only function and template parameters can be parameter packs";
 sema_empty_for_body = Warning [EmptyBody] (0) "for loop has empty body";
 sema_empty_if_body = Warning [EmptyBody] (0) "if statement has empty body";
 sema_empty_range_for_body = Warning [EmptyBody] (0) "range-based for loop has empty body";
 sema_empty_switch_body = Warning [EmptyBody] (0) "switch statement has empty body";
 sema_empty_while_body = Warning [EmptyBody] (0) "while loop has empty body";
+sema_enum_constant_in_bool_context = WarningOff [IntInBoolContext] (0) "converting the enum constant to a boolean";
 sema_enum_explicit_instantiation = Error (0) "enumerations cannot be explicitly instantiated";
 sema_enum_fixed_redecl_unfixed = Error (0) "enumeration previously declared with fixed underlying type";
 sema_enum_invalid_underlying = Error (1) "non-integral type {0} is an invalid underlying type";
@@ -75,6 +77,7 @@ sema_field_designator_unknown = Error (2) "field designator '{0}' does not refer
 sema_field_incomplete = Error (1) "field has incomplete type {0}";
 sema_field_sizeless = Error (1) "field has sizeless type {0}";
 sema_field_uninit_use = Warning [Uninitialized] (1) "field {0} is uninitialized when used here";
+sema_field_variable_size = Error (0) "fields must have a constant size: 'variable length array in structure' extension will never be supported";
 sema_flexible_array_empty_aggregate = Extension [GnuEmptyStruct] (2) "flexible array member '{0}' in otherwise empty {1:struct|class|union} is a GNU extension";
 sema_flexible_array_in_array = Extension [FlexibleArrayExtensions] (1) "{0} may not be used as an array element due to flexible array member";
 sema_flexible_array_in_struct = Extension [FlexibleArrayExtensions] (1) "'{0}' may not be nested in a struct due to flexible array member";
@@ -170,6 +173,7 @@ sema_inline_namespace_mismatch = Error (0) "non-inline namespace cannot be reope
 sema_inline_namespace_reopened_noninline = Warning [InlineNamespaceReopenedNoninline] (0) "inline namespace reopened as a non-inline namespace";
 sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
 sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
+sema_integer_constants_in_conditional_always_true = Warning [TautologicalConstantCompare] (0) "converting the result of '?:' with integer constants to a boolean always evaluates to 'true'";
 sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
 sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
 sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";
@@ -187,6 +191,12 @@ sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class speci
 sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
 sema_lambda_impcap = Error (1) "variable '{0}' cannot be implicitly captured in a lambda with no capture-default specified";
 sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";
+sema_left_shift_always = Warning [TautologicalConstantCompare] (1) "converting the result of '<<' to a boolean always evaluates to {0:false|true}";
+// -fclang-compat=22; clang 19 prints the operand (`_expr`, not a `_19`
+// row: the argument counts differ).
+sema_left_shift_in_bool_context = WarningOff [IntInBoolContext] (0) "converting the result of '<<' to a boolean; did you mean to compare with '0'?";
+// clang 19 wording of `sema_left_shift_in_bool_context`.
+sema_left_shift_in_bool_context_expr = WarningOff [IntInBoolContext] (1) "converting the result of '<<' to a boolean; did you mean '({0}) != 0'?";
 sema_likelihood_if_conflict = Warning [IgnoredAttributes] (1) "conflicting attributes '{0}' are ignored";
 sema_list_init_in_parens = Error (2) "cannot initialize {0:non-class|reference} type {1} with a parenthesized initializer list";
 sema_literal_conversion = Warning [LiteralConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
@@ -211,6 +221,7 @@ sema_many_braces_around_scalar = Warning [ManyBracesAroundScalarInit] (0) "too m
 sema_member_call_without_object = Error (0) "call to non-static member function without an object argument";
 sema_member_decl_no_match = Error (2) "out-of-line declaration of '{0}' does not match any declaration in {1}";
 sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not match any declaration in {1}";
+sema_member_def_ret_type_mismatch = Error (1) "return type of out-of-line definition of '{0}' differs from that in the declaration";
 sema_member_extra_qualification = Error (1) "extra qualification on member '{0}'";
 sema_member_fn_drops_quals = Error (3) "'this' argument to member function '{0}' has type {1}, but function is not marked {2}";
 sema_member_fn_ref_qual_mismatch = Error (3) "'this' argument to member function '{0}' is an {1:lvalue|rvalue}, but function has {2:non-const lvalue|rvalue} ref-qualifier";

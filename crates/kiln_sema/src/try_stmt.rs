@@ -54,6 +54,11 @@ impl Sema<'_, '_> {
         d: &Declarator,
     ) -> Option<DeclId> {
         let type_loc = ds.type_loc.unwrap_or(ds.loc);
+        // [temp.variadic]/5: only a parameter declares a pack (clang
+        // `GetFullTypeForDeclarator` drops the `...`).
+        if let Some(e) = d.ellipsis {
+            self.error(DiagId::sema_ellipsis_in_declarator_not_parameter, e);
+        }
         let base = self.catch_placeholder_check(base, type_loc, d);
         self.warn_redundant_parens(None, d);
         let mut ty = self.type_for_declarator_at(base, type_loc, d);

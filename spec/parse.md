@@ -237,6 +237,16 @@ clang's `Parser` over `Preprocessor::Lex`.
   declarator invalid). A type-requirement `typename Ts...[0];` is not a
   type-name and takes the same diagnostic
   (`temp.res.general/typename-unqualified-pack-index.cpp`).
+  A `typename` that fails before an unqualified name (`template<static
+  typename U>`, `typename Q q;`) does not consume the name, as clang: the
+  next diagnostic is at it and no "expected ';'" follows; at block scope
+  an unknown name is then "unknown type name 'Q'" (recovered as `int`)
+  and anything else "a type specifier is required for all declarations";
+  the declaration is invalid and redeclares nothing (WP-409,
+  `temp.param/typename-failed-recovery{,-non-type}.cpp`,
+  `temp.res/typename-failed-recovery.cpp`). A template-parameter-list
+  slot that is neither a parameter nor `,`/`>` is "expected ',' or '>' in
+  template-parameter-list" at the offending token.
   Once a decl-specifier names no type (`DeclSpec::type_error`), the
   later declarators of the group are skipped up to the `;`, as clang's
   `ParseDeclGroup`, so `u5 &x1, &x2;` and `S::c &x3, &x4;` report once
@@ -540,7 +550,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - A `(` after the declarator-id is a parameter list or a direct
     initializer by `is_cxx_function_declarator` (only where a direct
     initializer may follow; in member context it always starts a
-    parameter list, since a member has no direct-initializer). It is a
+    parameter list, since a member has no direct-initializer, and so it
+    does after a template-id declarator-id, as clang's
+    `mayBeFollowedByCXXDirectInit`: `template int v<char>(1);` is a
+    function declarator, WP-406). A parameter that starts with no
+    decl-specifier is "expected parameter declarator" (clang
+    `err_missing_param`, exempt from deduplication). The clause ends
+    there and the declarator stays valid: the missing `)` is reported at
+    the same token, which skips to the `)`. It is a
     parameter list only if its contents parse as a
     parameter-declaration-clause: `T f(T a)`, `T f(T(a))`, `T f(T(*a))`
     and `T f(T())` declare functions, while `T x((a))`, `T x((T()))`,
@@ -1336,6 +1353,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     `expected '(' after 'if'`; the parser skips to the next `;`.
 - **Unsupported:** case ranges, computed goto, statement expressions
   and range-based `for` are "not supported yet".
+  - **Deviation (computed goto):** GNU `goto *e;` is parsed. Its operand
+    is checked for an unexpanded pack (`Sema::act_on_indirect_goto`),
+    and then the statement is "computed goto is not supported yet" at the
+    `*`. The address-of-label operator `&&l` is not supported either.
+    clang accepts both, and reports "indirect goto in function with no
+    address-of-label expressions" when the function takes no label's
+    address.
 
 ### 6.2 Attributes (`attr.rs`)
 - **Syntax:** `[[ ]]` (with `using ns:`), `alignas(…)`, and GNU

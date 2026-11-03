@@ -342,6 +342,7 @@ impl Sema<'_, '_> {
                 let p = p.partial;
                 return Some((self.ast.definition(p).unwrap_or(p), n));
             }
+            self.templ.unmatched_qualifier = Some((tmpl, n));
         }
         Some((tmpl, n))
     }

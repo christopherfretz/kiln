@@ -136,6 +136,12 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("new_array_cookie", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
     ("new_delete_replaced", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("new_delete_replaced", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    // LLVM 22's InstCombine rewrites the `delete[]` destruction loop's
+    // element GEP to an `i8` GEP over the byte size; kiln's optimizer is
+    // `opt-19` (spec/driver.md "IR optimization"), which keeps the
+    // `%struct.N` GEP, so the type definition (ABI slice) differs too.
+    ("delete_oz", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("delete_oz", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 22 gives a coroutine's `await_suspend` wrappers internal (19:
     // private) linkage, and LLVM 22's coroutine lowering reshapes the
     // resume/destroy functions; kiln's coroutine IR follows clang 19. On

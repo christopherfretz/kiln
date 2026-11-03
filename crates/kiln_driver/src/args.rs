@@ -402,6 +402,9 @@ pub struct Args {
     /// `-m[no-]omit-leaf-frame-pointer` (the last wins; `Some(true)`
     /// omits it in leaf functions); `None` is the target's default.
     pub omit_leaf_frame_pointer: Option<bool>,
+    /// `-f[no-]strict-aliasing` (the last wins); `None` is the default
+    /// (strict: TBAA metadata above `-O0`, spec/codegen.md "TBAA").
+    pub strict_aliasing: Option<bool>,
     /// The `_Complex` multiply/divide algorithm, the last of
     /// `-f[no-]cx-limited-range`, `-f[no-]cx-fortran-rules`,
     /// `-fcomplex-arithmetic=` and `-ffast-math` (basic); `None` is
@@ -566,6 +569,8 @@ impl Args {
             "-fno-omit-frame-pointer" => self.omit_frame_pointer = Some(false),
             "-momit-leaf-frame-pointer" => self.omit_leaf_frame_pointer = Some(true),
             "-mno-omit-leaf-frame-pointer" => self.omit_leaf_frame_pointer = Some(false),
+            "-fstrict-aliasing" => self.strict_aliasing = Some(true),
+            "-fno-strict-aliasing" => self.strict_aliasing = Some(false),
             // Debug information is not generated (spec/codegen.md §5).
             "-g" | "-g0" | "-g1" | "-g2" | "-g3" | "-ggdb" | "-ggdb0" | "-ggdb1" | "-ggdb2"
             | "-ggdb3" => {}
@@ -958,6 +963,17 @@ mod tests {
         assert_eq!(parse("-mno-outline-atomics a.cpp").outline_atomics, Some(false));
         let a = parse("-mno-outline-atomics -moutline-atomics a.cpp");
         assert_eq!((a.outline_atomics, a.errors), (Some(true), vec![]));
+    }
+
+    #[test]
+    fn strict_aliasing_last_wins() {
+        assert_eq!(parse("a.cpp").strict_aliasing, None);
+        let a = parse("-fstrict-aliasing -fno-strict-aliasing a.cpp");
+        assert_eq!((a.strict_aliasing, a.errors), (Some(false), vec![]));
+        assert_eq!(
+            parse("-fno-strict-aliasing -fstrict-aliasing a.cpp").strict_aliasing,
+            Some(true)
+        );
     }
 
     #[test]

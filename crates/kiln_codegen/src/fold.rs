@@ -43,15 +43,21 @@ impl Folds {
 }
 
 /// The bridge codegen gives the Oven: no instantiation in M2, layouts
-/// from `kiln_abi`, diagnostics dropped (folding is silent).
+/// from `kiln_abi`, diagnostics dropped (folding is silent), the language
+/// mode sema recorded in the Oven ([`Oven::cxx_year`]).
 struct Bridge<'x> {
     ast: &'x mut Ast,
     abi: &'x Target,
+    cxx_year: u32,
 }
 
 impl SemaBridge for Bridge<'_> {
     fn ast(&self) -> &Ast {
         self.ast
+    }
+
+    fn cxx_year(&self) -> u32 {
+        self.cxx_year
     }
 
     fn ensure_body(&mut self, f: DeclId, _oven: &mut Oven) -> Option<StmtId> {
@@ -121,8 +127,12 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         c.tu();
         (c.out, c.inits, c.imm, c.statics, c.dtors)
     };
-    let mut b = Bridge { ast, abi: target };
+    let mut b = Bridge { ast, abi: target, cxx_year: oven.cxx_year() };
     let mut folds = Folds::default();
+    // clang's `ConstantEmitter` folds in modes that evaluate past
+    // floating arithmetic yielding a NaN or dividing by zero
+    // (`keepEvaluatingAfterUndefinedBehavior`).
+    oven.set_fold_float_ub(true);
     for e in cands {
         if folds.expr.contains_key(&e) {
             continue;
@@ -158,6 +168,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     // `evaluateDestruction` of that value (a `const` variable's object;
     // any other's is outside its lifetime), manifestly constant-evaluated
     // when the variable is constant-initialized.
+    oven.set_fold_float_ub(false);
     let mut dtors: Vec<_> = dtors.into_iter().collect();
     dtors.sort_unstable_by_key(|&(first, _)| first);
     for (first, (d, init, is_static)) in dtors {

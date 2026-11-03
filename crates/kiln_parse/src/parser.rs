@@ -142,6 +142,11 @@ pub struct Parser<'a, 'sm> {
     /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
     /// declarator, not the parameter list ([dcl.fct]/14).
     pub(crate) pack_hint: bool,
+    /// The declarator being parsed is a handler's exception-declaration,
+    /// whose direct declarator takes a misplaced `...` (clang
+    /// `ParseDirectDeclarator` consumes one wherever a name may follow;
+    /// sema rejects it). Taken by the first direct declarator.
+    pub(crate) catch_declarator: bool,
     /// The type-constraint location of the constrained placeholder the
     /// last type-id contained (its decl-specifier's, or one in its
     /// trailing return types), for the enclosing declarator's
@@ -163,6 +168,10 @@ pub struct Parser<'a, 'sm> {
     /// decl-specifier-seq without consuming its name: the parameter list
     /// stops there (clang's "expected ')'").
     pub(crate) param_abort: bool,
+    /// Set when `typename identifier` failed (no qualifier) and the
+    /// identifier names no type: the identifier is left unconsumed and
+    /// the decl-specifier-seq ends there (clang's `DoneWithDeclSpec`).
+    pub(crate) typename_failed: bool,
     /// The name and end of the last `typename T...[i]` whose pack index
     /// was consumed after "expected a qualified name after 'typename'".
     pub(crate) typename_pack_index: Option<(Loc, Loc)>,
@@ -303,10 +312,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             greater_is_op: true,
             greater_off_depth: 0,
             pack_hint: false,
+            catch_declarator: false,
             type_id_constraint: Loc::INVALID,
             param_typename: ParamTypename::Implicit,
             param_recovery: None,
             param_abort: false,
+            typename_failed: false,
             typename_pack_index: None,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
@@ -1509,6 +1520,35 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
         }
         Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
+    }
+
+    /// Skips the `name ::` and `name<args> ::` components left after a
+    /// nested-name-specifier that failed (diagnosed), so the declarator
+    /// goes on at its unqualified-id (clang annotates the whole invalid
+    /// `CXXScopeSpec`).
+    pub(crate) fn skip_nested_name_rest(&mut self) {
+        loop {
+            let mut i = self.pos;
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Template) {
+                i += 1;
+            }
+            if self.ident_of(self.tok_at(i)).is_none() {
+                return;
+            }
+            let mut j = i + 1;
+            if Self::punct_of(self.tok_at(j)) == Some(Punct::Less) {
+                match self.skip_template_args(j) {
+                    Some((close, false)) => j = close + 1,
+                    _ => return,
+                }
+            }
+            if Self::punct_of(self.tok_at(j)) != Some(Punct::ColonColon) {
+                return;
+            }
+            while self.pos <= j {
+                self.bump();
+            }
+        }
     }
 
     /// The `name<args>::` component of a nested-name-specifier after `qual`,

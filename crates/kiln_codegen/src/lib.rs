@@ -40,6 +40,7 @@ mod module_init;
 mod new_delete;
 mod null_init;
 mod stmt;
+mod tbaa;
 mod tls;
 mod try_catch;
 mod va_arg;
@@ -54,6 +55,10 @@ use kiln_source::Loc;
 
 /// Options controlling code generation.
 #[derive(Clone, Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent command-line switches, as clang's CodeGenOptions"
+)]
 pub struct CodegenOptions {
     /// The module's `source_filename`.
     pub source_filename: String,
@@ -74,6 +79,16 @@ pub struct CodegenOptions {
     /// emitted without the `-O0` `noinline optnone` pair (clang
     /// `CodeGenOpts.OptimizationLevel > 0`; spec/codegen.md §7p).
     pub optimize: bool,
+    /// The size optimization level: 1 at `-Os`, 2 at `-Oz`, else 0
+    /// (clang `CodeGenOpts.OptimizeSize`): functions and call sites get
+    /// `optsize`, and `minsize` too at 2 (spec/codegen.md "Size
+    /// optimization attributes").
+    pub opt_size: u8,
+    /// Type-based alias analysis applies (`-fstrict-aliasing`, the
+    /// default; `-fno-strict-aliasing` is clang's `RelaxedAliasing`):
+    /// with [`Self::optimize`], loads and stores carry `!tbaa`
+    /// (spec/codegen.md "TBAA").
+    pub strict_aliasing: bool,
     /// The clang version whose diagnostic text codegen's warnings follow
     /// (`-fclang-compat=`; spec/driver.md).
     pub clang_compat: u32,
@@ -199,6 +214,8 @@ impl Default for CodegenOptions {
             outline_atomics: true,
             complex_range: ComplexRange::Full,
             optimize: false,
+            opt_size: 0,
+            strict_aliasing: true,
             clang_compat: 22,
             llvm_major: 19,
             omit_frame_pointer: None,

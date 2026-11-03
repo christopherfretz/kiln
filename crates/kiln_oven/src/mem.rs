@@ -867,41 +867,6 @@ impl Memory {
         base
     }
 
-    /// Makes live static object `p` (of type `ty`) a fresh object of the
-    /// same type in place: flags `fl`, origin `origin`, its bytes
-    /// uninitialized and its union records dropped. Its slot, generation
-    /// and address are kept, so a pointer to it stays valid; `backed`
-    /// gives an unbacked ([`Memory::alloc_unbacked`]) object bytes, and a
-    /// backed one keeps its bytes either way. The object of a global that
-    /// is resolved again (`Oven::lax_objs`, spec/oven.md "Evaluation entry
-    /// points") is remade with it, so re-resolving costs no static space.
-    pub fn reinit_static(&mut self, p: u64, fl: u8, origin: Origin, backed: bool, types: &Types) {
-        let pp = Ptr::decode(p);
-        let idx = (pp.slot & !STATIC_BIT) as usize;
-        let a = self.statics[idx];
-        debug_assert!(a.live && a.generation == pp.generation, "reinit of a dead static");
-        if a.flags & flags::HAS_UNION != 0 {
-            let key = Ptr::alloc_key(p);
-            for &(o, ut) in types.unions(a.ty) {
-                self.unions.remove(&UKey::new(key, o, ut));
-                self.union_alts.remove(&UKey::new(key, o, ut));
-            }
-        }
-        let size = u64::from(a.size);
-        let base = if a.base != UNBACKED {
-            let (b, len) = (u64::from(a.base), size.max(1).next_multiple_of(GRAN));
-            self.stat.set_init(b, len, false);
-            self.stat.set_ptr(b, len, false);
-            a.base
-        } else if backed {
-            self.static_range(size) as u32
-        } else {
-            UNBACKED
-        };
-        let fl = if base == UNBACKED { fl | flags::EXTERNAL } else { fl };
-        self.statics[idx] = Alloc { base, flags: fl, origin, ..a };
-    }
-
     /// A static object no access may reach, of origin
     /// [`Origin::External`] or [`Origin::Unknown`]: an
     /// [`flags::EXTERNAL`] slot with a size (for address arithmetic and

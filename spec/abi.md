@@ -69,10 +69,12 @@ pub const CLANG_BUILTIN_RECORDS: [&str; 3]; pub const VTABLE_BLOCK_HEADS: [&str;
 pub fn record_layout_blocks(&str) -> Vec<&str>;          // ordered, clang builtins dropped
 pub fn vtable_blocks(&str) -> BTreeSet<String>;          // a set, `Original map` dropped
 ```
-- **Total.** No input panics. Incomplete, dependent, invalid or
-  recursive (`struct S { S s; }`, rejected by sema) types get the
-  degenerate layout (size 0, align 1). Arithmetic is in bits and
-  saturating.
+- **Total.** No input panics. Incomplete, dependent or recursive
+  (`struct S { S s; }`, rejected by sema) types get the degenerate
+  layout (size 0, align 1). A class sema flagged invalid
+  (sema-class.md §2.3) has size, data size and every alignment 1, as
+  clang's `getASTRecordLayout` gives it, with every field and base at
+  offset 0. Arithmetic is in bits and saturating.
 - **No recursion on the native stack.** Record dependencies are resolved
   by an explicit post-order stack, the empty-subobject walks and the
   dump use explicit stacks too, and the type printer is depth-capped.

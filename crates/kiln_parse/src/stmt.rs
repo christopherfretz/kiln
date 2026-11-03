@@ -263,12 +263,19 @@ impl Parser<'_, '_> {
         true
     }
 
-    /// `goto identifier ;` ([stmt.goto]).
+    /// `goto identifier ;` ([stmt.goto]); GNU `goto * expression ;`
+    /// (clang `ParseGotoStatement`: the operand is a full-expression,
+    /// then "computed goto is not supported yet", spec/parse.md §6.1).
     fn parse_goto(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         if self.at(Punct::Star) {
-            self.unsupported("computed goto", self.loc());
-            self.skip_to_semi();
+            let star = self.bump().span.lo;
+            let Some(e) = self.parse_expression() else {
+                self.skip_to_semi();
+                return None;
+            };
+            self.s.act_on_indirect_goto(e, star);
+            self.expect_semi_after_stmt("goto");
             return None;
         }
         let Some(name) = self.ident() else {
@@ -548,7 +555,9 @@ impl Parser<'_, '_> {
             // A type-specifier-seq: no storage class.
             self.reject_type_name_storage(&mut ds);
             let mut d = Declarator::new(ctx, self.loc());
+            self.catch_declarator = true;
             self.parse_declarator(&mut d);
+            self.catch_declarator = false;
             self.set_abstract_loc(&mut d);
             let base = self.s.type_from_declspec_at(&ds, d.name_loc());
             self.s.act_on_exception_decl(&ds, base, &d)
