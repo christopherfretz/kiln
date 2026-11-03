@@ -1334,13 +1334,26 @@ for `^^`, §5 for splices).
   optional nested-name-specifier and an identifier →
   `act_on_reflect_name`. A template-id operand is
   "unsupported: reflection of a template-id".
-- **Splice brackets.** `typename [: e :]` in a type position, and `[: e :]`
-  as a template argument ([temp.arg.general]/3; the spike always treats it
-  as a type), parse `e` as a constant-expression and pass it to
-  `act_on_splice_type`. `splice_end` finds the matching `:]` (nested
-  splices balance), and the tentative-parse scanner and template-argument
-  scan use it to skip a splice as one unit. An expression splice is
-  "unsupported: expression splice".
+- **Splice brackets.** `splice-specifier: [: constant-expression :]`.
+  `splice_end` finds the matching `:]` (nested splices balance), and the
+  tentative-parse scanner and template-argument scan use it to skip a
+  splice as one unit. `parse_splice_specifier` parses the operand as a
+  constant-expression; the position decides the Sema action (WP-474):
+
+  | Production | Where | Sema |
+  |---|---|---|
+  | `splice-type-specifier: typename? splice-specifier` [dcl.type.splice] | after `typename` (not followed by `::`); bare in the decl-specifier loop when no type specifier was seen and `typename_required(ctx)` is false (a type-only context: namespace scope, member-declaration, member function parameters, trailing return, template parameter default, cast and `new` type-ids, alias-declaration); a template type argument ([temp.arg.general]/3; always a type until WP-482) | `act_on_splice_type` |
+  | `splice-expression: splice-specifier` [expr.prim.splice] | a primary-expression starting with `[:` that is not a splice-scope-specifier | `act_on_splice_expr` |
+  | `postfix-expression . splice-expression`, `-> splice-expression` [expr.ref] | the member-access suffix when `[:` follows `.`/`->` and the splice is not followed by `::` | `act_on_member_splice` (with the `.`/`->` location) |
+  | `splice-scope-specifier: splice-specifier ::` [expr.prim.id.qual] | `decltype_scope_end` treats `[: e :]::` like `decltype(e)::`: the start of a nested-name-specifier in an expression, a type, an elaborated-type-specifier (`parse_tag_qualifier`), a `typename`-specifier, a using-declarator and a ptr-operator (`int [: r :]::* p`) | `act_on_nested_name_splice` → `DecltypeScope` annotation |
+  | `using namespace splice-specifier ;` [namespace.udir] | `parse_using_attrs`, when the splice is not followed by `::` (else it leads the namespace-name's nested-name-specifier) | `act_on_splice_namespace` → `act_on_using_directive` |
+
+  A declarative nested-name-specifier that starts with a splice
+  ([expr.prim.id.qual]/3) is diagnosed by the parser, which then skips the
+  qualifier: in `parse_direct_declarator` (the declarator-id; the
+  declaration is dropped) and in `parse_tag_specifier` (a class or enum
+  definition; the specifier is invalid). `template splice-specifier
+  <args>` is WP-482.
 
 ## 6. Statements and attributes
 
@@ -1770,8 +1783,8 @@ in `kiln_diag` for now; nothing emits them.
   - fold expressions
   - braced-init-list subscripts and functional-cast operands
   - pointer-to-member operators on classes
-  - reflection beyond the `-freflection` spike (§5.2): expression,
-    dependent and template splices, `^^` of a template-id
+  - reflection beyond the `-freflection` spike (§5.2): template
+    splices (WP-482), `^^` of a template-id
 - **Statements:** range-based `for`, contracts.
 
 **Landed (WP-100).** `try` compound-statement handler-seq ([except.pre]/1)

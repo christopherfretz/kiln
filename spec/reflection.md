@@ -474,36 +474,67 @@ answers as of that point.
   `checkpoint(TrialMode::Full)` and rolls back on failure. Interned
   reflections survive the rollback (append-only, §2.4) (→ WP-482).
 
-## 5. Splicing (→ WP-474)
-The grammar is in spec/parse.md §5.2. This section gives the semantics.
+## 5. Splicing (WP-474)
+The grammar is in spec/parse.md §5.2. This section gives the semantics;
+the sema is `kiln_sema/src/splice.rs` (`Sema::splice_entity` reads every
+position's operand).
 
 - **Operand.** The splice operand is a converted constant expression of
-  type `std::meta::info` ([basic.splice]). A non-`info` operand gets
-  "splice operand of type {0} is not a reflection", and a non-constant one
-  gets "splice operand must be a constant expression" followed by the
-  Oven's notes (implemented for type splices: `reflection/splice-type-neg.cpp`).
+  type `std::meta::info` ([basic.splice]), in every position. A non-`info`
+  operand gets "splice operand of type {0} is not a reflection", and a
+  non-constant one gets "splice operand must be a constant expression"
+  followed by the Oven's notes (`basic.splice/p1-not-info.cpp`,
+  `basic.splice/p1-not-constant.cpp`, `reflection/splice-type-neg.cpp`).
 - **Designated entity.** The splice designates the operand's `Reflectee`.
   Each grammar position accepts these kinds:
 
   | Position | Syntax | Accepts | Status |
   |---|---|---|---|
-  | type | `typename [: r :]` [dcl.type.splice]; `[: r :]` as a template type argument | a type or a type alias | implemented when not dependent |
-  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, value or object, or a data member (in a pointer-to-member context) | → WP-474 |
-  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a non-static data member, a member function, or a base subobject (P3293) | → WP-474 |
-  | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration | → WP-474 |
-  | template | `template [: r :] < args >` [temp.names] | a template | → WP-474 |
-  | namespace | `using namespace [: r :];` | a namespace | → WP-474 (GCC 16.1 is the reference) |
+  | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); `[: r :]` as a template type argument | a type or a type alias | implemented (`dcl.type.splice/`) |
+  | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`) |
+  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category) | implemented; the base form is untested until `bases_of` (WP-478) |
+  | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
+  | template | `template [: r :] < args >` [temp.names] | a template | → WP-482 |
+  | namespace | `using namespace [: r :];` | a namespace other than the global namespace, not dependent ([namespace.udir]/1) | implemented (`namespace.udir/`) |
 
   A misfit gets "splice in a {position} position does not designate a
-  {kind}". The type position's misfit wording is implemented as "splice in
-  a type position does not designate a type".
+  {kinds}" (`sema_splice_not_type`, `_not_expression`, `_not_member`,
+  `_not_scope`, `_not_namespace`). A constructor or destructor is
+  ill-formed in any splice-expression, the member access form included
+  (`sema_splice_special_member`, [expr.prim.splice]/2). A splice-scope-
+  specifier in a declarative nested-name-specifier (an out-of-line
+  definition's declarator-id, a class-head-name or enum-head-name) gets
+  `sema_splice_declarative_scope` ([expr.prim.id.qual]/3; GCC 16.1 accepts
+  some of these). A dependent using-directive splice gets
+  `sema_splice_dependent_namespace` at the template definition (GCC 16.1
+  accepts it) and the global namespace `sema_splice_global_namespace`.
+- **Member functions.** A member-function splice is not a qualified-id, so
+  `e.[: ^^B::f :]()` of a virtual `f` is a virtual call ([expr.call]/2; the
+  [dcl.contract.func] example). `&[: ^^B::f :]` is a pointer to member.
+- **Access.** Splices are not access-checked: a splice of a private member
+  is valid from anywhere (P2996; GCC 16.1 agrees). Access is the business of
+  the query that produced the reflection (`access_context`, WP-478).
 - **Dependent splices.** A value-dependent operand produces a `Splice`
-  type node, a `CXXSpliceExpr` or a splice nested-name-specifier. It is
-  resolved when substitution makes the operand non-dependent (templ/subst).
-  Today a dependent operand is "unsupported: dependent splice".
-- **Fast path.** When the operand is a substituted NTTP or another frozen
-  constant, sema reads the id directly without starting an Oven run. Each
-  distinct `R` in `[: R :]` costs one instantiation, as expected.
+  type node (a type splice), a `CXXSpliceExpr` (an expression or member
+  splice; with the object expression when that or the operand is
+  dependent) or an `Nns::Splice` (a scope splice; the nested-name-specifier
+  is always dependent). Each is resolved by the `templ/subst` arm for its
+  kind when substitution makes the operand non-dependent, through the same
+  `splice.rs` entry points as a non-dependent splice, so a misfit is
+  reported in the specialization with its instantiation note
+  (`temp.dep/splice-*.cpp`).
+- **Fast path.** When the operand is already a frozen reflection, sema
+  reads its id without an Oven run: through parentheses, implicit casts
+  and a substituted NTTP (`SubstNonTypeTemplateParmExpr`), a `ConstantExpr`
+  (its stored value), a `CXXReflectExpr` (its reflection) or a
+  `DeclRefExpr` to a constexpr `info` variable whose value is computed.
+  Each hit counts in `Sema::splice_fast_count()` (not an Oven counter, so
+  the constexpr report does not show it); every other operand is
+  evaluated as a constant expression. 1,000 type, 1,000 expression and
+  1,000 scope splices of three frozen operands start no evaluation
+  (`basic.splice/frozen-operand-fast-path.cpp`: `evaluations<=4`, the
+  three initializers and a static_assert). Each distinct `R` in `[: R :]`
+  costs one instantiation, as expected.
 - **NTTPs.** A substituted `info` template argument is rebuilt as the
   `CXXReflectExpr` of the same entity (implemented).
 
