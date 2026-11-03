@@ -2984,11 +2984,20 @@ diagnostics and IR.
     ([dcl.pre]/6), plus `constexpr` and `constinit` in C++26 (P2686R5,
     WP-454; gated on `-std`, not on `-fclang-compat`). Another storage
     class, `consteval`, `inline`, or `constexpr`/`constinit` before
-    C++26 is `decomposition declaration cannot be declared 'constexpr'`
-    (clang 22: `structured binding declaration ...`), or `... with
-    'static constexpr' specifiers` when there are several, at the first
-    one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
-    error rather than an extension warning; kiln follows it. A
+    C++26 is `structured binding declaration cannot be declared
+    'constexpr'`, one error per such specifier at its location (the
+    storage class, then `inline`, then the constexpr kind; clang 22,
+    WP-468). At `-fclang-compat` < 22 it is clang 19's single
+    `decomposition declaration cannot be declared 'constexpr'`, or `...
+    with 'register constexpr' specifiers` when there are several, at the
+    first one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
+    error rather than an extension warning; kiln follows it. At block
+    scope an `inline` is also `inline declaration of 'a' not allowed in
+    block scope` at `inline`, naming the first binding: [dcl.inline]'s
+    rule for every block-scope variable (`var_spec`, clang
+    `err_inline_declaration_block_scope`; the variable is not inline),
+    both compat levels. Tests: `dcl.struct.bind/specifiers-each*.cpp`,
+    `dcl.inline/block-scope.cpp`. A
     `consteval` is also `consteval can only be used in function
     declarations` (`sema_consteval_wrong_decl_kind`). The declaration
     continues: a `constexpr` is still applied, which makes `e` const,
@@ -5774,7 +5783,7 @@ Tests: `ext.vector/bool-from-int-vector-clang22.cpp`,
 `ext.vector/bool-from-int-vector-19.cpp`, `ext.vector/ir-bool-from-int-vector.cpp`;
 codegen spec/codegen.md §7u.
 
-### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458)
+### 5.28 `-Winteger-overflow` (`int_overflow.rs`, WP-458, WP-468)
 
 A full-expression that is not constant-evaluated is checked for signed
 overflow ([expr.pre]/4) once it is complete (`act_on_full_expr_at`;
@@ -5809,13 +5818,65 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   expression) and folded only when they contain none. Unsigned
   arithmetic is silent. The walk is bounded (65 536 nodes, depth 256)
   and skipped when the warning is disabled at the full-expression.
-- Not implemented: an overflow inside a `constexpr` function called from
-  the expression (clang's evaluator reports it at the operator in the
-  function body); compound assignment and increment; the operator's
-  source range; in an instantiation kiln adds the instantiation notes,
-  clang none.
+- **Calls (WP-468).** An operand that calls a `constexpr` or
+  `consteval` function or constructor (directly or below it; the cheap
+  filter counts such a call as a candidate) is evaluated in the Oven with
+  the body (`Oven::fold_for_overflow`, clang `EM_IgnoreSideEffects` with
+  `CheckingForUndefinedBehavior`): a lax fold in which a signed `+`, `-`,
+  `*` or negation that overflows (`Oven::wrap_overflow`, also a compound
+  assignment's `+=`, `-=`, `*=`, and `++` / `--`) yields its wrapped value
+  and is recorded; the evaluation goes on. Each record warns at its
+  operator, in order, with the type of the operation (the compound
+  assignment's type for `+=`), but `++` and `--`, which clang only notes
+  (`HandleOverflow`). A function called twice warns twice at the same
+  place (`inc(g) + inc(g)`). The evaluation enters no nested evaluation,
+  global initialization or `__builtin_constant_p` in this mode and is not
+  memoized. When it fails without a record (a non-constexpr callee, a
+  read of a non-`const` variable), the operand is searched as above, a
+  constexpr call found under it is evaluated in turn. A call that is the
+  full-expression itself is not evaluated (only its arguments), as
+  clang. Shifts, division and `<<=` never warn here.
+- **Reporting.** The warning carries the operation's source range and is
+  reported as clang's `Diags.Report`: no instantiation notes (in a
+  template a non-dependent overflow warns at the definition and in each
+  instantiation, notes-free), not deduplicated against another
+  full-expression or another overflow of the same one (the context key is
+  the instantiation's, the full-expression and the overflow's ordinal), so
+  checking a full-expression twice does not repeat it.
+- **Compound assignment.** `x op= y` is checked as a binary operator
+  would be: `<<=` / `>>=` diagnose a constant count that is negative or
+  not less than the promoted left type's width (`-Wshift-count-*`), `/=`
+  and `%=` a constant zero divisor (`-Wdivision-by-zero`), at the
+  operator with the right operand's range, through the runtime-behaviour
+  deferral (clang `CheckShiftOperands` / `CheckMultiplyDivideOperands` /
+  `CheckRemainderOperands` with `IsCompAssign`).
+- **Never constant (WP-468).** A `constexpr` or `consteval` function
+  that can never be constant is ill-formed, no diagnostic required
+  ([dcl.constexpr]/6); clang runs `isPotentialConstantExpr` on each
+  written definition when `CheckConstexprFunctionBodies` is on: before
+  C++23, else only under `-Winvalid-constexpr` (the last of
+  `-Winvalid-constexpr` / `-Wno-invalid-constexpr` decides,
+  `DiagEngine::group_flag`; `-Weverything`, `-Werror=` and pragmas do
+  not turn it on). Kiln checks the narrow shape a body overflow makes
+  (`constexpr_body.rs` `check_never_constant`, after the body's own
+  `-Winteger-overflow`): a non-member or static member function without
+  parameters, not in a template or an instantiation, not invalid, whose
+  call (`Oven::evaluate_call`) fails in its own body with the one note
+  `value N is outside the range of representable values of type 'T'`
+  (`g + 1`, `++i` on `INT_MAX`, `i += 1`). It reports `{constexpr|
+  consteval} function never produces a constant expression`
+  (`sema_constexpr_never_constant`, an error by default, group
+  `invalid-constexpr`) at the function's name with that note. A failure
+  in a callee (clang is silent too), an unsigned wrap or a narrowing are
+  not reported. Not yet: other failures clang reports (a call to a
+  non-constexpr function, a step limit), functions with parameters (a
+  read of one fails silently in clang), non-static members, lambdas and
+  constructors.
 - Tests: `expr.add/integer-overflow-folded.cpp`,
-  `expr.add/integer-overflow-constexpr-error.cpp`.
+  `expr.add/integer-overflow-constexpr-error.cpp`,
+  `expr.pre/integer-overflow-in-call.cpp`,
+  `expr.ass/compound-assign-overflow.cpp`,
+  `dcl.constexpr/never-constant-overflow-cxx{20,23,26}.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

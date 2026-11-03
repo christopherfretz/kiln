@@ -75,6 +75,7 @@ sema_constexpr_body_invalid_stmt = Error (2) "statement not allowed in {1:conste
 sema_constexpr_body_invalid_stmt_cxx23 = ExtWarn [Cxx23Extensions] (1) "use of this statement in a constexpr {0:function|constructor} is a C++23 extension";
 sema_constexpr_local_var_non_literal = Error (2) "variable of non-literal type {1} cannot be defined in a constexpr {0:function|constructor} before C++23";
 sema_constexpr_main = Error (1) "'main' is not allowed to be declared {0:constexpr|consteval}";
+sema_constexpr_never_constant = WarningError [InvalidConstexpr] (2) "{1:constexpr|consteval} {0:function|constructor} never produces a constant expression";
 sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
 sema_constexpr_nonstatic_member = Error (0) "non-static data member cannot be constexpr; did you intend to make it static?";
 sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval} declaration of '{1}' follows {2:non-constexpr|constexpr|consteval} declaration";

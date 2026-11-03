@@ -309,6 +309,17 @@ the evaluator's flattened type table.
   constant-evaluated, silent, not recorded, never cached; fails if the
   evaluation leaks an allocation. `at` locates the evaluation for the
   depth check.
+- `Oven::evaluate_call(bridge, f, at) -> Result<(), EvalFailure>`
+  (WP-468, clang `Expr::isPotentialConstantExpr` for a function without
+  parameters, spec/sema.md §5.28 "Never constant"): evaluates a call of
+  `f` without arguments in a stub (`compile_call`, the call's site at
+  `at`), manifestly constant-evaluated, with notes; the result, if any,
+  is frozen and dropped. The failure's last note is the call's `in call
+  to`. A function with parameters, a variadic one, or one returning a
+  reference or an aggregate is not evaluated (`Ok`), nor is anything
+  inside another evaluation. Not recorded in the stats; a success is
+  memoized as any call (`Func::memo`), so a later use of the function
+  costs a lookup.
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.
@@ -336,6 +347,18 @@ the evaluator's flattened type table.
   Silent, not recorded; an outermost evaluation (false when nested); the
   temporary object is freed (`Memory::free_static`, "Abstract memory")
   and memory reset.
+- `Oven::fold_for_overflow(bridge, e) -> (Option<ConstValueId>,
+  Vec<Overflow>)` (WP-468): `fold_rvalue` checking for undefined
+  behaviour (clang `EvaluateForOverflow`, for `-Winteger-overflow`,
+  spec/sema.md §5.28). `RunState::ub_check` is set for the outermost run
+  only (`Oven::ub_check_next`, taken by `begin_outermost`; cleared in a
+  nested evaluation, a global's initialization and speculation): a signed
+  `IAdd`/`ISub`/`IMul`/`INeg` whose result is outside its width yields
+  the result wrapped to the width and records `(pc, wrapped)`
+  (`vm.rs` `Oven::wrap_overflow`, cold) instead of failing. The records come back
+  in order as `Overflow { loc, e, value }` (the instruction's site); the
+  evaluation's failure (`None`) does not drop them. Silent; lax, so not
+  memoized.
 - `Oven::fold_rvalue(bridge, e) -> Option<ConstValueId>` (WP-165):
   `try_fold` in **lax mode** (`RunState::lax`), clang's codegen-time
   `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
