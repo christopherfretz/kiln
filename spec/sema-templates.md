@@ -1197,7 +1197,13 @@ silently (`diag = None`) at those sites. S3O lists them.
    - deduce `p.params` from `(p.args, A)` with `deduce_args` (§6.2);
    - finish the deduction: substitute the deduced args into `p.args` and
      require canonical equality with `A`;
-   - check `p`'s associated constraints (§8).
+   - check `p`'s associated constraints (§8). For a class template, their
+     atoms check access from the specialization being matched
+     (`ConceptState::partial_access`), so a class that befriends
+     `traits<It>` or `traits` lets `requires It::flag` see its private
+     members (clang accepts; WP-446, libc++ 22's
+     `__product_iterator_traits`,
+     `tests/conformance/temp.spec.partial.match/constraint-access-befriended-specialization.cpp`).
    The partials that succeed form the set `M`.
 4. If `M` is empty, the pattern is the primary template. If `M` has one
    element, it is that partial. Otherwise the pattern is the most

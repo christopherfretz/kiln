@@ -97,6 +97,13 @@ pub struct ConceptState {
     /// ([dcl.decl.general]/5; clang keeps the clause and checks it
     /// during overload resolution and destructor selection).
     pub(crate) untemplated_requires: kiln_source::fx::FxHashSet<DeclId>,
+    /// While the constraints of a class template partial specialization
+    /// are checked for a match: `(partial, specialization)`. Its atoms
+    /// check access from the specialization being matched, so a class
+    /// that befriends `traits<It>` lets `requires It::private_flag` on
+    /// `template <class I> struct traits<I>` see its members (clang
+    /// accepts; libc++ 22's `__product_iterator_traits`, WP-446).
+    pub(crate) partial_access: Option<(DeclId, DeclId)>,
     /// The type-constraint location of a variable or function declared
     /// with a constrained placeholder (`C auto x`, `C auto f()`).
     pub(crate) placeholder_locs: FxHashMap<DeclId, Loc>,
