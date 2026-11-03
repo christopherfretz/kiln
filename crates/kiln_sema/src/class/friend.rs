@@ -72,6 +72,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+        let ty = self.check_qualified_fn_type(ty, ds, d);
         let Some((name, _)) = d.name else {
             self.templ.cur = None;
             self.error(DiagId::parse_expected_unqualified_id, d.loc);
@@ -142,6 +143,13 @@ impl Sema<'_, '_> {
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         if !attrs.is_empty() {
+            if !def {
+                // [dcl.attr.annotation]/1.
+                self.reject_annotations(
+                    &mut attrs,
+                    Some("a friend declaration that is not a definition"),
+                );
+            }
             self.check_decl_attrs(f, &mut attrs);
             let _ = self.builder().attach_attrs(f, &attrs);
         }

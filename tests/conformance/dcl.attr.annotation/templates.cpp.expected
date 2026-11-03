@@ -1,0 +1,151 @@
+TranslationUnitDecl
+|-ClassTemplateDecl C
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| |-CXXRecordDecl struct C definition
+| | |-CXX26AnnotationAttr 'int' dependent
+| | | `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | |-FieldDecl field 'int'
+| | | `-CXX26AnnotationAttr 'int' dependent
+| | |   `-BinaryOperator 'int' '+'
+| | |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | |     `-IntegerLiteral 'int' 1
+| | |-VarDecl s 'int' static
+| | | `-CXX26AnnotationAttr 'int' dependent
+| | |   `-BinaryOperator 'int' '+'
+| | |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | |     `-IntegerLiteral 'int' 2
+| | |-CXXMethodDecl method 'void (int)'
+| | | |-ParmVarDecl arg 'int'
+| | | | `-CXX26AnnotationAttr 'int' dependent
+| | | |   `-BinaryOperator 'int' '+'
+| | | |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | | |     `-IntegerLiteral 'int' 4
+| | | `-CXX26AnnotationAttr 'int' dependent
+| | |   `-BinaryOperator 'int' '+'
+| | |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | |     `-IntegerLiteral 'int' 3
+| | `-FunctionTemplateDecl member_template
+| |   |-NonTypeTemplateParmDecl referenced 'int' depth 1 index 0 M
+| |   `-CXXMethodDecl member_template 'void ()'
+| |     `-CXX26AnnotationAttr 'int' dependent
+| |       `-BinaryOperator 'int' '+'
+| |         |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| |         `-DeclRefExpr 'int' NonTypeTemplateParm 'M' 'int'
+| `-ClassTemplateSpecializationDecl struct C definition implicit_instantiation
+|   |-TemplateArgument value 'int' 10
+|   |-CXX26AnnotationAttr 'int' value=10
+|   |-FieldDecl field 'int'
+|   | `-CXX26AnnotationAttr 'int' value=11
+|   |-VarDecl s 'int' static
+|   | `-CXX26AnnotationAttr 'int' value=12
+|   |-CXXMethodDecl used method 'void (int)'
+|   | |-ParmVarDecl arg 'int'
+|   | | `-CXX26AnnotationAttr 'int' value=14
+|   | `-CXX26AnnotationAttr 'int' value=13
+|   `-FunctionTemplateDecl member_template
+|     |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 M
+|     |-CXXMethodDecl member_template 'void ()'
+|     | `-CXX26AnnotationAttr 'int' dependent
+|     |   `-BinaryOperator 'int' '+'
+|     |     |-SubstNonTypeTemplateParmExpr 'int'
+|     |     | |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+|     |     | `-IntegerLiteral 'int' 10
+|     |     `-DeclRefExpr 'int' NonTypeTemplateParm 'M' 'int'
+|     `-CXXMethodDecl used member_template 'void ()'
+|       `-CXX26AnnotationAttr 'int' value=15
+|-VarDecl used c 'C<10>' callinit
+| `-CXXConstructExpr 'C<10>' 'void () noexcept'
+|-FunctionDecl use_members 'void ()'
+| `-CompoundStmt
+|   |-CXXMemberCallExpr 'void'
+|   | |-MemberExpr '<bound member function type>' .method
+|   | | `-DeclRefExpr 'C<10>' lvalue Var 'c' 'C<10>'
+|   | `-IntegerLiteral 'int' 0
+|   `-CXXMemberCallExpr 'void'
+|     `-MemberExpr '<bound member function type>' .member_template
+|       `-DeclRefExpr 'C<10>' lvalue Var 'c' 'C<10>'
+|-VarTemplateDecl packed
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 ... Is
+| |-VarDecl packed 'int' cinit
+| | |-IntegerLiteral 'int' 0
+| | |-CXX26AnnotationAttr 'int' dependent
+| | | `-PackExpansionExpr 'int'
+| | |   `-DeclRefExpr 'int' NonTypeTemplateParm 'Is' 'int'
+| | `-CXX26AnnotationAttr '<dependent type>' dependent
+| |   `-BinaryOperator '<dependent type>' '=='
+| |     |-CXXFoldExpr '<dependent type>'
+| |     | |-<<<NULL>>>
+| |     | |-DeclRefExpr 'int' NonTypeTemplateParm 'Is' 'int'
+| |     | `-<<<NULL>>>
+| |     `-IntegerLiteral 'int' 6
+| `-VarTemplateSpecializationDecl used packed 'int' implicit_instantiation cinit
+|   |-TemplateArgument pack
+|   | |-TemplateArgument value 'int' 1
+|   | |-TemplateArgument value 'int' 2
+|   | `-TemplateArgument value 'int' 3
+|   |-IntegerLiteral 'int' 0
+|   |-CXX26AnnotationAttr 'int' value=1
+|   |-CXX26AnnotationAttr 'int' value=2
+|   |-CXX26AnnotationAttr 'int' value=3
+|   `-CXX26AnnotationAttr 'bool' value=true
+|-VarDecl p 'int' cinit
+| `-ImplicitCastExpr 'int' <LValueToRValue>
+|   `-DeclRefExpr 'int' lvalue VarTemplateSpecialization 'packed' 'int' (VarTemplate 'packed')
+|-VarTemplateSpecializationDecl used packed 'int' implicit_instantiation cinit
+| |-TemplateArgument pack
+| | |-TemplateArgument value 'int' 1
+| | |-TemplateArgument value 'int' 2
+| | `-TemplateArgument value 'int' 3
+| |-IntegerLiteral 'int' 0
+| |-CXX26AnnotationAttr 'int' value=1
+| |-CXX26AnnotationAttr 'int' value=2
+| |-CXX26AnnotationAttr 'int' value=3
+| `-CXX26AnnotationAttr 'bool' value=true
+|-FunctionTemplateDecl fn
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-FunctionDecl fn 'void (T)'
+| | |-ParmVarDecl 'T'
+| | | `-CXX26AnnotationAttr '<dependent type>' dependent
+| | |   `-BinaryOperator '<dependent type>' '+'
+| | |     |-DependentScopeDeclRefExpr '<dependent type>' lvalue
+| | |     `-IntegerLiteral 'int' 1
+| | `-CXX26AnnotationAttr '<dependent type>' dependent
+| |   `-DependentScopeDeclRefExpr '<dependent type>' lvalue
+| `-FunctionDecl used fn 'void (V)'
+|   |-ParmVarDecl 'V'
+|   | `-CXX26AnnotationAttr 'int' value=8
+|   `-CXX26AnnotationAttr 'int' value=7
+|-CXXRecordDecl referenced struct V definition
+| `-VarDecl referenced value 'const int' static inline constexpr cinit value=7
+|   `-IntegerLiteral 'int' 7
+|-FunctionDecl use_fn 'void ()'
+| `-CompoundStmt
+|   `-CallExpr 'void'
+|     |-ImplicitCastExpr 'void (*)(V)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 'void (V)' lvalue Function 'fn' 'void (V)' (FunctionTemplate 'fn')
+|     `-CXXFunctionalCastExpr 'V' functional cast to V <NoOp>
+|       `-InitListExpr 'V'
+|-ClassTemplateDecl P
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-CXXRecordDecl struct P definition
+| | `-CXX26AnnotationAttr 'int' value=1
+| |-ClassTemplateSpecialization 'P'
+| |-ClassTemplateSpecializationDecl struct P definition implicit_instantiation
+| | |-TemplateArgument type 'char *'
+| | `-CXX26AnnotationAttr 'int' value=2
+| `-ClassTemplateSpecializationDecl struct P definition implicit_instantiation
+|   |-TemplateArgument type 'char'
+|   `-CXX26AnnotationAttr 'int' value=1
+|-ClassTemplatePartialSpecializationDecl struct P definition explicit_specialization
+| |-TemplateArgument type 'type-parameter-0-0 *'
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXX26AnnotationAttr 'int' value=2
+|-ClassTemplateSpecializationDecl struct P definition explicit_specialization
+| |-TemplateArgument type 'int'
+| `-CXX26AnnotationAttr 'int' value=3
+|-VarDecl p1 'P<char *>' callinit
+| `-CXXConstructExpr 'P<char *>' 'void () noexcept'
+|-VarDecl p2 'P<int>' callinit
+| `-CXXConstructExpr 'P<int>' 'void () noexcept'
+`-VarDecl p3 'P<char>' callinit
+  `-CXXConstructExpr 'P<char>' 'void () noexcept'

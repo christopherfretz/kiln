@@ -11,6 +11,7 @@ use kiln_ast::expr::{
 };
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::names::{DeclName, DeclNameView};
+use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{ArgView, BuiltinType, Nns, TemplateArg};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
@@ -54,12 +55,17 @@ impl Substituter<'_, '_, '_> {
                 self.note_shared_this(e);
             }
             self.sema.mark_shared_expr_referenced(e);
+            self.sema.note_shared_consteval_only(e);
             self.sema.reissue_designator_warnings(e);
             self.sema.note_shared_temporaries(e);
             return Ok(e);
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
-        let r = self.expr_node(e)?;
+        self.sema.subst_expr_depth += 1;
+        let r = self.expr_node(e);
+        self.sema.subst_expr_depth -= 1;
+        let r = r?;
+        self.sema.note_inst_consteval_only(e, r);
         if self.sema.is_err_expr(r) {
             return Err(SubstFail);
         }
@@ -857,12 +863,22 @@ impl Substituter<'_, '_, '_> {
                     .collect();
                 Ok(self.sema.act_type_trait(t, &args, loc, end))
             }
-            // -freflection spike: `^^T` reflects the substituted type; a
-            // reflected declaration is not dependent in the spike.
+            // spec/reflection-repr.md §2: `^^T` reflects the substituted
+            // type; a declaration of the pattern its instantiation; a
+            // template template parameter its argument.
             ExprKind::CXXReflectExpr => match ex(self).reflect_operand(e) {
-                kiln_ast::reflect::Reflectee::Type(q) => {
+                Reflectee::Type(q) => {
                     let q = self.ty(q, loc)?;
                     Ok(self.sema.act_on_reflect_type(q, loc, end))
+                }
+                Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
+                    let d = self.find_instantiated_decl(d, loc)?;
+                    Ok(self.sema.reflect_entity(d, loc, loc, end))
+                }
+                Reflectee::Template(n) => {
+                    let n = self.template_name(n, loc)?;
+                    let n = self.sema.ast.types.canonical_template_name(n);
+                    Ok(self.sema.make_reflect_expr(Reflectee::Template(n), loc, end))
                 }
                 _ => Ok(e),
             },

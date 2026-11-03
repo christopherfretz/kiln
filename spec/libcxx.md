@@ -78,7 +78,7 @@ cargo xtask libcxx [options] [<dir>...]
 | `--compile-timeout <secs>` | Limit of each compile and link step. Default 120 s for `harness` and `release`, 300 s for `debug` (also with `--compiler`: the default follows `--profile`). |
 | `--mem-limit <MiB>` | Address-space cap for every process (`spec/harness.md` "Resource limits"). kiln steps get kiln's stack reservation on top. Default 8192. `0` means no cap. |
 | `--report <file.md>` | Write the generated region of a status page (see "Report"). |
-| `--keep` | Keep the scratch directories under `<target>/xtask-libcxx/`. |
+| `--keep` | Keep the scratch directories under `<target>/xtask-libcxx/` and the run's `TMPDIR` root `<temp>/kiln-tmp-<pid>-<nanos>/` (see "Commands"). |
 | `--no-fail` | Exit 0 even when the run has failures. |
 | `-v` | Print every result, with the tail of the failing step's stderr. |
 
@@ -288,8 +288,8 @@ opaque: of its 807 tests 487 run, 292 are configuration-UNSUPPORTED
 ### RUN lines
 
 A `.sh.<ext>` test's `RUN:` commands (`script.rs`, WP-386) run in order in
-the test's scratch directory, named like lit's `%T` (`t<index>-<file
-name>.dir`, since a test may print or compare it); the first that fails
+the test's scratch directory, which is `%T` (`t<index>`, see
+"Commands"); the first that fails
 decides the outcome. Substitutions are expanded as lit does: `%{name}`
 until nothing changes (at most 10 rounds, lit's `recursiveExpansionLimit`; past that the test is an ERROR), then
 `%s`, `%S`, `%p`, `%t` (`<scratch>/t`), `%T` and `%%` in one pass. The
@@ -447,8 +447,12 @@ Some features are deliberately missing:
   would skip them on this library. They cannot pass here under any compiler
   (clang++-19 reports "child did not die" too). `REQUIRES:
   libcpp-hardening-mode=debug` tests stay UNSUPPORTED;
-- no `-fexperimental-library`, `-faligned-allocation` or other flag-probe
-  features that kiln does not implement;
+- no `-faligned-allocation` or other flag-probe features that kiln does
+  not implement. `-fexperimental-library` is implemented (WP-461:
+  `__has_feature(experimental_library)`, and `-lc++experimental` at the
+  link; `libcxx/experimental/fexperimental-library.compile.pass.cpp`), but
+  the feature list does not probe it: every compile already defines
+  `_LIBCPP_ENABLE_EXPERIMENTAL`;
 - no `no-*` features with Debian's libc++: everything libc++ can build is
   enabled (they are derived, above).
 
@@ -467,7 +471,20 @@ also in `--list`), only while the condition holds:
   root bypasses permission checks (`ROOT_UNSUPPORTED` in `run.rs`, e.g.
   `fs.op.status/status.pass.cpp`, `fs.op.is_block_file/is_block_file.pass.cpp`,
   `directory_entry.mods/replace_filename.pass.cpp`; WP-297).
-- the scratch directory on a host-shared bind mount (the mount holding it
+- `RLIMIT_NPROC` does not limit root: run as root, reason `env: running
+  as root: RLIMIT_NPROC does not limit root`, for
+  `futures.async/thread_create_failure.pass.cpp`, which lowers the limit
+  to make `std::async` fail and finds the thread created
+  (`ROOT_NPROC_UNSUPPORTED`; clang 22 fails the same way, WP-461).
+- a `--mem-limit` cap below what the test allocates, reason `env:
+  --mem-limit <m> MiB is below the <need> MiB it needs: <why>`
+  (`MEM_UNSUPPORTED`, path, MiB and why): `stringstream.members/gcount.pass.cpp`
+  needs an `INT_MAX - 1` byte payload plus a `stringbuf` grown past
+  `INT_MAX`, about 2 + 2 + 4 GiB at the last regrowth, so 9216 MiB (an
+  estimate: it cannot be measured on this host above 3 GiB; clang 22 fails
+  under 3072 MiB too, WP-461). With `--mem-limit 0` (no cap) or one at
+  least that large, the test runs.
+- the test's `TMPDIR` on a host-shared bind mount (the mount holding it
   in `/proc/self/mountinfo` has type `fakeowner`, `fuse.grpcfuse` or
   `virtiofs`): a directory's hard-link count is not `2 + subdirectories`
   and `create_directory(p, attrs)` cannot copy the attributes
@@ -488,9 +505,9 @@ also in `--list`), only while the condition holds:
   `locale.moneypunct.byname` and `locale.numpunct.byname` assert `"\3\3"`
   on every non-Windows, non-AIX target (`GROUPING_UNSUPPORTED`).
 
-A test joins a list only after its clang 19 build is shown to fail at the
-same assertion under the same condition; the lists are sorted (unit
-test `env_exclusions`).
+A test joins a list only after its clang 19 build (clang 22 for a libc++
+22 test) is shown to fail at the same assertion under the same condition;
+the lists are sorted (unit test `env_exclusions`).
 
 ## Timeouts and retries
 
@@ -524,9 +541,15 @@ on attempt k of n`. The run's wall time counts every attempt.
 
 ## Commands
 
-Every step runs with the cwd and `TMPDIR` set to the test's scratch directory,
-`<target>/xtask-libcxx/run-<pid>-<nanos>/t<i>/`. The directory is removed
-afterwards unless `--keep` is given. Compiles use the flags below, then the
+Every step runs with the cwd set to the test's scratch directory,
+`<target>/xtask-libcxx/run-<pid>-<nanos>/t<i>/`, and `TMPDIR` set to its
+own `<temp>/kiln-tmp-<pid>-<nanos>/t<i>/`, `<temp>` being the system temp
+directory (`std::env::temp_dir`). As lit's `lit-tmp-*` directory, it is short:
+libc++ 22's `filesystem_error::what()` drops the last byte of a message of
+256 bytes or more, so `fs.op.copy_file/copy_file.pass.cpp`, comparing two
+`TMPDIR/<cwd name>-static_env.<n>/file1` paths in one message, needs each
+under 103 bytes (unit test `short_scratch_paths`; WP-461). Both directories
+are removed afterwards unless `--keep` is given. Compiles use the flags below, then the
 `ADDITIONAL_COMPILE_FLAGS`, then the step flag, then the test path:
 
 ```
@@ -579,6 +602,18 @@ The verdict is reached in this order:
    `*_comparable_with.compile.pass.cpp` tests that pin llvm.org/PR171438
    (WP-446; docs/status/libcxx-m5.md). Passing such a test is an XPASS:
    kiln has taken on the defect.
+7. XFAIL as well, under kiln only (not in clang mode) and with libc++ 22
+   headers (`_LIBCPP_VERSION` major 22, `M5_TRIAGED_LIBCXX`), for a test in
+   `run.rs` `M5_TRIAGED` (path and reason, `XFAIL: m5: <reason>` in
+   `--list`): the M5 triage ledger of class (b) `.verify` diagnostic gaps
+   (a missing warning or a wording difference) that do not gate M5, each
+   reason naming the gap and its WP or "no WP yet" (WP-461;
+   docs/status/libcxx-m5.md "Triaged (b)"). An accepts-invalid (a
+   missing *error*) is a correctness gap and is never ledgered. Passing
+   such a test is an XPASS: the fix must remove the entry. The unit test
+   `m5_triaged_list` checks the ledger is sorted, every path exists in the
+   libc++ 22 checkout (when it is present), and no path is in two of
+   `XFAIL_IGNORED`, `CLANG_DEFECT_XFAIL` and `M5_TRIAGED`.
 
 | Outcome | Meaning |
 |---|---|
@@ -689,7 +724,10 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 - `script.rs`: `expansion`, `checks`, `line_kinds`, `quoting` (WP-386).
 - `cluster.rs`: normalization, message extraction, counting, crash keys.
 - `run.rs`: verdict order, outcome rules; `env_exclusions` (the lists
-  are sorted, the root reason, `Uid:` parsing); `slow_tests_list`
+  are sorted, the root reasons, the `--mem-limit` gate, `Uid:` parsing);
+  `m5_triaged_list` (sorted, kiln only, libc++ 22 only, paths exist, no
+  path on two XFAIL lists); `short_scratch_paths` (the deepest
+  `copy_file` path stays under 103 bytes); `slow_tests_list`
   (`slow_tests.txt` is sorted, every entry has a reason, which tests are
   long); `xfail_ignored_list` (sorted, every entry has a reason); `clang_defect_xfail_list` (sorted, kiln only, libc++ 22+);
   `compile_fail_records_first_error_or_verifies` (WP-163: the first

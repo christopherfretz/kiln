@@ -490,7 +490,7 @@ fn type_size_align_and_cache_fill() {
     let ty = ast.decls.get(decls[s]).ty().expect("type");
     let tl = type_size_align(&ast, ty, &tgt);
     assert_eq!((tl.size, tl.align), (32, 8));
-    let l = ensure_layout(&mut ast, decls[s], &tgt).clone();
+    let l = ensure_layout(&mut ast, decls[s], &tgt).expect("complete").clone();
     assert_eq!(l.size, 32);
     // The nested class was cached as well.
     assert_eq!(ast.layouts.get(decls[p]).map(|l| l.size), Some(16));

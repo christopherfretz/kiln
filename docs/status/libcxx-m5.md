@@ -17,21 +17,35 @@ missing-warning gap; **(c)** harness/driver gap; **(d)** environment.
 | | total | pass | fail | xfail | unsupported (driver) | timeout | pass rate |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | first run, base `c77a092a` (WP-418 harness)¹ | 9247 | 8562 | 195 | 34 | 455 (31) | 1 | 97.4% |
-| after WP-446 fixes (`ced0e9ad`, main `b4e8dfb3` merged; the 196 re-run) | 9247 | 8708 | 48 | 36 | 455 (31) | 0 | **99.0%** |
+| after WP-446 fixes (`ced0e9ad`, main `b4e8dfb3` merged; the 196 re-run) | 9247 | 8708 | 48 | 36 | 455 (31) | 0 | 99.0% |
+| after WP-461 (`db976360`; the 91 re-run²) | 9247 | 8716 | 9 | 64 | 457 (31) | 1 | **99.2%** |
 
 ¹ The run started on `c77a092a`; the report stamps `c2e88d0a`, the head
 when it finished. WP-446 fixes were built into the same harness target
 during the 69 min run, so late tests may have used a newer kiln++.
 
-Pass rate = pass / (total − unsupported). `std/`: 97.9% → 99.4% (12 fail
-left); `libcxx/`: 89.3% → 92.7% (36 fail left). The second row re-runs
-only the 196 first-run FAIL/TIMEOUT tests (the full suite was not rerun);
-the quick CI corpus and the M3 gate guard the rest.
+² The 48 FAILs left by WP-446 plus the driver-unsupported, clang-defect
+XFAIL and environment tests near them (91 paths, -j 3, 157 s); the other
+9156 keep their WP-446 outcome. 28 of the 64 XFAILs are the `M5_TRIAGED`
+ledger below; 2 of the 457 UNSUPPORTED are the new environment exclusions.
 
-Left, by class: (a) 11, (b) 33, (c) 2, (d) 2 (WP-460 has since fixed
-three (a) clusters, 8 tests: see "Fixed in WP-460"). The TIMEOUT
-(`ifstream.members/offset_range.pass.cpp`, 20 s) passes at 240 s under
-kiln and clang 22: it is in the long-test class, not a cluster.
+Pass rate = pass / (total − unsupported). `std/`: 97.9% → 99.4% (12 fail
+left) → 3 fail + 1 timeout; `libcxx/`: 89.3% → 92.7% (36 fail left) → 6
+fail. The second row re-runs only the 196 first-run FAIL/TIMEOUT tests and
+the third only its 91 (the full suite was not rerun); the quick CI corpus
+and the M3 gate guard the rest.
+
+Left after WP-461: 9 FAIL, all class (a), and 1 TIMEOUT. Class (b) is
+0 FAIL: 28 tests are XFAIL through the `M5_TRIAGED` ledger (see "Triaged
+(b)" below), 5 now pass. Classes (c) and (d) are empty: both (c) tests
+pass, and both (d) tests are UNSUPPORTED with a reason. The TIMEOUT
+(`ifstream.members/offset_range.pass.cpp`) is a long test (240 s run
+timeout) that timed out under shared-host load in this re-run; it passed
+in the WP-446 re-run and passes at 240 s under kiln and clang 22. It is
+in the long-test class, not a cluster.
+
+WP-460, which landed after this run, fixes 8 of the 9 (trivial_abi ×6,
+enable_if, std.compat; see "Fixed in WP-460"), leaving `make_from_tuple`.
 
 ## Open clusters
 
@@ -40,24 +54,44 @@ the cell says otherwise.
 
 | class | count | proposed WP | libc++ construct / first error | reproducer | tests |
 |---|---:|---|---|---|---|
-| (a) | 3 | `__builtin_elementwise_add_sat` / `_sub_sat` (sema builtin table, Oven, codegen `llvm.[su]{add,sub}.sat`) | `std::add_sat` / `std::sub_sat` ([numeric.sat.func]): "use of undeclared identifier '__builtin_elementwise_add_sat'" | `ext.gnu.builtins/elementwise-sat-run-clang22.cpp` | `numeric.ops.sat/add_sat.pass`, `sub_sat.pass`, `libcxx/numerics/nodiscard.verify` |
-| (b) | 14 | diagnostic wording: `[[nodiscard]]` reach | missing "ignoring return value of function declared with 'nodiscard' attribute"; one sub-cause is a `[[nodiscard]]` conversion function called by `static_cast` (kiln: "expression result unused"), others are `get`, `any_cast`, ranges iterators, `<chrono>` | `.verify` tests | `nodiscard.verify` in array, complex.number, numarray, range.filter, range.join.with ×3, range.iota.view, range.repeat.view, time, any, tuple, pairs, variant |
-| (b) | 5 | diagnostic wording: `nonnull` | missing "null passed to a callee that requires a non-null argument" | `.verify` tests | `nonnull.verify` in specialized.algorithms, mem.res, print.fun, basic.string, string.view |
-| (b) | 4 | diagnostic wording: `lifetimebound` | missing "temporary bound to local reference '…' will be destroyed at the end of the full-expression" | `.verify` tests | `lifetimebound.verify` in algorithms, as-lvalue, function.objects, utility/forward |
-| (b) | 3 | diagnostic wording: dependent member type | "no type named 'X' in 'Y'" / "in namespace 'std'" reported as "expected a type" | `.verify` tests | `unexpected_disabled_cpp17`, `futures.task.members/type`, `variant.hash/hash.depr` (WP-445) |
-| (b) | 2 | diagnostic wording: thread-safety analysis | missing "writing variable '…' requires holding shared_mutex '…' exclusively" (`-Wthread-safety`) | `.verify` tests | `thread.shared_mutex`, `thread.shared_timed_mutex` `thread_safety.verify` |
-| (b) | 2 | diagnostic wording: deprecation | missing "'…' is deprecated" on `rel_ops` and the C++17 adaptor typedefs | `.verify` tests | `rel_ops.depr_in_cxx20`, `typedefs.depr_in_cxx17` |
-| (b) | 1 | diagnostic wording: returning a reference to a temporary | missing "returning reference to local temporary object" in `<tuple>` | `.verify` test | `make_from_tuple.verify` (WP-445) |
-| (b) | 1 | diagnostic wording: constraint note | the "because … evaluated to false" note prints the substituted expression | `.verify` test | `libcxx/algorithms/cpp17_iterator_concepts.verify` |
-| (b) | 1 | diagnostic wording: `alloc_align` | missing "requested alignment is not a power of 2" | `.verify` test | `allocate_vocabulary.attributes.verify` |
-| (c) | 1 | harness: `-fexperimental-library` | kiln++ rejects the driver flag ("unknown argument") | the test itself | `libcxx/experimental/fexperimental-library.compile.pass` (driver `args.rs`, WP-445) |
-| (c) | 1 | harness: scratch path length | `copy_file.pass` fails under the harness's long scratch `TMPDIR` (110+ characters) with kiln **and** clang 22, passes with a short one | the test, `TMPDIR` shortened | `fs.op.copy_file/copy_file.pass` |
-| (d) | 1 | — | `RLIMIT_NPROC` does not limit root: thread creation never fails (clang 22 fails too) | — | `futures.async/thread_create_failure.pass` |
-| (d) | 1 | — | the 3072 MiB address-space cap is below two `INT_MAX` strings (clang 22 fails too) | — | `stringstream.members/gcount.pass` |
+| (a) | 6 | `[[clang::trivial_abi]]`: attribute, then register passing/return of a non-trivial class (attr + codegen) | `unique_ptr`/`shared_ptr`/`weak_ptr` under `_LIBCPP_ABI_ENABLE_*_TRIVIAL_ABI`; kiln ignores the attribute ("unknown attribute 'trivial_abi' ignored") and returns through the caller's slot; run asserts | `class.temporary/trivial-abi-run.cpp` | `libcxx/memory/trivial_abi/*` (shared_ptr_arg, unique_ptr_arg, unique_ptr_array, unique_ptr_destruction_order, unique_ptr_ret, weak_ptr_ret) |
+| (a) | 1 | clang `enable_if` attribute (attr + overload viability, "candidate disabled: <msg>") | `_CmpUnspecifiedParam`'s literal-0 constructor (`<__compare/ordering.h>`); kiln ignores the attribute and accepts `strong_ordering < 1` | `dcl.attr/enable-if-attr.cpp` | `cmp.categories.pre/reject-other-than-literal-zero.verify` |
+| (a) | 1 | `<tuple>` P2748 (C++26): returning a reference bound to a temporary is ill-formed (accepts-invalid; WP-209/WP-432 follow-ups) | `make_from_tuple<const int&>(tuple<char>{})`: kiln gives the `static_assert` but not "returning reference to local temporary object" in `<tuple>` | the test itself | `make_from_tuple.verify` |
+| (a) | 1 | Modules: an imported unit built in-process keeps its GMF declarations apart from the importer's GMF (spec/modules.md §6) | `std.compat.cppm` over `std.cppm`, both GMFs including `<cstddef>`: "missing '#include <__cstddef/byte.h>'; 'byte' must be declared before it is used" at `__type_traits/is_trivially_lexicographically_comparable.h:50` | `module.global.frag/gmf-dedup-import-gmf.cpp` (+ `Inputs/gdx-*.cppm`) | `std/modules/std.compat.pass` |
 
-Both (d) tests and `copy_file` are candidates for the environment
-exclusion lists (`xtask/src/libcxx/run.rs`, `ROOT_UNSUPPORTED` and a
-memory-cap list), which turns them into UNSUPPORTED with a reason.
+The `__builtin_elementwise_add_sat`/`_sub_sat` cluster (3) passes after
+main `db976360`.
+
+## Triaged (b): `M5_TRIAGED` (WP-461)
+
+Every test here passes under clang 22 with the same verify command; kiln
+accepts the code correctly and only misses or words a diagnostic. The
+ledger (`M5_TRIAGED`, `xtask/src/libcxx/run.rs`, libc++ 22 only) makes
+each one `XFAIL` with the reason `m5: <reason>` (spec/libcxx.md "Outcomes" step 7);
+an XPASS is the cue to drop its row.
+
+| cause | count | WP | tests |
+|---|---:|---|---|
+| `[[nodiscard]]` on a later redeclaration of a function template is not merged (libc++ forward-declares `get`, `any_cast`, `begin`/`end` without it) | 7 | none yet | `nodiscard.verify` in array, complex.number, numarray, tuple, pairs, variant, any |
+| `[[nodiscard]]` hidden friend of a class template never warns | 5 | none yet | `nodiscard.verify` in range.filter, range.iota.view, range.repeat.view; join.with iterator `eq`, `iter_move` |
+| `-Wnonnull` "null passed to a callee that requires a non-null argument" | 5 | WP-433 | `nonnull.verify` in specialized.algorithms, mem.res, print.fun, basic.string, string.view |
+| `lifetimebound` "temporary bound to local reference … will be destroyed" | 4 | none yet | `lifetimebound.verify` in algorithms, as-lvalue, function.objects, utility/forward |
+| `-Wthread-safety` | 2 | none yet | `thread_safety.verify` in thread.shared_mutex, thread.shared_timed_mutex |
+| "'…' is deprecated" on `rel_ops` and the C++17 adaptor typedefs | 2 | none yet | `rel_ops.depr_in_cxx20`, `typedefs.depr_in_cxx17` |
+| `alloc_align` "requested alignment is not a power of 2" | 1 | none yet | `allocate_vocabulary.attributes.verify` |
+| wording: the constraint note prints the substituted expression | 1 | none yet | `libcxx/algorithms/cpp17_iterator_concepts.verify` |
+| wording: `std::hash<std::monostate>` printed qualified | 1 | WP-432 | `variant.hash/hash.depr.verify` |
+
+## Fixed in WP-461
+
+| class | count | construct / first error | fix | test |
+|---|---:|---|---|---|
+| (b) | 2 | `[[nodiscard]]` through `static_cast` to a nodiscard conversion function (`<chrono>`), and a parenthesized nodiscard `operator==` (join.with sentinel) | sema `emit_unused` (clang `DiagnoseUnusedExprResult`) | `dcl.attr.nodiscard/through-cast.cpp` |
+| (b) | 2 | dependent member type "no type named …" (`unexpected_disabled_cpp17`, `futures.task.members/type`) | WP-445, already on main | — |
+| (c) | 1 | `-fexperimental-library` rejected | driver flag + `__has_feature(experimental_library)`, link `-lc++experimental` | `args.rs` `experimental_library`, `codegen_cmd.rs` `link_experimental_library` |
+| (c) | 1 | `copy_file.pass` under a 110+ character scratch `TMPDIR` | harness scratch `t<index>` under a short temp root | xtask `short_scratch_paths` |
+| (d) | 1 | `thread_create_failure`: `RLIMIT_NPROC` does not limit root | UNSUPPORTED when run as root (`ROOT_NPROC_UNSUPPORTED`) | xtask `env_exclusions` |
+| (d) | 1 | `gcount`: two `INT_MAX` strings need more than the 3072 MiB cap | UNSUPPORTED below 9216 MiB (`MEM_UNSUPPORTED`, an estimate) | xtask `env_exclusions` |
 
 ## Fixed in WP-446
 

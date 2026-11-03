@@ -16,6 +16,7 @@
 
 mod absolute_value;
 mod align_redecl;
+mod annot;
 mod asm;
 mod bit_int;
 mod bitfield_constant;
@@ -23,6 +24,7 @@ mod builtins;
 pub mod class;
 mod complex;
 mod consteval;
+mod consteval_only;
 mod constexpr_body;
 pub mod constfold;
 pub mod conv;
@@ -34,6 +36,7 @@ mod deduce;
 mod deprecated;
 mod empty_body;
 mod enable_if;
+mod entity;
 pub mod except;
 mod expansion;
 pub mod expr;
@@ -77,6 +80,8 @@ mod predefined;
 mod qualified_decl;
 mod range_for;
 mod reflect;
+mod reflect_limit;
+mod reflect_operand;
 mod rtti;
 pub mod scope;
 mod self_ref;
@@ -211,6 +216,16 @@ pub struct Sema<'a, 'sm> {
     /// `-freflection` (P2996 spike, WP-267; default off): `^^`, type
     /// splices and the reflection intrinsics (spec/reflection.md).
     pub reflection: bool,
+    /// [`Sema::is_consteval_only_type`] of the complete classes seen
+    /// (keyed by definition).
+    pub(crate) consteval_only_records: kiln_source::fx::FxHashMap<DeclId, bool>,
+    /// The consteval-only leaves of template definitions outside every
+    /// immediate function context: checked again in each instantiation
+    /// ([`Sema::note_inst_consteval_only`]).
+    pub(crate) consteval_only_pattern: kiln_source::fx::FxHashSet<ExprId>,
+    /// Depth of expressions being rebuilt by substitution (their
+    /// consteval-only leaves follow the pattern's, not the builders').
+    pub(crate) subst_expr_depth: u32,
     /// `-fcoro-aligned-allocation` (default off): a coroutine frame is
     /// allocated and freed with the `std::align_val_t` forms of
     /// `operator new`/`operator delete` when available (P2014R0 option 2,
@@ -230,6 +245,10 @@ pub struct Sema<'a, 'sm> {
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
     pub clang_compat: u32,
+    /// The `AArch64` `sve` target feature is on (`-march=armv8-a+sve`,
+    /// `-target-feature +sve`): the SVE vector types are usable in
+    /// expressions and as automatic variables (spec/sema.md "SVE").
+    pub sve: bool,
     /// The begin of the nested-name-specifier whose component the parser
     /// is acting on (set around each `act_on_nested_name_*` call): clang
     /// 22's point of instantiation for a class or enumeration completed
@@ -720,6 +739,11 @@ pub struct Sema<'a, 'sm> {
     /// clang's `EST_Uninstantiated`): the first declaration maps to its
     /// pattern; its type carries `ExcSpec::Deferred(pattern)`.
     pub(crate) uninstantiated_exc: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// Function template specializations and members of class template
+    /// specializations whose dependent annotations are substituted when
+    /// needed (spec/annotations.md §5): the specialization maps to its
+    /// pattern.
+    pub(crate) uninstantiated_annots: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The enclosing function's state and the scopes pushed for a member
     /// function definition, saved by `act_on_start_function_def` while a
     /// (local class's or out-of-line) member function body is analysed.
@@ -864,11 +888,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             exceptions: true,
             rtti: true,
             reflection: false,
+            consteval_only_records: kiln_source::fx::FxHashMap::default(),
+            consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
+            subst_expr_depth: 0,
             coro_aligned_allocation: false,
             lax_vector_conversions: LaxVectorConversions::All,
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 22,
+            sve: false,
             nns_start: None,
             gnu_lib_builtins: false,
             pack: (0, Vec::new()),
@@ -995,6 +1023,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delayed_exc_equiv: Vec::new(),
             unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
+            uninstantiated_annots: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,

@@ -227,8 +227,9 @@ pub trait SemaBridge {
     fn cxx23(&self) -> bool {
         self.cxx_year() >= 2023
     }
-    /// The layout of a complete record (via `kiln_abi`).
-    fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout;
+    /// The layout of a complete record (via `kiln_abi`); `None` while the
+    /// class is incomplete (no definition, or still being defined).
+    fn ensure_layout(&mut self, record: DeclId) -> Option<&RecordLayout>;
     /// `(size, align)` in bytes of a type the Oven has no value model
     /// for (a vector type: spec/oven.md "Interface"), via `kiln_abi`, so
     /// `sizeof`/`alignof` agree with layout. The default is unknown

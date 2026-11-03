@@ -415,6 +415,9 @@ impl Sema<'_, '_> {
         let sub_kind = self.ast.stmts.get(sub).kind();
         let mut kept = Vec::new();
         let mut likelihood: Option<kiln_ast::attr::AttrNode> = None;
+        // An annotation appertains only to a declaration
+        // ([dcl.attr.annotation]/1).
+        self.reject_annotations_in(attrs, None);
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
             if node.kind == AttrKind::LOOP_HINT {

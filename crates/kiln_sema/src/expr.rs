@@ -882,8 +882,16 @@ impl Sema<'_, '_> {
             let (top, n) = self.top_comparison(e, loc);
             note = n;
             if !top {
-                id = DiagId::sema_unused_expr;
-                args.clear();
+                // clang `DiagnoseUnusedExprResult`: a comparison that is
+                // not the statement itself (`(a == b);`) is checked as
+                // the call it is, at the operator.
+                let call = self.unused_comparison_call(e, loc);
+                if let Some((i, _, a)) = call.and_then(|c| self.unused_call_result(c, loc)) {
+                    (id, args) = (i, a);
+                } else {
+                    id = DiagId::sema_unused_expr;
+                    args.clear();
+                }
             }
         }
         if comma && id == DiagId::sema_unused_expr {
@@ -945,6 +953,37 @@ impl Sema<'_, '_> {
         } else {
             self.emit(d);
         }
+    }
+
+    /// The overloaded comparison at `loc` that [`Self::unused_warning`]
+    /// reported for `e` (clang's `WarnExpr`), along the operands it looks
+    /// through.
+    fn unused_comparison_call(&self, e: ExprId, loc: Loc) -> Option<ExprId> {
+        let ex = &self.ast.exprs;
+        let mut x = e;
+        for _ in 0..256 {
+            x = self.ignore_parens(x);
+            let n = ex.get(x);
+            x = match n.kind() {
+                ExprKind::CXXOperatorCallExpr if n.loc() == loc => return Some(x),
+                ExprKind::CXXBindTemporaryExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ImplicitCastExpr => ex.operand(x),
+                ExprKind::CStyleCastExpr | ExprKind::CXXFunctionalCastExpr
+                    if ex.cast_kind(x) == CastKind::ConstructorConversion =>
+                {
+                    ex.operand(x)
+                }
+                ExprKind::BinaryOperator if ex.binary_op(x) == BinaryOp::Comma => ex.operands(x)[1],
+                ExprKind::ConditionalOperator => ex.cond_arms(x)[1],
+                ExprKind::BinaryConditionalOperator => {
+                    ex.binary_conditional_operands(x, &self.ast.lists)[3]
+                }
+                _ => return None,
+            };
+        }
+        None
     }
 
     /// The `*` of the `(void*)` cast `e` (the last one spelled before
@@ -1100,50 +1139,13 @@ impl Sema<'_, '_> {
                 // declaration (`getCalleeDecl`), reported at the callee's
                 // start.
                 let callee = self.ast.exprs.callee(x);
-                let f = self.referenced_decl_of_callee(callee)?;
-                if self.ast.types.is_void(n.ty()) {
-                    return None;
-                }
                 // clang 22 reports an operator call at its start.
                 let at = if self.clang_compat >= 22 && n.kind() == ExprKind::CXXOperatorCallExpr {
                     self.begin_loc(x)
                 } else {
                     self.begin_loc(callee)
                 };
-                // clang `getUnusedResultAttr`: a nodiscard class or
-                // enumeration returned by value first, then the callee
-                // ([dcl.attr.nodiscard]/2).
-                let t = n.ty();
-                let by_type = if self.call_returns_reference(x) {
-                    None
-                } else {
-                    let tag = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t));
-                    tag.and_then(|d| self.find_attr(d, AttrKind::NODISCARD))
-                };
-                if let Some(a) = by_type.or_else(|| self.find_attr(f, AttrKind::NODISCARD)) {
-                    // clang appends the attribute's message
-                    // ([dcl.attr.nodiscard]/4).
-                    let attr = *self.ast.attrs.get(a);
-                    let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
-                    let name = "'nodiscard'".to_owned();
-                    // clang 22 `warn_unused_return_type`: a nodiscard
-                    // type is named, under -Wunused-value.
-                    if by_type.is_some() && self.clang_compat >= 22 {
-                        return Some(self.unused_type_warning("0", t, name, text, at));
-                    }
-                    return Some(match text {
-                        Some(t) => (DiagId::sema_unused_result_msg, at, vec![name, t]),
-                        None => (DiagId::sema_unused_result, at, vec![name]),
-                    });
-                }
-                // clang `warn_unused_call`: a `pure` / `const` callee
-                // whose result is not `void` (WP-182).
-                for (k, name) in [(AttrKind::PURE, "pure"), (AttrKind::CONST, "const")] {
-                    if self.find_attr(f, k).is_some() {
-                        return Some((DiagId::sema_unused_call, at, vec![name.to_owned()]));
-                    }
-                }
-                None
+                self.unused_call_result(x, at)
             }
             ExprKind::BinaryOperator => {
                 let op = self.ast.exprs.binary_op(x);
@@ -1221,6 +1223,7 @@ impl Sema<'_, '_> {
                     CastKind::ConstructorConversion => self
                         .unused_warning(self.ast.exprs.operand(x))
                         .map(|(id, _, args)| (id, loc, args)),
+                    _ if let Some(w) = self.unused_through_cast(x, loc) => Some(w),
                     // clang `warn_unused_voidptr`: `(void*)x` written so
                     // (not through a typedef) is taken for a typo of
                     // `(void)x`.
@@ -1237,45 +1240,23 @@ impl Sema<'_, '_> {
             // clang `isUnusedResultAWarning`'s default case: a void
             // result is never unused (`static_cast<void>(x);`).
             ExprKind::CXXStaticCastExpr if self.ast.types.is_void(n.ty()) => None,
-            ExprKind::CXXStaticCastExpr => {
-                // Always unused, but a constructor conversion reports a
-                // nodiscard constructor or class (clang
-                // `DiagnoseUnusedExprResult`).
-                let unused = (DiagId::sema_unused_expr, loc, Vec::new());
-                if self.ast.exprs.cast_kind(x) != CastKind::ConstructorConversion {
-                    return Some(unused);
-                }
-                let inner = self.ignore_paren_imp_casts(self.ast.exprs.operand(x));
-                let ik = self.ast.exprs.get(inner).kind();
-                if !matches!(ik, ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr) {
-                    return Some(unused);
-                }
-                Some(self.unused_warning(inner).map_or(unused, |(id, _, args)| (id, loc, args)))
+            // Always unused, but through a conversion of a call or
+            // construction its attributes are checked.
+            ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CXXReinterpretCastExpr => {
+                Some(self.unused_through_cast(x, loc).unwrap_or((
+                    DiagId::sema_unused_expr,
+                    loc,
+                    Vec::new(),
+                )))
             }
             ExprKind::CXXBindTemporaryExpr
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::ExprWithCleanups
             | ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
-                // A temporary of a nodiscard class, or made by a nodiscard
-                // constructor ([dcl.attr.nodiscard]/4, clang
-                // `warn_unused_constructor`).
-                let ctor = self.ast.exprs.constructor(x);
-                let by_ctor = self.find_attr(ctor, AttrKind::NODISCARD);
-                let a = by_ctor.or_else(|| {
-                    let class = self.ast.types.as_record(n.ty())?;
-                    self.find_attr(class, AttrKind::NODISCARD)
-                })?;
-                let attr = *self.ast.attrs.get(a);
-                let name = "'nodiscard'".to_owned();
-                if by_ctor.is_none() && self.clang_compat >= 22 {
-                    let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
-                    return Some(self.unused_type_warning("1", n.ty(), name, text, loc));
-                }
-                Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_text(m)) {
-                    Some(t) => (DiagId::sema_unused_constructor_msg, loc, vec![name, t]),
-                    None => (DiagId::sema_unused_constructor, loc, vec![name]),
-                })
+                self.unused_construct_result(x, loc)
             }
             ExprKind::StmtExpr => self.unused_stmt_expr(x, loc),
             // clang's default case, at `getExprLoc` (the base's begin:
@@ -1313,10 +1294,99 @@ impl Sema<'_, '_> {
             | ExprKind::ArrayTypeTraitExpr
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXTypeidExpr
-            | ExprKind::CXXReinterpretCastExpr
-            | ExprKind::CXXConstCastExpr
             | ExprKind::CompoundLiteralExpr
             | ExprKind::LambdaExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),
+            _ => None,
+        }
+    }
+
+    /// clang `DiagnoseUnusedExprResult` for a discarded call `x` with a
+    /// callee declaration (`getCalleeDecl`), reported at `at`: a
+    /// nodiscard result type or callee, else a `pure` / `const` callee.
+    fn unused_call_result(&self, x: ExprId, at: Loc) -> Option<(DiagId, Loc, Vec<String>)> {
+        let f = self.referenced_decl_of_callee(self.ast.exprs.callee(x))?;
+        if self.ast.types.is_void(self.ast.exprs.get(x).ty()) {
+            return None;
+        }
+        // clang `getUnusedResultAttr`: a nodiscard class or
+        // enumeration returned by value first, then the callee
+        // ([dcl.attr.nodiscard]/2).
+        let t = self.ast.exprs.get(x).ty();
+        let by_type = if self.call_returns_reference(x) {
+            None
+        } else {
+            let tag = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t));
+            tag.and_then(|d| self.find_attr(d, AttrKind::NODISCARD))
+        };
+        if let Some(a) = by_type.or_else(|| self.find_attr(f, AttrKind::NODISCARD)) {
+            // clang appends the attribute's message
+            // ([dcl.attr.nodiscard]/4).
+            let attr = *self.ast.attrs.get(a);
+            let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
+            let name = "'nodiscard'".to_owned();
+            // clang 22 `warn_unused_return_type`: a nodiscard
+            // type is named, under -Wunused-value.
+            if by_type.is_some() && self.clang_compat >= 22 {
+                return Some(self.unused_type_warning("0", t, name, text, at));
+            }
+            return Some(match text {
+                Some(t) => (DiagId::sema_unused_result_msg, at, vec![name, t]),
+                None => (DiagId::sema_unused_result, at, vec![name]),
+            });
+        }
+        // clang `warn_unused_call`: a `pure` / `const` callee
+        // whose result is not `void` (WP-182).
+        for (k, name) in [(AttrKind::PURE, "pure"), (AttrKind::CONST, "const")] {
+            if self.find_attr(f, k).is_some() {
+                return Some((DiagId::sema_unused_call, at, vec![name.to_owned()]));
+            }
+        }
+        None
+    }
+
+    /// A discarded temporary `x` of a nodiscard class, or made by a
+    /// nodiscard constructor ([dcl.attr.nodiscard]/4, clang
+    /// `warn_unused_constructor`), reported at `loc`.
+    fn unused_construct_result(&self, x: ExprId, loc: Loc) -> Option<(DiagId, Loc, Vec<String>)> {
+        let n = *self.ast.exprs.get(x);
+        let ctor = self.ast.exprs.constructor(x);
+        let by_ctor = self.find_attr(ctor, AttrKind::NODISCARD);
+        let a = by_ctor.or_else(|| {
+            let class = self.ast.types.as_record(n.ty())?;
+            self.find_attr(class, AttrKind::NODISCARD)
+        })?;
+        let attr = *self.ast.attrs.get(a);
+        let name = "'nodiscard'".to_owned();
+        if by_ctor.is_none() && self.clang_compat >= 22 {
+            let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
+            return Some(self.unused_type_warning("1", n.ty(), name, text, loc));
+        }
+        Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_text(m)) {
+            Some(t) => (DiagId::sema_unused_constructor_msg, loc, vec![name, t]),
+            None => (DiagId::sema_unused_constructor, loc, vec![name]),
+        })
+    }
+
+    /// clang `DiagnoseUnusedExprResult` under an explicit cast `x`: a
+    /// `NoOp`, constructor or integral conversion of a call or
+    /// construction (`static_cast<bool>(s)` calling a nodiscard
+    /// conversion function), its implicit casts stripped, is checked as
+    /// that call or construction, at the cast.
+    fn unused_through_cast(&self, x: ExprId, loc: Loc) -> Option<(DiagId, Loc, Vec<String>)> {
+        if !matches!(
+            self.ast.exprs.cast_kind(x),
+            CastKind::NoOp | CastKind::ConstructorConversion | CastKind::IntegralCast
+        ) {
+            return None;
+        }
+        let inner = self.ignore_imp_casts(self.ast.exprs.operand(x));
+        match self.ast.exprs.get(inner).kind() {
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr => {
+                self.unused_call_result(inner, loc)
+            }
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                self.unused_construct_result(inner, loc)
+            }
             _ => None,
         }
     }
@@ -2144,6 +2214,7 @@ impl Sema<'_, '_> {
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
             }
+            self.note_consteval_only_ref(e, d);
         } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
             let at = self.eloc(e);
             self.exc_spec_needed(d, at);
@@ -3882,6 +3953,9 @@ impl Sema<'_, '_> {
             let ct = self.ety(c);
             if self.is_vector_condition(ct) {
                 return self.act_on_vector_conditional(c, t, f, loc);
+            }
+            if self.is_sve_condition(ct) {
+                return self.sve_conditional(c, t, f, loc);
             }
         }
         let c2 = if self.expr_is_type_dependent(c) {

@@ -65,7 +65,7 @@ impl SemaBridge for Bridge<'_> {
         self.ast.decls.function(d)?.body
     }
 
-    fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout {
+    fn ensure_layout(&mut self, record: DeclId) -> Option<&RecordLayout> {
         kiln_abi::ensure_layout(&mut *self.ast, record, self.abi)
     }
 

@@ -715,6 +715,8 @@ impl Sema<'_, '_> {
     /// A non-type template parameter ([temp.param]/2) declared like a
     /// function parameter `p`; `pack` for `T... N`.
     pub fn act_on_non_type_template_param(&mut self, p: &ParamInfo, pack: bool) -> DeclId {
+        // [dcl.attr.annotation]/1: not on a template parameter.
+        self.reject_annotations_in(&p.attrs, Some("a template parameter"));
         let h = self.param_head(p.name, p.loc);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         // `int... N` keeps the type `int` (as clang); only a type with
