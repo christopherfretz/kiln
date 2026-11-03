@@ -2668,6 +2668,35 @@ impl Sema<'_, '_> {
         msg.with_note(self.diag(id, loc))
     }
 
+    /// The qualified name of member `p` as clang's
+    /// `getQualifiedNameAsString` prints it: a partial specialization
+    /// context with its canonical arguments (`'P<type-parameter-0-0,
+    /// int>::g'`), a class template's pattern without any (`'D::g'`).
+    fn member_qualified_name(&self, p: DeclId) -> String {
+        let q = self.qualified_decl_name(p);
+        let Some(pc) = self.ast.decls.get(p).ctx() else { return q };
+        if self.ast.partial_spec_info(self.ast.first(pc)).is_none() {
+            return q;
+        }
+        let Some(desc) = self.current_instantiation_desc(pc) else { return q };
+        let outer = self.qualified_decl_name(pc);
+        let outer = outer.rsplit_once("::").map_or(String::new(), |(o, _)| format!("{o}::"));
+        format!("{outer}{desc}::{}", self.decl_name(p))
+    }
+
+    /// True if member function `p` and the function type `ty` differ in
+    /// their return types only ([over.load]/2).
+    fn differs_in_return(&mut self, p: DeclId, ty: QualType) -> bool {
+        if self.kind_of(p) != DeclKind::CXXMethod {
+            return false;
+        }
+        let Some(pty) = self.declared_fn_type(p) else { return false };
+        match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
+            (Some(a), Some(b)) => !self.ast.types.same_type(a.ret(), b.ret()),
+            _ => false,
+        }
+    }
+
     /// Adds clang's "forward declaration of 'X'" note to an
     /// incomplete-type error when `ty` (or its array element) is a
     /// declared but undefined class ([basic.types.general]/5).
@@ -2711,10 +2740,13 @@ impl Sema<'_, '_> {
             .is_some_and(|(_, m)| m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization);
         let at = if explicit_member { self.ast.latest(rec) } else { rec };
         let loc = self.ast.decls.get(at).loc();
-        msg.with_note(
-            self.diag(DiagId::note_forward_declaration, loc)
-                .arg(format!("'{}'", self.qualified_decl_name(rec))),
-        )
+        // A specialization prints with its arguments (`'A<char>'`).
+        let name = if self.ast.spec_info(rec).is_some() {
+            self.decl_ty_str(self.tag_type(rec))
+        } else {
+            self.qualified_decl_name(rec)
+        };
+        msg.with_note(self.diag(DiagId::note_forward_declaration, loc).arg(format!("'{name}'")))
     }
 
     /// P2169: `name` is the placeholder `_` ([basic.scope.scope]/5).
@@ -3362,7 +3394,14 @@ impl Sema<'_, '_> {
             // [dcl.meaning.general]/2: a qualified declarator-id names a
             // previously declared member of the nominated class or
             // namespace.
-            let scope = if method {
+            let scope = if method
+                && self.clang_compat < 22
+                && self.ast.partial_spec_info(self.ast.first(ctx)).is_some()
+            {
+                // clang 19 prints a partial specialization with its
+                // canonical arguments (`'P<type-parameter-0-0, int>'`).
+                self.qualifier_desc(ctx)
+            } else if method {
                 // clang prints a class context as its type (`A<T>`,
                 // `N::A<long>::C`).
                 self.class_context_str(ctx)
@@ -3376,7 +3415,26 @@ impl Sema<'_, '_> {
             } else {
                 DiagId::sema_member_decl_no_match
             };
-            let msg = self.diag(id, d.name_loc()).arg(fname.clone()).arg(scope);
+            let ret_differs = method && prev.is_some_and(|p| self.differs_in_return(p, ty));
+            let msg = if let Some(p) = prev.filter(|_| ret_differs) {
+                // The member it corresponds to except in the return type
+                // (clang's `MergeFunctionDecl`).
+                let m = self
+                    .diag(DiagId::sema_member_def_ret_type_mismatch, d.name_loc())
+                    .arg(self.member_qualified_name(p));
+                self.note_prev(m, p, false)
+            } else {
+                let m = self.diag(id, d.name_loc()).arg(fname.clone()).arg(scope);
+                // clang 22 notes the class searched.
+                if self.clang_compat >= 22 && method {
+                    let note = self
+                        .diag(DiagId::note_entity_defined_here, self.ast.decls.get(ctx).loc())
+                        .arg(self.decl_name(ctx));
+                    m.with_note(note)
+                } else {
+                    m
+                }
+            };
             self.emit(msg);
             invalid_redecl = true;
         } else if let Some(p) = prev

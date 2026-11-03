@@ -257,6 +257,12 @@ pub struct TemplState {
     /// (an unlinked alias of `<dependent type>`, created on first use;
     /// [`Sema::act_on_nested_name_decltype`]).
     pub(crate) decltype_scope: Option<DeclId>,
+    /// A declarator qualifier `X<args>::` of class template `X` naming
+    /// neither the template nor one of its partial specializations
+    /// (`template<class T> void P<T*>::f()` with no `P<T*>`): the
+    /// template and the specifier, reported by the declaration
+    /// ([`Sema::diagnose_qualified_declaration`]).
+    pub(crate) unmatched_qualifier: Option<(DeclId, kiln_ast::ids::NnsId)>,
     /// The object scope of a nested-name-specifier after `.`/`->`
     /// ([basic.lookup.qual.general]/2, WP-121): its first component is
     /// looked up in the object's class before the expression's context.
@@ -684,6 +690,13 @@ impl Sema<'_, '_> {
         at: Loc,
     ) -> DeclId {
         self.act_on_finish_template_decl();
+        // [temp.param]/1: a template-head's parameter list is not empty
+        // (clang err_template_template_parm_no_parms, at the name).
+        let l = *self.ast.templates.param_list(params);
+        if self.ast.lists.iter::<DeclId>(l.params).next().is_none() {
+            let d = self.diag(DiagId::sema_template_template_param_no_params, at);
+            self.emit(d);
+        }
         let h = self.param_head(name, at);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_template_parm(h, params, depth, index, pack, typename_kw);
@@ -971,6 +984,13 @@ impl Sema<'_, '_> {
         let list = self.templ.heads[innermost].list;
         self.templ.cur = list;
         list
+    }
+
+    /// Forgets the pending `template<>` headers after a qualifier that
+    /// named nothing (diagnosed): they cannot be matched to its classes,
+    /// so none is reported extraneous (clang's invalid `CXXScopeSpec`).
+    pub fn discard_spec_headers(&mut self) {
+        self.templ.spec_headers.clear();
     }
 
     /// Matches the pending `template<>` headers ([`TemplState::spec_headers`],

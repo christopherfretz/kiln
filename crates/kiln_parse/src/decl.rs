@@ -1577,6 +1577,9 @@ impl Parser<'_, '_> {
         let was_invalid = ds.invalid;
         let qual = self.parse_tag_qualifier(ds);
         let qual_failed = !was_invalid && ds.invalid;
+        if qual_failed {
+            self.s.discard_spec_headers();
+        }
         let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
@@ -2090,6 +2093,8 @@ impl Parser<'_, '_> {
             self.s.set_entering_context(saved);
             let qual = qual.unwrap_or_else(|()| {
                 d.invalid = true;
+                self.s.discard_spec_headers();
+                self.skip_nested_name_rest();
                 None
             });
             d.global_qualifier = global && qual.is_some();

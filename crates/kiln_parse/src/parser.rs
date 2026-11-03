@@ -1502,12 +1502,41 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             if !stop {
                 self.expect(Punct::ColonColon);
             }
-            qual = Some(self.nested_name_template_id(class, qual, name, &args, kw, loc)?);
+            qual = Some(self.nested_name_template_id(class, qual, name, &args, kw, (start, loc))?);
             if stop {
                 break;
             }
         }
         Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
+    }
+
+    /// Skips the `name ::` and `name<args> ::` components left after a
+    /// nested-name-specifier that failed (diagnosed), so the declarator
+    /// goes on at its unqualified-id (clang annotates the whole invalid
+    /// `CXXScopeSpec`).
+    pub(crate) fn skip_nested_name_rest(&mut self) {
+        loop {
+            let mut i = self.pos;
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Template) {
+                i += 1;
+            }
+            if self.ident_of(self.tok_at(i)).is_none() {
+                return;
+            }
+            let mut j = i + 1;
+            if Self::punct_of(self.tok_at(j)) == Some(Punct::Less) {
+                match self.skip_template_args(j) {
+                    Some((close, false)) => j = close + 1,
+                    _ => return,
+                }
+            }
+            if Self::punct_of(self.tok_at(j)) != Some(Punct::ColonColon) {
+                return;
+            }
+            while self.pos <= j {
+                self.bump();
+            }
+        }
     }
 
     /// The `name<args>::` component of a nested-name-specifier after `qual`,
@@ -1519,12 +1548,16 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         name: Symbol,
         args: &[kiln_ast::types::TemplateArg],
         kw: Option<Loc>,
-        loc: Loc,
+        (start, loc): (Loc, Loc),
     ) -> Result<(DeclId, NnsId), ()> {
         let template_kw = kw.is_some();
         // The component begins at its `template` keyword, if any (clang's
         // last-qualifier-name location).
         let head = kw.unwrap_or(loc);
+        // clang 22's template specialization type spans its qualifier: an
+        // undefined `N::A<long>::B<int>::` is reported at the start of
+        // the nested-name-specifier, clang 19's at the template-name.
+        let complete_at = if self.s.clang_compat >= 22 { start } else { head };
         let dep_prefix = qual.is_some_and(|(c, _)| self.s.is_dependent_ctx(c));
         let prefix_nns = qual.map(|q| q.1);
         Ok(match (class, qual) {
@@ -1539,7 +1572,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     return Err(());
                 };
                 self.s
-                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, head)
+                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, complete_at)
                     .ok_or(())?
             }
             (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
