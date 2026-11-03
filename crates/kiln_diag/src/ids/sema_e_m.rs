@@ -147,6 +147,7 @@ sema_inconsistent_missing_override = Warning [InconsistentMissingOverride] (1) "
 sema_increment_bool = WarningError [IncrementBool] (0) "ISO C++17 does not allow incrementing expression of type bool";
 sema_increment_complex = Extension [C2yExtensions] (1) "'{0}' on an object of complex type is a C2y extension";
 sema_indirect_goto_in_protected_scope = Error (1) "cannot jump from this {0:indirect|asm} goto statement to one of its possible targets";
+sema_indirect_goto_without_addrlabel = Error (0) "indirect goto in function with no address-of-label expressions";
 sema_indirection_incomplete = Error (1) "indirection not permitted on operand of type {0}";
 sema_indirection_requires_pointer = Error (1) "indirection requires pointer operand ({0} invalid)";
 sema_indirection_through_null = Warning [NullDereference] (0) "indirection of non-volatile null pointer will be deleted, not trap";

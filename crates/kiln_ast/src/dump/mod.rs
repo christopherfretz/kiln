@@ -950,6 +950,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 stmt(Some(r.body), kids);
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
+            StmtKind::IndirectGotoStmt => expr(Some(stmts.indirect_goto_target(s)), kids),
             StmtKind::CoreturnStmt => {
                 expr(stmts.coreturn_operand(s), kids);
                 expr(stmts.coreturn_promise_call(s), kids);

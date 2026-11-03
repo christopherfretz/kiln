@@ -3738,6 +3738,12 @@ impl<'a> AstBuilder<'a> {
         self.stmt(StmtKind::GotoStmt, 0, loc, label.raw(), 0)
     }
 
+    /// GNU `goto *target;` (clang `IndirectGotoStmt`): `a` = the target
+    /// (already converted to `const void*`), `b` = the `*` location.
+    pub fn indirect_goto_stmt(&mut self, target: ExprId, loc: Loc, star: Loc) -> StmtId {
+        self.stmt(StmtKind::IndirectGotoStmt, 0, loc, target.raw(), star.to_raw())
+    }
+
     /// A try-block ([except.pre]/1): `try compound-statement handler-seq`
     /// (`a` = the compound statement, `b` = the `CXXCatchStmt` list).
     pub fn try_stmt(&mut self, block: StmtId, handlers: &[StmtId], loc: Loc) -> StmtId {
