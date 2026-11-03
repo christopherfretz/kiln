@@ -5,8 +5,8 @@
 // error at the label name; a non-identifier operand is "expected
 // identifier"; a label never defined is diagnosed at the function's end.
 // Returning one is -Wreturn-stack-address, once in a template definition
-// and again per instantiation. Code generation is not supported yet
-// (spec/parse.md §6.1).
+// and again per instantiation. Code generation and constant evaluation
+// are covered by stmt.goto/computed-goto-*.cpp.
 //@ expect: compile-fail
 //@ strict-diags
 //@ args: -Wgnu-label-as-value
