@@ -973,6 +973,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             d = d.context(self.inst.stack.context_key());
             let sev = self.diags.severity_at(id, d.loc());
             if self.inst.stack.is_sfinae() {
+                if self.inst.suppress_access.get() && is_access_error(id) {
+                    if let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
+                        && s.first.is_none()
+                    {
+                        s.first = Some(d);
+                    }
+                    return;
+                }
                 if (sev >= kiln_diag::Severity::Error || is_sfinae_failure(id))
                     && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
                 {
@@ -1442,6 +1450,20 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 /// substitution failure whatever their severity, even when disabled
 /// (`Sema::EmitDiagnostic` consults the SFINAE response before the
 /// mapping). The C99-designator extensions are not among them.
+/// An access-control error ([class.access]) that clang's
+/// `SuppressAccessChecks` discards.
+fn is_access_error(id: DiagId) -> bool {
+    matches!(
+        id,
+        DiagId::sema_access_base_conv
+            | DiagId::sema_access_base_ctor
+            | DiagId::sema_access_ctor
+            | DiagId::sema_access_dtor
+            | DiagId::sema_access_field_ctor
+            | DiagId::sema_access_member
+    )
+}
+
 fn is_sfinae_failure(id: DiagId) -> bool {
     matches!(
         id,

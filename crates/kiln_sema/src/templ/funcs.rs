@@ -552,6 +552,7 @@ impl Sema<'_, '_> {
         // An explicit instantiation that writes none takes the template's
         // ([temp.explicit]/9; libstdc++'s `extern template bool
         // has_facet<...>(const locale&)` of a `throw()` template).
+        let suppress = self.clang_compat >= 22 && !self.inst.suppress_access.replace(true);
         for &ft in templates {
             match self.deduce_decl(ft, explicit, ty, loc) {
                 Ok(s) => {
@@ -570,6 +571,9 @@ impl Sema<'_, '_> {
                 Err(f) if f.tdk == crate::templ::deduce::Tdk::Invalid => {}
                 Err(f) => failures.push(self.deduction_note(ft, &f, self.loc_of(ft))),
             }
+        }
+        if suppress {
+            self.inst.suppress_access.set(false);
         }
         let fname = self.decl_name_str(name);
         if matches.is_empty() {

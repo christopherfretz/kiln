@@ -297,6 +297,9 @@ impl Sema<'_, '_> {
         // `__unqualified_swappable_with` must see its poison-pill `swap`
         // when `swappable<T>` is checked from inside namespace std.
         let ctx = self.ast.decls.get(entity).ctx().unwrap_or(self.ast.tu);
+        // Satisfaction checks access also while an explicit
+        // specialization's candidates are deduced (clang 22, §6.9).
+        let suppress = self.inst.suppress_access.replace(false);
         let (ok, mut records) = self.in_inst_context(ctx, |s| {
             let mut records = Vec::new();
             let mut ok = true;
@@ -308,6 +311,7 @@ impl Sema<'_, '_> {
             }
             (ok, records)
         });
+        self.inst.suppress_access.set(suppress);
         self.pop_inst_frame();
         if ok {
             records.clear();

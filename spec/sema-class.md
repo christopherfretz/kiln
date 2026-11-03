@@ -283,7 +283,19 @@ SFINAE context are never delayed, so they run in the template's context and
 an inaccessible name is a substitution failure (`candidate template ignored:
 substitution failure [with T = C, U = typename C::P]: 'P' is a private member
 of 'C'`), for an explicit instantiation and for a call in any declaration's
-declarator alike (tests/conformance/temp.explicit/access-in-substitution.cpp).
+declarator alike (clang 19, `-fclang-compat<22`:
+tests/conformance/temp.explicit/access-in-substitution-clang19.cpp). From
+clang 21 on (`-fclang-compat>=22`) the deduction of an explicit
+specialization's or instantiation's candidates (`match_function_spec_in`)
+runs with access checks suppressed (`inst.suppress_access`, clang
+`SuppressAccessChecks`): an access error in its SFINAE context is no
+substitution failure, only the note's reason when the candidate fails for
+another reason (`int N = T::obj` with a non-constant `obj`); constraint
+satisfaction still checks access (`satisfy` clears the flag). Deviation: a
+later call reuses the specialization so formed, where clang 22 reports the
+access error at the call; clang 22 also fails the instantiation after an
+earlier failed call deduced the same arguments (order-dependent, not copied)
+(tests/conformance/temp.explicit/access-in-substitution.cpp).
 A default template argument that was formed but diagnosed is shown in the
 note's argument list, as clang keeps it (`deduce_call.rs`). The template arguments of a
 class-head `X<args>` that declares or defines a specialization (partial or

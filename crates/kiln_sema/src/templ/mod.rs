@@ -380,6 +380,11 @@ pub struct InstState {
     pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
     /// Drop the next error passed to `emit` (set by `incomplete_note`).
     pub(crate) suppress_next_error: std::cell::Cell<bool>,
+    /// Deducing the candidates of an explicit specialization or
+    /// instantiation at clang 22 (§6.9): an access error inside a SFINAE
+    /// context is no substitution failure, only the reason shown if the
+    /// deduction fails otherwise (clang 21+ `SuppressAccessChecks`).
+    pub(crate) suppress_access: std::cell::Cell<bool>,
     /// The template-id whose arguments `check_template_args` converts:
     /// its template name, the point of a `PriorArgSubstitution` frame.
     pub(crate) template_id_loc: Option<Loc>,
