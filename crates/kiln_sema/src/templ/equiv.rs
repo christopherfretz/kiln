@@ -24,6 +24,15 @@ impl Sema<'_, '_> {
     /// (their canonical profiles are equal). Used for requires-clauses,
     /// type-constraints, and atomic constraints.
     pub(crate) fn exprs_equivalent(&self, a: ExprId, b: ExprId) -> bool {
+        if a == b {
+            return true;
+        }
+        let m = &self.friend_cmp_constraints;
+        let (a, b) = if m.is_empty() {
+            (a, b)
+        } else {
+            (m.get(&a).copied().unwrap_or(a), m.get(&b).copied().unwrap_or(b))
+        };
         a == b || self.ast.exprs_equivalent(a, b)
     }
 

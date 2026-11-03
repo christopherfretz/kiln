@@ -264,6 +264,18 @@ impl InstantiationStack {
         self.frames.len() as u32 - self.non_inst
     }
 
+    /// clang's `inTemplateInstantiation`: a frame that is an
+    /// instantiation, or a constraint-satisfaction check of a template or
+    /// concept-id (clang's `ConstraintsCheck` is an instantiation record
+    /// although kiln's [`Self::depth`] does not count it).
+    pub fn in_instantiation_record(&self) -> bool {
+        self.depth() > 0
+            || self
+                .frames
+                .iter()
+                .any(|f| matches!(f.kind, FrameKind::ConstraintsCheck | FrameKind::ConceptCheck))
+    }
+
     /// Whether diagnostics are currently in a SFINAE context (the
     /// innermost frame that says).
     pub fn is_sfinae(&self) -> bool {
