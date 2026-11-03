@@ -2456,6 +2456,40 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// A value-dependent splice `[: operand :]` in an expression position
+    /// (spec/reflection.md §5; template patterns only): `a` is the operand,
+    /// `b` the object expression of a member splice `base.[: m :]` /
+    /// `base->[: m :]` (0 otherwise), `aux` bit 0 the `->`. A splice
+    /// whose operand is not dependent is the expression it designates.
+    pub fn splice_expr(
+        &mut self,
+        operand: ExprId,
+        base: Option<(ExprId, bool)>,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let mut deps = ExprDeps::TYPE_VALUE_INST;
+        let unexpanded =
+            |s: &Self, e: ExprId| s.ast.exprs.get(e).deps().contains(ExprDeps::UNEXPANDED_PACK);
+        if unexpanded(self, operand) || base.is_some_and(|(b, _)| unexpanded(self, b)) {
+            deps |= ExprDeps::UNEXPANDED_PACK;
+        }
+        let aux = u8::from(base.is_some_and(|(_, arrow)| arrow));
+        let b = base.map_or(0, |(b, _)| b.raw());
+        let e = self.simple(
+            ExprKind::CXXSpliceExpr,
+            ValueCategory::LValue,
+            deps,
+            aux,
+            QualType::DEPENDENT,
+            loc,
+            operand.raw(),
+            b,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
+        e
+    }
+
     /// `__array_rank(T)` / `__array_extent(T, dim)` (§9.4): a `size_t`
     /// prvalue. Value-dependent if `arg` or `dim` is.
     #[allow(clippy::too_many_arguments, reason = "one per field of the node")]

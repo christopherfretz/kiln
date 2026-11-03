@@ -294,7 +294,7 @@ impl Sema<'_, '_> {
     /// alias of `<dependent type>` linked into no context, so that
     /// [`Sema::is_dependent_ctx`] holds for it (the specifier itself
     /// carries the `decltype`).
-    fn decltype_scope_marker(&mut self) -> DeclId {
+    pub(crate) fn decltype_scope_marker(&mut self) -> DeclId {
         if let Some(d) = self.templ.decltype_scope {
             return d;
         }
