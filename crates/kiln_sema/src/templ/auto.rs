@@ -429,6 +429,23 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether `t` contains a placeholder, deduced or not (as
+    /// [`Sema::placeholder_step`] walks it; clang `getContainedAutoType`).
+    /// A templated function's `auto` return type is "deduced" as a
+    /// dependent type, so this is how a function template's deduced
+    /// return type is recognized.
+    pub(crate) fn contains_placeholder(&self, t: QualType) -> bool {
+        let mut cur = t;
+        for _ in 0..256 {
+            if let TypeView::Auto { .. } = self.ast.types.canonical_view(cur) {
+                return true;
+            }
+            let Some(next) = self.placeholder_step(cur) else { return false };
+            cur = next;
+        }
+        false
+    }
+
     /// The undeduced placeholder contained in `t` (as
     /// [`Sema::placeholder_step`] walks it), canonical.
     pub(crate) fn contained_placeholder(&self, t: QualType) -> Option<QualType> {

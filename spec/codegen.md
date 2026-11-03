@@ -1415,9 +1415,9 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   [temp.explicit]/12 instantiates under the declaration is emitted
   `available_externally` the same way (`Cg::keeps_available_externally`):
   one whose pattern is inline (declared `inline` or `constexpr`, or
-  defined in its class; an instantiated out-of-class member counts as
-  its pattern does) or that has a deduced return type, and that carries
-  no `noinline`. A non-inline member and a `noinline` one stay
+  defined in its class; sema marks an instantiation inline as its
+  pattern is, spec/sema-templates.md) or that has a deduced return type,
+  and that carries no `noinline`. A non-inline member and a `noinline` one stay
   declarations; a static local of an emitted one is `linkonce_odr` in
   its own comdat; C1/D1 calls go to C2/D2 (the structor alias rule).
   Not modelled: clang's `isTriviallyRecursive` exclusion.

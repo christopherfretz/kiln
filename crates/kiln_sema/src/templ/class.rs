@@ -1093,6 +1093,9 @@ impl Sema<'_, '_> {
             return;
         };
         let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };
+        if self.suppressed_by_explicit_inst_declaration(f, pattern) {
+            return;
+        }
         if self.is_function_spec(f) {
             // A function template specialization (WP-071, §4.4).
             self.instantiate_function_spec_definition(f, pdef, body, poi);
@@ -1126,6 +1129,33 @@ impl Sema<'_, '_> {
         });
         self.replay_dependent_access(pdef, f);
         self.pop_inst_frame();
+    }
+
+    /// [temp.explicit]/12: under an explicit instantiation declaration
+    /// (of `f` itself or of an enclosing class), only an inline function
+    /// or one with a deduced return type is implicitly instantiated
+    /// (clang `InstantiateFunctionDefinition` returns early for
+    /// `TSK_ExplicitInstantiationDeclaration` unless the pattern
+    /// `isInlined()` or its return type contains `auto`). A constexpr or
+    /// consteval function is inline ([dcl.constexpr]/1).
+    fn suppressed_by_explicit_inst_declaration(&self, f: DeclId, pattern: DeclId) -> bool {
+        if self.ast.governing_explicit_inst_kind(f)
+            != Some(SpecKind::ExplicitInstantiationDeclaration)
+        {
+            return false;
+        }
+        let spec_any = |d: DeclId, p: &dyn Fn(kiln_ast::decl::FnSpec) -> bool| {
+            self.ast.redecls_of(d).any(|r| self.ast.decls.function(r).is_some_and(|x| p(x.spec)))
+        };
+        let inline = self.instantiated_pattern_inline(f).unwrap_or(false)
+            || spec_any(pattern, &|s| s.constexpr_kind() != kiln_ast::decl::ConstexprKind::None);
+        let deduced = spec_any(pattern, &kiln_ast::decl::FnSpec::return_deduced)
+            || spec_any(f, &kiln_ast::decl::FnSpec::return_deduced)
+            || self.ast.redecls_of(pattern).any(|r| {
+                let ty = self.ast.decls.get(r).ty().unwrap_or(QualType::ERROR);
+                self.sugared_proto(ty).is_some_and(|p| self.contains_placeholder(p.ret()))
+            });
+        !inline && !deduced
     }
 
     /// A special member whose pattern is defaulted out of line
@@ -1237,6 +1267,17 @@ impl Sema<'_, '_> {
         }) else {
             return;
         };
+        // [temp.explicit]/12: an explicit instantiation declaration
+        // suppresses the definition unless the member may be usable in
+        // constant expressions (clang `InstantiateVariableDefinition`).
+        // The member stays pending so a later explicit instantiation
+        // definition still instantiates it.
+        if self.ast.governing_explicit_inst_kind(v)
+            == Some(SpecKind::ExplicitInstantiationDeclaration)
+            && !self.might_be_constant_var(v)
+        {
+            return;
+        }
         self.inst.member_defs.remove(&v);
         let Some(spec) = self.inst_owner(v) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };

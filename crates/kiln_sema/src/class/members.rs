@@ -5,6 +5,7 @@
 
 use kiln_ast::decl::{Access, BaseSpec, DeclKind, DefinitionBits, TagKind, VarSpec, VarStorage};
 use kiln_ast::names::DeclName;
+use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
@@ -624,11 +625,22 @@ impl Sema<'_, '_> {
     /// implicit `inline` of a function defined in its class when it is
     /// attached to the global module ([class.mfct]/1, [class.friend]/7;
     /// one attached to a named module is not inline, spec/modules.md §7).
-    /// Returns how many scopes were pushed.
+    /// An instantiation is inline exactly when its pattern's definition
+    /// is (clang `InstantiateFunctionDefinition` copies `isInlined`): an
+    /// instantiated member is declared in its class, but one defined out
+    /// of class from a non-inline pattern is not inline
+    /// ([temp.explicit]/12 depends on it). Returns how many scopes were
+    /// pushed.
     pub(crate) fn enter_definition_scopes(&mut self, f: DeclId) -> usize {
         let Some(ctx) = self.ast.decls.get(f).ctx() else { return 0 };
         let lexical = self.ast.decls.lexical_ctx(f).unwrap_or(ctx);
-        if self.kind_of(lexical) == DeclKind::CXXRecord
+        if let Some(inline) = self.instantiated_pattern_inline(f) {
+            if inline && !self.ast.decls.function(f).is_some_and(|x| x.spec.is_inline()) {
+                self.ast
+                    .decls
+                    .mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
+            }
+        } else if self.kind_of(lexical) == DeclKind::CXXRecord
             && matches!(
                 self.kind_of(f),
                 DeclKind::CXXMethod
@@ -644,6 +656,34 @@ impl Sema<'_, '_> {
                 .mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
         }
         self.push_scopes_between(ctx, lexical)
+    }
+
+    /// For a function instantiated from a template pattern: whether the
+    /// pattern's definition is inline (clang `FunctionDecl::isInlined`:
+    /// `inline` on a redeclaration of the pattern, or defined in its
+    /// class). `None` when `f` is not an instantiation (also when it is
+    /// explicitly specialized: [temp.expl.spec]/12, inline only as
+    /// declared) or its pattern has no definition.
+    pub(crate) fn instantiated_pattern_inline(&self, f: DeclId) -> Option<bool> {
+        let first = self.ast.first(f);
+        let explicit_spec = |k: SpecKind| k == SpecKind::ExplicitSpecialization;
+        if self.ast.member_spec_info(first).is_some_and(|(_, x)| explicit_spec(x.kind))
+            || self.ast.spec_info(first).is_some_and(|(_, x)| explicit_spec(x.kind))
+        {
+            return None;
+        }
+        let pattern = self.ast.instantiated_from(first)?;
+        let pdef = self.ast.definition(pattern)?;
+        let spec = |d: DeclId| self.ast.decls.function(d).map(|x| x.spec);
+        let plex = self.ast.decls.lexical_ctx(pdef).or_else(|| self.ast.decls.get(pdef).ctx());
+        let in_class = plex.is_some_and(|l| {
+            self.kind_of(l) == DeclKind::CXXRecord && self.ast.module_attachment(l).is_none()
+        });
+        Some(
+            in_class
+                || spec(pdef).is_some_and(|s| s.implicit_inline())
+                || self.ast.redecls_of(pattern).any(|r| spec(r).is_some_and(|s| s.is_inline())),
+        )
     }
 
     /// Pushes the scopes of `ctx` and its enclosing contexts up to (not

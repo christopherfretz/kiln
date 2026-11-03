@@ -1,0 +1,50 @@
+Dumping X:
+ClassTemplateDecl X
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-CXXRecordDecl struct X definition
+| |-CXXMethodDecl inl 'T ()'
+| |-CXXMethodDecl non 'T ()'
+| |-CXXMethodDecl in 'T ()' implicit-inline
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-IntegerLiteral 'int' 0
+| `-CXXRecordDecl struct N definition
+|   `-FieldDecl t 'T'
+|-ClassTemplateSpecializationDecl struct X definition implicit_instantiation
+| |-TemplateArgument type 'int'
+| |-CXXMethodDecl used inl 'int ()' implicit-inline
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-IntegerLiteral 'int' 1
+| |-CXXMethodDecl used non 'int ()'
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-IntegerLiteral 'int' 2
+| |-CXXMethodDecl used in 'int ()' implicit-inline
+| | `-CompoundStmt
+| |   `-ReturnStmt
+| |     `-IntegerLiteral 'int' 0
+| `-CXXRecordDecl struct N
+`-ClassTemplateSpecialization 'X'
+
+Dumping X::inl:
+CXXMethodDecl parent inl 'T ()' inline
+`-CompoundStmt
+  `-ReturnStmt
+    `-IntegerLiteral 'int' 1
+
+Dumping X::non:
+CXXMethodDecl parent non 'T ()'
+`-CompoundStmt
+  `-ReturnStmt
+    `-IntegerLiteral 'int' 2
+
+Dumping X:
+ClassTemplateSpecializationDecl struct X definition explicit_instantiation_declaration
+|-TemplateArgument type 'long'
+|-CXXMethodDecl inl 'long ()'
+|-CXXMethodDecl non 'long ()'
+|-CXXMethodDecl in 'long ()' implicit-inline
+`-CXXRecordDecl struct N definition
+  `-FieldDecl t 'long'
+
