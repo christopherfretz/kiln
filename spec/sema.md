@@ -7231,9 +7231,6 @@ Everything is gated on `Sema::reflection` (driver `-freflection`).
   - prototype scope (§4.3)
   - `dynamic_cast` and polymorphic `typeid`
   - class and array temporaries (§6.1) and compound literals (§5.8)
-  - `-Wconstant-conversion` and `-Wliteral-conversion` alongside
-    narrowing errors in list-initialization (outside braced lists they
-    landed: spec/sema-conv.md §9)
   - statement expressions: `-Wgnu-statement-expression`, jumps into
     one, and class-glvalue results
 - **Constant evaluation** (what the Oven supports in M2 is in

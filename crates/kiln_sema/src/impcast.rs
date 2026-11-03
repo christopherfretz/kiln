@@ -71,7 +71,19 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 k if k.is_explicit_cast() => {
-                    let sub = self.strip_impcast(self.ast.exprs.operand(s));
+                    let mut sub = self.strip_impcast(self.ast.exprs.operand(s));
+                    // clang 22 also skips the conversion of the one element
+                    // of a braced functional cast (`int{6.5}`, `T{4.5}` of
+                    // an aggregate `T`): its narrowing is diagnosed instead
+                    // (WP-465). clang 19 checks it.
+                    if self.clang_compat >= 22
+                        && self.ast.exprs.get(sub).kind() == ExprKind::InitListExpr
+                    {
+                        let mut it = self.ast.lists.iter(self.ast.exprs.init_list_inits(sub));
+                        if let (Some(only), None) = (it.next(), it.next()) {
+                            sub = self.strip_impcast(only);
+                        }
+                    }
                     work.push((sub, cc));
                     continue;
                 }

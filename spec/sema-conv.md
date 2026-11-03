@@ -277,6 +277,17 @@ floating, `format_e6`). Both underline the initializer, and the note
 carries clang's two insertions `static_cast<T>(` at its start and `)` after
 its last token (only for a spellable `T`, a typedef or builtin; WP-421).
 
+The full-expression's -Wliteral-conversion / -Wconstant-conversion
+(§9 item 3) still checks a narrowed element, so `S{3.5, 'x'}` reports
+both, as clang does. At `-fclang-compat=22` the one element of a braced
+functional cast (`int{6.5}`, `I{7.5}` for a typedef `I`, `T{4.5}` of a
+one-member aggregate, `int{(9.5)}`) is not checked (clang 22
+`CheckImplicitConversion` stops at the explicit cast and skips a
+one-element list under it), so only the narrowing error is reported; a
+list of several elements and a nested list are checked. At 19 every
+element is (WP-465, `impcast.rs` `check_implicit_conversions`; tests
+`expr.type.conv/braced-cast-literal-conversion{,-19}.cpp`).
+
 ## 8. Literal typing (`literal.rs`)
 These functions take the lexer's classification (`kiln_lex::literal`) and
 the target:
