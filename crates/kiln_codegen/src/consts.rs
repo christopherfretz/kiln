@@ -148,7 +148,7 @@ impl Cg<'_> {
         let elems: Vec<Value> = (0..(total / 8) as usize)
             .map(|i| self.m.const_int(LTy::I8, i128::from((w[i / 8] >> ((i % 8) * 8)) as u8)))
             .collect();
-        Some(self.array_const(t, LTy::I8, &elems, true))
+        Some(self.array_const(t, LTy::I8, &elems, elems.len()))
     }
 
     /// A scalar constant of IR type `t`.
