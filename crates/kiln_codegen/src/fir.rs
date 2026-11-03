@@ -10,9 +10,9 @@
 mod mem2reg;
 
 use kiln_llvm::{
-    BinOp, BlockId, CallOpts, CastOp, Clause, CmpXchgOpts, FastMath, Flags, FloatPredicate, FuncId,
-    GepFlags, IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module,
-    OperandBundle, Ordering, RmwOp, SyncScope, TypeId, Value,
+    Attr, BinOp, BlockId, CallOpts, CastOp, Clause, CmpXchgOpts, FastMath, Flags, FloatPredicate,
+    FuncId, GepFlags, IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, ModRef,
+    Module, OperandBundle, Ordering, RmwOp, SyncScope, TypeId, Value, ValueRef,
 };
 
 /// A block of the buffer.
@@ -211,7 +211,40 @@ pub(crate) enum Op {
     },
 }
 
+/// Whether `op` calls a function whose attributes say `memory(none)`.
+fn calls_memory_none(m: &Module, op: &Op) -> bool {
+    let (Op::Call { callee: V::C(c), .. }
+    | Op::Invoke { callee: V::C(c), .. }
+    | Op::CallBr { callee: V::C(c), .. }) = op
+    else {
+        return false;
+    };
+    let ValueRef::Func(g) = c.get() else { return false };
+    m.attrs_of(m.func(g).attrs.func).iter().any(|a| {
+        matches!(a, Attr::Memory(e) if e.argmem == ModRef::None
+            && e.inaccessiblemem == ModRef::None
+            && e.other == ModRef::None)
+    })
+}
+
 impl Op {
+    /// LLVM `Instruction::mayReadOrWriteMemory`, calls aside from their
+    /// callee's memory effects.
+    fn may_access_memory(&self) -> bool {
+        matches!(
+            self,
+            Op::Load { .. }
+                | Op::Store { .. }
+                | Op::Call { .. }
+                | Op::AssumeBundle { .. }
+                | Op::Invoke { .. }
+                | Op::CallBr { .. }
+                | Op::AtomicRmw { .. }
+                | Op::CmpXchg { .. }
+                | Op::Fence { .. }
+        )
+    }
+
     fn is_terminator(&self) -> bool {
         matches!(
             self,
@@ -370,6 +403,12 @@ pub(crate) struct Fir {
     params: Vec<TypeId>,
     cur: Option<Blk>,
     igoto: Option<IndirectGoto>,
+    /// The `llvm.access.group` of the active parallel loops (clang
+    /// `LoopInfoStack::InsertHelper`): attached to every instruction
+    /// [`Fir::push`] appends that may access memory.
+    access_group: Option<MetadataId>,
+    /// The `llvm.access.group` kind, once a parallel loop was entered.
+    access_kind: Option<MdKindId>,
 }
 
 impl Fir {
@@ -384,6 +423,8 @@ impl Fir {
             params,
             cur: None,
             igoto: None,
+            access_group: None,
+            access_kind: None,
         };
         let e = f.create_block();
         f.place_at_end(e);
@@ -677,14 +718,28 @@ impl Fir {
         self.insts[i as usize].md.push((kind, md));
     }
 
-    /// Appends `op` with result type `ty` to the current block.
+    /// Sets the `llvm.access.group` (kind `kind`) of the instructions
+    /// appended from now on (WP-462, spec/codegen.md "Loop metadata").
+    pub fn set_access_group(&mut self, kind: MdKindId, group: Option<MetadataId>) {
+        self.access_kind = Some(kind);
+        self.access_group = group;
+    }
+
+    /// Appends `op` with result type `ty` to the current block. Under a
+    /// parallel loop an instruction that may access memory (LLVM
+    /// `mayReadOrWriteMemory`) gets the loop's access group; a call does
+    /// unless its callee is `memory(none)` (checked by [`Fir::lower`]).
     pub fn push(&mut self, op: Op, ty: TypeId) -> V {
         let b = self.cur.unwrap_or_else(|| panic!("kiln_codegen: no insertion point for {op:?}"));
         let n = self.insts.len() as u32;
         for s in op.successors() {
             self.blocks[s.0 as usize].uses += 1;
         }
-        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        let md = match (self.access_kind, self.access_group) {
+            (Some(k), Some(g)) if op.may_access_memory() => vec![(k, g)],
+            _ => Vec::new(),
+        };
+        self.insts.push(Inst { op, ty, block: Some(b), md });
         self.blocks[b.0 as usize].insts.push(n);
         V::I(n)
     }
@@ -887,6 +942,17 @@ impl Fir {
     /// [`V::P`] placeholders.
     pub fn lower(&self, m: &mut Module, f: FuncId, ph: &[Option<Value>]) -> IrResult<()> {
         let phv = |n: u32| ph[n as usize].unwrap_or_else(|| panic!("unresolved placeholder {n}"));
+        // A call to a `memory(none)` function accesses no memory, so it
+        // gets no access group.
+        let no_group: Vec<u32> = match self.access_kind {
+            Some(k) => (0..self.insts.len() as u32)
+                .filter(|&i| {
+                    let inst = &self.insts[i as usize];
+                    inst.md.iter().any(|&(x, _)| x == k) && calls_memory_none(m, &inst.op)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
         let mut b = IrBuilder::new(m, f);
         let mut bmap: Vec<Option<BlockId>> = vec![None; self.blocks.len()];
         for &bb in &self.layout {
@@ -1000,6 +1066,9 @@ impl Fir {
                 };
                 if let Some(id) = r.as_inst() {
                     for &(k, md) in &inst.md {
+                        if Some(k) == self.access_kind && no_group.binary_search(&i).is_ok() {
+                            continue;
+                        }
                         b.func().add_inst_metadata(id, k, md);
                     }
                 }

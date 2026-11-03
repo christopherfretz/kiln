@@ -800,12 +800,29 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `followup_epilogue`) → unroll-and-jam → partial unroll → pipelining,
   each stage adding `llvm.loop.isvectorized` / `unroll.disable` /
   `unroll_and_jam.disable` / `distribute.enable` as clang does; the
-  `mustprogress` entry comes first in the innermost node. **Not
-  modelled:** `vectorize(assume_safety)` / `interleave(assume_safety)`
-  set only `vectorize.enable`; clang's parallel-loop marking
-  (`llvm.access.group` on each memory access in the body and
-  `llvm.loop.parallel_accesses`) is not emitted.
-  `tests/codegen/loop_hints.cpp`, `tests/codegen/loop_hints_o1.cpp`.
+  `mustprogress` entry comes first in the innermost node.
+  `vectorize(assume_safety)` / `interleave(assume_safety)` set
+  `vectorize.enable` and make the loop parallel (clang `IsParallel`,
+  WP-462): pushing it makes a `distinct !{}` access group (before the
+  loop id), its node lists `!{!"llvm.loop.parallel_accesses", group}`
+  right after `mustprogress` (in the before- and after-jam nodes under
+  an unroll-and-jam parent too), and while it is active every
+  instruction `Fir::push` appends that may access memory (load, store,
+  atomic, fence, call, `invoke`, `callbr`; LLVM `mayReadOrWriteMemory`)
+  gets `!llvm.access.group` (clang `LoopInfoStack::InsertHelper`): the
+  group of the one active parallel loop, or the uniqued list of every
+  active parallel loop's group, outermost first. A call whose callee is
+  a `memory(none)` function (a `const` function, `llvm.ctpop`) gets none;
+  only the callee's attributes count, as clang tags the call before
+  setting the call-site attributes. Instructions inserted at another
+  position (`insert_before`/`insert_after`, clang `new X(.., InsertPt)`)
+  get none either. The loop is active where clang pushes it: from
+  before the condition of a `for` and a range-based `for`, from after
+  the condition of a `while` (its cleanups included), and only around a
+  `do` loop's back-edge.
+  `tests/codegen/loop_hints.cpp`, `tests/codegen/loop_hints_o1.cpp`,
+  `tests/codegen/loop_parallel.cpp`, `tests/codegen/loop_parallel_o1.cpp`,
+  `tests/codegen/loop_parallel_jam.cpp`.
 - **Forwarding blocks** (clang `SimplifyForwardingBlocks`): a loop
   condition block that only branches on is folded into its predecessor
   only while no cleanup (a destructor, a lifetime end, a `noexcept`
