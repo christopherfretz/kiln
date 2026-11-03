@@ -1699,7 +1699,7 @@ impl Substituter<'_, '_, '_> {
         // default member initializers are not instantiated).
         for m in members {
             let n = *sub.sema.ast.decls.get(m);
-            if n.flags().contains(DeclFlags::IMPLICIT) {
+            if n.flags().contains(DeclFlags::IMPLICIT) || sub.sema.is_implicit_friend(m) {
                 continue;
             }
             if n.has(DeclFlags::INVALID)

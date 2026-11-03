@@ -267,6 +267,23 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// The error for an out-of-class definition redeclaring member `p`
+    /// that is implicitly declared or whose first declaration is
+    /// explicitly defaulted (clang `MergeFunctionDecl`'s
+    /// `err_definition_of_implicitly_declared_member` /
+    /// `err_definition_of_explicitly_defaulted_member`, ahead of the
+    /// exception-specification and `constexpr` checks), with the
+    /// special-member select (6: any other function, a defaulted
+    /// comparison).
+    pub(crate) fn defaulted_member_definition(&self, p: DeclId) -> Option<(DiagId, String)> {
+        let sel = || self.special_kind_of(p).map_or_else(|| "6".to_owned(), SpecialKind::sel);
+        if self.ast.decls.get(p).has(DeclFlags::IMPLICIT) {
+            return Some((DiagId::sema_define_implicit_member, sel()));
+        }
+        (self.fn_spec(self.ast.first(p)).defaulted() == Defaulted::Explicit)
+            .then(|| (DiagId::sema_define_explicitly_defaulted_member, sel()))
+    }
+
     /// Which special member function `f` is, if any ([special]/1;
     /// clang `getSpecialMember`). Function templates are never special
     /// members.
