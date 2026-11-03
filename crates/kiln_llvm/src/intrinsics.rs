@@ -233,6 +233,20 @@ pub fn lifetime_end(m: &mut Module) -> FuncId {
     lifetime(m, "llvm.lifetime.end")
 }
 
+/// `ptr @llvm.invariant.start.p0(i64 immarg size, ptr nocapture)`.
+pub fn invariant_start(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.invariant.start", &[p]);
+    declare(
+        m,
+        &name,
+        p,
+        &[(TypeId::I64, &[Attr::Flag(ImmArg)]), (p, &[Attr::Flag(NoCapture)])],
+        &[],
+        Shape::NoSyncArgMem,
+    )
+}
+
 /// `void @llvm.trap()`.
 pub fn trap(m: &mut Module) -> FuncId {
     declare(m, "llvm.trap", TypeId::VOID, &[], &[], Shape::Trap)
