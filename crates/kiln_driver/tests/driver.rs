@@ -650,6 +650,88 @@ fn literal_conversion_and_macro_argument_ranges_like_clang() {
     assert_eq!((o.code, o.stderr.as_str()), (1, MACRO_RANGE_GOLDEN));
 }
 
+/// [expr.log.and], [stmt.if], [cpp.replace]: fix-its are file edits
+/// (clang `Lexer::makeFileCharRange`, `edit::Commit`): a location that
+/// begins or ends every macro expansion it is in maps to the invocation,
+/// a macro argument to where it is written; otherwise the removal of
+/// `-Wconstant-logical-operand`'s constant (`G(5)`) and both
+/// `-Wunreachable-code` silencing insertions (`X 1`) are dropped while
+/// the notes stay (WP-419).
+const MACRO_FIXIT_SOURCE: &str = r"void g();
+bool h();
+#define LHS a
+#define ID(x) x
+#define G(x) x; (void)0
+#define NOT !
+#define X h() && !
+bool f1(int a) { return LHS && 5; }
+bool f2(int a) { return ID(a) && ID(5); }
+bool f3(int a) { return a && G(5); }
+void u1() { if (NOT 1) g(); }
+void u2() { if (X 1) g(); }
+";
+
+/// clang 19's and clang 22's `-fsyntax-only -Wunreachable-code` output
+/// for `MACRO_FIXIT_SOURCE`.
+const MACRO_FIXIT_GOLDEN: &str = r"<stdin>:8:29: warning: use of logical '&&' with constant operand [-Wconstant-logical-operand]
+    8 | bool f1(int a) { return LHS && 5; }
+      |                             ^  ~
+<stdin>:8:29: note: use '&' for a bitwise operation
+    8 | bool f1(int a) { return LHS && 5; }
+      |                             ^~
+      |                             &
+<stdin>:8:29: note: remove constant to silence this warning
+    8 | bool f1(int a) { return LHS && 5; }
+      |                             ^~~~
+<stdin>:9:31: warning: use of logical '&&' with constant operand [-Wconstant-logical-operand]
+    9 | bool f2(int a) { return ID(a) && ID(5); }
+      |                               ^     ~
+<stdin>:9:31: note: use '&' for a bitwise operation
+    9 | bool f2(int a) { return ID(a) && ID(5); }
+      |                               ^~
+      |                               &
+<stdin>:9:31: note: remove constant to silence this warning
+    9 | bool f2(int a) { return ID(a) && ID(5); }
+      |                               ^~~~~~~~
+<stdin>:10:27: warning: use of logical '&&' with constant operand [-Wconstant-logical-operand]
+   10 | bool f3(int a) { return a && G(5); }
+      |                           ^    ~
+<stdin>:10:27: note: use '&' for a bitwise operation
+   10 | bool f3(int a) { return a && G(5); }
+      |                           ^~
+      |                           &
+<stdin>:10:27: note: remove constant to silence this warning
+<stdin>:11:24: warning: code will never be executed [-Wunreachable-code]
+   11 | void u1() { if (NOT 1) g(); }
+      |                        ^
+<stdin>:11:17: note: silence by adding parentheses to mark code as explicitly dead
+   11 | void u1() { if (NOT 1) g(); }
+      |                 ^    
+      |                 /* DISABLES CODE */ ( )
+<stdin>:6:13: note: expanded from macro 'NOT'
+    6 | #define NOT !
+      |             ^
+<stdin>:12:22: warning: code will never be executed [-Wunreachable-code]
+   12 | void u2() { if (X 1) g(); }
+      |                      ^
+<stdin>:12:17: note: silence by adding parentheses to mark code as explicitly dead
+   12 | void u2() { if (X 1) g(); }
+      |                 ^
+<stdin>:7:18: note: expanded from macro 'X'
+    7 | #define X h() && !
+      |                  ^
+5 warnings generated.
+";
+
+#[test]
+fn fixits_in_macro_expansions_like_clang() {
+    for compat in ["-fclang-compat=19", "-fclang-compat=22"] {
+        let args = ["-std=c++26", "-fsyntax-only", compat, "-Wunreachable-code", "-"];
+        let o = kiln(&args, MACRO_FIXIT_SOURCE);
+        assert_eq!((o.code, o.stderr.as_str()), (0, MACRO_FIXIT_GOLDEN), "{compat}");
+    }
+}
+
 #[test]
 fn module_missing_import_notes() {
     // [module.reach]: each missing-import error of

@@ -5,6 +5,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
+use kiln_ast::names::DeclName;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -22,7 +23,7 @@ impl Sema<'_, '_> {
     #[allow(clippy::too_many_arguments, reason = "the lookup result's parts")]
     pub(crate) fn build_overload_ref(
         &mut self,
-        name: kiln_ast::names::DeclName,
+        name: DeclName,
         decls: &[DeclId],
         found: &[DeclId],
         naming: Option<DeclId>,
@@ -50,6 +51,17 @@ impl Sema<'_, '_> {
     /// `UnresolvedLookupExpr`, possibly parenthesized) with `args`
     /// (`braced` the braced-init-list ones): the `DeclRefExpr` naming the
     /// best viable function, or `None` after diagnosing.
+    /// "use of undeclared identifier 'f'" for the callee `name` at `loc`
+    /// that no lookup found; clang 22 adds the range of its (first) token.
+    fn diagnose_undeclared_call_name(&mut self, name: DeclName, loc: Loc) {
+        let mut msg = self.diag(Self::undeclared_use_id(name), loc).arg(self.decl_name_str(name));
+        if self.clang_compat >= 22 {
+            let end = self.token_end(loc).unwrap_or(loc);
+            msg = msg.range(kiln_source::Span::new(loc, end));
+        }
+        self.emit(msg);
+    }
+
     pub(crate) fn resolve_unresolved_call(
         &mut self,
         callee: ExprId,
@@ -92,9 +104,7 @@ impl Sema<'_, '_> {
             cands.extend(f.decls.iter().copied().zip(f.found.iter().copied()));
         }
         if cands.is_empty() {
-            let text = self.decl_name_str(name);
-            let msg = self.diag(Self::undeclared_use_id(name), n.loc()).arg(text);
-            self.emit(msg);
+            self.diagnose_undeclared_call_name(name, n.loc());
             return None;
         }
         // `f<args>(…)`: only the templates are candidates
@@ -336,7 +346,7 @@ impl Sema<'_, '_> {
         &mut self,
         set: &OverloadCandidateSet,
         out: OvlOutcome,
-        name: kiln_ast::names::DeclName,
+        name: DeclName,
         at: Loc,
         loc: Loc,
         naming: Option<DeclId>,
@@ -357,7 +367,7 @@ impl Sema<'_, '_> {
         &mut self,
         set: &OverloadCandidateSet,
         out: OvlOutcome,
-        name: kiln_ast::names::DeclName,
+        name: DeclName,
         at: Loc,
         loc: Loc,
         member: bool,

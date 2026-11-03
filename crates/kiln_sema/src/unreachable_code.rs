@@ -124,11 +124,16 @@ impl Sema<'_, '_> {
             while self.ast.exprs.get(lit).kind() == ExprKind::UnaryOperator {
                 lit = self.ignore_implicit_casts(self.ast.exprs.operand(lit));
             }
-            if let Some(close) = self.token_end(self.ast.exprs.get(lit).loc()) {
-                let note = self
-                    .diag(DiagId::note_unreachable_silence, open)
-                    .fixit(FixIt::insert(open, "/* DISABLES CODE */ ("))
-                    .fixit(FixIt::insert(close, ")"));
+            // clang emits the note only when the literal's end maps to the
+            // file, and drops both fix-its when the opening one does not
+            // (`macro_fixit.rs`).
+            if let Some(close) = self.file_token_end(self.ast.exprs.get(lit).loc()) {
+                let mut note = self.diag(DiagId::note_unreachable_silence, open);
+                let fixits =
+                    vec![FixIt::insert(open, "/* DISABLES CODE */ ("), FixIt::insert(close, ")")];
+                for f in self.file_fixits(fixits) {
+                    note = note.fixit(f);
+                }
                 d = d.with_note(note);
             }
         }
