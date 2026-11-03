@@ -902,7 +902,9 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **Class body** (`parse_record_body`, clang's `ParseCXXMemberSpecification`):
   `act_on_start_record_definition`, then `act_on_class_final` for a
   class-virt-specifier, then `act_on_base_specifiers` (always, with an
-  empty slice when there is no base clause), the members, `}` and
+  empty slice when there is no base clause), the members, `}`, any GNU
+  `__attribute__((...))` run right after it (`act_on_record_trailing_attrs`:
+  they appertain to the class, WP-416; spec/sema.md §4.5) and
   `act_on_finish_record_definition`. A missing `{` after a base clause
   is `expected '{' after base class list`; the class is still finished.
 - **Base clause** ([class.derived]): `[attrs] [virtual] [access]

@@ -7067,7 +7067,13 @@ impl Sema<'_, '_> {
                 .record(r)
                 .is_some_and(|x| x.defn.contains(DefinitionBits::LAMBDA_CAPTURES))
             {
-                bits = bits.with(DefinitionBits::LAMBDA_CAPTURES);
+                // A closure with a capture has no default constructor
+                // ([expr.prim.lambda.closure]/13), so it is not trivial
+                // (clang `hasTrivialDefaultConstructor` needs
+                // `hasDefaultConstructor`), and not POD.
+                bits = bits
+                    .with(DefinitionBits::LAMBDA_CAPTURES)
+                    .without(DefinitionBits::TRIVIAL_DEFAULT_CTOR);
             }
         }
         let (mut bits, invalid_field) = self.record_field_bits(r, bits);
@@ -9091,6 +9097,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The GNU attributes after the closing brace of class `r`'s
+    /// definition (`struct S { ... } __attribute__((packed));`): clang
+    /// `ParseCXXMemberSpecification` parses them there and
+    /// `ActOnFinishCXXMemberSpecification` applies them to the class
+    /// itself, before it is complete, so `packed` / `aligned` shape its
+    /// layout as when written after the class-key.
+    pub fn act_on_record_trailing_attrs(&mut self, r: DeclId, attrs: &[AttrId]) {
+        let mut attrs = attrs.to_vec();
+        self.check_decl_attrs(r, &mut attrs);
+        self.builder().append_attrs(r, &attrs);
+    }
+
     /// clang `handlePreferredName`: `preferred_name` applies to a class
     /// template (else it is ignored with a warning) and names a typedef
     /// for one of its specializations (else an error); kept when valid.
@@ -9514,6 +9532,7 @@ fn attr_kind_of(
         ("cold", _, true) => AttrKind::COLD,
         ("hot", _, true) => AttrKind::HOT,
         ("naked", _, true) => AttrKind::NAKED,
+        ("may_alias", _, true) => AttrKind::MAY_ALIAS,
         // clang `Clang<"optnone">` / `Clang<"minsize">` spellings:
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,

@@ -50,6 +50,7 @@ FormatExtraArgs = "format-extra-args" [];
 FormatInsufficientArgs = "format-insufficient-args" [];
 FormatInvalidSpecifier = "format-invalid-specifier" [];
 FormatSecurity = "format-security" [];
+FrameAddress = "frame-address" [];
 GccCompat = "gcc-compat" [];
 GnuAlignofExpression = "gnu-alignof-expression" [];
 GnuDesignator = "gnu-designator" [];

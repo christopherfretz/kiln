@@ -108,6 +108,11 @@ impl AttrKind {
     /// GNU `naked` on a function (clang `NakedAttr`): no prologue or
     /// epilogue; the body holds only asm statements (WP-405).
     pub const NAKED: AttrKind = AttrKind(107);
+    /// GNU `may_alias` on a type declaration (clang `MayAliasAttr`, no
+    /// subject list): an access through the typedef or tag type is in
+    /// the `omnipotent char` alias class at `-O1`+ (spec/codegen.md
+    /// "TBAA"; WP-423).
+    pub const MAY_ALIAS: AttrKind = AttrKind(108);
 }
 
 /// Attribute syntax.

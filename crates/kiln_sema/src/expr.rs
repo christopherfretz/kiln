@@ -1185,6 +1185,16 @@ impl Sema<'_, '_> {
                         self.unused_warning(r).map(|_| (DiagId::sema_unused_expr, loc, Vec::new()))
                     }
                     _ if op.is_assignment() => None,
+                    // A volatile scalar `.*` / `->*` result is read when
+                    // discarded ([expr.context]/2): clang sees the
+                    // `LValueToRValue` cast and does not warn.
+                    BinaryOp::PtrMemD | BinaryOp::PtrMemI
+                        if self.std >= kiln_lex::Std::Cxx11
+                            && self.ast.types.effective_quals(n.ty()).is_volatile()
+                            && self.ast.types.as_record(n.ty()).is_none() =>
+                    {
+                        None
+                    }
                     _ => Some((DiagId::sema_unused_expr, loc, Vec::new())),
                 }
             }
@@ -2697,13 +2707,13 @@ impl Sema<'_, '_> {
                     ExprFlags::CANNOT_OVERFLOW,
                 );
             }
-            if x == e
-                && self.implicit_member_operand(e).is_some()
-                && self.member_overload_decls(x).iter().any(|&d| self.is_static_method(d))
-            {
-                // `&f` of an implicit member set with a static member: the
-                // target selects it ([over.over]/1; spec/sema-overload.md
-                // §2.3).
+            if x == e && self.implicit_member_operand(e).is_some() {
+                // `&f` of an implicit member set: a lookup of the name
+                // (clang's `ActOnIdExpression` for an address-of operand),
+                // from which the target selects a static member or a
+                // static member template's specialization ([over.over]/1,
+                // /3; spec/sema-overload.md §2.3). `&(f)` stays a member
+                // access.
                 return self.builder().unary(
                     UnaryOp::AddrOf,
                     e,
@@ -3056,6 +3066,7 @@ impl Sema<'_, '_> {
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_sve_operands([l, r], loc);
         // [expr.ref]/7.3.2: a bound member function operand can only be
         // called; clang's `CheckPlaceholderExpr` rejects the operator.
         if !matches!(op, BinaryOp::PtrMemD | BinaryOp::PtrMemI)
@@ -3077,6 +3088,9 @@ impl Sema<'_, '_> {
             BinaryOp::Comma => {
                 self.diagnose_comma_lhs(l);
                 self.discard_assignment_ref(l);
+                // clang `CheckCommaOperands`: the left operand is a
+                // discarded-value expression ([expr.comma]/1).
+                let l = self.ignored_value_conversions(l);
                 let ty = self.ety(r);
                 let res = self.builder().binary(op, l, r, ty, loc);
                 self.mark_bitfield_if(res, r);
@@ -3419,6 +3433,16 @@ impl Sema<'_, '_> {
         if conv::standard_conversion(self, l, rt, ConvCtx::Comparison).is_some() {
             let l2 = conv::implicit_convert(self, l, rt, ConvCtx::Comparison).ok()?;
             return Some((l2, r, rt));
+        }
+        // /4.6: similar types (any depth) give their cv-combined type,
+        // `int **` and `const int **` give `const int *const *`.
+        if let Some(to) = conv::cv_combined_type(self, lt, rt)
+            && conv::standard_conversion(self, l, to, ConvCtx::Comparison).is_some()
+            && conv::standard_conversion(self, r, to, ConvCtx::Comparison).is_some()
+        {
+            let l2 = conv::implicit_convert(self, l, to, ConvCtx::Comparison).ok()?;
+            let r2 = conv::implicit_convert(self, r, to, ConvCtx::Comparison).ok()?;
+            return Some((l2, r2, to));
         }
         self.cv_combined_pointer(l, r, lt, rt)
     }
@@ -5550,6 +5574,9 @@ impl Sema<'_, '_> {
                     return self.recover(ty, &[e], loc);
                 }
                 self.discard_assignment_ref(e);
+                // [expr.static.cast]/6: the operand is a discarded-value
+                // expression (clang `CastOperation::CheckToVoid`).
+                let e = self.ignored_value_conversions(e);
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             if style == CastStyle::Const {
@@ -5854,21 +5881,11 @@ impl Sema<'_, '_> {
     }
 
     /// Pointer types differing only in cv-qualification at any level
-    /// ([conv.qual]/2 "similar").
+    /// ([conv.qual]/2 "similar", [expr.const.cast]/3): the levels below
+    /// the first may be pointers, pointers to members of the same class
+    /// or arrays of the same bound (`int A::**` and `const int A::**`).
     fn similar_pointers(&self, a: QualType, b: QualType) -> bool {
-        let (mut a, mut b) = (a, b);
-        for _ in 0..64 {
-            match (self.ast.types.pointee(a), self.ast.types.pointee(b)) {
-                (Some(x), Some(y))
-                    if self.ast.types.is_pointer(a) && self.ast.types.is_pointer(b) =>
-                {
-                    a = x;
-                    b = y;
-                }
-                _ => return self.ast.types.same_unqualified(a, b),
-            }
-        }
-        false
+        conv::similar_same_levels(self, a, b)
     }
 
     /// True if converting pointer `from` to pointer `to` casts away

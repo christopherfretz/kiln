@@ -60,7 +60,11 @@ panic and never silently wrong IR.
   `static const` member, first used in a try block, loaded the
   `available_externally` member and failed to link; libc++'s
   `memory_resource::__max_align`). Validation:
-  `tests/codegen/static_member_odr_use.cpp`.
+  `tests/codegen/static_member_odr_use.cpp`. A default member
+  initializer is walked once, at its field, so its candidates are folded
+  for every constructor that uses it (`int m = c;` with
+  `static const int c = 5;` stores `5`; WP-162,
+  `tests/codegen/nsdmi_static_const_fold.cpp`).
   Non-initializer candidates (a load of a const variable, a builtin
   call) fold with `Oven::fold_rvalue` (lax mode, WP-165): like clang's
   `tryEmitAsConstant`, a read of any `const` non-volatile variable with an
@@ -419,6 +423,25 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `llvm.assume(i1 true) ["align"(ptr p, i64 a[, i64 off])]`
       (`emitAlignmentAssumption`; the call is folded first so a dependent
       alignment is a constant; `builtins_assume_aligned.cpp`).
+      The alignment builtins (WP-416, clang `EmitBuiltinAlignTo`): the
+      alignment is zero-extended or truncated to the source type (i64 for
+      a pointer) and `mask = align - 1`; `__builtin_align_up` adds the mask
+      (`getelementptr inbounds i8, p, mask` for a pointer), then both
+      ands with `~mask` (`llvm.ptrmask.p0.i64` for a pointer);
+      `__builtin_is_aligned` is `icmp eq (and src, mask), 0` (`ptrtoint`
+      first for a pointer). Constant operands fold as IRBuilder folds them
+      (`x + 0` is kept); an integer call is a fold candidate.
+      `__builtin_debugtrap()` is `call void @llvm.debugtrap()`,
+      `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`.
+      `__builtin_elementwise_abs` is `llvm.abs(x, i1 false)` for
+      integers and `llvm.fabs` for floating point, `_max` / `_min`
+      `llvm.smax` / `umax` / `smin` / `umin` by element signedness and
+      `llvm.maxnum` / `minnum` for floating point, overloaded on the
+      (vector) operand type; at 22 a call the Oven folds is folded
+      (`builtins_align_elementwise.cpp`, `builtins_elementwise_22.cpp`).
+      The driver sets the Oven's compatibility level before codegen's
+      fold prepass, so a unit in which sema evaluated nothing folds at
+      its level.
       `__builtin_object_size` / `__builtin_dynamic_object_size` of an
       object the frontend does not know is `llvm.objectsize(p, min =
       type & 2, nullunknown = true, dynamic)`, type 3 the constant 0;
@@ -576,7 +599,32 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   an object whose alignment (`pointee_layout`: the non-virtual alignment
   of a non-final class) exceeds 1. Below 22 neither (clang 19). Metadata
   nodes are numbered in first-use order after the module flags and
-  ident, as clang prints them.
+  ident, as clang prints them. A reference parameter forwarded by a
+  delegating call (an inheriting constructor, a lambda's static invoker,
+  a thunk: `Cg::delegate_call_arg`, clang `EmitDelegateCallArg`) is a
+  plain `load ptr` of its slot with neither, at every compat level
+  (WP-416).
+- **Pointee alignment of an array of unknown bound (WP-416).** clang
+  `getTypeAlignInChars` gives `T[]` its element's alignment, so
+  `pointee_layout` reports `(no size, align of T)`: an `int(&)[]` / `int
+  (*)[]` parameter is `nonnull align 4` (no `dereferenceable`) and loads
+  through it are `align 4`. A function type stays alignment 1.
+- **Zeroed array fillers (WP-416).** clang `EmitArrayInit` passes
+  `Dest.isZeroed()` to the filler's `EmitInitializationToLValue`: when
+  the whole array was zeroed first (`Agg a[2] = {}`, one `memset` of the
+  array), the filler loop skips the per-element zeroing of a
+  value-initialized aggregate element, so no per-element `memset`.
+- **Constant external declarations (WP-416).** clang
+  `GetOrCreateLLVMGlobal` sets `isConstantStorage(Ctx, false, false)` on
+  a variable's declaration (`Cg::get_gvar`, `constant_storage`): a
+  reference (`extern int &r` is `external constant ptr`) or a `const`
+  object whose base element type is not a class (`extern const int`,
+  `extern int *const`, `extern const int[2]`) is `external constant`; a
+  `const` class object stays `external global`. A definition later in the
+  translation unit sets its own constness (§2).
+- **Discarded volatile reads (WP-416).** A discarded volatile scalar
+  glvalue carries sema's `LValueToRValue` cast (spec/sema.md §7,
+  [expr.context]/2), lowered as a `load volatile` whose value is unused.
 
 ### 3.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
@@ -928,6 +976,35 @@ The normative description is spec/driver.md "Code generation". In short:
   `any p<depth> pointer` node itself). Everything else (complex,
   vectors, member pointers, arrays, unions) is "omnipotent char". A
   vtable pointer is "vtable pointer" (child of the root).
+- **`may_alias`** (WP-423; `Cg::tbaa_may_alias`, clang
+  `TypeHasMayAlias`): a type whose class or enumeration carries GNU
+  `may_alias` (on any declaration), or with a typedef-name carrying it
+  anywhere in its sugar (`typedef int __attribute__((may_alias)) T;`,
+  `using T [[gnu::may_alias]] = int;`, a typedef of such a typedef), is
+  "omnipotent char" as an access type, whatever its canonical type (a
+  pointer typedef too; checked before the canonical-type cache). A
+  member of a may-alias class is a may-alias access (`{char, char, 0}`,
+  clang `EmitLValueForField`); a may-alias class used as a member type
+  keeps its struct node. In `!tbaa.struct` every scalar under a
+  may-alias type is "omnipotent char" (`CollectFields`' `MayAlias`).
+  Sema accepts the attribute on any declaration with no diagnostic
+  (clang `MayAliasAttr` has no subject list); it takes no arguments,
+  `[[gnu::may_alias]]` at the end of a decl-specifier-seq is no type
+  attribute, and after a ptr-operator the GNU spelling applies to the
+  declaration (`int *__attribute__((may_alias)) p`), as clang's
+  `ProcessDeclAttributes` does for every GNU declaration attribute in a
+  declarator chunk (`Parser::chunk_decl_attrs`).
+- **Atomics** (WP-423; `atomic.rs`, clang CGAtomic): `_Atomic(T)` is
+  "omnipotent char" as an access type. The `load atomic` / `store
+  atomic` of an `_Atomic` lvalue (`EmitAtomicLoadOp`, `EmitAtomicStore`,
+  scalar or aggregate) and the plain store of its initialization
+  (`EmitAtomicInit` → `emitCopyIntoMemory`) carry the lvalue's tag
+  (`{char, char, 0}`, or the struct path of an `_Atomic` member). The
+  operation of an `__atomic_*` / `__c11_atomic_*` builtin (load, store,
+  `atomicrmw`, `cmpxchg`, libcall) is untagged; its result is read back
+  from the temporary with the value type's tag, and an aggregate result
+  is copied out with the value type's `!tbaa.struct`.
+  `tests/codegen/tbaa_atomic_o1.cpp`.
 - **Struct nodes** (`getBaseTypeInfo`): a complete non-union class with
   no flexible array member is `!{!"_ZTS<name>", member, i64 off, ...}`
   listing its non-virtual non-empty bases by offset, then its fields:
@@ -1014,15 +1091,6 @@ The normative description is spec/driver.md "Code generation". In short:
   clang's in-process codegen where the text round trip did not.
 
 ### Deviations
-- **TBAA gaps (WP-412).** `__attribute__((may_alias))` is not modelled
-  (clang `TypeHasMayAlias` makes such accesses "omnipotent char"); at
-  `-O1`+ with strict aliasing kiln tags them by their type, so code
-  relying on `may_alias` for type punning can miscompile. Use
-  `-fno-strict-aliasing` for it until it is implemented. Atomic loads
-  and stores (`atomic.rs`) carry no `!tbaa`. An unnamed class's struct
-  node uses kiln's `Ut_` mangling, which does not number a second
-  unnamed class in the same scope (`Ut0_`), so its node name can differ
-  from clang's.
 - **clang 22 codegen (WP-355, WP-386).** At `-fclang-compat=22` kiln
   follows clang 22 where §6a says; elsewhere its IR is clang 19's under
   every level. The oracle-22 `DEVIATIONS` entries record the rest of
@@ -1169,7 +1237,23 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   function list (`Module::move_function_to_end`, WP-113). Deleting destructors (D0) are WP-080.
   Structor references go through `structor_ref`. A cache hit on the base
   variant still queues it for definition, because clang's `EmitDeferred`
-  is depth-first.
+  is depth-first. The D1 alias copies D2's visibility.
+- **Base-object destructor aliases** (WP-423; `Cg::try_base_dtor_alias`,
+  clang `CodeGenModule::TryEmitBaseDestructorAsAlias`): at -O1+ only, and
+  not for a `weak_odr` (explicit-instantiation, COMDAT) or
+  `available_externally` D2, a destructor whose body is an empty
+  compound statement, in a class with no virtual bases and no field of a
+  class type with a destructor, whose unique non-virtual base with a
+  non-trivial destructor sits at offset 0, gets no D2 body: its D2 is
+  the base's D2. The check runs before D2 is declared, and the base D2
+  is declared first, as in clang. A discardable D2 (`linkonce_odr`,
+  `internal`) is replaced (RAUW, `Module::replace_function`) unless the
+  base D2 is `available_externally`. Otherwise D2 becomes an `alias`
+  (`unnamed_addr`, external, `dso_local`, D2's visibility) of the base
+  D2, unless that is only a declaration or weak for the linker
+  (`linkonce_odr`, `weak_odr`). D1 then aliases (or is replaced by) the
+  resulting D2 symbol; LLVM 19's `GlobalOpt` folds the alias chain.
+  `tests/codegen/dtor_base_alias_o1.cpp`.
 - **Constructor bodies** (`EmitConstructorBody`): base initializers at an
   `i8` GEP with the `min_align` alignment and `getOverlapForBaseInit`,
   then member initializers in declaration order. Delegating constructors
@@ -2404,7 +2488,17 @@ label %coro.ret [i8 0, label %<kind>.ready; i8 1, label
 to `coro.ret` (a destroyed coroutine runs the destructors of the
 suspended scope). `.ready` evaluates `await_resume()` in the wanted
 form: ignored, scalar, lvalue, or into an aggregate slot. `<kind>` is
-`init`, `await`, `yield` or `final`.
+`init`, `await`, `yield` or `final`. The wrapper's function attributes are clang's
+(`generateAwaitSuspendWrapper` + `FinishFunction`) at every level:
+`alwaysinline mustprogress`, on x86 `"min-legal-vector-width"`, and at
+`-fclang-compat=22` `"sample-profile-suffix-elision-policy"="selected"`
+(clang 22); never `optnone`/`noinline`. Its parameters are `void *`
+`ImplicitParamDecl`s, so at -O1+ their prolog stores carry "any pointer"
+TBAA and the reloads none (`Cg::tbaa_void_ptr_store`; WP-423). After
+the -O1 pipeline the wrappers are inlined away; the pre-pass text is
+pinned against clang 19 by `kiln_driver/tests/codegen.rs`
+`coro_wrappers_before_passes_match_clang19`, the optimized one by
+`tests/codegen/coro_await_suspend_o1.cpp`.
 
 **Full-expression temporaries across a suspension.** A temporary of the
 full-expression holding a `co_await` lives until the full-expression
@@ -2442,7 +2536,8 @@ coroutine, `frame`/`alloc`/`begin`/`free` are a codegen error with
 clang's wording ("this builtin expect that __builtin_coro_begin/id has
 been used earlier in this function").
 
-**IR parity details (WP-370, §7p).** A coroutine gets lifetime markers;
+**IR parity details (WP-370, §7p).** A coroutine gets lifetime markers
+at every level;
 its cleanup destination slot is promoted to SSA; the `llvm.coro.free`
 call is moved to guard the deallocation (clang `CallCoroDelete`
 remembers the last one); the promise's address passes through a
@@ -2481,17 +2576,23 @@ Linux targets; `Cg::frame_pointer` applies it.
   the `-O0` `noinline optnone` pair, so the driver's `opt` pipeline
   (driver.md "IR optimization") can inline and optimize them.
 - **Lifetime markers (`lifetime.rs`, clang `EmitLifetimeStart` /
-  `CallLifetimeEnd`).** In a coroutine (where clang emits them at every
-  level: CoroSplit uses them to keep short-lived locals out of the
-  frame), each automatic variable gets `llvm.lifetime.start` right after
+  `CallLifetimeEnd`, `ShouldEmitLifetimeMarkers`).** In every function
+  at `-O1`+ (WP-423; also `optnone` ones, as clang) and in a coroutine
+  at every level (CoroSplit uses them to keep short-lived locals out of
+  the frame), each automatic variable gets `llvm.lifetime.start` right after
   its alloca (the end of clang `EmitAutoVarAlloca`) and each materialized
   temporary when it is created (before the outermost conditional for a
   full-expression temporary with no destructor), and `llvm.lifetime.end` from a
   `LifetimeEnd` cleanup (normal and EH, clang `NormalEHLifetimeMarker`).
   A variable a `goto` or a `switch` jumps past gets none (clang
-  `VarBypassDetector`; an indirect `goto` bypasses every variable).
-  Outside coroutines kiln emits none at any level (a deviation: clang
-  emits them at `-O1`+).
+  `VarBypassDetector`, initialized over the body as in clang
+  `GenerateCode`; an indirect `goto` bypasses every variable). Thunks
+  get none. The markers use LLVM 19's `(i64 size, ptr)` signature, since
+  kiln's optimizer is `opt-19` (driver.md "IR optimization"); under the
+  clang 22 oracle, `opt-22` auto-upgrades the markers that survive
+  optimization to LLVM 21's `(ptr)` form, leaving dead `.i64`
+  declarations, so cases that keep markers after -O1 compare
+  structurally there (`ir_vs_clang` deviation rows).
 - **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
   `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
   SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
@@ -2532,8 +2633,11 @@ guarantees it a constant initializer and a trivial destructor
 - **Initialization.** Dynamic initializers are ordinary
   `__cxx_global_var_init.N` functions; an ordered variable's is called
   from `internal void @__tls_init()` behind `internal thread_local i8
-  @__tls_guard` (branch weights 1:1023, guard stored before the calls)
-  and named by `_ZTH<name>`, an alias of `__tls_init` with the variable's
+  @__tls_guard` (branch weights 1:1023, guard stored before the calls;
+  at -O1+ followed by `call ptr @llvm.invariant.start.p0(i64 1, ptr
+  @__tls_guard)`, clang `EmitInvariantStart`, WP-423 — a module
+  initializer's guard gets the same, through the shared
+  `emit_guarded_calls`) and named by `_ZTH<name>`, an alias of `__tls_init` with the variable's
   linkage. A template instantiation's (unordered) `_ZTH` aliases its own
   guarded initializer. Destructors register with `__cxa_thread_atexit`
   (`nounwind`). A function-local `thread_local` is guarded by its

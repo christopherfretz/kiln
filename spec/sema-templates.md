@@ -2270,10 +2270,21 @@ recomputed exactly as for non-template code (clang's
   The exceptions match clang, which keeps the statement:
   - a `DeclStmt` whose variable *initializer* failed (the variable is
     invalid, the statement is not; `Substituter::init_failures`);
-  - errors inside a lambda body (the lambda's own body is invalid, the
-    enclosing function is not);
   - a statement that only refers to an already-invalid entity (it fails
     without a new error: clang builds a `RecoveryExpr`).
+
+  **A lambda body that reports its own error** makes the whole
+  lambda-expression fail (clang `TransformLambdaExpr` returns
+  `ExprError`; WP-163). Errors that belong to a nested instantiation the
+  body triggered do not count (`inst.body_errors`). Consequences:
+  - The closure type is discarded (`act_on_lambda_error`), so no cascade
+    follows from a closure whose call operator returns `void`. Neither a
+    `return l();` nor an NSDMI `int m = [] { ... }();` gets one.
+  - The enclosing statement fails by the rule above. An expression
+    statement or a `return` invalidates the specialization. A `DeclStmt`
+    initializer does not invalidate it; only the variable is invalid.
+
+  Test `expr.prim.lambda/lambda-body-substitution-failure.cpp`.
 - **Labels and `goto`** (WP-153). A `LabelStmt`, a `GotoStmt` and the
   labels of an `asm goto` are rebuilt by name (`act_on_label`,
   `act_on_goto`, `act_on_asm_goto_label`), so each instantiation owns its
@@ -4529,8 +4540,29 @@ pub struct InstFrame {          // 20 B
 | `RequirementInstantiation` | SFINAE | in instantiation of requirement here |
 | `NestedRequirementConstraintsCheck` | SFINAE | while checking the satisfaction of nested requirement requested here |
 | `BuildingDeductionGuides` | inherit | while building implicit deduction guide first needed here |
-| `LambdaSubstitution` | inherit | while substituting into a lambda expression here |
+| `LambdaSubstitution` | hard | while substituting into a lambda expression here (WP-163; see below) |
 | `DeclaringSpecialMember`, `DefiningSynthesizedFunction`, `RewritingOperatorAsSpaceship` | — | owned by S3C/S3O; listed here so that they count toward depth and elision |
+
+A lambda body substituted inside a specialization gets its own
+`LambdaSubstitution` frame (clang `TemplateInstantiator::TransformLambdaBody`,
+WP-163):
+- **Entity and point.** The entity is the new call operator, and the
+  point is the body's `{`.
+- **No instantiation, no SFINAE.** The frame is not an instantiation
+  (`is_instantiation` is false), so it does not count as a specialization
+  of its own. It is hard (`sfinae = Some(false)`): CWG2672 says a lambda
+  body is never in the immediate context.
+- **The note chain.** An error in the body prints "while substituting
+  into a lambda expression here" at that `{`, then the enclosing chain
+  (`in instantiation of function template specialization 'f<int>'
+  requested here`, …).
+- **Nesting.** Each nested lambda adds one note.
+- **Several errors in one body.** The context prints once, before the
+  first of them, as for any frame (§10.2).
+
+Tests: `temp.inst/lambda-body-substitution-notes.cpp` and
+`expr.prim.lambda/lambda-body-substitution-failure.cpp`. Both are
+strict-diags and generated from clang 22.
 
 A specialization in a note (and in the other diagnostics naming a
 specialization declaration: an ambiguous or late explicit

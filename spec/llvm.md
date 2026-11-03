@@ -99,7 +99,14 @@ comdats and metadata are numbered in print order. Inside the crate,
 `Module::funcs` is indexed by `FuncId` only: every walk over all functions
 (printing, numbering, `verify`) goes through `ordered_funcs()` /
 `func_order`, and outside the crate only `functions()` is visible (WP-206
-audit). `crates/kiln_driver/tests/codegen.rs` `function_order_is_stable`
+audit). `replace_function(old, new)` is LLVM `replaceAllUsesWith` +
+`eraseFromParent` on a function declaration: `old` leaves the order and
+frees its name, a function `new` moves to just after where `old` was
+(clang `applyReplacements`), and every operand naming `old`, earlier or
+later, prints as `resolve(old)`. `replace_function_with_alias(old, ty,
+aliasee)` instead adds an alias that takes `old`'s name and uses (clang
+`TryEmitBaseDestructorAsAlias`); both refuse a defined or already
+replaced `old` (`BadGlobal`) (WP-423). `crates/kiln_driver/tests/codegen.rs` `function_order_is_stable`
 pins that two compilations print the same text in clang's order.
 
 `dso_local` is not printed where LLVM implies it (local linkage, or
@@ -281,6 +288,22 @@ cannot code-generate it; LLVM's CoroEarly, CoroSplit and CoroCleanup
 passes must run first (spec/driver.md "IR optimization"). Functions
 holding `llvm.coro.id` carry the `presplitcoroutine` flag attribute,
 which CoroSplit removes.
+
+At `Module::ir_version` 22 or above, the declarations of the intrinsics
+LLVM 22 marks `IntrNoCreateUndefOrPoison` also carry the flag attribute
+`nocreateundeforpoison` (sorted after `nocallback`), as LLVM 22's parser
+attaches it (WP-416): the six `with.overflow`, `ctpop`, `bswap`,
+`bitreverse`, `fshl`/`fshr`, `clmul`, `fabs`, `copysign`, `fma`,
+`fmuladd`, `sqrt`, `powi`, `pow`, `sin`, `cos`, `exp`/`exp2`/`exp10`,
+`log`/`log2`/`log10`, `ldexp`, `frexp`, `floor`, `ceil`, `trunc`, `rint`,
+`nearbyint`, `round`, `roundeven`, `lround`/`llround`/`lrint`/`llrint`,
+`fptrunc.round`, `canonicalize`, `arithmetic.fence`, `is.fpclass`,
+`minnum`/`maxnum`/`minimum`/`maximum`/`minimumnum`/`maximumnum`,
+`smax`/`smin`/`umax`/`umin`, `scmp`/`ucmp`, the four `*.sat` additions and
+subtractions, `fptosi.sat`/`fptoui.sat` and `ptrmask`; not `abs`, `ctlz`,
+`cttz`, the vector reductions or anything else.
+`intrinsics::creates_no_undef_or_poison(m, name)` answers the question
+for a caller of the generic `intrinsic` (kiln_codegen's `llvm.fmuladd`).
 
 The generic `intrinsic(m, name, fn_ty)` declares any other intrinsic but
 cannot know its attributes; the caller must set `attrs` to LLVM's

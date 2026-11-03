@@ -116,6 +116,7 @@ that could violate them.
 ## Follow-ups
 
 - Children started by `run_measured` are not killed when xtask gets a
-  signal; they finish and release their own tokens.
+  signal; they finish and release their own tokens. Closed by WP-163
+  (spec/harness.md "Jobserver", Signals).
 - Substitution notes for errors inside lambda bodies in a specialization
-  are not yet emitted.
+  are not yet emitted. Closed by WP-163 (spec/sema-templates.md §10.1).

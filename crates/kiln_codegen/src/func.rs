@@ -127,6 +127,11 @@ pub(crate) struct Fx {
     /// address (clang `CXXABIThisValue`, which `this` no longer is once
     /// `this` is captured) and the lambda.
     pub closure: Option<(V, kiln_ast::LambdaId)>,
+    /// In a lambda's call operator with an explicit object parameter:
+    /// that parameter. The closure object is re-derived from it at each
+    /// capture access (clang `EmitLValueForLambdaField`), so the `V` of
+    /// [`Fx::closure`] is unused.
+    pub closure_obj: Option<DeclId>,
     /// The constructor/destructor variant being emitted.
     pub structor: Option<mangle::Structor>,
     /// The VTT parameter, loaded in the prolog (clang
@@ -192,8 +197,9 @@ pub(crate) struct Fx {
     /// value of `__builtin_coro_frame()` (clang
     /// `CurAwaitSuspendWrapper.FramePtr`).
     pub await_frame: Option<V>,
-    /// Emit lifetime markers (clang `ShouldEmitLifetimeMarkers`; set in
-    /// a coroutine, spec/codegen.md §7p).
+    /// Emit lifetime markers in this function even without optimization
+    /// (set in a coroutine, spec/codegen.md §7p); at -O1+ every function
+    /// has them ([`Cg::lifetime_markers_on`]).
     pub lifetime_markers: bool,
     /// The variables a jump bypasses, which get no lifetime markers
     /// (clang `Bypasses`).
@@ -222,6 +228,7 @@ impl Fx {
             this: None,
             this_class: None,
             closure: None,
+            closure_obj: None,
             structor: None,
             vtt: None,
             call_vtt: None,
@@ -489,13 +496,18 @@ impl Cg<'_> {
             && let Some(&obj) = param_decls.first()
             && self.is_explicit_object_method(d)
         {
-            let closure = self.explicit_object_closure(l, obj)?;
-            self.lambda_prolog(l, closure)?;
+            self.f.closure_obj = Some(obj);
+            self.lambda_prolog(l, self.f.locals[&obj].v)?;
         }
         if let Some(a) = vtt_addr {
             self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));
         }
 
+        // GenerateCode: `Bypasses.Init` over the body when lifetime
+        // markers are on (a coroutine redoes it over its own body).
+        if self.lifetime_markers_on() && thunk.is_none() {
+            self.f.bypasses = Some(Box::new(crate::lifetime::detect_bypasses(ast, body)));
+        }
         match kind {
             _ if let Some(th) = thunk => {
                 self.f.mustprogress = false;
@@ -992,17 +1004,19 @@ impl Cg<'_> {
         self.store_scalar_tb(v, a, q, Tb::Type);
     }
 
-    /// [`Self::store_scalar`] tagged with the access path `tb`.
-    pub fn store_scalar_tb(&mut self, v: V, a: Addr, q: QualType, tb: Tb) {
+    /// [`Self::store_scalar`] tagged with the access path `tb`; returns
+    /// the store.
+    pub fn store_scalar_tb(&mut self, v: V, a: Addr, q: QualType, tb: Tb) -> V {
         let vol = self.ast.types.effective_quals(q).is_volatile();
         if let Some(st) = self.vec_store(v, a, q, vol) {
             self.tbaa_mark(st, q, tb);
-            return;
+            return st;
         }
         let v = self.emit_to_memory(v, q, a.ty);
         let p = self.scalar_tls_addr(a.v);
         let st = self.store(v, p, a.align, vol);
         self.tbaa_mark(st, q, tb);
+        st
     }
 
     /// `memcpy(dst, src, n)`.

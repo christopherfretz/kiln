@@ -51,7 +51,7 @@ impl Sema<'_, '_> {
 
     /// The innermost function enclosing context `ctx` (clang
     /// `getPredefinedExprDecl`).
-    fn enclosing_function(&self, ctx: DeclId) -> Option<DeclId> {
+    pub(crate) fn enclosing_function(&self, ctx: DeclId) -> Option<DeclId> {
         let mut cur = Some(ctx);
         let mut guard = 0;
         while let Some(d) = cur {

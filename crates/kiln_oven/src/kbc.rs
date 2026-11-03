@@ -443,6 +443,13 @@ pub(crate) mod bi {
     /// `Oven::evaluate_chars`): the `a` elements of character type `t1`
     /// that `b` points to, read into the Oven's message buffer.
     pub const MSG_CHARS: u32 = 24;
+    /// WP-416: `__builtin_align_up` / `align_down` / `is_aligned` of the
+    /// integer `a` (canonical in width | signed << 8 of sub) to the
+    /// alignment `b` (canonical in `t2`'s width | signed << 8); sub's
+    /// operation << 9 is 0 up, 1 down, 2 `is_aligned` (clang
+    /// `getBuiltinAlignArguments`: a negative or non-power-of-two
+    /// alignment, or one above 2^(width-1), is a fault).
+    pub const ALIGN: u32 = 26;
     /// `std::uncaught_exceptions()` / `__builtin_uncaught_exceptions()`
     /// ([except.uncaught]/1, P3068): the number of exceptions thrown and
     /// not yet caught in this evaluation (a nested evaluation counts its

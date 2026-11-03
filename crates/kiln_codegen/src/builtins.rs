@@ -584,6 +584,86 @@ impl Cg<'_> {
                 let t = V::C(self.m.const_bool(true));
                 self.intrinsic_call(f, vec![x, t])
             }
+            // clang `EmitBuiltinAlignTo` / `BI__builtin_is_aligned`: the
+            // alignment zero-extended or truncated to the source integer
+            // type (the index type for a pointer), `mask = align - 1`.
+            id::ALIGN_UP | id::ALIGN_DOWN | id::IS_ALIGNED => {
+                let Some(a1) = arg(1) else {
+                    return err(self.loc_of(e), "alignment builtin without two arguments");
+                };
+                let src = self.emit_scalar(a0)?;
+                let al = self.emit_scalar(a1)?;
+                let sty = self.f.fir.ty(&self.m, src);
+                let is_ptr = self.m.types.int_width(sty).is_none();
+                let ity = if is_ptr { LTy::I64 } else { sty };
+                let al = self.int_cast(al, ity, false);
+                let one = V::C(self.m.const_int(ity, 1));
+                let mask = self.bin(BinOp::Sub, Flags::NONE, al, one);
+                if b == id::IS_ALIGNED {
+                    let addr = if is_ptr { self.cast(CastOp::PtrToInt, src, ity) } else { src };
+                    let set = self.bin(BinOp::And, Flags::NONE, addr, mask);
+                    let zero = V::C(self.m.const_int(ity, 0));
+                    self.icmp(IntPredicate::Eq, set, zero)
+                } else {
+                    let over = match (b == id::ALIGN_UP, is_ptr) {
+                        (false, _) => src,
+                        (true, true) => self.gep(LTy::I8, src, vec![mask], true),
+                        (true, false) => self.bin(BinOp::Add, Flags::NONE, src, mask),
+                    };
+                    let all = V::C(self.m.const_int(ity, -1));
+                    let inv = self.bin(BinOp::Xor, Flags::NONE, mask, all);
+                    if is_ptr {
+                        let f = kiln_llvm::intrinsics::ptrmask(&mut self.m);
+                        self.intrinsic_call(f, vec![over, inv])
+                    } else {
+                        self.bin(BinOp::And, Flags::NONE, over, inv)
+                    }
+                }
+            }
+            // clang `BI__builtin_frame_address`: `llvm.frameaddress(i32 N)`.
+            id::FRAME_ADDRESS => {
+                let level = self.emit_scalar(a0)?;
+                let level = self.int_cast(level, LTy::I32, false);
+                let f = kiln_llvm::intrinsics::frameaddress(&mut self.m);
+                self.intrinsic_call(f, vec![level])
+            }
+            // clang `BI__builtin_elementwise_abs`: `llvm.abs(x, false)` for
+            // integers, `llvm.fabs` for floating point (lane-wise on vectors).
+            id::ELEMENTWISE_ABS => {
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let eq = self.scalar_of(ast.exprs.get(a0).ty());
+                if ast.types.is_floating(eq) {
+                    let f = kiln_llvm::intrinsics::fabs(&mut self.m, ty);
+                    self.intrinsic_call(f, vec![x])
+                } else {
+                    let f = kiln_llvm::intrinsics::abs(&mut self.m, ty);
+                    let t = V::C(self.m.const_bool(false));
+                    self.intrinsic_call(f, vec![x, t])
+                }
+            }
+            // clang `BI__builtin_elementwise_max` / `_min`: `llvm.maxnum` /
+            // `llvm.minnum` for floating point, else by element signedness.
+            id::ELEMENTWISE_MAX | id::ELEMENTWISE_MIN => {
+                let Some(a1) = arg(1) else {
+                    return err(self.loc_of(e), "elementwise builtin without two arguments");
+                };
+                let x = self.emit_scalar(a0)?;
+                let y = self.emit_scalar(a1)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let eq = self.scalar_of(ast.exprs.get(a0).ty());
+                let max = b == id::ELEMENTWISE_MAX;
+                let name = match (ast.types.is_floating(eq), self.is_signed(eq), max) {
+                    (true, _, true) => "llvm.maxnum",
+                    (true, _, false) => "llvm.minnum",
+                    (false, true, true) => "llvm.smax",
+                    (false, true, false) => "llvm.smin",
+                    (false, false, true) => "llvm.umax",
+                    (false, false, false) => "llvm.umin",
+                };
+                let f = kiln_llvm::intrinsics::fp_op(&mut self.m, name, ty, 2);
+                self.intrinsic_call(f, vec![x, y])
+            }
             id::INF | id::INFF | id::INFL => {
                 let ty = self.lty(q);
                 let w = self.m.types.float_width(ty).unwrap_or(64);
@@ -673,6 +753,12 @@ impl Cg<'_> {
             // clang `EmitTrapCall`: no `unreachable` follows. The
             // `__builtin_verbose_trap` category and message only reach the
             // debug info (WP-282).
+            // clang `BI__builtin_debugtrap`: `llvm.debugtrap()`.
+            id::DEBUGTRAP => {
+                let f = kiln_llvm::intrinsics::debugtrap(&mut self.m);
+                self.intrinsic_call(f, vec![]);
+                return Ok(BuiltinCall::Emitted(None));
+            }
             id::TRAP | id::VERBOSE_TRAP => {
                 let f = kiln_llvm::intrinsics::trap(&mut self.m);
                 self.intrinsic_call(f, vec![]);

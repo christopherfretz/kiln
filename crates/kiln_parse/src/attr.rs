@@ -39,6 +39,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "optnone"
             | "minsize"
             | "naked"
+            | "may_alias"
             | "format"
     )
 }
