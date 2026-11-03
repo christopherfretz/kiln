@@ -173,8 +173,22 @@ impl Sema<'_, '_> {
         if cand.viable {
             // clang `CheckEnableIf`, after the candidate is otherwise
             // viable.
-            let args = std::mem::take(&mut set.args);
-            self.check_enable_if(&mut cand, &args, &params, skip, set.loc);
+            // clang binds a non-member operator function's operands from
+            // its first parameter, but passes an explicit-object member
+            // function the arguments without the object argument, which
+            // then shift onto the object parameter (`strict`).
+            let mut args = std::mem::take(&mut set.args);
+            match set.object {
+                Some(o) if oper_fn => {
+                    args.insert(0, o);
+                    self.check_enable_if(&mut cand, &args, &params, 0, false, set.loc);
+                    args.remove(0);
+                }
+                _ if explicit_obj => {
+                    self.check_enable_if(&mut cand, &args, &params, 0, true, set.loc);
+                }
+                _ => self.check_enable_if(&mut cand, &args, &params, skip, false, set.loc),
+            }
             set.args = args;
         }
         cand.ics.end = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);

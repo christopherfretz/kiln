@@ -2125,16 +2125,34 @@ and returns the scope it names:
       the parameters. A condition that is value-dependent, not a
       constant expression, or false makes the candidate not viable;
       its note is "candidate disabled: <message>" at the function
-      (`<no message provided>` for an empty one). If evaluating with all
+      (`<no message provided>` for an empty one). The arguments bind
+      from the first parameter, except that a non-static member
+      function's object argument binds to no parameter. Two cases follow
+      clang (WP-486): a non-member operator function's first operand
+      binds to its first parameter ([over.match.oper]/2); a member
+      function with an explicit object parameter gets the arguments
+      *without* the object argument, bound from the object parameter on
+      (they shift by one, clang `CheckEnableIf` passing the call's
+      arguments), and an argument that does not convert to the
+      parameter it lands on, or a parameter left with neither an
+      argument nor a default argument, disables it by its first
+      condition (clang `convertArgsForAvailabilityChecks` failing).
+      If evaluating with all
       values fails, the arguments that are not constant expressions on
       their own are dropped and the condition is evaluated again, so
       `__builtin_constant_p(n)` of a non-constant argument is false
       rather than not constant (clang `EvaluateWithSubstitution`).
     - A call without overload resolution (a member call, a call through
       a name of one function) is checked on its converted arguments in
-      `convert_call_args`: "no matching function for call to 'f'" at the
-      callee, or "no matching member function for call to 'm'" at the
-      member name, with the same note.
+      `convert_call_args`, the object argument of an explicit object
+      member function binding to the object parameter ([over.match.funcs.
+      general]/4): "no matching function for call to 'f'" at the callee,
+      or "no matching member function for call to 'm'" at the member
+      name (any member function, clang `BuildCallExpr`'s
+      `isa<CXXMethodDecl>`), with the same note. A call that overload
+      resolution chose is not checked again (`CallCallee::enable_if`;
+      `OvlState::resolved_member` marks a resolved explicit object member
+      call, and an operator call never re-checks).
     - Ranking ([over.match.best], last; clang `compareEnableIfAttrs`): a
       candidate with conditions beats one without; between two with
       conditions, compared in order, the one whose list properly extends
@@ -2145,10 +2163,14 @@ and returns the scope it names:
       enable_if_cond`, from `copy_attrs`), after deduction; a failed
       substitution drops the attribute.
     - Not done: `diagnose_if`, the never-constant check
-      (`err_attr_cond_never_constant_expr`), the object argument of an
-      explicit object member function (it takes no value).
+      (`err_attr_cond_never_constant_expr`); taking the address of a
+      function with a non-tautological condition ("cannot take address
+      of function 'f' because it has one or more non-tautological
+      enable_if conditions"); clang gives a class-type by-value parameter
+      initialized by copying an lvalue no value (its implicit copy
+      constructor is not yet defined), kiln evaluates the copy.
     - Tests: `tests/conformance/dcl.attr/enable-if-viability.cpp`,
-      `enable-if-ranking.cpp`.
+      `enable-if-ranking.cpp`, `enable-if-explicit-object.cpp`.
   - **The `trivial_abi` attribute** (clang extension, `[[clang::trivial_abi]]`
     / `__attribute__((trivial_abi))`; WP-460, `trivial_abi.rs`; clang
     AttrDocs "trivial_abi", `Sema::checkIllFormedTrivialABIStruct`):

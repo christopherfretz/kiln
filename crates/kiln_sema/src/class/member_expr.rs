@@ -1324,6 +1324,7 @@ impl Sema<'_, '_> {
         let mut kids = vec![callee];
         kids.extend_from_slice(args);
         let x = self.ignore_parens(callee);
+        let resolved = self.ovl.resolved_member.take();
         if let Some(r) = self.member_refs.get(&x).copied()
             && r.error
             && self.kind_of(r.decl) == DeclKind::CXXMethod
@@ -1339,7 +1340,8 @@ impl Sema<'_, '_> {
         let (call_callee, method, fn_ty) = match n.kind() {
             ExprKind::MemberExpr if self.has_explicit_object(self.ast.exprs.decl(x)) => {
                 let m = self.ast.exprs.decl(x);
-                return Some(self.explicit_object_call(x, m, args, braced, loc, rparen));
+                let resolved = resolved == Some(x);
+                return Some(self.explicit_object_call(x, m, args, braced, resolved, loc, rparen));
             }
             ExprKind::MemberExpr => {
                 let m = self.ast.exprs.decl(x);
@@ -1370,7 +1372,7 @@ impl Sema<'_, '_> {
             self.unsupported("calls through this function type", loc);
             return Some(self.recover_err(&kids, loc));
         };
-        let named = method.map(|d| CallCallee { decl: d, overloadable: false });
+        let named = method.map(|d| CallCallee { decl: d, overloadable: false, enable_if: true });
         let Some(conv_args) =
             self.convert_call_args(named, callee, args, braced, &proto, loc, rparen)
         else {
@@ -1408,13 +1410,16 @@ impl Sema<'_, '_> {
     /// the member access `x` ([over.match.funcs.general]/4, P0847): an
     /// ordinary call of `f` whose first argument is the object expression
     /// (clang's `BuildCallToMemberFunction` with
-    /// `isExplicitObjectMemberFunction`).
+    /// `isExplicitObjectMemberFunction`); `resolved` if overload
+    /// resolution chose `f` (its `enable_if` conditions are checked).
+    #[allow(clippy::too_many_arguments)]
     fn explicit_object_call(
         &mut self,
         x: ExprId,
         m: DeclId,
         args: &[ExprId],
         braced: &mut [Option<InitList>],
+        resolved: bool,
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
@@ -1445,7 +1450,7 @@ impl Sema<'_, '_> {
         let mut all_braced = Vec::with_capacity(braced.len() + 1);
         all_braced.push(None);
         all_braced.extend(braced.iter_mut().map(Option::take));
-        let named = Some(CallCallee { decl: m, overloadable: false });
+        let named = Some(CallCallee { decl: m, overloadable: false, enable_if: !resolved });
         let conv_args =
             self.convert_call_args(named, r, &kids, &mut all_braced, &proto, loc, rparen);
         let Some(conv_args) = conv_args else {
