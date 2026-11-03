@@ -2448,9 +2448,14 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   vector type, which clang 22's `VectorExprEvaluator` does not evaluate:
   `compile.rs` `unsupported` throws the generic "subexpression not valid
   in a constant expression" for it (WP-453; `__builtin_convertvector` to
-  a bool vector is the constant form).
+  a bool vector is the constant form). Every form is rejected, as by
+  clang 22 (WP-466 checked them; no extension): a converted comparison
+  result (`b4 L = I < 2`), a C-style or `static_cast`, an assignment or a
+  `return` in a constexpr function. A `vector_size` or floating source
+  has no conversion at all (sema).
 Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`,
-`ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`.
+`ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
+`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`.
 
 ### `_BitInt` — Landed (WP-404)
 Type rules: spec/types.md §21.
