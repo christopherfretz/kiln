@@ -2305,8 +2305,8 @@ and returns the scope it names:
     - `__builtin_is_cpp_trivially_relocatable` is not implied (clang 22
       answers false for a class with user-provided copy/move members);
       `__is_trivially_relocatable` follows `can_pass_in_registers` as in
-      clang. Not done: clang 22's deprecation warning on
-      `__is_trivially_relocatable`.
+      clang; at compat 22 it warns `-Wdeprecated-builtins` (builtin
+      traits §, WP-486).
     - Tests: `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`,
       `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`,
       `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`.
