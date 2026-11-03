@@ -78,6 +78,12 @@ pub struct PpOptions {
     /// Modules enabled (C++20 and later, not with `-E`): module and import
     /// directives are consumed and imports performed (spec/modules.md).
     pub modules: Option<crate::ModuleOptions>,
+    /// The parser runs on this stream: the loop-hint pragmas (`unroll`,
+    /// `nounroll`, `unroll_and_jam`, `nounroll_and_jam`, `GCC unroll`,
+    /// `GCC nounroll`, `clang loop`) macro-expand their tokens, as the
+    /// parser's `PragmaUnrollHintHandler` / `PragmaLoopHintHandler` do in
+    /// clang; `-E` keeps them unexpanded (spec/parse.md "Loop hints").
+    pub parser_pragmas: bool,
 }
 
 impl PpOptions {
@@ -97,6 +103,7 @@ impl PpOptions {
             timestamp: None,
             reflection: false,
             modules: None,
+            parser_pragmas: false,
         }
     }
 

@@ -740,9 +740,7 @@ impl Sema<'_, '_> {
             let after = list.last.unwrap_or(lexical);
             self.ast.templates.add_moved_class_inst(after, spec);
         }
-        if !declaration {
-            self.instantiate_members_of(spec, name_loc, 0);
-        }
+        self.instantiate_members_of(spec, name_loc, declaration, 0);
         Ok(spec)
     }
 
@@ -871,8 +869,8 @@ impl Sema<'_, '_> {
                 let after = list.last.unwrap_or(lexical);
                 self.ast.templates.add_explicit_member_inst(after, m);
             }
-            self.instantiate_members_of(m, name_loc, 0);
         }
+        self.instantiate_members_of(m, name_loc, declaration, 0);
     }
 
     /// Instantiates the definition of `spec` for an explicit
@@ -907,8 +905,13 @@ impl Sema<'_, '_> {
     /// Instantiates the definitions of the members of `class` (an
     /// explicitly instantiated specialization or a member class of one,
     /// [temp.explicit]/10): member functions, static data members and,
-    /// recursively, member classes. Member templates are not.
-    fn instantiate_members_of(&mut self, class: DeclId, loc: Loc, depth: u32) {
+    /// recursively, member classes. Member templates are not. For an
+    /// explicit instantiation `declaration` ([temp.explicit]/12) only
+    /// the member classes are instantiated, recursively, taking that
+    /// kind (clang `InstantiateClassMembers` with
+    /// `TSK_ExplicitInstantiationDeclaration`); their member functions
+    /// and static data members keep their definitions uninstantiated.
+    fn instantiate_members_of(&mut self, class: DeclId, loc: Loc, declaration: bool, depth: u32) {
         let Some(def) = self.ast.definition(class) else { return };
         if depth > 64 {
             return;
@@ -940,8 +943,12 @@ impl Sema<'_, '_> {
                 | DeclKind::CXXMethod
                 | DeclKind::CXXConstructor
                 | DeclKind::CXXDestructor
-                | DeclKind::CXXConversion => self.instantiate_function_definition(m, loc),
-                DeclKind::Var => {
+                | DeclKind::CXXConversion
+                    if !declaration =>
+                {
+                    self.instantiate_function_definition(m, loc);
+                }
+                DeclKind::Var if !declaration => {
                     // In-class initializer, else the out-of-line
                     // definition (clang `InstantiateVariableDefinition`).
                     self.instantiate_static_member_init(m, loc);
@@ -952,21 +959,33 @@ impl Sema<'_, '_> {
                     // itself explicitly instantiated (clang
                     // `InstantiateClassMembers` sets its kind; one already
                     // defined stays implicit: its vtable is not required).
+                    // A definition upgrades a member class an earlier
+                    // declaration instantiated, requiring its vtable.
                     let fresh = self.ast.definition(m).is_none();
                     if !self.instantiate_class(m, loc, false) {
                         continue;
                     }
-                    if fresh && let Some((i, _)) = self.ast.member_spec_info(self.ast.first(m)) {
+                    let kind = if declaration {
+                        SpecKind::ExplicitInstantiationDeclaration
+                    } else {
+                        SpecKind::ExplicitInstantiationDefinition
+                    };
+                    if let Some((i, _)) = self.ast.member_spec_info(self.ast.first(m)) {
                         self.ast.templates.update_member_spec(i, |x| {
-                            if matches!(
-                                x.kind,
-                                SpecKind::Undeclared | SpecKind::ImplicitInstantiation
-                            ) {
-                                x.kind = SpecKind::ExplicitInstantiationDefinition;
+                            let upgrade = !declaration
+                                && x.kind == SpecKind::ExplicitInstantiationDeclaration;
+                            if upgrade
+                                || fresh
+                                    && matches!(
+                                        x.kind,
+                                        SpecKind::Undeclared | SpecKind::ImplicitInstantiation
+                                    )
+                            {
+                                x.kind = kind;
                             }
                         });
                     }
-                    self.instantiate_members_of(m, loc, depth + 1);
+                    self.instantiate_members_of(m, loc, declaration, depth + 1);
                 }
                 _ => {}
             }

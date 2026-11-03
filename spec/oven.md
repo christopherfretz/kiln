@@ -1596,6 +1596,14 @@ lifetime" ([basic.life]/7)
 No new memory state: the entry already existed and is removed with the
 destruction. Clang 19 accepts destroying a union with a user-provided
 destructor twice and reading a member after it; kiln rejects both.
+An explicit destruction of a non-union class object whose union members'
+bytes alone are outside their lifetime is accepted too (`EndLife` aux 1,
+`live_but_unions`: every byte outside its `upos` unions must be live, and
+there must be such a byte; a member constructed by `std::construct_at`
+through a plain pointer has no union entry to consult): libc++ 22's list
+nodes destroy the value of their anonymous union, then the node (WP-446,
+`tests/conformance/class.union.anon/constexpr-destroy-member-then-object.cpp`).
+A class all of whose bytes are union bytes keeps the stricter check.
 
 *Unconstructed bases (WP-390).* Sema leaves a direct non-virtual base
 out of a constructor's ctor-initializers only after diagnosing that it
@@ -2466,7 +2474,14 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   is a `<N x i1>` constant global, also as a struct member and an array
   element (spec/codegen.md), with no `__cxx_global_var_init`
   (`tests/codegen/bool_vector_const.cpp`).
-Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`.
+- *Not folded*: clang 22's implicit integer → `bool` ext vector
+  conversion (spec/sema.md §5.28), a `CK_IntegralToBoolean` cast of
+  vector type, which clang 22's `VectorExprEvaluator` does not evaluate:
+  `compile.rs` `unsupported` throws the generic "subexpression not valid
+  in a constant expression" for it (WP-453; `__builtin_convertvector` to
+  a bool vector is the constant form).
+Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`,
+`ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`.
 
 ### `_BitInt` — Landed (WP-404, wide WP-445)
 Type rules: spec/types.md §21.
@@ -3102,7 +3117,8 @@ Remaining (each traps with a `kiln:` note today):
 - `delete` through `void*`.
 - Front-end gaps that keep some forms from reaching the Oven (not
   Oven work): class-specific `operator new`,
-  `delete[] (expr)` (parsed as a lambda) and
+  `delete[] (expr)` when `expr` starts with two identifiers (clang's
+  lambda lookahead) and
   `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the
   front end puts the volatile qualifier on the read expression's type.

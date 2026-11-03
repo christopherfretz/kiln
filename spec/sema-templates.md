@@ -1229,7 +1229,13 @@ silently (`diag = None`) at those sites. S3O lists them.
    - deduce `p.params` from `(p.args, A)` with `deduce_args` (§6.2);
    - finish the deduction: substitute the deduced args into `p.args` and
      require canonical equality with `A`;
-   - check `p`'s associated constraints (§8).
+   - check `p`'s associated constraints (§8). For a class template, their
+     atoms check access from the specialization being matched
+     (`ConceptState::partial_access`), so a class that befriends
+     `traits<It>` or `traits` lets `requires It::flag` see its private
+     members (clang accepts; WP-446, libc++ 22's
+     `__product_iterator_traits`,
+     `tests/conformance/temp.spec.partial.match/constraint-access-befriended-specialization.cpp`).
    The partials that succeed form the set `M`.
 4. If `M` is empty, the pattern is the primary template. If `M` has one
    element, it is that partial. Otherwise the pattern is the most
@@ -1404,9 +1410,41 @@ by its explicit instantiation (`queue_explicit_instantiation`). It is
 then reported at both places, as clang's duplicate
 `PendingInstantiations` entries do.
 
-**An explicit instantiation declaration** (`extern template`) does not
-stop sema from instantiating inline and `constexpr` members when they
-are used. It only tells codegen not to emit them (WP-080).
+**An explicit instantiation declaration** (`extern template`,
+[temp.explicit]/12, WP-449) suppresses the implicit instantiation of the
+definitions it covers, even when they are odr-used
+(`Ast::governing_explicit_inst_kind` decides, as codegen does: the
+member's own explicit kind, else the innermost explicitly instantiated
+enclosing class):
+- A member function's definition is instantiated only when its pattern
+  is inline (declared `inline` or `constexpr`/`consteval` on a
+  redeclaration, or defined in its class) or its declared return type
+  contains a placeholder (clang `InstantiateFunctionDefinition`;
+  `Sema::suppressed_by_explicit_inst_declaration`). The others are
+  never instantiated here, so an ill-formed body is not diagnosed.
+- A static data member's out-of-line definition is instantiated only
+  when the member may be usable in constant expressions (clang
+  `InstantiateVariableDefinition`, `might_be_constant_var`). It stays
+  in `inst.member_defs`, so a later explicit instantiation definition
+  still instantiates it.
+- The declaration instantiates the definitions of the class's member
+  classes, recursively, and gives the fresh ones the declaration kind
+  (clang `InstantiateClassMembers` with
+  `TSK_ExplicitInstantiationDeclaration`). A later explicit
+  instantiation definition upgrades such a member class to a
+  definition, so its vtable is required. A member class already
+  implicitly instantiated keeps the implicit kind.
+- An instantiated member function is implicitly inline only when its
+  pattern is (`Sema::instantiated_pattern_inline`, clang copies
+  `isInlined`). An out-of-class non-inline pattern gives a non-inline
+  instantiation, with or without an explicit instantiation. Codegen
+  reads the instantiation's own inline-ness (spec/codegen.md
+  "Explicit instantiation declarations").
+
+Tests: `tests/conformance/temp.explicit/extern-template-no-definitions.cpp`,
+`extern-template-inline-error.cpp`, `implicit-inline-from-pattern-ast.cpp`,
+`tests/codegen/extern_template_nested_class.cpp`,
+`extern_template_optnone_o1.cpp`.
 
 **Member specializations** such as `template<> void A<int>::f()`:
 1. Instantiate the declaration of `A<int>` (declarations only).
@@ -1523,6 +1561,11 @@ errors.
      can recurse.
    - **attributes** that affect layout (`alignas`, `packed`,
      `trivial_abi`).
+   - the class-virt-specifier **`final`** of the pattern (the primary
+     template's or the partial specialization's definition), through
+     `act_on_class_final` before the bases (WP-446), so `__is_final` and
+     the final-base check see it on the specialization. Test:
+     `tests/conformance/temp.inst/final-class-template.cpp`.
    - A member function's declaration, and a function template
      specialization's (at `function_spec_signature`), gets the pattern's
      attributes (`class_attrs`; clang `InitFunctionInstantiation` →
@@ -1618,7 +1661,14 @@ member class, whose instantiation now reports failure like a
 specialization's) is invalid, and a base-specifier naming it is dropped
 (class/members.rs), so the derived class does not find its members; a
 using-declaration whose qualifier names an invalid class is not
-diagnosed as "not a base class". A decl-specifier whose qualifier fails
+diagnosed as "not a base class"; an explicit type conversion `T(a, b)`,
+`T()` or `T{a, b}` (forms.rs, clang `BuildCXXTypeConstructExpr`) whose
+instantiation of `T` happens there and fails builds nothing inside a
+template instantiation (clang's `ExprError`); outside one the invalid
+class is initialized quietly and its members are still looked up, as
+clang's `RecoveryExpr` of type `T` is (`Y<int>().m()` is "no member
+named 'm'") (`temp.inst/failed-static-assert-functional-cast.cpp`,
+WP-446). A decl-specifier whose qualifier fails
 so (`X<A>::type v;`) spans the scanned name and the declaration goes on
 with an invalid type; a base-specifier `X<A>::B` is clang's "expected
 class name" at `B`
@@ -1691,7 +1741,19 @@ class name" at `B`
   "previous definition is here".
 - A friend template, or a friend specialization (`friend void f<>(T)`),
   is substituted and then matched against the namespace-scope templates
-  when it is instantiated.
+  when it is instantiated. The friend template keeps its pattern's
+  constraints (checked through `member_constraints`), whose own
+  parameters are a level deeper than the namespace template's; while it
+  is matched, each type-constraint and requires-clause is compared as its
+  substitution with the specialization's arguments, the friend's own
+  parameters at their retained depth (`Sema::friend_cmp_constraints`;
+  clang's `AreConstraintExpressionsEqual`). A constraint whose
+  substitution is not dependent names only the enclosing class's
+  parameters ([temp.friend]/9): it is compared as written, so the friend
+  stays a template of its own (WP-446; libc++ 22 `stack`/`queue`
+  `operator<=>`; `temp.friend/constrained-friend-template-*.cpp`). Gap:
+  a constraint naming both levels is compared substituted, which merges
+  what [temp.friend]/9 keeps apart.
 - A friend function or function template declared with a qualified name
   in a templated class (`template<class U> friend R N::f(X<U>);`,
   `friend R N::g(T);`) whose template head or type is dependent is not
@@ -1794,6 +1856,11 @@ and the §6.2 tests.
 - The NSDMI of a member of a specialization is instantiated the first
   time a constructor that uses it is defined, or an aggregate
   initialization reads it. It is cached in the field's cold slot.
+- The fields of an anonymous struct or union member are deferred the same
+  way: `sizeof(V<P>)` does not instantiate `P a = nullptr;` inside an
+  anonymous struct (WP-446; libc++ 22's `_LIBCPP_COMPRESSED_PAIR`,
+  `tests/conformance/temp.inst/nsdmi-anonymous-member-deferred.cpp`).
+  Only a local class's initializers are instantiated with the class.
 - A recursive use while the enclosing class is being instantiated is
   clang's error: "default member initializer for 'x' needed within
   definition of enclosing class 'A<int>' outside of member functions".
@@ -2946,6 +3013,15 @@ match `X<void()>`; `const T&` binding a function is unaffected (the
 reference strips `P`'s qualifiers first). WP-418,
 `tests/conformance/temp.deduct.type/cwg1584-cv-function.cpp` (libc++
 `std::is_within_lifetime(const T*)` rejects function pointers).
+
+`TopLevelParameterTypeList` ([temp.deduct.type]/10) is set for the
+function type deduced against an address target or a declaration
+([temp.deduct.funcaddr], [temp.deduct.decl]) and reaches only that type's
+own parameter-type-list: there a forwarding reference `T&&` (or the
+pattern `Args&&` of a pack) paired with an lvalue reference `U&` is
+adjusted to `T`, deducing `T = U&` (`int (*)(int&) = f` for
+`template <class... Args> int f(Args&&...)`). WP-446,
+`tests/conformance/temp.deduct.funcaddr/forwarding-reference-{lvalue,conflict}.cpp`.
 
 A class template-id P with a class A tries A first. If that fails and
 `DerivedClass` is set, it tries each base of A
@@ -4734,7 +4810,12 @@ arguments dropped (`Sema::name_for_diagnostic`; clang
 explicit specialization written with a typedef (`template<> constexpr
 int g<L *>;` is `'g<long *>'`). `declaration of variable 'au' with
 deduced type 'auto' requires an initializer` names the template, as in
-clang. The "in instantiation of variable template specialization" note
+clang. Dropping a written default argument from a printed name never
+substitutes a dependent default whose shape cannot match it
+(`typename T::value_type`, `decltype(T::f())`), so naming
+`M<S<int>, int>` never instantiates `S<int>` ([temp.inst]/2; libc++'s
+`memory_alignment<simd<bool>, bool>`). Test
+`temp.inst/default-arg-elision-no-instantiation.cpp`. The "in instantiation of variable template specialization" note
 of an error in a specialization's declaration (its type, or a deduced
 type's initializer, substituted with it) names the pattern, as clang
 does (`'v'`, `'u<T *>'`, `'S::m'`; `var_frame_names_pattern`); the note

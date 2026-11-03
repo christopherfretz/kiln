@@ -126,7 +126,7 @@ impl Preprocessor<'_, '_> {
         let depth = self.frames.len();
         let saved = (self.in_directive, self.dir_eod.take());
         self.in_directive = true;
-        self.do_pragma(PragmaIntroducer::Operator, at);
+        self.do_pragma(PragmaIntroducer::Operator, at, at.lo);
         while !self.lex_unexpanded().is_eod_or_eof() {}
         // Everything above the (exhausted) pragma stream was popped on
         // the way to its `Eod`; drop the stream without propagating its
@@ -183,15 +183,15 @@ impl Preprocessor<'_, '_> {
 
     /// `#pragma` (clang `HandlePragmaDirective`); `name` is the `pragma`
     /// token. The caller discards the rest of the line.
-    pub(crate) fn handle_pragma_directive(&mut self, name: PpTok) {
-        self.do_pragma(PragmaIntroducer::Directive, name.tok.span);
+    pub(crate) fn handle_pragma_directive(&mut self, hash: Loc, name: PpTok) {
+        self.do_pragma(PragmaIntroducer::Directive, name.tok.span, hash);
     }
 
     /// Dispatches a pragma whose tokens are next in the stream (clang's
     /// `PragmaNamespace` tree with the builtin handlers, and the `-E`
     /// printer's catch-all handlers for the rest). `span` is the `pragma`
-    /// / `_Pragma` token.
-    fn do_pragma(&mut self, intro: PragmaIntroducer, span: Span) {
+    /// / `_Pragma` token, `start` the `#` / `_Pragma` that begins it.
+    fn do_pragma(&mut self, intro: PragmaIntroducer, span: Span, start: Loc) {
         let first = self.lex_unexpanded();
         let name = first.ident().map(|s| self.interner.as_str(s));
         match name {
@@ -223,7 +223,7 @@ impl Preprocessor<'_, '_> {
                         if let Some(rest) = self.pragma_diagnostic(span.lo) {
                             let mut toks = vec![first.tok, second.tok];
                             toks.extend(rest);
-                            self.pass_pragma(intro, span, toks);
+                            self.pass_pragma(intro, span, start, toks);
                         }
                     }
                     Some(k @ ("warning" | "error")) if ns == "GCC" => {
@@ -238,9 +238,14 @@ impl Preprocessor<'_, '_> {
                         let mut toks = vec![first.tok];
                         if !second.is_eod_or_eof() {
                             toks.push(second.tok);
-                            self.rest_of_pragma(&mut toks, false);
+                            let expand = self.opts.parser_pragmas
+                                && matches!(
+                                    (ns, sub),
+                                    ("GCC", Some("unroll" | "nounroll")) | ("clang", Some("loop"))
+                                );
+                            self.rest_of_pragma(&mut toks, expand);
                         }
-                        self.pass_pragma(intro, span, toks);
+                        self.pass_pragma(intro, span, start, toks);
                     }
                 }
             }
@@ -250,10 +255,16 @@ impl Preprocessor<'_, '_> {
                     toks.push(first.tok);
                     // clang's `-E` printer expands `#pragma omp` (its
                     // handler is registered with token expansion).
-                    let expand = name == Some("omp");
+                    // The parser's loop-hint handlers expand too.
+                    let expand = name == Some("omp")
+                        || (self.opts.parser_pragmas
+                            && matches!(
+                                name,
+                                Some("unroll" | "nounroll" | "unroll_and_jam" | "nounroll_and_jam")
+                            ));
                     self.rest_of_pragma(&mut toks, expand);
                 }
-                self.pass_pragma(intro, span, toks);
+                self.pass_pragma(intro, span, start, toks);
             }
         }
     }
@@ -271,10 +282,16 @@ impl Preprocessor<'_, '_> {
 
     /// Offers an unconsumed pragma to [`crate::PpCallbacks::pragma`];
     /// queues a [`Marker::Pragma`] unless the callback consumed it.
-    fn pass_pragma(&mut self, introducer: PragmaIntroducer, span: Span, tokens: Vec<Token>) {
+    fn pass_pragma(
+        &mut self,
+        introducer: PragmaIntroducer,
+        span: Span,
+        start: Loc,
+        tokens: Vec<Token>,
+    ) {
         let info = PragmaInfo { introducer, span, tokens: &tokens };
         if !self.callbacks.pragma(&info) {
-            self.queue(Marker::Pragma { introducer, span, tokens });
+            self.queue(Marker::Pragma { introducer, span, start, tokens });
         }
     }
 

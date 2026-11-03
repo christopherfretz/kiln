@@ -65,6 +65,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::INIT_PRIORITY => "InitPriority",
         AttrKind::NONNULL => "NonNull",
         AttrKind::RETURNS_NONNULL => "ReturnsNonNull",
+        AttrKind::LOOP_HINT => "LoopHint",
         _ => return None,
     })
 }

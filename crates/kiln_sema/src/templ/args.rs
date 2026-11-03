@@ -1291,6 +1291,11 @@ impl Sema<'_, '_> {
                 };
                 Ok(TemplateArg::value(canon, v))
             }
+            // clang does not evaluate an argument that contains errors: a
+            // variable whose initializer names an invalid declaration (a
+            // variable template specialization that failed to
+            // instantiate) was already diagnosed.
+            Err(_) if self.refers_to_invalid_var(c) => Err(()),
             Err(f) => {
                 let d = self.diag(DiagId::sema_expr_not_cce, at).arg("non-type template argument");
                 let d = Self::with_failure_notes(d, f);
