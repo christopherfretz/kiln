@@ -1789,10 +1789,11 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         }
-        if self.s.clang_compat < 22 && !functions {
-            if let Some(kw) = self.s.template_id_keyword_typo(name, nl) {
-                return self.template_id_keyword(kw, nl);
-            }
+        if self.s.clang_compat < 22
+            && !functions
+            && let Some(kw) = self.s.template_id_keyword_typo(name, nl)
+        {
+            return self.template_id_keyword(kw, nl);
         }
         if self.s.clang_compat < 22 {
             // clang 19: a delayed typo on an expression parsing goes on

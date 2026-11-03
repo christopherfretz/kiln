@@ -1724,20 +1724,13 @@ impl Sema<'_, '_> {
         let e = if self.ety(e) == QualType::OVERLOAD && self.overload_operand(e).is_some() {
             let at = self.begin_loc(e);
             let ctx = crate::overload::address::AddrCtx::Convert;
-            match self.resolve_address_of_overloaded_noted(
-                e,
-                pty,
-                true,
-                ctx,
-                at,
-                Some(note.clone()),
-            ) {
-                Some(x) => x,
-                None => {
-                    let loc = self.ast.exprs.get(e).loc();
-                    return self.recover(pty, &[e], loc);
-                }
-            }
+            let noted = Some(note.clone());
+            let Some(x) = self.resolve_address_of_overloaded_noted(e, pty, true, ctx, at, noted)
+            else {
+                let loc = self.ast.exprs.get(e).loc();
+                return self.recover(pty, &[e], loc);
+            };
+            x
         } else {
             e
         };

@@ -481,8 +481,7 @@ impl Parser<'_, '_> {
         // as for any other initializer (WP-408).
         // An undeduced variable is corrected unfiltered before deduction.
         let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
-        let r = self.finish_condition_decl(v, d.init_style, name_loc, typos);
-        r
+        self.finish_condition_decl(v, d.init_style, name_loc, typos)
     }
 
     /// The initializer of condition variable `v` and the reference to it;
