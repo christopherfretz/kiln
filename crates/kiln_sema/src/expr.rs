@@ -712,7 +712,7 @@ impl Sema<'_, '_> {
                 return true;
             }
             if let Some(&u) = self.ref_usable.get(&holder) {
-                return u;
+                return u && self.representable_here(holder);
             }
             if self.has_errors_in(init)
                 || self.expr_is_value_dependent(init)
@@ -722,7 +722,7 @@ impl Sema<'_, '_> {
             }
             let u = self.is_constant_initialized(holder);
             self.ref_usable.insert(holder, u);
-            return u;
+            return u && self.representable_here(holder);
         }
         let q = self.ast.types.effective_quals(ty);
         let ok = spec.is_constexpr()
@@ -730,7 +730,28 @@ impl Sema<'_, '_> {
                 && !q.is_volatile()
                 && self.is_integral_or_enum(ty)
                 && !self.ast.types.is_reference(ty));
-        ok && self.is_constant_initialized(holder)
+        ok && self.is_constant_initialized(holder) && self.representable_here(holder)
+    }
+
+    /// P2686R5 [expr.const]/8-9: a variable whose value refers to an
+    /// automatic object (`constexpr int& r = local;`) is usable in
+    /// constant expressions only where that object is
+    /// constexpr-referenceable: in its own function, not in a lambda
+    /// nested in it, where naming the variable odr-uses (captures) it.
+    fn representable_here(&mut self, d: DeclId) -> bool {
+        let x = if let Some(&x) = self.auto_referent.get(&d) {
+            x
+        } else {
+            let Some(kiln_ast::decl::VarEvalState::Value(c)) =
+                self.ast.decls.var(d).map(|v| v.eval.state())
+            else {
+                return true;
+            };
+            let x = kiln_oven::automatic_referent(&self.ast, c);
+            self.auto_referent.insert(d, x);
+            x
+        };
+        x.is_none_or(|x| self.ast.decls.get(x).ctx() == self.enclosing_function(self.ctx))
     }
 
     /// True if the glvalue `e` designates a function or a variable with
@@ -3329,7 +3350,8 @@ impl Sema<'_, '_> {
             } else {
                 "remainder"
             };
-            let msg = self.diag(DiagId::sema_division_by_zero, loc).arg(what);
+            let msg =
+                self.diag(DiagId::sema_division_by_zero, loc).arg(what).range(self.expr_range(r));
             self.diag_if_reachable(msg, r);
         }
     }
@@ -3351,7 +3373,7 @@ impl Sema<'_, '_> {
         } else {
             return;
         };
-        let msg = self.diag(id, loc);
+        let msg = self.diag(id, loc).range(self.expr_range(r));
         self.diag_if_reachable(msg, r);
     }
 
@@ -3419,6 +3441,8 @@ impl Sema<'_, '_> {
                 let bw = conv::bit_field_width(self, l);
                 let base = conv::strip_cv(self, lt);
                 let p = conv::promoted_type(self, base, bw).unwrap_or(base);
+                // clang `CheckShiftOperands` with `IsCompAssign`.
+                self.diagnose_shift_count(r2, p, loc);
                 (r2, p, p)
             }
             _ => {
@@ -3441,6 +3465,11 @@ impl Sema<'_, '_> {
                         );
                         if needs_int && !self.ast.types.is_integral(ty) {
                             return self.invalid_operands(l, r, loc);
+                        }
+                        // clang `CheckMultiplyDivideOperands` /
+                        // `CheckRemainderOperands` with `IsCompAssign`.
+                        if matches!(op, BinaryOp::DivAssign | BinaryOp::RemAssign) {
+                            self.diagnose_division_by_zero(op, r2, loc);
                         }
                         (r2, ty, ty)
                     }

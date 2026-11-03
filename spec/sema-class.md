@@ -956,10 +956,10 @@ WP-400 models clang's `DefaultedDefaultConstructorIsConstexpr` and
   `-Winvalid-constexpr` (clang 19 and 22 run `isPotentialConstantExpr`
   only on written bodies); a use in a constant expression gets the
   default member initializer's note and "in call to 'X()'"
-  (`dcl.fct.def.default/constexpr-out-of-line-cxx20.cpp`). Kiln does not
-  yet implement the check for written bodies either ("constexpr
+  (`dcl.fct.def.default/constexpr-out-of-line-cxx20.cpp`). Kiln implements the check for written bodies only for a
+  body overflow in a function without parameters ("constexpr
   {function|constructor} never produces a constant expression", an
-  error by default before C++23). Open: clang 14-17's
+  error by default before C++23; spec/sema.md §5.28 "Never constant"). Open: clang 14-17's
   acceptance of a vbase class with an invalid constexpr constructor as
   literal (not mirrored; tests pin C++20 and later).
 

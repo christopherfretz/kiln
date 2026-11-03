@@ -121,6 +121,31 @@ enum Freeze {
     Notes(Vec<Note>),
 }
 
+/// The automatic variable (a non-`static`, non-`thread_local` local or a
+/// parameter) whose object constant `v` points to or refers to, directly
+/// or through a subobject or a constant object, if any: such a value is
+/// a constant only within its variable's function (P2686R5
+/// [expr.const.init]/2, "constexpr-referenceable"), so it is not
+/// constexpr-representable elsewhere and has no constant form in IR.
+pub fn automatic_referent(ast: &Ast, v: ConstValueId) -> Option<DeclId> {
+    fn walk(ast: &Ast, v: ConstValueId, depth: u32) -> Option<DeclId> {
+        if depth > 64 {
+            return None;
+        }
+        match ast.consts.scalar(v) {
+            Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) => {
+                let tls =
+                    ast.decls.var(d).is_some_and(|x| x.spec.tls() != kiln_ast::decl::TlsKind::None);
+                (is_local_var(ast, d) && !tls).then_some(d)
+            }
+            Some(Scalar::Pointer { base: PtrBase::Const(c), .. }) => walk(ast, c, depth + 1),
+            Some(_) => None,
+            None => ast.consts.relocs(v).iter().find_map(|r| walk(ast, r.value, depth + 1)),
+        }
+    }
+    walk(ast, v, 0)
+}
+
 impl Oven {
     /// A top-level evaluation with registers from `fb`: `object` is the
     /// variable initialized.
@@ -278,6 +303,36 @@ impl Oven {
         };
         let loc = expr_loc(b.ast(), at);
         let r = self.freeze_scalar(b, ty, v, loc).map_err(|f| match f {
+            Freeze::Fault(k) => EvalFailure::silent(k),
+            Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
+        });
+        match self.leak_notes(b) {
+            None => r,
+            Some(_) => Err(EvalFailure::silent(FailKind::NotConstant)),
+        }
+    }
+
+    /// Runs a call of function `f` without arguments at `at`
+    /// ([`crate::Oven::evaluate_call`]): its result, frozen.
+    pub(crate) fn eval_call(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        f: DeclId,
+        at: Loc,
+        fb: u32,
+    ) -> Result<ConstValueId, EvalFailure> {
+        self.run.object = None;
+        let Some(stub) = self.compile_call(b, f, at) else {
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        };
+        self.let_pending.clear();
+        self.exec(b, stub, fb)?;
+        // A `void` call has no value: `true` stands for it.
+        let (ty, v) = match self.funcs[stub as usize].ret {
+            RetKind::Scalar(ty) => (ty, self.regs[fb as usize]),
+            _ => (self.types.intern(b, QualType::BOOL), 1),
+        };
+        let r = self.freeze_scalar(b, ty, v, at).map_err(|f| match f {
             Freeze::Fault(k) => EvalFailure::silent(k),
             Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
         });
@@ -527,6 +582,28 @@ impl Oven {
         ]))
     }
 
+    /// Whether automatic variable `d` is constexpr-referenceable from the
+    /// initializing declaration of the variable being initialized
+    /// (P2686R5 [expr.const.init]/2, C++26): that variable is automatic
+    /// too ([expr.const.init]/4: one with static or thread storage
+    /// duration must be representable at namespace scope) and the
+    /// smallest enclosing scope of both that is not a block scope is the
+    /// same function parameter scope (a lambda's body is its own).
+    /// Deliberately narrowed to a variable declared `constexpr` (WP-467):
+    /// the rule would also make `auto& e = local;` constant-initialized,
+    /// which no compiler does yet, so that case waits for an oracle
+    /// (spec/sema.md §4.9).
+    fn referenceable_from_object(&self, b: &dyn SemaBridge, d: DeclId) -> bool {
+        let Some(v) = self.run.object else { return false };
+        let ast = b.ast();
+        let ctx = ast.decls.get(d).ctx();
+        b.cxx26()
+            && is_local_var(ast, v)
+            && ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            && ctx.is_some_and(|c| ast.decls.get(c).kind().is_function())
+            && ast.decls.get(v).ctx() == ctx
+    }
+
     /// The designated type a frozen `void *` keeps ([`Scalar::Pointer`]
     /// `designated`): the type its `kbc::VOID_TAG` tag bits `tag`
     /// recorded, for a pointer to `void`.
@@ -584,6 +661,13 @@ impl Oven {
         // constant address ([expr.const]/14).
         let automatic = matches!(a.origin, Origin::Global(d) | Origin::External(d) | Origin::Unknown(d)
             if is_local_var(b.ast(), d));
+        // P2686R5 [expr.const.init]/2: an automatic object is
+        // constexpr-referenceable from the initializing declaration of an
+        // automatic variable of the same function (its frozen address is
+        // that of the object in the variable's own invocation).
+        let referenceable = automatic
+            && matches!(a.origin, Origin::Global(d) | Origin::External(d)
+                if self.referenceable_from_object(b, d));
         // The object of unknown value of a namespace-scope reference
         // (P2280; clang `CheckLValueConstantExpression`
         // `allowConstexprUnknown`).
@@ -609,7 +693,7 @@ impl Oven {
         {
             return Err(Freeze::Fault(FailKind::NotConstant));
         }
-        if p.is_static() && !automatic {
+        if p.is_static() && (!automatic || referenceable) {
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
                 Origin::Str(lit, Some(origin)) => PtrBase::StringLit { lit, origin },
@@ -1323,6 +1407,7 @@ impl Oven {
             self.run.const_context,
             self.run.fold,
             self.run.cev_warn,
+            self.run.ub_check,
         );
         let mark = self.mem.mark();
         // Its own evaluation context: its allocations are numbered
@@ -1341,6 +1426,7 @@ impl Oven {
         self.run.const_context = manifest;
         self.run.fold = !manifest;
         self.run.cev_warn = false;
+        self.run.ub_check = false;
         let r = self.eval_at(b, init, Some(d), top);
         self.mem.free_heap_of(ctx, &self.types);
         self.mem.release(mark, &self.types);
@@ -1356,6 +1442,7 @@ impl Oven {
             self.run.const_context,
             self.run.fold,
             self.run.cev_warn,
+            self.run.ub_check,
         ) = saved;
         // The placeholder's storage now belongs to the variable.
         self.globals[g as usize].slot = 0;

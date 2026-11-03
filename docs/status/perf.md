@@ -254,6 +254,32 @@ An earlier pair of debug runs gave 12.68 s before and 10.56 s after. A
 range of more than 2^20 library-iterator elements is now counted rather
 than rejected.
 
+### WP-467: iterating expansion over a user iterator (2026-11-03)
+
+`tests/stress/expansion-iterating-user-iterator.cpp`: 10000 elements, a
+class iterator with `+`, `!=` and unary `*` (not the `end - begin` fast
+path), `-fsyntax-only`, debug kiln, two runs each on the shared host.
+Before is WP-467's base (the count evaluates `begin + i != end` per i,
+then each element builds `begin + i` again), after builds element i's
+`__iter` once and the count tests `__iter != end`.
+
+| Build | Before wall | Before max RSS | After wall | After max RSS | Oven steps (line 26) |
+|---|--:|--:|--:|--:|--:|
+| debug | 3.74 s, 3.65 s | 44932 KB | 3.22 s, 2.85 s | 40736 KB | 80008 → 60008 |
+
+Per element, against a pointer iterator over the same data (fast path,
+`-fsyntax-only`, debug, 10000 elements of a two-range program): 2.84 s
+and 40744 KB against 1.09 s and 34248 KB, about 175 µs and 0.65 KB more
+per element. What remains is three operator overload resolutions per
+element (`__begin + i`, `__iter != __end`, `*__iter`, each with clang's
+builtin candidate set; the arithmetic pairs dominate `+`) and three Oven
+evaluations; the body's instantiation is the same in both. At the 2^20
+cap this is roughly 3 minutes and 0.7 GB extra in a debug build, so a range
+that large is only practical through the fast path. Follow-up: resolve
+the three operators once per expansion (every element has the same
+operand types) and build the later elements' calls from the first's
+resolution.
+
 ### WP-502: GCC 16.1 in CI (2026-11-03)
 
 **Choice: `container: gcc:16.1.0-trixie` in both jobs** (the preferred

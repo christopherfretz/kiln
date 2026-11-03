@@ -9,6 +9,7 @@ pub(crate) mod names;
 mod query;
 mod recipe;
 mod templ;
+mod traits;
 
 pub(crate) use templ::SubstMemo;
 
@@ -61,6 +62,7 @@ impl Sema<'_, '_> {
             }
             MetaOp::Ext(x) => self.meta_ext(x, args, out, ctx, oven),
             MetaOp::Template(t) => self.meta_templ(t, args, out, ctx, oven),
+            MetaOp::Trait(t) => self.meta_trait(t, args, out, ctx, oven),
             _ => Err(MetaError::not_implemented(op, ctx.loc)),
         }
     }

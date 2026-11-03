@@ -172,7 +172,11 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             },
             None => oven.fold_rvalue(&mut b, e),
         };
-        if let Some(v) = v {
+        // A value holding the address of an automatic variable (a
+        // `constexpr` reference to a local, P2686R5) has no constant
+        // form: like clang's `ConstantEmitter`, which cannot emit it,
+        // codegen evaluates the expression at run time.
+        if let Some(v) = v.filter(|&v| kiln_oven::automatic_referent(b.ast, v).is_none()) {
             folds.expr.insert(e, v);
         }
     }
@@ -515,6 +519,17 @@ impl Collect<'_> {
             let is_static = is_static_local(ast, d)
                 || ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::Extern);
             self.var(d, is_static);
+            // A tuple-like decomposition's holding variables are not in
+            // the `DeclStmt` ([dcl.struct.bind]/4): a `static constexpr`
+            // one's are constant-initialized like `e` (clang emits
+            // `@_ZZ1fvE1x = internal constant ptr @_ZZ1fvEDC1x1yE`).
+            if let Some(l) = ast.decls.decomp_bindings(d) {
+                for b in ast.lists.iter::<DeclId>(l) {
+                    if let Some(h) = ast.decls.binding_var(b) {
+                        self.var(h, is_static_local(ast, h));
+                    }
+                }
+            }
         }
     }
 

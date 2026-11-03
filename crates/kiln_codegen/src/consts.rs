@@ -79,12 +79,25 @@ impl Cg<'_> {
                 self.tys.convert(ty)
             }
             kiln_ast::types::TypeView::ConstantArray(a) => match self.const_ir_type(a.elem) {
-                et @ IrType::Vector(..) => {
+                et if matches!(et, IrType::Vector(..)) || has_bool_vec(&et) => {
                     IrType::Array(Box::new(et), self.ast.types.array_size(ty).unwrap_or(0))
                 }
                 _ => self.tys.convert_mem(ty),
             },
             _ => self.tys.convert_mem(ty),
+        }
+    }
+
+    /// The memory form of constant type `it`: a `bool` vector is the
+    /// integer of its size (clang `ConvertTypeForMem`, `<4 x i1>` is
+    /// `i8`), in arrays of any depth.
+    fn bool_vec_mem_form(&mut self, it: &IrType) -> IrType {
+        match it {
+            IrType::Vector(et, _) if matches!(**et, IrType::Int(1)) => {
+                IrType::Int((self.tys.size_align(it).0 * 8) as u32)
+            }
+            IrType::Array(et, n) => IrType::Array(Box::new(self.bool_vec_mem_form(et)), *n),
+            _ => it.clone(),
         }
     }
 
@@ -271,6 +284,22 @@ impl Cg<'_> {
         if let Some(v) = self.member_ptr_reloc(img, off, it, t)? {
             return Ok(v);
         }
+        // clang `VisitImplicitValueInitExpr`: a value-initialized `bool`
+        // vector, array of them or class is `EmitNullConstant`, the null
+        // of its memory type (`i8` for `<4 x i1>`, `%struct.P` for a class
+        // whose explicit constant is a literal struct of `<N x i1>`).
+        if let Some(x) = e
+            && self.ast.exprs.get(self.strip_init(x)).kind() == ExprKind::ImplicitValueInitExpr
+            && (has_bool_vec(it) || matches!(it, IrType::Record(_)))
+        {
+            let m = self.bool_vec_mem_form(it);
+            let v = self.image_const(img, off, &m, None)?;
+            if self.is_null_value(v) {
+                let mt = self.ir(&m);
+                return Ok(self.m.const_zero(mt));
+            }
+            return Ok(v);
+        }
         match it {
             IrType::Int(w) => {
                 let n = u64::from(*w).div_ceil(8);
@@ -324,7 +353,7 @@ impl Cg<'_> {
                 // its constant has no common element type
                 // (`EmitArrayConstant`); a value-initialized one is
                 // `EmitNullConstant`'s plain array.
-                let (inits, filler, no_elts) = match e {
+                let (inits, filler, no_elts, list) = match e {
                     Some(x)
                         if matches!(
                             self.ast.exprs.get(x).kind(),
@@ -333,10 +362,22 @@ impl Cg<'_> {
                     {
                         let (inits, filler, _) = crate::expr::agg_init_parts(self.ast, x);
                         let none = inits.is_empty();
-                        (inits, filler, none)
+                        (inits, filler, none, true)
                     }
-                    _ => (Vec::new(), None, false),
+                    _ => (Vec::new(), None, false, false),
                 };
+                // The elements clang's `CommonElementType` looks at: the
+                // list's explicit ones (all of them without a list).
+                let ninit = if list { inits.len().min(*n as usize) } else { *n as usize };
+                // `EmitArrayConstant`'s desired type is the memory form
+                // (`ConvertType` of the array): a `bool` vector element is
+                // the integer of its size (`<4 x i1>` is `i8`), so the
+                // trailing zero array and an all-zero array of `bool`
+                // vectors are of it (a value-initialized filler is too:
+                // `VisitImplicitValueInitExpr` above), and the array beside
+                // explicit `<N x i1>` elements is a packed struct.
+                let mem = has_bool_vec(et)
+                    .then(|| (self.bool_vec_mem_form(it), self.bool_vec_mem_form(et)));
                 let mut elems = Vec::with_capacity(*n as usize);
                 for i in 0..*n {
                     let sub = inits.get(i as usize).copied().or(filler);
@@ -346,8 +387,11 @@ impl Cg<'_> {
                     let elt = self.ir(et);
                     return self.m.const_array(elt, &elems).map_err(|e| ir_err(&e));
                 }
-                let elt = self.ir(et);
-                self.array_const(t, elt, &elems, !no_elts)
+                let (t, elt) = match &mem {
+                    Some((mt, met)) => (self.ir(mt), self.ir(met)),
+                    None => (t, self.ir(et)),
+                };
+                self.array_const(t, elt, &elems, if no_elts { 0 } else { ninit })
             }
             IrType::Record(d) => {
                 let rec = self.tys.record(*d).clone();
@@ -490,9 +534,13 @@ impl Cg<'_> {
                     .filter(|f| !rec.bitfields.contains_key(f))
                     .and_then(|f| fields.iter().position(|&x| x == f))
                     .and_then(|p| inits.get(p + bases.len()).copied());
-                // A `bool` vector member is its `<N x i1>` constant.
+                // A `bool` vector member (or array of them) is its
+                // `<N x i1>` constant.
                 let fm = ast.decls.get(f).ty().map(|q| self.const_ir_type(q));
-                let m = fm.as_ref().filter(|t| matches!(t, IrType::Vector(..))).unwrap_or(m);
+                let m = fm
+                    .as_ref()
+                    .filter(|t| matches!(t, IrType::Vector(..)) || has_bool_vec(t))
+                    .unwrap_or(m);
                 out.push((at, self.image_const(img, off + at, m, sub)?));
             } else if let Some(b) = by_base[i] {
                 let sub = bases.iter().position(|&x| x == b).and_then(|p| inits.get(p).copied());
@@ -660,9 +708,10 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `EmitArrayConstant` over fully expanded elements; `common`
-    /// is false when the value has no explicitly initialized elements.
-    fn array_const(&mut self, t: LTy, elt: LTy, elems: &[Value], common: bool) -> R<Value> {
+    /// clang `EmitArrayConstant` over fully expanded elements, the first
+    /// `ninit` of them initialized explicitly (0 when the value has only a
+    /// filler); `t` and `elt` are the desired array and element types.
+    fn array_const(&mut self, t: LTy, elt: LTy, elems: &[Value], ninit: usize) -> R<Value> {
         let bound = elems.len();
         let mut nz = bound;
         while nz > 0 && self.is_null_value(elems[nz - 1]) {
@@ -671,25 +720,28 @@ impl Cg<'_> {
         if nz == 0 {
             return Ok(self.m.const_zero(t));
         }
-        // clang's `CommonElementType`: the first element's type when every
-        // element has it (a polymorphic class element is a literal struct).
+        // clang's `CommonElementType`: the first element's type when each
+        // of the `ninit` initialized elements has it (a polymorphic class
+        // element is a literal struct); the filler must match it too
+        // unless it is folded into a trailing zero array.
         let first = self.m.const_type(elems[0]);
-        let common = common && elems.iter().all(|&v| self.m.const_type(v) == first);
-        let elt = if common { first } else { elt };
+        let init_common =
+            ninit > 0 && elems[..ninit.min(bound)].iter().all(|&v| self.m.const_type(v) == first);
         let tz = bound - nz;
         if tz >= 8 {
             let mut out = Vec::new();
-            if common && nz >= 8 {
-                out.push(self.m.const_array(elt, &elems[..nz]).map_err(|e| ir_err(&e))?);
+            if init_common && nz >= 8 && elems[..nz].iter().all(|&v| self.m.const_type(v) == first)
+            {
+                out.push(self.m.const_array(first, &elems[..nz]).map_err(|e| ir_err(&e))?);
             } else {
                 out.extend_from_slice(&elems[..nz]);
             }
-            let ft = self.m.types.array(elt, tz as u64);
+            let ft = self.m.types.array(if init_common { first } else { elt }, tz as u64);
             out.push(self.m.const_zero(ft));
             return self.m.const_anon_struct(&out, true).map_err(|e| ir_err(&e));
         }
-        if common {
-            return self.m.const_array(elt, elems).map_err(|e| ir_err(&e));
+        if init_common && elems.iter().all(|&v| self.m.const_type(v) == first) {
+            return self.m.const_array(first, elems).map_err(|e| ir_err(&e));
         }
         self.m.const_anon_struct(elems, true).map_err(|e| ir_err(&e))
     }
@@ -737,6 +789,16 @@ impl Img {
 
     fn reloc(&self, at: u64) -> Option<ConstValueId> {
         self.relocs.iter().find(|r| u64::from(r.at) == at).map(|r| r.value)
+    }
+}
+
+/// Whether constant type `it` is a `bool` vector (`<N x i1>`) or an
+/// array of them, at any depth.
+fn has_bool_vec(it: &IrType) -> bool {
+    match it {
+        IrType::Vector(et, _) => matches!(**et, IrType::Int(1)),
+        IrType::Array(et, _) => has_bool_vec(et),
+        _ => false,
     }
 }
 
