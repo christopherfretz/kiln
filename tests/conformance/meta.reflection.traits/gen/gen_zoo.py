@@ -2,7 +2,7 @@
 """Writes the [meta.reflection.traits] type-zoo tests (WP-477).
 
   traits-zoo.cpp      kiln only (-freflection): is_X_type(^^T) == std::is_X_v<T>
-                      (and X(^^T) == ^^std::X_t<T> for the transformations),
+                      (and X(^^T) == canon<std::X_t<T>> for the transformations),
                       for every zoo type and every trait with a <type_traits>
                       counterpart.
   traits-zoo-rhs.cpp  both compilers (min-oracle 22): std::is_X_v<T> == V, with
@@ -130,12 +130,12 @@ def rows():
 def transform_rows():
     for a, _ in UNARY:
         for t in TRANSFORMS:
-            yield f"{t}(^^{a})", f"^^std::{t}_t<{a}>"
+            yield f"{t}(^^{a})", f"canon<std::{t}_t<{a}>>"
         if a in SIGN_OK and a != "Bool":
             for t in ("make_signed", "make_unsigned"):
-                yield f"{t}(^^{a})", f"^^std::{t}_t<{a}>"
+                yield f"{t}(^^{a})", f"canon<std::{t}_t<{a}>>"
         if a in ("En", "SEn"):
-            yield f"underlying_type(^^{a})", f"^^std::underlying_type_t<{a}>"
+            yield f"underlying_type(^^{a})", f"canon<std::underlying_type_t<{a}>>"
 
 
 def aliases():
@@ -170,12 +170,15 @@ def main():
            + "// [meta.reflection.traits] P2996R13: every type trait with a <type_traits>\n"
            + "// counterpart answers as it, over a type zoo (each type reflected through an\n"
            + "// alias: p4); a transformation returns the canonical type std::X_t names\n"
-           + "// (p5). traits-zoo-rhs.cpp pins the std:: side to clang 22's answers.\n"
+           + "// (p5): canon<T> reflects T through a template parameter, which drops\n"
+           + "// the alias ^^std::X_t<T> would keep ([expr.reflect]).\n"
+           + "// traits-zoo-rhs.cpp pins the std:: side to clang 22's answers.\n"
            + "//@ args: -freflection -I tests/support\n"
            + "//@ skip(clang): clang 19 does not implement P2996 reflection\n"
            + "//@ strict-diags\n"
            + "#include <type_traits>\n#include <utility>\n#include \"kiln_meta_traits.h\"\n"
-           + "using namespace std::meta;\n" + PRELUDE + aliases()
+           + "using namespace std::meta;\n"
+           + "template <class T> constexpr info canon = ^^T;\n" + PRELUDE + aliases()
            + "".join(f"static_assert({k} == {s});\n" for k, s in pairs)
            + "".join(f"static_assert({k} == {s});\n" for k, s in transform_rows()))
     rhs = (HEADER

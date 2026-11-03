@@ -26,4 +26,5 @@ static_assert(unwrap_reference(^^std::reference_wrapper<B>) == ^^B&);
 static_assert(unwrap_reference(^^B) == ^^B);
 static_assert(unwrap_ref_decay(^^const std::reference_wrapper<int>&) == ^^int&);
 static_assert(unwrap_ref_decay(^^int[2]) == ^^int*);
-static_assert(common_type({^^int, ^^long}) == ^^std::common_type_t<int, long>);
+// ^^std::common_type_t<int, long> would reflect the alias ([expr.reflect]).
+static_assert(common_type({^^int, ^^long}) == ^^long);

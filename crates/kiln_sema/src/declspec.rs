@@ -823,6 +823,10 @@ pub enum DeclSite {
     TypeParamDefault,
     /// A declarator rebuilt by template substitution (already checked).
     Subst,
+    /// The type-id of a reflect-expression `^^type-id`: as
+    /// [`DeclSite::Plain`], except that a function type with a
+    /// cv-qualifier-seq or ref-qualifier is allowed ([dcl.fct]/6).
+    Reflect,
 }
 
 /// The bracketed identifier list of a structured binding declaration

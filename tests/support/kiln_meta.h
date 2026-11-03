@@ -298,26 +298,15 @@ consteval bool name_is(info r, const char* s) {
 // [meta.reflection.define.aggregate] (WP-480; spec/reflection.md §6).
 // `data_member_options` with a non-owning `name_type` (the Oven reads
 // its flag, then the pointer and length of the string it holds; §6.1);
-// `optional` and `initializer_list` are stand-ins without a standard
-// library (libc++'s optional layout).
+// `optional` is a stand-in without a standard library (libc++'s optional
+// layout); `initializer_list` is always the library's (freestanding, and
+// headers that include it after this one must not see a second one).
 #if defined(_LIBCPP_VERSION) || defined(__GLIBCXX__)
 #include <initializer_list>
 #include <optional>
 #else
+#include <initializer_list>
 namespace std {
-template <class E>
-class initializer_list {
-  const E* __b_;
-  __kiln_size_t __n_;
-  constexpr initializer_list(const E* b, __kiln_size_t n) noexcept : __b_(b), __n_(n) {}
-
- public:
-  constexpr initializer_list() noexcept : __b_(nullptr), __n_(0) {}
-  constexpr const E* begin() const noexcept { return __b_; }
-  constexpr const E* end() const noexcept { return __b_ + __n_; }
-  constexpr __kiln_size_t size() const noexcept { return __n_; }
-};
-
 template <class T>
 class optional {
   union {

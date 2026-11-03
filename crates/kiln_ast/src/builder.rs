@@ -2407,13 +2407,13 @@ impl<'a> AstBuilder<'a> {
     /// prvalue. `aux` is the operand's [`Reflectee::tag`], `a` its
     /// [`Reflectee::payload`], `b` the [`crate::ids::ReflectionId`] index
     /// (0 while the operand is dependent: the expression is then
-    /// value-dependent). A type is interned as
+    /// value-dependent; also 0 when the reflection table is full, which
+    /// the caller diagnoses: a non-dependent expression whose
+    /// `reflect_value` is `None`). A type is interned as
     /// [`crate::Ast::reflection_type`] keys it; a declaration of a
     /// dependent context (a member of a class template, a local of a
     /// function template) is instantiation-dependent, so substitution
-    /// remaps it. `b` is also 0 when the reflection table is full, which
-    /// the caller diagnoses (a non-dependent expression whose
-    /// `reflect_value` is `None`).
+    /// remaps it.
     ///
     /// [`Reflectee::tag`]: crate::reflect::Reflectee::tag
     /// [`Reflectee::payload`]: crate::reflect::Reflectee::payload

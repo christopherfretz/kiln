@@ -61,7 +61,7 @@ impl Sema<'_, '_> {
         }
         let mut decls: Vec<DeclId> =
             found.decls.iter().map(|&d| self.ast.strip_shadow(d)).collect();
-        decls.dedup_by_key(|d| self.ast.first(*d)); // same_entity: raw ok
+        decls.dedup_by_key(|d| self.entity_decl(*d)); // same_entity: raw ok
         match decls.as_slice() {
             [] => {
                 let text = crate::decl::sym_str(self, name);
@@ -149,6 +149,7 @@ impl Sema<'_, '_> {
     /// alias kept). `None` for anything else (a constructor, a template
     /// parameter, a declaration with no entity).
     pub(crate) fn reflectee_of_decl(&mut self, d: DeclId) -> Option<Reflectee> {
+        // One reflection per entity (`Sema::same_entity`).
         let first = self.entity_decl(d);
         Some(match self.kind_of(d) {
             DeclKind::Namespace | DeclKind::TranslationUnit => Reflectee::Namespace(first),
@@ -182,11 +183,15 @@ impl Sema<'_, '_> {
     }
 
     /// The `CXXReflectExpr` of `r`, an expression of consteval-only type
-    /// ([`Sema::note_consteval_only`]).
+    /// ([`Sema::note_consteval_only`]); past the reflection table's limit,
+    /// the fatal `sema_too_many_reflections` and a recovery expression
+    /// ([`Sema::build_reflect_expr`]).
     pub(crate) fn make_reflect_expr(&mut self, r: Reflectee, loc: Loc, end: Loc) -> ExprId {
         let info = self.meta_info_type();
         let e = self.build_reflect_expr(r, info, loc, end);
-        self.note_consteval_only(e);
+        if self.ast.exprs.get(e).kind() == ExprKind::CXXReflectExpr {
+            self.note_consteval_only(e);
+        }
         e
     }
 

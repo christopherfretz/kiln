@@ -35,7 +35,8 @@ impl Parser<'_, '_> {
         if ahead.is_none()
             && self.is_cxx_type_id_at(self.pos(), TypeIdContext::InTrailingReturnType).0
         {
-            let ty = self.parse_type_id()?;
+            // [dcl.fct]/6: `^^int() const` is a type-id.
+            let ty = self.parse_type_id_into(None, kiln_sema::DeclSite::Reflect)?;
             let end = self.prev_end();
             return Some(self.s.act_on_reflect_type(ty, loc, end));
         }
