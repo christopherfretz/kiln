@@ -144,7 +144,8 @@ reported as `expected a type` (`variant.hash/hash.depr.verify`).
 -Wextra …` plus the `-Wno-…` list and
 `-D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER`; `%{verify}` adds `-Wno-error`
 and undefines the macro, as lit does), on wp/418 merged with main
-294e7d985, same flags (`-j 4 --mem-limit 3072`), 1026.7 s wall, peak RSS
+d2c08217, same flags (`-j 4 --mem-limit 3072`), 1299.4 s wall on a
+loaded host, peak RSS
 677 MiB (`variant.visit/visit_return_type.pass.cpp`, the kiln compile
 step):
 
