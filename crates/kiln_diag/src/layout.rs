@@ -251,6 +251,8 @@ fn push_diagnostic(sm: &SourceManager, d: &Diagnostic, limit: u32, out: &mut Vec
         .filter(|l| l.span.is_valid())
         .map(|l| Range { span: l.span, label: Some(l.text.clone()) })
         .collect();
+    // clang's `emitMacroExpansions` sees the ranges, not the fix-its.
+    let labels = raw.len();
     raw.extend(
         d.fixits.iter().filter(|f| f.span.is_valid()).map(|f| Range { span: f.span, label: None }),
     );
@@ -279,7 +281,7 @@ fn push_diagnostic(sm: &SourceManager, d: &Diagnostic, limit: u32, out: &mut Vec
         fixits: d.fixits.clone(),
     });
     if loc.is_macro() {
-        macro_expansions(sm, loc, &raw, limit, out);
+        macro_expansions(sm, loc, &raw[..labels], limit, out);
     }
 }
 

@@ -11,7 +11,7 @@
 
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
 use kiln_ast::types::BuiltinType;
-use kiln_ast::{ExprId, QualType};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::{Loc, Span};
 
@@ -73,7 +73,8 @@ impl Sema<'_, '_> {
                 _ => n.loc(),
             };
             let kids = self.ast.exprs.children(s, &self.ast.lists);
-            work.extend(kids.into_iter().rev().map(|k| (k, at)));
+            // clang's work list pops the last child first.
+            work.extend(kids.into_iter().map(|k| (k, at)));
         }
     }
 
@@ -101,6 +102,16 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(src).kind() == ExprKind::GNUNullExpr {
             self.check_null_conversion(src, to, cc);
         }
+        if self.ast.types.builtin(to) == Some(BuiltinType::Bool) {
+            let from = self.ast.types.canonical(from);
+            if self.ast.types.is_pointer(from)
+                || self.ast.types.is_array(from)
+                || self.ast.types.is_function(from)
+            {
+                self.always_non_null_pointer(src, cc);
+                return;
+            }
+        }
         if self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
         }
@@ -109,6 +120,132 @@ impl Sema<'_, '_> {
             return;
         }
         self.integer_constant_imp_cast(src, to, cc);
+    }
+
+    /// clang's `DiagnoseAlwaysNonNullPointer` for the conversion of `e`
+    /// (parentheses and implicit casts stripped) to `bool`: a function, an
+    /// array, or the address of an object, named by a `DeclRefExpr` or
+    /// `MemberExpr`, is never null (`-Wpointer-bool-conversion`; a
+    /// function adds the `&` and, when it is callable with no arguments
+    /// and returns `bool`, the `()` fix-it notes); `this` and the address
+    /// of a reference are null only after undefined behaviour
+    /// (`-Wundefined-bool-conversion`). Not in unevaluated operands, nor
+    /// when `e` or the context `cc` comes from a macro body; a weak
+    /// declaration may be null.
+    fn always_non_null_pointer(&mut self, e: ExprId, cc: Loc) {
+        if self.unevaluated > 0 {
+            return;
+        }
+        let at = self.expr_loc(e);
+        if at.is_macro() && (self.in_any_macro_body(at) || self.in_any_macro_body(cc)) {
+            return;
+        }
+        let mut e = e;
+        let kind = self.ast.exprs.get(e).kind();
+        if kind == ExprKind::CXXThisExpr {
+            let msg = self.diag(DiagId::sema_this_bool_conversion, at);
+            self.emit(msg);
+            return;
+        }
+        let addr_of = kind == ExprKind::UnaryOperator;
+        if addr_of {
+            if self.ast.exprs.unary_op(e) != UnaryOp::AddrOf {
+                return;
+            }
+            e = self.ast.exprs.operand(e);
+        }
+        let named = |s: &Self, x: ExprId| {
+            matches!(s.ast.exprs.get(x).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+                .then(|| s.ast.exprs.decl(x))
+        };
+        if addr_of {
+            // clang `CheckForReference` (a reference-returning call is
+            // left alone: kiln does not model its note).
+            let x = self.strip_impcast(e);
+            if let Some(d) = named(self, x) {
+                if self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_reference(t)) {
+                    let at = self.expr_loc(x);
+                    let msg = self.diag(DiagId::sema_address_of_reference_bool_conversion, at);
+                    self.emit(msg);
+                    return;
+                }
+            } else if matches!(
+                self.ast.exprs.get(x).kind(),
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+            ) {
+                return;
+            }
+        }
+        let Some(d) = named(self, e) else {
+            return;
+        };
+        if self.find_attr(d, kiln_ast::attr::AttrKind::WEAK).is_some() {
+            return;
+        }
+        let Some(t) = self.ast.decls.get(d).ty() else {
+            return;
+        };
+        let t = self.ast.types.canonical(t);
+        let (array, function) = (self.ast.types.is_array(t), self.ast.types.is_function(t));
+        if (addr_of && function) || (!addr_of && !function && !array) {
+            return;
+        }
+        let what = if addr_of {
+            0u32
+        } else if function {
+            1
+        } else {
+            2
+        };
+        let at = self.expr_loc(e);
+        let text = self.expr_text_as_written(e);
+        let mut msg = self.diag(DiagId::sema_impcast_pointer_to_bool, at).arg(what).arg(text);
+        if function {
+            let begin = self.begin_loc(e);
+            msg = msg.with_note(
+                self.diag(DiagId::note_function_warning_silence, at)
+                    .fixit(kiln_diag::FixIt::insert(begin, "&")),
+            );
+            if self.zero_arg_call_returns_bool(d, t) {
+                let end = self.expr_end_loc(e);
+                let after = self.token_end(end).unwrap_or(end);
+                msg = msg.with_note(
+                    self.diag(DiagId::note_function_to_function_call, at)
+                        .fixit(kiln_diag::FixIt::insert(after, "()")),
+                );
+            }
+        }
+        self.emit(msg);
+    }
+
+    /// clang `tryExprAsCall` for function `d` of type `t`, then whether
+    /// the call is `bool`: every parameter has a default argument.
+    fn zero_arg_call_returns_bool(&self, d: DeclId, t: QualType) -> bool {
+        let kiln_ast::types::TypeView::Function(p) = self.ast.types.view(t.ty()) else {
+            return false;
+        };
+        self.ast.types.builtin(self.ast.types.canonical(p.ret())) == Some(BuiltinType::Bool)
+            && self.param_decls(d).iter().all(|&q| self.param_has_default(q))
+    }
+
+    /// clang's `IsInAnyMacroBody`: whether `loc`, walked outward through
+    /// macro arguments to where they were written, is in a macro's
+    /// replacement list.
+    fn in_any_macro_body(&self, mut loc: Loc) -> bool {
+        let sm = self.diags.sm();
+        for _ in 0..256 {
+            if !loc.is_macro() {
+                return false;
+            }
+            match sm.expansion_info(loc) {
+                None => return false,
+                Some(x) if matches!(x.kind, kiln_source::ExpansionKind::Macro { .. }) => {
+                    return true;
+                }
+                Some(_) => loc = sm.immediate_macro_caller_loc(loc),
+            }
+        }
+        false
     }
 
     /// clang's `CheckImplicitConversion` for an integral constant `e`

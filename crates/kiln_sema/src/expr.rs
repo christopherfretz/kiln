@@ -4024,7 +4024,14 @@ impl Sema<'_, '_> {
             return self.recover_err(&[b, i], loc);
         }
         let elem = self.pointee_sugared(ptr).unwrap_or(QualType::ERROR);
-        if !self.ast.types.is_function(elem) && !self.require_complete(elem, loc) {
+        if self.ast.types.is_function(elem) {
+            // clang `err_subscript_function_type`, at the pointer operand.
+            let at = self.begin_loc(if ptr == bt { b } else { i });
+            let msg = self.diag(DiagId::sema_subscript_function_type, at).arg(self.ty_arg(elem));
+            self.emit(msg);
+            return self.recover_err(&[b, i], loc);
+        }
+        if !self.require_complete(elem, loc) {
             // clang `err_subscript_incomplete_or_sizeless_type`.
             let msg = self.diag(DiagId::sema_subscript_incomplete_type, loc).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
