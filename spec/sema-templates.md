@@ -3533,6 +3533,14 @@ its `DeclStmt` fails silently and ends its compound statement (clang's
 `static_assert` after `int a[-1];`, is checked. Tests
 `temp.variadic/p12-unexpanded-declarator-type.cpp`,
 `p12-unexpanded-declarator-group.cpp`.
+The same holds for a declaration statement whose declaration does not
+instantiate at all: a `static_assert` whose condition fails to substitute
+(not one that is false) and a variable whose type fails to substitute (not
+one whose initializer fails; an alias whose type fails also continues).
+Its diagnostic is the only one, and the rest of the compound statement is
+skipped (`subst/stmts.rs` `DeclStmt`; libc++'s
+`static_assert(sizeof(_Tp) >= 0, ...)` guards in `allocator::allocate`;
+`temp.inst/failed-decl-stmt-ends-block.cpp`, WP-418).
 
 A lambda whose body names an enclosing template's pack in a
 full-expression or a declaration (`[] { A x{}; return sizeof(x); }()...`)
