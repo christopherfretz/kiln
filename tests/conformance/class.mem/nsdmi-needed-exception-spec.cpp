@@ -22,7 +22,7 @@
 //@ diag: 45:10 error "default member initializer for 'b' needed within definition of enclosing class 'D' outside of member functions"
 //@ diag: 45:29 note "default member initializer declared here"
 //@ requires: clang<22
-// clang 22 emits error: default member initializer for 'a' needed within definition of enclosing cl...; WP-355 residual
+// clang 19 spelling; nsdmi-needed-exception-spec-clang22.cpp has clang 22's (WP-394).
 struct V {
   struct X { int a = 2; X() = default; };
   static constexpr X x{};

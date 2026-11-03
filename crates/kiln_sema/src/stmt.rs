@@ -91,6 +91,10 @@ pub struct FnState {
     /// `if constexpr` branch. A variable's initializer is potentially
     /// evaluated again ([`Sema::enter_var_initializer`]).
     pub(crate) rt_quiet: u32,
+    /// How many of `rt_quiet`'s contexts are discarded statements:
+    /// clang 22 keeps a variable's initializer in a discarded statement
+    /// quiet (its evaluation context inherits `InDiscardedStatement`).
+    pub(crate) discarded: u32,
     /// The coroutine state, once a coroutine keyword was seen
     /// (spec/sema.md §coroutines).
     pub(crate) coro: Option<Box<crate::coroutine::CoroState>>,
@@ -116,6 +120,7 @@ impl FnState {
             has_fallthrough: false,
             runtime_diags: Vec::new(),
             rt_quiet: 0,
+            discarded: 0,
             coro: None,
             first_return: None,
         }
@@ -579,11 +584,17 @@ impl Sema<'_, '_> {
     /// `DiscardedStatement` evaluation context).
     pub fn enter_discarded_statement(&mut self) {
         self.enter_quiet_context();
+        if let Some(f) = self.func.as_mut() {
+            f.discarded += 1;
+        }
     }
 
     /// Leaves a context entered with [`Sema::enter_discarded_statement`].
     pub fn exit_discarded_statement(&mut self) {
         self.exit_quiet_context();
+        if let Some(f) = self.func.as_mut() {
+            f.discarded = f.discarded.saturating_sub(1);
+        }
     }
 
     /// Before a variable's initializer: it is potentially evaluated even
@@ -592,9 +603,13 @@ impl Sema<'_, '_> {
     /// [`Sema::exit_var_initializer`] restores. A use of a deprecated
     /// entity in the initializer of `v` is in `v`'s context
     /// ([dcl.attr.deprecated]; clang delays it to the declarator's
-    /// completion).
+    /// completion). At compat 22 it stays quiet in a discarded statement.
     pub fn enter_var_initializer(&mut self, v: Option<DeclId>) -> (u32, Option<DeclId>) {
-        let quiet = self.func.as_mut().map_or(0, |f| std::mem::take(&mut f.rt_quiet));
+        let keep_discarded = self.clang_compat >= 22;
+        let quiet = self.func.as_mut().map_or(0, |f| {
+            let keep = if keep_discarded { f.discarded } else { 0 };
+            std::mem::replace(&mut f.rt_quiet, keep)
+        });
         let depr = std::mem::replace(&mut self.depr_init, v);
         (quiet, depr)
     }
@@ -1085,11 +1100,11 @@ impl Sema<'_, '_> {
                         self.emit(d);
                     }
                     Some(self.act_on_full_expr(e))
-                } else if self.ast.types.is_void(ety) && !ret_dep {
-                    let d = self.diag(DiagId::sema_return_void_expr_in_nonvoid, loc).arg(fname);
-                    self.emit(d);
-                    Some(self.act_on_full_expr(e))
                 } else {
+                    // A `void` operand of a non-void function is an
+                    // ill-formed copy-initialization ([stmt.return]/2,
+                    // [dcl.init.general]/16), as in clang.
+
                     candidate = self.copy_elision_candidate(e, ret);
                     let e = self.implicit_move(e);
                     let c = self.convert_for_init(e, ret, ConvCtx::Return);

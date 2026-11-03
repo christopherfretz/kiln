@@ -21,7 +21,7 @@
 //@ diag: 42:8 error "use of class template 'B' requires template arguments; argument deduction not allowed in function prototype"
 //@ diag: 25:26 note "template is declared here"
 //@ requires: clang<22
-// clang 22 emits error: cannot form pointer to deduced class template specialization type; WP-355 residual
+// clang 19 spelling; dcl.type.class.deduct-compound-diag-clang22.cpp has clang 22's (WP-394).
 template<class T> struct B { B(T); };
 template<class T> struct Outer { template<class U> struct In { In(U); }; };
 struct S {};

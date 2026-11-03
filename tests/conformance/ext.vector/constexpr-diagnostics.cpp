@@ -41,7 +41,7 @@
 //@ diag: 72:35 note "read of uninitialized object is not allowed in a constant expression"
 //@ diag: 73:20 note "in call to 'u()'"
 //@ requires: clang<22
-// clang 22 no longer emits error: constexpr variable 'sub' must be initialized by a constant expres...; WP-355 residual
+// clang 19 spelling; constexpr-diagnostics-clang22.cpp has clang 22's (WP-394).
 typedef int g4i __attribute__((vector_size(16)));
 typedef float g4f __attribute__((vector_size(16)));
 typedef int v4i __attribute__((ext_vector_type(4)));

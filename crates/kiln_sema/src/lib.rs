@@ -190,6 +190,11 @@ pub struct Sema<'a, 'sm> {
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
     pub clang_compat: u32,
+    /// The begin of the nested-name-specifier whose component the parser
+    /// is acting on (set around each `act_on_nested_name_*` call): clang
+    /// 22's point of instantiation for a class or enumeration completed
+    /// as a qualifier (`Sema::nns_poi`).
+    pub nns_start: Option<Loc>,
     /// GCC's implicit library builtins (`-stdlib=libstdc++`, WP-380): a
     /// call of a recognized C library `ceil` / `floor` / `trunc` /
     /// `round` / `fabs` / `fmin` / `fmax` / `copysign` function folds in
@@ -747,6 +752,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 19,
+            nns_start: None,
             gnu_lib_builtins: false,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {

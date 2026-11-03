@@ -29,7 +29,7 @@
 //@ diag: 54:38 warning "'P' is deprecated"
 //@ diag: 34:13 note "'P' has been explicitly marked deprecated here"
 //@ requires: clang<22
-// clang 22 expected compile-ok, but the compiler failed (exit code 1); WP-355 residual
+// clang 19 spelling; namespace-deprecated-clang22.cpp has clang 22's (WP-394).
 namespace [[deprecated("old")]] N { int x; namespace M { int y; } }
 namespace [[deprecated]] P { int z; template <class T> struct S {}; int fn(int); }
 namespace N { int w; }

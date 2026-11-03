@@ -41,14 +41,22 @@ impl Sema<'_, '_> {
         rparen: Loc,
     ) -> ExprId {
         // clang 22 also deprecates `__is_trivially_relocatable` in favour
-        // of the P2786 `__builtin_is_cpp_trivially_relocatable`.
-        let rep = table::deprecated_replacement(t).or_else(|| {
-            (self.clang_compat >= 22 && t == TypeTrait::IsTriviallyRelocatable)
-                .then_some("__builtin_is_cpp_trivially_relocatable")
+        // of the P2786 `__builtin_is_cpp_trivially_relocatable`, and
+        // `__reference_binds_to_temporary` in favour of
+        // `__reference_constructs_from_temporary`.
+        let rep = table::deprecated_replacement(t).or(match t {
+            TypeTrait::IsTriviallyRelocatable if self.clang_compat >= 22 => {
+                Some("__builtin_is_cpp_trivially_relocatable")
+            }
+            TypeTrait::ReferenceBindsToTemporary if self.clang_compat >= 22 => {
+                Some("__reference_constructs_from_temporary")
+            }
+            _ => None,
         });
         if let Some(rep) = rep {
+            // Repeated by every instantiation that rebuilds the trait.
             let d = self.diag(DiagId::sema_deprecated_builtin, loc).arg(t.spelling()).arg(rep);
-            self.emit(d);
+            self.emit(d.per_instantiation());
         }
         self.build_type_trait(t, args, loc, rparen)
     }
@@ -687,7 +695,10 @@ impl Sema<'_, '_> {
         {
             return false;
         }
-        let prvalue = t != TypeTrait::ReferenceBindsToTemporary;
+        // clang 22 evaluates `__reference_binds_to_temporary` as
+        // `__reference_constructs_from_temporary` (a non-reference `U` is
+        // a prvalue).
+        let prvalue = t != TypeTrait::ReferenceBindsToTemporary || self.clang_compat >= 22;
         let (fty, vc) = match self.ast.types.canonical_view(from.0) {
             TypeView::LValueRef(p) => (p, ValueCategory::LValue),
             TypeView::RValueRef(p) if self.ast.types.is_function(p) => (p, ValueCategory::LValue),

@@ -35,7 +35,7 @@
 //@ diag: 75:92 warning "'f32' has a non-throwing exception specification but can still throw"
 //@ diag: 75:6 note "function declared non-throwing here"
 //@ requires: clang<22
-// clang 22 emits warning: 'f31' has a non-throwing exception specification but can still throw; WP-355 residual
+// clang 19 spelling; throw-in-noexcept-reach-clang22.cpp has clang 22's (WP-394).
 [[noreturn]] void die();
 struct S { [[noreturn]] void die(); };
 void g();

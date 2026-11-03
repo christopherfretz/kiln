@@ -12,7 +12,7 @@
 //@ diag: 29:10 error "no matching function for call to 'h'"
 //@ diag: 28:6 note "candidate function template not viable: no known conversion from 'std::nullptr_t' to 'int' for 2nd argument"
 //@ requires: clang<22
-// clang 22 emits error: no matching function for call to 'f'; WP-355 residual
+// clang 19 spelling; substitution-failure-before-constraints-clang22.cpp has clang 22's (WP-394).
 template <class T> constexpr bool small = sizeof(T) < 2;
 // `p(1)`: the template fails substitution, the non-template is chosen.
 

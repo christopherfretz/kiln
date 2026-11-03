@@ -1,5 +1,3 @@
-//@ requires: clang<22
-// clang 22 expected compile-ok, but the compiler failed (exit code 1); WP-355 residual
 // Mangling differential: constrained templates (spec/abi.md §8.16,
 // WP-204). Type-constraints on template parameters (`Tk`), template
 // template parameter heads (`Tt ... E`), constrained placeholders
@@ -155,7 +153,9 @@ void use() {
   f28(1);
   Mt<int>{}.g(1); Mt<int>{}.h(); Mt<int>{}.k(1); Mt<int>{}.j(1); Mt<int>{}.m(1);
   Mt<int>::I<int>{}.k(1); Mt<int>::I<int>{}.j(1); R<int>{}.h();
-  h1<X>(); h2<Y>(); h2<X>(); h3<Z>(); h4<Z>(); h5<P>(); h5<Z>(); h6<P>(); h6<CS>();
+  // `h2<X>` and `h6<CS>` are ill-formed under clang 22's matching
+  // (conformance/temp.arg.template/deduction-and-constraints-clang22.cpp).
+  h1<X>(); h2<Y>(); h3<Z>(); h4<Z>(); h5<P>(); h5<Z>(); h6<P>();
   g1(1); g2(1); g3(1, 2); g4(1); g5(1); g6(1); g7(1); g8(1); int i; g9(&i, i); g10(1); g11(1);
   k1(1, 2.0); k2(1); k3(1, 2);
   V v; e1(v); e2(v); e3(v); e4(v); e5(v); e6(v); e7(v); e8(v); e9(v); e10(&v); e11(W2());

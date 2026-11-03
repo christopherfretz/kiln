@@ -818,7 +818,8 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.act_on_typeid(operand, loc, end))
             }
             // spec/sema-templates.md §9.1, §9.4: rebuilt through the
-            // parser's builders (no deprecation warning on instantiation).
+            // parser's builder, which warns about a deprecated spelling again
+            // under the instantiation note (clang's `BuildTypeTrait`).
             ExprKind::TypeTraitExpr => {
                 let t = ex(self).type_trait(e);
                 let tys: Vec<QualType> =
@@ -830,7 +831,7 @@ impl Substituter<'_, '_, '_> {
                     .enumerate()
                     .map(|(i, &q)| (q, if i == 1 { rhs } else { loc }))
                     .collect();
-                Ok(self.sema.build_type_trait(t, &args, loc, end))
+                Ok(self.sema.act_type_trait(t, &args, loc, end))
             }
             // -freflection spike: `^^T` reflects the substituted type; a
             // reflected declaration is not dependent in the spike.

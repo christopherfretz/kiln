@@ -13,7 +13,7 @@
 //@ diag: 22:15 error "must be initialized by a constant expression"
 //@ diag: 24:15 error "must be initialized by a constant expression"
 //@ requires: clang<22
-// clang 22 emits error: constexpr variable 'd' must be initialized by a constant expression; WP-355 residual
+// clang 19 spelling; recovery-expr-in-pattern-clang22.cpp has clang 22's (WP-394).
 template <class T> int f(T t) { return t + nosuch; }
 template <class T> constexpr int g(T t) { int x = nosuch2(1); return x + t; }
 template <class T> struct S { int m() { return sizeof(T) + nosuch3; } };

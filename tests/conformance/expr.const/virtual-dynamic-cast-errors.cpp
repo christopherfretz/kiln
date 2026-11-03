@@ -19,7 +19,7 @@
 //@ diag: 50:59 note "reference dynamic_cast failed: 'B' is a non-public base class of dynamic type 'Q' of operand"
 //@ diag: 51:21 note "in call to 'protected_target()'"
 //@ requires: clang<22
-// clang 22 emits error: constexpr variable 'x2' must be initialized by a constant expression; WP-355 residual
+// clang 19 spelling; virtual-dynamic-cast-errors-clang22.cpp has clang 22's (WP-394).
 struct A { constexpr virtual ~A() {} };
 struct B : A {};
 struct C : B {};

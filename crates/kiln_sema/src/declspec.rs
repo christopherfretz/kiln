@@ -243,6 +243,9 @@ pub struct DeclSpec {
     pub tag_declares: bool,
     /// The keyword of an elaborated or class specifier.
     pub keyword: TagKeyword,
+    /// The end of `enum class` / `enum struct` (the scoped keyword's
+    /// end): clang 22's insertion point for misplaced attributes.
+    pub scoped_key_end: Option<Loc>,
     /// Attributes appertaining to the declared entities.
     pub attrs: Vec<AttrId>,
     /// Where a leading C++11 attribute-specifier-seq (`[[...]]`,

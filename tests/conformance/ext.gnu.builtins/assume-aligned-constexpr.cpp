@@ -20,7 +20,7 @@
 //@ diag: 41:78 note "alignment of the base pointee object (4 bytes) is less than the asserted 8 bytes"
 //@ diag: 42:15 note "in call to 'f3()'"
 //@ requires: clang<22
-// clang 22 emits error: non-pointer argument to '__builtin_assume_aligned' is not allowed; WP-355 residual
+// clang 19 spelling; assume-aligned-constexpr-clang22.cpp has clang 22's (WP-394).
 struct S { int a; char c[8]; };
 constexpr int x = 1;
 alignas(16) constexpr char buf[4] = {};

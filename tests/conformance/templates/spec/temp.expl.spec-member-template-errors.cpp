@@ -13,7 +13,7 @@
 //@ diag: 32:30 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>'"
 //@ diag: 33:33 error "out-of-line definition of 'q' does not match any declaration in 'N::A<long>::C'"
 //@ requires: clang<22
-// clang 22 emits error: out-of-line definition of 'g' does not match any declaration in 'N::A<long>'; WP-355 residual
+// clang 19 spelling; temp.expl.spec-member-template-errors-clang22.cpp has clang 22's (WP-394).
 namespace N {
 template <class T> struct A {
   struct C {

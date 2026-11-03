@@ -20,7 +20,7 @@
 //@ diag: 30:54 error "no member named 'nosuch' in 'S'"
 //@ diag: 31:10 note "in instantiation of function template specialization 'h3<S>' requested here"
 //@ requires: clang<22
-// clang 22 emits error: no matching function for call to 'h3'; WP-355 residual
+// clang 19 spelling; invalid-body-substitution-failure-clang22.cpp has clang 22's (WP-394).
 struct S {};
 template <class T> constexpr int h(T t) { return t.nosuch(); }
 int e1 = h(S{});

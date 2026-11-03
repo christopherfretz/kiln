@@ -33,7 +33,7 @@
 //@ diag: 54:10 note "in instantiation of template class 'H5<int>' requested here"
 //@ diag: 53:56 note "expression evaluates to '4 == 0'"
 //@ requires: clang<22
-// clang 22 emits error: static assertion failed due to requirement 'sizeof(int) == 0': h6; WP-355 residual
+// clang 19 spelling; instantiation-note-template-id-column-clang22.cpp has clang 22's (WP-394).
 template <class T> struct H2 { static_assert(sizeof(T) == 0, "h2"); using type = int; };
 template <class T> constexpr bool small = sizeof(T) < 2;
 template <class T> requires small<T>

@@ -58,7 +58,7 @@
 //@ diag: 117:1 error "an attribute list cannot appear here"
 //@ diag: 118:1 error "an attribute list cannot appear here"
 //@ requires: clang<22
-// clang 22 emits error: misplaced attributes; expected attributes here; WP-355 residual
+// clang 19 spelling; leading-attribute-placement-2-clang22.cpp has clang 22's (WP-394).
 struct Y;
 alignas(4);
 [[deprecated]];

@@ -29,6 +29,12 @@ as clang's `-ast-dump-filter` prints it. The search does not descend into
 a printed tree, and still skips implicit decls and (without `all-files`)
 top-level decls of other files.
 
+The search does not enter a `UsingShadowDecl` /
+`ConstructorUsingShadowDecl`: clang 22's JSON nests the shadow's target
+under it, but the visitor does not reach the target through the shadow,
+so `xtask clang-ast` skips it too (WP-394;
+`ast/class.inhctor.init/shadow-implicit.cpp`).
+
 The search follows clang's `RecursiveASTVisitor`, which does not visit
 template instantiations ([temp.spec], [temp.expl.spec], [temp.explicit]):
 - A template's parameters and its pattern are searched; its implicit
