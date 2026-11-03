@@ -1239,8 +1239,10 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   pointer, in a callee or not) adds no second note; `static_assert`,
   `constexpr` variables, enumerators and array bounds print the same as
   kiln. `__builtin_is_constant_evaluated` / `if consteval` in a static
-  initializer differ only through the static-initialization fallback
-  below. The difference that is visible is in a *fold*: clang continues
+  initializer differ only where clang's codegen, after a failed constant
+  initialization, folds the initializer again as a non-manifest trial
+  (`int g = __builtin_is_constant_evaluated() ? x : 7;` is static there),
+  which kiln's codegen does not do for any initializer. The difference that is visible is in a *fold*: clang continues
   with the cast's result designating nothing (`Designator.setInvalid()`),
   so a null test or comparison of that pointer folds while any access
   through it fails silently: a file-scope `int a[(const int *)vp ? 1 :
