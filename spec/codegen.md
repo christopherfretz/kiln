@@ -346,8 +346,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `llvm.is.fpclass` with the folded mask `m` (not emitted; the fold
       prepass collects it); `__builtin_expect_with_probability` at -O0 is
       its first operand (the expected value emitted, the probability
-      not); signbit bitcasts to an integer of the
-      float's width and tests `slt 0`; the isgreater family is one
+      not); signbit (and WP-419's `signbitf` / `signbitl`, through
+      `builtin::f128_twin`) bitcasts to an integer of the
+      float's width and tests `slt 0`, and a constant argument folds
+      (clang 19 and 22; `builtins_signbit_fl.cpp`); the isgreater family is one
       `fcmp` (`ogt oge olt ole one uno`) zero-extended;
     - memcpy/memmove are `llvm.memcpy`/`llvm.memmove` (`i64` length,
       not volatile) with each pointer's known alignment as a parameter
@@ -418,6 +420,19 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       to `a / 8` (`tests/codegen/builtins_alloca.cpp`);
     - `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf`
       are library builtins (`tests/codegen/builtins_printf_lib.cpp`).
+    - recognized C library functions (WP-419, clang `EmitBuiltinExpr`
+      for a library builtin; spec/sema.md §5.4): a direct call of a
+      declaration with a `lib_builtin` twin whose `__builtin_` form is an
+      LLVM intrinsic (`ceil`, `floor`, `trunc`, `round`, `rint`,
+      `nearbyint`, `roundeven`, `fabs`, `copysign`, `fma`, `fmax` /
+      `fmin` -> `llvm.maxnum` / `llvm.minnum`, clang 22's `fmaximum_num`
+      / `fminimum_num`, each `{,f,l}`) is emitted as the twin
+      (`builtins::lib_intrinsic`) at every `-O` level, a definition of
+      the function included; the call is never folded (clang does not
+      constant-evaluate the library names). Under clang's default
+      `-fmath-errno` the errno-setting ones (`sqrt`, `sin`, `exp`, ...)
+      stay library calls; kiln has no `-fno-math-errno`
+      (`tests/codegen/lib_float_intrinsics.cpp`, `_gnu.cpp`).
     - library builtins (WP-282, clang `EmitBuiltinExpr`):
       `__builtin_assume_aligned(p, a[, off])` returns `p` and emits
       `llvm.assume(i1 true) ["align"(ptr p, i64 a[, i64 off])]`
@@ -469,7 +484,11 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `fminimum_num{,f,l}` are `llvm.roundeven`/`canonicalize`/
       `maximumnum`/`minimumnum` of the operand type; `exp10{,f,l}` and
       clang 22's `sincos{,f,l}` call the library function of that name
-      (WP-410; `builtins_c_math.cpp`, `builtins_c_math_22.cpp`). A
+      (WP-410; `builtins_c_math.cpp`, `builtins_c_math_22.cpp`). WP-419:
+      clang 22's `fmaximum_numf128` / `fminimum_numf128` lower as their
+      `l` twins (`llvm.maximumnum` / `minimumnum` of `fp128`), and
+      `sincosf128` and `sincospi{,f,l}` call the function of that name
+      (`builtins_c_math_more_22.cpp`). A
       `*f16` builtin (WP-403) is
       lowered likewise through `builtin::f16_twin` on `half` operands:
       `ceil`/`floor`/`trunc`/`round`/`rint`/`fabs`/`fma`/`fmax`/`fmin`

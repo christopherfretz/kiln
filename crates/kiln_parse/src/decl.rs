@@ -3521,7 +3521,9 @@ impl Parser<'_, '_> {
                 if !d.invalid {
                     self.error_here(DiagId::parse_expected_unqualified_id);
                 }
-                self.skip_to_semi();
+                // clang's `SkipMalformedDecl`: a braced group ends the
+                // declaration (`extern "C++" { ... }` at block scope).
+                self.skip_malformed_decl();
                 return decls;
             }
             // A function definition has no asm label: after one, `{` is
@@ -3695,7 +3697,10 @@ impl Parser<'_, '_> {
             self.s.plain_auto_type()
         } else if untyped {
             QualType::VOID
-        } else if d.invalid && !ds.has_type_specifier() {
+        } else if (d.invalid || !d.has_name()) && !ds.has_type_specifier() {
+            // A declarator with no name is reported as "expected
+            // unqualified-id" alone: clang never builds its type
+            // (`extern "C"` at block scope, [dcl.link]/4).
             QualType::ERROR
         } else {
             let t = self.s.type_from_declspec_at(ds, d.name_loc());

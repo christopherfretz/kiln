@@ -201,15 +201,27 @@ impl Sema<'_, '_> {
     /// chain). `NoThrowAttr` makes a call non-throwing for `noexcept`
     /// ([`Sema::can_throw`]) and `nounwind` in IR, as in clang; no
     /// `BuiltinAttr` is attached, so a call stays an ordinary call.
+    ///
+    /// WP-419: the declaration also records the row's `__builtin_` twin
+    /// (`ceil` -> `__builtin_ceil`), which redeclarations inherit. Codegen
+    /// lowers a call through the twin where clang's `EmitBuiltinExpr`
+    /// does (the errno-free rounding, `fabs`, `copysign`, `fma`, `fmax` /
+    /// `fmin`, `fmaximum_num` / `fminimum_num` functions); everywhere
+    /// else the call stays an ordinary call.
     pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
-        if self.ast.prev(f).is_some() {
+        if let Some(p) = self.ast.prev(f) {
+            if self.kind_of(f) == DeclKind::Function
+                && let Some(id) = self.ast.decls.lib_builtin(p)
+            {
+                let _ = self.ast.decls.cold.lib_builtin.insert(f, id);
+            }
             return;
         }
         let Some(info) = self.lib_builtin_info(f) else { return };
-        // WP-186: the twin codegen lowers some calls as (clang keeps the
-        // library builtin id on the declaration).
-        if let Some(twin) = builtin::by_name(&format!("__builtin_{}", info.name)) {
-            let _ = self.ast.decls.cold.lib_twin.insert(f, twin);
+        if let Some(id) =
+            builtin::by_name_at(&format!("__builtin_{}", info.name), self.clang_compat)
+        {
+            let _ = self.ast.decls.cold.lib_builtin.insert(f, id);
         }
         let loc = self.ast.decls.get(f).loc();
         // WP-186: the printf family's implicit `format`, first (clang
@@ -489,13 +501,20 @@ impl Sema<'_, '_> {
     /// library-builtin recognition in `ActOnFunctionDeclarator`, which
     /// gives it a builtin id): a `Function` in a namespace-scope context
     /// with C language linkage, named in the table and with the row's type
-    /// ignoring the exception specification.
+    /// ignoring the exception specification; WP-419: and declared at the
+    /// `-fclang-compat` level and in the dialect ([`builtin::lib_min_compat`],
+    /// [`builtin::lib_gnu_only`]).
     pub(crate) fn lib_builtin_info(&mut self, f: DeclId) -> Option<builtin::Info> {
         if self.kind_of(f) != DeclKind::Function {
             return None;
         }
         let name = self.ast.decls.get(f).name().as_ident()?;
         let info = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied()?;
+        if builtin::lib_min_compat(info.id) > self.clang_compat
+            || (builtin::lib_gnu_only(info.id) && !self.gnu)
+        {
+            return None;
+        }
         self.c_linkage_file_scope_fn_of_type(f, info.sig).then_some(info)
     }
 
@@ -717,6 +736,14 @@ impl Sema<'_, '_> {
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
             builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
+            // WP-419: clang `CheckBuiltinFunctionCall`: one argument, kept
+            // as written (no conversion; the call never evaluates it). A
+            // bound member function or builtin name is diagnosed as in any
+            // call argument; an overload set is kept (clang classifies its
+            // placeholder type as an unspecified value, kiln as -1).
+            builtin::CLASSIFY_TYPE => (self.builtin_arg_count(args, 1, rparen)
+                && !self.check_builtin_fn_use(args[0]))
+            .then(|| (args.to_vec(), QualType::INT)),
             builtin::VA_START => self.builtin_va_start(callee, args, rparen),
             // WP-156: the vector reductions (vector_ops.rs).
             builtin::REDUCE_ADD

@@ -56,6 +56,7 @@ pub mod literal;
 mod literal_op;
 mod local_friend;
 pub mod lookup;
+mod macro_fixit;
 pub mod modules;
 pub mod names;
 pub mod new_delete;
@@ -289,6 +290,10 @@ pub struct Sema<'a, 'sm> {
     /// variable with C language linkage, by name ([dcl.link]/6; clang's
     /// extern "C" context, `extern_c.rs`).
     pub(crate) extern_c: kiln_source::fx::FxHashMap<kiln_source::symbol::Symbol, DeclId>,
+    /// The one-character `>` tokens the parser split off a `>>` or `>>=`
+    /// closing a template argument list ([temp.names]/4), for
+    /// `token_end` (clang measures the split token).
+    pub(crate) split_greaters: kiln_source::fx::FxHashSet<Loc>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     /// Taken out for the duration of an evaluation, so the bridge can
     /// reach the rest of `Sema` (`ensure_body` instantiates through it,
@@ -833,6 +838,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
             missing_typename_fns: kiln_source::fx::FxHashSet::default(),
             extern_c: kiln_source::fx::FxHashMap::default(),
+            split_greaters: kiln_source::fx::FxHashSet::default(),
             oven: Some(Oven::new(Budget::default())),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
