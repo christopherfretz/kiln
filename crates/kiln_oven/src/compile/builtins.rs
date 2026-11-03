@@ -763,7 +763,11 @@ impl Compiler<'_> {
             | id::POWI
             | id::POWIF
             | id::POWIL
-            | id::VERBOSE_TRAP => self.trap_loc(begin, INVALID.into()),
+            | id::VERBOSE_TRAP
+            // WP-432: nor the frame builtins.
+            | id::DEBUGTRAP
+            | id::FRAME_ADDRESS
+            | id::RETURN_ADDRESS => self.trap_loc(begin, INVALID.into()),
             // WP-365: the P0533 `<cmath>` set, exact in every format.
             id::SIGNBIT
             | id::ISGREATER
@@ -1010,7 +1014,11 @@ impl Compiler<'_> {
             // most negative value wraps; floating: `fabs`) and the integer
             // `max` / `min`; its floating `max` / `min` fail silently. clang
             // 19 folds none of them (spec/oven.md "Vectors").
-            id::ELEMENTWISE_ABS | id::ELEMENTWISE_MAX | id::ELEMENTWISE_MIN => {
+            id::ELEMENTWISE_ABS
+            | id::ELEMENTWISE_MAX
+            | id::ELEMENTWISE_MIN
+            | id::ELEMENTWISE_ADD_SAT
+            | id::ELEMENTWISE_SUB_SAT => {
                 if self.o.clang_compat < 22 {
                     self.trap_loc(begin, INVALID.into());
                     return Some(self.finish_builtin(dst));

@@ -351,6 +351,14 @@ pub fn frameaddress(m: &mut Module) -> FuncId {
     declare(m, &name, p, &params, &[], Shape::Basic(Some(none)))
 }
 
+/// `ptr @llvm.returnaddress(i32 immarg level)` (WP-432).
+pub fn returnaddress(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let none = MemoryEffects::all(ModRef::None);
+    let params: [(TypeId, &[Attr]); 1] = [(TypeId::I32, &[Attr::Flag(ImmArg)])];
+    declare(m, "llvm.returnaddress", p, &params, &[], Shape::Basic(Some(none)))
+}
+
 /// Arithmetic of an `llvm.*.with.overflow.*` intrinsic.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum OverflowOp {

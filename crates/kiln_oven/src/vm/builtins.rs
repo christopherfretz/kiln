@@ -436,6 +436,20 @@ impl Oven {
                         }
                         x.unsigned_abs()
                     }
+                    k @ (bi::SADD_SAT | bi::SSUB_SAT) => {
+                        // Canonical signed operands are sign-extended, so
+                        // the `i128` result is exact below 128 bits.
+                        let (x, y) = (a as i128, b as i128);
+                        let r = if k == bi::SADD_SAT {
+                            x.saturating_add(y)
+                        } else {
+                            x.saturating_sub(y)
+                        };
+                        let sh = 128 - w;
+                        r.clamp(i128::MIN >> sh, i128::MAX >> sh) as u128
+                    }
+                    bi::UADD_SAT => v.saturating_add(b & mask(w)).min(mask(w)),
+                    bi::USUB_SAT => v.saturating_sub(b & mask(w)),
                     k => {
                         // clang: the amount modulo the width.
                         let n = ((b & mask(w)) % u128::from(w)) as u32;

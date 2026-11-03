@@ -644,6 +644,32 @@ impl Cg<'_> {
                 let f = kiln_llvm::intrinsics::frameaddress(&mut self.m);
                 self.intrinsic_call(f, vec![level])
             }
+            // clang `BI__builtin_return_address`: `llvm.returnaddress(i32 N)`.
+            id::RETURN_ADDRESS => {
+                let level = self.emit_scalar(a0)?;
+                let level = self.int_cast(level, LTy::I32, false);
+                let f = kiln_llvm::intrinsics::returnaddress(&mut self.m);
+                self.intrinsic_call(f, vec![level])
+            }
+            // clang `BI__builtin_elementwise_add_sat` / `_sub_sat`:
+            // `llvm.{s,u}{add,sub}.sat` by element signedness.
+            id::ELEMENTWISE_ADD_SAT | id::ELEMENTWISE_SUB_SAT => {
+                let Some(a1) = arg(1) else {
+                    return err(self.loc_of(e), "elementwise builtin without two arguments");
+                };
+                let x = self.emit_scalar(a0)?;
+                let y = self.emit_scalar(a1)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let eq = self.scalar_of(ast.exprs.get(a0).ty());
+                let name = match (self.is_signed(eq), b == id::ELEMENTWISE_ADD_SAT) {
+                    (true, true) => "llvm.sadd.sat",
+                    (true, false) => "llvm.ssub.sat",
+                    (false, true) => "llvm.uadd.sat",
+                    (false, false) => "llvm.usub.sat",
+                };
+                let f = kiln_llvm::intrinsics::fp_op(&mut self.m, name, ty, 2);
+                self.intrinsic_call(f, vec![x, y])
+            }
             // clang `BI__builtin_elementwise_abs`: `llvm.abs(x, false)` for
             // integers, `llvm.fabs` for floating point (lane-wise on vectors).
             id::ELEMENTWISE_ABS => {

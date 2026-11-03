@@ -742,6 +742,9 @@ impl Sema<'_, '_> {
             builtin::ELEMENTWISE_MAX | builtin::ELEMENTWISE_MIN => {
                 self.builtin_elementwise_minmax(args, rparen)
             }
+            builtin::ELEMENTWISE_ADD_SAT | builtin::ELEMENTWISE_SUB_SAT => {
+                self.builtin_elementwise_sat(args, rparen)
+            }
             builtin::OPERATOR_NEW | builtin::OPERATOR_DELETE => {
                 return self.builtin_operator_new_delete(callee, b, id, args, loc, rparen);
             }
@@ -1046,7 +1049,7 @@ impl Sema<'_, '_> {
             self.emit(d);
             return false;
         }
-        if id == builtin::FRAME_ADDRESS
+        if matches!(id, builtin::FRAME_ADDRESS | builtin::RETURN_ADDRESS)
             && let Some(&a) = args.first()
             && !self.expr_is_value_dependent(a)
             && let Some(v) = self.fold_int(a)
@@ -1064,7 +1067,12 @@ impl Sema<'_, '_> {
                 return false;
             }
             if v != 0 {
-                let d = self.diag(DiagId::sema_frame_address, at).arg("__builtin_frame_address");
+                let name = if id == builtin::FRAME_ADDRESS {
+                    "__builtin_frame_address"
+                } else {
+                    "__builtin_return_address"
+                };
+                let d = self.diag(DiagId::sema_frame_address, at).arg(name);
                 self.emit(d);
             }
         }
@@ -1251,7 +1259,7 @@ impl Sema<'_, '_> {
 
     /// clang's `isIntegerType`: an integral type (`bool`, the character
     /// types, `_BitInt`) or a complete unscoped enumeration.
-    fn is_integer_type(&self, q: QualType) -> bool {
+    pub(crate) fn is_integer_type(&self, q: QualType) -> bool {
         if self.ast.types.as_enum(q).is_some() {
             return conv::rank::is_unscoped_enum(self, q)
                 && conv::rank::int_width(self, q).is_some();

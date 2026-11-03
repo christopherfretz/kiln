@@ -411,6 +411,15 @@ pub(crate) mod bi {
     /// `INT_OP`: `__builtin_abs`/`labs`/`llabs` of the canonical signed
     /// `a` (WP-365); the most negative value is undefined (a fault).
     pub const IABS: u32 = 6;
+    /// `INT_OP`: `__builtin_elementwise_add_sat` of canonical signed
+    /// `a`, `b` (WP-432; clamped to the `w`-bit range).
+    pub const SADD_SAT: u32 = 7;
+    /// `INT_OP`: `__builtin_elementwise_add_sat`, unsigned.
+    pub const UADD_SAT: u32 = 8;
+    /// `INT_OP`: `__builtin_elementwise_sub_sat`, signed.
+    pub const SSUB_SAT: u32 = 9;
+    /// `INT_OP`: `__builtin_elementwise_sub_sat`, unsigned.
+    pub const USUB_SAT: u32 = 10;
     // WP-270: checked arithmetic.
     /// `__builtin_{add,sub,mul}_overflow` on canonical `a`, `b`: sub = op
     /// (0 add, 1 sub, 2 mul) | `a` signed << 2 | `b` signed << 3 | result
