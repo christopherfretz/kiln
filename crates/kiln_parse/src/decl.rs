@@ -1144,7 +1144,7 @@ impl Parser<'_, '_> {
         let loc = self.bump().span.lo;
         match self.parse_trait_operand()? {
             crate::expr::TraitOperand::Type(ty, _) => Some(self.s.act_on_typeof_type(ty, unqual)),
-            crate::expr::TraitOperand::Expr(e) => self.s.act_on_typeof_expr(e, loc, unqual),
+            crate::expr::TraitOperand::Expr(e) => self.s.act_on_typeof_expr(e?, loc, unqual),
         }
     }
 
@@ -1294,7 +1294,10 @@ impl Parser<'_, '_> {
                     || (end > start + 1
                         && self.unresolved_scope_name(start)
                         && self.qualified_unknown_type_follows(end, ctx))
-                    || (end > start + 1 && self.incomplete_scope_name(start)) =>
+                    || (end > start + 1
+                        && self.incomplete_scope_name(start)
+                        && (!matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                            || self.qualified_unknown_type_follows(end, ctx))) =>
             {
                 self.unknown_qualified_type_spec(ds, loc);
                 true
@@ -1315,6 +1318,24 @@ impl Parser<'_, '_> {
             }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
                 self.unknown_type_name_spec(ds, end, ctx, name, loc)
+            }
+            // `Und::x y;`, `X::type z;` with `X` a class template: at
+            // namespace or class scope a qualified name starts a
+            // decl-specifier, and parsing its qualifier reports the
+            // component that names no scope ("use of undeclared
+            // identifier 'Und'", "use of class template 'X' requires
+            // template arguments"); the declaration goes on with an
+            // invalid type (clang's invalid `CXXScopeSpec` in
+            // `ParseDeclarationSpecifiers`), one error in all.
+            // Followed by what is no declarator, the name is the
+            // declarator-id ([`Parser::at_qualified_implicit_int_declarator`]).
+            None if matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                && self
+                    .not_a_scope_name(start)
+                    .is_some_and(|end| self.qualified_unknown_type_follows(end, ctx)) =>
+            {
+                self.unknown_qualified_type_spec(ds, loc);
+                true
             }
             _ => false,
         }
@@ -1392,12 +1413,24 @@ impl Parser<'_, '_> {
             Ok(Some(q)) => {
                 let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
             }
-            // The specifier named an incomplete class (diagnosed): the
-            // final name belongs to the invalid type (clang).
-            Err(()) if self.ident().is_some() => {
-                self.bump();
+            // The specifier named an incomplete class or a component
+            // that names no scope (diagnosed): the rest of it and the
+            // final name, with its template arguments, belong to the
+            // invalid type (clang annotates the invalid `CXXScopeSpec`).
+            Err(()) => {
+                self.skip_nested_name_rest();
+                if self.ident().is_some() {
+                    self.bump();
+                    if self.at(Punct::Less)
+                        && let Some((close, false)) = self.skip_template_args(self.pos())
+                    {
+                        while self.pos() <= close {
+                            self.bump();
+                        }
+                    }
+                }
             }
-            _ => {}
+            Ok(None) => {}
         }
         ds.invalid = true;
         ds.type_error = true;
@@ -3431,7 +3464,9 @@ impl Parser<'_, '_> {
     fn at_qualified_implicit_int_declarator(&self) -> bool {
         let i = self.pos();
         let Some((end, false, class, _, Some(q))) = self.scan_name_qual_at(i) else {
-            return false;
+            // A qualifier component that names no scope (`Und::f();`):
+            // the declarator's qualifier reports it.
+            return self.not_a_scope_name(i).is_some_and(|end| self.implicit_int_follows(end));
         };
         if end <= i + 1
             || self.s.is_dependent_ctx(q)
@@ -3439,6 +3474,12 @@ impl Parser<'_, '_> {
         {
             return false;
         }
+        self.implicit_int_follows(end)
+    }
+
+    /// Whether token `end`, after a qualified name, continues a declarator
+    /// with no type ([`Self::at_qualified_implicit_int_declarator`]).
+    pub(crate) fn implicit_int_follows(&self, end: usize) -> bool {
         match Self::punct_of(self.tok_at(end)) {
             Some(Punct::Semi | Punct::Equal | Punct::Comma | Punct::LSquare | Punct::LBrace) => {
                 true

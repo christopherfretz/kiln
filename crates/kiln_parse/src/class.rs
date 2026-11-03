@@ -1425,9 +1425,12 @@ impl Parser<'_, '_> {
             self.act_on_member_decl_spec_only(&ds);
             return;
         }
+        // A qualifier component that names no scope (`Und::g();`): the
+        // declarator's qualifier reports it, as at namespace scope.
         if ds.is_empty()
             && !self.at_special_declarator(DeclaratorContext::Member)
             && !self.at_implicit_int_declarator()
+            && !self.not_a_scope_name(self.pos()).is_some_and(|end| self.implicit_int_follows(end))
         {
             self.member_without_type();
             return;

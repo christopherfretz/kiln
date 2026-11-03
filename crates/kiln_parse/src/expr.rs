@@ -92,7 +92,9 @@ fn binop(p: Punct) -> Option<(u8, Option<BinaryOp>)> {
 pub(crate) enum TraitOperand {
     /// `( type-id )`, with the `)`.
     Type(QualType, Loc),
-    Expr(ExprId),
+    /// A unary-expression; `None` when it failed to parse (an `alignof`
+    /// still warns, as clang).
+    Expr(Option<ExprId>),
 }
 
 /// True for a simple-type-specifier keyword that can begin a functional
@@ -723,13 +725,14 @@ impl Parser<'_, '_> {
             TraitOperand::Expr(e) => {
                 // [expr.alignof]/1 takes a type-id; `alignof e` is a GNU
                 // extension (clang `ext_alignof_expr`, at the keyword,
-                // before the operand is checked). Not `__alignof`.
+                // before the operand is checked, even an invalid one:
+                // `alignof(F::x)` with `F` incomplete). Not `__alignof`.
                 if let Some(sp) = spelling {
                     let d =
                         self.s.diag(DiagId::sema_alignof_expression, loc).arg(format!("'{sp}'"));
                     self.emit(d);
                 }
-                Some(self.s.act_on_trait_expr(kind, e, loc))
+                Some(self.s.act_on_trait_expr(kind, e?, loc))
             }
         }
     }
@@ -756,7 +759,7 @@ impl Parser<'_, '_> {
                 .with_greater_op(true, |p| p.parse_paren_rest(open))
                 .and_then(|e| self.parse_postfix_suffix(e));
             self.s.exit_unevaluated();
-            return Some(TraitOperand::Expr(e?));
+            return Some(TraitOperand::Expr(e));
         }
         if self.at(Punct::LParen)
             && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
@@ -772,7 +775,7 @@ impl Parser<'_, '_> {
         self.s.enter_unevaluated();
         let e = self.parse_cast_expr();
         self.s.exit_unevaluated();
-        Some(TraitOperand::Expr(e?))
+        Some(TraitOperand::Expr(e))
     }
 
     /// A builtin type trait `__trait ( ... )` (spec/sema-templates.md
