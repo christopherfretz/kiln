@@ -2084,7 +2084,8 @@ bases, a *relative* word (`REL` bit set): the high word is the signed
 distance from the class's own start to the slot, as the virtual base is
 the most derived object's and at no fixed offset in the class. `locate`
 resolves a relative word by trying each virtual subobject of that class
-through `sub_addr` from the object's start. Plain words are as in
+against the most derived object found once from the object's start
+(`locate_rel`). Plain words are as in
 "Dynamic types".
 
 **Addresses.** `Virt::subs` lists every subobject of a polymorphic or
@@ -2144,9 +2145,27 @@ WP-400). Sema: a rejected
 constexpr defaulted special member (C++23) is marked invalid, as clang's
 `setInvalidDecl`.
 
-**Left for later.**
-- `vcall` caches neither relative words nor overriders found in a virtual
-  base.
+**Call caches (WP-414).** A plain word's call is cached in
+`Virt::dispatch` by (dynamic type, slot offset, method). A word written
+by a complete-object constructor or destructor, or by thawing, carries
+the `CMP` flag (bit 30 of the class half; Oven types stay below 2^30): its
+object is the most derived object, so an overrider in a virtual base is at
+its complete-object offset and the cached `delta` gives `this` without a
+walk of the object model. (A plain word without `CMP`, written on a
+non-virtual slot by a base-object constructor, only reaches overriders in
+non-virtual subobjects, since a final overrider's subobject contains the
+called one; it keeps the `sub_addr` walk as a guard.) A relative word's
+call (`vcall_rel`) walks the object model once (`owner` of the running
+class's object) and is cached in `Virt::rel_dispatch` by (running class,
+relative slot offset, method, called class, most derived class, the
+running class's offset in it), which fix the called subobject; `this` is
+then `sub_in` of the cached overrider subobject. `locate` likewise walks
+once for all candidates of a relative word (`locate_rel`). Probe (release,
+1M calls through virtual bases on complete objects, 2M through relative
+words in base-object constructors): 170 → 143 ms and 465 → 288 ms, same
+steps, peak RSS 9 MB either way; `bench/oven/virtual-dispatch.cpp` (no
+virtual bases) is unchanged. Test:
+`tests/stress/constexpr-vcall-virtual-base-cache.cpp`.
 
 ### Vectors — Landed (WP-173)
 GNU `vector_size` and clang `ext_vector_type` values are stored as an
