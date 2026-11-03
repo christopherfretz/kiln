@@ -40,6 +40,7 @@
 //! images, is limited to 4 GiB ([`ConstError::Capacity`]).
 
 mod float;
+pub mod fltstr;
 mod print;
 mod value;
 

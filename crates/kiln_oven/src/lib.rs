@@ -37,7 +37,6 @@ mod arith;
 mod compile;
 mod complex;
 mod failure;
-mod fltstr;
 mod kbc;
 mod mem;
 mod memo;
@@ -450,6 +449,9 @@ pub struct Oven {
     /// provisional global costs one static slot per translation unit, not
     /// one per evaluation (spec/oven.md "Unknown references").
     pub(crate) provisional_objs: FxHashMap<u32, (ty::OTy, u64)>,
+    /// Floating arithmetic that yields a NaN or divides by zero goes on
+    /// with the `APFloat` result ([`Oven::set_fold_float_ub`]).
+    pub(crate) fold_float_ub: bool,
     /// String literal objects of evaluated `StringLiteral` exprs, one per
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
@@ -520,6 +522,7 @@ impl Oven {
             global_map: FxHashMap::default(),
             provisional: Vec::new(),
             provisional_objs: FxHashMap::default(),
+            fold_float_ub: false,
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             lets: FxHashMap::default(),
@@ -547,6 +550,16 @@ impl Oven {
         let i = self.origins.len() as u32;
         self.origins.push(o);
         i
+    }
+
+    /// Lets floating arithmetic that yields a NaN or divides by zero
+    /// ([expr.pre]/4, [expr.mul]/4: not a constant expression) go on with
+    /// the IEEE result, as clang's codegen folds an initializer or operand
+    /// (`ConstantEmitter`: such a result is undefined behaviour the
+    /// folding evaluation modes keep evaluating past). A call that did is
+    /// never memoized. Codegen sets it; sema never does.
+    pub fn set_fold_float_ub(&mut self, on: bool) {
+        self.fold_float_ub = on;
     }
 
     /// Sets how many call frames a failure's backtrace shows

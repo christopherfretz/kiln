@@ -4705,12 +4705,13 @@ pub mod builtin {
     }
 
     /// The lowest `-fclang-compat` level that declares builtin `id`
-    /// (clang 19 lacks `atan2f16`, `sincosf16` and the `f16`
-    /// `fmaximum_num` / `fminimum_num`; `__has_builtin` answers from the
+    /// (clang 19 lacks `atan2f16`, `sincosf16`, `sincos{,f,l}` and the
+    /// `fmaximum_num` / `fminimum_num` family; `__has_builtin` answers from the
     /// generated clang tables, which agree).
     pub fn min_compat(id: u32) -> u32 {
         match id {
-            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 => 22,
+            // 2039..=2047 (WP-410): `sincos`, `fmaximum_num`, `fminimum_num`.
+            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 | 2039..=2047 => 22,
             _ => 0,
         }
     }
@@ -4722,6 +4723,70 @@ pub mod builtin {
     }
 
     // ---- end WP-403 ----
+
+    // ---- WP-410: the remaining `__has_builtin` libm builtins ----
+
+    /// `__builtin_roundeven` (`llvm.roundeven`).
+    pub const ROUNDEVEN: u32 = 1048;
+    /// `__builtin_roundevenf`.
+    pub const ROUNDEVENF: u32 = 1046;
+    /// `__builtin_roundevenl`.
+    pub const ROUNDEVENL: u32 = 1050;
+    /// `__builtin_canonicalize` (`llvm.canonicalize`; not a constant).
+    pub const CANONICALIZE: u32 = 258;
+    /// `__builtin_canonicalizef`.
+    pub const CANONICALIZEF: u32 = 257;
+    /// `__builtin_canonicalizel`.
+    pub const CANONICALIZEL: u32 = 259;
+    /// `__builtin_fmaximum_num` (clang 22; `llvm.maximumnum`).
+    pub const FMAXIMUM_NUM: u32 = 2042;
+    /// `__builtin_fmaximum_numf` (clang 22).
+    pub const FMAXIMUM_NUMF: u32 = 2043;
+    /// `__builtin_fmaximum_numl` (clang 22).
+    pub const FMAXIMUM_NUML: u32 = 2044;
+    /// `__builtin_fminimum_num` (clang 22; `llvm.minimumnum`).
+    pub const FMINIMUM_NUM: u32 = 2045;
+    /// `__builtin_fminimum_numf` (clang 22).
+    pub const FMINIMUM_NUMF: u32 = 2046;
+    /// `__builtin_fminimum_numl` (clang 22).
+    pub const FMINIMUM_NUML: u32 = 2047;
+
+    /// The `double`/`float`/`long double` builtins clang answers
+    /// `__has_builtin` for that lower to an LLVM intrinsic (by id,
+    /// `kiln_codegen` `fp_intrinsic`): `roundeven` (evaluated as a P0533
+    /// function, [`p0533_base`]), `canonicalize` (never a constant) and
+    /// clang 22's `fmaximum_num` / `fminimum_num` (constant-evaluated by
+    /// clang 22, IEEE 754-2019 `maximumNumber` / `minimumNumber`). The ids
+    /// are clang 19's, kiln-private from 2042 for the ones it lacks.
+    pub const C_MATH_INTR: &[Info] = &[
+        row(CANONICALIZE, "__builtin_canonicalize", "dd", N | C),
+        row(CANONICALIZEF, "__builtin_canonicalizef", "ff", N | C),
+        row(CANONICALIZEL, "__builtin_canonicalizel", "LdLd", N | C),
+        row(FMAXIMUM_NUM, "__builtin_fmaximum_num", "ddd", N | C),
+        row(FMAXIMUM_NUMF, "__builtin_fmaximum_numf", "fff", N | C),
+        row(FMAXIMUM_NUML, "__builtin_fmaximum_numl", "LdLdLd", N | C),
+        row(FMINIMUM_NUM, "__builtin_fminimum_num", "ddd", N | C),
+        row(FMINIMUM_NUMF, "__builtin_fminimum_numf", "fff", N | C),
+        row(FMINIMUM_NUML, "__builtin_fminimum_numl", "LdLdLd", N | C),
+        row(ROUNDEVEN, "__builtin_roundeven", "dd", N | C),
+        row(ROUNDEVENF, "__builtin_roundevenf", "ff", N | C),
+        row(ROUNDEVENL, "__builtin_roundevenl", "LdLd", N | C),
+    ];
+
+    /// The `double`/`float`/`long double` builtins clang answers
+    /// `__has_builtin` for that are library calls, like [`LIBM`]
+    /// ([`is_libm`]): `exp10` and clang 22's `sincos` (GNU extensions;
+    /// clang 19 lacks `sincos`).
+    pub const C_MATH_LIB: &[Info] = &[
+        row(522, "__builtin_exp10", "dd", N),
+        row(521, "__builtin_exp10f", "ff", N),
+        row(523, "__builtin_exp10l", "LdLd", N),
+        row(2039, "__builtin_sincos", "vdd*d*", N),
+        row(2040, "__builtin_sincosf", "vff*f*", N),
+        row(2041, "__builtin_sincosl", "vLdLd*Ld*", N),
+    ];
+
+    // ---- end WP-410 ----
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
@@ -4736,6 +4801,8 @@ pub mod builtin {
             .chain(FLOATN)
             .chain(F16_INTR)
             .chain(F16_LIBM)
+            .chain(C_MATH_INTR)
+            .chain(C_MATH_LIB)
             .find(|e| e.name == name)
             .map(|e| e.id)
     }
@@ -4753,6 +4820,8 @@ pub mod builtin {
             .chain(FLOATN)
             .chain(F16_INTR)
             .chain(F16_LIBM)
+            .chain(C_MATH_INTR)
+            .chain(C_MATH_LIB)
             .find(|e| e.id == id)
     }
 
@@ -4834,6 +4903,7 @@ pub mod builtin {
     pub fn is_libm(id: u32) -> bool {
         LIBM.iter().any(|e| e.id == id)
             || F16_LIBM.iter().any(|e| e.id == id)
+            || C_MATH_LIB.iter().any(|e| e.id == id)
             || (is_f128(id) && f128_twin(id).is_none() && id != ROUNDEVENF128)
     }
 
