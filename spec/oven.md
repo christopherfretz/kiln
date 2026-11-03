@@ -651,7 +651,8 @@ literal is one instruction and one step, not an interpreted loop.
   reached; `__builtin_operator_new`/`_delete` outside
   `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
   untyped-memory note; inside them they allocate, "Transient
-  allocation", WP-212).
+  allocation", WP-212); `__builtin_debugtrap`, `__builtin_frame_address`
+  and `__builtin_return_address`, noted at the call's begin (WP-432).
 - **Floating-point math, P0533** (WP-365; `bi::FP_MATH`, sub = float
   code | op << 4 | `SECOND` for the pointer output; `softfloat::math`):
   `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`,
@@ -884,7 +885,28 @@ literal is one instruction and one step, not an interpreted loop.
   power of two", one above 2^(N-1) for an N-bit source with "requested
   alignment must be M or less for type 'T'; V is invalid"; then
   `(x + mask) & ~mask`, `x & ~mask` or `(x & mask) == 0`, wrapped to the
-  source type. A pointer source is not folded yet (`unsupported`).
+  source type. On a pointer source (kbc 28, `PTR_ALIGN`, WP-432; clang
+  `PointerExprEvaluator` / `IntExprEvaluator`, `getBaseAlignment`) the
+  known alignment is the complete object's (a variable's
+  `SemaBridge::decl_align`, else its type's, a heap or temporary object
+  its type's) at the pointer's byte offset (`MinAlign`).
+  `__builtin_is_aligned` checks the alignment first, then evaluates the
+  pointer: 1 when the known alignment is at least the requested one, 0
+  when the object's is but the offset's is not; `align_up` / `align_down`
+  evaluate the pointer first: the pointer itself when its known alignment
+  suffices, else (the object's suffices) the pointer with its byte offset
+  rounded, by element steps when the change is a multiple of the element
+  size (one past the end included); clang does not bound the new offset.
+  Otherwise (the object's alignment is less, a null, integral or function
+  pointer) the call fails with "cannot constant evaluate whether
+  run-time alignment is at least A" / "cannot constant evaluate the
+  result of adjusting alignment to A" at the pointer
+  (`BiFault::AlignRun`). Deliberate divergence: clang moves only the
+  offset and keeps the old designator, so reading through an adjusted
+  pointer reads the old element in clang (`*__builtin_align_up(&a[3], 8)`
+  is `a[3]`); the Oven reads the element at the new offset, as the
+  program does at run time. Test
+  `ext.gnu.builtins/align-pointer-constexpr.cpp`.
   `__builtin_assume_aligned` (kbc 23, `ASSUME_ALIGNED`, sub 1 with an
   offset) evaluates to its pointer operand after clang's check: the
   complete object's alignment (`SemaBridge::decl_align`, clang
@@ -2363,7 +2385,9 @@ exception (see "Bool vectors" below). The operations are in
   different class.
 - **Element-wise builtins** (WP-416): at compatibility level 22
   `__builtin_elementwise_abs` folds (integer: the most negative value
-  wraps; floating: `fabs`) as do the integer `_max` / `_min`, scalar and
+  wraps; floating: `fabs`) as do the integer `_max` / `_min` and
+  `_add_sat` / `_sub_sat` (`INT_OP` `SADD_SAT` / `UADD_SAT` / `SSUB_SAT` /
+  `USUB_SAT`, saturating in the element type; WP-432), scalar and
   lane-wise (`vec_elementwise`); the floating `_max` / `_min` fail without
   a note, as clang 22's. At 19 none folds: "subexpression not valid in a
   constant expression" at the call's begin (shown inside a function

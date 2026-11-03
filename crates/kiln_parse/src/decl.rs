@@ -2085,6 +2085,13 @@ impl Parser<'_, '_> {
             }
         }
         self.expect_closing(Punct::RBrace, Punct::LBrace, open);
+        // clang `ParseEnumBody`: GNU attributes after the `}` appertain to
+        // the enumeration, ahead of its underlying type (`packed`).
+        if self.at_kw(Kw::Attribute) {
+            let mut attrs = Vec::new();
+            self.parse_gnu_attr_seq(&mut attrs);
+            self.s.act_on_record_trailing_attrs(e, &attrs);
+        }
         self.s.act_on_finish_enum_definition(e);
     }
 

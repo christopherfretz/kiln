@@ -2840,6 +2840,7 @@ impl Sema<'_, '_> {
         if !self.check_modifiable(e, loc) {
             return self.recover_err(&[e], loc);
         }
+        self.check_volatile_inc_dec(inc, operand_t, loc);
         let flags =
             if self.narrower_than_int(t) { ExprFlags::CANNOT_OVERFLOW } else { ExprFlags::NONE };
         let ty = if op.is_postfix() || atomic.is_some() { conv::strip_cv(self, t) } else { t };
@@ -3226,6 +3227,7 @@ impl Sema<'_, '_> {
         };
         let res = self.builder().binary(BinaryOp::Assign, l, r2, lt, loc);
         self.mark_bitfield_if(res, l);
+        self.note_volatile_assign(l);
         res
     }
 

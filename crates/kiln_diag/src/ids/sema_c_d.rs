@@ -229,6 +229,12 @@ sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is depre
 sema_deprecated_literal_operator_id = Warning [DeprecatedLiteralOperator] (1) "identifier '{0}' preceded by whitespace in a literal operator declaration is deprecated";
 sema_deprecated_msg = Warning [DeprecatedDeclarations] (2) "'{0}' is deprecated: {1}";
 sema_deprecated_this_capture = Warning [DeprecatedThisCapture] (0) "implicit capture of 'this' with a capture default of '=' is deprecated";
+// WP-432: [depr.volatile.type] (C++20): clang `warn_deprecated_simple_assign_volatile`,
+// `warn_deprecated_volatile_structured_binding`,
+// `warn_deprecated_increment_decrement_volatile`.
+sema_deprecated_volatile_assign = Warning [DeprecatedVolatile] (1) "use of result of assignment to object of volatile-qualified type {0} is deprecated";
+sema_deprecated_volatile_binding = Warning [DeprecatedVolatile] (0) "volatile qualifier in structured binding declaration is deprecated";
+sema_deprecated_volatile_incdec = Warning [DeprecatedVolatile] (2) "{0:increment|decrement} of object of volatile-qualified type {1} is deprecated";
 sema_deprecated_volatile_param = Warning [DeprecatedVolatile] (1) "volatile-qualified parameter type {0} is deprecated";
 sema_deprecated_volatile_return = Warning [DeprecatedVolatile] (1) "volatile-qualified return type {0} is deprecated";
 sema_dereference_incomplete_type = Error (1) "dereference of pointer to incomplete type {0}";
