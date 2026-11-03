@@ -5,7 +5,7 @@
 // libc++'s `__movable_box` assigns a non-assignable `single_view` element
 // this way. spec/oven.md "Object lifetime".
 //@ args: -stdlib=libc++
-//@ expect: compile-pass
+//@ expect: compile-ok
 #include <memory>
 struct E {
   E() = default;

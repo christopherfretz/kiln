@@ -5,7 +5,7 @@
 // instantiation. libc++'s `flat_map(initializer_list<value_type>, ...)` test
 // constructs this way. spec/sema-templates.md "Dependent initializers".
 //@ args: -stdlib=libc++
-//@ expect: compile-pass
+//@ expect: compile-ok
 #include <initializer_list>
 struct Q {
   int a, b;
