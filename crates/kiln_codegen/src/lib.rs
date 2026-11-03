@@ -121,7 +121,7 @@ pub struct CodegenOptions {
     pub auto_var_init_max_size: u64,
 }
 
-/// clang's `LangOptions::TrivialAutoVarInitKind` (no `pattern` yet).
+/// clang's `LangOptions::TrivialAutoVarInitKind`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AutoVarInit {
     /// Left uninitialized (indeterminate).
@@ -129,6 +129,10 @@ pub enum AutoVarInit {
     Uninitialized,
     /// All-zero bytes, padding included.
     Zero,
+    /// clang's repeated pattern (`initializationPatternFor`): `0xAA`
+    /// bytes for integers, pointers and padding, all-ones NaNs for
+    /// floating point (spec/codegen.md §7y).
+    Pattern,
 }
 
 /// kiln's default `-ftrivial-auto-var-init-max-size` (spec/codegen.md
