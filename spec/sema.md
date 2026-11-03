@@ -3320,7 +3320,24 @@ for them.
     - for a constructor call, the type-id after the `(`;
     - for a scalar or vector literal, its `{`.
 
-    A dependent literal is checked when instantiated. A valid
+    A dependent literal is checked when instantiated.
+
+    The rules above are clang 19's. At `-fclang-compat=22` (WP-413,
+    `gnu.rs` `element_culprit_loc`) three things change:
+    - the culprit is the element itself, without looking through
+      parentheses or casts, at clang's `getExprLoc` (`expr_loc`). An
+      implicit conversion, including an lvalue-to-rvalue one, is located
+      where it begins, so `p.a` is reported at `p` and `x = 3` at `x`;
+    - a scalar, vector or complex literal is reported at its first
+      non-constant element instead of the `{`;
+    - a literal whose type is dependent but whose written elements are
+      not value-dependent is checked at the template definition (written
+      elements, at `expr_loc`). A failure makes the literal an error
+      expression, so its instantiations do not report it again.
+
+    Tests: `ext.gnu.compound.literal/namespace-scope-diagnostics{,-clang19}.cpp`.
+
+    A valid
     non-array literal is a prvalue, as it is inside a function, and its
     variable is constant-initialized.
 
