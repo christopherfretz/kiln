@@ -427,6 +427,40 @@ impl Module {
         Ok(id)
     }
 
+    /// Replace the declaration `f` by a fresh declaration of type
+    /// `fn_ty` with the same name and id, appended to the print order
+    /// (clang `GetOrCreateLLVMFunction` for a definition whose type
+    /// differs from an existing declaration of its name:
+    /// `Function::Create` + `takeName` + `replaceAllUsesWith` +
+    /// `eraseFromParent`). The header is reset; calls keep their own
+    /// function types.
+    ///
+    /// # Errors
+    ///
+    /// `f` is defined or replaced, or `fn_ty` is not a function type.
+    pub fn retype_function_to_end(&mut self, f: FuncId, fn_ty: TypeId) -> IrResult<()> {
+        if !self.funcs[f.index()].is_declaration() || self.replaced.contains_key(&f) {
+            return Err(IrError::new(
+                IrErrorKind::BadGlobal,
+                "only a live function declaration can be retyped",
+            ));
+        }
+        let Some((ret, params, varargs)) = self.types.function_info(fn_ty) else {
+            return Err(IrError::new(
+                IrErrorKind::InvalidType,
+                format!("function type expected, found {}", self.types.display(fn_ty)),
+            ));
+        };
+        let params: Vec<TypeId> = params.to_vec();
+        let name = std::mem::take(&mut self.funcs[f.index()].name);
+        self.funcs[f.index()] = Function::new(name, fn_ty, ret, &params, varargs);
+        if let Some(i) = self.func_order.iter().position(|&x| x == f) {
+            let _ = self.func_order.remove(i);
+        }
+        self.func_order.push(f);
+        Ok(())
+    }
+
     /// The function named `name`, or a new declaration of type `fn_ty`.
     pub fn get_or_insert_function(&mut self, name: &str, fn_ty: TypeId) -> IrResult<FuncId> {
         if let Some(ValueRef::Func(f)) = self.lookup(name).map(Value::get) {

@@ -1349,6 +1349,30 @@ AArch64).
   `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`
   (`__can_pass_in_regs`).
 
+### 8.27 Landed (WP-462): block-scope `extern` names, shared and structor asm labels
+- **Block-scope `extern` declarations.** A function declaration or an
+  `extern` variable declaration at block scope names the entity of its
+  innermost enclosing namespace ([basic.link]/6), so it mangles there,
+  as clang's `mangleNameWithAbiTags` walks a local container out to its
+  namespace for an entity with linkage (`mangle::local_extern_ns`, used
+  by the context walk): `void f() { extern void g(int); }` declares
+  `_Z1gi`, and in an instantiation of `template<class T> void f() {
+  extern void g(int); extern int ev; }` the names are `_Z1gi` and `ev`,
+  not `_ZZ1fIiEvvE1gi` / `_ZZ1fIiEvvE2ev`. A block-scope variable
+  without `extern` stays a local entity (§8.10).
+- **One label, one symbol.** An asm label replaces the mangled name of
+  the entity it is on (spec/sema.md "GNU asm labels"), so declarations
+  of different types whose labels are equal name one symbol: codegen
+  makes one function or global for them (spec/codegen.md §7z), never a
+  suffixed `@lbl.1`.
+- **Structors and conversion functions** take a label as other member
+  functions do. Every structor variant (C1/C2, D0/D1/D2) mangles as the
+  label, so the first variant defined is the definition and the
+  complete-object alias (C1 → C2, D1 → D2) is not emitted; a virtual
+  destructor's vtable names the label in both destructor slots, as
+  clang does. A class with virtual bases is not modelled (clang passes
+  the VTT to a definition without that parameter).
+
 ### Landed sections after WP-488: `spec/landed/abi/`
 From WP-488 on, a work package's Landed section is not appended here as
 another `### 8.NN`: it is its own file, `spec/landed/abi/WP-NNN.md`
