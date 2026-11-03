@@ -18,6 +18,7 @@
 use kiln_ast::ExprId;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{ExprKind, NonOdrUse};
+use kiln_source::Loc;
 
 use crate::Sema;
 
@@ -34,6 +35,8 @@ impl Sema<'_, '_> {
         let rewarn = self.null_deref_rewarn_active();
         let mut derefs = Vec::new();
         let mut varargs = Vec::new();
+        // The callees of the immediate invocations (not references).
+        let mut callees = Vec::new();
         let mut compares = Vec::new();
         let recompare = !self.null_compare_rewarn.is_empty();
         let mut stack = vec![e];
@@ -56,6 +59,9 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 ExprKind::DeclRefExpr | ExprKind::MemberExpr => {
+                    if kind == ExprKind::DeclRefExpr && !callees.contains(&x) {
+                        self.recheck_shared_ref(x);
+                    }
                     let d = self.ast.exprs.decl(x);
                     // clang `TransformDeclRefExpr` marks a kept node
                     // referenced, which counts it for
@@ -91,7 +97,10 @@ impl Sema<'_, '_> {
                 }
                 ExprKind::UnaryOperator if rewarn => derefs.push(x),
                 // A failed immediate invocation is reported again.
-                ExprKind::ConstantExpr => self.recheck_shared_invocation(x),
+                ExprKind::ConstantExpr => {
+                    callees.extend(self.invocation_callee_ref(x));
+                    self.recheck_shared_invocation(x);
+                }
                 ExprKind::CXXDeleteExpr => {
                     if let Some(f) = self.ast.exprs.operator_delete(x) {
                         self.mark_function_referenced(f, loc);
@@ -117,17 +126,7 @@ impl Sema<'_, '_> {
                         kids.iter().filter_map(|k| self.vararg_recheck.get(k).map(|&c| (*k, c))),
                     );
                 }
-                for &k in &kids {
-                    match self.ast.exprs.get(k).kind() {
-                        ExprKind::CXXDefaultArgExpr => {
-                            self.note_default_use(k, self.ast.exprs.default_arg_param(k), at);
-                        }
-                        ExprKind::CXXDefaultInitExpr => {
-                            self.note_default_use(k, self.ast.exprs.default_init_field(k), at);
-                        }
-                        _ => {}
-                    }
-                }
+                self.note_default_uses(&kids, at);
             }
             stack.extend(kids);
         }
@@ -139,6 +138,22 @@ impl Sema<'_, '_> {
         }
         for (a, kind) in varargs {
             self.check_variadic_args(&[a], kind);
+        }
+    }
+
+    /// The default arguments and member initializers among `kids` are
+    /// used again at `at` ([`Sema::mark_shared_expr_referenced`]).
+    fn note_default_uses(&mut self, kids: &[ExprId], at: Loc) {
+        for &k in kids {
+            match self.ast.exprs.get(k).kind() {
+                ExprKind::CXXDefaultArgExpr => {
+                    self.note_default_use(k, self.ast.exprs.default_arg_param(k), at);
+                }
+                ExprKind::CXXDefaultInitExpr => {
+                    self.note_default_use(k, self.ast.exprs.default_init_field(k), at);
+                }
+                _ => {}
+            }
         }
     }
 }

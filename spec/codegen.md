@@ -848,7 +848,10 @@ The normative description is spec/driver.md "Code generation". In short:
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
   internal one, kiln keeps it below `-fclang-compat=22`); it carries no
-  `align`, as clang's.
+  `align`, as clang's. A specialization taking such an object is
+  `internal` with no comdat at both levels (`set_def_linkage`), so
+  `linkage_internal_nttp` matches clang 22 with no deviation row
+  (WP-413).
 
 ### Size optimization attributes (WP-412)
 - `CodegenOptions::opt_size` is clang's `CodeGenOpts.OptimizeSize`: 1 at
@@ -1008,8 +1011,7 @@ The normative description is spec/driver.md "Code generation". In short:
   what clang 20-22 changed: x86-64 `__int128` as `i128`
   (19: two `i64`s; the same registers), AArch64 aggregates of pointers
   coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
-  type names, `llvm.modf`, CWG2137's initializer-list constructor for
-  `B{b}` (a sema change kiln should follow), and `-O0` instruction
+  type names, `llvm.modf`, and `-O0` instruction
   choices (atomic temporaries, `select` for vector `?:`, constant-folded
   reductions, `undef` widening shuffles, `delete` block order). clang
   22's IR for a `bool` vector element store fails verification
@@ -1022,9 +1024,6 @@ The normative description is spec/driver.md "Code generation". In short:
   both oracles. Following the rest under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
   "Residual").
-- **clang 22 internal template parameter objects.** clang 22 drops the
-  comdat of an internal template parameter object
-  (`linkage_internal_nttp`, oracle 22, `Allow::Structure`).
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
@@ -1374,6 +1373,11 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
 - **Pointers to virtual members**: `&C::vf` is `{index * 8 + 1, adj}` on
   x86-64 and `{index * 8, 2 * adj + 1}` on AArch64; calls through them
   take the virtual branch already present in WP-079's `memptr.rs`.
+  `index` is the slot of the function the pointer names, so a covariant
+  overrider's result is adjusted by the slot's entry: `&Base::f` reaches
+  the return-adjusting thunk in the base's slot, `&Derived::f` the slot
+  the overrider adds for its own return type (no adjustment), as clang
+  does (`virtual_covariant_memptr`, WP-414).
 - **Template linkage policy**: vtables, RTTI and thunks of classes that
   are template specializations, or have no key function, are
   `linkonce_odr` and emitted only when used (deferred), as with inline
@@ -1419,6 +1423,20 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
     functions) belongs to that vtable, not the next one.
   - Thunks with a virtual adjustment (`_ZTv0_n<off>_`) load the
     vcall offset from the vtable.
+
+**Vtables and VTTs of virtual lattices (WP-414).** Codegen asks for a
+class's vtable group, construction groups, VTT and subobject table once
+per structor and vptr store, so `Module.vts` (a `kiln_abi::VTableSession`,
+spec/abi.md §8.5) caches them for the module; the IR is unchanged. The
+virtual-base list of a class for the vptr stores (`class.rs`
+`collect_vbases_in`) walks each class once, and the `__vmi_class_type_info`
+flags (`vtable.rs` `VmiWalk`, clang `ComputeVMIClassTypeInfoFlags`) memoise
+the (class, virtual?) edges already seen, so neither is exponential in the
+number of paths through a lattice of virtual diamonds. Bench
+`bench/frontend/virtual-lattice-emit.cpp` (D<N> : B<N>, C<N>; B<N>, C<N> :
+virtual D<N-1>), `-emit-llvm`, release, depth 16: 1.37 s before, 0.40 s
+after, clang 22 12.1 s; depth 20: 5.0 s before, 0.8 s after; depth 32:
+4.3 s (clang over 120 s).
 
 **Landed (WP-108):**
 - *Member-pointer RTTI* (clang `BuildPointerToMemberTypeInfo`):

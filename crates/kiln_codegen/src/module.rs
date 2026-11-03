@@ -146,8 +146,9 @@ pub(crate) struct Cg<'a> {
     pub sdone: FxHashSet<DeclId>,
     /// `_ZTV` globals by class (WP-080).
     pub vtables: FxHashMap<DeclId, GlobalId>,
-    /// Vtable group layouts by class.
-    pub vt_layouts: FxHashMap<DeclId, std::rc::Rc<kiln_ast::class::VTableLayout>>,
+    /// Vtable groups, construction groups, VTTs and subobject tables
+    /// by class (one shared session).
+    pub vts: kiln_abi::vtable::VTableSession<'a>,
     /// Vtables referenced but not yet defined (clang `DeferredVTables`).
     pub deferred_vtables: Vec<DeclId>,
     /// Dynamic classes explicitly instantiated by a definition, in
@@ -227,7 +228,7 @@ impl<'a> Cg<'a> {
             thunk_fns: FxHashMap::default(),
             sdone: FxHashSet::default(),
             vtables: FxHashMap::default(),
-            vt_layouts: FxHashMap::default(),
+            vts: kiln_abi::vtable::VTableSession::new(ast, target),
             deferred_vtables: Vec::new(),
             explicit_vtables: Vec::new(),
             vt_emitted: FxHashSet::default(),

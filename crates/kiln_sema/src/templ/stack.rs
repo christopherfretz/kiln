@@ -628,14 +628,20 @@ impl Sema<'_, '_> {
         // The entry stays, empty: a later deduction forming the same
         // specialization adds nothing to it (clang keeps it too).
         if let Some(ds) = self.templ.suppressed_diags.get_mut(&d).map(std::mem::take) {
-            for x in ds {
-                // From clang 22 on they carry their own context notes and
-                // take none of the use's.
-                if self.clang_compat >= 22 && !self.inst.stack.is_sfinae() {
-                    x.emit(self.diags);
-                } else {
-                    self.emit(x);
-                }
+            self.emit_held_warnings(ds);
+        }
+    }
+
+    /// Reports the held-back substitution warnings `ds`
+    /// ([`Sema::emit_suppressed_diags`]).
+    pub(crate) fn emit_held_warnings(&mut self, ds: Vec<Diag>) {
+        for x in ds {
+            // From clang 22 on they carry their own context notes and
+            // take none of the use's.
+            if self.clang_compat >= 22 && !self.inst.stack.is_sfinae() {
+                x.emit(self.diags);
+            } else {
+                self.emit(x);
             }
         }
     }

@@ -229,6 +229,12 @@ pub struct TemplState {
     /// substitution-failure note of a later deduction that finds it
     /// memoized (§6.1 step 4).
     pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
+    /// Templated functions made invalid by their body (the constexpr
+    /// variable rule, `constexpr_body.rs`), not by their declaration: a
+    /// deduction still runs, and its specialization is a substitution
+    /// failure (clang marks only the `FunctionDecl` invalid, not its
+    /// template, and an instantiation of it is invalid too). WP-414.
+    pub(crate) body_invalid: kiln_source::fx::FxHashSet<DeclId>,
     /// Function template specializations whose explicit-specifier is
     /// not substituted yet: deduction checks the associated constraints
     /// first ([`Sema::get_function_spec_signature`], §6.1).
@@ -390,6 +396,11 @@ pub struct InstState {
     pub(crate) undefined_diagnosed: std::cell::Cell<Option<DeclId>>,
     /// Drop the next error passed to `emit` (set by `incomplete_note`).
     pub(crate) suppress_next_error: std::cell::Cell<bool>,
+    /// Deducing the candidates of an explicit specialization or
+    /// instantiation at clang 22 (§6.9): an access error inside a SFINAE
+    /// context is no substitution failure, only the reason shown if the
+    /// deduction fails otherwise (clang 21+ `SuppressAccessChecks`).
+    pub(crate) suppress_access: std::cell::Cell<bool>,
     /// The template-id whose arguments `check_template_args` converts:
     /// its template name, the point of a `PriorArgSubstitution` frame.
     pub(crate) template_id_loc: Option<Loc>,
@@ -719,6 +730,15 @@ impl Sema<'_, '_> {
         if self.clang_compat >= 22 {
             let _ = self.templ.keyless_ttps.insert(p);
         }
+    }
+
+    /// A template template parameter's default (at `at`) names variable
+    /// template or concept `a` ([temp.arg.template]/1): at clang
+    /// compatibility 22 it is a template argument of the wrong kind, the
+    /// parameter gets no default (clang 19 reports the parser's "must be a
+    /// class template" instead).
+    pub fn act_on_wrong_kind_ttp_default(&mut self, a: DeclId, at: Loc) {
+        self.reject_keyless_ttp_arg(a, at);
     }
 
     /// clang 22's rejection of template `a` as the argument (at `at`)
@@ -1642,7 +1662,7 @@ impl Sema<'_, '_> {
     pub fn act_on_end_abbreviated(&mut self) {
         // Also the end of a declaration: uses of deleted functions that
         // no full-expression reported (spec/sema-class.md §4.3).
-        if !self.special.pending_deleted.is_empty() {
+        if self.special.has_pending() {
             self.flush_pending_deleted();
         }
         if self.templ.heads.last().is_some_and(|h| h.invented) {
