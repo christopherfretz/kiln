@@ -101,6 +101,9 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(src).kind() == ExprKind::GNUNullExpr {
             self.check_null_conversion(src, to, cc);
         }
+        if self.ast.types.builtin(to) == Some(BuiltinType::Bool) {
+            self.diagnose_int_in_bool_context(src);
+        }
         if self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
         }
@@ -300,9 +303,18 @@ impl Sema<'_, '_> {
     }
 
     /// The end of the identifier, keyword, number or punctuator token at
-    /// `at`, from the source text (a macro location has none).
+    /// `at`, from the source text. For a macro location the token is
+    /// measured where it is spelled and the end is that far past `at` in
+    /// its expansion entry (clang `Lexer::getLocForEndOfToken`); `None`
+    /// if it would leave the entry.
     pub(crate) fn token_end(&self, at: Loc) -> Option<Loc> {
         let sm = self.diags.sm();
+        if at.is_macro() {
+            let sp = sm.spelling_loc(at);
+            let len = sm.same_entry_distance(sp, self.token_end(sp)?)?;
+            let end = at.with_offset(len);
+            return sm.same_entry_distance(at, end).map(|_| end);
+        }
         let (file, pos) = sm.offset_of(at)?;
         let text = sm.text(file).as_bytes();
         let start = pos as usize;
@@ -321,7 +333,16 @@ impl Sema<'_, '_> {
                 i += 1;
             }
         } else {
-            i += 1;
+            // A punctuator, longest match first ([lex.operators]). `>>`
+            // and `>>=` are left out: a `>` closing a template argument
+            // list may be the first half of one (clang measures the split
+            // token).
+            const PUNCT: [&[u8]; 22] = [
+                b"<=>", b"<<=", b"->*", b"::", b"->", b"++", b"--", b"<<", b"<=", b">=", b"==",
+                b"!=", b"&&", b"||", b"+=", b"-=", b"*=", b"/=", b"%=", b"&=", b"|=", b"^=",
+            ];
+            let rest = text.get(i..).unwrap_or_default();
+            i += PUNCT.iter().find(|p| rest.starts_with(p)).map_or(1, |p| p.len());
         }
         u32::try_from(i).ok().map(|o| sm.loc(file, o))
     }
@@ -343,7 +364,7 @@ fn representable(neg: bool, mag: u128, w: u32, signed: bool) -> bool {
 
 /// `v` truncated to a `w`-bit integer of signedness `signed` (clang's
 /// `PrettyPrintInRange`).
-fn truncate_to(v: i128, w: u32, signed: bool) -> i128 {
+pub(crate) fn truncate_to(v: i128, w: u32, signed: bool) -> i128 {
     if w == 0 || w >= 128 {
         return if w == 0 { 0 } else { v };
     }
