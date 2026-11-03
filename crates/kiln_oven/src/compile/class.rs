@@ -464,6 +464,10 @@ impl Compiler<'_> {
                 if let Some(at) = self.init_index(&ci, cls) {
                     self.unwind_subobjects(this, cls, union, done..at, loc);
                     done = done.max(at);
+                    if !delegating && !union {
+                        let pc = self.o.code.len() as u32;
+                        self.ctor_steps.push((pc, at as u32));
+                    }
                 }
                 let m = self.next;
                 self.ctor_init(&ci, this, cls, union);
@@ -476,6 +480,10 @@ impl Compiler<'_> {
             }
             if vptr {
                 self.emit(Op::SetVptr, set, &[this, cls.0]);
+            }
+            if !self.ctor_steps.is_empty() {
+                let pc = self.o.code.len() as u32;
+                self.ctor_steps.push((pc, u32::MAX));
             }
             if !delegating {
                 let n = self.o.types.vbase_start(cls);

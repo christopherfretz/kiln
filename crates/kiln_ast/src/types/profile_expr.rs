@@ -334,6 +334,7 @@ impl Ast {
                 self.push_list(ListId::new(n.b()), stack);
             }
             // Profiled in its syntactic form, like clang.
+            K::PseudoObjectExpr => stack.push(Work::Expr(x.pseudo_syntactic(e, &self.lists))),
             K::CXXRewrittenBinaryOperator => {
                 let (op, written) = x.rewritten_written(e);
                 out.push(tag(k, op as u32));

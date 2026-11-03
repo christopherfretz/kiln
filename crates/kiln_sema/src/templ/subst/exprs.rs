@@ -110,6 +110,13 @@ impl Substituter<'_, '_, '_> {
         if !v.iter().any(|&x| self.braced_source(x).is_some() || self.braced_pattern(x).is_some()) {
             return self.expr_list(l);
         }
+        self.braced_args(v)
+    }
+
+    /// The rebuild of [`Self::call_arg_list`] for an argument list holding a
+    /// braced argument (or a braced pack expansion), up to the first
+    /// `CXXDefaultArgExpr`.
+    fn braced_args(&mut self, v: Vec<ExprId>) -> SubstResult<Vec<ExprId>> {
         let mut out = Vec::with_capacity(v.len());
         for x in v {
             if self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultArgExpr {
@@ -1956,8 +1963,13 @@ impl Substituter<'_, '_, '_> {
         self.expr(e)
     }
 
-    /// Written arguments, pack expansions expanded.
+    /// Written arguments, pack expansions expanded; a braced argument
+    /// (`m(v, {v + 1})`, `m(a..., {a..., 7})`) is rebuilt as a braced
+    /// argument as in a call ([class.base.init]/7, WP-445).
     fn written_args(&mut self, v: &[ExprId]) -> SubstResult<Vec<ExprId>> {
+        if v.iter().any(|&x| self.braced_source(x).is_some() || self.braced_pattern(x).is_some()) {
+            return self.braced_args(v.to_vec());
+        }
         self.expand_exprs(v)
     }
 

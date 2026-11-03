@@ -307,8 +307,9 @@ impl Sema<'_, '_> {
         match site {
             BindingSite::Return => {
                 // [stmt.return]/6 (P2748): ill-formed; clang points at the
-                // returned expression.
-                let msg = self.diag(DiagId::sema_temp_return_local, self.begin_loc(init));
+                // temporary (`checkExprLifetime`'s `DiagRange` is the
+                // local's range): the operand of `static_cast<const int&>(c)`.
+                let msg = self.diag(DiagId::sema_temp_return_local, loc);
                 self.emit(msg);
             }
             BindingSite::Member(field) => {

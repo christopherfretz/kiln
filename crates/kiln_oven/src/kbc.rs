@@ -257,6 +257,13 @@ ops! {
     // values"); aux = op (`complex::cx`) | float kind << 2, or for an
     // integer element 1 << 6 | width << 7 | signed << 15
     Cx = 6,
+    // [d, a, b, type, x]: wide `_BitInt` (`TyKind::WideInt`) arithmetic on
+    // memory-resident values (`crate::bigint`, spec/oven.md "`_BitInt`");
+    // aux = sub-op (`wide`) | `wide::INIT` | `wide::RMW` | access kind << 8.
+    // `type` is the wide type of the operation (of the operands for
+    // `CMP`/`TO`/`TO_BOOL`); `d`, `a`, `b` hold addresses of wide values
+    // except where `wide` says otherwise.
+    Wide = 5,
     // [p, type, stat, n, k]: a placement new of `type` (aux
     // `new_aux::ARRAY`: of `type[n]`, register `n` checked as an array
     // new's bound against `k` explicit initializers; `new_aux::ZERO`:
@@ -311,6 +318,43 @@ ops! {
     // [dst, expr]: the address a GNU `&&label` (`AddrLabelExpr` `expr`)
     // evaluates to (`Oven::label_addr`; spec/oven.md "Label addresses")
     LabelAddr = 2,
+}
+
+/// The sub-operations of `Op::Wide`. Binary ones are `*d = *a op *b`
+/// (shifts: `b` a register holding the count, `x` = its width | signed
+/// << 8); unary ones `*d = op *a`.
+pub(crate) mod wide {
+    pub const MOV: u32 = 0;
+    pub const ADD: u32 = 1;
+    pub const SUB: u32 = 2;
+    pub const MUL: u32 = 3;
+    pub const DIV: u32 = 4;
+    pub const REM: u32 = 5;
+    pub const SHL: u32 = 6;
+    pub const SHR: u32 = 7;
+    pub const AND: u32 = 8;
+    pub const OR: u32 = 9;
+    pub const XOR: u32 = 10;
+    pub const NEG: u32 = 11;
+    pub const NOT: u32 = 12;
+    pub const INC: u32 = 13;
+    pub const DEC: u32 = 14;
+    /// Register `d` = the comparison `x` (`cmp`) of `*a` and `*b`.
+    pub const CMP: u32 = 15;
+    /// `*d` = register `a`, an integer of width `x & 0xFF`, signed `x >> 8 & 1`.
+    pub const FROM: u32 = 16;
+    /// Register `d` = `*a` converted to the integer of width `x & 0xFF`,
+    /// signed `x >> 8 & 1` (with `x >> 9 & 1`: saturating, a shift count).
+    pub const TO: u32 = 17;
+    /// Register `d` = `*a != 0`.
+    pub const TO_BOOL: u32 = 18;
+    /// `*d` = `*a` of wide type `x` converted to `type`.
+    pub const CAST: u32 = 19;
+    /// The result object begins its lifetime (an initialization).
+    pub const INIT: u32 = 1 << 6;
+    /// `*a` is the destination read for a read-modify-write (with the
+    /// access kind in aux).
+    pub const RMW: u32 = 1 << 7;
 }
 
 /// The conversions of `Op::Cce`.

@@ -34,6 +34,7 @@
 
 pub mod apfloat;
 mod arith;
+mod bigint;
 mod compile;
 mod complex;
 mod failure;
@@ -360,6 +361,13 @@ pub struct Oven {
     /// The base-object variants of constructors and destructors of
     /// classes with virtual bases ([`Oven::func_index_base`]).
     pub(crate) base_funcs: FxHashMap<DeclId, u32>,
+    /// The construction progress of each compiled constructor (by
+    /// function index) that initializes subobjects: `(pc, i)` pairs in
+    /// code order, from `pc` on entries `..i` of the class's
+    /// `fields` have begun their lifetime, entry `i` is being
+    /// initialized (`u32::MAX`: all have begun). Read only by
+    /// `__builtin_is_within_lifetime` (spec/oven.md "Builtins").
+    pub(crate) ctor_steps: FxHashMap<u32, Box<[(u32, u32)]>>,
     pub(crate) thunks: FxHashMap<ExprId, u32>,
     /// Thunks compiled inside a default argument use (the key's second
     /// half, [`Oven::fold_immediate_in`]): their source-location builtins
@@ -445,6 +453,7 @@ impl Oven {
             funcs: Vec::new(),
             func_map: FxHashMap::default(),
             base_funcs: FxHashMap::default(),
+            ctor_steps: FxHashMap::default(),
             thunks: FxHashMap::default(),
             thunks_at: FxHashMap::default(),
             srcloc_root: None,
@@ -745,6 +754,8 @@ impl Oven {
             + cap(&self.funcs)
             + map(&self.func_map)
             + map(&self.base_funcs)
+            + map(&self.ctor_steps)
+            + self.ctor_steps.values().map(|s| size_of_val(&**s)).sum::<usize>()
             + map(&self.thunks)
             + map(&self.thunks_at)
             + cap(&self.globals)

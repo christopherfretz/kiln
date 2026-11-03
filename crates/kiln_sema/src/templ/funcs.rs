@@ -935,6 +935,12 @@ impl Sema<'_, '_> {
             return None;
         }
         if let Some(p) = exc {
+            // An implicit or explicitly defaulted member is rejected
+            // first (clang `MergeFunctionDecl`).
+            if !inst && let Some((id, sel)) = self.defaulted_member_definition(p) {
+                self.emit(self.diag(id, d.name_loc()).arg(sel));
+                return Some(None);
+            }
             // [except.spec]/5.
             let e = self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc());
             let e = self.note_prev(e, p, false);
@@ -1049,6 +1055,13 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name_str(self.ast.decls.get(m).name()))
                 .with_note(note);
             self.emit(e);
+            return None;
+        }
+        // An implicit `operator==` ([class.compare.default]/4) or an
+        // explicitly defaulted member is not redefined (clang
+        // `MergeFunctionDecl`, ahead of the `constexpr` check).
+        if let Some((id, sel)) = self.defaulted_member_definition(m) {
+            self.emit(self.diag(id, name_loc).arg(sel));
             return None;
         }
         let fspec = self.explicit_spec_fnspec(ds, ty, m);

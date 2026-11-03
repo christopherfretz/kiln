@@ -173,7 +173,7 @@ pub fn parse_oven(value: &str) -> Result<OvenBudget, String> {
         }
         _ => None,
     };
-    let (mut limits, mut floors): (Vec<(Counter, u64)>, Vec<(Counter, u64)>) = Default::default();
+    let (mut limits, mut floors) = (Vec::<(Counter, u64)>::new(), Vec::<(Counter, u64)>::new());
     for item in items {
         let (key, n, list) = match (item.split_once("<="), item.split_once(">=")) {
             (Some((k, n)), None) => (k, n, &mut limits),

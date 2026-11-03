@@ -758,10 +758,15 @@ impl Sema<'_, '_> {
                 Err(())
             }
             // A value-dependent argument is evaluated when it is
-            // substituted ([temp.res.general]/6); one of a known type is
-            // checked for its conversion now (§3.2).
+            // substituted ([temp.res.general]/6), and so is an
+            // instantiation-dependent one (`is_same<void,
+            // void_t<decltype(e)>>::value`): folding it now would drop the
+            // substitution failure of `e` ([temp.deduct.general]/8; clang
+            // keeps it as written). One of a known type is checked for its
+            // conversion now (§3.2).
             (DeclKind::NonTypeTemplateParm, ArgView::Expr { expr, .. })
-                if self.expr_is_value_dependent(expr) =>
+                if self.expr_is_value_dependent(expr)
+                    || self.type_instantiation_dependent(expr) =>
             {
                 self.check_value_dependent_nttp_arg(tmpl, depth, p, expr, at, prior).map(|()| a)
             }
@@ -898,6 +903,33 @@ impl Sema<'_, '_> {
         let r = f(self);
         self.constant_full_expr -= 1;
         r
+    }
+
+    /// Whether `e` is instantiation-dependent through a type or a
+    /// qualifier (`is_same<void, void_t<decltype(x)>>::value`), whose
+    /// substitution can fail. A reference to a local declaration of a
+    /// template (`constexpr int N = 3; TC<N>`) is instantiation-dependent
+    /// in kiln only so that it is remapped; clang folds it, and so does
+    /// kiln.
+    fn type_instantiation_dependent(&self, e: ExprId) -> bool {
+        use kiln_ast::expr::ExprDeps;
+        let (x, t) = (&self.ast.exprs, &self.ast.types);
+        let inst = |q: QualType| t.flags(q.ty()).contains(TypeFlags::INSTANTIATION_DEPENDENT);
+        let mut stack = vec![e];
+        while let Some(e) = stack.pop() {
+            if !x.get(e).deps().contains(ExprDeps::INSTANTIATION) {
+                continue;
+            }
+            if inst(x.get(e).ty())
+                || x.decl_ref_extra(e)
+                    .and_then(|d| d.qualifier)
+                    .is_some_and(|q| t.nns_flags(q).contains(TypeFlags::INSTANTIATION_DEPENDENT))
+            {
+                return true;
+            }
+            stack.extend(x.children(e, &self.ast.lists));
+        }
+        false
     }
 
     /// The type of non-type parameter `p` for an argument at `at`: its
