@@ -262,7 +262,7 @@ impl Sema<'_, '_> {
         let Some(sym) = sym else {
             return fail(loc, "operators argument is not a valid operator");
         };
-        let cv = if utf8 { self.srcloc_u8_string(sym) } else { self.srcloc_string(sym) };
+        let cv = self.frozen_string(sym, utf8);
         cv.ok_or_else(|| MetaError::note(loc, "kiln: string too large for a constant"))
     }
 

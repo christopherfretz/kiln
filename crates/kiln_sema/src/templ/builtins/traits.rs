@@ -958,13 +958,15 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `isScalarType`: arithmetic (complex included),
-    /// enumeration, pointer, member pointer and `std::nullptr_t`.
+    /// enumeration, pointer, member pointer, `std::nullptr_t` and
+    /// `std::meta::info`.
     fn is_scalar_ext(&self, q: QualType) -> bool {
         matches!(
             self.ast.types.canonical_view(q),
             TypeView::Pointer(_) | TypeView::MemberPointer { .. } | TypeView::Enum(_)
         ) || self.is_arithmetic_ext(q)
             || self.is_nullptr_type(q)
+            || self.is_meta_info(q)
     }
 
     /// Scalar or vector (clang treats vectors as scalars here).
