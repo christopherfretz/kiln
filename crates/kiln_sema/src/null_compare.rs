@@ -99,7 +99,7 @@ impl Sema<'_, '_> {
         e
     }
 
-    fn ignore_imp_casts(&self, mut e: ExprId) -> ExprId {
+    pub(crate) fn ignore_imp_casts(&self, mut e: ExprId) -> ExprId {
         for _ in 0..256 {
             match self.ast.exprs.get(e).kind() {
                 ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {

@@ -678,15 +678,11 @@ const M5_TRIAGED: &[(&str, &str)] = &[
     ),
     (
         "libcxx/ranges/range.adaptors/range.join.with/range.join.with.iterator/eq.nodiscard.verify.cpp",
-        "kiln says 'expression result unused' for a parenthesized [[nodiscard]] operator==; WP-461 item 6",
+        "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (operator==) never warns; no WP yet",
     ),
     (
         "libcxx/ranges/range.adaptors/range.join.with/range.join.with.iterator/iter_move.nodiscard.verify.cpp",
         "missing -Wunused-result: a [[nodiscard]] hidden friend of a class template (iter_move) never warns; no WP yet",
-    ),
-    (
-        "libcxx/ranges/range.adaptors/range.join.with/range.join.with.sentinel/eq.nodiscard.verify.cpp",
-        "kiln says 'expression result unused' for a parenthesized [[nodiscard]] operator==; WP-461 item 6",
     ),
     (
         "libcxx/ranges/range.factories/range.iota.view/nodiscard.verify.cpp",
@@ -711,10 +707,6 @@ const M5_TRIAGED: &[(&str, &str)] = &[
     (
         "libcxx/thread/thread.shared_timed_mutex/thread_safety.verify.cpp",
         "missing -Wthread-safety 'writing variable … requires holding shared_timed_mutex … exclusively'; no WP yet",
-    ),
-    (
-        "libcxx/time/nodiscard.verify.cpp",
-        "kiln says 'expression result unused' for static_cast to a [[nodiscard]] conversion function; WP-461 item 6",
     ),
     (
         "libcxx/utilities/any/nodiscard.verify.cpp",

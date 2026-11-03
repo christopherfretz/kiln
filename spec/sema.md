@@ -3643,6 +3643,22 @@ for them.
     value of function declared with pure|const attribute` [-Wunused-value]
     at the call's start. Nothing but `nodiscard` is diagnosed for an
     expression spelled in a macro body (clang `ShouldSuppress`).
+  - **Through a cast (WP-461)**: an explicit cast (`static_cast`,
+    `const_cast`, `reinterpret_cast`, C-style, functional) of kind
+    `NoOp`, `ConstructorConversion` or `IntegralCast` whose operand,
+    implicit casts stripped (clang `IgnoreImpCasts`, not parentheses),
+    is a call or a construction is checked as that call
+    (`unused_call_result`: nodiscard type, nodiscard callee, then
+    `pure` / `const`) or construction (`unused_construct_result`), at
+    the cast: `static_cast<bool>(s);` calling a `[[nodiscard]]`
+    conversion function warns `-Wunused-result`, `static_cast<int>(t)`
+    through a `pure` `operator long` warns `pure`. Otherwise the cast is
+    `expression result unused` (`bool{s};`: its operand is an init
+    list). An overloaded comparison that is not the unused expression
+    itself (parenthesized, a comma's right operand, a conditional's
+    arm; `unused_comparison_call`) is checked as that call, at its
+    operator, before falling back to `expression result unused`
+    (`tests/conformance/dcl.attr.nodiscard/through-cast.cpp`).
   - **In an instantiation (WP-217)**: clang rebuilds every expression
     statement and for-increment (`TransformExprStmt` → `ActOnExprStmt`),
     so the warning of a non-dependent one is reported again in each
