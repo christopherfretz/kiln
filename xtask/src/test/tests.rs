@@ -27,7 +27,11 @@ fn cli_parsing() {
         "2.5",
         "--oracle",
         "clang++",
+        "--gcc=/opt/g++",
+        "--external",
+        "/x/corpus",
         "--no-oracle",
+        "--no-gcc",
         "--pp-compare=text",
         "--mem-limit",
         "512",
@@ -43,7 +47,10 @@ fn cli_parsing() {
         Options {
             compiler: Some("clang++-19".into()),
             oracle: Some("clang++".into()),
+            gcc: Some("/opt/g++".into()),
+            no_gcc: true,
             no_oracle: true,
+            external: Some("/x/corpus".into()),
             filter: Some("lex".into()),
             update: true,
             jobs: Some(3),
@@ -412,6 +419,62 @@ fn memory_limits_with_a_fake_hog() {
     has(&results, "pass-run-binary-fits.cpp", "(memory limit 256 MiB)");
 }
 
+/// The GCC oracle (`spec/harness.md` "GCC oracle") against the fake kiln
+/// and the fake GCC of `xtask/fixtures/fake-gcc`: verdicts, run output,
+/// and the advisory outcome of a GCC crash, ICE or `sorry`.
+#[test]
+fn gcc_oracle_with_a_fake_gcc() {
+    if !have_clang() {
+        return;
+    }
+    let root = repo_root();
+    let dir = root.join("xtask/fixtures/gcc");
+    let fake_gcc = root.join("xtask/fixtures/fake-gcc/g++");
+    let mut o = clang_opts(std::slice::from_ref(&dir));
+    o.compiler = Some(root.join("xtask/fixtures/fake-kiln/kiln"));
+    o.gcc = Some(fake_gcc.clone());
+    let results = execute(&o).unwrap();
+    check_fixture_statuses(&results, 13);
+    let by_name = |rs: &[TestResult], n: &str| rs.iter().find(|r| r.name.ends_with(n)).cloned();
+    let text = |rs: &[TestResult], n: &str| report::format_result(&by_name(rs, n).unwrap(), false);
+    let has = |n: &str, what: &str| {
+        let t = text(&results, n);
+        assert!(t.contains(what), "{n}: {what:?} not in\n{t}");
+    };
+    has("pass-advisory-ice.cpp", "[advisory: oracle crashed (internal compiler error)]");
+    has("pass-advisory-sorry.cpp", "[advisory: oracle crashed (sorry, unimplemented)]");
+    has("pass-advisory-signal.cpp", "[advisory: oracle crashed (");
+    has("error-gcc-rejects-compile-ok.cpp", "rejects this compile-ok test");
+    has("error-gcc-accepts-compile-fail.cpp", "accepts this compile-fail test");
+    has("error-xfail-does-not-mask-gcc.cpp", "rejects this compile-ok test");
+    has("fail-run-stdout-differs.cpp", "stdout differs from the GCC oracle");
+    has("fail-run-exit-differs.cpp", "exit differs from the GCC oracle");
+    let counts = report::Counts::of(&results);
+    assert_eq!(counts.advisory(), 3);
+    let summary = report::format_summary(&counts, results.len(), Duration::ZERO);
+    assert!(summary.contains("; 3 advisory; 13 tests"), "{summary}");
+    // Without a GCC the comparisons are dropped, never failed: only kiln's
+    // own checks remain (the `error-` fixtures pass, the run diffs pass).
+    o.no_gcc = true;
+    let results = execute(&o).unwrap();
+    assert!(
+        results.iter().all(|r| !r.status.is_failure() && r.advisory.is_none()),
+        "{}",
+        report(&results)
+    );
+    // `skip(gcc)` applies when GCC is the compiler under test.
+    let mut g = clang_opts(std::slice::from_ref(&dir));
+    g.compiler = Some(fake_gcc);
+    g.filter = Some("skip-gcc".into());
+    let results = execute(&g).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status, Status::Skip, "{}", report(&results));
+    // An explicitly named GCC that does not run is an infrastructure error.
+    o.no_gcc = false;
+    o.gcc = Some(root.join("xtask/fixtures/no-such-gcc"));
+    assert!(execute(&o).unwrap_err().contains("the GCC oracle"));
+}
+
 #[test]
 fn oracle_mismatches_are_detected() {
     if !have_clang() {
@@ -703,6 +766,7 @@ fn ci_gate_honours_failure_counts() {
         details: String::new(),
         log: Vec::new(),
         updated: false,
+        advisory: None,
         elapsed: Duration::ZERO,
     };
     let ran = |statuses: &[Status]| {

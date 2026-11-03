@@ -216,7 +216,7 @@ impl fmt::Display for DiagDirective {
 }
 
 /// A `skip`/`xfail` marker: `skip: reason` (all compilers) or
-/// `skip(kiln): reason` / `skip(clang): reason`.
+/// `skip(kiln): reason` / `skip(clang): reason` / `skip(gcc): reason`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Marker {
     pub compiler: Option<CompilerKind>,
@@ -262,6 +262,10 @@ pub struct TestSpec {
     pub env: Vec<(String, String)>,
     /// Compare against the oracle compiler (default: on for `run`/`pp`).
     pub oracle: bool,
+    /// `oracle: gcc`: compare kiln's verdict (and a `run` test's stdout and
+    /// exit status) with the GCC oracle instead of clang
+    /// (`spec/harness.md` "GCC oracle").
+    pub gcc: bool,
     /// `oven:` budgets: at most one unlocated, at most one per location.
     pub oven: Vec<OvenBudget>,
     pub skip: Vec<Marker>,
@@ -494,6 +498,9 @@ struct Parser {
     pp_only: Vec<(usize, &'static str)>,
     ast_only: Vec<(usize, &'static str)>,
     oracle_line: usize,
+    /// The line of `oracle: gcc` (0: none).
+    gcc_line: usize,
+    skip_gcc_line: usize,
     /// Line of the `skip(clang)` marker, 0 when there is none.
     skip_clang_line: usize,
     stdout_file_line: usize,
@@ -543,6 +550,8 @@ impl Parser {
             pp_only: Vec::new(),
             ast_only: Vec::new(),
             oracle_line: 0,
+            gcc_line: 0,
+            skip_gcc_line: 0,
             skip_clang_line: 0,
             stdout_file_line: 0,
             stdin_file_line: 0,
@@ -846,7 +855,7 @@ impl Parser {
     fn oracle_directive(&mut self, line: usize, value: &str) {
         let v = match value {
             "clang" => Some(true),
-            "none" => Some(false),
+            "none" | "gcc" => Some(false),
             _ => None,
         };
         match v {
@@ -854,8 +863,11 @@ impl Parser {
             Some(b) => {
                 self.oracle = Some(b);
                 self.oracle_line = line;
+                if value == "gcc" {
+                    self.gcc_line = line;
+                }
             }
-            None => self.err(line, format!("unknown oracle `{value}` (clang|none)")),
+            None => self.err(line, format!("unknown oracle `{value}` (clang|gcc|none)")),
         }
     }
 
@@ -932,8 +944,9 @@ impl Parser {
             None => None,
             Some("kiln") => Some(CompilerKind::Kiln),
             Some("clang") => Some(CompilerKind::Clang),
+            Some("gcc") => Some(CompilerKind::Gcc),
             Some(q) => {
-                self.err(line, format!("unknown compiler `{q}` (kiln|clang)"));
+                self.err(line, format!("unknown compiler `{q}` (kiln|clang|gcc)"));
                 return;
             }
         };
@@ -948,6 +961,9 @@ impl Parser {
         }
         if name == "skip" && compiler == Some(CompilerKind::Clang) {
             self.skip_clang_line = line;
+        }
+        if name == "skip" && compiler == Some(CompilerKind::Gcc) {
+            self.skip_gcc_line = line;
         }
         list.push(Marker { compiler, reason: reason.to_owned() });
     }
@@ -998,6 +1014,26 @@ impl Parser {
         (stdin, stdout)
     }
 
+    /// Validates `oracle: gcc` against `expect`, `verify` and `skip(gcc)`;
+    /// returns whether the test has it.
+    fn check_gcc(&mut self, expect: Expect, verify: bool) -> bool {
+        if self.gcc_line == 0 {
+            return false;
+        }
+        let line = self.gcc_line;
+        if verify || !matches!(expect, Expect::Run | Expect::CompileOk | Expect::CompileFail) {
+            self.err(
+                line,
+                "`oracle: gcc` only applies to `run`, `compile-ok` and `compile-fail` tests \
+                 (not `verify`)",
+            );
+        }
+        if self.skip_gcc_line != 0 {
+            self.err(line, "`oracle: gcc` contradicts `skip(gcc)`");
+        }
+        true
+    }
+
     /// Validates `skip(clang)` against `oracle` and `expect`; returns
     /// whether the test has it.
     fn check_skip_clang(&mut self, expect: Expect) -> bool {
@@ -1040,7 +1076,9 @@ impl Parser {
             }
         }
         let verify = self.check_verify(expect);
+        let gcc = self.check_gcc(expect, verify);
         if self.oracle.is_some()
+            && !gcc
             && !verify
             && !matches!(expect, Expect::Run | Expect::Pp | Expect::Ast)
         {
@@ -1098,6 +1136,7 @@ impl Parser {
                     matches!(expect, Expect::Layout | Expect::Vtables | Expect::Ir)
                 },
             ),
+            gcc,
             oven: self.oven,
             skip: self.skip,
             xfail: self.xfail,
@@ -1599,6 +1638,36 @@ mod tests {
     }
 
     #[test]
+    fn gcc_oracle_and_skip_gcc() {
+        // spec/harness.md "GCC oracle": `oracle: gcc` replaces the clang
+        // oracle on run/compile-ok/compile-fail tests.
+        for expect in ["run", "compile-ok", "compile-fail"] {
+            let s =
+                ok(&format!("//@ expect: {expect}\n//@ oracle: gcc\n//@ skip(clang): no P2996\n"));
+            assert!(s.gcc && !s.oracle, "{expect}");
+            let s = ok(&format!("//@ expect: {expect}\n"));
+            assert!(!s.gcc, "the GCC oracle is opt-in ({expect})");
+        }
+        let s = ok("//@ expect: compile-ok\n//@ skip(gcc): GCC 16.1 rejects it\n");
+        assert_eq!(s.skip_reason(CompilerKind::Gcc), Some("GCC 16.1 rejects it"));
+        assert_eq!(s.skip_reason(CompilerKind::Kiln), None);
+        let s = ok("//@ xfail(gcc): wrong\n");
+        assert_eq!(s.xfail_reason(CompilerKind::Gcc), Some("wrong"));
+        let e = errs("//@ oracle: gcc\n//@ skip(gcc): x\n");
+        assert_eq!(e, ["line 1: `oracle: gcc` contradicts `skip(gcc)`"]);
+        let e = errs("//@ expect: pp\n//@ oracle: gcc\n");
+        assert_eq!(
+            e,
+            ["line 2: `oracle: gcc` only applies to `run`, `compile-ok` and `compile-fail` tests \
+              (not `verify`)"]
+        );
+        let e = errs("//@ verify\n//@ oracle: gcc\n");
+        assert!(e[0].contains("(not `verify`)"), "{e:?}");
+        let e = errs("//@ oracle: gcc\n//@ oracle: clang\n");
+        assert_eq!(e, ["line 2: duplicate `oracle`"]);
+    }
+
+    #[test]
     fn skip_clang_rejected_without_golden() {
         // spec/harness.md, directives: `layout`, `vtables` and `ir` compare
         // with the oracle only, so `skip(clang)` would leave no reference.
@@ -1750,7 +1819,7 @@ mod tests {
             "//@ exit: 300\n",
             "//@ strict-diags: yes\n",
             "//@ skip:\n",
-            "//@ skip(gcc): x\n",
+            "//@ skip(icc): x\n",
             "//@ std(kiln): c++20\n",
             "//@ args: \"unterminated\n",
         ));
@@ -1765,7 +1834,7 @@ mod tests {
         assert!(e[7].contains("0..=255"));
         assert!(e[8].contains("takes no value"));
         assert!(e[9].contains("requires a reason"));
-        assert!(e[10].contains("unknown compiler `gcc`"));
+        assert!(e[10].contains("unknown compiler `icc` (kiln|clang|gcc)"));
         assert!(e[11].contains("does not take a compiler qualifier"));
         assert!(e[12].contains("unterminated"));
         // exit is also run-only, reported at finish.
