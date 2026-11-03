@@ -3060,7 +3060,7 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   `tests/conformance/ext.vector/ir-bool-from-int-vector.cpp` (`expect: ir`,
   `requires: clang>=22`).
 
-## 7x. Landed (WP-460): callee-destroyed arguments (`[[clang::trivial_abi]]`)
+## 7ac. Landed (WP-460): callee-destroyed arguments (`[[clang::trivial_abi]]`)
 A by-value parameter of a class the callee destroys
 (`kiln_abi::call::is_destroyed_in_callee`, spec/abi.md §8.25: passed in
 registers yet with a non-trivial destructor, which only `trivial_abi`

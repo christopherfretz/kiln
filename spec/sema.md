@@ -2122,7 +2122,7 @@ and returns the scope it names:
       destructor of each by-value parameter the callee destroys
       (`kiln_abi::call::is_destroyed_in_callee`) is referenced, so an
       implicit one is defined. ABI and codegen: spec/abi.md §8.25,
-      spec/codegen.md §7x.
+      spec/codegen.md §7ac.
     - `__builtin_is_cpp_trivially_relocatable` is not implied (clang 22
       answers false for a class with user-provided copy/move members);
       `__is_trivially_relocatable` follows `can_pass_in_registers` as in

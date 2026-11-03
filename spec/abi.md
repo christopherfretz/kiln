@@ -1314,7 +1314,7 @@ deviations now match.
 - *Destroyed in callee* (`is_destroyed_in_callee`, clang
   `isParamDestroyedInCallee` under Itanium): a class passed in
   registers whose destructor is not trivial. Codegen: spec/codegen.md
-  §7x.
+  §7ac.
 - Tests: `tests/codegen/trivial_abi_subobjects.cpp` (signatures of
   dropped/propagated cases, both oracles, both targets),
   `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`
