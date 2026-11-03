@@ -49,7 +49,13 @@ template instantiations ([temp.spec], [temp.expl.spec], [temp.explicit]):
   non-type argument only when its default is a non-value-dependent
   integral constant expression of the same value, clang's
   `isSubstitutedTemplateArgument`, so `= N` and `= Max<L>::value` keep
-  it; WP-297); a template template argument prints its (qualified) name, an
+  it; WP-297; an omitted type argument is always dropped, a written one
+  only when clang's structural comparison finds it equal to the
+  substituted default: never through an array or function declarator in
+  the default, a reference collapsed through a type parameter, or
+  cv-qualifiers added to a reference argument, so `Y<int &&, int &>` for
+  `R = T &` and `Z<int &, int &>` for `R = const T` keep it; WP-437); a
+  template template argument prints its (qualified) name, an
   enumeration argument its enumerator or, naming none, its value
   (`G<K::b>`, `G<7>`). A member of a partial specialization is named by
   its canonical arguments (`X<type-parameter-0-0 *, true>::C`), with the
@@ -718,13 +724,27 @@ contract:
   argument's enumerator), from the side channel's `TemplateArgument`
   lines of the specialization; pack elements print one by one the same
   way (an empty pack prints nothing), and an argument of a deduced
-  (`auto`) parameter prints as the side channel spells it, except that a
-  value with an escape (`'\xc8'`) is an error. A default argument
+  (`auto`) parameter prints exactly as the side channel spells it
+  (`(signed char)'\xfd'`, `U'\U0001f600'`). A character-typed argument
+  of a declared parameter (`char`, `signed char`, `unsigned char`,
+  `char8_t`, `char16_t`, `char32_t`, `wchar_t`) prints as clang's
+  `CharacterLiteral::print` from the JSON value truncated to the type's
+  width (spec/ast.md §9.3; WP-437). A default argument
   compared for trimming (clang drops trailing arguments equal to their
   defaults) is a non-dependent type, a literal, an earlier type
   parameter of the same template, or such a parameter under pointer,
-  reference (collapsed) and cv declarators (`U = T *`, `U = const T &`;
-  array and function declarators are errors); a template template
+  reference (collapsed), cv, array and function declarators (`U = T *`,
+  `U = const T &`, `U = T (*)[4]`, `U = void (*)(T *, T[2])`), spelled as
+  clang nests declarators with function parameter types adjusted
+  (`void (*)(long *, long *)`, `char *const[3]`). Member pointers,
+  dependent template-ids (`U = W<T>`) and function types with an
+  exception specification, method qualifiers or a calling convention are
+  errors. Where the comparison depends on whether the argument was
+  written (above; the JSON does not say), each possible spelling of the
+  specialization is a candidate and the one among the `Dumping …:`
+  headers of clang's text dump filtered by the same string is used (one
+  more clang run, only then); none naming the declaration means it is not
+  dumped, several are an error. A template template
   parameter's default is equal when the side channel's declaration
   address of the default (under its `TemplateTemplateParmDecl`, counted
   only under a template-declaring parent) is the argument's. Any other

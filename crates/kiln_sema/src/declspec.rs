@@ -540,6 +540,9 @@ pub struct ParamInfo {
     /// The outermost `&`/`&&` of the declarator when the declared type
     /// is a reference (invalid otherwise; [`crate::Sema::ref_locs`]).
     pub ref_loc: Loc,
+    /// The innermost `*`/`[` of the declarator when it applies to the
+    /// decl-specifiers (invalid otherwise; [`crate::Sema::inner_chunk_locs`]).
+    pub chunk_loc: Loc,
     /// The parameter declaration created at its point of declaration
     /// ([basic.scope.pdecl]/1) by [`crate::Sema::act_on_prototype_param`],
     /// so that it is in scope in the rest of the declarator
