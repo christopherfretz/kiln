@@ -3280,10 +3280,30 @@ categories, compared with clang 22 and clang 19 on both targets).
   a dead block (x86-64 functions keep `align 2`). Before this a
   this-adjusting thunk dropped the variadic arguments. Above `-O0` the
   vtable's such thunk is `available_externally` when the vtable is; a
-  return-adjusting variadic thunk is a declaration (clang would clone
-  the method), and defining one is diagnosed
-  (`tests/codegen/variadic_thunk{,_o1,_o1_nopasses}.cpp`,
+  return-adjusting variadic thunk of a method defined elsewhere is a
+  declaration (`tests/codegen/variadic_thunk{,_o1,_o1_nopasses}.cpp`,
   `tests/conformance/class.virtual/variadic-thunk-run.cpp`).
+- **Return-adjusting variadic thunks** (WP-492) are clang's
+  `GenerateVarArgsThunk`, emitted after their method's definition
+  (`emit_thunks`): `gen_code_or_thunk` keeps the finished `Fir` of every
+  variadic virtual method (`Cg::vararg_bodies`), and the thunk is a copy
+  of it (`Fir::clone_body`, LLVM `CloneFunction`): moved to the end of
+  the module, the module's unique-name counter advanced once (the clone
+  is first named after the method), with the method's attributes,
+  `unnamed_addr`, `align`, personality and section, then the method's
+  linkage and a comdat of its own (`setThunkProperties`). The this
+  adjustment is inserted before the first `store` of the `this`
+  argument in the entry block, which then stores the adjusted pointer;
+  the first block in layout order ending in `ret` loses its `ret`, the
+  returned value takes `PerformReturnAdjustment` (a pointer null-checked
+  in blocks placed after the returning block, `Builder.CreateBr` keeping
+  each insertion point; a constant pointer's check folded as LLVM's
+  constant folder does: `null` is null, a global that is not
+  `extern_weak` or an `inbounds` GEP of one is not) and a new `ret`
+  returns it. A body that already made a block for a `blockaddress`, or
+  a method never defined here, is diagnosed instead
+  (`tests/codegen/variadic_thunk_ret{,_o1}.cpp`,
+  `tests/conformance/class.virtual/variadic-covariant-thunk-run.cpp`).
 - **`isLibFunction`** is builtin attribute bit `LIB_FUNCTION` (128,
   clang's `F`), set on the 406 `__builtin_` rows clang 19 and 22 treat as
   library functions (found by compiling each labelled `extern template`
@@ -3302,7 +3322,9 @@ categories, compared with clang 22 and clang 19 on both targets).
   `insert_after` gets no access group (clang's `new X(..., InsertPt)`
   also bypasses `InsertHelper`, but not every kiln insert mirrors one);
   the clang 19 distinct `followup_inner`; `"; No predecessors!"`
-  comments; vtable hiding (`isVTableHidden`); labelled structors of a
+  comments; vtable hiding (`isVTableHidden`: it reads the visibility of
+  the RTTI and of undefined methods, and kiln has no visibility model);
+  labelled structors of a
   class with virtual bases (clang emits a VTT call to a one-argument
   definition) and the dead D0 block clang appends to a labelled virtual
   destructor; local classes and instantiations in the incomplete-class

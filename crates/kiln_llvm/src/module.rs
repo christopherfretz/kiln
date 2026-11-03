@@ -385,6 +385,13 @@ impl Module {
 
     // ---- global values --------------------------------------------------
 
+    /// Advances the unique-suffix counter as naming a new global `name`
+    /// would (LLVM `ValueSymbolTable::makeUniqueName` for a value that is
+    /// renamed right after, as `CloneFunction` + `takeName`).
+    pub fn consume_unique_name(&mut self, name: &str) {
+        let _ = self.unique_global_name(name);
+    }
+
     fn unique_global_name(&mut self, name: &str) -> Box<str> {
         if name.is_empty() || !self.gnames.contains_key(name) {
             return name.into();

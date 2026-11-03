@@ -170,6 +170,10 @@ pub(crate) struct Cg<'a> {
     pub rtti_globals: FxHashMap<String, GlobalId>,
     /// Bodies using placeholders, lowered once the module is complete.
     pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
+    /// The finished body of each variadic virtual method defined so far
+    /// (and whether it uses placeholders), cloned into its
+    /// return-adjusting thunks (clang `GenerateVarArgsThunk`).
+    pub vararg_bodies: FxHashMap<FuncId, (crate::fir::Fir, bool)>,
     /// Warnings codegen reports itself (clang's `CGM.getDiags()`, e.g.
     /// `-Watomic-alignment`), in emission order.
     pub diags: Vec<kiln_diag::Diag>,
@@ -245,6 +249,7 @@ impl<'a> Cg<'a> {
             vt_emitted: FxHashSet::default(),
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
+            vararg_bodies: FxHashMap::default(),
             diags: Vec::new(),
             f: Fx::empty(),
             gi: crate::global_init::GlobalInits::default(),

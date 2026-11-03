@@ -773,20 +773,17 @@ impl Cg<'_> {
                     }
                     _ => None,
                 };
-                if !self.opts.optimize() {
-                    x
-                } else {
+                if self.opts.optimize() {
                     let ty = self.f.fir.ty(&self.m, x);
-                    match prob {
-                        Some(p) => {
-                            let f = kiln_llvm::intrinsics::expect_with_probability(&mut self.m, ty);
-                            self.intrinsic_call(f, vec![x, ev, p])
-                        }
-                        None => {
-                            let f = kiln_llvm::intrinsics::expect(&mut self.m, ty);
-                            self.intrinsic_call(f, vec![x, ev])
-                        }
+                    if let Some(p) = prob {
+                        let f = kiln_llvm::intrinsics::expect_with_probability(&mut self.m, ty);
+                        self.intrinsic_call(f, vec![x, ev, p])
+                    } else {
+                        let f = kiln_llvm::intrinsics::expect(&mut self.m, ty);
+                        self.intrinsic_call(f, vec![x, ev])
                     }
+                } else {
+                    x
                 }
             }
             // WP-282: `llvm.powi.T.i32` (clang `Builtin::BI__builtin_powi`).
