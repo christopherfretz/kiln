@@ -2382,6 +2382,23 @@ impl Compiler<'_> {
     }
 
     fn decl_one(&mut self, d: DeclId) {
+        // A constexpr local's initializer is a constant expression of its
+        // own ([expr.const]/22): not part of a consteval block's plainly
+        // constant-evaluated evaluation (spec/consteval-blocks.md §3).
+        let ast = self.b.ast();
+        let constexpr_local = ast.decls.get(d).kind() == DeclKind::Var
+            && is_local_var(ast, d)
+            && ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
+        if !constexpr_local {
+            return self.decl_one_var(d);
+        }
+        let saved = self.reg();
+        self.emit(Op::IsConstEval, 4, &[saved]);
+        self.decl_one_var(d);
+        self.emit(Op::IsConstEval, 8, &[saved]);
+    }
+
+    fn decl_one_var(&mut self, d: DeclId) {
         let ast = self.b.ast();
         let n = *ast.decls.get(d);
         if n.kind() != DeclKind::Var {
