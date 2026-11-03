@@ -2964,7 +2964,7 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   template instantiated twice), `tests/conformance/stmt.goto/computed-
   goto-dispatch-run.cpp` (`expect: run`).
 
-## 7u. Landed (WP-454): braced expansion elements, constexpr structured bindings
+## 7x. Landed (WP-454): braced expansion elements, constexpr structured bindings
 
 No lowering changed; the new forms reach codegen as existing AST.
 
