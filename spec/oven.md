@@ -298,6 +298,17 @@ the evaluator's flattened type table.
   On failure the characters read before the failing one are returned
   with the failure and its notes (clang prints them). spec/sema.md §4.6
   renders the text.
+- `Oven::evaluate_with_params(bridge, cond, binds, at) ->
+  Option<ConstValueId>` (WP-460, clang `Expr::EvaluateWithSubstitution`,
+  for the `enable_if` attribute, spec/sema.md §4.5): evaluates `cond`
+  (`None`: only the bindings, giving `true`) in a fresh function whose
+  locals are the parameters `binds` names, each initialized from its
+  argument expression (a reference parameter binds to it, an object
+  parameter is a local variable copy-initialized from it). A parameter
+  not bound is not a constant expression when read. Manifestly
+  constant-evaluated, silent, not recorded, never cached; fails if the
+  evaluation leaks an allocation. `at` locates the evaluation for the
+  depth check.
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.
@@ -1203,7 +1214,11 @@ lower to the same two ops: `New` with aux `ARRAY | STD` and `ty = T`
   `ARRAY_AS_WRITTEN` says what was written); `operator_delete(e)` must be
   a replaceable global deallocation function for the delete to be
   constant ([expr.const]); `delete_passes(e)` (size, alignment) is
-  a codegen fact.
+  a codegen fact. A class's destroying `operator delete`
+  ([expr.delete]/10) is class-specific, so the delete is not constant
+  ("call to class-specific 'operator delete'" at the `delete`), directly
+  or through a virtual destructor, as clang 22 and 19 do (WP-457;
+  `tests/conformance/expr.const/constexpr-destroying-delete.cpp`).
 
 **Checks**, with clang 19's wording, each verified against the oracle
 (WP-061b part 2; `tests/conformance/expr.new/constexpr-*.cpp`,
@@ -1610,6 +1625,15 @@ through a plain pointer has no union entry to consult): libc++ 22's list
 nodes destroy the value of their anonymous union, then the node (WP-446,
 `tests/conformance/class.union.anon/constexpr-destroy-member-then-object.cpp`).
 A class all of whose bytes are union bytes keeps the stricter check.
+
+An explicit destructor call written with a dependent destructor name
+(`t.~T()`, `u.t.~T()`, `p->Base<T>::~Base()`) is rebuilt at
+instantiation (spec/sema-templates.md §3.4) into the same
+`CXXMemberCallExpr` / `CXXPseudoDestructorExpr` a non-dependent call
+gives, so it ends the lifetime exactly as above: the scalar
+`T t{}; t.~T();` with `T = int` is "destroying object 't' whose lifetime
+has already ended" at scope exit, as clang does (WP-457;
+`tests/conformance/expr.prim.id.dtor/dependent-member-destructor-name*.cpp`).
 
 *Unconstructed bases (WP-390).* Sema leaves a direct non-virtual base
 out of a constructor's ctor-initializers only after diagnosing that it

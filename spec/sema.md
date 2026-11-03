@@ -369,7 +369,10 @@ residual` (docs/status/wp-184-oracle-switch.md).
   non-dependent `extern int g;` in it conflicts with an earlier `extern
   char g;`. A block-scope redeclaration whose type (or the earlier
   declaration's type) is dependent is checked only at instantiation
-  (clang's `MergeVarDeclTypes` for a local variable). Test:
+  (clang's `MergeVarDeclTypes` for a local variable). An instantiated
+  block-scope `extern` declaration keeps its function as its context but
+  names the namespace-scope entity, which the mangler resolves
+  (spec/abi.md §8.27, WP-462). Test:
   tests/conformance/basic.link/local-extern-template-pattern.cpp (WP-330).
 - **`classify_name`** gives the parser a name's category: type,
   namespace, value, or undeclared.
@@ -651,7 +654,8 @@ Redeclaration and linkage rules:
   redeclarations" (§4.7).
 - **GNU asm labels** (`act_on_asm_label`, clang's
   `ActOn{Function,Variable}Declarator` and `mergeDeclAttributes`): a
-  function (also a member function, WP-449) or variable declarator's
+  function (also a member function, WP-449, and a constructor,
+  destructor or conversion function, WP-462) or variable declarator's
   label becomes an `AsmLabel`
   attribute, first in the declaration's attribute list, and its
   `StringLitId` is recorded in the `asm_label` cold data of the entity's
@@ -1759,6 +1763,7 @@ and returns the scope it names:
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
   | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
   | INIT_PRIORITY | the checked priority (`u32`; the raw `ExprId` before `check_decl_attrs`) | — |
+  | ENABLE_IF | `ExprId` of the condition (contextually converted to `bool` unless type-dependent) | `ExprId` of the string-literal message |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -2039,6 +2044,103 @@ and returns the scope it names:
     Not yet: parameters (`act_on_param_declarator` only checks
     `alignas`) and namespace-definitions are not run through the table.
     Test: `tests/conformance/dcl.attr.grammar/attribute-subjects.cpp`.
+  - **`enable_if`** (clang extension, `__attribute__((enable_if(cond,
+    "message")))` only; WP-460, `enable_if.rs`; clang AttrDocs
+    "enable_if", `Sema::CheckEnableIf`):
+    - Form: exactly two arguments. The parser parses them with the
+      function's parameters in scope (as a trailing requires-clause), so
+      the condition can name them. The condition is contextually
+      converted to `bool` unless type-dependent; the message must be a
+      string literal ("expected string literal as argument of 'enable_if'
+      attribute"); another argument count is "requires exactly 2 arguments".
+    - Subject: functions. On anything else, "'enable_if' attribute only
+      applies to functions" (warning, `-Wignored-attributes`) and the
+      attribute is dropped.
+    - Identity: a function declaration whose conditions are not those of
+      an earlier declaration, in order and by equivalence
+      ([temp.over.link]/5 profiles), declares an overload, not a
+      redeclaration (clang `IsOverload`; `NewFn::enable_if`). So every
+      declaration of one function has the same conditions, and a
+      declaration's own attributes are the function's.
+    - Viability: after a candidate is otherwise viable
+      (`add_candidate`), each argument is converted to its parameter's
+      type with diagnostics captured (a failing one gives its parameter
+      no value), an omitted argument is its default argument, and each
+      condition in declaration order is evaluated by
+      `Oven::evaluate_with_params` (spec/oven.md) with those values for
+      the parameters. A condition that is value-dependent, not a
+      constant expression, or false makes the candidate not viable;
+      its note is "candidate disabled: <message>" at the function
+      (`<no message provided>` for an empty one). If evaluating with all
+      values fails, the arguments that are not constant expressions on
+      their own are dropped and the condition is evaluated again, so
+      `__builtin_constant_p(n)` of a non-constant argument is false
+      rather than not constant (clang `EvaluateWithSubstitution`).
+    - A call without overload resolution (a member call, a call through
+      a name of one function) is checked on its converted arguments in
+      `convert_call_args`: "no matching function for call to 'f'" at the
+      callee, or "no matching member function for call to 'm'" at the
+      member name, with the same note.
+    - Ranking ([over.match.best], last; clang `compareEnableIfAttrs`): a
+      candidate with conditions beats one without; between two with
+      conditions, compared in order, the one whose list properly extends
+      the other's (equivalent prefix) wins; otherwise neither is better
+      (an ambiguity).
+    - Templates: the condition is substituted with the pattern's
+      parameters naming the specialization's (`Substituter::
+      enable_if_cond`, from `copy_attrs`), after deduction; a failed
+      substitution drops the attribute.
+    - Not done: `diagnose_if`, the never-constant check
+      (`err_attr_cond_never_constant_expr`), the object argument of an
+      explicit object member function (it takes no value).
+    - Tests: `tests/conformance/dcl.attr/enable-if-viability.cpp`,
+      `enable-if-ranking.cpp`.
+  - **The `trivial_abi` attribute** (clang extension, `[[clang::trivial_abi]]`
+    / `__attribute__((trivial_abi))`; WP-460, `trivial_abi.rs`; clang
+    AttrDocs "trivial_abi", `Sema::checkIllFormedTrivialABIStruct`):
+    - Subject: classes and unions; elsewhere "'trivial_abi' attribute only
+      applies to classes" (`-Wignored-attributes`). It takes no arguments
+      ("'trivial_abi' attribute takes no arguments", error; the parser
+      keeps the argument list so the check can fire).
+    - Dropped at the class's `}`, with "'trivial_abi' cannot be applied to
+      'X'" (`-Wignored-attributes`) and a note "'trivial_abi' is disallowed
+      on 'X' because …" naming the first reason in clang's order: it is
+      polymorphic; it has a base that cannot be passed in registers or a
+      virtual base ("has a base of a non-trivial class type" / "has a
+      virtual base"); it has a field whose class cannot be ("has a field
+      of a non-trivial class type"); then, unless the class is trivially
+      relocatable (`cxx_relocatable_class`), "its copy constructors and
+      move constructors are all deleted". A template instantiation drops
+      it silently.
+    - In effect, the class's copy and move constructors and destructor are
+      trivial for the purposes of calls (`DefinitionBits::TRIVIAL_ABI`).
+      Otherwise a declared non-trivial, non-user-provided member is
+      trivial for calls when the corresponding members of every base and
+      non-reference field class are (clang `addedClassSubobject`), recorded
+      as `COPY_CTOR_FOR_CALL` / `MOVE_CTOR_FOR_CALL` / `DTOR_FOR_CALL`
+      (`trivial_abi_bits`, computed before the class's properties freeze).
+    - clang quirk, modelled: the implicit members clang declares eagerly at
+      `}` (`implicit_bits`: copy/move constructors needing overload
+      resolution or with inherited constructors, the destructor of a
+      dynamic class) are marked trivial for calls *before* the attribute
+      is dropped, so a class whose attribute is dropped for a virtual base
+      or a non-trivial subobject still passes in registers when its only
+      non-trivial members are those (`__can_pass_in_regs(H)` is true for
+      `struct [[clang::trivial_abi]] H : N {}` in clang 19 and 22).
+    - Callee-destroyed parameters (`mark_callee_destroyed_param`, clang
+      `CheckParmsForFunctionDef`): at a function definition, the
+      destructor of each by-value parameter the callee destroys
+      (`kiln_abi::call::is_destroyed_in_callee`) is referenced, so an
+      implicit one is defined. ABI and codegen: spec/abi.md §8.26,
+      spec/codegen.md §7ac.
+    - `__builtin_is_cpp_trivially_relocatable` is not implied (clang 22
+      answers false for a class with user-provided copy/move members);
+      `__is_trivially_relocatable` follows `can_pass_in_registers` as in
+      clang. Not done: clang 22's deprecation warning on
+      `__is_trivially_relocatable`.
+    - Tests: `tests/conformance/dcl.attr/trivial-abi-attribute.cpp`,
+      `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`,
+      `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`.
   - **Type-position attributes** ([dcl.spec.general]/1, [dcl.ptr]/1,
     [dcl.array]/1, [dcl.fct]/1; `act_on_type_position_attrs`, clang
     `err_attribute_not_type_attr`; WP-312, WP-324). An
@@ -4121,8 +4223,33 @@ and aggregate element types.
   deallocation never takes one). Without a virtual destructor the operand
   is converted to the first parameter's type. Codegen calls it with an
   empty tag temporary and runs no destructor; the destructor is still
-  selected (and access-checked) as clang does. A destroying delete through
-  a virtual destructor is a codegen "not supported yet" error.
+  selected (and access-checked) as clang does. Through a virtual
+  destructor the deallocation is the deleting destructor's (WP-457):
+  `check_destructor_delete` selects the class's deallocation function at
+  the destructor (`dtor_dealloc_fn`) and, for a destroying one, stores
+  `this` converted to its first parameter in `Ast::dtor_delete_this`
+  for codegen (spec/codegen.md §7u).
+- **Access to class allocation functions** ([class.access]/4,
+  [expr.new]/28, [class.dtor]/7.3; WP-457): a class-specific `operator
+  new` / `operator delete` (usual or destroying) selected by a
+  new- or delete-expression is access-checked at the expression, naming
+  class the allocated class. A new-expression checks both its `operator
+  new` and its matching `operator delete` (whether or not the
+  initialization can throw, as clang's `FindAllocationFunctions`; not
+  under `-fno-exceptions`), and an inaccessible `operator new` does not
+  stop the matching delete from being looked up and checked — two errors
+  at one location (`check_member_access_distinct`, which the
+  diagnostic engine's dedup would otherwise merge). A user-provided
+  virtual destructor checks its `operator delete` at the destructor; an
+  implicit or defaulted virtual destructor whose `operator delete` is
+  missing, ambiguous or inaccessible from the class is defined as
+  deleted (`virtual_dtor_delete_usable`, deletion reason
+  `note_deleted_dtor_no_operator_delete` "virtual destructor requires an
+  unambiguous, accessible 'operator delete'" at the class), so an
+  override of a non-deleted base destructor is the usual deleted-override
+  error with that note too (`report_override_mismatch`). Tests:
+  `tests/conformance/expr.new/class-operator-delete-access*.cpp`,
+  `tests/conformance/class.dtor/virtual-operator-delete-access.cpp`.
 - The element class's destructor ([expr.delete]/6, and for `new T[n]`
   [expr.new]/27) is selected (`mark_element_dtor_referenced`, skipped
   for an invalid or dependent class): a deleted one (such as a union's

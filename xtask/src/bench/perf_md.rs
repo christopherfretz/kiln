@@ -176,15 +176,49 @@ pub fn parse(text: &str, t: &str, o: &str) -> Result<Vec<Row>, String> {
 /// everything after it are kept verbatim by every recording.
 pub const KEPT_HEADING: &str = "## Measured by hand";
 
-/// The hand-written section of an existing page ([`KEPT_HEADING`] to the
-/// end), if it has one.
-pub fn kept_section(text: &str) -> Option<&str> {
-    let at = if text.starts_with(KEPT_HEADING) {
-        0
-    } else {
-        text.find(&format!("\n{KEPT_HEADING}"))? + 1
-    };
-    Some(&text[at..])
+/// An existing page cut into its generated main part (the ratio table), the
+/// libc++ slice's section ([`super::slice::HEADING`] up to the hand-written
+/// section) and the hand-written section ([`KEPT_HEADING`] to the end).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Sections<'a> {
+    pub main: &'a str,
+    pub slice: Option<&'a str>,
+    pub kept: Option<&'a str>,
+}
+
+/// Where a line starting with `heading` begins in `text`.
+fn heading_at(text: &str, heading: &str) -> Option<usize> {
+    if text.starts_with(heading) {
+        return Some(0);
+    }
+    text.find(&format!("\n{heading}")).map(|at| at + 1)
+}
+
+/// Cuts a page into its [`Sections`].
+pub fn split(text: &str) -> Sections<'_> {
+    let kept_at = heading_at(text, KEPT_HEADING);
+    let before = &text[..kept_at.unwrap_or(text.len())];
+    let slice_at = heading_at(before, super::slice::HEADING);
+    Sections {
+        main: &before[..slice_at.unwrap_or(before.len())],
+        slice: slice_at.map(|at| &before[at..]),
+        kept: kept_at.map(|at| &text[at..]),
+    }
+}
+
+/// The page from its parts, one blank line between them.
+pub fn assemble(main: &str, slice: Option<&str>, kept: Option<&str>) -> String {
+    let mut parts: Vec<&str> = vec![main.trim_end()];
+    parts.extend(slice.map(str::trim_end));
+    parts.retain(|p| !p.is_empty());
+    let mut s = parts.iter().map(|p| format!("{p}\n")).collect::<Vec<_>>().join("\n");
+    if let Some(k) = kept {
+        if !s.is_empty() {
+            s.push('\n');
+        }
+        s.push_str(k);
+    }
+    s
 }
 
 /// The results-file timestamp of a legacy page's run, from
@@ -483,12 +517,36 @@ mod tests {
     #[test]
     fn keeps_the_hand_written_section() {
         let page = render(&[], &cx("s"));
-        assert_eq!(kept_section(&page), None);
+        assert_eq!(split(&page), Sections { main: &page, slice: None, kept: None });
         let hand = format!("{KEPT_HEADING}\n\n| a | b |\n");
         let with = format!("{page}\n{hand}");
-        assert_eq!(kept_section(&with), Some(hand.as_str()));
+        assert_eq!(split(&with).kept, Some(hand.as_str()));
         // The rows above it still parse.
         assert_eq!(parse(&with, "kiln", "clang").unwrap(), []);
+        assert_eq!(assemble(split(&with).main, None, split(&with).kept), with);
+    }
+
+    // The libc++ slice's section sits between the table and the
+    // hand-written section; each part comes back verbatim, and a page
+    // without the slice gains it in that place.
+    #[test]
+    fn splits_out_the_slice_section() {
+        use super::super::slice::HEADING;
+        let page = render(&[], &cx("s"));
+        let section = format!("{HEADING}\n\n| Test | a |\n|---|--:|\n| `t` | 1 |\n");
+        let hand = format!("{KEPT_HEADING}\n\nby hand\n");
+        let full = format!("{page}\n{section}\n{hand}");
+        let parts = split(&full);
+        assert_eq!(parts.main.trim_end(), page.trim_end());
+        assert_eq!(parts.slice.map(str::trim_end), Some(section.trim_end()));
+        assert_eq!(parts.kept, Some(hand.as_str()));
+        assert_eq!(assemble(parts.main, parts.slice, parts.kept), full);
+        // The main table still parses with the section after it.
+        assert_eq!(parse(parts.main, "kiln", "clang").unwrap(), []);
+        let without = format!("{page}\n{hand}");
+        let p = split(&without);
+        assert_eq!(assemble(p.main, Some(&section), p.kept), full);
+        assert_eq!(assemble(&page, Some(&section), None), format!("{page}\n{section}"));
     }
 
     // The committed page can always be merged into, so the next filtered

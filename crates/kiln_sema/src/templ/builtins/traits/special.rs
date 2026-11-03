@@ -271,9 +271,10 @@ impl Sema<'_, '_> {
 
     /// clang's `canPassInRegisters` (SemaDeclCXX.cpp, the Itanium rule of
     /// [class.temporary]/3): each copy constructor, move constructor and
-    /// destructor of class `r` is trivial or deleted, and at least one
-    /// copy or move constructor is not deleted. The implicit members not
-    /// declared yet are judged from the class bits.
+    /// destructor of class `r` is trivial for the purposes of calls
+    /// (trivial, or made so by `[[clang::trivial_abi]]`) or deleted, and
+    /// at least one copy or move constructor is not deleted. The implicit
+    /// members not declared yet are judged from the class bits.
     pub(crate) fn can_pass_in_registers(&self, r: DeclId) -> bool {
         use SpecialKind as K;
         let d = self.class_def(r);
@@ -283,20 +284,19 @@ impl Sema<'_, '_> {
         }
         let bits = self.bits_of(d);
         let mut has_copy_or_move = false;
-        for (k, bit) in [
-            (K::CopyCtor, DefinitionBits::TRIVIAL_COPY_CTOR),
-            (K::MoveCtor, DefinitionBits::TRIVIAL_MOVE_CTOR),
-        ] {
+        let for_call = |k: K| {
+            bits.contains(k.trivial_bit())
+                || crate::trivial_abi::for_call_bit(k).is_some_and(|b| bits.contains(b))
+        };
+        for k in [K::CopyCtor, K::MoveCtor] {
             if self.needs_implicit(d, k) && !self.known_deleted(d, k) {
-                if !bits.contains(bit) {
+                if !for_call(k) {
                     return false;
                 }
                 has_copy_or_move = true;
             }
         }
-        if self.needs_implicit(d, K::Dtor)
-            && !self.known_deleted(d, K::Dtor)
-            && !bits.contains(DefinitionBits::TRIVIAL_DTOR)
+        if self.needs_implicit(d, K::Dtor) && !self.known_deleted(d, K::Dtor) && !for_call(K::Dtor)
         {
             return false;
         }
@@ -307,17 +307,22 @@ impl Sema<'_, '_> {
             {
                 continue;
             }
-            if kind == DeclKind::CXXConstructor {
-                if !self.is_member_of_kind(m, K::CopyCtor)
-                    && !self.is_member_of_kind(m, K::MoveCtor)
-                {
+            let k = if kind == DeclKind::CXXConstructor {
+                let k = if self.is_member_of_kind(m, K::CopyCtor) {
+                    K::CopyCtor
+                } else if self.is_member_of_kind(m, K::MoveCtor) {
+                    K::MoveCtor
+                } else {
                     continue;
-                }
+                };
                 has_copy_or_move = true;
-            } else if self.special_kind_of(m) != Some(K::Dtor) {
+                k
+            } else if self.special_kind_of(m) == Some(K::Dtor) {
+                K::Dtor
+            } else {
                 continue;
-            }
-            if !self.fn_spec(m).is_trivial() {
+            };
+            if !self.fn_spec(m).is_trivial() && !self.member_trivial_for_call(d, m, k) {
                 return false;
             }
         }

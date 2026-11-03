@@ -120,7 +120,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn cxx_relocatable_class(&mut self, r: DeclId, depth: usize) -> bool {
+    pub(crate) fn cxx_relocatable_class(&mut self, r: DeclId, depth: usize) -> bool {
         use SpecialKind as K;
         if self.is_dependent_type(self.class_type(r)) {
             return false;

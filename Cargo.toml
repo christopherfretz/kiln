@@ -46,6 +46,12 @@ cast_possible_truncation = "allow"
 cast_possible_wrap = "allow"
 cast_sign_loss = "allow"
 
+# Thin LTO with 4 codegen units (WP-326, spec/libcxx.md "Build profiles"):
+# measured against `harness`, fat LTO and one codegen unit on the
+# libcxx-slice and bench/frontend, it is as fast as either alternative
+# (within 2%) and 7-9% faster than `harness`, for a 51 s clean build where
+# fat LTO takes 119 s and one unit 71 s. `panic = "abort"` is not an option:
+# the driver joins the compiler thread and reports a panic as exit 70.
 [profile.release]
 debug = 1
 lto = "thin"
@@ -70,7 +76,8 @@ inherits = "release"
 
 # What `cargo xtask libcxx` / `libstdcxx` build by default (WP-319,
 # spec/libcxx.md "Build profiles"): optimized like `release`, but without LTO
-# and with more codegen units so a clean build stays cheap, line tables so a
+# and with more codegen units so a clean build stays cheap (and runs ~7%
+# slower than `release`; WP-326), line tables so a
 # panic backtrace stays readable, and incremental rebuilds. Debug assertions
 # and overflow checks are off, as in `release`: the suite measures the
 # compiler users run.

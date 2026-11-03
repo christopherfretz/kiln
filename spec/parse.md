@@ -1147,7 +1147,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `[nns] type-name :: ~ type-name`, the last `type-name ::` is not a
     nested-name-specifier but the pseudo-destructor's first type-name
     (clang's `MayBePseudoDestructor`; `parse_pseudo_destructor`). Both
-    go to `Sema::act_on_member_destructor_q` (WP-223).
+    go to `Sema::act_on_member_destructor_q` (WP-223). `~decltype(e)`
+    after `.`/`->` ([expr.prim.id.dtor]/1, a computed-type-specifier) is
+    parsed with `parse_decltype_specifier` and passed to
+    `rebuild_member_destructor` (`~decltype(auto)` is the
+    `decltype(auto)` error; WP-457).
     A member name after `.`/`->` and an optional nested-name-specifier
     may be an operator-function-id or a conversion-function-id
     (`a.A::operator==(b)`, `p->A::operator int()`; [expr.ref]/1,

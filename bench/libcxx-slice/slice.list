@@ -1,0 +1,55 @@
+# The libc++ slice (spec/bench.md "The libcxx-slice entry"): heavy libc++
+# tests, paths relative to the llvmorg-22.1.8 libcxx/test checkout that
+# `cargo xtask libcxx` uses. Each is compiled at -fsyntax-only with the
+# flags the libc++ runner gives it. Selected only by naming this directory:
+#   cargo xtask bench --compare-with clang++-22 bench/libcxx-slice
+# Seeded from 48 sema-heavy libc++ 19 tests (WP-317); one was removed in 22:
+#   vector.cons/assign_copy.addressof.compile.pass.cpp -> assign_copy.pass.cpp
+std/containers/associative/map/map.cons/move_alloc.pass.cpp
+std/containers/associative/map/map.observers/value_comp.pass.cpp
+std/containers/associative/map/map.special/member_swap.pass.cpp
+std/containers/sequences/vector/vector.cons/assign_copy.pass.cpp
+std/containers/sequences/vector/vector.cons/op_equal_initializer_list.pass.cpp
+std/containers/sequences/vector/vector.modifiers/push_back_exception_safety.pass.cpp
+std/iterators/iterator.primitives/range.iter.ops/range.iter.ops.next/iterator_count_sentinel.pass.cpp
+std/iterators/iterator.requirements/alg.req.sortable/sortable.compile.pass.cpp
+std/iterators/iterator.requirements/iterator.concepts/iterator.concept.random.access/random_access_iterator.compile.pass.cpp
+std/iterators/predef.iterators/counted.iterator/iter_move.pass.cpp
+std/iterators/predef.iterators/insert.iterators/front.insert.iter.ops/front.insert.iter.op_astrk/test.pass.cpp
+std/iterators/predef.iterators/move.iterators/move.iter.ops/move.iter.nonmember/iter_swap.pass.cpp
+std/iterators/predef.iterators/move.iterators/move.sentinel/ctad.compile.pass.cpp
+std/iterators/predef.iterators/reverse.iterators/sized_sentinel.compile.pass.cpp
+std/iterators/stream.iterators/ostream.iterator/ostream.iterator.cons.des/copy.pass.cpp
+std/numerics/bit/byteswap.pass.cpp
+std/ranges/range.adaptors/range.as.rvalue/enable_borrowed_range.compile.pass.cpp
+std/ranges/range.adaptors/range.drop.while/begin.pass.cpp
+std/ranges/range.adaptors/range.elements/iterator/ctor.base.pass.cpp
+std/ranges/range.adaptors/range.filter/iterator/ctor.default.pass.cpp
+std/ranges/range.adaptors/range.join/range.join.iterator/iter.swap.pass.cpp
+std/ranges/range.adaptors/range.lazy.split/range.lazy.split.outer.value/end.pass.cpp
+std/ranges/range.adaptors/range.split/general.pass.cpp
+std/ranges/range.adaptors/range.take/ctor.default.pass.cpp
+std/ranges/range.adaptors/range.zip/ctad.compile.pass.cpp
+std/ranges/range.factories/range.iota.view/ctor.value.bound.pass.cpp
+std/ranges/range.factories/range.istream.view/iterator/ctor.pass.cpp
+std/ranges/range.factories/range.single.view/ctor.default.pass.cpp
+std/ranges/range.req/range.view/view_base.compile.pass.cpp
+std/strings/basic.string/string.capacity/resize_size.pass.cpp
+std/strings/basic.string/string.cons/size_char_alloc.pass.cpp
+std/strings/basic.string/string.modifiers/string_append/push_back.pass.cpp
+std/strings/basic.string/string.modifiers/string_insert/size_size_char.pass.cpp
+std/strings/basic.string/string.nonmembers/string.io/stream_extract.pass.cpp
+std/strings/basic.string/string.nonmembers/string_opgt=/string_view_string.pass.cpp
+std/strings/basic.string/string.ops/string_find.first.of/pointer_size_size.pass.cpp
+std/strings/basic.string/types.pass.cpp
+std/time/time.cal/time.cal.md/types.pass.cpp
+std/time/time.cal/time.cal.mwdlast/time.cal.mwdlast.nonmembers/ostream.pass.cpp
+std/time/time.cal/time.cal.weekday/time.cal.weekday.members/iso_encoding.pass.cpp
+std/time/time.cal/time.cal.ym/time.cal.ym.nonmembers/comparisons.pass.cpp
+std/time/time.cal/time.cal.ymdlast/time.cal.ymdlast.members/plus_minus_equal_year.pass.cpp
+std/time/time.cal/time.cal.ymwdlast/time.cal.ymwdlast.members/plus_minus_equal_year.pass.cpp
+std/time/time.duration/default_ratio.pass.cpp
+std/time/time.duration/time.duration.nonmember/op_divide_rep.pass.cpp
+std/time/time.point/time.point.arithmetic/op_+=.pass.cpp
+std/time/time.syn/formatter.weekday_index.pass.cpp
+std/time/time.zone/time.zone.exception/time.zone.exception.ambig/types.pass.cpp
