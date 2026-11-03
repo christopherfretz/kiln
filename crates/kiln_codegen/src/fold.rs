@@ -230,9 +230,16 @@ impl Collect<'_> {
                 DeclKind::Var if !is_local(ast, d) => self.var(d, true),
                 // A default member initializer's immediate invocations
                 // are left unevaluated by sema, like a default argument's.
+                // Its other candidates are folded once, shared by every
+                // constructor that uses it (clang folds `int m = c;` with
+                // `static const int c = 5;` to `store i32 5`).
                 DeclKind::Field => {
                     if let Some(init) = ast.decls.field(d).and_then(|f| f.init) {
                         self.immediates(init, None, 0);
+                        let n = ast.exprs.get(init);
+                        if !n.is_type_dependent() && !n.is_value_dependent() {
+                            self.expr(init);
+                        }
                     }
                 }
                 _ => {}

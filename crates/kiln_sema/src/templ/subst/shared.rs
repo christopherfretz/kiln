@@ -16,6 +16,7 @@
 //! entered.
 
 use kiln_ast::ExprId;
+use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{ExprKind, NonOdrUse};
 
 use crate::Sema;
@@ -56,6 +57,15 @@ impl Sema<'_, '_> {
                 }
                 ExprKind::DeclRefExpr | ExprKind::MemberExpr => {
                     let d = self.ast.exprs.decl(x);
+                    // clang `TransformDeclRefExpr` marks a kept node
+                    // referenced, which counts it for
+                    // `-Wunused-but-set-variable` against the discarded
+                    // assignments the instantiated statements subtract.
+                    if kind == ExprKind::DeclRefExpr
+                        && matches!(self.ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
+                    {
+                        self.count_var_ref(d);
+                    }
                     if self.ast.exprs.non_odr_use(x) == NonOdrUse::None
                         && self.ast.decls.function(d).is_some()
                     {

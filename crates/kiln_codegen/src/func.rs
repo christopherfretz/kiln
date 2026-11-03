@@ -127,6 +127,11 @@ pub(crate) struct Fx {
     /// address (clang `CXXABIThisValue`, which `this` no longer is once
     /// `this` is captured) and the lambda.
     pub closure: Option<(V, kiln_ast::LambdaId)>,
+    /// In a lambda's call operator with an explicit object parameter:
+    /// that parameter. The closure object is re-derived from it at each
+    /// capture access (clang `EmitLValueForLambdaField`), so the `V` of
+    /// [`Fx::closure`] is unused.
+    pub closure_obj: Option<DeclId>,
     /// The constructor/destructor variant being emitted.
     pub structor: Option<mangle::Structor>,
     /// The VTT parameter, loaded in the prolog (clang
@@ -222,6 +227,7 @@ impl Fx {
             this: None,
             this_class: None,
             closure: None,
+            closure_obj: None,
             structor: None,
             vtt: None,
             call_vtt: None,
@@ -489,8 +495,8 @@ impl Cg<'_> {
             && let Some(&obj) = param_decls.first()
             && self.is_explicit_object_method(d)
         {
-            let closure = self.explicit_object_closure(l, obj)?;
-            self.lambda_prolog(l, closure)?;
+            self.f.closure_obj = Some(obj);
+            self.lambda_prolog(l, self.f.locals[&obj].v)?;
         }
         if let Some(a) = vtt_addr {
             self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));
