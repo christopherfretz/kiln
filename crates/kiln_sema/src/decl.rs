@@ -9685,14 +9685,25 @@ impl Sema<'_, '_> {
                 return;
             };
             // clang `checkParamIsIntegerType`: a dependent parameter is
-            // not an integer either.
-            if !self.ast.types.is_integral(p) {
+            // not an integer either. alloc_align also takes
+            // `std::align_val_t` (`AddAllocAlignAttr`, `Type::isAlignValT`;
+            // libstdc++ 16 `operator new` overloads); alloc_size does not.
+            if !self.ast.types.is_integral(p) && !(refs && self.is_align_val_t(p)) {
                 let at = self.ast.exprs.get(e).loc();
                 let msg = self.diag(DiagId::sema_attribute_param_integers_only, at).arg(name);
                 self.emit(msg);
                 return;
             }
         }
+    }
+
+    /// clang `Type::isAlignValT`: `q` is (sugar for) an enumeration
+    /// named `align_val_t` in namespace `std`.
+    fn is_align_val_t(&self, q: QualType) -> bool {
+        self.ast.types.as_enum(q).is_some_and(|d| {
+            self.ast.decls.get(d).name().as_ident() == Some(self.intern("align_val_t"))
+                && self.is_in_std_namespace(d)
+        })
     }
 
     /// GNU `format(archetype, F, A)` on function `d` (WP-186; clang
