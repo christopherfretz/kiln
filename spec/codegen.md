@@ -283,6 +283,10 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     nothrow, or the direct callee has a `NoThrow` attribute (a
     recognized C library function, spec/sema.md §5.4) or a `const` /
     `pure` attribute; the declaration and a definition get it too;
+    a callee expression that folds to a function (a constant
+    `int (&)(int)` naming one) is that function for these checks and
+    for `TryMarkNoThrow`, as clang's `CalleePtr` (WP-432,
+    `fn_ref_callee_nounwind.cpp`);
   - a written or implicit `const` / `pure` attribute (not on a builtin,
     whose row decides) adds `willreturn memory(none)` /
     `willreturn memory(read)` to the declaration, the definition and
@@ -301,9 +305,19 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     `cold` / `hot` to the declaration, the definition and direct call
     sites, member calls included (`builtins::cold_hot_attrs`; WP-172,
     `tests/codegen/cold_hot.cpp`; glibc's `abort` is `__COLD`). C library
-    functions recognized by name stay ordinary calls: clang's lowering of
-    a `BuiltinAttr` library call (`memcpy` to `llvm.memcpy`, a folded
-    `strlen("abc")`) is not done (a follow-up);
+    functions recognized by name (spec/sema.md §5.4) stay ordinary calls,
+    except the ones clang's `EmitBuiltinExpr` lowers through their
+    library builtin id: `memcpy` / `memmove` / `memset`, `abs` / `labs` /
+    `llabs`, and `fabs`, `ceil`, `floor`, `trunc`, `round`, `rint`,
+    `nearbyint`, `copysign`, `fmax`, `fmin`, `fma` with their `f` / `l`
+    forms (clang's `GenerateIntrinsics` set; `sqrt` stays a call under
+    `-fmath-errno`; WP-419's `roundeven` / `fmaximum_num` / `fminimum_num`
+    below) are emitted as their `__builtin_` twin
+    (`DeclArena::lib_builtin`, `builtins::lib_intrinsic`; WP-186,
+    `tests/codegen/builtins_lib_intrinsic.cpp`). Not done (follow-ups):
+    clang's -O0 fold of a library call the constant evaluator accepts
+    (`strlen("abc")` is `i64 3`, `memcmp` of literals), clang 22's
+    `modf` to `llvm.modf`, and `-fno-builtin` / `-fno-builtin-<name>`;
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary; an
@@ -323,6 +337,9 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     (`builtins.rs`, clang `EmitBuiltinExpr`; landed in WP-088):
     - a call with an integral or floating result is a fold candidate
       (§3, `fold.rs`); if the Oven folds it, it is that constant;
+      `abs` / `labs` / `llabs` are candidates only at
+      `-fclang-compat=22` (clang 20 made them constant; WP-432,
+      `builtins_abs_22.cpp`);
     - `__builtin_is_constant_evaluated()` is `i1 false`, since code that
       runs is not manifestly constant-evaluated (it is never a fold
       candidate);
@@ -438,7 +455,15 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       first for a pointer). Constant operands fold as IRBuilder folds them
       (`x + 0` is kept); an integer call is a fold candidate.
       `__builtin_debugtrap()` is `call void @llvm.debugtrap()`,
-      `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`.
+      `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`,
+      `__builtin_return_address(n)` `call ptr @llvm.returnaddress(i32 n)`
+      (WP-432, `builtins_return_address.cpp`).
+      `__builtin_elementwise_add_sat` / `_sub_sat` are `llvm.sadd.sat` /
+      `uadd.sat` / `ssub.sat` / `usub.sat` by element signedness (a
+      `bool` operand as unsigned), folded at 22 when the Oven folds them
+      (WP-432, `builtins_elementwise_sat{,_22}.cpp`). The alignment
+      builtins on a pointer to an object of known alignment fold in a
+      global initializer (spec/oven.md "Builtins"; `builtins_align_ptr.cpp`).
       `__builtin_elementwise_abs` is `llvm.abs(x, i1 false)` for
       integers and `llvm.fabs` for floating point, `_max` / `_min`
       `llvm.smax` / `umax` / `smin` / `umin` by element signedness and
@@ -755,7 +780,7 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   condition block that only branches on is folded into its predecessor
   only while no cleanup (a destructor, a lifetime end, a `noexcept`
   terminate scope) is on the EH stack. `tests/codegen/forwarding_block_cleanup.cpp`.
-- Case ranges (GNU) are an error.
+- Case ranges (GNU) are an error. GNU computed goto: §7t.
 - A goto (forward, backward, out of nested scopes, loops and try blocks)
   branches through the cleanups of every scope it leaves (`cleanup.rs`
   branch fixups). A local default-initialized by a trivial constructor
@@ -1523,7 +1548,9 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   thunks spill and reload their parameters like any function, adjust
   `this`, and forward the arguments with a `tail call` (not `musttail`).
   Attributes follow clang's IsThunk rules: `this` keeps only `noundef`,
-  and a reference return keeps only `noundef`.
+  and a reference return keeps only `noundef`. A thunk is `nounwind`
+  only by its method's type or attributes: no `TryMarkNoThrow` over its
+  body (clang `generateThunk`; WP-432, `thunk_attrs{,_noexc}.cpp`).
 - **`dynamic_cast`** (`EmitDynamicCast`): pointer sources are
   null-checked (blocks `dynamic_cast.notnull`/`.null`/`.end`, then a
   phi). The runtime call is `__dynamic_cast(p, srcRTTI, dstRTTI, hint)`
@@ -2639,8 +2666,16 @@ missing value instead, which is invalid IR.
 begin/end/suspend/free/id` become the matching `llvm.coro.*` call;
 `alloc`, `begin` and `free` take the function's `%id` first, `suspend`
 a leading `token none`, `end` a trailing `token none`;
-`__builtin_coro_frame` is the `llvm.coro.begin` value. Outside a
-coroutine, `frame`/`alloc`/`begin`/`free` are a codegen error with
+`__builtin_coro_frame` is the `llvm.coro.begin` value. A hand-written
+`__builtin_coro_id` in a function that is not a C++ coroutine creates
+the function's coroutine state (clang `createCoroData`, for coroutines
+written by hand in C): its token feeds the later `alloc`/`begin`/`free`
+calls, a `__builtin_coro_begin` becomes the `frame` value, and the
+function gets no `presplitcoroutine`; a second one is a codegen error
+"only one __builtin_coro_id can be used in a function", and one in a
+C++ coroutine "__builtin_coro_id shall not be used in a C++ coroutine"
+(tests/codegen/coro_builtins.cpp, `lower.rs` `hand_written_coro_id`).
+Without either, `frame`/`alloc`/`begin`/`free` are a codegen error with
 clang's wording ("this builtin expect that __builtin_coro_begin/id has
 been used earlier in this function").
 
@@ -2874,6 +2909,60 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
 - **Remaining:** `=pattern`; pre-filling classes with a non-trivial
   default constructor; VLAs; the run-time EB diagnosis P2795 recommends
   is today's `-Wuninitialized` (no sanitizer).
+
+## 7s. Landed (WP-450): `bool` ext-vector constants
+- A constant `bool` ext vector (the Oven's packed `BoolVec`,
+  spec/oven.md "Bool vectors") is a `<N x i1>` constant: lane `i` is bit
+  `i % 8` of byte `i / 8` of the folded image (`consts.rs`
+  `image_const`). Its global, and a struct member or array element of
+  that type, keeps the value type `<N x i1>` rather than the `iP` memory
+  type (`const_ir_type`; clang's literal struct `{ i32, <8 x i1>, <3 x
+  i1> }` and `[2 x <8 x i1>]`), and is laid out by its bit count rounded
+  up to a power-of-two byte size (`func.rs` `ir_layout`).
+- Constant folding as the IRBuilder's `ConstantFolder` does (`func.rs`
+  `fold_shuffle`, `fold_vec_to_int`): a `shufflevector` of two constants
+  folds (a poison mask lane is `undef`; an all-poison mask is `poison`),
+  and a `bitcast` of a constant vector to an integer folds to `0` when the
+  vector is null, to `-1` when every lane is all-ones at compat 22 (LLVM
+  20+ `FoldBitCast`), and otherwise stays a `bitcast (...)` constant
+  expression. So storing a constant `bool` vector to a local is `store iP
+  bitcast (<P x i1> <...> to iP)`, as clang's.
+- Test: `tests/codegen/bool_vector_const.cpp` (exact on both triples
+  under oracle 19, structural under 22).
+
+## 7t. Landed (WP-444): GNU computed goto (`stmt.rs`)
+- `&&l` (clang `GetAddrOfLabel`, `addr_of_label`) is `blockaddress(@f,
+  %bb)` for the label's block. The first label address or computed
+  `goto` in a function makes the dispatch block (clang
+  `GetIndirectGotoBlock`, `Fir::indirect_goto`): `%indirect.goto.dest =
+  phi ptr` and `indirectbr ptr %indirect.goto.dest, [...]`, unplaced.
+  Each `&&l` evaluation adds its label as a destination, so a label
+  whose address is taken twice is listed twice, as clang's
+  `addDestination`. The label's LLVM block is created ahead of lowering
+  (`Fir::block_id`) so the `blockaddress` can name it; an address-taken
+  block is a use of its block and is never pruned.
+- `goto *e` (clang `EmitIndirectGotoStmt`): a target that is `&&l`
+  under parentheses and implicit casts (`Ast::indirect_goto_constant_
+  target`) is `goto l`, through the cleanups of the scopes it leaves;
+  otherwise the target is emitted as a scalar, added to the `phi` from
+  the current block, and the block branches to the dispatch block (no
+  cleanups, which sema guarantees there are none to run).
+- At the end of the function (`finish_indirect_goto`, before EH
+  finishing) the dispatch block is placed after the return block. With
+  no computed `goto` its `phi` has no incoming values and is replaced by
+  `poison` (clang 19, `-fclang-compat=19`: `undef`).
+- A label address in a constant (`static void *t[] = {&&a, &&b};`, a
+  frozen Oven value `PtrBase::Label`, `consts.rs`) is the same
+  `blockaddress`, so the global is a constant initializer exactly as
+  clang's. The address of another function's label (only reachable
+  through a constexpr value computed in that function) is a codegen
+  error "address of a label of another function in a constant" (clang
+  crashes there).
+- Tests: `tests/codegen/computed_goto.cpp` (exact IR on both triples at
+  both oracles: a static table, a conditional target, a duplicate
+  address, an unused dispatch block, `goto *&&l` through a destructor, a
+  template instantiated twice), `tests/conformance/stmt.goto/computed-
+  goto-dispatch-run.cpp` (`expect: run`).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

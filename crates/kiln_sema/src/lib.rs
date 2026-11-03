@@ -181,6 +181,12 @@ pub struct Sema<'a, 'sm> {
     /// The full target description (layout for `sizeof`/`alignof`,
     /// spec/abi.md).
     pub abi: Target,
+    /// The class layouts computed for the deallocation-function lookup of
+    /// virtual destructors ([`Sema::complete_class_align`]), kept between
+    /// classes so a class lattice is laid out once rather than once per
+    /// class (WP-450). Only complete classes are laid out through it, and
+    /// a complete class's layout never changes within the TU.
+    pub(crate) layout_cache: kiln_abi::LayoutCache,
     /// The `#pragma pack` directives seen, in order (location and the
     /// spelling of the argument list).
     pub pragma_packs: Vec<(Loc, String)>,
@@ -238,6 +244,9 @@ pub struct Sema<'a, 'sm> {
     pub(crate) func: Option<stmt::FnState>,
     /// Depth of unevaluated operands (`sizeof`, `alignof`).
     pub(crate) unevaluated: u32,
+    /// [`stmt::FnState::volatile_assigns`] outside a function body (a
+    /// namespace-scope initializer, a default member initializer).
+    pub(crate) volatile_assigns: Vec<ExprId>,
     /// The operands of the `decltype`s being parsed, innermost last: the
     /// unevaluated depth of each and the calls with an incomplete class
     /// prvalue result it deferred ([dcl.type.decltype]/2).
@@ -838,6 +847,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             diags,
             target,
             abi,
+            layout_cache: kiln_abi::LayoutCache::default(),
             pragma_packs: Vec::new(),
             attr_spellings: kiln_source::fx::FxHashMap::default(),
             exceptions: true,
@@ -857,6 +867,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctx: tu,
             func: None,
             unevaluated: 0,
+            volatile_assigns: Vec::new(),
             decltype_calls: Vec::new(),
             agg_list_end: None,
             agg_error_mark: None,

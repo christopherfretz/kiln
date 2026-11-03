@@ -128,6 +128,22 @@ fn coro_end_follows_llvm_major() {
     }
 }
 
+/// clang `createCoroData`: a hand-written `__builtin_coro_id` is
+/// remembered for later `coro.alloc`/`begin`/`free` calls, but only one
+/// per function and none inside a C++ coroutine
+/// ([dcl.fct.def.coroutine]; spec/codegen.md §7p).
+#[test]
+fn hand_written_coro_id() {
+    let ok = "void f() { __builtin_coro_id(0, nullptr, nullptr, nullptr); \
+              (void)__builtin_coro_alloc(); }";
+    let ir = kiln_ir(ok).expect("lowers");
+    assert!(!ir.contains("presplitcoroutine"), "{ir}");
+    let twice = "void f() { __builtin_coro_id(0, nullptr, nullptr, nullptr); \
+                 __builtin_coro_id(0, nullptr, nullptr, nullptr); }";
+    let e = kiln_ir(twice).expect_err("second coro.id");
+    assert!(e.contains("only one __builtin_coro_id can be used in a function"), "{e}");
+}
+
 /// `-moutline-atomics`: clang 19 enables the feature by default only when
 /// it finds a GCC installation for the target, which an x86-64 host
 /// cross-targeting aarch64 lacks (see `ir_vs_clang`'s `pinned_flags`); kiln's

@@ -651,7 +651,8 @@ literal is one instruction and one step, not an interpreted loop.
   reached; `__builtin_operator_new`/`_delete` outside
   `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
   untyped-memory note; inside them they allocate, "Transient
-  allocation", WP-212).
+  allocation", WP-212); `__builtin_debugtrap`, `__builtin_frame_address`
+  and `__builtin_return_address`, noted at the call's begin (WP-432).
 - **Floating-point math, P0533** (WP-365; `bi::FP_MATH`, sub = float
   code | op << 4 | `SECOND` for the pointer output; `softfloat::math`):
   `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`,
@@ -884,7 +885,28 @@ literal is one instruction and one step, not an interpreted loop.
   power of two", one above 2^(N-1) for an N-bit source with "requested
   alignment must be M or less for type 'T'; V is invalid"; then
   `(x + mask) & ~mask`, `x & ~mask` or `(x & mask) == 0`, wrapped to the
-  source type. A pointer source is not folded yet (`unsupported`).
+  source type. On a pointer source (kbc 28, `PTR_ALIGN`, WP-432; clang
+  `PointerExprEvaluator` / `IntExprEvaluator`, `getBaseAlignment`) the
+  known alignment is the complete object's (a variable's
+  `SemaBridge::decl_align`, else its type's, a heap or temporary object
+  its type's) at the pointer's byte offset (`MinAlign`).
+  `__builtin_is_aligned` checks the alignment first, then evaluates the
+  pointer: 1 when the known alignment is at least the requested one, 0
+  when the object's is but the offset's is not; `align_up` / `align_down`
+  evaluate the pointer first: the pointer itself when its known alignment
+  suffices, else (the object's suffices) the pointer with its byte offset
+  rounded, by element steps when the change is a multiple of the element
+  size (one past the end included); clang does not bound the new offset.
+  Otherwise (the object's alignment is less, a null, integral or function
+  pointer) the call fails with "cannot constant evaluate whether
+  run-time alignment is at least A" / "cannot constant evaluate the
+  result of adjusting alignment to A" at the pointer
+  (`BiFault::AlignRun`). Deliberate divergence: clang moves only the
+  offset and keeps the old designator, so reading through an adjusted
+  pointer reads the old element in clang (`*__builtin_align_up(&a[3], 8)`
+  is `a[3]`); the Oven reads the element at the new offset, as the
+  program does at run time. Test
+  `ext.gnu.builtins/align-pointer-constexpr.cpp`.
   `__builtin_assume_aligned` (kbc 23, `ASSUME_ALIGNED`, sub 1 with an
   offset) evaluates to its pointer operand after clang's check: the
   complete object's alignment (`SemaBridge::decl_align`, clang
@@ -2344,14 +2366,8 @@ virtual bases) is unchanged. Test:
 GNU `vector_size` and clang `ext_vector_type` values are stored as an
 array of their lanes (`TyKind::Array`, `Types::is_vector`). The array is
 padded to the vector's own size and alignment, so an `ext_vector_type(3)`
-occupies 4 lanes and the 4th is indeterminate. A vector of `bool` (bits)
-stays `Opaque`: it has no value model yet, so its constant evaluation is
-"not supported" and a namespace-scope `bool`-vector variable gets dynamic
-initialization (clang emits a `<N x i1>` constant). clang 19 folds
-`bool`-vector lists, `!`, `& | ^ ~`, `==`, `__builtin_convertvector` both
-ways and `__builtin_bit_cast`; clang 22 also subscripts and reduces them.
-The planned model is packed bits, lane `i` at bit `i` (follow-up to
-WP-187). The operations are in
+occupies 4 lanes and the 4th is indeterminate. A vector of `bool` is the
+exception (see "Bool vectors" below). The operations are in
 `compile/vector.rs`. The accept/reject boundary is clang 19's
 `VectorExprEvaluator`:
 - **Folded:** arithmetic, bitwise, shift and comparison operators, lane
@@ -2377,7 +2393,9 @@ WP-187). The operations are in
   different class.
 - **Element-wise builtins** (WP-416): at compatibility level 22
   `__builtin_elementwise_abs` folds (integer: the most negative value
-  wraps; floating: `fabs`) as do the integer `_max` / `_min`, scalar and
+  wraps; floating: `fabs`) as do the integer `_max` / `_min` and
+  `_add_sat` / `_sub_sat` (`INT_OP` `SADD_SAT` / `UADD_SAT` / `SSUB_SAT` /
+  `USUB_SAT`, saturating in the element type; WP-432), scalar and
   lane-wise (`vec_elementwise`); the floating `_max` / `_min` fail without
   a note, as clang 22's. At 19 none folds: "subexpression not valid in a
   constant expression" at the call's begin (shown inside a function
@@ -2397,6 +2415,43 @@ WP-187). The operations are in
   M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
   (`kiln_codegen/src/consts.rs`).
+
+*Bool vectors* (WP-450). An `ext_vector_type(N)` of `bool` is
+`TyKind::BoolVec { elem, n }` (`ty.rs`): packed bits in `ceil(N/8)`
+bytes, lane `i` at bit `i % 8` of byte `i / 8`, padded to the vector's
+size and alignment (`b3` is 1 byte, `b24` is 4), as clang lays out
+`<N x i1>` in memory. A value is never one allocation per lane: list
+initialization, the operators and `__builtin_convertvector` move whole
+registers lane by lane (`load_lanes` / `store_lanes` use `LoadBits` /
+`StoreBits` of width 1 at the lane's byte and bit), and a lane place is
+`Place::Lane`, read and written by the KBC ops `LoadLane` / `StoreLane`
+`[.., p, idx, vector type]` with a dynamic index. A lane index above `N`
+faults with "cannot refer to element I of array of N elements", index
+`N` with "read of / assignment to dereferenced one-past-the-end
+pointer", as clang 22's. The packed bytes are what `value.rs` freezes
+(the last byte's padding bits masked) and thaws.
+- *Folded* at either level: list and empty initialization, a scalar
+  splat, `!`, `~`, unary `+`/`-`, `& | ^` (vector or scalar operand),
+  `==`/`!=` and the other comparisons, `__builtin_convertvector` both
+  ways (to `bool`: nonzero is true; a float lane converts toward zero
+  through a 1-bit unsigned conversion and out of range gives "value V is
+  outside the range of representable values of type 'bool'"), and
+  `__builtin_bit_cast` both ways. At compat 22 also subscripts (through
+  pointers, members, array elements, compound assignment) and
+  `__builtin_reduce_*` (`add`/`mul` wrap in one bit, `max`/`min` are
+  `or`/`and`).
+- *Bit casts* use the packed bytes (`vm/bitcast.rs`); a bool vector
+  whose `N` is not a multiple of 8 is rejected in both directions with
+  clang's "element size 1 * element count N is not a multiple of the
+  byte size 8" note (`compile/bitcast.rs`). A source with an
+  indeterminate lane byte is "indeterminate value".
+- *Notes* print a bool vector argument lane by lane (`{true, false,
+  ...}`, every lane, as clang).
+- *Codegen*: a constexpr or constant-initialized bool-vector variable
+  is a `<N x i1>` constant global, also as a struct member and an array
+  element (spec/codegen.md), with no `__cxx_global_var_init`
+  (`tests/codegen/bool_vector_const.cpp`).
+Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`.
 
 ### `_BitInt` — Landed (WP-404)
 Type rules: spec/types.md §21.
@@ -2678,6 +2733,41 @@ footprint flat over 10 000 evaluations). Once a definition gives it an
 initializer, the next resolution is a fresh one (the old object stays, at
 most one per variable, since a frozen result may still point to it)
 (`expr.const/p2280-provisional-global.cpp`).
+
+### Label addresses — Landed (WP-444)
+GNU `&&l` (clang's `AddrLabelExpr` lvalue base: an object of unknown
+value, distinct per expression) is a constant `void *`.
+- `compile.rs` lowers an `AddrLabelExpr` to `Op::LabelAddr [dst, expr]`
+  (KBC, appended after `Cce`). The VM's `label_addr` returns the pointer
+  cached for that expression in `VirtState::labels` (`ExprId` → pointer,
+  12 bytes per entry in the footprint), allocating on first use an
+  unbacked `CONST | EXTERNAL` object of origin `Origin::Label(expr)`.
+  Nothing is allocated unless an `&&l` is evaluated, and a second
+  evaluation of the same expression yields an equal pointer.
+- Two label addresses compare equal only when they come from the same
+  expression; a label address is never null. Reading through one is
+  `MemFault::Literal`, "read of object '&&l' whose value is not known"
+  plus "temporary created here" at the expression. Offsetting past the
+  object is "cannot refer to element N of non-array object"; a cast to
+  an object pointer gets the `void *` similarity note, a cast to an
+  integer the reinterpret_cast note; a relational comparison of two
+  label addresses is "comparison between pointers to unrelated objects
+  '&&&l' and '&&&m' has unspecified value" (the pointer is printed as
+  clang's `&` + the expression). `__builtin_constant_p(&&l)` is false
+  (`is_literal` is not true of label bases).
+- clang 19 (`-fclang-compat=19`): any equality comparison with a label
+  or string literal base is "comparison of addresses of literals has
+  unspecified value" (`is_literal_or_label`), and a relational one is
+  "comparison between '&&&l' and '&&&m' has unspecified value".
+- Freezing gives `PtrBase::Label { label, origin }` (spec/ast.md, code
+  6, printed `&&l` with `+ N` for a non-zero offset; never mangled into
+  a template argument); thawing goes back through `label_addr(origin)`.
+  Codegen lowers the frozen value to a `blockaddress` (spec/codegen.md
+  §7t).
+- Evaluating `goto *p` is "subexpression not valid in a constant
+  expression"; sema already rejects the statement in a constexpr body
+  (spec/sema.md). Tests: `tests/conformance/stmt.goto/computed-goto-
+  constexpr{,-19}.cpp`.
 
 ### Reflection runtime (M6; WP-267 spike behind `-freflection`)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's

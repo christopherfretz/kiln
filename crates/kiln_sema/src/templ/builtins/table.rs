@@ -435,6 +435,10 @@ pub static TABLE: &[Row] = &[
     f("__builtin_shufflevector", DONE, Oven::No),
     f("__builtin_verbose_trap", DONE, Oven::No),
     f("__builtin_copysignf16", DONE, Oven::No),
+    // WP-432.
+    f("__builtin_return_address", DONE, Oven::No),
+    f("__builtin_elementwise_add_sat", DONE, Oven::Yes),
+    f("__builtin_elementwise_sub_sat", DONE, Oven::Yes),
     // Added by clang 20-22 and probed by the C++26 headers; staged off
     // until implemented (spec/sema.md "clang 22 builtins"), so
     // `__has_builtin` answers 0 at every `-fclang-compat` level.

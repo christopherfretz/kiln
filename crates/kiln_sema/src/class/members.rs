@@ -96,14 +96,13 @@ impl Sema<'_, '_> {
             return ty;
         }
         let s = method_quals_spelling(q, r);
-        // The qualifiers follow the parameter list's `)` (their own
-        // locations are not in the declarator).
-        let loc = d
-            .chunks
-            .iter()
-            .find_map(|c| match c {
-                crate::declspec::Chunk::Function { rparen, .. } => Some(*rparen),
-                _ => None,
+        // At the first qualifier written, else the parameter list's `)`.
+        let loc = crate::decl::first_fn_qual_loc(d)
+            .or_else(|| {
+                d.chunks.iter().find_map(|c| match c {
+                    crate::declspec::Chunk::Function { rparen, .. } => Some(*rparen),
+                    _ => None,
+                })
             })
             .unwrap_or(d.loc);
         let msg = self.diag(DiagId::sema_static_member_fn_quals, loc).arg(s);

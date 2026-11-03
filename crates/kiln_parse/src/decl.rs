@@ -1519,6 +1519,12 @@ impl Parser<'_, '_> {
             // (namespace scope: "expected unqualified-id" at the `:`).
             || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && Self::punct_of(next) == Some(Punct::Colon))
+            // A type-id (`new Zork`, `static_cast<Zork *>`, `using X =
+            // Zork;`, a trailing return type or a default template
+            // argument): only a type can start one, so clang's
+            // `ParseImplicitInt` (a type-specifier context) diagnoses any
+            // undeclared name (WP-186).
+            || ctx == DeclaratorContext::TypeName
     }
 
     /// `foo<args> x` with `foo` undeclared ([`Parser::undeclared_template_type`]):
@@ -2079,6 +2085,13 @@ impl Parser<'_, '_> {
             }
         }
         self.expect_closing(Punct::RBrace, Punct::LBrace, open);
+        // clang `ParseEnumBody`: GNU attributes after the `}` appertain to
+        // the enumeration, ahead of its underlying type (`packed`).
+        if self.at_kw(Kw::Attribute) {
+            let mut attrs = Vec::new();
+            self.parse_gnu_attr_seq(&mut attrs);
+            self.s.act_on_record_trailing_attrs(e, &attrs);
+        }
         self.s.act_on_finish_enum_definition(e);
     }
 
@@ -3244,6 +3257,12 @@ impl Parser<'_, '_> {
         } else {
             d.trailing_constraint
         };
+        if ds.type_error {
+            // "unknown type name" was reported: the type-id is clang's
+            // invalid type, so a cast or trait of it says nothing more
+            // (WP-186).
+            return Some(QualType::ERROR);
+        }
         Some(self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d))
     }
 

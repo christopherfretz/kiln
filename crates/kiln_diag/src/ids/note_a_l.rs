@@ -128,6 +128,7 @@ note_fn_template_spec_matched = Note (2) "function template '{0}' matches specia
 note_for_range_begin_end = Note (4) "selected '{0:begin|end}' {1:function|template }{2} with iterator type {3}";
 note_for_range_invalid_iterator = Note (2) "in implicit call to 'operator{0:!=|*|++}' for iterator of type {1}";
 note_for_range_member_begin_end_ignored = Note (2) "member is not a candidate because range type {0} has no '{1:end|begin}' member";
+note_format_security_fixit = Note (0) "treat the string as an argument to avoid this";
 note_forward_declaration = Note (1) "forward declaration of {0}";
 note_forward_template_decl = Note (0) "forward declaration of template entity is here";
 note_function_returns_const = Note (2) "function {0} which returns const-qualified type {1} declared here";

@@ -289,9 +289,14 @@ impl Oven {
                 let t = site
                     .e
                     .map_or_else(|| "int".into(), |e| {
-                        // A complex part: its element type (clang).
+                        // A complex part or a vector lane: its element
+                        // type (clang).
                         let q = ast.exprs.get(e).ty();
-                        Self::qname(ast, ast.types.as_complex(q).unwrap_or(q))
+                        let q = match ast.types.canonical_view(q) {
+                            kiln_ast::types::TypeView::Vector { elem, .. } => elem,
+                            _ => ast.types.as_complex(q).unwrap_or(q),
+                        };
+                        Self::qname(ast, q)
                     });
                 (
                     site.loc,
@@ -794,6 +799,16 @@ impl Oven {
                     ),
                 };
             }
+            BiFault::AlignRun { adjust: false, align } => {
+                return format!(
+                    "cannot constant evaluate whether run-time alignment is at least {align}"
+                );
+            }
+            BiFault::AlignRun { adjust: true, align } => {
+                return format!(
+                    "cannot constant evaluate the result of adjusting alignment to {align}"
+                );
+            }
             BiFault::AlignArg { lo, hi, w, signed, big } => {
                 let b = u128::from(hi) << 64 | u128::from(lo);
                 let v = if signed { (b as i128).to_string() } else { b.to_string() };
@@ -868,6 +883,7 @@ impl Oven {
             | BiFault::CastUnrep { .. }
             | BiFault::Align { .. }
             | BiFault::Lifetime { .. }
+            | BiFault::AlignRun { .. }
             | BiFault::AlignArg { .. } => String::new(),
         }
     }
@@ -1027,7 +1043,7 @@ impl Oven {
                 s.push_str(&self.ptr_string(ast, v as u64, to));
             }
             TyKind::Ptr(pt) => s.push_str(&self.ptr_string(ast, v as u64, pt)),
-            TyKind::Array { .. } | TyKind::Record { .. } => {
+            TyKind::Array { .. } | TyKind::BoolVec { .. } | TyKind::Record { .. } => {
                 self.write_object(ast, s, t, v as u64, depth);
             }
             // clang: `&C::m` (the member's class and the member,
@@ -1110,6 +1126,28 @@ impl Oven {
                 }
                 if n > MAX_ELEMS {
                     s.push_str(", ...");
+                }
+                s.push('}');
+            }
+            // clang prints every lane of a vector (`APValue::printPretty`).
+            TyKind::BoolVec { elem, n } => {
+                let len = n.div_ceil(8);
+                let bytes = self.mem.check(raw, len, false).ok().and_then(|(st, abs, _)| {
+                    let sp = self.mem.space(st);
+                    sp.is_init(abs, len)
+                        .then(|| sp.bytes[abs as usize..(abs + len) as usize].to_vec())
+                });
+                let Some(bytes) = bytes else {
+                    s.push_str("<uninitialized>");
+                    return;
+                };
+                s.push('{');
+                for i in 0..n {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    let b = bytes[(i / 8) as usize] >> (i % 8) & 1;
+                    self.write_value(ast, s, elem, u128::from(b), depth + 1);
                 }
                 s.push('}');
             }
@@ -1235,6 +1273,8 @@ impl Oven {
             Origin::TypeInfo(q) => {
                 let _ = write!(s, "typeid({})", Self::type_name(ast, q));
             }
+            // clang prints the `AddrLabelExpr` base as written: `&&&l`.
+            Origin::Label(e) => ast.write_expr(e, &mut s),
         }
         let (mut t, mut rel) = (a.ty, u64::from(p.off));
         // clang prints a member reached through a base as `.B::m` and
@@ -1474,7 +1514,10 @@ impl Oven {
                     extra.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
                 }
                 let d = self.ptr_string(ast, p, ty);
-                format!("{verb} object '{}' whose value is not known", d.trim_start_matches('&'))
+                // The object's name: a literal's designator less its `&`
+                // (`"a"`, `&&l`).
+                let d = d.strip_prefix('&').unwrap_or(&d);
+                format!("{verb} object '{d}' whose value is not known")
             }
             MemFault::Const(t) => {
                 let q = self.types.info(t).q;

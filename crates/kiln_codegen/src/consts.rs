@@ -35,7 +35,7 @@ impl Cg<'_> {
                 self.scalar_const(s, mt)
             }
             ConstValue::Aggregate(img) => {
-                let it = self.tys.convert_mem(ty);
+                let it = self.const_ir_type(ty);
                 let bytes = img.bytes.to_vec();
                 let relocs = img.relocs.to_vec();
                 let unions = img.unions.to_vec();
@@ -63,10 +63,35 @@ impl Cg<'_> {
         }
     }
 
-    /// True if `ty` is a vector type laid out as an IR vector (not a
-    /// `bool` ext vector, whose value form is `<N x i1>`).
+    /// The IR type of a constant of type `ty`: its memory type, except
+    /// that a `bool` ext vector (also as an array element) is its value
+    /// type `<N x i1>` (clang
+    /// `ConstantEmitter::emitForMemory` keeps the vector constant; its
+    /// memory type is an integer).
+    fn const_ir_type(&mut self, ty: QualType) -> IrType {
+        match self.ast.types.canonical_view(ty) {
+            kiln_ast::types::TypeView::Vector { elem, .. }
+                if matches!(
+                    self.ast.types.canonical_view(elem),
+                    kiln_ast::types::TypeView::Builtin(kiln_ast::types::BuiltinType::Bool)
+                ) =>
+            {
+                self.tys.convert(ty)
+            }
+            kiln_ast::types::TypeView::ConstantArray(a) => match self.const_ir_type(a.elem) {
+                et @ IrType::Vector(..) => {
+                    IrType::Array(Box::new(et), self.ast.types.array_size(ty).unwrap_or(0))
+                }
+                _ => self.tys.convert_mem(ty),
+            },
+            _ => self.tys.convert_mem(ty),
+        }
+    }
+
+    /// True if `ty` is a vector type (a `bool` ext vector's value form
+    /// is `<N x i1>`).
     fn is_vector_ty(&mut self, ty: QualType) -> bool {
-        matches!(self.tys.convert_mem(ty), IrType::Vector(..))
+        matches!(self.tys.convert(ty), IrType::Vector(..))
     }
 
     /// A scalar constant of IR type `t`.
@@ -127,6 +152,10 @@ impl Cg<'_> {
                 Ok(gval(self.let_global(t, ty)?))
             }
             PtrBase::TypeInfo(t) => self.rtti(t),
+            PtrBase::Label { label, origin } => {
+                let at = self.loc_of(origin);
+                self.addr_of_label(label, at)
+            }
         }
     }
 
@@ -341,7 +370,18 @@ impl Cg<'_> {
                 err(None, "base-class subobjects in constants are not supported yet (M3)")
             }
             // clang `ConstExprEmitter`/`APValue::Vector`: one constant per
-            // lane, lane `i` at byte `i * sizeof(elem)` of the image.
+            // lane, lane `i` at byte `i * sizeof(elem)` of the image; an
+            // `i1` lane (a `bool` vector) is bit `i % 8` of byte `i / 8`.
+            IrType::Vector(et, n) if matches!(**et, IrType::Int(1)) => {
+                let t1 = self.ir(et);
+                let elems: Vec<Value> = (0..*n)
+                    .map(|i| {
+                        let b = img.byte(off + i / 8) >> (i % 8) & 1;
+                        self.m.const_int(t1, i128::from(b))
+                    })
+                    .collect();
+                self.m.const_vector(&elems).map_err(|e| ir_err(&e))
+            }
             IrType::Vector(et, n) => {
                 let (es, _) = self.tys.size_align(et);
                 let mut elems = Vec::with_capacity(*n as usize);
@@ -450,6 +490,9 @@ impl Cg<'_> {
                     .filter(|f| !rec.bitfields.contains_key(f))
                     .and_then(|f| fields.iter().position(|&x| x == f))
                     .and_then(|p| inits.get(p + bases.len()).copied());
+                // A `bool` vector member is its `<N x i1>` constant.
+                let fm = ast.decls.get(f).ty().map(|q| self.const_ir_type(q));
+                let m = fm.as_ref().filter(|t| matches!(t, IrType::Vector(..))).unwrap_or(m);
                 out.push((at, self.image_const(img, off + at, m, sub)?));
             } else if let Some(b) = by_base[i] {
                 let sub = bases.iter().position(|&x| x == b).and_then(|p| inits.get(p).copied());

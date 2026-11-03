@@ -159,6 +159,14 @@ impl Sema<'_, '_> {
                 return;
             }
         }
+        if is_var && self.inst.deferred_inits.contains(&p.decl) {
+            // A deferred inline static data member (WP-186).
+            self.instantiate_static_member_init(p.decl, p.poi);
+            if !self.inst.deferred_inits.contains(&p.decl) {
+                self.ast.templates.add_end_of_tu_def(p.decl);
+            }
+            return;
+        }
         let had = self.ast.definition(p.decl).is_some();
         let redecls = self.ast.redecls_of(p.decl).count();
         if is_var {

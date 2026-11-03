@@ -56,6 +56,9 @@ impl Oven {
             TyKind::Bool => bools,
             TyKind::Float(_) => value_len(info.size, info.kind) == info.size,
             TyKind::Array { elem, .. } => self.dense(elem, bools),
+            // Every bit is a lane (`ty.rs`): dense when the lanes fill
+            // the bytes.
+            TyKind::BoolVec { n, .. } => n == info.size * 8,
             TyKind::Record { union: false, .. } => {
                 let mut end = 0;
                 for f in self.types.fields(t) {
@@ -161,6 +164,16 @@ impl Oven {
                     self.read_obj(sp, abs, elem, off + i * es, buf);
                 }
             }
+            TyKind::BoolVec { n, .. } => {
+                let len = n.div_ceil(8);
+                let space = self.mem.space(sp);
+                if space.is_init(abs + off, len) {
+                    let (a, o) = ((abs + off) as usize, off as usize);
+                    let len = len as usize;
+                    buf.bytes[o..o + len].copy_from_slice(&space.bytes[a..a + len]);
+                    buf.def[o..o + len].fill(true);
+                }
+            }
             TyKind::Record { .. } => {
                 for f in self.types.fields(t) {
                     self.read_obj(sp, abs, f.ty, off + f.offset, buf);
@@ -242,6 +255,18 @@ impl Oven {
                 for i in 0..n {
                     self.write_obj(ast, sp, abs, buf, elem, off + i * es)?;
                 }
+            }
+            TyKind::BoolVec { n, .. } => {
+                // Any byte is a valid set of lanes; an indeterminate one
+                // is not a value of `bool`.
+                let len = n.div_ceil(8);
+                if !buf.all_def(off, len) {
+                    return Err(Fault::Bi(BiFault::CastIndet { t }));
+                }
+                let a = (abs + off) as usize;
+                let space = self.mem.space_mut(sp);
+                space.bytes[a..a + len as usize].copy_from_slice(buf.get(off, len));
+                space.set_init(abs + off, len, true);
             }
             TyKind::Record { .. } => {
                 let (first, count) = match info.kind {

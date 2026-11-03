@@ -175,6 +175,9 @@ pub enum ExcSpec {
     Nothrow,
     /// `throw()` as written.
     DynamicNone,
+    /// GNU `__attribute__((nothrow))` on a function type with no written
+    /// specification (WP-186; clang `EST_NoThrow`): non-throwing.
+    NothrowAttr,
     /// `noexcept` as written.
     BasicNoexcept,
     /// `noexcept(expr)` as written.
@@ -209,6 +212,7 @@ impl ExcSpec {
         matches!(
             self,
             ExcSpec::Nothrow
+                | ExcSpec::NothrowAttr
                 | ExcSpec::DynamicNone
                 | ExcSpec::BasicNoexcept
                 | ExcSpec::NoexceptExpr { value: NoexceptValue::True, .. }

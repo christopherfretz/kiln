@@ -544,6 +544,8 @@ impl Oven {
             Ok(p)
         } else if aux & 0xff == crate::kbc::bi::ASSUME_ALIGNED {
             self.bi_assume_aligned(b, aux >> 8 != 0, a as u64, bb, c).map(|()| a)
+        } else if aux & 0xff == crate::kbc::bi::PTR_ALIGN {
+            self.bi_ptr_align(b, aux >> 8, a as u64, bb, OTy(t1))
         } else if aux & 0xff == crate::kbc::bi::MSG_CHARS {
             self.bi_msg_chars(a, bb as u64, OTy(t1)).map(|()| a)
         } else if aux & 0xff == crate::kbc::bi::UNCAUGHT {
@@ -982,6 +984,30 @@ impl Oven {
                     let v = reg!(1);
                     let bw = arg!(3) as u32;
                     if let Err(f) = self.store_bits(raw, ty, v, bw & 0xFF, bw >> 8, aux & 1 != 0) {
+                        fail!(f);
+                    }
+                    pc += 5;
+                }
+                Op::LoadLane => {
+                    let vty = OTy(arg!(3) as u32);
+                    let r = self
+                        .lane_at(reg!(1) as u64, reg!(2) as u64, vty, aux)
+                        .and_then(|(q, bit, elem)| self.load_bits(q, elem, bit, 1, aux));
+                    match r {
+                        Ok(v) => reg!(0) = v,
+                        Err(f) => fail!(f),
+                    }
+                    pc += 5;
+                }
+                Op::StoreLane => {
+                    let vty = OTy(arg!(3) as u32);
+                    let v = reg!(1);
+                    let init = aux & 1 != 0;
+                    let k = if init { ak::INIT } else { ak::ASSIGN };
+                    let r = self
+                        .lane_at(reg!(0) as u64, reg!(2) as u64, vty, k)
+                        .and_then(|(q, bit, elem)| self.store_bits(q, elem, v, bit, 1, init));
+                    if let Err(f) = r {
                         fail!(f);
                     }
                     pc += 5;
@@ -1446,6 +1472,11 @@ impl Oven {
                     }
                     pc = fr.ret_pc as usize;
                     fb = self.stack[self.stack.len() - 1].fb as usize;
+                }
+                Op::LabelAddr => {
+                    let Some(e) = ExprId::try_new(arg!(1) as u32) else { fail!(Fault::Invalid) };
+                    reg!(0) = u128::from(self.label_addr(b, e));
+                    pc += 3;
                 }
                 Op::GlobalAddr => {
                     let g = arg!(1);
@@ -1924,6 +1955,13 @@ impl Oven {
         self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(..)))
     }
 
+    /// clang 19's literal bases (`IsLiteralLValue`): a string literal or
+    /// a label address.
+    fn is_literal_or_label(&self, raw: u64) -> bool {
+        let p = Ptr::decode(raw);
+        self.alloc_any(p).is_some_and(|a| matches!(a.origin, Origin::Str(..) | Origin::Label(_)))
+    }
+
     /// clang 22 notes a `std::allocator<T>::allocate` allocation at the
     /// call of `allocate` (its member name for a member call), not at the
     /// `operator new` inside it; `e` when there is no such call.
@@ -2041,7 +2079,7 @@ impl Oven {
                 if self.literals_may_overlap(p, q) {
                     return Err(Fault::LiteralCmp);
                 }
-            } else if self.is_literal(p) || self.is_literal(q) {
+            } else if self.is_literal_or_label(p) || self.is_literal_or_label(q) {
                 return Err(Fault::LiteralCmp);
             }
             if Ptr::decode(p).off == 0 && !Ptr::decode(p).is_fn() && self.past_complete(q) {
@@ -2425,6 +2463,28 @@ impl Oven {
         })
     }
 
+    /// The byte address, bit and lane type of lane `idx` of the `bool`
+    /// vector of type `vty` at `raw` (`Op::LoadLane`, `Op::StoreLane`):
+    /// lane `i` is bit `i % 8` of byte `i / 8`. A lane past the end is
+    /// stepped to as an array element would be (clang 22): `n` is the
+    /// one-past-the-end lane, which access `k` cannot dereference.
+    fn lane_at(&self, raw: u64, idx: u64, vty: OTy, k: u32) -> Result<(u64, u32, OTy), Fault> {
+        let TyKind::BoolVec { elem, n } = self.types.kind(vty) else {
+            return Err(Fault::Invalid);
+        };
+        if idx > n {
+            return Err(Fault::ArrayIndex { idx: i128::from(idx), n, array: true });
+        }
+        if idx == n {
+            return Err(Fault::Mem { f: MemFault::PastEnd, ak: k, ty: elem, p: raw });
+        }
+        if raw == 0 || idx < 8 {
+            return Ok((raw, (idx % 8) as u32, elem));
+        }
+        let off = u64::from(Ptr::decode(raw).off) + idx / 8;
+        Ok((Ptr::with_off(raw, off, false), (idx % 8) as u32, elem))
+    }
+
     fn store_bits(
         &mut self,
         raw: u64,
@@ -2562,6 +2622,7 @@ impl Oven {
             TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } | TyKind::Reflection => {
                 Some((field, t))
             }
+            TyKind::BoolVec { n, .. } => (!s.is_init(abs, n.div_ceil(8))).then_some((field, t)),
             TyKind::Array { elem, n } => {
                 let es = self.types.size(elem);
                 (0..n).find_map(|i| {

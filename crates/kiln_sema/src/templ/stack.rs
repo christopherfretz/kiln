@@ -669,6 +669,7 @@ impl Sema<'_, '_> {
         }
         let ds = self.take_suppressed_diags(d, loc);
         if !ds.is_empty() {
+            let _ = self.templ.deduction_diags.remove(&d);
             self.emit_held_warnings(ds);
         }
     }
@@ -711,11 +712,18 @@ impl Sema<'_, '_> {
     /// arguments', the defaults'), ahead of the signature's own (clang
     /// `FinishTemplateArgumentDeduction`: the deduction's diagnostics are
     /// stored only when `spec` has no entry yet; `fresh`, this deduction
-    /// formed it, and made that entry).
+    /// formed it, and made that entry). How many lead the entry is
+    /// recorded: a use that finds no match hands back only the rest
+    /// ([`Sema::drop_template_id_warnings`]).
     pub(crate) fn keep_deduction_warnings(&mut self, spec: DeclId, fresh: bool, held: Vec<Diag>) {
         if held.is_empty() {
             return;
         }
+        // An entry a use that found no match handed back holds only the
+        // signature's, waiting, like clang's empty slot, for a deduction
+        // that succeeds: this one's go ahead of them.
+        let fresh = fresh || self.special.dropped_tid_warnings.contains_key(&spec);
+        let n = held.len();
         match self.templ.suppressed_diags.entry(spec) {
             std::collections::hash_map::Entry::Vacant(v) => {
                 let _ = v.insert(held);
@@ -724,8 +732,9 @@ impl Sema<'_, '_> {
                 let own = std::mem::replace(o.get_mut(), held);
                 o.get_mut().extend(own);
             }
-            std::collections::hash_map::Entry::Occupied(_) => {}
+            std::collections::hash_map::Entry::Occupied(_) => return,
         }
+        let _ = self.templ.deduction_diags.insert(spec, n);
     }
 
     /// Records the arguments converted so far on the innermost frame.

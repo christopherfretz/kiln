@@ -1590,23 +1590,25 @@ impl Sema<'_, '_> {
     /// Whether the function declared by `d` with parameters `params` is an
     /// explicit object member function ([dcl.fct]/6, P0847): its first
     /// parameter is an explicit object parameter. Diagnoses one anywhere
-    /// else, in a static, virtual or non-member function, with a
-    /// cv- or ref-qualifier, a default argument or as a pack.
+    /// else, in a static, virtual or non-member function (`Some(false)`:
+    /// the declaration is invalid, as clang's `setInvalidType`), with a
+    /// default argument or as a pack. (Its cv- and ref-qualifiers are
+    /// [`Sema::drop_invalid_fn_quals`]'.) `None`: no explicit object
+    /// parameter.
     fn explicit_object_member(
         &mut self,
         ds: &DeclSpec,
-        d: &Declarator,
         params: &[ParamInfo],
         method: bool,
-    ) -> bool {
+    ) -> Option<bool> {
         for p in params.iter().skip(1) {
             if p.explicit_object.is_some() {
                 let m = self.diag(DiagId::sema_explicit_object_param_not_first, p.loc).arg(0u8);
                 self.emit(m);
             }
         }
-        let Some(first) = params.first() else { return false };
-        let Some(this_loc) = first.explicit_object else { return false };
+        let first = params.first()?;
+        let this_loc = first.explicit_object?;
         let which = if !method {
             Some(2u8)
         } else if ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
@@ -1620,29 +1622,7 @@ impl Sema<'_, '_> {
             let m =
                 self.diag(DiagId::sema_explicit_object_param_nonmember, this_loc).arg(w).arg(0u8);
             self.emit(m);
-            return false;
-        }
-        if let Some(Chunk::Function { quals, ref_qual, rparen, .. }) = d.chunks.first() {
-            // clang quotes the qualifiers (cv first) and points at the
-            // first one written.
-            let mut written: Vec<(Option<Loc>, &str)> = Vec::new();
-            if quals.contains(Quals::CONST) {
-                written.push((d.fn_qual_locs[0], "const"));
-            }
-            if quals.contains(Quals::VOLATILE) {
-                written.push((d.fn_qual_locs[1], "volatile"));
-            }
-            match ref_qual {
-                RefQual::LValue => written.push((d.fn_qual_locs[2], "&")),
-                RefQual::RValue => written.push((d.fn_qual_locs[2], "&&")),
-                RefQual::None => {}
-            }
-            if !written.is_empty() {
-                let q = written.iter().map(|&(_, q)| q).collect::<Vec<_>>().join(" ");
-                let at = written.iter().filter_map(|&(l, _)| l).min().unwrap_or(*rparen);
-                let m = self.diag(DiagId::sema_explicit_object_param_qualifier, at).arg(q);
-                self.emit(m);
-            }
+            return Some(false);
         }
         match first.default_arg {
             DefaultArg::None => {}
@@ -1655,7 +1635,43 @@ impl Sema<'_, '_> {
         if matches!(self.ast.types.view(first.ty.ty()), TypeView::PackExpansion { .. }) {
             self.error(DiagId::sema_explicit_object_param_pack, this_loc);
         }
-        true
+        Some(true)
+    }
+
+    /// [dcl.fct]/6: a cv-qualifier-seq or ref-qualifier is only on the
+    /// function type of a non-static member function without an explicit
+    /// object parameter (static ones are
+    /// [`Sema::check_static_method_quals`]'). clang
+    /// (`err_invalid_qualified_function_type`, or
+    /// `err_explicit_object_parameter_qualifiers` for an explicit object
+    /// member function `explicit_object`) quotes them (cv first) at the
+    /// first one written and drops them from the type, so an
+    /// instantiation does not report them again.
+    fn drop_invalid_fn_quals(
+        &mut self,
+        ty: QualType,
+        d: &Declarator,
+        explicit_object: bool,
+    ) -> QualType {
+        let Some(p) = self.ast.types.proto(ty).copied() else { return ty };
+        let info = p.info();
+        let (q, r) = (info.this_quals(), info.ref_qual());
+        if q.is_empty() && r == RefQual::None {
+            return ty;
+        }
+        let spelled = crate::class::members::method_quals_spelling(q, r);
+        let at = first_fn_qual_loc(d).unwrap_or(d.loc);
+        let id = if explicit_object {
+            DiagId::sema_explicit_object_param_qualifier
+        } else {
+            DiagId::sema_nonmember_fn_quals
+        };
+        let msg = self.diag(id, at).arg(spelled);
+        self.emit(msg);
+        let params = self.ast.types.params(&p).to_vec();
+        let exc = self.ast.types.exc_spec(&p);
+        let info = info.with_this_quals(Quals::NONE).with_ref_qual(RefQual::None);
+        self.ast.types.function(p.ret(), &params, info, exc)
     }
 
     /// The default argument `= init` of parameter `p` ([dcl.fct.default]),
@@ -2156,16 +2172,7 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_friend_invalid_in_context, l);
         }
         // Member functions take cv/ref-qualifiers (WP-066b); a non-member
-        // function type with them is `typedef`-only ([dcl.fct]/6).
-        if d.ctx != DeclaratorContext::Member
-            && !ds.is_typedef()
-            && !d.invalid
-            && let Some(Chunk::Function { quals, ref_qual, .. }) = d.chunks.first()
-            && (!quals.is_empty() || *ref_qual != RefQual::None)
-            && d.qualifier.is_none_or(|q| self.ast.decls.record(q).is_none())
-        {
-            self.unsupported("function qualifiers on a non-member function", d.name_loc());
-        }
+        // function's are `act_on_function`'s (`drop_invalid_fn_quals`).
         false
     }
     /// [temp.explicit]/1 (clang `ActOnExplicitInstantiation`): an
@@ -2502,6 +2509,7 @@ impl Sema<'_, '_> {
             }
         }
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
+        let ty = self.apply_nothrow_attrs(ty, &mut attrs);
         // [dcl.spec.general]/3: a function or member declared with no
         // type (`y();`, `struct S { y; };`) is an invalid `int` one, as
         // clang's `ConvertDeclSpecToType`: later uses name it silently.
@@ -2784,6 +2792,7 @@ impl Sema<'_, '_> {
     pub(crate) fn exc_spec_spelling(&self, exc: ExcSpec) -> String {
         match exc {
             ExcSpec::DynamicNone => "throw()".to_owned(),
+            ExcSpec::NothrowAttr => "__attribute__((nothrow))".to_owned(),
             ExcSpec::NoexceptExpr { expr, .. } => {
                 let mut s = String::from("noexcept(");
                 kiln_ast::types::TypeNames::write_expr(&self.ast, expr, &mut s);
@@ -3279,7 +3288,21 @@ impl Sema<'_, '_> {
         {
             spec = spec.with_storage(FnStorage::Static);
         }
-        let ty = if in_class && spec.storage() == FnStorage::Static {
+        let explicit_object = d
+            .function_params()
+            .and_then(<[ParamInfo]>::first)
+            .is_some_and(|p| p.explicit_object.is_some());
+        // clang diagnoses an explicit object parameter of a namespace- or
+        // block-scope function as it parses the parameter, before its
+        // qualifiers (a friend's, in its class, after them).
+        let early_explicit_object = (!method && !friend && explicit_object).then(|| {
+            let params = d.function_params().unwrap_or_default();
+            self.explicit_object_member(ds, params, false)
+        });
+        let fn_chunk = matches!(d.chunks.first(), Some(Chunk::Function { .. }));
+        let ty = if (!method || explicit_object) && fn_chunk {
+            self.drop_invalid_fn_quals(ty, d, method)
+        } else if in_class && spec.storage() == FnStorage::Static {
             self.check_static_method_quals(ty, d)
         } else {
             ty
@@ -3786,8 +3809,14 @@ impl Sema<'_, '_> {
         }
         let params: Vec<ParamInfo> =
             d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
-        if self.explicit_object_member(ds, d, &params, method) {
-            spec = spec.with_explicit_object(true);
+        let eo = match early_explicit_object {
+            Some(r) => r,
+            None => self.explicit_object_member(ds, &params, method),
+        };
+        match eo {
+            Some(true) => spec = spec.with_explicit_object(true),
+            Some(false) => invalid_redecl = true,
+            None => {}
         }
         let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
         if let Some(p) = prev_ok {
@@ -5308,6 +5337,9 @@ impl Sema<'_, '_> {
         if deduced {
             ty = self.deduce_var_auto(v, ty, &init, loc, direct).unwrap_or(QualType::ERROR);
             self.ast.decls.set_ty(v, ty);
+            // A deduced sizeless type is checked as a written one (clang
+            // `CheckVariableDeclarationType` after deduction).
+            self.check_sizeless_var(v, self.in_local_scope());
             // `auto x = {...};` deduced `std::initializer_list<U>`; the
             // list initializes it below ([dcl.init.list]/3.6, WP-106).
         }
@@ -7460,8 +7492,11 @@ impl Sema<'_, '_> {
     /// `ActOnEnumBody`: the narrowest of `int`, `long`, `long long` when
     /// some value is negative, else of `unsigned int`, `unsigned long`,
     /// `unsigned long long`, promoting to the signed type of the same
-    /// width unless the values need every bit.
-    fn best_enum_types(&self, values: &[(DeclId, i128)]) -> (QualType, QualType) {
+    /// width unless the values need every bit. A `packed` enumeration
+    /// also considers `signed char` / `short` (`unsigned char` /
+    /// `unsigned short`), promoting to `int` (clang
+    /// `ASTContext::computeBestEnumTypes`).
+    fn best_enum_types(&self, values: &[(DeclId, i128)], packed: bool) -> (QualType, QualType) {
         let mut neg_bits = 0u32;
         let mut pos_bits = 0u32;
         for &(_, v) in values {
@@ -7473,6 +7508,18 @@ impl Sema<'_, '_> {
             }
         }
         let width = |t: QualType| constfold::int_info(&self.ast, t).map_or(64, |x| x.0);
+        if packed {
+            let small = if neg_bits > 0 {
+                [QualType::SCHAR, QualType::SHORT]
+                    .into_iter()
+                    .find(|&t| neg_bits <= width(t) && pos_bits < width(t))
+            } else {
+                [QualType::UCHAR, QualType::USHORT].into_iter().find(|&t| pos_bits <= width(t))
+            };
+            if let Some(t) = small {
+                return (t, QualType::INT);
+            }
+        }
         let signed = [QualType::INT, QualType::LONG, QualType::LONGLONG];
         let unsigned = [QualType::UINT, QualType::ULONG, QualType::ULONGLONG];
         if neg_bits > 0 {
@@ -7545,7 +7592,8 @@ impl Sema<'_, '_> {
             // enumeration; `int` stands in until it is instantiated.
             Some((QualType::INT, QualType::INT))
         } else {
-            let (best, promotion) = self.best_enum_types(&build.enumerators);
+            let packed = self.find_attr(e, AttrKind::PACKED).is_some();
+            let (best, promotion) = self.best_enum_types(&build.enumerators, packed);
             // [dcl.enum]/5 (clang's `ActOnEnumBody`): each initializer is
             // converted to the underlying type.
             for &(d, _) in &build.enumerators {
@@ -8070,6 +8118,22 @@ impl Sema<'_, '_> {
             return d;
         }
         let (Some(lv), Some(rv)) = (self.try_fold(l), self.try_fold(r)) else { return d };
+        // clang's `ConvertAPValueToString` prints no lvalue or member
+        // pointer: a pointer comparison gets no note (`&a == &b`, `&&l ==
+        // &&m`).
+        let pointer = |v| {
+            matches!(
+                self.ast.consts.scalar(v),
+                Some(
+                    kiln_ast::consts::Scalar::Null { .. }
+                        | kiln_ast::consts::Scalar::Pointer { .. }
+                        | kiln_ast::consts::Scalar::MemberPtr { .. }
+                )
+            )
+        };
+        if pointer(lv) || pointer(rv) {
+            return d;
+        }
         let note = self
             .diag(DiagId::note_expr_evaluates_to, self.ast.exprs.get(c).loc())
             .arg(self.comparison_value_text(lv))
@@ -9277,7 +9341,9 @@ impl Sema<'_, '_> {
     /// `ParseCXXMemberSpecification` parses them there and
     /// `ActOnFinishCXXMemberSpecification` applies them to the class
     /// itself, before it is complete, so `packed` / `aligned` shape its
-    /// layout as when written after the class-key.
+    /// layout as when written after the class-key. Likewise an
+    /// enumeration's (clang `ParseEnumBody` -> `ActOnEnumBody`, ahead of
+    /// its underlying type).
     pub fn act_on_record_trailing_attrs(&mut self, r: DeclId, attrs: &[AttrId]) {
         let mut attrs = attrs.to_vec();
         self.check_decl_attrs(r, &mut attrs);
@@ -9454,6 +9520,87 @@ impl Sema<'_, '_> {
                 return;
             }
         }
+    }
+
+    /// GNU `format(archetype, F, A)` on function `d` (WP-186; clang
+    /// `handleFormatAttr`): `F` names a parameter (one-based, index 1 of
+    /// an implicit object member function being `this`, which cannot be
+    /// the format string) of pointer-to-character type; `A` is 0 or the
+    /// position of the `...` (a non-variadic function gets
+    /// `-Wgcc-compat`'s warning and `A` must then be one past the last
+    /// parameter); `strftime` requires `A` = 0. False drops the
+    /// attribute (after an error).
+    pub(crate) fn check_format_decl_attr(
+        &mut self,
+        d: DeclId,
+        kind: DeclKind,
+        node: AttrNode,
+    ) -> bool {
+        if !kind.is_function() {
+            let shown = format!("'{}'", self.attr_shown(&node, "format"));
+            let what = "Objective-C methods, blocks, and non-K&R-style functions";
+            let msg = self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc).arg(shown);
+            self.emit(msg.arg(what.to_owned()));
+            return false;
+        }
+        if node.flags & 1 != 0 {
+            return true;
+        }
+        let Some(proto) = self.ast.decls.get(d).ty().and_then(|t| self.ast.types.proto(t)) else {
+            return true;
+        };
+        let name = "'format'";
+        let this = u32::from(self.is_implicit_object_member(d));
+        let params = self.ast.types.params(proto).to_vec();
+        let mut num = u32::try_from(params.len()).unwrap_or(u32::MAX - 2) + this;
+        let (f, first) = (node.b & 0xffff, node.b >> 16);
+        let oob = |s: &mut Self, pos: &str| {
+            let msg =
+                s.diag(DiagId::sema_attribute_param_out_of_bounds, node.loc).arg(name).arg(pos);
+            s.emit(msg);
+            false
+        };
+        if f < 1 || f > num {
+            return oob(self, "2");
+        }
+        if this == 1 && f == 1 {
+            let msg = self.diag(DiagId::sema_format_attribute_implicit_this, node.loc);
+            self.emit(msg);
+            return false;
+        }
+        let pty = params[(f - 1 - this) as usize];
+        let t = &self.ast.types;
+        let is_char = |q: QualType| {
+            matches!(
+                t.builtin(t.canonical(q).without_quals()),
+                Some(BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar)
+            )
+        };
+        let char_ptr = t.is_pointer(pty) && t.pointee(pty).is_some_and(is_char);
+        if !t.is_dependent(pty) && !char_ptr {
+            let msg = self.diag(DiagId::sema_format_attribute_not_string, node.loc);
+            self.emit(msg);
+            return false;
+        }
+        if first != 0 {
+            if proto.variadic() {
+                num += 1;
+            } else {
+                let at = self.ast.decls.get(d).loc();
+                let msg = self.diag(DiagId::sema_gcc_requires_variadic, at).arg(name);
+                self.emit(msg);
+            }
+        }
+        if node.a == crate::vector::FORMAT_STRFTIME {
+            if first != 0 {
+                let msg = self.diag(DiagId::sema_format_strftime_third_param, node.loc);
+                self.emit(msg);
+                return false;
+            }
+        } else if first != 0 && first != num {
+            return oob(self, "3");
+        }
+        true
     }
 
     /// `#pragma pack` and other unsupported pragmas.
@@ -9665,6 +9812,8 @@ fn attr_kind_of(
         ("exclude_from_explicit_instantiation", _, gnu) if gnu || clang_scope => {
             AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION
         }
+        ("format", _, true) => AttrKind::FORMAT,
+        ("nothrow", _, true) => AttrKind::NOTHROW,
         _ => return None,
     })
 }
@@ -9718,4 +9867,10 @@ fn auto_init_items(
         }
         Initializer::List(l) => (auto_list_items(l, true), AutoInit::CopyList, Some(l.lbrace)),
     }
+}
+
+/// The first of the cv-qualifiers and ref-qualifier written on function
+/// declarator `d` (clang points its qualifier errors there).
+pub(crate) fn first_fn_qual_loc(d: &Declarator) -> Option<Loc> {
+    d.fn_qual_locs.iter().flatten().min().copied()
 }

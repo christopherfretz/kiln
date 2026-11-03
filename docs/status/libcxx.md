@@ -178,6 +178,9 @@ expression is odr-used). The 2 remaining are WP-416's: 1
 `returning reference to local temporary object` not diagnosed in
 `<tuple>` (`make_from_tuple.verify`); 1 `no type named 'argument_type'`
 reported as `expected a type` (`variant.hash/hash.depr.verify`).
+WP-432 re-ran WP-416's 2 deprecated variable-template failures
+(`meta.unary.prop/is_pod.deprecated.verify`,
+`is_trivial.deprecated.verify`): both pass.
 
 ## Environment
 
