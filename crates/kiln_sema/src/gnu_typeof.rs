@@ -26,6 +26,7 @@ impl Sema<'_, '_> {
     /// profile (clang's `DependentTypeOfExprType`); otherwise the
     /// canonical type is the operand's.
     pub fn act_on_typeof_expr(&mut self, e: ExprId, _loc: Loc, unqual: bool) -> Option<QualType> {
+        let e = self.resolve_single_overload_candidate(e);
         if self.is_err_expr(e) || self.check_overload_use(e) {
             return None;
         }
