@@ -41,6 +41,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "naked"
             | "may_alias"
             | "init_priority"
+            | "nonnull"
     )
 }
 

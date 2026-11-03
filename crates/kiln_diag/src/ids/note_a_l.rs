@@ -57,6 +57,7 @@ note_ctor_candidate_deleted = Note (2) "candidate constructor{0:| (the implicit 
 note_declared_at = Note (0) "declared here";
 note_declared_coroutine_here = Note (1) "function is a coroutine due to use of '{0}' here";
 note_declared_non_template = Note (0) "declared as a non-template here";
+note_declared_nonnull = Note (1) "declared {0:'returns_nonnull'|'nonnull'} here";
 note_deduced_conflicting = Note (4) "candidate template ignored: deduced conflicting {0:types|values|templates} for parameter '{1}' ({2} vs. {3})";
 note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";
 note_deduction_incomplete_pack = Note (3) "candidate template ignored: deduced too few arguments for expanded pack '{0}'; no argument for {1} expanded parameter in deduced argument pack {2}";

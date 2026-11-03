@@ -1415,6 +1415,7 @@ impl Parser<'_, '_> {
         q: Qualifier,
         kw: TagKeyword,
     ) -> Option<QualType> {
+        let nns_end = self.prev_end();
         let template_kw = self.eat_kw(Kw::Template).is_some();
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_unqualified_id);
@@ -1471,18 +1472,31 @@ impl Parser<'_, '_> {
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             let ctx = self.s.qualifier_desc(q.ctx);
-            if self.at(Punct::Less) && class == NameClass::Undeclared {
-                // `std::codecvt_utf8<wchar_t> c;` with no such member
-                // ([temp.names]/3: only a template name is followed by
-                // `<`): clang's `DiagnoseUnknownTypeName` "no template
-                // named 'X' in 'N'", then its argument list is skipped.
-                let d = self.s.diag(DiagId::sema_no_member_template, name_loc).arg(text).arg(ctx);
+            // clang underlines the nested-name-specifier (WP-421).
+            let qual = kiln_source::Span::new(q.loc, nns_end);
+            if self.at(Punct::Less) && matches!(class, NameClass::Undeclared | NameClass::Value(_))
+            {
+                // `std::codecvt_utf8<wchar_t> c;` with no such member, or
+                // `R::f<int> z;` with `f` no template ([temp.names]/3:
+                // only a template name is followed by `<`): clang's
+                // `DiagnoseUnknownTypeName` "no template named 'X' in
+                // 'N'", then its argument list is skipped.
+                let d = self
+                    .s
+                    .diag(DiagId::sema_no_member_template, name_loc)
+                    .arg(text)
+                    .arg(ctx)
+                    .range(qual);
                 self.emit(d);
                 let _ = self.parse_template_arg_list();
                 return None;
             }
-            let d =
-                self.s.diag(DiagId::sema_typename_nested_not_found, name_loc).arg(text).arg(ctx);
+            let d = self
+                .s
+                .diag(DiagId::sema_typename_nested_not_found, name_loc)
+                .arg(text)
+                .arg(ctx)
+                .range(qual);
             self.emit(d);
             return None;
         };

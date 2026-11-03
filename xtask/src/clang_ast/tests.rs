@@ -368,6 +368,58 @@ TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>
     assert_eq!(d[1].args, ["type 'int'"]);
 }
 
+#[test]
+fn side_channel_pack_elements_and_declarations() {
+    // A pack argument's elements nest under it; a template argument's
+    // child declaration gives its address (the identity the filter's
+    // template template default comparison uses).
+    let text = "\
+TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>
+`-ClassTemplateSpecializationDecl 0x2 <t.cpp:2:1, col:50> col:47 struct Y definition implicit_instantiation
+  |-TemplateArgument pack '<W, W>'
+  | |-TemplateArgument template 'W'
+  | | `-ClassTemplateDecl 0x3 <line:1:1, col:28> col:25 W
+  | `-TemplateArgument template 'W'
+  |   `-ClassTemplateDecl 0x3 <col:1, col:28> col:25 W
+  `-TemplateArgument type 'int'
+";
+    let d = side::parse(text).unwrap();
+    assert_eq!(d[0].args, ["pack '<W, W>'", "type 'int'"]);
+    let pack = &d[0].args[0];
+    assert_eq!(pack.decl, None, "a pack's first child is an element, not a declaration");
+    assert_eq!(pack.elems, ["template 'W'", "template 'W'"]);
+    assert!(pack.elems.iter().all(|e| e.decl.as_deref() == Some("0x3")));
+    assert!(d[0].args[1].elems.is_empty() && d[0].args[1].decl.is_none());
+}
+
+#[test]
+fn side_channel_template_template_parameters() {
+    // Only a template-declaring parent's parameters count: the reference
+    // under a `TemplateArgument` (and a type's `name:` line) is not a
+    // parameter. The default is the address of its argument's declaration.
+    let text = "\
+TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>
+|-ClassTemplateDecl 0x2 <t.cpp:3:1, col:51> col:48 Z
+| |-TemplateTemplateParmDecl 0x4 <col:11, col:38> col:34 depth 0 index 0 D
+| | |-TemplateTypeParmDecl 0x5 <col:21> col:26 class depth 1 index 0
+| | `-TemplateArgument <col:38> template 'W' qualified
+| |   `-ClassTemplateDecl 0x3 <line:1:1, col:28> col:25 W
+| `-CXXRecordDecl 0x6 <line:3:41, col:51> col:48 struct Z definition
+|   `-FieldDecl 0x7 <col:43, col:47> col:47 f 'D<int>':'D<int>'
+|     `-TemplateArgument template 'D'
+|       `-TemplateTemplateParmDecl 0x4 <col:11, col:38> col:34 depth 0 index 0 D
+`-FunctionTemplateDecl 0x8 <line:4:1, col:40> col:36 g
+  |-TemplateTemplateParmDecl 0x9 <col:11, col:31> col:31 depth 0 index 0 ... P
+  `-FunctionDecl 0xa <col:34, col:40> col:36 g 'void ()'
+";
+    let p = side::template_template_parms(text).unwrap();
+    assert_eq!(p.len(), 2);
+    assert_eq!(p[0].default.as_deref(), Some("0x3"));
+    assert!(p[0].names("D") && !p[0].names("W"));
+    assert_eq!(p[1].default, None);
+    assert!(p[1].names("P") && p[1].names(""));
+}
+
 fn types() -> Types {
     let mut t = Types::default();
     let f = |n: &str, ty: &str| Field { name: Some(n.into()), ty: ty.into() };

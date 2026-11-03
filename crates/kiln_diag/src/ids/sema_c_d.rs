@@ -24,6 +24,7 @@ sema_capture_not_automatic = Error (1) "'{0}' cannot be captured because it does
 sema_capture_not_variable = Error (1) "'{0}' in capture list does not name a variable";
 sema_case_empty_range = Warning (0) "empty case range specified";
 sema_case_not_in_switch = Error (0) "'case' statement not in switch statement";
+sema_cast_nonnull_to_bool = Warning [PointerBoolConversion] (2) "nonnull {0:function call|parameter} '{1}' will evaluate to 'true' on first encounter";
 sema_cast_to_incomplete = Error (1) "cast to incomplete type {0}";
 sema_catch_incomplete = Error (1) "cannot catch incomplete type {0}";
 sema_catch_incomplete_ptr = Error (1) "cannot catch pointer to incomplete type {0}";
