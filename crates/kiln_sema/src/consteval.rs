@@ -755,6 +755,26 @@ impl Sema<'_, '_> {
         // [expr.const]/22: a constant-initialized variable's initializer
         // is manifestly constant-evaluated.
         let constant_init = var.is_some_and(|v| self.checks_constant_init(v));
+        self.check_bad_refs(bad_refs, escalating, constant_init);
+        for u in uses {
+            self.check_default_use(u.decl, u.loc, escalating, false);
+        }
+        if !self.imm.consteval_only_errors.is_empty() {
+            for r in &refs {
+                self.imm.consteval_only_errors.remove(r);
+            }
+        }
+    }
+
+    /// The references outside every immediate invocation of a
+    /// full-expression: each escalates `escalating` or is an error
+    /// ([expr.const]/16-19, [expr.const.imm]/2).
+    fn check_bad_refs(
+        &mut self,
+        bad_refs: Vec<ExprId>,
+        escalating: Option<DeclId>,
+        constant_init: bool,
+    ) {
         for r in bad_refs {
             if self.is_consteval_only_ref(r) {
                 if !constant_init {
@@ -799,14 +819,6 @@ impl Sema<'_, '_> {
             }
             self.emit(msg);
         }
-        for u in uses {
-            self.check_default_use(u.decl, u.loc, escalating, false);
-        }
-        if !self.imm.consteval_only_errors.is_empty() {
-            for r in &refs {
-                self.imm.consteval_only_errors.remove(r);
-            }
-        }
     }
 
     /// Expression `r` of consteval-only type outside an immediate
@@ -818,23 +830,20 @@ impl Sema<'_, '_> {
         }
         let loc = self.begin_loc(r);
         let ty = self.ast.exprs.get(r).ty();
-        match escalating {
-            Some(g) => {
-                self.imm.escalated_exprs.insert(r);
-                let why = Escalation {
-                    loc,
-                    callee: g,
-                    call: false,
-                    default_init: None,
-                    written: false,
-                    consteval_only: Some(ty),
-                };
-                self.escalate(g, why);
-            }
-            None => {
-                let d = self.diag(DiagId::sema_immediate_escalating_expr, loc).arg(self.ty_arg(ty));
-                self.emit(d);
-            }
+        if let Some(g) = escalating {
+            self.imm.escalated_exprs.insert(r);
+            let why = Escalation {
+                loc,
+                callee: g,
+                call: false,
+                default_init: None,
+                written: false,
+                consteval_only: Some(ty),
+            };
+            self.escalate(g, why);
+        } else {
+            let d = self.diag(DiagId::sema_immediate_escalating_expr, loc).arg(self.ty_arg(ty));
+            self.emit(d);
         }
     }
 

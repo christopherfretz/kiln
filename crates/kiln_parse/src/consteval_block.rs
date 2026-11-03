@@ -5,7 +5,7 @@
 //! constant-evaluated context and evaluated by sema
 //! ([`kiln_sema::Sema::act_on_consteval_block`]).
 
-use kiln_ast::{DeclId, ExprId, QualType};
+use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std};
 use kiln_sema::DeclaratorContext;
@@ -26,7 +26,7 @@ impl Parser<'_, '_> {
 
     /// consteval-block-declaration, at `consteval {`. C++26 only (no
     /// `-freflection` needed).
-    pub(crate) fn parse_consteval_block(&mut self) -> Option<DeclId> {
+    pub(crate) fn parse_consteval_block(&mut self) -> DeclId {
         let loc = self.bump().span.lo;
         if self.std < Std::Cxx26 {
             let d = self.s.diag(DiagId::parse_consteval_block_cxx26, loc);
@@ -34,14 +34,22 @@ impl Parser<'_, '_> {
         }
         self.s.enter_constant_evaluated();
         let call = self.parse_consteval_block_call(loc);
-        self.s.exit_constant_evaluated(call);
-        Some(self.s.act_on_consteval_block(call, loc))
+        self.s.exit_constant_evaluated(Some(call));
+        self.s.act_on_consteval_block(call, loc)
+    }
+
+    /// A consteval block as a statement at `loc` (a block-declaration's
+    /// declaration-statement); attributes at `lead` are prohibited.
+    pub(crate) fn parse_consteval_block_stmt(&mut self, lead: Option<Loc>, loc: Loc) -> StmtId {
+        self.prohibit_attrs_at(lead);
+        let d = self.parse_consteval_block();
+        self.s.act_on_decl_stmt(&[d], loc)
     }
 
     /// The block's compound statement as the body of a `consteval` lambda
     /// with no captures and no parameters returning `void`, and the call
     /// of that lambda.
-    fn parse_consteval_block_call(&mut self, loc: Loc) -> Option<ExprId> {
+    fn parse_consteval_block_call(&mut self, loc: Loc) -> ExprId {
         let intro = LambdaIntroducer { lbracket: loc, rbracket: loc, ..Default::default() };
         let id = self.s.act_on_lambda_start(&intro);
         let specs = LambdaSpecifiers { consteval: Some(loc), ..Default::default() };
@@ -69,6 +77,6 @@ impl Parser<'_, '_> {
         self.in_stmt_expr = saved_stmt_expr;
         self.sync_attr_macros();
         let lambda = self.s.act_on_lambda_end(id, body, rbrace);
-        Some(self.s.act_on_call(lambda, &[], rbrace, rbrace))
+        self.s.act_on_call(lambda, &[], rbrace, rbrace)
     }
 }

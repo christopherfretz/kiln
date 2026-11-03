@@ -15,10 +15,8 @@ use kiln_source::Loc;
 use crate::Sema;
 
 impl Sema<'_, '_> {
-    /// `consteval { ... }` at `loc`; `call` is the call of its lambda
-    /// (`None` after a parse error).
-    pub fn act_on_consteval_block(&mut self, call: Option<ExprId>, loc: Loc) -> DeclId {
-        let call = call.unwrap_or_else(|| self.recover_err(&[], loc));
+    /// `consteval { ... }` at `loc`; `call` is the call of its lambda.
+    pub fn act_on_consteval_block(&mut self, call: ExprId, loc: Loc) -> DeclId {
         self.consteval_block_checked(call, loc).0
     }
 
