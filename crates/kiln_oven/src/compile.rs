@@ -5241,7 +5241,7 @@ impl Compiler<'_> {
         if let Some(d) = direct
             && let Some(op) = self.b.meta_intrinsic(d)
         {
-            return self.meta_call(e, op, &args);
+            return self.meta_call(e, (op, d), &args, sret);
         }
         // `::operator new`/`::operator delete` (spec/oven.md "Transient
         // allocation": constant only in `std::allocator<T>::allocate` /
@@ -5402,10 +5402,78 @@ impl Compiler<'_> {
     /// spec/reflection.md §3): the arguments are evaluated in order into
     /// consecutive registers (a scalar or `info` argument by value, a
     /// class or array argument by address), whose first index and count
-    /// are the builtin's raw `a`/`b` operands.
-    fn meta_call(&mut self, e: ExprId, op: crate::MetaOp, args: &[ExprId]) -> u32 {
+    /// are the builtin's raw `a`/`b` operands. A class-typed result is
+    /// built in `sret` (or a temporary) through its recipe, and a
+    /// `reflection_range` argument is read as a span (§3.5); a call that
+    /// can throw `std::meta::exception` is followed by its throw (§8.2).
+    /// Operand 3 is the call's `MetaSite` index + 1 (0: none).
+    fn meta_call(
+        &mut self,
+        e: ExprId,
+        (op, callee): (crate::MetaOp, DeclId),
+        args: &[ExprId],
+        sret: Option<u32>,
+    ) -> u32 {
+        use crate::meta::materialize::{ExcSite, MetaSite, Shape, recipe};
         if args.len() > crate::MAX_META_ARGS {
             self.unsupported(e);
+            return self.reg();
+        }
+        let mut site =
+            MetaSite { e, callee, result: None, ranges: [None; crate::MAX_META_ARGS], exc: None };
+        // The recipes, matched once per call site.
+        let rty = self.ety(e);
+        let is_class = |c: &Self, t: OTy| matches!(c.kind(t), TyKind::Record { .. });
+        let mut bad = None;
+        if is_class(self, rty) && !self.node(e).value_category().is_glvalue() {
+            let q = self.ast().exprs.get(e).ty();
+            match self.b.meta_shape(op, None, q) {
+                Ok(Some(sh)) => match recipe(&self.o.types, rty, sh) {
+                    Ok(rc) => site.result = Some(rc),
+                    Err(why) => bad = Some((e, q, why)),
+                },
+                Ok(None) => bad = Some((e, q, "is not a result kiln materializes".into())),
+                Err(why) => bad = Some((e, q, why)),
+            }
+        }
+        for (i, &x) in args.iter().enumerate() {
+            // Every argument is asked: a range parameter may be given a
+            // built-in array, or a value that is no range at all.
+            let xt = self.ety(x);
+            if bad.is_some() {
+                continue;
+            }
+            let q = self.ast().exprs.get(x).ty();
+            match self.b.meta_shape(op, Some(i), q) {
+                Ok(Some(sh)) => match recipe(&self.o.types, xt, sh) {
+                    Ok(rc) => {
+                        site.ranges[i] = Some(rc);
+                        if sh == Shape::Range {
+                            self.o.meta.info_ty = self.o.meta.info_ty.or(match rc {
+                                crate::meta::materialize::Recipe::Vector { elem, .. }
+                                | crate::meta::materialize::Recipe::Inline { elem, .. } => {
+                                    Some(elem).filter(|&t| self.kind(t) == TyKind::Reflection)
+                                }
+                                crate::meta::materialize::Recipe::Span { ptr, .. } => {
+                                    match self.kind(ptr.ty) {
+                                        TyKind::Ptr(t) => Some(t),
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            });
+                        }
+                    }
+                    Err(why) => bad = Some((x, q, why)),
+                },
+                Ok(None) => {}
+                Err(why) => bad = Some((x, q, why)),
+            }
+        }
+        if let Some((at, q, why)) = bad {
+            let t = Oven::type_name(self.ast(), q);
+            let msg = format!("'{t}' cannot be used by '{}': it {why}", op.display());
+            self.trap(at, &msg);
             return self.reg();
         }
         let n = args.len() as u32;
@@ -5434,16 +5502,92 @@ impl Compiler<'_> {
             }
         }
         let dst = self.reg();
-        let t2 = self.ety(e).0;
+        if site.result.is_some() {
+            match sret {
+                Some(p) => {
+                    self.emit(Op::Mov, 0, &[dst, p]);
+                }
+                None => self.alloc(dst, rty, Origin::Temp(e), false, e),
+            }
+        }
+        let exc = if self.b.cxx26() { self.b.meta_exception() } else { None };
+        let exc = exc.and_then(|x| {
+            let (wt, at) = (self.ty(x.what), self.ty(x.at));
+            let what = recipe(&self.o.types, wt, Shape::Str).ok()?;
+            let at_rc = recipe(&self.o.types, at, Shape::SrcLoc).ok()?;
+            Some((x, wt, at, what, at_rc))
+        });
+        if let Some((_, _, _, what, at)) = exc {
+            let flag = self.reg();
+            self.konst(flag, 0);
+            site.exc = Some(ExcSite { flag, what, at });
+        }
+        let idx = if site.result.is_some()
+            || site.exc.is_some()
+            || site.ranges.iter().any(Option::is_some)
+        {
+            self.o.meta.sites.push(site);
+            self.o.meta.sites.len() as u32
+        } else {
+            0
+        };
+        let t2 = rty.0;
         let loc = self.begin(e);
         self.emit_site(
             Op::Builtin,
             crate::kbc::bi::META | op.code() << 8,
-            &[dst, base, n, 0, t1, t2],
+            &[dst, base, n, idx, t1, t2],
             e,
             loc,
         );
+        if let (Some((x, wt, at, _, _)), Some(xs)) = (exc, site.exc) {
+            self.meta_throw_block(e, (x, wt, at), xs.flag, idx, loc);
+        }
         dst
+    }
+
+    /// The throw of the `std::meta::exception` a failing intrinsic call
+    /// `e` (site `idx`) raises, run when its `flag` register is set
+    /// (spec/reflection.md §8.2): the exception object is constructed by
+    /// `ctor` from the message, `^^fn` and location `bi::META_EXC` fills
+    /// in, then thrown as by a throw-expression.
+    fn meta_throw_block(
+        &mut self,
+        e: ExprId,
+        (x, wt, at): (crate::ExcCtor, OTy, OTy),
+        flag: u32,
+        idx: u32,
+        loc: Loc,
+    ) {
+        use crate::kbc::NO_DTOR;
+        use crate::vm::exc::EXC_FREE;
+        let skip = self.jmp_if(flag, false);
+        let m = self.next;
+        let ty = self.ty(x.class);
+        let obj = self.reg();
+        let oi = self.o.push_origin(Origin::Heap(e, 0));
+        self.emit_site(Op::New, 0, &[obj, ty.0, obj, oi, 0], e, loc);
+        self.emit_loc(Op::PushCleanup, 4, &[obj, EXC_FREE, ty.0], loc);
+        let base = self.next;
+        for _ in 0..4 {
+            self.reg();
+        }
+        self.emit(Op::Mov, 0, &[base, obj]);
+        self.alloc(base + 1, wt, Origin::Temp(e), false, e);
+        self.alloc(base + 3, at, Origin::Temp(e), false, e);
+        self.emit_site(
+            Op::Builtin,
+            crate::kbc::bi::META_EXC,
+            &[base + 2, base + 1, base + 3, idx, 0, 0],
+            e,
+            loc,
+        );
+        let f = self.o.func_index(self.b.ast(), x.ctor);
+        self.emit_at(Op::Call, 0, &[f, base], e);
+        let dtor = self.dtor_of(ty).unwrap_or(NO_DTOR);
+        self.emit_site(Op::Throw, 0, &[obj, ty.0, dtor], e, loc);
+        self.next = m;
+        self.patch_here(skip);
     }
 
     /// `__builtin_LINE()` and the other source-location builtins

@@ -428,6 +428,12 @@ pub(crate) mod bi {
     /// register reads; at most `MAX_META_ARGS`); `t1` the element type of
     /// the last pointer argument, `t2` the result type.
     pub const META: u32 = 30;
+    /// The arguments of the `std::meta::exception` constructor a failing
+    /// intrinsic throws with (spec/reflection.md §8.2): the message
+    /// string view built in the object at `a`, the source location in the
+    /// object at `b` (register reads), `^^fn` as `dst`; `c` is raw, the
+    /// call's `MetaSite` index + 1.
+    pub const META_EXC: u32 = 31;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).

@@ -42,12 +42,23 @@ pub struct AnonIds {
     /// Whether the module has any `abi_tag` attribute (computed on first
     /// use): without one no name carries implicit tags.
     abi_tags: Option<bool>,
+    /// Reflection template-argument literals written (`L u6__info <n> E`,
+    /// spec/reflection.md §8.3), over every symbol mangled for the module.
+    refl_literals: u64,
 }
 
 impl AnonIds {
     /// An empty table.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// How many reflection template-argument literals the symbols mangled
+    /// with this table contain (spec/reflection.md §8.3): each costs one
+    /// decimal write of its `ReflectionId`, never a read of the reflectee,
+    /// so this is also the mangler's whole reflection workload.
+    pub fn reflection_literals(&self) -> u64 {
+        self.refl_literals
     }
 
     /// The id of class `d` (first declaration), assigning the next one
@@ -462,6 +473,10 @@ fn value_externally_visible(ast: &Ast, value: ConstValueId) -> bool {
             PtrBase::StringLit { .. } | PtrBase::Const(_) | PtrBase::Label { .. } => false,
         },
         ConstValue::Scalar(Scalar::MemberPtr { member, .. }) => !is_internal_symbol(ast, member),
+        // A reflection mangles as its translation-unit-local id (§8.3 of
+        // spec/reflection.md), so a specialization on one must not be
+        // merged with another TU's: it has internal linkage.
+        ConstValue::Scalar(Scalar::Reflection { .. }) => false,
         ConstValue::Scalar(_) => true,
         ConstValue::Aggregate(img) => {
             img.relocs.iter().all(|r| value_externally_visible(ast, r.value))
@@ -2168,13 +2183,21 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     self.out.push('E');
                 }
             }
-            // Vendor stand-in (spec/reflection-repr.md §4) until the
-            // real reflection mangling: `L u6__info <id> E`, the
-            // translation unit's reflection id, so distinct reflections
-            // never collide within a TU.
+            // The vendor placeholder until WP-102 (spec/reflection.md
+            // §8.3): `L <info-type> <number> E`, the number the
+            // translation unit's `ReflectionId` index, which is the
+            // reflection's identity ([temp.type]/2), so equal reflections
+            // mangle equal and distinct ones distinct. The reflectee is
+            // never read. `<info-type>` is `u6__info`, a substitution
+            // candidate (the second literal of a symbol is `LS<n>_<id>E`).
+            // Not stable across translation units: an entity with such an
+            // argument has internal linkage (`value_externally_visible`).
             Scalar::Reflection { id, .. } => {
                 use std::fmt::Write as _;
-                let _ = write!(self.out, "Lu6__info{}E", id.index());
+                self.out.push('L');
+                self.ty(ty);
+                let _ = write!(self.out, "{}E", id.index());
+                self.anon.refl_literals += 1;
             }
         }
     }
@@ -2662,8 +2685,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
         let view = ast.types.canonical_view(q);
         match view {
-            // A vendor extended type (`u <source-name>`) is substitutable.
-            TypeView::Builtin(b) if !b.is_sizeless() => {
+            // A vendor extended type (`u <source-name>`) is substitutable:
+            // the SVE types and `std::meta::info` (`u6__info`, §8.3 of
+            // spec/reflection.md).
+            TypeView::Builtin(b) if !b.is_sizeless() && b != BuiltinType::MetaInfo => {
                 self.out.push_str(self.builtin_str(b));
                 return;
             }
@@ -2904,6 +2929,9 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         B::SvBfloat16 => "u14__SVBfloat16_t",
         B::SvBool => "u10__SVBool_t",
         B::SvCount => "u11__SVCount_t",
+        // The vendor placeholder for `std::meta::info` until WP-102
+        // (GCC 16.1 writes `Dm`; spec/reflection.md §8.3).
+        B::MetaInfo => "u6__info",
         _ => "u7unknown",
     }
 }
