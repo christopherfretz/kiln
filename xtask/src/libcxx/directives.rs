@@ -257,6 +257,30 @@ impl Directives {
     }
 }
 
+/// Whether `text` has a clang-verify directive (`expected-error`,
+/// `-warning`, `-note` or `-remark`, optionally `-re`, then anything up to
+/// `{{` on the same line), the default `-verify` prefix only. Such a
+/// `.compile.fail.cpp` test is run with `-verify` (spec/libcxx.md
+/// ".compile.fail.cpp").
+pub fn has_verify_directives(text: &str) -> bool {
+    text.lines().any(|line| {
+        let mut start = 0;
+        while let Some(i) = line[start..].find("expected-").map(|i| i + start) {
+            start = i + "expected-".len();
+            if line[..i].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                continue;
+            }
+            let rest = &line[start..];
+            let level = ["error", "warning", "note", "remark"].iter().find(|l| rest.starts_with(*l));
+            if level.is_some_and(|l| rest[l.len()..].contains("{{")) {
+                return true;
+            }
+        }
+        false
+    })
+}
+
 /// The first keyword at or after `from` in `line` that does not follow an
 /// identifier character.
 fn find_keyword(line: &str, from: usize) -> Option<(usize, &'static str)> {
@@ -430,6 +454,18 @@ fn string_literal(s: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn verify_directives() {
+        use super::has_verify_directives as has;
+        assert!(has("int x = y; // expected-error {{undeclared identifier 'y'}}"));
+        assert!(has("// expected-error-re@+1 2 {{.*}}"));
+        assert!(has("f(); // expected-warning@-1{{unused}}"));
+        assert!(!has("// expected-no-diagnostics"));
+        assert!(!has("// unexpected-error {{x}}"));
+        assert!(!has("// expected-error without braces"));
+        assert!(!has("// This test checks that X fails to compile."));
+    }
+
     use super::*;
 
     #[test]

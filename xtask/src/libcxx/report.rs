@@ -320,6 +320,26 @@ pub fn render(
         let _ = writeln!(s, "- `{}` — {}{first}", r.rel, r.outcome);
     }
 
+    let passed_on_status: Vec<(&str, &str)> = results
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::Pass | Outcome::XPass))
+        .filter_map(|r| Some((r.rel.as_str(), r.first_error.as_deref()?)))
+        .collect();
+    let _ = writeln!(
+        s,
+        "\n### compile.fail tests passed on exit status\n\n{} `.compile.fail.cpp` tests without \
+         clang-verify directives passed because the compile failed; their first error, for spotting a \
+         wrong-reason failure (spec/libcxx.md \".compile.fail.cpp\").\n",
+        passed_on_status.len()
+    );
+    if !passed_on_status.is_empty() {
+        let _ = writeln!(s, "<details>\n\n| test | first error |\n|---|---|");
+        for (rel, line) in passed_on_status {
+            let _ = writeln!(s, "| `{rel}` | {} |", md_code(&cut(line, 160)));
+        }
+        let _ = writeln!(s, "\n</details>");
+    }
+
     let mut reasons: BTreeMap<&str, usize> = BTreeMap::new();
     for r in results {
         if let Outcome::Unsupported(why) = &r.outcome {
@@ -376,6 +396,7 @@ mod tests {
             wall: Duration::ZERO,
             max_rss_kb: Some(2048),
             compile_rss_kb: Some(1024),
+            first_error: None,
         }
     }
 
