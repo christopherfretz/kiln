@@ -18,8 +18,8 @@ use super::new_delete::record_bits;
 use super::{Access, Compiler, Local, Place, skip_parens};
 use crate::kbc::{Op, cmp, int_aux};
 use crate::mem::Origin;
-use crate::vm::exc::LIFE_CHECK;
 use crate::ty::{OTy, TyKind};
+use crate::vm::exc::LIFE_CHECK;
 
 /// A member call through a null object pointer.
 const NULL_MEMBER_CALL: &str =

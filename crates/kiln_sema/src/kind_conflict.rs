@@ -104,9 +104,8 @@ impl Sema<'_, '_> {
         }
         let alias = u32::from(self.kind_of(td) == DeclKind::TypeAlias);
         let quoted = format!("'{}'", sym_str(self, name));
-        let note = self
-            .diag(DiagId::note_entity_declared_here, self.ast.decls.get(td).loc())
-            .arg(quoted);
+        let note =
+            self.diag(DiagId::note_entity_declared_here, self.ast.decls.get(td).loc()).arg(quoted);
         let msg = self
             .diag(DiagId::sema_tag_definition_of_typedef, loc)
             .arg(sym_str(self, name))

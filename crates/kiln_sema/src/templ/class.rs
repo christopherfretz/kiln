@@ -567,9 +567,13 @@ impl Sema<'_, '_> {
             }
             // A declared, never defined explicit specialization
             // ([temp.expl.spec]/1) is reported here as incomplete.
-            if self.ast.spec_info(r).is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization)
+            if self
+                .ast
+                .spec_info(r)
+                .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization)
             {
-                let d = self.diag(DiagId::sema_incomplete_nested_name_spec, poi).arg(self.ty_arg(q));
+                let d =
+                    self.diag(DiagId::sema_incomplete_nested_name_spec, poi).arg(self.ty_arg(q));
                 let d = self.incomplete_note(d, q);
                 self.emit(d);
             }
