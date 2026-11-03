@@ -438,7 +438,11 @@ impl Sema<'_, '_> {
         // return 1;` deduces per specialization. The declared type keeps
         // its placeholder (clang prints `auto`).
         if self.in_template() || value.is_some_and(|e| self.expr_is_type_dependent(e)) {
+            // In the pattern of an expansion statement of a non-template
+            // function, its expansions deduce.
+            let templated = self.in_template_outside_expansions();
             if let Some(st) = self.func.as_mut()
+                && templated
                 && !st.deduced
             {
                 st.deduced = true;

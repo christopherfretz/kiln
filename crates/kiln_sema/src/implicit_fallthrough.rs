@@ -280,6 +280,7 @@ impl Sema<'_, '_> {
             | StmtKind::ForStmt
             | StmtKind::DoStmt
             | StmtKind::CXXForRangeStmt
+            | StmtKind::CXXExpansionStmt
             | StmtKind::DeclStmt
             | StmtKind::ExprStmt => false,
             _ => self.children(s).into_iter().any(|c| self.ift_has_continue(c, flow)),

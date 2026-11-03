@@ -149,6 +149,12 @@ pub enum ExprKind {
     CXXSpliceExpr,
     // recovery
     RecoveryExpr,
+    /// The element an expansion statement's for-range-declaration is
+    /// initialized from ([stmt.expand], P1306R5; template patterns
+    /// only): `aux` is the statement's form ([`crate::stmt::ExpansionForm`]),
+    /// `a` the depth of its synthetic template level. Each expansion
+    /// replaces it by its element (spec/sema.md "Expansion statements").
+    CXXExpansionSelectExpr,
 }
 
 impl ExprKind {
