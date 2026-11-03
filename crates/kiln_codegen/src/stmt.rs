@@ -486,19 +486,44 @@ impl Cg<'_> {
             None => true,
             Some(c) => self.fold_bool(c) == Some(true),
         };
-        if cond_true && self.is_empty_body(body) {
+        let mp = if cond_true && self.is_empty_body(body) {
             self.f.mustprogress = false;
-            return None;
-        }
-        let mp = if let Some(m) = self.f.loop_mp {
-            m
+            None
+        } else if let Some(m) = self.f.loop_mp {
+            Some(m)
         } else {
             let s = self.m.md_string(b"llvm.loop.mustprogress");
             let m = self.m.md_tuple(&[Some(s)]);
             self.f.loop_mp = Some(m);
-            m
+            Some(m)
         };
-        let node = self.m.md_distinct_tuple(&[None, Some(mp)]);
+        self.loop_id(mp)
+    }
+
+    /// clang `LoopInfo::createMetadata`: the distinct `llvm.loop` node
+    /// `{self, mustprogress?, unroll.disable?}`, or `None` when it has no
+    /// property. At `-O1` (clang `OptimizationLevel > 0` without
+    /// `UnrollLoops`, which `-O2` and above set) every loop carries
+    /// `llvm.loop.unroll.disable` (spec/codegen.md "Loop metadata").
+    fn loop_id(&mut self, mp: Option<kiln_llvm::MetadataId>) -> Option<kiln_llvm::MetadataId> {
+        let unroll = if self.opts.opt_level == 1 {
+            Some(if let Some(u) = self.f.loop_unroll {
+                u
+            } else {
+                let s = self.m.md_string(b"llvm.loop.unroll.disable");
+                let u = self.m.md_tuple(&[Some(s)]);
+                self.f.loop_unroll = Some(u);
+                u
+            })
+        } else {
+            None
+        };
+        if mp.is_none() && unroll.is_none() {
+            return None;
+        }
+        let ops: Vec<_> =
+            std::iter::once(None).chain([mp, unroll].into_iter().flatten().map(Some)).collect();
+        let node = self.m.md_distinct_tuple(&ops);
         self.m.md_set_operand(node, 0, Some(node)).expect("distinct loop id");
         Some(node)
     }
@@ -653,8 +678,8 @@ impl Cg<'_> {
     }
 
     /// clang `EmitCXXForRangeStmt`: the implicit variables, then the
-    /// loop. The loop carries no `llvm.loop` metadata (clang pushes the
-    /// loop without `mustprogress`).
+    /// loop. clang pushes the loop without `mustprogress`, so it carries
+    /// `llvm.loop` metadata only at `-O1` (`unroll.disable`).
     fn emit_range_for(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
         let d = *ast.stmts.range_for_data(s);
@@ -674,7 +699,8 @@ impl Cg<'_> {
         let cond_d = self.jump_dest_here();
         let cond_b = cond_d.blk;
         self.emit_block(cond_b, false);
-        self.f.loops.push(LoopFrame { header: cond_b, md: None });
+        let md = self.loop_id(None);
+        self.f.loops.push(LoopFrame { header: cond_b, md });
         let exit =
             if self.requires_cleanups(&for_scope) { self.f.fir.create_block() } else { end.blk };
         let body_b = self.f.fir.create_block();

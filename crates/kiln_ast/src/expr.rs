@@ -137,6 +137,7 @@ pub enum ExprKind {
     ConstantExpr,
     // GNU / builtins
     StmtExpr,
+    AddrLabelExpr,
     ChooseExpr,
     VAArgExpr,
     AtomicExpr,
@@ -2849,6 +2850,11 @@ impl ExprArena {
     /// The compound statement of a `StmtExpr`.
     pub fn stmt_expr_body(&self, e: ExprId) -> StmtId {
         StmtId::new(self.expect_kind(e, ExprKind::StmtExpr).a)
+    }
+
+    /// The label declaration a GNU `&&label` (`AddrLabelExpr`) names.
+    pub fn addr_label(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::AddrLabelExpr).a)
     }
 
     /// The operand type and designator as written of a value-dependent

@@ -680,7 +680,9 @@ impl Cg<'_> {
     /// empty, its class has no virtual bases and no field needing
     /// destruction, and exactly one non-virtual base, at offset zero, has
     /// a non-trivial destructor. A discardable (`linkonce_odr`,
-    /// internal) one is replaced by that base's base-object destructor;
+    /// `available_externally`, internal) one is replaced by that base's
+    /// base-object destructor (unless that is an `available_externally`
+    /// `always_inline` one);
     /// an external one becomes an alias of it when the base's is already
     /// defined and not weak. A `weak_odr` one (clang `COMDAT` structor
     /// codegen) is always emitted. `declared` is the base-object
@@ -693,11 +695,11 @@ impl Cg<'_> {
         declared: Option<FuncId>,
     ) -> R<bool> {
         let ast = self.ast;
-        if !self.opts.optimize || ast.decls.get(d).kind() != DeclKind::CXXDestructor {
+        if !self.opts.optimize() || ast.decls.get(d).kind() != DeclKind::CXXDestructor {
             return Ok(false);
         }
         let linkage = self.fn_def_linkage(d);
-        if matches!(linkage, Linkage::WeakOdr | Linkage::AvailableExternally) {
+        if linkage == Linkage::WeakOdr {
             return Ok(false);
         }
         // A defaulted destructor's synthesized body is on its first
@@ -742,10 +744,14 @@ impl Cg<'_> {
         };
         let bfirst = ast.first(bdtor);
         let target_linkage = self.fn_def_linkage(bfirst);
-        if matches!(linkage, Linkage::Internal | Linkage::LinkOnceOdr) {
+        if matches!(
+            linkage,
+            Linkage::Internal | Linkage::LinkOnceOdr | Linkage::AvailableExternally
+        ) {
             // clang keeps an `available_externally` `always_inline` target
             // unreferenced (libc++); the alias is then refused below.
-            if target_linkage == Linkage::AvailableExternally {
+            if target_linkage == Linkage::AvailableExternally && self.has_always_inline_attr(bfirst)
+            {
                 return Ok(false);
             }
             // `addReplacement`.
@@ -1543,6 +1549,7 @@ impl Cg<'_> {
         }
         let fd = *ast.decls.function(ctor).expect("constructor");
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.construct_args(e)).collect();
+        self.psabi_call_check(e, ctor, &args, true);
         if fd.spec.is_trivial() && args.is_empty() {
             return Ok(());
         }
@@ -1803,6 +1810,7 @@ impl Cg<'_> {
         let ast = self.ast;
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
         let fty = ast.decls.get(md).ty().expect("method type");
+        self.psabi_call_check(e, md, args, self.this_class_of(md).is_some());
         if self.this_class_of(md).is_none() {
             // A static member function called through an object.
             self.emit_ignored(base)?;

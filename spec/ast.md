@@ -372,6 +372,7 @@ struct ExprNode {        // 20 bytes
   | `BinaryConditionalOperator` | `ListId` of [common, condition, true arm, false arm] | | `binary_conditional_operands` |
   | `CXXThrowExpr` | operand or none (rethrow) | | `throw_operand` |
   | `StmtExpr` | the `CompoundStmt` | | `stmt_expr_body` |
+  | `AddrLabelExpr` (GNU `&&l`, WP-424) | the `LabelDecl` | `cold.end_loc` = the label name's location; a `void *` prvalue | `addr_label` |
   | `OffsetOfExpr` | `ListId` of the array index expressions | `b` = byte offset (`u32`) | `offsetof_value` |
   | `CompoundLiteralExpr` | the `InitListExpr` | | `compound_literal_init` |
   | `CXXScalarValueInitExpr` | none | | |

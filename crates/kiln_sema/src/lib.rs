@@ -61,6 +61,7 @@ mod macro_fixit;
 pub mod modules;
 pub mod names;
 pub mod new_delete;
+mod nonnull;
 mod null_compare;
 mod null_deref;
 mod nullability;
@@ -96,7 +97,7 @@ mod vector_ops;
 mod vexing;
 
 use kiln_abi::Target;
-use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};
+use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type, vector_diag_arg};
 use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
@@ -1066,14 +1067,18 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                     }
                     return;
                 }
-                if (sev >= kiln_diag::Severity::Error || is_sfinae_failure(id))
-                    && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
-                {
+                // A warning that is an error only through `-Werror` is
+                // still a warning here (clang's SFINAE response follows
+                // the diagnostic's class, not its mapped severity).
+                let failure = (sev >= kiln_diag::Severity::Error
+                    && (id.class() != kiln_diag::DiagClass::Warning || id.is_default_error()))
+                    || is_sfinae_failure(id);
+                if failure && let Some(s) = self.inst.sfinae.borrow_mut().last_mut() {
                     s.errors += 1;
                     if s.first.is_none() {
                         s.first = Some(d);
                     }
-                } else if sev < kiln_diag::Severity::Error && self.diags.would_emit(&d) {
+                } else if !failure && self.diags.would_emit(&d) {
                     // A warning waits for the use of what the substitution
                     // forms (§5.7); clang 22 keeps the context notes with it
                     // (clang 19 none).
@@ -1560,28 +1565,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// gives no `aka`.
     pub fn ty_arg(&self, q: QualType) -> String {
         let names = names::SemaNames::new(self);
-        let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
-        if let kiln_ast::types::TypeView::Vector { elem, count, .. } =
-            self.ast.types.canonical_view(q)
-        {
-            // clang's `Desugar` stops before a vector type ("people want
-            // their vec4"), and prints the vector details only without
-            // an `aka`.
-            if let Some(d) = self.vector_aka(q) {
-                let a = print_type(&self.ast.types, &names, d, PrintOptions::SUGARED);
-                if a != s {
-                    return format!("'{s}' (aka '{a}')");
-                }
-            }
-            let top = self.ast.types.desugar_top(q);
-            let elem = match self.ast.types.view(top.ty()) {
-                kiln_ast::types::TypeView::Vector { elem, .. } => elem,
-                _ => elem,
-            };
-            let e = print_type(&self.ast.types, &names, elem, PrintOptions::SUGARED);
-            let v = if count == 1 { "value" } else { "values" };
-            return format!("'{s}' (vector of {count} '{e}' {v})");
+        if let Some(v) = vector_diag_arg(&self.ast.types, &names, q, self.clang_compat >= 22) {
+            return v;
         }
+        let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
         let a = aka(&self.ast.types, &names, q).filter(|a| {
             self.va_list_type.is_none_or(|v| {
                 let vc = print_type(&self.ast.types, &names, v, PrintOptions::CANONICAL);
@@ -1592,40 +1579,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             Some(a) => format!("'{s}' (aka '{a}')"),
             None => format!("'{s}'"),
         }
-    }
-
-    /// clang's `Desugar` for a type whose canonical type is a vector: the
-    /// type desugared step by step, stopping at the sugar whose
-    /// underlying type is the vector itself; `None` when no step counts
-    /// for an `aka` (template parameter substitution, `using` and
-    /// elaborated names, attributes and deduced types do not).
-    fn vector_aka(&self, q: QualType) -> Option<QualType> {
-        use kiln_ast::types::TypeView as V;
-        let t = &self.ast.types;
-        let mut cur = q;
-        let mut aka = false;
-        for _ in 0..256 {
-            let next = t.desugar_once(cur);
-            if next == cur {
-                break;
-            }
-            match t.view(cur.ty()) {
-                // clang substitutes canonical template arguments.
-                V::SubstTemplateTypeParm { .. } => {
-                    cur = t.canonical(cur);
-                    continue;
-                }
-                V::Elaborated { .. } | V::Using { .. } | V::Attributed { .. } | V::Auto { .. } => {}
-                _ => {
-                    if matches!(t.view(next.ty()), V::Vector { .. }) {
-                        break;
-                    }
-                    aka = true;
-                }
-            }
-            cur = next;
-        }
-        aka.then_some(cur)
     }
 
     /// `q` printed canonically (fully qualified) without quotes.

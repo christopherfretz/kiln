@@ -50,7 +50,8 @@ impl Sema<'_, '_> {
     /// [class.prop]/9; clang 22 `UTT_IsImplicitLifetime`): scalar, array
     /// and vector types, and implicit-lifetime classes (an aggregate whose
     /// destructor is not user-provided, or a class with a trivial
-    /// non-deleted destructor and a trivial non-deleted constructor).
+    /// non-deleted destructor and a trivial, eligible, non-deleted
+    /// constructor).
     pub(super) fn is_implicit_lifetime(&mut self, q: QualType) -> bool {
         use SpecialKind as K;
         let tys = &self.ast.types;
@@ -80,8 +81,16 @@ impl Sema<'_, '_> {
             return false;
         }
         let declared: Vec<DeclId> = self.ast.constructors(r).iter().collect();
-        if declared.iter().any(|&c| !self.is_deleted_fn(c) && self.fn_spec(c).is_trivial()) {
-            return true;
+        // clang skips an ineligible constructor ([special]/6: its
+        // constraints are not satisfied).
+        for c in declared {
+            if self.is_deleted_fn(c) || !self.fn_spec(c).is_trivial() {
+                continue;
+            }
+            let loc = self.ast.decls.get(c).loc();
+            if self.check_function_constraints(c, loc).is_none_or(|s| self.sat_ok(s)) {
+                return true;
+            }
         }
         (self.needs_implicit(r, K::DefaultCtor)
             && bits.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR))

@@ -443,6 +443,19 @@ pub(crate) mod bi {
     /// `Oven::evaluate_chars`): the `a` elements of character type `t1`
     /// that `b` points to, read into the Oven's message buffer.
     pub const MSG_CHARS: u32 = 24;
+    /// `__builtin_is_within_lifetime(a)` ([meta.const.eval]/4, WP-418;
+    /// clang `EvaluateBuiltinIsWithinLifetime`): a null, function or
+    /// one-past-the-end `a` fails (`BiFault::Lifetime`); a pointer to no
+    /// live object fails as a read of it; else whether the object of
+    /// static type `t1` (or [`DYN`]) at `a` is within its lifetime: `b`
+    /// (the argument's static union designators, `UNION_LIVE`) and every
+    /// union on its path from the complete object has it in its active
+    /// member.
+    pub const LIFETIME: u32 = 25;
+    /// `b != 0` and member `sub` of the union of type `t1` at `a` is
+    /// (or may be) its active member: one union member access of an
+    /// `is_within_lifetime` argument's designator (WP-418).
+    pub const UNION_LIVE: u32 = 27;
     /// WP-416: `__builtin_align_up` / `align_down` / `is_aligned` of the
     /// integer `a` (canonical in width | signed << 8 of sub) to the
     /// alignment `b` (canonical in `t2`'s width | signed << 8); sub's

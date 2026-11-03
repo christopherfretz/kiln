@@ -2708,6 +2708,15 @@ impl Oven {
             self.place_in_unions(raw, a.ty, ty)?;
         }
         self.mem.set_lifetime(raw, size, true).map_err(fault)?;
+        if size == 0 && self.types.size(ty) > 0 {
+            // Its lifetime begins all the same: an explicit destruction
+            // (`end_life`) ended it over its whole size, and a member call
+            // on the new object checks that size (`std::destroy_at` then
+            // `std::construct_at` of an empty member, libc++'s
+            // `__movable_box` assignment; [basic.life]/8). Only the
+            // lifetime bits are set: the bytes' values stay the sharer's.
+            self.mem.revive(raw, self.types.size(ty)).map_err(fault)?;
+        }
         if aux & new_aux::ZERO != 0 && size > 0 {
             let (st, abs, _) = self.mem.check(raw, size, true).map_err(fault)?;
             self.mem.zero(st, abs, size);

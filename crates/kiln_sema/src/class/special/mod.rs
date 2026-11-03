@@ -179,6 +179,11 @@ pub(crate) struct SpecialState {
     /// them ([`Sema::template_id_no_match`]); the entry follows the
     /// enclosing parentheses and `&` as [`PendingDeleted`] does.
     pub pending_tid_warnings: Vec<(ExprId, DeclId, Vec<kiln_diag::Diag>)>,
+    /// Specializations whose held-back warnings an initialization that
+    /// found no match handed back ([`Sema::drop_template_id_warnings`]),
+    /// with that use's location: from clang 22 on their context notes
+    /// move to the next use ([`Sema::take_suppressed_diags`]).
+    pub dropped_tid_warnings: FxHashMap<DeclId, Loc>,
     /// Implicit special members found deleted after their class's
     /// definition bits froze (lazy declarations; clang's
     /// `setImplicit*IsDeleted` and its `DefaultedCopyAssignmentIsDeleted`

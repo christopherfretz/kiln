@@ -422,6 +422,22 @@ impl Parser<'_, '_> {
 
     // -- unary and cast expressions ----------------------------------------------------
 
+    /// GNU `&& identifier` (labels as values; clang `ParseCastExpression`,
+    /// `tok::ampamp`): "use of GNU address-of-label extension" at the
+    /// `&&`, then the label is looked up or created and marked used.
+    /// No postfix suffix follows. Outside a function body the operand is
+    /// rejected at the identifier (spec/parse.md §6.1).
+    fn parse_addr_label(&mut self, amp: Loc) -> Option<ExprId> {
+        self.bump();
+        let Some(name) = self.ident() else {
+            let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+            self.emit(d);
+            return None;
+        };
+        let nl = self.bump().span.lo;
+        self.s.act_on_addr_label(name, nl, amp)
+    }
+
     /// cast-expression ([expr.cast]) and unary-expression ([expr.unary]).
     pub(crate) fn parse_cast_expr(&mut self) -> PExpr {
         if !self.stack_ok() {
@@ -449,8 +465,7 @@ impl Parser<'_, '_> {
                 return Some(self.s.act_on_unary(op, e, loc));
             }
             if p == Punct::AmpAmp {
-                self.unsupported("the GNU address-of-label operator", loc);
-                return None;
+                return self.parse_addr_label(loc);
             }
             if let Some((open, is_type, ambiguous)) = self.open_paren_template_scope() {
                 if is_type && (!ambiguous || self.ambiguous_paren_is_cast(self.pos())) {
@@ -1732,16 +1747,21 @@ impl Parser<'_, '_> {
         begin: Loc,
         template_loc: Option<Loc>,
     ) -> ExprId {
-        match self.parse_template_id_rest(class, name, nl) {
+        let res = self.parse_template_id_rest(class, name, nl);
+        let r_angle = self.prev_lo();
+        match res {
             Ok(TemplateIdRef::Overload(e)) => {
                 let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
+                self.s.set_template_id_end(e, r_angle);
                 if let Some(q) = qual {
                     self.s.set_template_id_begin(e, begin, nl);
                     self.s.set_template_id_qualifier(e, q.nns);
                     self.s.set_template_kw(e, template_loc);
                 }
                 if !self.at(Punct::LParen) {
-                    return self.s.resolve_single_template_id(e);
+                    let r = self.s.resolve_single_template_id(e);
+                    self.s.set_template_id_end(r, r_angle);
+                    return r;
                 }
                 if qual.is_none() {
                     self.s.act_on_template_id_call_name(e);
@@ -1749,6 +1769,7 @@ impl Parser<'_, '_> {
                 e
             }
             Ok(TemplateIdRef::Value(e)) => {
+                self.s.set_template_id_end(e, r_angle);
                 if let Some(q) = qual {
                     self.s.set_template_id_begin(e, begin, nl);
                     self.s.set_template_id_qualifier(e, q.nns);

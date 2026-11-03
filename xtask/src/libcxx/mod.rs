@@ -588,6 +588,13 @@ fn execute(opts: &Options) -> Result<bool, String> {
         long_run_timeout: opts.long_run_timeout,
         mem: MemLimit::from_mib(opts.mem_limit_mib),
         probe,
+        warning_flags: run::supported_warning_flags(
+            &kiln,
+            &toolchain.llvm_dir(),
+            &scratch.with_extension("warnings"),
+            MemLimit::from_mib(opts.mem_limit_mib),
+            opts.compile_timeout(),
+        ),
         scratch: scratch.clone(),
         keep: opts.keep,
     };

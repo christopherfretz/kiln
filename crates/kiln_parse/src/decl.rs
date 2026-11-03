@@ -1300,9 +1300,8 @@ impl Parser<'_, '_> {
                 true
             }
             Some((end, NameClass::Value(_), _))
-                if ctx == DeclaratorContext::File
+                if matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                     && self.nontype_scope_name(start)
-                    && Self::punct_of(self.tok_at(end)) != Some(Punct::Less)
                     && self.qualified_unknown_type_follows(end, ctx) =>
             {
                 self.unknown_qualified_type_spec(ds, loc);
@@ -1533,7 +1532,7 @@ impl Parser<'_, '_> {
             || self.unknown_type_follows(end, ctx)
             || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && Self::punct_of(self.tok_at(end)) == Some(Punct::Less))
-            || (ctx == DeclaratorContext::File
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
                 && Self::punct_of(self.tok_at(end)) == Some(Punct::LParen)
                 && self.declarator_may_start_at(end))
     }
@@ -3176,13 +3175,16 @@ impl Parser<'_, '_> {
 
     /// A type-id whose vector attributes in the decl-specifiers
     /// (`int __attribute__((ext_vector_type(4)))`) move to `out`, as clang
-    /// `ParseTypeName`'s `Attrs` hands them to an alias-declaration.
+    /// `ParseTypeName`'s `Attrs` hands them to an alias-declaration;
+    /// without `out` they modify the decl-specifier type (a cast, `sizeof`,
+    /// a template argument; clang `processTypeAttrs`).
     pub(crate) fn parse_type_id_into(
         &mut self,
         out: Option<&mut Vec<AttrId>>,
         site: DeclSite,
     ) -> Option<QualType> {
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
+        let vec_out = out.is_some();
         if let Some(out) = out {
             let ast = &self.s.ast;
             let is_vec = |a: &AttrId| {
@@ -3198,7 +3200,10 @@ impl Parser<'_, '_> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         d.site = site;
         self.parse_declarator(&mut d);
-        let base = self.s.type_from_declspec(&ds);
+        let mut base = self.s.type_from_declspec(&ds);
+        if !vec_out {
+            base = self.s.apply_type_id_vector_attrs(base, &ds);
+        }
         self.type_id_constraint = if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             ds.constraint_loc
         } else {
@@ -3428,7 +3433,7 @@ impl Parser<'_, '_> {
     /// [`Self::qualified_unknown_type_follows`]). The name is the
     /// declarator-id of an invalid `int` declaration, after "a type
     /// specifier is required" (WP-411).
-    fn at_qualified_implicit_int_declarator(&self) -> bool {
+    pub(crate) fn at_qualified_implicit_int_declarator(&self) -> bool {
         let i = self.pos();
         let Some((end, false, class, _, Some(q))) = self.scan_name_qual_at(i) else {
             return false;

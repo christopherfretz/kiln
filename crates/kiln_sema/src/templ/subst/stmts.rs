@@ -57,6 +57,23 @@ impl Substituter<'_, '_, '_> {
                 if !reported && self.sema.clang_compat >= 22 && self.erroneous_return(s) {
                     return self.sema.act_on_null_stmt(loc);
                 }
+                // A `return` whose operand fails without a new error (it
+                // names a variable whose initializer failed, or, under
+                // clang 19, is an error of the pattern) in a function whose
+                // return type has a placeholder: clang's `DeduceAutoType`
+                // answers `AlreadyDiagnosed` for an operand that
+                // `containsErrors()` and `BuildReturnStmt` marks the
+                // function invalid, so its type is not deduced `void` from
+                // what is left and a call to it does not cascade. In a
+                // lambda body the lambda-expression fails instead
+                // (spec/sema-templates.md §5.5; WP-434).
+                if !reported && !self.probe_done() && self.placeholder_return(s) {
+                    if self.lambda_bodies == 0 {
+                        self.stmt_failed = true;
+                    } else {
+                        self.lambda_return_failed = true;
+                    }
+                }
                 let e = self.sema.recover_err(&[], loc);
                 self.sema.builder().expr_stmt(e)
             }
@@ -73,6 +90,16 @@ impl Substituter<'_, '_, '_> {
                 .stmts
                 .return_value(s)
                 .is_some_and(|v| ast.exprs.is_erroneous_operand(v, &ast.lists))
+    }
+
+    /// Whether pattern statement `s` is a `return` with an operand in a
+    /// function (or lambda call operator) whose declared return type has
+    /// a placeholder, deduced by an earlier `return` or not.
+    fn placeholder_return(&self, s: StmtId) -> bool {
+        let ast = &self.sema.ast;
+        ast.stmts.get(s).kind() == StmtKind::ReturnStmt
+            && ast.stmts.return_value(s).is_some()
+            && self.sema.func.as_ref().is_some_and(|f| f.auto_ret.is_some())
     }
 
     /// A sub-statement: a statement that is not compound gets a block
@@ -176,8 +203,20 @@ impl Substituter<'_, '_, '_> {
                         Ok(x) => out.push(x),
                         Err(f) => {
                             // This declaration and the ones after it are
-                            // invalid; a later use is no new error.
+                            // invalid; a later use is no new error. As
+                            // clang's `TransformCompoundStmt`, a declaration
+                            // that does not instantiate at all (a
+                            // `static_assert` whose condition is invalid, a
+                            // variable whose type does not substitute; not
+                            // one with an invalid initializer) also ends the
+                            // enclosing compound statement (WP-418).
+                            let none = match self.sema.kind_of(d) {
+                                DeclKind::StaticAssert => true,
+                                DeclKind::Var => !self.locals.contains_key(&d),
+                                _ => false,
+                            };
                             self.failed_locals.extend_from_slice(&ds[i..]);
+                            self.invalid_decl_stmt |= none;
                             return Err(f);
                         }
                     }
@@ -213,7 +252,7 @@ impl Substituter<'_, '_, '_> {
                 self.sema.push_scope(ScopeKind::Control);
                 let r = (|| {
                     let (var, c) = self.condition(l.cond_var, l.cond, loc)?;
-                    let c = self.sema.act_on_condition(c.ok_or(SubstFail)?);
+                    let c = self.sema.act_on_condition_at(c.ok_or(SubstFail)?, loc);
                     self.sema.act_on_start_loop();
                     let body = l.body.map(|b| self.sub_stmt(b));
                     self.sema.act_on_end_loop();
@@ -230,7 +269,7 @@ impl Substituter<'_, '_, '_> {
                 self.sema.act_on_end_loop();
                 let body = body.unwrap_or_else(|| self.sema.act_on_null_stmt(loc));
                 let c = self.expr(l.cond.ok_or(SubstFail)?)?;
-                let c = self.sema.act_on_condition(c);
+                let c = self.sema.act_on_condition_at(c, loc);
                 Ok(self.sema.act_on_do(body, c, loc))
             }
             StmtKind::ForStmt => {
@@ -239,7 +278,7 @@ impl Substituter<'_, '_, '_> {
                 let r = (|| {
                     let init = self.opt_stmt(l.init);
                     let (var, c) = self.condition(l.cond_var, l.cond, loc)?;
-                    let c = c.map(|c| self.sema.act_on_condition(c));
+                    let c = c.map(|c| self.sema.act_on_condition_at(c, loc));
                     let inc = self.opt_expr(l.inc)?;
                     self.sema.act_on_start_loop();
                     let body = l.body.map(|b| self.sub_stmt(b));
@@ -495,7 +534,7 @@ impl Substituter<'_, '_, '_> {
             let (var, c) = self.condition(d.cond_var, d.cond, loc)?;
             let c = c.ok_or(SubstFail)?;
             if kind == IfKind::Constexpr {
-                let c = self.sema.act_on_constexpr_condition(c);
+                let c = self.sema.act_on_constexpr_condition(c, loc);
                 if self.sema.ast.exprs.get(c).kind() != ExprKind::ConstantExpr {
                     // Still value-dependent (an outer level is not yet
                     // substituted): both branches are kept, as written.
@@ -533,7 +572,7 @@ impl Substituter<'_, '_, '_> {
                 };
                 return Ok(self.sema.act_on_if(kind, init, var, Some(c), then, els, loc));
             }
-            let c = self.sema.act_on_condition(c);
+            let c = self.sema.act_on_condition_at(c, loc);
             let then = match d.then {
                 Some(t) => self.sub_stmt(t),
                 None => self.sema.act_on_null_stmt(loc),

@@ -3319,6 +3319,9 @@ pub mod builtin {
         /// before the `NoThrowAttr` (clang `AddKnownFunctionAttributes`).
         /// Set together with [`CONST`].
         pub const CONST_EARLY: u8 = 32;
+        /// `Consteval`: the declaration is an immediate function (clang
+        /// `LazilyCreateBuiltin`, `isImmediate`).
+        pub const CONSTEVAL: u8 = 64;
     }
 
     /// One builtin function.
@@ -3348,7 +3351,10 @@ pub mod builtin {
         Info { id, name, sig, attrs }
     }
 
-    use attr::{CONST as C, CONST_EARLY as E, CUSTOM as T, NORETURN as R, NOTHROW as N, PURE as P};
+    use attr::{
+        CONST as C, CONST_EARLY as E, CONSTEVAL as I, CUSTOM as T, NORETURN as R, NOTHROW as N,
+        PURE as P,
+    };
 
     /// Every builtin function kiln declares.
     pub const ALL: &[Info] = &[
@@ -4538,6 +4544,7 @@ pub mod builtin {
         row(SHUFFLEVECTOR, "__builtin_shufflevector", "v.", N | C | T),
         row(VERBOSE_TRAP, "__builtin_verbose_trap", "vcC*cC*", N | R),
         row(COPYSIGNF16, "__builtin_copysignf16", "hhh", N | C),
+        row(IS_WITHIN_LIFETIME, "__builtin_is_within_lifetime", "bv*", N | T | I),
         // WP-416.
         row(ALIGN_UP, "__builtin_align_up", "v*.", N | C | T),
         row(ALIGN_DOWN, "__builtin_align_down", "v*.", N | C | T),
@@ -4808,8 +4815,15 @@ pub mod builtin {
     pub fn min_compat(id: u32) -> u32 {
         match id {
             // 2039..=2047 (WP-410): `sincos`, `fmaximum_num`, `fminimum_num`;
-            // 2060..=2065 (WP-419): the `f128` forms and `sincospi`.
-            2035 | 2036 | FMAXIMUM_NUMF16 | FMINIMUM_NUMF16 | 2039..=2047 | 2060..=2065 => 22,
+            // 2060..=2065 (WP-419): the `f128` forms and `sincospi`;
+            // IS_WITHIN_LIFETIME (WP-418): clang 20.
+            2035
+            | 2036
+            | FMAXIMUM_NUMF16
+            | FMINIMUM_NUMF16
+            | 2039..=2047
+            | 2060..=2065
+            | IS_WITHIN_LIFETIME => 22,
             _ => 0,
         }
     }
@@ -4889,6 +4903,11 @@ pub mod builtin {
     ];
 
     // ---- end WP-410 ----
+
+    /// `__builtin_is_within_lifetime(p)` ([meta.const.eval]/4, P2641R4;
+    /// clang 20, `Consteval` and `CustomTypeChecking`): whether `p` points
+    /// to an object within its lifetime. Kiln-private id.
+    pub const IS_WITHIN_LIFETIME: u32 = 2090;
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {

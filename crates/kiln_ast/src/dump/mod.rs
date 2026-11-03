@@ -2175,6 +2175,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.line.push_str(" immediate-escalating");
                 }
             }
+            // clang `VisitAddrLabelExpr`: the label's name and address.
+            ExprKind::AddrLabelExpr => {
+                let d = exprs.addr_label(e);
+                self.line.push(' ');
+                self.names.write_name(d, &mut self.line);
+                self.id('d', d.raw());
+            }
             // clang `VisitExtVectorElementExpr`: the accessor.
             ExprKind::ExtVectorElementExpr => {
                 self.line.push(' ');
