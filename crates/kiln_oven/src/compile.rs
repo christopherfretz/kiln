@@ -2257,7 +2257,8 @@ impl Compiler<'_> {
             TyKind::Int { width, signed } => (u32::from(width), signed),
             _ => (8, false),
         };
-        let c = self.rv(d.cond);
+        let wide_cond = self.o.types.wide(cond_ty).is_some();
+        let c = if wide_cond { self.wide_place(d.cond) } else { self.rv(d.cond) };
         // [stmt.pre]/4 (P0963): tuple-like bindings after the condition.
         self.cond_bindings(d.cond_var);
         if nested {
@@ -2277,6 +2278,24 @@ impl Compiler<'_> {
         let aux_eq = int_aux(cw as u8, cs) | cmp::EQ << 9;
         for (i, tg) in targets.iter().enumerate() {
             let Some((lo, hi)) = tg.range else { continue };
+            if wide_cond {
+                // A wide condition: each case value compared in memory.
+                let cd = *self.b.ast().stmts.case_data(tg.stmt);
+                if let Some(rhs) = cd.rhs {
+                    let u = self.reg();
+                    self.wide_case_cmp(cmp::GE, u, c, cond_ty, cd.lhs);
+                    let skip = self.jmp_if(u, false);
+                    self.wide_case_cmp(cmp::LE, u, c, cond_ty, rhs);
+                    let j = self.jmp_if(u, true);
+                    stubs.push((i, j));
+                    self.patch_here(skip);
+                } else {
+                    self.wide_case_cmp(cmp::EQ, t, c, cond_ty, cd.lhs);
+                    let j = self.jmp_if(t, true);
+                    stubs.push((i, j));
+                }
+                continue;
+            }
             let (lo, hi) = (crate::arith::canon(lo, cw, cs), crate::arith::canon(hi, cw, cs));
             if lo == hi {
                 self.konst(t, lo);
@@ -3345,8 +3364,14 @@ impl Compiler<'_> {
         let [a, b] = self.ast().exprs.operands(e);
         let (at, bt) = (self.ety(a), self.ety(b));
         let kinds = (self.kind(at), self.kind(bt));
-        let ra = self.rv(a);
-        let rb = self.rv(b);
+        let wide = self.o.types.wide(at).is_some() && at == bt;
+        let (ra, rb) = if wide {
+            let ra = self.wide_place(a);
+            (ra, self.wide_place(b))
+        } else {
+            let ra = self.rv(a);
+            (ra, self.rv(b))
+        };
         let r = self.reg();
         let c = self.reg();
         let partial = info.kind == kiln_ast::class::CmpCategory::Partial;
@@ -3364,7 +3389,11 @@ impl Compiler<'_> {
         };
         let mut ends = Vec::new();
         for (k, v) in tests {
-            self.compare(e, kinds, k, c, ra, rb);
+            if wide {
+                self.wide_cmp_at(k, c, [ra, rb], at, e);
+            } else {
+                self.compare(e, kinds, k, c, ra, rb);
+            }
             let j = self.jmp_if(c, false);
             self.konst(r, v);
             ends.push(self.jmp());
@@ -4847,6 +4876,9 @@ impl Compiler<'_> {
                         // [dcl.init.aggr]/5.3: copy-initialized from `{}`.
                         let q = self.elem_ptr(p, fi.offset, e);
                         match fi.width {
+                            Some(w) if self.o.types.wide(fi.ty).is_some() => {
+                                self.wide_field_init(None, q, fi.ty, (fi.bit, w), e);
+                            }
                             Some(w) => {
                                 let z = self.reg();
                                 self.konst(z, 0);
@@ -4921,6 +4953,9 @@ impl Compiler<'_> {
             return;
         }
         match fi.width {
+            Some(w) if self.o.types.wide(fi.ty).is_some() => {
+                self.wide_field_init(Some(x), q, fi.ty, (fi.bit, w), e);
+            }
             Some(w) => {
                 let r = self.rv(x);
                 self.emit_at(Op::StoreBits, 1, &[q, r, fi.ty.0, fi.bit | w << 8], x);

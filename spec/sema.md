@@ -6237,7 +6237,14 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     like any other, and `-Wswitch` sees an enumeration result. Codegen
     and the Oven evaluate it once. Tests:
     `stmt.switch/class-condition-{diags,run}.cpp`.
-  - duplicate `case` values (with a note)
+  - duplicate `case` values (with a note), each case located at its
+    value's begin (clang `getBeginLoc`). A case value outside `i128` (an
+    `unsigned __int128` above its maximum, a `_BitInt(N)` with N > 128;
+    WP-465) keeps its exact constant in the `ConstantExpr`, has no `i128`
+    key, and is compared with the other such values by its words
+    (`wide_duplicate_case`, printed in decimal); codegen emits it from the
+    constant and the Oven compares it limb by limb (spec/oven.md
+    "`_BitInt`"). Tests: `stmt.switch/bit-int-wide-{duplicate-case,condition}.cpp`.
   - multiple `default` labels
   - `case` values converted to the promoted type
   - `act_on_start_switch(loc, …)` and
@@ -6846,8 +6853,10 @@ bit-field's signedness ([conv.integral]/3). Storing 1 into a one-bit
 wide signed bit-field reports `... to a one-bit wide bit-field ...`
 [-Wsingle-bit-bitfield-constant-conversion, a subgroup].
 - Nothing is reported for a `bool` bit-field, a dependent or invalid
-  bit-field, a value-dependent or non-constant value, or a value of
-  128 or more bits.
+  bit-field, or a value-dependent or non-constant value. A value of 128
+  or more bits (`__int128`, a wide `_BitInt`; WP-465) gets the same rule
+  computed on its words (`wide_truncation`), with exact decimal values
+  (`class.bit/bit-int-wide-bit-field.cpp`).
 - The value needs the width of its type, except that a negated or
   complemented constant (`-5`, `~0u`), or any unsigned constant written
   that way, needs only its significant bits (`APInt::getSignificantBits`

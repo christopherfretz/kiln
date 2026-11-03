@@ -350,6 +350,18 @@ pub(crate) mod wide {
     pub const TO_BOOL: u32 = 18;
     /// `*d` = `*a` of wide type `x` converted to `type`.
     pub const CAST: u32 = 19;
+    /// Register `d` = `*a` converted to the float of kind `x`
+    /// (`compile::float_code`), round to nearest even.
+    pub const TO_FLOAT: u32 = 20;
+    /// `*d` = register `a`, a float of kind `x`, truncated toward zero
+    /// ([conv.fpint]/1: out of range is undefined).
+    pub const FROM_FLOAT: u32 = 21;
+    /// `*d` = the bit-field of declared type `type` at register `a`, bit
+    /// `x & 7` of that byte, width `x >> 3` (sign- or zero-extended).
+    pub const LOAD_BITS: u32 = 22;
+    /// The bit-field of declared type `type` at register `d` (bit
+    /// `x & 7`, width `x >> 3`) = `*a`, truncated to the width.
+    pub const STORE_BITS: u32 = 23;
     /// The result object begins its lifetime (an initialization).
     pub const INIT: u32 = 1 << 6;
     /// `*a` is the destination read for a read-modify-write (with the

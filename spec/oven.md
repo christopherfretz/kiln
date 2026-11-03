@@ -2559,12 +2559,30 @@ Type rules: spec/types.md §21.
   is copied at its own source location so a note points where clang's
   does. Freeze writes `Scalar::Int` with exactly `IntBits::words_for(N)`
   words; thaw re-extends them over the slot.
-- *Not yet evaluated, wide only* (trap "kiln: conversion between a _BitInt
-  wider than 128 bits and a floating type is not supported in constant
-  evaluation yet", or the generic wide-`_BitInt` trap kept in
-  `compile.rs` `rv_inner` as a safety net): conversions to and from
-  floating types, wide bit-fields, `switch` on a wide value, `<=>`, and
-  integer literals wider than 128 bits (clang has none in C++).
+- *Floating conversions, bit-fields, `switch`, `<=>`, literals* (WP-465).
+  `TO_FLOAT` converts the exact value to a float kind
+  (`softfloat::from_limbs`: the top 128 significant bits plus a sticky
+  bit, rounded to nearest even; past the format's range it is infinity,
+  as clang folds it); `FROM_FLOAT` truncates toward zero
+  (`softfloat::trunc_limbs`) and faults `FloatRange` when the result does
+  not fit N bits (a negative value for an unsigned type, NaN, infinity),
+  noted at the operand's begin with the destination type as written and its
+  `aka` (the note names every typedef so, narrow ones too). A compound
+  assignment with a floating computation type converts the wide left
+  operand to it and the result back. A wide bit-field is a
+  `Place::Bits` read by `LOAD_BITS` into a temporary (sign- or
+  zero-extended from its width) and written by `STORE_BITS` (truncated to
+  the width), for initialization, assignment, compound assignment and
+  `++`/`--`; freezing copies its bytes one at a time under a per-byte mask.
+  `switch` on a wide condition compares it with each case value converted
+  to the condition's type (`wide_case_cmp`: `CMP` EQ, or GE/LE for a GNU
+  range); sema keeps a case value outside `i128` as its exact constant
+  (spec/sema.md §7). `<=>` of two wide operands of the same type is two
+  `CMP`s giving the ordering. An `IntegerLiteral` wider than 128 bits
+  (only a substituted non-type template argument: C++ has no `wb` suffix)
+  is built from its 128-bit chunks, most significant first (`FROM`, `SHL`
+  by 128, `OR`). The generic wide-`_BitInt` trap in `compile.rs`
+  `rv_inner` remains as a safety net for any other expression form.
 
 ### Complex values — Landed (WP-211)
 A GNU `_Complex T` object is stored as `T[2]` (`ty.rs`): the real part,

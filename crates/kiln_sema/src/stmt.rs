@@ -2,6 +2,7 @@
 //! and iteration statements, `case`/`default`, jumps, labels and `goto`,
 //! `return` (spec/sema.md §7).
 
+use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{DeclFlags, DeclKind, DeclMisc, NewDecl, Payload};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprDeps, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::ids::RawId;
@@ -40,6 +41,10 @@ pub(crate) struct SwitchState {
     /// GNU case ranges `lo ... hi` seen, with their `lo` and `hi`
     /// expressions (checked when the switch ends).
     pub ranges: Vec<(i128, i128, ExprId, ExprId)>,
+    /// Case values outside `i128` (an `unsigned __int128` above
+    /// `i128::MAX`, a wide `_BitInt`): their normalized words, decimal
+    /// spelling and location, for the duplicate check only.
+    pub wide_values: Vec<(Vec<u64>, String, Loc)>,
     /// The `CaseStmt`/`DefaultStmt`s, in source order.
     pub cases: Vec<StmtId>,
     /// The first `default:`.
@@ -868,6 +873,7 @@ impl Sema<'_, '_> {
                 cond_ty,
                 values: Vec::new(),
                 ranges: Vec::new(),
+                wide_values: Vec::new(),
                 cases: Vec::new(),
                 default: None,
                 invalid,
@@ -910,8 +916,12 @@ impl Sema<'_, '_> {
     /// `ConstantExpr` (or `e` when invalid).
     pub fn act_on_case_value(&mut self, e: ExprId, case_loc: Loc) -> ExprId {
         let (ce, value) = self.convert_case_value(e, case_loc);
-        let Some(iv) = value else { return ce };
-        let loc = self.ast.exprs.get(e).loc();
+        let Some(iv) = value else {
+            self.wide_duplicate_case(e, ce);
+            return ce;
+        };
+        // clang reports (and remembers) a case at its value's begin.
+        let loc = self.begin_loc(e);
         let dup = self
             .func
             .as_ref()
@@ -927,6 +937,35 @@ impl Sema<'_, '_> {
             s.values.push((iv, loc));
         }
         ce
+    }
+
+    /// The duplicate check of a case value `e` (converted: `ce`) outside
+    /// `i128`, by its exact bits.
+    fn wide_duplicate_case(&mut self, e: ExprId, ce: ExprId) {
+        if self.ast.exprs.get(ce).kind() != ExprKind::ConstantExpr {
+            return;
+        }
+        let Some(v) = self.ast.exprs.constant_value(ce) else { return };
+        let Some(Scalar::Int { bits, signed, .. }) = self.ast.consts.scalar(v) else { return };
+        let words = bits.words().to_vec();
+        let loc = self.begin_loc(e);
+        let Some(sw) = self.func.as_ref().and_then(|f| f.switches.last()) else { return };
+        if sw.invalid {
+            return;
+        }
+        if let Some((_, text, prev)) = sw.wide_values.iter().find(|w| w.0 == words).cloned() {
+            let d = self
+                .diag(DiagId::sema_duplicate_case, loc)
+                .arg(text)
+                .with_note(self.diag(DiagId::note_duplicate_case_prev, prev));
+            self.emit(d);
+            return;
+        }
+        let mut text = String::new();
+        bits.write_decimal(signed, &mut text);
+        if let Some(s) = self.func.as_mut().and_then(|f| f.switches.last_mut()) {
+            s.wide_values.push((words, text, loc));
+        }
     }
 
     /// The bounds of a GNU case range `case lo ... hi:`, each converted
@@ -1011,11 +1050,16 @@ impl Sema<'_, '_> {
         let at = self.begin_loc(e);
         match self.eval_const(conv, kiln_oven::EvalContext::converted(at)) {
             Ok(v) => {
-                let iv = self.const_int(v).unwrap_or(0);
-                let cv = self.int_const(cond_ty, iv);
+                // A value outside `i128` keeps its own (exact) constant
+                // and has no `i128` key.
+                let iv = self.const_int(v);
+                let cv = match iv {
+                    Some(iv) => self.int_const(cond_ty, iv),
+                    None => v,
+                };
                 let ce = self.builder().constant_expr(conv, Some(cv));
                 let ce = self.act_on_constant_full_expr(ce);
-                (ce, (!invalid).then_some(iv))
+                (ce, iv.filter(|_| !invalid))
             }
             Err(mut f) => {
                 // [stmt.switch]/2: a converted constant expression (clang's

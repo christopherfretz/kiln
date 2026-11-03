@@ -308,6 +308,25 @@ impl Sema<'_, '_> {
             Scalar::Bool { ty: t, value: v != 0 }
         } else {
             let (w, signed) = int_info(&self.ast, t).unwrap_or((64, true));
+            if w > 128 {
+                // A wide `_BitInt`: `v` extended over its words.
+                let n = IntBits::words_for(w);
+                let fill = if v < 0 { u64::MAX } else { 0 };
+                let mut words: Vec<u64> = (0..n)
+                    .map(|i| match i {
+                        0 => v as u64,
+                        1 => (v >> 64) as u64,
+                        _ => fill,
+                    })
+                    .collect();
+                if w % 64 != 0 {
+                    words[n - 1] &= (1u64 << (w % 64)) - 1;
+                }
+                if let Some(bits) = IntBits::from_words(w, &words) {
+                    let scalar = Scalar::Int { ty: t, signed, bits };
+                    return self.ast.consts.push_scalar(scalar).expect("integer constants intern");
+                }
+            }
             Scalar::Int { ty: t, signed, bits: IntBits::from_i128(w.clamp(1, 128), v) }
         };
         self.ast.consts.push_scalar(scalar).expect("integer constants intern")

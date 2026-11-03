@@ -2292,7 +2292,10 @@ recomputed exactly as for non-template code (clang's
 - **An NTTP reference** becomes `SubstNonTypeTemplateParmExpr {param,
   pack_index, replacement}`. The replacement is:
   - an `IntegerLiteral` (or the matching literal) built from the
-    `ConstValueId`;
+    `ConstValueId`; for a `_BitInt(N)` (any N; WP-465) too, and for a
+    wide `_BitInt` (N > 128) or a value outside `i128` (an
+    `unsigned __int128` above its maximum) a wide literal holding the
+    argument's exact constant (`temp.arg.nontype/{bit-int-wide,int128}-value.cpp`);
   - for a class-type NTTP, a `DeclRefExpr` to the `TemplateParamObject`
     (§6.10);
   - for a reference or pointer NTTP, the entity expression;

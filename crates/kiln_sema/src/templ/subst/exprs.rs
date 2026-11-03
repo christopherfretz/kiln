@@ -1709,6 +1709,23 @@ impl Substituter<'_, '_, '_> {
         value: kiln_ast::ConstValueId,
         loc: Loc,
     ) -> SubstResult<ExprId> {
+        // A wide `_BitInt` (any value), or an integer outside `i128` (an
+        // `unsigned __int128` above `i128::MAX`): a literal of the
+        // argument's exact bits.
+        let wide = matches!(
+            self.sema.ast.types.canonical_view(ty),
+            kiln_ast::types::TypeView::BitInt { width, .. } if width > 128
+        );
+        let int = matches!(
+            self.sema.ast.consts.scalar(value),
+            Some(kiln_ast::consts::Scalar::Int { .. })
+        );
+        if int
+            && self.sema.ast.types.as_enum(ty).is_none()
+            && (wide || self.sema.const_int(value).is_none())
+        {
+            return Ok(self.sema.ast.builder().wide_int_literal(ty, value, Radix::Decimal, loc));
+        }
         let Some(v) = self.sema.const_int(value) else {
             // Class, pointer and null values (§6.10).
             if let Some(r) = self.sema.nttp_value_expr(ty, value, loc) {
@@ -1749,6 +1766,9 @@ impl Substituter<'_, '_, '_> {
             Some(BuiltinType::Char16) => Some(CharKind::Utf16),
             Some(BuiltinType::Char32) => Some(CharKind::Utf32),
             Some(_) => None,
+            None if matches!(t.canonical_view(ty), kiln_ast::types::TypeView::BitInt { .. }) => {
+                None
+            }
             None => return self.unimplemented("non-type template argument of this type", loc),
         };
         if let Some(kind) = kind {

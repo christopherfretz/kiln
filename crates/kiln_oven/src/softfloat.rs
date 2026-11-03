@@ -237,6 +237,67 @@ pub(crate) fn trunc(kind: FloatKind, a: u128) -> Option<(bool, u128)> {
     }
 }
 
+/// The float nearest `±mag` (`mag`: magnitude limbs, least significant
+/// first), round to nearest even, overflowing to infinity (`APFloat`
+/// `convertFromAPInt`): the conversion of a `_BitInt` wider than 128 bits.
+pub(crate) fn from_limbs(kind: FloatKind, neg: bool, mag: &[u64]) -> u128 {
+    let Some(top) = mag.iter().rposition(|&w| w != 0) else {
+        return pack_zero(Fmt::of(kind), false);
+    };
+    // `t`: the index of the magnitude's top bit.
+    let t = top as u32 * 64 + mag[top].ilog2();
+    let bit = |i: u32| -> u128 { u128::from(mag[(i / 64) as usize] >> (i % 64) & 1) };
+    if t < 128 {
+        let m = u128::from(mag[0]) | mag.get(1).map_or(0, |&w| u128::from(w) << 64);
+        return pack(kind, neg, 127, m);
+    }
+    // The top 128 bits, the lowest of them sticky for everything below.
+    let lo = t - 127;
+    let mut m = 0u128;
+    for i in (lo..=t).rev() {
+        m = m << 1 | bit(i);
+    }
+    let below = (0..lo).any(|i| bit(i) != 0);
+    pack(kind, neg, t as i32, m | u128::from(below))
+}
+
+/// Truncation toward zero into `n` limbs: `(negative, magnitude)`;
+/// `None` for non-finite values or magnitudes of `2^(64 n)` and more.
+pub(crate) fn trunc_limbs(kind: FloatKind, a: u128, n: usize) -> Option<(bool, Vec<u64>)> {
+    let mut w = vec![0u64; n];
+    match unpack(kind, a) {
+        Val::Zero(s) => Some((s, w)),
+        Val::Fin(s, e, m) => {
+            if e < 0 {
+                return Some((s, w));
+            }
+            if e <= 127 {
+                let v = m >> (127 - e);
+                w[0] = v as u64;
+                if n > 1 {
+                    w[1] = (v >> 64) as u64;
+                }
+                return Some((s, w));
+            }
+            // `m << (e - 127)`.
+            let sh = (e - 127) as usize;
+            if sh + 128 > n * 64 {
+                return None;
+            }
+            let (q, r) = (sh / 64, (sh % 64) as u32);
+            let limbs = [m as u64, (m >> 64) as u64];
+            for (i, &x) in limbs.iter().enumerate() {
+                w[q + i] |= x << r;
+                if r != 0 && q + i + 1 < n {
+                    w[q + i + 1] |= x >> (64 - r);
+                }
+            }
+            Some((s, w))
+        }
+        _ => None,
+    }
+}
+
 fn add(kind: FloatKind, x: Val, y: Val) -> Val {
     match (x, y) {
         // The first NaN operand (`APFloat::addOrSubtractSpecials`).
