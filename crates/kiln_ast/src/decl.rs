@@ -153,6 +153,11 @@ pub enum DeclKind {
     Label,
     /// The result name of a postcondition (P2900).
     ContractResultName,
+    /// A consteval-block-declaration ([dcl.pre], P3289R1): payload
+    /// [`StaticAssertData`] whose `cond` is the call of the block's
+    /// synthesized `consteval` lambda and whose `message` is `None`
+    /// (spec/consteval-blocks.md §2).
+    ConstevalBlock,
 }
 
 /// Which payload arena a kind's `data` indexes.
@@ -212,7 +217,7 @@ impl DeclKind {
             K::TranslationUnit | K::LinkageSpec | K::Export | K::RequiresExprBody => {
                 PayloadClass::Scope
             }
-            K::StaticAssert => PayloadClass::StaticAssert,
+            K::StaticAssert | K::ConstevalBlock => PayloadClass::StaticAssert,
             K::LifetimeExtendedTemporary => PayloadClass::Let,
             _ => PayloadClass::None,
         }
@@ -252,6 +257,7 @@ impl DeclKind {
                 | DeclKind::Friend
                 | DeclKind::FriendTemplate
                 | DeclKind::StaticAssert
+                | DeclKind::ConstevalBlock
                 | DeclKind::RequiresExprBody
                 | DeclKind::ParmVar
                 | DeclKind::ImplicitParam
@@ -321,6 +327,7 @@ impl DeclKind {
             K::StaticAssert => "StaticAssert",
             K::Label => "Label",
             K::ContractResultName => "ContractResultName",
+            K::ConstevalBlock => "ConstevalBlock",
         }
     }
 }

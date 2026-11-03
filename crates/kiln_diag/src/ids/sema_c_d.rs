@@ -60,6 +60,7 @@ sema_const_member_assign = Error (1) "cannot assign to non-static data member wi
 sema_constant_conversion = Warning [ConstantConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
 sema_constant_integer_arg_type = Error (1) "argument to '{0}' must be a constant integer";
 sema_constant_logical_operand = Warning [ConstantLogicalOperand] (1) "use of logical '{0}' with constant operand";
+sema_consteval_block_non_constant = Error (0) "consteval block is not a constant expression";
 sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
 sema_consteval_overrides = Error (2) "{0:consteval|non-consteval} function '{1}' cannot override a {0:non-consteval|consteval} function";
 sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";

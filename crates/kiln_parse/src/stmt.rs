@@ -224,6 +224,13 @@ impl Parser<'_, '_> {
                     let d = self.parse_static_assert()?;
                     return Some(self.s.act_on_decl_stmt(&[d], loc));
                 }
+                // [dcl.pre]/1 (P3289R1): a consteval-block-declaration
+                // takes no attributes either.
+                Kw::Consteval if self.peek_is(1, Punct::LBrace) => {
+                    self.prohibit_attrs_at(lead_loc);
+                    let d = self.parse_consteval_block()?;
+                    return Some(self.s.act_on_decl_stmt(&[d], loc));
+                }
                 Kw::Using => {
                     let ds = self.parse_using_leading(&lead_attrs, lead_loc);
                     if ds.is_empty() {

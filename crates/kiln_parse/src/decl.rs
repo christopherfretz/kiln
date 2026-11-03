@@ -210,6 +210,9 @@ impl Parser<'_, '_> {
             (_, Some(Kw::StaticAssert)) => {
                 self.parse_static_assert();
             }
+            _ if self.at_consteval_block() => {
+                self.parse_consteval_block();
+            }
             (_, Some(Kw::Extern))
                 if matches!(
                     self.peek(1).kind,

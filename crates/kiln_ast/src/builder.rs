@@ -966,6 +966,19 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// A consteval-block-declaration ([dcl.pre], P3289R1): `call` is the
+    /// call of the block's synthesized `consteval` lambda.
+    pub fn consteval_block(&mut self, ctx: DeclId, loc: Loc, call: ExprId) -> DeclId {
+        let payload = Payload::StaticAssert(StaticAssertData { cond: call, message: None });
+        self.add(
+            DeclHead::new(ctx, DeclName::EMPTY, loc),
+            DeclKind::ConstevalBlock,
+            None,
+            payload,
+            None,
+        )
+    }
+
     /// Attaches attributes to `d` (sets `HAS_ATTRS`, §7).
     ///
     /// # Errors
