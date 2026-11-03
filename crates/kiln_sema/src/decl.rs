@@ -7244,6 +7244,7 @@ impl Sema<'_, '_> {
                     // condition's for a literal).
                     let d = d.range(self.expr_range(if lit { c } else { inner }));
                     let d = self.explain_failed_comparison(d, inner);
+                    let d = self.with_trait_explanation(d, inner);
                     self.emit(d);
                 }
                 Err(mut f) => {

@@ -4112,6 +4112,28 @@ not use it, so it is not in M3.
 | `__builtin_is_constant_evaluated()` | the Oven returns `true` in a manifestly constant-evaluated context. Codegen emits `false`. Sema warns "'__builtin_is_constant_evaluated' will always evaluate to 'true' in a manifestly constant-evaluated expression" where clang does. Owned by WP-063 | Oven `EvalContext` |
 | `__builtin_constant_p(e)` | `int`. The Oven returns 1 if `e` (integral, enumeration, floating, pointer or `nullptr_t`, with no assignment, increment, `new`, `delete` or `throw` of its own) evaluates to a constant. A pointer counts only if it is null or the start of a string literal. Other types and arguments with side effects give 0. The argument is evaluated speculatively (`Op::Speculate`): a failure gives 0, but a resource limit still fails the evaluation. Codegen folds the call through the Oven and emits 0 if that fold fails, as clang does at -O0 (WP-130) | Oven, codegen |
 
+**Failed-trait explanation** (clang 22 `DiagnoseTypeTraitDetails`,
+`traits/explain.rs`, WP-413). At `-fclang-compat=22` only, a failed
+`static_assert` condition and a failed concept atom are checked for a
+type trait. The condition is taken after parentheses and implicit casts
+are skipped. Three forms qualify: `__trait(T)`, `std::is_X_v<T>`, and
+`std::is_X<T>::value` (std may include an inline namespace). For each,
+kiln appends clang's explanation notes at the condition's begin location.
+Only `is_trivially_copyable` is explained so far. Its notes, in order:
+- "T is not trivially copyable";
+- "because it is a reference type";
+- per base, "because it has a virtual base B", then "because it has a
+  non-trivially-copyable base B";
+- per member, "…non-trivially-copyable member 'm' of type M";
+- "because it has a user-provided destructor";
+- "because it has a user provided copy/move constructor/assignment
+  operator", in member order;
+- "'R' defined here" at the class.
+
+Other traits produce no notes yet; see the WP-413 follow-ups. Tests:
+`templates/builtins/meta.unary.prop-trivially-copyable-explain{,-clang19}.cpp`
+and `templates/concepts/static-assert-concept-atom-expr{,-clang19}.cpp`.
+
 ### 9.5 `__builtin_*` functions used by the M3 headers
 
 These are declared by WP-063's builtin declaration table, with custom

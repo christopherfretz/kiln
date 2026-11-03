@@ -661,13 +661,15 @@ impl Sema<'_, '_> {
                         nested: None,
                     }];
                 }
-                vec![SatRecord {
+                let mut recs = vec![SatRecord {
                     id: DiagId::note_atomic_constraint_false,
                     loc: at,
                     select: true,
                     args: vec![self.expr_text(inner)],
                     nested: None,
-                }]
+                }];
+                recs.extend(self.trait_explanation(inner, at));
+                recs
             }
         }
     }
