@@ -157,9 +157,9 @@ the IS equality ([expr.eq]):
      directly inside such a `meta` (the op is then looked up as
      `Class::name`, e.g. `access_context::current`), or the translation
      unit itself for an op that is not in `std::meta`
-     (`__kiln_define_member`). So `std::meta`, `std::__1::meta` and
-     `std::inline v1::meta::inline x::` all qualify, and `std::other::`
-     does not;
+     (`__kiln_define_member`). So `std::meta`, `std::__1::meta` (with
+     `__1` inline, as in libc++) and an inline namespace inside `meta` all
+     qualify, and `std::other` does not;
   3. `(name, signature)` matches a row of the op tables (§3.3), where the
      signature is the parameter list with each parameter classified as
      `info` (its canonical unqualified type is `MetaInfo`) or not. An
