@@ -9,6 +9,7 @@ pub(crate) mod names;
 mod query;
 mod traits;
 mod recipe;
+mod value;
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::types::BuiltinType;
@@ -54,6 +55,7 @@ impl Sema<'_, '_> {
             MetaOp::Query(q) => self.meta_query(q, args, out, ctx),
             MetaOp::Ext(x) => self.meta_ext(x, args, out, ctx, oven),
             MetaOp::Trait(t) => self.meta_trait(t, args, out, ctx, oven),
+            MetaOp::Value(v) => self.meta_value(v, args, out, ctx, oven),
             _ => Err(MetaError::not_implemented(op, ctx.loc)),
         }
     }
