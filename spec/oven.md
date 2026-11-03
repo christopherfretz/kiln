@@ -1854,8 +1854,9 @@ evaluated like any other initializer.
 `MpAddr [dst, obj, mp]` (`obj.*mp`, checking derived-member containment;
 `Fault::NullBase` for a base step through a null object), `MpActive
 [p, mp]` (a union member reached through `.*` must be active), `MpFn
-[dst, mp, trap]` (the callee of a pointer to member function; a virtual
-one dispatches as `VCall` does, WP-077). `Downcast [dst, p, off, ty]` is
+[dst, mp, this, adj]` (the callee of a pointer to member function; a
+virtual one dispatches as `VCall` does, WP-077, and writes its covariant
+return adjustment into `adj`). `Downcast [dst, p, off, ty]` is
 `static_cast` from a base pointer or glvalue to a derived one
 ([expr.static.cast]/2, /11), checking that the base subobject is part of
 an object of the derived type.
@@ -1956,7 +1957,12 @@ calls. Covariant returns: `VCall` writes the overrider-to-method return
 adjustment (a byte offset of the method's return class within the
 overrider's) into register `adj`, and `CovAdj [p, adj]` moves the
 returned pointer or reference (null stays null). `MpFn` of a virtual
-member function dispatches the same way.
+member function dispatches the same way, and a call through a pointer to
+member function whose type returns a class pointer or reference gets
+the same `adj` register and `CovAdj` after the call (0 for a non-virtual
+member): the result has the return type of the function the pointer
+names, as for a direct call ([class.virtual]/8, [expr.mptr.oper]/6;
+`class.virtual/covariant-return-member-pointer.cpp`, WP-414).
 
 **`dynamic_cast`.** `DynCast [dst, p, static, target]` (target
 `u32::MAX`: `void*`; aux 1: reference cast) follows clang's
@@ -2026,8 +2032,6 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   already diagnosed) traps silently when its declaration is evaluated,
   so the enclosing constant expression reports only its own error
   (clang's invalid-declaration evaluation failure; WP-400).
-- Covariant return adjustment through a pointer to member function:
-  `Fault::Invalid` (stub, follow-up of WP-077).
 - Freezing a pointer to a `typeid` object (`constexpr auto *p =
   &typeid(T);`) is `NotConstant`: needs a `PtrBase` for type_info objects
   shared with codegen (WP-080, with RTTI emission).

@@ -1235,6 +1235,11 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
 - **Pointers to virtual members**: `&C::vf` is `{index * 8 + 1, adj}` on
   x86-64 and `{index * 8, 2 * adj + 1}` on AArch64; calls through them
   take the virtual branch already present in WP-079's `memptr.rs`.
+  `index` is the slot of the function the pointer names, so a covariant
+  overrider's result is adjusted by the slot's entry: `&Base::f` reaches
+  the return-adjusting thunk in the base's slot, `&Derived::f` the slot
+  the overrider adds for its own return type (no adjustment), as clang
+  does (`virtual_covariant_memptr`, WP-414).
 - **Template linkage policy**: vtables, RTTI and thunks of classes that
   are template specializations, or have no key function, are
   `linkonce_odr` and emitted only when used (deferred), as with inline
