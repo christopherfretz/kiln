@@ -7,10 +7,10 @@
 use kiln_ast::decl::DeclKind;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::{DeclId, ReflectionId};
-use kiln_source::Loc;
 use kiln_oven::{
     AccessOp, MemberOp, MetaCtx, MetaError, MetaOut, Oven, info_arg, member_kind as mk,
 };
+use kiln_source::Loc;
 
 use super::fail;
 use crate::Sema;

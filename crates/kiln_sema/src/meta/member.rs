@@ -396,7 +396,11 @@ impl Sema<'_, '_> {
 
     /// Interns `r`; a full reflection table is the fatal
     /// `sema_too_many_reflections` (a partial cache list is dropped).
-    pub(super) fn meta_intern(&mut self, r: Reflectee, loc: Loc) -> Result<ReflectionId, MetaError> {
+    pub(super) fn meta_intern(
+        &mut self,
+        r: Reflectee,
+        loc: Loc,
+    ) -> Result<ReflectionId, MetaError> {
         Ok(self.intern_reflection(r, loc)?)
     }
 
