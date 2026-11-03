@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kiln_ast::decl::{ConstexprKind, DeclKind, Defaulted, FnSpec};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, Defaulted, FnSpec};
 use kiln_ast::expr::{ExprFlags, ExprKind};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
@@ -598,7 +598,15 @@ impl Sema<'_, '_> {
     /// A reference `e` to function `d`: recorded when `d` is immediate
     /// and `e` is not exempt ([expr.const]/17).
     pub(crate) fn note_immediate_ref(&mut self, e: ExprId, d: DeclId) {
+        // A function in a dependent context (a member of a class
+        // template, a template pattern) is not recorded: its references
+        // are checked when instantiated (clang `MarkDeclRefReferenced`,
+        // `!FD->isDependentContext()`), so a dependent call of it in the
+        // pattern, never formed as an invocation there, is not mistaken
+        // for taking its address.
         if self.is_immediate_fn(d)
+            && !self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX)
+            && self.ast.described_template(d).is_none()
             && !self.immediate_exempt()
             && !self.imm.pending.refs.contains(&e)
         {
