@@ -34,6 +34,7 @@ mod deduce;
 mod deprecated;
 mod empty_body;
 pub mod except;
+mod expansion;
 pub mod expr;
 mod extern_c;
 mod fallthrough;
@@ -109,6 +110,7 @@ pub use declspec::{
     NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 pub use empty_body::EmptyBodyStmt;
+pub use expansion::{ExpansionHead, ExpansionInit};
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};

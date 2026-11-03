@@ -235,7 +235,7 @@ impl Sema<'_, '_> {
     }
 
     /// Whether `stash` holds an error.
-    fn stash_has_error(&self, stash: &[Diag]) -> bool {
+    pub(crate) fn stash_has_error(&self, stash: &[Diag]) -> bool {
         stash.iter().any(|d| {
             d.id()
                 .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)

@@ -637,3 +637,51 @@ const CASES: &[(&str, Mode, &str)] = &[
         "struct alignas(64) L { char c[64]; }; L* f() { return new L{}; } L* g(int n) { return new L[n]{}; } void h(L* p) { delete p; } void k(L* p) { delete[] p; }",
     ),
 ];
+
+/// [stmt.expand] (P1306R5): an expansion statement lowers to one block
+/// per element, in order, with no back-edge; `break` leaves all of them
+/// and `continue` ends the current one (spec/codegen.md "Expansion
+/// statements"). `FileCheck` is not installed: the order and the branch
+/// structure are checked on the IR text.
+#[test]
+fn expansion_statement_lowers_in_order() {
+    let src = "void g(int);\n\
+               void f(int n) {\n\
+                 template for (constexpr int x : {1, 2, 3}) {\n\
+                   if (x == n) continue;\n\
+                   if (n < 0) break;\n\
+                   g(x);\n\
+                 }\n\
+               }\n";
+    let ir = kiln_ir(src).expect("lowers");
+    let body = &ir[ir.find("define dso_local void @_Z1fi").expect("f")..];
+    let body = &body[..body.find("\n}\n").expect("end of f")];
+    let calls: Vec<usize> = (1..=3)
+        .map(|i| body.find(&format!("call void @_Z1gi(i32 noundef {i})")).expect("g(i)"))
+        .collect();
+    assert!(calls[0] < calls[1] && calls[1] < calls[2], "{body}");
+    // No label is branched to from below it: the expansions are straight
+    // line code joined by forward branches.
+    let labels: Vec<(String, usize)> = body
+        .lines()
+        .scan(0, |off, l| {
+            let at = *off;
+            *off += l.len() + 1;
+            Some((l, at))
+        })
+        .filter_map(|(l, at)| {
+            l.split_once(':').filter(|(n, _)| !n.contains(' ')).map(|(n, _)| (n.to_owned(), at))
+        })
+        .collect();
+    for (name, at) in &labels {
+        let target = format!("label %{name}");
+        let mut from = 0;
+        while let Some(i) = body[from..].find(&target) {
+            assert!(from + i < *at, "back-edge to %{name}\n{body}");
+            from += i + target.len();
+        }
+    }
+    if let Some(r) = opt(&ir) {
+        r.unwrap_or_else(|e| panic!("opt: {e}\n{ir}"));
+    }
+}

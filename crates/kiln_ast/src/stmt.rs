@@ -182,6 +182,81 @@ pub struct RangeForData {
     pub colon: Loc,
 }
 
+/// The form of an expansion statement ([stmt.expand]/3, P1306R5):
+/// `CXXExpansionStmt.aux & ExpansionForm::MASK`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[repr(u16)]
+pub enum ExpansionForm {
+    /// Not known yet: the expansion-initializer is type-dependent.
+    #[default]
+    Dependent = 0,
+    /// Over an expansion-init-list `{ a, b }`.
+    Enumerating = 1,
+    /// Over an expansion-iterable expression (`begin`/`end`).
+    Iterating = 2,
+    /// Over the elements of a structured binding declaration.
+    Destructuring = 3,
+}
+
+impl ExpansionForm {
+    /// The bits of `aux` holding the form.
+    pub const MASK: u16 = 3;
+    /// `aux` bit: the statement was expanded (its `prelude` and
+    /// `expansions` are set; its pattern parts are not to be walked).
+    pub const EXPANDED: u16 = 4;
+
+    /// The form held in `aux`.
+    pub const fn from_aux(aux: u16) -> Self {
+        match aux & Self::MASK {
+            1 => ExpansionForm::Enumerating,
+            2 => ExpansionForm::Iterating,
+            3 => ExpansionForm::Destructuring,
+            _ => ExpansionForm::Dependent,
+        }
+    }
+
+    /// The name the dump uses.
+    pub const fn name(self) -> &'static str {
+        match self {
+            ExpansionForm::Dependent => "dependent",
+            ExpansionForm::Enumerating => "enumerating",
+            ExpansionForm::Iterating => "iterating",
+            ExpansionForm::Destructuring => "destructuring",
+        }
+    }
+}
+
+/// Side record of a `CXXExpansionStmt` ([stmt.expand], P1306R5). The
+/// pattern parts (`decl`, `body`, and the initializer) are a template
+/// pattern at the depth in the node's `b`; once expanded, `prelude` and
+/// `expansions` are the statement's code ([stmt.expand]/5) and the
+/// pattern parts are kept only for the dump.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ExpansionData {
+    /// The init-statement.
+    pub init: Option<StmtId>,
+    /// The for-range-declaration, initialized from a
+    /// `CXXExpansionSelectExpr` (the pattern of each element's variable).
+    pub decl: DeclId,
+    /// The expressions of an expansion-init-list (a list of `ExprId`;
+    /// enumerating form).
+    pub exprs: ListId,
+    /// The expansion-initializer expression (`None` for an
+    /// expansion-init-list).
+    pub range_init: Option<ExprId>,
+    /// The compound-statement (a pattern).
+    pub body: StmtId,
+    /// Expanded: the declaration statements before the first element
+    /// (`range` and `begin`, or the structured binding declaration; a
+    /// list of `StmtId`).
+    pub prelude: ListId,
+    /// Expanded: one `CompoundStmt` per element, `{ decl = element;
+    /// body }` (a list of `StmtId`).
+    pub expansions: ListId,
+    /// The `:`.
+    pub colon: Loc,
+}
+
 /// Side record of a `CoroutineBodyStmt` ([dcl.fct.def.coroutine]/5;
 /// clang's `CoroutineBodyStmt` slots): the function body as written and
 /// the statements and expressions Sema builds around it. Built only for
@@ -291,6 +366,7 @@ pub struct StmtArena {
     cases: Vec<CaseData>,
     loops: Vec<LoopData>,
     range_fors: Vec<RangeForData>,
+    expansions: Vec<ExpansionData>,
     asms: Vec<AsmData>,
     asm_operands: Vec<AsmOperand>,
     coros: Vec<CoroutineBodyData>,
@@ -321,6 +397,16 @@ impl Default for StmtArena {
                 inc: None,
                 loop_var: DeclId::new(DeclId::MAX_INDEX),
                 body: ds,
+                colon: Loc::INVALID,
+            }],
+            expansions: vec![ExpansionData {
+                init: None,
+                decl: DeclId::new(DeclId::MAX_INDEX),
+                exprs: ListId::EMPTY,
+                range_init: None,
+                body: ds,
+                prelude: ListId::EMPTY,
+                expansions: ListId::EMPTY,
                 colon: Loc::INVALID,
             }],
             asms: vec![AsmData {
@@ -407,6 +493,9 @@ impl StmtArena {
     pub(crate) fn push_range_for(&mut self, x: RangeForData) -> u32 {
         push_side(&mut self.range_fors, x)
     }
+    pub(crate) fn push_expansion(&mut self, x: ExpansionData) -> u32 {
+        push_side(&mut self.expansions, x)
+    }
     pub(crate) fn push_coro(&mut self, x: CoroutineBodyData) -> u32 {
         push_side(&mut self.coros, x)
     }
@@ -462,6 +551,26 @@ impl StmtArena {
     /// The side record of a `CXXForRangeStmt`.
     pub fn range_for_data(&self, s: StmtId) -> &RangeForData {
         &self.range_fors[self.expect(s, &[StmtKind::CXXForRangeStmt]).a as usize]
+    }
+
+    /// The side record of a `CXXExpansionStmt`.
+    pub fn expansion_data(&self, s: StmtId) -> &ExpansionData {
+        &self.expansions[self.expect(s, &[StmtKind::CXXExpansionStmt]).a as usize]
+    }
+
+    /// The form of a `CXXExpansionStmt`.
+    pub fn expansion_form(&self, s: StmtId) -> ExpansionForm {
+        ExpansionForm::from_aux(self.expect(s, &[StmtKind::CXXExpansionStmt]).aux)
+    }
+
+    /// Whether a `CXXExpansionStmt` was expanded (not a pattern).
+    pub fn expansion_expanded(&self, s: StmtId) -> bool {
+        self.expect(s, &[StmtKind::CXXExpansionStmt]).aux & ExpansionForm::EXPANDED != 0
+    }
+
+    /// The depth of a `CXXExpansionStmt`'s synthetic template level.
+    pub fn expansion_depth(&self, s: StmtId) -> u16 {
+        self.expect(s, &[StmtKind::CXXExpansionStmt]).b as u16
     }
 
     /// The side record of a `CoroutineBodyStmt`.
@@ -580,7 +689,7 @@ impl StmtArena {
         self.rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn rows(&self) -> [VecDims; 9] {
+    fn rows(&self) -> [VecDims; 10] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("ifs", &self.ifs),
@@ -588,6 +697,7 @@ impl StmtArena {
             VecDims::of("cases", &self.cases),
             VecDims::of("loops", &self.loops),
             VecDims::of("range_fors", &self.range_fors),
+            VecDims::of("expansions", &self.expansions),
             VecDims::of("asms", &self.asms),
             VecDims::of("asm_operands", &self.asm_operands),
             VecDims::of("coros", &self.coros),
