@@ -3329,7 +3329,8 @@ impl Sema<'_, '_> {
             } else {
                 "remainder"
             };
-            let msg = self.diag(DiagId::sema_division_by_zero, loc).arg(what);
+            let msg =
+                self.diag(DiagId::sema_division_by_zero, loc).arg(what).range(self.expr_range(r));
             self.diag_if_reachable(msg, r);
         }
     }
@@ -3351,7 +3352,7 @@ impl Sema<'_, '_> {
         } else {
             return;
         };
-        let msg = self.diag(id, loc);
+        let msg = self.diag(id, loc).range(self.expr_range(r));
         self.diag_if_reachable(msg, r);
     }
 
@@ -3419,6 +3420,8 @@ impl Sema<'_, '_> {
                 let bw = conv::bit_field_width(self, l);
                 let base = conv::strip_cv(self, lt);
                 let p = conv::promoted_type(self, base, bw).unwrap_or(base);
+                // clang `CheckShiftOperands` with `IsCompAssign`.
+                self.diagnose_shift_count(r2, p, loc);
                 (r2, p, p)
             }
             _ => {
@@ -3441,6 +3444,11 @@ impl Sema<'_, '_> {
                         );
                         if needs_int && !self.ast.types.is_integral(ty) {
                             return self.invalid_operands(l, r, loc);
+                        }
+                        // clang `CheckMultiplyDivideOperands` /
+                        // `CheckRemainderOperands` with `IsCompAssign`.
+                        if matches!(op, BinaryOp::DivAssign | BinaryOp::RemAssign) {
+                            self.diagnose_division_by_zero(op, r2, loc);
                         }
                         (r2, ty, ty)
                     }

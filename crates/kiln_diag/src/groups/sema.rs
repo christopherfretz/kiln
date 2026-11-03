@@ -75,6 +75,7 @@ InlineNamespaceReopenedNoninline = "inline-namespace-reopened-noninline" [];
 InstantiationAfterSpecialization = "instantiation-after-specialization" [];
 IntInBoolContext = "int-in-bool-context" [];
 IntegerOverflow = "integer-overflow" [];
+InvalidConstexpr = "invalid-constexpr" [];
 InvalidNoreturn = "invalid-noreturn" [];
 InvalidOffsetof = "invalid-offsetof" [];
 InvalidPartialSpecialization = "invalid-partial-specialization" [];

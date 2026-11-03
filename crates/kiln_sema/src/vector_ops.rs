@@ -1320,6 +1320,16 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         let parts = self.vector_parts(vt).expect("an ext vector");
         let text = self.ast.symbols().as_str(name).to_owned();
+        if self.is_ext_bool_vector(vt) {
+            // clang `CheckExtVectorComponent`: no element access on a
+            // `bool` ext vector (a lane is one bit, so it has no address),
+            // diagnosed at the name for every accessor; clang 19 quotes
+            // the name twice (spec/sema.md §5.19).
+            let arg = if self.clang_compat >= 22 { text } else { format!("'{text}'") };
+            let d = self.diag(DiagId::sema_ext_vector_component_name_illegal, loc).arg(arg);
+            self.emit(d);
+            return self.recover_err(&[base], loc);
+        }
         let lanes = match kiln_ast::expr::ext_vector_access(&text, parts.count) {
             kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } => lanes,
             kiln_ast::expr::ExtVectorAccess::Illegal(c, at) => {

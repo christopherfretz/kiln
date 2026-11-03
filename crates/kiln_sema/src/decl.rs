@@ -879,7 +879,8 @@ impl Sema<'_, '_> {
     /// through a typedef-name or `decltype` (no function declarator) is
     /// only the type of a non-static member function, of a typedef or
     /// alias-declaration, of a template type argument or of a type
-    /// parameter's default. Anything else (a non-member function at
+    /// parameter's default; the operand of `^^` declares nothing, so it
+    /// may name one ([expr.reflect]; GCC 16.1). Anything else (a non-member function at
     /// namespace or block scope, a static member function, a friend, a
     /// parameter, a type-id) is clang's `err_invalid_qualified_function_type`
     /// in its "of type" form, at the start of the declaration, and the
@@ -899,6 +900,7 @@ impl Sema<'_, '_> {
                     | DeclSite::TemplateArg
                     | DeclSite::TypeParamDefault
                     | DeclSite::Subst
+                    | DeclSite::Reflect
             )
             || d.chunks.iter().any(|c| matches!(c, Chunk::Function { .. }))
         {
@@ -4773,10 +4775,31 @@ impl Sema<'_, '_> {
                 spec = spec.with_constinit(true);
             }
         }
-        if ds.inline.is_some() {
-            spec = spec.with_inline(true);
+        if let Some(l) = ds.inline {
+            if self.in_local_scope() {
+                self.inline_block_scope(d, l);
+            } else {
+                spec = spec.with_inline(true);
+            }
         }
         spec
+    }
+
+    /// [dcl.inline]: `inline` shall not appear on a block scope
+    /// declaration (clang `err_inline_declaration_block_scope`, at
+    /// `inline`, naming the variable or a structured binding
+    /// declaration's first binding); the variable is not inline.
+    fn inline_block_scope(&mut self, d: &Declarator, l: Loc) {
+        let name = match &d.decomp {
+            Some(dc) => dc.ids.first().map(|b| b.name),
+            None => d.name.map(|(n, _)| n),
+        };
+        let Some(name) = name else { return };
+        let msg = self
+            .diag(DiagId::sema_inline_declaration_block_scope, l)
+            .range(Span::new(l, l.with_offset(6)))
+            .arg(sym_str(self, name));
+        self.emit(msg);
     }
 
     pub(crate) fn is_var_definition(&self, v: DeclId) -> bool {

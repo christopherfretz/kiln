@@ -96,7 +96,21 @@ impl Sema<'_, '_> {
             bad.push(("inline", l));
         }
         self.decomp_cxx20_specifiers(ds, !bad.is_empty());
-        if let Some(&(first, l)) = bad.first() {
+        if self.clang_compat >= 22 {
+            // clang 22: one error per specifier, at its location, the
+            // storage class first, then `inline`, then the constexpr kind.
+            let rank = |kw: &str| match kw {
+                "inline" => 1,
+                "constexpr" | "consteval" | "constinit" => 2,
+                _ => 0,
+            };
+            bad.sort_by_key(|b| rank(b.0));
+            for &(kw, l) in &bad {
+                let msg = self.diag(DiagId::sema_decomp_decl_spec, l).arg(format!("'{kw}'"));
+                self.emit(msg);
+            }
+        } else if let Some(&(first, l)) = bad.first() {
+            // clang 19: one error at the first, naming them all.
             let arg = if bad.len() == 1 {
                 format!("'{first}'")
             } else {
@@ -564,7 +578,7 @@ impl Sema<'_, '_> {
     }
 
     /// `std::NAME` if it is a class template.
-    fn std_class_template(&self, name: &str) -> Option<(DeclId, DeclId)> {
+    pub(crate) fn std_class_template(&self, name: &str) -> Option<(DeclId, DeclId)> {
         let std = self.intern("std");
         let ns = self.lookup_qualified(self.ast.tu, std, LookupKind::Nested);
         let ns = ns.decls.iter().copied().find(|&d| self.kind_of(d) == DeclKind::Namespace)?;
@@ -644,7 +658,7 @@ impl Sema<'_, '_> {
 
     /// The integral template argument `i` of type `std::size_t` (clang
     /// builds `get<i>` and `tuple_element<i, E>` with it).
-    fn size_t_arg(&mut self, i: u64) -> TemplateArg {
+    pub(crate) fn size_t_arg(&mut self, i: u64) -> TemplateArg {
         let size_t = self.size_type();
         let canon = self.ast.types.canonical(size_t);
         let v = self.int_const(canon, i128::from(i));
