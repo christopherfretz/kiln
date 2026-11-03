@@ -596,10 +596,50 @@ impl Sema<'_, '_> {
             && !self.defining.iter().any(|&x| self.ast.first(x) == self.ast.first(r))
         {
             let d = self.diag(DiagId::sema_incomplete_nested_name_spec, loc).arg(self.ty_arg(q));
+            let d = self.incomplete_note(d, q);
             self.emit(d);
             return false;
         }
         true
+    }
+
+    /// The class or enumeration `ctx` that a nested-name-specifier
+    /// component `name::` at `loc` named, before the next name is looked
+    /// up in it: it must be complete ([expr.prim.id.qual]/1, clang's
+    /// `RequireCompleteDeclContext` at the last qualifier's name). A
+    /// dependent context is checked at instantiation, a class being
+    /// defined is complete enough, a namespace is accepted. The type
+    /// prints fully qualified (clang prints the context's own type, not
+    /// the typedef that named it); the location is [`Sema::nns_poi`].
+    /// False after a diagnostic.
+    pub fn require_complete_nns_ctx(&mut self, ctx: DeclId, loc: Loc) -> bool {
+        if !self.nns_ctx_incomplete(ctx) {
+            self.nns_start = None;
+            return true;
+        }
+        let kind = self.kind_of(ctx);
+        let ty = self.tag_type(ctx);
+        let at = self.nns_poi(loc);
+        let d = self
+            .diag(DiagId::sema_incomplete_nested_name_spec, at)
+            .arg(format!("'{}'", self.decl_ty_str(ty)));
+        // An opaque enumeration gets no note (clang).
+        let d = if kind == DeclKind::CXXRecord { self.incomplete_note(d, ty) } else { d };
+        self.emit(d);
+        false
+    }
+
+    /// Whether [`Sema::require_complete_nns_ctx`] rejects `ctx`: a class
+    /// or enumeration declared but never defined, neither dependent, nor
+    /// declared in a template, nor a template specialization (those are instantiated on demand).
+    pub fn nns_ctx_incomplete(&self, ctx: DeclId) -> bool {
+        matches!(self.kind_of(ctx), DeclKind::CXXRecord | DeclKind::Enum)
+            && self.ast.definition(ctx).is_none()
+            && !self.is_dependent_ctx(ctx)
+            // A member of a template (clang `isDependentContext`).
+            && !self.ast.decls.get(ctx).has(DeclFlags::DEPENDENT_CTX)
+            && self.ast.spec_info(ctx).is_none()
+            && self.ast.instantiated_from(ctx).is_none()
     }
 
     /// The arguments of specialization `spec` by depth (§5.1).

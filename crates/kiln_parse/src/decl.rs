@@ -1293,7 +1293,8 @@ impl Parser<'_, '_> {
                     && self.unknown_type_follows(end, ctx))
                     || (end > start + 1
                         && self.unresolved_scope_name(start)
-                        && self.qualified_unknown_type_follows(end, ctx)) =>
+                        && self.qualified_unknown_type_follows(end, ctx))
+                    || (end > start + 1 && self.incomplete_scope_name(start)) =>
             {
                 self.unknown_qualified_type_spec(ds, loc);
                 true
@@ -1387,8 +1388,16 @@ impl Parser<'_, '_> {
     /// ([`Parser::parse_type_name_spec`]): the parse proper reports it,
     /// and the decl-spec recovers to an invalid `int`.
     fn unknown_qualified_type_spec(&mut self, ds: &mut DeclSpec, loc: Loc) {
-        if let Ok(Some(q)) = self.parse_nested_name_nns() {
-            let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
+        match self.parse_nested_name_nns() {
+            Ok(Some(q)) => {
+                let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
+            }
+            // The specifier named an incomplete class (diagnosed): the
+            // final name belongs to the invalid type (clang).
+            Err(()) if self.ident().is_some() => {
+                self.bump();
+            }
+            _ => {}
         }
         ds.invalid = true;
         ds.type_error = true;
@@ -1676,6 +1685,25 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// `class F::H;` with `F` incomplete: clang's `ActOnTag` rejects
+    /// the qualified standalone declaration before it enters the
+    /// incomplete scope (diagnosed by the specifier parse).
+    fn incomplete_standalone_tag_qualifier(
+        &mut self,
+        ds: &DeclSpec,
+        keyword: TagKeyword,
+        qual_loc: Loc,
+    ) {
+        if ds.friend.is_none()
+            && ds.storage.is_none()
+            && self.incomplete_scope_name(self.pos())
+            && let Some((end, ..)) = self.scan_name_qual_at(self.pos())
+            && Self::punct_of(self.tok_at(end)) == Some(Punct::Semi)
+        {
+            self.s.check_standalone_tag_qualifier(keyword, qual_loc);
+        }
+    }
+
     /// The class-key or `enum` (with its `class`/`struct`) at `k`: the tag
     /// keyword and the enum's `EnumData` scoped flags.
     fn parse_tag_key(&mut self, ds: &mut DeclSpec, k: Kw) -> (TagKeyword, u32) {
@@ -1704,6 +1732,7 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
+        self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
         let (qual, qual_failed) = self.parse_tag_qualifier_checked(ds);
         let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum
@@ -2295,7 +2324,10 @@ impl Parser<'_, '_> {
             let qual = self.parse_nested_name();
             self.s.set_entering_context(saved);
             let qual = qual.unwrap_or_else(|()| {
+                // An invalid qualifier declares nothing (clang's
+                // `HandleDeclarator` returns no declaration).
                 d.invalid = true;
+                d.dropped = true;
                 self.s.discard_spec_headers();
                 self.skip_nested_name_rest();
                 None

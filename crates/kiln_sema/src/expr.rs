@@ -1946,16 +1946,12 @@ impl Sema<'_, '_> {
             _ if self.is_class_member_ref(d) => {
                 return self.implicit_member_ref(d, loc, shadow, extra.and_then(|x| x.qualifier));
             }
-            // [temp.names]/1: a variable template is named with arguments
-            // (clang's `diagnoseMissingTemplateArguments`).
-            DeclKind::VarTemplate => {
-                let note = self.diag(DiagId::note_template_decl_here, n.loc());
-                let msg = self
-                    .diag(DiagId::sema_template_requires_args, loc)
-                    .arg("variable template")
-                    .arg(format!("'{}'", self.decl_name(d)))
-                    .with_note(note);
-                self.emit(msg);
+            // [temp.names]/1: a variable template or concept is named with
+            // arguments (clang's `diagnoseMissingTemplateArguments`).
+            DeclKind::VarTemplate | DeclKind::Concept => {
+                let what =
+                    if n.kind() == DeclKind::Concept { "concept" } else { "variable template" };
+                self.missing_template_args(d, what, extra.and_then(|x| x.qualifier), loc);
                 return self.recover_err(&[], loc);
             }
             k if crate::lookup::is_type_kind(k) || k == DeclKind::Namespace => {

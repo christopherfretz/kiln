@@ -285,6 +285,20 @@ delayed meaning; in practice they are always parsed immediately.
   "unknown type name 'T'"). Tests:
   `temp.param/template-template-param-missing-key{,-clang19,-cxx14}.cpp`,
   `temp.param/template-template-param-keyless-recovery{,-clang19}.cpp`.
+- A template template parameter's default argument names a class
+  template, an alias template or a template template parameter as a whole
+  template-argument ([temp.param]/10, clang's
+  `ParseTemplateTemplateArgument`). Anything else (a type parameter, a
+  class, a template-id `K<int>`, a qualified non-template) is "default
+  template argument for a template template parameter must be a class
+  template" at the token after what was parsed (at a template-id's start),
+  and the parameter is skipped to its `,`/`>`. At compat 22 a variable
+  template or concept is a template name of the wrong kind (P2841):
+  "template argument does not refer to a class or alias template, or
+  template template parameter" with its "refers to" note
+  (`act_on_wrong_kind_ttp_default`, WP-422); at 19 it is the "must be a
+  class template" error after the name. Tests:
+  `temp.param/ttp-default-not-class-template{,-clang19}.cpp`.
 - A template template parameter whose template-head has no parameters
   (`template<> class U`) is "template template parameter must have its
   own template parameters" at its name (at the next token when unnamed);
@@ -1591,10 +1605,10 @@ class name" at `B`
   parameter — `H<Y<T>>` (a specialization), `H<T>`, `H<N>`,
   `H<T::X>` without `template` — is rejected when the enclosing template
   is defined, at the argument, even though the arguments are dependent
-  (`check_dependent_template_template_args`, run by `template_id` before
-  it forms the dependent specialization; clang's
-  `CheckTemplateArgumentList` runs on dependent arguments too, WP-404).
-  Alignment stops at the first pack expansion. Test:
+  (`check_dependent_template_args`, run by `template_id` before it
+  forms the dependent specialization; clang's
+  `CheckTemplateArgumentList` runs on dependent arguments too, WP-404,
+  §10.5). Alignment stops at the first pack expansion. Test:
   `tests/conformance/temp.arg.template/dependent-non-template-argument.cpp`.
 - A template argument `ns::A` or `C::A` whose qualifier is a namespace
   or the class `A` is a member of finds the template itself, never an
@@ -4696,6 +4710,43 @@ ambiguity errors.
 - "too few template arguments for class template 'X'" / "too many …";
   the note is "template is declared here".
 - "template argument for template type parameter must be a type".
+- Template-argument checking (`check_template_args`) stops at the first
+  argument that fails, as clang's `CheckTemplateArgumentList`: later
+  arguments and the arity are not reported (`M<1, int, 2>` is one error).
+  Test: `temp.arg.general/first-failing-argument.cpp`.
+- A variable template or concept named alone as a template-argument
+  ([temp.names]/1): at compat 22 the parser takes it as a template name
+  (P2841, `at_template_name_arg`) and the check reports it against the
+  parameter: for a type parameter "use of variable template 'N::v'
+  requires template arguments" (qualifier as written, at the name) with
+  "template is declared here"; for a template template parameter
+  "template argument does not refer to a class or alias template, or
+  template template parameter" with "template argument refers to a
+  variable template 'v', here"; for a non-type parameter "... must be an
+  expression". At compat 19 it is an expression: "use of variable template
+  'v' requires template arguments", or for a concept "too few template
+  arguments for concept 'C'" (`act_bare_concept_template_arg`). Either
+  way, an argument invalid as an expression ends the
+  template-argument-list (clang's `ParseTemplateArgumentList`). A concept
+  in an expression is "use of concept 'C' requires template arguments".
+  Tests: `temp.arg.general/var-template-or-concept-argument{,-clang19}.cpp`.
+- A class template-id with dependent arguments is checked at its
+  definition (`check_dependent_template_args`, clang's
+  `CheckTemplateArgumentList` on dependent arguments): the arity (a
+  missing argument needs a default), a type for a type parameter, a
+  template for a template template parameter (a template template
+  parameter argument is matched against it, [temp.arg.template]/3), and
+  not a type or template for a non-type parameter; non-type arguments
+  are converted once substituted. A template template parameter `TT`
+  for a type parameter is "use of template template parameter 'TT'
+  requires template arguments". A `T::x` for a type parameter is
+  "template argument for template type parameter must be a type; did
+  you forget 'typename'?" and the check goes on (clang recovers), so
+  `P<T::x, T::y>` reports both; any other failure ends it. Only the
+  arguments before a pack expansion are checked, and not the arity; a
+  template-id naming an expanded parameter pack is checked only for that
+  pack's arity (§3.2). Tests: `temp.arg.general/dependent-template-id-checked.cpp`,
+  `temp.arg.template/dependent-ttp-argument{,-clang22}.cpp`.
 - "non-type template argument is not a constant expression", followed by
   the Oven note chain.
 - "implicit instantiation of undefined template 'X<int>'".
