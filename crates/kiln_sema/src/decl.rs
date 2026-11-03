@@ -827,6 +827,8 @@ impl Sema<'_, '_> {
             if !self.ast.types.effective_quals(params[0].ty).is_empty() {
                 self.error(DiagId::sema_param_with_void_type, params[0].loc);
             }
+            // [dcl.attr.annotation]/1: not on a `void` parameter.
+            self.reject_annotations_in(&params[0].attrs, Some("a parameter of type 'void'"));
             return Vec::new();
         }
         let mut out = Vec::with_capacity(params.len());
@@ -4248,6 +4250,7 @@ impl Sema<'_, '_> {
             }
             if !p.attrs.is_empty() {
                 let mut attrs = p.attrs.clone();
+                self.take_annotations(pd, &mut attrs);
                 let range = Span::new(p.range.0, p.range.1);
                 self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
@@ -7531,7 +7534,9 @@ impl Sema<'_, '_> {
                 self.ast.decls.set_access(d, access);
             }
             if !attrs.is_empty() {
-                let _ = self.builder().attach_attrs(d, attrs);
+                let mut attrs = attrs.to_vec();
+                self.take_annotations(d, &mut attrs);
+                let _ = self.builder().attach_attrs(d, &attrs);
             }
             if !scoped && self.in_local_scope() {
                 self.push_local(name, d);
@@ -7591,7 +7596,9 @@ impl Sema<'_, '_> {
             }
         };
         if !attrs.is_empty() {
-            let _ = self.builder().attach_attrs(d, attrs);
+            let mut attrs = attrs.to_vec();
+            self.take_annotations(d, &mut attrs);
+            let _ = self.builder().attach_attrs(d, &attrs);
         }
         if !scoped && self.in_local_scope() {
             self.push_local(name, d);

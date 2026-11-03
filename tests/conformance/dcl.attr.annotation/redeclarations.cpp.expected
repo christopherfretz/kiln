@@ -1,0 +1,49 @@
+TranslationUnitDecl
+|-FunctionDecl f 'void ()'
+| `-CXX26AnnotationAttr 'int' value=1
+|-FunctionDecl f 'void ()'
+| `-CXX26AnnotationAttr 'int' value=2
+|-FunctionDecl f 'void ()'
+| |-CompoundStmt
+| `-CXX26AnnotationAttr 'int' value=3
+|-CXXRecordDecl struct S
+| `-CXX26AnnotationAttr 'int' value=4
+|-CXXRecordDecl struct S definition
+| `-CXX26AnnotationAttr 'int' value=5
+|-NamespaceDecl n
+| `-CXX26AnnotationAttr 'int' value=6
+|-NamespaceDecl n original Namespace 'n'
+| `-CXX26AnnotationAttr 'int' value=7
+|-VarDecl v 'int' extern
+| `-CXX26AnnotationAttr 'int' value=8
+|-VarDecl v 'int' cinit
+| |-IntegerLiteral 'int' 0
+| `-CXX26AnnotationAttr 'int' value=9
+|-FunctionTemplateDecl g
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| |-FunctionDecl g 'int ()'
+| | `-CXX26AnnotationAttr 'int' dependent
+| |   `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| `-FunctionDecl used g 'int ()'
+|   |-CompoundStmt
+|   | `-ReturnStmt
+|   |   `-SubstNonTypeTemplateParmExpr 'int'
+|   |     |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+|   |     `-IntegerLiteral 'int' 3
+|   |-CXX26AnnotationAttr 'int' value=3
+|   `-CXX26AnnotationAttr 'int' value=13
+|-FunctionTemplateDecl g
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 0 N
+| |-FunctionDecl g 'int ()'
+| | |-CompoundStmt
+| | | `-ReturnStmt
+| | |   `-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | `-CXX26AnnotationAttr 'int' dependent
+| |   `-BinaryOperator 'int' '+'
+| |     |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| |     `-IntegerLiteral 'int' 10
+| `-Function 'g'
+`-VarDecl use 'int' cinit
+  `-CallExpr 'int'
+    `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+      `-DeclRefExpr 'int ()' lvalue Function 'g' 'int ()' (FunctionTemplate 'g')

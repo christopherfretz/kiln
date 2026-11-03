@@ -135,6 +135,9 @@ impl Sema<'_, '_> {
     }
 
     pub fn act_on_type_position_attrs(&mut self, attrs: &mut Vec<AttrId>, in_chunk: bool) {
+        // An annotation appertains only to a declaration
+        // ([dcl.attr.annotation]/1), never to a type.
+        self.reject_annotations(attrs, None);
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
             if matches!(node.syntax, AttrSyntax::Gnu | AttrSyntax::Declspec) {
@@ -161,6 +164,14 @@ impl Sema<'_, '_> {
     /// table of [`Sema::check_decl_attrs`]; kiln keeps none of them.
     pub fn act_on_decl_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
         let mut v = attrs.to_vec();
+        // None of these declares an entity an annotation can appertain
+        // to ([dcl.attr.annotation]/1).
+        let what = match self.ast.decls.get(d).kind() {
+            DeclKind::UsingDirective => "a using-directive",
+            DeclKind::Using | DeclKind::UsingEnum => "a using-declaration",
+            _ => "an attribute-declaration",
+        };
+        self.reject_annotations(&mut v, Some(what));
         self.check_decl_attrs(d, &mut v);
     }
 
@@ -174,6 +185,9 @@ impl Sema<'_, '_> {
     /// `unlikely`, `fallthrough`) are left to
     /// [`Sema::act_on_attributed_stmt`].
     pub fn act_on_stmt_decl_attrs(&mut self, attrs: &[AttrId], asm: bool) {
+        // An asm-declaration declares nothing an annotation can
+        // appertain to; any other statement is not a declaration.
+        self.reject_annotations_in(attrs, asm.then_some("an asm-declaration"));
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
             if matches!(
@@ -206,7 +220,13 @@ impl Sema<'_, '_> {
             matches!(self.ast.decls.get(d).kind(), DeclKind::UsingDirective | DeclKind::Using)
         });
         if using {
-            self.act_on_stmt_decl_attrs(attrs, false);
+            // Its annotations were rejected by `act_on_decl_attrs`.
+            let attrs: Vec<AttrId> = attrs
+                .iter()
+                .copied()
+                .filter(|&a| self.ast.attrs.get(a).kind != AttrKind::ANNOTATION)
+                .collect();
+            self.act_on_stmt_decl_attrs(&attrs, false);
         }
     }
 
@@ -223,6 +243,8 @@ impl Sema<'_, '_> {
         if attrs.is_empty() {
             return;
         }
+        // They would appertain to the absent declarators ([dcl.pre]/5).
+        self.reject_annotations_in(attrs, Some("a declaration with no declarator"));
         let key = match ds.keyword {
             TagKeyword::Struct => "struct",
             TagKeyword::Class => "class",
@@ -251,6 +273,7 @@ impl Sema<'_, '_> {
     /// attributes, and the standard and GNU attributes whose subject is
     /// wrong.
     pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        self.take_annotations(d, attrs);
         self.check_alignas_subject(d, attrs);
         self.check_init_priority(d, attrs);
         let kind = self.ast.decls.get(d).kind();

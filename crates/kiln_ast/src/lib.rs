@@ -11,6 +11,7 @@
 //!   test contract).
 #![forbid(unsafe_code)]
 
+pub mod annot;
 pub mod ast;
 pub mod attr;
 pub mod builder;
