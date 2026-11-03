@@ -9,7 +9,7 @@
 //! whose value changes (clang's `warn_impcast_integer_precision_constant`);
 //! and `-Wnull-conversion` for GNU `__null` (`gnu_null.rs`).
 
-use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -29,6 +29,14 @@ impl Sema<'_, '_> {
     /// its implicit conversions. Children of an expression take its own
     /// location as their context, as in clang.
     pub(crate) fn check_implicit_conversions(&mut self, root: ExprId, cc: Loc) {
+        // clang's `CheckImplicitConversions`: nothing for a value- or
+        // type-dependent full-expression; each instantiation checks it.
+        if self.expr_is_value_dependent(root) {
+            return;
+        }
+        if !self.inst.stack.is_empty() {
+            self.recheck_enum_constants_in_bool(root);
+        }
         let mut work = vec![(root, cc)];
         let mut seen = 0usize;
         while let Some((e, cc)) = work.pop() {
@@ -134,6 +142,41 @@ impl Sema<'_, '_> {
     /// (`-Wundefined-bool-conversion`). Not in unevaluated operands, nor
     /// when `e` or the context `cc` comes from a macro body; a weak
     /// declaration may be null.
+    /// Whether `x`, the operand of `&` (a `call` or not), is a reference:
+    /// a glvalue call, or a name of a reference variable or member.
+    fn is_reference_operand(&self, x: ExprId, call: bool) -> bool {
+        if call {
+            return self.ast.exprs.get(x).value_category() != ValueCategory::PRValue;
+        }
+        matches!(self.ast.exprs.get(x).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+            && self
+                .ast
+                .decls
+                .get(self.ast.exprs.decl(x))
+                .ty()
+                .is_some_and(|t| self.ast.types.is_reference(t))
+    }
+
+    /// `msg` with clang's "'f' returns a reference" note when the call
+    /// `x` has a direct callee (`getDirectCallee`: a function, not a
+    /// pointer to one).
+    fn note_reference_return(&self, msg: kiln_diag::Diag, x: ExprId) -> kiln_diag::Diag {
+        let direct = self.callee_decl(x).filter(|&f| {
+            self.ast
+                .decls
+                .get(f)
+                .ty()
+                .is_some_and(|t| self.ast.types.is_function(self.ast.types.canonical(t)))
+        });
+        match direct {
+            Some(f) => msg.with_note(
+                self.diag(DiagId::note_reference_is_return_value, self.ast.decls.get(f).loc())
+                    .arg(format!("'{}'", self.decl_name(f))),
+            ),
+            None => msg,
+        }
+    }
+
     fn always_non_null_pointer(&mut self, e: ExprId, cc: Loc) {
         if self.unevaluated > 0 {
             return;
@@ -165,20 +208,30 @@ impl Sema<'_, '_> {
                 .then(|| s.ast.exprs.decl(x))
         };
         if addr_of {
-            // clang `CheckForReference` (a reference-returning call is
-            // left alone: kiln does not model its note).
+            // clang `CheckForReference`: the address of a reference
+            // variable or member, or of a call returning a reference (a
+            // glvalue call; the note names a direct callee). Ranges: the
+            // operand of `&` and the context token.
             let x = self.strip_impcast(e);
-            if let Some(d) = named(self, x) {
-                if self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_reference(t)) {
-                    let at = self.expr_loc(x);
-                    let msg = self.diag(DiagId::sema_address_of_reference_bool_conversion, at);
-                    self.emit_after_typos(root, msg);
-                    return;
-                }
-            } else if matches!(
-                self.ast.exprs.get(x).kind(),
+            let kind = self.ast.exprs.get(x).kind();
+            let call = matches!(
+                kind,
                 ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
-            ) {
+            );
+            if self.is_reference_operand(x, call) {
+                let at = self.expr_loc(x);
+                let range = Span::new(cc, self.token_end(cc).unwrap_or(cc));
+                let mut msg = self
+                    .diag(DiagId::sema_address_of_reference_bool_conversion, at)
+                    .range(self.expr_range(e))
+                    .range(range);
+                if call {
+                    msg = self.note_reference_return(msg, x);
+                }
+                self.emit_after_typos(root, msg);
+                return;
+            }
+            if call {
                 return;
             }
         }
@@ -446,6 +499,15 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The parser split a one-character `>` token at `at` off a `>>` or
+    /// `>>=` ([temp.names]/4): [`Self::token_end`] measures it as one
+    /// character. A tentative parse that is rolled back may leave one
+    /// recorded; only a diagnostic range ending at a `>>` operator at
+    /// the same location would notice.
+    pub fn note_split_greater(&mut self, at: Loc) {
+        self.split_greaters.insert(at);
+    }
+
     /// The end of the identifier, keyword, number or punctuator token at
     /// `at`, from the source text. For a macro location the token is
     /// measured where it is spelled and the end is that far past `at` in
@@ -453,6 +515,9 @@ impl Sema<'_, '_> {
     /// if it would leave the entry.
     pub(crate) fn token_end(&self, at: Loc) -> Option<Loc> {
         let sm = self.diags.sm();
+        if self.split_greaters.contains(&at) {
+            return Some(at.with_offset(1));
+        }
         if at.is_macro() {
             let sp = sm.spelling_loc(at);
             let len = sm.same_entry_distance(sp, self.token_end(sp)?)?;
@@ -477,13 +542,14 @@ impl Sema<'_, '_> {
                 i += 1;
             }
         } else {
-            // A punctuator, longest match first ([lex.operators]). `>>`
-            // and `>>=` are left out: a `>` closing a template argument
-            // list may be the first half of one (clang measures the split
+            // A punctuator, longest match first ([lex.operators]). A `>`
+            // the parser split off a `>>` or `>>=` closing a template
+            // argument list was measured above (clang measures the split
             // token).
-            const PUNCT: [&[u8]; 22] = [
-                b"<=>", b"<<=", b"->*", b"::", b"->", b"++", b"--", b"<<", b"<=", b">=", b"==",
-                b"!=", b"&&", b"||", b"+=", b"-=", b"*=", b"/=", b"%=", b"&=", b"|=", b"^=",
+            const PUNCT: [&[u8]; 24] = [
+                b"<=>", b"<<=", b">>=", b"->*", b"::", b"->", b"++", b"--", b"<<", b">>", b"<=",
+                b">=", b"==", b"!=", b"&&", b"||", b"+=", b"-=", b"*=", b"/=", b"%=", b"&=", b"|=",
+                b"^=",
             ];
             let rest = text.get(i..).unwrap_or_default();
             i += PUNCT.iter().find(|p| rest.starts_with(p)).map_or(1, |p| p.len());
@@ -518,5 +584,45 @@ pub(crate) fn truncate_to(v: i128, w: u32, signed: bool) -> i128 {
     } else {
         // The low `w` bits, as a non-negative value.
         v & ((1i128 << w) - 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use kiln_ast::Ast;
+    use kiln_ast::types::TypeContext;
+    use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
+    use kiln_source::SourceManager;
+    use kiln_source::symbol::Interner;
+
+    use crate::Sema;
+    use crate::target::{Arch, Target};
+
+    /// [lex.operators]: `>>` and `>>=` are one token each unless the
+    /// parser split a `>` off them closing a template argument list
+    /// ([temp.names]/4).
+    #[test]
+    fn token_end_measures_shift_tokens_and_split_greaters() {
+        let src = "a >> b >>= c >= d > e";
+        let sm = SourceManager::new();
+        let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+        let diags = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+        let target = Target::for_arch(Arch::X86_64);
+        let ast = Ast::new(Arc::new(Interner::new()), TypeContext::new(target.types.clone()));
+        let mut s = Sema::for_target(ast, &diags, target);
+        let len = |s: &Sema<'_, '_>, at: u32| {
+            let end = s.token_end(sm.loc(file, at)).expect("measurable");
+            sm.offset_of(end).expect("file location").1 - at
+        };
+        assert_eq!(len(&s, 2), 2, ">>");
+        assert_eq!(len(&s, 7), 3, ">>=");
+        assert_eq!(len(&s, 13), 2, ">=");
+        assert_eq!(len(&s, 18), 1, ">");
+        s.note_split_greater(sm.loc(file, 2));
+        s.note_split_greater(sm.loc(file, 3));
+        assert_eq!(len(&s, 2), 1, "split first '>'");
+        assert_eq!(len(&s, 3), 1, "split second '>'");
     }
 }
