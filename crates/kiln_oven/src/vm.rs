@@ -778,8 +778,16 @@ impl Oven {
                     pc += 3;
                 }
                 Op::FAdd | Op::FSub | Op::FMul | Op::FDiv => {
-                    match arith::float_bin(op, float_of(aux), reg!(1), reg!(2)) {
+                    let kind = float_of(aux);
+                    match arith::float_bin(op, kind, reg!(1), reg!(2)) {
                         Ok(v) => reg!(0) = v,
+                        Err(FloatErr::NaN | FloatErr::DivZero) if self.fold_float_ub => {
+                            let Some(v) = arith::float_bin_raw(op, kind, reg!(1), reg!(2)) else {
+                                fail!(Fault::Float(FloatErr::Unsupported))
+                            };
+                            reg!(0) = v;
+                            self.run.impure += 1;
+                        }
                         Err(e) => fail!(Fault::Float(e)),
                     }
                     pc += 4;
@@ -1484,6 +1492,15 @@ impl Oven {
             }
             c.pc &= !UNWIND_ONLY;
         }
+        if c.func == exc::LIFE_CHECK {
+            // A trivially destructible base: only its lifetime is checked
+            // (not while unwinding, which destroys no constructed object's
+            // base twice).
+            if !unwinding {
+                self.cleanup_life(&c, fb).map_err(|f| (f, self.cleanup_fault_pc(&c, pc)))?;
+            }
+            return Ok(None);
+        }
         if c.func >= exc::SENTINEL {
             // A try-block's marker or an exception's end (`vm/exc.rs`).
             match self.exc_cleanup(c).map_err(|f| (f, pc))? {
@@ -1520,7 +1537,9 @@ impl Oven {
         aux: u32,
         pc: usize,
     ) -> Result<(), Fault> {
-        if raw == 0 {
+        // A trivially destructible base can be outside its lifetime only
+        // if a constructor left it unconstructed (`Memory::set_unconstructed`).
+        if raw == 0 || (func == exc::LIFE_CHECK && self.mem.unconstructed.is_empty()) {
             return Ok(());
         }
         let (elem, n) = if aux & 1 != 0 {

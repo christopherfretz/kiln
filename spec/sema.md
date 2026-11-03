@@ -1878,7 +1878,17 @@ and returns the scope it names:
   expression of type `bool`.
   - A failed comparison adds `expression evaluates to 'L op R'` at the
     operator, underlining the whole comparison (clang
-    `DiagnoseStaticAssertDetails`).
+    `DiagnoseStaticAssertDetails`). The condition and its conjuncts are
+    looked at through parentheses, implicit casts and full-expressions
+    (`ExprWithCleanups`, as clang's `IgnoreParenImpCasts` steps through
+    every `FullExpr`), so a comparison of a `__builtin_bit_cast`, which
+    materializes its operand, gets the note too. A float side prints as
+    `ConvertAPValueToString` does, `APFloat::toString` (`1`, `2.5E+10`,
+    `+Inf`); a float literal in the requirement text as clang's
+    `PrintFloatingLiteral` (spec/ast.md §9.3). A range whose ends come
+    from a macro argument ends after the last token, measured where it
+    is spelled (WP-410). Test:
+    `dcl.pre/static-assert-full-expression-note.cpp`.
   - In a template definition (`in_template()`, or a context flagged
     `DEPENDENT_CTX`) the condition is not evaluated, even when it is not
     value-dependent (P2593R1, a DR; clang's
@@ -2679,7 +2689,10 @@ the initializer, or after default initialization, and before the
     (sema-class.md §8.3, "Landed (WP-066b)"); overloaded member
     functions wait for WP-068a
   - **ext-vector element access:** §5.19
-  - **subscripts:** either operand order
+  - **subscripts:** either operand order; a pointer to function as the
+    pointer operand is "subscript of pointer to function type 'void ()'"
+    at the pointer operand's begin (clang `CreateBuiltinArraySubscriptExpr`,
+    WP-408, test `expr.sub/subscript-function-pointer.cpp`)
   - **`sizeof`/`alignof`:** of types and expressions, using
     `kiln_abi` layout; `alignof` of an expression naming a variable or
     data member uses its declared alignment (§4.5). An invalid operand
@@ -2873,6 +2886,40 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   still lowers as the builtin. Tests:
   `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-written-first.cpp`,
   `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-implicit-first.cpp`.
+- **Redeclaring a builtin** (WP-410; clang `MergeFunctionDecl`,
+  `CheckEquivalentExceptionSpec`, `ActOnStartOfFunctionDef`): only a
+  file-scope (translation-unit redeclaration context), non-`static`
+  declaration with C linkage of a builtin's name is checked; one at
+  namespace scope, with C++ linkage, or `static` is an ordinary
+  function. Library builtins without the `__builtin_` prefix (`sin`)
+  are not checked in C++ (clang's incompatible-library-redeclaration
+  warning is C only). For a checked first declaration
+  (`recognize_builtin_decl`):
+  - a builtin with custom type checking is `sema_builtin_redeclare`
+    ("cannot redeclare builtin function 'X'");
+  - otherwise a type other than the builtin's is
+    `sema_conflicting_types`, except that at -fclang-compat=19 a type
+    differing only in the return type is
+    `sema_ovl_diff_return_type` (clang 19 checks overloading first);
+  - each with `note_previous_builtin_declaration` ("'X' is a builtin
+    with type T", `builtin_type_note`) at the declaration; the
+    declaration is invalid and is not the builtin (a later call finds
+    the implicit builtin, `lazily_create_builtin`).
+  - A builtin that cannot throw redeclared `noexcept(false)` (or with a
+    potentially-throwing dynamic specification) is
+    `sema_exception_spec_mismatch` with `note_previous_declaration` at
+    the previous declaration (the first declaration itself when there
+    is none); one written without a specification gets the builtin's
+    `throw()` merged in.
+  - A later redeclaration that conflicts with one recognized as the
+    builtin reports the same note in place of "previous declaration is
+    here".
+  - A definition of a declaration recognized as a builtin is
+    `sema_builtin_definition` ("definition of builtin function 'X'"),
+    and the function is invalid.
+  - Not implemented: clang's "different language linkage" error for an
+    `extern "C++"` redeclaration of an implicitly declared builtin.
+  Tests: `dcl.fct/builtin-redecl*.cpp`, `c.math/builtin-redecl.cpp`.
 - **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
   placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
 - **Calls:** `act_on_call` converts the callee with
@@ -4330,6 +4377,25 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   undeclared identifier", when the functions belong to several
   namespaces, or are found both directly and through a using-declaration
   (several using-declarations included).
+- **Recovered overload set** ([temp.names]/3, WP-408; clang 22): the
+  overload set a corrected uncalled template-id stands for is a
+  placeholder. A condition and a conditional's arms resolve its one
+  candidate first (`resolve_single_overload_candidate`), so `if
+  (val<int>)` warns that the address of '::val<int>' is always true and
+  an arm decays to the function pointer; a placeholder type (`auto`,
+  `auto *`, `auto &`, `decltype(auto)`) does not deduce from it
+  ("address of overloaded function 'val' does not match required type
+  'int (int)'" with "candidate function"); a default argument converts
+  it to the parameter type with "passing argument to parameter" after;
+  `sizeof`/`alignof` resolve it and reject the function type; `.m` on
+  it is "base of member reference is a function; perhaps you meant to
+  call it with no arguments?" and `->m` "member reference base type 'S
+  ()' is not a structure or union". The corrected name prints with its
+  qualifier (`typo_nns`; none when the path crosses a class). Tests:
+  `tests/conformance/temp.names/undeclared-template-id-recovery-22.cpp`,
+  `expr.cond/undeclared-template-id-arm-22.cpp`,
+  `expr.sizeof/undeclared-template-id-operand-22.cpp` (and `-19.cpp`,
+  clang 19's delayed correction of the same operands).
 - **Template-id typo candidates** ([temp.names]/3, WP-399; clang 22's
   `CorrectTypo` from `DiagnoseEmptyLookup`, `correct_template_id_typo`):
   for an uncalled template-id whose name ordinary lookup finds nothing or
@@ -4386,9 +4452,9 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   WP-399; clang 19's `TypoExpr` and `CorrectDelayedTyposInExpr`): under
   `-fclang-compat=19` an undeclared template-id whose best candidate is
   the name itself qualified (exactly one non-member function or using
-  shadow, non-dependent arguments, outside an instantiation, inside a
-  delayed-typo scope) is speculatively rebuilt as a reference to that
-  function, template arguments dropped
+  shadow, outside an instantiation, inside a delayed-typo scope) is
+  speculatively rebuilt as a reference to that function, template
+  arguments dropped (dependent ones too)
   (`speculate_template_id_typo`). The diagnostics engine holds every
   diagnosis (fatal ones aside) from then on (spec/diag.md "Held
   diagnostics"). At the correction point -- the end of the expression
@@ -4405,11 +4471,60 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   identifier 'val'"; a successful one "use of undeclared identifier
   'val'; did you mean '::val'?" with "'::val' declared here". Typos
   corrected in one batch fail together (`(val<int>, val<int> + 1)`).
-  Calls, overload sets and edit-distance candidates are never corrected
-  on this path. Tests:
+  Calls are never corrected on this path. The scopes (spec/parse.md "Compat-19 correction scopes",
+  WP-408) differ only in what follows the correction point: an
+  initializer (a declaration's, a condition declaration's) is filtered by
+  its initialization, so a type mismatch fails the speculation; a flush
+  scope (default member initializer, default argument, template
+  argument, `decltype` operand, braced-list element) and an undeduced type (`auto`,
+  `decltype(auto)`) correct before any conversion, so only an error in
+  the rebuilt expression itself (`sizeof(::val)`) fails it, and the
+  conversion's error then follows "did you mean". The location heuristic
+  above is the same in every scope. Under compat 19 a condition that is
+  itself the corrected name is not checked for `-Wpointer-bool-conversion`
+  (clang 19 converts the `TypoExpr`), while any other full-expression
+  warning about an expression built on the correction is held and issued
+  after "did you mean" (`Sema::emit_after_typos`), or dropped with a
+  failed speculation. Tests:
   `tests/conformance/temp.names/undeclared-template-id-correct-19.cpp`,
+  `undeclared-template-id-scopes-19.cpp`,
   `undeclared-template-id-function-19.cpp`; clang 22:
   `undeclared-template-id-function-22.cpp`.
+- **Clang 19 edit-distance candidates** ([temp.names]/3, WP-408; clang
+  19's `CorrectTypoDelayed` and `TransformTypos`): the same speculation
+  covers any candidate ordinary or qualified lookup finds
+  (`template_id_typo_candidates`, ranked as for clang 22 but with no
+  third-of-the-length bound), grouped by distance. clang 19 rebuilds the
+  candidates of each group in turn and takes the first valid one unless
+  another of the same group is valid too (`AmbiguousTypoExprs`), and
+  never a type, template, namespace, concept or non-static member
+  function (`typo_kind_19`: a variable, parameter, enumerator, binding,
+  non-type template parameter, or a field with an implicit object
+  argument is a value; a function, function template or static member
+  function a function). Kiln speculates once (`TypoSpec`): on the one
+  value of the nearest group, or on its first function when it has none
+  (an overload set rebuilt as an unresolved name). A function speculation
+  holds a `fallback` "did you mean" for the value of the same group or of
+  the nearest later group with exactly one value, taken when the
+  function fails; a valid function tied with a value or another function
+  is `ambiguous`, reported uncorrected. Two values in the nearest group
+  are no correction. The correction point validates as before: a
+  built-in operand or an initializer rejects a function, a `return`
+  operand, condition or discarded expression accepts anything, so there
+  a function tied with a value is ambiguous; an ambiguous or failed
+  `return` operand is then an error expression
+  (`Sema::holds_uncorrected_typo`), so no return conversion is checked.
+  When the nearest group is keywords only, clang 19 replaces the name by
+  the first one at once (`template_id_keyword_typo`): "did you mean
+  'break'?" and the keyword is re-parsed where the template-id was
+  ("expected unqualified-id" at it; `template` is consumed with
+  "'template' keyword not permitted here" and "expected unqualified-id"
+  at the next token, an error operand before a binary operator). Within
+  one distance clang orders candidates by a string hash kiln does not
+  model, so a keyword tied with a declaration (`swtch` with `switch` and
+  a function `swatch`), and an initializer that accepts only one of a
+  tied value and function, may differ. Tests:
+  `tests/conformance/temp.names/template-id-typo-*-19.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.
@@ -4570,8 +4685,9 @@ clang's `CheckLogicalOperands`, on the unconverted operands of a built-in
 `&&` / `||` ([expr.log.and]/1, [expr.log.or]/1), before their contextual
 conversion to `bool` (`check_constant_logical_operand`):
 - If either operand, as written (no parentheses stripped), names an
-  enumerator whose value is not 0 or 1, nothing is diagnosed (that is
-  clang's default-off `-Wint-in-bool-context`, not implemented).
+  enumerator whose value is not 0 or 1, that is
+  `sema_enum_constant_in_bool_context` (§5.26) and nothing more is
+  diagnosed here, whether or not that warning is enabled.
 - Otherwise `sema_constant_logical_operand` ("use of logical '&&' with
   constant operand", group `constant-logical-operand`, on by default) is
   issued at the operator, with the right operand's range, when the left
@@ -4590,8 +4706,61 @@ conversion to `bool` (`check_constant_logical_operand`):
   removing from the end of the left operand to the end of the right.
 - Tests: `expr.log.and/constant-operand*.cpp`, `expr.log.or/constant-operand.cpp`.
 
+### 5.26 Integers in a boolean context (`int_in_bool.rs`, WP-410)
+
+clang's `DiagnoseIntInBoolContext`, run by the implicit-conversion walk
+(`check_implicit_conversions`, `impcast.rs`) on the source of every
+implicit conversion to `bool` ([conv.bool]/1) of a completed
+full-expression, with parentheses and implicit casts stripped; an
+explicit cast to `bool` is not checked. A literal operand is an
+`IntegerLiteral`, or one directly under a unary `-` (the literal's own
+value is used); no parentheses or implicit casts are looked through.
+- `<<` ([expr.shift]): a left operand that is the literal 0 is
+  `sema_left_shift_always` ("converting the result of '<<' to a boolean
+  always evaluates to false", group `tautological-constant-compare`
+  under `tautological-compare`, on by default). Both operands literal,
+  the right literal's top bit clear and the expression not
+  value-dependent: the same warning with the shift's value, folded as
+  clang's constant folder does outside a constant context (a negative
+  count shifts right, a count of at least the width shifts by the width
+  less one, the result wraps to the promoted type). Otherwise, when the
+  shift's type is a signed integer type, `sema_left_shift_in_bool_context`
+  ("...; did you mean to compare with '0'?", group
+  `int-in-bool-context`, off by default, in `-Wmost`); at
+  -fclang-compat=19 `sema_left_shift_in_bool_context_expr` ("...; did
+  you mean '(E) != 0'?" with the shift printed as written). At the
+  operator.
+- Conditional ([expr.cond]): both arms literal, not both of value 0 or
+  1, and both non-zero is `sema_integer_constants_in_conditional_always_true`
+  (`tautological-constant-compare`) at the start of the condition. Each
+  arm whose type is not `bool` is then checked in turn (clang
+  `CheckConditionalOperator`).
+- `&&` / `||` ([expr.log.and], [expr.log.or]): an operand, as written,
+  naming an enumerator whose value is not 0 or 1 is
+  `sema_enum_constant_in_bool_context` ("converting the enum constant
+  to a boolean", `int-in-bool-context`) at the operator, from
+  `builtin_binary` before the operands are converted.
+- clang's `'*' in boolean context` is C only and not issued.
+- Deviation: clang checks a template's non-dependent full-expressions
+  again in each instantiation and repeats these warnings there; kiln
+  reports them once, in the definition.
+- Tests: `expr.shift/shift-bool-always.cpp`,
+  `expr.shift/shift-in-bool-context-{19,22}.cpp`,
+  `expr.cond/cond-int-constants-bool.cpp`,
+  `conv.bool/enum-constant-in-bool*.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
+  - an invalid element (WP-408): an expression standing for clang's
+    `ExprError` (`Sema::is_expr_error`: an undeclared identifier or a
+    qualified name not found, as opposed to a `RecoveryExpr` such as a
+    failed call) among the parenthesized arguments or anywhere in a
+    braced list leaves the initialization unperformed and undiagnosed
+    (clang's `ActOnInitializerError`): `int w(S::nom, 2);` reports no
+    "excess elements in scalar initializer". A braced list holding one
+    is itself such an expression as a call argument or in `T{...}`
+    (clang's `ParseBraceInitializer` fails). Test:
+    `tests/conformance/dcl.init.general/invalid-element-initializer.cpp`.
   - copy- and direct-initialization of scalars, through the implicit
     conversion sequence, with narrowing enforced for list-init
     ([dcl.init.list]/7); a list element (`init_element`, an array or
@@ -4936,7 +5105,13 @@ conversion to `bool` (`check_constant_logical_operand`):
 - **Compound statements and scopes:** see §2.
 - **`if`, `while`, `for`:** condition conversion to `bool` (contextual
   conversion), plus `cond_var` for condition declarations
-  (`act_on_condition_var`).
+  (`act_on_condition_var`). A condition variable of function type
+  (`decltype(auto) x = f`) is "a function type is not allowed here" at
+  its declarator after the failed initialization ([stmt.pre]/5, clang
+  `CheckConditionVariable`; WP-408, test
+  `stmt.pre/condition-decltype-auto-function.cpp`). The condition
+  resolves a lone overload candidate before converting
+  (`resolve_single_overload_candidate`).
 - **`act_on_if(kind, init, cond_var, cond, then, els, loc)`** builds
   every `IfKind`:
   - **`if constexpr`** ([stmt.if]/2): `act_on_constexpr_condition(e)`

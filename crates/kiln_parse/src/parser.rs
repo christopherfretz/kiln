@@ -168,6 +168,10 @@ pub struct Parser<'a, 'sm> {
     /// decl-specifier-seq without consuming its name: the parameter list
     /// stops there (clang's "expected ')'").
     pub(crate) param_abort: bool,
+    /// Set when `typename identifier` failed (no qualifier) and the
+    /// identifier names no type: the identifier is left unconsumed and
+    /// the decl-specifier-seq ends there (clang's `DoneWithDeclSpec`).
+    pub(crate) typename_failed: bool,
     /// The name and end of the last `typename T...[i]` whose pack index
     /// was consumed after "expected a qualified name after 'typename'".
     pub(crate) typename_pack_index: Option<(Loc, Loc)>,
@@ -313,6 +317,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             param_typename: ParamTypename::Implicit,
             param_recovery: None,
             param_abort: false,
+            typename_failed: false,
             typename_pack_index: None,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
@@ -523,11 +528,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// (`PP.EnterToken` + `Tok.setKind(tok::semi)`).
     pub(crate) fn inject_semi(&mut self) {
         let at = self.loc();
-        let semi = Token {
-            kind: TokKind::Punct(Punct::Semi),
-            span: Span::new(at, at),
-            flags: TokFlags::empty(),
-        };
+        self.inject(TokKind::Punct(Punct::Semi), at);
+    }
+
+    /// Inserts a token of kind `kind` at `at` before the current token
+    /// (clang's `UnconsumeToken` of a replacement token).
+    pub(crate) fn inject(&mut self, kind: TokKind, at: Loc) {
+        let semi = Token { kind, span: Span::new(at, at), flags: TokFlags::empty() };
         let saved = Replay {
             toks: vec![semi],
             eof: semi,
@@ -1515,6 +1522,35 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
         }
         Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
+    }
+
+    /// Skips the `name ::` and `name<args> ::` components left after a
+    /// nested-name-specifier that failed (diagnosed), so the declarator
+    /// goes on at its unqualified-id (clang annotates the whole invalid
+    /// `CXXScopeSpec`).
+    pub(crate) fn skip_nested_name_rest(&mut self) {
+        loop {
+            let mut i = self.pos;
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Template) {
+                i += 1;
+            }
+            if self.ident_of(self.tok_at(i)).is_none() {
+                return;
+            }
+            let mut j = i + 1;
+            if Self::punct_of(self.tok_at(j)) == Some(Punct::Less) {
+                match self.skip_template_args(j) {
+                    Some((close, false)) => j = close + 1,
+                    _ => return,
+                }
+            }
+            if Self::punct_of(self.tok_at(j)) != Some(Punct::ColonColon) {
+                return;
+            }
+            while self.pos <= j {
+                self.bump();
+            }
+        }
     }
 
     /// The `name<args>::` component of a nested-name-specifier after `qual`,
