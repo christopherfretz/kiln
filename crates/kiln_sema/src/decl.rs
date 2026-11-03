@@ -4780,10 +4780,31 @@ impl Sema<'_, '_> {
                 spec = spec.with_constinit(true);
             }
         }
-        if ds.inline.is_some() {
-            spec = spec.with_inline(true);
+        if let Some(l) = ds.inline {
+            if self.in_local_scope() {
+                self.inline_block_scope(d, l);
+            } else {
+                spec = spec.with_inline(true);
+            }
         }
         spec
+    }
+
+    /// [dcl.inline]: `inline` shall not appear on a block scope
+    /// declaration (clang `err_inline_declaration_block_scope`, at
+    /// `inline`, naming the variable or a structured binding
+    /// declaration's first binding); the variable is not inline.
+    fn inline_block_scope(&mut self, d: &Declarator, l: Loc) {
+        let name = match &d.decomp {
+            Some(dc) => dc.ids.first().map(|b| b.name),
+            None => d.name.map(|(n, _)| n),
+        };
+        let Some(name) = name else { return };
+        let msg = self
+            .diag(DiagId::sema_inline_declaration_block_scope, l)
+            .range(Span::new(l, l.with_offset(6)))
+            .arg(sym_str(self, name));
+        self.emit(msg);
     }
 
     pub(crate) fn is_var_definition(&self, v: DeclId) -> bool {

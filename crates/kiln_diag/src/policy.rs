@@ -48,6 +48,8 @@ pub(crate) struct Policy {
     /// The clang compat level, which selects the group tree
     /// ([`crate::Group::compat_subgroups`]).
     pub(crate) compat: u32,
+    /// The `-W` options, in order ([`Self::group_flag`]).
+    warnings: Vec<String>,
 }
 
 impl Policy {
@@ -81,6 +83,7 @@ impl Policy {
             ext_behavior,
             suppress_system: true,
             compat: opts.clang_compat,
+            warnings: opts.warnings.clone(),
         };
         let mut reports = Vec::new();
         for report in [false, true] {
@@ -250,6 +253,20 @@ impl Policy {
             }
             m.no_fatal = true;
         }
+    }
+
+    /// Whether the last of `-W<group>` and `-Wno-<group>` given was the
+    /// positive one; `None` if neither was.
+    pub(crate) fn group_flag(&self, group: &str) -> Option<bool> {
+        self.warnings.iter().rev().find_map(|w| {
+            if w == group {
+                Some(true)
+            } else if w.strip_prefix("no-") == Some(group) {
+                Some(false)
+            } else {
+                None
+            }
+        })
     }
 
     /// The severity `id` is emitted with (clang's `getDiagnosticSeverity`).
