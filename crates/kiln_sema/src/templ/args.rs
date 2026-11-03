@@ -1231,20 +1231,11 @@ impl Sema<'_, '_> {
             self.emit(d);
             return Err(());
         }
-        if t.is_integral(pty)
-            && int_like(cty)
-            && let Some(raw) = self.fold_int(c)
-            && !self.int_fits(pty, raw)
-        {
-            let d = self
-                .diag(DiagId::sema_cce_narrowing_value, at)
-                .arg("non-type template argument")
-                .arg(raw.to_string())
-                .arg(self.ty_arg(pty));
-            // clang `ext_cce_narrowing` (a `-Wc++11-narrowing` error by
-            // default) recovers with the converted value.
-            self.emit(d);
-        }
+        let narrowed = if t.is_integral(pty) && int_like(cty) {
+            self.fold_int(c).filter(|&raw| !self.int_fits(pty, raw))
+        } else {
+            None
+        };
         let c = match self.in_cce(|s| conv::implicit_convert(s, c, pty, ConvCtx::Initialization)) {
             Ok(c) => c,
             Err(err) => {
@@ -1274,6 +1265,18 @@ impl Sema<'_, '_> {
             }
         }
         let c = self.act_on_constant_full_expr(c);
+        // After the full-expression's conversion warnings, as in clang
+        // (`BuildConvertedConstantExpression`): `ext_cce_narrowing` (a
+        // `-Wc++11-narrowing` error by default) recovers with the
+        // converted value.
+        if let Some(raw) = narrowed {
+            let d = self
+                .diag(DiagId::sema_cce_narrowing_value, at)
+                .arg("non-type template argument")
+                .arg(raw.to_string())
+                .arg(self.ty_arg(pty));
+            self.emit(d);
+        }
         if self.is_err_expr(c) {
             return Err(());
         }

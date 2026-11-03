@@ -312,7 +312,14 @@ the target:
    `Sema::constant_full_expr` for array bounds, bit-field widths,
    enumerators, `static_assert`, `alignas`, case values and template
    arguments). Conditional arms are checked separately. The warning goes
-   through `diag_if_reachable`. A constant truncated by the bit-field it
+   through `diag_if_reachable`. Those exemptions and `diag_if_reachable`
+   apply to the first rule only (clang `DiagRuntimeBehavior`); the
+   same-width rule is a plain diagnostic, so `case 64:` on a
+   `_BitInt(7)` condition, a `signed char` NTTP or an enumerator of a
+   fixed `signed char` type, a namespace-scope `constexpr` initializer
+   and unreachable code report it too, before the narrowing error
+   of a converted constant expression (WP-465;
+   `conv.integral/constant-conversion-same-width.cpp`). A constant truncated by the bit-field it
    is assigned to reports -Wbitfield-constant-conversion instead and its
    conversions are skipped (spec/sema.md §7.12). Not implemented:
    `-Wnull-conversion` (it waits on `__null`, which glibc's and the

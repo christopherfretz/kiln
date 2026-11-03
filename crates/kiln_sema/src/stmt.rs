@@ -17,7 +17,8 @@ use kiln_source::symbol::Symbol;
 use std::collections::HashSet;
 
 use crate::Sema;
-use crate::conv::{self, ConvCtx};
+use crate::conv::{self, ConvCtx, SecondStep, StandardConversion};
+use crate::overload::Ics;
 use crate::scope::{Scope, ScopeKind};
 
 /// A label of the current function.
@@ -1040,6 +1041,10 @@ impl Sema<'_, '_> {
             return (e, None);
         }
         let loc = self.ast.exprs.get(e).loc();
+        let narrowed = match self.case_cce_check(e, cond_ty) {
+            Ok(n) => n,
+            Err(r) => return r,
+        };
         let conv = match conv::implicit_convert(self, e, cond_ty, ConvCtx::Initialization) {
             Ok(c) => c,
             Err(err) => {
@@ -1059,18 +1064,107 @@ impl Sema<'_, '_> {
                 };
                 let ce = self.builder().constant_expr(conv, Some(cv));
                 let ce = self.act_on_constant_full_expr(ce);
+                self.case_narrowing(narrowed, at, cond_ty);
                 (ce, iv.filter(|_| !invalid))
             }
             Err(mut f) => {
                 // [stmt.switch]/2: a converted constant expression (clang's
                 // `CheckConvertedConstantExpression`, CCEK_CaseValue),
                 // reported at the value's first token.
+                let full = self.act_on_constant_full_expr(conv);
+                self.case_narrowing(narrowed, at, cond_ty);
                 let at = Self::fold_lone_invalid(&mut f, at);
                 let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
                 let d = Self::with_failure_notes(msg, f);
                 self.emit(d);
-                (self.act_on_constant_full_expr(conv), None)
+                (full, None)
             }
+        }
+    }
+
+    /// [stmt.switch]/2, [expr.const]/12 (clang
+    /// `BuildConvertedConstantExpression`, `CCEK_CaseValue`): a case value is
+    /// a converted constant expression of the promoted condition type. With
+    /// no implicit conversion sequence to it, or one whose (last) standard
+    /// conversion is not allowed there (a floating-integral conversion, a
+    /// boolean conversion from a pointer, ...), it is an error at the
+    /// value's first token naming its type as written, and the case is
+    /// dropped (`Err`, the recovered value). Otherwise the value a
+    /// narrowing integral conversion changes, if any (`Ok`), reported by
+    /// `case_narrowing` after the full-expression's conversion warnings, as
+    /// in clang.
+    fn case_cce_check(
+        &mut self,
+        e: ExprId,
+        cond_ty: QualType,
+    ) -> Result<Option<i128>, (ExprId, Option<i128>)> {
+        let written = self.ast.exprs.get(e).ty();
+        let at = self.begin_loc(e);
+        let pty = conv::strip_cv(self, cond_ty);
+        if written != QualType::OVERLOAD && !self.ast.types.is_dependent(written) {
+            let info = self.arg_info(e);
+            let ics = self.try_implicit_conversion(&info, pty, crate::overload::IcsOptions::NONE);
+            let scs = match ics {
+                Ics::Standard(s) => Some(s),
+                Ics::UserDefined(u) => Some(u.after),
+                _ => None,
+            };
+            let id = if ics.is_bad() {
+                Some(DiagId::sema_cce_not_implicitly_convertible)
+            } else if scs.is_some_and(|s| !self.case_second_allowed(&s)) {
+                Some(DiagId::sema_cce_conversion_not_allowed)
+            } else {
+                None
+            };
+            if let Some(id) = id {
+                let d = self
+                    .diag(id, at)
+                    .arg(self.ty_arg(written))
+                    .arg(self.ty_arg(pty))
+                    .range(self.expr_range(e));
+                self.emit(d);
+                return Err((self.recover_err(&[e], at), None));
+            }
+        }
+        let c = conv::lvalue_to_rvalue(self, e);
+        let cty = conv::strip_cv(self, self.ast.exprs.get(c).ty());
+        let t = &self.ast.types;
+        if !(t.is_integral(pty) && (t.is_integral(cty) || t.as_enum(cty).is_some())) {
+            return Ok(None);
+        }
+        Ok(self.fold_int(c).filter(|&raw| !self.int_fits(pty, raw)))
+    }
+
+    /// clang `CheckConvertedConstantConversions`: the second standard
+    /// conversions allowed in a converted constant expression of integral
+    /// or enumeration type ([expr.const]/12; narrowing is checked apart).
+    fn case_second_allowed(&self, scs: &StandardConversion) -> bool {
+        match scs.second {
+            SecondStep::Identity
+            | SecondStep::IntegralPromotion
+            | SecondStep::IntegralConversion => true,
+            SecondStep::BooleanConversion => {
+                self.ast.types.is_integral(scs.from) || conv::is_unscoped_enum(self, scs.from)
+            }
+            SecondStep::PointerConversion | SecondStep::MemberPointerConversion => {
+                self.is_nullptr_type(scs.from)
+            }
+            _ => false,
+        }
+    }
+
+    /// The narrowing of a case value `raw` to the condition type (clang
+    /// `ext_cce_narrowing`: a `-Wc++11-narrowing` error by default; clang
+    /// goes on with the converted value), at the value's first token `at`.
+    fn case_narrowing(&mut self, raw: Option<i128>, at: Loc, cond_ty: QualType) {
+        if let Some(raw) = raw {
+            let pty = conv::strip_cv(self, cond_ty);
+            let d = self
+                .diag(DiagId::sema_cce_narrowing_value, at)
+                .arg("case value")
+                .arg(raw.to_string())
+                .arg(self.ty_arg(pty));
+            self.emit(d);
         }
     }
 

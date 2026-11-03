@@ -6246,7 +6246,22 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     constant and the Oven compares it limb by limb (spec/oven.md
     "`_BitInt`"). Tests: `stmt.switch/bit-int-wide-{duplicate-case,condition}.cpp`.
   - multiple `default` labels
-  - `case` values converted to the promoted type
+  - `case` values converted to the promoted type as a converted
+    constant expression ([expr.const]/12, clang
+    `BuildConvertedConstantExpression`; WP-465): the implicit conversion
+    sequence is formed first (`case_cce_check`); none is `value of type
+    'X' is not implicitly convertible to 'T'`, and a standard (or a
+    user-defined sequence's second standard) conversion whose second step
+    is not identity, an integral promotion or conversion, a boolean
+    conversion from an integral or unscoped enumeration type, or a
+    pointer conversion from `nullptr_t` is `conversion from 'X' to 'T' is
+    not allowed in a converted constant expression` (`case 1.5:`, a class
+    with `operator double`, a string literal); both at the value with its
+    range, and the case is dropped. An integral value that does not fit is
+    `case value evaluates to V, which cannot be narrowed to type 'T'`,
+    after the full-expression's conversion warnings, as are an NTTP's and
+    a fixed-type enumerator's. Test:
+    `stmt.switch/case-converted-constant.cpp`.
   - `act_on_start_switch(loc, …)` and
     `act_on_finish_switch(…, cond_var)` bracket the body
   - GNU case ranges `case lo ... hi` (WP-205): the parser emits the

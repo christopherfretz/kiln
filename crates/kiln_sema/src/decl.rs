@@ -7443,19 +7443,11 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
         } else if !self.is_error_type(ity) {
             let mut c = conv::lvalue_to_rvalue(self, ie);
+            let mut narrowed = None;
             let cty = if let Some(f) = build.fixed {
                 // [dcl.enum]/5: a converted constant expression, so a
                 // narrowing value is ill-formed ([expr.const]/12).
-                if let Some(raw) = self.fold_int(c)
-                    && !self.fits(f, raw)
-                {
-                    let msg = self
-                        .diag(DiagId::sema_cce_narrowing_value, self.begin_loc(ie))
-                        .arg("enumerator value")
-                        .arg(raw.to_string())
-                        .arg(self.ty_arg(f));
-                    self.emit(msg);
-                }
+                narrowed = self.fold_int(c).filter(|&raw| !self.fits(f, raw));
                 c = conv::implicit_convert(self, c, f, ConvCtx::Initialization).unwrap_or(c);
                 f
             } else {
@@ -7463,6 +7455,16 @@ impl Sema<'_, '_> {
                 if self.ast.types.as_enum(cty).is_some() { QualType::INT } else { cty }
             };
             let c = self.act_on_constant_full_expr(c);
+            // After the full-expression's conversion warnings, as in clang
+            // (`BuildConvertedConstantExpression`).
+            if let Some(raw) = narrowed {
+                let msg = self
+                    .diag(DiagId::sema_cce_narrowing_value, self.begin_loc(ie))
+                    .arg("enumerator value")
+                    .arg(raw.to_string())
+                    .arg(self.ty_arg(cty));
+                self.emit(msg);
+            }
             // A converted constant expression for a fixed underlying
             // type ([dcl.enum]/5), else an integral constant expression.
             let at = self.begin_loc(ie);
