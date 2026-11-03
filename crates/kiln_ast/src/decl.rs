@@ -2933,6 +2933,11 @@ pub mod builtin {
     /// custom type-checking: one argument, decayed): whether the argument
     /// folds to a constant.
     pub const CONSTANT_P: u32 = 211;
+    /// `int __builtin_classify_type(...)` (clang `Builtins.td` signature
+    /// `i.`; custom type-checking: one argument, not converted or
+    /// evaluated): the GCC type class of the argument's type
+    /// ([`crate::Ast::gcc_type_class`]; WP-419).
+    pub const CLASSIFY_TYPE: u32 = 209;
     /// `__builtin_bswap16` (clang `Builtins.td` signature `UsUs`).
     pub const BSWAP16: u32 = 179;
     /// `__builtin_bswap32` (clang `Builtins.td` signature `UiUi`).
@@ -3363,6 +3368,7 @@ pub mod builtin {
         row(CTZG, "__builtin_ctzg", "i.", N | C | T),
         row(POPCOUNTG, "__builtin_popcountg", "i.", N | C | T),
         row(CONSTANT_P, "__builtin_constant_p", "i.", N | C | T),
+        row(CLASSIFY_TYPE, "__builtin_classify_type", "i.", N | C | T),
         row(BSWAP16, "__builtin_bswap16", "UsUs", N | C),
         row(BSWAP32, "__builtin_bswap32", "UiUi", N | C),
         row(BSWAP64, "__builtin_bswap64", "ULiULi", N | C),

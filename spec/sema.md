@@ -3050,6 +3050,10 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
     (`__float128`, i.e. `long double` on AArch64) and
     `__builtin_sincospi{,f,l}` (`void(T, T*, T*)`, `nothrow`; only at
     `-fclang-compat=22`, `builtin::min_compat`).
+  - WP-419: `__builtin_classify_type(e)` (custom-checked, one argument
+    kept unconverted and unevaluated; GCC type classes, identical in
+    clang 19 and 22): spec/sema-templates.md §9.4
+    (`tests/conformance/expr.const/builtin-classify-type*.cpp`).
 - **Format strings** (WP-282; `format_string.rs`, clang
   `CheckPrintfHandler`): a call whose callee has a `format(printf, F, A)`
   attribute with `A` > 0 and whose argument `F` is an ordinary string

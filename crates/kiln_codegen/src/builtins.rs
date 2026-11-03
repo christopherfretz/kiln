@@ -396,6 +396,12 @@ impl Cg<'_> {
             // 1 or 0 when it could evaluate it) is not a constant, as at
             // clang -O0; it is not evaluated.
             id::CONSTANT_P => V::C(self.m.const_int(LTy::I32, 0)),
+            // WP-419: the operand's GCC type class, the operand not
+            // evaluated (clang folds the call whatever the operand).
+            id::CLASSIFY_TYPE => {
+                let c = arg(0).map_or(-1, |x| ast.gcc_type_class(ast.exprs.get(x).ty()));
+                V::C(self.m.const_int(LTy::I32, i128::from(c)))
+            }
             // [specialized.addressof]: `&x` without an overloaded `&`.
             id::ADDRESSOF => self.emit_lvalue(a0)?.addr.v,
             id::CLZ

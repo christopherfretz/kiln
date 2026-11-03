@@ -808,3 +808,46 @@ fn memory_report_instantiation_row_spec_ast_15_q6() {
         r.rows.iter().filter(|r| !r.name.starts_with("instantiation")).map(|r| r.live_bytes).sum();
     assert_eq!(r.live_bytes(), sum);
 }
+
+/// WP-419: `__builtin_classify_type` type classes (clang
+/// `EvaluateBuiltinClassifyType`) for the types the C++ corpus cannot
+/// spell yet (`_BitInt`) and the ones it reaches only indirectly.
+#[test]
+fn gcc_type_class() {
+    use kiln_ast::ids::QualType;
+    use kiln_ast::types::VectorKind;
+    let mut ast = new_ast();
+    let t = &mut ast.types;
+    let bit = t.bit_int(true, 37);
+    let ubit = t.bit_int(false, 8);
+    let atomic = t.atomic(QualType::INT);
+    let atomic_bit = t.atomic(bit);
+    let cx = t.complex(QualType::DOUBLE);
+    let vec = t.vector(QualType::INT, 4, VectorKind::Generic);
+    let ext = t.vector(QualType::FLOAT, 4, VectorKind::Ext);
+    let ptr = t.pointer_to(QualType::VOID);
+    let lref = t.lvalue_ref_to(QualType::BOOL);
+    let cases = [
+        (QualType::VOID, 0),
+        (QualType::CHAR, 1),
+        (QualType::UINT128, 1),
+        (QualType::BOOL, 4),
+        (QualType::FLOAT16, 8),
+        (QualType::FLOAT128, 8),
+        (QualType::NULLPTR, -1),
+        (QualType::SV_INT8, -1),
+        (QualType::META_INFO, -1),
+        (bit, 18),
+        (ubit, 18),
+        (atomic, 1),
+        (atomic_bit, 18),
+        (cx, 9),
+        (vec, 19),
+        (ext, 19),
+        (ptr, 5),
+        (lref, 4),
+    ];
+    for (q, want) in cases {
+        assert_eq!(ast.gcc_type_class(q), want, "{q:?}");
+    }
+}

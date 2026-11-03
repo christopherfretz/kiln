@@ -713,6 +713,14 @@ impl Sema<'_, '_> {
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
             builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
+            // WP-419: clang `CheckBuiltinFunctionCall`: one argument, kept
+            // as written (no conversion; the call never evaluates it). A
+            // bound member function or builtin name is diagnosed as in any
+            // call argument; an overload set is kept (clang classifies its
+            // placeholder type as an unspecified value, kiln as -1).
+            builtin::CLASSIFY_TYPE => (self.builtin_arg_count(args, 1, rparen)
+                && !self.check_builtin_fn_use(args[0]))
+            .then(|| (args.to_vec(), QualType::INT)),
             builtin::VA_START => self.builtin_va_start(callee, args, rparen),
             // WP-156: the vector reductions (vector_ops.rs).
             builtin::REDUCE_ADD
