@@ -136,6 +136,9 @@ interned charges nothing, so 10,000 `reflect_constant(i % 16)` calls
 make 16 entries (`meta.reflection.result/reflect-constant-budget.cpp`);
 `tests/stress/reflect-constant-1e5.cpp` pins the bound at 10^5 calls
 and, under a small `-fconstexpr-memory`, the existing memory-limit error.
+Content counts only for the value and name families, and a byte a nested
+call already charged is not charged again by the enclosing one
+(spec/oven.md "Limits and metrics").
 
 ## 7. Open items
 

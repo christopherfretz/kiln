@@ -13,7 +13,6 @@
 use super::Fault;
 use crate::compile::TrapInfo;
 use crate::kbc::ak;
-use crate::meta::intern::ReflMark;
 use crate::meta::materialize::Recipe;
 use crate::meta::value::recipe_elem;
 use crate::meta::{MAX_META_ARGS, MetaCtx, MetaError, MetaErrorKind, MetaOut, OvenFault, Purity};
@@ -81,9 +80,9 @@ impl Oven {
             }
         }
         let mut out = MetaOut::Unset;
-        let mark = ReflMark::of(b);
+        let mark = self.refl_mark(b);
         let r = b.meta(op, &args[..n], &mut out, &ctx, self);
-        self.charge_refl(b, mark)?;
+        self.charge_refl(b, mark, matches!(op, MetaOp::Value(_) | MetaOp::Query(_)))?;
         if let Err(e) = r {
             return Err(match e.kind {
                 MetaErrorKind::Fault(OvenFault(f)) => f,

@@ -580,7 +580,15 @@ asks whether the evaluation is manifestly constant-evaluated.
   the call). Content interning makes it bounded: a call whose result is
   already interned charges 0, so `n` calls over `k` distinct values
   charge `O(k)` (`meta.reflection.result/reflect-constant-budget.cpp`,
-  `stress/reflect-constant-1e5.cpp`). The tables are not reclaimed
+  `stress/reflect-constant-1e5.cpp`). Every op charges its new table
+  entries; only the value and name families charge constant-store
+  content, so what `substitute`'s instantiation or `members_of`'s class
+  completion interns is not reflection storage. Each byte is charged
+  once, by the call that interned it: a call subtracts what the
+  intrinsic calls nested inside it (in evaluations its bridge callback
+  ran on the lent Oven) already attributed (`Oven::refl_seen`), so a
+  1,000-deep `can_substitute` chain charges linearly
+  (`stress/substitute-nested-1000.cpp`). The tables are not reclaimed
   during the evaluation (an `info` may sit anywhere in Oven memory); a
   per-evaluation overlay table is an M7 item.
 - `EvalStats` holds one `EvalRecord` per `evaluate` call and TU totals.

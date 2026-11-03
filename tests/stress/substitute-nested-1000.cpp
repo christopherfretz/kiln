@@ -14,7 +14,10 @@
 //@ expect: compile-ok
 //@ oracle: gcc
 //@ strict-diags
-//@ oven: peak_bytes<=128 allocs<=1100 evaluations<=1100 steps<=20000
+// refl_bytes is linear in the depth: each level's new reflections are
+// charged once, by the call that interned them, not again by every
+// enclosing call (spec/oven.md "Reflection bytes").
+//@ oven: peak_bytes<=29200 refl_bytes<=58100 allocs<=1100 evaluations<=1100 steps<=20000
 #if __has_include(<meta>)
 #include <meta>
 #else

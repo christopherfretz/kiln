@@ -521,6 +521,9 @@ pub struct Oven {
     inner: Inner,
     /// Reflection call sites and materialization state (spec/reflection.md §3.5).
     pub(crate) meta: meta::materialize::MetaState,
+    /// Interned growth already attributed to an intrinsic call
+    /// (`refl_bytes`, `meta/intern.rs`).
+    pub(crate) refl_seen: meta::intern::ReflSeen,
 }
 
 /// The inclusive cost of the nested evaluations run so far by the running
@@ -584,6 +587,7 @@ impl Oven {
             ctx_depth: 0,
             inner: Inner::default(),
             meta: meta::materialize::MetaState::default(),
+            refl_seen: meta::intern::ReflSeen::default(),
         }
     }
 
