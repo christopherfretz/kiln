@@ -619,7 +619,10 @@ impl Sema<'_, '_> {
                 return Err(());
             }
             SpecKind::ExplicitSpecialization => {
-                if Self::declares_definition(d, vspec) && self.is_var_definition(spec) {
+                if Self::declares_definition(d, vspec)
+                    && self.is_var_definition(spec)
+                    && !self.module_merge_hidden_definition(spec)
+                {
                     let msg = self
                         .diag(DiagId::sema_redefinition, loc)
                         .arg(self.spec_decl_name(tmpl, info.print_args));

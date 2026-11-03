@@ -652,6 +652,40 @@ enum Step {
     Timeout,
 }
 
+/// The arguments (between the compiler and the file) of `job`'s compile
+/// at `-fsyntax-only`: the base flags and the test's own, as the compile
+/// step of [`run_test`] gets them, and `%{verify}` ([`VERIFY_FLAGS`]) for a
+/// `.verify.cpp` test. `Err` says why the test is not compiled that way: it
+/// is unsupported here (environment, features, driver), `XFAIL`, a `.sh`
+/// test, or a `.compile.fail` test (which is meant not to compile).
+pub fn syntax_args(cfg: &Config, job: &Job<'_>) -> Result<Vec<String>, String> {
+    let name = job.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let kind = Kind::of(name).ok_or_else(|| format!("{}: not a libc++ test file name", job.rel))?;
+    if let Some(reason) = env_unsupported(&job.rel, &cfg.scratch, cfg.libcxx_version) {
+        return Err(format!("UNSUPPORTED ({reason})"));
+    }
+    let text = std::fs::read(&job.path)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .map_err(|e| format!("cannot read {}: {e}", job.path.display()))?;
+    let kind = compile_fail_kind(kind, &text);
+    let (_, flags, xfail) =
+        prepare(kind, &text, &job.local_cfgs, &cfg.feature_refs()).map_err(|o| o.to_string())?;
+    if let Some(x) = xfail.filter(|_| xfail_ignored(&job.rel).is_none()) {
+        return Err(format!("XFAIL: {x}"));
+    }
+    let mode: &[&str] = match kind {
+        Kind::Sh | Kind::CompileFail => {
+            return Err(format!("a {} test has no -fsyntax-only compile", kind.label()));
+        }
+        Kind::Verify => VERIFY_FLAGS,
+        _ => &["-fsyntax-only"],
+    };
+    let mut v = cfg.base_compile_flags();
+    v.extend(flags);
+    v.extend(mode.iter().map(|f| (*f).to_owned()));
+    Ok(v)
+}
+
 pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
     let name = job.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let kind = Kind::of(name).unwrap_or(Kind::Pass);
@@ -1426,6 +1460,59 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&base);
         r
+    }
+
+    /// The libc++ slice's compiles (spec/bench.md "The libcxx-slice
+    /// entry") are the runner's: base flags, the test's own flags, then
+    /// `-fsyntax-only` or the verify flags; tests with no syntax-only
+    /// compile are refused.
+    #[test]
+    fn syntax_args_follow_the_runner() {
+        let base = std::env::temp_dir().join(format!("kiln-libcxx-syntax-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cfg = Config {
+            kiln: base.join("kiln++"),
+            clang: false,
+            libcxx_include: base.join("inc"),
+            checkout: base.clone(),
+            tag: String::new(),
+            llvm_dir: base.clone(),
+            clang_compat: 22,
+            libcxx: None,
+            resource_dir: base.join("res"),
+            features: F.iter().map(|f| (*f).to_owned()).collect(),
+            libcxx_version: None,
+            compile_timeout: Duration::from_secs(20),
+            run_timeout: Duration::from_secs(20),
+            long_run_timeout: Duration::from_secs(20),
+            mem: None,
+            probe: RssProbe::Unavailable,
+            warning_flags: vec!["-Wall".into()],
+            scratch: base.join("s"),
+            keep: false,
+        };
+        let args = |name: &str, text: &str| {
+            let path = base.join(name);
+            std::fs::write(&path, text).unwrap();
+            let job = Job { path, rel: name.to_owned(), local_cfgs: Vec::new(), index: 0 };
+            syntax_args(&cfg, &job)
+        };
+        let base_flags = cfg.base_compile_flags();
+        let pass =
+            args("a.pass.cpp", "// ADDITIONAL_COMPILE_FLAGS: -DX=1\nint main(){}\n").unwrap();
+        assert_eq!(&pass[..base_flags.len()], base_flags.as_slice());
+        assert_eq!(&pass[base_flags.len()..], ["-DX=1", "-fsyntax-only"]);
+        let verify = args("b.verify.cpp", "// expected-no-diagnostics\n").unwrap();
+        let tail: Vec<&str> = verify[base_flags.len()..].iter().map(String::as_str).collect();
+        assert_eq!(tail, VERIFY_FLAGS);
+        let sh = args("c.sh.cpp", "// RUN: %{build}\n").unwrap_err();
+        assert!(sh.contains("no -fsyntax-only compile"), "{sh}");
+        let unsupported = args("d.pass.cpp", "// UNSUPPORTED: c++26\n").unwrap_err();
+        assert!(unsupported.contains("UNSUPPORTED"), "{unsupported}");
+        let xfail = args("e.pass.cpp", "// XFAIL: kiln\n").unwrap_err();
+        assert!(xfail.starts_with("XFAIL"), "{xfail}");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// libc++'s `.sh.cpp` idioms: `%{build}`, output redirected and

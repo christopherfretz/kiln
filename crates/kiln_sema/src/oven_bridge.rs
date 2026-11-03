@@ -284,6 +284,22 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(None, |oven, b| oven.try_fold(b, e))
     }
 
+    /// `cond` (`None`: `true`) evaluated with each parameter of `binds`
+    /// initialized from its argument ([`Oven::evaluate_with_params`]),
+    /// silently; `loc` is the point of instantiation of what it needs.
+    pub(crate) fn eval_with_params(
+        &mut self,
+        cond: Option<ExprId>,
+        binds: &[(DeclId, ExprId)],
+        at: ExprId,
+        loc: Loc,
+    ) -> Option<ConstValueId> {
+        if !self.eval_stack_ok(at) {
+            return None;
+        }
+        self.with_oven(Some(loc), |oven, b| oven.evaluate_with_params(b, cond, binds, at))
+    }
+
     /// [`Sema::try_fold`], laxly ([`Oven::fold_rvalue`], clang
     /// `EvaluateAsInt`): a `const` non-volatile variable with an
     /// initializer reads as its value even when it is not usable in
