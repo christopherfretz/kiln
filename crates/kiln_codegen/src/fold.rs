@@ -409,6 +409,7 @@ impl Collect<'_> {
                     self.expr(v);
                 }
             }
+            StmtKind::IndirectGotoStmt => self.expr(ast.stmts.indirect_goto_target(s)),
             StmtKind::GCCAsmStmt => {
                 for op in ast.stmts.asm_operands(s) {
                     self.expr(op.expr);

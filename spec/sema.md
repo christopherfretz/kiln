@@ -958,6 +958,22 @@ Redeclaration and linkage rules:
   direct initializer by [dcl.ambig.res]/1 warns as clang does, with
   its fix-it notes (`add a pair of parentheses`, `replace parentheses
   with an initializer`, `remove parentheses`).
+- **Function qualifiers where none are allowed** ([dcl.fct]/6, clang
+  `err_invalid_qualified_function_type`, WP-435): a cv- or
+  ref-qualifier on a non-member or friend function is "non-member
+  function cannot have 'Q' qualifier", on an explicit-object member
+  function "explicit object member function cannot have 'Q'
+  qualifier", both at the first qualifier (`Declarator::fn_qual_locs`)
+  with every qualifier spelled; the qualifiers are dropped from the
+  function type, so an instantiation does not report them again and
+  `void f() const; void f() {}` declares one function. A free function
+  with an explicit object parameter reports that first, a friend after;
+  an explicit-object static or virtual member reports the qualifier
+  first, then "cannot appear in a static/virtual function" (the
+  declaration is invalid). A static member function's qualifier error
+  is also at its first qualifier. Tests
+  `dcl.fct/nonmember-function-qualifiers.cpp`,
+  `dcl.fct/explicit-object-qualifiers-template.cpp`.
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
 - A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
@@ -3121,6 +3137,14 @@ the initializer, or after default initialization, and before the
   `D **` and `int **` vs `long **` are not similar and have none. Tests
   `expr.cond/composite-pointer-multilevel*.cpp`,
   `conv.qual/multilevel-compare-run.cpp`.
+- **C-style cast of a parenthesized list** (clang
+  `ParseSimpleExpressionList`, WP-435): in `(T)(a, b, c)` the parser
+  parses every element first, then builds the comma operators left to
+  right at the operand's `(` (`Parser::parse_paren_list_rest`), so the
+  elements' own diagnostics come before the commas' and a comma's
+  diagnostic is at the `(`; a nested `((a, b))` keeps its own comma
+  locations, and a `{` element is "expected expression". Test
+  `expr.comma/cast-paren-list.cpp`.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -4655,7 +4679,17 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   rejected (no viable constructor) is marked invalid, and evaluating its
   declaration fails with no note (spec/oven.md "Classes").
   From C++23 clang 22 no longer applies `CheckLiteralType` during
-  evaluation (spec/oven.md); clang 19 does. Tests:
+  evaluation (spec/oven.md); clang 19 does.
+- The same walk applies the statement rule (clang
+  `CheckConstexprFunctionStmt`; WP-444): a GNU `goto *p` is allowed at
+  no language level, "statement not allowed in {constexpr|consteval}
+  {function|constructor}" at the `goto` when it comes before any
+  non-literal variable, the function made invalid as above. Before
+  C++23 a body that breaks neither rule but holds a label or a `goto`
+  gets "use of this statement in a constexpr {function|constructor} is
+  a C++23 extension" (`-Wc++23-extensions`) at the first one. Tests
+  `tests/conformance/stmt.goto/computed-goto-constexpr-body{,-cxx20}.cpp`.
+  Tests of the variable rule:
   `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
   `tests/conformance/dcl.constexpr/non-literal-local-template-cxx{20,23}.cpp`,
   `tests/conformance/dcl.constexpr/non-literal-local-lambda-cxx20.cpp`,
@@ -5920,6 +5954,29 @@ and unevaluated operands:
   `possible target of asm goto statement` note and `jump exits …`
   notes). Leaving scopes through `goto` is fine; codegen runs their
   cleanups (spec/codegen.md).
+- **Landed (WP-444): GNU computed goto.** `act_on_indirect_goto`
+  ([stmt.goto], GNU): an operand with an unexpanded pack is diagnosed
+  and the statement dropped; otherwise, unless type-dependent, it is
+  converted to `const void *` as by assignment (clang
+  `CheckSingleAssignmentConstraints`; a non-pointer operand gets that
+  conversion's error), made a full-expression, and the function is
+  marked as holding an indirect goto, which runs the jump-scope checker.
+  `VerifyIndirectJumps` (`verify_indirect_jumps`): with no `&&l` in the
+  body the first indirect goto is "indirect goto in function with no
+  address-of-label expressions"; otherwise each scope holding an
+  indirect goto must reach each scope holding an address-taken label by
+  leaving only scopes without an "exits" note and then entering only
+  scopes without a "bypasses" note, else "cannot jump from this
+  indirect goto statement to one of its possible targets" at the
+  `goto`, "possible target of indirect goto statement" at the label and
+  one note per scope (one jump and one label stand for each scope, in
+  clang's `DenseMap` order, `dense_map_order`). Unlike a direct `goto`,
+  leaving a scope with a destructor is an error (an indirect goto runs no
+  cleanups). `&&l` in a lambda or local class names a label of that
+  body, so a label of the enclosing function is "use of undeclared
+  label" there. A `&&l` in a template's body is instantiation-dependent
+  (spec/sema-templates.md). Tests:
+  `tests/conformance/stmt.goto/computed-goto-{jump-scope,lambda,dispatch-run,reachability}.cpp`.
 - `[[noreturn]]`: the fall-off analysis (§4.3) treats a call as not
   returning when any redeclaration of the callee is `[[noreturn]]`,
   including member calls.
@@ -5984,8 +6041,12 @@ and unevaluated operands:
   walked (a `noexcept` operand is, as clang's CFG does); a GNU case range
   is reached when the constant condition is in `[lo, hi]` and counts
   toward enumeration coverage (WP-205). Not modeled: implicit
-  destructors marked `noreturn`; indirect `goto` needs no model because
-  kiln does not parse `&&label` / `goto *p`. The fall-off analysis
+  destructors marked `noreturn`. A live GNU indirect `goto *p` reaches
+  every label whose address the body takes (clang's indirect-goto block
+  and `AddressTakenLabels`: `&&l` outside lambdas and unevaluated
+  operands, found once per walk by `addr_taken_labels`) and does not
+  fall through (WP-444, `stmt.goto/computed-goto-reachability.cpp`).
+  The fall-off analysis
   behind -Wreturn-type / -Winvalid-noreturn (`falls_off` →
   `fall_off_kind`, WP-219) is the same walk run to a fixed point,
   classifying the live predecessors of the exit as in clang

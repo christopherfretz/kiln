@@ -449,6 +449,10 @@ impl Cg<'_> {
                 let lv = self.emit_lvalue(e)?;
                 self.load_lv(lv)
             }
+            // clang `VisitAddrLabelExpr`.
+            ExprKind::AddrLabelExpr => {
+                V::C(self.addr_of_label(ast.exprs.addr_label(e), self.loc_of(e))?)
+            }
             k => return err(self.loc_of(e), format!("expression {k:?} is not supported yet")),
         }))
     }

@@ -457,6 +457,7 @@ impl Sema<'_, '_> {
         match st.get(s).kind() {
             StmtKind::ExprStmt => exprs.push(st.expr_stmt_expr(s)),
             StmtKind::ReturnStmt => exprs.extend(st.return_value(s)),
+            StmtKind::IndirectGotoStmt => exprs.push(st.indirect_goto_target(s)),
             StmtKind::CoreturnStmt => {
                 exprs.extend(st.coreturn_operand(s));
                 exprs.extend(st.coreturn_promise_call(s));

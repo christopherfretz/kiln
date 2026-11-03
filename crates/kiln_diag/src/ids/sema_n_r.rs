@@ -43,6 +43,8 @@ sema_non_template_in_template_id = Error (1) "'{0}' does not name a template but
 sema_non_thread_thread = Error (1) "non-thread-local declaration of '{0}' follows thread-local declaration";
 sema_nonconst_member_fn_ptr = Error (0) "cannot create a non-constant pointer to member function";
 sema_nonlocal_sizeless = Error (1) "non-local variable with sizeless type {0}";
+// [dcl.fct]/6 (clang `err_invalid_qualified_function_type`)
+sema_nonmember_fn_quals = Error (1) "non-member function cannot have '{0}' qualifier";
 sema_nonnull_expr_compare = Warning [TautologicalPointerCompare] (3) "comparison of nonnull {0:function call|parameter} '{1}' {2:not |}equal to a null pointer is '{2:true|false}' on first encounter";
 sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined out-of-line";
 sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";

@@ -224,9 +224,13 @@ impl Sema<'_, '_> {
         // the declarator's own checks, and one in a static or virtual
         // function makes the declaration invalid (clang
         // `CheckExplicitObjectMemberFunction` runs first).
-        let xobj_member = (!xobj || matches!(shape, Shape::Conv(_) | Shape::Assign))
-            && self.explicit_object_member(ds, d, &params, true);
-        if xobj && !xobj_member && matches!(shape, Shape::Conv(_) | Shape::Assign) {
+        let eo = if !xobj || matches!(shape, Shape::Conv(_) | Shape::Assign) {
+            self.explicit_object_member(ds, &params, true)
+        } else {
+            None
+        };
+        let xobj_member = eo == Some(true);
+        if eo == Some(false) {
             *invalid = true;
         }
         let mut ds_virt = None;
@@ -321,6 +325,9 @@ impl Sema<'_, '_> {
             Shape::Conv(t) => self.rebuild_fn_type(ty, t, None, false),
             Shape::Assign => ty,
         };
+        // An explicit object member function takes no cv-/ref-qualifiers
+        // ([dcl.fct]/6): reported and dropped as for any other.
+        let ty = if xobj_member { self.drop_invalid_fn_quals(ty, d, true) } else { ty };
         let class_ty = self.class_type(class);
         let canon = self.ast.types.canonical(class_ty).ty();
         let name = match shape {
