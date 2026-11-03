@@ -392,7 +392,15 @@ impl Cg<'_> {
             // subscript is the vector's value and `extractelement`.
             ExprKind::ArraySubscriptExpr if self.vec_subscript(e).is_some() => {
                 let (base, idx) = self.vec_subscript(e).expect("checked");
-                let v = self.emit_scalar(base)?;
+                // A `const` vector variable folds (`tryEmitAsConstant`,
+                // WP-453): no load, the lane is extracted from the constant.
+                let v = match self.folds.get(base) {
+                    Some(c) => {
+                        let bq = ast.exprs.get(base).ty();
+                        V::C(self.const_scalar_value(c, bq)?)
+                    }
+                    None => self.emit_scalar(base)?,
+                };
                 let i = self.emit_scalar(idx)?;
                 self.extract_elt(v, i)
             }
