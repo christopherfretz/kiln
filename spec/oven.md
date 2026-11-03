@@ -559,8 +559,8 @@ The format is NDJSON (UTF-8, one JSON object per `\n`-terminated line), one
 line per **top-level evaluation** in the order the evaluations finished,
 then exactly one `total` line, which is the last line:
 ```
-{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"wall_us":4}
-{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"wall_us":4,"evaluations":1}}
+{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"wall_us":4}
+{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"memo_hits":0,"wall_us":4,"evaluations":1}}
 ```
 A top-level evaluation is one call of an evaluation entry point that the
 language requires (a manifestly constant-evaluated context): it includes
@@ -586,6 +586,7 @@ choice and must not move a budget.
 | `peak_arena` | The maximum abstract-memory address space held at once (`frame.top + heap.top`), fragmentation included; see "Transient allocation". `peak_arena >= peak_bytes`. |
 | `frozen_bytes` | Bytes this evaluation added to the `ConstStore`: only newly interned bytes, so a result equal to one already frozen adds 0 (spec/ast.md §9). |
 | `static_bytes` | Bytes of the static space held when the evaluation ended (`Memory::static_top`: live static objects plus the free ranges below the top; "Abstract memory", static reclamation). The space persists across evaluations, so this is the TU's so far. Optional for consumers (absent in reports before WP-322: read as 0). |
+| `memo_hits` | Calls answered from the memo table ("Memoization"); a nested evaluation's hits are its own line's. The one counter that differs with the cache on or off: it observes the cache, it is not a cost. Optional for consumers (absent in reports before WP-470: read as 0). |
 | `wall_us` | Wall-clock microseconds, rounded down. |
 
 The `total` object has the same counters summed over the evaluations, except
@@ -998,7 +999,8 @@ take `_Float32x`/`_Float64x` operands directly. Test:
 
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,
-  `bool` or floating and its result is such a scalar (not a pointer, not
+  `bool`, floating or `std::meta::info` (an id's bits: spec/reflection.md
+  §3.6, WP-470) and its result is such a scalar (not a pointer, not
   void, not an aggregate). Such a call cannot observe or modify mutable
   state: it receives no pointer, may not modify an object from outside the
   evaluation ([expr.const]/5.16), and reads of globals are either of
@@ -1017,7 +1019,11 @@ take `_Float32x`/`_Float64x` operands directly. Test:
   above the arena at the call (checked against the memory limit), and
   depth.
   Every counter and every budget decision is therefore identical with the
-  cache on or off (tested).
+  cache on or off (tested), except `memo_hits`, which counts the hits
+  ("Reporting protocol").
+- A call that ran a reflection intrinsic whose purity class is not
+  `Stable` is not cached (spec/reflection.md §3.3: the intrinsic bumps
+  `run.impure`).
 
 ### Performance — normative targets, recorded baselines
 No heap allocation per evaluation once warm (no boxing of values, no hash
@@ -1208,7 +1214,11 @@ lower to the same two ops: `New` with aux `ARRAY | STD` and `ty = T`
   `ARRAY_AS_WRITTEN` says what was written); `operator_delete(e)` must be
   a replaceable global deallocation function for the delete to be
   constant ([expr.const]); `delete_passes(e)` (size, alignment) is
-  a codegen fact.
+  a codegen fact. A class's destroying `operator delete`
+  ([expr.delete]/10) is class-specific, so the delete is not constant
+  ("call to class-specific 'operator delete'" at the `delete`), directly
+  or through a virtual destructor, as clang 22 and 19 do (WP-457;
+  `tests/conformance/expr.const/constexpr-destroying-delete.cpp`).
 
 **Checks**, with clang 19's wording, each verified against the oracle
 (WP-061b part 2; `tests/conformance/expr.new/constexpr-*.cpp`,
@@ -1615,6 +1625,15 @@ through a plain pointer has no union entry to consult): libc++ 22's list
 nodes destroy the value of their anonymous union, then the node (WP-446,
 `tests/conformance/class.union.anon/constexpr-destroy-member-then-object.cpp`).
 A class all of whose bytes are union bytes keeps the stricter check.
+
+An explicit destructor call written with a dependent destructor name
+(`t.~T()`, `u.t.~T()`, `p->Base<T>::~Base()`) is rebuilt at
+instantiation (spec/sema-templates.md §3.4) into the same
+`CXXMemberCallExpr` / `CXXPseudoDestructorExpr` a non-dependent call
+gives, so it ends the lifetime exactly as above: the scalar
+`T t{}; t.~T();` with `T = int` is "destroying object 't' whose lifetime
+has already ended" at scope exit, as clang does (WP-457;
+`tests/conformance/expr.prim.id.dtor/dependent-member-destructor-name*.cpp`).
 
 *Unconstructed bases (WP-390).* Sema leaves a direct non-virtual base
 out of a constructor's ctor-initializers only after diagnosing that it
@@ -2847,71 +2866,19 @@ syntactic form `a <=> b` is never compiled; it is the location of notes
 (`static_assert`s over strong, weak and partial categories, a base, an
 array member, and a call counter that checks the single evaluation).
 
-### Reflection runtime (M6; WP-267 spike behind `-freflection`)
-- `std::meta::info` is a `ReflectionId(u32)` into sema's
-  `ReflectionTable` (spec/ast.md §10). It is an 8-byte scalar of
-  `TyKind::Reflection` (`ty.rs`). Its register and memory value is
-  `index - 1` (`ReflectionId::bits`/`from_bits`), so a value-initialized
-  `info{}` is the null reflection (table slot 1). It freezes to and thaws
-  from `Scalar::Reflection` (`value.rs`). A value that is not a table index
-  does not freeze: "kiln: value is not a reflection the compiler produced".
-- *Amended by the spike:* the shadow has no `Reflection` kind; it keeps
-  only init and pointer bits. A reflection cannot be forged because loads
-  and stores are typed and `memcpy` requires the same type on both sides
-  ("cannot constant evaluate 'memcpy' from object of type 'unsigned long'
-  to object of type 'std::meta::info'"). `__builtin_bit_cast` rejects
-  `info` in sema (not trivially copyable). Whether to add shadow kinds is
-  open (docs/status/reflection-spike.md R5).
-- **Dispatch.** A direct call to a declaration for which
-  `SemaBridge::meta_intrinsic(f)` returns a `MetaOp` (sema matches the
-  qualified name) compiles to `Op::Builtin` with aux
-  `bi::META | op << 8`. The operands are
-  `[dst, a, b, c, char type of a pointer argument, result type]`.
-  The VM (`vm/meta.rs`) calls the matching bridge method:
+### Reflection runtime (M6; `-freflection`)
+Specified in **`spec/reflection.md`** §3:
+- the `info` value (`TyKind::Reflection`, bits `index - 1`) and the
+  typed-copy rule (§2.1, §2.5);
+- the `bi::META` instruction and the `SemaBridge::meta` entry point
+  (§3.2);
+- the purity classes and the per-op table (§3.3);
+- `MetaCtx` (§3.4) and materialized results (§3.5);
+- memoization (§3.6);
+- provisional class slots in the type table (§3.7);
+- accounting (§3.8).
 
-  | `MetaOp` | bridge method | result |
-  |---|---|---|
-  | `TypeOf` | `reflect_type_of(r, loc)` | `info` |
-  | `NameOf` | `reflect_name(r, loc)` | a frozen string, thawed as `const char*` |
-  | `MembersCount` / `MemberAt` | `reflect_members(r, loc, oven)` | count / `info` (index checked) |
-  | `DefineMember` | `define_member(cls, ty, name, loc, oven)` | `info` of the new member |
-
-  A string argument is read up to its NUL; more than 4096 bytes is an
-  invalid name. A method that may evaluate (completing a template
-  specialization, checking a member type) receives the running Oven and
-  lends it back to sema for the nested evaluation (R-OVEN-1, sema's
-  `lend_oven`).
-- **Failures.** A bridge method fails with `Vec<Note>`. The first note
-  becomes the trap's message, the call stack follows, then the remaining
-  notes. An empty vector is a silent failure, used for a speculative fold.
-- **Memoization.** Every meta intrinsic increments `run.impure`, so
-  neither the call nor any call whose span contains it is memoized. This
-  matters because the result of a query can change between evaluations
-  (a class gains members, a specialization completes), and a defining call
-  must never be replayed (`tests/conformance/reflection/define-member-neg.cpp`).
-- **Mutation.** `define_member` (and later `define_aggregate`) changes the
-  AST while the evaluation runs. The Oven holds only ids, which stay
-  valid because the arenas are append-only. Sema enforces where mutation
-  is allowed (spec/sema.md "Reflection (spike, -freflection)"); the Oven
-  does not know whether an evaluation is manifestly constant-evaluated.
-- **Incomplete classes in the type table.** A class interned while it has
-  no definition, or while it is still being defined, is a *provisional*
-  `Opaque` slot. Its layout is not computed: `ensure_layout` caches by
-  first declaration, is never invalidated, and returns `None` for an
-  incomplete class (spec/abi.md §1). `Types::refresh` runs at the start of
-  every evaluation, and an `intern` hit on a provisional slot upgrades it
-  as well; once the class is complete, the slot is rebuilt **in place**,
-  so a pointer already holding the `OTy` stays valid. No object of a
-  provisional type can exist, because objects need complete types.
-  Cost: the provisional slots are a hash set (an `intern` hit is O(1)),
-  and `refresh` does nothing unless sema's class-completion epoch
-  (`DeclArena::completion_epoch`, moved only by `complete_definition`)
-  changed since the last refresh; it then visits the provisional slots
-  in creation order. Thousands of forward-declared classes therefore cost
-  nothing per evaluation (`tests/stress/provisional-types-scale.cpp`; WP-471).
-- **Accounting.** The defining evaluation is an ordinary evaluation in
-  `-fconstexpr-report`: steps, bytes and calls of the Oven work, plus sema
-  work done inside a bridge call, which appears only in `wall_us`.
+The VM half is `vm/meta.rs`; the op tables are in `meta/`.
 
 ## Interface — amended 2026-10-28 per spec/ast.md Q2
 The Oven holds **no** borrow of the AST across calls: sema mutates the AST
@@ -2930,12 +2897,9 @@ pub trait SemaBridge {
     fn subobjects(&mut self, record: DeclId) -> &[Subobject];     // indexed by SubobjectId
     fn consts(&mut self) -> &mut ConstStore;                      // freeze results
     fn diag(&mut self, d: Diag);
-    // reflection (WP-267 spike; all default to "not an intrinsic" / Err(vec![])):
+    // reflection (spec/reflection.md §3; defaults: not an intrinsic / Err(MetaError::silent())):
     fn meta_intrinsic(&self, f: DeclId) -> Option<MetaOp>;
-    fn reflect_type_of(&mut self, r: ReflectionId, loc: Loc) -> Result<ReflectionId, Vec<Note>>;
-    fn reflect_name(&mut self, r: ReflectionId, loc: Loc) -> Result<ConstValueId, Vec<Note>>;
-    fn reflect_members(&mut self, r: ReflectionId, loc: Loc, oven: &mut Oven) -> Result<Vec<ReflectionId>, Vec<Note>>;
-    fn define_member(&mut self, cls: ReflectionId, ty: ReflectionId, name: &str, loc: Loc, oven: &mut Oven) -> Result<ReflectionId, Vec<Note>>;
+    fn meta(&mut self, op: MetaOp, args: &[u128], out: &mut MetaOut, ctx: &MetaCtx, oven: &mut Oven) -> Result<(), MetaError>;
 }
 impl Oven {
     pub fn new(budget: Budget) -> Self;

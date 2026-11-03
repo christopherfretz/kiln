@@ -326,8 +326,22 @@ impl Sema<'_, '_> {
                 return (DeleteReason::Yes, notes);
             }
         }
-        // todo: [class.dtor]/7.3, the deallocation function of a virtual
-        // destructor, is not checked (spec/sema-class.md §4.2).
+        // [class.dtor]/7.3: a virtual destructor whose deallocation
+        // function lookup finds nothing usable, or an inaccessible one, is
+        // deleted (clang `ShouldDeleteSpecialMember` →
+        // `FindDeallocationFunction` without diagnostics).
+        if k == K::Dtor
+            && crate::class::is_virtual(&self.ast, f)
+            && !self.virtual_dtor_delete_usable(class)
+        {
+            if diagnose {
+                notes.push(self.diag(
+                    DiagId::note_deleted_dtor_no_operator_delete,
+                    self.ast.decls.get(class).loc(),
+                ));
+            }
+            return (DeleteReason::Yes, notes);
+        }
         let const_arg = matches!(k, K::CopyCtor | K::CopyAssign) && self.copy_param_is_const_ref(f);
         // An inheriting constructor is deleted as a defaulted default
         // constructor would be, except that the inherited bases use their
