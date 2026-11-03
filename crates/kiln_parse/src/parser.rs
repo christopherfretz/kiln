@@ -1238,12 +1238,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         lo
     }
 
-    /// The index of the `::` when a `decltype ( expression ) ::` or a
-    /// pack-index-specifier `T ... [ expression ] ::` starts at token `i`
+    /// The index of the `::` when a `decltype ( expression ) ::`, a
+    /// splice-scope-specifier `[: r :] ::` or a pack-index-specifier
+    /// `T ... [ expression ] ::` starts at token `i`
     /// ([expr.prim.id.qual]: a *computed-type-specifier* as the first
     /// component of a nested-name-specifier; [dcl.type.pack.index]).
     /// `decltype(auto)` is never one.
     pub(crate) fn decltype_scope_end(&self, i: usize) -> Option<usize> {
+        // A splice-scope-specifier `[: r :] ::` ([expr.prim.id.qual]/1).
+        if let Some(after) = self.splice_end(i) {
+            return (self.tok_at(after).kind == TokKind::Punct(Punct::ColonColon)).then_some(after);
+        }
         if self.ident_of(self.tok_at(i)).is_some() {
             return self.pack_index_scope_end(i);
         }
@@ -1306,6 +1311,16 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             return true;
         }
         let loc = self.loc();
+        if self.at_splice() {
+            let e = self.parse_splice_operand();
+            if !self.at(Punct::ColonColon) {
+                return false;
+            }
+            let qual = e.and_then(|e| self.s.act_on_nested_name_splice(e, loc));
+            self.decltype_scope =
+                Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
+            return true;
+        }
         let ty = if self.ident().is_some() {
             self.parse_pack_index_scope(loc)
         } else {

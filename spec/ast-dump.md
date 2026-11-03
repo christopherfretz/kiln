@@ -508,6 +508,13 @@ type>'`:
   ./-><name>`, `UnresolvedLookupExpr '…' lvalue [(ADL)] = '<name>'
   [empty]`, `CXXUnresolvedConstructExpr '<type>'`, `PackExpansionExpr`,
   `CXXFoldExpr` and `SizeOfPackExpr 'unsigned long' <pack>`.
+- `CXXSpliceExpr '<dependent type>' lvalue [.|->]` (P2996, WP-474): a
+  splice-expression `[: r :]` whose operand is value-dependent, with the
+  operand as its child; a member splice `e.[: r :]` / `e->[: r :]` adds
+  ` .` or ` ->` and has the object expression as its first child. A
+  splice of a non-dependent operand never leaves this node: it is
+  replaced by the expression it designates (a `DeclRefExpr`, a
+  `MemberExpr`, ...). Test: temp.dep/splice-ast-dump.cpp.
 - An `UnresolvedLookupExpr` whose candidate set is all function
   templates, with dependent explicit arguments, is `'<dependent type>'`.
   Its overload set is `'<overloaded function type>'`.

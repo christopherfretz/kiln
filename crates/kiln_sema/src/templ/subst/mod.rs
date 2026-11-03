@@ -628,6 +628,14 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 };
                 return Ok(self.sema.nns_component(Some(p), c, spelled));
             }
+            // `[: r :]::` (spec/reflection.md §5): the scope the
+            // substituted operand designates.
+            Nns::Splice(e) => {
+                let e = self.expr(e)?;
+                let nl = self.written(WrittenKey::Nns(n), loc);
+                let (_, m) = self.sema.act_on_nested_name_splice(e, nl).ok_or(SubstFail)?;
+                return Ok(m);
+            }
             Nns::Namespace { prefix: Some(p), ns } => {
                 Nns::Namespace { prefix: Some(self.nns(p, loc)?), ns }
             }
