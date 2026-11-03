@@ -43,10 +43,21 @@ pub(crate) enum TraitFailure {
 }
 
 /// The engine's per-TU state: whether trait diagnostics are being
-/// recorded instead of emitted (`Some`), and the first failure so far.
+/// recorded instead of emitted, and the first failure recorded so far.
 #[derive(Debug, Default)]
 pub(crate) struct TraitState {
-    pub(crate) quiet: Option<Option<TraitFailure>>,
+    pub(crate) quiet: bool,
+    pub(crate) failure: Option<TraitFailure>,
+}
+
+impl TraitState {
+    /// Records `f` (the first failure wins) when quiet; false otherwise.
+    pub(crate) fn record(&mut self, f: TraitFailure) -> bool {
+        if self.quiet {
+            self.failure.get_or_insert(f);
+        }
+        self.quiet
+    }
 }
 
 impl Sema<'_, '_> {
@@ -166,8 +177,7 @@ impl Sema<'_, '_> {
         let canon = self.trait_eval_args(args);
         let args = canon.as_deref().unwrap_or(args);
         if let Status::Owner(_) = table::trait_status(t) {
-            if let Some(q) = &mut self.traits.quiet {
-                q.get_or_insert(TraitFailure::Unimplemented);
+            if self.traits.record(TraitFailure::Unimplemented) {
                 return None;
             }
             let what = format!("type trait '{}'", t.spelling());
@@ -354,7 +364,7 @@ impl Sema<'_, '_> {
     /// specialization). While a reflection trait evaluates quietly an
     /// undefined template is not diagnosed: the failure is the caller's.
     fn trait_complete(&mut self, q: QualType, at: Loc) -> bool {
-        if self.traits.quiet.is_some() {
+        if self.traits.quiet {
             self.require_complete_silent(q, at)
         } else {
             self.require_complete(q, at)
@@ -365,8 +375,7 @@ impl Sema<'_, '_> {
     /// complete type is required: diagnosed as `id` with the
     /// forward-declaration note, or recorded while evaluating quietly.
     fn trait_incomplete(&mut self, id: DiagId, at: Loc, q: QualType) {
-        if let Some(f) = &mut self.traits.quiet {
-            f.get_or_insert(TraitFailure::Incomplete(q));
+        if self.traits.record(TraitFailure::Incomplete(q)) {
             return;
         }
         let msg = self.diag(id, at).arg(self.ty_arg(q));
@@ -383,9 +392,11 @@ impl Sema<'_, '_> {
         &mut self,
         f: impl FnOnce(&mut Self) -> R,
     ) -> (R, Option<TraitFailure>) {
-        let saved = self.traits.quiet.replace(None);
+        let quiet = std::mem::replace(&mut self.traits.quiet, true);
+        let outer = self.traits.failure.take();
         let r = f(self);
-        let failure = std::mem::replace(&mut self.traits.quiet, saved).flatten();
+        self.traits.quiet = quiet;
+        let failure = std::mem::replace(&mut self.traits.failure, outer);
         (r, failure)
     }
 

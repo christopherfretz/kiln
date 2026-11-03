@@ -122,7 +122,7 @@ impl Sema<'_, '_> {
                 // underlying type is incomplete until its closing brace
                 // ([dcl.enum]/6), and its underlying type is not yet
                 // determined (clang `BuiltinEnumUnderlyingType`).
-                if self.traits.quiet.is_some() && !self.require_complete_silent(t, loc) {
+                if self.traits.quiet && !self.require_complete_silent(t, loc) {
                     self.transform_quiet(TraitFailure::Incomplete(t));
                     return None;
                 }
@@ -153,13 +153,7 @@ impl Sema<'_, '_> {
     /// Records `f` while a reflection trait evaluates quietly (true), else
     /// false and the caller diagnoses.
     fn transform_quiet(&mut self, f: TraitFailure) -> bool {
-        match &mut self.traits.quiet {
-            Some(slot) => {
-                slot.get_or_insert(f);
-                true
-            }
-            None => false,
-        }
+        self.traits.record(f)
     }
 
     /// `add_const` / `add_volatile` / `add_cv` ([meta.trans.cv]): `t` with

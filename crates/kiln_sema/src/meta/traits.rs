@@ -290,17 +290,14 @@ impl Sema<'_, '_> {
         // The leading type operands (`tuple_element(I, T)` has its type
         // second).
         let mut tys = [QualType::ERROR; 2];
-        let lead = match shape {
-            Shape::LibIndexed(_) => {
-                tys[0] = self.trait_operand(info_arg(args, 1)?, loc)?;
-                1
+        let lead = if let Shape::LibIndexed(_) = shape {
+            tys[0] = self.trait_operand(info_arg(args, 1)?, loc)?;
+            1
+        } else {
+            for (i, slot) in tys.iter_mut().enumerate().take(fixed) {
+                *slot = self.trait_operand(info_arg(args, i)?, loc)?;
             }
-            _ => {
-                for (i, slot) in tys.iter_mut().enumerate().take(fixed) {
-                    *slot = self.trait_operand(info_arg(args, i)?, loc)?;
-                }
-                fixed
-            }
+            fixed
         };
         if is_range_n(op) {
             return self.meta_trait_range(op, shape, &tys[..lead], args, out, ctx, oven);
@@ -419,8 +416,9 @@ impl Sema<'_, '_> {
         let settled = || tys.iter().all(|&q| self.undefined_spec(q).is_none());
         match shape {
             Shape::Engine(t) => match t {
-                TypeTrait::IsSame | TypeTrait::IsLayoutCompatible => settled(),
-                TypeTrait::IsBaseOf
+                TypeTrait::IsSame
+                | TypeTrait::IsLayoutCompatible
+                | TypeTrait::IsBaseOf
                 | TypeTrait::IsVirtualBaseOf
                 | TypeTrait::IsPointerInterconvertibleBaseOf => settled(),
                 _ if tys.len() == 1 => match table::completeness(t) {
@@ -601,33 +599,36 @@ impl Sema<'_, '_> {
                 *out = v;
                 Ok(())
             }
-            (None, Err(f)) => fail(loc, self.lib_failure_note(op, f)),
+            (None, Err(f)) => fail(loc, lib_failure_note(op, f)),
         }
     }
+}
 
-    /// The note for library trait failure `f` of `op`.
-    fn lib_failure_note(&self, op: TraitOp, f: LibFailure) -> String {
-        let name = match shape(op).0 {
-            Shape::LibBool(n) | Shape::LibSize(n) | Shape::LibType(n) | Shape::LibIndexed(n) => n,
-            _ => return format!("'{}' has no result for these operands", op.name()),
-        };
-        match f {
-            LibFailure::NotDeclared => format!(
-                "'{}' needs 'std::{name}', which is not declared (include {})",
-                op.name(),
-                header_of(name)
-            ),
-            LibFailure::Incomplete => {
-                format!("'std::{name}' is not defined for these operands")
-            }
-            LibFailure::NoMember => format!(
-                "'std::{name}' has no member '{}' for these operands",
-                if matches!(shape(op).0, Shape::LibType(_) | Shape::LibIndexed(_)) {
-                    "type"
-                } else {
-                    "value"
-                }
-            ),
+/// The note for library trait failure `f` of `op`.
+fn lib_failure_note(op: TraitOp, f: LibFailure) -> String {
+    let (Shape::LibBool(name)
+    | Shape::LibSize(name)
+    | Shape::LibType(name)
+    | Shape::LibIndexed(name)) = shape(op).0
+    else {
+        return format!("'{}' has no result for these operands", op.name());
+    };
+    match f {
+        LibFailure::NotDeclared => format!(
+            "'{}' needs 'std::{name}', which is not declared (include {})",
+            op.name(),
+            header_of(name)
+        ),
+        LibFailure::Incomplete => {
+            format!("'std::{name}' is not defined for these operands")
         }
+        LibFailure::NoMember => format!(
+            "'std::{name}' has no member '{}' for these operands",
+            if matches!(shape(op).0, Shape::LibType(_) | Shape::LibIndexed(_)) {
+                "type"
+            } else {
+                "value"
+            }
+        ),
     }
 }
