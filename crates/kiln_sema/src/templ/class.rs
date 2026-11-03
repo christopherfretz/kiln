@@ -1605,6 +1605,18 @@ impl Substituter<'_, '_, '_> {
         self.class_body_with(spec, def, local, false);
     }
 
+    /// The pattern's class-virt-specifier `final` ([class.pre]/1:
+    /// `__is_final` of a specialization of a `final` class template is
+    /// true; libc++'s compressed-pair padding of a final allocator), then
+    /// its attributes ([`Substituter::class_attrs`]).
+    fn class_final_and_attrs(&mut self, spec: DeclId, def: DeclId) {
+        if self.sema.ast.decls.record(def).is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)) {
+            let loc = self.sema.ast.decls.get(def).loc();
+            self.sema.act_on_class_final(spec, loc);
+        }
+        self.class_attrs(spec, def);
+    }
+
     /// [`Substituter::class_body`]; `anonymous` for an anonymous struct
     /// or union (its `}` is followed by `;`).
     pub(crate) fn class_body_with(
@@ -1616,14 +1628,7 @@ impl Substituter<'_, '_, '_> {
     ) {
         let saved_entity = self.entity.replace(spec);
         self.sema.act_on_start_record_definition(spec);
-        // The pattern's class-virt-specifier `final` ([class.pre]/1):
-        // `__is_final` of a specialization of a `final` class template is
-        // true (libc++'s compressed-pair padding of a final allocator).
-        if self.sema.ast.decls.record(def).is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)) {
-            let loc = self.sema.ast.decls.get(def).loc();
-            self.sema.act_on_class_final(spec, loc);
-        }
-        self.class_attrs(spec, def);
+        self.class_final_and_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
         let (specs, mut invalid) = sub.class_bases(def);
@@ -1724,10 +1729,9 @@ impl Substituter<'_, '_, '_> {
         // Default member initializers ([temp.inst]/3): instantiated when
         // a constructor or an aggregate initialization uses one
         // ([`Sema::instantiate_nsdmi`], clang
-        // `InstantiateInClassInitializer`), the fields of an anonymous
-        // struct or union member included (WP-446). Those of a local class
-        // are instantiated now, in the complete-class context (the parser
-        // replays them so).
+        // `InstantiateInClassInitializer`), an anonymous member's included.
+        // Those of a local class are instantiated now, in the complete-class
+        // context (the parser replays them so).
         if !nsdmis.is_empty() && !invalid {
             if local.is_none() {
                 let ctx = (sub.args.clone(), sub.pairs.clone());
