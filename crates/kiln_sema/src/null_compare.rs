@@ -20,7 +20,7 @@ use kiln_ast::expr::{ExprKind, UnaryOp};
 use kiln_ast::types::{BuiltinType, FuncProto};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId, FixIt};
-use kiln_source::{ExpansionKind, Loc};
+use kiln_source::Loc;
 
 use crate::{Sema, conv};
 
@@ -47,7 +47,7 @@ impl Sema<'_, '_> {
         if self.holds_typo_expr(e) {
             return;
         }
-        let Some(msg) = self.always_non_null_pointer(e, null, eq) else { return };
+        let Some(msg) = self.null_compare_non_null(e, null, eq) else { return };
         let msg = msg.range(self.expr_range(null));
         if self.in_template() {
             let n = self.null_compare_rewarn.len();
@@ -69,23 +69,6 @@ impl Sema<'_, '_> {
         for (_, d) in hits {
             self.emit(d.allow_duplicate());
         }
-    }
-
-    /// clang `IsInAnyMacroBody`: `loc` or a macro argument it came from
-    /// was written in a macro's replacement list.
-    fn in_any_macro_body(&self, mut loc: Loc) -> bool {
-        let sm = self.diags.sm();
-        for _ in 0..256 {
-            if !loc.is_macro() {
-                return false;
-            }
-            match sm.expansion_info(loc) {
-                Some(x) if matches!(x.kind, ExpansionKind::Macro { .. }) => return true,
-                Some(_) => loc = sm.immediate_macro_caller_loc(loc),
-                None => return false,
-            }
-        }
-        false
     }
 
     fn ignore_imp_casts(&self, mut e: ExprId) -> ExprId {
@@ -110,7 +93,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn always_non_null_pointer(&self, e: ExprId, null: ExprId, eq: bool) -> Option<Diag> {
+    fn null_compare_non_null(&self, e: ExprId, null: ExprId, eq: bool) -> Option<Diag> {
         let at = self.eloc(e);
         if at.is_macro()
             && (self.in_any_macro_body(at) || self.in_any_macro_body(self.begin_loc(null)))
