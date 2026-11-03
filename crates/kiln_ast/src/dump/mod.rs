@@ -2302,6 +2302,26 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.bare_ty(t);
                 }
             }
+            // kiln: the reflectee's kind and its stable form
+            // (spec/reflection-repr.md §5); `dependent` before
+            // instantiation.
+            ExprKind::CXXReflectExpr => {
+                let r = ast.reflect_operand(e);
+                self.line.push(' ');
+                self.line.push_str(r.kind_name());
+                match exprs.reflect_value(e) {
+                    Some(id) => {
+                        self.line.push(' ');
+                        crate::consts::PrintEnv::reflection(ast, id, &mut self.line);
+                    }
+                    None => {
+                        self.line.push_str(" dependent");
+                        if let crate::reflect::Reflectee::Type(t) = r {
+                            self.ty(t);
+                        }
+                    }
+                }
+            }
             // clang prints only the trait; kiln adds the type operands.
             ExprKind::TypeTraitExpr => {
                 self.line.push(' ');

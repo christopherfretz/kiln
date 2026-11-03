@@ -18,11 +18,9 @@ use kiln_ast::{ConstValueId, DeclHead, DeclId, ExprId, QualType, ReflectionId};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind, MetaOp, Note, Oven};
 use kiln_source::Loc;
-use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::lookup::LookupKind;
-use crate::using::Qualifier;
 
 impl Sema<'_, '_> {
     /// The type `std::meta::info` (spelled `decltype(^^int)`).
@@ -33,74 +31,6 @@ impl Sema<'_, '_> {
     /// True if `t` is (cv) `std::meta::info`.
     pub fn is_meta_info(&self, t: QualType) -> bool {
         self.ast.types.canonical(t).without_quals() == self.meta_info_type()
-    }
-
-    /// `^^type-id` ([expr.reflect]/2).
-    pub fn act_on_reflect_type(&mut self, ty: QualType, loc: Loc, end: Loc) -> ExprId {
-        let info = self.meta_info_type();
-        if ty == QualType::ERROR {
-            return self.recover(info, &[], loc);
-        }
-        self.builder().reflect_expr(Reflectee::Type(ty), info, loc, end)
-    }
-
-    /// `^^name` / `^^nns name` ([expr.reflect]/3-5): a namespace, a
-    /// variable, a non-overloaded function or a data member. Overload
-    /// sets, templates and anything else are not reflected by the spike.
-    pub fn act_on_reflect_name(
-        &mut self,
-        qual: Option<Qualifier>,
-        name: Symbol,
-        name_loc: Loc,
-        loc: Loc,
-        end: Loc,
-    ) -> ExprId {
-        let info = self.meta_info_type();
-        let lookup = |s: &Self, k| match qual {
-            Some(q) => s.lookup_qualified(q.ctx, name, k),
-            None => s.lookup_name(name, k),
-        };
-        let mut found = lookup(self, LookupKind::Ordinary);
-        if found.decls.is_empty() {
-            found = lookup(self, LookupKind::Nested);
-        }
-        let text = crate::decl::sym_str(self, name);
-        match found.decls.as_slice() {
-            [] => {
-                let d = self.diag(DiagId::sema_undeclared_var_use, name_loc).arg(text);
-                self.emit(d);
-                self.recover(info, &[], loc)
-            }
-            &[d] => match self.kind_of(d) {
-                // Spike: an alias reflects the namespace it denotes (P2996
-                // reflects the alias itself; `dealias` unwraps it).
-                DeclKind::NamespaceAlias => {
-                    let d = self.ast.resolve_alias(d);
-                    self.builder().reflect_expr(Reflectee::Decl(d), info, loc, end)
-                }
-                DeclKind::Namespace
-                | DeclKind::Var
-                | DeclKind::Field
-                | DeclKind::Function
-                | DeclKind::CXXMethod => {
-                    let d = self.ast.first(d);
-                    self.builder().reflect_expr(Reflectee::Decl(d), info, loc, end)
-                }
-                _ => {
-                    let d =
-                        self.diag(DiagId::sema_reflect_operand, name_loc).arg(format!("'{text}'"));
-                    self.emit(d);
-                    self.recover(info, &[], loc)
-                }
-            },
-            _ => {
-                let d = self
-                    .diag(DiagId::sema_reflect_operand, name_loc)
-                    .arg(format!("overload set '{text}'"));
-                self.emit(d);
-                self.recover(info, &[], loc)
-            }
-        }
     }
 
     /// The type a splice-type-specifier `[: e :]` designates
@@ -241,11 +171,18 @@ impl Sema<'_, '_> {
     ) -> Result<ConstValueId, Vec<Note>> {
         let name = match self.ast.reflections.get(r) {
             Reflectee::Null => String::new(),
-            Reflectee::Decl(d) => self.decl_name(d),
+            Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
+                self.decl_name(d)
+            }
             Reflectee::Type(t) => match self.ast.types.as_record(t) {
                 Some(d) => self.decl_name(d),
                 None => self.ty_str(t),
             },
+            // WP-472: the M6-03 kinds; WP-470's meta/ split owns this query.
+            Reflectee::Template(n) => {
+                self.ast.types.template_decl(n).map(|d| self.decl_name(d)).unwrap_or_default()
+            }
+            _ => String::new(),
         };
         if name.is_empty() {
             return fail(loc, format!("'{}' has no name", self.reflection_str(r)));

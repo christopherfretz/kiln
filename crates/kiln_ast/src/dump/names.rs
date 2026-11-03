@@ -1619,17 +1619,50 @@ impl PrintEnv for AstNames<'_> {
         false
     }
 
+    /// A reflection in its stable form (spec/reflection-repr.md §5):
+    /// `^^int`, `^^ns::f`, `^^::`, `^^(value of type int)`.
     fn reflection(&self, id: crate::ids::ReflectionId, out: &mut String) {
         use crate::reflect::Reflectee;
-        match self.ast.reflections.get(id) {
-            Reflectee::Null => out.push_str("std::meta::info()"),
-            Reflectee::Type(t) => {
-                out.push_str("^^");
-                self.type_name(t, out);
+        use std::fmt::Write;
+        let r = self.ast.reflections.get(id);
+        if r == Reflectee::Null {
+            out.push_str("std::meta::info()");
+            return;
+        }
+        out.push_str("^^");
+        match r {
+            Reflectee::Null => {}
+            Reflectee::Type(t) => self.type_name(t, out),
+            Reflectee::Namespace(d) if self.ast.decls.get(d).kind() == DeclKind::TranslationUnit => {
+                out.push_str("::");
             }
-            Reflectee::Decl(d) => {
-                out.push_str("^^");
+            Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
                 self.write_qualified_name(d, out);
+            }
+            Reflectee::Template(n) => match self.ast.types.template_decl(n) {
+                Some(d) => self.write_qualified_name(d, out),
+                None => out.push_str("(template)"),
+            },
+            Reflectee::Value(v) | Reflectee::Object(v) => {
+                let object = matches!(r, Reflectee::Object(_));
+                let mut t = self.ast.consts.ty(v);
+                if object {
+                    t = self.ast.types.pointee(t).unwrap_or(t);
+                }
+                out.push_str(if object { "(object of type " } else { "(value of type " });
+                self.type_name(t, out);
+                out.push(')');
+            }
+            Reflectee::BaseSpec(d, i) => {
+                let _ = write!(out, "(base #{i} of ");
+                self.write_qualified_name(d, out);
+                out.push(')');
+            }
+            Reflectee::DataMemberSpec(m) => {
+                let _ = write!(out, "(data member spec #{})", m.index());
+            }
+            Reflectee::Annotation(a) => {
+                let _ = write!(out, "(annotation #{})", a.index());
             }
         }
     }

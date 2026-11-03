@@ -75,6 +75,7 @@ mod predefined;
 mod qualified_decl;
 mod range_for;
 mod reflect;
+mod reflect_operand;
 mod rtti;
 pub mod scope;
 mod self_ref;

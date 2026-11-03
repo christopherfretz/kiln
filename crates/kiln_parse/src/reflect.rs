@@ -5,36 +5,88 @@
 
 use kiln_lex::{Punct, TokKind};
 
-use crate::parser::{PExpr, Parser};
+use crate::parser::{PExpr, Parser, is_template_class};
 use crate::tentative::TypeIdContext;
 use kiln_ast::QualType;
 
 impl Parser<'_, '_> {
-    /// `^^ type-id` / `^^ qualified-namespace-specifier` /
-    /// `^^ id-expression` ([expr.reflect]/1), at `^^`. A type-id wins
-    /// when the operand can be one ([expr.reflect]/2: `^^T` reflects the
-    /// type).
+    /// `^^ ::` / `^^ type-id` / `^^ reflection-name` / `^^ id-expression`
+    /// ([expr.reflect]/1), at `^^`. A type-id wins when the operand can be
+    /// one ([expr.reflect]/6); a template-name not followed by `<` names
+    /// the template (/5); a template-id that is not a type names the
+    /// variable or function specialization (/7).
     pub(crate) fn parse_reflect_expr(&mut self) -> PExpr {
         let loc = self.bump().span.lo;
+        // `^^::` ([expr.reflect]/4): nothing that continues a qualified
+        // name follows the `::`.
+        if self.at(Punct::ColonColon)
+            && !matches!(self.tok_at(self.pos() + 1).kind, TokKind::Identifier(_))
+            && !matches!(Self::punct_of(self.tok_at(self.pos() + 1)), Some(Punct::Tilde))
+        {
+            self.bump();
+            let end = self.prev_end();
+            return Some(self.s.act_on_reflect_global(loc, end));
+        }
         // An operand that can be a type-id is one (as a trailing return
-        // type: an ambiguous declarator such as `void (*)(int)` tips to it).
-        if self.is_cxx_type_id_at(self.pos(), TypeIdContext::InTrailingReturnType).0 {
+        // type: an ambiguous declarator such as `void (*)(int)` tips to it),
+        // unless it is a bare template-name.
+        if !self.at_bare_template_name()
+            && self.is_cxx_type_id_at(self.pos(), TypeIdContext::InTrailingReturnType).0
+        {
             let ty = self.parse_type_id()?;
             let end = self.prev_end();
             return Some(self.s.act_on_reflect_type(ty, loc, end));
         }
+        let operand = self.tok().span.lo;
         let qual = self.parse_nested_name_nns().ok()?;
         let Some(name) = self.ident() else {
-            self.error_here(kiln_diag::DiagId::parse_expected_unqualified_id);
-            return None;
+            return Some(self.s.reflect_bad_operand(operand, loc));
         };
         let name_loc = self.bump().span.lo;
-        if self.at(Punct::Less) {
-            self.unsupported("reflection of a template-id", name_loc);
+        if let Some(q) = qual
+            && self.s.is_dependent_ctx(q.ctx)
+        {
+            self.unsupported("reflection of a dependent qualified name", name_loc);
             return None;
+        }
+        if self.at(Punct::Less) {
+            let class = self.s.classify_name(name, qual.map(|q| q.ctx));
+            if is_template_class(class) {
+                let r = self.parse_template_id_rest(class, name, name_loc).ok()?;
+                let end = self.prev_end();
+                return Some(self.s.act_on_reflect_template_id(r, name_loc, loc, end));
+            }
         }
         let end = self.prev_end();
         Some(self.s.act_on_reflect_name(qual, name, name_loc, loc, end))
+    }
+
+    /// True at `name` / `nns name` naming a template, not followed by `<`
+    /// (the reflection of the template itself, never a type-id).
+    fn at_bare_template_name(&self) -> bool {
+        let mut i = self.pos();
+        let mut ctx = None;
+        if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
+            ctx = Some(self.s.ast.tu);
+            i += 1;
+        }
+        loop {
+            let TokKind::Identifier(name) = self.tok_at(i).kind else { return false };
+            let next = Self::punct_of(self.tok_at(i + 1));
+            if next == Some(Punct::ColonColon) {
+                // Only plain namespace / class qualifiers are followed.
+                match self.s.lookup_nested_ctx(name, ctx) {
+                    Some(c) => ctx = Some(c),
+                    None => return false,
+                }
+                i += 2;
+                continue;
+            }
+            if next == Some(Punct::Less) {
+                return false;
+            }
+            return self.s.names_template(name, ctx);
+        }
     }
 
     /// True at `[:` (only ever lexed under `-freflection`).

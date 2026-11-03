@@ -4,6 +4,7 @@
 //! implicit nodes semantic analysis added are stripped and the
 //! expression is rebuilt through the Sema actions the parser calls.
 
+use kiln_ast::reflect::Reflectee;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{
     BinaryOp, CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, ExprNode, Radix, TypeidOperand,
@@ -851,12 +852,23 @@ impl Substituter<'_, '_, '_> {
                     .collect();
                 Ok(self.sema.act_type_trait(t, &args, loc, end))
             }
-            // -freflection spike: `^^T` reflects the substituted type; a
-            // reflected declaration is not dependent in the spike.
+            // spec/reflection-repr.md §2: `^^T` reflects the substituted
+            // type; a declaration of the pattern its instantiation; a
+            // template template parameter its argument.
             ExprKind::CXXReflectExpr => match ex(self).reflect_operand(e) {
-                kiln_ast::reflect::Reflectee::Type(q) => {
+                Reflectee::Type(q) => {
                     let q = self.ty(q, loc)?;
                     Ok(self.sema.act_on_reflect_type(q, loc, end))
+                }
+                Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
+                    let d = self.find_instantiated_decl(d, loc)?;
+                    Ok(self.sema.reflect_entity(d, loc, loc, end))
+                }
+                Reflectee::Template(n) => {
+                    let n = self.template_name(n, loc)?;
+                    let n = self.sema.ast.types.canonical_template_name(n);
+                    let info = self.sema.meta_info_type();
+                    Ok(self.sema.builder().reflect_expr(Reflectee::Template(n), info, loc, end))
                 }
                 _ => Ok(e),
             },
