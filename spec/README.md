@@ -31,3 +31,33 @@ say which in the PR. A spec change without tests is incomplete.
 | [sema-templates.md](sema-templates.md) | kiln_sema (`templ`), kiln_parse, kiln_ast (templates) | design |
 | [sema-lambda.md](sema-lambda.md) | kiln_parse, kiln_sema (`lambda`), kiln_oven, kiln_codegen (lambdas) | landed (WP-075) |
 | codegen, driver | | in progress (M2) |
+
+## Landed sections
+
+A work package that lands behaviour records it in a "Landed (WP-NNN)"
+section: what the code now does, the rules it follows, and the tests
+that back it. Since WP-488 a new one is **its own file**,
+`spec/landed/<spec>/WP-NNN.md`, where `<spec>` is the stem of the spec it
+extends (`codegen` for `codegen.md`, `abi` for `abi.md`, `sema-class`
+for `sema-class.md`, …). The file's first line is `# WP-NNN — <title>`;
+the body has the same shape a section in the spec had (rules, standard
+and clang references, tests by path). Appending `## 7x. Landed …` /
+`### 8.NN Landed …` to the end of a spec made every two open pull
+requests conflict on that file, and every landing forced a re-merge
+and a full CI re-run of the others; one file per WP never conflicts.
+
+- The existing sections stay where they are (no migration). A spec
+  whose Landed chapter has moved on ends that chapter with a pointer to
+  its directory (`codegen.md` §7x, `abi.md` §8.26).
+- The files are as normative as the spec they extend, and are read in
+  WP order after the spec's own Landed chapter. A later WP that changes
+  a rule an earlier file states updates that file (or, for a section
+  still in the spec, the spec) rather than contradicting it.
+- Section numbers are no longer allotted for Landed sections; refer to
+  one as `spec/landed/codegen/WP-NNN.md`.
+- `cargo xtask ci` checks, before anything is built (spec/harness.md
+  "CI", step 0), that every file under `spec/landed/` is
+  `spec/landed/<spec>/WP-NNN.md` for an existing `spec/<spec>.md`, that
+  its first line is `# WP-NNN — <title>` with its own id, and that
+  `docs/BACKLOG.md` has a `| WP-NNN |` row (`xtask/src/landed.rs`).
+  `spec/landed/README.md` is the only other file allowed there.

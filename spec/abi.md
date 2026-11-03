@@ -1329,6 +1329,14 @@ against clang 22); the oracle-22 x86-64 `Abi` deviations of
 `builtins_overflow` differ only in instructions (`Structure`, as on
 AArch64).
 
+### 8.26 Landed sections after WP-488: `spec/landed/abi/`
+From WP-488 on, a work package's Landed section is not appended here as
+another `### 8.NN`: it is its own file, `spec/landed/abi/WP-NNN.md`
+(title line `# WP-NNN — <title>`, the same content as a subsection
+above), so open pull requests never conflict on this chapter
+(spec/README.md "Landed sections"). They are as normative as this file;
+read that directory after §8.25.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.
