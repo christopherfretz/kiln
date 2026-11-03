@@ -417,6 +417,10 @@ impl Sema<'_, '_> {
         let mut likelihood: Option<kiln_ast::attr::AttrNode> = None;
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::LOOP_HINT {
+                kept.extend(self.handle_loop_hint(a, sub));
+                continue;
+            }
             let name = match node.kind {
                 AttrKind::ASSUME => "assume",
                 AttrKind::LIKELY => "likely",
@@ -492,6 +496,7 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        self.check_loop_hint_compat(&kept);
         if kept.is_empty() {
             return sub;
         }

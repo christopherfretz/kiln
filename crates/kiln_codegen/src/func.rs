@@ -10,7 +10,7 @@ use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate, FuncId,
-    GepFlags, IntPredicate, IntValue, MemOpts, MetadataId, TypeId as LTy, Value,
+    GepFlags, IntPredicate, IntValue, MemOpts, TypeId as LTy, Value,
 };
 use kiln_oven::apfloat::{self, FloatKind};
 use kiln_source::Loc;
@@ -49,12 +49,7 @@ pub(crate) struct SwitchCtx {
     pub range_head: Blk,
 }
 
-/// An active loop (clang `LoopInfo`).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct LoopFrame {
-    pub header: Blk,
-    pub md: Option<MetadataId>,
-}
+pub(crate) use crate::loop_md::LoopFrame;
 
 /// A parameter's value after clang `EmitFunctionProlog`.
 enum ParamVal {
@@ -177,9 +172,9 @@ pub(crate) struct Fx {
     pub cx_ret: Option<(V, V)>,
     /// Calls: (instruction, callee, call-site nounwind).
     pub calls: Vec<(u32, Option<FuncId>, bool)>,
-    pub loop_mp: Option<MetadataId>,
-    /// The function's `!{!"llvm.loop.unroll.disable"}` node (at `-O1`).
-    pub loop_unroll: Option<MetadataId>,
+    /// The loop statement about to be emitted and the `AttributedStmt`
+    /// whose loop hints apply to it (clang `EmitStmt`'s `Attrs`).
+    pub loop_hints: Option<(kiln_ast::StmtId, kiln_ast::StmtId)>,
     /// The active conditional evaluations (clang `ConditionalEvaluation`),
     /// innermost last: each is the block the condition started in.
     pub conds: Vec<Blk>,
@@ -256,8 +251,7 @@ impl Fx {
             vector_width: 0,
             cx_ret: None,
             calls: Vec::new(),
-            loop_mp: None,
-            loop_unroll: None,
+            loop_hints: None,
             conds: Vec::new(),
             opaque: FxHashMap::default(),
             array_index: Vec::new(),
@@ -340,7 +334,13 @@ impl Cg<'_> {
         let first = ast.first(d);
         let sig = self.structor_sig(first, structor)?;
         let fd = *ast.decls.function(d).expect("function");
-        let Some(body) = fd.body else { return Ok(()) };
+        // A thunk needs no body of its method: a thunk of a virtual
+        // function defined elsewhere is emitted with a vtable above -O0
+        // (clang `maybeEmitThunk` with `ForVTable`).
+        let body = fd.body;
+        if body.is_none() && thunk.is_none() {
+            return Ok(());
+        }
         let is_main = mangle::decl_name(ast, first) == "main"
             && ast.decls.get(first).ctx().is_some_and(|c| self.is_tu_level(c));
 
@@ -365,6 +365,13 @@ impl Cg<'_> {
             let name = self.m.func(f).name().to_owned();
             let c = self.m.comdat(&name, kiln_llvm::ComdatKind::Any);
             self.m.func_mut(f).comdat = Some(c);
+        }
+        if thunk.is_some() && body.is_none() {
+            // clang `setThunkLinkage` with `ForVTable`.
+            let func = self.m.func_mut(f);
+            func.linkage = kiln_llvm::Linkage::AvailableExternally;
+            func.comdat = None;
+            func.dso_local = false;
         }
         let kind = ast.decls.get(d).kind();
         if self.is_x86()
@@ -530,10 +537,13 @@ impl Cg<'_> {
 
         // GenerateCode: `Bypasses.Init` over the body when lifetime
         // markers are on (a coroutine redoes it over its own body).
-        if self.lifetime_markers_on() && thunk.is_none() {
+        if let Some(body) = body
+            && self.lifetime_markers_on()
+            && thunk.is_none()
+        {
             self.f.bypasses = Some(Box::new(crate::lifetime::detect_bypasses(ast, body)));
         }
-        match kind {
+        match (kind, body) {
             _ if let Some(th) = thunk => {
                 self.f.mustprogress = false;
                 self.emit_thunk_body(d, structor, th, &param_decls)?;
@@ -543,19 +553,20 @@ impl Cg<'_> {
             {
                 self.emit_lambda_invoke_body(call_op, &param_decls)?;
             }
-            DeclKind::CXXConstructor => self.emit_ctor_body(d, body)?,
-            DeclKind::CXXDestructor if structor == Some(mangle::Structor::Deleting) => {
+            (_, None) => {}
+            (DeclKind::CXXConstructor, Some(body)) => self.emit_ctor_body(d, body)?,
+            (DeclKind::CXXDestructor, _) if structor == Some(mangle::Structor::Deleting) => {
                 self.emit_deleting_dtor_body(d)?;
             }
-            DeclKind::CXXDestructor
+            (DeclKind::CXXDestructor, Some(body))
                 if structor == Some(mangle::Structor::Complete)
                     && self.structor_has_vbases(d)
                     && self.ast.stmts.get(body).kind() != kiln_ast::stmt::StmtKind::CXXTryStmt =>
             {
                 self.emit_complete_dtor_body()?;
             }
-            DeclKind::CXXDestructor => self.emit_dtor_body(d, body)?,
-            _ => self.emit_body(body)?,
+            (DeclKind::CXXDestructor, Some(body)) => self.emit_dtor_body(d, body)?,
+            (_, Some(body)) => self.emit_body(body)?,
         }
 
         // GenerateCode: falling off the end of a value-returning function
@@ -884,7 +895,7 @@ impl Cg<'_> {
     }
 
     fn loop_md(&mut self, i: u32, succ: &[Blk]) {
-        if let Some(l) = self.f.loops.last().copied()
+        if let Some(l) = self.f.loops.last()
             && let Some(md) = l.md
             && succ.contains(&l.header)
         {

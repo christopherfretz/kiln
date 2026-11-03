@@ -79,6 +79,36 @@ pub enum Event {
         /// The unit's key.
         key: String,
     },
+    /// A loop-hint pragma (`#pragma unroll`, `#pragma clang loop`, ...;
+    /// clang's `annot_pragma_loop_hint` tokens, spec/parse.md §2.3),
+    /// applied to the statement starting at `before`.
+    LoopHints {
+        /// The token the pragma precedes (filled in when it is read).
+        before: Loc,
+        /// The hints, in source order.
+        hints: Vec<LoopHintInfo>,
+    },
+}
+
+/// One hint of a loop-hint pragma (clang's `PragmaLoopHintInfo`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoopHintInfo {
+    /// The `#` of the directive or the `_Pragma` token.
+    pub start: Loc,
+    /// The pragma name: `unroll`, `nounroll`, `unroll_and_jam`,
+    /// `nounroll_and_jam` (also for `GCC unroll` / `GCC nounroll`), or
+    /// `loop` for `#pragma clang loop`.
+    pub name: &'static str,
+    /// The pragma-name token.
+    pub name_loc: Loc,
+    /// The `#pragma clang loop` option and its location.
+    pub option: Option<(&'static str, Loc)>,
+    /// The value tokens: `None` for a valueless `#pragma unroll`,
+    /// `Some(empty)` for an empty `(...)`.
+    pub value: Option<Vec<Token>>,
+    /// Where the value ends (clang's `eof` terminator): the token after
+    /// the value or its `)`.
+    pub value_end: Loc,
 }
 
 /// How many consumed tokens the window keeps behind the parser's position
@@ -234,6 +264,17 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
                     if t.kind == TokKind::Eof {
                         self.eof = Some(next);
                     }
+                    // A loop hint applies to the statement this token starts.
+                    for (at, e) in self.events.iter_mut().rev() {
+                        if *at != next {
+                            break;
+                        }
+                        if let Event::LoopHints { before, .. } = e
+                            && *before == Loc::INVALID
+                        {
+                            *before = t.span.lo;
+                        }
+                    }
                     self.toks.push(t);
                     return;
                 }
@@ -244,14 +285,14 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
 
     fn marker(&mut self, m: Marker, next: usize) {
         match m {
-            Marker::Pragma { span, tokens, .. } => {
+            Marker::Pragma { span, start, tokens, .. } => {
                 let cx = PragmaCx {
                     diags: self.diags,
                     interner: self.pp.interner(),
                     sm: self.pp.source_manager(),
                     lex_opts: self.pp.lex_options(),
                 };
-                if let Some(e) = classify(&cx, span, &tokens) {
+                if let Some(e) = classify(&cx, span, start, &tokens) {
                     self.events.push_back((next, e));
                 }
             }
