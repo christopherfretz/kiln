@@ -290,7 +290,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     Some(Punct::LParen) => Tpr::Ambiguous,
                     _ => Tpr::True,
                 },
-                Kw::Decltype | Kw::Typeof | Kw::Atomic => {
+                Kw::Decltype | Kw::Typeof | Kw::Atomic | Kw::BitInt | Kw::ExtInt => {
                     // Without `(`, `_Atomic` is the type qualifier: as `const`.
                     if self.punct_at(self.i + 1) != Some(Punct::LParen) {
                         return if k == Kw::Atomic { Tpr::True } else { Tpr::Error };
@@ -518,7 +518,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
         match self.kw() {
             Some(Kw::Atomic) if self.punct_at(self.i + 1) != Some(Punct::LParen) => self.i += 1,
-            Some(k @ (Kw::Decltype | Kw::Typeof | Kw::Atomic)) => {
+            Some(k @ (Kw::Decltype | Kw::Typeof | Kw::Atomic | Kw::BitInt | Kw::ExtInt)) => {
                 self.i += 1;
                 if !self.at(Punct::LParen) || !self.skip_group_here() {
                     return Tpr::Error;
@@ -1336,6 +1336,14 @@ impl Parser<'_, '_> {
     /// [`Parser::is_cxx_type_id`] at token index `i`.
     pub(crate) fn is_cxx_type_id_at(&self, i: usize, ctx: TypeIdContext) -> (bool, bool) {
         Scan::new(self, i).type_id(ctx)
+    }
+
+    /// Whether a declarator may start at token `i` (clang's
+    /// `TryParseDeclarator` without an abstract declarator not giving
+    /// `False`): `(v)`, `(*p)[2]`, `(N::x)` may, `(1)` and `(int)` may
+    /// not.
+    pub(crate) fn declarator_may_start_at(&self, i: usize) -> bool {
+        Scan::new(self, i).declarator(false, true, false, false) != Tpr::False
     }
 
     /// [dcl.ambig.res]/1: whether the `(` at the current token, after a

@@ -274,7 +274,11 @@ impl Sema<'_, '_> {
     /// it is done in `int` and cannot overflow (clang's
     /// `UnaryOperator::canOverflow` rule).
     fn narrower_than_int(&self, t: QualType) -> bool {
-        if !self.is_integral_or_enum(t) {
+        // A `_BitInt` is never promoted, so its arithmetic can overflow
+        // at any width (clang: `nsw` on `-`/`++` of `_BitInt(7)`).
+        if !self.is_integral_or_enum(t)
+            || matches!(self.ast.types.canonical_view(t), TypeView::BitInt { .. })
+        {
             return false;
         }
         let int_w = conv::int_width(self, QualType::INT).unwrap_or(32);
@@ -3586,6 +3590,9 @@ impl Sema<'_, '_> {
     fn comparison(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         self.diagnose_array_comparison(op, l, r, loc);
         self.diagnose_self_comparison(op, l, r, loc);
+        if matches!(op, BinaryOp::EQ | BinaryOp::NE) {
+            self.diagnose_always_non_null_compare(op == BinaryOp::EQ, l, r);
+        }
         let l2 = conv::decay(self, l);
         let r2 = conv::decay(self, r);
         let (lt, rt) = (self.ety(l2), self.ety(r2));

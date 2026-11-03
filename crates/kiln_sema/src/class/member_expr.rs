@@ -393,7 +393,10 @@ impl Sema<'_, '_> {
                 base: b,
                 arrow,
                 nns,
-                implicit: false,
+                // An instantiated implicit `this->f` stays implicit
+                // (a static winner is a `DeclRefExpr`, [over.over]).
+                implicit: self.ast.exprs.get(base).kind() == ExprKind::CXXThisExpr
+                    && self.ast.exprs.this_is_implicit(base),
                 targs: None,
             };
             return self.build_member_overload(set, loc);

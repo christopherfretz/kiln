@@ -11,7 +11,8 @@
 //! immediate invocations that failed at the definition, and the
 //! null dereferences the definition warned about are warned about again
 //! (spec/sema.md §5.15), and so are the arguments of its variadic calls
-//! that the definition did not check (`Sema::check_variadic_args`). Unevaluated operands and lambda bodies are not
+//! that the definition did not check (`Sema::check_variadic_args`), and
+//! so are its always-non-null comparisons (`Sema::reissue_null_compares`). Unevaluated operands and lambda bodies are not
 //! entered.
 
 use kiln_ast::ExprId;
@@ -32,10 +33,15 @@ impl Sema<'_, '_> {
         let rewarn = self.null_deref_rewarn_active();
         let mut derefs = Vec::new();
         let mut varargs = Vec::new();
+        let mut compares = Vec::new();
+        let recompare = !self.null_compare_rewarn.is_empty();
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             let kind = self.ast.exprs.get(x).kind();
             let loc = self.eloc(x);
+            if recompare && self.null_compare_rewarn.contains_key(&x) {
+                compares.push(x);
+            }
             match kind {
                 // Unevaluated operands ([expr.context]/1) and the bodies
                 // of lambdas (their own functions).
@@ -117,6 +123,9 @@ impl Sema<'_, '_> {
         }
         if !derefs.is_empty() {
             self.reissue_null_derefs(&derefs);
+        }
+        if !compares.is_empty() {
+            self.reissue_null_compares(&compares);
         }
         for (a, kind) in varargs {
             self.check_variadic_args(&[a], kind);

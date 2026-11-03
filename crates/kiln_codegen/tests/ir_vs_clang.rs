@@ -78,8 +78,6 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // kiln zeroes a padded `_Atomic` operand's padding and writes a failed
     // compare-exchange's old value back to `*expected` (C11 7.17.7.4p2) at
     // every compat level, as clang 22 does; clang 19 did neither.
-    ("atomic_padded", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
-    ("atomic_padded", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
     // An importer of a module whose global module fragment defines G's key
     // function: kiln declares `_ZTV1G` external (the interface unit emits
     // it with `_ZTI1G`/`_ZTS1G`, Itanium ABI §5.2.3); clang 22 omits them
@@ -90,9 +88,11 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     ("module_gmf_vtable", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("module_gmf_vtable", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // LLVM 20+ passes x86-64 `__int128` as `i128` instead of `{ i64, i64 }`
-    // / two `i64`s (the same registers and stack slots: SysV §3.2.3).
+    // / two `i64`s (the same registers and stack slots: SysV §3.2.3); the
+    // same for `_BitInt(65..128)`.
     ("abi_decls", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     ("atomic_builtins", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
+    ("bit_int_arith", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     ("atomic_lv_libcall", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     ("atomic_wide", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     ("builtins_bits", "x86_64-unknown-linux-gnu", "22", Allow::Abi),

@@ -434,13 +434,42 @@ target, the non-pointer error stands. A qualifier on an undeduced
 Instantiation (`templ/subst/types.rs`, clang's
 `TransformAttributedType`): a qualifier on a dependent type that
 substitutes to a non-pointer is `sema_nullability_nonpointer` and a
-substitution failure (a SFINAE note in deduction). kiln reports it at
-the instantiation location (a member's name), clang at the keyword
-(it keeps a TypeLoc).
-Not implemented: clang's redeclaration check
-(`warn_nullability_conflict` on `void f(int* _Nonnull); void
-f(int* _Nullable);`), the `-Wnullability-completeness` family, and the
-`nonnull` attribute spellings.
+substitution failure (a SFINAE note in deduction), reported at the
+keyword as clang does (it keeps a TypeLoc): `apply_nullability` records
+a dependent result's keyword location in `InstState::nullability_locs`
+(keyed by the attributed type) and `nullability_loc` picks the one
+nearest the substituted declaration (WP-404;
+`tests/conformance/ext.clang.nullability/subst-location.cpp`).
+
+Array brackets (WP-404, clang `ParseBracketDeclarator`; kiln_parse
+`parse_bracket_quals`): a nullability qualifier inside `[...]` is
+recorded against the array chunk. On a parameter's outermost array
+(chunk 0 of a `Prototype` declarator) it is accepted and moves to the
+decayed pointer (`adjust_param_type` re-wraps it: `int a[_Nonnull]` is
+`int * _Nonnull`); on any other array it is the non-pointer error
+(`'int[3]'`, `'int[]'`). C99 `static` and cv/`restrict` qualifiers
+there are errors in C++ at the `[`: `parse_c99_array_usage_cxx`
+("static array size / qualifier in array size is a C99 feature, not
+permitted in C++") on a parameter's outermost array, else
+`parse_array_static_outside_prototype` / `parse_array_qual_outside_prototype`
+(the declarator is invalid). `[*]` is not parsed.
+(`tests/conformance/ext.clang.nullability/array-brackets.cpp`.)
+
+Redeclarations (WP-404, clang `mergeParamDeclAttributes`;
+`check_param_nullability`): each parameter's outermost nullability is
+compared with the previous declaration's; a difference is the
+`-Wnullability` warning `sema_nullability_mismatched_redecl`
+("nullability specifier '_Nullable' conflicts with existing specifier
+'_Nonnull'") at the new parameter, with `note_previous_declaration` at
+the latest previous one. An unwritten one inherits (clang copies it onto
+the type; kiln finds the nearest earlier declaration that wrote one).
+Return types are not compared in C++, nor nested pointers
+(`tests/conformance/ext.clang.nullability/redecl-conflict.cpp`).
+Not implemented: copying the inherited nullability into the
+redeclaration's parameter type, `-Wnonnull` ("null returned from
+function that requires a non-null return value"),
+`-Wnullability-extension` (pedantic), the `-Wnullability-completeness`
+family, and the `nonnull` attribute spellings.
 
 ### 4.2 Declarator to declaration
 `act_on_declarator` turns a `Declarator` into a declaration:
@@ -1348,7 +1377,18 @@ and returns the scope it names:
     a class template redeclaration is, and a later definition joins
     that chain. An enumeration redeclaration creates no decl. Test:
     class.name/redeclaration-ast.cpp.
-  - A definition checks for redefinition and kind mismatch.
+  - A definition checks for redefinition and kind mismatch. A
+    redefinition ([basic.def.odr]/1) is diagnosed once and recovered
+    from as clang's `ActOnTag` does (it makes the new tag anonymous and
+    invalid): the new decl is created `INVALID` and taken out of every
+    lookup table (`AstBuilder::unregister_name`, also its class
+    template), so later uses find the first definition rather than an
+    ambiguity — at namespace scope, in a reopened, unnamed or inline
+    namespace, in a class and in a block alike. The parser skips its
+    body (`Sema::tag_body_skipped`; no member is checked, no enumerator
+    declared) and its declarators get an error type. Gap: clang still
+    parses a base-clause there (`expected class name`). Test:
+    basic.def.odr/class-redefinition-recovery.cpp.
   - A type name marks referenced only the declaration lookup found (the
     latest in its chain; clang `isThisDeclarationReferenced`). An
     elaborated-type-specifier that finds a tag (`struct N *a`) marks
@@ -2638,6 +2678,13 @@ the initializer, or after default initialization, and before the
     template definition, at the initializer, unless it is a braced list.
   - It does not look through a scalar's one-element list, so
     `__thread int x{f()};` is reported at the `{`.
+  - A one-expression parenthesized initializer of a dependent type, or
+    whose expression is type-dependent, is clang 19's `ParenListExpr`,
+    reported at its `(` (`static __thread T w(T(1));`, `int w(T::v)`;
+    WP-411). kiln keeps a `ParenListExpr` only for a longer list, so
+    `act_on_init` passes the `(` to `check_static_tls`. A value-dependent
+    expression of a non-dependent type (`int w(sizeof(T))`) is reported
+    at the expression.
 - Redeclarations (clang `MergeVarDecl`, `check_tls_redecl`): a
   redeclaration whose thread storage kind differs from the previous one
   is reported before any redefinition check. The texts are
@@ -2648,12 +2695,10 @@ the initializer, or after default initialization, and before the
   here` or `previous declaration is here`. The declaration is still
   merged. This applies at namespace scope and to out-of-class static data
   members.
-- **Residual:** at compat 19, the single-argument dependent paren
-  initializer `static __thread T w(T(1));` is reported at the `T`. clang 19
-  reports it at the `(` of its `ParenListExpr`, which kiln does not keep.
 - Tests: `basic.stc.thread/static-tls-init.cpp`, `tls-redecl.cpp`,
-  `static-tls-template.cpp`, `static-tls-dependent.cpp` (clang>=22) and
-  `static-tls-dependent-19.cpp` (clang<22).
+  `static-tls-template.cpp`, `static-tls-dependent.cpp` and
+  `static-tls-paren.cpp` (clang>=22), `static-tls-dependent-19.cpp` and
+  `static-tls-paren-19.cpp` (clang<22).
 
 ## 5. Expressions (`expr.rs`, `conv/`)
 - **Typed nodes:** each `act_on_*` builds clang's typed node, with
@@ -4743,6 +4788,54 @@ value is used); no parentheses or implicit casts are looked through.
   `expr.shift/shift-in-bool-context-{19,22}.cpp`,
   `expr.cond/cond-int-constants-bool.cpp`,
   `conv.bool/enum-constant-in-bool*.cpp`.
+
+### 5.27 Always-non-null comparisons (`null_compare.rs`, WP-411)
+
+clang's `DiagnoseAlwaysNonNullPointer`, comparison forms
+([conv.ptr]/1, [basic.compound]/3, [dcl.ref]/5, [expr.prim.this]). A
+built-in `==` / `!=` with exactly one null pointer constant operand
+(`conv::is_null_pointer_constant`: `nullptr`, `__null`, a zero integer
+literal) checks the other, unconverted operand `E` in `comparison()`,
+before the usual conversions, so it applies alike in function bodies,
+default member initializers, namespace-scope and constexpr initializers
+and unevaluated operands:
+- Skipped when `E`'s location is a macro location and it, or the null
+  constant's start, was written in a macro body (clang
+  `IsInAnyMacroBody`); a macro argument is diagnosed.
+- Through implicit conversions only: `this` is `sema_this_null_compare`.
+  Then, through parentheses, a unary operator other than `&` ends the
+  check; `&X` checks `X`: a variable or member of reference type or a
+  call to a function returning a reference (through parentheses) is
+  `sema_address_of_reference_null_compare` (with
+  `note_reference_is_return_value` at the function), both
+  `-Wtautological-undefined-compare`.
+- Otherwise `X` (or `E`) must be a `DeclRefExpr` or `MemberExpr` (not
+  parenthesized) of a non-weak declaration: `&` of a non-function, or
+  without `&` a function or an array, is `sema_null_pointer_compare`
+  ("comparison of {address of|function|array} 'X' ...",
+  `-Wtautological-pointer-compare`, `X` printed as written). A function
+  adds `note_function_warning_silence` (insert `&`) and, when it can be
+  called without arguments and returns a pointer (or an integer, against
+  a literal zero), `note_function_to_function_call` (append `()`).
+- An operand holding a clang 19 delayed typo (`holds_typo_expr`: an
+  undeclared template-id corrected to `::val`) is not checked: clang's
+  `TypoExpr` makes the comparison type-dependent and the correction
+  rebuilds it under a SFINAE trap, which drops warnings
+  (`temp.names/undeclared-template-id-correct-19.cpp`).
+- The result selects `true` for `!=`, `false` for `==`. The location is
+  the member name of a member access, else the start of the operand;
+  ranges are the operand's and the null constant's.
+- A template definition checks its non-dependent comparisons; the
+  instantiation warns again: a rebuilt comparison re-checks, and a shared
+  non-dependent operand reissues the definition's warning from
+  `null_compare_rewarn` (`mark_shared_expr_referenced`'s walk), in
+  definition order, with the instantiation notes.
+- Not implemented: the `nonnull` / `returns_nonnull` attribute forms, the
+  lambda-conversion form, and the conversion-to-`bool` forms
+  (`-Wpointer-bool-conversion`, "address of 'x' will always evaluate to
+  'true'"), which share this check in clang.
+- Tests: `expr.eq/null-pointer-compare.cpp`,
+  `expr.eq/null-pointer-compare-forms.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

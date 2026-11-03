@@ -196,6 +196,8 @@ impl<'a> IrTypes<'a> {
         let ast = self.ast();
         match ast.types.canonical_view(q) {
             TypeView::Builtin(BuiltinType::Bool) => return IrType::Int(1),
+            // A `_BitInt(N)` value is `iN`; in memory it fills its slot.
+            TypeView::BitInt { width, .. } => return IrType::Int(width),
             // A vector value is `<N x T>`; an `ext_vector_type` of `bool`
             // is `<N x i1>` (clang `ConvertType`).
             TypeView::Vector { elem, count, .. } => {
@@ -211,7 +213,12 @@ impl<'a> IrTypes<'a> {
         let ast = self.ast();
         match ast.types.canonical_view(q) {
             TypeView::Builtin(b) => self.builtin(b),
-            TypeView::BitInt { width, .. } => IrType::Int(width),
+            // clang `ConvertTypeForMem`: `_BitInt(N)` in memory is the
+            // integer of its ABI size (`i8` for `_BitInt(7)`, `i64` for
+            // `_BitInt(33)`, `i256` for `_BitInt(200)` on x86_64).
+            TypeView::BitInt { width, .. } => {
+                IrType::Int(self.target().bit_int_size_align_bits(width).0 as u32)
+            }
             TypeView::Pointer(_)
             | TypeView::LValueRef(_)
             | TypeView::RValueRef(_)
