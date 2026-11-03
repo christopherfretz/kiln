@@ -3549,7 +3549,10 @@ impl Sema<'_, '_> {
     /// diagnosed. Not in a template instantiation nor from a macro; a
     /// class operand only at clang 22, where an operator without a viable
     /// candidate is checked as a built-in comparison (spec/sema.md §1.1).
-    /// Arrays are `diagnose_array_comparison`'s.
+    /// Arrays are `diagnose_array_comparison`'s. A vector comparison is
+    /// checked after its operands are converted (clang
+    /// `CheckVectorCompareOperands`), except a floating vector (clang's
+    /// `hasFloatingRepresentation`).
     pub(crate) fn diagnose_self_comparison(
         &mut self,
         op: BinaryOp,
@@ -3565,7 +3568,7 @@ impl Sema<'_, '_> {
         if ty.is_array(t)
             || ty.is_floating(t)
             || ty.as_complex(t).is_some()
-            || self.vector_parts(t).is_some()
+            || self.vector_parts(t).is_some_and(|v| ty.is_floating(v.elem))
             || (ty.as_record(t).is_some() && self.clang_compat < 22)
             || self.is_nullptr_type(t)
             || self.is_dependent_type(t)

@@ -1529,6 +1529,11 @@ impl Sema<'_, '_> {
             return e;
         }
         if self.is_vector_type(ty) {
+            // A vector is not an aggregate ([dcl.init.list]/3.1; clang
+            // `FK_DesignatedInitForNonAggregate`).
+            if l.items.iter().any(|i| !i.designator.is_empty()) && !self.is_error_type(ty) {
+                return self.designated_non_aggregate(ty, l, entity.unwrap_or(l.lbrace));
+            }
             return self.vector_list_init(ty, l);
         }
         if let Some(e) = self.complex_list_init(ty, l) {
@@ -1618,9 +1623,9 @@ impl Sema<'_, '_> {
     }
 
     /// Up to `count` vector elements of type `elem` from `items[*pos..]`
-    /// (clang `CheckVectorType`), one item each. A designator is not
-    /// supported in a braced vector list (`None`, diagnosed) and ends a
-    /// brace-elided one after its first item.
+    /// (clang `CheckVectorType`), one item each. A designator ends a
+    /// brace-elided list after its first item (a braced vector list with
+    /// a designator was rejected as a non-aggregate).
     fn vector_elements(
         &mut self,
         elem: QualType,
@@ -1635,10 +1640,6 @@ impl Sema<'_, '_> {
             // The designator of the item that started a brace-elided
             // list names this vector, not one of its elements.
             if !item.designator.is_empty() && (braced || !inits.is_empty()) {
-                if braced {
-                    self.unsupported("a designator in a vector initializer", item.value.loc(self));
-                    return None;
-                }
                 break;
             }
             let x = match &item.value {
