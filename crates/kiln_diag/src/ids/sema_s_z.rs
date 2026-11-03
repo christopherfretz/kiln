@@ -26,9 +26,25 @@ sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' afte
 sema_spec_member_not_instantiated = Error (1) "specialization of member '{0}' does not specialize an instantiated member";
 sema_spec_redecl_global_scope = Error (2) "{0:class template|class template partial|variable template|variable template partial|function template} specialization of '{1}' must occur at global scope";
 sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
+// [expr.prim.id.qual]/2 (WP-474)
+sema_splice_declarative_scope = Error (0) "a splice-scope-specifier cannot be used in a declarative nested-name-specifier";
+// [namespace.udir]/1 (WP-474)
+sema_splice_dependent_namespace = Error (0) "the splice-specifier of a using-directive cannot be dependent";
+// [namespace.udir]/1 (WP-474)
+sema_splice_global_namespace = Error (0) "the splice-specifier of a using-directive cannot designate the global namespace";
 sema_splice_not_constant = Error (0) "splice operand must be a constant expression";
+// [expr.prim.splice]/2 (WP-474)
+sema_splice_not_expression = Error (0) "splice in an expression position does not designate a variable, function, enumerator, value or object";
 sema_splice_not_info = Error (1) "splice operand of type {0} is not a reflection";
+// [expr.ref]/2 (WP-474)
+sema_splice_not_member = Error (1) "splice in a member access position does not designate a member of {0}";
+// [namespace.udir]/1 (WP-474)
+sema_splice_not_namespace = Error (0) "splice in a namespace position does not designate a namespace";
+// [basic.lookup.qual.general]/1 (WP-474)
+sema_splice_not_scope = Error (0) "splice in a scope position does not designate a class, namespace or enumeration";
 sema_splice_not_type = Error (0) "splice in a type position does not designate a type";
+// [expr.prim.splice]/2 (WP-474)
+sema_splice_special_member = Error (1) "a splice-expression cannot designate a {0:constructor|destructor}";
 sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
 sema_standalone_tag_qualifier = Error (1) "forward declaration of {0:class|struct|union|enum} cannot have a nested name specifier";
 sema_statement_requires_integer = Error (1) "statement requires expression of integer type ({0} invalid)";
