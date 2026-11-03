@@ -211,7 +211,7 @@ impl Substituter<'_, '_, '_> {
                             // one with an invalid initializer) also ends the
                             // enclosing compound statement (WP-418).
                             let none = match self.sema.kind_of(d) {
-                                DeclKind::StaticAssert => true,
+                                DeclKind::StaticAssert | DeclKind::ConstevalBlock => true,
                                 DeclKind::Var => !self.locals.contains_key(&d),
                                 _ => false,
                             };
@@ -724,6 +724,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(x)
             }
             DeclKind::StaticAssert => self.static_assert_decl(d).map(|x| x.0),
+            DeclKind::ConstevalBlock => self.consteval_block_decl(d).map(|x| x.0),
             DeclKind::Using | DeclKind::UnresolvedUsingValue => self.local_using_decl(d, loc),
             // A block-scope using-directive ([namespace.udir]): the
             // nominated namespace is never dependent; redone in the

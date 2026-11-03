@@ -8,8 +8,9 @@ use kiln_lex::{Punct, TokKind};
 use crate::keywords::Kw;
 use crate::parser::{PExpr, Parser, is_template_class};
 use crate::tentative::TypeIdContext;
-use kiln_ast::QualType;
+use kiln_ast::{ExprId, QualType};
 use kiln_sema::DeclSite;
+use kiln_source::Loc;
 
 impl Parser<'_, '_> {
     /// `^^ ::` / `^^ type-id` / `^^ reflection-name` / `^^ id-expression`
@@ -165,11 +166,31 @@ impl Parser<'_, '_> {
     /// ([basic.splice], [dcl.type.splice]): the type the operand
     /// reflects, at `[:`.
     pub(crate) fn parse_splice_type(&mut self) -> Option<QualType> {
+        let open = self.loc();
+        let (e, close) = self.parse_splice_specifier()?;
+        self.s.act_on_splice_type(e, open, close)
+    }
+
+    /// The splice-specifier `[: constant-expression :]` at `[:`
+    /// ([basic.splice]): its operand and the `:]` location. `None` after
+    /// an error (the `:]` is consumed when present).
+    pub(crate) fn parse_splice_specifier(&mut self) -> Option<(ExprId, Loc)> {
         let open = self.bump().span.lo;
         let e = self.with_greater_op(true, Self::parse_constant_expr);
         let close = self.expect_closing(Punct::SpliceClose, Punct::SpliceOpen, open);
-        let e = e?;
-        self.s.act_on_splice_type(e, open, close)
+        Some((e?, close))
+    }
+
+    /// [`Parser::parse_splice_specifier`]'s operand alone.
+    pub(crate) fn parse_splice_operand(&mut self) -> Option<ExprId> {
+        self.parse_splice_specifier().map(|(e, _)| e)
+    }
+
+    /// The splice-expression `[: r :]` at `[:` ([expr.prim.splice]).
+    pub(crate) fn parse_splice_expr(&mut self) -> Option<ExprId> {
+        let open = self.loc();
+        let (e, close) = self.parse_splice_specifier()?;
+        Some(self.s.act_on_splice_expr(e, open, close))
     }
 }
 

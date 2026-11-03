@@ -5247,15 +5247,9 @@ impl Sema<'_, '_> {
             }
             return e;
         }
-        // [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`.
-        let (base, arrow) = if arrow && self.ast.types.as_record(self.ety(base)).is_some() {
-            match self.arrow_base(base, op_loc) {
-                crate::overload::arrow::ArrowBase::Arrow(e) => (e, true),
-                crate::overload::arrow::ArrowBase::Dot => (base, false),
-                crate::overload::arrow::ArrowBase::Err => return self.recover_err(&[base], loc),
-            }
-        } else {
-            (base, arrow)
+        let (base, arrow) = match self.member_arrow_base(base, loc, op_loc, arrow) {
+            Ok(x) => x,
+            Err(e) => return e,
         };
         // clang `LookupMemberExpr`: `v.xy` / `p->xy` on an ext vector.
         if qual.is_none()
@@ -5264,6 +5258,45 @@ impl Sema<'_, '_> {
         {
             return self.ext_vector_member(base, vt, id, loc, op_loc, arrow);
         }
+        let (b, obj_ty, def) = match self.member_object(base, loc, op_loc, arrow) {
+            Ok(x) => x,
+            Err(e) => return e,
+        };
+        self.member_access(base, b, obj_ty, def, arrow, name, qual, loc)
+    }
+
+    /// [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`;
+    /// the base and whether the access is still an arrow. `Err` carries
+    /// the recovery expression.
+    pub(crate) fn member_arrow_base(
+        &mut self,
+        base: ExprId,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> Result<(ExprId, bool), ExprId> {
+        if arrow && self.ast.types.as_record(self.ety(base)).is_some() {
+            match self.arrow_base(base, op_loc) {
+                crate::overload::arrow::ArrowBase::Arrow(e) => Ok((e, true)),
+                crate::overload::arrow::ArrowBase::Dot => Ok((base, false)),
+                crate::overload::arrow::ArrowBase::Err => Err(self.recover_err(&[base], loc)),
+            }
+        } else {
+            Ok((base, arrow))
+        }
+    }
+
+    /// The object of a class member access `base.m` / `base->m`
+    /// ([expr.ref]/2-4): the (decayed) base, the object type and the
+    /// complete class definition. `Err` carries the recovery expression
+    /// after the diagnostic.
+    pub(crate) fn member_object(
+        &mut self,
+        base: ExprId,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> Result<(ExprId, QualType, DeclId), ExprId> {
         let (b, obj_ty) = if arrow {
             // clang `LookupMemberExpr`: the pointee or element type, or a
             // function type as written.
@@ -5281,14 +5314,14 @@ impl Sema<'_, '_> {
                 let msg =
                     self.diag(DiagId::sema_operator_arrow_not_pointer, loc).arg(self.ty_arg(ot));
                 self.emit(msg);
-                return self.recover_err(&[base], loc);
+                return Err(self.recover_err(&[base], loc));
             };
             if self.ast.types.as_record(p).is_none() {
                 let msg = self
                     .diag(DiagId::sema_member_reference_struct_union, op_loc)
                     .arg(self.ty_arg(p));
                 self.emit(msg);
-                return self.recover_err(&[base], loc);
+                return Err(self.recover_err(&[base], loc));
             }
             (conv::decay(self, base), p)
         } else {
@@ -5309,7 +5342,7 @@ impl Sema<'_, '_> {
                         .arg(self.ty_arg(bt))
                 };
                 self.emit(msg);
-                return self.recover_err(&[base], loc);
+                return Err(self.recover_err(&[base], loc));
             }
             (base, bt)
         };
@@ -5319,7 +5352,7 @@ impl Sema<'_, '_> {
         // a function body: its members declared so far are found (a
         // trailing return type naming `this->m`, [class.mem]/7).
         if self.instantiation_fails(obj_ty, op_loc) {
-            return self.recover_err(&[base], loc);
+            return Err(self.recover_err(&[base], loc));
         }
         let complete = self.this_outside_member_body(rec) || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {
@@ -5327,9 +5360,9 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_member_reference_incomplete, op_loc)
                 .arg(self.ty_arg(obj_ty));
             self.emit(self.incomplete_note(msg, obj_ty));
-            return self.recover_err(&[base], loc);
+            return Err(self.recover_err(&[base], loc));
         };
-        self.member_access(base, b, obj_ty, def, arrow, name, qual, loc)
+        Ok((b, obj_ty, def))
     }
 
     /// A name declared by an anonymous union outside a class
