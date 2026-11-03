@@ -2698,6 +2698,14 @@ impl DeclArena {
         &self.completed_records
     }
 
+    /// The class-completion epoch: moves exactly when a class definition
+    /// completes ([`DeclArena::complete_definition`], the only point a
+    /// class becomes complete), so a cache of "still incomplete" facts is
+    /// stale only when it differs from the epoch it was taken at.
+    pub fn completion_epoch(&self) -> u32 {
+        u32::try_from(self.completed_records.len()).unwrap_or(u32::MAX)
+    }
+
     /// Sets a field's default member initializer (write-once).
     pub fn set_field_init(&mut self, f: DeclId, init: ExprId) -> Result<(), AlreadySet> {
         set_once(&mut self.field_mut(f).init, init, "FieldData.init", RawId::raw)

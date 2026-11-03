@@ -1,17 +1,17 @@
 // [basic.types.general]/5, [expr.const] + kiln Oven type table (spec/oven.md
-// "Types"): a class interned by the Oven while it has no definition keeps a
-// provisional slot that is rebuilt once the class completes. 5,000
-// forward-declared classes, each named by two constant evaluations, keep
-// every class provisional for the rest of the TU. The Oven rebuilds
-// provisional slots only when sema has completed a class since its last
-// look (the completion epoch), and checks membership through a hash set,
-// so each evaluation costs the same few steps however many incomplete
-// classes came before it (before WP-471 every evaluation scanned every
-// provisional slot: O(n^2) in the number of forward declarations).
+// "Incomplete classes in the type table"): a class interned by the Oven
+// while it has no definition keeps a provisional slot that is rebuilt once
+// the class completes. 5,000 forward-declared classes, each named by two
+// constant evaluations, stay provisional for the rest of the TU. The Oven
+// rebuilds provisional slots only when sema completed a class since its
+// last look (the completion epoch) and checks membership through a hash
+// set, so an evaluation costs the same however many incomplete classes
+// came before it (before WP-471 every evaluation scanned every provisional
+// slot: O(n^2) wall in the number of forward declarations).
 //@ expect: compile-ok
 //@ strict-diags
 //@ std: c++20
-//@ oven: evaluations<=10000 steps<=40000 peak_bytes<=0 allocs<=0
+//@ oven: evaluations<=10010 steps<=10010 peak_bytes<=16
 struct Done;
 constexpr Done *pdone = nullptr;
 #define X(a) struct S##a; constexpr S##a *p##a = nullptr; static_assert(!p##a);

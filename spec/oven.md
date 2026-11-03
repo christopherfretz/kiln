@@ -2844,11 +2844,18 @@ array member, and a call counter that checks the single evaluation).
 - **Incomplete classes in the type table.** A class interned while it has
   no definition, or while it is still being defined, is a *provisional*
   `Opaque` slot. Its layout is not computed: `ensure_layout` caches by
-  first declaration and is never invalidated. `Types::refresh` runs at the
-  start of every evaluation, and an `intern` hit runs it as well; once the
-  class is complete, the slot is rebuilt **in place**, so a pointer
-  already holding the `OTy` stays valid. No object of a provisional type
-  can exist, because objects need complete types.
+  first declaration, is never invalidated, and returns `None` for an
+  incomplete class (spec/abi.md §1). `Types::refresh` runs at the start of
+  every evaluation, and an `intern` hit on a provisional slot upgrades it
+  as well; once the class is complete, the slot is rebuilt **in place**,
+  so a pointer already holding the `OTy` stays valid. No object of a
+  provisional type can exist, because objects need complete types.
+  Cost: the provisional slots are a hash set (an `intern` hit is O(1)),
+  and `refresh` does nothing unless sema's class-completion epoch
+  (`DeclArena::completion_epoch`, moved only by `complete_definition`)
+  changed since the last refresh; it then visits the provisional slots
+  in creation order. Thousands of forward-declared classes therefore cost
+  nothing per evaluation (`tests/stress/provisional-types-scale.cpp`; WP-471).
 - **Accounting.** The defining evaluation is an ordinary evaluation in
   `-fconstexpr-report`: steps, bytes and calls of the Oven work, plus sema
   work done inside a bridge call, which appears only in `wall_us`.
