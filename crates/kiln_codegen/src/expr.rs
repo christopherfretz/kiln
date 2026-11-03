@@ -1787,7 +1787,9 @@ impl Cg<'_> {
     fn decl_lvalue(&mut self, e: ExprId, d: DeclId, q: QualType) -> R<LV> {
         let ast = self.ast;
         match ast.decls.get(d).kind() {
-            DeclKind::Function | DeclKind::CXXMethod => {
+            // An explicit object conversion function is named like a
+            // free function ([over.match.funcs.general]/4).
+            DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion => {
                 let f = self.get_fn(d)?;
                 Ok(LV {
                     addr: Addr { v: V::C(Value::func(f)), ty: LTy::PTR, align: 1 },

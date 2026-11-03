@@ -53,6 +53,7 @@ sema_conditional_vector_has_void = Error (1) "GNU vector conditional operand can
 // the stray `}` is clang 19's (a `%diff` typo in the .td file).
 sema_conditional_vector_mismatched = Error (2) "vector operands to the vector conditional must be the same type ({0} and {1})}}";
 sema_conditional_vector_operand_type = Error (1) "enumeration type {0} is not allowed in a vector conditional";
+sema_conditional_vector_scalar_type_unsupported = Error (2) "scalar type {0} not supported with vector condition type {1}";
 sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
 sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";
 sema_conflicting_types = Error (1) "conflicting types for '{0}'";

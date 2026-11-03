@@ -428,7 +428,8 @@ then `Ast::first`); code that means "same entity" never compares
 `DeclId`s, which differ between redeclarations. Reflections are interned
 by `entity_decl`, so `info` equality is `same_entity`. `cargo test -p
 xtask` lints the reflection code (`kiln_sema/src/reflect.rs`,
-`kiln_sema/src/meta/`, `kiln_oven/src/meta/`) for raw `DeclId` `==`,
+`reflect_operand.rs`, `reflect_limit.rs`, `kiln_sema/src/meta/`,
+`kiln_oven/src/meta/`) for raw `DeclId` `==`,
 `!=` and `assert_eq!`; a line that really means the declaration carries
 `// same_entity: raw ok`.
 
@@ -1003,6 +1004,33 @@ Redeclaration and linkage rules:
   is also at its first qualifier. Tests
   `dcl.fct/nonmember-function-qualifiers.cpp`,
   `dcl.fct/explicit-object-qualifiers-template.cpp`.
+- **Qualified function types through a typedef-name** ([dcl.fct]/6,
+  CWG1417, WP-459, `decl.rs` `check_qualified_fn_type`): a function type
+  with a cv-qualifier-seq or ref-qualifier named by a typedef-name or
+  `decltype` (no function declarator of its own) is only the type of a
+  non-static member function, of a typedef or alias-declaration, of a
+  template type argument (a type trait's operand parses as one), of a
+  type parameter's default, or the pointee of a pointer to member. As a
+  non-member function at namespace or block scope (`extern` included), a
+  static member function, a friend, a parameter, a handler, or in a
+  type-id (`sizeof`, `new`, a trailing return type) it is clang's
+  `err_invalid_qualified_function_type` in its "of type" form: "non-member
+  function of type 'F' (aka 'int () const') cannot have 'const'
+  qualifier" ("static member function of type ..." for a static member)
+  at the start of the declaration or type-id, and the qualifiers are
+  dropped (follow-on errors print `int ()`). A pointer or reference to
+  such a type stays `check_qualified_function`'s (WP-435). In a template
+  instantiation, a data member, variable or static data member whose type
+  substitutes to a function type (qualified or not) is "data member /
+  variable / static data member instantiated with function type T" at its
+  name (clang `VisitFieldDecl`/`VisitVarDecl`, [temp.inst]/17); a member
+  function's parameter of that type is not diagnosed (it adjusts to a
+  pointer). Not yet: `friend F;` naming a qualified function typedef (an
+  elaborated friend type, clang errors). Tests
+  `dcl.fct/qualified-function-typedef.cpp`,
+  `dcl.fct/qualified-function-type-id.cpp`,
+  `dcl.fct/qualified-function-instantiation.cpp`,
+  `dcl.decl.general/qualified-function-decltype.cpp`.
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
 - A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang

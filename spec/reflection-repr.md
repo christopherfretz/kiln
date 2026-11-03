@@ -113,10 +113,17 @@ Two reflections are equal iff their ids are equal ([expr.eq]/6): `==` on
 place identity is decided, so every key in §1 must map equal entities to
 the same `Reflectee`:
 
-- a redeclaration reflects its first declaration;
+- a redeclaration reflects its first declaration, and a friend
+  declaration of a function the function it declares: every declaration
+  key is `Sema::entity_decl` (spec/sema.md §4 "Entity identity"), so
+  `info` equality is `Sema::same_entity`;
 - a type, as §1;
 - a template, through its canonical name;
 - a value or object, by content-interned store value.
+
+Interning a new reflection past the table's limit is the fatal
+`sema_too_many_reflections` (`Sema::intern_reflection`; `^^` through
+`Sema::build_reflect_expr`), never a panic (WP-471).
 
 `tests/conformance/expr.reflect/equality-matrix.cpp` checks a 29-by-29
 matrix of every operand kind (each equal only to itself, and to its

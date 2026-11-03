@@ -60,6 +60,7 @@ starting with `-` are inputs.
 | `-stdlib=libstdc++` / `libc++` | C++ standard library headers (default libstdc++) |
 | `-fexperimental-library`, `-fno-experimental-library` | libc++'s experimental library: `__has_feature(experimental_library)` and `__has_extension(experimental_library)` are 1 (a `kiln_pp` feature overlay, as clang's cc1 flag; libc++ derives `_LIBCPP_ENABLE_EXPERIMENTAL` from it), and the link step gets `-fexperimental-library` (clang adds `-lc++experimental`); the last wins (`Args::experimental_library`, WP-461) |
 | `--target=<triple>` | `aarch64`/`arm64` or `x86_64`/`amd64` Linux; anything else is an error |
+| `-march=<arch>[+ext...]`, `-mcpu=<cpu>[+ext...]`, `-target-feature <±feat>` (usually via `-Xclang`) | AArch64 target features ("Target features" below, WP-459) |
 | `--embed-dir=<dir>` | `#embed` search directory |
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | dependency output (see below) |
 | `-trigraphs`, `-ftrigraphs`, `-fno-trigraphs` | trigraphs (default: on only for strict C and C++ before 17) |
@@ -187,6 +188,41 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
 `-nostdinc` drops all of them. `-cxx-isystem` applies only to C++. The
 list is realized by `kiln_pp::SearchList::build` (`spec/pp.md` "Header
 search"), which drops nonexistent and duplicate directories.
+
+## Target features
+
+`features::resolve` (WP-459) turns `-march=`, `-mcpu=` and
+`-target-feature` into the AArch64 feature set the way clang's AArch64
+driver does (`getAArch64TargetFeatures`); `run_as` reports its errors once,
+the `-fsyntax-only` and codegen paths read the result.
+
+- **Base.** The last `-march=` wins; its value is `armv8-a` followed by
+  `+ext` modifiers. Without `-march=`, the last `-mcpu=` is used: `generic`
+  (adds `+ete,+trbe`) followed by `+ext` modifiers. When `-march=` is
+  present, `-mcpu=` contributes nothing (clang uses the CPU only without
+  an architecture).
+- **Extensions** are case-insensitive and applied left to right, the
+  last setting of each winning: `sve` adds `+fullfp16` and `+sve`;
+  `nosve` removes `sve` (`+sve+nosve` leaves `+fullfp16`, `-sve`; a lone
+  `+nosve` does nothing).
+- **`-target-feature ±name`** applies after the base, in order, last
+  wins; `+sve` alone adds only `+sve` (no `+fullfp16`). `-Xclang
+  -target-feature -Xclang +sve` is accepted: an `-Xclang` before a
+  separate value is skipped.
+- **Result.** `TargetFeatures { sve, extra }`: `sve` sets
+  `ParseOptions::sve` / `Sema::sve` (SVE types usable, spec/types.md
+  §5.1) and `CodegenOptions::sve` (`vscale_range(1,16)`, spec/codegen.md
+  §7aa); `extra` (`±name` in first-appearance order) overrides the
+  default AArch64 `"target-features"` entries
+  (`CodegenOptions::target_features`).
+- **Errors.** Any other architecture, CPU or extension is `unsupported
+  argument '<v>' to option '-march='` (`-mcpu=` alike); on x86-64,
+  `-march=`/`-mcpu=` are the same error and `-target-feature` is ignored.
+  A `-target-feature` value without a sign is `unsupported argument`.
+  An unknown `+name` is passed through to `"target-features"`.
+- **Not yet.** The `__ARM_FEATURE_SVE`, `__ARM_FEATURE_SVE_VECTOR_OPERATORS`
+  and `__ARM_FEATURE_FP16_*` predefines do not follow the features (the
+  predefine table, `kiln_pp/src/predef.rs`, has no feature input yet).
 
 ## Predefines
 
@@ -637,6 +673,12 @@ Each deviation is covered by a test or a test note.
 17. **`-verify` needs `-fsyntax-only`.** clang also verifies a full
     compile. `-Xclang` forwards to the driver parser, not to a `cc1`,
     so only options the driver knows are accepted after it.
+18. **Target features** ("Target features" above): only `armv8-a`
+    and `generic` with the `sve`/`nosve` extensions are known, so other
+    `-march=`/`-mcpu=` values are errors where clang accepts them; on
+    x86-64, `-mcpu=` is "unsupported argument" (clang: "unsupported
+    option") and `-target-feature` is ignored (clang passes it on); a
+    `-target-feature` value without `+`/`-` is an error (clang warns).
 
 ## Tests
 

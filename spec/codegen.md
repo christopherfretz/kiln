@@ -3181,6 +3181,36 @@ No lowering changed; the new forms reach codegen as existing AST.
     `fold.rs`).
   - An unreferenced namespace-scope `constexpr` decomposition's `e`
     (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
+
+## 7aa. Landed (WP-459): explicit-object conversion functions, AArch64 target features
+- A conversion function with an explicit object parameter
+  ([class.conv.fct]/1, P0847) is lowered as an explicit-object member
+  function (`is_explicit_object_method` covers `CXXConversion`): no
+  `this`, the object an ordinary first parameter (a reference, or a value
+  for `this H`), mangled with `H` (`_ZNH1ScviERKS_`), named like a free
+  function (`decl_lvalue`), and called with the object as its first
+  argument (no `this` adjustment, no temporary for an lvalue object). A
+  `this auto&&` / `this Self&&` conversion template is instantiated per
+  object type. Test `tests/codegen/explicit_object_conversion.cpp`.
+- AArch64 `"target-features"` (`module.rs` `aarch64_features`): the default
+  entries `+fp-armv8,+neon,+outline-atomics` (or `-outline-atomics`),
+  `+v8a`, `-fmv` are overridden by `CodegenOptions::target_features` (the
+  driver's `-march=`/`-mcpu=`/`-target-feature` result, spec/driver.md
+  "Target features"; last setting wins) and printed as clang does, the
+  sorted `+` features, then the sorted `-` ones
+  (`+fp-armv8,+fullfp16,+neon,+outline-atomics,+sve,+v8a,-fmv` for
+  `-march=armv8-a+sve`).
+- With `CodegenOptions::sve` (AArch64 only), every function definition
+  and the global-initialization functions (`__cxx_global_var_init`,
+  `_GLOBAL__sub_I_*`, `__tls_init`: `init_fn_attrs`) carry
+  `vscale_range(1,16)` (clang's `CodeGenFunction` for a target with SVE);
+  the TLS wrapper and `__clang_call_terminate`, built outside it, do not.
+  Test `ext.arm.sve/ir-target-features-sve.cpp`.
+- Not yet: SVE constants (a scalar splat into a scalable vector, the zero
+  vector of `-v` or of a vector `?:` condition) are built as fixed vectors
+  and fail IR lowering (`expr.rs` integer/float constants, `func.rs`
+  `splat`); SVE allocas use alignment 1 (clang 16, `svbool_t` 2), from
+  `kiln_abi`'s target type table.
 ## 7v. Landed (WP-456): `PseudoObjectExpr`
 
 The synthesized three-way comparison of a defaulted `operator<=>`

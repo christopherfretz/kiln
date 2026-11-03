@@ -262,6 +262,7 @@ sema_va_start_not_last_named_param = Warning [Varargs] (0) "second argument to '
 sema_va_start_not_last_named_param_19 = Warning [Varargs] (0) "second argument to 'va_start' is not the last named parameter";
 sema_va_start_outside_function = Error (0) "'va_start' cannot be used outside a function";
 sema_va_start_type_is_undefined = Warning [Varargs] (1) "passing {0:an object that undergoes default argument promotion|an object of reference type|a parameter declared with the 'register' keyword} to 'va_start' has undefined behavior";
+sema_var_instantiates_to_function = Error (2) "{0:variable|static data member} instantiated with function type {1}";
 sema_var_partial_spec_redecl_scope = Error (2) "variable template partial specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_var_spec_not_in_enclosing_ns = Error (2) "variable template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_var_template_spec_type = Error (4) "type {2} of {0:explicit instantiation|explicit specialization|partial specialization|redeclaration} of '{1}' does not match expected type {3}";
