@@ -264,6 +264,12 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         }
         let qualified = nns.is_some();
+        // The exception specification is part of the type ([dcl.fct]/14):
+        // resolved before the reference takes it (clang's
+        // `DiagnoseUseOfDecl`; `&A::operator==` of a defaulted `==`).
+        if self.kind_of(d) == DeclKind::CXXMethod {
+            self.resolve_exc_for_type(d, loc);
+        }
         let declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let ty = self.non_reference(declared);
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
