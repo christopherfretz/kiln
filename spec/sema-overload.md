@@ -349,16 +349,27 @@ An unqualified member name inside a member function that names a set of
 static and non-static member functions is an implicit member overload set
 (`this->f`, §2.3; also the `this->f` an instantiation rebuilds it as, whose
 `this` is implicit). With a pointer-to-function target, of `f` or `&f`, the
-non-template static members are its candidates (`implicit_member_operand`,
-WP-402): the one that matches becomes a `DeclRefExpr` and the implicit
-object is dropped (clang's `FixOverloadedFunctionReference`); a non-static
-member is never named this way ([expr.prim.id.general]/4,
-[expr.unary.op]/4), so a member-pointer target or no match is "reference to
-non-static member function must be called" with the candidates as
-"possible target for call" (clang says "address of overloaded function
-... does not match" for `&f`). `&f` of such a set without a static member
-stays "cannot create a non-constant pointer to member function". Templates
-in the set are not candidates yet. Test:
+static members are its candidates (`implicit_member_operand`, WP-402): a
+matching non-template, else ([over.over]/3, /5, WP-416) the specialization
+of a static member function template deduced from the target, the most
+specialized of several (`address_template_candidates` over the set). The
+one selected becomes a `DeclRefExpr` and the implicit object is dropped
+(clang's `FixOverloadedFunctionReference`); a non-static member, template
+or not, is never named this way ([expr.prim.id.general]/4,
+[expr.unary.op]/4). `&f` of any such set is a lookup of the name (clang's
+`ActOnIdExpression` builds a ULE for an overloaded address-of operand), so
+with no match it is "address of overloaded function 'f' does not match
+required type" with the ULE's candidate notes (a mismatch note per
+non-template, deduction failures after), and so is `f` when the set has a
+static member or static member template (clang's `UnresolvedMemberExpr` is
+then of overloaded type); `f` of only non-static members, or with a
+member-pointer target, is "reference to non-static member function must be
+called" with the candidates as "possible target for call", and `&(f)` is
+"cannot create a non-constant pointer to member function". (clang lists
+class members newest first inside a member function defined in the class,
+in declaration order out of line; kiln uses declaration order.) Tests:
+`over.over/implicit-member-template-address.cpp`,
+`tests/codegen/implicit_member_template_address.cpp`, and
 `over.over/implicit-member-static-target.cpp` (libc++ 22 `<format>`
 `__allocating_buffer` passing `__prepare_write` to its base).
 

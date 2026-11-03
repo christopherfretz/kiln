@@ -2704,13 +2704,13 @@ impl Sema<'_, '_> {
                     ExprFlags::CANNOT_OVERFLOW,
                 );
             }
-            if x == e
-                && self.implicit_member_operand(e).is_some()
-                && self.member_overload_decls(x).iter().any(|&d| self.is_static_method(d))
-            {
-                // `&f` of an implicit member set with a static member: the
-                // target selects it ([over.over]/1; spec/sema-overload.md
-                // §2.3).
+            if x == e && self.implicit_member_operand(e).is_some() {
+                // `&f` of an implicit member set: a lookup of the name
+                // (clang's `ActOnIdExpression` for an address-of operand),
+                // from which the target selects a static member or a
+                // static member template's specialization ([over.over]/1,
+                // /3; spec/sema-overload.md §2.3). `&(f)` stays a member
+                // access.
                 return self.builder().unary(
                     UnaryOp::AddrOf,
                     e,
