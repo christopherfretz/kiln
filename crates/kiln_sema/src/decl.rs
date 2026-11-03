@@ -1188,6 +1188,11 @@ impl Sema<'_, '_> {
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
                     }
+                    // [depr.volatile.type]/2: and a volatile-qualified
+                    // parameter type, at the parameter.
+                    if self.std >= kiln_lex::Std::Cxx20 && self.inst.stack.is_empty() {
+                        self.check_volatile_params(params);
+                    }
                     let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
@@ -1195,6 +1200,13 @@ impl Sema<'_, '_> {
             if !d.nullability.is_empty() || !moved.is_empty() {
                 ty = self.chunk_nullability(ty, i, d, &moved);
             }
+        }
+        // [temp.variadic]/5: only a parameter declares a pack (clang
+        // `GetFullTypeForDeclarator` drops the `...`).
+        if let Some(e) = d.ellipsis
+            && !matches!(d.ctx, DeclaratorContext::Prototype | DeclaratorContext::TypeName)
+        {
+            self.error(DiagId::sema_ellipsis_in_declarator_not_parameter, e);
         }
         if recover && self.is_error_type(ty) {
             return QualType::INT;
@@ -5628,15 +5640,19 @@ impl Sema<'_, '_> {
             return;
         }
         let vn = *self.ast.decls.get(v);
-        if vn.kind() != DeclKind::Var {
-            return;
-        }
-        if self.uninit_array_or_reference(v) || vn.has(DeclFlags::INVALID) {
+        if vn.kind() != DeclKind::Var
+            || self.uninit_array_or_reference(v)
+            || vn.has(DeclFlags::INVALID)
+            || self.is_member_spec_declaration(v)
+        {
             return;
         }
         // An in-class static data member declaration is not a definition
         // ([class.static.data]/3): its type may be incomplete.
-        if self.is_in_class_static(v) && !self.is_var_definition(v) {
+        if self.is_in_class_static(v)
+            && !self.is_var_definition(v)
+            && !self.is_spec_of_out_of_line_def(v)
+        {
             // But it cannot deduce a class type without an initializer.
             if let Some(ty) = vn.ty()
                 && self.is_ctad_placeholder(ty)
