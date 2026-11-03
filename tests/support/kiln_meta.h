@@ -461,8 +461,9 @@ consteval const typename meta::__kiln_unref<T>::type* define_static_object(T&& t
   } else if constexpr (__is_array(U)) {
     return __builtin_addressof(meta::extract<const U&>(meta::reflect_constant_array(t)));
   } else {
-    const U a[1] = {t};
-    return define_static_array(a).data();
+    // A span, not `const U a[1]`: an array bound in this pattern would
+    // cost every including TU an evaluation.
+    return define_static_array(span<const U>(__builtin_addressof(t), 1)).data();
   }
 }
 }  // namespace std
