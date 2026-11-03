@@ -399,6 +399,7 @@ impl Cg<'_> {
             return Ok(r);
         }
         let name = mangle::mangle_structor(self.ast, &mut self.anon, first, v);
+        self.note_rep(&name, first);
         // Every variant of a structor with an asm label takes the label
         // (clang `getMangledName` of each `GlobalDecl`): they are one
         // function, the first variant defined ([`Cg::emit_structor_def`]).
@@ -423,33 +424,33 @@ impl Cg<'_> {
     }
 
     /// The labelled structor function `f` for a definition of variant `v`
-    /// of `first`: `None` when an earlier variant already defined the
-    /// label (clang appends the later variant's body as unreachable
-    /// blocks, or skips an alias; spec/abi.md §1), else `f`, retyped
-    /// when the variant's signature differs (a base-object variant with
-    /// a VTT parameter; clang `GetOrCreateLLVMFunction`).
+    /// of `first` (clang `GetOrCreateLLVMFunction` for a definition under
+    /// the label every variant takes; spec/abi.md §1): `f` itself when
+    /// its type is the variant's — an earlier variant's body stays and
+    /// this one's is appended after it as unreachable blocks — else `f`
+    /// retyped at the end of the module, dropping an earlier variant's
+    /// body (the complete-object variant, without the VTT parameter of
+    /// the base-object one of a class with virtual bases, replaces it).
     fn labelled_structor_def(
         &mut self,
         d: DeclId,
         first: DeclId,
         v: Structor,
         f: FuncId,
-    ) -> R<Option<FuncId>> {
+    ) -> R<FuncId> {
         if !self.labelled_structor(first) {
-            return Ok(Some(f));
+            return Ok(f);
         }
-        if !self.m.func(f).is_declaration() {
-            return Ok(None);
-        }
+        self.check_duplicate_def(d, f);
         let sig = self.structor_sig(first, Some(v))?;
         if self.m.func(f).ty() != sig.fn_ty {
-            if let Err(e) = self.m.retype_function_to_end(f, sig.fn_ty) {
+            if let Err(e) = self.m.redefine_function_to_end(f, sig.fn_ty) {
                 return err(Some(self.ast.decls.get(d).loc()), format!("cannot define {e:?}"));
             }
             self.set_decl_attrs(f, first, &sig);
             self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
         }
-        Ok(Some(f))
+        Ok(f)
     }
 
     /// Queues the definition of variant `v` of `first` for emission if
@@ -622,7 +623,7 @@ impl Cg<'_> {
                     return Ok(());
                 }
                 let (_, f) = self.declare_structor(first, v)?;
-                let Some(f) = self.labelled_structor_def(d, first, v, f)? else { return Ok(()) };
+                let f = self.labelled_structor_def(d, first, v, f)?;
                 let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
                 let r = self.gen_code(d, f, Some(Structor::Base));
                 self.f = saved;
@@ -635,12 +636,10 @@ impl Cg<'_> {
                 self.squeued.insert((first, v));
                 if self.structor_has_vbases(d) {
                     let (_, f) = self.declare_structor(first, v)?;
-                    if !self.m.func(f).is_declaration() {
+                    if !self.m.func(f).is_declaration() && !self.labelled_structor(first) {
                         return Ok(());
                     }
-                    let Some(f) = self.labelled_structor_def(d, first, v, f)? else {
-                        return Ok(());
-                    };
+                    let f = self.labelled_structor_def(d, first, v, f)?;
                     let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
                     let r = self.gen_code(d, f, Some(Structor::Complete));
                     self.f = saved;
@@ -698,10 +697,12 @@ impl Cg<'_> {
             Structor::Deleting => {
                 self.squeued.insert((first, v));
                 let (_, f) = self.declare_structor(first, v)?;
-                if !self.m.func(f).is_declaration() || !self.d0_done.insert(first) {
+                if !self.m.func(f).is_declaration() && !self.labelled_structor(first)
+                    || !self.d0_done.insert(first)
+                {
                     return Ok(());
                 }
-                let Some(f) = self.labelled_structor_def(d, first, v, f)? else { return Ok(()) };
+                let f = self.labelled_structor_def(d, first, v, f)?;
                 let saved = std::mem::replace(&mut self.f, crate::func::Fx::empty());
                 let r = self.gen_code(d, f, Some(Structor::Deleting));
                 self.f = saved;

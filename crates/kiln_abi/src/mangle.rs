@@ -285,13 +285,41 @@ pub fn local_extern_ns(ast: &Ast, d: DeclId) -> Option<DeclId> {
     None
 }
 
-/// True if `d` is declared inside an `extern "C"` linkage specification
-/// (the innermost one wins).
+/// True if the function or variable `d` has C language linkage
+/// ([dcl.link]/4-5; clang `getDeclLanguageLinkage`, `isExternC`): its
+/// first declaration is lexically inside an `extern "C"` linkage
+/// specification, through enclosing functions and classes
+/// ([`in_extern_c_context`]: a block-scope `extern` declaration, or a
+/// friend declared in a class, in an `extern "C"` block), and it has
+/// external linkage. A class member has C++ language linkage; an entity
+/// with internal linkage (`extern "C" { static int x; }`, a `const`
+/// variable in a braced specification) or a local variable has none,
+/// and is mangled (`_ZL1x`).
 pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
-    let mut c = ast.decls.get(d).ctx();
-    while let Some(ctx) = c {
-        let n = ast.decls.get(ctx);
-        match n.kind() {
+    let first = ast.first(d);
+    let n = ast.decls.get(first);
+    let Some(c) = n.ctx() else { return false };
+    let ck = ast.decls.get(c).kind();
+    if is_record_kind(ck) {
+        return false;
+    }
+    if is_function_kind(ck)
+        && n.kind() != DeclKind::Function
+        && ast.decls.var(first).is_none_or(|v| v.spec.storage() != VarStorage::Extern)
+    {
+        return false;
+    }
+    in_extern_c_context(ast, first) && !has_internal_linkage(ast, first)
+}
+
+/// True if `d` is lexically inside an `extern "C"` linkage
+/// specification, the innermost one deciding, through any enclosing
+/// namespaces, functions and classes (clang `isInExternCContext`).
+pub fn in_extern_c_context(ast: &Ast, d: DeclId) -> bool {
+    let mut c = ast.decls.lexical_ctx(d);
+    for _ in 0..10_000 {
+        let Some(ctx) = c else { return false };
+        match ast.decls.get(ctx).kind() {
             DeclKind::LinkageSpec => {
                 return ast
                     .decls
@@ -299,12 +327,9 @@ pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
                     .is_some_and(|s| s.linkage_lang() == Some(LinkageLang::C));
             }
             DeclKind::TranslationUnit => return false,
-            // Class members and local entities never have C language
-            // linkage.
-            k if is_record_kind(k) || is_function_kind(k) => return false,
             _ => {}
         }
-        c = n.ctx();
+        c = ast.decls.lexical_ctx(ctx);
     }
     false
 }
@@ -374,7 +399,7 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
                 && !v.spec.is_inline()
                 && (!ast.modules.active || ast.module_attachment(first).is_none())
                 && v.spec.storage() != VarStorage::Extern
-                && !is_extern_c(ast, first)
+                && !ast.decls.is_single_line_linkage(first)
                 && !matches!(v.templ.get(), Some((TemplLinkKind::Specialization, _)))
         }
         _ => false,
@@ -577,7 +602,17 @@ fn is_file_context(ast: &Ast, d: DeclId) -> bool {
 /// linkage.
 pub fn has_internal_linkage(ast: &Ast, d: DeclId) -> bool {
     let first = ast.first(d);
-    if internal_by_storage(ast, first) || in_anon_ns(ast, first) {
+    if internal_by_storage(ast, first) {
+        return true;
+    }
+    // A namespace-scope function or variable of an unnamed namespace
+    // first declared in an `extern "C"` context keeps external linkage
+    // (clang `getLVForNamespaceScopeDecl`).
+    if in_anon_ns(ast, first)
+        && !(matches!(ast.decls.get(first).kind(), DeclKind::Function | DeclKind::Var)
+            && is_file_context(ast, first)
+            && in_extern_c_context(ast, first))
+    {
         return true;
     }
     // A local entity has no linkage unless its function is inline or a

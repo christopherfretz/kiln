@@ -460,3 +460,51 @@ fn coro_wrappers_before_passes_match_clang19() {
     assert!(k.contains("__await_suspend_wrapper__init"), "{k}");
     assert_eq!(k, c);
 }
+
+/// clang `err_duplicate_mangled_name` (spec/codegen.md "Duplicate mangled
+/// names", WP-492): a definition whose symbol (an asm label, or a name
+/// equal to another entity's mangled name) is already defined by another
+/// entity is an error at code generation, once, with the representative
+/// definition as the note; nothing is written. Every structor variant
+/// taking one label is a single entity and is no error.
+#[test]
+fn duplicate_mangled_name() {
+    let d = scratch("dupname");
+    let cases = [
+        (
+            "void f() asm(\"x\");\nvoid g() asm(\"x\");\nvoid f() {}\nvoid g() {}\nvoid h() asm(\"x\");\nvoid h() {}\n",
+            "t.cpp:4:6: error: definition with same mangled name 'x' as another definition\n    \
+             4 | void g() {}\n      |      ^\nt.cpp:3:6: note: previous definition is here\n    \
+             3 | void f() {}\n      |      ^\n1 error generated.\n",
+        ),
+        (
+            "extern \"C\" void _Z1fv() {}\nvoid f() {}\n",
+            "t.cpp:2:6: error: definition with same mangled name '_Z1fv' as another definition\n    \
+             2 | void f() {}\n      |      ^\nt.cpp:1:17: note: previous definition is here\n    \
+             1 | extern \"C\" void _Z1fv() {}\n      |                 ^\n1 error generated.\n",
+        ),
+        (
+            "void af() asm(\"actor\");\nvoid af() {}\nstruct A { A() asm(\"actor\"); };\nA::A() {}\n",
+            "t.cpp:4:4: error: definition with same mangled name 'actor' as another definition\n    \
+             4 | A::A() {}\n      |    ^\nt.cpp:2:6: note: previous definition is here\n    \
+             2 | void af() {}\n      |      ^\n1 error generated.\n",
+        ),
+        ("struct S { S() asm(\"s\"); ~S() asm(\"t\"); };\nS::S() {}\nS::~S() {}\n", ""),
+    ];
+    for (src, want) in cases {
+        std::fs::write(d.join("t.cpp"), src).unwrap();
+        let _ = std::fs::remove_file(d.join("t.ll"));
+        let o = kiln_in(&d, &["-S", "-emit-llvm", "t.cpp"]);
+        assert_eq!(text(&o.stderr), want, "{src}");
+        assert_eq!(o.status.code(), Some(i32::from(!want.is_empty())), "{src}");
+        assert_eq!(d.join("t.ll").exists(), want.is_empty(), "{src}");
+        if have("clang++-19") {
+            let c = Command::new("clang++-19")
+                .args(["-S", "-emit-llvm", "-o", "c.ll", "t.cpp"])
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert_eq!(text(&c.stderr), want, "clang++-19: {src}");
+        }
+    }
+}

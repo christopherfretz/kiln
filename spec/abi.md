@@ -1387,8 +1387,8 @@ AArch64).
   label, so the first variant defined is the definition and the
   complete-object alias (C1 → C2, D1 → D2) is not emitted; a virtual
   destructor's vtable names the label in both destructor slots, as
-  clang does. A class with virtual bases is not modelled (clang passes
-  the VTT to a definition without that parameter).
+  clang does. A class with virtual bases: the complete-object variant
+  replaces the base-object definition (WP-492, spec/codegen.md §7z).
 
 ### Landed sections after WP-488: `spec/landed/abi/`
 From WP-488 on, a work package's Landed section is not appended here as
