@@ -6,6 +6,7 @@
 use std::cmp::Ordering;
 
 use kiln_ast::consts::FloatKind;
+use kiln_ast::expr::ExprKind;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
@@ -1462,6 +1463,11 @@ impl Oven {
                         if v == 0 || !p.is_fn() {
                             fail!(Fault::NullCallee);
                         }
+                        // A function pointer a fold cast (`Op::Cce`): clang
+                        // calls none whose type differs from the callee's.
+                        if Ptr::is_nowhere(v) && !self.cast_callee_matches(b, pc, p.off) {
+                            fail!(Fault::Invalid);
+                        }
                         p.off
                     };
                     match self.enter(b, callee, pc, pc + 3, fb, arg!(1)) {
@@ -1945,6 +1951,35 @@ impl Oven {
         Ok(ip as i64 - iq as i64)
     }
 
+    /// Whether function `f`, called through a function pointer a fold
+    /// cast (`Op::Cce`) by the indirect call at `pc`, has the type the
+    /// call names, ignoring the exception specification (clang
+    /// `EvaluateCall`'s `hasSameFunctionTypeIgnoringExceptionSpec`): a
+    /// pointer cast back to its function's type calls it (spec/oven.md
+    /// "Pointers that point at nothing").
+    #[cold]
+    fn cast_callee_matches(&self, b: &dyn SemaBridge, pc: usize, f: u32) -> bool {
+        let ast = b.ast();
+        let Some(e) = self.site(pc).e.filter(|&e| ast.exprs.get(e).kind() == ExprKind::CallExpr)
+        else {
+            return false;
+        };
+        let Some(d) = self.funcs.get(f as usize).and_then(|x| x.decl) else { return false };
+        let callee = ast.exprs.get(ast.exprs.callee(e)).ty();
+        let Some(want) = ast.types.pointee(callee) else { return false };
+        let Some(have) = ast.decls.get(d).ty() else { return false };
+        let t = &ast.types;
+        match (t.proto(want), t.proto(have)) {
+            (Some(w), Some(h)) => {
+                t.same_type(w.ret(), h.ret())
+                    && w.variadic() == h.variadic()
+                    && t.params(w).len() == t.params(h).len()
+                    && t.params(w).iter().zip(t.params(h)).all(|(&x, &y)| t.same_type(x, y))
+            }
+            _ => false,
+        }
+    }
+
     /// The conversion `aux` (`kbc::cce`) of register value `v` by a cast
     /// a fold continues past (`Op::Cce`; clang's invalid designator); the
     /// result is not memoized. `None` fails the fold.
@@ -2023,7 +2058,7 @@ impl Oven {
         }
         let Some(ce) = self.site(f.call_pc as usize).e else { return e };
         let ast = b.ast();
-        if ast.exprs.get(ce).kind() == kiln_ast::expr::ExprKind::CXXMemberCallExpr
+        if ast.exprs.get(ce).kind() == ExprKind::CXXMemberCallExpr
             && let Some(&m) = ast.exprs.children(ce, &ast.lists).first()
         {
             return m;

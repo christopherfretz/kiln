@@ -50,8 +50,16 @@ panic and never silently wrong IR.
   re-folded initializer is never registered for constant destruction.
   A vector initializer is re-folded the same way (`tryEmitPrivate`
   evaluates it as an rvalue: `i4 gv = cv;` with `const i4 cv = {..}` is
-  a static initializer; WP-453, §7w). Aggregates are not re-folded (they
-  keep their dynamic initializer).
+  a static initializer; WP-453, §7w). An initializer list is re-folded
+  the same way (clang's `ConstExprEmitter` emits each element with
+  `tryEmitPrivateForMemory`, which falls back to `EvaluateAsRValue`;
+  WP-492): `H h = {(void (*)())&f, 1};` and `A a = {
+  __builtin_is_constant_evaluated() ? x : 7};` are static initializers.
+  Other aggregate initializers (a constructor call, a list with
+  temporaries) are not re-folded and keep their dynamic initializer. A
+  cast to or from a function pointer continues in a fold (spec/oven.md
+  "Pointers that point at nothing"), so `void (*p)() = (void (*)())&f;`
+  is the global `ptr @f`.
   Uses of a const integral variable whose constant initialization failed
   fold to that same non-manifest value (spec/oven.md "Lax folds"), so
   `return cg;` emits `ret i32 9` and the unused internal `cg` is not
@@ -358,9 +366,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     - isfinite/isinf/isnan/isnormal are `llvm.is.fpclass` (tests 504,
       516, 3, 264) zero-extended; `__builtin_isfpclass(x, m)` is
       `llvm.is.fpclass` with the folded mask `m` (not emitted; the fold
-      prepass collects it); `__builtin_expect_with_probability` at -O0 is
-      its first operand (the expected value emitted, the probability
-      not); signbit (and WP-419's `signbitf` / `signbitl`, through
+      prepass collects it); `__builtin_expect` and
+      `__builtin_expect_with_probability` at -O0 are their first operand
+      (the expected value emitted, the probability not), above -O0
+      `llvm.expect.T(value, expected)` and
+      `llvm.expect.with.probability.T(value, expected, double P)` with
+      the probability folded (WP-492, `builtin_expect_o1.cpp`); signbit (and WP-419's `signbitf` / `signbitl`, through
       `builtin::f128_twin`) bitcasts to an integer of the
       float's width and tests `slt 0`, and a constant argument folds
       (clang 19 and 22; `builtins_signbit_fl.cpp`); the isgreater family is one
@@ -800,7 +811,9 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `TempLoopID`) and filled when it is popped, through
   `Module::md_set_operands`, so an inner loop of an `unroll_and_jam` parent
   is finished first and becomes the parent's
-  `llvm.loop.unroll_and_jam.followup_inner`, the parent's own
+  `llvm.loop.unroll_and_jam.followup_inner` (listing its properties;
+  at `-fclang-compat=19` one distinct self-referential node of them, as
+  clang 19's loop-id `UnrollAndJamInnerFollowup`), the parent's own
   `followup_outer` carrying the before-jam attributes. The followup chain
   is clang's: full unroll → distribute → vectorize (`followup_all`,
   `followup_epilogue`) → unroll-and-jam → partial unroll → pipelining,
@@ -3272,14 +3285,52 @@ categories, compared with clang 22 and clang 19 on both targets).
   emitted (`tests/codegen/asm_label_shared.cpp`,
   `tests/codegen/asm_label_structors.cpp`,
   `tests/conformance/dcl.asm/asm-label-shared-and-structors.cpp`).
+  A later variant of the same function type has its body appended to
+  that definition as unreachable blocks (a labelled virtual destructor's
+  `D0` after `D2`: `; No predecessors!`, declaring `_ZdlPvm`); one of
+  another type — the complete-object variant of a class with virtual
+  bases, without the base-object variant's VTT parameter — replaces the
+  definition at the end of the module (`Module::redefine_function_to_end`,
+  clang erasing the old definition), so the label is the complete-object
+  function and the class's vtable and VTT are emitted (WP-492,
+  `tests/codegen/asm_label_structors_vbases.cpp`,
+  `tests/conformance/dcl.asm/asm-label-structors-vbases-run.cpp`).
+- **Duplicate mangled names** (WP-492; clang `err_duplicate_mangled_name`
+  in `GetOrCreateLLVMFunction` with `IsForDefinition`): each symbol name
+  has a representative declaration, the first one codegen names it for
+  (a reference, a definition, or a deferred labelled definition: clang's
+  `Manglings`). A function definition into an already defined function
+  whose representative is another entity is the error `definition with
+  same mangled name 'N' as another definition` at the definition, with
+  `note: previous definition is here` at the representative's
+  definition; it is reported once (clang emits no later declaration
+  after an error) and no output is written. Structor variants sharing a
+  label are one entity. A function defined under the symbol of a defined
+  variable (clang's error) is not detected
+  (`crates/kiln_driver/tests/codegen.rs` `duplicate_mangled_name`).
 - **Incomplete class in a signature**: a function first referenced while
   a class parameter or return type is incomplete (never defined, or
   defined later in the TU) is declared `void ()` with no attributes, as
   clang does for a type `isFuncTypeConvertible` rejects; the declaration
   stays when the class is completed, calls use their call-site function
-  type, and a definition retypes it. The top-level walk tracks the class
-  definitions it has not reached yet; a pointer or reference to such a
-  class has no `dereferenceable` size. A virtual method's placeholder is
+  type, and a definition retypes it. A class is complete to the
+  top-level walk from the end of the top-level declaration during which
+  it was completed (clang `HandleTopLevelDecl`; a namespace or
+  linkage-specification block is one declaration, so a class defined
+  later in the same block is complete): the parser records the TU's
+  last member and the class-completion epoch at the end of each
+  (`DeclArena::end_top_level_decl`), a TU member takes the epoch of the
+  first end at or after it in the member list (a class specialization
+  first declared by an explicit instantiation is appended there), the
+  explicit instantiation definitions that follow a member take the next
+  member's, the walk compares the class's completion index against that
+  epoch, and after the walk every class is complete. Class template specializations,
+  member classes of them and explicit specializations count by where
+  they are completed, local classes and closure types are complete with
+  their enclosing declaration (WP-492,
+  `tests/codegen/incomplete_class_inst.cpp`,
+  `temp.inst/incomplete-specialization-signature-run.cpp`). A pointer
+  or reference to an incomplete class has no `dereferenceable` size. A virtual method's placeholder is
   `unnamed_addr`, and so is its thunk's
   (`tests/codegen/incomplete_class_sig.cpp`,
   `tests/codegen/incomplete_class_thunk.cpp`). A braced list initializing
@@ -3296,10 +3347,30 @@ categories, compared with clang 22 and clang 19 on both targets).
   a dead block (x86-64 functions keep `align 2`). Before this a
   this-adjusting thunk dropped the variadic arguments. Above `-O0` the
   vtable's such thunk is `available_externally` when the vtable is; a
-  return-adjusting variadic thunk is a declaration (clang would clone
-  the method), and defining one is diagnosed
-  (`tests/codegen/variadic_thunk{,_o1,_o1_nopasses}.cpp`,
+  return-adjusting variadic thunk of a method defined elsewhere is a
+  declaration (`tests/codegen/variadic_thunk{,_o1,_o1_nopasses}.cpp`,
   `tests/conformance/class.virtual/variadic-thunk-run.cpp`).
+- **Return-adjusting variadic thunks** (WP-492) are clang's
+  `GenerateVarArgsThunk`, emitted after their method's definition
+  (`emit_thunks`): `gen_code_or_thunk` keeps the finished `Fir` of every
+  variadic virtual method (`Cg::vararg_bodies`), and the thunk is a copy
+  of it (`Fir::clone_body`, LLVM `CloneFunction`): moved to the end of
+  the module, the module's unique-name counter advanced once (the clone
+  is first named after the method), with the method's attributes,
+  `unnamed_addr`, `align`, personality and section, then the method's
+  linkage and a comdat of its own (`setThunkProperties`). The this
+  adjustment is inserted before the first `store` of the `this`
+  argument in the entry block, which then stores the adjusted pointer;
+  the first block in layout order ending in `ret` loses its `ret`, the
+  returned value takes `PerformReturnAdjustment` (a pointer null-checked
+  in blocks placed after the returning block, `Builder.CreateBr` keeping
+  each insertion point; a constant pointer's check folded as LLVM's
+  constant folder does: `null` is null, a global that is not
+  `extern_weak` or an `inbounds` GEP of one is not) and a new `ret`
+  returns it. A body that already made a block for a `blockaddress`, or
+  a method never defined here, is diagnosed instead
+  (`tests/codegen/variadic_thunk_ret{,_o1}.cpp`,
+  `tests/conformance/class.virtual/variadic-covariant-thunk-run.cpp`).
 - **`isLibFunction`** is builtin attribute bit `LIB_FUNCTION` (128,
   clang's `F`), set on the 406 `__builtin_` rows clang 19 and 22 treat as
   library functions (found by compiling each labelled `extern template`
@@ -3312,17 +3383,26 @@ categories, compared with clang 22 and clang 19 on both targets).
   `Fir::push` appends while it is active (the union under nested
   parallel loops; calls to `memory(none)` callees skipped), exact against
   clang 19 and 22 (`tests/codegen/loop_parallel{,_o1}.cpp`;
-  `loop_parallel_jam.cpp` is oracle 22 only, as clang 19 makes
-  `followup_inner` distinct).
-- **Not modelled**: an instruction placed by `Fir::insert_before` /
-  `insert_after` gets no access group (clang's `new X(..., InsertPt)`
-  also bypasses `InsertHelper`, but not every kiln insert mirrors one);
-  the clang 19 distinct `followup_inner`; `"; No predecessors!"`
-  comments; vtable hiding (`isVTableHidden`); labelled structors of a
-  class with virtual bases (clang emits a VTT call to a one-argument
-  definition) and the dead D0 block clang appends to a labelled virtual
-  destructor; local classes and instantiations in the incomplete-class
-  walk.
+  `loop_parallel_jam.cpp`, where clang 19, and kiln at
+  `-fclang-compat=19`, makes the `followup_inner` properties a distinct
+  self-referential node; WP-492). An instruction kiln places away from the
+  insertion point follows how clang makes it (WP-492): one made by
+  `new X(.., InsertPt)` or appended directly (`Fir::insert_before`,
+  `insert_after`, `insert_before_last`, `push_in`: the `cleanup.cond`
+  flag stores of `setBeforeOutermostConditional` and
+  `SetupCleanupBlockActivation`, the branch fixups' `cleanup.dest.slot`
+  stores, the `cleanup.dest` load of a cleanup's exit switch, the
+  `tmp.exprcleanup` spills of a `CGBuilderTy(CGM, ..)`) gets no access
+  group; one made by the function's builder at a moved insertion point
+  (`Fir::builder_insert_before_last`: the `llvm.lifetime.start` of a
+  full-expression temporary in a conditional branch, put at the
+  outermost conditional's start) gets the active one
+  (`tests/codegen/loop_parallel_inserts{,_o1}.cpp`).
+- **Not modelled**: `"; No predecessors!"` comments; vtable hiding
+  (`isVTableHidden`: it reads the visibility of the RTTI and of
+  undefined methods, and kiln has no visibility model); the emission
+  order of inline (deferred) labelled structors of a class with virtual
+  bases.
 
 ## 7y. Landed (WP-452): `=pattern`, pre-fills and VLAs (`auto_init.rs`)
 
