@@ -355,9 +355,12 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     - isfinite/isinf/isnan/isnormal are `llvm.is.fpclass` (tests 504,
       516, 3, 264) zero-extended; `__builtin_isfpclass(x, m)` is
       `llvm.is.fpclass` with the folded mask `m` (not emitted; the fold
-      prepass collects it); `__builtin_expect_with_probability` at -O0 is
-      its first operand (the expected value emitted, the probability
-      not); signbit (and WP-419's `signbitf` / `signbitl`, through
+      prepass collects it); `__builtin_expect` and
+      `__builtin_expect_with_probability` at -O0 are their first operand
+      (the expected value emitted, the probability not), above -O0
+      `llvm.expect.T(value, expected)` and
+      `llvm.expect.with.probability.T(value, expected, double P)` with
+      the probability folded (WP-492, `builtin_expect_o1.cpp`); signbit (and WP-419's `signbitf` / `signbitl`, through
       `builtin::f128_twin`) bitcasts to an integer of the
       float's width and tests `slt 0`, and a constant argument folds
       (clang 19 and 22; `builtins_signbit_fl.cpp`); the isgreater family is one
