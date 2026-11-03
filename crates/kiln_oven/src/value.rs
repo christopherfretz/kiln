@@ -559,12 +559,17 @@ impl Oven {
     /// duration must be representable at namespace scope) and the
     /// smallest enclosing scope of both that is not a block scope is the
     /// same function parameter scope (a lambda's body is its own).
+    /// Deliberately narrowed to a variable declared `constexpr` (WP-467):
+    /// the rule would also make `auto& e = local;` constant-initialized,
+    /// which no compiler does yet, so that case waits for an oracle
+    /// (spec/sema.md §4.9).
     fn referenceable_from_object(&self, b: &dyn SemaBridge, d: DeclId) -> bool {
         let Some(v) = self.run.object else { return false };
         let ast = b.ast();
         let ctx = ast.decls.get(d).ctx();
         b.cxx26()
             && is_local_var(ast, v)
+            && ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
             && ctx.is_some_and(|c| ast.decls.get(c).kind().is_function())
             && ast.decls.get(v).ctx() == ctx
     }

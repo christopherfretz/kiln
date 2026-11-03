@@ -334,7 +334,9 @@ impl Sema<'_, '_> {
                 let loc = self.ast.decls.get(v).loc();
                 // A value referring to an automatic object is constant
                 // only by C++26 P2686R5, which clang 22 (whose warning
-                // this is) does not implement: not a constant here.
+                // this is) does not implement: not a constant here (a
+                // guard: only a `constexpr` variable's value can, for now,
+                // spec/sema.md §4.9).
                 match self.eval_const(init, kiln_oven::EvalContext::init(v, loc)) {
                     Ok(c) if kiln_oven::automatic_referent(&self.ast, c).is_none() => {}
                     _ => return false,

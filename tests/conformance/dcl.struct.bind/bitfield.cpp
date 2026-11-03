@@ -1,8 +1,5 @@
 //@ expect: ast
 //@ ast-filter: test
-//@ std: c++23
-// Pinned to C++23: at C++26 the reference e is constant-initialized (P2686R5,
-// [expr.const.init]/2) and names of it are non_odr_use_constant; clang 22 lacks that.
 // [dcl.struct.bind]/5 (C++26 /7): a binding to a bit-field member is a
 // bit-field lvalue. Binding a const reference to it ([dcl.init.ref]/5.3)
 // copies the value into a temporary, as for the member itself.

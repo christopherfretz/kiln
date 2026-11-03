@@ -1,9 +1,6 @@
 //@ expect: ast
 //@ ast-filter: test
-//@ std: c++23
 //@ requires: clang>=22
-// Pinned to C++23: at C++26 the reference e is constant-initialized (P2686R5,
-// [expr.const.init]/2) and names of it are non_odr_use_constant; clang 22 lacks that.
 // [dcl.struct.bind]/3 (C++26 [dcl.struct.bind]/6): binding an array. The
 // unnamed holding variable `e` (DecompositionDecl) copies the array (an
 // ArrayInitLoopExpr) for `auto`, or refers to it for the reference forms;

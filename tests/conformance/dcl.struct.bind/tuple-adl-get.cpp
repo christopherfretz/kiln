@@ -1,9 +1,6 @@
 //@ expect: ast
 //@ ast-filter: test
-//@ std: c++23
 //@ requires: clang>=22
-// Pinned to C++23: at C++26 the reference e is constant-initialized (P2686R5,
-// [expr.const.init]/2) and names of it are non_odr_use_constant; clang 22 lacks that.
 // [dcl.struct.bind]/4 (C++26 /7): without a member get template, the
 // initializer is `get<i>(xe)` with get found only by argument-dependent
 // lookup ([basic.lookup.argdep]); the call is marked `adl`.

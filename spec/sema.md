@@ -3114,19 +3114,24 @@ diagnostics and IR.
   representable at namespace scope), nor is a pointer escaping its
   function (`return &k;`). The rule is the Oven's pointer freeze
   (spec/oven.md "Freezing"): the variable being initialized and the
-  referent's variable are both locals of the same function. Usability is
+  referent's variable are both locals of the same function, and the
+  variable being initialized is declared `constexpr`. Usability is
   then scoped ([expr.const]/8-9): a variable whose frozen value designates
   an automatic object (`kiln_oven::automatic_referent`, cached per
   variable in `Sema::auto_referent`) is usable in constant expressions
   only where `enclosing_function(ctx)` is that object's function
   (`Sema::representable_here`), so in a lambda body naming such a
-  reference or pointer is an odr-use and it is captured. A
-  non-`constexpr` reference to a local is constant-initialized by the same
-  rule ([expr.const.init]/2), so it too is usable in constant expressions
-  and its names are `non_odr_use_constant`; neither clang 22 nor GCC 16
-  implements this (clang 22 only the structured-binding part), so tests of
-  it are `skip(clang)` and the clang-golden AST tests whose `e` is a
-  reference to a local are pinned to `-std=c++23`. A value read through
+  reference or pointer is an odr-use and it is captured. Deliberate
+  narrowing (partial: constexpr declarations only): by
+  [expr.const.init]/2 a non-`constexpr` `auto& e = local;` or `auto* p =
+  &local;` would be constant-initialized too, its reference usable in
+  constant expressions and its names `non_odr_use_constant`; kiln does not
+  do that yet, so it stays exactly as clang 22 (not constant-initialized,
+  odr-used, captured; the AST tests `dcl.struct.bind/{array,bitfield,
+  tuple-adl-get}.cpp` run at the default std against clang). That case
+  waits for an oracle: neither clang 22 nor GCC 16 implements P2686's
+  automatic references (clang 22 only the structured-binding part), so the
+  tests of the constexpr cases are `skip(clang)`. A value read through
   such a reference still needs a constant referent ([expr.const]/10:
   `constexpr int& r = i; static_assert(r == 3);` reads non-const `i`).
   Codegen does not fold an initializer or load whose value designates an
@@ -3969,7 +3974,8 @@ for them.
     destructor, or is initialized by a non-trivial constructor call that
     is not a constant initialization (a value referring to an automatic
     object, constant only by P2686R5, counts as not constant, as in
-    clang 22: WP-467, `stmt.dcl/unused-variable-ptr-to-automatic.cpp`),
+    clang 22; a guard for when the §4.9 constexpr-only narrowing is
+    lifted: WP-467, `stmt.dcl/unused-variable-ptr-to-automatic.cpp`),
     or by a type-dependent initializer. A reference lifetime-extending a
     temporary is judged by the temporary's type.
   - A variable of dependent type is diagnosed as its instantiation is

@@ -409,8 +409,9 @@ the evaluator's flattened type table.
   At C++26 (P2686R5 [expr.const.init]/2, WP-467) the pointer is frozen as
   `PtrBase::Decl(local)` instead when it is constexpr-referenceable from
   the variable being initialized (`Oven::referenceable_from_object`:
-  `run.object` is a non-static local of the same function as the
-  referent's variable; a `static` one is not a local). Globals are
+  `run.object` is a non-static local declared `constexpr`, of the same
+  function as the referent's variable; a `static` one is not a local, and
+  a non-`constexpr` one is deliberately excluded, spec/sema.md §4.9). Globals are
   resolved once per Oven, so the check is made at the freeze, against
   `run.object`, not at resolve time. `automatic_referent(ast, value)`
   finds such a pointer anywhere in a frozen value (scalars, relocations,
