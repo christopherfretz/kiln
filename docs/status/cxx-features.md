@@ -121,7 +121,7 @@ not check it: its first header cell is not `Paper`.
 | WP-482 | M6-13: `substitute`, `can_substitute`, template queries | todo | | |
 | WP-483 | M6-14: validation and perf infrastructure (GCC differential, `bench/reflect`, report fields) | todo | | |
 | WP-484 | M6-15: libstdc++ `<meta>` and the feature macros | todo | | |
-| WP-485 | M6-16: reflection mangling and codegen of entities templated on `info` | todo | | |
+| WP-485 | M6-16: reflection mangling and codegen of entities templated on `info` | done | `conformance/expr.reflect/reflection-mangle-run.cpp`<br>`conformance/expr.reflect/reflection-mangle-neg.cpp`<br>`kiln_codegen/tests/reflection_mangle.rs`<br>`bench/frontend/reflection-mangle.cpp` | Placeholder form `L u6__info <id> E` (spec/reflection.md §8.3), the info type `u6__info` a substitution candidate; functions, variable templates and class templates (statics, vtables, RTTI) on `info` arguments emit with **internal linkage, not link-compatible with GCC/clang**: the same `f<^^int>` in two TUs is two entities. A `constexpr` local initialized by a reflection query in an emitted body keeps sema's value. → WP-102: GCC 16.1's `Dm` encoding and normal linkage. |
 
 ## DR-level papers
 
