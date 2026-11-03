@@ -2776,6 +2776,24 @@ value, distinct per expression) is a constant `void *`.
   (spec/sema.md). Tests: `tests/conformance/stmt.goto/computed-goto-
   constexpr{,-19}.cpp`.
 
+### Pseudo-object expressions — Landed (WP-456)
+A `PseudoObjectExpr` (ast.md §5.3; today only the synthesized three-way
+comparison of a defaulted `operator<=>`, spec/sema-class.md §4.12) is
+compiled from its semantic expressions (`compile.rs` `bind_pseudo` /
+`unbind_pseudo`): those before the result are compiled in order, an
+`OpaqueValueExpr` binding its source once in the compiler's opaque map
+(an lvalue for a glvalue source, else a register), any other compiled
+for effect; the result is then compiled as an rvalue, lvalue,
+initialization or effect, as the context asks, and the bindings are
+dropped. Each operand is therefore evaluated exactly once, and the
+bytecode is the same as for a hand-written `a == b ? ... : a < b ? ...`
+over two locals: the evaluation fast path allocates nothing new. The
+syntactic form `a <=> b` is never compiled; it is the location of notes
+(`expr_loc`). Tests:
+`tests/conformance/class.spaceship/synth-three-way.cpp`
+(`static_assert`s over strong, weak and partial categories, a base, an
+array member, and a call counter that checks the single evaluation).
+
 ### Reflection runtime (M6; WP-267 spike behind `-freflection`)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's
   `ReflectionTable` (spec/ast.md §10). It is an 8-byte scalar of
