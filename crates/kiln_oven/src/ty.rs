@@ -719,13 +719,24 @@ impl Types {
         true
     }
 
-    /// Whether class `d` has no definition or is still being defined.
+    /// Whether class `d` has no definition or is still being defined
+    /// (`kiln_abi::ensure_layout` refuses it).
     fn incomplete(ast: &Ast, d: DeclId) -> bool {
         ast.definition(d).is_none_or(|def| {
             ast.decls
                 .record(def)
-                .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::BEING_DEFINED))
+                .is_none_or(|r| !r.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE))
         })
+    }
+
+    /// An `Opaque` slot for incomplete class type `c` (`slot` when one
+    /// is reserved), kept provisional until the class completes.
+    /// `first` is the class's first declaration, the slot's key.
+    fn provisional_slot(&mut self, c: QualType, first: DeclId, slot: Option<OTy>) -> OTy {
+        let t = slot.unwrap_or_else(|| self.simple(c, 0, 1, TyKind::Opaque));
+        self.provisional.insert(first, t);
+        self.provisional_slots.insert(t);
+        t
     }
 
     fn record(&mut self, bridge: &mut dyn SemaBridge, c: QualType, d: DeclId) -> OTy {
@@ -743,10 +754,7 @@ impl Types {
     ) -> OTy {
         let ast = bridge.ast();
         if Self::incomplete(ast, d) {
-            let t = self.simple(c, 0, 1, TyKind::Opaque);
-            self.provisional.insert(ast.first(d), t);
-            self.provisional_slots.insert(t);
-            return t;
+            return self.provisional_slot(c, ast.first(d), slot);
         }
         let Some(def) = ast.definition(d) else {
             return self.simple(c, 0, 1, TyKind::Opaque);
@@ -790,7 +798,11 @@ impl Types {
                 (m, ast.decls.get(m).ty().unwrap_or(QualType::INT), w, mutable)
             })
             .collect();
-        let layout = bridge.ensure_layout(def);
+        let first = ast.first(d);
+        let Some(layout) = bridge.ensure_layout(def) else {
+            // Unreachable: `incomplete` is `ensure_layout`'s rule.
+            return self.provisional_slot(c, first, slot);
+        };
         let (size, align) = (layout.size, layout.align);
         let dsize = layout.data_size;
         let offs: Vec<u64> = layout.fields.to_vec();

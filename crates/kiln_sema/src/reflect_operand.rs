@@ -149,7 +149,7 @@ impl Sema<'_, '_> {
     /// alias kept). `None` for anything else (a constructor, a template
     /// parameter, a declaration with no entity).
     pub(crate) fn reflectee_of_decl(&mut self, d: DeclId) -> Option<Reflectee> {
-        let first = self.ast.first(d);
+        let first = self.entity_decl(d);
         Some(match self.kind_of(d) {
             DeclKind::Namespace | DeclKind::TranslationUnit => Reflectee::Namespace(first),
             DeclKind::NamespaceAlias => Reflectee::NamespaceAlias(first),
@@ -185,7 +185,7 @@ impl Sema<'_, '_> {
     /// ([`Sema::note_consteval_only`]).
     pub(crate) fn make_reflect_expr(&mut self, r: Reflectee, loc: Loc, end: Loc) -> ExprId {
         let info = self.meta_info_type();
-        let e = self.builder().reflect_expr(r, info, loc, end);
+        let e = self.build_reflect_expr(r, info, loc, end);
         self.note_consteval_only(e);
         e
     }

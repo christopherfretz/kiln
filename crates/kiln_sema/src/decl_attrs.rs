@@ -28,6 +28,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::ASSUME => "assume",
         AttrKind::CARRIES_DEPENDENCY => "carries_dependency",
         AttrKind::INDETERMINATE => "indeterminate",
+        AttrKind::UNINITIALIZED => "uninitialized",
         AttrKind::DEPRECATED => "deprecated",
         AttrKind::FALLTHROUGH => "fallthrough",
         AttrKind::LIKELY => "likely",
@@ -395,6 +396,7 @@ impl Sema<'_, '_> {
                 "minsize",
                 "functions and Objective-C methods",
             ),
+            AttrKind::UNINITIALIZED => self.check_uninitialized_subject(d, kind, node),
             // clang `TrivialABI`: `SubjectList<[CXXRecord]>` (ignored
             // with a warning).
             AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {
@@ -408,6 +410,22 @@ impl Sema<'_, '_> {
             ),
             _ => true,
         }
+    }
+
+    /// `[[clang::uninitialized]]` (clang `UninitializedAttr`,
+    /// `SubjectList<[LocalVar]>`): only on a variable with automatic
+    /// storage; elsewhere ignored with a warning.
+    fn check_uninitialized_subject(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
+        if kind == DeclKind::Var && self.has_local_storage(d) {
+            return true;
+        }
+        let shown = self.attr_shown(&node, "uninitialized");
+        let msg = self
+            .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
+            .arg(format!("'{shown}'"))
+            .arg("local variables".to_owned());
+        self.emit(msg);
+        false
     }
 
     /// `optnone` against `always_inline` and `minsize` on function `d`

@@ -298,7 +298,7 @@ impl Sema<'_, '_> {
             }
         };
         let id = oven.dms_intern(Dms { ty, name, alignment, bit_width, nua: raw.nua });
-        Ok(self.ast.reflections.intern(Reflectee::DataMemberSpec(id)))
+        Ok(self.intern_reflection(Reflectee::DataMemberSpec(id), loc)?)
     }
 
     /// `define_aggregate(class_type, mdescrs)`

@@ -138,13 +138,13 @@ impl Sema<'_, '_> {
             .collect();
         // Each member keyed as `^^` keys it (a nested type or alias is a
         // type, a member template a template; spec/reflection-repr.md §1).
-        Ok(members
+        members
             .into_iter()
             .map(|m| {
-                let r = self.reflectee_of_decl(m).unwrap_or(Reflectee::Decl(self.ast.first(m)));
-                self.ast.reflections.intern(r)
+                let r = self.reflectee_of_decl(m).unwrap_or(Reflectee::Decl(self.entity_decl(m)));
+                self.intern_reflection(r, ctx.loc).map_err(MetaError::from)
             })
-            .collect())
+            .collect()
     }
 
     /// `__kiln_define_member(cls, ty, name)` (spec/reflection.md §3.4):
@@ -188,7 +188,7 @@ impl Sema<'_, '_> {
         // `^^S` names the first declaration of `S`; the class being
         // defined is its definition: compare entities, not decls.
         let building = self.classes.last().map(|c| c.record);
-        let Some(r) = building.filter(|&b| self.ast.first(b) == self.ast.first(r)) else {
+        let Some(r) = building.filter(|&b| self.same_entity(b, r)) else {
             let cname = self.decl_name(r);
             let mut notes = vec![Note::new(
                 loc,
@@ -215,7 +215,7 @@ impl Sema<'_, '_> {
         if self.ast.types.is_function(t)
             || self.ast.types.is_reference(t)
             || !self.is_complete(t)
-            || self.ast.types.as_record(t) == Some(r)
+            || self.ast.types.as_record(t).is_some_and(|d| self.same_entity(d, r))
         {
             return fail(
                 loc,
@@ -254,6 +254,6 @@ impl Sema<'_, '_> {
         let d = Dms { ty: t, name: Some(sym), alignment: None, bit_width: None, nua: false };
         let point = self.inst.eval_loc.unwrap_or(loc);
         let f = self.inject_field(r, &d, loc, point);
-        Ok(self.ast.reflections.intern(Reflectee::Decl(f)))
+        Ok(self.intern_reflection(Reflectee::Decl(f), loc)?)
     }
 }

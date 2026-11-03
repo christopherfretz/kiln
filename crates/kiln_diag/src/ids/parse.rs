@@ -79,6 +79,7 @@ parse_expected_type = Error (0) "expected a type";
 parse_expected_unqualified_id = Error (0) "expected unqualified-id";
 parse_expected_while = Error (0) "expected 'while' in do/while loop";
 parse_explicit_instantiation_with_definition = Error (0) "explicit template instantiation cannot have a definition; if this definition is meant to be an explicit specialization, add '<>' after the 'template' keyword";
+parse_explicit_object_pre_cxx23 = Error (0) "explicit object parameters are incompatible with C++ standards before C++2b";
 parse_ext_alias_in_init_statement = ExtWarn [Cxx23Extensions] (0) "alias declaration in this context is a C++23 extension";
 parse_ext_annotations = ExtWarn [Cxx26Extensions] (0) "annotations are a C++26 extension";
 parse_ext_binding_pack = ExtWarn [Cxx26Extensions] (0) "structured binding packs are a C++2c extension";

@@ -197,6 +197,7 @@ impl Substituter<'_, '_, '_> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
         let ty = self.named_decl_ty(d, t, loc)?;
+        self.var_function_type(ty, loc, ctx)?;
         let ds = self.pattern_declspec(d, ty);
         let mut dr = self.pattern_declarator(d, ctx)?;
         // The initialization's form as written (`T v{...}` is
@@ -338,6 +339,7 @@ impl Substituter<'_, '_, '_> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
         let ty = self.named_decl_ty(d, t, loc)?;
+        self.var_function_type(ty, loc, DeclaratorContext::Member)?;
         let mut ds = self.pattern_declspec(d, ty);
         ds.inline = None;
         let dr = self.pattern_declarator(d, DeclaratorContext::Member)?;
@@ -352,6 +354,28 @@ impl Substituter<'_, '_, '_> {
             self.sema.inst.deferred_inits.insert(v);
         }
         Ok(v)
+    }
+
+    /// [dcl.meaning.general]/5 ([temp.inst]/17): a variable or static data
+    /// member whose type substitutes to a function type is not declared
+    /// (clang `VisitVarDecl`'s `err_variable_instantiates_to_function`, at
+    /// its name).
+    fn var_function_type(
+        &mut self,
+        ty: QualType,
+        loc: Loc,
+        ctx: DeclaratorContext,
+    ) -> SubstResult<()> {
+        if !self.sema.ast.types.is_function(ty) {
+            return Ok(());
+        }
+        let m = self
+            .sema
+            .diag(kiln_diag::DiagId::sema_var_instantiates_to_function, loc)
+            .arg(u8::from(ctx == DeclaratorContext::Member))
+            .arg(self.sema.ty_arg(ty));
+        self.sema.emit(m);
+        Err(SubstFail)
     }
 
     /// Initializes `v` as pattern variable `d` is.
@@ -1156,8 +1180,18 @@ impl Substituter<'_, '_, '_> {
         // is still declared, invalid, so lookup finds it and its uses are
         // silent; the specialization is invalid ([temp.inst]/3, §4.3).
         let ty = self.named_decl_ty(d, t, loc);
-        let failed = ty.is_err();
-        let ty = ty.unwrap_or(QualType::ERROR);
+        // clang `VisitFieldDecl`: a field whose type substitutes to a
+        // function type is declared invalid ([dcl.meaning.general]/5).
+        let to_function = ty.is_ok_and(|t| self.sema.ast.types.is_function(t));
+        if let (true, Ok(t)) = (to_function, ty) {
+            let m = self
+                .sema
+                .diag(kiln_diag::DiagId::sema_field_instantiates_to_function, loc)
+                .arg(self.sema.ty_arg(t));
+            self.sema.emit(m);
+        }
+        let failed = ty.is_err() || to_function;
+        let ty = if to_function { QualType::ERROR } else { ty.unwrap_or(QualType::ERROR) };
         let ds = self.pattern_declspec(d, ty);
         let mut dr = self.pattern_declarator(d, DeclaratorContext::Member)?;
         if failed {

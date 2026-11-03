@@ -39,7 +39,7 @@ impl SemaBridge for Nesting<'_> {
         }
         self.inner.ensure_body(f, oven)
     }
-    fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout {
+    fn ensure_layout(&mut self, record: DeclId) -> Option<&RecordLayout> {
         self.inner.ensure_layout(record)
     }
     fn final_overrider(

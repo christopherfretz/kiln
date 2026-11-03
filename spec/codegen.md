@@ -2906,15 +2906,10 @@ guarantees it a constant initializer and a trivial destructor
 - Tests: `tests/codegen/thread_local.cpp`,
   `tests/codegen/module_thread_local.cpp` (oracle 22),
   `tests/conformance/basic.stc.thread/module-tls-run.cpp`.
-- **Remaining:** clang emits the initializer (and `_ZTH`/`_ZTW`) of an
-  implicitly instantiated variable template specialization or template
-  static data member after the TU's functions (sema
-  `PerformPendingInstantiations` adds the instantiated definition at the
-  end of the TU), where kiln emits it at first use (`get_gvar` →
-  `instantiated_var_def`); fixing it needs sema to defer the
-  instantiation (`templ/pending.rs`), so `thread_local.cpp` has no
-  thread-local variable template (WP-189 triage: everything else in
-  `tls.rs` matches clang 19).
+- The initializer, `_ZTH` and `_ZTW` of an implicitly instantiated
+  thread-local variable template specialization or template static data
+  member follow the TU's functions, as in clang (WP-466, §7ab;
+  `tests/codegen/var_template_thread_local.cpp`, both oracles).
 
 ## 7q. Landed (WP-187): `-Wpsabi` and `bool`-vector conditions
 - **Calls: `-Wpsabi`** (`psabi.rs`, clang
@@ -2964,16 +2959,14 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   %v, i8 0, i64 N, i1 <volatile>)`. Both carry `!annotation
   !{!"auto-init"}`: the IR of clang's `-ftrivial-auto-var-init=zero`,
   which `tests/codegen/erroneous_init.cpp` compares exactly.
-- **Not filled:** a `[[indeterminate]]` variable (the attribute on any
-  of its declarations) keeps its plain `alloca`; a reference; an
-  object of size 0; a variable with an initializer, including the
-  implicit call of a non-trivial default constructor (the constructor
-  initializes it; clang's `=zero` pre-fills such a class, kiln does not,
-  so a scalar member the constructor leaves alone is not zeroed:
-  follow-up); a variable length array (clang zero-fills it); a variable
-  whose declaration a jump bypasses ([stmt.dcl]/2 makes that ill-formed
-  for a variable with initialization, but a plain `int x;` may be
-  bypassed and is then unwritten, as in clang).
+- **Not filled:** a `[[indeterminate]]` or `[[clang::uninitialized]]`
+  variable (the attribute on any of its declarations) keeps its plain
+  `alloca`; an object of size 0; a variable whose declaration a jump
+  bypasses ([stmt.dcl]/2 makes that ill-formed for a variable with
+  initialization, but a plain `int x;` may be bypassed and is then
+  unwritten, as in clang). Variables with an initializer that may leave
+  bytes unwritten (a non-trivial default constructor, a non-constant
+  aggregate initializer) and VLAs are pre-filled since WP-452 (§7y).
 - **Size limit: 4096 bytes** (`AUTO_VAR_INIT_MAX_SIZE`, the driver's
   default for `-ftrivial-auto-var-init-max-size`). A larger variable is
   not written (its value is still erroneous) and gets the kiln-only
@@ -2987,10 +2980,11 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
 - **Standards.** The fill is on by default under `-std=c++26` and later
   only; before C++26 the read is undefined and nothing changes. The
   driver flags (spec/driver.md): `-ftrivial-auto-var-init=zero` turns it
-  on under any standard (clang's meaning), `=uninitialized` off; `=pattern`
-  is rejected as an unsupported argument. `CodegenOptions::auto_var_init`
-  (`AutoVarInit::{Uninitialized, Zero}`, default `Uninitialized` for API
-  users) and `auto_var_init_max_size`. The clang oracles have no
+  on under any standard (clang's meaning), `=uninitialized` off, and
+  `=pattern` (§7y) fills with clang's pattern instead of zero.
+  `CodegenOptions::auto_var_init` (`AutoVarInit::{Uninitialized, Zero,
+  Pattern}`, default `Uninitialized` for API users) and
+  `auto_var_init_max_size`. The clang oracles have no
   erroneous values, so the IR-diff corpus (`ir_vs_clang.rs`
   `pinned_flags`) and the conformance `expect: ir` tests at C++26 pin
   `-ftrivial-auto-var-init=uninitialized`.
@@ -3002,9 +2996,14 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   `tests/conformance/basic.indet/` (`run-erroneous-zero.cpp`,
   `run-byte-read.cpp`, `run-threshold.cpp`, `indeterminate-compiles.cpp`,
   `ir-cxx23-unchanged.cpp`).
-- **Remaining:** `=pattern`; pre-filling classes with a non-trivial
-  default constructor; VLAs; the run-time EB diagnosis P2795 recommends
-  is today's `-Wuninitialized` (no sanitizer).
+- **Remaining:** the run-time EB diagnosis P2795 recommends is today's
+  `-Wuninitialized` (no sanitizer). A variable whose declaration a
+  `goto` (or `switch` case label) jumps over stays unwritten, as in
+  clang: the fill is at the declaration, which control never reaches.
+  Reading it is still erroneous behaviour, but the value is whatever the
+  stack held; covering it would mean filling at the jump or at function
+  entry, which clang does not do either (not planned).
+  `=pattern`, constructor and aggregate pre-fills and VLAs: §7y.
 
 ## 7s. Landed (WP-450): `bool` ext-vector constants
 - A constant `bool` ext vector (the Oven's packed `BoolVec`,
@@ -3186,6 +3185,36 @@ No lowering changed; the new forms reach codegen as existing AST.
     `fold.rs`).
   - An unreferenced namespace-scope `constexpr` decomposition's `e`
     (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
+
+## 7aa. Landed (WP-459): explicit-object conversion functions, AArch64 target features
+- A conversion function with an explicit object parameter
+  ([class.conv.fct]/1, P0847) is lowered as an explicit-object member
+  function (`is_explicit_object_method` covers `CXXConversion`): no
+  `this`, the object an ordinary first parameter (a reference, or a value
+  for `this H`), mangled with `H` (`_ZNH1ScviERKS_`), named like a free
+  function (`decl_lvalue`), and called with the object as its first
+  argument (no `this` adjustment, no temporary for an lvalue object). A
+  `this auto&&` / `this Self&&` conversion template is instantiated per
+  object type. Test `tests/codegen/explicit_object_conversion.cpp`.
+- AArch64 `"target-features"` (`module.rs` `aarch64_features`): the default
+  entries `+fp-armv8,+neon,+outline-atomics` (or `-outline-atomics`),
+  `+v8a`, `-fmv` are overridden by `CodegenOptions::target_features` (the
+  driver's `-march=`/`-mcpu=`/`-target-feature` result, spec/driver.md
+  "Target features"; last setting wins) and printed as clang does, the
+  sorted `+` features, then the sorted `-` ones
+  (`+fp-armv8,+fullfp16,+neon,+outline-atomics,+sve,+v8a,-fmv` for
+  `-march=armv8-a+sve`).
+- With `CodegenOptions::sve` (AArch64 only), every function definition
+  and the global-initialization functions (`__cxx_global_var_init`,
+  `_GLOBAL__sub_I_*`, `__tls_init`: `init_fn_attrs`) carry
+  `vscale_range(1,16)` (clang's `CodeGenFunction` for a target with SVE);
+  the TLS wrapper and `__clang_call_terminate`, built outside it, do not.
+  Test `ext.arm.sve/ir-target-features-sve.cpp`.
+- Not yet: SVE constants (a scalar splat into a scalable vector, the zero
+  vector of `-v` or of a vector `?:` condition) are built as fixed vectors
+  and fail IR lowering (`expr.rs` integer/float constants, `func.rs`
+  `splat`); SVE allocas use alignment 1 (clang 16, `svbool_t` 2), from
+  `kiln_abi`'s target type table.
 ## 7v. Landed (WP-456): `PseudoObjectExpr`
 
 The synthesized three-way comparison of a defaulted `operator<=>`
@@ -3275,6 +3304,121 @@ categories, compared with clang 22 and clang 19 on both targets).
   definition) and the dead D0 block clang appends to a labelled virtual
   destructor; local classes and instantiations in the incomplete-class
   walk.
+
+## 7y. Landed (WP-452): `=pattern`, pre-fills and VLAs (`auto_init.rs`)
+
+The rest of clang's `EmitAutoVarInit` (`CGDecl.cpp`) on top of §7r, so
+`-ftrivial-auto-var-init=zero|pattern` and kiln's C++26 default give
+clang's IR for every automatic variable. The fill mode is
+`Cg::auto_init_mode`: none for `=uninitialized`, a `constexpr`, static,
+thread-local or non-local variable, or one marked `[[indeterminate]]`
+or `[[clang::uninitialized]]`.
+
+- **Pre-fill** (`Cg::auto_init_prefill`, from `expr.rs`
+  `emit_var_init`). A variable whose initializer is not a constant is
+  filled first and then initialized, when its type is not a clang
+  *scalar* (builtin, enumeration, pointer, member pointer, `_Complex`,
+  `_BitInt`), or when it is but the initializer names the variable
+  itself (`int x = x + 1;`, clang `isAccessedBy`). So a class with a
+  non-trivial default constructor, an array of them, an aggregate or
+  array initialized from a call, a structured binding's object, a
+  reference (`int &r = f();`, the slot only), an `_Atomic` and a vector
+  are filled; `int i = g();` is not. Clang's *scalar* and kiln's
+  single-store type differ: a vector is not scalar but is one store.
+- **Constant initializer.** One that lowers to a constant is stored as
+  it was (§3); under a fill mode a non-null constant first has its
+  `undef` parts replaced by the fill value and its padding made
+  explicit as zero bytes (clang `replaceUndef`, then `constWithPadding`
+  with `IsPattern::No`, even under `=pattern`), which changes the
+  `__const` global and the store shape. A null constant is unchanged.
+- **Store shape** (clang `emitStoresForConstant`, `Cg::stores_for_constant`).
+  An integer, pointer, floating or vector type is one store. Otherwise:
+  an all-zero value, or one larger than 32 bytes with at most 6
+  non-zero stores, is `llvm.memset` 0 plus those stores; one larger
+  than 32 bytes whose bytes are all one value (clang `isBytewiseValue`:
+  `half`, `float` and `double` only among floating types, `inttoptr`
+  of an integer looks through to it) is `llvm.memset` of that byte; anything
+  else is an `llvm.memcpy` from `@__const.<mangled function>.<variable>`
+  (`private unnamed_addr constant`) at the variable's alignment. Every
+  store and call carries `!annotation !{!"auto-init"}`.
+- **`=pattern`** (clang `initializationPatternFor`). An integer (any
+  width, `bool` and `_BitInt` included) is all `0xAA` bytes; a pointer
+  (and `nullptr_t`) is `inttoptr (i64 0xAAAAAAAAAAAAAAAA to ptr)`; a
+  floating value is all-ones bits (a quiet NaN); a vector splats its
+  element's pattern; arrays and classes are built element by element.
+  Padding is explicit `[N x i8] c"\AA..."` in a literal struct
+  (`constWithPadding`, `IsPattern::Yes`), packed when the members
+  require it; an array is rebuilt only when its element type changed.
+  So `int big[20]` is `memset i8 -86`, `float f[40]` is `memset i8 -1`,
+  and a padded struct is a `memcpy`.
+- **VLAs** (`Cg::auto_var_init_vla`, after `emit_vla_var`'s alloca).
+  `-ftrivial-auto-var-init-max-size` does not apply. `=zero` is one
+  `llvm.memset` of the run-time size (`mul nuw i64 %count, <element
+  size>`, the `mul` omitted for a 1-byte element) at the alloca's
+  alignment. `=pattern` is clang's loop: `icmp eq i64 %count, 0`
+  branches past it; a setup block computes the size and the end
+  pointer (`getelementptr inbounds i8`); the loop body's `phi` walks the
+  elements, `memcpy`ing one element's pattern from a `@__const` global
+  (element alignment) to each, and advances by the element size.
+- **Size limit.** The §7r limit and remark apply to every fill except
+  a VLA's. A limit of 0 is none.
+- **`[[clang::uninitialized]]`** (`AttrKind::UNINITIALIZED`, GNU
+  `__attribute__((uninitialized))` too): on a local variable it turns
+  the fill off, as `[[indeterminate]]` does (unlike that one it has no
+  standard meaning, so the value is indeterminate only as far as kiln
+  chooses; the constant evaluator ignores it). Elsewhere it is ignored
+  with clang's warning `'clang::uninitialized' attribute only applies to
+  local variables [-Wignored-attributes]`.
+- **Not modelled:** clang's per-declaration cache of `__const` globals
+  (kiln makes one per fill, which LLVM merges; clang's names match since
+  each fill has its own variable); the pattern of an SVE scalable
+  vector, which kiln_llvm cannot spell as a constant, so it is filled
+  with zero (clang: a splat); in the memset-plus-stores budget a vector
+  constant counts as one store, where clang walks a
+  `ConstantDataSequential`'s elements (no case found that differs).
+- Tests: `tests/codegen/auto_var_init_prefill.cpp` (`=zero`),
+  `auto_var_init_pattern.cpp`, `auto_var_init_vector.cpp` (`=pattern`,
+  `min-oracle: 22`: clang 19 spells the constants without `splat`),
+  `auto_var_init_max_size.cpp`; `crates/kiln_driver/tests/erroneous_init.rs`;
+  `tests/conformance/basic.indet/` `run-erroneous-prefill.cpp` (the C++26
+  default), `run-pattern.cpp` (compared with clang),
+  `uninitialized-attr.cpp`.
+## 7ab. Landed (WP-466): linkage, 3-lane stores, file-scope compound literals, end-of-TU variables
+- **`const volatile` linkage** ([basic.link]/3.2; spec/sema.md): a
+  namespace-scope `const volatile` variable that is not `static` has
+  external linkage (`kiln_abi::mangle::internal_by_storage` tests
+  `const` and not `volatile`, for an array through its element type), so
+  it is a mangled `dso_local` definition emitted even when unused
+  (`tests/codegen/const_volatile_linkage.cpp`).
+- **3-lane ext-vector stores** (`func.rs` `vec_store`): a `<3 x T>` value
+  is widened to its `<4 x T>` storage by `shufflevector <3 x T> %v, <3 x
+  T> undef, <4 x i32> <0, 1, 2, 3>` at compat 22 (clang 22), by `... <3 x
+  T> poison, <0, 1, 2, poison>` at compat 19 (clang 19). Loads are the
+  same at both. The oracle-22 `Allow::Structure` rows of
+  `builtins_shufflevector`, `ext_vector_element`, `vector_abi` and
+  `vector_const` are gone (`tests/codegen/ext_vector3_store.cpp`).
+- **File-scope array compound literals** (spec/sema.md §5.8; clang
+  `tryEmitGlobalCompoundLiteral`): the literal's implicit static `Var`
+  (`DeclTable::compound_literal_of`) is emitted by `get_gvar` at its
+  first reference, its initializer constant first, as `@.compoundliteral`
+  (uniqued `.compoundliteral.N` on the module's one name counter;
+  `var_symbol`), `internal global`, or `internal constant` for a const
+  element type. `emit_lvalue` names the global. Alignment: the variable
+  rule at compat 22; the type alignment at compat 19, without x86-64's
+  16-byte alignment of a large array (clang 19 `getTypeAlignInChars`).
+  Clang 19 and 22 are otherwise identical
+  (`tests/codegen/file_scope_compound_literal.cpp`, both oracles).
+- **End-of-TU variable definitions** (WP-440; spec/sema-templates.md
+  §4.6 "Points of instantiation"): an implicitly instantiated variable
+  template specialization is recorded in `end_of_tu_defs` like a
+  static data member, after the instantiations its initializer requires
+  (post-order). Its global, its
+  `__cxx_global_var_init.N` and its `@llvm.global_ctors` entry follow
+  everything else in the TU, in clang's order, at both compat levels
+  (`tests/codegen/var_template_init_order.cpp`,
+  `var_template_thread_local.cpp`). `instantiated_var_def` treats any
+  variable template specialization as its own definition (one without
+  an initializer is default-initialized).
 
 ## Landed sections after WP-488: `spec/landed/codegen/`
 
