@@ -6627,7 +6627,22 @@ not supported yet`.
     (`sema_expansion_size_not_constant` when an evaluation fails or the
     cap is reached); the fast path has no cap. A class iterator whose `!=`
     disagrees with its `-` gets the comparison's count
-    (`tests/conformance/stmt.expand/iterating-count.cpp`).
+    (`tests/conformance/stmt.expand/iterating-count.cpp`). *One pass*
+    (WP-467, `expansion_count_elements`): the incremental count and the
+    elements are built together. For i ≥ 1 element i's `__iter` is built
+    first and the count tests `__iter != __end` (i = 0 tests `__begin !=
+    __end`, so an empty range never builds `__begin + 0`), so `__begin + i`
+    is resolved and evaluated once per element, not once for the count and
+    again for the element; the `__iter` built for i = N is dropped. The
+    left operand of `!=` is then a `const` lvalue, as the wording's `i !=
+    end` names a variable, rather than the prvalue `__begin + i`. The pass
+    runs with its diagnostics captured; on any error (or a non-constant
+    test) it is discarded and the separate count and element loop above
+    run and diagnose, so diagnostics are unchanged. Per element it still
+    resolves `+`, `!=` and unary `*` and evaluates `__iter`, the test and
+    the element (docs/status/perf.md "WP-467";
+    `tests/stress/expansion-iterating-user-iterator.cpp` budgets the
+    evaluations and steps).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
     (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
     for-range-declaration the declaration is `static constexpr`.

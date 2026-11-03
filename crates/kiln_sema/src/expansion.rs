@@ -262,33 +262,108 @@ impl Sema<'_, '_> {
             self.act_on_decl_stmt(&[range], range_loc),
             self.act_on_decl_stmt(&[begin, end], colon),
         ];
-        let n = self.expansion_size(begin, end, colon)?;
-        let pd = QualType::unqual(self.target.ptrdiff_t);
+        let fast = self.expansion_size_difference(begin, end, colon);
+        if fast.is_none() {
+            if let Some(elems) = self.expansion_count_elements(begin, end, colon) {
+                return Some((prelude, elems?));
+            }
+        }
+        let n = match fast {
+            Some(n) => n,
+            None => self.expansion_size(begin, end, colon)?,
+        };
         let mut elems = Vec::new();
         for i in 0..n {
-            let iter = self.expansion_var("__iter", cauto, colon);
-            let b = self.build_decl_ref(begin, colon);
-            let lit = self.builder().int_literal(pd, i, Radix::Decimal, colon);
-            let add = self.act_on_binary(BinaryOp::Add, b, lit, colon);
-            if self.is_err_expr(add)
-                || !self.init_expansion_var(
-                    iter,
-                    add,
-                    colon,
-                    DiagId::sema_for_range_iter_deduction_failure,
-                )
-            {
-                return None;
-            }
+            let iter = self.expansion_iter(begin, i, colon)?;
             let ds = self.act_on_decl_stmt(&[iter], colon);
-            let r = self.build_decl_ref(iter, colon);
-            let deref = self.act_on_unary(UnaryOp::Deref, r, colon);
-            if self.is_err_expr(deref) {
-                return None;
-            }
-            elems.push((Some(ds), deref));
+            elems.push((Some(ds), self.expansion_deref(iter, colon)?));
         }
         Some((prelude, elems))
+    }
+
+    /// Element `i`'s `static constexpr auto __iter = begin + i;`
+    /// ([stmt.expand]/5.2), initialized; `None` after an error.
+    fn expansion_iter(&mut self, begin: DeclId, i: u64, colon: Loc) -> Option<DeclId> {
+        let cauto = {
+            let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
+            self.ast.types.qualify(auto, Quals::CONST)
+        };
+        let pd = QualType::unqual(self.target.ptrdiff_t);
+        let iter = self.expansion_var("__iter", cauto, colon);
+        let b = self.build_decl_ref(begin, colon);
+        let lit = self.builder().int_literal(pd, i, Radix::Decimal, colon);
+        let add = self.act_on_binary(BinaryOp::Add, b, lit, colon);
+        (!self.is_err_expr(add)
+            && self.init_expansion_var(
+                iter,
+                add,
+                colon,
+                DiagId::sema_for_range_iter_deduction_failure,
+            ))
+        .then_some(iter)
+    }
+
+    /// Element expression `*__iter`; `None` after an error.
+    fn expansion_deref(&mut self, iter: DeclId, colon: Loc) -> Option<ExprId> {
+        let r = self.build_decl_ref(iter, colon);
+        let deref = self.act_on_unary(UnaryOp::Deref, r, colon);
+        (!self.is_err_expr(deref)).then_some(deref)
+    }
+
+    /// The count and the elements of an iterating expansion outside the
+    /// `end - begin` fast path, in one pass (spec/sema.md §7.6a, WP-467):
+    /// element `i`'s `__iter` (`begin + i`) is built first and the count
+    /// tests `__iter != end` on it, so `begin + i` is resolved and
+    /// evaluated once per element rather than once for the count and
+    /// once for the element (`begin != end` for `i == 0`, as
+    /// [`Sema::expansion_size`]; the `__iter` built for `i == N` is
+    /// dropped). `None` when anything fails, with nothing diagnosed: the
+    /// separate count and elements then run and diagnose. `Some(None)`
+    /// after the 2^20 element limit is diagnosed.
+    fn expansion_count_elements(
+        &mut self,
+        begin: DeclId,
+        end: DeclId,
+        colon: Loc,
+    ) -> Option<Option<Vec<Element>>> {
+        let (r, stash) = self.capturing(|s| {
+            if !s.expansion_more(begin, end, colon)? {
+                return Some(Some(Vec::new()));
+            }
+            let mut elems = Vec::new();
+            for i in 0..MAX_ITERATING {
+                let iter = s.expansion_iter(begin, i, colon)?;
+                if i > 0 && !s.expansion_more(iter, end, colon)? {
+                    return Some(Some(elems));
+                }
+                let ds = s.act_on_decl_stmt(&[iter], colon);
+                elems.push((Some(ds), s.expansion_deref(iter, colon)?));
+            }
+            Some(None)
+        });
+        if r.is_none() || self.stash_has_error(&stash) {
+            return None;
+        }
+        self.release(stash, Vec::new());
+        if r == Some(None) {
+            self.error(DiagId::sema_expansion_size_not_constant, colon);
+        }
+        r
+    }
+
+    /// Whether `it != end` is true, as a constant expression; `None`
+    /// (nothing diagnosed but what building the expression diagnoses)
+    /// when it is not one.
+    fn expansion_more(&mut self, it: DeclId, end: DeclId, colon: Loc) -> Option<bool> {
+        let it = self.build_decl_ref(it, colon);
+        let e = self.build_decl_ref(end, colon);
+        let ne = self.act_on_binary(BinaryOp::NE, it, e, colon);
+        if self.is_err_expr(ne) {
+            return None;
+        }
+        let c = conv::contextually_convert_to_bool(self, ne).ok()?;
+        let v = self.eval_int(c, EvalContext::new(EvalKind::Other, colon)).ok()?;
+        Some(v != 0)
     }
 
     /// N of an iterating expansion statement ([stmt.expand]/5.2): the
@@ -297,11 +372,10 @@ impl Sema<'_, '_> {
     /// `++` in a consteval lambda; `begin + i` is what each element uses).
     /// A contiguous iterator whose arithmetic is the language's or the
     /// standard library's counts in one evaluation of `end - begin`
-    /// ([`Sema::expansion_size_difference`]).
+    /// ([`Sema::expansion_size_difference`], tried first by the caller);
+    /// this count runs only when the one-pass
+    /// [`Sema::expansion_count_elements`] fails, to diagnose.
     fn expansion_size(&mut self, begin: DeclId, end: DeclId, colon: Loc) -> Option<u64> {
-        if let Some(n) = self.expansion_size_difference(begin, end, colon) {
-            return Some(n);
-        }
         let pd = QualType::unqual(self.target.ptrdiff_t);
         for i in 0..MAX_ITERATING {
             let b = self.build_decl_ref(begin, colon);
