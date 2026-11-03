@@ -5,8 +5,10 @@
 
 use kiln_ast::consts::{PtrBase, Scalar};
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, VarStorage};
-use kiln_ast::expr::{ExprFlags, ExprKind, NonOdrUse, UnaryOp};
-use kiln_ast::types::{Quals, TemplateArg, TypeView};
+use kiln_ast::expr::{
+    CastKind, CharKind, ExprFlags, ExprKind, NonOdrUse, Radix, UnaryOp, ValueCategory,
+};
+use kiln_ast::types::{BuiltinType, Quals, TemplateArg, TypeView};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_oven::{EvalContext, EvalFailure, FailKind, Note};
@@ -396,6 +398,65 @@ impl Sema<'_, '_> {
                 }) && n.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
             }
             _ => false,
+        }
+    }
+
+    /// The expression a non-type template argument value stands for
+    /// when substituted (clang's
+    /// `BuildExpressionFromNonTypeTemplateArgument`): a literal of an
+    /// integral or enumeration value, else [`Self::nttp_value_expr`].
+    /// `None` for values not yet supported.
+    pub(crate) fn nttp_arg_expr(
+        &mut self,
+        ty: QualType,
+        value: ConstValueId,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        let Some(v) = self.const_int(value) else {
+            // Class, pointer and null values (§6.10).
+            return self.nttp_value_expr(ty, value, loc);
+        };
+        let t = &self.ast.types;
+        if let Some(en) = t.as_enum(ty) {
+            let it =
+                self.ast.decls.enumeration(en).and_then(|d| d.int_type).unwrap_or(QualType::INT);
+            let lit = self.nttp_int_literal(it, v, loc);
+            return Some(self.ast.builder().cast(
+                ExprKind::CStyleCastExpr,
+                CastKind::IntegralCast,
+                lit,
+                ty,
+                ValueCategory::PRValue,
+                None,
+                loc,
+                ExprFlags::NONE,
+            ));
+        }
+        let kind = match t.builtin(ty)? {
+            BuiltinType::Bool => {
+                return Some(self.ast.builder().bool_literal(ty, v != 0, loc));
+            }
+            BuiltinType::Char | BuiltinType::SChar | BuiltinType::UChar => Some(CharKind::Ascii),
+            BuiltinType::WChar => Some(CharKind::Wide),
+            BuiltinType::Char8 => Some(CharKind::Utf8),
+            BuiltinType::Char16 => Some(CharKind::Utf16),
+            BuiltinType::Char32 => Some(CharKind::Utf32),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            let u = u32::try_from(v & 0xffff_ffff).unwrap_or(0);
+            return Some(self.ast.builder().char_literal(ty, kind, u, loc));
+        }
+        Some(self.nttp_int_literal(ty, v, loc))
+    }
+
+    /// The integer literal of `v` at type `ty`.
+    pub(crate) fn nttp_int_literal(&mut self, ty: QualType, v: i128, loc: Loc) -> ExprId {
+        if let Ok(u) = u64::try_from(v) {
+            self.ast.builder().int_literal(ty, u, Radix::Decimal, loc)
+        } else {
+            let c = self.int_const(ty, v);
+            self.ast.builder().wide_int_literal(ty, c, Radix::Decimal, loc)
         }
     }
 

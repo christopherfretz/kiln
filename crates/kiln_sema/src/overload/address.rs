@@ -368,7 +368,7 @@ impl Sema<'_, '_> {
     /// [temp.arg.explicit]/4): of its templates, exactly one has every
     /// template argument explicit or defaulted (clang's
     /// `ResolveSingleFunctionTemplateSpecialization`).
-    fn single_template_spec(&mut self, ule: ExprId) -> Option<(DeclId, DeclId)> {
+    pub(crate) fn single_template_spec(&mut self, ule: ExprId) -> Option<(DeclId, DeclId)> {
         let explicit = self.ast.templates.expr_targs.get(ule).copied()?;
         if self
             .ast

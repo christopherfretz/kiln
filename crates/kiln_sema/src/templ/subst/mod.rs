@@ -530,6 +530,17 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                     ArgLookup::Missing => Err(SubstFail),
                 }
             }
+            // `[: r :]<args>` with a dependent `r` (P2996 [temp.names]/1):
+            // the template the substituted operand designates.
+            TemplateName::Splice { expr, .. } => {
+                let e = self.expr(expr)?;
+                self.sema.splice_template_name(e, true).ok_or(SubstFail)
+            }
+            TemplateName::SpliceProfile(p) => {
+                let e = self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?;
+                let e = self.expr(e)?;
+                self.sema.splice_template_name(e, true).ok_or(SubstFail)
+            }
             TemplateName::DependentIdentifier { nns, name } => {
                 let q = self.nns(nns, loc)?;
                 if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(q)

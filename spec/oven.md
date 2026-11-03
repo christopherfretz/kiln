@@ -1847,8 +1847,12 @@ skipped for clang). Every other observable result matches clang
 (`constant-p-trial.cpp`, which is strict-diags under both compilers).
 
 `TrialMode::Transactional` allows every effect and undoes it on rollback.
-It is the general mode for future evaluator trials. No evaluator path uses
-it yet; the unit tests exercise it.
+It is the general mode for evaluator trials. Its user is
+`std::meta::substitute`/`can_substitute` (WP-482): the reflection bridge
+opens one with `Oven::trial_begin` around each uncached substitution and
+closes it with `Oven::trial_end(keep)`, so a failed substitution's nested
+constant evaluations leave no bytes behind
+(`tests/conformance/reflection/substitute-trial-rollback.cpp`).
 
 **Complexity.**
 
