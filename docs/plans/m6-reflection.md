@@ -7,10 +7,16 @@ this file is the rationale and the dependency graph.
 
 ## Decisions taken (2026-11-03)
 
-- **D1 Reference compiler.** GCC 16.1.0 is provisioned on the dev host
-  (`.toolchain/gcc-16.1/bin/g++-16`, outside this repo). The GCC differential,
-  the scaling sweeps and the private corpora run off the merge queue; the
-  merge-queue CI image does not get GCC.
+- **D1 Reference compiler** (revised 2026-11-03). GCC 16.1.0 is provisioned
+  on the dev host (`.toolchain/gcc-16.1/bin/g++-16`, outside this repo;
+  `scripts/env.sh` exports it as `KILN_GCC`) and goes into the CI path:
+  `oracle: gcc` tests (spec/harness.md "GCC oracle") and the deterministic
+  reflection counter gates (`oven:` budgets) run in merge-queue CI. The
+  vs-GCC perf table, the `--scaling` sweeps and the private corpora stay
+  off the queue (manual or nightly on the dev host). CI wall time must not
+  grow for it: the GCC-bearing image is adopted only when it pays for its
+  own pull (docs/status/perf.md "CI time"); until then CI leaves `KILN_GCC`
+  unset and the GCC comparisons are skipped, never failed.
 - **D2 `<meta>` vehicle.** libstdc++ 16.1's `<meta>` is the production target
   and is available now (`__cpp_lib_reflection 202603L`). Until WP-484 consumes
   it, `tests/support/kiln_meta.h` is the test vehicle. The p2996 fork's
@@ -388,12 +394,11 @@ Total is about 11–13 week-long slots, against the spike's estimate of 20–30.
 
 **Header differential:** every reflection test that uses only IS names also runs through libstdc++ `<meta>` (M6-15). Different outcomes are a bug in one of the two shims.
 
-**Merge-queue CI** (keep `xtask ci` growth ≤ +60 s):
-- the reflection conformance dirs in kiln mode (no oracle compiles)
-- S-tier `bench/reflect` counters (§3.9)
-- the stress cases with `oven:` budgets
+**Merge-queue CI** (net per-job CI time must not grow; D1):
+- the reflection conformance dirs in kiln mode, with their `oracle: gcc` comparisons: a bounded set, each test compiled once by GCC 16.1 (no run-twice shapes), when the CI image carries GCC (D1)
+- the deterministic reflection counter gates: the `oven:` budgets of the `bench/reflect` shapes (§3.8) once their `xfail(kiln)` markers go, and the stress cases with `oven:` budgets
 
-GCC differential, scaling sweeps, vs-GCC tables and the private corpora run off the merge queue: nightly or manual on the dev box. GCC 16.1 does not go into the GH Actions image unless a prebuilt package exists, because building it from source in CI is too slow.
+The vs-GCC perf table, the `--scaling` sweeps and the private corpora stay off the merge queue: manual or nightly on the dev host. GCC is never built from source in CI.
 
 **M6 exit measures:**
 - (a) the reference workload builds and its tests pass under kiln with libstdc++ 16.1 `<meta>`

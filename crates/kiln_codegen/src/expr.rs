@@ -1787,7 +1787,9 @@ impl Cg<'_> {
     fn decl_lvalue(&mut self, e: ExprId, d: DeclId, q: QualType) -> R<LV> {
         let ast = self.ast;
         match ast.decls.get(d).kind() {
-            DeclKind::Function | DeclKind::CXXMethod => {
+            // An explicit object conversion function is named like a
+            // free function ([over.match.funcs.general]/4).
+            DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion => {
                 let f = self.get_fn(d)?;
                 Ok(LV {
                     addr: Addr { v: V::C(Value::func(f)), ty: LTy::PTR, align: 1 },
@@ -2087,6 +2089,14 @@ impl Cg<'_> {
                     return err(self.loc_of(e), "reference-returning call produced no value");
                 };
                 Ok(self.ref_lvalue(p, q))
+            }
+            // clang `EmitCompoundLiteralLValue` of a file-scope literal:
+            // its `.compoundliteral` global (WP-466).
+            ExprKind::CompoundLiteralExpr if let Some(d) = ast.exprs.compound_literal_var(e) => {
+                let g = self.get_gvar(d)?;
+                let (ty, align) = (self.mty(q), self.var_align(d));
+                let addr = Addr { v: V::C(gval(g)), ty, align };
+                Ok(LV { addr, q, bf: None, vidx: None, tb: Tb::Type })
             }
             ExprKind::CompoundLiteralExpr if !self.is_aggregate(q) => {
                 self.compound_literal_lvalue(e)

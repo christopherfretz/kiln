@@ -9,9 +9,10 @@ use super::directives::PpCompare;
 use super::runner::{Status, TestResult, indent};
 use crate::bench::record::human_time;
 
-/// Per-status counts.
+/// Per-status counts, and how many results are advisory (the GCC oracle's
+/// comparison was dropped; `spec/harness.md` "GCC oracle").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Counts(pub BTreeMap<Status, usize>);
+pub struct Counts(pub BTreeMap<Status, usize>, pub usize);
 
 impl Counts {
     pub fn of(results: &[TestResult]) -> Self {
@@ -19,7 +20,12 @@ impl Counts {
         for r in results {
             *m.entry(r.status).or_insert(0) += 1;
         }
-        Self(m)
+        Self(m, results.iter().filter(|r| r.advisory.is_some()).count())
+    }
+
+    /// Results whose GCC comparison was dropped (never a failure).
+    pub fn advisory(&self) -> usize {
+        self.1
     }
 
     pub fn get(&self, s: Status) -> usize {
@@ -31,16 +37,20 @@ impl Counts {
     }
 }
 
-/// The line(s) printed for one result. Passes are printed only when verbose;
-/// skips and xfails always (they are tracked debt), with their reason.
+/// The line(s) printed for one result. Passes are printed only when verbose
+/// or advisory; skips and xfails always (they are tracked debt), with their
+/// reason.
 pub fn format_result(r: &TestResult, verbose: bool) -> String {
     let mut s = String::new();
-    if r.status == Status::Pass && !verbose {
+    if r.status == Status::Pass && !verbose && r.advisory.is_none() {
         return s;
     }
     let _ = write!(s, "{:<6} {}", r.status.label(), r.name);
     if let Some(reason) = &r.reason {
         let _ = write!(s, " ({reason})");
+    }
+    if let Some(a) = &r.advisory {
+        let _ = write!(s, " [{a}]");
     }
     if r.updated {
         s.push_str(" [updated .expected]");
@@ -61,11 +71,16 @@ pub fn format_result(r: &TestResult, verbose: bool) -> String {
     s
 }
 
-/// The final summary line.
+/// The final summary line; `A advisory; ` appears before the total only
+/// when a GCC comparison was dropped.
 pub fn format_summary(counts: &Counts, total: usize, elapsed: Duration) -> String {
     let verdict = if counts.failed() { "FAILED" } else { "ok" };
+    let advisory = match counts.advisory() {
+        0 => String::new(),
+        n => format!("{n} advisory; "),
+    };
     format!(
-        "test result: {verdict}. {} passed; {} failed; {} xfail; {} xpass; {} skipped; {} errors; {} killed; {total} tests in {:.2}s\n",
+        "test result: {verdict}. {} passed; {} failed; {} xfail; {} xpass; {} skipped; {} errors; {} killed; {advisory}{total} tests in {:.2}s\n",
         counts.get(Status::Pass),
         counts.get(Status::Fail),
         counts.get(Status::XFail),
@@ -182,6 +197,7 @@ pub fn parity_table(h: &ParityHeader, results: &[TestResult]) -> String {
         let mut c = Counts::default();
         for r in rs {
             *c.0.entry(r.status).or_insert(0) += 1;
+            c.1 += usize::from(r.advisory.is_some());
         }
         // Skipped tests are not counted against the rate.
         let ran = rs.len() - c.get(Status::Skip);
@@ -262,6 +278,7 @@ mod tests {
             details: "why".into(),
             log: vec!["$ cc x.cpp  # exit code 1".into()],
             updated: false,
+            advisory: None,
             elapsed: Duration::ZERO,
         }
     }
@@ -282,6 +299,18 @@ mod tests {
         assert_eq!(
             format_summary(&c, 3, Duration::from_millis(1500)),
             "test result: ok. 1 passed; 0 failed; 1 xfail; 0 xpass; 1 skipped; 0 errors; 0 killed; 3 tests in 1.50s\n"
+        );
+        let mut a = r(Status::Pass);
+        a.advisory = Some("advisory: oracle crashed (internal compiler error)".into());
+        assert_eq!(
+            format_result(&a, false),
+            "PASS   tests/x.cpp [advisory: oracle crashed (internal compiler error)]\n"
+        );
+        let c = Counts::of(&[a.clone(), r(Status::Pass)]);
+        assert!(!c.failed() && c.advisory() == 1);
+        assert_eq!(
+            format_summary(&c, 2, Duration::from_millis(10)),
+            "test result: ok. 2 passed; 0 failed; 0 xfail; 0 xpass; 0 skipped; 0 errors; 0 killed; 1 advisory; 2 tests in 0.01s\n"
         );
         assert!(Counts::of(&[r(Status::XPass)]).failed());
         assert!(Counts::of(&[r(Status::Error)]).failed());

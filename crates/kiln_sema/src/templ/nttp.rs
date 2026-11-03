@@ -85,14 +85,14 @@ impl Sema<'_, '_> {
         false
     }
 
-    fn record_bits(&self, def: DeclId) -> DefinitionBits {
+    pub(crate) fn record_bits(&self, def: DeclId) -> DefinitionBits {
         self.ast.decls.record(def).map(|x| x.defn).unwrap_or_default()
     }
 
     /// Whether `ty` is a structural type ([temp.param]/7), as clang's
     /// `Type::isStructuralType`, recomputed for classes so a member of
     /// rvalue reference type counts (the `STRUCTURAL` bit misses it).
-    fn is_structural(&self, ty: QualType) -> bool {
+    pub(crate) fn is_structural(&self, ty: QualType) -> bool {
         self.is_structural_at(ty, 0)
     }
 
@@ -128,7 +128,7 @@ impl Sema<'_, '_> {
     /// member, an rvalue reference member, a non-public base) ends the
     /// walk, else the first non-structural subobject is named and the
     /// walk continues into its type.
-    fn not_structural_notes(&self, ty: QualType) -> Vec<Diag> {
+    pub(crate) fn not_structural_notes(&self, ty: QualType) -> Vec<Diag> {
         let mut notes = Vec::new();
         let mut ty = ty;
         for _ in 0..MAX_DEPTH {

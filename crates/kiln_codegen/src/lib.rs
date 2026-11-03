@@ -75,6 +75,13 @@ pub struct CodegenOptions {
     /// `target-features` (`-moutline-atomics`, the default), else
     /// `-outline-atomics` (`-mno-outline-atomics`). Ignored on x86-64.
     pub outline_atomics: bool,
+    /// `AArch64` only: the `+name`/`-name` target features beyond the
+    /// base set (`-march=armv8-a+sve`, `-target-feature`; one per name),
+    /// merged into the functions' `target-features`. Ignored on x86-64.
+    pub target_features: Vec<String>,
+    /// `AArch64` only: the `sve` target feature is on, so function
+    /// definitions carry `vscale_range(1,16)` (clang `getVScaleRange`).
+    pub sve: bool,
     /// How `_Complex` floating multiply and divide are lowered
     /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
     /// `LangOptions::ComplexRange`).
@@ -251,6 +258,8 @@ impl Default for CodegenOptions {
             exceptions: true,
             ident: String::new(),
             outline_atomics: true,
+            target_features: Vec::new(),
+            sve: false,
             complex_range: ComplexRange::Full,
             opt_level: 0,
             opt_size: 0,

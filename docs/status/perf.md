@@ -125,6 +125,74 @@ pairs. `/usr/bin/time` wall and max RSS, `-fsyntax-only`; instantiations
 from `-fkiln-instantiation-report`. Box shared with five other
 implementers, so walls are noisy (clang's varied 5.9-8.5 s across runs).
 
+### WP-483: CI time, GCC 16.1 reflection baselines, S1 scaling (2026-11-03)
+
+**CI time.** Per-step wall of the last main run before WP-483 (run
+41641461340, before WP-488), from the job logs:
+
+| Step | `check` (aarch64) | `check-x86_64` |
+|---|--:|--:|
+| Initialize containers (`debian:trixie` pull) | 5 s | 4 s |
+| Install git | 7 s | 5 s |
+| Checkout | 2 s | 3 s |
+| apt toolchain (clang 19/22, LLVM, lld, libc++) | 12 s | 12 s |
+| Rust toolchain + cache | 10 s | 12 s |
+| `xtask ci`: fmt, clippy | 24 s | 20 s |
+| `xtask ci`: cargo test | 264 s | 214 s |
+| `xtask ci`: clang 22 self-check | 64 s | 67 s |
+| `xtask ci`: kiln corpus | 160 s | 141 s |
+| `KILN_ORACLE=19 xtask ci --quick`: fmt, clippy | 4 s | 3 s |
+| `--quick`: cargo test | 210 s | 178 s |
+| `--quick`: kiln corpus | 159 s | 140 s |
+| Job total | 15.6 min | 13.5 min |
+
+WP-483 adds no CI step. Its new xtask unit tests (gen-reflect
+determinism, the scaling gate, the GCC oracle and `--external` with the
+fake GCC) take 1.5 s together on the dev host and run in parallel with the
+other xtask tests inside the cargo test steps; `bench/reflect` is not in
+the corpus. The image stays `debian:trixie`: `gcc:16.1.0-trixie` exists
+(Docker Hub, 2026-08-10) but is 536.8 MB compressed on arm64 and
+560.1 MB on amd64 (GCC's layer 163.5 / 176.4 MB) against about 50 MB for
+`debian:trixie`. Downloading and decompressing the arm64 layers took 5.4 s
+on the dev host (about 1.55 GB unpacked); on a hosted runner, with the
+extraction to disk, that is an estimated 15-30 s against 4-5 s today, so
++10-25 s per job, while the preinstalled git, curl and build tools save
+about 5 s. GCC in the image costs more than it saves, so CI leaves
+`KILN_GCC` unset and `oracle: gcc` comparisons are skipped there
+(spec/harness.md "GCC oracle"). The PR run's per-step times are in the
+WP-483 handback.
+
+**GCC 16.1 on the reflection shapes.** `bench/reflect/` at the committed
+default N, and at the §3.8 sizes, one run each, `g++-16 -std=c++26
+-freflection -fsyntax-only`, `/usr/bin/time` wall and max RSS, dev host
+at a load average of about 11. kiln has no `<meta>` yet (every shape is
+`xfail(kiln)`), so there is no kiln column.
+
+| Shape | N | Wall | Max RSS | N (§3.8) | Wall | Max RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| S1 | 100 | 0.82 s | 153560 KB | 2000 | 8.00 s | 1115956 KB |
+| S2 | 50 | 0.86 s | 197628 KB | 500 | 4.58 s | 1004692 KB |
+| S3 | 100 | 1.10 s | 176912 KB | 1000 | 7.27 s | 805852 KB |
+| S4 | 100 | 0.81 s | 152964 KB | 2000 | 7.15 s | 1113780 KB |
+| S5 | 1000 | 0.93 s | 152976 KB | 10000 | 4.74 s | 631608 KB |
+| S6 | 500 | 1.94 s | 437504 KB | 1000 | 3.26 s | 792796 KB |
+
+S6 at N=2000 took 6.23 s and 1483628 KB: GCC's memory grows by about
+0.7 MB per namespace member scanned 100 times, so the §3.8 N=5000 was not
+run (it would pass 3 GiB). S3 builds its 10N-member aggregate from 10
+chunks of N specs (`define_static_array`), because 10000
+`data_member_spec` calls in one evaluation exceed GCC's default
+`-fconstexpr-ops-limit` (33554432) and leave the class incomplete.
+
+**S1 scaling** (`cargo xtask bench --scaling s1`, spec/bench.md "Scaling
+sweeps"):
+
+| Compiler | N | Wall | Peak RSS | 4N wall | 4N peak RSS | 4N/N wall | 4N/N RSS | Gate |
+|---|--:|--:|--:|--:|--:|--:|--:|---|
+| GCC 16.1, `--runs 3` | 100 | 670 ms | 150.6 MiB | 1682 ms | 298.9 MiB | 2.51x | 1.98x | ok |
+| GCC 16.1, `--runs 1` | 500 | 2407 ms | 347.0 MiB | 8075 ms | 1089.7 MiB | 3.35x | 3.14x | ok |
+| kiln release | 100 | - | - | - | - | - | - | xfail (WP-478: `'meta' file not found`) |
+
 ### WP-317: the 2026-11-03 re-recording
 
 The table above and every `bench/baselines/*.json` were re-recorded with a

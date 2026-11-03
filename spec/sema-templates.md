@@ -1703,6 +1703,20 @@ class name" at `B`
   the `pending` worklist with their POI. `end_of_tu_instantiations()`
   drains the worklist with a loop; an instantiation may push more entries
   onto it.
+- Each definition the drain instantiates is recorded in
+  `TemplateTables::end_of_tu_defs` for codegen (spec/codegen.md §2a),
+  in clang's order ([temp.point]/7: the end of the TU is a point of
+  instantiation). A function definition is recorded before the
+  instantiations it requires (pre-order, clang
+  `InstantiateFunctionDefinition`'s `HandleTopLevelDecl`). A variable
+  definition is recorded after them (post-order, clang
+  `InstantiateVariableDefinition`'s `PassToConsumerRAII`): a static data
+  member's out-of-line redeclaration and a variable template
+  specialization alike, including one whose initializer was instantiated
+  in place on the specialization itself (WP-440/WP-466,
+  `pending.rs` `instantiate_pending` returns it to the drain, which
+  records it once that definition's nested queue has drained;
+  `tests/codegen/var_template_init_order.cpp`).
 
 ### 4.7 Injected-class-name
 
