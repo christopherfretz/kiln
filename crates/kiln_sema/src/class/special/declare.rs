@@ -488,6 +488,25 @@ impl Sema<'_, '_> {
         if inherited_explicit.is_some() {
             spec = spec.with_explicit(true);
         }
+        // [dcl.constexpr]/1: every declaration of a constexpr (consteval)
+        // function is constexpr (consteval) (clang
+        // `err_constexpr_redecl_mismatch`, `MergeFunctionDecl`).
+        if let Some(p) = prev_ok
+            && !in_class
+        {
+            let (ok, nk) = (self.fn_spec(p).constexpr_kind(), spec.constexpr_kind());
+            if ok != nk {
+                let m = self
+                    .diag(DiagId::sema_constexpr_redecl_mismatch, sloc)
+                    .arg(nk as u8)
+                    .arg(self.decl_name_str(name))
+                    .arg(ok as u8);
+                let m = self.note_prev(m, p, false);
+                self.emit(m);
+                prev_ok = None;
+                redecl_invalid = true;
+            }
+        }
         let fparams: Vec<ParamInfo> =
             if shape == Shape::Dtor { Vec::new() } else { params.clone() };
         // A parameter that names no type makes the function invalid
@@ -523,9 +542,12 @@ impl Sema<'_, '_> {
         if let Some(Some(e)) = inherited_explicit {
             let _ = self.ast.decls.cold.explicit_expr.insert(f, e);
         }
-        // Where a constexpr defaulted one of a class with virtual bases is
+        // Where a constexpr or consteval defaulted one that cannot be is
         // diagnosed before C++26 (`check_defaulted_impl`).
-        if ds.constexpr.is_some() && ds.loc != d.name_loc() && self.std < kiln_lex::Std::Cxx26 {
+        if ds.constexpr.or(ds.consteval).is_some()
+            && ds.loc != d.name_loc()
+            && self.std < kiln_lex::Std::Cxx26
+        {
             self.constexpr_begin_locs.insert(f, ds.loc);
         }
         self.create_params(f, &fparams, &defaults);

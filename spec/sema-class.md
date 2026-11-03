@@ -832,7 +832,59 @@ on all implicit members of non-virtual-base classes, absent on
 not `constexpr` when a member's selected ctor is not). `HAS_CONSTEXPR_CTOR` and
 `LITERAL` are computed from these. `DEFAULTED_DEFAULT_CTOR_CONSTEXPR` records
 the default ctor's answer before it is declared.
-WP-067a implements the C++23+ rule only; the C++20 rule is open.
+
+WP-400 models clang's `DefaultedDefaultConstructorIsConstexpr` and
+`defaultedSpecialMemberIsConstexpr` (`defaulted_is_constexpr`):
+- From C++23 every defaulted special member of a class without a virtual
+  base is constexpr (C++26: with one too, P3533); a non-constexpr member or
+  base constructor fails only when an evaluation reaches it, with the
+  defaulted constructor in the call stack.
+- C++23 with a *direct* virtual base (indirect ones do not count; copy and
+  move constructors are never constexpr, assignments always are): the
+  default constructor and destructor follow clang's running flag
+  (`vbase_flag_cxx23`). It starts true; over the bases in declaration
+  order a virtual base clears it and a non-virtual base without a
+  constexpr default constructor (destructor) sets it; then over the
+  fields a class-type member (an array's element type; references and
+  anonymous-union members skipped; for the constructor, a member with a
+  default member initializer skipped too) without one sets it. So
+  `A : virtual V, NB` may declare `constexpr A() = default;` but
+  `A : NB, virtual V` may not. A destructor so found constexpr is
+  recorded in `SpecialState::vbase_dtor_constexpr` (dump `constexpr`);
+  the class stays non-literal ([basic.types.general]/10, `LITERAL`
+  unaffected). Test:
+  `tests/conformance/class.default.ctor/constexpr-defaulted-vbase-order-cxx23.cpp`.
+- Before C++23 the per-subobject rule holds: each base's and each member's
+  selected constructor (default, copy or move as the member requires) or
+  assignment must be constexpr, a member without an initializer and a union
+  are fine (P1331), and a virtual base makes it non-constexpr.
+- An explicitly `constexpr`/`consteval` defaulted member that the rule says
+  is not constexpr is an error at the specifier before C++23: "defaulted
+  definition of {default constructor|copy constructor|...} cannot be marked
+  {constexpr|consteval} before C++23"; with a virtual base it is the
+  [dcl.constexpr]/4 error instead (§4.10). A destructor is never consteval.
+- The pending defaulted members of a class are checked destructor first,
+  then in declaration order (clang `CheckCompletedCXXClass`).
+- A defaulted comparison declared `constexpr`/`consteval` before C++23
+  whose synthesized body would call a non-constexpr comparison is an error
+  at the specifier ("defaulted definition of {equality|three-way|relational}
+  comparison operator cannot be declared constexpr because it invokes a
+  non-constexpr comparison function", clang 19 with a trailing space: `_19`
+  row), with clang's `ExplainConstexpr` notes for the first such callee
+  ("non-constexpr comparison function would be used to compare {member
+  X|base class X}" at the subobject, omitted for a secondary comparison of
+  the complete object, then "... declared here"). A defaulted `<=>` checks
+  its implicit `operator==` too, reported at the `<=>` ("because for which
+  the corresponding implicit 'operator=='  invokes ..."). A class template
+  specialization is checked when instantiated, at the pattern's specifier.
+- Tests: `tests/conformance/class.default.ctor/constexpr-defaulted-cxx{20,23}.cpp`,
+  `tests/conformance/dcl.fct.def.default/consteval-special-cxx{20,23}.cpp`,
+  `tests/conformance/dcl.fct.def.default/cmp-constexpr-mismatch{,-cxx23}.cpp`.
+- Open: the C++20 `-Winvalid-constexpr` "constexpr constructor never
+  produces a constant expression" for an implicit or unspecified defaulted
+  default constructor used in a constant expression; clang 14-17's
+  acceptance of a vbase class with an invalid constexpr constructor as
+  literal (not mirrored; tests pin C++20 and later).
 
 ### 4.7 Constructors, destructors, conversion functions (declarations)
 Constructor: no return type (`constructor cannot have a return type`), not
@@ -2268,6 +2320,24 @@ classes, depth-6 hierarchies, 20 members each, implicit members never used)
 gates `Ast::memory()` bytes per class — the lazy policy must keep unused
 implicit members at zero bytes — and a reference-workload-style synthetic (many small
 polymorphic classes) for `final_overrider`/vtable cache size.
+
+Virtual lattices (WP-400): every walk over a class's bases visits each
+class once, never once per path, so a lattice of virtual diamonds (2^N
+paths, 3N+1 subobjects) costs polynomial time. The vtable marking
+(`class/virtual/used.rs`, clang's recursive `MarkVirtualMembersReferenced`
+in one preorder walk with a visited set), the virtual-base list
+(`virtual_bases`) and the vbase base-specifier search
+(`define.rs` `vbase_spec_index`), the bases-with-fields and repeated-base
+checks (`members.rs`), `has_virtual_base` (dominance), and the path
+searches of member lookup (`lookup.rs` `class_leaves`) and of
+derived-to-base conversion (`conv/bases.rs` `walk`), which skip a class
+already found to lead nowhere (a search cut by a depth or count limit
+records nothing more). Results and diagnostics are unchanged.
+`ClassVirtuals` is cached per class (`ensure_virtuals`) and computed from
+the class's own subobject graph. Validation:
+`tests/stress/virtual-lattice-deep.cpp` (depth 32),
+`bench/frontend/virtual-lattice.cpp` (depth 14; clang 22 is exponential
+there).
 
 ## 11. Open questions (with recommendation)
 - **Q1 Implicit-member laziness.** Mirror clang's eager/lazy policy (§4.1;

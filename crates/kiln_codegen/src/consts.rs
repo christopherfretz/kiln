@@ -326,7 +326,7 @@ impl Cg<'_> {
                     return self.union_const(img, off, t, (*d, rec.size), e);
                 }
                 let mut elems: Vec<(u64, Value)> = Vec::with_capacity(rec.members.len());
-                self.record_elems(img, off, 0, *d, false, e, &mut elems)?;
+                self.record_elems(img, off, 0, *d, None, e, &mut elems)?;
                 self.build_struct_const(t, rec.size, &elems)
             }
             IrType::Struct(ms, packed) => {
@@ -360,6 +360,12 @@ impl Cg<'_> {
     /// class `d` at byte `rel` of the object at `off`, its non-virtual
     /// bases flattened in at their offsets (address order); padding (and
     /// the byte of an empty class) is left to `build_struct_const`.
+    /// `complete`: the most derived class when `d` is laid out as a base
+    /// (its non-virtual part at `rel` of that object). A vtable pointer
+    /// slot is the address point of subobject (`d`, `rel`) in the most
+    /// derived class's vtable group (clang `ConstStructBuilder` with
+    /// `getVTableAddressPoint`; the virtual bases are members of the
+    /// complete object).
     #[allow(clippy::too_many_arguments)]
     fn record_elems(
         &mut self,
@@ -367,13 +373,15 @@ impl Cg<'_> {
         off: u64,
         rel: u64,
         d: DeclId,
-        as_base: bool,
+        complete: Option<DeclId>,
         e: Option<ExprId>,
         out: &mut Vec<(u64, Value)>,
     ) -> R<()> {
         let ast = self.ast;
         let first = ast.first(d);
         let rec = self.tys.record(first).clone();
+        let as_base = complete.is_some();
+        let vt_class = complete.unwrap_or(first);
         if rec.is_union && as_base {
             return err(None, "union base-class constants are not supported yet (M3)");
         }
@@ -395,6 +403,16 @@ impl Cg<'_> {
         for (&b, &i) in &rec.base_index {
             if let Some(s) = by_base.get_mut(i as usize) {
                 *s = Some(b);
+            }
+        }
+        // The virtual bases are members of the complete object only
+        // (P3533: kiln's constant evaluation makes such objects).
+        let mut virt_slot: Vec<Option<DeclId>> = vec![None; members.len()];
+        if !as_base {
+            for (&b, &i) in &rec.vbase_index {
+                if let Some(s) = virt_slot.get_mut(i as usize) {
+                    *s = Some(b);
+                }
             }
         }
         let e = e.map(|x| self.strip_init(x));
@@ -435,9 +453,13 @@ impl Cg<'_> {
                 out.push((at, self.image_const(img, off + at, m, sub)?));
             } else if let Some(b) = by_base[i] {
                 let sub = bases.iter().position(|&x| x == b).and_then(|p| inits.get(p).copied());
-                self.record_elems(img, off, at, b, true, sub, out)?;
+                self.record_elems(img, off, at, b, Some(vt_class), sub, out)?;
+            } else if let Some(b) = virt_slot[i] {
+                self.record_elems(img, off, at, b, Some(vt_class), None, out)?;
+            } else if i == 0 && matches!(m, IrType::Ptr) && self.is_dynamic(first) {
+                out.push((at, self.vtable_address_point(vt_class, first, rel)?));
             } else if !matches!(m, IrType::Array(..) | IrType::Int(8)) {
-                return err(None, "polymorphic class constants are not supported yet (M3)");
+                return err(None, "class constants with this member are not supported yet");
             }
         }
         Ok(())
@@ -606,7 +628,11 @@ impl Cg<'_> {
         if nz == 0 {
             return Ok(self.m.const_zero(t));
         }
-        let common = common && elems.iter().all(|&v| self.m.const_type(v) == elt);
+        // clang's `CommonElementType`: the first element's type when every
+        // element has it (a polymorphic class element is a literal struct).
+        let first = self.m.const_type(elems[0]);
+        let common = common && elems.iter().all(|&v| self.m.const_type(v) == first);
+        let elt = if common { first } else { elt };
         let tz = bound - nz;
         if tz >= 8 {
             let mut out = Vec::new();

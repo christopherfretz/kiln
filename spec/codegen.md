@@ -1151,6 +1151,19 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   refer to the runtime's `external constant` objects. RTTI of a type that
   involves an incomplete class has `internal` linkage. Linkage of class
   RTTI follows the vtable.
+- **Constant objects of polymorphic classes** (`consts.rs`
+  `record_elems`, WP-400): a constant initializer of a dynamic class
+  gives each vptr field the vtable address point of its subobject in the
+  complete object's vtable (the group `vtable_address_point(complete,
+  subobject)` names; a base subobject never uses its own class's
+  vtable), as clang's `ConstantEmitter` does. A class with virtual bases
+  (constant only through P3533, kiln alone) emits its virtual-base
+  members of the complete-object type the same way, at their layout
+  offsets. An array whose elements all have one constant type uses it as
+  the element type (clang `CommonElementType`), so an array of a dynamic
+  class is `[N x %struct.P]` and not a literal struct. Validation:
+  `tests/codegen/polymorphic_const_global.cpp` (exact IR),
+  `tests/conformance/dcl.constinit/constinit-virtual-base-run-cxx26.cpp`.
 - **vptr stores**: constructors store the address point of every vptr
   after the base initializers and before the member initializers;
   destructors re-store them on entry unless clang's

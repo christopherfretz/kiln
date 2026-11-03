@@ -1047,6 +1047,20 @@ impl Sema<'_, '_> {
             return None;
         }
         let fspec = self.explicit_spec_fnspec(ds, ty, m);
+        // [dcl.constexpr]/1: the member's declarations agree on
+        // `constexpr`/`consteval` (clang merges the specialization with
+        // the instantiated member, `err_constexpr_redecl_mismatch`).
+        let (ok, nk) = (self.fn_spec(m).constexpr_kind(), fspec.constexpr_kind());
+        if ok != nk {
+            let e = self
+                .diag(DiagId::sema_constexpr_redecl_mismatch, name_loc)
+                .arg(nk as u8)
+                .arg(self.decl_name_str(self.ast.decls.get(m).name()))
+                .arg(ok as u8);
+            let e = self.note_prev(e, m, false);
+            self.emit(e);
+            return None;
+        }
         self.ast.templates.update_member_spec(i, |x| {
             x.kind = SpecKind::ExplicitSpecialization;
             x.point_of_instantiation = Loc::INVALID;

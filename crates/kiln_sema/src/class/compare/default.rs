@@ -427,7 +427,37 @@ impl Sema<'_, '_> {
             };
             self.set_deduced_return(f, cat);
         }
-        if first && self.fn_spec(f).constexpr_kind() == ConstexprKind::None && info.constexpr {
+        let ck = self.fn_spec(f).constexpr_kind();
+        if ck != ConstexprKind::None && !info.constexpr && self.std < kiln_lex::Std::Cxx23 {
+            // [dcl.fct.def.default]/3 before C++23 (P2448): a `constexpr`
+            // or `consteval` defaulted comparison must be
+            // constexpr-compatible (clang
+            // `err_defaulted_comparison_constexpr_mismatch`, at the
+            // declaration's begin).
+            let at = self
+                .constexpr_begin_locs
+                .get(&f)
+                .or_else(|| {
+                    self.ast.instantiated_from(f).and_then(|p| self.constexpr_begin_locs.get(&p))
+                })
+                .copied()
+                .unwrap_or(floc);
+            // The implicit `operator==` reports at its `operator<=>`, under
+            // its own id (one error per id and location, spec/diag.md).
+            let consteval = u8::from(ck == ConstexprKind::Consteval);
+            let mut d = if implicit {
+                self.diag(DiagId::sema_defaulted_cmp_constexpr_mismatch_implicit, at).arg(consteval)
+            } else {
+                self.diag(DiagId::sema_defaulted_cmp_constexpr_mismatch, at)
+                    .arg(k.index())
+                    .arg(consteval)
+            };
+            for n in self.explain_cmp_not_constexpr(f, k, rd, from) {
+                d = d.with_note(n);
+            }
+            self.emit(d);
+        }
+        if first && ck == ConstexprKind::None && info.constexpr {
             self.ast
                 .decls
                 .mark_function(f, FnSpec::new().with_constexpr_kind(ConstexprKind::Constexpr));
@@ -582,6 +612,9 @@ impl Sema<'_, '_> {
             .collect();
         if !ps.is_empty() {
             let _ = self.builder().set_params(f, &ps);
+        }
+        if let Some(&l) = self.constexpr_begin_locs.get(&s) {
+            let _ = self.constexpr_begin_locs.insert(f, l);
         }
         let sfirst = self.ast.first(s);
         if let Some(&(_, dl)) = self.special.cmp.default_loc.get(&sfirst) {

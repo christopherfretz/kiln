@@ -1233,7 +1233,7 @@ impl Oven {
                         Ok((f, this, cov)) => {
                             self.regs[slot] = u128::from(this);
                             if adj as u32 != u32::MAX {
-                                self.regs[fb + adj] = cov as u128;
+                                self.regs[fb + adj] = cov;
                             } else if cov != 0 {
                                 fail!(Fault::Invalid);
                             }
@@ -1253,8 +1253,16 @@ impl Oven {
                 Op::CovAdj => {
                     let p = reg!(0) as u64;
                     if p != 0 {
-                        let off = i64::from(Ptr::decode(p).off) + reg!(1) as i64;
-                        reg!(0) = u128::from(Ptr::with_off(p, off as u64, false));
+                        match virt::cov_adj(reg!(1)) {
+                            virt::CovAdj::Off(o) => {
+                                let off = i64::from(Ptr::decode(p).off) + o;
+                                reg!(0) = u128::from(Ptr::with_off(p, off as u64, false));
+                            }
+                            virt::CovAdj::VBase(cls, k) => match self.sub_addr(b, p, cls, k) {
+                                Some(q) => reg!(0) = u128::from(q),
+                                None => fail!(Fault::Invalid),
+                            },
+                        }
                     }
                     pc += 3;
                 }
