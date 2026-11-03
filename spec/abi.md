@@ -619,6 +619,15 @@ points, thunks and method indices are clang's.
     `expect: vtables` (spec/harness.md "Layout and vtable tests", WP-084).
     They and `kiln_driver/tests/{record,vtable}_layouts.rs` split the dumps
     with `kiln_abi::dump_blocks`, which encodes the two deviations above.
+- **`VTableSession`** (WP-414): a translation-unit session over the
+  free functions above. One `Layouter` and `Classes` fact cache is shared
+  by every query, and `vtable_layout`, `construction_vtable`, `vtt`
+  (`VttLayout`: the VTT entries with the groups they name) and
+  `subobjects` (`SubobjectTable`: each subobject with its offset and a
+  `(class, offset)` → `SubobjectId` index) are cached per class. Each
+  query is refuelled to the builders' full step budget (`Classes::refuel`),
+  so a session returns exactly what the free functions return, each of
+  which runs in a fresh session. Codegen holds one per module.
 
 ### 8.6 Landed (WP-079): class lowering, argument passing, mangling, member pointers
 - **Record lowering** (`irtype.rs`, clang `CGRecordLowering`):

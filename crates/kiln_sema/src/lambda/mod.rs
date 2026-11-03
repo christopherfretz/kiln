@@ -614,6 +614,12 @@ impl Sema<'_, '_> {
                 let b = self.end_function_body(b, rbrace);
                 if let Some(f) = top.call_op {
                     let _ = self.builder().set_body(f, b);
+                    // [dcl.constexpr]/3 before C++23 (constexpr_body.rs).
+                    if top.explicit_constexpr {
+                        self.check_constexpr_lambda_body_vars(f, b);
+                    } else {
+                        self.implicit_constexpr_lambda_body_vars(f, b);
+                    }
                 }
             } else {
                 self.func = None;

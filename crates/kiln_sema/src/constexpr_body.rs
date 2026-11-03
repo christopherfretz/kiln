@@ -3,13 +3,18 @@
 //! non-literal type; clang `CheckConstexprDeclStmt` under
 //! `CheckConstexprFunctionDefinition`; spec/sema.md §7.10).
 //!
-//! Checked when a non-template `constexpr` or `consteval` function
-//! definition is finished, in statement order: the first such variable is
-//! an error (with `RequireLiteralType`'s notes) and makes the function
-//! invalid, so a constant expression calling it reports nothing more, as
-//! clang reports once. Lambda call operators are not checked (clang makes
-//! an implicitly constexpr one silently non-constexpr instead); neither
-//! are instantiations.
+//! Checked when a `constexpr` or `consteval` function definition is
+//! finished, in statement order: the first such variable is an error (with
+//! `RequireLiteralType`'s notes) and makes the function invalid, so a
+//! constant expression calling it reports nothing more, as clang reports
+//! once. In a template (a function template, a member of a class template,
+//! a generic lambda) only a variable of non-dependent type is checked, at
+//! the definition; instantiations are not checked (clang makes an
+//! instantiation that breaks the rule silently non-constexpr). A lambda's
+//! call operator is checked only when the lambda is declared `constexpr`
+//! or `consteval` explicitly; an implicitly constexpr one that breaks the
+//! rule is silently not constexpr instead, also when an enclosing
+//! template is instantiated. WP-414.
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, VarStorage};
 use kiln_ast::stmt::StmtKind;
@@ -22,11 +27,40 @@ impl Sema<'_, '_> {
     /// [dcl.constexpr]/3 before C++23 for the definition of `f` with
     /// `body` (see the module docs).
     pub(crate) fn check_constexpr_body_vars(&mut self, f: DeclId, body: StmtId) {
+        if !self.is_lambda_call_op(f) {
+            self.constexpr_body_vars(f, body);
+        }
+    }
+
+    /// The same rule for the call operator `f` of a lambda declared
+    /// `constexpr` or `consteval` explicitly, at the end of its `body`.
+    pub(crate) fn check_constexpr_lambda_body_vars(&mut self, f: DeclId, body: StmtId) {
+        self.constexpr_body_vars(f, body);
+    }
+
+    /// The call operator `f` of a lambda not declared `constexpr`, at the
+    /// end of its `body` (in a template, and again when an enclosing
+    /// template is instantiated): before C++23 it is constexpr only if no
+    /// variable it defines has a non-literal type ([expr.prim.lambda.
+    /// closure]/5 with [dcl.constexpr]/3; clang `CheckConstexprKind::
+    /// CheckValid`). A generic lambda's specializations follow its
+    /// pattern.
+    pub(crate) fn implicit_constexpr_lambda_body_vars(&mut self, f: DeclId, body: StmtId) {
+        let spec = self.fn_spec(f);
         if self.std >= kiln_lex::Std::Cxx23
-            || self.in_template()
+            || spec.constexpr_kind() != ConstexprKind::Constexpr
+            || self.first_non_literal_var(body).is_none()
+        {
+            return;
+        }
+        let s = spec.with_constexpr_kind(ConstexprKind::None);
+        self.ast.decls.respecify_function(f, s);
+    }
+
+    fn constexpr_body_vars(&mut self, f: DeclId, body: StmtId) {
+        if self.std >= kiln_lex::Std::Cxx23
             || !self.inst.stack.frames.is_empty()
             || self.ast.decls.get(f).has(DeclFlags::INVALID)
-            || self.is_lambda_call_op(f)
             || self.fn_spec(f).constexpr_kind() == ConstexprKind::None
         {
             return;
@@ -41,6 +75,8 @@ impl Sema<'_, '_> {
         let msg = self.with_non_literal_notes(msg, ty);
         self.emit(msg);
         self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        // A template's deduction still runs (`TemplState::body_invalid`).
+        self.templ.body_invalid.insert(f);
     }
 
     /// The first variable defined in `body`, in source order, whose type

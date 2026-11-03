@@ -1206,21 +1206,30 @@ impl Oven {
                 Op::MpFn => match self.mp.get(reg!(1)) {
                     Some(e) if e.virt => {
                         let (m, cls) = (e.member, e.cls);
+                        let adj = arg!(3);
                         match self.vcall(b, m, cls, reg!(2) as u64) {
-                            // A covariant return through a pointer to
-                            // member: not adjusted (WP-077 stub).
-                            Ok((_, _, cov)) if cov != 0 => fail!(Fault::Invalid),
-                            Ok((f, this, _)) => {
+                            Ok((f, this, cov)) => {
                                 reg!(0) = u128::from(crate::mem::fn_ptr(f));
                                 reg!(2) = u128::from(this);
+                                // A covariant return is adjusted as by a
+                                // direct call ([class.virtual]/8).
+                                if adj as u32 != u32::MAX {
+                                    self.regs[fb + adj] = cov;
+                                } else if cov != 0 {
+                                    fail!(Fault::Invalid);
+                                }
                             }
                             Err(f) => fail!(f),
                         }
-                        pc += 4;
+                        pc += 5;
                     }
                     Some(e) => {
                         reg!(0) = u128::from(crate::mem::fn_ptr(e.fn_index));
-                        pc += 4;
+                        let adj = arg!(3);
+                        if adj as u32 != u32::MAX {
+                            self.regs[fb + adj] = 0;
+                        }
+                        pc += 5;
                     }
                     None => fail!(Fault::Invalid),
                 },

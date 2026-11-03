@@ -4204,14 +4204,28 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   reports the first one, "variable of non-literal type 'T' cannot be
   defined in a constexpr {function|constructor} before C++23", with the
   type's "not literal because" notes, and marks the function invalid.
-  Variables whose own declaration was already diagnosed are checked too;
-  function templates, their specializations and lambda call operators are
-  not checked yet (open). A local whose initialization sema
+  Variables whose own declaration was already diagnosed are checked too.
+  In a template (a function template, a member of a class template, a
+  generic lambda) only a variable of non-dependent type is checked, at the
+  definition; instantiations are not checked. A function template made
+  invalid this way stays a candidate whose deduction is a substitution
+  failure without a reason ("candidate template ignored: substitution
+  failure [with T = int]"; `TemplState::body_invalid`), unlike one whose
+  declaration is invalid (`Tdk::Invalid`, no candidate); a member of a
+  class template made invalid is not instantiated ("no member named").
+  A lambda's call operator is checked only when the lambda is declared
+  `constexpr` or `consteval` explicitly; an implicitly constexpr one that
+  breaks the rule is silently not constexpr ([expr.prim.lambda.closure]/5;
+  clang `CheckConstexprKind::CheckValid`), checked again when an enclosing
+  template is instantiated, its generic specializations following the
+  pattern (`implicit_constexpr_lambda_body_vars`; WP-414). A local whose initialization sema
   rejected (no viable constructor) is marked invalid, and evaluating its
   declaration fails with no note (spec/oven.md "Classes").
   From C++23 clang 22 no longer applies `CheckLiteralType` during
   evaluation (spec/oven.md); clang 19 does. Tests:
   `tests/conformance/dcl.constexpr/non-literal-local-cxx{20,23,23-19}.cpp`,
+  `tests/conformance/dcl.constexpr/non-literal-local-template-cxx{20,23}.cpp`,
+  `tests/conformance/dcl.constexpr/non-literal-local-lambda-cxx20.cpp`,
   `tests/conformance/expr.const/invalid-local-silent.cpp`.
 
 ### 5.21 Template rules from the libstdc++ clusters (WP-323)

@@ -9,8 +9,8 @@
 // path (WP-400): before, depth 16 took 25 s and depth 32 would not finish
 // within the compile limit; clang 22 is exponential here too (depth 14:
 // 2.5 s, 16: 9.4 s), so it is skipped. bench/frontend/virtual-lattice.cpp
-// measures depth 14 against clang. Sema only: the vtables and VTTs of such
-// a lattice are not yet emitted in polynomial time (codegen).
+// measures depth 14 against clang; bench/frontend/virtual-lattice-emit.cpp
+// the vtables and VTTs (codegen, WP-414).
 //@ skip(clang): clang's vtable marking is exponential in the lattice depth
 //@ expect: compile-ok
 //@ strict-diags

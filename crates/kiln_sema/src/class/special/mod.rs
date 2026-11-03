@@ -373,7 +373,12 @@ impl Sema<'_, '_> {
             // An out-of-line `= default` is user-provided
             // ([dcl.fct.def.default]/5).
             self.ast.decls.mark_function(f, FnSpec::new().with_defaulted(Defaulted::Explicit));
-            self.check_out_of_line_defaulted(f, kind);
+            if self.check_out_of_line_defaulted(f, kind) {
+                // Defined here (clang `SetDeclDefaulted` →
+                // `DefineDefaultedFunction`): codegen emits it and the
+                // Oven evaluates it like any user-provided definition.
+                self.define_implicit_special(f, kind, loc);
+            }
         }
     }
 
