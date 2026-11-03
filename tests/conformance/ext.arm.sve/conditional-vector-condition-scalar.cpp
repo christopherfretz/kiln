@@ -5,7 +5,7 @@
 // integer condition, a pointer) is an error, and a
 // `void` arm (including a throw-expression) is an error at that arm
 // (clang 22 `CheckSizelessVectorConditionalTypes`; clang 19 crashes or
-// reports these differently). spec/sema.md §5.8.
+// reports these differently). spec/types.md §5.1.
 //@ requires: clang>=22
 //@ expect: compile-fail
 //@ args: --target=aarch64-unknown-linux-gnu -march=armv8-a+sve -ferror-limit=0

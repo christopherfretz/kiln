@@ -5,7 +5,7 @@
 // operator; two scalar arms get their common type, splatted to the SVE
 // vector of the condition's element count; the result must have the
 // condition's element count and element size. A floating condition is
-// contextually converted to `bool`, which fails. spec/sema.md §5.8.
+// contextually converted to `bool`, which fails. spec/types.md §5.1.
 //@ expect: compile-fail
 //@ args: --target=aarch64-unknown-linux-gnu -march=armv8-a+sve -ferror-limit=0
 //@ strict-diags

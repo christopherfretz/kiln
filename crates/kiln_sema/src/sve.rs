@@ -299,7 +299,7 @@ impl Sema<'_, '_> {
 
     /// `c ? t : f` with an SVE vector condition `c` (clang
     /// `CXXCheckConditionalOperands` + `CheckSizelessVectorConditionalTypes`;
-    /// spec/sema.md §5.8). A `void` arm is an error; two SVE arms must
+    /// spec/types.md §5.1). A `void` arm is an error; two SVE arms must
     /// have the same type, which is the result; one SVE arm goes through
     /// `CheckSizelessVectorOperands`; two scalar arms get their common
     /// type, splatted to the SVE vector of the condition's element count.
