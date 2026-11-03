@@ -298,22 +298,29 @@ pub fn memset(m: &mut Module, len: TypeId) -> FuncId {
 fn lifetime(m: &mut Module, base: &str) -> FuncId {
     let p = ptr(m);
     let name = overloaded_name(m, base, &[p]);
-    declare(
-        m,
-        &name,
-        TypeId::VOID,
-        &[(TypeId::I64, &[Attr::Flag(ImmArg)]), (p, &[Attr::Flag(NoCapture)])],
-        &[],
-        Shape::NoSyncArgMem,
-    )
+    let sized: &[(TypeId, &[Attr])] =
+        &[(TypeId::I64, &[Attr::Flag(ImmArg)]), (p, &[Attr::Flag(NoCapture)])];
+    let sizeless: &[(TypeId, &[Attr])] = &[(p, &[Attr::Flag(NoCapture)])];
+    let params = if lifetime_has_size(m) { sized } else { sizeless };
+    declare(m, &name, TypeId::VOID, params, &[], Shape::NoSyncArgMem)
 }
 
-/// `void @llvm.lifetime.start.p0(i64 immarg size, ptr nocapture)`.
+/// Whether `llvm.lifetime.start`/`.end` take the object size first: below
+/// [`Module::ir_version`] 21 (LLVM 21 dropped the operand; its `ptr` is
+/// then written `captures(none)`).
+pub fn lifetime_has_size(m: &Module) -> bool {
+    m.ir_version < 21
+}
+
+/// `void @llvm.lifetime.start.p0(i64 immarg size, ptr nocapture)`; at
+/// [`Module::ir_version`] 21+ `void @llvm.lifetime.start.p0(ptr
+/// captures(none))`.
 pub fn lifetime_start(m: &mut Module) -> FuncId {
     lifetime(m, "llvm.lifetime.start")
 }
 
-/// `void @llvm.lifetime.end.p0(i64 immarg size, ptr nocapture)`.
+/// `void @llvm.lifetime.end.p0(i64 immarg size, ptr nocapture)`; at
+/// [`Module::ir_version`] 21+ without the size.
 pub fn lifetime_end(m: &mut Module) -> FuncId {
     lifetime(m, "llvm.lifetime.end")
 }

@@ -635,6 +635,25 @@ fn captures_none_at_llvm_21() {
     assert!(!t.contains("nocapture"), "{t}");
 }
 
+/// §6: at `ir_version` 21+ `llvm.lifetime.start`/`.end` take only the
+/// pointer (LLVM 21 dropped the size operand), written `captures(none)`.
+#[test]
+fn lifetime_markers_at_llvm_21() {
+    for (version, want) in [
+        (19, "declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #0\n"),
+        (21, "declare void @llvm.lifetime.start.p0(ptr captures(none)) #0\n"),
+    ] {
+        let mut m = aarch64();
+        m.ir_version = version;
+        assert_eq!(intrinsics::lifetime_has_size(&m), version < 21);
+        let _ = intrinsics::lifetime_start(&mut m);
+        let _ = intrinsics::lifetime_end(&mut m);
+        let t = m.to_string();
+        assert!(t.contains(want), "{t}");
+        assert_eq!(t.contains("i64 immarg"), version < 21, "{t}");
+    }
+}
+
 /// §5: at `ir_version` 20+ a vector of one repeated integer or float
 /// constant prints as `splat (T v)`; mixed lanes and pointer lanes do not.
 #[test]

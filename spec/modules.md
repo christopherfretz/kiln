@@ -300,6 +300,36 @@ differs is entered and its members checked one by one); a declaration that
 still differs is parsed and can then be a redefinition error, where real
 ODR merging would accept it. Both are documented deviations.
 
+**Merging by entity (WP-460).** Where the positions differ (another
+header path, an importer's GMF that declares the entity itself), the
+declarations still merge as entities ([module.global.frag]/1: the global
+module is one module; [basic.def.odr]/15), as clang's
+`makeMergedDefinitionVisible` does. A declaration of another named unit's
+global module fragment is never visible to the current unit except by a
+merge (`module_hidden_global`), so:
+
+- *Lookup* takes the found declaration when it is visible, else a visible
+  redeclaration of the same entity (`module_visible_redecl`, clang
+  `findAcceptableDecl`; a template's through its pattern's chain): the
+  lookup table holds only the latest redeclaration, which may be the
+  hidden one.
+- *A redefinition* whose previous definition is such a hidden GMF
+  declaration is not diagnosed: the previous definition (and the template
+  it describes) is merged into the current unit (`module_merge_hidden_
+  definition`). A class or enumeration body is then skipped like a
+  redefinition's (§4.4 of spec/sema.md); a variable, a variable template
+  specialization and a function keep the new definition as a
+  redeclaration of the entity; a concept is created out of lookup.
+- *An opaque enum redeclaration* (which creates no declaration of its
+  own) merges the hidden enumeration it redeclares
+  (`module_merge_hidden_redecl`).
+- *A scoped enumerator* is visible whenever it is found: it is reached only
+  by a qualified lookup naming its enumeration, which is then reachable
+  ([module.reach]/5). An unscoped enumerator follows its enumeration.
+
+The new definition is not checked against the old for ODR equivalence
+(clang checks with its ODR hash): a documented deviation (§10, item 11).
+
 ## 7. Code generation and mangling
 
 Codegen treats a declaration owned by an imported named-module unit
@@ -473,6 +503,13 @@ part B (§9).
     - libc++ is unaffected: the `std` module exports declarations of its
       global module fragment, which are attached to the global module,
       so the /4 rule does not apply to them.
+11. **No ODR check on a merged GMF definition (WP-460).** A definition
+    merged with another unit's GMF definition of the same entity (§6,
+    "Merging by entity") is accepted without comparing the two; clang
+    compares ODR hashes and reports a mismatch. Bodies that differ are
+    ill-formed, no diagnostic required ([basic.def.odr]/15), so kiln
+    conforms; the reference repro is
+    `module.global.frag/gmf-merge-importer.cpp`.
 
 ## Tests
 
@@ -496,6 +533,9 @@ part B (§9).
   sources are in `Inputs/` (passed as extra inputs and with
   `-fmodule-file`); `skip(clang)` because clang needs a two-step BMI
   build the harness does not drive.
+- `module.global.frag/gmf-merge-importer.cpp` (+ `Inputs/gmi-*.cppm`):
+  entities declared in both an importer's and an imported unit's GMF
+  merge (§6, "Merging by entity"; WP-460), compared with clang.
 - `module.import/header-unit*.cpp`: header units (macros visible).
 - `module.import/import-std-{vector,format,ranges,compat,hidden}.cpp`:
   `import std;` / `import std.compat;` under C++20, 23 and 26

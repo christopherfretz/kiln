@@ -167,8 +167,12 @@ static_assert(g() == 30);
     let (a, ra) = run(src, Budget::default());
     let (b, rb) = run(src, no_memo());
     assert!(a.is_ok() && b.is_ok());
-    let strip =
-        |r: &[EvalRecord]| r.iter().map(|r| EvalRecord { wall_us: 0, ..*r }).collect::<Vec<_>>();
+    // `memo_hits` is the one counter that tells the runs apart.
+    assert!(ra.iter().map(|r| r.memo_hits).sum::<u64>() > 0);
+    assert!(rb.iter().all(|r| r.memo_hits == 0));
+    let strip = |r: &[EvalRecord]| {
+        r.iter().map(|r| EvalRecord { wall_us: 0, memo_hits: 0, ..*r }).collect::<Vec<_>>()
+    };
     assert_eq!(strip(&ra), strip(&rb));
     // `f(30)` is cached by the third assertion; the fourth still needs 32
     // frames.
@@ -240,10 +244,10 @@ static_assert(v + k == 10);
     let out = out.replace("\"wall_us\"=0", "\"wall_us\":0");
     assert_eq!(
         out,
-        r#"{"loc":"t.cpp:2:15","kind":"static_assert","steps":30,"bytes":0,"peak_bytes":0,"calls":15,"allocs":0,"peak_arena":0,"frozen_bytes":16,"static_bytes":0,"wall_us":0}
-{"loc":"t.cpp:3:15","kind":"init","steps":50,"bytes":0,"peak_bytes":0,"calls":25,"allocs":0,"peak_arena":0,"frozen_bytes":16,"static_bytes":8,"wall_us":0}
-{"loc":"t.cpp:5:15","kind":"static_assert","steps":0,"bytes":0,"peak_bytes":0,"calls":0,"allocs":0,"peak_arena":0,"frozen_bytes":0,"static_bytes":24,"wall_us":0}
-{"total":{"steps":80,"bytes":0,"peak_bytes":0,"calls":40,"allocs":0,"peak_arena":0,"frozen_bytes":32,"static_bytes":24,"wall_us":0,"evaluations":3}}
+        r#"{"loc":"t.cpp:2:15","kind":"static_assert","steps":30,"bytes":0,"peak_bytes":0,"calls":15,"allocs":0,"peak_arena":0,"frozen_bytes":16,"static_bytes":0,"memo_hits":3,"wall_us":0}
+{"loc":"t.cpp:3:15","kind":"init","steps":50,"bytes":0,"peak_bytes":0,"calls":25,"allocs":0,"peak_arena":0,"frozen_bytes":16,"static_bytes":8,"memo_hits":2,"wall_us":0}
+{"loc":"t.cpp:5:15","kind":"static_assert","steps":0,"bytes":0,"peak_bytes":0,"calls":0,"allocs":0,"peak_arena":0,"frozen_bytes":0,"static_bytes":24,"memo_hits":0,"wall_us":0}
+{"total":{"steps":80,"bytes":0,"peak_bytes":0,"calls":40,"allocs":0,"peak_arena":0,"frozen_bytes":32,"static_bytes":24,"memo_hits":5,"wall_us":0,"evaluations":3}}
 "#
     );
     let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("kiln_oven_report.ndjson");

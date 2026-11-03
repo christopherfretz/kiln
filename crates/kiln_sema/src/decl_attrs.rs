@@ -47,6 +47,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::COLD => "cold",
         AttrKind::HOT => "hot",
         AttrKind::ABI_TAG => "abi_tag",
+        AttrKind::ENABLE_IF => "enable_if",
         AttrKind::MALLOC => "malloc",
         AttrKind::ALLOC_SIZE => "alloc_size",
         AttrKind::ALLOC_ALIGN => "alloc_align",
@@ -56,6 +57,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE => "coro_only_destroy_when_complete",
         AttrKind::OPTNONE => "optnone",
         AttrKind::MINSIZE => "minsize",
+        AttrKind::TRIVIAL_ABI => "trivial_abi",
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
         AttrKind::INIT_PRIORITY => "init_priority",
@@ -266,6 +268,8 @@ impl Sema<'_, '_> {
     }
 
     /// One attribute of [`Sema::check_decl_attrs`]; false drops it.
+    // One flat match arm per attribute kind's subject rule.
+    #[allow(clippy::too_many_lines)]
     fn check_decl_attr(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
         let wrong = |s: &mut Self, id: DiagId, name: &str, what: &str| {
             let shown = s.attr_shown(&node, name);
@@ -297,6 +301,10 @@ impl Sema<'_, '_> {
             // [dcl.attr.noreturn]/1.
             AttrKind::NORETURN if !kind.is_function() => {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type_error, "noreturn", "functions")
+            }
+            // clang `EnableIf`: `SubjectList<[Function]>`.
+            AttrKind::ENABLE_IF if !kind.is_function() => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "enable_if", "functions")
             }
             // [dcl.attr.nouniqueaddr]/1.
             AttrKind::NO_UNIQUE_ADDRESS => {
@@ -366,6 +374,11 @@ impl Sema<'_, '_> {
                 "functions and Objective-C methods",
             ),
             AttrKind::UNINITIALIZED => self.check_uninitialized_subject(d, kind, node),
+            // clang `TrivialABI`: `SubjectList<[CXXRecord]>` (ignored
+            // with a warning).
+            AttrKind::TRIVIAL_ABI if !is_record_kind(kind) => {
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, "trivial_abi", "classes")
+            }
             AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE if !is_record_kind(kind) => wrong(
                 self,
                 DiagId::sema_attribute_wrong_decl_type,

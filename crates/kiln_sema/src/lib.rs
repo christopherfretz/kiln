@@ -33,6 +33,7 @@ pub mod declspec;
 mod deduce;
 mod deprecated;
 mod empty_body;
+mod enable_if;
 pub mod except;
 mod expansion;
 pub mod expr;
@@ -61,6 +62,7 @@ mod local_friend;
 pub mod lookup;
 mod loop_hint;
 mod macro_fixit;
+mod meta;
 pub mod modules;
 pub mod names;
 pub mod new_delete;
@@ -89,6 +91,7 @@ mod switch_enum;
 pub mod target;
 pub mod templ;
 mod template_id_typo;
+mod trivial_abi;
 mod try_stmt;
 mod type_diff;
 mod unreachable_code;
@@ -206,8 +209,7 @@ pub struct Sema<'a, 'sm> {
     /// `typeid` is an error otherwise.
     pub rtti: bool,
     /// `-freflection` (P2996 spike, WP-267; default off): `^^`, type
-    /// splices and the kiln reflection intrinsics (spec/sema.md
-    /// "Reflection (spike, -freflection)").
+    /// splices and the reflection intrinsics (spec/reflection.md).
     pub reflection: bool,
     /// `-fcoro-aligned-allocation` (default off): a coroutine frame is
     /// allocated and freed with the `std::align_val_t` forms of

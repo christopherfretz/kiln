@@ -23,8 +23,8 @@ pub(crate) enum LState {
     Full,
 }
 
-/// clang `LoopAttributes` (without `IsParallel` and `CodeAlign`, which
-/// kiln does not model).
+/// clang `LoopAttributes` (without `CodeAlign`, which kiln does not
+/// model).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct LoopAttrs {
     vectorize_enable: LState,
@@ -40,12 +40,15 @@ pub(crate) struct LoopAttrs {
     pipeline_disabled: bool,
     pipeline_ii: u32,
     must_progress: bool,
+    /// `IsParallel` (`vectorize(assume_safety)`, `interleave(assume_safety)`).
+    is_parallel: bool,
 }
 
 impl LoopAttrs {
     /// clang's `LoopInfo` constructor: whether the loop gets an id.
     fn any(&self) -> bool {
-        self.vectorize_width != 0
+        self.is_parallel
+            || self.vectorize_width != 0
             || self.vectorize_scalable != LState::Unspecified
             || self.interleave_count != 0
             || self.unroll_count != 0
@@ -71,12 +74,15 @@ pub(crate) struct LoopFrame {
     attrs: LoopAttrs,
     /// clang `UnrollAndJamInnerFollowup`.
     inner_followup: Option<Vec<MetadataId>>,
+    /// clang `AccessGroup`: the `distinct !{}` of a parallel loop.
+    access_group: Option<MetadataId>,
 }
 
 /// The `create*Metadata` chain of one loop.
 struct MdBuilder<'a> {
     m: &'a mut Module,
     inner_followup: Option<&'a [MetadataId]>,
+    access_group: Option<MetadataId>,
 }
 
 type Props = Vec<MetadataId>;
@@ -298,6 +304,12 @@ impl MdBuilder<'_> {
         if a.must_progress {
             props.push(self.flag("llvm.loop.mustprogress"));
         }
+        if a.is_parallel
+            && let Some(g) = self.access_group
+        {
+            let s = self.m.md_string(b"llvm.loop.parallel_accesses");
+            props.push(self.m.md_tuple(&[Some(s), Some(g)]));
+        }
         props.extend(additional);
         self.full_unroll(a, props, has)
     }
@@ -332,9 +344,11 @@ impl Cg<'_> {
                 }
                 (St::Disable, O::Distribute) => a.distribute_enable = LState::Disable,
                 (St::Disable, O::PipelineDisabled) => a.pipeline_disabled = true,
-                // `assume_safety` also makes the loop parallel in clang
-                // (`llvm.loop.parallel_accesses`), not modelled.
-                (St::Enable | St::AssumeSafety, O::Vectorize | O::Interleave) => {
+                (St::Enable, O::Vectorize | O::Interleave) => a.vectorize_enable = LState::Enable,
+                // The loop is parallel: its memory accesses get its access
+                // group, and its id `llvm.loop.parallel_accesses`.
+                (St::AssumeSafety, O::Vectorize | O::Interleave) => {
+                    a.is_parallel = true;
                     a.vectorize_enable = LState::Enable;
                 }
                 (St::Enable, O::Unroll) => a.unroll_enable = LState::Enable,
@@ -367,8 +381,30 @@ impl Cg<'_> {
         {
             a.unroll_enable = LState::Disable;
         }
+        let access_group = a.is_parallel.then(|| self.m.md_distinct_tuple(&[]));
         let md = a.any().then(|| self.m.md_distinct_tuple(&[None]));
-        self.f.loops.push(LoopFrame { header, md, attrs: a, inner_followup: None });
+        self.f.loops.push(LoopFrame { header, md, attrs: a, inner_followup: None, access_group });
+        if access_group.is_some() {
+            self.update_access_group();
+        }
+    }
+
+    /// The access group of the instructions emitted under the active
+    /// loops (clang `LoopInfoStack::InsertHelper`): none, the one
+    /// parallel loop's, or the list of every parallel loop's, outermost
+    /// first.
+    fn update_access_group(&mut self) {
+        let groups: Vec<_> = self.f.loops.iter().filter_map(|l| l.access_group).collect();
+        let g = match groups.as_slice() {
+            [] => None,
+            [g] => Some(*g),
+            _ => {
+                let ops: Vec<_> = groups.into_iter().map(Some).collect();
+                Some(self.m.md_tuple(&ops))
+            }
+        };
+        let k = self.m.md_kind("llvm.access.group");
+        self.f.fir.set_access_group(k, g);
     }
 
     /// clang `LoopInfoStack::pop` (`LoopInfo::finish`): the loop's id
@@ -377,9 +413,16 @@ impl Cg<'_> {
     /// the outer one its `followup_inner`.
     pub(crate) fn pop_loop(&mut self) {
         let l = self.f.loops.pop().expect("an active loop");
+        if l.access_group.is_some() {
+            self.update_access_group();
+        }
         let Some(id) = l.md else { return };
         let mut cur = l.attrs;
-        let mut b = MdBuilder { m: &mut self.m, inner_followup: l.inner_followup.as_deref() };
+        let mut b = MdBuilder {
+            m: &mut self.m,
+            inner_followup: l.inner_followup.as_deref(),
+            access_group: l.access_group,
+        };
         if let Some(p) = self.f.loops.last_mut()
             && (p.attrs.unroll_and_jam_enable != LState::Unspecified
                 || p.attrs.unroll_and_jam_count != 0)
@@ -394,6 +437,7 @@ impl Cg<'_> {
                 vectorize_predicate_enable: a.vectorize_predicate_enable,
                 unroll_and_jam_count: a.unroll_and_jam_count,
                 unroll_and_jam_enable: a.unroll_and_jam_enable,
+                is_parallel: a.is_parallel,
                 ..LoopAttrs::default()
             };
             let mut after = LoopAttrs {
@@ -401,6 +445,7 @@ impl Cg<'_> {
                 unroll_count: a.unroll_count,
                 pipeline_disabled: a.pipeline_disabled,
                 pipeline_ii: a.pipeline_ii,
+                is_parallel: a.is_parallel,
                 ..LoopAttrs::default()
             };
             match a.unroll_enable {
