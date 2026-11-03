@@ -683,7 +683,10 @@ impl Sema<'_, '_> {
             return self.unperformed_init(ty, init);
         }
         match init {
-            Initializer::Expr(e) => self.init_from_expr(ty, e, ConvCtx::Initialization, loc),
+            Initializer::Expr(e) => {
+                self.settle_typo_tie(e, ty);
+                self.init_from_expr(ty, e, ConvCtx::Initialization, loc)
+            }
             Initializer::Paren(v, l, r) => {
                 let settled = !v
                     .iter()
@@ -1469,6 +1472,26 @@ impl Sema<'_, '_> {
         l: &InitList,
         entity: Option<Loc>,
     ) -> ExprId {
+        let outer = self.agg_error_mark;
+        if outer.is_some() {
+            return self.init_from_list_in(ty, l, entity);
+        }
+        let mark = self.diags.unrecoverable_error_count();
+        self.agg_error_mark = Some(mark);
+        let e = self.init_from_list_in(ty, l, entity);
+        self.agg_error_mark = None;
+        if self.agg_excess.replace(false) || self.diags.unrecoverable_error_count() > mark {
+            // clang's failed `InitListChecker` (`hadError`): the
+            // initialization is an `ExprError`, so no full-expression
+            // warning looks into it and the variable is not usable in
+            // constant expressions.
+            let r = self.recover(ty, &[e], l.lbrace);
+            return self.mark_expr_error(r);
+        }
+        e
+    }
+
+    fn init_from_list_in(&mut self, ty: QualType, l: &InitList, entity: Option<Loc>) -> ExprId {
         // `_Atomic(T)` takes no braces (clang `InitListChecker`), but a
         // single element of class type initializes it (WP-165).
         if self.ast.types.as_atomic(ty).is_some() {
@@ -1840,7 +1863,17 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// "excess elements in ... initializer" at the first excess clause
+    /// (clang `IList->getInit(Index)->getBeginLoc()`), unless an error
+    /// was already reported for this initializer (clang's `hadError`: a
+    /// failed element, or an excess list nested in it;
+    /// [`Sema::agg_error_mark`]). Narrowing, an error by default but of
+    /// warning class, does not count.
     fn excess(&self, ty: QualType, item: &InitItem) {
+        self.agg_excess.set(true);
+        if self.agg_error_mark.is_some_and(|m| self.diags.unrecoverable_error_count() > m) {
+            return;
+        }
         let which = if self.ast.types.is_array(ty) {
             "0"
         } else if self.ast.types.as_record(ty).is_some_and(|r| {
@@ -1853,7 +1886,11 @@ impl Sema<'_, '_> {
         } else {
             "4"
         };
-        let msg = self.diag(DiagId::sema_excess_initializers, item.value.loc(self)).arg(which);
+        let at = match item.value {
+            InitValue::Expr(e) => self.begin_loc(e),
+            InitValue::List(_) => item.value.loc(self),
+        };
+        let msg = self.diag(DiagId::sema_excess_initializers, at).arg(which);
         self.emit(self.ref_temp_noted(msg));
     }
 

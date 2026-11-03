@@ -1113,9 +1113,25 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `correct_delayed_typos_in`), or contains an error expression (clang 22,
   `Sema::contains_errors`, clang's `containsErrors`). Tests:
   `tests/conformance/expr.call/expression-list-recovery-22.cpp`,
-  `expression-list-recovery-19.cpp`. Not modelled: clang's `ExprError`
-  for an undeclared plain identifier (kiln builds a recovery
-  expression), so `f(u 8, "a"*2)` does not yet skip to the `,`.
+  `expression-list-recovery-19.cpp`.
+- **Undeclared plain identifiers as operands** (WP-420): under clang 22
+  an unqualified undeclared identifier is `ExprError` (an error
+  expression with "use of undeclared identifier 'u'" and the range of
+  the name). Parsing goes on with it (`expr_invalid` set) when an
+  operator, a postfix token (`[ . -> ++ --`) or a closing token (`) ] }
+  , ; :`) follows; otherwise the operand fails, so `f(u 8, "a"*2)` skips
+  to the `,` and `a[u 8]` to the `]`. Under clang 19 it is a delayed typo
+  (reported at the end of the full-expression or where the parser gives
+  up on it). A parenthesized expression whose operand fails or is
+  invalid skips quietly to its `)` (stopping at `;`) and is an error
+  expression: `(u 8) + "a"*2` still diagnoses the right operand (clang's
+  `ParseParenExpression`). Under clang 19 the same holds for a
+  parenthesized expression beginning with an undeclared identifier not
+  followed by `(`, `<` or `::` (clang's `ClassifyName` makes it
+  `ExprError`) once its delayed typo is corrected. Tests:
+  `tests/conformance/expr.prim.id/undeclared-error-operand-recovery-*.cpp`.
+  Not modelled: a qualified undeclared name (`S::nom 8`) as `ExprError`
+  under clang 22.
 - **Subscript recovery** (WP-399, clang's `ParsePostfixExpressionSuffix`
   for `[`): the subscript is `ExprError` (an error expression with
   `expr_invalid` set, so an enclosing expression-list skips to its `,`
@@ -1126,10 +1142,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   action), or when its Sema action reports an error and yields an error
   expression (`i[1]` on an `int`, a non-integer index, no viable
   `operator[]`). A subscript over an operand that merely contains errors
-  (`g(u<int> 7)[0]`) stays a recovery expression. Under the same model an
-  expression statement followed by `)` `;` reports "extraneous ')'
-  before ';'" and takes both (clang's `ExpectAndConsumeSemi`). Tests:
+  (`g(u<int> 7)[0]`) stays a recovery expression. Tests:
   `tests/conformance/expr.sub/`.
+- **Extraneous token before `;`** (clang's `ExpectAndConsumeSemi`,
+  WP-420): an expression statement or a simple-declaration whose `;` is
+  preceded by one `)` or `]` (`a[1]];`, `f(1));`, `int x = a[1]];`)
+  reports "extraneous ']' before ';'" at that token, with a removal
+  fix-it, and takes both. A missing `;` there is "expected ';' after
+  expression" with an insertion fix-it `;` at the end of the previous
+  token. Other statements (`return a[2]];`) only say "expected ';' after
+  return statement" (clang's `ExpectAndConsume`; also with the `;`
+  fix-it). Tests: `tests/conformance/expr.post/extraneous-token-before-semi.cpp`.
 - **Literals:**
   - Integer, floating and character literals are classified by
     `kiln_lex::literal` and typed by `kiln_sema::literal`
