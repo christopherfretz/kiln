@@ -234,11 +234,23 @@ impl Sema<'_, '_> {
             .filter(|c| c.kind != SynthKind::Inheriting)
             .map(|c| match c.kind {
                 SynthKind::Special(kind) => {
-                    let spec =
-                        self.ast.decls.function(c.member).map(|x| x.spec).unwrap_or_default();
+                    // "defaulted" for an explicit `= default`, in the class,
+                    // out of line, or on the pattern's out-of-line
+                    // definition of an instantiated member.
+                    let pattern = self.ast.instantiated_from(c.member);
+                    let explicit = self
+                        .ast
+                        .redecls_of(c.member)
+                        .chain(pattern.into_iter().flat_map(|p| self.ast.redecls_of(p)))
+                        .any(|d| {
+                            self.ast
+                                .decls
+                                .function(d)
+                                .is_some_and(|x| x.spec.defaulted() == Defaulted::Explicit)
+                        });
                     let class = self.ast.decls.get(c.member).ctx().unwrap_or(self.ast.tu);
                     self.diag(DiagId::note_member_synthesized_at, c.loc)
-                        .arg(u8::from(spec.defaulted() == Defaulted::Explicit))
+                        .arg(u8::from(explicit))
                         .arg(kind.index())
                         .arg(self.ty_arg(self.tag_type(class)))
                 }

@@ -1006,7 +1006,10 @@ impl Sema<'_, '_> {
 
     fn instantiate_function_definition_inner(&mut self, f: DeclId, poi: Loc) {
         let Some(pattern) = self.ast.instantiated_from(f) else { return };
-        let Some(pdef) = self.ast.definition(pattern) else { return };
+        let Some(pdef) = self.ast.definition(pattern) else {
+            self.instantiate_out_of_line_defaulted(f, pattern, poi);
+            return;
+        };
         let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };
         if self.is_function_spec(f) {
             // A function template specialization (WP-071, §4.4).
@@ -1040,6 +1043,31 @@ impl Sema<'_, '_> {
             sub.function_def(f, pdef, body);
         });
         self.replay_dependent_access(pdef, f);
+        self.pop_inst_frame();
+    }
+
+    /// A special member whose pattern is defaulted out of line
+    /// (`template<class T> C<T>::C() = default;`): the instantiation is
+    /// defaulted and defined there (clang `InstantiateFunctionDefinition`
+    /// → `DefineDefaultedFunction`, without `SetDeclDefaulted`'s checks).
+    fn instantiate_out_of_line_defaulted(&mut self, f: DeclId, pattern: DeclId, poi: Loc) {
+        let Some(def) = self.ast.redecls_of(pattern).find(|&d| {
+            self.ast.prev(d).is_some()
+                && self
+                    .ast
+                    .decls
+                    .function(d)
+                    .is_some_and(|x| x.spec.defaulted() == kiln_ast::decl::Defaulted::Explicit)
+        }) else {
+            return;
+        };
+        let Some(kind) = self.special_kind_of(f) else { return };
+        if !self.push_inst_frame(FrameKind::MemberFunction, f, pattern, poi) {
+            return;
+        }
+        // The definition's context note is at the pattern's definition.
+        let at = self.ast.decls.get(def).loc();
+        self.define_implicit_special(f, kind, at);
         self.pop_inst_frame();
     }
 

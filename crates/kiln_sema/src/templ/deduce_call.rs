@@ -290,7 +290,8 @@ impl Sema<'_, '_> {
         // clang `DeduceTemplateArguments`: an invalid template (its
         // function has an invalid parameter or return type, already
         // reported) deduces nothing.
-        if self.ast.decls.get(templated).has(DeclFlags::INVALID)
+        if (self.ast.decls.get(templated).has(DeclFlags::INVALID)
+            && !self.templ.body_invalid.contains(&templated))
             || self.ast.decls.get(ft).has(DeclFlags::INVALID)
         {
             return Err(DeductionFailure::new(Tdk::Invalid, d));
@@ -800,6 +801,14 @@ impl Sema<'_, '_> {
         });
         match r {
             None => Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
+            Some((Ok(_), Ok(()))) if self.templ.body_invalid.contains(&templated) => {
+                // The specialization of a function whose body broke a
+                // rule is invalid: a substitution failure without a
+                // reason (clang `FinishTemplateArgumentDeduction`).
+                let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+                f.args = Some(sugared);
+                Err(f)
+            }
             Some((Ok(spec), Ok(()))) => {
                 // [temp.deduct.general]/5: the associated constraints
                 // ([temp.constr.decl]/3) are checked once the function

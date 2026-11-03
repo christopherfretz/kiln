@@ -665,6 +665,22 @@ in 'E'` (error at `}`). Dominance through virtual bases is handled by the
 subobject graph (the overrider's subobject need not be on the path to the
 subobject).
 
+Complexity (`class/virtual/graph.rs`, WP-414). The final overriders of
+(x, m) are the maximal subobjects, in the containment DAG above x, whose
+class declares an overrider of m. Each method has *override roots* (the
+methods it transitively overrides that override nothing; memoised). The
+pairs are grouped by the first root m0 of m and one postorder walk per
+root computes, for every subobject, the maximal subobjects above it
+declaring an m0-overrider; when all of them override m itself (the usual
+case: an m-overrider is an m0-overrider) they are m's finals, otherwise
+that pair falls back to a direct walk. Total work is linear in the
+(subobject, virtual function) pairs times the containment edges, not
+quadratic in the subobjects per pair. The subobject graph finds the
+parent of each virtual base from an incremental class → subobject map.
+The final overriders a used vtable marks referenced are cached per class
+(`Sema.vtable_finals`), so `define_used_vtables` recursing through the
+bases does not recompute them.
+
 **Itanium vtables** (`kiln_abi::vtable`, WP-078b), cached in `Ast.vtables`:
 ```
 pub struct VTableLayout {
@@ -804,7 +820,19 @@ member functions and comparison operators may be defaulted`. An `= default`
 written in the class body is a definition there and so implicitly inline
 ([class.mfct]/1; clang `setImplicitlyInline`; the dump prints
 `implicit-inline`); one written out of class is not. Explicitly defaulted on its first
-declaration → not user-provided; out of line → user-provided, defined there. A
+declaration → not user-provided; out of line → user-provided, defined there
+(`defaulted_impl` → `define_implicit_special` on the out-of-line declaration
+once `check_out_of_line_defaulted` passes; clang `SetDeclDefaulted` →
+`DefineDefaultedFunction`), so codegen emits it and the Oven evaluates it. A
+member of a class template whose pattern is defaulted out of line is defined
+when the member's definition is instantiated
+(`instantiate_out_of_line_defaulted`, without the `= default` checks, as
+clang), its context note "in defaulted ... first required here" at the
+pattern's definition. Known difference: an error inside that instantiated
+definition is located at the member's in-class declaration where clang
+uses the pattern's out-of-line one. Tests:
+`tests/conformance/dcl.fct.def.default/out-of-line-defined-run.cpp`,
+`constexpr-out-of-line-cxx20.cpp`. A
 deleted function must be deleted on its first declaration. Signature checks of
 [dcl.fct.def.default]/2–3 (`the parameter for an explicitly-defaulted copy
 constructor is const, but a member or base requires it to be non-const`, return
@@ -894,9 +922,15 @@ WP-400 models clang's `DefaultedDefaultConstructorIsConstexpr` and
 - Tests: `tests/conformance/class.default.ctor/constexpr-defaulted-cxx{20,23}.cpp`,
   `tests/conformance/dcl.fct.def.default/consteval-special-cxx{20,23}.cpp`,
   `tests/conformance/dcl.fct.def.default/cmp-constexpr-mismatch{,-cxx23}.cpp`.
-- Open: the C++20 `-Winvalid-constexpr` "constexpr constructor never
-  produces a constant expression" for an implicit or unspecified defaulted
-  default constructor used in a constant expression; clang 14-17's
+- An implicit or defaulted constructor (in the class or out of line) that
+  can never be constant is not diagnosed at its definition, even under
+  `-Winvalid-constexpr` (clang 19 and 22 run `isPotentialConstantExpr`
+  only on written bodies); a use in a constant expression gets the
+  default member initializer's note and "in call to 'X()'"
+  (`dcl.fct.def.default/constexpr-out-of-line-cxx20.cpp`). Kiln does not
+  yet implement the check for written bodies either ("constexpr
+  {function|constructor} never produces a constant expression", an
+  error by default before C++23). Open: clang 14-17's
   acceptance of a vbase class with an invalid constexpr constructor as
   literal (not mirrored; tests pin C++20 and later).
 
@@ -2345,13 +2379,18 @@ in one preorder walk with a visited set), the virtual-base list
 checks (`members.rs`), `has_virtual_base` (dominance), and the path
 searches of member lookup (`lookup.rs` `class_leaves`) and of
 derived-to-base conversion (`conv/bases.rs` `walk`), which skip a class
-already found to lead nowhere (a search cut by a depth or count limit
-records nothing more). Results and diagnostics are unchanged.
+already found to lead nowhere. In `class_leaves` that memo records the
+depth: a search cut by the depth or count limit below a class records the
+depth it was reached at, and a later visit at that depth or deeper skips it
+(one reached higher is searched again), so a lattice deeper than the depth
+limit is not searched once per path either (WP-414). Results and diagnostics are unchanged.
 `ClassVirtuals` is cached per class (`ensure_virtuals`) and computed from
 the class's own subobject graph. Validation:
 `tests/stress/virtual-lattice-deep.cpp` (depth 32),
-`bench/frontend/virtual-lattice.cpp` (depth 14; clang 22 is exponential
-there).
+`bench/frontend/virtual-lattice.cpp` (depth 14 by default, `-DLATTICE_DEPTH=N`;
+clang 22 is exponential there). Kiln, release, `-fsyntax-only`: depth 100
+1.8 s, depth 200 12 s (28 MB); the remaining cost is the record layout
+recomputed per virtual destructor (`check_destructor_delete`).
 
 ## 11. Open questions (with recommendation)
 - **Q1 Implicit-member laziness.** Mirror clang's eager/lazy policy (§4.1;

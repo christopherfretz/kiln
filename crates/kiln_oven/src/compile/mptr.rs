@@ -125,13 +125,24 @@ impl Compiler<'_> {
         let arrow = ast.exprs.binary_op(bin) == BinaryOp::PtrMemI;
         let [a, b] = ast.exprs.operands(bin);
         let mq = ast.exprs.get(b).ty();
-        let refs: Vec<bool> = match ast.types.canonical_view(mq) {
-            TypeView::MemberPointer { pointee, .. } => ast
-                .types
-                .proto(pointee)
-                .map(|p| ast.types.params(p).iter().map(|&t| ast.types.is_reference(t)).collect())
-                .unwrap_or_default(),
-            _ => Vec::new(),
+        let (refs, cov): (Vec<bool>, bool) = match ast.types.canonical_view(mq) {
+            TypeView::MemberPointer { pointee, .. } => {
+                let refs = ast
+                    .types
+                    .proto(pointee)
+                    .map(|p| {
+                        ast.types.params(p).iter().map(|&t| ast.types.is_reference(t)).collect()
+                    })
+                    .unwrap_or_default();
+                let cov = match ast.types.canonical_view(pointee) {
+                    TypeView::Function(p) => {
+                        ast.types.pointee(p.ret()).and_then(|r| ast.types.as_record(r)).is_some()
+                    }
+                    _ => false,
+                };
+                (refs, cov)
+            }
+            _ => (Vec::new(), false),
         };
         let loc = self.begin(e);
         let obj = self.mp_object(a, arrow, Access::Addr);
@@ -140,8 +151,17 @@ impl Compiler<'_> {
         let at = self.node(b).loc();
         self.emit_site(Op::MpAddr, 0, &[this, obj, mp], b, at);
         let f = self.reg();
-        self.emit_site(Op::MpFn, 0, &[f, mp, this], b, at);
-        self.call_frame(e, Callee::Ind(f), rty, sret, Some(this), &args, &refs, Some(loc))
+        // A function returning a class pointer or reference may be a
+        // covariant overrider's: its result is adjusted after the call
+        // ([class.virtual]/8), as a direct virtual call's is.
+        let adj = cov.then(|| self.reg());
+        self.emit_site(Op::MpFn, 0, &[f, mp, this, adj.unwrap_or(u32::MAX)], b, at);
+        let base =
+            self.call_frame(e, Callee::Ind(f), rty, sret, Some(this), &args, &refs, Some(loc));
+        if let Some(a) = adj {
+            self.emit(Op::CovAdj, 0, &[base, a]);
+        }
+        base
     }
 
     /// Whether `callee` (parentheses skipped) is a `.*` / `->*`.

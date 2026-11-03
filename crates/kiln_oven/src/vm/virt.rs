@@ -1,7 +1,8 @@
 //! Dynamic types (WP-077; spec/oven.md "Dynamic types"): the vptr slot of
 //! each polymorphic subobject holds a *dynamic-type word* — the class `C`
 //! whose constructor or destructor last ran on the object (its Oven type,
-//! low 32 bits) and the subobject's offset in `C` (high 32 bits). Written
+//! low 30 bits, with the [`REL`] and [`CMP`] flags above it) and the
+//! subobject's offset in `C` (high 32 bits). Written
 //! by `Op::SetVptr` ([class.cdtor]/4: the dynamic type of an object under
 //! construction or destruction is the class of the running constructor or
 //! destructor), read by virtual calls, `dynamic_cast` and `typeid`. The
@@ -80,6 +81,17 @@ struct Target {
     to: Option<u16>,
 }
 
+/// The key of [`Virt::rel_dispatch`].
+type RelKey = (OTy, i64, DeclId, OTy, u32, u64);
+
+/// A resolved call through a [`REL`] word.
+#[derive(Clone, Copy, Debug)]
+struct RelTarget {
+    t: Target,
+    /// The overrider's subobject (index in the running class's graph).
+    k: u16,
+}
+
 /// A covariant return adjustment ([class.virtual]/8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CovAdj {
@@ -115,6 +127,11 @@ pub(crate) struct Virt {
     map: FxHashMap<OTy, u32>,
     infos: Vec<PolyInfo>,
     dispatch: FxHashMap<(OTy, u64, DeclId), Target>,
+    /// The calls through [`REL`] words: keyed by the running class, the
+    /// slot's distance from its start, the method, the called class, the
+    /// most derived object's [`PolyInfo`] and the running class's offset
+    /// in it, which together fix the subobject called (WP-414).
+    rel_dispatch: FxHashMap<RelKey, RelTarget>,
     /// The `std::type_info` object of each type `typeid` named (by its
     /// canonical type): a static allocation, so `&typeid(T)` is one
     /// address for the translation unit.
@@ -141,6 +158,7 @@ impl Virt {
                 })
                 .sum::<usize>()
             + self.dispatch.capacity() * 48
+            + self.rel_dispatch.capacity() * 96
             + self.type_infos.capacity() * 12
     }
 }
@@ -148,6 +166,20 @@ impl Virt {
 /// Encodes a dynamic-type word.
 pub(crate) fn word(cls: OTy, off: u64) -> u128 {
     u128::from(cls.0) | u128::from(off) << 32
+}
+
+/// The flag of a dynamic-type word written by a complete-object
+/// constructor or destructor of its class (or by thawing a complete
+/// object): the object of that class is the most derived object, so its
+/// virtual bases are at their complete-object offsets and a virtual call
+/// needs no walk of the object model to find one (WP-414). Oven types
+/// stay below 2^30 (each takes far more than a byte of the evaluation's
+/// memory budget).
+const CMP: u32 = 1 << 30;
+
+/// Encodes a complete object's dynamic-type word ([`CMP`]).
+fn cmp_word(cls: OTy, off: u64) -> u128 {
+    word(cls, off) | u128::from(CMP)
 }
 
 /// The flag of a dynamic-type word whose offset is relative to this
@@ -173,6 +205,8 @@ pub(crate) struct Dyn {
     /// start of that class's object to the slot.
     pub off: i64,
     pub rel: bool,
+    /// [`CMP`]: the object of class `cls` is a complete object.
+    pub complete: bool,
 }
 
 /// The record type of class declaration `d`.
@@ -295,7 +329,8 @@ impl Oven {
         for k in 0..n {
             let off = self.virt.infos[i as usize].vptrs[k];
             let p = Ptr::with_off(raw, start + off, false);
-            self.write_vptr(p, word(cls, off)).map_err(fault)?;
+            let w = if base_obj { word(cls, off) } else { cmp_word(cls, off) };
+            self.write_vptr(p, w).map_err(fault)?;
         }
         let n = self.virt.infos[i as usize].vvptrs.len();
         if n == 0 {
@@ -308,7 +343,7 @@ impl Oven {
             let off = self.virt.infos[i as usize].subs[usize::from(j)].off;
             let Some((m, at)) = owner else {
                 let p = Ptr::with_off(raw, start + off, false);
-                self.write_vptr(p, word(cls, off)).map_err(fault)?;
+                self.write_vptr(p, cmp_word(cls, off)).map_err(fault)?;
                 continue;
             };
             let p = self.sub_in(raw, i as usize, j, m, at).ok_or(Fault::Invalid)?;
@@ -363,7 +398,7 @@ impl Oven {
                     .collect();
                 for off in offs {
                     let s = self.mem.space_mut(sp);
-                    s.write(abs + off, 8, word(t, off));
+                    s.write(abs + off, 8, cmp_word(t, off));
                     s.set_init(abs + off, 8, true);
                     s.set_ptr(abs + off, 8, false);
                 }
@@ -409,7 +444,7 @@ impl Oven {
         let lo = w as u32;
         let rel = lo & REL != 0;
         let off = if rel { i64::from((w >> 32) as u32 as i32) } else { (w >> 32) as i64 };
-        Ok(Dyn { cls: OTy(lo & !REL), off, rel })
+        Ok(Dyn { cls: OTy(lo & !(REL | CMP)), off, rel, complete: lo & CMP != 0 })
     }
 
     /// The fault of a polymorphic operation (access kind `k`) on the
@@ -448,15 +483,21 @@ impl Oven {
             let k = at(false).or_else(|| at(true))?;
             return Some((i, k as u16));
         }
-        let cands: Vec<usize> =
-            (0..subs.len()).filter(|&j| subs[j].virt && subs[j].cls == cls).collect();
         let start = self.rel_start(raw, d);
-        for j in cands {
-            if self.sub_addr(b, start, d.cls, j as u16) == Some(raw) {
-                return Some((i, j as u16));
-            }
-        }
-        None
+        let (m, at) = self.owner(b, start, d.cls)?;
+        self.locate_rel(i as usize, cls, raw, m, at).map(|k| (i, k))
+    }
+
+    /// The virtual subobject of class `cls` of the class with info `i`
+    /// that is at `raw`, its most derived object having info `m` and
+    /// being at `at` (one object-model walk for all the candidates).
+    fn locate_rel(&self, i: usize, cls: OTy, raw: u64, m: usize, at: u64) -> Option<u16> {
+        let subs = &self.virt.infos[i].subs;
+        (0..subs.len()).find_map(|j| {
+            let j16 = u16::try_from(j).ok()?;
+            (subs[j].virt && subs[j].cls == cls && self.sub_in(raw, i, j16, m, at) == Some(raw))
+                .then_some(j16)
+        })
     }
 
     /// The start of the object of class `d.cls` whose [`REL`] word is at
@@ -520,16 +561,15 @@ impl Oven {
         raw: u64,
     ) -> Result<(u32, u64, u128), Fault> {
         let d = self.read_vptr(b.ast(), raw, cls, ak::MEMBER_CALL)?;
+        if d.rel {
+            return self.vcall_rel(b, method, cls, d, raw);
+        }
         let key = (d.cls, d.off as u64, method);
         let t = match self.virt.dispatch.get(&key) {
-            Some(&t) if !d.rel => t,
-            _ => {
+            Some(&t) => t,
+            None => {
                 let t = self.resolve(b, method, cls, d, raw)?;
-                // A relative word's subobject depends on the most
-                // derived object: not cached.
-                if !d.rel {
-                    self.virt.dispatch.insert(key, t);
-                }
+                self.virt.dispatch.insert(key, t);
                 t
             }
         };
@@ -537,10 +577,53 @@ impl Oven {
             return Err(Fault::PureVirtual(t.ov));
         }
         let this = match t.to {
-            Some(k) => self.sub_addr(b, self.rel_start(raw, d), d.cls, k).ok_or(Fault::Invalid)?,
-            None => Ptr::with_off(raw, (i64::from(Ptr::decode(raw).off) + t.delta) as u64, false),
+            // In a complete object the virtual base is at its
+            // complete-object offset (`delta` holds).
+            Some(k) if !d.complete => {
+                self.sub_addr(b, self.rel_start(raw, d), d.cls, k).ok_or(Fault::Invalid)?
+            }
+            _ => Ptr::with_off(raw, (i64::from(Ptr::decode(raw).off) + t.delta) as u64, false),
         };
         Ok((t.func, this, t.cov))
+    }
+
+    /// [`Self::vcall`] through a [`REL`] word: one walk of the object
+    /// model finds the most derived object, then the call is cached by
+    /// the running class's position in it.
+    fn vcall_rel(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        method: DeclId,
+        cls: OTy,
+        d: Dyn,
+        raw: u64,
+    ) -> Result<(u32, u64, u128), Fault> {
+        let start = self.rel_start(raw, d);
+        let (m, at) = self.owner(b, start, d.cls).ok_or(Fault::Invalid)?;
+        let pos = u64::from(Ptr::decode(start).off).wrapping_sub(at);
+        let key = (d.cls, d.off, method, cls, m as u32, pos);
+        let i = self.poly_info(b, d.cls) as usize;
+        let rt = match self.virt.rel_dispatch.get(&key) {
+            Some(&rt) => rt,
+            None => {
+                let at_k = self.locate_rel(i, cls, raw, m, at).ok_or(Fault::Invalid)?;
+                let t = self.resolve_at(b, method, i as u32, at_k, d)?;
+                let k = t.to.ok_or(Fault::Invalid)?;
+                let rt = RelTarget { t, k };
+                self.virt.rel_dispatch.insert(key, rt);
+                rt
+            }
+        };
+        if rt.t.pure {
+            return Err(Fault::PureVirtual(rt.t.ov));
+        }
+        let s = self.virt.infos[i].subs[usize::from(rt.k)];
+        let this = if s.virt {
+            self.sub_in(start, i, rt.k, m, at).ok_or(Fault::Invalid)?
+        } else {
+            Ptr::with_off(start, u64::from(Ptr::decode(start).off) + s.off, false)
+        };
+        Ok((rt.t.func, this, rt.t.cov))
     }
 
     /// The final overrider of `method` for the subobject (of class `cls`)
@@ -554,6 +637,19 @@ impl Oven {
         raw: u64,
     ) -> Result<Target, Fault> {
         let (i, at) = self.locate(b, d, cls, raw).ok_or(Fault::Invalid)?;
+        self.resolve_at(b, method, i, at, d)
+    }
+
+    /// [`Self::resolve`] of the subobject `at` of the dynamic type with
+    /// info `i`.
+    fn resolve_at(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        method: DeclId,
+        i: u32,
+        at: u16,
+        d: Dyn,
+    ) -> Result<Target, Fault> {
         let cdecl = self.virt.infos[i as usize].decl.ok_or(Fault::Invalid)?;
         let (ov, s2) = b.final_overrider(cdecl, SubobjectId(at), method).ok_or(Fault::Invalid)?;
         let subs = &self.virt.infos[i as usize].subs;

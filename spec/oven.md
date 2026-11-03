@@ -1888,8 +1888,9 @@ evaluated like any other initializer.
 `MpAddr [dst, obj, mp]` (`obj.*mp`, checking derived-member containment;
 `Fault::NullBase` for a base step through a null object), `MpActive
 [p, mp]` (a union member reached through `.*` must be active), `MpFn
-[dst, mp, trap]` (the callee of a pointer to member function; a virtual
-one dispatches as `VCall` does, WP-077). `Downcast [dst, p, off, ty]` is
+[dst, mp, this, adj]` (the callee of a pointer to member function; a
+virtual one dispatches as `VCall` does, WP-077, and writes its covariant
+return adjustment into `adj`). `Downcast [dst, p, off, ty]` is
 `static_cast` from a base pointer or glvalue to a derived one
 ([expr.static.cast]/2, /11), checking that the base subobject is part of
 an object of the derived type.
@@ -1990,7 +1991,12 @@ calls. Covariant returns: `VCall` writes the overrider-to-method return
 adjustment (a byte offset of the method's return class within the
 overrider's) into register `adj`, and `CovAdj [p, adj]` moves the
 returned pointer or reference (null stays null). `MpFn` of a virtual
-member function dispatches the same way.
+member function dispatches the same way, and a call through a pointer to
+member function whose type returns a class pointer or reference gets
+the same `adj` register and `CovAdj` after the call (0 for a non-virtual
+member): the result has the return type of the function the pointer
+names, as for a direct call ([class.virtual]/8, [expr.mptr.oper]/6;
+`class.virtual/covariant-return-member-pointer.cpp`, WP-414).
 
 **`dynamic_cast`.** `DynCast [dst, p, static, target]` (target
 `u32::MAX`: `void*`; aux 1: reference cast) follows clang's
@@ -2060,14 +2066,11 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   already diagnosed) traps silently when its declaration is evaluated,
   so the enclosing constant expression reports only its own error
   (clang's invalid-declaration evaluation failure; WP-400).
-- Covariant return adjustment through a pointer to member function:
-  `Fault::Invalid` (stub, follow-up of WP-077).
 - Freezing a pointer to a `typeid` object (`constexpr auto *p =
-  &typeid(T);`) is `NotConstant`: needs a `PtrBase` for type_info objects
-  shared with codegen (WP-080, with RTTI emission).
-- `r.A::f()` (an explicit member access with a qualifier) is rejected by
-  sema ("qualified member access is not supported yet"); only implicit
-  `A::f()` is covered.
+  &typeid(T);`) and an explicitly qualified call on a member access
+  (`r.A::f()`, `p->A::f()`, non-virtual per [class.virtual]/16) landed
+  (WP-176 and later; tests `class.virtual/qualified-call-constexpr.cpp`,
+  `codegen/typeid_constant.cpp`).
 - A virtual call on a member subobject whose own base is still being
   constructed reports the lifetime note where clang reports CWG1517
   (`no_dynamic` keys on the running constructor's object and class).
@@ -2118,7 +2121,8 @@ bases, a *relative* word (`REL` bit set): the high word is the signed
 distance from the class's own start to the slot, as the virtual base is
 the most derived object's and at no fixed offset in the class. `locate`
 resolves a relative word by trying each virtual subobject of that class
-through `sub_addr` from the object's start. Plain words are as in
+against the most derived object found once from the object's start
+(`locate_rel`). Plain words are as in
 "Dynamic types".
 
 **Addresses.** `Virt::subs` lists every subobject of a polymorphic or
@@ -2178,9 +2182,27 @@ WP-400). Sema: a rejected
 constexpr defaulted special member (C++23) is marked invalid, as clang's
 `setInvalidDecl`.
 
-**Left for later.**
-- `vcall` caches neither relative words nor overriders found in a virtual
-  base.
+**Call caches (WP-414).** A plain word's call is cached in
+`Virt::dispatch` by (dynamic type, slot offset, method). A word written
+by a complete-object constructor or destructor, or by thawing, carries
+the `CMP` flag (bit 30 of the class half; Oven types stay below 2^30): its
+object is the most derived object, so an overrider in a virtual base is at
+its complete-object offset and the cached `delta` gives `this` without a
+walk of the object model. (A plain word without `CMP`, written on a
+non-virtual slot by a base-object constructor, only reaches overriders in
+non-virtual subobjects, since a final overrider's subobject contains the
+called one; it keeps the `sub_addr` walk as a guard.) A relative word's
+call (`vcall_rel`) walks the object model once (`owner` of the running
+class's object) and is cached in `Virt::rel_dispatch` by (running class,
+relative slot offset, method, called class, most derived class, the
+running class's offset in it), which fix the called subobject; `this` is
+then `sub_in` of the cached overrider subobject. `locate` likewise walks
+once for all candidates of a relative word (`locate_rel`). Probe (release,
+1M calls through virtual bases on complete objects, 2M through relative
+words in base-object constructors): 170 → 143 ms and 465 → 288 ms, same
+steps, peak RSS 9 MB either way; `bench/oven/virtual-dispatch.cpp` (no
+virtual bases) is unchanged. Test:
+`tests/stress/constexpr-vcall-virtual-base-cache.cpp`.
 
 ### Vectors — Landed (WP-173)
 GNU `vector_size` and clang `ext_vector_type` values are stored as an

@@ -199,11 +199,13 @@ ops! {
     // ([class.union]/2; an access through `.*` never activates one,
     // [class.union]/6)
     MpActive = 2,
-    // [dst, mp, this]: the function of a pointer to member function; a
-    // virtual one is dispatched on the object at register `this` (the
+    // [dst, mp, this, adj]: the function of a pointer to member function;
+    // a virtual one is dispatched on the object at register `this` (the
     // member's class subobject, `MpAddr`'s result), which is adjusted in
-    // place to the final overrider's subobject
-    MpFn = 3,
+    // place to the final overrider's subobject; register `adj`
+    // (`u32::MAX`: none) receives the covariant return adjustment as
+    // `VCall`'s does (0 for a non-virtual function)
+    MpFn = 4,
     // [dst, a, b, c, t1, t2]: a library builtin evaluated natively
     // (spec/oven.md "Builtins"); aux = kind (`bi`) | sub << 8, `a`..`c`
     // registers, `t1`/`t2` types (`bi::DYN`: the designated object's).
