@@ -28,7 +28,8 @@ left); `libcxx/`: 89.3% → 92.7% (36 fail left). The second row re-runs
 only the 196 first-run FAIL/TIMEOUT tests (the full suite was not rerun);
 the quick CI corpus and the M3 gate guard the rest.
 
-Left, by class: (a) 11, (b) 33, (c) 2, (d) 2. The TIMEOUT
+Left, by class: (a) 11, (b) 33, (c) 2, (d) 2 (WP-460 has since fixed
+three (a) clusters, 8 tests: see "Fixed in WP-460"). The TIMEOUT
 (`ifstream.members/offset_range.pass.cpp`, 20 s) passes at 240 s under
 kiln and clang 22: it is in the long-test class, not a cluster.
 
@@ -39,10 +40,7 @@ the cell says otherwise.
 
 | class | count | proposed WP | libc++ construct / first error | reproducer | tests |
 |---|---:|---|---|---|---|
-| (a) | 6 | `[[clang::trivial_abi]]`: attribute, then register passing/return of a non-trivial class (attr + codegen) | `unique_ptr`/`shared_ptr`/`weak_ptr` under `_LIBCPP_ABI_ENABLE_*_TRIVIAL_ABI`; kiln ignores the attribute ("unknown attribute 'trivial_abi' ignored") and returns through the caller's slot; run asserts | `class.temporary/trivial-abi-run.cpp` | `libcxx/memory/trivial_abi/*` (shared_ptr_arg, unique_ptr_arg, unique_ptr_array, unique_ptr_destruction_order, unique_ptr_ret, weak_ptr_ret) |
 | (a) | 3 | `__builtin_elementwise_add_sat` / `_sub_sat` (sema builtin table, Oven, codegen `llvm.[su]{add,sub}.sat`) | `std::add_sat` / `std::sub_sat` ([numeric.sat.func]): "use of undeclared identifier '__builtin_elementwise_add_sat'" | `ext.gnu.builtins/elementwise-sat-run-clang22.cpp` | `numeric.ops.sat/add_sat.pass`, `sub_sat.pass`, `libcxx/numerics/nodiscard.verify` |
-| (a) | 1 | clang `enable_if` attribute (attr + overload viability, "candidate disabled: <msg>") | `_CmpUnspecifiedParam`'s literal-0 constructor (`<__compare/ordering.h>`); kiln ignores the attribute and accepts `strong_ordering < 1` | `dcl.attr/enable-if-attr.cpp` | `cmp.categories.pre/reject-other-than-literal-zero.verify` |
-| (a) | 1 | Modules: an imported unit built in-process keeps its GMF declarations apart from the importer's GMF (spec/modules.md §6) | `std.compat.cppm` over `std.cppm`, both GMFs including `<cstddef>`: "missing '#include <__cstddef/byte.h>'; 'byte' must be declared before it is used" at `__type_traits/is_trivially_lexicographically_comparable.h:50` | `module.global.frag/gmf-dedup-import-gmf.cpp` (+ `Inputs/gdx-*.cppm`) | `std/modules/std.compat.pass` |
 | (b) | 14 | diagnostic wording: `[[nodiscard]]` reach | missing "ignoring return value of function declared with 'nodiscard' attribute"; one sub-cause is a `[[nodiscard]]` conversion function called by `static_cast` (kiln: "expression result unused"), others are `get`, `any_cast`, ranges iterators, `<chrono>` | `.verify` tests | `nodiscard.verify` in array, complex.number, numarray, range.filter, range.join.with ×3, range.iota.view, range.repeat.view, time, any, tuple, pairs, variant |
 | (b) | 5 | diagnostic wording: `nonnull` | missing "null passed to a callee that requires a non-null argument" | `.verify` tests | `nonnull.verify` in specialized.algorithms, mem.res, print.fun, basic.string, string.view |
 | (b) | 4 | diagnostic wording: `lifetimebound` | missing "temporary bound to local reference '…' will be destroyed at the end of the full-expression" | `.verify` tests | `lifetimebound.verify` in algorithms, as-lvalue, function.objects, utility/forward |
@@ -81,6 +79,14 @@ memory-cap list), which turns them into UNSUPPORTED with a reason.
 | (a) | 1 | `copy_move_trivial` (segfault): a file-scope function template named like a builtin hid the builtin | sema (`dc3b8556`) | `over.match.best/builtin-name-template.cpp` |
 | (c) | 1 | `std/modules/std.pass`: kiln found the system LLVM 19 `std.cppm`, whose `headers_not_available` lists `<flat_map>` | harness `-fprebuilt-module-path` to the package tree (`Config::module_source_flags`, `d6162682`) | xtask unit test `clang_mode_flags` |
 | (c) | 2 | `equality_comparable_with`, `three_way_comparable_with`: the `TEST_COMPILER_CLANG` branch pins llvm.org/PR171438; kiln follows the standard | now XFAIL with that reason (`CLANG_DEFECT_XFAIL`, `d4e0cff4`; spec/libcxx.md "Outcomes") | xtask unit test `clang_defect_xfail_list` |
+
+## Fixed in WP-460
+
+| class | count | construct / first error | fix (commit) | corpus test |
+|---|---:|---|---|---|
+| (a) | 6 | `[[clang::trivial_abi]]` `unique_ptr`/`shared_ptr`/`weak_ptr`: the attribute was ignored, so the class went through memory and the caller destroyed it | sema trivial-for-call bits, `kiln_abi` register passing, callee-destroyed parameters in codegen (`7b2cfd63`, `9c5f657f`; spec/sema.md "The `trivial_abi` attribute", spec/abi.md §8.26, spec/codegen.md §7ac) | `class.temporary/trivial-abi-run.cpp`, `class.temporary/run-trivial-abi-callee-destroys.cpp`, `dcl.attr/trivial-abi-attribute.cpp`, `tests/codegen/trivial_abi_*.cpp` |
+| (a) | 1 | `cmp.categories.pre/reject-other-than-literal-zero.verify`: clang `enable_if` ignored, `strong_ordering < 1` accepted | sema `enable_if` viability and ranking, Oven `evaluate_with_params` (`daf9b450`, `f5c2d953`; spec/sema.md §4.5) | `dcl.attr/enable-if-attr.cpp`, `dcl.attr/enable-if-{viability,ranking,form}.cpp` |
+| (a) | 1 | `std/modules/std.compat.pass`: an in-process imported unit's GMF declarations stayed apart from the importer's ("'byte' must be declared before it is used") | GMF entities merge across imports (`53258ba6`, `6d8d209c`; spec/modules.md §6) | `module.global.frag/gmf-dedup-import-gmf.cpp`, `module.global.frag/gmf-merge-importer.cpp` |
 
 ## Affected directories after the fixes
 

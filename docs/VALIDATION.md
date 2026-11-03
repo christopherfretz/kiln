@@ -361,7 +361,14 @@ on bench entries are enforced too. The time rule compares the fastest current ru
 with the baseline median so host load does not read as a regression, and a
 baseline taken with a different compiler version, host or entry source is
 advisory only. The same corpus is run through clang to produce the
-comparison table in `docs/status/perf.md`. The contract is `spec/bench.md`.
+comparison table in `docs/status/perf.md`. The `libcxx-slice` entry
+(`bench/libcxx-slice/slice.list`, selected only when named) times kiln
+against clang 22 on ~50 heavy libc++ 22 tests at `-fsyntax-only`, with the
+flags the libc++ runner gives each test, and reports per-test and aggregate
+ratios (time median, geometric mean, p90 and max; memory median and p90)
+with the box load; it is record-only, because only the ratio measured in one
+window means anything on this shared host, and its section of `perf.md` is
+re-recorded at each milestone. The contract is `spec/bench.md`.
 
 ## Release candidates
 
