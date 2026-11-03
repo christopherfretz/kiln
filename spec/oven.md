@@ -1243,7 +1243,7 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   sharing its address keeps its value)
   (`expr.new/p2747-placement-voidified-through-memory*.cpp`). The
   exception is an empty complete object or array element (libc++'s
-  `vector<bitset<0>>`, "Memory" below): it owns its byte
+  `vector<bitset<0>>`; see "Architecture" above): it owns its byte
   (`basic.life/constexpr-empty-allocator-storage.cpp`).
 - *Casts from `void *`* (C++26, P2738R1, [expr.static.cast]/14): `VoidCast
   [dst, p, T]` aux 0 (a `static_cast` from `cv void *` to `cv T *`
