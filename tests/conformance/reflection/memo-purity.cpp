@@ -3,7 +3,7 @@
 // reflection intrinsics is as pure as one over integers, so its second
 // call with the same `info` argument is answered from the memo table; one
 // that reaches a `PointDependent` intrinsic (the answer may change as the
-// program grows: the spike's members_of) is never memoized, and neither
+// program grows: members_of) is never memoized, and neither
 // is the evaluation enclosing it.
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
@@ -22,10 +22,10 @@ struct S {
 };
 
 consteval bool is_int(info r) { return type_of(r) == ^^int; }
-consteval unsigned long count(info r) { return __kiln_members_count(r); }
+consteval unsigned long count(info r) { return members_of(r, access_context::unchecked()).size(); }
 
 static_assert(is_int(^^v));
 static_assert(is_int(^^v));
 
-static_assert(count(^^S) == 2);
-static_assert(count(^^S) == 2);
+static_assert(count(^^S) == 8);
+static_assert(count(^^S) == 8);

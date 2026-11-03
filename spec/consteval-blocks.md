@@ -106,8 +106,9 @@ Rules that keep the bit exact:
 - **Injection gate.** The VM builds `MetaCtx { plainly: Oven::plain(),
   trial: run.fold || mem.in_trial(), … }` (`vm/meta.rs`). A `Mutating`
   op fails silently in a trial before it reaches the bridge, and
-  `__kiln_members_count` / `__kiln_member_at` do not instantiate a class
-  from a trial (`meta/ext.rs`), so a trial never mutates
+  the member, access, layout and annotation queries do not instantiate a
+  class from a trial (`Sema::meta_may_instantiate`, `meta/member.rs`),
+  so a trial never mutates
   (`tests/conformance/dcl.pre/consteval-block-trial-never-mutates.cpp`).
   `__kiln_define_member` is a kiln extension and keeps injecting from
   any manifestly constant-evaluated context in the member-specification

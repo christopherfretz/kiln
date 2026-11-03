@@ -1,11 +1,10 @@
-//! The kiln extensions (spec/reflection.md §3.4): the spike's ops, kept
-//! until their IS replacements land (`name_of` → `identifier_of`,
-//! WP-475; `__kiln_members_count`/`__kiln_member_at` → `members_of`,
-//! WP-478; `__kiln_define_member` stays an extension, D-ext).
+//! The kiln extensions (spec/reflection.md §3.4): the spike's `name_of`,
+//! kept until WP-475's `identifier_of` replaces it (WP-478 retired the
+//! spike's member ops for `members_of`), and `__kiln_define_member`,
+//! which stays an extension (D-ext).
 
-use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::reflect::Reflectee;
-use kiln_ast::{ConstValueId, DeclId, ReflectionId};
+use kiln_ast::{ConstValueId, ReflectionId};
 use kiln_diag::DiagId;
 use kiln_oven::{Dms, ExtOp, MetaCtx, MetaError, MetaOut, Note, Oven, info_arg};
 use kiln_source::Loc;
@@ -26,26 +25,6 @@ impl Sema<'_, '_> {
         let loc = ctx.loc;
         *out = match x {
             ExtOp::NameOf => MetaOut::Frozen(self.reflect_name(info_arg(args, 0)?, loc)?),
-            ExtOp::MembersCount => {
-                let m = self.reflect_members(info_arg(args, 0)?, ctx, oven)?;
-                MetaOut::Scalar(m.len() as u128)
-            }
-            ExtOp::MemberAt => {
-                let i = *args.get(1).ok_or_else(MetaError::invalid)?;
-                let m = self.reflect_members(info_arg(args, 0)?, ctx, oven)?;
-                match usize::try_from(i).ok().and_then(|i| m.get(i)) {
-                    Some(&r) => MetaOut::Info(r),
-                    None => {
-                        return fail(
-                            loc,
-                            format!(
-                                "member index {i} is out of range for a class with {} members",
-                                m.len()
-                            ),
-                        );
-                    }
-                }
-            }
             ExtOp::DefineMember => {
                 let (cls, ty) = (info_arg(args, 0)?, info_arg(args, 1)?);
                 let p = *args.get(2).ok_or_else(MetaError::invalid)?;
@@ -80,72 +59,6 @@ impl Sema<'_, '_> {
             Some(cv) => Ok(cv),
             None => fail(loc, "kiln: name too large for a constant"),
         }
-    }
-
-    /// The class type reflected by `r`, completed (instantiated at `loc`
-    /// if it is an implicitly instantiable specialization; `oven` lent).
-    fn reflected_complete_class(
-        &mut self,
-        r: ReflectionId,
-        ctx: &MetaCtx,
-        oven: &mut Oven,
-    ) -> Result<DeclId, MetaError> {
-        let loc = ctx.loc;
-        let not_class = |s: &Self| {
-            MetaError::note(loc, format!("'{}' does not reflect a class type", s.reflection_str(r)))
-        };
-        let Reflectee::Type(t) = self.ast.reflections.get(r) else { return Err(not_class(self)) };
-        let Some(d) = self.ast.types.as_record(t) else { return Err(not_class(self)) };
-        if self.undefined_spec(t).is_some() {
-            // Not manifestly constant-evaluated (a fold, or a trial such
-            // as `__builtin_constant_p`'s operand): no instantiation
-            // (spec/consteval-blocks.md §3).
-            if ctx.trial || self.inst.eval_loc.is_none() {
-                return Err(MetaError::silent());
-            }
-            self.lend_oven(oven, |s| s.require_complete(t, loc));
-        }
-        match self.ast.definition(d) {
-            Some(def) if self.is_complete(t) => Ok(def),
-            _ => fail(loc, format!("'{}' reflects an incomplete class", self.reflection_str(r))),
-        }
-    }
-
-    /// The members of the class `r` reflects, in declaration order
-    /// (the spike's `members_of`): every named member declared in the
-    /// class (an implicitly declared special member is excluded: kiln
-    /// declares those lazily, so whether one exists depends on what was
-    /// used before; the IS includes them, WP-478).
-    fn reflect_members(
-        &mut self,
-        r: ReflectionId,
-        ctx: &MetaCtx,
-        oven: &mut Oven,
-    ) -> Result<Vec<ReflectionId>, MetaError> {
-        let def = self.reflected_complete_class(r, ctx, oven)?;
-        let members: Vec<DeclId> = self
-            .ast
-            .members(def)
-            .filter(|&m| {
-                let n = self.ast.decls.get(m);
-                !n.has(DeclFlags::IMPLICIT)
-                    && !self.decl_name(m).is_empty()
-                    && !matches!(
-                        n.kind(),
-                        DeclKind::AccessSpec | DeclKind::StaticAssert | DeclKind::Friend
-                    )
-            })
-            .collect();
-        // Each member keyed as `^^` keys it (a nested type or alias is a
-        // type, a member template a template; spec/reflection-repr.md §1),
-        // one reflection per entity (`Sema::entity_decl`).
-        members
-            .into_iter()
-            .map(|m| {
-                let r = self.reflectee_of_decl(m).unwrap_or(Reflectee::Decl(self.entity_decl(m)));
-                self.intern_reflection(r, ctx.loc).map_err(MetaError::from)
-            })
-            .collect()
     }
 
     /// `__kiln_define_member(cls, ty, name)` (spec/reflection.md §3.4):

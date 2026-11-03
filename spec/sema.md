@@ -7110,8 +7110,8 @@ not supported yet`.
   element is never instantiated.
 - **Feature macro.** `__cpp_expansion_statements` 202506L at C++26 at
   every `-fclang-compat` (`KILN_FEATURES`; clang 22 does not define it).
-- **Left.** `define_static_array` and reflection ranges (kiln's
-  `members_of` returns a `member_list` aggregate without `begin`/`end`);
+- **Left.** `define_static_array` and reflection ranges (since WP-478
+  `members_of` returns a `std::vector<info>`);
   P2686's constexpr-referenceable automatic objects (§4.9).
 - Validation: `tests/conformance/stmt.expand/` (all `requires: clang>=23`),
   `tests/codegen/expansion_stmt.cpp`, `kiln_codegen` test

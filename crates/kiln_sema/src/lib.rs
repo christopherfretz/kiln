@@ -797,6 +797,11 @@ pub struct Sema<'a, 'sm> {
     /// needed (spec/annotations.md §5): the specialization maps to its
     /// pattern.
     pub(crate) uninstantiated_annots: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// The annotation each annotation attribute already produced: one
+    /// written on a declaration's leading attribute-specifier-seq
+    /// appertains to every declarator's entity and is one annotation
+    /// ([dcl.attr.annotation]/3; `[[=1]] int x, y;`).
+    pub(crate) annot_of_attr: kiln_source::fx::FxHashMap<kiln_ast::AttrId, kiln_ast::annot::AnnId>,
     /// The enclosing function's state and the scopes pushed for a member
     /// function definition, saved by `act_on_start_function_def` while a
     /// (local class's or out-of-line) member function body is analysed.
@@ -874,6 +879,9 @@ pub struct Sema<'a, 'sm> {
     /// The frozen strings and source locations of the `std::meta` names
     /// family, per reflection (`meta/names.rs`).
     pub(crate) meta_names: meta::names::NameCache,
+    /// The member lists and access scope of the `std::meta` member
+    /// queries (`meta/member.rs`; spec/reflection-members.md §2).
+    pub(crate) meta_members: meta::member::MemberState,
     /// The lambdas whose bodies are being analysed, innermost last
     /// (spec/sema-lambda.md; WP-075).
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
@@ -1090,6 +1098,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             uninstantiated_annots: kiln_source::fx::FxHashMap::default(),
+            annot_of_attr: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
@@ -1111,6 +1120,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             abstract_noted: kiln_source::fx::FxHashSet::default(),
             srcloc: builtins::SrcLocCache::default(),
             meta_names: meta::names::NameCache::default(),
+            meta_members: meta::member::MemberState::default(),
             lambdas: Vec::new(),
             lambda_mangle: lambda::ManglingState::default(),
             size_t_sugar: size_t,

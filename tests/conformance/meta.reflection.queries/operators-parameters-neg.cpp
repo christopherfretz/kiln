@@ -38,7 +38,7 @@ struct S { int m; operator int() const; void f(); };
 int gv;
 void fn(int);
 static_assert(operator_of(^^fn) == op_new);
-static_assert(operator_of(__kiln_member_at(^^S, 1)) == op_new);
+static_assert(operator_of(members_of(^^S, access_context::unchecked())[1]) == op_new);
 static_assert(operator_of(^^S::f) == op_new);
 static_assert(symbol_of(operators(0))[0] == 0);
 static_assert(symbol_of(operators(45))[0] == 0);

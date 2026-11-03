@@ -33,17 +33,19 @@ struct S {
 };
 
 // members_of: alias, nested class, enum, member template, member function
+// in declaration order, then the six implicitly declared special members
 // (an unscoped enumerator is found in S but is not a member of it; GCC
-// 16.1 lists the same seven).
-static_assert(__kiln_members_count(^^S) == 7);
-static_assert(__kiln_member_at(^^S, 0) == ^^S::a);
-static_assert(__kiln_member_at(^^S, 1) == ^^S::T);
-static_assert(__kiln_member_at(^^S, 1) != ^^int);
-static_assert(__kiln_member_at(^^S, 2) == ^^S::N);
-static_assert(__kiln_member_at(^^S, 3) == ^^S::E);
-static_assert(__kiln_member_at(^^S, 4) == ^^S::tm);
-static_assert(__kiln_member_at(^^S, 5) == ^^S::f);
-static_assert(__kiln_member_at(^^S, 6) == ^^S::m);
+// 16.1 lists the same thirteen in the same order).
+consteval info mem(unsigned long i) { return members_of(^^S, access_context::unchecked())[i]; }
+static_assert(members_of(^^S, access_context::unchecked()).size() == 13);
+static_assert(mem(0) == ^^S::a);
+static_assert(mem(1) == ^^S::T);
+static_assert(mem(1) != ^^int);
+static_assert(mem(2) == ^^S::N);
+static_assert(mem(3) == ^^S::E);
+static_assert(mem(4) == ^^S::tm);
+static_assert(mem(5) == ^^S::f);
+static_assert(mem(6) == ^^S::m);
 
 // type_of: canonical, cv kept, enumerators give their enumeration.
 static_assert(type_of(^^v) == ^^int);

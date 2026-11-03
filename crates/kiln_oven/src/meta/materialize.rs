@@ -298,7 +298,8 @@ impl Oven {
         ReflectionId::from_bits(v).ok_or_else(MetaError::invalid)
     }
 
-    /// The (data, length) value of the range argument object at `addr`.
+    /// The operand value of the class argument object at `addr`: a
+    /// range's (data, length), or a pair's two scalars.
     pub(crate) fn range_arg(&self, rc: Recipe, addr: u64) -> Result<u128, Fault> {
         let get = |l: Leaf| self.load(field_addr(addr, l.off), l.ty, ak::READ);
         let (data, n) = match rc {
@@ -310,7 +311,15 @@ impl Oven {
                 let n = if b == e { 0 } else { self.ptr_sub(e, b, elem)? };
                 (b, u64::try_from(n).map_err(|_| Fault::Invalid)?)
             }
-            Recipe::Ptr(_) | Recipe::Pair(..) => return Err(Fault::Invalid),
+            // Two scalars (an `access_context`): the first in the low
+            // 64 bits, the second in the high.
+            Recipe::Pair(a, b) => {
+                let (x, y) = (get(a)?, get(b)?);
+                let x = u64::try_from(x).map_err(|_| Fault::Invalid)?;
+                let y = u64::try_from(y).map_err(|_| Fault::Invalid)?;
+                return Ok(u128::from(x) | u128::from(y) << 64);
+            }
+            Recipe::Ptr(_) => return Err(Fault::Invalid),
         };
         Ok(u128::from(data) | u128::from(n) << 64)
     }
