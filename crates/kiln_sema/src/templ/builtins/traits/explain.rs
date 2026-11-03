@@ -27,11 +27,8 @@ impl Sema<'_, '_> {
             return out;
         }
         let Some((t, args)) = self.extract_type_trait(e) else { return out };
-        match (t, args.as_slice()) {
-            (TypeTrait::IsTriviallyCopyable, &[q]) => {
-                self.explain_trivially_copyable(q, at, &mut out)
-            }
-            _ => {}
+        if let (TypeTrait::IsTriviallyCopyable, &[q]) = (t, args.as_slice()) {
+            self.explain_trivially_copyable(q, at, &mut out);
         }
         out
     }
