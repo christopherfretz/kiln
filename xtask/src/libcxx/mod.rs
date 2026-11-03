@@ -478,6 +478,187 @@ fn load_local_cfgs(test_root: &Path, tests: &[(PathBuf, String)]) -> HashMap<Pat
     cache
 }
 
+/// What a run of `tag`'s tests needs before any compiler is chosen: the
+/// toolchain its major selects, the tests checkout, the libc++ headers and
+/// the lit features they imply.
+#[derive(Clone, Debug)]
+struct Setup {
+    tag: String,
+    toolchain: crate::oracle::Oracle,
+    checkout: PathBuf,
+    test_root: PathBuf,
+    /// The extracted libc++ tree the run compiles and links against (`None`:
+    /// the system install, or not looked up).
+    libcxx: Option<LibcxxTree>,
+    features: Vec<String>,
+    libcxx_version: Option<u32>,
+}
+
+impl Setup {
+    /// `tests` overrides the default checkout; `install` looks up the libc++
+    /// tree the run uses (`--list` sets nothing up and skips it).
+    fn resolve(root: &Path, tag: String, tests: Option<&Path>, install: bool) -> Result<Self, String> {
+        let toolchain = match tag_major(&tag).filter(|m| crate::oracle::SUPPORTED.contains(m)) {
+            Some(m) => crate::oracle::Oracle::parse(Some(&m.to_string()))?,
+            None => crate::oracle::Oracle::from_env()?,
+        };
+        let checkout = tests.map_or_else(|| default_checkout(root, &tag), Path::to_path_buf);
+        let test_root = checkout.join("libcxx").join("test");
+        if !test_root.join("support").join("test_macros.h").is_file() {
+            return Err(format!(
+                "libc++ tests not found at {}; run scripts/fetch-libcxx-tests.sh {tag}",
+                checkout.display()
+            ));
+        }
+        let libcxx = if install { libcxx_install(root, toolchain)? } else { None };
+        // The headers the run compiles against: the system install, or the
+        // extracted `.toolchain/libcxx-N-root` (also for `--list`, which does
+        // not set up the run's tree), so the features follow its
+        // `__config_site`.
+        let headers = match &libcxx {
+            Some(t) => t.include.clone(),
+            None => libcxx_install(root, toolchain)
+                .ok()
+                .flatten()
+                .map_or_else(|| toolchain.libcxx_include(), |t| t.include),
+        };
+        Ok(Self {
+            tag,
+            toolchain,
+            checkout,
+            test_root,
+            libcxx,
+            features: features::detect(&headers),
+            libcxx_version: features::libcxx_version(&headers),
+        })
+    }
+
+    /// The run configuration of `compiler` (`clang`: clang mode). Probes
+    /// the compiler's warning flags in a scratch file next to `scratch`.
+    fn config(
+        &self,
+        root: &Path,
+        compiler: &Path,
+        clang: bool,
+        scratch: &Path,
+        limits: &Limits,
+    ) -> Config {
+        Config {
+            kiln: compiler.to_path_buf(),
+            clang,
+            libcxx_include: self.toolchain.libcxx_include(),
+            checkout: self.checkout.clone(),
+            tag: self.tag.clone(),
+            llvm_dir: self.toolchain.llvm_dir(),
+            clang_compat: self.toolchain.version,
+            libcxx: self.libcxx.clone(),
+            resource_dir: root.join("resource"),
+            features: self.features.clone(),
+            libcxx_version: self.libcxx_version,
+            compile_timeout: limits.compile_timeout,
+            run_timeout: limits.run_timeout,
+            long_run_timeout: limits.long_run_timeout,
+            mem: limits.mem,
+            probe: RssProbe::detect(scratch),
+            warning_flags: run::supported_warning_flags(
+                compiler,
+                &self.toolchain.llvm_dir(),
+                &scratch.with_extension("warnings"),
+                limits.mem,
+                limits.compile_timeout,
+            ),
+            scratch: scratch.to_path_buf(),
+            keep: limits.keep,
+        }
+    }
+}
+
+/// The run limits of [`Config`].
+struct Limits {
+    compile_timeout: Duration,
+    run_timeout: Duration,
+    long_run_timeout: Duration,
+    mem: Option<MemLimit>,
+    keep: bool,
+}
+
+/// One libc++ test compiled at `-fsyntax-only` with exactly the flags the
+/// runner gives it ([`syntax_compiles`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyntaxCompile {
+    /// The test file (absolute).
+    pub path: PathBuf,
+    /// Everything between the compiler and the test file.
+    pub args: Vec<String>,
+    /// The environment the runner sets for the compile.
+    pub env: Vec<(String, PathBuf)>,
+}
+
+/// [`syntax_compiles`]'s answer.
+#[derive(Clone, Debug)]
+pub struct SyntaxCompiles {
+    /// The tests checkout's `libcxx/test`.
+    pub test_root: PathBuf,
+    /// Per requested test, in order: its compile, or why the runner would
+    /// not compile it that way (unsupported here, `XFAIL`, a `.sh` or
+    /// `.compile.fail` test, a missing file).
+    pub tests: Vec<Result<SyntaxCompile, String>>,
+}
+
+/// The `-fsyntax-only` compile of each test in `rels` (paths relative to
+/// `libcxx/test` of `tag`'s default checkout) with `compiler` (`clang`:
+/// clang mode), built by the same code as the runner's compile step: base
+/// flags, the test's `ADDITIONAL_COMPILE_FLAGS` and `lit.local.cfg`
+/// features, the compiler's supported warning flags (spec/libcxx.md
+/// "Commands"). `.verify.cpp` tests get `%{verify}` instead of
+/// `-fsyntax-only`. `scratch` holds the warning-flag probe. For
+/// `cargo xtask bench`'s `libcxx-slice` entry (spec/bench.md).
+pub fn syntax_compiles(
+    root: &Path,
+    compiler: &Path,
+    clang: bool,
+    tag: &str,
+    rels: &[String],
+    scratch: &Path,
+    mem_limit_mib: u64,
+) -> Result<SyntaxCompiles, String> {
+    check_tag(tag)?;
+    let setup = Setup::resolve(root, tag.to_owned(), None, true)?;
+    let test_root = setup.test_root.clone();
+    let tests: Vec<(PathBuf, String)> = rels.iter().map(|r| (test_root.join(r), r.clone())).collect();
+    let cfg_cache = load_local_cfgs(&test_root, &tests);
+    std::fs::create_dir_all(scratch)
+        .map_err(|e| format!("cannot create {}: {e}", scratch.display()))?;
+    let mem = MemLimit::from_mib(mem_limit_mib);
+    let compile_timeout = Profile::Harness.compile_timeout();
+    let limits = Limits {
+        compile_timeout,
+        run_timeout: compile_timeout,
+        long_run_timeout: compile_timeout,
+        mem,
+        keep: false,
+    };
+    let cfg = setup.config(root, compiler, clang, scratch, &limits);
+    let out = tests
+        .iter()
+        .enumerate()
+        .map(|(index, (p, rel))| {
+            let job = Job {
+                path: p.clone(),
+                rel: rel.clone(),
+                local_cfgs: local_cfgs(&cfg_cache, &test_root, p),
+                index,
+            };
+            run::syntax_args(&cfg, &job).map(|args| SyntaxCompile {
+                path: p.clone(),
+                args,
+                env: vec![("KILN_LLVM_DIR".to_owned(), cfg.llvm_dir.clone())],
+            })
+        })
+        .collect();
+    Ok(SyntaxCompiles { test_root, tests: out })
+}
+
 /// Runs the selection; `Ok(true)` when any test failed the run.
 #[allow(clippy::too_many_lines)] // linear setup / run / report sequence
 fn execute(opts: &Options) -> Result<bool, String> {
@@ -488,19 +669,8 @@ fn execute(opts: &Options) -> Result<bool, String> {
         opts.gate.as_deref(),
         std::env::var(TAG_ENV).ok().as_deref(),
     )?;
-    let toolchain = match tag_major(&tag).filter(|m| crate::oracle::SUPPORTED.contains(m)) {
-        Some(m) => crate::oracle::Oracle::parse(Some(&m.to_string()))?,
-        None => crate::oracle::Oracle::from_env()?,
-    };
-    let checkout = opts.tests.clone().unwrap_or_else(|| default_checkout(&root, &tag));
-    let test_root = checkout.join("libcxx").join("test");
-    if !test_root.join("support").join("test_macros.h").is_file() {
-        return Err(format!(
-            "libc++ tests not found at {}; run scripts/fetch-libcxx-tests.sh {tag}",
-            checkout.display()
-        ));
-    }
-    let libcxx = if opts.list { None } else { libcxx_install(&root, toolchain)? };
+    let setup = Setup::resolve(&root, tag, opts.tests.as_deref(), !opts.list)?;
+    let test_root = setup.test_root.clone();
     let roots: Vec<String> = if opts.dirs.is_empty() || opts.gate.is_some() {
         let mut r = gate_dirs(opts.gate.as_deref().unwrap_or("m3"));
         r.extend(opts.dirs.iter().cloned());
@@ -513,18 +683,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
         return Err("no tests selected".into());
     }
     let cfg_cache = load_local_cfgs(&test_root, &tests);
-    // The headers the run compiles against: the system install, or the
-    // extracted `.toolchain/libcxx-N-root` (also for `--list`, which does not
-    // set up the run's tree), so the features follow its `__config_site`.
-    let headers = match &libcxx {
-        Some(t) => t.include.clone(),
-        None => libcxx_install(&root, toolchain)
-            .ok()
-            .flatten()
-            .map_or_else(|| toolchain.libcxx_include(), |t| t.include),
-    };
-    let features = features::detect(&headers);
-    let libcxx_version = features::libcxx_version(&headers);
+    let (features, libcxx_version) = (setup.features.clone(), setup.libcxx_version);
     let feature_refs: Vec<&str> = features.iter().map(String::as_str).collect();
 
     if opts.list {
@@ -567,37 +726,17 @@ fn execute(opts: &Options) -> Result<bool, String> {
     let scratch = target.join("xtask-libcxx").join(format!("run-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&scratch)
         .map_err(|e| format!("cannot create {}: {e}", scratch.display()))?;
-    let probe = RssProbe::detect(&scratch);
     // Clang mode: the harness self-check (spec/libcxx.md "Clang mode").
     let clang = opts.compiler.is_some()
         && crate::util::identify(&kiln)?.kind == crate::util::CompilerKind::Clang;
-    let cfg = Config {
-        kiln: kiln.clone(),
-        clang,
-        libcxx_include: toolchain.libcxx_include(),
-        checkout: checkout.clone(),
-        tag,
-        llvm_dir: toolchain.llvm_dir(),
-        clang_compat: toolchain.version,
-        libcxx,
-        resource_dir: root.join("resource"),
-        features: features.clone(),
-        libcxx_version,
+    let limits = Limits {
         compile_timeout: opts.compile_timeout(),
         run_timeout: opts.run_timeout,
         long_run_timeout: opts.long_run_timeout,
         mem: MemLimit::from_mib(opts.mem_limit_mib),
-        probe,
-        warning_flags: run::supported_warning_flags(
-            &kiln,
-            &toolchain.llvm_dir(),
-            &scratch.with_extension("warnings"),
-            MemLimit::from_mib(opts.mem_limit_mib),
-            opts.compile_timeout(),
-        ),
-        scratch: scratch.clone(),
         keep: opts.keep,
     };
+    let cfg = setup.config(&root, &kiln, clang, &scratch, &limits);
     let jobs: Vec<Job<'_>> = tests
         .iter()
         .enumerate()

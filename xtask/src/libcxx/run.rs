@@ -601,6 +601,40 @@ enum Step {
     Timeout,
 }
 
+/// The arguments (between the compiler and the file) of `job`'s compile
+/// at `-fsyntax-only`: the base flags and the test's own, as the compile
+/// step of [`run_test`] gets them, and `%{verify}` ([`VERIFY_FLAGS`]) for a
+/// `.verify.cpp` test. `Err` says why the test is not compiled that way: it
+/// is unsupported here (environment, features, driver), `XFAIL`, a `.sh`
+/// test, or a `.compile.fail` test (which is meant not to compile).
+pub fn syntax_args(cfg: &Config, job: &Job<'_>) -> Result<Vec<String>, String> {
+    let name = job.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let kind = Kind::of(name).ok_or_else(|| format!("{}: not a libc++ test file name", job.rel))?;
+    if let Some(reason) = env_unsupported(&job.rel, &cfg.scratch, cfg.libcxx_version) {
+        return Err(format!("UNSUPPORTED ({reason})"));
+    }
+    let text = std::fs::read(&job.path)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .map_err(|e| format!("cannot read {}: {e}", job.path.display()))?;
+    let kind = compile_fail_kind(kind, &text);
+    let (_, flags, xfail) =
+        prepare(kind, &text, &job.local_cfgs, &cfg.feature_refs()).map_err(|o| o.to_string())?;
+    if let Some(x) = xfail.filter(|_| xfail_ignored(&job.rel).is_none()) {
+        return Err(format!("XFAIL: {x}"));
+    }
+    let mode: &[&str] = match kind {
+        Kind::Sh | Kind::CompileFail => {
+            return Err(format!("a {} test has no -fsyntax-only compile", kind.label()));
+        }
+        Kind::Verify => VERIFY_FLAGS,
+        _ => &["-fsyntax-only"],
+    };
+    let mut v = cfg.base_compile_flags();
+    v.extend(flags);
+    v.extend(mode.iter().map(|f| (*f).to_owned()));
+    Ok(v)
+}
+
 pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
     let name = job.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let kind = Kind::of(name).unwrap_or(Kind::Pass);
