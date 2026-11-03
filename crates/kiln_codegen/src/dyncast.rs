@@ -229,6 +229,7 @@ impl Cg<'_> {
         } else {
             // emitDynamicCastToVoid: this + vtable[-2] (offset-to-top).
             let vt = self.load(LTy::PTR, this, align, false);
+            self.tbaa_vptr(vt);
             let m2 = self.i64c(-2);
             let p = self.gep(LTy::I64, vt, vec![m2], true);
             let off = self.load(LTy::I64, p, 8, false);
@@ -327,6 +328,7 @@ impl Cg<'_> {
             self.emit_block(end, false);
         }
         let vt = self.load(LTy::PTR, lv.addr.v, lv.addr.align, false);
+        self.tbaa_vptr(vt);
         let m1 = self.i64c(-1);
         let p = self.gep(LTy::PTR, vt, vec![m1], true);
         Ok(self.load(LTy::PTR, p, 8, false))

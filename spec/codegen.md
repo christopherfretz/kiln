@@ -832,11 +832,123 @@ The normative description is spec/driver.md "Code generation". In short:
   alone above it (clang `GenerateCode`). Tests:
   `tests/codegen/optnone_minsize_naked_o{0,1}.cpp` (exact under oracle
   19, structural under 22, on both targets).
+- A naked function returning indirectly keeps its `sret` parameter
+  (`dead_on_unwind writable sret(T) align N`) but without `noalias`,
+  which clang's `EmitFunctionProlog` adds only after the naked early
+  return; nothing stores the `sret` pointer (WP-412). Register variables
+  with an asm label in a naked body are ordinary `alloca`s whose asm
+  operands are pinned to `{reg}` (§7c). Tests:
+  `tests/codegen/naked_sret{,_o1}.cpp`, `tests/codegen/naked_asm_regvar.cpp`
+  (per-target register names: AArch64 `x0`/`w1`, x86-64 `rdi`/`esi`).
 - A template parameter object is emitted `linkonce_odr` with a comdat
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
   internal one, kiln keeps it below `-fclang-compat=22`); it carries no
   `align`, as clang's.
+
+### Size optimization attributes (WP-412)
+- `CodegenOptions::opt_size` is clang's `CodeGenOpts.OptimizeSize`: 1 at
+  `-Os`, 2 at `-Oz` (the driver's `opt_size`). `Cg::size_attrs` gives
+  `optsize`, and `minsize` too at 2 (clang
+  `getTrivialDefaultFunctionAttributes`). They come with
+  `Cg::target_attrs`, so every function that has the target attributes
+  gets them: definitions (user functions, structor variants, thunks,
+  initialization functions, TLS wrappers, `__clang_call_terminate`) and
+  declarations (`Cg::declare_fn`, library builtins). Runtime functions
+  (`rt_fn`: `__cxa_atexit`, `__cxa_allocate_exception`, `__cxa_throw`, …)
+  and intrinsics have neither. An `optnone` function drops them: its
+  definition (`DefInline::OptNone`, clang
+  `SetLLVMFunctionAttributesForDefinition` removes them) and its
+  declaration (`Cg::optnone_fns`).
+- Call sites through clang `EmitCall` (`Fx::call_vals_to`: direct,
+  indirect and virtual calls, structor calls; replaceable allocation
+  calls) get `Cg::call_size_attrs`: the size attributes unless the
+  callee is in `Cg::optnone_fns`. Runtime calls, inline asm, intrinsic
+  calls and the plain calls of `__cxx_global_var_init` /
+  `__clang_call_terminate` / `_ZTH` have none.
+- Initialization functions (`__cxx_global_var_init`,
+  `_GLOBAL__sub_I_*`) and the `thread_local` wrapper `_ZTW*` are
+  `noinline` only at `-O0`.
+- At `-Oz` a non-array delete-expression that does not deallocate
+  through a virtual deleting destructor or a destroying `operator
+  delete` calls `operator delete` unconditionally in the null check's
+  end block (clang `EmitObjectDelete`: "When optimizing for size, call
+  'operator delete' unconditionally").
+- Tests: `tests/codegen/optsize_os.cpp`, `optsize_oz.cpp`,
+  `delete_oz.cpp` (exact under oracle 19, structural under 22, both
+  targets).
+
+### TBAA (WP-412, `tbaa.rs`)
+- **When.** `Cg::tbaa_on`: `CodegenOptions::optimize && strict_aliasing`
+  (clang creates `CodeGenTBAA` iff `OptimizationLevel > 0 &&
+  !RelaxedAliasing`), so `-O0` and `-fno-strict-aliasing` emit none.
+  Bodies made `optnone` by the attribute are still tagged. The rule
+  relied on is [basic.lval]/11.
+- **Nodes** (clang `CodeGenTBAA`, built lazily and cached on
+  `Cg::tbaa`): the root `!{!"Simple C++ TBAA"}`; scalar nodes
+  `!{name, parent, i64 0}` under "omnipotent char" (the root's child).
+  A builtin is named for its signed variant (`int`, `long`, `long long`,
+  `__int128`, `short`, `float`, `double`, `long double`, `wchar_t`,
+  `char8_t`, `char16_t`, `char32_t`, `bool`, `_Float16`, `__fp16`,
+  `std::nullptr_t`); `char`, `signed char` and `unsigned char` are
+  "omnipotent char"; `_BitInt(N)` is "_BitInt(N)". An externally
+  visible enumeration is its `_ZTS` name, one in an unnamed namespace
+  and `std::byte` are "omnipotent char". A pointer or reference is
+  "any pointer" (child of char) below `-fclang-compat=22`; at 22 it is
+  `"p<depth> <pointee>"` under `"any p<depth> pointer"` (pointer TBAA:
+  depth counts pointer levels through arrays; the pointee is the
+  builtin's name, "omnipotent char" for the char types, or a named
+  class's `_ZTS` name; `void`, enumerations, functions, member pointers,
+  `_BitInt`, complex, vectors, atomics and unnamed classes give the
+  `any p<depth> pointer` node itself). Everything else (complex,
+  vectors, member pointers, arrays, unions) is "omnipotent char". A
+  vtable pointer is "vtable pointer" (child of the root).
+- **Struct nodes** (`getBaseTypeInfo`): a complete non-union class with
+  no flexible array member is `!{!"_ZTS<name>", member, i64 off, ...}`
+  listing its non-virtual non-empty bases by offset, then its fields:
+  unnamed bit-fields and empty `[[no_unique_address]]` members are
+  skipped, a bit-field is listed at its byte offset with its type node.
+- **Access tags** (`Tb`, carried on `LV::tb` as clang's
+  `LValue::getTBAAInfo`): `{T, T, 0}` for a plain access; a `.`/`->`
+  member chain accumulates `{outermost class, member type, offset}`
+  (`Cg::tb_field`); a member of a union, a vector-typed member and any
+  access below a may-alias path are `{char, char, 0}`; a bit-field
+  access is untagged. Array subscripts and derived-to-base conversions
+  restart at the plain tag (`Tb::sub`, keeping may-alias), as does a
+  member of a class that is no valid base. A conditional lvalue keeps
+  its operands' common tag, else may-alias; `__builtin_bit_cast` reads
+  may-alias. A reference member's slot load carries the member's path
+  and its referee the plain tag; a reference's own slot (variables,
+  members, captures) is accessed as the reference type, and a
+  constructor's member initializers store with the member's path.
+  Parameter spills (the `this` spill as the class pointer, the VTT spill
+  as `void **`) are tagged; the `this` reload, the return-value slot of
+  a direct return, complex parts, vector element read-modify-writes and
+  `vec3`/bool-vector loads are not. `bool` loads also carry
+  `!range !{i8 0, i8 2}` and `!noundef`.
+- **Vtable pointers** (`Cg::tbaa_vptr`, clang `GetVTablePtr` /
+  `InitializeVTablePointer`): the constructor and destructor vptr stores
+  and every vptr load (virtual calls, `dynamic_cast` to `void*`,
+  `typeid`, virtual base offsets, virtual member-function-pointer calls,
+  `::delete` of a polymorphic object, virtual thunks).
+- **`!tbaa.struct`** (`getTBAAStructInfo`, attached by the aggregate
+  copies of `EmitAggregateCopy` only: trivial copy/move construction and
+  assignment, aggregate-copy expressions): `(i64 off, i64 size, tag)`
+  per scalar field, nested classes flattened, empty fields skipped; a
+  union, array or vector field is one "omnipotent char" entry of its
+  size, a run of bit-fields one at its first member's offset with the
+  storage size; a class with a base or a flexible array member gets
+  none. A copy constructor's memberwise field-range `memcpy` gets none.
+- At `-fclang-compat=22` the module also gets `!llvm.errno.tbaa =
+  !{int tag}` (clang 22 `EmitModuleMetadata`).
+- Thunks get their method's definition attributes above `-O0`
+  (`optnone`, `inlinehint`: clang `maybeEmitThunk` calls
+  `SetLLVMFunctionAttributesForDefinition`); at `-O0` they are
+  `noinline optnone`.
+- Tests: `tests/codegen/tbaa_scalar_o1.cpp`, `tbaa_struct_path_o1.cpp`,
+  `tbaa_vptr_o1.cpp`, `tbaa_copy_o1.cpp`, `tbaa_off_o1.cpp` (exact under
+  oracle 19, which compares metadata, on both targets; oracle 22 strips
+  metadata, so the clang 22 pointer nodes were checked by hand).
 
 ### Always-inliner (WP-389)
 - clang's `-O0` pipeline (`buildO0DefaultPipeline`) runs
@@ -877,6 +989,15 @@ The normative description is spec/driver.md "Code generation". In short:
   clang's in-process codegen where the text round trip did not.
 
 ### Deviations
+- **TBAA gaps (WP-412).** `__attribute__((may_alias))` is not modelled
+  (clang `TypeHasMayAlias` makes such accesses "omnipotent char"); at
+  `-O1`+ with strict aliasing kiln tags them by their type, so code
+  relying on `may_alias` for type punning can miscompile. Use
+  `-fno-strict-aliasing` for it until it is implemented. Atomic loads
+  and stores (`atomic.rs`) carry no `!tbaa`. An unnamed class's struct
+  node uses kiln's `Ut_` mangling, which does not number a second
+  unnamed class in the same scope (`Ut0_`), so its node name can differ
+  from clang's.
 - **clang 22 codegen (WP-355, WP-386).** At `-fclang-compat=22` kiln
   follows clang 22 where §6a says; elsewhere its IR is clang 19's under
   every level. The oracle-22 `DEVIATIONS` entries record the rest of
@@ -1208,8 +1329,8 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `CanSkipVTablePointerInitialization` holds (trivial body, no
   members needing destruction).
 - **Virtual calls** (`CGCXXABI::getVirtualFunctionPointer`): the
-  arguments are emitted first, then the vtable load (`!tbaa` free at
-  `-O0`), the slot GEP and load. Calls are devirtualized when the class
+  arguments are emitted first, then the vtable load (tagged "vtable pointer"
+  above `-O0`, §TBAA), the slot GEP and load. Calls are devirtualized when the class
   or the method is `final`, when the object is a known complete object
   (a named non-reference variable or a temporary), and for qualified
   calls (`p->B::f()`).

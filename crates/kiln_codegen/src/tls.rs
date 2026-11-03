@@ -287,8 +287,11 @@ impl Cg<'_> {
             self.m.func_mut(w).linkage = Linkage::LinkOnceOdr;
         }
         // SetLLVMFunctionAttributesForDefinition (no CodeGenFunction: no
-        // "min-legal-vector-width").
-        let mut fa = vec![Attr::Flag(AttrKind::NoInline)];
+        // "min-legal-vector-width"); `noinline` only at -O0.
+        let mut fa = Vec::new();
+        if !self.opts.optimize {
+            fa.push(Attr::Flag(AttrKind::NoInline));
+        }
         if !self.opts.exceptions {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
