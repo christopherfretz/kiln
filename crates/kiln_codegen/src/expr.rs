@@ -4043,8 +4043,11 @@ impl Cg<'_> {
                 self.push_deferred_destroy(c);
             }
         }
-        let fields: Vec<DeclId> =
-            ast.decls.members(rd).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
+        let fields: Vec<DeclId> = ast
+            .decls
+            .members(def)
+            .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
         for f in fields {
             let fd = ast.decls.field(f);
             let unnamed_bf =

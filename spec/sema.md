@@ -369,7 +369,10 @@ residual` (docs/status/wp-184-oracle-switch.md).
   non-dependent `extern int g;` in it conflicts with an earlier `extern
   char g;`. A block-scope redeclaration whose type (or the earlier
   declaration's type) is dependent is checked only at instantiation
-  (clang's `MergeVarDeclTypes` for a local variable). Test:
+  (clang's `MergeVarDeclTypes` for a local variable). An instantiated
+  block-scope `extern` declaration keeps its function as its context but
+  names the namespace-scope entity, which the mangler resolves
+  (spec/abi.md §8.27, WP-462). Test:
   tests/conformance/basic.link/local-extern-template-pattern.cpp (WP-330).
 - **`classify_name`** gives the parser a name's category: type,
   namespace, value, or undeclared.
@@ -651,7 +654,8 @@ Redeclaration and linkage rules:
   redeclarations" (§4.7).
 - **GNU asm labels** (`act_on_asm_label`, clang's
   `ActOn{Function,Variable}Declarator` and `mergeDeclAttributes`): a
-  function (also a member function, WP-449) or variable declarator's
+  function (also a member function, WP-449, and a constructor,
+  destructor or conversion function, WP-462) or variable declarator's
   label becomes an `AsmLabel`
   attribute, first in the declaration's attribute list, and its
   `StringLitId` is recorded in the `asm_label` cold data of the entity's
@@ -2909,11 +2913,31 @@ diagnostics and IR.
     `dcl.struct.bind/p0963-binding-condition*.cpp`,
     `dcl.struct.bind/p0963-switch-condition.cpp`.
   - Only `static`, `thread_local`, `auto` and cv are allowed
-    ([dcl.pre]/6). Another storage class, `constexpr`, `consteval`,
-    `constinit` or `inline` is `decomposition declaration cannot be
-    declared 'constexpr'`, or `... with 'static constexpr' specifiers`
-    when there are several, at the first one. The declaration continues:
-    a `constexpr` is still applied, which makes `e` const, as in clang.
+    ([dcl.pre]/6), plus `constexpr` and `constinit` in C++26 (P2686R5,
+    WP-454; gated on `-std`, not on `-fclang-compat`). Another storage
+    class, `consteval`, `inline`, or `constexpr`/`constinit` before
+    C++26 is `decomposition declaration cannot be declared 'constexpr'`
+    (clang 22: `structured binding declaration ...`), or `... with
+    'static constexpr' specifiers` when there are several, at the first
+    one. Clang 22 implements P2686R5 and, at `-std=c++23`, gives this
+    error rather than an extension warning; kiln follows it. A
+    `consteval` is also `consteval can only be used in function
+    declarations` (`sema_consteval_wrong_decl_kind`). The declaration
+    continues: a `constexpr` is still applied, which makes `e` const,
+    as in clang.
+  - **P2686R5.** A `constexpr` decomposition is a constexpr variable
+    `e`: its initializer must be a constant expression
+    (`check_constexpr_init`, the same diagnostics and notes as any
+    `constexpr` variable, including the element-wise copy of an array
+    `e` in `init_decomposition_array`), and its bindings are then usable
+    in constant expressions ([expr.const]/4, the binding expression
+    refers to `e`). A tuple-like type's holding variables are
+    `constexpr` too, so each `get` call is constant-evaluated at the
+    declaration. `constinit` is recorded on `e` (`record_constinit`)
+    and checked like any `constinit` variable. `static constexpr`,
+    block scope, namespace scope, templates and the P1061 pack form
+    compose unchanged. Tests: `dcl.struct.bind/p2686-*.cpp`,
+    `dcl.struct.bind/specifiers-constexpr.cpp` (c++23).
   - Before C++20 (P1091R3, [dcl.pre]/6) `static` and `thread_local`
     (`__thread`, `_Thread_local`) are an extension:
     `structured binding declaration declared 'static' is a C++20
@@ -3027,9 +3051,11 @@ diagnostics and IR.
   (`kiln_oven` `holding_vars`, codegen `emit_var_decl`). A use of a
   binding evaluates or emits its binding expression. A namespace-scope
   `e` mangles as `_ZDC1a1bE` (`kiln_abi` `mangle_decomp.rs`, `DC
-  <source-name>+ E`, never `L`-prefixed). A `constexpr` decomposition is
-  rejected, so constant bindings come from a `const` `e` with a
-  constant initializer, which is usable in constant expressions.
+  <source-name>+ E`, never `L`-prefixed). Constant bindings come from
+  a `constexpr` `e` (C++26, P2686R5) or, as before, a `const` `e` with
+  a constant initializer that is usable in constant expressions; the
+  Oven needs no new rule, since
+  usability is that of `e` and the holding variables.
 - **Fixed on the way.**
   - A reference that cannot bind (to `void`, or to a non-class type
     with no conversion) is `reference to type 'int' could not bind to
@@ -3039,7 +3065,10 @@ diagnostics and IR.
     specialization fully qualified (`Sema::decl_ty_str`, clang's
     printing of `getTypeDeclType`).
 - **Left.**
-  - `constexpr` structured bindings (P2686; clang 19 rejects them too).
+  - P2686R5's constexpr-referenceable automatic objects: a block-scope
+    non-`static` `constexpr` decomposition whose bindings are
+    references (`constexpr auto& [a] = ...` of a local) still needs `e`
+    to have static storage; clang 22 rejects these too.
   - Instantiating binding attributes.
   - The NoOp `'const M'` cast clang adds when a const class `e` is
     copy-initialized from a prvalue.
@@ -6438,17 +6467,44 @@ not supported yet`.
   ([stmt.expand]/5). An inner pattern that depends on the element is
   expanded within it. The form is chosen on the substituted initializer:
   - *enumerating*: an expansion-init-list; element i is its i-th
-    expression. A braced or designated element is unsupported
-    (`unsupported`, not a crash).
+    initializer-clause. The list is an expression-list
+    ([stmt.expand]/1), so a top-level designator is `expected
+    expression` (clang 23 parses it with `ParseExpressionList`). A
+    braced element (WP-454) is kept as written, a `void`-typed
+    `InitListExpr` (`dependent_init_list`; a braced pack expansion
+    `{x}...` is expanded in a template as a call argument's is), and
+    `Substituter::initializer` turns the select it replaces into
+    `Initializer::List`: the for-range-declaration is
+    copy-list-initialized exactly as `decl = {...};` ([stmt.expand]/5.1,
+    [dcl.init.list]/3; designated lists against an aggregate per
+    [dcl.init.list]/3.1, `auto` deducing `std::initializer_list` per
+    element, a structured binding of it ill-formed as for `auto [a, b] =
+    {1, 2};`). Each element's temporaries belong to its own block
+    `{ decl = {...}; body }`, so codegen and the Oven destroy them at that
+    block's end like any block-scope declaration's.
   - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
     member `begin`/`end` are found or ADL finds viable candidates;
     `static constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
     through a per-element `static constexpr auto __iter = __begin + i`.
-    N is counted by evaluating `__begin + i != __end` for i = 0, 1, ...
-    (kiln deviation: the paper defines N as `__end - __begin`; the count
-    agrees for random-access iterators and also works without
-    `operator-`), capped at 2^20 (`sema_expansion_size_not_constant`
-    when an evaluation fails).
+    N is the first i for which `__begin + i != __end` is false
+    ([stmt.expand]/5.2 counts with `++` in a consteval lambda; `__begin +
+    i` is what each element uses). *Fast path* (WP-454,
+    `expansion_size_difference`): when `__begin` and `__end` have the same
+    type and it is (a) a pointer to a complete object type, or (b) a
+    specialization of libc++'s `std::__wrap_iter`, `std::__bounded_iter`
+    or `std::__static_bounded_iter`, or libstdc++'s
+    `__gnu_cxx::__normal_iterator`, whose first template argument is a
+    pointer (the iterators of `std::array`, `std::span`,
+    `std::basic_string_view`, `std::basic_string` and `std::vector` are
+    these or pointers), N is `__end - __begin` evaluated once, when that
+    is a constant expression with a non-negative integral value. For
+    these types `+`, `-` and `!=` are the pointer's, so the count is the
+    same. Any other iterator, or a failed or negative difference, is
+    counted incrementally, one evaluation per i, capped at 2^20
+    (`sema_expansion_size_not_constant` when an evaluation fails or the
+    cap is reached); the fast path has no cap. A class iterator whose `!=`
+    disagrees with its `-` gets the comparison's count
+    (`tests/conformance/stmt.expand/iterating-count.cpp`).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
     (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
     for-range-declaration the declaration is `static constexpr`.
@@ -6460,15 +6516,14 @@ not supported yet`.
   captured diagnostics, `stash_has_error`: a failed constant
   initialization does not mark the variable INVALID), it is retried by
   value, a copy, each attempt in a block scope of its own. The copy stands
-  in for P2686 (constexpr references to automatic variables), which kiln
-  does not implement: the paper's `constexpr std::array` local example
-  works. When both fail, the first attempt's diagnostics are emitted.
+  in for P2686's constexpr-referenceable automatic objects, which kiln
+  does not implement (§4.9): the paper's `constexpr std::array` local
+  example works. When both fail, the first attempt's diagnostics are emitted.
 - **Holding variables.** The holding variables of a `constexpr` structured
   binding declaration are `constexpr` (P2686 [dcl.struct.bind]/4), so the
   Oven sees initialized constants rather than a static variable's
-  definition. A user-written `constexpr` structured binding is still
-  rejected (`structured binding declaration cannot be declared
-  'constexpr'`).
+  definition. User-written `constexpr` structured bindings are §4.9
+  (P2686R5, WP-454).
 - **Return type deduction.** A `return` in the pattern of an expansion
   statement of a non-template function does not deduce the placeholder
   return type (`in_template_outside_expansions`); its expansions do.
@@ -6483,7 +6538,7 @@ not supported yet`.
   every `-fclang-compat` (`KILN_FEATURES`; clang 22 does not define it).
 - **Left.** `define_static_array` and reflection ranges (kiln's
   `members_of` returns a `member_list` aggregate without `begin`/`end`);
-  braced or designated init-list elements; P2686.
+  P2686's constexpr-referenceable automatic objects (§4.9).
 - Validation: `tests/conformance/stmt.expand/` (all `requires: clang>=23`),
   `tests/codegen/expansion_stmt.cpp`, `kiln_codegen` test
   `expansion_statement_lowers_in_order`.
@@ -7041,113 +7096,17 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     instantiation from cascading (`temp.inst/var-spec-invalid-init-silent.cpp`,
     WP-418).
 
-## 8a. Reflection (spike, -freflection) (`reflect.rs`, WP-267)
+## 8a. Reflection (`reflect.rs`, `meta/`; `-freflection`)
+Specified in **`spec/reflection.md`**:
+- the value type and the `^^` operand (§2);
+- intrinsic recognition and the per-family sema dispatch in `meta/` (§3);
+- the consteval boundary (§4);
+- splices (§5);
+- `define_aggregate` and the `__kiln_define_member` rules (§6);
+- annotations (§7);
+- the error model (§8).
 
-This is a design spike, not P2996. All of it is gated on `Sema::reflection`
-(driver `-freflection`, default off, C++26). `__cpp_reflection` is not
-predefined. With the flag off, nothing here is reachable: the lexer does
-not produce `^^`, `[:` or `:]`. Findings: docs/status/reflection-spike.md.
-Tests: `tests/conformance/reflection/`, written as kiln-only goldens from
-the P2996R13 wording.
-
-- **Value type.** `std::meta::info` is the builtin type `MetaInfo`, spelled
-  `decltype(^^int)` (`tests/support/kiln_meta.h`). It is a scalar with
-  these operations:
-  - copy, and comparison with `==`/`!=` (both operands `info`;
-    [expr.eq]/7 as amended by P2996);
-  - `?:` with two `info` arms;
-  - value-initialization (`info{}`, the null reflection);
-  - use as an NTTP: a substituted argument is rebuilt as the
-    `CXXReflectExpr` of the same entity.
-
-  Nothing converts to or from it. Any other operator is
-  `invalid operands`.
-- **`^^` operand** ([expr.reflect]). Supported operands:
-  - a type-id;
-  - a namespace;
-  - a variable;
-  - a non-template function;
-  - a (qualified) data member.
-
-  The result is a constant `CXXReflectExpr` whose value is the
-  `ReflectionId` of `Reflectee::Type(canonical QualType)` or
-  `Reflectee::Decl(first declaration)`. **Divergence from spec/ast.md §10:**
-  the spike canonicalizes alias sugar, so `^^Alias == ^^int`. Any other
-  operand gets `cannot reflect {0}`. In a template, `^^T` reflects the
-  substituted type.
-- **Type splice** ([dcl.type.splice]). `typename [: e :]` is a type, and so
-  is `[: e :]` where a template type argument is expected. `e` is
-  converted and evaluated as a constant expression of type `info`. The
-  errors are:
-  - `splice operand of type {0} is not a reflection`;
-  - `splice operand must be a constant expression`, with the Oven's notes;
-  - `splice in a type position does not designate a type`.
-
-  A dependent operand is "unsupported: dependent splice", and
-  `using A = [: r :];` without `typename` is not parsed yet.
-- **Intrinsics.** `meta_intrinsic_of(f)` recognizes these declarations by
-  qualified name, for the Oven's dispatch (spec/oven.md
-  "Reflection runtime"). Their bodies do not exist; the header only
-  declares them.
-  - `std::meta::type_of(info)`: the type of a variable, data member or
-    function, canonical. Anything else gets the note "'X' has no type".
-  - `std::meta::name_of(info) -> const char*`: an identifier, a class's
-    name, or a type's spelling, as a frozen string literal object. The
-    null reflection gets the note "'std::meta::info()' has no name".
-  - `std::meta::__kiln_members_count(info)` / `__kiln_member_at(info, i)`:
-    the class's members in declaration order. Members are included if
-    they are named and are not implicitly declared, an access specifier,
-    a `static_assert` or a friend. A class template specialization is
-    completed on demand (lent Oven; only when manifestly
-    constant-evaluated). An incomplete class gets the note
-    "'X' reflects an incomplete class". The header's
-    `members_of<R>()` builds a `member_list<N>` from these two.
-  - `__kiln_define_member(info cls, info type, const char* name)`, at
-    namespace scope: see below.
-- **`define_member` rules** (the mutation experiment). When the call
-  succeeds, it appends a public non-static data member `name` of type
-  `type` to `cls`'s member list, at the point the member-specification has
-  reached. The new member is a `Field` with `DeclFlags::INJECTED` and the
-  call's location. The call returns the member's reflection.
-
-  Layout, aggregate-ness and the rest of the definition bits come from
-  class completion at `}`. The member is found by every later lookup:
-  - later code in the same evaluation;
-  - later member declarations;
-  - complete-class contexts (member function bodies);
-  - code after the class.
-
-  In a class template, an unqualified name in a member function body is
-  looked up at definition time ([temp.res]), so it needs `this->v`. The
-  conditions, checked in order:
-  1. The evaluation must be manifestly constant-evaluated
-     (`inst.eval_loc` set). Otherwise the call fails silently, so a
-     speculative `try_fold` never mutates.
-  2. `cls` must reflect a class type: "'X' does not reflect a class type".
-  3. That class must be the innermost class being defined
-     (`classes.last()`), compared by first declaration. Otherwise the
-     note is "'__kiln_define_member' can only add a member to the class
-     whose member-specification is being evaluated ('S' is not)", plus
-     "class being defined is 'I'" when there is one. This covers a
-     complete class, an outer class, and namespace scope.
-  4. `type` must reflect a complete object type other than `cls`. A
-     template specialization is completed on demand. Otherwise the note is
-     "'X' is not a complete object type for a data member", or
-     "'X' does not reflect a type".
-  5. `name` must be an identifier: "'n' is not an identifier".
-  6. `name` must not be declared in the class yet ([class.mem]/5). A
-     duplicate gets three notes:
-     - "duplicate member 'x'" at the call;
-     - "previous declaration is here";
-     - "in evaluation of '__kiln_define_member' for class 'S' being
-       defined here" at the class.
-
-  The supported evaluation contexts are any constant evaluation in the
-  member-specification. In practice that is `static_assert`, called
-  directly or through a consteval helper, in a class or a class template
-  (each specialization evaluates its own). P2996's `define_aggregate`,
-  which completes an *incomplete* class from a consteval block, is not
-  implemented.
+Everything is gated on `Sema::reflection` (driver `-freflection`).
 
 ## 9. Target (`target.rs`)
 - `pub use kiln_abi::{Arch, Target}`.

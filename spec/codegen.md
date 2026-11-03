@@ -803,12 +803,29 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `followup_epilogue`) → unroll-and-jam → partial unroll → pipelining,
   each stage adding `llvm.loop.isvectorized` / `unroll.disable` /
   `unroll_and_jam.disable` / `distribute.enable` as clang does; the
-  `mustprogress` entry comes first in the innermost node. **Not
-  modelled:** `vectorize(assume_safety)` / `interleave(assume_safety)`
-  set only `vectorize.enable`; clang's parallel-loop marking
-  (`llvm.access.group` on each memory access in the body and
-  `llvm.loop.parallel_accesses`) is not emitted.
-  `tests/codegen/loop_hints.cpp`, `tests/codegen/loop_hints_o1.cpp`.
+  `mustprogress` entry comes first in the innermost node.
+  `vectorize(assume_safety)` / `interleave(assume_safety)` set
+  `vectorize.enable` and make the loop parallel (clang `IsParallel`,
+  WP-462): pushing it makes a `distinct !{}` access group (before the
+  loop id), its node lists `!{!"llvm.loop.parallel_accesses", group}`
+  right after `mustprogress` (in the before- and after-jam nodes under
+  an unroll-and-jam parent too), and while it is active every
+  instruction `Fir::push` appends that may access memory (load, store,
+  atomic, fence, call, `invoke`, `callbr`; LLVM `mayReadOrWriteMemory`)
+  gets `!llvm.access.group` (clang `LoopInfoStack::InsertHelper`): the
+  group of the one active parallel loop, or the uniqued list of every
+  active parallel loop's group, outermost first. A call whose callee is
+  a `memory(none)` function (a `const` function, `llvm.ctpop`) gets none;
+  only the callee's attributes count, as clang tags the call before
+  setting the call-site attributes. Instructions inserted at another
+  position (`insert_before`/`insert_after`, clang `new X(.., InsertPt)`)
+  get none either. The loop is active where clang pushes it: from
+  before the condition of a `for` and a range-based `for`, from after
+  the condition of a `while` (its cleanups included), and only around a
+  `do` loop's back-edge.
+  `tests/codegen/loop_hints.cpp`, `tests/codegen/loop_hints_o1.cpp`,
+  `tests/codegen/loop_parallel.cpp`, `tests/codegen/loop_parallel_o1.cpp`,
+  `tests/codegen/loop_parallel_jam.cpp`.
 - **Forwarding blocks** (clang `SimplifyForwardingBlocks`): a loop
   condition block that only branches on is folded into its predecessor
   only while no cleanup (a destructor, a lifetime end, a `noexcept`
@@ -1535,11 +1552,20 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   initializers included), but not the operands of a call. A call whose
   direct callee (through parentheses, implicit casts and substituted
   non-type template parameters) carries the same label, or is the
-  builtin `__builtin_<label>` of a library function kiln recognizes
-  (`builtin::lib_by_name`, standing in for clang's `isLibFunction`),
-  makes it recursive.
+  builtin `__builtin_<label>` of a library function makes it recursive.
+  The library builtins carry `builtin::attr::LIB_FUNCTION` (clang
+  `isLibFunction`, the `FunctionWithBuiltinPrefix` flag, WP-462): the
+  406 `__builtin_` rows that clang 19 and 22 treat so, found by probing
+  each one in an `extern template` labelled with its library name. The
+  generic classification and comparison builtins (`__builtin_isnan`,
+  `__builtin_fpclassify`, ...), `__builtin_powi`, `__builtin_abort` and
+  the `_Float16`/`__float128` math rows are among them; the bit
+  operations (`__builtin_clz`, `__builtin_popcount`), `__builtin_expect`,
+  `__builtin_trap`, the overflow, coroutine, elementwise and alignment
+  builtins are not.
   `tests/codegen/trivially_recursive.cpp`,
-  `tests/codegen/trivially_recursive_always_inline.cpp`.
+  `tests/codegen/trivially_recursive_always_inline.cpp`,
+  `tests/codegen/trivially_recursive_lib.cpp`.
 - **Explicit instantiation definitions** ([temp.explicit], WP-170;
   `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
   `GVA_StrongODR`): a function or variable that is an explicit
@@ -2801,12 +2827,13 @@ Linux targets; `Cg::frame_pointer` applies it.
   A variable a `goto` or a `switch` jumps past gets none (clang
   `VarBypassDetector`, initialized over the body as in clang
   `GenerateCode`; an indirect `goto` bypasses every variable). Thunks
-  get none. The markers use LLVM 19's `(i64 size, ptr)` signature, since
-  kiln's optimizer is `opt-19` (driver.md "IR optimization"); under the
-  clang 22 oracle, `opt-22` auto-upgrades the markers that survive
-  optimization to LLVM 21's `(ptr)` form, leaving dead `.i64`
-  declarations, so cases that keep markers after -O1 compare
-  structurally there (`ir_vs_clang` deviation rows).
+  get none. The markers use LLVM 19's `(i64 size, ptr nocapture)`
+  signature, and LLVM 21's `(ptr captures(none))` at `-fclang-compat=22`
+  (WP-462, §7z): codegen emits the latter itself for an LLVM 21+ backend
+  (`kiln_llvm` `Module::ir_version`, `intrinsics::lifetime_has_size`),
+  and for an older one the driver rewrites the `-S -emit-llvm` text after
+  `opt` (driver.md "IR optimization"), so `opt-19`/`llc-19` still get
+  the form they parse.
 - **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
   `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
   SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
@@ -3131,6 +3158,35 @@ caller's full-expression ([class.temporary]/3; clang
 - Tests: `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`
   (both oracles),
   `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`.
+## 7x. Landed (WP-454): braced expansion elements, constexpr structured bindings
+
+No lowering changed; the new forms reach codegen as existing AST.
+
+- A braced element of an expansion-init-list (`template for (P p : {{1,
+  2}, {.x = 3}})`, spec/sema.md §7.6a) is the per-element block `{ P p
+  = {...}; body }`. The expansion variable's list-initialization, its
+  temporaries and its destructor are emitted as for any block-scope
+  `P p = {...};`: each element's temporaries die at the end of its
+  declaration's full-expression and `p` at the end of its block, before
+  the next element starts. Tests:
+  `stmt.expand/braced-elements-run.cpp` (constructor and destructor
+  order), `stmt.expand/braced-elements.cpp` (the Oven's order).
+- A `constexpr` structured binding (P2686R5, spec/sema.md §4.9) emits
+  `e` and its holding variables as `constexpr` variables: a namespace-
+  scope `e` and its tuple-like holding references are constant globals
+  (`@x = constant ptr @_ZGR1x_`, as clang); a block-scope non-`static`
+  one calls `get` at run time, as clang does. Test:
+  `dcl.struct.bind/p2686-run.cpp`.
+- Left:
+  - A `static constexpr` block-scope tuple-like decomposition's holding
+    references get a guarded dynamic initializer, where clang
+    constant-initializes them: `fold::Collect::local_decl` does not
+    visit the holding variables of a local decomposition, so no fold
+    exists for `static_local` (values are right; WP-453 owns
+    `fold.rs`).
+  - An unreferenced namespace-scope `constexpr` decomposition's `e`
+    (`@_ZDC1x1yE`, internal) is not emitted; clang emits it.
+
 ## 7aa. Landed (WP-459): explicit-object conversion functions, AArch64 target features
 - A conversion function with an explicit object parameter
   ([class.conv.fct]/1, P0847) is lowered as an explicit-object member
@@ -3176,6 +3232,88 @@ category's `const` static members, which the defaulted body copies into
 its return slot (`static_cast<R>`), so the IR is clang's
 (`tests/codegen/synth_three_way.cpp`, strong, weak and partial
 categories, compared with clang 22 and clang 19 on both targets).
+
+## 7z. Landed (WP-462): local externs, asm labels, placeholders, `-O1` details
+
+- **Block-scope `extern` declarations** (spec/abi.md §8.27) name their
+  namespace-scope entity also in an instantiation of a function
+  template: `template<class T> void f() { extern void g(int); extern int
+  ev; }` declares `@_Z1gi` and `@ev = external global i32`, not
+  `_ZZ1fIiEvvE…` locals (`tests/codegen/local_extern_instantiation.cpp`,
+  `tests/conformance/basic.link/local-extern-instantiation-run.cpp`).
+- **Shared asm labels** (spec/abi.md §8.27): declarations of different
+  types whose labels name one symbol are one function or global, as
+  clang's `GetOrCreateLLVMFunction`/`GetOrCreateLLVMGlobal` return the
+  existing entry whatever its type; each call keeps its own function
+  type. A definition whose type differs from the existing declaration
+  replaces it at the end of the module (`kiln_llvm`
+  `Module::retype_function_to_end`, clang `Function::Create` + `takeName`
+  + RAUW). **Labels on constructors, destructors and conversion
+  functions**: every structor variant names the label, the first variant
+  defined is the one definition, and the complete-object alias is not
+  emitted (`tests/codegen/asm_label_shared.cpp`,
+  `tests/codegen/asm_label_structors.cpp`,
+  `tests/conformance/dcl.asm/asm-label-shared-and-structors.cpp`).
+- **Incomplete class in a signature**: a function first referenced while
+  a class parameter or return type is incomplete (never defined, or
+  defined later in the TU) is declared `void ()` with no attributes, as
+  clang does for a type `isFuncTypeConvertible` rejects; the declaration
+  stays when the class is completed, calls use their call-site function
+  type, and a definition retypes it. The top-level walk tracks the class
+  definitions it has not reached yet; a pointer or reference to such a
+  class has no `dereferenceable` size. A virtual method's placeholder is
+  `unnamed_addr`, and so is its thunk's
+  (`tests/codegen/incomplete_class_sig.cpp`,
+  `tests/codegen/incomplete_class_thunk.cpp`). A braced list initializing
+  a class through a type written before the class was defined now reads
+  the definition's fields
+  (`list-init-of-class-declared-incomplete-run.cpp`).
+- **Lifetime markers at `-fclang-compat=22`** use LLVM 21's
+  `(ptr captures(none))` form (§7p, WP-370, "Lifetime markers"; driver.md
+  "IR optimization"); the `lifetime_o1`, `extern_template_vtable_o1` and
+  `loop_hints_o1` deviations are gone.
+- **Variadic thunks** are clang's `EmitMustTailThunk`: the thunk passes
+  its own arguments with the adjusted `this` to a `musttail` call that
+  forwards `...`, returns its result, and the generic epilogue lands in
+  a dead block (x86-64 functions keep `align 2`). Before this a
+  this-adjusting thunk dropped the variadic arguments. Above `-O0` the
+  vtable's such thunk is `available_externally` when the vtable is; a
+  return-adjusting variadic thunk is a declaration (clang would clone
+  the method), and defining one is diagnosed
+  (`tests/codegen/variadic_thunk{,_o1,_o1_nopasses}.cpp`,
+  `tests/conformance/class.virtual/variadic-thunk-run.cpp`).
+- **`isLibFunction`** is builtin attribute bit `LIB_FUNCTION` (128,
+  clang's `F`), set on the 406 `__builtin_` rows clang 19 and 22 treat as
+  library functions (found by compiling each labelled `extern template`
+  body at `-O1 -disable-llvm-passes`: a declaration means library); the
+  trivially-recursive check (§7a) reads it
+  (`tests/codegen/trivially_recursive_lib.cpp`).
+- **`assume_safety` access groups** (§4, loop metadata):
+  a distinct group per parallel loop, `llvm.loop.parallel_accesses` in
+  its id, `!llvm.access.group` on each memory-accessing instruction
+  `Fir::push` appends while it is active (the union under nested
+  parallel loops; calls to `memory(none)` callees skipped), exact against
+  clang 19 and 22 (`tests/codegen/loop_parallel{,_o1}.cpp`;
+  `loop_parallel_jam.cpp` is oracle 22 only, as clang 19 makes
+  `followup_inner` distinct).
+- **Not modelled**: an instruction placed by `Fir::insert_before` /
+  `insert_after` gets no access group (clang's `new X(..., InsertPt)`
+  also bypasses `InsertHelper`, but not every kiln insert mirrors one);
+  the clang 19 distinct `followup_inner`; `"; No predecessors!"`
+  comments; vtable hiding (`isVTableHidden`); labelled structors of a
+  class with virtual bases (clang emits a VTT call to a one-argument
+  definition) and the dead D0 block clang appends to a labelled virtual
+  destructor; local classes and instantiations in the incomplete-class
+  walk.
+
+## Landed sections after WP-488: `spec/landed/codegen/`
+
+From WP-488 on, a work package's Landed section is not appended here: it
+is its own file, `spec/landed/codegen/WP-NNN.md` (title line
+`# WP-NNN — <title>`, the same content as a section above), so open pull
+requests never conflict on the end of this file (spec/README.md "Landed
+sections"). They are as normative as this file; read that directory
+after the numbered Landed sections above.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

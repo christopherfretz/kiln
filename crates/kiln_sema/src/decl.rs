@@ -2689,6 +2689,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(decl, &mut attrs);
         }
         self.check_optnone_conflicts(decl, &mut attrs);
+        self.act_on_asm_label(ds, d, decl, &mut attrs);
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
@@ -2712,8 +2713,18 @@ impl Sema<'_, '_> {
     ) {
         let kind = self.ast.decls.get(decl).kind();
         // A member function takes one as a namespace-scope function does
-        // (clang `ActOnFunctionDeclarator`).
-        if !matches!(kind, DeclKind::Function | DeclKind::CXXMethod | DeclKind::Var) {
+        // (clang `ActOnFunctionDeclarator`), constructors, destructors
+        // and conversion functions included (every structor variant
+        // takes the label, spec/abi.md §1).
+        if !matches!(
+            kind,
+            DeclKind::Function
+                | DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
+                | DeclKind::Var
+        ) {
             return;
         }
         let prev_attr = self.ast.prev(decl).and_then(|p| {
@@ -5663,7 +5674,7 @@ impl Sema<'_, '_> {
 
     /// A `constexpr` variable's initializer must be a constant expression
     /// ([dcl.constexpr]/10); its value is recorded.
-    fn check_constexpr_init(&mut self, v: DeclId, e: ExprId) {
+    pub(crate) fn check_constexpr_init(&mut self, v: DeclId, e: ExprId) {
         if self.ast.decls.begin_eval(v).is_err() {
             return;
         }

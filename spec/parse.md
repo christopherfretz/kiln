@@ -1321,7 +1321,9 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   suffix for recovery (except `[`/`(`/`++`/`--` at the start of a line,
   where the caller's `expected ';'` is better).
 
-### 5.2 Reflection (`reflect.rs`, WP-267 spike, `-freflection`)
+### 5.2 Reflection (`reflect.rs`, `-freflection`)
+This section is the grammar only. Semantics are in spec/reflection.md (§2
+for `^^`, §5 for splices).
 - The tokens `^^`, `[:` and `:]` exist only when `ParseOptions::reflection`
   is set and the standard is C++26 (spec/lex.md Phase 3). Without the
   flag, `^^x` is `^` `^x` and gets clang 19's errors

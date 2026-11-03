@@ -78,7 +78,7 @@ directives are also ERRORs.
 | `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
 | `ast-implicit` | `ast` only. Include implicit declarations (implicit special members, injected-class-names, ...): kiln gets `-fdump-ast=implicit`, clang's dump is normalized as `xtask clang-ast --implicit`. Use with `ast-filter` to keep the builtin implicit declarations out. |
 | `pp-linemarkers` | `pp` only. Preprocess with `-E` instead of `-E -P`, so the output keeps line markers, and compare them (see "pp comparison"). |
-| `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes`, `static_bytes` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
+| `oven: [<line>[:<col>]] <counter><=N\|<counter>>=N ...` | kiln-specific constexpr budget (`<=` an upper bound, `>=` a floor); `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes`, `static_bytes`, `evaluations` or `memo_hits` (a budget-only counter the bench does not record; 0 in a report that lacks it). Not for `pp`. See "kiln-specific tests". |
 | `inst-report: <golden.json>` | kiln-specific: the compile's template instantiation report must equal the golden, timings masked. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
@@ -216,7 +216,7 @@ the release without further configuration.
 **Two-oracle policy (WP-355).** The goldens, `//@ diag:` directives and
 the IR-diff baseline are clang 22's, and the corpus is green under BOTH
 releases: `cargo xtask ci` (oracle 22) and `KILN_ORACLE=19 cargo xtask ci
---quick` are both gates. An expectation that differs between the releases
+--quick --oracle-only` ("CI") are both gates. An expectation that differs between the releases
 is pinned to one of them by `requires:` — `clang>=22` where clang 22's
 output is the contract (a C++26 feature clang 19 lacks, a reworded
 diagnostic, a re-sugared dump), `clang<22` where kiln has not followed
@@ -435,8 +435,10 @@ compile fails for that reason. Then:
   is in the test file at that line (and column, if given), combined as for
   the total (sums; maximum for `peak_bytes`, `peak_arena` and `static_bytes`; count for `evaluations`). If no
   evaluation matches, the test FAILs: a budget on nothing is a stale budget.
-- Each bound is inclusive: a counter above it is a **FAIL**, naming the
-  location, the counter, its value and the budget.
+- Each bound is inclusive: a counter above a `<=` bound, or below a `>=`
+  floor, is a **FAIL**, naming the location, the counter, its value and the
+  bound. A floor states that something happened (`memo_hits>=1`: a call was
+  answered from the memo table); `memo_hits` is summed like `steps`.
 
 The report's total is listed with the commands under `-v`.
 
@@ -719,12 +721,17 @@ informational (exit status non-zero only on tool errors); its contract is
 `cargo xtask features` ("Feature table") is not part of `ci` either: it is a
 manual / M4-gate check.
 
-`cargo xtask ci [--quick]` is the merge gate (`docs/AGENTS.md` rule 3). It
-runs, stopping at the first failing step:
+`cargo xtask ci [--quick] [--oracle-only]` is the merge gate
+(`docs/AGENTS.md` rule 3). It runs, stopping at the first failing step:
 
-0. `cargo xtask diag-split --check` (in-process): kiln_diag's id and group
-   tables are in their area files with empty tails (spec/diag.md §2.4).
-   On failure it lists each problem and says to run `cargo xtask diag-split`;
+0. two in-process lints, each listing every problem it finds:
+   `cargo xtask diag-split --check` (kiln_diag's id and group tables are
+   in their area files with empty tails, spec/diag.md §2.4; the failure
+   says to run `cargo xtask diag-split`), and the per-WP Landed files
+   (spec/README.md "Landed sections", `xtask/src/landed.rs`): each file
+   under `spec/landed/` is `<spec>/WP-NNN.md` for an existing
+   `spec/<spec>.md`, starts `# WP-NNN — <title>` with its own id, and has
+   a `| WP-NNN |` row in `docs/BACKLOG.md`. Both run before `ci` fails;
 1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
    warnings`, `cargo test --workspace`. A step that fails with rustc's
    `error[E0463]` (can't find crate) on a line of its stderr is rerun
@@ -764,9 +771,27 @@ or an infrastructure error; otherwise it exits 1. The decision is
 `--quick` is for local iteration only; merges to `main` and GitHub CI use the
 full form. Any other argument is a usage error (exit 2).
 
+**`--oracle-only`** (WP-488) is the second oracle's gate: GitHub CI runs
+`KILN_ORACLE=19 cargo xtask ci --quick --oracle-only` after `cargo xtask
+ci`. It skips step 0, fmt and clippy, and replaces `cargo test
+--workspace` by `cargo test -p <pkg> --test <name>` for each test target
+in `ORACLE_TESTS` (`xtask/src/main.rs`), the targets whose result depends
+on `KILN_ORACLE` (today `kiln_codegen`'s `ir_vs_clang`); steps 2–4 are as
+above. Everything else in the workspace either pins clang 19 itself or
+uses no oracle, so it already ran, with the same result, in the
+default-oracle pass: the crates' tests name `clang++-19` and
+`/usr/lib/llvm-19`, and the harness's own end-to-end tests
+(`xtask/src/test/tests.rs` `clang_opts`) pin release 19 as compiler,
+oracle and toolchain (`Options::toolchain`, so `requires: llvm` does not
+follow `KILN_ORACLE` there either). A test target that reads `KILN_ORACLE` must be
+listed: `ci_tests::oracle_tests_are_listed` scans `crates/` for the name
+and fails on an unlisted (or stale) target. `--oracle-only` with the
+default oracle is allowed, but checks nothing the full form does not.
+
 The end-to-end tests in `xtask/src/test/tests.rs` and
 `xtask/src/bench/tests.rs` skip themselves with a note when clang 19 is
-missing. GitHub CI (`.github/workflows/ci.yml`) runs `cargo xtask ci` in a
+missing. GitHub CI (`.github/workflows/ci.yml`) runs `cargo xtask ci`, then
+`KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`, in a
 `debian:trixie` container on `ubuntu-24.04-arm`, the reference environment
 (aarch64 Debian 13, clang 19.1.7, GCC 14), with `clang-19 llvm-19 lld-19
 libc++-19-dev libc++abi-19-dev` installed and `KILN_REQUIRE_LLVM=1`, so

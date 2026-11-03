@@ -10,8 +10,8 @@
 //! declared, and the pattern instantiated once per element, the select
 //! becoming the element (spec/sema-templates.md §5.5).
 
-use kiln_ast::decl::{DeclFlags, InitStyle, VarSpec, VarStorage};
-use kiln_ast::expr::{BinaryOp, Radix, UnaryOp};
+use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle, VarSpec, VarStorage};
+use kiln_ast::expr::{BinaryOp, ExprKind, Radix, UnaryOp};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{ExpansionData, ExpansionForm};
@@ -100,22 +100,27 @@ impl Sema<'_, '_> {
     ) -> Option<ExpansionHead> {
         let (exprs, range_init, form) = match range {
             ExpansionInit::List(l) => {
-                if let Some(i) = l
-                    .items
-                    .iter()
-                    .find(|i| !i.designator.is_empty() || matches!(i.value, InitValue::List(_)))
-                {
-                    let at = match &i.value {
-                        InitValue::List(x) => x.lbrace,
-                        InitValue::Expr(e) => self.begin_loc(*e),
-                    };
-                    self.unsupported(
-                        "a braced or designated element of an expansion-init-list",
-                        at,
-                    );
+                // [stmt.expand]/1: the list is an expression-list, whose
+                // initializer-clauses may be braced-init-lists but not
+                // designated (clang 23 parses it with
+                // `ParseExpressionList`: "expected expression" at the
+                // designator).
+                if let Some(d) = l.items.iter().find_map(|i| i.designator.first()) {
+                    self.error(DiagId::parse_expected_expression, d.loc());
                     return None;
                 }
-                let es = Self::list_exprs(&l);
+                // A braced element is kept as written (a dependent
+                // `InitListExpr`): it list-initializes the
+                // for-range-declaration of its own expansion ([stmt.expand]/5.1,
+                // `decl = {…};`).
+                let es: Vec<ExprId> = l
+                    .items
+                    .iter()
+                    .map(|i| match &i.value {
+                        InitValue::Expr(e) => *e,
+                        InitValue::List(n) => self.dependent_init_list(n),
+                    })
+                    .collect();
                 (self.ast.lists.push(&es), None, ExpansionForm::Enumerating)
             }
             ExpansionInit::Expr(e) => (ListId::EMPTY, Some(e), ExpansionForm::Dependent),
@@ -290,7 +295,13 @@ impl Sema<'_, '_> {
     /// first `i` for which `begin + i != end` is false, each evaluated
     /// as a constant expression (spec/sema.md: the wording counts with
     /// `++` in a consteval lambda; `begin + i` is what each element uses).
+    /// A contiguous iterator whose arithmetic is the language's or the
+    /// standard library's counts in one evaluation of `end - begin`
+    /// ([`Sema::expansion_size_difference`]).
     fn expansion_size(&mut self, begin: DeclId, end: DeclId, colon: Loc) -> Option<u64> {
+        if let Some(n) = self.expansion_size_difference(begin, end, colon) {
+            return Some(n);
+        }
         let pd = QualType::unqual(self.target.ptrdiff_t);
         for i in 0..MAX_ITERATING {
             let b = self.build_decl_ref(begin, colon);
@@ -325,6 +336,76 @@ impl Sema<'_, '_> {
         }
         self.error(DiagId::sema_expansion_size_not_constant, colon);
         None
+    }
+
+    /// The fast path of [`Sema::expansion_size`] (spec/sema.md §7.6a):
+    /// when `begin` and `end` have the same type and it is a pointer to
+    /// a complete object type or a standard library contiguous iterator
+    /// ([`Sema::is_lib_contiguous_iterator`]), the first `i` with
+    /// `begin + i != end` false is `end - begin` whenever that is a
+    /// non-negative constant: `begin + i` for `i` in `[0, end - begin]`
+    /// stays within the range and compares unequal to `end` exactly
+    /// before it. `None` (the incremental count decides, and diagnoses)
+    /// otherwise; nothing is diagnosed here.
+    fn expansion_size_difference(&mut self, begin: DeclId, end: DeclId, colon: Loc) -> Option<u64> {
+        let b = self.build_decl_ref(begin, colon);
+        let e = self.build_decl_ref(end, colon);
+        let (bt, et) = (self.ety(b), self.ety(e));
+        if !self.ast.types.same_unqualified(bt, et) {
+            return None;
+        }
+        let contiguous = match self.ast.types.pointee(bt) {
+            Some(p) if self.ast.types.is_pointer(bt) => {
+                crate::target::is_complete_object(&self.ast, p)
+            }
+            _ => self.is_lib_contiguous_iterator(bt),
+        };
+        if !contiguous {
+            return None;
+        }
+        let d = self.act_on_binary(BinaryOp::Sub, e, b, colon);
+        if self.is_err_expr(d) || !self.ast.types.is_integral(self.ety(d)) {
+            return None;
+        }
+        let n = self.eval_int(d, EvalContext::new(EvalKind::Other, colon)).ok()?;
+        u64::try_from(n).ok()
+    }
+
+    /// Whether class type `t` is one of the standard library's
+    /// contiguous iterator adaptors over a pointer, whose `+`, `-` and
+    /// `!=` are the pointer's: libc++'s `std::__wrap_iter`,
+    /// `std::__bounded_iter` and `std::__static_bounded_iter`, and
+    /// libstdc++'s `__gnu_cxx::__normal_iterator` (the iterators of
+    /// `std::array`, `std::span`, `std::basic_string_view`,
+    /// `std::basic_string` and `std::vector` are these or pointers).
+    fn is_lib_contiguous_iterator(&self, t: QualType) -> bool {
+        let Some(r) = self.ast.types.as_record(t) else { return false };
+        let Some(name) = self.ast.decls.get(r).name().as_ident() else { return false };
+        let Some((_, spec)) = self.ast.spec_info(r) else { return false };
+        let over_pointer =
+            match self.ast.types.args(spec.args).first().map(kiln_ast::types::TemplateArg::view) {
+                Some(kiln_ast::types::ArgView::Type(p)) => self.ast.types.is_pointer(p),
+                _ => false,
+            };
+        if !over_pointer {
+            return false;
+        }
+        match self.ast.symbols().as_str(name) {
+            "__wrap_iter" | "__bounded_iter" | "__static_bounded_iter" => {
+                self.is_in_std_namespace(r)
+            }
+            "__normal_iterator" => {
+                let Some(ns) = self.ast.decls.get(r).ctx().map(|c| self.ast.redecl_context(c))
+                else {
+                    return false;
+                };
+                let top = self.ast.decls.get(ns).ctx().map(|p| self.ast.redecl_context(p));
+                self.kind_of(ns) == DeclKind::Namespace
+                    && self.ast.decls.get(ns).name().as_ident() == Some(self.intern("__gnu_cxx"))
+                    && top.is_some_and(|p| self.kind_of(p) == DeclKind::TranslationUnit)
+            }
+            _ => false,
+        }
     }
 
     /// The destructuring form ([stmt.expand]/5.3): `constexpr_opt auto&&
@@ -412,7 +493,7 @@ impl Substituter<'_, '_, '_> {
             let exprs: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(data.exprs).collect();
             let src = match data.range_init {
                 Some(e) => ExpansionSource::Expr(self.expr(e)?),
-                None => ExpansionSource::List(self.expand_exprs(&exprs)?),
+                None => ExpansionSource::List(self.expansion_list(&exprs)?),
             };
             if expand {
                 return self.expand_expansion(init, src, &data, depth, loc);
@@ -437,6 +518,48 @@ impl Substituter<'_, '_, '_> {
         })();
         self.sema.pop_scope();
         r
+    }
+
+    /// The elements of a pattern expansion-init-list, substituted: a
+    /// braced element (and a braced pack expansion `{x}...`,
+    /// [temp.variadic]/5.4) stays a dependent braced list, list-
+    /// initializing its expansion's declaration.
+    fn expansion_list(&mut self, exprs: &[ExprId]) -> SubstResult<Vec<ExprId>> {
+        use crate::templ::pack::Expansion;
+        let mut out = Vec::with_capacity(exprs.len());
+        for &x in exprs {
+            let ex = &self.sema.ast.exprs;
+            if ex.get(x).kind() == ExprKind::InitListExpr {
+                let l = self.init_list(x)?;
+                out.push(self.sema.dependent_init_list(&l));
+                continue;
+            }
+            let pat = crate::templ::pack::expr_pattern(self.sema, x)
+                .filter(|&p| self.sema.ast.exprs.get(p).kind() == ExprKind::InitListExpr);
+            match pat {
+                Some(p) => {
+                    let ellipsis = self.sema.ast.exprs.get(x).loc();
+                    match self.expand_pattern_at(Some(ellipsis), |s| s.init_list(p))? {
+                        Expansion::Elements(ls) => {
+                            out.extend(ls.iter().map(|l| self.sema.dependent_init_list(l)));
+                        }
+                        Expansion::Unexpanded(l) => {
+                            let e = self.sema.dependent_init_list(&l);
+                            out.push(self.sema.act_pack_expansion(e, ellipsis));
+                        }
+                    }
+                }
+                None => out.extend(self.expand_exprs(&[x])?),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether the expansion element `e` is a braced element (a
+    /// `void`-typed `InitListExpr` kept as written).
+    pub(crate) fn is_braced_element(&self, e: ExprId) -> bool {
+        let ex = &self.sema.ast.exprs;
+        ex.get(e).kind() == ExprKind::InitListExpr && self.sema.ast.types.is_void(ex.get(e).ty())
     }
 
     /// The for-range-declaration of pattern `d`, instantiated.
