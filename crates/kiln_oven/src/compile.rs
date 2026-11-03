@@ -35,6 +35,7 @@ mod mptr;
 mod new_delete;
 mod rtti;
 mod vector;
+mod wide;
 
 pub(crate) use builtins::designator_type;
 pub(crate) use new_delete::{is_named, is_std_named};
@@ -233,9 +234,11 @@ fn is_plain_binary(ast: &kiln_ast::Ast, e: ExprId) -> bool {
     !matches!(op, BinaryOp::Comma | BinaryOp::LAnd | BinaryOp::LOr | BinaryOp::Assign)
         && !op.is_compound_assignment()
         && !op.is_ptr_mem()
-        && ![e, ast.exprs.operands(e)[0], ast.exprs.operands(e)[1]]
-            .iter()
-            .any(|&x| ast.types.as_complex(ast.exprs.get(x).ty()).is_some())
+        && ![e, ast.exprs.operands(e)[0], ast.exprs.operands(e)[1]].iter().any(|&x| {
+            let q = ast.exprs.get(x).ty();
+            ast.types.as_complex(q).is_some()
+                || matches!(ast.types.canonical_view(q), TypeView::BitInt { width, .. } if width > 128)
+        })
 }
 
 pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
@@ -745,6 +748,12 @@ impl Oven {
                 matches!(c.o.types.scal(p.ty), Some(Scal::Int { .. } | Scal::Bool | Scal::Float(_)))
             })
             && !matches!(ret, RetKind::Scalar(t) if c.o.types.scal(t) == Some(Scal::Ptr));
+        let steps = std::mem::take(&mut c.ctor_steps);
+        if steps.is_empty() {
+            self.ctor_steps.remove(&idx);
+        } else {
+            self.ctor_steps.insert(idx, steps.into_boxed_slice());
+        }
         let f = &mut self.funcs[idx as usize];
         f.entry = entry;
         f.state = FState::Ready;
@@ -832,6 +841,9 @@ pub(crate) struct Compiler<'a> {
     /// Comma left operands not evaluated: the ignored values of the
     /// `__builtin_object_size` trial being compiled (WP-302).
     skip_effects: Vec<ExprId>,
+    /// The construction progress of the constructor being compiled
+    /// ([`Oven::ctor_steps`]).
+    ctor_steps: Vec<(u32, u32)>,
 }
 
 /// The value an `OpaqueValueExpr` stands for.
@@ -875,6 +887,7 @@ impl<'a> Compiler<'a> {
             array_index: None,
             srcloc: None,
             skip_effects: Vec::new(),
+            ctor_steps: Vec::new(),
         }
     }
 
@@ -2972,6 +2985,11 @@ impl Compiler<'_> {
     /// Increment/decrement of `place`; `out` receives the old value for a
     /// postfix operator, the new one for a prefix one.
     fn inc_dec(&mut self, place: Place, ty: OTy, op: UnaryOp, out: Option<u32>, e: ExprId) {
+        if self.o.types.wide(ty).is_some() {
+            // A wide value is never read through `out` (the postfix form
+            // is `wide_init`'s).
+            return self.wide_inc_dec(place, ty, op, e);
+        }
         if let Some(elem) = self.cx_elem(ty) {
             // clang `IncDecSubobjectHandler`: the real part only.
             // A complex value is never read through `out` (the postfix
@@ -3142,6 +3160,9 @@ impl Compiler<'_> {
     fn arith_spine(&mut self, e: ExprId, dst: u32, ty: OTy) {
         if self.cx_operands(e) {
             return self.cx_compare(e, dst);
+        }
+        if self.wide_operands(e) {
+            return self.wide_compare(e, dst);
         }
         let ast = self.ast();
         let [a, b] = ast.exprs.operands(e);
@@ -3414,9 +3435,12 @@ impl Compiler<'_> {
     }
 
     fn cast(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        let op = self.ast().exprs.operand(e);
+        if self.is_wide_expr(op) && self.o.types.wide(ty).is_none() {
+            return self.wide_to_scalar(e, dst, ty);
+        }
         let ast = self.ast();
         let ck = ast.exprs.cast_kind(e);
-        let op = ast.exprs.operand(e);
         let ek = ast.exprs.get(e).kind();
         let reinterpret = ek == ExprKind::CXXReinterpretCastExpr;
         if reinterpret {
@@ -4302,6 +4326,9 @@ impl Compiler<'_> {
         if let Some(elem) = self.cx_elem(ty) {
             return self.cx_assign(e, elem);
         }
+        if self.o.types.wide(ty).is_some() {
+            return self.wide_assign(e, ty);
+        }
         if self.o.types.is_aggregate(ty) {
             let src = self.lv_mem(b, Access::Read);
             let dstp = self.lv_mem(a, Access::Write);
@@ -4329,6 +4356,13 @@ impl Compiler<'_> {
         }
         if self.cx_elem(lty).is_some() || self.is_complex_expr(x.rhs) {
             return self.cx_compound_assign(e);
+        }
+        let ct = self.ty(x.result_ty);
+        if self.o.types.wide(lty).is_some()
+            || self.o.types.wide(ct).is_some()
+            || self.is_wide_expr(x.rhs)
+        {
+            return self.wide_compound_assign(e);
         }
         let r = self.rv_copy(x.rhs);
         let place = self.lv_rmw(lhs, e);
@@ -4384,9 +4418,6 @@ impl Compiler<'_> {
     }
 
     fn init_inner(&mut self, e: ExprId, p: u32, ty: OTy) {
-        if self.wide_bit_int(e) {
-            return;
-        }
         let n = self.node(e);
         // An object of an invalid class (diagnosed, [class.mem]; its
         // layout is a placeholder) is never constructed: the evaluation
@@ -4499,6 +4530,9 @@ impl Compiler<'_> {
         }
         if self.cx_op(e) && self.cx_elem(ty).is_some() {
             return self.cx_init(e, p, ty);
+        }
+        if self.o.types.wide(ty).is_some() && self.wide_init(e, p, ty) {
+            return;
         }
         if !self.o.types.is_aggregate(ty) {
             let r = self.rv(e);
@@ -4892,6 +4926,9 @@ impl Compiler<'_> {
                     }
                     _ if op.is_compound_assignment() => {
                         self.compound_assign(e);
+                    }
+                    _ if self.o.types.wide(ty).is_some() => {
+                        let _ = self.materialize(e, ty);
                     }
                     _ => {
                         let r = self.reg();

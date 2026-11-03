@@ -1700,6 +1700,18 @@ impl Sema<'_, '_> {
     /// Reports the names of non-static members used without an object
     /// ([expr.prim.id.general]/4) at the end of a full-expression; true
     /// if one was reported.
+    ///
+    /// Every pending reference is flushed, including those of an
+    /// enclosing full-expression still being parsed when a nested one
+    /// ends (a template argument's constant expression, a lambda body's
+    /// statement). That is only an ordering difference: a pending
+    /// reference with `error` set is ill-formed whatever follows (the
+    /// uses it could still become, `&C::m` and an unevaluated operand,
+    /// either cannot enclose a nested full-expression or clear `error`
+    /// when the reference is formed), and the nested and enclosing
+    /// expressions share one SFINAE context. WP-445 found no program
+    /// whose answer changes, so it is left as is (spec/sema.md §3,
+    /// members named without an object).
     pub(crate) fn flush_member_refs(&mut self) -> bool {
         if self.member_refs.is_empty() {
             return false;

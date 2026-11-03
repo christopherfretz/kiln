@@ -182,6 +182,21 @@ WP-432 re-ran WP-416's 2 deprecated variable-template failures
 (`meta.unary.prop/is_pod.deprecated.verify`,
 `is_trivial.deprecated.verify`): both pass.
 
+**After WP-445** (the WP-418 correctness follow-ups), on wp/445 78c5a251
+merged with main b4e8dfb3, same flags (`-j 4 --mem-limit 3072`), 906.9 s
+wall on a loaded host, peak RSS 683 MiB
+(`variant.visit/visit_return_type.pass.cpp`, the kiln compile step):
+
+| Scope | total | pass | fail | unsupported (driver) | pass rate |
+|---|---:|---:|---:|---:|---:|
+| 21 M4 directories | 2661 | 2634 | 0 | 27 (0) | **100.0%** |
+
+`make_from_tuple.verify` passes (`-Wreturn-stack-address` sees the
+temporary through a reference cast), and so does `hash.depr.verify` (a
+qualified name in a type-only context that names no type gets the lookup
+error). `-flax-vector-conversions=none` is now accepted, so the
+`_warningFlags` probe passes it to every compile.
+
 ## Environment
 
 What `cargo xtask libcxx` detects about the host, and what stays
