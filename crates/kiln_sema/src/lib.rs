@@ -23,6 +23,7 @@ mod builtins;
 pub mod class;
 mod complex;
 mod consteval;
+mod consteval_only;
 mod constexpr_body;
 pub mod constfold;
 pub mod conv;
@@ -210,6 +211,16 @@ pub struct Sema<'a, 'sm> {
     /// splices and the kiln reflection intrinsics (spec/sema.md
     /// "Reflection (spike, -freflection)").
     pub reflection: bool,
+    /// [`Sema::is_consteval_only_type`] of the complete classes seen
+    /// (keyed by definition).
+    pub(crate) consteval_only_records: kiln_source::fx::FxHashMap<DeclId, bool>,
+    /// The consteval-only leaves of template definitions outside every
+    /// immediate function context: checked again in each instantiation
+    /// ([`Sema::note_inst_consteval_only`]).
+    pub(crate) consteval_only_pattern: kiln_source::fx::FxHashSet<ExprId>,
+    /// Depth of expressions being rebuilt by substitution (their
+    /// consteval-only leaves follow the pattern's, not the builders').
+    pub(crate) subst_expr_depth: u32,
     /// `-fcoro-aligned-allocation` (default off): a coroutine frame is
     /// allocated and freed with the `std::align_val_t` forms of
     /// `operator new`/`operator delete` when available (P2014R0 option 2,
@@ -860,6 +871,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             exceptions: true,
             rtti: true,
             reflection: false,
+            consteval_only_records: kiln_source::fx::FxHashMap::default(),
+            consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
+            subst_expr_depth: 0,
             coro_aligned_allocation: false,
             lax_vector_conversions: LaxVectorConversions::All,
             range_lifetime_extension: false,

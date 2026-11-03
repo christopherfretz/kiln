@@ -55,12 +55,17 @@ impl Substituter<'_, '_, '_> {
                 self.note_shared_this(e);
             }
             self.sema.mark_shared_expr_referenced(e);
+            self.sema.note_shared_consteval_only(e);
             self.sema.reissue_designator_warnings(e);
             self.sema.note_shared_temporaries(e);
             return Ok(e);
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
-        let r = self.expr_node(e)?;
+        self.sema.subst_expr_depth += 1;
+        let r = self.expr_node(e);
+        self.sema.subst_expr_depth -= 1;
+        let r = r?;
+        self.sema.note_inst_consteval_only(e, r);
         if self.sema.is_err_expr(r) {
             return Err(SubstFail);
         }
@@ -867,8 +872,7 @@ impl Substituter<'_, '_, '_> {
                 Reflectee::Template(n) => {
                     let n = self.template_name(n, loc)?;
                     let n = self.sema.ast.types.canonical_template_name(n);
-                    let info = self.sema.meta_info_type();
-                    Ok(self.sema.builder().reflect_expr(Reflectee::Template(n), info, loc, end))
+                    Ok(self.sema.make_reflect_expr(Reflectee::Template(n), loc, end))
                 }
                 _ => Ok(e),
             },

@@ -29,14 +29,13 @@ impl Sema<'_, '_> {
         if ty == QualType::ERROR {
             return self.recover(info, &[], loc);
         }
-        self.builder().reflect_expr(Reflectee::Type(ty), info, loc, end)
+        self.make_reflect_expr(Reflectee::Type(ty), loc, end)
     }
 
     /// `^^::` ([expr.reflect]/4): the global namespace.
     pub fn act_on_reflect_global(&mut self, loc: Loc, end: Loc) -> ExprId {
-        let info = self.meta_info_type();
         let tu = self.ast.tu;
-        self.builder().reflect_expr(Reflectee::Namespace(tu), info, loc, end)
+        self.make_reflect_expr(Reflectee::Namespace(tu), loc, end)
     }
 
     /// `^^name` / `^^nns name` ([expr.reflect]/5, /7): a namespace,
@@ -155,7 +154,16 @@ impl Sema<'_, '_> {
             DeclKind::CXXConstructor => return self.reflect_overload_set(name_loc, loc),
             _ => return self.reflect_bad_operand(name_loc, loc),
         };
-        self.builder().reflect_expr(r, info, loc, end)
+        self.make_reflect_expr(r, loc, end)
+    }
+
+    /// The `CXXReflectExpr` of `r`, an expression of consteval-only type
+    /// ([`Sema::note_consteval_only`]).
+    pub(crate) fn make_reflect_expr(&mut self, r: Reflectee, loc: Loc, end: Loc) -> ExprId {
+        let info = self.meta_info_type();
+        let e = self.builder().reflect_expr(r, info, loc, end);
+        self.note_consteval_only(e);
+        e
     }
 
     /// [expr.reflect]/7: an id-expression that names an overload set does

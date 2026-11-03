@@ -150,7 +150,7 @@ impl Sema<'_, '_> {
     /// expression. A template definition is checked like clang does: its
     /// non-dependent invocations now (an instantiation shares them),
     /// the dependent ones at instantiation.
-    fn immediate_exempt(&self) -> bool {
+    pub(crate) fn immediate_exempt(&self) -> bool {
         self.unevaluated > 0
             || self.immediate > 0
             || self.imm.pending.const_eval > 0
@@ -560,6 +560,13 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records `e` for the immediate checks at the end of the current
+    /// full-expression (a consteval-only leaf, `consteval_only.rs`; a
+    /// fresh node, so not searched for: a full-expression may hold many).
+    pub(crate) fn note_pending_ref(&mut self, e: ExprId) {
+        self.imm.pending.refs.push(e);
+    }
+
     /// The call `call` of function `f` (named by `callee_ref`, when it
     /// is a `DeclRefExpr`): an immediate invocation outside an immediate
     /// function context is wrapped in a `ConstantExpr` evaluated at the
@@ -683,7 +690,15 @@ impl Sema<'_, '_> {
                 self.ast.exprs.set_constant_elided(c);
             }
         }
+        let mut consteval_only_reported = false;
         for r in bad_refs {
+            // A consteval-only expression (spec/reflection-repr.md §5).
+            if self.is_consteval_only_leaf(r) {
+                if !consteval_only_reported {
+                    consteval_only_reported = self.check_consteval_only_leaf(r, e, var, escalating);
+                }
+                continue;
+            }
             // Already immediate-escalating (an instantiation's copy of a
             // pattern's reference): clang skips it.
             if self.ast.exprs.get(r).has(ExprFlags::IMMEDIATE_ESCALATING) {
@@ -900,7 +915,7 @@ impl Sema<'_, '_> {
     /// when it is declared (clang's `CheckCompleteVariableDeclaration`):
     /// `constexpr`, static or thread storage duration, or a `const`
     /// non-volatile integral or enumeration local.
-    fn checks_constant_init(&self, v: DeclId) -> bool {
+    pub(crate) fn checks_constant_init(&self, v: DeclId) -> bool {
         let Some(var) = self.ast.decls.var(v) else { return false };
         if var.spec.is_constexpr() || self.has_static_storage(v) {
             return true;
