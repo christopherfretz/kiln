@@ -4578,6 +4578,11 @@ and unevaluated operands:
   adds `note_function_warning_silence` (insert `&`) and, when it can be
   called without arguments and returns a pointer (or an integer, against
   a literal zero), `note_function_to_function_call` (append `()`).
+- An operand holding a clang 19 delayed typo (`holds_typo_expr`: an
+  undeclared template-id corrected to `::val`) is not checked: clang's
+  `TypoExpr` makes the comparison type-dependent and the correction
+  rebuilds it under a SFINAE trap, which drops warnings
+  (`temp.names/undeclared-template-id-correct-19.cpp`).
 - The result selects `true` for `!=`, `false` for `==`. The location is
   the member name of a member access, else the start of the operand;
   ranges are the operand's and the null constant's.

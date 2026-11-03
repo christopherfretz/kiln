@@ -41,6 +41,12 @@ impl Sema<'_, '_> {
             return;
         }
         let (e, null) = if rn { (l, r) } else { (r, l) };
+        // A clang 19 `TypoExpr` operand makes the comparison
+        // type-dependent; the correction rebuilds it under a SFINAE trap,
+        // which drops warnings (`val<int> == nullptr` corrected to `::val`).
+        if self.holds_typo_expr(e) {
+            return;
+        }
         let Some(msg) = self.always_non_null_pointer(e, null, eq) else { return };
         let msg = msg.range(self.expr_range(null));
         if self.in_template() {
