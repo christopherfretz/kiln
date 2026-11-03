@@ -451,7 +451,11 @@ fn measure_and_report(
         report.improved,
         report.new,
         report.advisory,
-        if report.unjudged > 0 { format!(", {} not judged", report.unjudged) } else { String::new() },
+        if report.unjudged > 0 {
+            format!(", {} not judged", report.unjudged)
+        } else {
+            String::new()
+        },
         start.elapsed().as_secs_f64()
     );
     Ok(report)

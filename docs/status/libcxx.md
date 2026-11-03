@@ -37,8 +37,20 @@ How to rerun the sample (from the helper checkout; adapt paths):
 T=kiln/.toolchain/llvm-project/libcxx/test
 find $T/std -name '*.cpp' | sort | awk 'NR%10==3' > sample.list
 cd kiln && source scripts/env.sh && \
-  cargo xtask libcxx --no-fail -j 3 --timeout 20 --report sample.json $(cat ../sample.list) | tee ../sample.log
+  cargo xtask libcxx --no-fail -j 3 --report sample.json $(cat ../sample.list) | tee ../sample.log
 ```
+
+The rows above were measured with a debug kiln and `--timeout 20`. Stratum
+and full-suite runs now use the runner's defaults (`spec/libcxx.md` "Build
+profiles", "Timeouts and retries"): the `harness` profile (optimized, no LTO,
+incremental; built once per checkout), a 120 s limit per compile or link step
+and 30 s per run (240 s for the long-running directories). A debug kiln
+(`--profile debug`, 300 s compile limit) is several times slower on
+template-heavy tests and is for debugging only; the M3 gate takes ~1 min with
+the default profile and ~10 min with `--profile debug`. For kiln-vs-clang
+compile time on heavy libc++ tests, use the bench's libc++ slice
+(`cargo xtask bench --compare-with clang++-22 bench/libcxx-slice`,
+`docs/status/perf.md` "libc++ slice").
 
 Only failures are printed; cluster them with
 `grep "FAIL (" sample.log | sed 's/.* — //' | sed "s/'[^']*'/'X'/g" | sort | uniq -c | sort -rn`.

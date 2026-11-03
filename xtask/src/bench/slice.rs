@@ -159,10 +159,8 @@ impl Dist {
         // Nearest rank: the smallest value with at least 90% at or below it.
         let rank = (n * 9).div_ceil(10).max(1);
         let max = v[n - 1].1;
-        let max_id = ratios
-            .iter()
-            .find(|(_, r)| *r == max)
-            .map_or_else(String::new, |(id, _)| id.clone());
+        let max_id =
+            ratios.iter().find(|(_, r)| *r == max).map_or_else(String::new, |(id, _)| id.clone());
         let xs: Vec<f64> = v.iter().map(|(_, r)| *r).collect();
         Some(Self {
             n,
@@ -500,7 +498,11 @@ mod tests {
         );
         assert!(section.starts_with(HEADING), "{section}");
         assert!(section.contains("4 of the 48 tests"), "{section}");
-        assert!(section.contains("| kiln/clang time | 2.00x | 1.82x | 3.00x | 3.00x `std/b.pass` | 3 |"), "{section}");
+        assert!(
+            section
+                .contains("| kiln/clang time | 2.00x | 1.82x | 3.00x | 3.00x `std/b.pass` | 3 |"),
+            "{section}"
+        );
         assert!(section.contains("| `std/c.pass` | FAIL | 100.0 | - | - | 4.0 | - |"), "{section}");
         assert!(section.contains("first 12.5, mean 12.5, max 12.5"), "{section}");
         assert!(section.ends_with("|\n"), "{section}");

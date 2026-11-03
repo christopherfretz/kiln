@@ -497,7 +497,12 @@ struct Setup {
 impl Setup {
     /// `tests` overrides the default checkout; `install` looks up the libc++
     /// tree the run uses (`--list` sets nothing up and skips it).
-    fn resolve(root: &Path, tag: String, tests: Option<&Path>, install: bool) -> Result<Self, String> {
+    fn resolve(
+        root: &Path,
+        tag: String,
+        tests: Option<&Path>,
+        install: bool,
+    ) -> Result<Self, String> {
         let toolchain = match tag_major(&tag).filter(|m| crate::oracle::SUPPORTED.contains(m)) {
             Some(m) => crate::oracle::Oracle::parse(Some(&m.to_string()))?,
             None => crate::oracle::Oracle::from_env()?,
@@ -625,7 +630,8 @@ pub fn syntax_compiles(
     check_tag(tag)?;
     let setup = Setup::resolve(root, tag.to_owned(), None, true)?;
     let test_root = setup.test_root.clone();
-    let tests: Vec<(PathBuf, String)> = rels.iter().map(|r| (test_root.join(r), r.clone())).collect();
+    let tests: Vec<(PathBuf, String)> =
+        rels.iter().map(|r| (test_root.join(r), r.clone())).collect();
     let cfg_cache = load_local_cfgs(&test_root, &tests);
     std::fs::create_dir_all(scratch)
         .map_err(|e| format!("cannot create {}: {e}", scratch.display()))?;
