@@ -418,61 +418,10 @@ impl Sema<'_, '_> {
         Some((op.spelling(), l, r))
     }
 
-    /// The location of the first token of `e` (clang's `getBeginLoc`):
-    /// a node whose own location is an operator or a name after its first
-    /// operand begins where that operand does.
-    pub(crate) fn begin_loc(&self, mut e: ExprId) -> Loc {
-        loop {
-            let n = self.ast.exprs.get(e);
-            let first = match n.kind() {
-                ExprKind::ImplicitCastExpr
-                | ExprKind::ConstantExpr
-                | ExprKind::MaterializeTemporaryExpr
-                | ExprKind::CXXBindTemporaryExpr
-                | ExprKind::CXXStdInitializerListExpr
-                | ExprKind::ExprWithCleanups
-                | ExprKind::BinaryOperator
-                | ExprKind::CompoundAssignOperator
-                | ExprKind::ConditionalOperator
-                | ExprKind::BinaryConditionalOperator
-                | ExprKind::ArraySubscriptExpr
-                | ExprKind::CallExpr
-                | ExprKind::CXXMemberCallExpr
-                | ExprKind::CXXPseudoDestructorExpr
-                | ExprKind::DesignatedInitUpdateExpr
-                | ExprKind::ExtVectorElementExpr
-                | ExprKind::MemberExpr => true,
-                ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
-                ExprKind::CXXRewrittenBinaryOperator => {
-                    e = self.ast.exprs.rewritten_semantic(e);
-                    continue;
-                }
-                // clang's `CXXOperatorCallExpr::getSourceRangeImpl`: a
-                // prefix unary operator begins at its token, every other
-                // form at its first operand.
-                ExprKind::CXXOperatorCallExpr => {
-                    use kiln_ast::names::OverloadedOperator as O;
-                    let op = self.ast.exprs.operator_call_op(e);
-                    let args = self.ast.exprs.call_args(e);
-                    let first = self.ast.lists.at::<ExprId>(args, 0);
-                    let prefix = self.ast.lists.get(args).len() == 1
-                        && !matches!(op, O::Call | O::Subscript | O::Arrow);
-                    match first {
-                        Some(a) if !prefix => {
-                            e = a;
-                            continue;
-                        }
-                        _ => return n.loc(),
-                    }
-                }
-                _ => false,
-            };
-            let kids = if first { self.ast.exprs.children(e, &self.ast.lists) } else { Vec::new() };
-            match kids.first() {
-                Some(&k) => e = k,
-                None => return self.ast.templates.expr_begin.get(e).copied().unwrap_or(n.loc()),
-            }
-        }
+    /// The location of the first token of `e` (clang's `getBeginLoc`;
+    /// [`kiln_ast::Ast::begin_loc`]).
+    pub(crate) fn begin_loc(&self, e: ExprId) -> Loc {
+        self.ast.begin_loc(e)
     }
 
     /// The source range of `e` (clang `getSourceRange`) for a diagnostic:

@@ -39,6 +39,7 @@ mod module;
 mod module_init;
 mod new_delete;
 mod null_init;
+mod psabi;
 mod stmt;
 mod tbaa;
 mod tls;

@@ -3000,6 +3000,7 @@ impl Cg<'_> {
         let vals = self.emit_call_args(&sig, &args)?;
         let mut ret_extra = Vec::new();
         if let Some(d) = direct {
+            self.psabi_call_check(e, d, &args, false);
             self.alloc_call_attrs(d, &vals, &mut extra, &mut ret_extra);
         }
         let r =
