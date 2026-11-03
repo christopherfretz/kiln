@@ -244,6 +244,10 @@ pub struct Sema<'a, 'sm> {
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
     /// "Predefined identifiers").
     pub clang_compat: u32,
+    /// The `AArch64` `sve` target feature is on (`-march=armv8-a+sve`,
+    /// `-target-feature +sve`): the SVE vector types are usable in
+    /// expressions and as automatic variables (spec/sema.md "SVE").
+    pub sve: bool,
     /// The begin of the nested-name-specifier whose component the parser
     /// is acting on (set around each `act_on_nested_name_*` call): clang
     /// 22's point of instantiation for a class or enumeration completed
@@ -883,6 +887,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             gnu: false,
             clang_compat: 22,
+            sve: false,
             nns_start: None,
             gnu_lib_builtins: false,
             pack: (0, Vec::new()),

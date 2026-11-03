@@ -687,11 +687,11 @@ impl<'a> Cg<'a> {
                     });
                     if let Some(def) = def {
                         self.emit_global_var(def)?;
-                    } else if ast.spec_info(first).is_some()
-                        && ast.decls.var(first).is_some_and(|v| v.init.is_some())
-                    {
-                        // A variable template specialization used before
-                        // its template's definition is its own definition.
+                    } else if ast.spec_info(first).is_some() {
+                        // A variable template specialization is its own
+                        // definition (also one used before its template's
+                        // definition; one without an initializer is
+                        // default-initialized).
                         self.emit_global_var(first)?;
                     }
                 }
@@ -1668,16 +1668,40 @@ impl<'a> Cg<'a> {
             out.push(Attr::string("tune-cpu", "generic"));
         } else {
             out.push(Attr::string("target-cpu", "generic"));
-            // clang 19 sorts the `+` features and appends the explicit
-            // `-mno-outline-atomics` after `-fmv`.
-            out.push(Attr::string(
-                "target-features",
-                if self.opts.outline_atomics {
-                    "+fp-armv8,+neon,+outline-atomics,+v8a,-fmv"
-                } else {
-                    "+fp-armv8,+neon,+v8a,-fmv,-outline-atomics"
-                },
-            ));
+            out.push(Attr::string("target-features", &self.aarch64_features()));
+        }
+    }
+
+    /// The `AArch64` `target-features` string: the base `+fp-armv8`,
+    /// `+neon`, `±outline-atomics`, `+v8a`, `-fmv`, overridden by
+    /// [`CodegenOptions::target_features`]; clang lists the enabled
+    /// features sorted, then the disabled ones sorted.
+    fn aarch64_features(&self) -> String {
+        let mut f: std::collections::BTreeMap<&str, bool> = [
+            ("fp-armv8", true),
+            ("neon", true),
+            ("outline-atomics", self.opts.outline_atomics),
+            ("v8a", true),
+            ("fmv", false),
+        ]
+        .into_iter()
+        .collect();
+        for e in &self.opts.target_features {
+            if let Some((sign, name)) = e.split_at_checked(1) {
+                f.insert(name, sign == "+");
+            }
+        }
+        let on = f.iter().filter(|e| *e.1).map(|e| format!("+{}", e.0));
+        let off = f.iter().filter(|e| !*e.1).map(|e| format!("-{}", e.0));
+        on.chain(off).collect::<Vec<_>>().join(",")
+    }
+
+    /// `vscale_range(1,16)` on a function definition with the `sve`
+    /// target feature (clang `StartFunction`; not on the thunks and
+    /// helpers clang builds without a `CodeGenFunction`).
+    pub fn vscale_attr(&self, out: &mut Vec<Attr>) {
+        if self.opts.sve && !self.is_x86() {
+            out.push(Attr::VScaleRange(1, 16));
         }
     }
 
@@ -1903,6 +1927,7 @@ impl<'a> Cg<'a> {
         }
         a.extend(extra);
         a.push(Attr::UwTable(UwTableKind::Async));
+        self.vscale_attr(&mut a);
         self.target_attrs(&mut a);
         if inline == DefInline::OptNone {
             // `SetLLVMFunctionAttributesForDefinition` removes them.
@@ -1934,9 +1959,22 @@ impl<'a> Cg<'a> {
         } else if let Some(def) = self.instantiated_var_def(first) {
             self.to_emit.push(Def::Decl(def));
         }
+        // A namespace-scope array compound literal's object is defined at
+        // its first use, its initializer emitted before the global, clang
+        // `tryEmitGlobalCompoundLiteral` (WP-466).
+        if ast.decls.compound_literal_of(first).is_some() {
+            let init = ast.decls.var(first).and_then(|v| v.init);
+            if init.is_some_and(|e| self.folds.get(e).is_some()) {
+                self.emit_var_def(first)?;
+                if let Some(&g) = self.gvars.get(&first) {
+                    return Ok(g);
+                }
+            }
+            self.to_emit.push(Def::Decl(first));
+        }
         let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };
         let lt = self.mty(ty);
-        let name = mangle::mangle_decl(ast, &mut self.anon, first);
+        let name = self.var_symbol(first);
         // clang `GetOrCreateLLVMGlobal` returns an existing global of the
         // name unchanged, whatever its type: variables whose asm labels
         // name one symbol share it.
@@ -2009,7 +2047,22 @@ impl<'a> Cg<'a> {
     /// `getDeclAlign(D)`): its `alignas`/`aligned` attribute, else
     /// [`Self::global_align`] of its type ([dcl.align]/5).
     pub fn var_align(&mut self, d: DeclId) -> u64 {
-        kiln_abi::layout::decl_align(self.ast, d, self.target, false)
+        // clang 19 `tryEmitGlobalCompoundLiteral` aligns a file-scope
+        // compound literal to its type alignment (no x86-64 large-array
+        // bump); clang 22 uses the variable rule.
+        let literal_type_align =
+            self.opts.clang_compat < 22 && self.ast.decls.compound_literal_of(d).is_some();
+        kiln_abi::layout::decl_align(self.ast, d, self.target, literal_type_align)
+    }
+
+    /// The symbol of namespace-scope or static data member variable
+    /// `first`: its mangled name, or `.compoundliteral` for the object of
+    /// a namespace-scope array compound literal (uniqued by the module).
+    fn var_symbol(&mut self, first: DeclId) -> String {
+        if self.ast.decls.compound_literal_of(first).is_some() {
+            return ".compoundliteral".to_owned();
+        }
+        mangle::mangle_decl(self.ast, &mut self.anon, first)
     }
 
     /// clang `EmitGlobalVarDefinition`.
@@ -2055,7 +2108,7 @@ impl<'a> Cg<'a> {
             }
             g
         } else {
-            let name = mangle::mangle_decl(ast, &mut self.anon, first);
+            let name = self.var_symbol(first);
             // A declaration of another variable with the same asm label
             // is this definition's global (clang `GetOrCreateLLVMGlobal`
             // with `IsForDefinition` replaces it by one of the

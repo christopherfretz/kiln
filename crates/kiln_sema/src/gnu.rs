@@ -3,8 +3,8 @@
 //! `( T ) { ... }`. Each matches clang's behaviour for C++.
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
-use kiln_ast::expr::ExprKind;
 pub use kiln_ast::expr::OffsetofComponent;
+use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::ids::RawId;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
@@ -600,13 +600,11 @@ impl Sema<'_, '_> {
             self.unsupported(&format!("compound literals of {what}"), lparen);
             return self.recover(ty, flat, lparen);
         }
-        if self.func.is_none() {
-            // clang makes this an lvalue naming an internal
-            // `.compoundliteral` global; kiln has no static-storage
-            // compound-literal object in the Oven or codegen yet.
-            self.unsupported("array compound literals at namespace scope", lparen);
-            return self.recover(ty, flat, lparen);
-        }
+        // clang's `isFileScope` literal: outside a function (at namespace
+        // or class scope) an array literal is an lvalue naming an object
+        // of static storage duration, an internal `.compoundliteral`
+        // global (WP-466).
+        let file_scope = self.func.is_none();
         let init = self.init_from_list_at(ty, l, Some(lparen));
         if self.is_err_expr(init) {
             return self.recover(ty, &[init], lparen);
@@ -616,6 +614,25 @@ impl Sema<'_, '_> {
         } else {
             ty
         };
+        if file_scope {
+            if !self.check_constant_literal_init(ty, init, lparen, l.lbrace) {
+                // An lvalue, as the literal: its decay is no temporary.
+                return self.builder().recovery(Some(ty), ValueCategory::LValue, &[init], lparen);
+            }
+            // The object's context is the enclosing namespace.
+            let mut ctx = self.ctx;
+            while !matches!(
+                self.ast.decls.get(ctx).kind(),
+                DeclKind::Namespace
+                    | DeclKind::TranslationUnit
+                    | DeclKind::LinkageSpec
+                    | DeclKind::Export
+            ) && let Some(c) = self.ast.decls.get(ctx).ctx()
+            {
+                ctx = c;
+            }
+            return self.builder().file_scope_compound_literal(ctx, ty, init, lparen).0;
+        }
         self.builder().compound_literal(ty, init, lparen)
     }
 
