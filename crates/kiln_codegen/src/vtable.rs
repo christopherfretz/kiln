@@ -1143,7 +1143,7 @@ impl Cg<'_> {
         }
         let first = ast.first(m);
         let Some(fty) = ast.decls.get(first).ty() else { return false };
-        ast.types.proto(fty).is_some_and(|p| p.variadic())
+        ast.types.proto(fty).is_some_and(kiln_ast::types::FuncProto::variadic)
             && !self.has_incomplete_class_in_sig(first)
     }
 
@@ -1289,7 +1289,7 @@ impl Cg<'_> {
         let adj = self.type_adjustment(this, this_align, th.this, false);
         let first = ast.first(d);
         let fty = ast.decls.get(first).ty().expect("method type");
-        if ast.types.proto(fty).is_some_and(|p| p.variadic()) {
+        if ast.types.proto(fty).is_some_and(kiln_ast::types::FuncProto::variadic) {
             return self.emit_musttail_thunk(d, v, th, params, adj);
         }
         let mut vals = Vec::with_capacity(params.len());
