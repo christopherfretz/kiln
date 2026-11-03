@@ -552,6 +552,35 @@ pub fn xfail_ignored(rel: &str) -> Option<&'static str> {
     XFAIL_IGNORED.iter().find(|&&(p, _)| p == rel).map(|&(_, r)| r)
 }
 
+/// Tests that pin a clang defect kiln does not share: XFAIL under kiln when
+/// the headers are libc++ [`CLANG_DEFECT_SINCE`] or later, never in clang
+/// mode (spec/libcxx.md "Outcomes"). Each one's `TEST_COMPILER_CLANG`
+/// branch asserts clang's wrong answer, and kiln defines `__clang__`.
+/// Sorted by path.
+const CLANG_DEFECT_XFAIL: &[(&str, &str)] = &[
+    (
+        "std/concepts/concepts.compare/concept.equalitycomparable/equality_comparable_with.compile.pass.cpp",
+        "pins llvm.org/PR171438 (a non-movable type is equality_comparable_with int under clang); kiln follows [concept.equalitycomparable]",
+    ),
+    (
+        "std/language.support/cmp/cmp.concept/three_way_comparable_with.compile.pass.cpp",
+        "pins llvm.org/PR171438 (a non-movable type is three_way_comparable_with int under clang); kiln follows [cmp.concept]",
+    ),
+];
+
+/// The first libc++ major release whose tests pin the [`CLANG_DEFECT_XFAIL`]
+/// behaviour.
+const CLANG_DEFECT_SINCE: u32 = 22;
+
+/// Why `rel` is XFAIL under kiln although lit expects it to pass, if it is
+/// ([`CLANG_DEFECT_XFAIL`]); `libcxx` is the headers' `_LIBCPP_VERSION`.
+pub fn clang_defect_xfail(rel: &str, clang: bool, libcxx: Option<u32>) -> Option<&'static str> {
+    if clang || libcxx.is_none_or(|v| features::libcxx_major(v) < CLANG_DEFECT_SINCE) {
+        return None;
+    }
+    CLANG_DEFECT_XFAIL.iter().find(|&&(p, _)| p == rel).map(|&(_, r)| r)
+}
+
 /// What lit decides before anything runs: `Err(outcome)` ends the test
 /// (UNSUPPORTED or ERROR), `Ok` carries the directives, flags and the
 /// XFAIL expression that applies, if any.
@@ -660,6 +689,9 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
         flags.extend(cfg.module_source_flags());
     }
     let xfail = xfail.filter(|_| xfail_ignored(&job.rel).is_none());
+    let xfail = xfail.or_else(|| {
+        clang_defect_xfail(&job.rel, cfg.clang, cfg.libcxx_version).map(|r| format!("kiln: {r}"))
+    });
     // Named like lit's `%T` (`<test file>.dir`): `RUN:` lines can see it.
     let scratch = cfg.scratch.join(format!("t{}-{name}.dir", job.index));
     if let Err(e) = std::fs::create_dir_all(&scratch) {
@@ -1269,6 +1301,22 @@ mod tests {
         }
         assert_eq!(xfail_ignored("libcxx/selftest/pass.cpp/werror.pass.cpp"), None);
         assert_eq!(xfail_ignored("libcxx/selftest/pass.cpp/xfail.pass.cpp"), None);
+    }
+
+    #[test]
+    fn clang_defect_xfail_list() {
+        let paths: Vec<&str> = CLANG_DEFECT_XFAIL.iter().map(|&(p, _)| p).collect();
+        let mut sorted = paths.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, paths);
+        let (rel, reason) = CLANG_DEFECT_XFAIL[0];
+        assert!(!reason.is_empty());
+        assert_eq!(clang_defect_xfail(rel, false, Some(220_108)), Some(reason));
+        assert_eq!(clang_defect_xfail(rel, true, Some(220_108)), None);
+        assert_eq!(clang_defect_xfail(rel, false, Some(190_107)), None);
+        assert_eq!(clang_defect_xfail(rel, false, None), None);
+        assert_eq!(clang_defect_xfail("std/a/b.pass.cpp", false, Some(220_108)), None);
     }
 
     /// Writes an executable script at `path` without this process ever
