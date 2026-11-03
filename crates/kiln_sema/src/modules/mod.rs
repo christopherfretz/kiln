@@ -553,6 +553,28 @@ impl Sema<'_, '_> {
         self.module_visible_owner(d, mt.owner(d))
     }
 
+    /// `raw` when it is visible, else a visible redeclaration of its
+    /// entity (clang `LookupResult::getAcceptableDecl` /
+    /// `findAcceptableDecl`): a lookup table holds only the latest
+    /// declaration, which may belong to a unit the current one does not
+    /// see while an earlier redeclaration is its own or merged into it
+    /// (the global module is one module: [module.global.frag]/1,
+    /// spec/modules.md §6). `None` when no declaration is visible.
+    pub(crate) fn module_visible_redecl(&self, raw: DeclId) -> Option<DeclId> {
+        if self.module_visible(raw) {
+            return Some(raw);
+        }
+        // A template's redeclarations are its pattern's ([temp.decls]/1).
+        if let Some(pattern) = self.ast.template_info(raw).and_then(|t| t.pattern) {
+            return self
+                .ast
+                .redecls_of(pattern)
+                .filter_map(|p| self.ast.described_template(p))
+                .find(|&t| t != raw && self.module_visible(t));
+        }
+        self.ast.redecls_of(raw).find(|&x| x != raw && self.module_visible(x))
+    }
+
     /// The declarations a lookup of `name` that found nothing would find
     /// if every reachable declaration were visible: the
     /// non-visible declarations clang's typo correction offers as the
