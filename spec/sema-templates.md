@@ -4111,7 +4111,12 @@ libc++ 19 spells these as `using __remove_cv_t = __remove_cv(_Tp);`.
 - The type is `UnaryTransform{kind, operand}` sugar whose canonical type
   is the result. It prints as clang does, e.g. `__remove_cv(int const)`.
 - A dependent operand gives a dependent `UnaryTransform`. Substitution
-  recomputes it (§5.3).
+  recomputes it (§5.3). Only a dependent operand defers it (clang
+  `BuildUnaryTransformType` tests `isDependentType`): an operand that is
+  merely instantiation-dependent (`TC<N>*`, `N` a constant local of a
+  function template, reaching an alias substituted with its arguments as
+  written at compat 22) is transformed when the type is built
+  (`tests/conformance/temp.dep.type/instantiation-dependent-unary-transform.cpp`).
 
 | Builtin | Result |
 |---|---|
