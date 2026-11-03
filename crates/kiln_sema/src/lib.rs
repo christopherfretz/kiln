@@ -70,6 +70,7 @@ pub mod scope;
 mod self_ref;
 mod side_effects;
 pub mod stack_guard;
+mod static_tls;
 pub mod stmt;
 mod struct_bind;
 mod sve;

@@ -216,7 +216,16 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
         main_dir: Option<&str>,
     ) -> Option<String> {
         let cwd = std::env::current_dir().ok()?;
-        let dirs = self.list.dirs().iter().map(|d| (d.path.as_str(), d.characteristic.is_system()));
+        // The suggestion names a header of an imported unit, which clang 22
+        // and 19 read back from the BMI as an absolute path and compare
+        // with the search directories as written: a relative directory
+        // never matches (the main file's directory is absolute there).
+        let dirs = self
+            .list
+            .dirs()
+            .iter()
+            .filter(|d| d.path.starts_with('/'))
+            .map(|d| (d.path.as_str(), d.characteristic.is_system()));
         Some(suggest_include_name(sm.file_name(file), dirs, main_dir, &cwd.to_string_lossy()))
     }
 }

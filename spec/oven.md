@@ -594,7 +594,9 @@ literal is one instruction and one step, not an interpreted loop.
   and integer `abs`/`labs`/`llabs` (`bi::IABS`), and P1383's `sqrt`
   (WP-393, `bi::SQRT`), each in its plain, `f`, `l` and `f128` spellings
   (`kiln_ast` `builtin::p0533_base`; `sqrt` also clang's `__fp16`
-  `__builtin_sqrtf16`), evaluate
+  `__builtin_sqrtf16`; WP-403: `ceil`/`floor`/`trunc`/`round`/`rint`/
+  `fma`/`frexp` also as `__builtin_<fn>f16`, which `builtin::f16_twin`
+  maps to the `f` form, the `__fp16` operand picking binary16), evaluate
   exactly in the operand's format: binary16, bfloat16, binary32,
   binary64, x87 80-bit and binary128 all go through the integer
   significand code in `softfloat` (no host libm, no host float
@@ -636,6 +638,19 @@ literal is one instruction and one step, not an interpreted loop.
   answers 0 at both levels; codegen keeps the call, as for the rest of
   the set). Tests: `tests/conformance/c.math/constexpr-sqrt*.cpp`,
   `gnu-lib-sqrt.cpp`.
+- **Sign, min and max** (`bi::FP_OP`; WP-403 for the `f16` and
+  `_num` forms): `fabs`, `copysign`, `fmax`/`fmin` (each spelling,
+  `__builtin_fabsf16`/`fmaxf16`/`fminf16` through `f16_twin`) and the
+  clang 22 `fmaximum_numf16`/`fminimum_numf16`, bit-exact as clang folds
+  them: `fmax`/`fmin` below `-fclang-compat=22` (clang 19 `APFloat::
+  maxnum`) yield the other operand for a NaN (`-0 < +0`); at 22
+  (`FMAX_22`/`FMIN_22`, LLVM 22 `maxnum`) a signaling NaN `a`, else a
+  signaling NaN `b`, yields itself quieted (`softfloat::quiet`) first;
+  `maximumnum`/`minimumnum` yield the other operand for a NaN, quieted
+  when both are NaN. `__builtin_canonicalizef16` and the
+  `F16_LIBM` set (`sin`, `pow`, `atan2`, `sincos`, ...) are not
+  constants (the generic note), as in clang
+  (`tests/conformance/c.math/f16-builtins*.cpp`, `constexpr-f16*.cpp`).
 - **Bits** (`bi::CLZ`/`CTZ`/`POPCOUNT`/`BSWAP`): any width up to 128; a
   zero operand to `clz`/`ctz` without the `g` forms' fallback is not a
   constant (no note, as clang).
@@ -1525,7 +1540,12 @@ logged. `Op::Speculate` (`__builtin_constant_p`) opens a speculative
 checkpoint around its region:
 - if the region completes, the checkpoint is committed;
 - if the region fails, the checkpoint is rolled back. A not-constant
-  failure then answers 0. A resource limit (steps, depth, memory) is still
+  failure then answers 0, except in a lax fold outside a constant context
+  (`Oven::fold_rvalue`, clang `EvaluateAsInt`/`EvaluateAsRValue`), where
+  it fails the fold as clang's `EvaluateBuiltinConstantP` caller does
+  (WP-403: `x && __builtin_constant_p(x)` gets no
+  `-Wconstant-logical-operand`,
+  `tests/conformance/expr.log.and/constant-operand.cpp`). A resource limit (steps, depth, memory) is still
   rolled back first, and then fails the evaluation.
 
 **Divergence from clang 19.** A failed speculative evaluation that wrote a

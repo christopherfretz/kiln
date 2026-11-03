@@ -80,6 +80,15 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // every compat level, as clang 22 does; clang 19 did neither.
     ("atomic_padded", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
     ("atomic_padded", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
+    // An importer of a module whose global module fragment defines G's key
+    // function: kiln declares `_ZTV1G` external (the interface unit emits
+    // it with `_ZTI1G`/`_ZTS1G`, Itanium ABI §5.2.3); clang 22 omits them
+    // from the interface and defines them, with G's deleting destructor,
+    // strongly in every importer, so two importers fail to link
+    // (spec/modules.md §10 deviation 7). The extra globals are in the ABI
+    // slice.
+    ("module_gmf_vtable", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("module_gmf_vtable", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // LLVM 20+ passes x86-64 `__int128` as `i128` instead of `{ i64, i64 }`
     // / two `i64`s (the same registers and stack slots: SysV §3.2.3); the
     // same for `_BitInt(65..128)`.

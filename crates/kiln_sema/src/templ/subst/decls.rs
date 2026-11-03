@@ -42,6 +42,7 @@ impl Substituter<'_, '_, '_> {
             }
             if s.tls() != TlsKind::None {
                 ds.thread_local = Some(loc);
+                ds.thread_kind = s.tls();
             }
             if s.is_constexpr() {
                 ds.constexpr = Some(loc);
