@@ -35,10 +35,8 @@ impl Sema<'_, '_> {
         if self.is_union(base) || self.is_union(derived) {
             return false;
         }
-        if !self.require_complete(b, rhs_loc) {
-            let msg = self.diag(DiagId::sema_incomplete_type_required, rhs_loc).arg(self.ty_arg(b));
-            let msg = self.incomplete_note(msg, b);
-            self.emit(msg);
+        if !self.trait_complete(b, rhs_loc) {
+            self.trait_incomplete(DiagId::sema_incomplete_type_required, rhs_loc, b);
             return false;
         }
         bases::base_paths(self, derived, base)
