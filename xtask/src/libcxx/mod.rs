@@ -539,13 +539,15 @@ impl Setup {
     }
 
     /// The run configuration of `compiler` (`clang`: clang mode). Probes
-    /// the compiler's warning flags in a scratch file next to `scratch`.
+    /// the compiler's warning flags in a scratch file next to `scratch`;
+    /// `tmp` is the run's `TMPDIR` root (`run::tmp_root`).
     fn config(
         &self,
         root: &Path,
         compiler: &Path,
         clang: bool,
         scratch: &Path,
+        tmp: &Path,
         limits: &Limits,
     ) -> Config {
         Config {
@@ -573,6 +575,7 @@ impl Setup {
                 limits.compile_timeout,
             ),
             scratch: scratch.to_path_buf(),
+            tmp: tmp.to_path_buf(),
             keep: limits.keep,
         }
     }
@@ -644,7 +647,7 @@ pub fn syntax_compiles(
         mem,
         keep: false,
     };
-    let cfg = setup.config(root, compiler, clang, scratch, &limits);
+    let cfg = setup.config(root, compiler, clang, scratch, scratch, &limits);
     let out = tests
         .iter()
         .enumerate()
@@ -693,18 +696,32 @@ fn execute(opts: &Options) -> Result<bool, String> {
     let feature_refs: Vec<&str> = features.iter().map(String::as_str).collect();
 
     if opts.list {
-        let target = target_dir(&root)?;
+        // Where a run's `TMPDIR`s would live (`run::tmp_root`).
+        let tmp_dir = std::env::temp_dir();
+        let mem = MemLimit::from_mib(opts.mem_limit_mib);
+        let clang = match &opts.compiler {
+            Some(c) => crate::util::identify(c)?.kind == crate::util::CompilerKind::Clang,
+            None => false,
+        };
         for (p, rel) in &tests {
             let kind =
                 p.file_name().and_then(|n| n.to_str()).and_then(Kind::of).unwrap_or(Kind::Pass);
             let text = std::fs::read_to_string(p).unwrap_or_default();
-            let verdict = match run::env_unsupported(rel, &target, libcxx_version).map_or_else(
-                || run::prepare(kind, &text, &local_cfgs(&cfg_cache, &test_root, p), &feature_refs),
-                |r| Err(Outcome::Unsupported(r)),
-            ) {
+            let verdict = match run::env_unsupported(rel, &tmp_dir, libcxx_version, mem)
+                .map_or_else(
+                    || {
+                        run::prepare(
+                            kind,
+                            &text,
+                            &local_cfgs(&cfg_cache, &test_root, p),
+                            &feature_refs,
+                        )
+                    },
+                    |r| Err(Outcome::Unsupported(r)),
+                ) {
                 Ok((d, _, xfail)) => {
                     let mut v = "run".to_owned();
-                    if let Some(x) = xfail {
+                    if let Some(x) = run::effective_xfail(rel, xfail, clang, libcxx_version) {
                         let _ = write!(v, " (XFAIL: {x})");
                     }
                     if let Some(why) = run::is_long(rel, &d) {
@@ -730,8 +747,11 @@ fn execute(opts: &Options) -> Result<bool, String> {
     };
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
     let scratch = target.join("xtask-libcxx").join(format!("run-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&scratch)
-        .map_err(|e| format!("cannot create {}: {e}", scratch.display()))?;
+    let tmp = run::tmp_root(std::process::id(), nanos);
+    for dir in [&scratch, &tmp] {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
     // Clang mode: the harness self-check (spec/libcxx.md "Clang mode").
     let clang = opts.compiler.is_some()
         && crate::util::identify(&kiln)?.kind == crate::util::CompilerKind::Clang;
@@ -742,7 +762,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
         mem: MemLimit::from_mib(opts.mem_limit_mib),
         keep: opts.keep,
     };
-    let cfg = setup.config(&root, &kiln, clang, &scratch, &limits);
+    let cfg = setup.config(&root, &kiln, clang, &scratch, &tmp, &limits);
     let jobs: Vec<Job<'_>> = tests
         .iter()
         .enumerate()
@@ -766,6 +786,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
     let results = run_all(&cfg, &jobs, opts.jobs, opts.verbose);
     if !opts.keep {
         let _ = std::fs::remove_dir_all(&scratch);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
     let wall = start.elapsed();
 

@@ -110,6 +110,7 @@ FLAGS = [
     ("DefineTargetOsMacros", ["-fdefine-target-os-macros"], "`-fdefine-target-os-macros`"),
     ("ExperimentalNewConstantInterpreter", ["-fexperimental-new-constant-interpreter"],
      "`-fexperimental-new-constant-interpreter`"),
+    ("ExperimentalLibrary", ["-fexperimental-library"], "`-fexperimental-library`"),
     ("PtrauthIntrinsics", ["-fptrauth-intrinsics"], "`-fptrauth-intrinsics` (aarch64)"),
     ("PtrauthCalls", ["-fptrauth-calls"], "`-fptrauth-calls` (aarch64)"),
     ("PtrauthReturns", ["-fptrauth-returns"], "`-fptrauth-returns` (aarch64)"),
