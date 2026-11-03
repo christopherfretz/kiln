@@ -1068,7 +1068,7 @@ impl Sema<'_, '_> {
                 if ttp {
                     self.check_ttp_arity(d, args, l)?;
                 } else if dep_args {
-                    self.check_expanded_pack_arity(d, args, l)?;
+                    self.check_dependent_template_args(d, args, l)?;
                 } else {
                     let locs = std::mem::take(&mut self.templ.arg_locs);
                     let t = self.class_template_type(name, d, args, &locs, l)?;

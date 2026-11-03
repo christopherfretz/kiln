@@ -376,6 +376,24 @@ residual` (docs/status/wp-184-oracle-switch.md).
   (WP-288; libc++ `rand.dist.norm.lognormal/param_types.pass.cpp`;
   `tests/conformance/temp.res/qualified-name-through-typedef.cpp`,
   `qualified-name-through-typedef-run.cpp`).
+- A nested-name-specifier component naming a class or enumeration that
+  is declared but not defined ([basic.lookup.qual]/1, [class.mem]/1:
+  a class is complete only after its definition) is "incomplete type
+  'N::F' named in nested name specifier" (`require_complete_nns_ctx`,
+  clang's `RequireCompleteDeclContext`): the type is printed fully
+  qualified (through a typedef, the class it names); a class takes the
+  "forward declaration of 'F'" note, an opaque enumeration none. At
+  compat 22 it is at the start of the whole specifier, at 19 at the
+  incomplete component. The parser skips the rest of the specifier; a
+  declarator so qualified declares nothing (later uses are undeclared),
+  a type specifier is the error type. It applies in every context
+  (declarations, `friend`, `sizeof`, expressions, alias and default
+  template arguments, out-of-line definitions); not to a dependent
+  qualifier, a member of a template (`DEPENDENT_CTX`), a specialization
+  or instantiation (`require_complete_nns`), a pointer-to-member's
+  `F::*`, or the class being defined. `class F::H;` is first
+  "forward declaration of class cannot have a nested name specifier".
+  Tests: `basic.lookup.qual/incomplete-nested-name-specifier{,-location,-location-clang19}.cpp`.
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 

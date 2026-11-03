@@ -4,8 +4,8 @@
 //! argument lists the substituter consults (§5.1).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::ids::ArgListId;
-use kiln_ast::types::{ArgView, TemplateArg, TypeView};
+use kiln_ast::ids::{ArgListId, TemplateNameId};
+use kiln_ast::types::{ArgView, TemplateArg, TemplateName, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::EvalContext;
@@ -200,7 +200,6 @@ impl Sema<'_, '_> {
         let params = self.template_params(head);
         let depth = self.template_param_depth(head);
         let mut out: Vec<TemplateArg> = Vec::with_capacity(params.len());
-        let mut ok = true;
         let arg_loc = |i: usize| arg_locs.get(i).copied().unwrap_or(loc);
         let mut wi = 0usize;
         let mut open_expansion = false;
@@ -217,10 +216,17 @@ impl Sema<'_, '_> {
                     let at = arg_loc(wi);
                     let ty = tys.get(taken).copied().filter(|_| !open);
                     taken += 1;
-                    match self.check_expanded_pack_arg(tmpl, depth, p, written[wi], at, &out, ty) {
-                        Ok(a) => elems.push(a),
-                        Err(()) => ok = false,
-                    }
+                    // The first failing argument ends the check (clang's
+                    // `CheckTemplateArgumentList`).
+                    elems.push(self.check_expanded_pack_arg(
+                        tmpl,
+                        depth,
+                        p,
+                        written[wi],
+                        at,
+                        &out,
+                        ty,
+                    )?);
                     wi += 1;
                 }
                 open_expansion |= open;
@@ -236,10 +242,14 @@ impl Sema<'_, '_> {
             if pack {
                 let mut elems = Vec::new();
                 while wi < written.len() {
-                    match self.check_template_arg(tmpl, depth, p, written[wi], arg_loc(wi), &out) {
-                        Ok(a) => elems.push(a),
-                        Err(()) => ok = false,
-                    }
+                    elems.push(self.check_template_arg(
+                        tmpl,
+                        depth,
+                        p,
+                        written[wi],
+                        arg_loc(wi),
+                        &out,
+                    )?);
                     wi += 1;
                 }
                 let l = self.ast.types.arg_list(&elems);
@@ -247,14 +257,8 @@ impl Sema<'_, '_> {
                 continue;
             }
             if wi < written.len() {
-                if let Ok(a) =
-                    self.check_template_arg(tmpl, depth, p, written[wi], arg_loc(wi), &out)
-                {
-                    out.push(a);
-                } else {
-                    ok = false;
-                    out.push(TemplateArg::NULL);
-                }
+                let a = self.check_template_arg(tmpl, depth, p, written[wi], arg_loc(wi), &out)?;
+                out.push(a);
                 wi += 1;
                 continue;
             }
@@ -273,9 +277,6 @@ impl Sema<'_, '_> {
         }
         if wi < written.len() {
             self.diag_template_arity(tmpl, true, loc);
-            return Err(());
-        }
-        if !ok {
             return Err(());
         }
         let sugared = self.ast.types.arg_list(&out);
@@ -324,6 +325,102 @@ impl Sema<'_, '_> {
         let r = self.check_template_arg(tmpl, depth, p, a, at, prior);
         self.templ.nttp_elem = saved;
         r
+    }
+
+    /// The definition-time check of the class template-id `tmpl<args>`
+    /// with dependent arguments (clang's `CheckTemplateArgumentList`,
+    /// which runs on dependent arguments too; §3.2): the arity, and the
+    /// kind of each argument against its parameter (a type for a type
+    /// parameter, a template for a template template parameter, whose
+    /// parameters are matched as [temp.arg.template]/3 says, an
+    /// expression for a non-type parameter). Non-type arguments are
+    /// converted once substituted. A dependent `T::x` for a type
+    /// parameter is "did you forget 'typename'?" and the check goes on,
+    /// as clang's does; any other failure ends it. A template-id with a
+    /// pack expansion argument is checked only for an expanded pack's
+    /// arity. Consumes the pending argument locations. `Err` after a
+    /// diagnostic.
+    pub(crate) fn check_dependent_template_args(
+        &mut self,
+        tmpl: DeclId,
+        args: &[TemplateArg],
+        loc: Loc,
+    ) -> Result<(), ()> {
+        let locs = std::mem::take(&mut self.templ.arg_locs);
+        self.check_expanded_pack_arity(tmpl, args, loc)?;
+        let head = self.head_template(tmpl);
+        let params = self.template_params(head);
+        if args.iter().any(|&a| self.is_pack_expansion_arg(a))
+            || params.iter().any(|p| self.templ.expanded_packs.contains_key(p))
+        {
+            return Ok(());
+        }
+        let depth = self.template_param_depth(head);
+        let tmpl = self.ast.first(tmpl);
+        let arg_loc = |i: usize| locs.get(i).copied().unwrap_or(loc);
+        let mut prior: Vec<TemplateArg> = Vec::with_capacity(params.len());
+        let mut failed = false;
+        let mut wi = 0usize;
+        for &p in &params {
+            if self.ast.template_parm(p).is_some_and(|x| x.pack) {
+                while wi < args.len() {
+                    failed |= self.check_dependent_arg(tmpl, depth, p, args[wi], arg_loc(wi), &prior)?;
+                    wi += 1;
+                }
+                break;
+            }
+            if wi >= args.len() {
+                // The rest have defaults, checked once substituted.
+                if self.template_default(p).is_none() {
+                    self.diag_template_arity(tmpl, false, loc);
+                    return Err(());
+                }
+                break;
+            }
+            failed |= self.check_dependent_arg(tmpl, depth, p, args[wi], arg_loc(wi), &prior)?;
+            prior.push(args[wi]);
+            wi += 1;
+        }
+        if wi < args.len() {
+            self.diag_template_arity(tmpl, true, loc);
+            return Err(());
+        }
+        if failed { Err(()) } else { Ok(()) }
+    }
+
+    /// One argument of [`Self::check_dependent_template_args`]: `Ok(true)`
+    /// after the recoverable missing-`typename` error, `Err` after any
+    /// other.
+    fn check_dependent_arg(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        a: TemplateArg,
+        at: Loc,
+        prior: &[TemplateArg],
+    ) -> Result<bool, ()> {
+        match (self.kind_of(p), a.view()) {
+            (DeclKind::TemplateTypeParm, ArgView::Expr { expr, .. })
+                if self.ast.exprs.get(expr).kind()
+                    == kiln_ast::expr::ExprKind::DependentScopeDeclRefExpr =>
+            {
+                let d = self.diag(DiagId::sema_template_arg_must_be_type_suggest, at);
+                let d = self.note_param_here(d, p);
+                self.emit(d);
+                Ok(true)
+            }
+            // Non-type arguments are converted once substituted.
+            (DeclKind::NonTypeTemplateParm, ArgView::Expr { .. } | ArgView::Value { .. }) => {
+                Ok(false)
+            }
+            (_, ArgView::Type(_) | ArgView::Template(_) | ArgView::Expr { .. }) => {
+                self.check_template_arg(tmpl, depth, p, a, at, prior).map(|_| false)
+            }
+            // A profiled or substituted value is checked when the
+            // template-id is.
+            _ => Ok(false),
+        }
     }
 
     /// The arity check of the dependent template-id `tmpl<args>` whose
@@ -415,6 +512,68 @@ impl Sema<'_, '_> {
         self.emit(d);
     }
 
+    /// The template a template argument names: also a template template
+    /// parameter's declaration (`B2<TT>` inside `TT`'s template).
+    fn arg_template_decl(&self, name: TemplateNameId) -> Option<DeclId> {
+        self.ast.types.template_decl(name).or_else(|| match self.ast.types.template_name_view(name) {
+            TemplateName::TemplateTemplateParm { decl, .. } => Some(decl),
+            _ => None,
+        })
+    }
+
+    /// A concept named alone as a template-argument before clang 22
+    /// (which parses it as a concept-id with no arguments): "too few
+    /// template arguments for concept 'C'" at `loc`; an erroneous
+    /// expression argument.
+    pub fn act_bare_concept_template_arg(&mut self, c: DeclId, loc: Loc) -> TemplateArg {
+        self.diag_template_arity(c, false, loc);
+        let e = self.recover_err(&[], loc);
+        self.builder().template_arg_expr(e)
+    }
+
+    /// A variable template, concept (clang 22 parses either as a
+    /// template name, P2841) or template template parameter named
+    /// without arguments where a type is expected: "use of variable
+    /// template 'v' requires template arguments" with the template's
+    /// note (clang's `diagnoseMissingTemplateArguments`). False for any
+    /// other template name.
+    fn var_or_concept_arg_missing_args(&mut self, name: TemplateNameId, at: Loc) -> bool {
+        let Some(d) = self.arg_template_decl(name) else { return false };
+        let what = match self.kind_of(d) {
+            DeclKind::VarTemplate => "variable template",
+            DeclKind::Concept => "concept",
+            DeclKind::TemplateTemplateParm => "template template parameter",
+            _ => return false,
+        };
+        let qual = match self.ast.types.template_name_view(name) {
+            TemplateName::Qualified { nns, .. } => Some(nns),
+            _ => None,
+        };
+        self.missing_template_args(d, what, qual, at);
+        true
+    }
+
+    /// "use of <what> 'name' requires template arguments" at `at` with
+    /// "template is declared here" at template `d` (clang's
+    /// `diagnoseMissingTemplateArguments`); the name is printed with
+    /// qualifier `qual` as written.
+    pub(crate) fn missing_template_args(
+        &mut self,
+        d: DeclId,
+        what: &str,
+        qual: Option<kiln_ast::ids::NnsId>,
+        at: Loc,
+    ) {
+        let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(d).loc());
+        let q = qual.map(|n| self.nns_str(n)).unwrap_or_default();
+        let msg = self
+            .diag(DiagId::sema_template_requires_args, at)
+            .arg(what.to_owned())
+            .arg(format!("'{q}{}'", self.decl_name(d)))
+            .with_note(note);
+        self.emit(msg);
+    }
+
     fn note_param_here(&self, d: kiln_diag::Diag, p: DeclId) -> kiln_diag::Diag {
         d.note(DiagId::note_template_param_here, Span::empty(self.ast.decls.get(p).loc()))
     }
@@ -433,6 +592,11 @@ impl Sema<'_, '_> {
     ) -> Result<TemplateArg, ()> {
         match (self.kind_of(p), a.view()) {
             (DeclKind::TemplateTypeParm, ArgView::Type(t)) => Ok(TemplateArg::ty(t)),
+            (DeclKind::TemplateTypeParm, ArgView::Template(name))
+                if self.var_or_concept_arg_missing_args(name, at) =>
+            {
+                Err(())
+            }
             (DeclKind::TemplateTypeParm, ArgView::Template(name))
                 if self.template_arg_missing_args(name, at) =>
             {
@@ -469,13 +633,13 @@ impl Sema<'_, '_> {
                 Err(())
             }
             (DeclKind::TemplateTemplateParm, ArgView::Template(n)) => {
-                match self.ast.types.template_decl(n).map(|d| self.kind_of(d)) {
+                match self.arg_template_decl(n).map(|d| self.kind_of(d)) {
                     Some(
                         DeclKind::ClassTemplate
                         | DeclKind::TypeAliasTemplate
                         | DeclKind::TemplateTemplateParm,
                     ) => {
-                        let d = self.ast.types.template_decl(n);
+                        let d = self.arg_template_decl(n);
                         if let Some(d) = d {
                             let args = self.prior_levels(tmpl, depth, prior);
                             if !self.check_template_template_arg(p, d, at, &args) {
@@ -485,11 +649,25 @@ impl Sema<'_, '_> {
                         Ok(a)
                     }
                     None => Ok(a),
+                    // A variable template or concept (parsed as a
+                    // template name by clang 22, P2841).
+                    Some(DeclKind::VarTemplate | DeclKind::Concept) => {
+                        if let Some(d) = self.arg_template_decl(n) {
+                            self.reject_keyless_ttp_arg(d, at);
+                        }
+                        Err(())
+                    }
                     Some(_) => {
                         self.error(DiagId::sema_template_arg_must_be_template, at);
                         Err(())
                     }
                 }
+            }
+            // An erroneous argument was diagnosed when it was formed.
+            (DeclKind::TemplateTemplateParm, ArgView::Expr { expr, .. })
+                if self.is_err_expr(expr) =>
+            {
+                Err(())
             }
             (DeclKind::TemplateTemplateParm, _) => {
                 self.error(DiagId::sema_template_arg_must_be_template, at);
