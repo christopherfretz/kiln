@@ -1164,7 +1164,8 @@ Redeclaration and linkage rules:
     (`templ/subst/stmts.rs`); they are not checked again.
   - The parser rejects an argument list on a standard attribute that
     takes none (`carries_dependency`, `fallthrough`, `noreturn`,
-    `no_unique_address`, `likely`, `unlikely`, `maybe_unused`, even
+    `no_unique_address`, `likely`, `unlikely`, `maybe_unused`,
+    `indeterminate` from C++26, even
     `()`): `attribute 'likely' cannot have an argument list` at the `(`,
     and drops the attribute (clang `ParseCXX11AttributeArgs`).
   - Codegen ignores them: clang 19 consults likelihood only when
@@ -1682,6 +1683,7 @@ and returns the scope it names:
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
   | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
+  | INIT_PRIORITY | the checked priority (`u32`; the raw `ExprId` before `check_decl_attrs`) | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -1860,13 +1862,40 @@ and returns the scope it names:
   - `alignof` of an expression ([expr.alignof]/1 takes a type-id) is
     the GNU extension `'alignof' applied to an expression is a GNU
     extension` (`-Wgnu-alignof-expression`, in `-Wgnu`, at the keyword;
-    not for `__alignof`/`__alignof__`). `alignof` of a data member
+    not for `__alignof`/`__alignof__`), after the operand's own errors
+    and even when the operand is invalid (`alignof(F::x)` with `F`
+    incomplete, `alignof(1 + )`; clang's `ext_alignof_expr` is emitted
+    before the operand is checked; WP-430,
+    `expr.alignof/incomplete-qualifier-gnu-expression.cpp`). `alignof` of a data member
     (named ignoring parentheses) of a class still being defined is
     `invalid application of 'alignof' to a field of a class still being
     defined` at the operand's own location (clang `CheckAlignOfExpr`;
     [class.mem.general]/8). Test:
     `tests/conformance/dcl.align/alignof-expression-diag.cpp`.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
+  - **`init_priority(N)`** (GNU, [dcl.attr.grammar]/5;
+    `init_priority.rs`, clang `handleInitPriorityAttr`, WP-189). Parsed
+    with an expression argument (`__attribute__` or `[[gnu::]]`); exactly
+    one, else `'init_priority' attribute takes one argument` (under
+    compat ≥ 22 the `[[gnu::]]` spelling is named `'gnu::init_priority'`).
+    `check_decl_attrs` then checks, in clang's order, dropping the
+    attribute on the first error: the subject is a variable (`only
+    applies to variables`); it is not declared in a function and its type,
+    arrays stripped, is a class (`can only use 'init_priority' attribute
+    on file-scope definitions of objects of class type`); the argument is
+    an integer constant (`'init_priority' attribute requires an integer
+    constant`, at the attribute) whose value fits in 32 bits (`integer
+    constant expression evaluates to value N that cannot be represented
+    in a 32-bit unsigned integer type`, at the expression); and the
+    range. Under compat < 22, outside 101..=65535 is `'init_priority'
+    attribute requires integer constant between 101 and 65535 inclusive`
+    (not checked in a system header). Under compat ≥ 22, above 65535 is
+    the same error with bounds 0 and 65535, and below 101 is `requested
+    'init_priority' N is reserved for internal use`
+    (`-Winit-priority-reserved`, default error; the attribute is kept).
+    A surviving attribute stores the priority in `a`; codegen orders the
+    variable's initialization by it (spec/codegen.md §7f).
+    `tests/conformance/dcl.attr/gnu-init-priority*.cpp`.
   - **Attribute subjects** ([dcl.attr.grammar]/5, `decl_attrs.rs`
     `check_decl_attrs`, clang `diagAppertainsToDecl` and the per-kind
     handlers; WP-324). One table, applied to the attributes of every
@@ -1908,6 +1937,23 @@ and returns the scope it names:
       parameters, Objective-C methods, and functions`). `packed`: a
       class, an enumeration or a data member; otherwise `'packed'
       attribute ignored` (warning).
+    - `indeterminate` ([dcl.attr.indet]/1, C++26 P2795R5, WP-448;
+      `AttrKind::INDETERMINATE`): only a variable with automatic
+      storage duration (no `static`, `thread_local` or `extern`) or a
+      parameter; elsewhere the error `'indeterminate' attribute only
+      applies to local variables or function parameters` (clang trunk's
+      subject list `LocalVar, ParmVar`). It may repeat ([dcl.attr.grammar]/4,
+      P2156R1). On a parameter it must be on the function's first
+      declaration: a redeclaration adding it is the error
+      `'[[indeterminate]]' attribute on parameter 'b' must appear on the
+      first declaration of the function` at the attribute, with `previous
+      declaration is here` at the first declaration
+      (`check_param_indeterminate`; clang trunk's text, the note is
+      kiln's). Before C++26 it is not recognised: `unknown attribute
+      'indeterminate' ignored` [-Wunknown-attributes]. Effect: codegen
+      writes no erroneous value (spec/codegen.md §7s); constant
+      evaluation is unchanged (an indeterminate read is non-constant).
+      Tests: `tests/conformance/dcl.attr.indet/`.
     - `fallthrough`, `likely`, `unlikely` and `assume` are statement
       attributes: on any declaration `'X' attribute cannot be applied to
       a declaration` (error).

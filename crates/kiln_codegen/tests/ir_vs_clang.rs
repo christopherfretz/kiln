@@ -60,6 +60,12 @@ enum Allow {
     /// The oracle's own IR fails `opt-N -passes=verify` (a clang defect);
     /// only kiln's IR is verified.
     OracleInvalid,
+    /// Nothing: kiln's IR is compared in the oracle's mode after
+    /// `opt-N -passes=loop-simplify,lcssa` (which skip `optnone`
+    /// functions) and [`ir_norm::unname_locals`], the canonicalization
+    /// clang 19's `AArch64` `-O0` pipeline applies to its own output
+    /// (spec/codegen.md "Deviations").
+    LoopCanon,
 }
 
 /// `(case, triple, oracle, allow)`: pairs whose IR differs from clang
@@ -67,14 +73,15 @@ enum Allow {
 const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // clang 19's AArch64 -O0 pipeline runs `loop(loop-idiom-vectorize)`,
     // whose LoopSimplify/LCSSA canonicalization reshapes the array loops
-    // of the (non-`optnone`) global initialization functions.
-    ("global_init_array_eh", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
+    // of the (non-`optnone`) global initialization functions; kiln's IR
+    // matches after the same two passes.
+    ("global_init_array_eh", "aarch64-unknown-linux-gnu", "19", Allow::LoopCanon),
     // The same canonicalization of `__cxx_global_array_dtor`'s
     // partial-array EH cleanup loop (WP-205).
-    ("eh_array_destroy_throwing_global", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
+    ("eh_array_destroy_throwing_global", "aarch64-unknown-linux-gnu", "19", Allow::LoopCanon),
     // The same, for the EH cleanup of a static array temporary's
     // initialization (WP-216).
-    ("array_temporary_global", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
+    ("array_temporary_global", "aarch64-unknown-linux-gnu", "19", Allow::LoopCanon),
     // kiln zeroes a padded `_Atomic` operand's padding and writes a failed
     // compare-exchange's old value back to `*expected` (C11 7.17.7.4p2) at
     // every compat level, as clang 22 does; clang 19 did neither.
@@ -184,8 +191,18 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
 /// natively on an `AArch64` host it does, cross-compiling from x86-64 (the
 /// GitHub runner) it does not. kiln defaults to on; the explicit flag
 /// makes the comparison host-independent.
+///
+/// `-ftrivial-auto-var-init=uninitialized`: kiln writes the C++26
+/// erroneous value of an uninitialized automatic variable by default
+/// (P2795R5, spec/codegen.md §7r), which the clang oracles do not
+/// implement; `erroneous_init.cpp` compares kiln's fill with clang's
+/// `-ftrivial-auto-var-init=zero` through its `//@ args:`.
 fn pinned_flags(triple: &str) -> &'static [&'static str] {
-    if triple.starts_with("aarch64") { &["-moutline-atomics"] } else { &[] }
+    if triple.starts_with("aarch64") {
+        &["-moutline-atomics", "-ftrivial-auto-var-init=uninitialized"]
+    } else {
+        &["-ftrivial-auto-var-init=uninitialized"]
+    }
 }
 
 fn corpus_dir() -> PathBuf {
@@ -303,6 +320,14 @@ fn opt(ir: &str) -> Option<Result<String, String>> {
     pipe(&opt_tool(), &["-S", "-passes=verify", "-o", "-"], ir)
 }
 
+/// [`Allow::LoopCanon`]: verified IR `ir` after LLVM's loop
+/// canonicalization, renumbered and reprinted.
+fn loop_canon(ir: &str) -> Result<String, String> {
+    let canon = pipe(&opt_tool(), &["-S", "-passes=loop-simplify,lcssa", "-o", "-"], ir)
+        .unwrap_or_else(|| panic!("{} present", opt_tool()))?;
+    opt(&ir_norm::unname_locals(&canon)).unwrap_or_else(|| panic!("{} present", opt_tool()))
+}
+
 fn clang_ir(file: &Path, triple: &str) -> Option<Result<String, String>> {
     let target = format!("--target={triple}");
     let path = file.display().to_string();
@@ -387,11 +412,14 @@ struct Outcome {
     diff: Option<String>,
 }
 
-fn run_case(name: &str, file: &Path, triple: &str) -> Result<Option<Outcome>, String> {
+fn run_case(name: &str, file: &Path, triple: &str, canon: bool) -> Result<Option<Outcome>, String> {
     let ir = kiln_ir(file, triple)?;
     let Some(checked) = opt(&ir) else { return Ok(None) };
     let (opt_name, clang_name) = (opt_tool(), clang_tool());
-    let ours = checked.map_err(|e| format!("{opt_name} rejects kiln IR:\n{e}\n{ir}"))?;
+    let mut ours = checked.map_err(|e| format!("{opt_name} rejects kiln IR:\n{e}\n{ir}"))?;
+    if canon {
+        ours = loop_canon(&ours).map_err(|e| format!("loop canonicalization failed: {e}"))?;
+    }
     if min_oracle(file).is_some_and(|n| oracle_version().parse::<u32>().is_ok_and(|o| o < n)) {
         return Ok(None);
     }
@@ -443,7 +471,9 @@ fn ir_matches_clang() {
                 .iter()
                 .find(|d| d.0 == name && d.1 == triple && d.2 == oracle)
                 .map(|d| d.3);
-            let o = match run_case(&name, file, triple) {
+            let canon = allow == Some(Allow::LoopCanon);
+            let allow = allow.filter(|&a| a != Allow::LoopCanon);
+            let o = match run_case(&name, file, triple, canon) {
                 Ok(Some(o)) => o,
                 Ok(None) => {
                     skipped += 1;
@@ -458,6 +488,9 @@ fn ir_matches_clang() {
                     continue;
                 }
             };
+            if canon && o.diff.is_none() {
+                deviations.push(format!("{name} ({triple}): matches after loop canonicalization"));
+            }
             exact += usize::from(o.exact);
             structural += usize::from(o.structural);
             abi_ok += usize::from(o.abi.is_none());
@@ -468,7 +501,7 @@ fn ir_matches_clang() {
                     mode(),
                     abi.as_ref().map_or(String::new(), |a| format!("the ABI slice too:\n{a}"))
                 )),
-                (None | Some(Allow::Structure), None, Some(d)) => failures
+                (None | Some(Allow::Structure | Allow::LoopCanon), None, Some(d)) => failures
                     .push(format!("{name} ({triple}): ABI slice differs from clang {oracle}\n{d}")),
                 (Some(Allow::Structure), Some(_), Some(d)) => failures.push(format!(
                     "{name} ({triple}): ABI slice differs from clang {oracle} (only the \

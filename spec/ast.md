@@ -940,8 +940,15 @@ context-free defaults (`NoEnv`):
   - `Plain { suffix }` gives `5U`, `5L`, `5UL`, `5LL`, `5ULL` (no suffix
     for `int`).
   - `Cast` gives `(short)5`.
-  - `Char(enc)` gives `'a'` or `u8'a'`, using the string escapes, with
-    `'` escaped.
+  - `Char(enc)` gives `'a'` or `u8'a'`, and `SmallChar` (`signed char`,
+    `unsigned char`) gives `(signed char)'a'` when the type is included,
+    spelled as clang's `CharacterLiteral::print` (WP-437): the simple
+    escapes `\\ \' \a \b \f \n \r \t \v`, printable ASCII verbatim,
+    otherwise `\xhh` below 256 (`'\x00'`, `'\xc8'`), `\uhhhh` up to
+    `0xffff` and `\Uhhhhhhhh` above, lowercase and zero-padded (an
+    ordinary `char` is masked to its byte). The expression printer
+    (`CharacterLiteral` in a static-assertion requirement or a dependent
+    argument) uses the same spelling; string literals keep §2's.
   - `Enum` gives the enumerator, fully qualified by its scope (clang
     `printQualifiedName`; an unscoped enumeration adds no component:
     `n::E::X`, `n::ub`), or `(n::E)7` when no enumerator matches. A

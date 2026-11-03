@@ -154,6 +154,7 @@ pub trait FeatureQueries {
         let name = name.strip_prefix("__").and_then(|n| n.strip_suffix("__")).unwrap_or(name);
         match name {
             "assume" => 202_207,
+            "indeterminate" => 202_403,
             "carries_dependency" | "noreturn" => 200_809,
             "deprecated" => 201_309,
             "fallthrough" | "maybe_unused" => 201_603,

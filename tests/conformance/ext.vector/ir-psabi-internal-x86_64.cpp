@@ -5,7 +5,7 @@
 // visible, as its ABI is the compiler's to choose. WP-187.
 //@ expect: ir
 //@ requires: clang<22
-//@ args: --target=x86_64-linux-gnu
+//@ args: --target=x86_64-linux-gnu -ftrivial-auto-var-init=uninitialized
 //@ strict-diags
 //@ diag: 24:3 warning "AVX vector argument of type 'g8i' (vector of 8 'int' values) without 'avx' enabled changes the ABI"
 //@ diag: 25:3 warning "AVX vector return of type 'g8i' (vector of 8 'int' values) without 'avx' enabled changes the ABI"

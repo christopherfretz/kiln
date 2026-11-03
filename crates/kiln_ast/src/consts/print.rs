@@ -14,7 +14,7 @@ use super::ConstStore;
 use super::float::format_float;
 use super::value::{ByteImage, ConstValue, FloatKind, IntBits, PtrBase, Scalar};
 use crate::ids::{ConstValueId, DeclId, QualType, ReflectionId};
-use crate::strings::{StringEncoding, StringPool, push_unit};
+use crate::strings::{StringEncoding, StringPool, push_char_literal};
 
 /// Which syntax values print in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -361,14 +361,14 @@ impl Printer<'_> {
                 }
                 out.push('\'');
                 let u = bits.to_u128().map_or(0, |v| v as u32 & 0xff);
-                push_unit(u, '\'', out);
+                push_char_literal(u, true, out);
                 out.push('\'');
             }
             IntStyle::Char(enc) => {
                 out.push_str(enc.prefix());
                 out.push('\'');
                 let u = bits.to_u128().map_or(0, |v| v as u32);
-                push_unit(u, '\'', out);
+                push_char_literal(u, enc == StringEncoding::Ordinary, out);
                 out.push('\'');
             }
             IntStyle::Enum if self.env.enumerator(ty, bits, out) => {}

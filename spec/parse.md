@@ -244,6 +244,22 @@ clang's `Parser` over `Preprocessor::Lex`.
   the previous token. The missing `;` of a declaration carries the
   insertion fix-it `;` (clang `ExpectAndConsume`)
   (`tests/conformance/dcl.dcl/qualified-name-no-type.cpp`).
+  A qualified name one of whose qualifier components names no scope
+  (`Und::x y;` with `Und` undeclared, `N::Und::x`, `X::type` with `X` a
+  class template) is clang's invalid CXXScopeSpec (WP-430,
+  `not_a_scope_name`): the component's own error ("use of undeclared
+  identifier 'Und'", "no member named 'Und' in namespace 'N'", "use of
+  class template 'X' requires template arguments") and nothing more. In a
+  namespace or class, when a declarator follows the name
+  (`qualified_unknown_type_follows`) it was the type and the declaration
+  goes on with an invalid type (`y` is declared, later uses are quiet);
+  before what `implicit_int_follows` accepts (`Und::f();`, `Und::j;`) it
+  is the declarator-id and the declaration declares nothing (no "a type
+  specifier is required", no "expected unqualified-id"). An incomplete
+  class qualifier (`F::a();`, `F::c d;`) likewise reports only "incomplete
+  type 'F' named in nested name specifier"
+  (`basic.lookup.qual/undeclared-qualifier-declaration.cpp`,
+  `basic.lookup.qual/incomplete-qualifier-declarator-id.cpp`).
   A member declaration recovers the same way (WP-421): `R::f(v);` and
   `R::f<int> a;` in a class are "no type named" / "no template named
   'f' in namespace 'R'", and `R::h(int);` is a qualified declarator-id
@@ -1493,7 +1509,7 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     follows. Template instantiation looks the label up again by name.
     Returning one is "returning address of label, which is local"
     (`-Wreturn-stack-address`, spec/sema-class.md §5.6). Code
-    generation is a `blockaddress` (spec/codegen.md §7r), constant
+    generation is a `blockaddress` (spec/codegen.md §7s), constant
     evaluation a label-address pointer (spec/oven.md "Label
     addresses"), so `&&l` also works in a constant expression and a
     static initializer. Tests: `tests/conformance/ext.gnu.label.value/`,
