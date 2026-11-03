@@ -2942,7 +2942,8 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   zeroinitializer` giving `<N x i1>`, then stored on the packed layout
   (§7s).
 - Tests: `tests/codegen/vector_const_fold.cpp` (both oracles),
-  `tests/codegen/vector_int_to_bool_22.cpp` (`min-oracle: 22`).
+  `tests/conformance/ext.vector/ir-bool-from-int-vector.cpp` (`expect: ir`,
+  `requires: clang>=22`).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

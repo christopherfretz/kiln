@@ -5359,7 +5359,8 @@ The implicit conversions between two distinct vector types (clang
   `static_cast from ... is not allowed`.
 Tests: `ext.vector/bool-from-int-vector-clang22.cpp`,
 `ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
-`ext.vector/bool-from-int-vector-19.cpp`; codegen spec/codegen.md §7u.
+`ext.vector/bool-from-int-vector-19.cpp`, `ext.vector/ir-bool-from-int-vector.cpp`;
+codegen spec/codegen.md §7u.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
