@@ -1834,7 +1834,17 @@ and returns the scope it names:
   expression of type `bool`.
   - A failed comparison adds `expression evaluates to 'L op R'` at the
     operator, underlining the whole comparison (clang
-    `DiagnoseStaticAssertDetails`).
+    `DiagnoseStaticAssertDetails`). The condition and its conjuncts are
+    looked at through parentheses, implicit casts and full-expressions
+    (`ExprWithCleanups`, as clang's `IgnoreParenImpCasts` steps through
+    every `FullExpr`), so a comparison of a `__builtin_bit_cast`, which
+    materializes its operand, gets the note too. A float side prints as
+    `ConvertAPValueToString` does, `APFloat::toString` (`1`, `2.5E+10`,
+    `+Inf`); a float literal in the requirement text as clang's
+    `PrintFloatingLiteral` (spec/ast.md §9.3). A range whose ends come
+    from a macro argument ends after the last token, measured where it
+    is spelled (WP-410). Test:
+    `dcl.pre/static-assert-full-expression-note.cpp`.
   - In a template definition (`in_template()`, or a context flagged
     `DEPENDENT_CTX`) the condition is not evaluated, even when it is not
     value-dependent (P2593R1, a DR; clang's

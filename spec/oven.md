@@ -213,7 +213,8 @@ the evaluator's flattened type table.
   notation unless that would pad more than three zeros or imply more
   digits than that precision, else `D.DDDE+X` (`1.0E+300`, `128.1`,
   `9.999999999999999E+22`, `6.55E+4`); `+Inf`, `-Inf`, `NaN`, `0`, `-0`
-  (WP-237; `fltstr.rs`). A float argument in an "in call to" note is
+  (WP-237; `kiln_ast::consts::fltstr`, shared with sema's expression
+  printing since WP-410). A float argument in an "in call to" note is
   clang's `%e` (`f(1.000000e+10)`).
 - Argument values print as clang's `APValue::printPretty` (WP-241): a
   class or array as a brace list of its bases and members, an array cut

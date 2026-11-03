@@ -7408,7 +7408,7 @@ impl Sema<'_, '_> {
                 return t;
             }
         }
-        self.ignore_paren_imp_casts(c)
+        self.ignore_paren_full_imp_casts(c)
     }
 
     /// A failed condition as clang's `findFailedBooleanCondition`
@@ -7427,7 +7427,7 @@ impl Sema<'_, '_> {
     }
 
     fn conjunction_terms(&self, e: ExprId, out: &mut Vec<ExprId>) {
-        let x = self.ignore_paren_imp_casts(e);
+        let x = self.ignore_paren_full_imp_casts(e);
         if self.ast.exprs.get(x).kind() == ExprKind::BinaryOperator
             && self.ast.exprs.binary_op(x) == kiln_ast::expr::BinaryOp::LAnd
             && out.len() < 1024
@@ -7455,12 +7455,24 @@ impl Sema<'_, '_> {
         let (Some(lv), Some(rv)) = (self.try_fold(l), self.try_fold(r)) else { return d };
         let note = self
             .diag(DiagId::note_expr_evaluates_to, self.ast.exprs.get(c).loc())
-            .arg(self.const_display(lv))
+            .arg(self.comparison_value_text(lv))
             .arg(op)
-            .arg(self.const_display(rv))
+            .arg(self.comparison_value_text(rv))
             // clang `DiagnoseStaticAssertDetails`: the operator's range.
             .range(self.expr_range(c));
         d.with_note(note)
+    }
+
+    /// An operand's value in the "expression evaluates to" note (clang
+    /// `ConvertAPValueToString`): a float as `APFloat::toString` prints
+    /// it (`1`, `2.5E+10`, `+Inf`).
+    fn comparison_value_text(&self, v: kiln_ast::ids::ConstValueId) -> String {
+        match self.ast.consts.scalar(v) {
+            Some(kiln_ast::consts::Scalar::Float { kind, bits, .. }) => {
+                kiln_ast::consts::fltstr::to_string(kind, bits, 0)
+            }
+            _ => self.const_display(v),
+        }
     }
 
     /// `;` or a declaration with no declarators (`struct S;`, `int;`).

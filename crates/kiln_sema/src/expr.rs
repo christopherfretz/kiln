@@ -360,6 +360,22 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// As [`Self::ignore_paren_imp_casts`], also through an
+    /// `ExprWithCleanups` (clang's `IgnoreParenImpCasts` steps through
+    /// every `FullExpr`): a condition that materializes a temporary, as
+    /// `__builtin_bit_cast` does, is still a comparison.
+    pub(crate) fn ignore_paren_full_imp_casts(&self, e: ExprId) -> ExprId {
+        let mut e = e;
+        for _ in 0..256 {
+            let x = self.ignore_paren_imp_casts(e);
+            if self.ast.exprs.get(x).kind() != ExprKind::ExprWithCleanups {
+                return x;
+            }
+            e = self.ast.exprs.operand(x);
+        }
+        e
+    }
+
     pub(crate) fn ignore_parens(&self, e: ExprId) -> ExprId {
         let mut e = e;
         for _ in 0..256 {
@@ -380,7 +396,7 @@ impl Sema<'_, '_> {
     /// The operator and operands of a failed `static_assert` condition
     /// worth explaining (clang's `DiagnoseStaticAssertDetails`).
     pub(crate) fn comparison_parts(&self, e: ExprId) -> Option<(&'static str, ExprId, ExprId)> {
-        let e = self.ignore_paren_imp_casts(e);
+        let e = self.ignore_paren_full_imp_casts(e);
         if self.ast.exprs.get(e).kind() != ExprKind::BinaryOperator {
             return None;
         }

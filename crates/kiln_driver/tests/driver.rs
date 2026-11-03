@@ -602,6 +602,54 @@ fn bit_width_and_static_assert_ranges_like_clang() {
     assert_eq!((o.code, o.stderr.as_str()), (1, BIT_WIDTH_GOLDEN));
 }
 
+/// [conv.bool], [dcl.pre]/12: a -Wliteral-conversion range underlines a
+/// whole `&&` or `||` operator, and a range whose ends come from a macro
+/// argument covers its last token (clang `Lexer::getLocForEndOfToken`
+/// on the spelling); a static_assert condition with cleanups (a
+/// `__builtin_bit_cast` operand) still gets its "expression evaluates
+/// to" note (WP-410).
+const MACRO_RANGE_SOURCE: &str = r"bool f(bool x) { return x && 5.0; }
+bool g(bool x) { return 5.0 || x; }
+#define P(x) (x)
+static_assert(P(2 + 1 == 4));
+static_assert(__builtin_bit_cast(unsigned, 1.0f) == 0);
+";
+
+/// clang 19's and clang 22's `-fsyntax-only` output for
+/// `MACRO_RANGE_SOURCE`.
+const MACRO_RANGE_GOLDEN: &str = r"<stdin>:1:30: warning: implicit conversion from 'double' to 'bool' changes value from 5 to true [-Wliteral-conversion]
+    1 | bool f(bool x) { return x && 5.0; }
+      |                           ~~ ^~~
+<stdin>:2:25: warning: implicit conversion from 'double' to 'bool' changes value from 5 to true [-Wliteral-conversion]
+    2 | bool g(bool x) { return 5.0 || x; }
+      |                         ^~~ ~~
+<stdin>:4:17: error: static assertion failed due to requirement '2 + 1 == 4'
+    4 | static_assert(P(2 + 1 == 4));
+      |                 ^~~~~~~~~~
+<stdin>:3:15: note: expanded from macro 'P'
+    3 | #define P(x) (x)
+      |               ^
+<stdin>:4:23: note: expression evaluates to '3 == 4'
+    4 | static_assert(P(2 + 1 == 4));
+      |                 ~~~~~~^~~~
+<stdin>:3:15: note: expanded from macro 'P'
+    3 | #define P(x) (x)
+      |               ^
+<stdin>:5:15: error: static assertion failed due to requirement '__builtin_bit_cast(unsigned int, 1.F) == 0'
+    5 | static_assert(__builtin_bit_cast(unsigned, 1.0f) == 0);
+      |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<stdin>:5:50: note: expression evaluates to '1065353216 == 0'
+    5 | static_assert(__builtin_bit_cast(unsigned, 1.0f) == 0);
+      |               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~
+2 warnings and 2 errors generated.
+";
+
+#[test]
+fn literal_conversion_and_macro_argument_ranges_like_clang() {
+    let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], MACRO_RANGE_SOURCE);
+    assert_eq!((o.code, o.stderr.as_str()), (1, MACRO_RANGE_GOLDEN));
+}
+
 #[test]
 fn module_missing_import_notes() {
     // [module.reach]: each missing-import error of

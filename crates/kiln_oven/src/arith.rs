@@ -445,9 +445,9 @@ pub(crate) fn float_truth(kind: FloatKind, a: u128) -> bool {
 
 /// How clang prints a float in a constant-evaluation note such as
 /// `note_constexpr_overflow` (`OptionalDiagnostic << APFloat`); see
-/// [`crate::fltstr::note_string`].
+/// [`kiln_ast::consts::fltstr::note_string`].
 pub(crate) fn apfloat_to_string(kind: FloatKind, a: u128) -> String {
-    crate::fltstr::note_string(kind, a)
+    kiln_ast::consts::fltstr::note_string(kind, a)
 }
 
 /// `raw_ostream << double` (`%e`): how clang prints a float argument in

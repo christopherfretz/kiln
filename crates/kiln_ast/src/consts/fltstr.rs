@@ -1,5 +1,5 @@
 //! Exact decimal printing of a float encoding as `llvm::APFloat::toString`
-//! does it, for every [`FloatKind`] (spec/oven.md, "Diagnostics").
+//! does it, for every [`FloatKind`] (spec/oven.md, "Diagnostics"; spec/ast.md §9.3).
 //!
 //! The value is expanded to its exact decimal digits (`mant * 2^e` as
 //! `N * 10^-k` with `N = mant * 5^k`, over a small bignum), rounded half
@@ -7,7 +7,7 @@
 //! digits (LLVM's `AdjustToPrecision`), and laid out in plain or `E`
 //! notation with LLVM's padding rule.
 
-use kiln_ast::consts::FloatKind;
+use super::value::FloatKind;
 
 /// The significand precision in bits of a format (LLVM `semanticsPrecision`).
 pub(crate) fn precision(kind: FloatKind) -> u32 {
@@ -25,7 +25,7 @@ pub(crate) fn precision(kind: FloatKind) -> u32 {
 /// (`OptionalDiagnostic::operator<<(const APFloat &)`):
 /// `toString(Buf, (precision * 59 + 195) / 196)`, i.e. `ceil(precision *
 /// log10(2))` significant digits, `1.0E+300`, `128.1`, `+Inf`, `NaN`.
-pub(crate) fn note_string(kind: FloatKind, bits: u128) -> String {
+pub fn note_string(kind: FloatKind, bits: u128) -> String {
     to_string(kind, bits, (precision(kind) * 59).div_ceil(196))
 }
 
@@ -33,7 +33,7 @@ pub(crate) fn note_string(kind: FloatKind, bits: u128) -> String {
 /// /*TruncateZero=*/true)`. A `format_precision` of 0 means LLVM's
 /// round-trip default, `2 + precision * 59 / 196` digits (the JSON AST
 /// dump's `value`).
-pub(crate) fn to_string(kind: FloatKind, bits: u128, format_precision: u32) -> String {
+pub fn to_string(kind: FloatKind, bits: u128, format_precision: u32) -> String {
     const MAX_PADDING: i64 = 3;
     let fp = if format_precision == 0 { 2 + precision(kind) * 59 / 196 } else { format_precision }
         as usize;
