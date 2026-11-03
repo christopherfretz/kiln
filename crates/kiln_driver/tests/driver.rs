@@ -605,7 +605,7 @@ fn bit_width_and_static_assert_ranges_like_clang() {
 /// [conv.bool], [dcl.pre]/12: a -Wliteral-conversion range underlines a
 /// whole `&&` or `||` operator, and a range whose ends come from a macro
 /// argument covers its last token (clang `Lexer::getLocForEndOfToken`
-/// on the spelling); a static_assert condition with cleanups (a
+/// on the spelling); a `static_assert` condition with cleanups (a
 /// `__builtin_bit_cast` operand) still gets its "expression evaluates
 /// to" note (WP-410).
 const MACRO_RANGE_SOURCE: &str = r"bool f(bool x) { return x && 5.0; }

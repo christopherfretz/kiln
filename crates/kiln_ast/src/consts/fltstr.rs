@@ -100,6 +100,7 @@ enum Class {
 }
 
 /// The sign and class of an encoding (`bits` zero-extended).
+#[allow(clippy::similar_names, reason = "IEEE field names: bits, bias, exp_bits")]
 fn decode(kind: FloatKind, bits: u128) -> (bool, Class) {
     let (exp_bits, frac_bits, explicit_int) = match kind {
         FloatKind::Half => (5u32, 10u32, false),
