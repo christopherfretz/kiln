@@ -2531,8 +2531,16 @@ missing value instead, which is invalid IR.
 begin/end/suspend/free/id` become the matching `llvm.coro.*` call;
 `alloc`, `begin` and `free` take the function's `%id` first, `suspend`
 a leading `token none`, `end` a trailing `token none`;
-`__builtin_coro_frame` is the `llvm.coro.begin` value. Outside a
-coroutine, `frame`/`alloc`/`begin`/`free` are a codegen error with
+`__builtin_coro_frame` is the `llvm.coro.begin` value. A hand-written
+`__builtin_coro_id` in a function that is not a C++ coroutine creates
+the function's coroutine state (clang `createCoroData`, for coroutines
+written by hand in C): its token feeds the later `alloc`/`begin`/`free`
+calls, a `__builtin_coro_begin` becomes the `frame` value, and the
+function gets no `presplitcoroutine`; a second one is a codegen error
+"only one __builtin_coro_id can be used in a function", and one in a
+C++ coroutine "__builtin_coro_id shall not be used in a C++ coroutine"
+(tests/codegen/coro_builtins.cpp, `lower.rs` `hand_written_coro_id`).
+Without either, `frame`/`alloc`/`begin`/`free` are a codegen error with
 clang's wording ("this builtin expect that __builtin_coro_begin/id has
 been used earlier in this function").
 
