@@ -2796,12 +2796,13 @@ Linux targets; `Cg::frame_pointer` applies it.
   A variable a `goto` or a `switch` jumps past gets none (clang
   `VarBypassDetector`, initialized over the body as in clang
   `GenerateCode`; an indirect `goto` bypasses every variable). Thunks
-  get none. The markers use LLVM 19's `(i64 size, ptr)` signature, since
-  kiln's optimizer is `opt-19` (driver.md "IR optimization"); under the
-  clang 22 oracle, `opt-22` auto-upgrades the markers that survive
-  optimization to LLVM 21's `(ptr)` form, leaving dead `.i64`
-  declarations, so cases that keep markers after -O1 compare
-  structurally there (`ir_vs_clang` deviation rows).
+  get none. The markers use LLVM 19's `(i64 size, ptr nocapture)`
+  signature, and LLVM 21's `(ptr captures(none))` at `-fclang-compat=22`
+  (WP-462, §7z): codegen emits the latter itself for an LLVM 21+ backend
+  (`kiln_llvm` `Module::ir_version`, `intrinsics::lifetime_has_size`),
+  and for an older one the driver rewrites the `-S -emit-llvm` text after
+  `opt` (driver.md "IR optimization"), so `opt-19`/`llc-19` still get
+  the form they parse.
 - **Cleanup-destination promotion (`fir/mem2reg.rs`).** clang's
   `FinishFunction` replaces a coroutine's `cleanup.dest.slot` alloca by
   SSA values and phis; kiln ports LLVM 19's `PromoteMemToReg` for that
