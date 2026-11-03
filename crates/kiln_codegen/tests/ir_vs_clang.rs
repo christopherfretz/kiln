@@ -114,12 +114,6 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // IR type names (19: `(anonymous struct)`).
     ("lambda_names", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("lambda_names", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
-    // clang 20+ implements CWG2137 ([over.match.list], [over.ics.list]):
-    // `B{b}` picks `B(std::initializer_list<B>)` where clang 19 and kiln
-    // copy-construct (CWG1467 alone). kiln is the one to change (sema;
-    // WP-184 residual).
-    ("dr1467_single_element", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
-    ("dr1467_single_element", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
     // clang 22 lowers `modf` to the `llvm.modf` intrinsic (19: a `modff`
     // libcall).
     ("builtins_math", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
