@@ -113,6 +113,15 @@ impl Sema<'_, '_> {
         if ds.is_typedef() {
             return None;
         }
+        // [depr.volatile.type]/4 (C++20 [dcl.struct.bind]/1): a cv that
+        // includes volatile is deprecated (clang
+        // `warn_deprecated_volatile_structured_binding`, at `volatile`).
+        if self.std >= kiln_lex::Std::Cxx20
+            && let Some(at) = ds.cv_locs[1]
+        {
+            let d = self.diag(DiagId::sema_deprecated_volatile_binding, at);
+            self.emit(d);
+        }
         let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         let one_ref = matches!(d.chunks.as_slice(), [] | [Chunk::LRef { .. } | Chunk::RRef { .. }]);
         if ds.base != TypeSpecKind::Auto || d.grouping || !one_ref {

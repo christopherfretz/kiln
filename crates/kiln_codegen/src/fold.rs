@@ -117,6 +117,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     let (cands, inits, imm, statics, dtors) = {
         let mut c = Collect {
             ast,
+            compat: oven.clang_compat(),
             out: Vec::new(),
             inits: FxHashMap::default(),
             imm: Vec::new(),
@@ -217,6 +218,8 @@ fn is_scalar(ast: &Ast, d: DeclId) -> bool {
 /// Collects the candidate expressions.
 struct Collect<'a> {
     ast: &'a Ast,
+    /// The `-fclang-compat` level ([`crate::builtins::is_fold_candidate`]).
+    compat: u32,
     out: Vec<ExprId>,
     /// Candidates that are constant initializers of a variable (static
     /// storage, `constexpr`, or usable in constant expressions as a
@@ -406,6 +409,7 @@ impl Collect<'_> {
                     self.expr(v);
                 }
             }
+            StmtKind::IndirectGotoStmt => self.expr(ast.stmts.indirect_goto_target(s)),
             StmtKind::GCCAsmStmt => {
                 for op in ast.stmts.asm_operands(s) {
                     self.expr(op.expr);
@@ -560,7 +564,7 @@ impl Collect<'_> {
             }
             // clang `EmitBuiltinExpr` first tries the call as a constant.
             ExprKind::CallExpr => {
-                if crate::builtins::is_fold_candidate(ast, e) {
+                if crate::builtins::is_fold_candidate(ast, e, self.compat) {
                     self.out.push(e);
                 }
                 self.out.extend(crate::builtins::folded_arg(ast, e));

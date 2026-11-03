@@ -11,7 +11,7 @@
 
 use kiln_ast::class::SubobjectId;
 use kiln_ast::decl::{Access, DeclKind, TagKind};
-use kiln_ast::{Ast, DeclId, QualType};
+use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::Fault;
@@ -136,6 +136,10 @@ pub(crate) struct Virt {
     /// canonical type): a static allocation, so `&typeid(T)` is one
     /// address for the translation unit.
     type_infos: FxHashMap<u32, u64>,
+    /// The object of each label address (`&&l`) evaluated, by its
+    /// `AddrLabelExpr`: an unbacked static allocation, so one expression
+    /// is one address and two are two (clang 22).
+    labels: FxHashMap<ExprId, u64>,
 }
 
 impl Virt {
@@ -160,6 +164,7 @@ impl Virt {
             + self.dispatch.capacity() * 48
             + self.rel_dispatch.capacity() * 96
             + self.type_infos.capacity() * 12
+            + self.labels.capacity() * 12
     }
 }
 
@@ -907,6 +912,21 @@ impl Oven {
         let size = self.types.size(ti);
         let p = self.mem.alloc_static(ti, size, crate::mem::flags::CONST, Origin::TypeInfo(q));
         self.virt.type_infos.insert(key, p);
+        p
+    }
+
+    /// `Op::LabelAddr`: the address `&&l` (`AddrLabelExpr` `e`, of type
+    /// `void *`) evaluates to; made on first use.
+    pub(crate) fn label_addr(&mut self, b: &mut dyn SemaBridge, e: ExprId) -> u64 {
+        if let Some(&p) = self.virt.labels.get(&e) {
+            return p;
+        }
+        let q = b.ast().exprs.get(e).ty();
+        let t = self.types.intern(b, q);
+        let size = self.types.size(t);
+        let fl = crate::mem::flags::CONST | crate::mem::flags::EXTERNAL;
+        let p = self.mem.alloc_unbacked(t, size, fl, Origin::Label(e));
+        self.virt.labels.insert(e, p);
         p
     }
 
