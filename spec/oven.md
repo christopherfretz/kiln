@@ -2033,11 +2033,10 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   so the enclosing constant expression reports only its own error
   (clang's invalid-declaration evaluation failure; WP-400).
 - Freezing a pointer to a `typeid` object (`constexpr auto *p =
-  &typeid(T);`) is `NotConstant`: needs a `PtrBase` for type_info objects
-  shared with codegen (WP-080, with RTTI emission).
-- `r.A::f()` (an explicit member access with a qualifier) is rejected by
-  sema ("qualified member access is not supported yet"); only implicit
-  `A::f()` is covered.
+  &typeid(T);`) and an explicitly qualified call on a member access
+  (`r.A::f()`, `p->A::f()`, non-virtual per [class.virtual]/16) landed
+  (WP-176 and later; tests `class.virtual/qualified-call-constexpr.cpp`,
+  `codegen/typeid_constant.cpp`).
 - A virtual call on a member subobject whose own base is still being
   constructed reports the lifetime note where clang reports CWG1517
   (`no_dynamic` keys on the running constructor's object and class).
