@@ -155,14 +155,15 @@ impl Sema<'_, '_> {
             // clang names the template-id's name and notes the
             // specialization's bindings (`candidate function [with N = 2]`).
             let kind = format!("function {}", self.deduced_args_desc(info.template, info.args));
+            let (at, spec) = self.deleted_note_decl(p.decl);
             let msg = self
                 .diag(DiagId::sema_call_deleted_function, p.loc)
                 .arg(self.decl_arg(info.template))
                 .arg(self.delete_message_suffix(p.decl))
                 .with_note(
-                    self.diag(DiagId::note_ovl_candidate_deleted, self.ast.decls.get(p.decl).loc())
+                    self.diag(DiagId::note_ovl_candidate_deleted, self.ast.decls.get(at).loc())
                         .arg(kind)
-                        .arg(0u8),
+                        .arg(u8::from(spec)),
                 );
             self.emit(msg);
             return;

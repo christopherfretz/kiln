@@ -368,7 +368,10 @@ impl Sema<'_, '_> {
             return Ics::bad(BadKind::NoConversion, a.ty, to);
         };
         let ft = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
-        let addr = self.overload_operand(e).is_some_and(|(_, addr)| addr);
+        let addr = self
+            .overload_operand(e)
+            .or_else(|| self.implicit_member_operand(e))
+            .is_some_and(|(_, addr)| addr);
         let class = self.is_implicit_object_member(d).then(|| self.declaring_class(d)).flatten();
         let f = if let Some(c) = class {
             let ct = self.tag_type(c).ty();

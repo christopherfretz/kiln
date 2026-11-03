@@ -480,7 +480,10 @@ system's `/etc/localtime`, which the `current_zone.pass.cpp` tests compare
 against.
 
 This mirrors lit's `llvm-libc++-shared.cfg` at its defaults: the newest
-standard, experimental features enabled, no warnings, and no `-Werror`. The
+standard, experimental features enabled, no warnings, and no `-Werror`
+(decided in WP-402: kiln's warning set and wording are not clang's, so
+`-Werror` would turn warning deviations into gate failures; the two
+selftests that check lit's `-Werror` are expected to pass, "Outcomes"). The
 libc++ headers and runtime are the system's LLVM 19 ones. The `_LIBCPP_VERSION`
 that kiln sees is recorded in the report.
 
@@ -493,7 +496,11 @@ The verdict is reached in this order:
 3. Driver UNSUPPORTED: kind, RUN lines, modules, substitutions,
    FILE_DEPENDENCIES.
 4. The steps.
-5. XFAIL.
+5. XFAIL, unless the test is in `run.rs` `XFAIL_IGNORED` (path and
+   reason): `libcxx/selftest/pass.cpp/werror.pass.cpp` and
+   `libcxx/selftest/sh.cpp/werror.sh.cpp` are `XFAIL: *` because lit
+   builds with `-Werror`; the driver does not, so they are expected to
+   pass (PASS, not XPASS).
 
 | Outcome | Meaning |
 |---|---|
@@ -604,7 +611,8 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 - `run.rs`: verdict order, outcome rules; `env_exclusions` (the lists
   are sorted, the root reason, `Uid:` parsing); `slow_tests_list`
   (`slow_tests.txt` is sorted, every entry has a reason, which tests are
-  long); `allow_retries_reruns_the_binary` (a fake compiler whose test
+  long); `xfail_ignored_list` (sorted, every entry has a reason);
+  `allow_retries_reruns_the_binary` (a fake compiler whose test
   script fails twice, then passes: PASS with 2 retries, FAIL with 1; a
   timeout is retried under the given limit); `preparation_of_scripts`
   (`.sh.cpp` idioms) and its `ETXTBSY` regression loop (fake scripts are

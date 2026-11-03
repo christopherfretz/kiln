@@ -617,6 +617,28 @@ impl Sema<'_, '_> {
     pub(crate) fn ovl_deleted(&self, f: DeclId) -> bool {
         self.is_deleted_fn(f) || self.fn_spec(f).is_deleted()
     }
+
+    /// The declaration a note on the deleted function `f` points at, and
+    /// whether the candidate note calls it "implicitly" deleted. For an
+    /// explicit specialization of a function template, or of a member of
+    /// a class template specialization, that is its latest declaration,
+    /// and "implicitly". clang's candidate is the
+    /// specialization's most recent declaration. Its
+    /// `isDeletedAsWritten` is false: the deletion is recorded on the
+    /// first declaration, which deduction formed. Otherwise `f` itself.
+    pub(crate) fn deleted_note_decl(&self, f: DeclId) -> (DeclId, bool) {
+        use kiln_ast::templates::SpecKind;
+        let spec = self.ast.decls.function(f).is_some()
+            && (self
+                .ast
+                .spec_info(f)
+                .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+                || self
+                    .ast
+                    .member_spec_info(f)
+                    .is_some_and(|(_, m)| m.kind == SpecKind::ExplicitSpecialization));
+        if spec { (self.ast.latest(f), true) } else { (f, false) }
+    }
 }
 
 /// The identity binding of a static member's object slot

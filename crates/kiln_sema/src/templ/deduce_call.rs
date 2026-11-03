@@ -147,6 +147,21 @@ impl Sema<'_, '_> {
         loc: Loc,
         f: impl FnOnce(&mut Self) -> R,
     ) -> Option<(R, Result<(), Option<Diag>>)> {
+        self.in_sfinae_held(kind, ft, args, loc, &mut Vec::new(), f)
+    }
+
+    /// [`Self::in_sfinae`], the warnings the frame held back (and nothing
+    /// took) appended to `held`: one deduction's phases share them, as
+    /// clang's `TemplateDeductionInfo` does (§5.7).
+    pub(crate) fn in_sfinae_held<R>(
+        &mut self,
+        kind: FrameKind,
+        ft: DeclId,
+        args: Option<ArgListId>,
+        loc: Loc,
+        held: &mut Vec<Diag>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<(R, Result<(), Option<Diag>>)> {
         if !self.push_inst_frame(kind, ft, ft, loc) {
             return None;
         }
@@ -158,8 +173,9 @@ impl Sema<'_, '_> {
         }
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let r = f(self);
-        let st = self.inst.sfinae.borrow_mut().pop().unwrap_or_default();
+        let mut st = self.inst.sfinae.borrow_mut().pop().unwrap_or_default();
         self.pop_inst_frame();
+        held.append(&mut st.warnings);
         let failed = if st.errors > 0 { Err(st.first) } else { Ok(()) };
         Some((r, failed))
     }
@@ -279,6 +295,10 @@ impl Sema<'_, '_> {
         {
             return Err(DeductionFailure::new(Tdk::Invalid, d));
         }
+        let name_loc = self.ast.decls.get(templated).loc();
+        // The warnings the phases before the specialization is formed
+        // hold back (§5.7): kept with it on success, else dropped.
+        let mut held: Vec<Diag> = Vec::new();
         let is_pack = |s: &Self, p: DeclId| s.ast.template_parm(p).is_some_and(|x| x.pack);
         // [temp.arg.explicit]/9: a template parameter pack anywhere in the
         // list (`template <class... A, class T>`) takes every remaining
@@ -344,63 +364,70 @@ impl Sema<'_, '_> {
                 return Err(f);
             }
             let mut bad = None;
-            let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, None, loc, |s| {
-                let mut wi = 0usize;
-                for (i, &parm) in params.iter().enumerate() {
-                    let Some(&w) = written.get(wi) else { break };
-                    let prior: Vec<TemplateArg> = d.args[..i].to_vec();
-                    // An expanded parameter pack takes one argument per
-                    // element type ([temp.variadic]/5).
-                    if let Some(tys) = s.expanded_pack_types(parm) {
-                        let mut v = Vec::new();
-                        while let Some(&w) = written.get(wi).filter(|_| v.len() < tys.len()) {
-                            let ty = Some(tys[v.len()]);
-                            let Ok(a) =
-                                s.check_expanded_pack_arg(ft, depth, parm, w, loc, &prior, ty)
-                            else {
-                                bad = Some(i);
-                                return;
-                            };
-                            v.push(a);
-                            wi += 1;
+            let r = self.in_sfinae_held(
+                FrameKind::ExplicitArgSubstitution,
+                ft,
+                None,
+                loc,
+                &mut held,
+                |s| {
+                    let mut wi = 0usize;
+                    for (i, &parm) in params.iter().enumerate() {
+                        let Some(&w) = written.get(wi) else { break };
+                        let prior: Vec<TemplateArg> = d.args[..i].to_vec();
+                        // An expanded parameter pack takes one argument per
+                        // element type ([temp.variadic]/5).
+                        if let Some(tys) = s.expanded_pack_types(parm) {
+                            let mut v = Vec::new();
+                            while let Some(&w) = written.get(wi).filter(|_| v.len() < tys.len()) {
+                                let ty = Some(tys[v.len()]);
+                                let Ok(a) =
+                                    s.check_expanded_pack_arg(ft, depth, parm, w, loc, &prior, ty)
+                                else {
+                                    bad = Some(i);
+                                    return;
+                                };
+                                v.push(a);
+                                wi += 1;
+                            }
+                            let l = s.ast.types.arg_list(&v);
+                            d.args[i] = TemplateArg::pack(l);
+                            continue;
                         }
-                        let l = s.ast.types.arg_list(&v);
-                        d.args[i] = TemplateArg::pack(l);
-                        continue;
-                    }
-                    wi += 1;
-                    if is_pack(s, parm) {
-                        // [temp.arg.explicit]/9: the rest form a pack,
-                        // which deduction may extend.
-                        let mut v = Vec::new();
-                        for &w in &written[wi - 1..] {
-                            let Ok(a) = s.check_template_arg(ft, depth, parm, w, loc, &prior)
-                            else {
-                                bad = Some(i);
-                                return;
-                            };
-                            v.push(a);
+                        wi += 1;
+                        if is_pack(s, parm) {
+                            // [temp.arg.explicit]/9: the rest form a pack,
+                            // which deduction may extend.
+                            let mut v = Vec::new();
+                            for &w in &written[wi - 1..] {
+                                let Ok(a) = s.check_template_arg(ft, depth, parm, w, loc, &prior)
+                                else {
+                                    bad = Some(i);
+                                    return;
+                                };
+                                v.push(a);
+                            }
+                            let l = s.ast.types.arg_list(&v);
+                            d.args[i] = TemplateArg::pack(l);
+                            wi = written.len();
+                            break;
                         }
-                        let l = s.ast.types.arg_list(&v);
-                        d.args[i] = TemplateArg::pack(l);
-                        wi = written.len();
-                        break;
+                        let Ok(a) = s.check_template_arg(ft, depth, parm, w, loc, &prior) else {
+                            bad = Some(i);
+                            return;
+                        };
+                        d.args[i] = match a.view() {
+                            ArgView::Type(q) => TemplateArg::ty(s.written_bare(q)),
+                            _ => a,
+                        };
                     }
-                    let Ok(a) = s.check_template_arg(ft, depth, parm, w, loc, &prior) else {
-                        bad = Some(i);
-                        return;
-                    };
-                    d.args[i] = match a.view() {
-                        ArgView::Type(q) => TemplateArg::ty(s.written_bare(q)),
-                        _ => a,
-                    };
-                }
-                // More arguments than an expanded pack and the parameters
-                // after it take.
-                if wi < written.len() {
-                    bad = Some(params.len().saturating_sub(1));
-                }
-            });
+                    // More arguments than an expanded pack and the parameters
+                    // after it take.
+                    if wi < written.len() {
+                        bad = Some(params.len().saturating_sub(1));
+                    }
+                },
+            );
             let Some(((), failed)) = r else {
                 return Err(DeductionFailure::new(Tdk::InstantiationDepth, d));
             };
@@ -414,8 +441,15 @@ impl Sema<'_, '_> {
             let tys = ptys.clone();
             let fn_has_pack =
                 tys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
-            let whole =
-                matches!(target, DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_)) && !fn_has_pack;
+            // clang substitutes the whole function type for a target type
+            // and for a template-id naming one specialization without a
+            // call (`ResolveSingleFunctionTemplateSpecialization` takes the
+            // `ArgFunctionType`-less funcaddr deduction).
+            let whole = match target {
+                DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_) => true,
+                DeduceTarget::None => call.is_none(),
+                DeduceTarget::Conversion(_) => false,
+            } && !fn_has_pack;
             // clang substitutes the explicit arguments as written
             // (`SubstituteExplicitTemplateArguments` is `Final`): a
             // parameter they make non-dependent keeps their sugar, so
@@ -430,42 +464,58 @@ impl Sema<'_, '_> {
                 }
             }
             let sugared_levels = self.prior_levels(ft, depth, &sugared);
-            let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
-                s.in_template_context(ft, |s| {
-                    let mut sub = Substituter::new(s, &sugared_levels);
-                    sub.final_subst = true;
-                    // A function parameter pack keeps its pattern: the
-                    // explicitly given prefix may be extended by deduction.
-                    // A non-trailing one is a non-deduced context
-                    // ([temp.deduct.type]/5.7): its explicit elements are
-                    // all of it (clang keeps the expansion, unexpanded, in
-                    // the parameter count).
-                    let mut v = Vec::with_capacity(tys.len());
-                    let mut kept = 0usize;
-                    for (j, &t) in tys.iter().enumerate() {
-                        let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
-                            let t = sub.ty(t, loc)?;
-                            v.push(sub.param_type(t, loc)?);
-                            continue;
-                        };
-                        if j + 1 == tys.len() {
-                            v.push(t);
-                            continue;
-                        }
-                        match sub.expand_pattern_at(None, |sub| sub.ty(pat, loc))? {
-                            crate::templ::pack::Expansion::Elements(e) => {
-                                for t in e {
-                                    v.push(sub.param_type(t, loc)?);
-                                }
-                                kept += 1;
+            let r = self.in_sfinae_held(
+                FrameKind::ExplicitArgSubstitution,
+                ft,
+                Some(shown),
+                loc,
+                &mut held,
+                |s| {
+                    s.in_template_context(ft, |s| {
+                        let mut sub = Substituter::new(s, &sugared_levels);
+                        sub.final_subst = true;
+                        // A function parameter pack keeps its pattern: the
+                        // explicitly given prefix may be extended by deduction.
+                        // A non-trailing one is a non-deduced context
+                        // ([temp.deduct.type]/5.7): its explicit elements are
+                        // all of it (clang keeps the expansion, unexpanded, in
+                        // the parameter count).
+                        let mut v = Vec::with_capacity(tys.len());
+                        let mut kept = 0usize;
+                        for (j, &t) in tys.iter().enumerate() {
+                            let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
+                                let t = sub.ty(t, loc)?;
+                                v.push(sub.param_type(t, loc)?);
+                                continue;
+                            };
+                            if j + 1 == tys.len() {
+                                v.push(t);
+                                continue;
                             }
-                            crate::templ::pack::Expansion::Unexpanded(_) => v.push(t),
+                            match sub.expand_pattern_at(None, |sub| sub.ty(pat, loc))? {
+                                crate::templ::pack::Expansion::Elements(e) => {
+                                    for t in e {
+                                        v.push(sub.param_type(t, loc)?);
+                                    }
+                                    kept += 1;
+                                }
+                                crate::templ::pack::Expansion::Unexpanded(_) => v.push(t),
+                            }
                         }
-                    }
-                    let f = if whole { Some(sub.ty(pfn, loc)?) } else { None };
-                    Ok::<_, crate::templ::subst::SubstFail>((v, f, kept))
-                })
-            });
+                        // clang `BuildFunctionType` reports at the function's
+                        // name (`Function->getLocation()`).
+                        let f = if whole {
+                            sub.type_begin = Some(name_loc);
+                            let f = sub.ty(pfn, loc);
+                            sub.type_begin = None;
+                            Some(f?)
+                        } else {
+                            None
+                        };
+                        Ok::<_, crate::templ::subst::SubstFail>((v, f, kept))
+                    })
+                },
+            );
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
                 Some((Ok((t, f, kept)), Ok(()))) => {
@@ -683,9 +733,14 @@ impl Sema<'_, '_> {
             };
             let prior: Vec<TemplateArg> = d.args[..j].to_vec();
             let shown = self.ast.types.arg_list(&prior);
-            let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(shown), loc, |s| {
-                s.default_template_arg(ft, depth, p, def, loc, &prior)
-            });
+            let r = self.in_sfinae_held(
+                FrameKind::DeducedArgSubstitution,
+                ft,
+                Some(shown),
+                loc,
+                &mut held,
+                |s| s.default_template_arg(ft, depth, p, def, loc, &prior),
+            );
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
                 Some((Ok(a), Ok(()))) => d.args[j] = a,
@@ -737,6 +792,9 @@ impl Sema<'_, '_> {
         // §6.1 step 4: the specialization, its signature substituted.
         let canonical = self.ast.types.canonical_args(sugared);
         let conv = ConvertedArgs { sugared, canonical };
+        // Whether this deduction forms the specialization (its own
+        // held-back warnings then stored with it, `get_function_spec_signature`).
+        let fresh = held.is_empty() || self.ast.templates.find_spec(ft, canonical).is_none();
         let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(sugared), loc, |s| {
             s.get_function_spec_signature(ft, conv, loc)
         });
@@ -803,6 +861,7 @@ impl Sema<'_, '_> {
                         return Err(f);
                     }
                 }
+                self.keep_deduction_warnings(spec, fresh, held);
                 self.templ.explicit_nondep = nondep;
                 Ok(spec)
             }
