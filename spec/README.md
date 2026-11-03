@@ -30,4 +30,5 @@ say which in the PR. A spec change without tests is incomplete.
 | [sema-class.md](sema-class.md) | kiln_sema (classes), kiln_abi (layout, vtables) | design (WP-S3C) |
 | [sema-templates.md](sema-templates.md) | kiln_sema (`templ`), kiln_parse, kiln_ast (templates) | design |
 | [sema-lambda.md](sema-lambda.md) | kiln_parse, kiln_sema (`lambda`), kiln_oven, kiln_codegen (lambdas) | landed (WP-075) |
+| [reflection-repr.md](reflection-repr.md) | kiln_ast (`reflect`), kiln_parse, kiln_sema (`reflect_operand`, `consteval_only`) | implemented (WP-472) |
 | codegen, driver | | in progress (M2) |

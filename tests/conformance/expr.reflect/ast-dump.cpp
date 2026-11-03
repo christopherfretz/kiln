@@ -2,7 +2,7 @@
 //@ ast-filter: test
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
-// [expr.reflect] P2996R13, spec/reflection-repr.md §3: a reflect-expression
+// [expr.reflect] P2996R13, spec/reflection-repr.md §5: a reflect-expression
 // dumps the operand's kind and entity in a stable form: the type as
 // written when it is an alias, the qualified name of a declaration,
 // namespace or template, and `::` for the global namespace.

@@ -5,6 +5,7 @@
 
 use kiln_lex::{Punct, TokKind};
 
+use crate::keywords::Kw;
 use crate::parser::{PExpr, Parser, is_template_class};
 use crate::tentative::TypeIdContext;
 use kiln_ast::QualType;
@@ -41,6 +42,21 @@ impl Parser<'_, '_> {
         let operand = self.tok().span.lo;
         let qual = self.parse_nested_name_nns().ok()?;
         let Some(name) = self.ident() else {
+            // An operator-, conversion-function-id or destructor name
+            // (/7): consumed whole, reflected later.
+            if self.at_kw(Kw::Operator) {
+                self.unsupported("reflection of an operator or conversion function name", operand);
+                self.parse_operator_function_name()?;
+                return None;
+            }
+            if self.at(Punct::Tilde) {
+                self.unsupported("reflection of a destructor name", operand);
+                self.bump();
+                if self.ident().is_some() {
+                    self.bump();
+                }
+                return None;
+            }
             let bad = self.s.reflect_bad_operand(operand, loc);
             // A literal or parenthesized operand is consumed whole, so the
             // rest of the expression parses ([expr.reflect]/1 has no such

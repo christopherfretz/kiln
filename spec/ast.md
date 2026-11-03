@@ -984,12 +984,17 @@ context-free defaults (`NoEnv`):
 - Every other code unit prints as `\x{hh}` (lowercase hex).
 
 ## 10. Reflection and injection (M6; representation fixed now)
-- `ReflectionTable` interns `ReflectionId → Reflectee`: `Type(QualType)`,
-  `Decl(DeclId)`, `Namespace(DeclId)`, `Template(TemplateNameId)`,
+- `ReflectionTable` interns `ReflectionId → Reflectee`: `Null`,
+  `Type(QualType)`, `Decl(DeclId)`, `Namespace(DeclId)`,
+  `NamespaceAlias(DeclId)`, `Template(TemplateNameId)`,
   `Value(ConstValueId)`, `Object(ConstValueId /*pointer*/)`,
-  `BaseSpec(DeclId, index)`, `DataMemberSpec(...)`, `Null`.
+  `BaseSpec(DeclId, index)`, `DataMemberSpec(DmsId)`, `Annotation(AnnId)`.
+  The full contract — each variant's key, the `^^` operand mapping,
+  identity, template arguments and mangling, printing, and consteval-only
+  types — is [reflection-repr.md](reflection-repr.md).
 - `^^T` reflects the type **as written**: a `QualType` that names an alias
-  (`Typedef`/`Using` sugar at the top) keeps it; all other sugar is
+  (a typedef, alias declaration or alias template specialization at the
+  top; reflection-repr.md §1) keeps it; all other sugar is
   canonicalized before interning, so `^^const int == ^^int const` and
   `^^decltype(1) == ^^int`, but `^^Alias != ^^int` ([meta.reflection]
   `dealias`).

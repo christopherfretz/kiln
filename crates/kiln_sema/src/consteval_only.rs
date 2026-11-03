@@ -1,5 +1,5 @@
 //! Consteval-only types (M6-03, WP-472; P2996R13 [basic.types.general]
-//! and [expr.const]; spec/reflection-repr.md §5).
+//! and [expr.const]; spec/reflection-repr.md §6).
 //!
 //! A consteval-only type is `std::meta::info` or a type built from one.
 //! Its objects exist only during constant evaluation: a variable of such

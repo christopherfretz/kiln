@@ -94,6 +94,18 @@ Columns:
 | P2865R6 | Removing deprecated array comparisons | — | done | `conformance/expr.eq/p2865-probe.cpp`<br>`conformance/expr.eq/p2865-array-comparison.cpp`<br>`conformance/expr.eq/p2865-array-comparison-cxx20.cpp` | WP-356. clang 19 only warns (probe `xfail(clang)`). |
 | P3176R1 | The Oxford variadic comma | — | done | `conformance/dcl.fct/p3176-probe.cpp`<br>`conformance/dcl.fct/p3176-variadic-comma.cpp`<br>`conformance/dcl.fct/p3176-variadic-comma-cxx23.cpp` | WP-356. clang 19 lacks the deprecation (probe `xfail(clang)`). |
 
+## C++26 reflection
+
+Behind `-freflection` (no `__cpp_impl_reflection` yet: it is defined once
+the paper is complete). Not in clang 22: written reason for the M4 exit;
+the tests are `skip(clang)`. Contracts: [spec/reflection-repr.md](../../spec/reflection-repr.md)
+(representation, `^^`, identity, consteval-only) and spec/reflection.md
+(splices, queries, injection).
+
+| Paper | Feature | `__cpp_*` macro (kiln / clang 22) | Status | Corpus tests | Notes |
+|---|---|---|---|---|---|
+| P2996R13 | Reflection for C++26 | `__cpp_impl_reflection` — / — | partial | `conformance/expr.reflect/global-namespace.cpp`<br>`conformance/expr.reflect/namespace.cpp`<br>`conformance/expr.reflect/namespace-alias.cpp`<br>`conformance/expr.reflect/type.cpp`<br>`conformance/expr.reflect/templates.cpp`<br>`conformance/expr.reflect/template-id-specializations.cpp`<br>`conformance/expr.reflect/enumerator.cpp`<br>`conformance/expr.reflect/structured-binding.cpp`<br>`conformance/expr.reflect/variable.cpp`<br>`conformance/expr.reflect/data-member.cpp`<br>`conformance/expr.reflect/member-function.cpp`<br>`conformance/expr.reflect/parameter.cpp`<br>`conformance/expr.reflect/template-member-remap.cpp`<br>`conformance/expr.reflect/equality-matrix.cpp`<br>`conformance/expr.reflect/alias-vs-dealias-identity.cpp`<br>`conformance/expr.reflect/rejected-operands.cpp`<br>`conformance/expr.reflect/nttp-info-kinds.cpp`<br>`conformance/expr.reflect/ast-dump.cpp`<br>`conformance/basic.types.general/consteval-only.cpp`<br>`conformance/basic.types.general/consteval-only-escalation-run.cpp`<br>`conformance/reflection/reflect-operator.cpp`<br>`conformance/reflection/value-model.cpp`<br>`conformance/reflection/value-model-neg.cpp`<br>`conformance/reflection/queries.cpp`<br>`conformance/reflection/splice-type.cpp` | Done (WP-472): the reflectee set, `^^` for every operand kind (`::`, types with a top-level alias kept, namespaces and aliases, templates, template-ids, variables, functions, members, enumerators, bindings, parameters, dependent `^^T`), overload-set and NTTP rejection, identity by id, `template <info R>` arguments of every kind (vendor mangling `Lu6__info<id>E`, TU-local), the stable dump form, and the consteval-only rules for types, variables, functions and expressions. Not yet: operator, conversion-function and destructor names after `^^`, dependent qualified names and template-ids; consteval-only member functions of consteval-only classes; the full query families, splices beyond the WP-267 type splice, `define_aggregate`, the real mangling (spec/reflection.md). GCC 16.1 makes `^^J == ^^I` for `using J = I;`; kiln follows the paper (`alias-vs-dealias-identity.cpp`). |
+
 ## DR-level papers
 
 DRs already listed above: P2280, P2468, P2036, P2564, P2513, P2327.

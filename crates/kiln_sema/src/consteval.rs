@@ -692,7 +692,7 @@ impl Sema<'_, '_> {
         }
         let mut consteval_only_reported = false;
         for r in bad_refs {
-            // A consteval-only expression (spec/reflection-repr.md §5).
+            // A consteval-only expression (spec/reflection-repr.md §6).
             if self.is_consteval_only_leaf(r) {
                 if !consteval_only_reported {
                     consteval_only_reported = self.check_consteval_only_leaf(r, e, var, escalating);
