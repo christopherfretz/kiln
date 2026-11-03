@@ -2394,7 +2394,9 @@ impl<'a> AstBuilder<'a> {
     /// prvalue. `aux` is the operand's [`Reflectee::tag`], `a` its
     /// [`Reflectee::payload`], `b` the [`crate::ids::ReflectionId`] index
     /// (0 while the operand is dependent: the expression is then
-    /// value-dependent). A type is interned as
+    /// value-dependent; also 0 when the reflection table is full, which
+    /// the caller diagnoses: a non-dependent expression whose
+    /// `reflect_value` is `None`). A type is interned as
     /// [`crate::Ast::reflection_type`] keys it; a declaration of a
     /// dependent context (a member of a class template, a local of a
     /// function template) is instantiation-dependent, so substitution
@@ -2445,7 +2447,7 @@ impl<'a> AstBuilder<'a> {
         let b = if deps.contains(ExprDeps::VALUE_INST) {
             0
         } else {
-            self.ast.reflections.intern(operand).index()
+            self.ast.reflections.intern(operand).map_or(0, crate::ids::ReflectionId::index)
         };
         let (aux, a) = (operand.tag(), operand.payload());
         let e =

@@ -414,6 +414,25 @@ residual` (docs/status/wp-184-oracle-switch.md).
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 
+**Entity identity** (`entity.rs`, WP-471). Two declarations denote the
+same entity exactly when they are in one redeclaration chain
+([basic.link], [basic.def]/1): a redeclaration, a definition after a
+declaration, an out-of-line member definition ([class.mfct]/1) and a
+friend declaration of a function ([class.friend]; looked through to the
+function it declares) are all the entity their first declaration
+introduced. An instantiated specialization is a distinct entity from its
+template or pattern ([temp.spec.general]), and so is an explicit
+specialization. `Sema::same_entity(a, b)` is the only test of this
+(`Sema::entity_decl` gives the representative: friend looked through,
+then `Ast::first`); code that means "same entity" never compares
+`DeclId`s, which differ between redeclarations. Reflections are interned
+by `entity_decl`, so `info` equality is `same_entity`. `cargo test -p
+xtask` lints the reflection code (`kiln_sema/src/reflect.rs`,
+`reflect_operand.rs`, `reflect_limit.rs`, `kiln_sema/src/meta/`,
+`kiln_oven/src/meta/`) for raw `DeclId` `==`,
+`!=` and `assert_eq!`; a line that really means the declaration carries
+`// same_entity: raw ok`.
+
 ### 4.1 DeclSpec and Declarator
 - The parser fills a `DeclSpec` and a `Declarator` (clang's classes of
   the same names).
@@ -3786,6 +3805,22 @@ for them.
     value of function declared with pure|const attribute` [-Wunused-value]
     at the call's start. Nothing but `nodiscard` is diagnosed for an
     expression spelled in a macro body (clang `ShouldSuppress`).
+  - **Through a cast (WP-461)**: an explicit cast (`static_cast`,
+    `const_cast`, `reinterpret_cast`, C-style, functional) of kind
+    `NoOp`, `ConstructorConversion` or `IntegralCast` whose operand,
+    implicit casts stripped (clang `IgnoreImpCasts`, not parentheses),
+    is a call or a construction is checked as that call
+    (`unused_call_result`: nodiscard type, nodiscard callee, then
+    `pure` / `const`) or construction (`unused_construct_result`), at
+    the cast: `static_cast<bool>(s);` calling a `[[nodiscard]]`
+    conversion function warns `-Wunused-result`, `static_cast<int>(t)`
+    through a `pure` `operator long` warns `pure`. Otherwise the cast is
+    `expression result unused` (`bool{s};`: its operand is an init
+    list). An overloaded comparison that is not the unused expression
+    itself (parenthesized, a comma's right operand, a conditional's
+    arm; `unused_comparison_call`) is checked as that call, at its
+    operator, before falling back to `expression result unused`
+    (`tests/conformance/dcl.attr.nodiscard/through-cast.cpp`).
   - **In an instantiation (WP-217)**: clang rebuilds every expression
     statement and for-increment (`TransformExprStmt` → `ActOnExprStmt`),
     so the warning of a non-dependent one is reported again in each
