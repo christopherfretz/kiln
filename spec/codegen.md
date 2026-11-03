@@ -748,9 +748,34 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   carries `!{!"llvm.loop.unroll.disable"}` after the optional
   `mustprogress` entry: `!{self, mustprogress?, unroll.disable}`, the
   `unroll.disable` tuple cached per module. A loop with neither entry
-  gets no `!llvm.loop` (`Cg::loop_id`). `#pragma unroll` / `#pragma
-  clang loop` are not modelled (the parser ignores them).
-  `tests/codegen/loop_unroll_disable_o1.cpp`.
+  gets no `!llvm.loop`. `tests/codegen/loop_unroll_disable_o1.cpp`.
+- **Loop hints** (WP-449; clang `CGLoopInfo`, `LoopInfoStack::push`/`pop`,
+  `LoopInfo::createMetadata`; `loop_md.rs`): a loop whose statement is
+  the sub-statement of an `AttributedStmt` with `LOOP_HINT` attributes
+  (spec/parse.md §2.3) gets them as clang's `LoopAttributes`, the hint
+  values folded as integer constants (`AttributedStmt` arms reach codegen
+  only through `Cg::f.loop_hints`, keyed by the loop statement). Option
+  and state map as in clang `LoopInfoStack::push` (`Unroll`/`UnrollCount`,
+  `UnrollAndJam`/`UnrollAndJamCount`, `Vectorize`/`VectorizeWidth` with
+  `fixed`/`scalable`, `Interleave`/`InterleaveCount`, `Distribute`,
+  `PipelineDisabled`/`PipelineInitiationInterval`, `VectorizePredicate`);
+  at -O1 an unspecified unroll with no count becomes `disable`. The
+  node is a `distinct` placeholder made when the loop is pushed (clang's
+  `TempLoopID`) and filled when it is popped, through
+  `Module::md_set_operands`, so an inner loop of an `unroll_and_jam` parent
+  is finished first and becomes the parent's
+  `llvm.loop.unroll_and_jam.followup_inner`, the parent's own
+  `followup_outer` carrying the before-jam attributes. The followup chain
+  is clang's: full unroll → distribute → vectorize (`followup_all`,
+  `followup_epilogue`) → unroll-and-jam → partial unroll → pipelining,
+  each stage adding `llvm.loop.isvectorized` / `unroll.disable` /
+  `unroll_and_jam.disable` / `distribute.enable` as clang does; the
+  `mustprogress` entry comes first in the innermost node. **Not
+  modelled:** `vectorize(assume_safety)` / `interleave(assume_safety)`
+  set only `vectorize.enable`; clang's parallel-loop marking
+  (`llvm.access.group` on each memory access in the body and
+  `llvm.loop.parallel_accesses`) is not emitted.
+  `tests/codegen/loop_hints.cpp`, `tests/codegen/loop_hints_o1.cpp`.
 - **Forwarding blocks** (clang `SimplifyForwardingBlocks`): a loop
   condition block that only branches on is folded into its predecessor
   only while no cleanup (a destructor, a lifetime end, a `noexcept`

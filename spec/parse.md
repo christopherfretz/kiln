@@ -346,9 +346,39 @@ when it reaches that token (`handle_events`, as for clang's
 | `STDC <other>` | `unknown pragma in STDC namespace` [-Wunknown-pragmas] |
 | `GCC visibility push(v)` / `pop` | syntax warnings [-Wignored-pragmas] (missing `(`/`)`, `expected identifier`, extra tokens); `Event::Visibility`. An unknown `v` gets `unknown visibility 'v'` [-Wignored-attributes] and is not pushed; an unmatched `pop` is an error. The visibility itself is not applied yet (M3). |
 | `pack ...` | missing `(` gets `missing '(' after '#pragma pack' - ignoring`. Otherwise `Event::PragmaPack`; Sema records `(loc, args)` in `Sema::pragma_packs` and reports `'#pragma pack' is not supported yet` (layout does not apply it yet). |
-| `GCC diagnostic ...`, `clang diagnostic`, `clang loop`, `clang fp`, `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored. **Not applied:** `clang diagnostic ignored` does not silence anything. |
-| `comment`, `float_control`, `unused`, `omp`, `unroll`, `nounroll`, `unroll_and_jam`, `nounroll_and_jam` | accepted, ignored |
+| `GCC diagnostic ...`, `clang diagnostic`, `clang fp`, `clang optimize`, `clang max_tokens_*`, `clang __debug` | accepted, ignored. **Not applied:** `clang diagnostic ignored` does not silence anything. |
+| `comment`, `float_control`, `unused`, `omp`, `GCC ivdep` | accepted, ignored |
+| `unroll [N\|(N)]`, `nounroll`, `unroll_and_jam [N\|(N)]`, `nounroll_and_jam`, `GCC unroll [N\|(N)]`, `GCC nounroll`, `clang loop <option>(<arg>)...` | loop hints, below |
 | `weak`, `redefine_extname`, `align`, `options`, `ms_struct`, `clang attribute`, `clang section` | `Event::UnsupportedPragma`: `'#pragma <name>' is not supported yet` |
+
+**Loop hints** (WP-449; clang `PragmaLoopHintHandler`,
+`PragmaUnrollHintHandler`, `HandlePragmaLoopHint`): `pragma::classify`
+checks the pragma's syntax when it reads it (`missing option`, `invalid
+option 'x'`, `expected '('`, extra tokens after `#pragma unroll N` ->
+`extra tokens at end of '#pragma unroll' - ignored` [-Wignored-pragmas])
+and queues each hint (`LoopHintInfo`: pragma name, option, argument
+tokens) in `Parser::loop_hints`, keyed by the location of the token
+after the pragma, so the queue survives the replay of saved tokens (the
+preprocessor runs with `PpOptions::parser_pragmas`, so the pragma's
+tokens are macro-expanded as clang's handlers do: `#pragma unroll N`
+with `N` a macro). `parse_statement` takes the hints for its first
+token; `loop_hint.rs` then parses each argument (an identifier state
+`enable`/`disable`/`full`/`assume_safety`, `fixed`/`scalable` for
+`vectorize_width`, or a constant expression parsed with clang's
+`ParseConstantExpression` and checked by Sema `CheckLoopHintExpr`: an
+integer type, positive, `0` allowed only for `#pragma unroll`) and the
+hints become `LOOP_HINT` attributes (`kiln_ast::attr::LoopHint`: option,
+state, spelling) of an `AttributedStmt` around the statement. Sema
+(`kiln_sema/src/loop_hint.rs`, clang `handleLoopHintAttr`,
+`CheckForIncompatibleAttributes`) reports `expected a for, while, or
+do-while loop to follow '#pragma <name>'` for any other statement and
+`incompatible directives` / `duplicate directives` for a pair of hints
+of one category. A hint queued before `}` reports `expected statement`;
+at namespace scope `expected unqualified-id` (the declaration is
+skipped to its `;`); in a class `this pragma cannot appear in <tag>
+declaration`. A value-dependent value is substituted at instantiation
+(clang `TransformLoopHintAttr`): rechecked, kept unchanged on error, and
+a value `0` or `1` turns the hint into `unroll(disable)`.
 
 A `module` or `import` directive ([cpp.module], [cpp.import]) is
 removed from the stream through its `;`. The parser reports `a module
