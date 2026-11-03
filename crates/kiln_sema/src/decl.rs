@@ -9184,6 +9184,7 @@ impl Sema<'_, '_> {
                         | "coro_only_destroy_when_complete"
                         | "optnone"
                         | "minsize"
+                        | "uninitialized"
                         | "trivial_abi"
                 ))
         {
@@ -9934,6 +9935,7 @@ fn attr_kind_of(
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,
         ("minsize", _, _) if gnu_syntax || clang_scope => AttrKind::MINSIZE,
+        ("uninitialized", _, _) if gnu_syntax || clang_scope => AttrKind::UNINITIALIZED,
         // clang `Clang<"trivial_abi">`.
         ("trivial_abi", _, _) if gnu_syntax || clang_scope => AttrKind::TRIVIAL_ABI,
         ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
