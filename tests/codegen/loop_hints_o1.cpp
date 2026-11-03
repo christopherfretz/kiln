@@ -1,4 +1,5 @@
 //@ args: -O1 -Xclang -disable-llvm-passes
+//@ min-oracle: 22
 // [cpp.pragma]/1, [stmt.iter]: loop-hint pragmas at -O1 (clang CGLoopInfo
 // with optimization on): an `unroll_and_jam` outer loop moves its inner
 // loop's metadata behind `llvm.loop.unroll_and_jam.followup_inner`, an

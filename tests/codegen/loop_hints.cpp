@@ -1,3 +1,4 @@
+//@ min-oracle: 22
 // [cpp.pragma]/1 (implementation-defined pragmas), [stmt.iter]: clang's
 // loop-hint pragmas (`#pragma unroll [N|(N)]`, `nounroll`,
 // `unroll_and_jam`, `nounroll_and_jam`, `GCC unroll`, `#pragma clang loop
