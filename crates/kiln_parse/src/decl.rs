@@ -1659,8 +1659,9 @@ impl Parser<'_, '_> {
         }
     }
 
-    fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
-        let kw_loc = self.bump().span.lo;
+    /// The class-key or `enum` (with its `class`/`struct`) at `k`: the tag
+    /// keyword and the enum's `EnumData` scoped flags.
+    fn parse_tag_key(&mut self, ds: &mut DeclSpec, k: Kw) -> (TagKeyword, u32) {
         let keyword = match k {
             Kw::Struct => TagKeyword::Struct,
             Kw::Class => TagKeyword::Class,
@@ -1677,6 +1678,12 @@ impl Parser<'_, '_> {
                 ds.scoped_key_end = Some(l.with_offset(6));
             }
         }
+        (keyword, scoped)
+    }
+
+    fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
+        let kw_loc = self.bump().span.lo;
+        let (keyword, scoped) = self.parse_tag_key(ds, k);
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
