@@ -18,7 +18,7 @@ use kiln_lex::literal::{
 use kiln_lex::{Punct, Std, TokKind, Token};
 use kiln_sema::expr::CastStyle;
 use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent, SpecialName};
-use kiln_source::Loc;
+use kiln_source::{Loc, Span};
 
 use crate::decl::is_type_specifier_kw;
 use crate::keywords::Kw;
@@ -1793,7 +1793,8 @@ impl Parser<'_, '_> {
             && !functions
             && let Some(kw) = self.s.template_id_keyword_typo(name, nl)
         {
-            return self.template_id_keyword(kw, nl);
+            let len = u32::try_from(self.s.ast.symbols().as_str(name).len()).unwrap_or(0);
+            return self.template_id_keyword(kw, Span::new(nl, nl.with_offset(len)));
         }
         if self.s.clang_compat < 22 {
             // clang 19: a delayed typo on an expression parsing goes on
@@ -1812,8 +1813,25 @@ impl Parser<'_, '_> {
                 let _ = self.s.act_on_id_expression(name, nl, None);
             }
         }
-        let goes_on = self.cur_binop().is_some()
+        let goes_on = self.error_operand_goes_on();
+        // The template-id is clang's `ExprError`: an expression-list
+        // skips past it (`a[u<int>], x` skips to the `,`; WP-399).
+        self.expr_invalid |= goes_on;
+        goes_on.then(|| self.s.act_on_error_expr(&[], nl))
+    }
+
+    /// Whether the enclosing expression goes on parsing around an error
+    /// operand (clang's `ExprError`) that ends here: before a binary
+    /// operator, a postfix suffix (`[`, `.`, `->`, `++`, `--`) or a
+    /// closing token.
+    fn error_operand_goes_on(&self) -> bool {
+        self.cur_binop().is_some()
             || [
+                Punct::LSquare,
+                Punct::Period,
+                Punct::Arrow,
+                Punct::PlusPlus,
+                Punct::MinusMinus,
                 Punct::RParen,
                 Punct::RSquare,
                 Punct::RBrace,
@@ -1822,11 +1840,7 @@ impl Parser<'_, '_> {
                 Punct::Colon,
             ]
             .iter()
-            .any(|&p| self.at(p));
-        // The template-id is clang's `ExprError`: an expression-list
-        // skips past it (`a[u<int>], x` skips to the `,`; WP-399).
-        self.expr_invalid |= goes_on;
-        goes_on.then(|| self.s.act_on_error_expr(&[], nl))
+            .any(|&p| self.at(p))
     }
 
     /// clang 19's re-parse of the template-id at `nl` corrected to the
@@ -1836,9 +1850,14 @@ impl Parser<'_, '_> {
     /// permitted here") and the enclosing expression goes on around an
     /// error operand before an operator; any other keyword is left for
     /// the enclosing construct to skip.
-    fn template_id_keyword(&mut self, kw: &str, nl: Loc) -> PExpr {
+    fn template_id_keyword(&mut self, kw: &str, name: Span) -> PExpr {
+        let nl = name.lo;
         if kw == "template" {
-            let d = self.s.diag(DiagId::parse_unexpected_template_in_unqualified_id, nl);
+            // The fix-it removes it (clang's `FixItHint::CreateRemoval`).
+            let d = self
+                .s
+                .diag(DiagId::parse_unexpected_template_in_unqualified_id, nl)
+                .fixit(kiln_diag::FixIt::remove(name));
             self.emit(d);
             self.error_here(DiagId::parse_expected_unqualified_id);
             let goes_on = self.cur_binop().is_some();
@@ -1962,6 +1981,20 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_call_name(name, nl));
         }
         let e = self.s.act_on_id_expression(name, nl, qual);
+        if self.s.clang_compat >= 22
+            && qual.is_none()
+            && class == NameClass::Undeclared
+            && self.s.is_expr_error(e)
+        {
+            // clang 22's undeclared identifier is `ExprError` (no delayed
+            // typo): the enclosing expression goes on around it before an
+            // operator, a postfix suffix or a closing token, and anything
+            // else (`f(u 8, x)`, `a[u 8]`) is skipped by the enclosing
+            // construct, as for an undeclared template-id (WP-420).
+            let goes_on = self.error_operand_goes_on();
+            self.expr_invalid |= goes_on;
+            return goes_on.then_some(e);
+        }
         self.parse_pack_index_suffix(e, nl)
     }
 
@@ -2126,15 +2159,39 @@ impl Parser<'_, '_> {
             let r = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
             return Some(self.s.act_fold(None, op, Some(rhs), lparen, ellipsis, r));
         }
+        // clang 19 classifies a leading identifier not followed by `(`,
+        // `<` or `::` (`ClassifyName`): an undeclared one is reported
+        // there and the parenthesized expression is `ExprError`, skipped
+        // to its `)` with no "expected ')'" (`(u 8)`; `(u) + x` goes on
+        // around it, WP-420).
+        let undeclared_first = self.s.clang_compat < 22
+            && matches!(self.tok().kind, TokKind::Identifier(sym)
+                if self.s.classify_name(sym, None) == NameClass::Undeclared)
+            && !matches!(
+                self.tok_at(self.pos() + 1).kind,
+                TokKind::Punct(Punct::LParen | Punct::Less | Punct::ColonColon)
+            );
+        let outer_invalid = std::mem::replace(&mut self.expr_invalid, false);
         let e = if self.at_kw(Kw::Throw) {
             self.parse_expression()
         } else {
             self.parse_fold_operand(false)
         };
+        let invalid = std::mem::replace(&mut self.expr_invalid, outer_invalid);
+        // clang's `ParseParenExpression`: an `ExprError` inside skips to
+        // the `)` with no "expected ')'" and the parenthesized expression
+        // is `ExprError`, around which the enclosing expression goes on
+        // (`(1 + ) + x`, `((u) 8)`; WP-420).
         let Some(e) = e else {
             self.skip_until(&[Punct::RParen], false, true);
-            return None;
+            self.expr_invalid = true;
+            return Some(self.s.act_on_error_expr(&[], lparen));
         };
+        if invalid || (undeclared_first && self.s.correct_delayed_typos_in(e)) {
+            self.skip_until(&[Punct::RParen], true, true);
+            self.expr_invalid = true;
+            return Some(self.s.act_on_error_expr(&[e], lparen));
+        }
         let Some(op) = self.fold_op_at(self.pos()) else {
             let r = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
             return Some(self.s.act_on_paren(e, lparen, r));

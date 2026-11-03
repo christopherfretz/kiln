@@ -1579,9 +1579,17 @@ impl Sema<'_, '_> {
                 return e;
             }
             let msg = self.diag(Self::undeclared_use_id(name), loc).arg(text);
-            self.emit(msg);
             let e = self.recover_err(&[], loc);
-            return self.mark_expr_error(e);
+            let e = self.mark_expr_error(e);
+            if self.clang_compat < 22 {
+                // clang 19's `TypoExpr`: reported at the end of the
+                // full-expression or where the parser gives up on it
+                // (`f(u 8, x)` skips to the `)`, WP-420).
+                self.emit_delayed_typo(msg, e);
+            } else {
+                self.emit(msg);
+            }
+            return e;
         };
         if found.decls.len() > 1
             && found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::UnresolvedUsingValue)

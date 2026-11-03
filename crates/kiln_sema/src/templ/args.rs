@@ -14,6 +14,7 @@ use kiln_source::{Loc, Span};
 use crate::Sema;
 use crate::conv::{self, ConvCtx, SecondStep, StandardConversion};
 use crate::overload::Ics;
+use crate::overload::address::AddrCtx;
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
@@ -779,6 +780,29 @@ impl Sema<'_, '_> {
         if t.is_reference(pty) {
             return self.convert_ref_nttp_arg(pty, e, at, Some(self.ast.decls.get(p).loc()));
         }
+        // An overload set resolves against the parameter's type
+        // ([temp.arg.nontype]/2, [over.over]/1.5); with no match it has no
+        // implicit conversion (`A<f>` for an `int`, a non-template
+        // `g<int>` recovered from a typo; WP-420).
+        let (e, ety) = if ety == QualType::OVERLOAD && !t.is_dependent(pty) {
+            let r = self.address_match(e, pty).and_then(|_| {
+                self.resolve_address_of_overloaded(e, pty, false, AddrCtx::Convert, at)
+            });
+            let Some(r) = r else {
+                let d = self
+                    .diag(DiagId::sema_cce_not_implicitly_convertible, self.begin_loc(e))
+                    .arg(self.ty_arg(ety))
+                    .arg(self.ty_arg(pty))
+                    .range(self.expr_range(e));
+                let d = self.note_nttp_param(d, Some(self.ast.decls.get(p).loc()));
+                self.emit(d);
+                return Err(());
+            };
+            (r, self.ast.exprs.get(r).ty())
+        } else {
+            (e, ety)
+        };
+        let t = &self.ast.types;
         // clang `CheckConvertedConstantExpression`: an argument with no
         // implicit conversion sequence to the parameter's type
         // ([temp.arg.nontype]/2, [expr.const]/12) is diagnosed as such.
@@ -790,10 +814,15 @@ impl Sema<'_, '_> {
                 // template-id is substituted.
                 let from = self.begin_loc(e);
                 let from = if from.is_valid() { from } else { at };
+                // A function template-id resolved early is still clang's
+                // overload set (`A<tf<int>>`, `A<&tf<int>>`).
+                let shown =
+                    if self.overload_set_of(e).is_some() { QualType::OVERLOAD } else { ety };
                 let d = self
                     .diag(DiagId::sema_cce_not_implicitly_convertible, from)
-                    .arg(self.ty_arg(ety))
-                    .arg(self.ty_arg(pty));
+                    .arg(self.ty_arg(shown))
+                    .arg(self.ty_arg(pty))
+                    .range(self.expr_range(e));
                 let d = self.note_nttp_param(d, Some(self.ast.decls.get(p).loc()));
                 self.emit(d);
                 return Err(());

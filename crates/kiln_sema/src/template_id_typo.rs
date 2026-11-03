@@ -110,7 +110,8 @@ impl Sema<'_, '_> {
         }
         let kw = self.typo_keywords().into_iter().find(|&k| k == first.text)?;
         let msg = self.diag(DiagId::sema_undeclared_var_use_suggest, loc).arg(sym_str(self, name));
-        self.emit(msg.arg(kw));
+        let msg = self.typo_fixes(msg.arg(kw), loc, kw, true);
+        self.emit(msg);
         Some(kw)
     }
 
@@ -235,10 +236,25 @@ impl Sema<'_, '_> {
         let note = self
             .diag(DiagId::note_entity_declared_here, self.typo_note_loc(shown))
             .arg(format!("'{}'", c.text));
-        self.diag(DiagId::sema_undeclared_var_use_suggest, loc)
+        let d = self
+            .diag(DiagId::sema_undeclared_var_use_suggest, loc)
             .arg(typo.to_owned())
             .arg(c.text.clone())
-            .with_note(note)
+            .with_note(note);
+        self.typo_fixes(d, loc, &c.text, false)
+    }
+
+    /// A "did you mean" `d` for the name at `loc`: under clang 22 the
+    /// name's range and, for an entity, the fix-it replacing it with
+    /// `text`; under clang 19 the fix-it alone (WP-420).
+    fn typo_fixes(&self, d: kiln_diag::Diag, loc: Loc, text: &str, keyword: bool) -> kiln_diag::Diag {
+        let name = kiln_source::Span::new(loc, self.token_end(loc).unwrap_or(loc));
+        let d = if keyword && self.clang_compat >= 22 {
+            d
+        } else {
+            d.fixit(FixIt::replace(name, text))
+        };
+        if self.clang_compat >= 22 { d.range(name) } else { d }
     }
 
     /// The expression clang 19 rebuilds candidate `c` into: a reference
@@ -301,7 +317,8 @@ impl Sema<'_, '_> {
         let typo = sym_str(self, name);
         if c.decls.is_empty() {
             // A keyword: no note, no recovery.
-            let msg = self.diag(DiagId::sema_undeclared_var_use_suggest, loc).arg(typo).arg(c.text);
+            let msg = self.diag(DiagId::sema_undeclared_var_use_suggest, loc).arg(typo);
+            let msg = self.typo_fixes(msg.arg(c.text.clone()), loc, &c.text, true);
             self.emit(msg);
             return TemplateIdTypo::Suggested;
         }
@@ -349,6 +366,7 @@ impl Sema<'_, '_> {
             .arg(typo)
             .arg(c.text.clone())
             .with_note(note);
+        let msg = self.typo_fixes(msg, loc, &c.text, false);
         self.emit(msg);
         match kind {
             Correction::Type => return TemplateIdTypo::Suggested,
