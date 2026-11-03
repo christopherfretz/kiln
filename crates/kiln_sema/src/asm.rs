@@ -223,7 +223,7 @@ impl Sema<'_, '_> {
             if self.type_dependent(e) {
                 continue;
             }
-            let Some((size, _)) = crate::target::size_align(&self.ast, t, &self.abi) else {
+            let Some((size, _)) = self.size_align(t) else {
                 continue;
             };
             let c = self.asm_str(ops[idx as usize].constraint);
@@ -298,7 +298,7 @@ impl Sema<'_, '_> {
             let in_dom = self.asm_domain(in_t);
             let out_dom = self.asm_domain(out_t);
             let size = |s: &Self, t| {
-                crate::target::size_align(&s.ast, t, &s.abi).map_or(0, |(b, _)| b * 8)
+                s.size_align(t).map_or(0, |(b, _)| b * 8)
             };
             let (in_size, out_size) = (size(self, in_t), size(self, out_t));
             if in_size == out_size && in_dom == out_dom && in_dom != Domain::Other {

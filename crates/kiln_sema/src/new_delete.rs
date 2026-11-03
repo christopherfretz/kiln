@@ -458,7 +458,7 @@ impl Sema<'_, '_> {
                 None => return self.recover_err(&kids, loc),
             }
         }
-        let (size, align) = crate::target::size_align(&self.ast, elem, &self.abi).unwrap_or((1, 1));
+        let (size, align) = self.size_align(elem).unwrap_or((1, 1));
         let _ = size;
         let mut pass_align = align > self.abi.default_new_align;
         // Class element types: constructors (WP-067b) and array cookies
@@ -935,7 +935,7 @@ impl Sema<'_, '_> {
     /// targets' maximum object size).
     fn array_too_large(&self, n: u64, elem: QualType) -> bool {
         const MAX_BITS: u32 = 61;
-        let Some((size, _)) = crate::target::size_align(&self.ast, elem, &self.abi) else {
+        let Some((size, _)) = self.size_align(elem) else {
             return false;
         };
         if n == 0 || size == 0 {
@@ -1538,7 +1538,7 @@ impl Sema<'_, '_> {
             false
         };
         let align = if complete {
-            crate::target::size_align(&self.ast, elem, &self.abi).map_or(1, |(_, a)| a)
+            self.size_align(elem).map_or(1, |(_, a)| a)
         } else {
             1
         };
@@ -1751,11 +1751,7 @@ impl Sema<'_, '_> {
     /// being defined (its implicit destructor is declared before `}`) is
     /// laid out over the cached layouts of its bases and members but not
     /// cached itself (`Layouter::into_complete_cache`; WP-450, WP-428).
-    fn complete_class_align(&mut self, ty: QualType) -> u64 {
-        let cache = std::mem::take(&mut self.layout_cache);
-        let mut lay = kiln_abi::Layouter::with_cache(&self.ast, &self.abi, cache);
-        let align = lay.type_layout(ty).align;
-        self.layout_cache = lay.into_complete_cache();
-        align
+    fn complete_class_align(&self, ty: QualType) -> u64 {
+        self.with_layouter(|lay| lay.type_layout(ty).align)
     }
 }

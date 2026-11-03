@@ -116,6 +116,11 @@ use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
+
+/// The virtual base classes of a class with the base-specifier naming
+/// each and its path index ([`Sema::virtual_bases`]), shared with the
+/// per-class cache.
+pub(crate) type VirtualBases = std::rc::Rc<[(DeclId, kiln_ast::decl::BaseSpec, u32)]>;
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
     BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
@@ -200,7 +205,15 @@ pub struct Sema<'a, 'sm> {
     /// class (WP-450). It holds complete classes only (a class still being
     /// defined is laid out over it but not kept, WP-428), and a complete
     /// class's layout never changes within the TU.
-    pub(crate) layout_cache: kiln_abi::LayoutCache,
+    pub(crate) layout_cache: std::cell::RefCell<kiln_abi::LayoutCache>,
+    /// The virtual base classes of each complete class with any, by
+    /// definition ([`Sema::virtual_bases`], spec/sema-class.md §6.5): a
+    /// class's base-specifiers are final once it is complete, so the
+    /// list is collected once per class instead of once per query. A
+    /// class being defined is never cached; its list is built from the
+    /// cached lists of its (complete) direct bases (WP-515).
+    pub(crate) vbases_cache:
+        std::cell::RefCell<kiln_source::fx::FxHashMap<DeclId, VirtualBases>>,
     /// The `#pragma pack` directives seen, in order (location and the
     /// spelling of the argument list).
     pub pragma_packs: Vec<(Loc, String)>,
@@ -902,7 +915,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             diags,
             target,
             abi,
-            layout_cache: kiln_abi::LayoutCache::default(),
+            layout_cache: std::cell::RefCell::default(),
+            vbases_cache: std::cell::RefCell::default(),
             pragma_packs: Vec::new(),
             attr_spellings: kiln_source::fx::FxHashMap::default(),
             traits: templ::builtins::TraitState::default(),

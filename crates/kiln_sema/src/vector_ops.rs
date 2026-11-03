@@ -82,7 +82,7 @@ impl Sema<'_, '_> {
 
     /// The size in bits of a scalar type (`None` if incomplete).
     pub(crate) fn scalar_bits(&self, q: QualType) -> Option<u64> {
-        crate::target::size_align(&self.ast, q, self.abi()).map(|(s, _)| s * 8)
+        self.size_align(q).map(|(s, _)| s * 8)
     }
 
     /// clang's `breakDownVectorType` + `areVectorTypesSameSize`: the data

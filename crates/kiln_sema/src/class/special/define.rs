@@ -25,7 +25,7 @@ use kiln_ast::types::{Quals, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
-use kiln_source::fx::{FxHashMap, FxHashSet};
+use kiln_source::fx::FxHashMap;
 
 use super::SpecialKind;
 use super::deletion::Selected;
@@ -485,7 +485,7 @@ impl Sema<'_, '_> {
         let mut had_error = false;
         let abstract_class = self.defn_bits(class).contains(DefinitionBits::ABSTRACT);
         let direct = self.indexed_bases(class);
-        for (vb, spec) in self.virtual_bases(class) {
+        for &(vb, spec, idx) in self.virtual_bases(class).iter() {
             let first = self.ast.first(vb);
             if let Some(i) = bases.iter().position(|b| b.0 == first) {
                 // todo(WP-067b): warn_abstract_vbase_init_ignored.
@@ -494,7 +494,6 @@ impl Sema<'_, '_> {
                 let inherited = !direct.iter().any(|(_, b)| {
                     b.is_virtual && self.base_class(b).is_some_and(|c| self.ast.first(c) == first)
                 });
-                let idx = self.vbase_spec_index(class, vb).unwrap_or(0);
                 match self.implicit_base_init(info.iik, spec, idx, true, inherited, loc) {
                     Some(ci) => info.out.push(ci),
                     None => had_error = true,
@@ -535,40 +534,6 @@ impl Sema<'_, '_> {
         let idx: Vec<u32> = self.ast.lists.get(rec.bases).to_vec();
         let specs: Vec<BaseSpec> = self.ast.decls.bases(def, &self.ast.lists).copied().collect();
         idx.into_iter().zip(specs).collect()
-    }
-
-    /// The path index of the base-specifier naming virtual base `vb`
-    /// that [`Sema::virtual_bases`] reports for `r`.
-    fn vbase_spec_index(&self, r: DeclId, vb: DeclId) -> Option<u32> {
-        let mut walked: FxHashSet<DeclId> = FxHashSet::default();
-        self.vbase_spec_index_in(r, vb, &mut walked, 0)
-    }
-
-    /// [`Self::vbase_spec_index`] below `r`, skipping the classes already
-    /// `walked` (they do not name `vb`; each class is walked once, WP-400).
-    fn vbase_spec_index_in(
-        &self,
-        r: DeclId,
-        vb: DeclId,
-        walked: &mut FxHashSet<DeclId>,
-        depth: usize,
-    ) -> Option<u32> {
-        if depth > 1024 {
-            return None;
-        }
-        for (i, b) in self.indexed_bases(r) {
-            let Some(bd) = self.base_class(&b) else { continue };
-            if self.defn_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES)
-                && walked.insert(self.ast.first(bd))
-                && let Some(x) = self.vbase_spec_index_in(bd, vb, walked, depth + 1)
-            {
-                return Some(x);
-            }
-            if b.is_virtual && self.ast.first(bd) == self.ast.first(vb) {
-                return Some(i);
-            }
-        }
-        None
     }
 
     /// clang `isInactiveUnionMember`.
@@ -1662,7 +1627,7 @@ impl Sema<'_, '_> {
         };
         let a0 = addr(self, to, vp);
         let a1 = addr(self, from, cvp);
-        let size = crate::target::size_align(&self.ast, ty, &self.abi).map_or(0, |x| x.0);
+        let size = self.size_align(ty).map_or(0, |x| x.0);
         let size_t = self.size_type();
         let a2 = self.builder().int_literal(size_t, size, Radix::Decimal, loc);
         let call = self.builder().call(
@@ -1772,7 +1737,7 @@ impl Sema<'_, '_> {
         if !visit_virtual {
             return;
         }
-        for (vb, _) in self.virtual_bases(class) {
+        for &(vb, ..) in self.virtual_bases(class).iter() {
             if direct_virtual.contains(&self.ast.first(vb)) {
                 continue;
             }

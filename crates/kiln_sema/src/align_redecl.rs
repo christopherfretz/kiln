@@ -43,7 +43,7 @@ impl Sema<'_, '_> {
             if self.ast.types.is_dependent(t) {
                 return None;
             }
-            return Some(crate::target::size_align(&self.ast, t, &self.abi).map_or(0, |x| x.1));
+            return Some(self.size_align(t).map_or(0, |x| x.1));
         }
         let Some(e) = ExprId::from_raw(node.a) else {
             // `__attribute__((aligned))`: the target's biggest alignment.
@@ -104,7 +104,7 @@ impl Sema<'_, '_> {
     }
 
     fn type_align(&self, t: QualType) -> u64 {
-        crate::target::size_align(&self.ast, t, &self.abi).map_or(0, |x| x.1)
+        self.size_align(t).map_or(0, |x| x.1)
     }
 
     /// Merges the alignment attributes of the new declaration `new` (its
@@ -276,7 +276,7 @@ impl Sema<'_, '_> {
         if self.ast.types.is_dependent(ty) {
             return;
         }
-        let Some((_, natural)) = crate::target::size_align(&self.ast, ty, &self.abi) else {
+        let Some((_, natural)) = self.size_align(ty) else {
             return;
         };
         if natural > set.max {

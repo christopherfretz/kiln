@@ -347,7 +347,7 @@ impl Sema<'_, '_> {
         let count = if ext {
             v
         } else {
-            let esize = crate::target::size_align(&self.ast, elem, self.abi()).map_or(0, |s| s.0);
+            let esize = self.size_align(elem).map_or(0, |s| s.0);
             if esize == 0 || v % u128::from(esize) != 0 {
                 self.error(DiagId::sema_vector_size_not_multiple, loc);
                 return QualType::ERROR;

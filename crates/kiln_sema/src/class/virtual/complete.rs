@@ -6,6 +6,7 @@
 use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, FnSpec, FnStorage, TagKind, TemplLinkKind,
 };
+use kiln_ast::class::{ClassVirtuals, SubobjectId};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::Quals;
 use kiln_ast::{DeclId, QualType};
@@ -120,11 +121,33 @@ impl Sema<'_, '_> {
     /// `virtual function 'f' has more than one final overrider`
     /// ([class.virtual]/2: a virtual function has a unique final
     /// overrider in a complete class).
+    ///
+    /// The subobject graph and final overriders computed here are those
+    /// of the complete class, so they become its `Ast::virtuals` entry
+    /// (`graph::ensure_virtuals`; spec/sema-class.md §6.5, WP-515): the
+    /// vtable marking and the Oven read them instead of computing them a
+    /// second time.
     fn check_unique_final_overriders(&mut self, r: DeclId) {
         let subs = graph::subobject_graph(&self.ast, r);
         let all = graph::all_final_overriders(&self.ast, &subs);
+        self.check_unique_final_overriders_in(r, &all);
+        let first = self.ast.first(r);
+        if self.ast.virtuals.get(first).is_none() {
+            let mut overriders = all;
+            overriders.dedup_by_key(|e| (e.0, e.1));
+            self.ast.virtuals.insert(first, ClassVirtuals { subobjects: subs, overriders });
+        }
+    }
+
+    /// [`Self::check_unique_final_overriders`] over the final overrider
+    /// candidates `all` of complete class `r`.
+    fn check_unique_final_overriders_in(
+        &mut self,
+        r: DeclId,
+        all: &[(SubobjectId, DeclId, DeclId, SubobjectId)],
+    ) {
         let mut by_method: FxHashMap<DeclId, Vec<(u16, DeclId)>> = FxHashMap::default();
-        for e in &all {
+        for e in all {
             by_method.entry(e.1).or_default().push((e.0.0, e.2));
         }
         let rname = format!("'{}'", self.qualified_decl_name(r));

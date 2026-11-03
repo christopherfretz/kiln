@@ -44,6 +44,34 @@ pub fn size_align(ast: &Ast, ty: QualType, target: &Target) -> Option<(u64, u64)
     Some((l.size, l.align))
 }
 
+impl crate::Sema<'_, '_> {
+    /// `(sizeof, alignof)` of `ty` in bytes, as [`size_align`], laid out
+    /// over the per-Sema [`kiln_abi::LayoutCache`] (spec/sema-class.md
+    /// §6.5): a complete class, and every complete class it contains, is
+    /// laid out once per TU. A class still being defined is laid out over
+    /// the cached layouts of its complete bases and members and then
+    /// dropped (`Layouter::into_complete_cache`; WP-428, WP-515).
+    pub(crate) fn size_align(&self, ty: QualType) -> Option<(u64, u64)> {
+        if !is_complete_object(&self.ast, ty) {
+            return None;
+        }
+        let l = self.with_layouter(|lay| lay.type_layout(ty));
+        Some((l.size, l.align))
+    }
+
+    /// Runs `f` on a layout session resuming the per-Sema cache, then
+    /// keeps the layouts of the complete classes it laid out (§6.5). The
+    /// session cannot call back into sema, so the cache is never borrowed
+    /// twice.
+    pub(crate) fn with_layouter<R>(&self, f: impl FnOnce(&mut kiln_abi::Layouter<'_>) -> R) -> R {
+        let cache = self.layout_cache.take();
+        let mut lay = kiln_abi::Layouter::with_cache(&self.ast, &self.abi, cache);
+        let r = f(&mut lay);
+        *self.layout_cache.borrow_mut() = lay.into_complete_cache();
+        r
+    }
+}
+
 /// True if `ty` is a complete object type (its size is known).
 pub fn is_complete_object(ast: &Ast, ty: QualType) -> bool {
     let t = &ast.types;

@@ -105,7 +105,7 @@ impl Sema<'_, '_> {
             self.emit(self.incomplete_note(msg, atom));
             return None;
         }
-        if crate::target::size_align(&self.ast, atom, &self.abi).is_none_or(|(s, _)| s == 0) {
+        if self.size_align(atom).is_none_or(|(s, _)| s == 0) {
             let msg = self
                 .diag(DiagId::sema_atomic_builtin_must_be_pointer, at)
                 .arg(self.ty_arg(pt))

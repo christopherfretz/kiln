@@ -33,7 +33,7 @@ impl Sema<'_, '_> {
     }
 
     fn align_of(&self, ty: QualType) -> Option<u64> {
-        crate::target::size_align(&self.ast, ty, &self.abi).map(|(_, a)| a)
+        self.size_align(ty).map(|(_, a)| a)
     }
 
     /// The operand of `&` (clang `CheckAddressOfPackedMember`): records

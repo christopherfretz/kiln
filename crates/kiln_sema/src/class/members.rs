@@ -343,7 +343,7 @@ impl Sema<'_, '_> {
                     .arg(tag)
                     .arg(u8::from(vbases.len() != 1)),
             );
-            for (_, b) in vbases {
+            for &(_, b, _) in vbases.iter() {
                 msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
             }
             return msg;

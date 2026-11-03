@@ -121,7 +121,7 @@ impl Sema<'_, '_> {
             .filter_map(|(_, b)| self.base_class(&b).map(|c| (self.ast.first(c), false)))
             .collect();
         specs.extend(
-            self.virtual_bases(class).into_iter().map(|(vb, _)| (self.ast.first(vb), true)),
+            self.virtual_bases(class).iter().map(|v| (self.ast.first(v.0), true)),
         );
         for (b, is_virtual) in specs {
             let Some(&(_, via)) = entries.iter().find(|e| e.0 == b) else { continue };

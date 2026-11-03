@@ -151,7 +151,7 @@ impl Sema<'_, '_> {
         let bases: Vec<BaseSpec> = self.ast.decls.bases(class, &self.ast.lists).copied().collect();
         let mut subs: Vec<BaseSpec> = bases.iter().filter(|b| !b.is_virtual).copied().collect();
         if !k.is_ctor() || !self.defn_bits(class).contains(DefinitionBits::ABSTRACT) {
-            subs.extend(self.virtual_bases(class).into_iter().map(|x| x.1));
+            subs.extend(self.virtual_bases(class).iter().map(|x| x.1));
         }
         for b in subs {
             let Some(bc) = self.base_class(&b) else { continue };

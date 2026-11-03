@@ -18,7 +18,6 @@ use crate::class::InitStyle as CtorStyle;
 use crate::conv::{self, ConvCtx};
 use crate::init::{Designator, InitList, InitValue};
 use crate::lookup::LookupKind;
-use crate::target;
 
 /// The state saved across a statement expression
 /// ([`Sema::act_on_start_stmt_expr`]): the enclosing full-expression's
@@ -323,7 +322,7 @@ impl Sema<'_, '_> {
                         );
                         return None;
                     };
-                    let size = target::size_align(&self.ast, elem, &self.abi).map_or(0, |x| x.0);
+                    let size = self.size_align(elem).map_or(0, |x| x.0);
                     bits += i * i128::from(size) * 8;
                     cur = elem;
                 }

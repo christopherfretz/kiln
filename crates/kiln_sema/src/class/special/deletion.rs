@@ -392,7 +392,7 @@ impl Sema<'_, '_> {
         } else {
             subs.extend(bases.iter().filter(|b| !b.is_virtual).copied());
             if !self.defn_bits(w.class).contains(DefinitionBits::ABSTRACT) {
-                subs.extend(self.virtual_bases(w.class).into_iter().map(|x| x.1));
+                subs.extend(self.virtual_bases(w.class).iter().map(|x| x.1));
             }
         }
         for b in subs {
@@ -833,7 +833,7 @@ impl Sema<'_, '_> {
                 // at the declaration's start, a note per virtual base).
                 let mut msg =
                     self.diag(DiagId::sema_defaulted_constexpr_with_vbase, at).arg(k.index());
-                for (_, b) in self.virtual_bases(class) {
+                for &(_, b, _) in self.virtual_bases(class).iter() {
                     msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
                 }
                 self.emit(msg);

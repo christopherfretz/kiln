@@ -2040,7 +2040,7 @@ impl Sema<'_, '_> {
         // `getTypeSizeInChars` of a reference type).
         let size_of = |s: &mut Self, t: QualType| {
             let t = if s.ast.types.is_reference(t) { s.ast.types.pointer_to(t) } else { t };
-            crate::target::size_align(&s.ast, t, &s.abi).map_or(0, |x| x.0)
+            s.size_align(t).map_or(0, |x| x.0)
         };
         let (ss, ds) = (size_of(self, src), size_of(self, ty));
         if ss != ds {
@@ -2396,7 +2396,7 @@ impl Sema<'_, '_> {
                 covered.get_mut(at..at + ptr_bytes)?.fill(true);
             } else {
                 let v = if name.as_deref() == Some("_M_line") { line } else { column };
-                let (w, _) = crate::target::size_align(&self.ast, fty, &self.abi)?;
+                let (w, _) = self.size_align(fty)?;
                 let w = usize::try_from(w).ok()?;
                 let le = u64::from(v).to_le_bytes();
                 for i in 0..w {

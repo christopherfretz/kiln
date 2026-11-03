@@ -565,7 +565,7 @@ impl Sema<'_, '_> {
         let vbase = if direct.is_some_and(|b| b.is_virtual) {
             None
         } else {
-            self.virtual_bases(class).into_iter().find(|(c, _)| self.ast.first(*c) == target)
+            self.virtual_bases(class).iter().find(|v| self.ast.first(v.0) == target).map(|v| (v.0, v.1))
         };
         let (spec, inherited) = match (direct, vbase) {
             (None, None) => {
@@ -741,8 +741,8 @@ impl Sema<'_, '_> {
     fn init_order_keys(&self, class: DeclId) -> Vec<OrderKey> {
         let mut keys: Vec<OrderKey> = self
             .virtual_bases(class)
-            .into_iter()
-            .map(|(c, _)| OrderKey::Base(self.ast.first(c)))
+            .iter()
+            .map(|v| OrderKey::Base(self.ast.first(v.0)))
             .collect();
         for (_, b) in self.indexed_bases(class) {
             if !b.is_virtual

@@ -21,7 +21,6 @@ use super::table::{self, Arity, Complete, Status};
 use crate::Sema;
 use crate::class::{Selected, SpecialKind};
 use crate::conv::rank::builtin_signed;
-use crate::target;
 use crate::templ::stack::FrameKind;
 
 mod cxx26;
@@ -1317,7 +1316,7 @@ impl Sema<'_, '_> {
     }
 
     fn size_bits(&self, q: QualType) -> Option<u64> {
-        target::size_align(&self.ast, q, &self.abi).map(|(s, _)| s.saturating_mul(8))
+        self.size_align(q).map(|(s, _)| s.saturating_mul(8))
     }
 
     fn fields_of(&self, r: DeclId) -> Vec<DeclId> {
@@ -1350,7 +1349,7 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        let layout = kiln_abi::record_layout(&self.ast, def, &self.abi);
+        let layout = self.with_layouter(|lay| lay.record(def).clone());
         let mut cur: u64 = 0;
         let mut bases: Vec<(DeclId, u64)> = layout.bases.to_vec();
         bases.sort_by_key(|b| b.1);

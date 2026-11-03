@@ -299,7 +299,7 @@ impl Sema<'_, '_> {
         let (w, signed) = if let Some(v) = self.vector_parts(to) {
             // A vector target: clang's `getIntWidth` is the whole
             // vector's size, so only a fractional part is reported.
-            let bits = crate::target::size_align(&self.ast, to, self.abi()).map_or(64, |s| s.0 * 8);
+            let bits = self.size_align(to).map_or(64, |s| s.0 * 8);
             (u32::try_from(bits).unwrap_or(u32::MAX), int_signed(self, v.elem))
         } else if is_bool {
             (1, false)

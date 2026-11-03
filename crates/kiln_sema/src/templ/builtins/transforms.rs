@@ -254,7 +254,7 @@ impl Sema<'_, '_> {
                         _ => {}
                     }
                 }
-                let size = crate::target::size_align(&self.ast, t, &self.abi).map(|s| s.0)?;
+                let size = self.size_align(t).map(|s| s.0)?;
                 let cands: [BuiltinType; 6] = if signed {
                     [
                         BuiltinType::SChar,
@@ -275,7 +275,7 @@ impl Sema<'_, '_> {
                     ]
                 };
                 let found = cands.into_iter().find(|&c| {
-                    crate::target::size_align(&self.ast, c.qual_type(), &self.abi)
+                    self.size_align(c.qual_type())
                         .is_some_and(|s| s.0 == size)
                 })?;
                 found.qual_type()

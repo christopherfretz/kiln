@@ -2802,7 +2802,7 @@ impl Sema<'_, '_> {
         if !kiln_abi::asm::is_valid_register_name(arch, &name) {
             self.emit(self.diag(DiagId::sema_asm_unknown_register_name, loc).arg(name));
         } else if !self.in_local_scope() && !self.is_dependent_type(ty) {
-            let bits = target::size_align(&self.ast, ty, self.abi()).map(|(s, _)| s * 8);
+            let bits = self.size_align(ty).map(|(s, _)| s * 8);
             let size = bits.map(|b| kiln_abi::asm::global_register_size_mismatch(arch, &name, b));
             let unreserved =
                 self.clang_compat >= 22 && !kiln_abi::asm::global_register_reserved_22(arch, &name);
@@ -5880,7 +5880,7 @@ impl Sema<'_, '_> {
             .arg(u8::from(kind == DeclKind::CXXConstructor))
             .arg(tag)
             .arg(u8::from(vbases.len() != 1));
-        for (_, b) in vbases {
+        for &(_, b, _) in vbases.iter() {
             msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
         }
         self.emit(msg);
@@ -7418,6 +7418,11 @@ impl Sema<'_, '_> {
         self.builder().complete_record_definition(r, bits);
         if invalid {
             self.ast.decls.set_flags(r, DeclFlags::INVALID);
+        }
+        if bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            // Cached now, so a derived class's list is built from it
+            // (spec/sema-class.md §6.5).
+            let _ = self.virtual_bases(r);
         }
         let own = self.own_aligned(r);
         self.check_alignas_underalignment(r, &own);

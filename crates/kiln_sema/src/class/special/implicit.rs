@@ -3,6 +3,8 @@
 //! clang `CXXRecordDecl::addedMember` / `addedClassSubobject`,
 //! `AddImplicitlyDeclaredMembersToClass`, `DeclareImplicit*`).
 
+use std::rc::Rc;
+
 use kiln_ast::decl::{
     BaseSpec, ConstexprKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, FieldData, FnSpec,
     TagKind,
@@ -14,7 +16,7 @@ use kiln_source::fx::FxHashSet;
 
 use super::SpecialKind;
 use super::deletion::Selected;
-use crate::Sema;
+use crate::{Sema, VirtualBases};
 use crate::class::r#virtual::is_virtual;
 
 /// How deep the walks over bases and member classes go before giving up
@@ -241,43 +243,59 @@ impl Sema<'_, '_> {
     /// The virtual base classes of class `r`, in clang's `vbases()` order:
     /// per direct base, its virtual bases, then itself if virtual; each
     /// class once. The specifier is the one naming it (in `r` or in the
-    /// base that introduced it).
-    pub(crate) fn virtual_bases(&self, r: DeclId) -> Vec<(DeclId, BaseSpec)> {
-        let mut out: Vec<(DeclId, BaseSpec)> = Vec::new();
-        let mut seen: FxHashSet<DeclId> = FxHashSet::default();
-        let mut walked: FxHashSet<DeclId> = FxHashSet::default();
-        self.collect_vbases(self.class_def(r), &mut out, &mut seen, &mut walked, 0);
-        out
+    /// base that introduced it), with its path index (as
+    /// [`Self::indexed_bases`]).
+    ///
+    /// Cached per complete class (`Sema::vbases_cache`, spec/sema-class.md
+    /// §6.5; WP-515): a complete class's base-specifiers never change, so
+    /// each class's list is collected once and shared. A class being
+    /// defined is not cached; its list is built from the cached lists of
+    /// its direct bases, which are complete ([class.derived.general]/2).
+    pub(crate) fn virtual_bases(&self, r: DeclId) -> VirtualBases {
+        self.virtual_bases_at(self.class_def(r), 0).0
     }
 
-    /// Appends the virtual bases of `r` not yet in `out` in inheritance
-    /// graph order. A class already `walked` has all its virtual bases in
-    /// `out`, so each class is walked once (linear in a virtual lattice,
-    /// not exponential; WP-400).
-    fn collect_vbases(
-        &self,
-        r: DeclId,
-        out: &mut Vec<(DeclId, BaseSpec)>,
-        seen: &mut FxHashSet<DeclId>,
-        walked: &mut FxHashSet<DeclId>,
-        depth: usize,
-    ) {
+    /// [`Self::virtual_bases`] of definition `def` at recursion `depth`,
+    /// and whether the list is whole (a walk cut by [`MAX_DEPTH`] is
+    /// neither whole nor cached).
+    fn virtual_bases_at(&self, def: DeclId, depth: usize) -> (VirtualBases, bool) {
+        if let Some(v) = self.vbases_cache.borrow().get(&def) {
+            return (v.clone(), true);
+        }
+        let defn = self.ast.decls.record(def).map(|x| x.defn).unwrap_or_default();
+        let complete = defn.contains(DefinitionBits::COMPLETE);
+        if complete && !defn.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            return (Rc::from([]), true);
+        }
         if depth > MAX_DEPTH {
-            return;
+            return (Rc::from([]), false);
         }
-        let bases: Vec<BaseSpec> = self.ast.decls.bases(r, &self.ast.lists).copied().collect();
-        for b in bases {
+        let mut out: Vec<(DeclId, BaseSpec, u32)> = Vec::new();
+        let mut seen: FxHashSet<DeclId> = FxHashSet::default();
+        let mut whole = true;
+        for (i, b) in self.indexed_bases(def) {
             let Some(bd) = self.base_class(&b) else { continue };
-            let first = self.ast.first(bd);
-            if self.defn_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES)
-                && walked.insert(first)
-            {
-                self.collect_vbases(bd, out, seen, walked, depth + 1);
+            if self.defn_bits(bd).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+                // `bd`'s list in its own order, less the classes already
+                // found: the same first-encounter order as one depth-first
+                // walk of the whole graph.
+                let (inner, w) = self.virtual_bases_at(bd, depth + 1);
+                whole &= w;
+                for &v in inner.iter() {
+                    if seen.insert(self.ast.first(v.0)) {
+                        out.push(v);
+                    }
+                }
             }
-            if b.is_virtual && seen.insert(first) {
-                out.push((bd, b));
+            if b.is_virtual && seen.insert(self.ast.first(bd)) {
+                out.push((bd, b, i));
             }
         }
+        let out: VirtualBases = out.into();
+        if whole && complete {
+            self.vbases_cache.borrow_mut().insert(def, out.clone());
+        }
+        (out, whole)
     }
 
     /// Whether field `f` has a default member initializer.
@@ -982,8 +1000,8 @@ impl Sema<'_, '_> {
                 assign_const = false;
             }
         }
-        for (v, _) in &vbases {
-            if !self.copy_has_const_param(*v, K::CopyCtor) {
+        for &(v, ..) in vbases.iter() {
+            if !self.copy_has_const_param(v, K::CopyCtor) {
                 ctor_const_vbase = false;
             }
         }

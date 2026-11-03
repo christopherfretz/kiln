@@ -89,7 +89,7 @@ impl SemaBridge for Bridge<'_, '_, '_> {
 
     fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32) {
         let s = &*self.sema;
-        crate::target::size_align(&s.ast, ty, &s.abi)
+        s.size_align(ty)
             .map_or((0, 1), |(size, align)| (size, u32::try_from(align).unwrap_or(1)))
     }
 
