@@ -472,6 +472,17 @@ pub(crate) mod bi {
     /// `getBuiltinAlignArguments`: a negative or non-power-of-two
     /// alignment, or one above 2^(width-1), is a fault).
     pub const ALIGN: u32 = 26;
+    /// WP-432: `__builtin_align_up` / `align_down` / `is_aligned` (sub
+    /// 0 / 1 / 2) of the pointer `a` (to elements of type `t1`) to the
+    /// checked alignment `b` (clang `PointerExprEvaluator` and
+    /// `IntExprEvaluator`): the known alignment of `a` is its complete
+    /// object's (a variable's declared alignment, else its type's) at
+    /// `a`'s byte offset. `is_aligned` is 1 when that is at least `b`, 0
+    /// when the object's is but the offset's is not; `align_up` / `down`
+    /// is `a` when its alignment is at least `b`, else `a` with its offset
+    /// rounded when the object's is; otherwise a fault
+    /// (`BiFault::AlignRun`). Executed with the bridge.
+    pub const PTR_ALIGN: u32 = 28;
     /// `std::uncaught_exceptions()` / `__builtin_uncaught_exceptions()`
     /// ([except.uncaught]/1, P3068): the number of exceptions thrown and
     /// not yet caught in this evaluation (a nested evaluation counts its

@@ -66,6 +66,11 @@ pub(crate) enum BiFault {
     /// (`note_constexpr_invalid_alignment`), or (`big`) exceeds 2^(w-1)
     /// (`note_constexpr_alignment_too_big`).
     AlignArg { lo: u64, hi: u64, w: u8, signed: bool, big: bool },
+    /// WP-432: the alignment of a pointer to `align` bytes is not known
+    /// at compile time: whether it is at least that (`is_aligned`,
+    /// `note_constexpr_alignment_compute`) or (`adjust`) the result of
+    /// `align_up` / `align_down` (`note_constexpr_alignment_adjust`).
+    AlignRun { adjust: bool, align: u64 },
 }
 
 /// `bi::ALIGN` (WP-416; clang `getBuiltinAlignArguments` and
@@ -505,6 +510,55 @@ impl Oven {
             return Err(Fault::Bi(BiFault::Align { kind, v, align }));
         }
         Ok(())
+    }
+
+    /// `bi::PTR_ALIGN` (WP-432; clang `getBaseAlignment` and
+    /// `CharUnits::alignmentAtOffset`).
+    pub(super) fn bi_ptr_align(
+        &self,
+        b: &mut dyn SemaBridge,
+        sub: u32,
+        p: u64,
+        align: u128,
+        elem: OTy,
+    ) -> Result<u128, Fault> {
+        let align = u64::try_from(align).unwrap_or(u64::MAX).max(1);
+        let fault = Fault::Bi(BiFault::AlignRun { adjust: sub != 2, align });
+        let ptr = Ptr::decode(p);
+        // clang has no base object for a null or integral pointer.
+        if p == 0 || ptr.is_fn() || Ptr::is_nowhere(p) {
+            return Err(fault);
+        }
+        let Some(a) = self.alloc_any(ptr) else { return Err(fault) };
+        let decl = match a.origin {
+            Origin::Var(d) | Origin::Global(d) | Origin::External(d) => b.decl_align(d),
+            _ => 0,
+        };
+        let base = if decl != 0 { decl } else { u64::from(self.types.info(a.ty).align) }.max(1);
+        let off = u64::from(ptr.off);
+        // `MinAlign(base, off)`: the largest power of two dividing both.
+        let at = if off == 0 { base } else { base.min(1 << off.trailing_zeros()) };
+        match sub {
+            2 if at >= align => Ok(1),
+            2 if base >= align => Ok(0),
+            _ if sub != 2 && at >= align => Ok(u128::from(p)),
+            _ if sub != 2 && base >= align => {
+                let m = align - 1;
+                let new = if sub == 1 { off & !m } else { (off + m) & !m };
+                let es = self.types.size(elem).max(1);
+                let d = i128::from(new) - i128::from(off);
+                // An element step keeps the pointer's array position
+                // (one past the end included); clang does not check the
+                // bounds of the adjusted offset.
+                if d % i128::from(es) == 0
+                    && let Ok(q) = self.ptr_add(p, d / i128::from(es), elem)
+                {
+                    return Ok(u128::from(q));
+                }
+                Ok(u128::from(Ptr::with_off(p, new, false)))
+            }
+            _ => Err(fault),
+        }
     }
 
     /// `bi::OBJECT_SIZE` (WP-282): a pointer that designates no object (a

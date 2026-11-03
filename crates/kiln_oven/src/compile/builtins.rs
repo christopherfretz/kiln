@@ -987,27 +987,51 @@ impl Compiler<'_> {
             }
             // WP-416: clang folds the alignment builtins on an integer
             // source (`IntExprEvaluator`), checking the alignment (evaluated
-            // first) with its note at the alignment argument; a pointer
-            // source is not folded yet (spec/oven.md "Builtins").
+            // first) with its note at the alignment argument. WP-432: on a
+            // pointer source (`PointerExprEvaluator`; `is_aligned` in
+            // `IntExprEvaluator`) from the known alignment of its object,
+            // `align_up` / `align_down` evaluating the pointer first; an
+            // unknown result is noted at the pointer (spec/oven.md
+            // "Builtins").
             id::ALIGN_UP | id::ALIGN_DOWN | id::IS_ALIGNED => {
                 let (x, al) = (arg(0)?, arg(1)?);
-                let xt = self.ety(x);
-                let Some((w, s)) = int_of(self.kind(xt)) else {
-                    self.unsupported(e);
-                    return Some(self.finish_builtin(dst));
-                };
-                let (aw, asg) = self.int_ws(al);
-                let at = self.begin(al);
-                let ws = w | u32::from(s) << 8;
-                let t2 = aw | u32::from(asg) << 8;
-                let b = self.rv(al);
-                op(self, bi::ALIGN, ws | 3 << 9, [dst, b, dst], [0, t2], at);
-                let a = self.rv(x);
                 let k = match bid {
                     id::ALIGN_UP => 0,
                     id::ALIGN_DOWN => 1,
                     _ => 2,
                 };
+                let (aw, asg) = self.int_ws(al);
+                let at = self.begin(al);
+                let t2 = aw | u32::from(asg) << 8;
+                let xt = self.ety(x);
+                let Some((w, s)) = int_of(self.kind(xt)) else {
+                    let q = self.ast().exprs.get(x).ty();
+                    let Some(et) = self.ast().types.pointee(q) else {
+                        self.unsupported(e);
+                        return Some(self.finish_builtin(dst));
+                    };
+                    let t = self.ty(et).0;
+                    // The check reads only the alignment's width, at 64.
+                    let ws = 64;
+                    let a = if k == 2 {
+                        let b = self.rv(al);
+                        op(self, bi::ALIGN, ws | 3 << 9, [dst, b, dst], [0, t2], at);
+                        let a = self.rv(x);
+                        (a, b)
+                    } else {
+                        let a = self.rv(x);
+                        let b = self.rv(al);
+                        op(self, bi::ALIGN, ws | 3 << 9, [dst, b, dst], [0, t2], at);
+                        (a, b)
+                    };
+                    let loc = self.ast().exprs.get(x).loc();
+                    op(self, bi::PTR_ALIGN, k, [a.0, a.1, dst], [t, 0], loc);
+                    return Some(self.finish_builtin(dst));
+                };
+                let ws = w | u32::from(s) << 8;
+                let b = self.rv(al);
+                op(self, bi::ALIGN, ws | 3 << 9, [dst, b, dst], [0, t2], at);
+                let a = self.rv(x);
                 op(self, bi::ALIGN, ws | k << 9, [a, b, dst], [0, t2], at);
             }
             // WP-416: clang 22 folds the element-wise `abs` (integer: the
