@@ -1082,8 +1082,11 @@ impl Types {
     /// Whether the storage unit of a bit-field of type `p` lies at `off`
     /// inside `root` (a bit-field is not a subobject that a pointer can
     /// designate, but its accesses still go through the unions above it).
+    /// A lane of a `bool` ext vector is the same: one bit, reached through
+    /// the vector (WP-438).
     pub fn has_bit_unit(&self, root: OTy, off: u64, p: OTy) -> bool {
         match self.kind(root) {
+            TyKind::BoolVec { elem, .. } => elem == p && off < self.size(root),
             TyKind::Array { elem, n } => {
                 let es = self.size(elem);
                 es != 0 && off / es < n && self.has_bit_unit(elem, off % es, p)
