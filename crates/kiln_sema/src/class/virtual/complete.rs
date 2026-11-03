@@ -184,7 +184,7 @@ impl Sema<'_, '_> {
                 }
             }
             if !os.is_empty() {
-                self.report_override_mismatch(m, &os);
+                self.report_override_mismatch(r, m, &os);
             }
             if hidden_on && !n.has(DeclFlags::INVALID) && n.kind() == DeclKind::CXXMethod {
                 let ty = n.ty().unwrap_or(QualType::ERROR);
@@ -218,8 +218,9 @@ impl Sema<'_, '_> {
     }
 
     /// clang `ReportOverrides` for the static, deleted and consteval
-    /// mismatches of `m` against the functions it overrides.
-    fn report_override_mismatch(&mut self, m: DeclId, os: &[DeclId]) {
+    /// mismatches of `m` (a member of class `r`) against the functions it
+    /// overrides.
+    fn report_override_mismatch(&mut self, r: DeclId, m: DeclId, os: &[DeclId]) {
         let spec_of =
             |s: &Self, d: DeclId| s.ast.decls.function(d).map(|f| f.spec).unwrap_or_default();
         let ms = spec_of(self, m);
@@ -257,8 +258,18 @@ impl Sema<'_, '_> {
             return;
         }
         let ce = |s: FnSpec| s.constexpr_kind() == ConstexprKind::Consteval;
-        let consteval: Vec<DeclId> =
-            os.iter().copied().filter(|&o| ce(spec_of(self, o)) != ce(ms)).collect();
+        // [class.virtual]/18 as P2996R13 words it: a consteval virtual
+        // function may override a non-consteval one in a class of
+        // consteval-only type (`std::meta::exception::what`, GCC 16.1).
+        let exempt = ce(ms) && {
+            let t = self.tag_type(r);
+            self.is_consteval_only_type(t)
+        };
+        let consteval: Vec<DeclId> = os
+            .iter()
+            .copied()
+            .filter(|&o| ce(spec_of(self, o)) != ce(ms) && !exempt)
+            .collect();
         if !consteval.is_empty() {
             let mut msg =
                 self.diag(DiagId::sema_consteval_overrides, loc).arg(u8::from(!ce(ms))).arg(name);
