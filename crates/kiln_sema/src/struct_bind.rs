@@ -71,17 +71,24 @@ impl Sema<'_, '_> {
             // `ext_decomp_decl_cond` (clang 19's wording).
             self.error(DiagId::sema_decomp_decl_cond, dc.lbracket);
         }
-        // [dcl.pre]/6: only static, thread_local, auto and cv.
+        // [dcl.pre]/6: only static, thread_local, auto and cv; C++26
+        // (P2686R5) adds constexpr and constinit (clang 22 accepts them
+        // at C++26 only, an error before).
+        let p2686 = self.std >= kiln_lex::Std::Cxx26;
         let mut bad: Vec<(&str, Loc)> = Vec::new();
         if let Some((s, l)) = ds.storage
             && s != StorageSpec::Static
         {
             bad.push((s.spelling(), l));
         }
-        for (kw, at) in
-            [("constexpr", ds.constexpr), ("consteval", ds.consteval), ("constinit", ds.constinit)]
-        {
-            if let Some(l) = at {
+        for (kw, at, ok) in [
+            ("constexpr", ds.constexpr, p2686),
+            ("consteval", ds.consteval, false),
+            ("constinit", ds.constinit, p2686),
+        ] {
+            if let Some(l) = at
+                && !ok
+            {
                 bad.push((kw, l));
             }
         }
@@ -215,6 +222,9 @@ impl Sema<'_, '_> {
         let v = self.builder().var(h, ty, spec, None);
         let _ = self.builder().set_decomposition(v, &bindings);
         self.lambda_mangle.var = Some(v);
+        // P2686R5: `constinit auto [a, b] = e;` requires constant
+        // initialization of the unnamed variable ([dcl.constinit]/2).
+        self.record_constinit(v, ds);
         if invalid || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
@@ -304,6 +314,10 @@ impl Sema<'_, '_> {
         };
         let init = self.act_on_full_expr(init);
         let _ = self.builder().set_var_init(v, init);
+        // P2686R5: a constexpr one is constant-initialized from the array.
+        if self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr()) && !self.is_err_expr(init) {
+            self.check_constexpr_init(v, init);
+        }
     }
 
     /// A decomposition declared without an initializer

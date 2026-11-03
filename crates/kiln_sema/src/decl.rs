@@ -5539,7 +5539,7 @@ impl Sema<'_, '_> {
 
     /// A `constexpr` variable's initializer must be a constant expression
     /// ([dcl.constexpr]/10); its value is recorded.
-    fn check_constexpr_init(&mut self, v: DeclId, e: ExprId) {
+    pub(crate) fn check_constexpr_init(&mut self, v: DeclId, e: ExprId) {
         if self.ast.decls.begin_eval(v).is_err() {
             return;
         }
