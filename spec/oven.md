@@ -2443,7 +2443,14 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   is a `<N x i1>` constant global, also as a struct member and an array
   element (spec/codegen.md), with no `__cxx_global_var_init`
   (`tests/codegen/bool_vector_const.cpp`).
-Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`.
+- *Not folded*: clang 22's implicit integer → `bool` ext vector
+  conversion (spec/sema.md §5.28), a `CK_IntegralToBoolean` cast of
+  vector type, which clang 22's `VectorExprEvaluator` does not evaluate:
+  `compile.rs` `unsupported` throws the generic "subexpression not valid
+  in a constant expression" for it (WP-453; `__builtin_convertvector` to
+  a bool vector is the constant form).
+Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`,
+`ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`.
 
 ### `_BitInt` — Landed (WP-404)
 Type rules: spec/types.md §21.

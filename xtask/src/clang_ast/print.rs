@@ -1953,10 +1953,11 @@ impl<'a> Printer<'a, '_> {
                     }
                 }
             }
-            "CXXCatchStmt" => {
+            "CXXCatchStmt" | "LoopHintAttr" => {
                 // `catch (...)` has an absent exception-declaration slot
                 // (`{"id": "0x0"}`), which kiln does not print
-                // (spec/ast-dump.md §3).
+                // (spec/ast-dump.md §3); so has a loop hint without a
+                // value (`{}`).
                 line = k.to_owned();
                 for slot in kids(n) {
                     if !is_null(slot)

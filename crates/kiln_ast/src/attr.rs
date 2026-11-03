@@ -126,6 +126,168 @@ impl AttrKind {
     /// initializer runs from the `_GLOBAL__I_<N>` constructor of priority
     /// `N` ([basic.start.dynamic]; spec/codegen.md §7f; WP-189).
     pub const INIT_PRIORITY: AttrKind = AttrKind(111);
+    /// A loop hint (`#pragma unroll`, `nounroll`, `unroll_and_jam`,
+    /// `nounroll_and_jam`, `GCC unroll`, `clang loop`) on a loop statement
+    /// (clang `LoopHintAttr`, [`AttrSyntax::Pragma`]): `a` is the raw
+    /// `ExprId` of the value as written (0: none), `b` the [`LoopHint`]
+    /// ([`LoopHint::pack`]), `loc` the pragma-name token (`unroll`,
+    /// `loop`) (WP-449).
+    pub const LOOP_HINT: AttrKind = AttrKind(112);
+}
+
+/// What a loop hint controls (clang `LoopHintAttr::OptionType`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+#[allow(missing_docs, reason = "named after clang's options")]
+pub enum LoopHintOption {
+    Vectorize = 0,
+    VectorizeWidth,
+    Interleave,
+    InterleaveCount,
+    Unroll,
+    UnrollCount,
+    UnrollAndJam,
+    UnrollAndJamCount,
+    PipelineDisabled,
+    PipelineInitiationInterval,
+    Distribute,
+    VectorizePredicate,
+}
+
+impl LoopHintOption {
+    const ALL: [LoopHintOption; 12] = [
+        Self::Vectorize,
+        Self::VectorizeWidth,
+        Self::Interleave,
+        Self::InterleaveCount,
+        Self::Unroll,
+        Self::UnrollCount,
+        Self::UnrollAndJam,
+        Self::UnrollAndJamCount,
+        Self::PipelineDisabled,
+        Self::PipelineInitiationInterval,
+        Self::Distribute,
+        Self::VectorizePredicate,
+    ];
+
+    /// The `#pragma clang loop` option name (clang `getOptionName`).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Vectorize => "vectorize",
+            Self::VectorizeWidth => "vectorize_width",
+            Self::Interleave => "interleave",
+            Self::InterleaveCount => "interleave_count",
+            Self::Unroll => "unroll",
+            Self::UnrollCount => "unroll_count",
+            Self::UnrollAndJam => "unroll_and_jam",
+            Self::UnrollAndJamCount => "unroll_and_jam_count",
+            Self::PipelineDisabled => "pipeline",
+            Self::PipelineInitiationInterval => "pipeline_initiation_interval",
+            Self::Distribute => "distribute",
+            Self::VectorizePredicate => "vectorize_predicate",
+        }
+    }
+
+    /// A state option (`vectorize(enable)`), else a numeric one
+    /// (`vectorize_width(4)`) (clang `CheckForIncompatibleAttributes`).
+    pub const fn is_state(self) -> bool {
+        matches!(
+            self,
+            Self::Vectorize
+                | Self::Interleave
+                | Self::Unroll
+                | Self::UnrollAndJam
+                | Self::VectorizePredicate
+                | Self::PipelineDisabled
+                | Self::Distribute
+        )
+    }
+}
+
+/// A loop hint's state (clang `LoopHintAttr::LoopHintState`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+#[allow(missing_docs, reason = "named after clang's states")]
+pub enum LoopHintState {
+    Enable = 0,
+    Disable,
+    Numeric,
+    FixedWidth,
+    ScalableWidth,
+    AssumeSafety,
+    Full,
+}
+
+impl LoopHintState {
+    const ALL: [LoopHintState; 7] = [
+        Self::Enable,
+        Self::Disable,
+        Self::Numeric,
+        Self::FixedWidth,
+        Self::ScalableWidth,
+        Self::AssumeSafety,
+        Self::Full,
+    ];
+}
+
+/// How a loop hint was spelled (clang's `LoopHintAttr` spellings).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum LoopHintSpelling {
+    /// `#pragma clang loop`.
+    ClangLoop = 0,
+    /// `#pragma unroll` / `#pragma GCC unroll`.
+    Unroll,
+    /// `#pragma nounroll` / `#pragma GCC nounroll`.
+    Nounroll,
+    /// `#pragma unroll_and_jam`.
+    UnrollAndJam,
+    /// `#pragma nounroll_and_jam`.
+    NounrollAndJam,
+}
+
+impl LoopHintSpelling {
+    const ALL: [LoopHintSpelling; 5] =
+        [Self::ClangLoop, Self::Unroll, Self::Nounroll, Self::UnrollAndJam, Self::NounrollAndJam];
+
+    /// The pragma name (`"clang loop"`, `"unroll"`).
+    pub const fn pragma(self) -> &'static str {
+        match self {
+            Self::ClangLoop => "clang loop",
+            Self::Unroll => "unroll",
+            Self::Nounroll => "nounroll",
+            Self::UnrollAndJam => "unroll_and_jam",
+            Self::NounrollAndJam => "nounroll_and_jam",
+        }
+    }
+}
+
+/// The `b` word of a [`AttrKind::LOOP_HINT`] attribute.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct LoopHint {
+    /// The option.
+    pub option: LoopHintOption,
+    /// The state.
+    pub state: LoopHintState,
+    /// The spelling.
+    pub spelling: LoopHintSpelling,
+}
+
+impl LoopHint {
+    /// `option | state << 8 | spelling << 16`.
+    pub const fn pack(self) -> u32 {
+        self.option as u32 | (self.state as u32) << 8 | (self.spelling as u32) << 16
+    }
+
+    /// The inverse of [`LoopHint::pack`].
+    pub fn unpack(b: u32) -> LoopHint {
+        let at = |i: u32, n: usize| ((b >> i) & 0xff).min(n as u32 - 1) as usize;
+        LoopHint {
+            option: LoopHintOption::ALL[at(0, LoopHintOption::ALL.len())],
+            state: LoopHintState::ALL[at(8, LoopHintState::ALL.len())],
+            spelling: LoopHintSpelling::ALL[at(16, LoopHintSpelling::ALL.len())],
+        }
+    }
 }
 
 /// Attribute syntax.
@@ -141,6 +303,8 @@ pub enum AttrSyntax {
     Keyword = 2,
     /// `__declspec(attr)`.
     Declspec = 3,
+    /// A pragma (`#pragma unroll`).
+    Pragma = 4,
 }
 
 /// The 16-byte attribute node (spec/ast.md §7).
