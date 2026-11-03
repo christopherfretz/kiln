@@ -547,6 +547,9 @@ impl Oven {
             let (base, n) = (arg(1), arg(2));
             return self.exec_meta(b, pc, fb, aux >> 8, (base, n), (t1, t2));
         }
+        if aux & 0xff == crate::kbc::bi::META_EXC {
+            return self.exec_meta_exc(b, pc, fb);
+        }
         let (a, bb, c) = (reg(1), reg(2), reg(3));
         if aux & 0xff == crate::kbc::bi::THAW_PTR {
             let cur = self.stack[self.stack.len() - 1].func;
@@ -1821,7 +1824,13 @@ impl Oven {
 
     /// A heap allocation of `elem` (`n == u64::MAX`) or `elem[n]`,
     /// zero-filled with [`new_aux::ZERO`].
-    fn new_alloc(&mut self, elem: OTy, n: u64, aux: u32, origin: Origin) -> Result<u64, Fault> {
+    pub(crate) fn new_alloc(
+        &mut self,
+        elem: OTy,
+        n: u64,
+        aux: u32,
+        origin: Origin,
+    ) -> Result<u64, Fault> {
         let (ty, fl) = if n == u64::MAX {
             (elem, 0)
         } else if aux & new_aux::STD != 0 {
@@ -1877,7 +1886,7 @@ impl Oven {
         }
     }
 
-    fn ptr_add(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
+    pub(crate) fn ptr_add(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
         if raw == 0 {
             return if i == 0 { Ok(0) } else { Err(Fault::NullArith) };
         }
@@ -1898,7 +1907,7 @@ impl Oven {
         Ok(Ptr::with_off(raw, start + new * es, new == n))
     }
 
-    fn ptr_sub(&self, p: u64, q: u64, elem: OTy) -> Result<i64, Fault> {
+    pub(crate) fn ptr_sub(&self, p: u64, q: u64, elem: OTy) -> Result<i64, Fault> {
         if p == 0 && q == 0 {
             return Ok(0);
         }
@@ -2431,7 +2440,14 @@ impl Oven {
         })
     }
 
-    fn store(&mut self, raw: u64, ty: OTy, v: u128, k: u32, init: bool) -> Result<(), Fault> {
+    pub(crate) fn store(
+        &mut self,
+        raw: u64,
+        ty: OTy,
+        v: u128,
+        k: u32,
+        init: bool,
+    ) -> Result<(), Fault> {
         let info = *self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
