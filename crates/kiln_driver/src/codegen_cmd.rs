@@ -135,6 +135,16 @@ pub fn opt_pipeline(flag: Option<&str>) -> Option<&'static str> {
     }
 }
 
+/// clang's `CodeGenOpts.OptimizeSize` for `-O<flag>`: 1 at `-Os`, 2 at
+/// `-Oz`, else 0.
+pub fn opt_size(flag: Option<&str>) -> u8 {
+    match flag {
+        Some("-Os") => 1,
+        Some("-Oz") => 2,
+        _ => 0,
+    }
+}
+
 /// The identification string of kiln's modules (`!llvm.ident`).
 pub fn ident() -> String {
     format!("kiln version {}", env!("CARGO_PKG_VERSION"))
@@ -214,6 +224,8 @@ impl CodegenJob<'_> {
                 outline_atomics: a.outline_atomics.unwrap_or(true),
                 complex_range: a.complex_range(),
                 optimize: opt_pipeline(a.opt_flag.as_deref()).is_some(),
+                opt_size: opt_size(a.opt_flag.as_deref()),
+                strict_aliasing: a.strict_aliasing.unwrap_or(true),
                 clang_compat: a.predef.clang_compat.major(),
                 llvm_major: job.toolchain.llvm_major(),
                 omit_frame_pointer: a.omit_frame_pointer,

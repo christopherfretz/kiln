@@ -19,6 +19,7 @@ use crate::expr::LV;
 use crate::fir::{Fir, Op, V};
 use crate::func::Addr;
 use crate::module::{Cg, R, err};
+use crate::tbaa::Tb;
 
 impl Cg<'_> {
     /// The pointee type and class of member pointer type `q`.
@@ -316,7 +317,7 @@ impl Cg<'_> {
         let align = self.dyn_offset_align(base.align, class, natural);
         let q = ast.exprs.get(e).ty();
         let ty = self.mty(q);
-        Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None })
+        Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None, tb: Tb::Type })
     }
 
     /// clang `EmitCXXMemberPointerCallExpr` with
@@ -347,6 +348,7 @@ impl Cg<'_> {
         self.emit_block(virt, false);
         let vt_align = self.dyn_offset_align(this.align, rd, 8);
         let vtable = self.load(LTy::PTR, this_v, vt_align, false);
+        self.tbaa_vptr(vtable);
         let off = if arm { fn_int } else { self.bin(BinOp::Sub, Flags::NONE, fn_int, one) };
         let slot = self.gep(LTy::I8, vtable, vec![off], false);
         let k = self.m.md_kind("nosanitize");

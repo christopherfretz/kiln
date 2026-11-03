@@ -300,7 +300,10 @@ impl Oven {
                     Some((src, whole)) => {
                         let (at, call) = self.trivial_copy_frame(ast, site, src, whole);
                         frame = Some(call);
-                        (at, msg)
+                        match self.unconstructed_base_of(ast, f, src, whole) {
+                            Some(base) => base,
+                            None => (at, msg),
+                        }
                     }
                     None => (loc, msg),
                 }
@@ -619,6 +622,67 @@ impl Oven {
         let fb = self.stack.last()?.fb as usize;
         let src = *self.regs.get(fb + *self.code.get(pc + 2)? as usize)?;
         Some((src as u64, OTy(*self.code.get(pc + 3)?)))
+    }
+
+    /// A trivial copy of the `ty` object at `src` that failed (`f`) on
+    /// the bytes of a base its constructor never constructed
+    /// (`Memory::set_unconstructed`): clang copies the absent base and
+    /// its `CheckFullyInitialized` notes "constructor of base class 'B'
+    /// is not called" at the base-specifier, as a frozen result's is
+    /// (`value.rs`, WP-390): the first such base, bases before members
+    /// (WP-409).
+    fn unconstructed_base_of(
+        &self,
+        ast: &Ast,
+        f: MemFault,
+        src: u64,
+        ty: OTy,
+    ) -> Option<(Loc, String)> {
+        if f != MemFault::Lifetime || self.mem.unconstructed.is_empty() {
+            return None;
+        }
+        let p = Ptr::decode(src);
+        let dead: Vec<(u64, OTy)> = self
+            .mem
+            .unconstructed
+            .iter()
+            .filter(|&&(b, _, empty)| {
+                let q = Ptr::decode(b);
+                !empty && q.slot == p.slot && q.generation == p.generation
+            })
+            .map(|&(b, bt, _)| (u64::from(Ptr::decode(b).off), bt))
+            .collect();
+        let (decl, bt) = self.dead_base_in(ty, u64::from(p.off), &dead, 0)?;
+        let canon = ast.types.canonical(self.types.info(bt).q).ty();
+        let s = ast
+            .decls
+            .bases(decl, &ast.lists)
+            .find(|s| !s.is_virtual && ast.types.canonical(s.ty).ty() == canon)?;
+        let name = Self::type_name(ast, self.types.info(bt).q);
+        Some((s.loc, format!("constructor of base class '{name}' is not called")))
+    }
+
+    /// The class (and the type) of the first base among `dead` (offset,
+    /// type) within the record `ty` at offset `off`: its bases, then its
+    /// members, depth-first.
+    fn dead_base_in(
+        &self,
+        ty: OTy,
+        off: u64,
+        dead: &[(u64, OTy)],
+        depth: u32,
+    ) -> Option<(DeclId, OTy)> {
+        let TyKind::Record { decl, union: false, .. } = self.types.kind(ty) else { return None };
+        if depth > 64 {
+            return None;
+        }
+        let fields = self.types.fields(ty);
+        for fi in fields.iter().filter(|fi| fi.base) {
+            if dead.contains(&(off + fi.offset, fi.ty)) {
+                return Some((decl, fi.ty));
+            }
+        }
+        fields.iter().find_map(|fi| self.dead_base_in(fi.ty, off + fi.offset, dead, depth + 1))
     }
 
     /// A trivial copy constructor or assignment operator runs inline (an

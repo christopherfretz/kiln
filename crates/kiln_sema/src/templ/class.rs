@@ -562,7 +562,22 @@ impl Sema<'_, '_> {
     pub fn require_complete_nns(&mut self, q: QualType, loc: Loc) -> bool {
         if let Some(r) = self.undefined_spec(q) {
             let poi = self.nns_poi(loc);
-            return self.instantiate_class(r, poi, true);
+            if self.instantiate_class(r, poi, true) {
+                return true;
+            }
+            // A declared, never defined explicit specialization
+            // ([temp.expl.spec]/1) is reported here as incomplete.
+            if self
+                .ast
+                .spec_info(r)
+                .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization)
+            {
+                let d =
+                    self.diag(DiagId::sema_incomplete_nested_name_spec, poi).arg(self.ty_arg(q));
+                let d = self.incomplete_note(d, q);
+                self.emit(d);
+            }
+            return false;
         }
         if let Some(e) = self.undefined_member_enum(q) {
             // A scoped member enumeration is defined when named in a

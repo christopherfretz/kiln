@@ -20,6 +20,7 @@ use crate::CodegenError;
 use crate::cleanup::{Cleanups, JumpDest};
 use crate::fir::{Blk, Fir, Op, V};
 use crate::module::{Cg, R, Sig, err};
+use crate::tbaa::Tb;
 
 /// An address with its element type and alignment (clang `Address`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -441,14 +442,19 @@ impl Cg<'_> {
             let loc = Some(ast.decls.get(p).loc());
             vals.push(self.prolog_arg(&info.kind, pq, &mut arg_no, loc)?);
         }
+        let this_class = ast.decls.get(d).ctx();
         let this_addr = this_arg.filter(|_| !self.f.naked).map(|v| {
             let a = self.f.fir.alloca(LTy::PTR, 8);
-            self.store(v, a, 8, false);
+            let st = self.store(v, a, 8, false);
+            if let Some(rd) = this_class {
+                self.tbaa_this_store(st, rd);
+            }
             a
         });
         let vtt_addr = vtt_arg.filter(|_| !self.f.naked).map(|v| {
             let a = self.f.fir.alloca(LTy::PTR, 8);
-            self.store(v, a, 8, false);
+            let st = self.store(v, a, 8, false);
+            self.tbaa_vtt_store(st);
             a
         });
         for (&p, val) in param_decls.iter().zip(vals) {
@@ -580,13 +586,11 @@ impl Cg<'_> {
             || !self.opts.exceptions
             || self.no_throw_calls();
         let noreturn = self.ast.is_noreturn_fn(d);
-        let inline = if thunk.is_some() {
-            if self.opts.optimize {
-                crate::module::DefInline::Plain
-            } else {
-                crate::module::DefInline::OptNone
-            }
+        let inline = if thunk.is_some() && !self.opts.optimize {
+            crate::module::DefInline::OptNone
         } else {
+            // clang `maybeEmitThunk` gives a thunk its method's definition
+            // attributes (`optnone`, `inlinehint`, ...) above -O0.
             let inline = self.def_inline_attrs(d);
             self.def_opt_attrs(d, inline, &mut extra);
             inline
@@ -600,7 +604,10 @@ impl Cg<'_> {
             inline,
             extra,
         });
-        let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), true);
+        // clang `EmitFunctionProlog` adds `noalias` to the `sret` argument,
+        // and returns before that in a naked function (no `ReturnValue`
+        // slot either way: the `sret` pointer is the return address).
+        let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), !self.f.naked);
         if thunk.is_some() {
             (ret, params) = self.thunk_attrs(&sig, ret, params);
         }
@@ -897,25 +904,63 @@ impl Cg<'_> {
         self.f.fir.push(Op::Load { ty, ptr, mem: mem(align, volatile) }, ty)
     }
 
-    pub fn store(&mut self, val: V, ptr: V, align: u64, volatile: bool) {
-        self.f.fir.push(Op::Store { val, ptr, mem: mem(align, volatile) }, LTy::VOID);
+    pub fn store(&mut self, val: V, ptr: V, align: u64, volatile: bool) -> V {
+        self.f.fir.push(Op::Store { val, ptr, mem: mem(align, volatile) }, LTy::VOID)
     }
 
     /// clang `EmitLoadOfScalar` (bools are truncated to `i1`).
     pub fn load_scalar(&mut self, a: Addr, q: QualType) -> V {
+        self.load_scalar_tb(a, q, Tb::Type)
+    }
+
+    /// [`Self::load_scalar`] with the access path `tb`: the load carries
+    /// its TBAA tag, and a `bool` load at `-O1`+ `!range !{i8 0, i8 2}` and
+    /// `!noundef` (clang `getRangeForLoadFromType`). A three-element or
+    /// `bool` vector is loaded untagged, as clang does.
+    pub fn load_scalar_tb(&mut self, a: Addr, q: QualType, tb: Tb) -> V {
         let vol = self.ast.types.effective_quals(q).is_volatile();
         if let Some(v) = self.vec_load(a, q, vol) {
             return v;
         }
         let p = self.scalar_tls_addr(a.v);
         let v = self.load(a.ty, p, a.align, vol);
-        if self.is_bool_value(q) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
+        self.tbaa_mark(v, q, tb);
+        if self.is_bool_value(q) {
+            if self.opts.optimize && a.ty == LTy::I8 {
+                self.bool_range(v);
+            }
+            self.cast(CastOp::Trunc, v, LTy::I1)
+        } else {
+            v
+        }
+    }
+
+    /// `!range !{i8 0, i8 2}` and `!noundef !{}` on the `bool` load `v`.
+    fn bool_range(&mut self, v: V) {
+        let lo = self.m.const_int(LTy::I8, 0);
+        let hi = self.m.const_int(LTy::I8, 2);
+        let (Ok(lo), Ok(hi)) = (self.m.md_const(lo), self.m.md_const(hi)) else {
+            unreachable!("integer metadata")
+        };
+        let range = self.m.md_tuple(&[Some(lo), Some(hi)]);
+        let empty = self.m.md_tuple(&[]);
+        let k = self.m.md_kind("range");
+        let i = Fir::last_inst(v);
+        self.f.fir.add_md(i, k, range);
+        let k = self.m.md_kind("noundef");
+        self.f.fir.add_md(i, k, empty);
     }
 
     /// clang `EmitStoreOfScalar` (bools are zero-extended to memory).
     pub fn store_scalar(&mut self, v: V, a: Addr, q: QualType) {
+        self.store_scalar_tb(v, a, q, Tb::Type);
+    }
+
+    /// [`Self::store_scalar`] tagged with the access path `tb`.
+    pub fn store_scalar_tb(&mut self, v: V, a: Addr, q: QualType, tb: Tb) {
         let vol = self.ast.types.effective_quals(q).is_volatile();
-        if self.vec_store(v, a, q, vol) {
+        if let Some(st) = self.vec_store(v, a, q, vol) {
+            self.tbaa_mark(st, q, tb);
             return;
         }
         let v = if self.is_bool_value(q) && self.f.fir.ty(&self.m, v) == LTy::I1 {
@@ -924,11 +969,12 @@ impl Cg<'_> {
             v
         };
         let p = self.scalar_tls_addr(a.v);
-        self.store(v, p, a.align, vol);
+        let st = self.store(v, p, a.align, vol);
+        self.tbaa_mark(st, q, tb);
     }
 
     /// `memcpy(dst, src, n)`.
-    pub fn memcpy(&mut self, dst: Addr, src: V, src_align: u64, n: u64, volatile: bool) {
+    pub fn memcpy(&mut self, dst: Addr, src: V, src_align: u64, n: u64, volatile: bool) -> V {
         let f = kiln_llvm::intrinsics::memcpy(&mut self.m, LTy::I64);
         let fn_ty = self.m.func(f).ty();
         let n = self.m.const_int(LTy::I64, i128::from(n));
@@ -949,8 +995,8 @@ impl Cg<'_> {
             },
             LTy::VOID,
         );
-        let _ = (c, src);
         self.f.calls.push((Fir::last_inst(c), Some(f), true));
+        c
     }
 
     /// `memcpy(dst, src, n)` with an instruction source.
@@ -1737,21 +1783,20 @@ impl Cg<'_> {
         None
     }
 
-    fn vec_store(&mut self, v: V, a: Addr, q: QualType, vol: bool) -> bool {
-        let Some((elem, n)) = self.vec_of(q) else { return false };
+    /// The store, when `q` is a vector of `bool` or of three elements.
+    fn vec_store(&mut self, v: V, a: Addr, q: QualType, vol: bool) -> Option<V> {
+        let (elem, n) = self.vec_of(q)?;
         if self.is_bool(elem) {
             let p = self.m.types.int_width(a.ty).unwrap_or(8);
             let w = self.bool_vec_resize(v, p);
             let raw = self.cast(CastOp::BitCast, w, a.ty);
-            self.store(raw, a.v, a.align, vol);
-            return true;
+            return Some(self.store(raw, a.v, a.align, vol));
         }
         if n == 3 {
             let w = self.shuffle(v, None, vec![0, 1, 2, kiln_llvm::SHUFFLE_POISON]);
-            self.store(w, a.v, a.align, vol);
-            return true;
+            return Some(self.store(w, a.v, a.align, vol));
         }
-        false
+        None
     }
 
     pub fn fneg(&mut self, v: V) -> V {

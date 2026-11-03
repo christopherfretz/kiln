@@ -1467,12 +1467,20 @@ epilogue destroys a subobject (`PushCleanup` aux 2) is reported at the
 outermost such destructor's call (`Oven::cleanup_fault_pc`): the
 `delete`, the variable or the temporary, as clang's
 `HandleDestructionImpl` passes its call range down
-(`expr.const/unconstructed-base-destroy-location.cpp`). Not yet: a
-trivial copy of the object reports the lifetime read where clang notes
-the base (needs a fault kind in `notes.rs`); clang also reports
-destroying a derived object (with a non-trivial destructor) whose
-trivially destructible base was never constructed, which kiln does
-not check.
+(`expr.const/unconstructed-base-destroy-location.cpp`). A destructor
+with a body destroys a trivially destructible base too: its epilogue
+registers a `PushCleanup` aux 2 with the `exc::LIFE_CHECK` sentinel
+function (registered only while `Memory::unconstructed` is non-empty),
+whose `run_cleanup` runs no function and checks the base's lifetime
+(`cleanup_life`), so an unconstructed one is "destroying object 'd'
+whose lifetime has already ended" in the destructor's frame, as
+clang's `HandleDestructionImpl` checks every base for a value; a
+trivial destructor destroys no base. A trivial copy (`Op::Copy` aux 4)
+failing on the bytes of an unconstructed base of the source, directly
+or in a member, is "constructor of base class 'B' is not called" at
+that base-specifier (`Oven::unconstructed_base_of`; clang copies the
+absent base and `CheckFullyInitialized` notes it), with the copy's
+frame note (WP-409; `expr.const/unconstructed-trivial-base.cpp`).
 
 *A virtual base without a mem-initializer (WP-400).* When the most
 derived constructor names no mem-initializer for a virtual base, Sema
