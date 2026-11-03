@@ -56,7 +56,10 @@ impl Sema<'_, '_> {
                         "reflection does not represent a complete type or type alias",
                     );
                 };
-                let want = self.ast.types.canonical(ty).without_quals();
+                // remove_const of both sides (P3394R4): an annotation's
+                // type is cv-unqualified, so a volatile type matches none.
+                let c = self.ast.types.canonical(ty);
+                let want = QualType::new(c.ty(), c.quals_bits() & !1);
                 MetaOut::Infos(self.annotations_of(r, Some(want), loc, oven)?)
             }
         };
@@ -102,7 +105,7 @@ impl Sema<'_, '_> {
     }
 
     /// `annotations_of(r)` (with `want`: `annotations_of_with_type`,
-    /// keeping those whose type is `want` ignoring cv) into the Oven's
+    /// keeping those whose type is `want`, the given type without const) into the Oven's
     /// result buffer: the annotations of every declaration of the
     /// entity, first to latest, each in source order.
     fn annotations_of(
@@ -112,6 +115,16 @@ impl Sema<'_, '_> {
         loc: Loc,
         oven: &mut Oven,
     ) -> Result<u32, MetaError> {
+        // A class template specialization's annotations are its
+        // instantiation's ([dcl.attr.annotation]/3).
+        if let Reflectee::Type(t) = self.ast.reflections.get(r)
+            && self.undefined_spec(t).is_some()
+        {
+            if self.inst.eval_loc.is_none() {
+                return Err(MetaError::silent());
+            }
+            self.lend_oven(oven, |s| s.require_complete(t, loc));
+        }
         let src = self.annotation_source(r, loc)?;
         let f = match src {
             Source::Param(f, _) => Some(f),
