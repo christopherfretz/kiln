@@ -21,6 +21,7 @@ mod asm;
 mod bit_int;
 mod bitfield_constant;
 mod builtins;
+pub mod cfg;
 pub mod class;
 mod complex;
 mod consteval;
@@ -260,6 +261,17 @@ pub struct Sema<'a, 'sm> {
     /// constant evaluation as its `__builtin_` twin, as GCC folds
     /// `::ceil` (spec/sema.md §5.4).
     pub gnu_lib_builtins: bool,
+    /// `-fkiln-dump-cfg`: build the graph of every analysed body and
+    /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.4).
+    pub cfg_dump: bool,
+    /// The dumps of `-fkiln-dump-cfg`.
+    pub cfg_out: String,
+    /// `-fkiln-cfg-max-elems`: a body whose graph would hold more
+    /// elements gets none; its flow-sensitive warnings are skipped with
+    /// `-Rkiln-analysis-skipped` (spec/sema.md §7.5).
+    pub cfg_max_elems: usize,
+    /// The graph's vectors, reused from body to body.
+    pub(crate) cfg_scratch: cfg::Cfg,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -896,6 +908,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sve: false,
             nns_start: None,
             gnu_lib_builtins: false,
+            cfg_dump: false,
+            cfg_out: String::new(),
+            cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
+            cfg_scratch: cfg::Cfg::default(),
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,

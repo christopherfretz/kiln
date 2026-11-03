@@ -452,7 +452,7 @@ impl Sema<'_, '_> {
 
     /// The expressions directly in statement `s` and its sub-statements
     /// (in that order).
-    fn stmt_parts(&self, s: StmtId, exprs: &mut Vec<ExprId>, subs: &mut Vec<StmtId>) {
+    pub(crate) fn stmt_parts(&self, s: StmtId, exprs: &mut Vec<ExprId>, subs: &mut Vec<StmtId>) {
         let st = &self.ast.stmts;
         match st.get(s).kind() {
             StmtKind::ExprStmt => exprs.push(st.expr_stmt_expr(s)),
@@ -508,7 +508,7 @@ impl Sema<'_, '_> {
     /// Whether some handler of the enclosing try-blocks catches the throw
     /// `e` (clang `isThrowCaught`: a catch-all, the same type, or a base
     /// class, through one reference or pointer level).
-    fn throw_caught(&self, e: ExprId, tries: &[StmtId]) -> bool {
+    pub(crate) fn throw_caught(&self, e: ExprId, tries: &[StmtId]) -> bool {
         let t = &self.ast.types;
         let thrown = self.ast.exprs.throw_operand(e).map(|o| self.ast.exprs.get(o).ty());
         for &tr in tries.iter().rev() {

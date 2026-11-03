@@ -208,7 +208,7 @@ impl Sema<'_, '_> {
     }
 
     /// Whether variable `v` has automatic storage duration.
-    fn has_automatic_storage(&self, v: DeclId) -> bool {
+    pub(crate) fn has_automatic_storage(&self, v: DeclId) -> bool {
         self.ast.decls.var(v).is_some_and(|var| {
             matches!(var.spec.storage(), VarStorage::None | VarStorage::Register)
                 && var.spec.tls() == kiln_ast::decl::TlsKind::None

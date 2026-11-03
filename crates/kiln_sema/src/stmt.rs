@@ -1492,6 +1492,9 @@ impl Sema<'_, '_> {
         if self.diags.uncompilable_error_count() > 0 || self.in_template() {
             return wrapped;
         }
+        if self.cfg_dump {
+            self.dump_body_cfg(state.decl, body);
+        }
         // clang `ActOnFinishFunctionBody`: no fall-off check for a
         // `naked` function (nor for `main`, below).
         let naked = self.naked_attr(state.decl).is_some();
