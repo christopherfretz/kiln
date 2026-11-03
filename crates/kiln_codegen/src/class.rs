@@ -1543,6 +1543,7 @@ impl Cg<'_> {
         }
         let fd = *ast.decls.function(ctor).expect("constructor");
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.construct_args(e)).collect();
+        self.psabi_call_check(e, ctor, &args, true);
         if fd.spec.is_trivial() && args.is_empty() {
             return Ok(());
         }
@@ -1803,6 +1804,7 @@ impl Cg<'_> {
         let ast = self.ast;
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
         let fty = ast.decls.get(md).ty().expect("method type");
+        self.psabi_call_check(e, md, args, self.this_class_of(md).is_some());
         if self.this_class_of(md).is_none() {
             // A static member function called through an object.
             self.emit_ignored(base)?;

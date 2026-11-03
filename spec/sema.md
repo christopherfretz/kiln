@@ -558,7 +558,15 @@ family, and the `nonnull` attribute spellings.
      repeats it), and `sizeof(T[n])` warns once (clang twice).
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
-   are compatible, and links the redeclaration chain.
+   are compatible, and links the redeclaration chain. A declaration
+   found invalid there (ambiguous or missing qualified member, a
+   redefinition, a type mismatch, an invalid storage class) is marked
+   invalid, and a later redeclaration skips invalid variables to the
+   latest valid one (`valid_prev_var`, clang does not link an invalid
+   redeclaration): `R::v; int R::v;` redeclares `extern int v`, and
+   after `long R::t;` against `int t`, `int R::t;` is "redefinition of
+   't'" noting the original (WP-421,
+   `tests/conformance/dcl.meaning/qualified-implicit-int-redeclaration.cpp`).
 4. A variable of type `void` that has an initializer ([basic.def]/5,
    [dcl.init.general]/7: `void x(1);`, `void v(T::m);`, `void h(void
    (*fp)(X<T>::m), int);`) is "variable has incomplete type 'void'" at
@@ -1586,6 +1594,34 @@ and returns the scope it names:
     a `vector_size` vector) gives a `DependentVector` (spec/types.md);
     after substitution it is diagnosed at the size operand (clang: at
     the attribute name).
+    In a type-id (`sizeof`/`alignof`, a cast, a template argument, a
+    new-type-id; not an alias-declaration, whose attributes go to the
+    alias) the decl-specifier attributes modify the decl-specifier type
+    as type attributes (`Sema::apply_type_id_vector_attrs`, clang
+    `processTypeAttrs`), so `ext_vector_type` is accepted at clang 19
+    too (WP-187; `ext.vector/type-id-run.cpp`).
+    Diagnostics (WP-187, `ext.vector/*-diagnostics.cpp`):
+    - A type argument whose desugaring reaches a vector typedef stops at
+      that typedef as written, with its scope: `'B' (aka 'X::v')`,
+      `'A<long>' (aka 't1<long>::v')` (clang 22, at
+      `-fclang-compat=22`, keeps a dependent name's keyword: `(aka
+      'typename t1<long>::v')`)
+      (`kiln_ast::types::vector_diag_arg`, used by `Sema::ty_arg` and
+      codegen; clang's `Desugar` keeps the Elaborated name of a vector).
+    - Comparing an integer vector with itself is
+      `-Wtautological-compare` (`self-comparison always evaluates to a
+      constant`), as for a scalar; a floating vector is not.
+    - A scalar converted to a vector (a splat) is checked as a conversion
+      to the element type, naming the vector: a lossy floating literal is
+      `-Wliteral-conversion`, an integer constant that does not fit is
+      `-Wconstant-conversion`. As in clang, a floating value is measured
+      against the whole vector's width, so `1e20` into a vector of 4 `int`
+      is silent.
+    - A designated list for a vector warns `-Wc99-designator` at each
+      array designator (and about mixing designated and non-designated
+      elements) and is then `initialization of non-aggregate type T with
+      a designated initializer list` (a vector is not an aggregate), at
+      the variable or at a nested list's brace.
   - GNU `malloc` (function with a pointer result, else `'malloc'
     attribute only applies to return values that are pointers`; on a
     non-function `... only applies to functions`), `alloc_size(n[, m])`
@@ -4118,7 +4154,9 @@ The vector operators themselves are summarized in spec/types.md
   - Codegen: a GNU condition is `icmp ne 0` plus `select`. An ext
     condition is the sign-bit mask blend (`icmp slt 0`, `sext`, `and`,
     `or`, with float arms bitcast to the condition type), as clang
-    emits it for C++. A `bool` ext-vector condition is *M4*.
+    emits it for C++. A `bool` ext-vector condition (accepted from clang
+    20: clang 19 rejects its lane size) is one `select` on its `<N x i1>`
+    lanes (WP-187; `ext.vector/ir-bool-conditional*.cpp`).
 - **Scalar condition with a vector arm** (`scalar_cond_vector_operands`):
   converted to `bool` as usual, and the arms are converted as for a
   binary vector operator without `bool` vectors. A `bool`-vector arm is
@@ -5090,12 +5128,65 @@ and unevaluated operands:
   non-dependent operand reissues the definition's warning from
   `null_compare_rewarn` (`mark_shared_expr_referenced`'s walk), in
   definition order, with the instantiation notes.
-- Not implemented: the `nonnull` / `returns_nonnull` attribute forms, the
-  lambda-conversion form, and the conversion-to-`bool` forms
-  (`-Wpointer-bool-conversion`, "address of 'x' will always evaluate to
-  'true'"), which share this check in clang.
+- Before `DeclRefExpr`/`MemberExpr` (WP-421): a call (through
+  parentheses and implicit conversions) to a function declared
+  `returns_nonnull` is `sema_nonnull_expr_compare` "comparison of
+  nonnull function call 'E' ... is '{true|false}' on first encounter",
+  `E` printed as written; a lambda's conversion to a function pointer
+  (`l == nullptr`, an implicit `operator R(*)()` call), outside any
+  instantiation, is `sema_null_pointer_compare` select 3 ("address of
+  lambda function pointer conversion operator"), at the lambda's
+  object, ranged from its `[`; a parameter made non-null is the
+  "nonnull parameter 'p'" form. Both nonnull forms add
+  `note_declared_nonnull` at the attribute.
+- A parameter is non-null (`nonnull.rs` `nonnull_param_attr`) by its
+  own `nonnull` attribute on any declaration of its function, else by a
+  function `nonnull` attribute with no index or naming its one-based
+  index (the implicit object parameter counts); a function template's
+  pattern has none (clang checks the specialization). Not once the
+  function body has assigned it or taken its address before the check
+  (`FnState::modified_params`, clang `ModifiedNonNullParams`, recorded
+  by `assign` and `address_of`).
+- Conversion to `bool` (spec/sema-conv.md §3) shares the classifier
+  (`NullUse::Bool`), with the context location instead of the null
+  constant: the condition's keyword (`if`, `while`, `for`, `do`), the
+  operator of `?:`, `!`, `&&`, `||`, the variable of an initialization,
+  `return`, the start of a call. Its nonnull forms are
+  `sema_cast_nonnull_to_bool` "nonnull {function call|parameter} 'E'
+  will evaluate to 'true' on first encounter".
+- Ranges: the operand's (`expr_range`, so a template-id `ft<int>` up to
+  its `>`, recorded by the parser with `set_template_id_end`) and the
+  null constant's or the context token's; the `()` fix-it goes after the
+  operand's last token. A null constant written as a macro argument keeps
+  its spelled range.
+- Not checked: a type- or value-dependent full-expression root
+  (clang `CheckImplicitConversions`); a bool conversion re-checks per
+  instantiation from the full-expression checks, so it keeps no
+  `null_compare_rewarn` entry. An instantiation shares the definition's
+  converted null operand (`NullToPointer` cast), which is looked
+  through before the null-constant test.
+- Attribute checks (`nonnull.rs`): `nonnull(i...)` indices are integer
+  constants (`sema_attribute_param_not_ice`, a value-dependent one too);
+  on a function (`sema_attribute_wrong_decl_type` otherwise; a parameter
+  takes it unindexed); an index past the parameters of a non-variadic
+  function or 0 is `sema_attribute_param_out_of_bounds`, 1 in an
+  implicit object member function `sema_attribute_implicit_this_arg`
+  (both drop the attribute); an index of a non-pointer parameter is
+  dropped with `sema_attribute_pointer_args_only` (when all are dropped
+  the attribute covers every parameter, as in clang); no index on a
+  non-variadic function without a pointer or dependent parameter (not
+  from a macro) is `sema_attribute_nonnull_no_pointers`.
+  `returns_nonnull` needs a function (`sema_attribute_wrong_decl_type`
+  "Objective-C methods and functions") returning a pointer
+  (`sema_attribute_pointers_only`). A dependent type counts as a pointer
+  from clang 22 on; clang 19 (`-fclang-compat=19`) warns.
+  Not implemented: the parameter-declaration and return-type ranges of
+  those warnings (kiln keeps no declarator source range), and
+  `-Wnonnull` "null passed to a callee that requires a non-null
+  argument".
 - Tests: `expr.eq/null-pointer-compare.cpp`,
-  `expr.eq/null-pointer-compare-forms.cpp`.
+  `expr.eq/null-pointer-compare-forms.cpp`, `expr.eq/nonnull-compare.cpp`,
+  `conv.bool/pointer-bool-conversion.cpp`, `dcl.attr/nonnull-attribute*.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

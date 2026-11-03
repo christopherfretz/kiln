@@ -127,6 +127,7 @@ sema_illegal_storage_class_on_var = Error (0) "illegal storage class on file-sco
 sema_imaginary_constant = Extension [GnuImaginaryConstant] (0) "imaginary constants are a GNU extension";
 sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
 sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";
+sema_impcast_lambda_pointer_to_bool = Warning [PointerBoolConversion] (0) "address of lambda function pointer conversion operator will always evaluate to 'true'";
 sema_impcast_pointer_to_bool = Warning [PointerBoolConversion] (2) "address of {0:'{1}'|function '{1}'|array '{1}'} will always evaluate to 'true'";
 sema_implicit_coroutine_std_nothrow_type_not_found = Error (0) "std::nothrow was not found; include <new> before defining a coroutine which uses get_return_object_on_allocation_failure()";
 sema_implicit_empty_initializer = Error (0) "initializer for aggregate with no elements requires explicit braces";

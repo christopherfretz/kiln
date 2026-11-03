@@ -2265,6 +2265,30 @@ recomputed exactly as for non-template code (clang's
   - a statement that only refers to an already-invalid entity (it fails
     without a new error: clang builds a `RecoveryExpr`).
 
+  **A `return` with an erroneous operand in a placeholder-return
+  function** (WP-434). A `return` whose operand fails without a new
+  error (it names a local whose initializer failed, `auto l = t.foo();
+  return l;`, or, below `-fclang-compat=22`, it is an error of the
+  pattern) still invalidates the specialization when the declared return
+  type contains a placeholder, whether or not an earlier `return`
+  already deduced it. clang's `DeduceAutoType` answers
+  `AlreadyDiagnosed` for an operand that `containsErrors()`, and
+  `BuildReturnStmt` then marks the function invalid. So the type is not
+  deduced `void` from what is left, the caller gets no `void` cascade,
+  and a later call is a substitution failure. Inside a lambda body the
+  lambda-expression fails instead (`Substituter::lambda_return_failed`).
+  The enclosing statement then fails by the rules above. A
+  non-placeholder return type is unaffected (one error, no
+  invalidation). From clang 22 on, a `return` whose operand is an error
+  of the pattern is dropped instead (`Substituter::stmt`), so a generic lambda
+  `[](auto x) { return x + undeclared; }` deduces `void` and each call
+  cascades, as in clang 22. A non-generic lambda outside any template
+  keeps clang 19's single error under both levels: clang 22 also
+  deduces `void` there, but kiln does not follow it. Tests
+  `dcl.spec.auto/return-of-failed-local.cpp` (both releases) and
+  `expr.prim.lambda/undeclared-identifier-no-void-cascade.cpp`
+  (`clang<22`).
+
   **A lambda body that reports its own error** makes the whole
   lambda-expression fail (clang `TransformLambdaExpr` returns
   `ExprError`; WP-163). Errors that belong to a nested instantiation the

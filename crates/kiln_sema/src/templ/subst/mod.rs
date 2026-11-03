@@ -96,6 +96,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// (clang's `TransformCompoundStmt` `SubStmtInvalid`: the body, and
     /// so the function template specialization, is invalid; WP-145).
     pub(crate) stmt_failed: bool,
+    /// A `return` of the lambda body being rebuilt failed in a call
+    /// operator with a placeholder return type: the lambda-expression
+    /// fails (clang marks the call operator invalid; WP-434).
+    pub(crate) lambda_return_failed: bool,
     /// Variable initializers that failed to substitute (the variable is
     /// invalid, its declaration statement is not: clang keeps it).
     pub(crate) init_failures: u32,
@@ -170,6 +174,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             final_subst: false,
             lambda_bodies: 0,
             stmt_failed: false,
+            lambda_return_failed: false,
             init_failures: 0,
             failed_inits: Vec::new(),
             failed_init_use: false,

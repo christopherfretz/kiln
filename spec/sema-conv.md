@@ -273,7 +273,9 @@ The checks:
 `narrowing_diag(s, n, init, to) -> Option<Diag>` returns clang's warning
 (warning-as-error, group `c++11-narrowing`) with its "insert an explicit
 cast" note. The message renders the constant as clang does (`%e`-style for
-floating, `format_e6`).
+floating, `format_e6`). Both underline the initializer, and the note
+carries clang's two insertions `static_cast<T>(` at its start and `)` after
+its last token (only for a spellable `T`, a typedef or builtin; WP-421).
 
 ## 8. Literal typing (`literal.rs`)
 These functions take the lexer's classification (`kiln_lex::literal`) and
@@ -341,10 +343,11 @@ the target:
    for `&f` of a function, a weak declaration, the address of a
    prvalue call, an unevaluated operand, or a source or conversion
    point in a macro body. The walk visits a binary operator's right
-   operand first, so `f && g` warns for `g` first. Not implemented:
-   `-Wtautological-pointer-compare` (`f == nullptr`); a condition's
-   context token is its first token, not clang's `if`/`while`/`for`
-   keyword. Tests:
+   operand first, so `f && g` warns for `g` first. The classification is
+   spec/sema.md §5.27's (`null_compare.rs` `always_non_null`, WP-421),
+   which adds the reference-returning call note, the `returns_nonnull`
+   call and `nonnull` parameter forms, the lambda conversion, and the
+   context token's range. Tests: `conv.bool/pointer-bool-conversion.cpp`,
    `tests/conformance/expr.unary.op/pointer-bool-conversion.cpp`,
    `expr.log.and/pointer-bool-conversion-operands.cpp`,
    `intro.compliance/wbool-conversion-members.cpp`,
