@@ -1,6 +1,6 @@
-// [expr.const]/14: a constant expression's pointer or reference value
-// must not designate an object with automatic storage duration, even
-// when the variable is static or the referent is const-initialized.
+// [expr.const]/14 (C++23): a constant expression's pointer or reference value must
+// not designate an automatic object, even when static or const-initialized (C++26 relaxes it: p2686-*.cpp).
+//@ std: c++23
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 23:49 error "constexpr variable 'p' must be initialized by a constant expression"
