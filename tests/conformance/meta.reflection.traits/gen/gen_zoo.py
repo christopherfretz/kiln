@@ -47,9 +47,13 @@ enum class SE : unsigned char { a };
 """
 
 # The unary zoo: (alias name, type-id).
+# Target-neutral: no plain `char` (its signedness is the target's) and no
+# size- or padding-dependent answer, since the pinned values are clang 22's
+# on the generating host.
 UNARY = [
     ("Void", "void"), ("CVoid", "const void"), ("Int", "int"), ("CInt", "const int"),
-    ("VInt", "volatile int"), ("Bool", "bool"), ("Char", "char"), ("UInt", "unsigned"),
+    ("VInt", "volatile int"), ("Bool", "bool"), ("SChar", "signed char"),
+    ("UChar", "unsigned char"), ("UInt", "unsigned"),
     ("LDouble", "long double"), ("Float", "float"), ("Nullptr", "decltype(nullptr)"),
     ("IntP", "int*"), ("CIntP", "const int*"), ("IntPC", "int* const"), ("IntL", "int&"),
     ("CIntL", "const int&"), ("IntR", "int&&"), ("Arr3", "int[3]"), ("ArrU", "int[]"),
@@ -105,7 +109,7 @@ BINARY_RANGE = ["constructible", "trivially_constructible", "nothrow_constructib
 
 # Operand restrictions of [meta.unary.prop] / [meta.rel] the zoo respects
 # (a precondition violation is UB in <type_traits>, so it is not tested).
-SIGN_OK = {"Int", "CInt", "VInt", "Bool", "Char", "UInt", "En", "SEn", "Long"}
+SIGN_OK = {"Int", "CInt", "VInt", "Bool", "SChar", "UChar", "UInt", "En", "SEn", "Long"}
 
 
 def rows():
