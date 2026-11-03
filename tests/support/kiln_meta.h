@@ -395,8 +395,10 @@ consteval span<const meta::__kiln_range_value_t<R>> define_static_array(R&& r) {
 template <class T>
 consteval const typename meta::__kiln_unref<T>::type* define_static_object(T&& t) {
   using U = typename meta::__kiln_unref<T>::type;
-  if constexpr (__is_class(U)) {
+  if constexpr (__is_class(U) || __is_union(U)) {
     return __builtin_addressof(meta::extract<const U&>(meta::reflect_constant(t)));
+  } else if constexpr (__is_array(U)) {
+    return __builtin_addressof(meta::extract<const U&>(meta::reflect_constant_array(t)));
   } else {
     const U a[1] = {t};
     return define_static_array(a).data();
