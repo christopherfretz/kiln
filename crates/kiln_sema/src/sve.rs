@@ -131,6 +131,8 @@ impl Sema<'_, '_> {
 
     /// A variable `v` of sizeless type: an error unless it has automatic
     /// storage duration ([basic.stc]), and then one without SVE support.
+    /// Either way `v` is invalid, so its uses raise no further errors
+    /// (clang marks the declaration invalid after either diagnostic).
     pub(crate) fn check_sizeless_var(&mut self, v: DeclId, local: bool) {
         let n = *self.ast.decls.get(v);
         let Some(ty) = n.ty().filter(|&t| self.ast.types.is_sizeless(t)) else { return };
@@ -143,8 +145,8 @@ impl Sema<'_, '_> {
         } else {
             let msg = self.diag(DiagId::sema_nonlocal_sizeless, n.loc()).arg(self.ty_arg(ty));
             self.emit(msg);
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
     }
 
     /// The element type and count of the SVE vector type `q` (clang

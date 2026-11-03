@@ -5274,6 +5274,9 @@ impl Sema<'_, '_> {
         if deduced {
             ty = self.deduce_var_auto(v, ty, &init, loc, direct).unwrap_or(QualType::ERROR);
             self.ast.decls.set_ty(v, ty);
+            // A deduced sizeless type is checked as a written one (clang
+            // `CheckVariableDeclarationType` after deduction).
+            self.check_sizeless_var(v, self.in_local_scope());
             // `auto x = {...};` deduced `std::initializer_list<U>`; the
             // list initializes it below ([dcl.init.list]/3.6, WP-106).
         }
