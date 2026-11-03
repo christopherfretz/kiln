@@ -494,6 +494,8 @@ struct Parser {
     pp_only: Vec<(usize, &'static str)>,
     ast_only: Vec<(usize, &'static str)>,
     oracle_line: usize,
+    /// Line of the `skip(clang)` marker, 0 when there is none.
+    skip_clang_line: usize,
     stdout_file_line: usize,
     stdin_file_line: usize,
 }
@@ -541,6 +543,7 @@ impl Parser {
             pp_only: Vec::new(),
             ast_only: Vec::new(),
             oracle_line: 0,
+            skip_clang_line: 0,
             stdout_file_line: 0,
             stdin_file_line: 0,
         }
@@ -943,6 +946,9 @@ impl Parser {
             self.err(line, format!("duplicate `{name}` for the same compiler"));
             return;
         }
+        if name == "skip" && compiler == Some(CompilerKind::Clang) {
+            self.skip_clang_line = line;
+        }
         list.push(Marker { compiler, reason: reason.to_owned() });
     }
 
@@ -992,6 +998,30 @@ impl Parser {
         (stdin, stdout)
     }
 
+    /// Validates `skip(clang)` against `oracle` and `expect`; returns
+    /// whether the test has it.
+    fn check_skip_clang(&mut self, expect: Expect) -> bool {
+        // The oracle is a clang: a test clang cannot compile is not
+        // compared with it (`skip(clang)` implies `oracle: none`).
+        if self.skip_clang_line == 0 {
+            return false;
+        }
+        if self.oracle == Some(true) {
+            self.err(self.oracle_line, "`oracle: clang` contradicts `skip(clang)`");
+        }
+        // `layout`, `vtables` and `ir` have no golden: without the oracle
+        // there is nothing to compare kiln's output with.
+        if matches!(expect, Expect::Layout | Expect::Vtables | Expect::Ir) {
+            let line = self.skip_clang_line;
+            self.err(
+                line,
+                "`skip(clang)` does not apply to `layout`, `vtables` and `ir` tests \
+                 (the oracle is their only reference); use `skip:`",
+            );
+        }
+        true
+    }
+
     fn finish(mut self) -> Result<TestSpec, Vec<DirectiveError>> {
         let expect = self.expect.unwrap_or(Expect::CompileOk);
         if expect != Expect::Run {
@@ -1019,12 +1049,7 @@ impl Parser {
                 "`oracle` only applies to `run`, `pp`, `ast` and `verify` tests",
             );
         }
-        // The oracle is a clang: a test clang cannot compile is not
-        // compared with it (`skip(clang)` implies `oracle: none`).
-        let skip_clang = self.skip.iter().any(|m| m.compiler == Some(CompilerKind::Clang));
-        if skip_clang && self.oracle == Some(true) {
-            self.err(self.oracle_line, "`oracle: clang` contradicts `skip(clang)`");
-        }
+        let skip_clang = self.check_skip_clang(expect);
         if self.inst_report.is_some() && !matches!(expect, Expect::CompileOk | Expect::CompileFail)
         {
             let line = self.inst_report_line;
@@ -1571,6 +1596,25 @@ mod tests {
         assert_eq!(e, ["line 2: `oracle: clang` contradicts `skip(clang)`"]);
         let e = errs("//@ expect: ast\n//@ skip(clang): hangs\n//@ oracle: clang\n");
         assert_eq!(e, ["line 3: `oracle: clang` contradicts `skip(clang)`"]);
+    }
+
+    #[test]
+    fn skip_clang_rejected_without_golden() {
+        // spec/harness.md, directives: `layout`, `vtables` and `ir` compare
+        // with the oracle only, so `skip(clang)` would leave no reference.
+        for expect in ["layout", "vtables", "ir"] {
+            let e = errs(&format!("//@ expect: {expect}\n//@ skip(clang): hangs\n"));
+            assert_eq!(
+                e,
+                ["line 2: `skip(clang)` does not apply to `layout`, `vtables` and `ir` tests \
+                     (the oracle is their only reference); use `skip:`"],
+                "{expect}"
+            );
+            let s = ok(&format!("//@ expect: {expect}\n//@ skip(kiln): not yet\n"));
+            assert!(s.oracle, "skip(kiln) keeps the oracle for `{expect}`");
+            let s = ok(&format!("//@ expect: {expect}\n//@ skip: both\n"));
+            assert!(s.oracle && s.skip.len() == 1, "{expect}");
+        }
     }
 
     #[test]

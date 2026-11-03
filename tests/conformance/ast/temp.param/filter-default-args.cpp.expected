@@ -1,0 +1,64 @@
+Dumping X::C:
+TemplateTypeParmDecl class depth 0 index 3 C
+`-TemplateArgument type 'T &&'
+
+Dumping X::C1:
+CXXRecordDecl struct C1 definition
+`-FieldDecl x 'int'
+
+Dumping X<int>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl a 'int'
+
+Dumping X<int *>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl b 'int'
+
+Dumping X<const int>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl c 'int'
+
+Dumping X<long, const long &, long **, long &&, const long *, volatile long *>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl d 'int'
+
+Dumping R::C:
+TemplateTypeParmDecl class depth 0 index 3 C
+`-TemplateArgument type 'const T &'
+
+Dumping R::C1:
+CXXRecordDecl struct C1 definition
+`-FieldDecl r 'int'
+
+Dumping R<int &>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl e 'int'
+
+Dumping R<int &&>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl e 'int'
+
+Dumping R<int &&, int &, int &>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl e 'int'
+
+Dumping Y::C1:
+CXXRecordDecl struct C1 definition
+`-FieldDecl y 'int'
+
+Dumping Y<int>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl f 'int'
+
+Dumping Y<short>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl g 'int'
+
+Dumping Y<long, V>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl h 'int'
+
+Dumping Y<char, q::W, q::W>::C1:
+CXXRecordDecl parent struct C1 definition
+`-FieldDecl i 'int'
+
