@@ -1536,6 +1536,14 @@ lifetime" ([basic.life]/7)
 No new memory state: the entry already existed and is removed with the
 destruction. Clang 19 accepts destroying a union with a user-provided
 destructor twice and reading a member after it; kiln rejects both.
+An explicit destruction of a non-union class object whose union members'
+bytes alone are outside their lifetime is accepted too (`EndLife` aux 1,
+`live_but_unions`: every byte outside its `upos` unions must be live, and
+there must be such a byte; a member constructed by `std::construct_at`
+through a plain pointer has no union entry to consult): libc++ 22's list
+nodes destroy the value of their anonymous union, then the node (WP-446,
+`tests/conformance/class.union.anon/constexpr-destroy-member-then-object.cpp`).
+A class all of whose bytes are union bytes keeps the stricter check.
 
 *Unconstructed bases (WP-390).* Sema leaves a direct non-virtual base
 out of a constructor's ctor-initializers only after diagnosing that it
