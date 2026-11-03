@@ -1257,6 +1257,10 @@ impl Oven {
                 _ => self.external(b, ty, d),
             },
             VarEvalState::Evaluating => {
+                // Mid-initialization: kept for this evaluation only (an
+                // automatic variable has no `eval_inner` placeholder to
+                // restore; WP-465).
+                self.provisional.push(g);
                 self.global_obj(ty, flags::CONST | flags::RESOLVING | (hu & flags::HAS_UNION), d)
             }
             VarEvalState::NotEvaluated => {

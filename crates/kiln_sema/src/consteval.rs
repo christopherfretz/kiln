@@ -16,9 +16,9 @@ use std::collections::{HashMap, HashSet};
 use kiln_ast::decl::{ConstexprKind, DeclKind, Defaulted, FnSpec};
 use kiln_ast::expr::{ExprFlags, ExprKind};
 use kiln_ast::templates::SpecKind;
-use kiln_ast::{DeclId, ExprId, QualType};
+use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_oven::{EvalContext, EvalKind};
+use kiln_oven::{EvalContext, EvalFailure, EvalKind};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -71,6 +71,9 @@ pub(crate) struct ImmPending {
     const_eval: u32,
     /// The variable whose initializer the next full-expression is.
     var_init: Option<DeclId>,
+    /// Its failed invocations are reported after its constant
+    /// initialization is checked ([`Sema::report_deferred_immediates`]).
+    var_defer: bool,
     /// The next full-expression is a default argument or default member
     /// initializer: its invocations are not checked here.
     default_init: bool,
@@ -88,6 +91,10 @@ pub(crate) struct ImmState {
     pending: ImmPending,
     /// The escalated functions and why.
     reasons: HashMap<DeclId, Escalation>,
+    /// The failed immediate invocations of a `constexpr` or `constinit`
+    /// variable's initializer, with the variable and the callee, to be
+    /// reported after the variable's check.
+    after_var: Vec<(DeclId, ExprId, DeclId)>,
 }
 
 /// The pending state of an enclosing full-expression set aside by
@@ -287,6 +294,38 @@ impl Sema<'_, '_> {
     /// The next full-expression is the initializer of `v`.
     pub(crate) fn note_var_init_full_expr(&mut self, v: DeclId) {
         self.imm.pending.var_init = Some(v);
+    }
+
+    /// [`Sema::note_var_init_full_expr`], with the failed invocations of
+    /// a `constexpr` or `constinit` `v` reported only once its constant
+    /// initialization has been checked ([`Sema::report_deferred_immediates`]):
+    /// clang evaluates the immediate invocations of a declaration's
+    /// initializer after `CheckCompleteVariableDeclaration`, so the
+    /// variable's own error comes first and a read of `v` in an invocation
+    /// sees its failed initializer.
+    pub(crate) fn note_checked_var_init_full_expr(&mut self, v: DeclId) {
+        self.imm.pending.var_init = Some(v);
+        self.imm.pending.var_defer = true;
+    }
+
+    /// Reports the failed immediate invocations of `v`'s initializer set
+    /// aside by [`Sema::finish_immediate_invocations`], evaluating each
+    /// again (`v` now has its initializer and its evaluation state).
+    pub(crate) fn report_deferred_immediates(&mut self, v: DeclId) {
+        if self.imm.after_var.is_empty() {
+            return;
+        }
+        let all = std::mem::take(&mut self.imm.after_var);
+        let (mine, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|&(w, ..)| w == v);
+        self.imm.after_var = rest;
+        for (_, c, callee) in mine {
+            match self.eval_immediate(c) {
+                Ok(val) => {
+                    let _ = self.ast.exprs.set_constant_value(c, val);
+                }
+                Err(fail) => self.report_immediate_call(c, callee, fail, None, false),
+            }
+        }
     }
 
     /// The variable whose initializer the next full-expression is, if
@@ -613,11 +652,25 @@ impl Sema<'_, '_> {
         self.imm.pending.default_uses.clear();
     }
 
+    /// Evaluates immediate invocation `c` ([expr.const]/25).
+    fn eval_immediate(&mut self, c: ExprId) -> Result<ConstValueId, EvalFailure> {
+        let at = self.begin_loc(c);
+        self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at))
+    }
+
+    /// Whether `v` is constexpr or constinit: its initializer is checked as
+    /// a whole before its immediate invocations are reported (WP-465).
+    fn checked_var(&self, v: DeclId) -> bool {
+        self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            || self.constinit_of(v).is_some()
+    }
+
     /// The end of full-expression `e` (from [`Sema::act_on_full_expr`]):
     /// evaluates its immediate invocations and checks the references to
     /// immediate functions ([expr.const]/16-19).
     pub(crate) fn finish_immediate_invocations(&mut self, e: ExprId) {
         let var = self.imm.pending.var_init.take();
+        let var_defer = std::mem::take(&mut self.imm.pending.var_defer);
         let member_init = self.imm.pending.member_init.take();
         let default_init = std::mem::take(&mut self.imm.pending.default_init);
         let uses = std::mem::take(&mut self.imm.pending.default_uses);
@@ -648,13 +701,9 @@ impl Sema<'_, '_> {
         // evaluated (and wrapped) individually.
         let escalating =
             self.func.as_ref().map(|s| s.decl).filter(|&f| self.is_immediate_escalating(f));
-        let mut results = Vec::with_capacity(outer.len());
-        for &(c, _) in &outer {
-            let at = self.begin_loc(c);
-            let r = self
-                .eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
-            results.push(r);
-        }
+        let report_after =
+            var.filter(|&v| var_defer && escalating.is_none() && self.checked_var(v));
+        let results: Vec<_> = outer.iter().map(|&(c, _)| self.eval_immediate(c)).collect();
         // A constant-initialized variable's initializer (clang evaluates
         // it as a whole): its invocations keep their wrappers, unvalued
         // in clang's dump.
@@ -681,7 +730,10 @@ impl Sema<'_, '_> {
                             Escalation { loc, callee, call: true, default_init: field, written };
                         self.escalate(g, why);
                     }
-                    None => self.report_immediate_call(c, callee, fail, None, false),
+                    None => match report_after {
+                        Some(v) => self.imm.after_var.push((v, c, callee)),
+                        None => self.report_immediate_call(c, callee, fail, None, false),
+                    },
                 },
             }
         }
@@ -828,7 +880,7 @@ impl Sema<'_, '_> {
         &mut self,
         c: ExprId,
         f: DeclId,
-        mut fail: kiln_oven::EvalFailure,
+        mut fail: EvalFailure,
         default_use: Option<(DeclId, Loc)>,
         again: bool,
     ) {

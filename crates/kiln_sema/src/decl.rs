@@ -5200,6 +5200,7 @@ impl Sema<'_, '_> {
         self.act_on_init_inner(v, init);
         self.check_static_tls(v, paren);
         self.check_constinit(v);
+        self.report_deferred_immediates(v);
         self.check_consteval_only_var(v);
         self.initializing = None;
         self.lambda_mangle.var = None;
@@ -5491,7 +5492,7 @@ impl Sema<'_, '_> {
             self.ast.decls.mark_var(v, style);
         }
         self.check_self_reference(v, e, direct);
-        self.note_var_init_full_expr(v);
+        self.note_checked_var_init_full_expr(v);
         let name_loc = self.ast.decls.get(v).loc();
         let e = self.act_on_full_expr_at(e, name_loc);
         let _ = self.builder().set_var_init(v, e);
@@ -5727,7 +5728,7 @@ impl Sema<'_, '_> {
 
     /// The declaration of `v`'s entity that has `constinit`, and where
     /// (in its pattern, for an instantiated one).
-    fn constinit_of(&self, v: DeclId) -> Option<(DeclId, Loc)> {
+    pub(crate) fn constinit_of(&self, v: DeclId) -> Option<(DeclId, Loc)> {
         let (d, mut at) = if let Some(&at) = self.constinit_locs.get(&v) {
             (v, at)
         } else {

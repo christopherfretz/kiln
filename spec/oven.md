@@ -834,12 +834,21 @@ literal is one instruction and one step, not an interpreted loop.
   (`RunState::object`, clang's `EvaluatingDecl`) fails with `... cannot be
   called with a pointer to an object whose lifetime has not yet begun`
   (`BiFault::Lifetime` kind 3;
-  `meta.const.eval/is-within-lifetime-not-begun-errors.cpp`).
+  `meta.const.eval/is-within-lifetime-not-begun-errors.cpp`). That
+  includes the RESOLVING placeholder a self-reference such as `constexpr
+  C c(&c)` reads while `c` is evaluated (`Origin::Global` of the same
+  first declaration; a local constexpr variable mid-initialization
+  resolves to such an object too, kept in `provisional` for that
+  evaluation only), so a consteval constructor's immediate invocation
+  handed `&c` fails the same way (WP-465;
+  `meta.const.eval/is-within-lifetime-consteval-var.cpp`).
   Known gaps: an aggregate or array member being list-initialized reads
   as within its lifetime as a whole (clang: its later elements are not);
-  a consteval constructor's immediate
-  invocation initializing a variable is evaluated as a temporary, so it
-  answers false where clang reports kind 3.
+  `this` inside a consteval constructor whose immediate invocation
+  initializes a variable, member, parameter or local temporary is the
+  thunk's temporary, so it is answered where clang reports kind 3
+  (clang accepts it when the invocation is nested in a temporary, member
+  access or comma of a static-storage initializer).
 - **Temporaries:** a `MaterializeTemporaryExpr` with full-expression
   storage (a `bit_cast` or builtin operand bound to a reference
   parameter) is an lvalue in the Oven, its object living until the end of

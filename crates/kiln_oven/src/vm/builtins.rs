@@ -216,7 +216,7 @@ impl Oven {
     /// `bi::LIFETIME` of the pointer `raw` designating an object of type
     /// `t` ([`bi::DYN`]: unknown), `ok` its static union designators'
     /// verdict.
-    fn bi_within_lifetime(&self, raw: u64, ok: bool, t: u32) -> Result<u128, Fault> {
+    fn bi_within_lifetime(&self, ast: &Ast, raw: u64, ok: bool, t: u32) -> Result<u128, Fault> {
         let p = Ptr::decode(raw);
         let kind = match () {
             () if raw == 0 => Some(0),
@@ -236,10 +236,18 @@ impl Oven {
             p: raw,
         })?;
         // clang: the variable whose initializer is being evaluated
-        // (`Info.EvaluatingDecl`) has not begun its lifetime (WP-445).
-        if let (Origin::Var(d), Some(o)) = (a.origin, self.run.object)
-            && d == o
-        {
+        // (`Info.EvaluatingDecl`) has not begun its lifetime (WP-445): the
+        // object it initializes, or the placeholder a namespace-scope
+        // variable named in its own initializer reads (`constexpr C
+        // c(&c)`, WP-465).
+        let evaluating = match (a.origin, self.run.object) {
+            (Origin::Var(d), Some(o)) => d == o,
+            (Origin::Global(d), Some(o)) => {
+                a.flags & flags::RESOLVING != 0 && ast.first(d) == ast.first(o)
+            }
+            _ => false,
+        };
+        if evaluating {
             return Err(Fault::Bi(BiFault::Lifetime { kind: 3 }));
         }
         if !ok {
@@ -359,7 +367,7 @@ impl Oven {
                 // tag (`kbc::VOID_TAG`), if any.
                 let tag = (a >> 64) as u32;
                 let t = if t1 == bi::DYN && tag != 0 { tag - 1 } else { t1 };
-                self.bi_within_lifetime(a as u64, b != 0, t)
+                self.bi_within_lifetime(ast, a as u64, b != 0, t)
             }
             bi::UNION_LIVE => {
                 let raw = a as u64;

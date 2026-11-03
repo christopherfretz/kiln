@@ -4427,7 +4427,15 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   The initializer of a variable that is constant-initialized keeps its
   wrappers unvalued (clang's deferred mode). A failure reports `call to
   consteval|immediate function 'f' is not a constant expression` with
-  the Oven's notes. Default arguments and default member initializers
+  the Oven's notes. When the variable a full-expression initializes is
+  constexpr or constinit (`note_checked_var_init_full_expr`), a failing
+  outermost invocation is not reported there: it is kept in
+  `ImmState::after_var` and `report_deferred_immediates` re-evaluates
+  and reports it after `check_constexpr_init`/`check_constinit`, as clang
+  checks the variable first (the invocation's note then names the
+  variable's initializer; WP-465,
+  `meta.const.eval/is-within-lifetime-consteval-var.cpp`). An escalating
+  invocation is reported in place. Default arguments and default member initializers
   are not checked at their definition (`note_default_init_full_expr`).
   A constant-expression finished as a full-expression of its own while
   an enclosing one is being built (`act_on_constant_full_expr`: a
