@@ -25,6 +25,7 @@ sema_alignas_mismatch = Error (2) "redeclaration has different alignment require
 sema_alignas_missing_on_definition = Error (1) "{0} must be specified on definition if it is specified on any declaration";
 sema_alignas_underaligned = Error (2) "requested alignment is less than minimum alignment of {0} for type {1}";
 sema_alignas_wrong_decl_type = Error (2) "{0} attribute cannot be applied to {1:a function parameter|a variable with 'register' storage class|a 'catch' variable|a bit-field|an enumeration}";
+sema_alignment_builtin_useless = Warning [TautologicalCompare] (1) "{0:aligning a value|the result of checking whether a value is aligned} to 1 byte is {0:a no-op|always true}";
 sema_alignment_not_power_of_two = Error (0) "requested alignment is not a power of 2";
 sema_alignment_too_big = Error (1) "requested alignment must be {0} bytes or smaller";
 sema_alignment_too_big_bits = Error (1) "requested alignment must be {0} or smaller";

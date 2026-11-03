@@ -698,6 +698,14 @@ impl Sema<'_, '_> {
             | builtin::REDUCE_XOR
             | builtin::REDUCE_MIN
             | builtin::REDUCE_MAX => self.builtin_reduce(id, args, rparen),
+            // WP-416: the alignment and element-wise math builtins.
+            builtin::ALIGN_UP | builtin::ALIGN_DOWN | builtin::IS_ALIGNED => {
+                self.builtin_align(id, args, rparen)
+            }
+            builtin::ELEMENTWISE_ABS => self.builtin_elementwise_abs(args, rparen),
+            builtin::ELEMENTWISE_MAX | builtin::ELEMENTWISE_MIN => {
+                self.builtin_elementwise_minmax(args, rparen)
+            }
             builtin::OPERATOR_NEW | builtin::OPERATOR_DELETE => {
                 return self.builtin_operator_new_delete(callee, b, id, args, loc, rparen);
             }
@@ -813,6 +821,82 @@ impl Sema<'_, '_> {
         Some((vec![a], QualType::INT))
     }
 
+    /// `__builtin_align_up` / `__builtin_align_down` /
+    /// `__builtin_is_aligned` (clang's `BuiltinAlignment`; spec/sema.md
+    /// §5.4): the source is an integer (not `bool` or an enumeration) or a
+    /// non-function pointer (an array decays), else `operand of type T
+    /// where arithmetic or pointer type is required`; the alignment is
+    /// such an integer, else `used type T where integer is required`. A
+    /// constant alignment must be in [1, 2^(width(T)-1)] and a power of
+    /// two; 1 warns (`-Wtautological-compare`). The result has the
+    /// (decayed, unqualified) source type, or `bool` for `is_aligned`.
+    fn builtin_align(
+        &mut self,
+        id: u32,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let (src, al) = (args[0], args[1]);
+        let valid_int = |s: &Self, q: QualType| {
+            s.ast.types.is_integral(q) && s.ast.types.builtin(q) != Some(BuiltinType::Bool)
+        };
+        let st0 = self.ety(src);
+        let st = if self.ast.types.is_array(st0) { conv::array_decayed(self, st0) } else { st0 };
+        let ptr = self.ast.types.is_pointer(st);
+        let fn_ptr =
+            ptr && self.ast.types.pointee(st).is_some_and(|p| self.ast.types.is_function(p));
+        if (!ptr && !valid_int(self, st)) || fn_ptr {
+            let d = self
+                .diag(DiagId::sema_typecheck_expect_scalar_operand, self.eloc(src))
+                .arg(self.ty_arg(st));
+            self.emit(d);
+            return None;
+        }
+        let at = self.ety(al);
+        if !valid_int(self, at) {
+            let d = self.diag(DiagId::sema_expect_int, self.eloc(al)).arg(self.ty_arg(at));
+            self.emit(d);
+            return None;
+        }
+        let is_aligned = id == builtin::IS_ALIGNED;
+        if !self.expr_is_value_dependent(al)
+            && let Some(v) = self.fold_int(al)
+        {
+            let bits = if ptr {
+                u32::try_from(self.abi.pointer_size * 8).unwrap_or(64)
+            } else {
+                conv::rank::int_width(self, st).unwrap_or(64)
+            };
+            let max = (bits <= 128).then(|| 1u128 << (bits - 1));
+            let loc = self.eloc(al);
+            let err = if v < 1 {
+                Some(self.diag(DiagId::sema_alignment_too_small, loc).arg(1))
+            } else if let Some(m) = max.filter(|&m| v.cast_unsigned() > m) {
+                Some(self.diag(DiagId::sema_alignment_too_big_bits, loc).arg(m.to_string()))
+            } else if v.count_ones() != 1 {
+                Some(self.diag(DiagId::sema_alignment_not_power_of_two, loc))
+            } else {
+                None
+            };
+            if let Some(d) = err {
+                self.emit(d);
+                return None;
+            }
+            if v == 1 {
+                let d =
+                    self.diag(DiagId::sema_alignment_builtin_useless, loc).arg(usize::from(is_aligned));
+                self.emit(d);
+            }
+        }
+        let src = conv::decay(self, src);
+        let al = conv::lvalue_to_rvalue(self, al);
+        let ty = if is_aligned { QualType::BOOL } else { conv::strip_cv(self, st) };
+        Some((vec![src, al], ty))
+    }
+
     /// `__builtin_isfinite` & co. (clang's `BuiltinFPClassification`;
     /// C23 7.12.3): one real floating argument.
     fn builtin_fp_classification(
@@ -919,6 +1003,28 @@ impl Sema<'_, '_> {
                 .arg("3".to_string());
             self.emit(d);
             return false;
+        }
+        if id == builtin::FRAME_ADDRESS
+            && let Some(&a) = args.first()
+            && !self.expr_is_value_dependent(a)
+            && let Some(v) = self.fold_int(a)
+        {
+            // clang `BuiltinConstantArgRange(TheCall, 0, 0, 0xFFFF)`, then
+            // `-Wframe-address` for a nonzero level.
+            let at = self.begin_loc(callee);
+            if !(0..=0xFFFF).contains(&v) {
+                let d = self
+                    .diag(DiagId::sema_argument_invalid_range, at)
+                    .arg(v.to_string())
+                    .arg("0".to_string())
+                    .arg("65535".to_string());
+                self.emit(d);
+                return false;
+            }
+            if v != 0 {
+                let d = self.diag(DiagId::sema_frame_address, at).arg("__builtin_frame_address");
+                self.emit(d);
+            }
         }
         true
     }

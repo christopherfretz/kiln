@@ -63,8 +63,111 @@ impl Compiler<'_> {
             k if k.is_cast() => {
                 matches!(ast.exprs.cast_kind(e), CastKind::VectorSplat | CastKind::BitCast)
             }
+            ExprKind::CallExpr => self.elementwise_call(e).is_some(),
             _ => false,
         }
+    }
+
+    /// The builtin `__builtin_elementwise_abs` / `max` / `min` that call
+    /// `e` names directly, if any.
+    pub(super) fn elementwise_call(&self, e: ExprId) -> Option<u32> {
+        use kiln_ast::decl::builtin as id;
+        let ast = self.ast();
+        let mut c = skip_parens(ast, ast.exprs.callee(e));
+        while ast.exprs.get(c).kind().is_cast()
+            && matches!(
+                ast.exprs.cast_kind(c),
+                CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr
+            )
+        {
+            c = skip_parens(ast, ast.exprs.operand(c));
+        }
+        if ast.exprs.get(c).kind() != ExprKind::DeclRefExpr {
+            return None;
+        }
+        ast.decls
+            .builtin_id(ast.exprs.decl(c))
+            .filter(|&b| matches!(b, id::ELEMENTWISE_ABS | id::ELEMENTWISE_MAX | id::ELEMENTWISE_MIN))
+    }
+
+    /// `__builtin_elementwise_abs` / `max` / `min` of the canonical
+    /// `w`-bit integers `a` (and `b`) into `d` (clang 22
+    /// `IntExprEvaluator`: `abs` of the most negative value wraps).
+    pub(super) fn int_elementwise(&mut self, bid: u32, w: u32, s: bool, r: [u32; 2], d: u32, e: ExprId) {
+        use kiln_ast::decl::builtin as id;
+        let [a, b] = r;
+        let aux = int_aux(w as u8, s);
+        self.emit(Op::Mov, 0, &[d, a]);
+        let (c, other) = if bid == id::ELEMENTWISE_ABS {
+            let z = self.reg();
+            self.konst(z, 0);
+            let c = self.reg();
+            self.emit(Op::ICmp, aux | cmp::LT << 9, &[c, a, z]);
+            let u = self.reg();
+            self.emit_at(Op::INeg, int_aux(w as u8, false), &[u, a], e);
+            let n = self.reg();
+            self.emit(Op::ICast, w | w << 9 | u32::from(s) << 17, &[n, u]);
+            (c, n)
+        } else {
+            let k = if bid == id::ELEMENTWISE_MAX { cmp::GT } else { cmp::LT };
+            let c = self.reg();
+            self.emit(Op::ICmp, aux | k << 9, &[c, b, a]);
+            (c, b)
+        };
+        let j = self.jmp_if(c, false);
+        self.emit(Op::Mov, 0, &[d, other]);
+        self.patch_here(j);
+    }
+
+    /// An element-wise builtin call `e` of vector type, lane by lane (as
+    /// the scalar forms in `builtin_call`).
+    fn vec_elementwise(&mut self, e: ExprId, elem: OTy) -> Vec<u32> {
+        use kiln_ast::decl::builtin as id;
+        let bid = self.elementwise_call(e).unwrap_or(id::ELEMENTWISE_ABS);
+        if self.o.clang_compat < 22 {
+            let at = self.begin(e);
+            self.trap_loc(at, super::builtins::INVALID.into());
+            return Vec::new();
+        }
+        let ast = self.ast();
+        let args: Vec<ExprId> =
+            ast.lists.get(ast.exprs.call_args(e)).iter().map(|&x| ExprId::new(x)).collect();
+        let Some(&x) = args.first() else { return Vec::new() };
+        let k = self.kind(elem);
+        if let TyKind::Float(fk) = k {
+            if bid != id::ELEMENTWISE_ABS {
+                self.trap(e, "");
+                return Vec::new();
+            }
+            let at = self.begin(e);
+            let xs = self.vec_regs(x);
+            return xs
+                .into_iter()
+                .map(|a| {
+                    let d = self.reg();
+                    let aux = bi::FP_OP | (float_code(fk) | bi::FABS << 4) << 8;
+                    self.emit_site(Op::Builtin, aux, &[d, a, a, d, 0, 0], e, at);
+                    d
+                })
+                .collect();
+        }
+        let Some((w, s)) = int_of(k) else {
+            self.unsupported(e);
+            return Vec::new();
+        };
+        let xs = self.vec_regs(x);
+        let ys = match args.get(1) {
+            Some(&y) => self.vec_regs(y),
+            None => xs.clone(),
+        };
+        xs.into_iter()
+            .zip(ys)
+            .map(|(a, b)| {
+                let d = self.reg();
+                self.int_elementwise(bid, w, s, [a, b], d, e);
+                d
+            })
+            .collect()
     }
 
     /// Initializes the vector object of type `ty` at `p` from operation
@@ -209,6 +312,7 @@ impl Compiler<'_> {
             ExprKind::ConditionalOperator => self.vec_cond(e, n),
             ExprKind::ShuffleVectorExpr => self.vec_shuffle(e),
             ExprKind::ExtVectorElementExpr => self.ext_elt_regs(e),
+            ExprKind::CallExpr => self.vec_elementwise(e, elem),
             _ => {
                 let op = self.ast().exprs.operand(e);
                 if self.ast().exprs.cast_kind(e) == CastKind::VectorSplat {
