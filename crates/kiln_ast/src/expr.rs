@@ -149,6 +149,12 @@ pub enum ExprKind {
     CXXSpliceExpr,
     // recovery
     RecoveryExpr,
+    // semantic rewrites
+    /// clang's `PseudoObjectExpr`: a syntactic form (as written, for the
+    /// dump and diagnostics) and the semantic expressions that compute it
+    /// (`OpaqueValueExpr`s bound before use, then the result); the
+    /// synthesized three-way comparison ([class.spaceship]/1).
+    PseudoObjectExpr,
 }
 
 impl ExprKind {
@@ -2688,6 +2694,17 @@ impl ExprArena {
             ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)).take(5));
             }
+            // The semantic expressions, each bound `OpaqueValueExpr` by its
+            // source (so every subexpression is visited once); the
+            // syntactic form shares the sources and is not a child.
+            ExprKind::PseudoObjectExpr => {
+                for c in lists.iter::<ExprId>(ListId::new(n.a)).skip(1) {
+                    let src = (self.get(c).kind == ExprKind::OpaqueValueExpr)
+                        .then(|| ExprId::from_raw(self.get(c).a))
+                        .flatten();
+                    v.push(src.unwrap_or(c));
+                }
+            }
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
             | ExprKind::AtomicExpr
@@ -2786,6 +2803,28 @@ impl ExprArena {
         let mut it = lists.iter::<ExprId>(ListId::new(n.a));
         let mut next = || it.next().expect("four operands");
         [next(), next(), next(), next()]
+    }
+
+    /// The syntactic form of a `PseudoObjectExpr` (the expression as
+    /// written; not evaluated).
+    pub fn pseudo_syntactic(&self, e: ExprId, lists: &IdLists) -> ExprId {
+        let n = self.expect_kind(e, ExprKind::PseudoObjectExpr);
+        lists.iter::<ExprId>(ListId::new(n.a)).next().expect("syntactic form")
+    }
+
+    /// The semantic expressions of a `PseudoObjectExpr`, in evaluation
+    /// order: the bound `OpaqueValueExpr`s, then the result (and none
+    /// after it for the synthesized three-way comparison).
+    pub fn pseudo_semantics(&self, e: ExprId, lists: &IdLists) -> Vec<ExprId> {
+        let n = self.expect_kind(e, ExprKind::PseudoObjectExpr);
+        lists.iter::<ExprId>(ListId::new(n.a)).skip(1).collect()
+    }
+
+    /// The result expression of a `PseudoObjectExpr`: its value is the
+    /// value of the whole expression.
+    pub fn pseudo_result(&self, e: ExprId, lists: &IdLists) -> ExprId {
+        let n = self.expect_kind(e, ExprKind::PseudoObjectExpr);
+        lists.at::<ExprId>(ListId::new(n.a), n.b as usize + 1).expect("result expression")
     }
 
     /// The operand as written of a `CoawaitExpr`, `CoyieldExpr` or

@@ -117,6 +117,10 @@ impl Ast {
                     e = self.exprs.rewritten_semantic(e);
                     continue;
                 }
+                ExprKind::PseudoObjectExpr => {
+                    e = self.exprs.pseudo_syntactic(e, &self.lists);
+                    continue;
+                }
                 // clang's `CXXOperatorCallExpr::getSourceRangeImpl`: a
                 // prefix unary operator begins at its token, every other
                 // form at its first operand.

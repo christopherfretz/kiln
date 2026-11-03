@@ -1847,6 +1847,7 @@ impl<'a> Printer<'a, '_> {
             | "LambdaExpr"
             | "CompoundLiteralExpr"
             | "BinaryConditionalOperator"
+            | "PseudoObjectExpr"
             | "OffsetOfExpr"
             | "ChooseExpr"
             | "DependentScopeDeclRefExpr"
