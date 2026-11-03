@@ -1577,7 +1577,8 @@ impl Cg<'_> {
     /// all three operands are evaluated; an ext vector condition selects
     /// by each lane's sign bit through masks (`(f & ~m) | (t & m)`, float
     /// lanes bit-cast to the condition's type), a GNU vector condition by
-    /// lane `!= 0` through a `select`.
+    /// lane `!= 0` and a bool ext vector condition by its lanes, both
+    /// through a `select`.
     fn emit_vector_conditional(
         &mut self,
         c: ExprId,
@@ -1594,8 +1595,9 @@ impl Cg<'_> {
             let m = self.icmp(IntPredicate::Ne, cv, zero);
             return Ok(self.select(m, x, y));
         }
+        // A bool ext vector condition (clang 20+) is its `<N x i1>` lanes.
         if self.m.types.vector_info(ct).is_some_and(|(et, _, _)| et == LTy::I1) {
-            return err(None, "conditionals on bool vectors are not supported yet (M4)");
+            return Ok(self.select(cv, x, y));
         }
         let msb = self.icmp(IntPredicate::Slt, cv, zero);
         let mask = self.cast(CastOp::SExt, msb, ct);
