@@ -263,7 +263,10 @@ written. At 21 or above `attr_set` replaces the `nocapture` flag by
 `Attr::CapturesNone`, printed `captures(none)` (LLVM 21's spelling, which
 LLVM 19 cannot parse) in its integer-attribute position after
 `allocsize`; kiln_codegen sets it to the backend's major at
-`-fclang-compat=22` (spec/codegen.md §6a; WP-402).
+`-fclang-compat=22` (spec/codegen.md §6a; WP-402). At 20 or above a
+vector constant whose lanes are all one integer or floating-point constant
+prints as `splat (T v)`, as LLVM 20's AsmWriter does (`<1 x i32> splat (i32
+5)` included; pointer lanes and `zeroinitializer` are unchanged; WP-187).
 
 ## 6. Intrinsics
 Intrinsics are ordinary declarations whose name starts with `llvm.`.

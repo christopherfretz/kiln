@@ -231,7 +231,7 @@ impl CodegenJob<'_> {
                 omit_frame_pointer: a.omit_frame_pointer,
                 omit_leaf_frame_pointer: a.omit_leaf_frame_pointer,
                 // [basic.indet]/1 (P2795R5): C++26 automatic variables
-                // start with their erroneous value (spec/codegen.md §7q).
+                // start with their erroneous value (spec/codegen.md §7r).
                 auto_var_init: a.auto_var_init.unwrap_or(
                     if job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx26 {
                         AutoVarInit::Zero

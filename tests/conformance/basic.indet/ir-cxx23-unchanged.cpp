@@ -1,6 +1,6 @@
 // [basic.indet]/1 before C++26: reading an uninitialized automatic
 // variable is undefined behaviour, so kiln writes no erroneous value under
-// `-std=c++23` (spec/codegen.md §7q): the IR equals clang's, a plain
+// `-std=c++23` (spec/codegen.md §7r): the IR equals clang's, a plain
 // `alloca` with no store or `llvm.memset`.
 //@ expect: ir
 //@ std: c++23

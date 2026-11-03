@@ -1,5 +1,5 @@
 //! C++26 erroneous values at run time (P2795R5, [basic.indet]; spec/codegen.md
-//! §7q): which automatic variables kiln's codegen fills with zero bytes,
+//! §7r): which automatic variables kiln's codegen fills with zero bytes,
 //! under which standard and `-ftrivial-auto-var-init` flags. The cases
 //! here are the kiln-only ones: `tests/codegen/erroneous_init.cpp`
 //! compares the fill itself with clang's `-ftrivial-auto-var-init=zero`,

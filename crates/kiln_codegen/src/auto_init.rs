@@ -2,7 +2,7 @@
 //! (C++26 [basic.indet]/1, P2795R5; WP-448): clang's
 //! `-ftrivial-auto-var-init=zero` (`initializeWhatIsTechnicallyUninitialized`
 //! and `emitZeroOrPatternForAutoVarInit` in `CGDecl.cpp`), which kiln
-//! applies by default in C++26 (spec/codegen.md §7q).
+//! applies by default in C++26 (spec/codegen.md §7r).
 
 use kiln_ast::DeclId;
 use kiln_ast::attr::AttrKind;

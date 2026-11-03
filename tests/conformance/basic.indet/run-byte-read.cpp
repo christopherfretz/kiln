@@ -5,7 +5,7 @@
 // [basic.indet]/2 (C++26, P2795R5): reading an erroneous value through an
 // `unsigned char` or `std::byte` glvalue, and copying it into another
 // such object, is not erroneous behaviour; the copy carries the erroneous
-// value (all-zero bytes in kiln, spec/codegen.md §7q). clang 22 has no
+// value (all-zero bytes in kiln, spec/codegen.md §7r). clang 22 has no
 // erroneous values (`oracle: none`).
 #include <cstddef>
 extern "C" int printf(const char *, ...);

@@ -6,7 +6,7 @@
 //@ stdout: at 0
 //@ diag: 17:26 remark "erroneous value of variable 'junk' not written: its size (8192 bytes) exceeds -ftrivial-auto-var-init-max-size=4096"
 //@ diag: 29:7 remark "erroneous value of variable 'b' not written: its size (4100 bytes) exceeds -ftrivial-auto-var-init-max-size=4096"
-// [basic.indet]/1 (C++26, P2795R5), spec/codegen.md §7q: kiln writes the
+// [basic.indet]/1 (C++26, P2795R5), spec/codegen.md §7r: kiln writes the
 // erroneous value (zero bytes) of an automatic variable of at most 4096
 // bytes; a larger one is left unwritten (its value is still erroneous,
 // whatever bytes the stack holds) and `-Rauto-var-init` says so. The

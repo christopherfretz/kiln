@@ -5,3 +5,4 @@
 AtomicAlignment = "atomic-alignment" [];
 // WP-448: kiln-only remark group (`-Rauto-var-init`).
 AutoVarInit = "auto-var-init" [];
+Psabi = "psabi" [];

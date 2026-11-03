@@ -679,9 +679,9 @@ impl Parser<'_, '_> {
         };
         let rparen = self.prev_end();
         let (kind, cond) = if constexpr {
-            (IfKind::Constexpr, self.s.act_on_constexpr_condition(c))
+            (IfKind::Constexpr, self.s.act_on_constexpr_condition(c, loc))
         } else {
-            (IfKind::Ordinary, self.s.act_on_condition(c))
+            (IfKind::Ordinary, self.s.act_on_condition_at(c, loc))
         };
         // The branch a non-dependent `if constexpr` condition discards
         // is a discarded statement ([stmt.if]/2).
@@ -843,8 +843,9 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_case(v, rhs, sub, loc))
     }
 
-    /// A loop condition `( condition )`; `do` takes only an expression.
-    fn parse_loop_condition(&mut self, what: &str, allow_decl: bool) -> Option<Cond> {
+    /// A loop condition `( condition )` of the statement whose keyword is
+    /// at `kw`; `do` takes only an expression.
+    fn parse_loop_condition(&mut self, what: &str, allow_decl: bool, kw: Loc) -> Option<Cond> {
         let Some(open) = self.eat(Punct::LParen) else {
             let d = self
                 .s
@@ -864,14 +865,14 @@ impl Parser<'_, '_> {
             return None;
         };
         self.expect_closing(Punct::RParen, Punct::LParen, open);
-        Some((var, self.s.act_on_condition(c)))
+        Some((var, self.s.act_on_condition_at(c, kw)))
     }
 
     /// while-statement ([stmt.while]).
     fn parse_while(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         self.s.push_scope(ScopeKind::Control);
-        let cond = self.parse_loop_condition("while", true);
+        let cond = self.parse_loop_condition("while", true, loc);
         let rparen = self.prev_end();
         self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
@@ -899,7 +900,7 @@ impl Parser<'_, '_> {
             self.eat(Punct::Semi);
             return None;
         }
-        let cond = self.parse_loop_condition("while", false);
+        let cond = self.parse_loop_condition("while", false, loc);
         let Some((_, cond)) = cond else {
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
@@ -1125,7 +1126,7 @@ impl Parser<'_, '_> {
                 return None;
             };
             var = v;
-            cond = Some(self.s.act_on_condition(c));
+            cond = Some(self.s.act_on_condition_at(c, loc));
         }
         if self.eat(Punct::Semi).is_none() {
             let d = self

@@ -1,6 +1,6 @@
 // [basic.indet]/1-2 (C++26, P2795R5): an automatic variable without an
 // initializer gets kiln's erroneous value, all-zero bytes, written at its
-// declaration (spec/codegen.md §7q): a zero store for a scalar, an
+// declaration (spec/codegen.md §7r): a zero store for a scalar, an
 // `llvm.memset` for anything else (arrays, classes, padding included),
 // each tagged `!annotation !{!"auto-init"}`. That is the IR clang emits
 // under `-ftrivial-auto-var-init=zero`, which the `args` line gives both

@@ -4,7 +4,7 @@
 //@ stdout: ok
 // [basic.indet]/1, [dcl.attr.indet] (C++26, P2795R5): a variable or
 // parameter declared `[[indeterminate]]` keeps an indeterminate value (no
-// erroneous value is written: spec/codegen.md §7q); reading it is
+// erroneous value is written: spec/codegen.md §7r); reading it is
 // undefined, so only the program's well-defined part is checked.
 extern "C" int printf(const char *, ...);
 struct T {

@@ -411,7 +411,7 @@ pub struct Args {
     /// clang's default (full, or basic under `-Ofast`).
     pub complex_range: Option<ComplexRange>,
     /// `-ftrivial-auto-var-init=` (the last wins); `None` is the
-    /// standard's default (spec/codegen.md §7q).
+    /// standard's default (spec/codegen.md §7r).
     pub auto_var_init: Option<AutoVarInit>,
     /// `-ftrivial-auto-var-init-max-size=` (the last wins).
     pub auto_var_init_max_size: Option<u64>,

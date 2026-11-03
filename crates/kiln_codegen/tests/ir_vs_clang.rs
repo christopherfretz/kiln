@@ -182,7 +182,7 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
 ///
 /// `-ftrivial-auto-var-init=uninitialized`: kiln writes the C++26
 /// erroneous value of an uninitialized automatic variable by default
-/// (P2795R5, spec/codegen.md §7q), which the clang oracles do not
+/// (P2795R5, spec/codegen.md §7r), which the clang oracles do not
 /// implement; `erroneous_init.cpp` compares kiln's fill with clang's
 /// `-ftrivial-auto-var-init=zero` through its `//@ args:`.
 fn pinned_flags(triple: &str) -> &'static [&'static str] {

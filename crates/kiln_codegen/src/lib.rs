@@ -40,6 +40,7 @@ mod module;
 mod module_init;
 mod new_delete;
 mod null_init;
+mod psabi;
 mod stmt;
 mod tbaa;
 mod tls;
@@ -107,7 +108,7 @@ pub struct CodegenOptions {
     pub omit_leaf_frame_pointer: Option<bool>,
     /// What an automatic variable without an initializer holds at its
     /// declaration (`-ftrivial-auto-var-init=`; the C++26 erroneous value
-    /// of [basic.indet], spec/codegen.md §7q). The driver's default is
+    /// of [basic.indet], spec/codegen.md §7r). The driver's default is
     /// [`AutoVarInit::Zero`] in C++26 and [`AutoVarInit::Uninitialized`]
     /// before.
     pub auto_var_init: AutoVarInit,
@@ -127,7 +128,7 @@ pub enum AutoVarInit {
 }
 
 /// kiln's default `-ftrivial-auto-var-init-max-size` (spec/codegen.md
-/// §7q): 4 KiB.
+/// §7r): 4 KiB.
 pub const AUTO_VAR_INIT_MAX_SIZE: u64 = 4096;
 
 /// Which functions keep a frame pointer: the `"frame-pointer"` function

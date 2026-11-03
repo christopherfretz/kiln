@@ -8,7 +8,7 @@
 // [basic.indet]/1-2 (C++26, P2795R5): an automatic variable without an
 // initializer has an erroneous value, and reading it is erroneous
 // behaviour whose result is that value; kiln's erroneous value is all-zero
-// bytes, padding included (spec/codegen.md §7q). The bytes are inspected
+// bytes, padding included (spec/codegen.md §7r). The bytes are inspected
 // through `unsigned char`, which [basic.indet]/2 exempts. Each variable
 // is dirtied by an earlier frame at the same stack slot first, so a
 // missing fill shows. clang 22 has no erroneous values (`oracle: none`).
