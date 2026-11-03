@@ -627,7 +627,11 @@ impl Sema<'_, '_> {
         {
             return r;
         }
-        self.check_implicit_conversions(e, cc);
+        // clang never completes an `ExprError` (a failed list
+        // initialization, [`Sema::is_expr_error`]).
+        if !self.is_expr_error(e) {
+            self.check_implicit_conversions(e, cc);
+        }
         self.flush_member_refs();
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();

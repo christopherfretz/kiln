@@ -4845,6 +4845,19 @@ and unevaluated operands:
     is itself such an expression as a call argument or in `T{...}`
     (clang's `ParseBraceInitializer` fails). Test:
     `tests/conformance/dcl.init.general/invalid-element-initializer.cpp`.
+  - a failed braced aggregate initialization (WP-420; clang's
+    `InitListChecker::hadError`): once an element failed to initialize
+    (`int a[] = {g(1, 2), 2};` with a `void g`: "cannot initialize an
+    array element of type 'int' with an rvalue of type 'void'") or a list
+    had excess clauses, nested lists included, no further "excess
+    elements" error is reported for the same outermost list
+    (`Sema::agg_error_mark`, the unrecoverable error count when it
+    started, so a narrowing error does not count). The excess error is at
+    the begin location of the first excess clause (`{1, 1 + 2}` at the
+    `1`). The outermost list's initialization is then an `ExprError`
+    (`is_expr_error`): its full-expression is not checked for implicit
+    conversions and the variable has no constant initializer. Test:
+    `tests/conformance/dcl.init.aggr/element-init-failure.cpp`.
   - copy- and direct-initialization of scalars, through the implicit
     conversion sequence, with narrowing enforced for list-init
     ([dcl.init.list]/7); a list element (`init_element`, an array or

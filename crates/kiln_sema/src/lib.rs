@@ -240,6 +240,13 @@ pub struct Sema<'a, 'sm> {
     /// The `}` of the innermost braced aggregate list being checked: a
     /// brace-elided sublist's element destructor checks are located
     /// there (`init_dtor.rs`).
+    /// The unrecoverable error count when the outermost braced list
+    /// being checked started: clang's `InitListChecker::hadError`, which
+    /// suppresses "excess elements" once an element failed (WP-420).
+    pub(crate) agg_error_mark: Option<u32>,
+    /// An initializer clause was left over in the outermost braced list
+    /// being checked: the initialization failed (clang's `hadError`).
+    pub(crate) agg_excess: std::cell::Cell<bool>,
     pub(crate) agg_list_end: Option<Loc>,
     /// Depth of immediate function contexts ([expr.const]/16) entered
     /// by `if consteval`.
@@ -814,6 +821,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unevaluated: 0,
             decltype_calls: Vec::new(),
             agg_list_end: None,
+            agg_error_mark: None,
+            agg_excess: std::cell::Cell::new(false),
             immediate: 0,
             constant_full_expr: 0,
             discarding_init: false,
