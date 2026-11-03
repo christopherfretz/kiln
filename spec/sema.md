@@ -7337,7 +7337,8 @@ specification, a trailing return type or requires-clause, an asm label,
 GNU attributes and the last virt-specifier, but not trailing C++11
 attribute-specifiers (`ColdDeclData::declarator_end`, recorded by the
 parser for bodiless member and namespace- or block-scope function
-declarations, WP-381; an instantiated function uses its pattern's).
+declarations, WP-381; an instantiated function uses its pattern's, or
+the out-of-line definition its definition was instantiated from, WP-428).
 
 **`co_await e` ([expr.await]/3-5).** In order:
 

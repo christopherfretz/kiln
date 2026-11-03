@@ -857,11 +857,20 @@ member of a class template whose pattern is defaulted out of line is defined
 when the member's definition is instantiated
 (`instantiate_out_of_line_defaulted`, without the `= default` checks, as
 clang), its context note "in defaulted ... first required here" at the
-pattern's definition. Known difference: an error inside that instantiated
-definition is located at the member's in-class declaration where clang
-uses the pattern's out-of-line one. Tests:
+pattern's definition. The member is located at that definition from then
+on (sema-templates.md §4.6, WP-428), so an error inside the instantiated
+definition, and its note chain, are clang's. A defaulted copy or move
+assignment operator is defined at the end of its declaration (clang
+`DefineImplicitCopyAssignment` `getEndLoc()`, `declarator_end`,
+spec/ast.md): the declarator's closing `)` out of line, the last character
+of `default` in the class, the class for an implicit one; an instantiation
+of a member's `operator=` is "requested here" there. An out-of-line
+definition skips the deletion checks, so a member or base whose selected
+`operator=` is deleted is `attempt to use a deleted function` with the
+"explicitly marked deleted here" note ([dcl.fct.def.delete]/2). Tests:
 `tests/conformance/dcl.fct.def.default/out-of-line-defined-run.cpp`,
-`constexpr-out-of-line-cxx20.cpp`. A
+`constexpr-out-of-line-cxx20.cpp`, `instantiated-out-of-line-loc.cpp`,
+`assign-instantiation-point.cpp`. A
 deleted function must be deleted on its first declaration. Signature checks of
 [dcl.fct.def.default]/2–3 (`the parameter for an explicitly-defaulted copy
 constructor is const, but a member or base requires it to be non-const`, return
@@ -1765,6 +1774,35 @@ against `-complete` block by block, in order (abi.md §8.4).
   - See abi.md §7.
 - `kiln_abi/tests/layout_rules.rs`: one named test per probe in §6.2.
 
+### 6.5 Layout caches (WP-450, WP-428)
+A class's layout is computed once per TU wherever it is needed more than
+once; a cache never holds the layout of an incomplete class, which may
+still change ([basic.types.general]/5), and is never invalidated.
+- **`Ast::layouts`** (spec/types.md §11): `kiln_abi::ensure_layout`, for
+  the Oven (`sizeof`, `alignof`, `offsetof`, member offsets) and codegen.
+  It lays out complete classes only (`None` for an incomplete one). Sema's
+  `sizeof`/`alignof` only check the operand; the Oven folds the value.
+- **`Sema::layout_cache`** (a `kiln_abi::LayoutCache`): the alignment of a
+  class with a virtual destructor, which selects its deallocation function
+  ([expr.delete]/10, [class.dtor]/16; `complete_class_align`, called by
+  `check_destructor_delete` and `virtual_dtor_delete_usable`). An implicit
+  virtual destructor is declared, and its deletion decided, while the class
+  is still being defined, so that class is laid out over the cached layouts
+  of its complete bases and members and then dropped
+  (`Layouter::into_complete_cache`, abi.md §1): each class of a hierarchy is
+  laid out once, not once per derived class. Before WP-428 a class still
+  being defined was laid out from scratch with all its bases, cubic in the
+  length of a chain of polymorphic classes.
+- Other sema queries (`crate::target::size_align`: bit-field widths,
+  `alignas` checks, atomics, `__builtin_*` operand checks) lay out from
+  scratch: each is asked about a few types per declaration, not once per
+  class of a hierarchy.
+
+Validation: `bench/frontend/virtual-dtor-chain.cpp` (600 classes: 3.8 s
+before WP-428, 0.28 s after, clang 22 about 1.1 s; its `threshold-time`
+baseline, `threshold-time: 100`, catches a return of the per-class layout) and the virtual lattice
+below (§10).
+
 ## 7. Diagnostics
 - **Wording** is clang 19's, verified on the container; every quoted message in
   §2–§5 is normative (text, argument formatting, notes and their order). The
@@ -2513,8 +2551,11 @@ the class's own subobject graph. Validation:
 `tests/stress/virtual-lattice-deep.cpp` (depth 32),
 `bench/frontend/virtual-lattice.cpp` (depth 14 by default, `-DLATTICE_DEPTH=N`;
 clang 22 is exponential there). Kiln, release, `-fsyntax-only`: depth 100
-1.8 s, depth 200 12 s (28 MB); the remaining cost is the record layout
-recomputed per virtual destructor (`check_destructor_delete`).
+0.9 s, depth 200 4.0 s (29 MB) after WP-428 cached the layout of the class
+being defined (§6.5; before: 1.9 s, 13.2 s). The remaining cost is the
+virtual-base collection (`class/special/implicit.rs` `virtual_bases`, one
+walk per query) and the final overriders (`class/virtual/graph.rs`
+`all_final_overriders`).
 
 ## 11. Open questions (with recommendation)
 - **Q1 Implicit-member laziness.** Mirror clang's eager/lazy policy (§4.1;
