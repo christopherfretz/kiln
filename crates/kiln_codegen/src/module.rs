@@ -1202,15 +1202,17 @@ impl<'a> Cg<'a> {
     /// clang `getMinimumObjectSize` and `getNaturalTypeAlignment(T,
     /// forPointeeType)` of an object reached through a pointer or
     /// reference: `(dereferenceable bytes, alignment)`, the size `None` for
-    /// an incomplete type (whose alignment is 1). Classes use their
-    /// non-virtual size and alignment.
+    /// an incomplete type (whose alignment is 1, except an array of unknown
+    /// bound, aligned as its element: `getTypeAlignInChars`). Classes use
+    /// their non-virtual size and alignment.
     pub fn pointee_layout(&mut self, p: QualType) -> (Option<u64>, u64) {
         let ast = self.ast;
         match ast.types.canonical_view(p) {
             // getMinimumClassObjectSize / getClassPointerAlignment: a
             // final class is known to be a complete object.
             TypeView::Record(d) => self.this_layout(d),
-            TypeView::IncompleteArray(_) | TypeView::Function(_) => (None, 1),
+            TypeView::IncompleteArray(e) => (None, self.size_align(e).1),
+            TypeView::Function(_) => (None, 1),
             _ if ast.types.is_void(p) => (None, 1),
             _ => {
                 let (s, a) = self.size_align(p);

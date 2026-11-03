@@ -4058,10 +4058,13 @@ impl Cg<'_> {
                 LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
             // [class.temporary]/5: the temporaries of each element's
             // initialization are destroyed before the next one starts.
+            // The array's zeroed state reaches each element (clang
+            // `EmitInitializationToLValue` with `Dest.isZeroed()`), so a
+            // zeroed array gets no per-element `memset` or zero stores.
             let sc = self.begin_scope(false);
             let r = match filler {
-                Some(f) => self.init_to_lvalue(f, lv, false),
-                None => self.null_init_lvalue(lv, false),
+                Some(f) => self.init_to_lvalue(f, lv, zeroed),
+                None => self.null_init_lvalue(lv, zeroed),
             };
             self.end_scope(sc);
             r?;
