@@ -72,6 +72,7 @@ note_defaulted_cmp_ambiguous = Note (4) "defaulted '{0}' is implicitly deleted b
 note_defaulted_cmp_calls_deleted = Note (3) "defaulted '{0}' is implicitly deleted because it would invoke a deleted comparison function{1:| for member {2}| for base class {2}}";
 note_defaulted_cmp_cannot_deduce = Note (3) "return type of defaulted 'operator<=>' cannot be deduced because return type {0} of three-way comparison for {1:|member |base class }{2} is not a standard comparison category type";
 note_defaulted_cmp_cannot_deduce_callee = Note (2) "selected 'operator<=>' for {0:|member |base class }{1} declared here";
+note_defaulted_cmp_cannot_deduce_undeduced_auto = Note (2) "{0:|member |base class }{1} declared here";
 note_defaulted_cmp_inaccessible = Note (6) "defaulted '{0}' is implicitly deleted because it would invoke a {1:private|protected} '{2}'{3: member of {4}| to compare base class {5}| member of {4} to compare member {5}}";
 note_defaulted_cmp_no_viable = Note (4) "defaulted '{0}' is implicitly deleted because there is no viable {1:three-way comparison function|'operator=='} for {2:|member |base class }{3}";
 note_defaulted_cmp_no_viable_synth = Note (1) "three-way comparison cannot be synthesized because there is no viable function for {0:'=='|'<'} comparison";

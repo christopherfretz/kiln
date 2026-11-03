@@ -1017,6 +1017,7 @@ impl<'a> Compiler<'a> {
                     }
                 }
                 ExprKind::CXXRewrittenBinaryOperator => ast.exprs.rewritten_semantic(e),
+                ExprKind::PseudoObjectExpr => ast.exprs.pseudo_syntactic(e, &ast.lists),
                 ExprKind::CXXBindTemporaryExpr | ExprKind::ExprWithCleanups => ast.exprs.operand(e),
                 ExprKind::BinaryConditionalOperator => {
                     ast.exprs.binary_conditional_operands(e, &ast.lists)[0]
@@ -2704,6 +2705,11 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.rewritten_semantic(e);
                 self.rv_inner(op, dst);
             }
+            ExprKind::PseudoObjectExpr => {
+                let r = self.bind_pseudo(e, Access::Read);
+                self.rv_inner(r, dst);
+                self.unbind_pseudo(e);
+            }
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 let op = self.ast().exprs.subst_replacement(e);
                 self.rv_inner(op, dst);
@@ -3815,6 +3821,47 @@ impl Compiler<'_> {
         ops
     }
 
+    /// Evaluates the semantic expressions of a `PseudoObjectExpr` before
+    /// its result, in order, binding each `OpaqueValueExpr`'s source
+    /// once for its uses (spec/oven.md "Pseudo-object expressions"); returns the result. The
+    /// bindings live until [`Self::unbind_pseudo`].
+    fn bind_pseudo(&mut self, e: ExprId, acc: Access) -> ExprId {
+        let ast = self.ast();
+        let result = ast.exprs.pseudo_result(e, &ast.lists);
+        for s in ast.exprs.pseudo_semantics(e, &ast.lists) {
+            if s == result {
+                break;
+            }
+            match self.ast().exprs.opaque_source(s) {
+                Some(src) if self.node(s).kind() == ExprKind::OpaqueValueExpr => {
+                    let v = if self.node(src).value_category().is_glvalue() {
+                        Opaque::Lv(self.lv(src, acc))
+                    } else {
+                        Opaque::Rv(self.rv(src))
+                    };
+                    self.opaque.insert(src, v);
+                }
+                _ => self.effect(s),
+            }
+        }
+        result
+    }
+
+    /// Drops the bindings [`Self::bind_pseudo`] made for `e`.
+    fn unbind_pseudo(&mut self, e: ExprId) {
+        let ast = self.ast();
+        let sources: Vec<ExprId> = ast
+            .exprs
+            .pseudo_semantics(e, &ast.lists)
+            .into_iter()
+            .filter(|&s| ast.exprs.get(s).kind() == ExprKind::OpaqueValueExpr)
+            .filter_map(|s| ast.exprs.opaque_source(s))
+            .collect();
+        for src in sources {
+            self.opaque.remove(&src);
+        }
+    }
+
     fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
         match self.ast().exprs.opaque_source(e) {
             Some(src) => self.opaque.get(&src).copied(),
@@ -3846,6 +3893,12 @@ impl Compiler<'_> {
             ExprKind::CXXRewrittenBinaryOperator => {
                 let op = self.ast().exprs.rewritten_semantic(e);
                 self.lv(op, acc)
+            }
+            ExprKind::PseudoObjectExpr => {
+                let r = self.bind_pseudo(e, acc);
+                let p = self.lv(r, acc);
+                self.unbind_pseudo(e);
+                p
             }
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 let op = self.ast().exprs.subst_replacement(e);
@@ -4421,6 +4474,12 @@ impl Compiler<'_> {
                 let op = self.ast().exprs.rewritten_semantic(e);
                 return self.init_inner(op, p, ty);
             }
+            ExprKind::PseudoObjectExpr => {
+                let r = self.bind_pseudo(e, Access::Read);
+                self.init_inner(r, p, ty);
+                self.unbind_pseudo(e);
+                return;
+            }
             ExprKind::CXXDefaultArgExpr if default_arg_of(self.ast(), e).is_some() => {
                 let d = default_arg_of(self.ast(), e).unwrap_or(e);
                 let saved = self.enter_default_arg(e);
@@ -4849,6 +4908,11 @@ impl Compiler<'_> {
             ExprKind::CXXRewrittenBinaryOperator => {
                 let op = self.ast().exprs.rewritten_semantic(e);
                 self.effect(op);
+            }
+            ExprKind::PseudoObjectExpr => {
+                let r = self.bind_pseudo(e, Access::Read);
+                self.effect(r);
+                self.unbind_pseudo(e);
             }
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 let op = self.ast().exprs.subst_replacement(e);

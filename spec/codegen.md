@@ -3097,6 +3097,22 @@ caller's full-expression ([class.temporary]/3; clang
 - Tests: `tests/codegen/trivial_abi_calls.cpp`, `trivial_abi_subobjects.cpp`
   (both oracles),
   `tests/conformance/class.temporary/run-trivial-abi-callee-destroys.cpp`.
+## 7v. Landed (WP-456): `PseudoObjectExpr`
+
+The synthesized three-way comparison of a defaulted `operator<=>`
+([class.spaceship]/1; spec/sema-class.md §4.12) is a `PseudoObjectExpr`
+(ast.md §5.3) whose semantic expressions are `[OVE(a), OVE(b), chain]`.
+As clang's `emitPseudoObjectExpr`, `Cg::bind_pseudo` emits the semantic
+expressions before the result in order: an `OpaqueValueExpr` binds its
+source once in `f.opaque` (an lvalue address for a glvalue source, else
+the scalar), any other is emitted and ignored; the result is then
+emitted in the requested form (scalar `emit_arm`, `emit_lvalue`,
+`emit_agg`, complex `emit_cx`) and `unbind_pseudo` drops the bindings.
+The syntactic form is never emitted. The chain is an lvalue of the
+category's `const` static members, which the defaulted body copies into
+its return slot (`static_cast<R>`), so the IR is clang's
+(`tests/codegen/synth_three_way.cpp`, strong, weak and partial
+categories, compared with clang 22 and clang 19 on both targets).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
