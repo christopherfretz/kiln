@@ -1666,6 +1666,13 @@ clang 19 `CGAtomic` at -O0, mirrored:
   arms stay an `i8` `phi`, as in clang (valid IR, oracle-checked in
   `tests/codegen/atomic_bool_inc.cpp`); the invalid-in-clang cases are a
   run test with no oracle (`ext.c11.atomic/bool-postinc-run.cpp`).
+- **Glvalue conditionals as prvalues (WP-418).** The lvalue-to-rvalue
+  conversion of a glvalue `?:` of scalar type loads each arm in its own
+  block and merges the loaded values in the `phi` (clang
+  `VisitAbstractConditionalOperator` visits the arms as scalars): an arm
+  that is a reference-returning call is loaded through its lvalue
+  (`Cg::emit_arm`, `emit_glvalue_load`), never merged as its address
+  (`tests/codegen/cond_glvalue_ref_call.cpp`).
 - **`_Atomic` aggregates in calls (WP-183).** `_Atomic(T)` with `T` an
   aggregate is evaluated as an aggregate (`is_atomic_aggregate`, clang's
   `getEvaluationKind`) for a `return` operand, a parameter, an argument
