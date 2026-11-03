@@ -1296,7 +1296,11 @@ impl Sema<'_, '_> {
             _ => None,
         };
         let Some(v) = folded else {
-            self.error(DiagId::sema_vla_unsupported, loc);
+            if matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member) {
+                self.vla_at_file_scope(d, loc, at, f);
+            } else {
+                self.error(DiagId::sema_vla_unsupported, loc);
+            }
             return None;
         };
         let wloc = Self::fold_lone_invalid(&mut f, loc);
@@ -1304,6 +1308,47 @@ impl Sema<'_, '_> {
         self.emit(w);
         self.error(DiagId::sema_vla_folded_to_constant, at);
         u64::try_from(v).ok().map(Ok)
+    }
+
+    /// A bound that neither is a constant expression nor folds, in a
+    /// namespace-scope or member declarator: clang builds the variable
+    /// length array (after `-Wvla-cxx-extension` with the failure's
+    /// notes, at the bound) and the declaration rejects it at its name
+    /// (`CheckVariableDeclarationType`, `CheckTypedefForVariablyModifiedType`,
+    /// `CheckFieldDecl`, `CheckFunctionDeclaration`): a function's type is
+    /// variably modified, a non-static data member's size is not
+    /// constant, and anything else is a variable length array when every
+    /// declarator chunk outside the bound is an array (an array of one is
+    /// one too) or a variably modified type otherwise ([dcl.array]/1: the
+    /// bound is a converted constant expression).
+    fn vla_at_file_scope(
+        &mut self,
+        d: &Declarator,
+        loc: Loc,
+        at: Loc,
+        mut f: kiln_oven::EvalFailure,
+    ) {
+        let wloc = Self::fold_lone_invalid(&mut f, loc);
+        let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
+        self.emit(w);
+        let pos = d
+            .chunks
+            .iter()
+            .position(
+                |ch| matches!(ch, Chunk::Array { size: Some(s), .. } if self.begin_loc(*s) == loc),
+            )
+            .unwrap_or(0);
+        let outer = &d.chunks[..pos];
+        let id = if matches!(outer.first(), Some(Chunk::Function { .. })) {
+            DiagId::sema_vm_func_decl
+        } else if self.declarator_field {
+            DiagId::sema_field_variable_size
+        } else if outer.iter().all(|ch| matches!(ch, Chunk::Array { .. })) {
+            DiagId::sema_vla_decl_in_file_scope
+        } else {
+            DiagId::sema_vm_decl_in_file_scope
+        };
+        self.error(id, at);
     }
 
     /// clang `ext_vla_cxx` / `ext_vla_cxx_in_gnu_mode` (off by default in
@@ -2224,7 +2269,12 @@ impl Sema<'_, '_> {
         let base = self.apply_declspec_vector_attrs(base, ds);
         let base = self.ctad_decl_spec_check(ds, base, d);
         self.warn_redundant_parens(Some((ds, base)), d);
+        self.declarator_field = d.ctx == DeclaratorContext::Member
+            && !ds.is_typedef()
+            && ds.friend.is_none()
+            && !matches!(ds.storage, Some((StorageSpec::Static, _)));
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+        self.declarator_field = false;
         if head.is_some() {
             if ds.is_typedef() {
                 self.error(DiagId::sema_typedef_template, d.loc);

@@ -2691,6 +2691,21 @@ impl Sema<'_, '_> {
                     ExprFlags::CANNOT_OVERFLOW,
                 );
             }
+            if x == e
+                && self.implicit_member_operand(e).is_some()
+                && self.member_overload_decls(x).iter().any(|&d| self.is_static_method(d))
+            {
+                // `&f` of an implicit member set with a static member: the
+                // target selects it ([over.over]/1; spec/sema-overload.md
+                // §2.3).
+                return self.builder().unary(
+                    UnaryOp::AddrOf,
+                    e,
+                    QualType::OVERLOAD,
+                    loc,
+                    ExprFlags::CANNOT_OVERFLOW,
+                );
+            }
             // [expr.unary.op]/4: `&b.f` is not a pointer to member.
             self.error(DiagId::sema_nonconst_member_fn_ptr, loc);
             return self.recover_err(&[e], loc);

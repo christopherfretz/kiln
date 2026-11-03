@@ -387,6 +387,11 @@ pub struct Sema<'a, 'sm> {
     /// reference to a reference collapses), so the pack check still
     /// runs on it ([dcl.fct]/16; [`Sema::type_for_declarator_at`]).
     pub(crate) declarator_int_recovery: bool,
+    /// The declarator whose type is being formed declares a non-static
+    /// data member: a variable length array bound that does not fold is
+    /// clang's `err_typecheck_field_variable_size` there
+    /// ([`Sema::type_for_declarator_at`]).
+    pub(crate) declarator_field: bool,
     /// Replaying a non-dependent class-scope using-declaration of a
     /// pattern: clang walks the pattern's shadow list, which is newest
     /// first, so the instantiation's shadows come in reverse (WP-159).
@@ -805,6 +810,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             declarator_int_recovery: false,
+            declarator_field: false,
             reverse_using_shadows: false,
             va_list_type: None,
             ext_vector_typedefs: Vec::new(),

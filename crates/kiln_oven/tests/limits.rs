@@ -322,11 +322,11 @@ static_assert(k(&n) + k(m + 1) == 2);
 }
 
 /// [expr.const]/4 and spec/oven.md "Evaluation entry points": a `const`
-/// variable not usable in constant expressions resolves differently in
-/// strict and lax ([`Oven::fold_rvalue`]) evaluations, so a mode switch
-/// resolves it again; it is remade in the object it had, so alternating
-/// the modes 10k times holds what the first few switches did (each
-/// re-resolution leaked a static slot and its bytes before WP-387).
+/// variable not usable in constant expressions is read by lax
+/// ([`Oven::fold_rvalue`]) evaluations only, from one object resolved
+/// once for both modes (WP-407), so alternating the modes 10k times holds
+/// what the first few switches did (each re-resolution leaked a static
+/// slot and its bytes before WP-387).
 #[test]
 fn lax_globals_do_not_grow() {
     let src = "\

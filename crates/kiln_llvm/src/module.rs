@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::attr::{Attr, AttrTable};
+use crate::attr::{Attr, AttrKind, AttrTable};
 use crate::constant::{ConstData, ConstTable, IntValue, mask128};
 use crate::error::{IrError, IrErrorKind, IrResult};
 use crate::function::Function;
@@ -332,6 +332,11 @@ pub struct Module {
     pub(crate) sync_scopes: Vec<Box<str>>,
     gnames: HashMap<Box<str>, Value>,
     last_unique: u32,
+    /// The LLVM release whose textual IR the module is written in (default
+    /// 19). At 21 or later [`Module::attr_set`] writes `nocapture` as
+    /// `captures(none)` (LLVM 21 replaced the attribute; LLVM 19 rejects the
+    /// new spelling).
+    pub ir_version: u32,
 }
 
 impl Module {
@@ -362,6 +367,7 @@ impl Module {
             sync_scopes: vec![Box::from(""), Box::from("singlethread")],
             gnames: HashMap::new(),
             last_unique: 0,
+            ir_version: 19,
         }
     }
 
@@ -647,8 +653,19 @@ impl Module {
     // ---- attributes -----------------------------------------------------
 
     /// Intern an attribute set (canonicalized: later duplicates of a key
-    /// win, then sorted).
+    /// win, then sorted). At [`Module::ir_version`] 21 or later `nocapture`
+    /// is interned as `captures(none)`.
     pub fn attr_set(&mut self, attrs: &[Attr]) -> AttrSetId {
+        if self.ir_version >= 21 && attrs.contains(&Attr::Flag(AttrKind::NoCapture)) {
+            let v: Vec<Attr> = attrs
+                .iter()
+                .map(|a| match a {
+                    Attr::Flag(AttrKind::NoCapture) => Attr::CapturesNone,
+                    a => a.clone(),
+                })
+                .collect();
+            return self.attrs.intern(&v);
+        }
         self.attrs.intern(attrs)
     }
 

@@ -418,6 +418,9 @@ pub struct Oven {
     /// The clang release whose note wording failures follow
     /// (`-fclang-compat=`; [`Oven::set_clang_compat`]).
     pub(crate) clang_compat: u32,
+    /// The translation unit's language standard as its year
+    /// ([`Oven::set_cxx_year`]).
+    cxx_year: u32,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     pub(crate) sites: Vec<Site>,
@@ -446,15 +449,6 @@ pub struct Oven {
     /// provisional global costs one static slot per translation unit, not
     /// one per evaluation (spec/oven.md "Unknown references").
     pub(crate) provisional_objs: FxHashMap<u32, (ty::OTy, u64)>,
-    /// Globals whose resolution depends on the lax mode
-    /// ([`value::VarInfo::lax`]), and the mode they were resolved in.
-    pub(crate) lax_globals: Vec<u32>,
-    pub(crate) lax_resolved: bool,
-    /// The object each lax global last resolved to: remade in place when
-    /// a mode switch resolves it again, so a lax global costs one static
-    /// slot per translation unit however often the mode alternates
-    /// (spec/oven.md "Evaluation entry points").
-    pub(crate) lax_objs: FxHashMap<u32, u64>,
     /// Floating arithmetic that yields a NaN or divides by zero goes on
     /// with the `APFloat` result ([`Oven::set_fold_float_ub`]).
     pub(crate) fold_float_ub: bool,
@@ -511,6 +505,7 @@ impl Oven {
             budget,
             backtrace_limit: notes::BACKTRACE_LIMIT,
             clang_compat: 19,
+            cxx_year: 2026,
             types: Types::default(),
             code: Vec::new(),
             sites: Vec::new(),
@@ -527,9 +522,6 @@ impl Oven {
             global_map: FxHashMap::default(),
             provisional: Vec::new(),
             provisional_objs: FxHashMap::default(),
-            lax_globals: Vec::new(),
-            lax_objs: FxHashMap::default(),
-            lax_resolved: false,
             fold_float_ub: false,
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
@@ -587,6 +579,20 @@ impl Oven {
     /// The compatibility level ([`Oven::set_clang_compat`]).
     pub fn clang_compat(&self) -> u32 {
         self.clang_compat
+    }
+
+    /// Records the translation unit's language standard as its year
+    /// (sema's [`SemaBridge::cxx_year`]), for a bridge that does not know
+    /// it: codegen's folds share the TU's bytecode, which bakes in the
+    /// mode-dependent rules (the pre-C++26 `void *` cast), so they must
+    /// see the same year (spec/oven.md "Casts from void *"). Default 2026.
+    pub fn set_cxx_year(&mut self, year: u32) {
+        self.cxx_year = year;
+    }
+
+    /// The year [`Oven::set_cxx_year`] recorded.
+    pub fn cxx_year(&self) -> u32 {
+        self.cxx_year
     }
 
     /// The backtrace limit ([`Oven::set_backtrace_limit`]).
@@ -797,8 +803,6 @@ impl Oven {
             + map(&self.global_map)
             + cap(&self.provisional)
             + map(&self.provisional_objs)
-            + cap(&self.lax_globals)
-            + map(&self.lax_objs)
             + map(&self.lit_exprs)
             + map(&self.thawed)
             + map(&self.lets)
@@ -909,17 +913,11 @@ impl Oven {
         (r, c)
     }
 
-    /// Starts the outermost context: globals resolved provisionally (or
-    /// for the other strictness) are forgotten, the counters reset.
+    /// Starts the outermost context: globals resolved provisionally are
+    /// forgotten, the counters reset.
     fn begin_outermost(&mut self, silent: bool, enum_check: bool, const_context: bool) {
         for g in self.provisional.drain(..) {
             self.globals[g as usize].state = compile::GState::Unresolved;
-        }
-        if self.lax_resolved != self.run.lax {
-            self.lax_resolved = self.run.lax;
-            for g in self.lax_globals.drain(..) {
-                self.globals[g as usize].state = compile::GState::Unresolved;
-            }
         }
         self.run.silent = silent;
         self.run.enum_check = enum_check;

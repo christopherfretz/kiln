@@ -282,7 +282,7 @@ pub(crate) fn cold_hot_attrs(ast: &Ast, d: DeclId, out: &mut Vec<Attr>) {
 
 /// Whether `q` is a complete object type (an incomplete class has no
 /// natural alignment to speak of).
-fn is_complete(ast: &Ast, q: QualType) -> bool {
+pub(crate) fn is_complete(ast: &Ast, q: QualType) -> bool {
     ast.types.as_record(q).is_none_or(|r| {
         ast.definition(r).is_some_and(|d| {
             ast.decls
