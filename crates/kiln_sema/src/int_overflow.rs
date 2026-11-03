@@ -1,13 +1,16 @@
 //! `-Winteger-overflow`: a signed `+`, `-`, `*` or unary `-` of a
 //! full-expression that is not a constant-expression, whose operands
-//! fold and whose result is outside the range of its type
-//! ([expr.pre]/4; clang's `CheckForIntOverflow` and
-//! `Expr::EvaluateForOverflow`). See spec/sema.md §5.28.
+//! fold and whose result is outside the range of its type, including
+//! one inside the body of a `constexpr` function the full-expression
+//! calls or a compound assignment there ([expr.pre]/4; clang's
+//! `CheckForIntOverflow` and `Expr::EvaluateForOverflow`). See
+//! spec/sema.md §5.28.
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{ConstexprKind, DeclKind};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprDeps, ExprKind, UnaryOp};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
+use kiln_source::Loc;
 
 use crate::Sema;
 use crate::conv::rank::{int_signed, int_width};
@@ -29,10 +32,14 @@ enum Leaf {
     No,
 }
 
-/// The walk's bounds.
+/// The walk's bounds, and what tells its diagnostics apart.
 struct Walk {
     budget: u32,
     depth: u32,
+    /// The full-expression.
+    root: ExprId,
+    /// The overflows diagnosed so far.
+    count: u32,
 }
 
 impl Walk {
@@ -75,7 +82,7 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        let mut w = Walk { budget: BUDGET, depth: 0 };
+        let mut w = Walk { budget: BUDGET, depth: 0, root, count: 0 };
         let mut work = vec![root];
         while let Some(orig) = work.pop() {
             if !w.take() {
@@ -123,8 +130,9 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Whether `e` contains a signed `+`, `-`, `*` or unary `-` (a cheap
-    /// filter before anything is folded).
+    /// Whether `e` contains a signed `+`, `-`, `*` or unary `-`, or a
+    /// call to a `constexpr` function (a cheap filter before anything is
+    /// folded).
     fn has_overflow_candidate(&self, e: ExprId) -> bool {
         let mut stack = vec![e];
         let mut budget = BUDGET;
@@ -133,7 +141,7 @@ impl Sema<'_, '_> {
                 return false;
             }
             budget -= 1;
-            if self.overflow_candidate(x).is_some() {
+            if self.overflow_candidate(x).is_some() || self.overflow_call(x) {
                 return true;
             }
             if !self.overflow_opaque(x) {
@@ -159,6 +167,92 @@ impl Sema<'_, '_> {
         }
         let w = int_width(self, n.ty())?;
         (w <= 128).then_some((n.ty(), w))
+    }
+
+    /// Whether `e` calls a `constexpr` or `consteval` function or
+    /// constructor, whose body the evaluation enters.
+    fn overflow_call(&self, e: ExprId) -> bool {
+        let f = match self.ast.exprs.get(e).kind() {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
+                self.callee_decl(e)
+            }
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                Some(self.ast.exprs.constructor(e))
+            }
+            _ => None,
+        };
+        f.and_then(|f| self.ast.decls.function(f))
+            .is_some_and(|f| f.spec.constexpr_kind() != ConstexprKind::None)
+    }
+
+    /// Whether `e` or an expression under it that the evaluation enters
+    /// is an [`Sema::overflow_call`].
+    fn has_overflow_call(&self, e: ExprId) -> bool {
+        let mut stack = vec![e];
+        let mut budget = BUDGET;
+        while let Some(x) = stack.pop() {
+            if budget == 0 {
+                return false;
+            }
+            budget -= 1;
+            if self.overflow_call(x) {
+                return true;
+            }
+            if !self.overflow_opaque(x) {
+                stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            }
+        }
+        false
+    }
+
+    /// Reports `-Winteger-overflow` at `loc` for operation `e` of type
+    /// `ty`, whose result wrapped is `wrapped`. clang reports it straight
+    /// to the diagnostics engine: no instantiation notes, and every
+    /// overflow found prints, also one at the same place as another (a
+    /// function called twice); the same full-expression checked again
+    /// does not repeat them.
+    fn emit_overflow(&mut self, w: &mut Walk, loc: Loc, e: ExprId, wrapped: i128, ty: QualType) {
+        let mut key = self.inst.stack.context_key();
+        key ^= (u64::from(w.root.index()) << 20 | u64::from(w.count))
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        w.count += 1;
+        let d = self
+            .diag(DiagId::sema_integer_constant_overflow, loc)
+            .arg(group_digits(wrapped))
+            .arg(self.ty_arg(ty))
+            .range(self.expr_range(e))
+            .context(key)
+            .per_instantiation();
+        d.emit(self.diags);
+    }
+
+    /// clang `EvaluateForOverflow` of `e` in the evaluator: the
+    /// overflows found on the way are reported, in order, but those of a
+    /// `++` or `--` (only a note in clang). `Err` when the evaluation
+    /// failed and found none.
+    fn overflow_eval(&mut self, e: ExprId, w: &mut Walk) -> Result<Option<i128>, ()> {
+        let (v, found) = self.fold_for_overflow(e);
+        if v.is_none() && found.is_empty() {
+            return Err(());
+        }
+        for o in found {
+            let Some(oe) = o.e else { continue };
+            let n = *self.ast.exprs.get(oe);
+            if n.kind() == ExprKind::UnaryOperator
+                && matches!(
+                    self.ast.exprs.unary_op(oe),
+                    UnaryOp::PreInc | UnaryOp::PostInc | UnaryOp::PreDec | UnaryOp::PostDec
+                )
+            {
+                continue;
+            }
+            let ty = n.ty();
+            if !self.ast.types.is_integral(ty) || !int_signed(self, ty) {
+                continue;
+            }
+            self.emit_overflow(w, o.loc, oe, o.value, ty);
+        }
+        Ok(v.and_then(|v| self.const_int(v)))
     }
 
     /// Subexpressions the evaluation does not enter: unevaluated
@@ -227,11 +321,7 @@ impl Sema<'_, '_> {
             let wrapped = truncate_to(wrapped, width, true);
             // clang shows the wrapped result; for a unary `-` that is its
             // operand, the minimum value, again.
-            let d = self
-                .diag(DiagId::sema_integer_constant_overflow, n.loc())
-                .arg(group_digits(wrapped))
-                .arg(self.ty_arg(ty));
-            self.emit(d.per_instantiation());
+            self.emit_overflow(w, n.loc(), e, wrapped, ty);
             return Some(wrapped);
         }
         match n.kind() {
@@ -265,9 +355,15 @@ impl Sema<'_, '_> {
             Leaf::Unknown => return None,
             Leaf::No => {}
         }
-        // Anything else: its operators are looked for, and it is folded
-        // when there are none (a fold fails on an overflow inside).
-        if (self.overflow_opaque(e) || !self.overflow_scan(e, w)) && need {
+        // Anything that calls a `constexpr` function is evaluated, the
+        // body included. Anything else, or a failed evaluation that found
+        // nothing: its operators are looked for, and it is folded when
+        // there are none (a fold fails on an overflow inside).
+        let calls = !self.overflow_opaque(e) && self.has_overflow_call(e);
+        if calls && let Ok(v) = self.overflow_eval(e, w) {
+            return v;
+        }
+        if (self.overflow_opaque(e) || !self.overflow_scan(e, w)) && need && !calls {
             return self.fold_rvalue_int(e);
         }
         None
@@ -315,6 +411,11 @@ impl Sema<'_, '_> {
                 continue;
             }
             let k = self.ast.exprs.get(x).kind();
+            if x != e && self.overflow_call(x) {
+                found = true;
+                let _ = self.overflow_value(x, w, false);
+                continue;
+            }
             if x != e
                 && (self.overflow_candidate(x).is_some() || k == ExprKind::ConditionalOperator)
             {

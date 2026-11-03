@@ -309,6 +309,17 @@ the evaluator's flattened type table.
   constant-evaluated, silent, not recorded, never cached; fails if the
   evaluation leaks an allocation. `at` locates the evaluation for the
   depth check.
+- `Oven::evaluate_call(bridge, f, at) -> Result<(), EvalFailure>`
+  (WP-468, clang `Expr::isPotentialConstantExpr` for a function without
+  parameters, spec/sema.md §5.28 "Never constant"): evaluates a call of
+  `f` without arguments in a stub (`compile_call`, the call's site at
+  `at`), manifestly constant-evaluated, with notes; the result, if any,
+  is frozen and dropped. The failure's last note is the call's `in call
+  to`. A function with parameters, a variadic one, or one returning a
+  reference or an aggregate is not evaluated (`Ok`), nor is anything
+  inside another evaluation. Not recorded in the stats; a success is
+  memoized as any call (`Func::memo`), so a later use of the function
+  costs a lookup.
 - `Oven::is_constant_initialized(bridge, var) -> bool`
   ([basic.start.static]/2): silent, not recorded; uses the variable's
   cached evaluation state when known.
@@ -336,6 +347,18 @@ the evaluator's flattened type table.
   Silent, not recorded; an outermost evaluation (false when nested); the
   temporary object is freed (`Memory::free_static`, "Abstract memory")
   and memory reset.
+- `Oven::fold_for_overflow(bridge, e) -> (Option<ConstValueId>,
+  Vec<Overflow>)` (WP-468): `fold_rvalue` checking for undefined
+  behaviour (clang `EvaluateForOverflow`, for `-Winteger-overflow`,
+  spec/sema.md §5.28). `RunState::ub_check` is set for the outermost run
+  only (`Oven::ub_check_next`, taken by `begin_outermost`; cleared in a
+  nested evaluation, a global's initialization and speculation): a signed
+  `IAdd`/`ISub`/`IMul`/`INeg` whose result is outside its width yields
+  the result wrapped to the width and records `(pc, wrapped)`
+  (`vm.rs` `Oven::wrap_overflow`, cold) instead of failing. The records come back
+  in order as `Overflow { loc, e, value }` (the instruction's site); the
+  evaluation's failure (`None`) does not drop them. Silent; lax, so not
+  memoized.
 - `Oven::fold_rvalue(bridge, e) -> Option<ConstValueId>` (WP-165):
   `try_fold` in **lax mode** (`RunState::lax`), clang's codegen-time
   `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
@@ -406,6 +429,19 @@ the evaluator's flattened type table.
   is a local variable read as a global): "pointer to '…' is not a
   constant expression" (or "reference to …" when the frozen type is a
   reference; clang `note_constexpr_non_global`), with "declared here".
+  At C++26 (P2686R5 [expr.const.init]/2, WP-467) the pointer is frozen as
+  `PtrBase::Decl(local)` instead when it is constexpr-referenceable from
+  the variable being initialized (`Oven::referenceable_from_object`:
+  `run.object` is a non-static local declared `constexpr`, of the same
+  function as the referent's variable; a `static` one is not a local, and
+  a non-`constexpr` one is deliberately excluded, spec/sema.md §4.9). Globals are
+  resolved once per Oven, so the check is made at the freeze, against
+  `run.object`, not at resolve time. `automatic_referent(ast, value)`
+  finds such a pointer anywhere in a frozen value (scalars, relocations,
+  pointer-to-constant chains), which sema uses for usability
+  (spec/sema.md §4.9) and codegen to skip the fold. Left: a lambda body
+  reading through such a pointer in its own `static_assert` is accepted
+  (the evaluation point is not known to the Oven).
 - Freezing a pointer or reference to a temporary lifetime-extended by
   the variable being initialized ([class.temporary]/6) rejects one whose
   type is destructed (`Ast::needs_destruction`: a non-trivial destructor
@@ -2482,6 +2518,13 @@ exception (see "Bool vectors" below). The operations are in
   `__builtin_reduce_*` fold, as clang 20+ does (WP-394;
   `ext.vector/constexpr-diagnostics-clang22.cpp`). A `?:` with a vector
   condition fails silently in clang 22 as well, so it stays rejected.
+  Writing a lane (`v[i] = x`, `v.y = x`, any vector element type) of a
+  union member does not make that member active: only member access and
+  array subscript do ([class.union.general]/6), so the vector operand is
+  accessed as a read-modify-write (`compile.rs` `lane_base_access`) and
+  an inactive member is "assignment to member 'v' of union with active
+  member 'c'", as clang (WP-438;
+  `ext.vector/bool-constexpr-union-diagnostics-clang22.cpp`).
   The compat-19 boundary above holds until the oracle switch (WP-184,
   M3 to M4).
 - Codegen emits folded vector values as `<N x T>` constants
@@ -2516,6 +2559,21 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   clang's "element size 1 * element count N is not a multiple of the
   byte size 8" note (`compile/bitcast.rs`). A source with an
   indeterminate lane byte is "indeterminate value".
+- *Shuffles* (WP-438): `__builtin_shufflevector` folds lane by lane at
+  either level. At compat 19 a shuffle whose lane count differs from its
+  operands' has clang 19's GNU-vector-of-`bool` type, `CK_BitCast` to
+  the ext vector (sema); kiln stores that GNU vector packed like a
+  `BoolVec`, but clang 19's `BitCastBuffer` writes it a byte per lane and
+  reads the smaller packed destination from its first bytes, so
+  `vm/bitcast.rs` `gnu_bool_vec_cast` gives lane `k` = source lane `k/8`
+  when `k % 8 == 0`, else false (`b8 w = shuffle(b4, b4, 0..7)` is
+  `0x01`), the value clang 19 folds and emits. At compat 22 the shuffle
+  has the ext vector type and no cast.
+- *Union members* (WP-438): a lane is one bit, so a lane store into a
+  `bool` vector member of a union goes through the union like a
+  bit-field's (`ty.rs` `has_bit_unit` treats the lanes of a `BoolVec` as
+  bit units): `union U { b8 v; unsigned char c; }; constexpr U u =
+  {(b8)true};` constructs `v`, at either level.
 - *Notes* print a bool vector argument lane by lane (`{true, false,
   ...}`, every lane, as clang).
 - *Codegen*: a constexpr or constant-initialized bool-vector variable
@@ -2532,9 +2590,13 @@ pointer", as clang 22's. The packed bytes are what `value.rs` freezes
   result (`b4 L = I < 2`), a C-style or `static_cast`, an assignment or a
   `return` in a constexpr function. A `vector_size` or floating source
   has no conversion at all (sema).
-Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp`,
+Tests: `tests/conformance/ext.vector/bool-constexpr-*.cpp` (shuffles:
+`bool-constexpr-shuffle-run.cpp`, `-19.cpp`;
+`tests/codegen/bool_vector_shuffle_const.cpp`; unions:
+`bool-constexpr-union-run.cpp`, `tests/codegen/bool_vector_union_const.cpp`),
 `ext.vector/bool-from-int-vector-diagnostics-clang22.cpp`,
-`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`.
+`ext.vector/bool-from-int-vector-constexpr-clang22.cpp`;
+budget (packed bits, no per-lane allocation): `tests/stress/bool-vector-sieve.cpp`.
 
 ### `_BitInt` — Landed (WP-404, wide WP-445)
 Type rules: spec/types.md §21.
