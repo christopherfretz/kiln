@@ -228,6 +228,12 @@ pub(crate) struct Cfg {
     pub(crate) inc: HashMap<Unit, StmtId>,
     pub(crate) ret: HashMap<Unit, StmtId>,
     pub(crate) do_conds: HashSet<ExprId>,
+    /// Where each local variable's declaration takes effect: before the
+    /// element at the index, in the block (`CfgReq::uninit`; clang's
+    /// one-variable `DeclStmt` elements, spec/sema.md §7.5.4).
+    pub(crate) decl_marks: Vec<(BlockId, u32, DeclId)>,
+    /// The comma operators met (not elements; `CfgReq::uninit`).
+    pub(crate) commas: Vec<ExprId>,
 }
 
 impl Cfg {
@@ -250,6 +256,8 @@ impl Cfg {
         self.inc.clear();
         self.ret.clear();
         self.do_conds.clear();
+        self.decl_marks.clear();
+        self.commas.clear();
     }
 
     /// The graph exists (clang built one, under the size cap).

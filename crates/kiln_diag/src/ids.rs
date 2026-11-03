@@ -235,4 +235,15 @@ impl DiagId {
 // The tail block (spec/diag.md §2.4): rows here compile, but `cargo xtask
 // diag-split --check` (run by `cargo xtask ci`) fails until `cargo xtask
 // diag-split` has moved them into their area file under `src/ids/`.
-diag_id_table! {}
+diag_id_table! {
+sema_uninit_var = WarningOff [Uninitialized] (2) "variable {0} is uninitialized when {1:used here|captured by block}";
+sema_sometimes_uninit_var = WarningOff [SometimesUninitialized] (5) "variable {0} is {1:used|captured} uninitialized whenever {2:'{3}' condition is {4}|'{3}' loop {4}|'{3}' loop {4}|switch {3} is taken|its declaration is reached|{3} is called}";
+sema_maybe_uninit_var = WarningOff [ConditionalUninitialized] (2) "variable {0} may be uninitialized when {1:used here|captured by block}";
+sema_uninit_const_reference = WarningOff [UninitializedConstReference] (1) "variable {0} is uninitialized when passed as a const reference argument here";
+sema_uninit_const_pointer = WarningOff [UninitializedConstPointer] (1) "variable {0} is uninitialized when passed as a const pointer argument here";
+sema_uninit_analysis_skipped = Remark [KilnAnalysisSkipped] (2) "uninitialized-value warnings for '{0}' skipped: the analysis needs more than {1} MiB";
+note_uninit_var_use = Note (1) "{0:uninitialized use occurs|variable is captured by block} here";
+note_var_declared_here = Note (1) "variable {0} is declared here";
+note_var_fixit_add_initialization = Note (1) "initialize the variable {0} to silence this warning";
+note_uninit_fixit_remove_cond = Note (3) "remove the {0:'{1}' if its condition|condition if it} is always {2:false|true}";
+}

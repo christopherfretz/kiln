@@ -29,6 +29,9 @@ pub(crate) struct CfgReq {
     pub(crate) flow: bool,
     /// Record the unreachable-code scan's tables (`-Wunreachable-code*`).
     pub(crate) scan: bool,
+    /// Record the declaration points and commas the uninitialized-values
+    /// analysis reads (spec/sema.md §7.5.4).
+    pub(crate) uninit: bool,
 }
 
 /// A loop, switch or expansion statement `break`/`continue` leave.
@@ -83,6 +86,8 @@ pub(crate) struct Builder {
     /// The edges of `goto *p` into the shared indirect-goto block.
     igoto: Vec<u32>,
     kids: Vec<ExprId>,
+    /// Declaration marks waiting for the block the position opens.
+    marks: Vec<DeclId>,
 }
 
 /// One entry of a full-expression's temporaries record (clang
@@ -190,6 +195,7 @@ impl Builder {
             cur_ret: None,
             igoto: Vec::new(),
             kids: Vec::new(),
+            marks: Vec::new(),
         }
     }
 
@@ -260,7 +266,28 @@ impl Builder {
         self.dangling = d;
         self.dangling.clear();
         self.cur = Some(b);
+        if !self.marks.is_empty() {
+            let i = self.cfg.elems.len() as u32;
+            for v in std::mem::take(&mut self.marks) {
+                self.cfg.decl_marks.push((b, i, v));
+            }
+        }
         b
+    }
+
+    /// Variable `v`'s declaration takes effect here (`CfgReq::uninit`):
+    /// before the next element of the open block, or of the block the
+    /// dangling edges open. Nothing at an unreachable point.
+    fn mark_decl(&mut self, v: DeclId) {
+        if !self.req.uninit {
+            return;
+        }
+        if let Some(b) = self.cur {
+            let i = self.cfg.elems.len() as u32;
+            self.cfg.decl_marks.push((b, i, v));
+        } else if !self.dangling.is_empty() {
+            self.marks.push(v);
+        }
     }
 
     /// A new block on the current position.
@@ -542,6 +569,7 @@ impl Sema<'_, '_> {
                         if let Some(init) = v.init {
                             self.cfg_expr(init, b);
                         }
+                        b.mark_decl(d);
                     }
                 }
                 if has_var {
@@ -625,6 +653,9 @@ impl Sema<'_, '_> {
     fn cfg_var_init(&mut self, v: Option<DeclId>, b: &mut Builder) {
         if let Some(i) = v.and_then(|v| self.ast.decls.var(v).and_then(|x| x.init)) {
             self.cfg_expr(i, b);
+        }
+        if let Some(v) = v {
+            b.mark_decl(v);
         }
     }
 
@@ -1159,6 +1190,8 @@ impl Sema<'_, '_> {
                     && self.ast.exprs.binary_op(e) == BinaryOp::Comma;
                 if !comma {
                     b.push(Elem::Expr(e));
+                } else if b.req.uninit {
+                    b.cfg.commas.push(e);
                 }
                 if b.has_pos() && self.is_noreturn_call(e) {
                     Self::cfg_noreturn(b);
