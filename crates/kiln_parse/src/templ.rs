@@ -193,16 +193,7 @@ impl Parser<'_, '_> {
                 self.s.act_explicit_spec_end();
                 return;
             }
-            if self.at_plain_tag_decl() || self.at_namespace_member_tag_decl() {
-                self.extraneous_empty_template_head(loc, ctx);
-                return;
-            }
-            if self.at_non_template_spec() {
-                // `template<> struct NT<int> {}` naming a non-template:
-                // the class-specifier diagnoses the template-id and
-                // declares `NT` ([temp.expl.spec]/1; clang's
-                // `err_template_spec_needs_template_parameters` recovery).
-                self.parse_spec_declaration(ctx);
+            if self.explicit_spec_of_non_template(loc, ctx) {
                 return;
             }
             let _ = self.s.act_explicit_specialization(false, loc);
@@ -258,6 +249,24 @@ impl Parser<'_, '_> {
         let t = self.tok_at(self.pos() + 2);
         matches!(Self::punct_of(t), Some(Punct::LBrace | Punct::Colon | Punct::Semi))
             || self.is_final_tok(t)
+    }
+
+    /// `template<>` (at `loc`) before a class declaration that is no
+    /// template-id, or a template-id on a non-template: parsed, with the
+    /// head diagnosed as extraneous or (`template<> struct NT<int> {}`)
+    /// the template-id by the class-specifier, which declares `NT`
+    /// ([temp.expl.spec]/1; clang's
+    /// `err_template_spec_needs_template_parameters` recovery). True
+    /// when handled.
+    fn explicit_spec_of_non_template(&mut self, loc: Loc, ctx: DeclaratorContext) -> bool {
+        if self.at_plain_tag_decl() || self.at_namespace_member_tag_decl() {
+            self.extraneous_empty_template_head(loc, ctx);
+        } else if self.at_non_template_spec() {
+            self.parse_spec_declaration(ctx);
+        } else {
+            return false;
+        }
+        true
     }
 
     /// `class-key N::...::identifier` then `{`, `:`, `;` or `final`, the

@@ -1572,6 +1572,48 @@ impl Parser<'_, '_> {
         Some(self.s.type_specifier_placeholder_check(ty, at))
     }
 
+    /// `parse_tag_qualifier`, and whether it failed (diagnosed it named
+    /// nothing): the template headers it would have matched are
+    /// discarded with it.
+    fn parse_tag_qualifier_checked(
+        &mut self,
+        ds: &mut DeclSpec,
+    ) -> (Option<kiln_sema::using::Qualifier>, bool) {
+        let was_invalid = ds.invalid;
+        let qual = self.parse_tag_qualifier(ds);
+        let failed = !was_invalid && ds.invalid;
+        if failed {
+            self.s.discard_spec_headers();
+        }
+        (qual, failed)
+    }
+
+    /// `struct NT<int> {}` naming a non-template (or after a qualifier
+    /// that named nothing): [temp.expl.spec]/1 specializes a template,
+    /// so this is clang's `err_explicit_spec_non_template`; the arguments
+    /// are skipped and `NT` itself declared.
+    fn skip_non_template_args(
+        &mut self,
+        keyword: TagKeyword,
+        (n, nloc): (Symbol, Loc),
+        qualifier: Option<DeclId>,
+        qual_failed: bool,
+    ) {
+        if !self.at(Punct::Less)
+            || !qual_failed
+                && matches!(self.s.classify_name(n, qualifier), NameClass::TypeTemplate(_))
+        {
+            return;
+        }
+        let Some((close, false)) = self.skip_template_args(self.pos()) else { return };
+        let what = format!("{} '{}'", keyword.spelling(), self.s.ast.symbols().as_str(n));
+        let d = self.s.diag(DiagId::sema_explicit_spec_non_template, nloc).arg(what);
+        self.emit(d);
+        while self.pos() <= close && self.tok().kind != TokKind::Eof {
+            self.bump();
+        }
+    }
+
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
         let keyword = match k {
@@ -1593,12 +1635,7 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
-        let was_invalid = ds.invalid;
-        let qual = self.parse_tag_qualifier(ds);
-        let qual_failed = !was_invalid && ds.invalid;
-        if qual_failed {
-            self.s.discard_spec_headers();
-        }
+        let (qual, qual_failed) = self.parse_tag_qualifier_checked(ds);
         let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
@@ -1623,22 +1660,8 @@ impl Parser<'_, '_> {
             self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, &attrs);
             return;
         }
-        if is_class
-            && self.at(Punct::Less)
-            && let Some((n, nloc)) = name
-            && (qual_failed
-                || !matches!(self.s.classify_name(n, qualifier), NameClass::TypeTemplate(_)))
-            && let Some((close, false)) = self.skip_template_args(self.pos())
-        {
-            // `struct NT<int> {}` naming a non-template ([temp.expl.spec]/1
-            // specializes a template): clang's `err_explicit_spec_non_template`;
-            // the arguments are skipped and `NT` itself declared.
-            let what = format!("{} '{}'", keyword.spelling(), self.s.ast.symbols().as_str(n));
-            let d = self.s.diag(DiagId::sema_explicit_spec_non_template, nloc).arg(what);
-            self.emit(d);
-            while self.pos() <= close && self.tok().kind != TokKind::Eof {
-                self.bump();
-            }
+        if is_class && let Some(name) = name {
+            self.skip_non_template_args(keyword, name, qualifier, qual_failed);
         }
         let mut final_loc = None;
         if is_class && name.is_some() {
@@ -1694,14 +1717,9 @@ impl Parser<'_, '_> {
             self.spec_error(&e, kw_loc);
         }
         if use_ == TagUse::Definition {
-            let spelling = match keyword {
-                TagKeyword::Struct => "struct",
-                TagKeyword::Class => "class",
-                TagKeyword::Union => "union",
-                _ => "enum",
-            };
+            // `keyword` is a class-key or `enum` here, never `None`.
             let could_be_bitfield = keyword == TagKeyword::Enum && ctx == DeclaratorContext::Member;
-            self.check_after_tag_definition(spelling, could_be_bitfield);
+            self.check_after_tag_definition(keyword.spelling(), could_be_bitfield);
         }
     }
 

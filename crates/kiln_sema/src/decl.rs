@@ -4549,6 +4549,20 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
+    /// `diagnose_ambiguous_qualified_var`, or, for an unqualified
+    /// variable with no earlier declaration (`no_prev`) outside a
+    /// template, `template<class T> int V; int V;` (`kind_conflict`).
+    /// True when diagnosed.
+    fn diagnose_var_kind_conflict(&mut self, name: Symbol, d: &Declarator, no_prev: bool) -> bool {
+        if self.diagnose_ambiguous_qualified_var(name, d) {
+            return true;
+        }
+        no_prev
+            && d.qualifier.is_none()
+            && self.templ.cur.is_none()
+            && self.diagnose_template_kind_conflict(name, NewKind::Var, d.name_loc())
+    }
+
     /// `int Q::t;` naming members of several inline namespaces of `Q`:
     /// clang's "redefinition of 't' as different kind of symbol", noted
     /// at one of them (WP-235). True when diagnosed.
@@ -4608,11 +4622,7 @@ impl Sema<'_, '_> {
             None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
         };
-        let mut ambiguous = self.diagnose_ambiguous_qualified_var(name, d);
-        // `template<class T> int V; int V;` (`kind_conflict`).
-        if prev.is_none() && !ambiguous && d.qualifier.is_none() && self.templ.cur.is_none() {
-            ambiguous = self.diagnose_template_kind_conflict(name, NewKind::Var, d.name_loc());
-        }
+        let ambiguous = self.diagnose_var_kind_conflict(name, d, prev.is_none());
         // A variable declared with no type is invalid and not merged
         // (clang's `MergeVarDecl` returns at an invalid new declaration):
         // `y; y;` reports the missing type twice, no redefinition.
@@ -4626,8 +4636,7 @@ impl Sema<'_, '_> {
         };
         // An invalid decl-specifier (`typename Q b;`) was reported: the
         // declaration is not merged (clang's invalid `DeclSpec`).
-        let prev = if self.is_error_type(ty) { None } else { prev };
-        if let Some(p) = prev {
+        if let Some(p) = prev.filter(|_| !self.is_error_type(ty)) {
             let pn = *self.ast.decls.get(p);
             let block = local.is_some() && self.in_local_scope();
             if pn.kind() == DeclKind::Var && !block {
@@ -6165,10 +6174,41 @@ impl Sema<'_, '_> {
         self.emit(self.diag(DiagId::sema_standalone_tag_qualifier, qual_loc).arg(kind));
     }
 
+    /// An unqualified tag `n` that redeclares nothing, naming an entity
+    /// of another kind (`kind_conflict`): an elaborated reference to a
+    /// non-tag, a class template over a non-template, or a class over a
+    /// template or typedef. True when diagnosed.
+    fn diagnose_tag_kind_conflict(
+        &mut self,
+        keyword: TagKeyword,
+        n: Symbol,
+        use_: TagUse,
+        template: bool,
+        opaque_enum: bool,
+        nloc: Loc,
+    ) -> bool {
+        match use_ {
+            TagUse::Reference if !opaque_enum => {
+                let o = self.lookup_name(n, LookupKind::Nested).decls;
+                self.diagnose_tag_reference_non_tag(keyword, n, &o, nloc)
+            }
+            TagUse::Reference => false,
+            _ if template => self.diagnose_template_kind_conflict(n, NewKind::ClassTemplate, nloc),
+            _ => {
+                self.diagnose_template_kind_conflict(n, NewKind::Tag, nloc)
+                    || self.diagnose_tag_typedef_conflict(n, nloc)
+            }
+        }
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "one lookup-and-redeclaration sequence shared by every tag use"
+    )]
     pub fn act_on_tag(
         &mut self,
         keyword: TagKeyword,
@@ -6202,20 +6242,14 @@ impl Sema<'_, '_> {
             let found =
                 self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc);
             if found.is_empty() && qualifier.is_none() {
-                conflict = match use_ {
-                    TagUse::Reference if !opaque_enum => {
-                        let o = self.lookup_name(n, LookupKind::Nested).decls;
-                        self.diagnose_tag_reference_non_tag(keyword, n, &o, nloc)
-                    }
-                    TagUse::Reference => false,
-                    _ if head.is_some() => {
-                        self.diagnose_template_kind_conflict(n, NewKind::ClassTemplate, nloc)
-                    }
-                    _ => {
-                        self.diagnose_template_kind_conflict(n, NewKind::Tag, nloc)
-                            || self.diagnose_tag_typedef_conflict(n, nloc)
-                    }
-                };
+                conflict = self.diagnose_tag_kind_conflict(
+                    keyword,
+                    n,
+                    use_,
+                    head.is_some(),
+                    opaque_enum,
+                    nloc,
+                );
             }
             if let Some(&p) = found.last() {
                 if self.tag_matches(p, keyword) {

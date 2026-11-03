@@ -64,10 +64,8 @@ impl Sema<'_, '_> {
             && t == dc
         {
             let mut q = self.nns_str(nns);
-            if self.clang_compat >= 22
-                && let Some(s) = q.strip_suffix("::")
-            {
-                q = s.to_owned();
+            if self.clang_compat >= 22 && q.ends_with("::") {
+                q.truncate(q.len() - 2);
             }
             let m = self.diag(DiagId::sema_template_qualified_declarator_no_match, d.name_loc());
             self.emit(m.arg(q));
