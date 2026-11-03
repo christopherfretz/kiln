@@ -33,6 +33,19 @@ impl Note {
     }
 }
 
+/// A signed integer operation whose result was outside its type in an
+/// evaluation checking for undefined behaviour
+/// ([`crate::Oven::fold_for_overflow`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Overflow {
+    /// The operator.
+    pub loc: Loc,
+    /// The operation (its type is the one clang names), if known.
+    pub e: Option<kiln_ast::ExprId>,
+    /// The result wrapped to the operation's width, sign-extended.
+    pub value: i128,
+}
+
 /// What kind of limit, if any, stopped the evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailKind {
