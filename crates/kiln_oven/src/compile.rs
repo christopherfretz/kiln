@@ -3674,7 +3674,7 @@ impl Compiler<'_> {
 
     /// Evaluates the semantic expressions of a `PseudoObjectExpr` before
     /// its result, in order, binding each `OpaqueValueExpr`'s source
-    /// once for its uses (spec/oven.md §3.4); returns the result. The
+    /// once for its uses (spec/oven.md "Pseudo-object expressions"); returns the result. The
     /// bindings live until [`Self::unbind_pseudo`].
     fn bind_pseudo(&mut self, e: ExprId, acc: Access) -> ExprId {
         let ast = self.ast();
