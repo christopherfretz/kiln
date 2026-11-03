@@ -168,11 +168,40 @@ impl Cg<'_> {
             return Ok(g);
         }
         let ty = self.ast.consts.ty(c);
+        if let Some(g) = self.const_chars(c, ty) {
+            self.const_objects.insert(c, g);
+            return Ok(g);
+        }
         let init = self.const_value(c, ty, None, true)?;
         let align = self.global_align(ty);
         let g = self.private_const(".constant", init, align);
         self.const_objects.insert(c, g);
         Ok(g)
+    }
+
+    /// A constant character array (the object of P3491's
+    /// `reflect_constant_string`/`define_static_string`, or a
+    /// `reflect_constant_array` of characters): a string-pool global
+    /// (`.str.N`, internal; one per content, shared with an equal string
+    /// literal's, as either object may be potentially non-unique,
+    /// [intro.object]/9), not a `.constant`. WP-479.
+    fn const_chars(&mut self, c: ConstValueId, ty: QualType) -> Option<kiln_llvm::GlobalId> {
+        use kiln_ast::types::{BuiltinType, TypeView};
+        let ast = self.ast;
+        let TypeView::ConstantArray(a) = ast.types.canonical_view(ty) else { return None };
+        let unit = match ast.types.builtin(ast.types.canonical(a.elem))? {
+            BuiltinType::Char | BuiltinType::Char8 => 1,
+            BuiltinType::Char16 => 2,
+            BuiltinType::Char32 => 4,
+            BuiltinType::WChar => self.size_align(a.elem).0,
+            _ => return None,
+        };
+        let img = ast.consts.aggregate(c)?;
+        if !img.relocs.is_empty() || unit == 0 || img.bytes.len() as u64 % unit != 0 {
+            return None;
+        }
+        let n = img.bytes.len() as u64 / unit;
+        Some(self.string_global_named(img.bytes, unit, n, ".str"))
     }
 
     /// The value of source-location builtin `e` ([support.srcloc.cons]):

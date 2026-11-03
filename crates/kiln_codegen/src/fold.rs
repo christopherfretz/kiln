@@ -145,6 +145,13 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         // lax as clang's `EvaluateAsRValue`: a `const double` or
         // `const _Atomic(int)` variable reads as its value.
         let v = match inits.get(&e) {
+            // The value sema's constant initialization stored (clang
+            // `VarDecl::evaluateValue` is cached; `tryEmitForInitializer`
+            // reads it): not evaluated again, which would also re-run
+            // reflection intrinsics codegen's bridge does not implement
+            // (`static constexpr auto s = std::define_static_array(r);`,
+            // WP-479).
+            Some(&var) if let Some(v) = sema_value(b.ast, var) => Some(v),
             Some(&var) => match oven.fold_constant_init(&mut b, e, var) {
                 // clang `ConstantEmitter::tryEmitPrivateForVarInit`: an
                 // initializer that is not constant is folded again outside
@@ -198,6 +205,14 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         }
     }
     folds
+}
+
+/// The constant value sema stored for variable `d`'s initialization.
+fn sema_value(ast: &Ast, d: DeclId) -> Option<ConstValueId> {
+    match ast.decls.var(d)?.eval.state() {
+        kiln_ast::decl::VarEvalState::Value(v) => Some(v),
+        _ => None,
+    }
 }
 
 /// Whether variable `d` has a scalar type (arithmetic, enumeration,
