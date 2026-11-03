@@ -17,7 +17,6 @@ use kiln_source::Loc;
 
 use super::{DeclOrPack, SubstFail, SubstResult, Substituter};
 use crate::declspec::{Chunk, Declarator, DeclaratorContext};
-use crate::init::Initializer;
 use crate::lambda::{LambdaCaptureSpec, LambdaIntroducer, LambdaSpecifiers};
 use crate::templ::pack::Expansion;
 use crate::templ::stack::FrameKind;
@@ -156,13 +155,10 @@ impl Substituter<'_, '_, '_> {
                 // ([expr.prim.lambda.capture]/17): one init-capture per
                 // element of the expanded pattern, all named `xs`; kept
                 // as a pack when the expansion stays unexpanded.
-                let i = self.sema.ast.decls.var(v).and_then(|x| x.init).ok_or(SubstFail)?;
+                let (i, style) = self.init_capture_init(v)?;
                 let name = self.sema.ast.decls.get(v).name().as_ident().map(|s| (s, c.loc));
                 let elems = match self.expand_pattern_at(Some(c.ellipsis), |s| {
-                    match s.initializer(i, InitStyle::C)? {
-                        Some(Initializer::Expr(x)) => Ok(x),
-                        _ => Err(SubstFail),
-                    }
+                    s.initializer(i, style)?.ok_or(SubstFail)
                 })? {
                     Expansion::Elements(xs) => {
                         init_vars.push((v, Some(xs.len())));
@@ -179,7 +175,7 @@ impl Substituter<'_, '_, '_> {
                         name,
                         loc: c.loc,
                         ellipsis,
-                        init: Some(x),
+                        init: Some((style, x)),
                         var: Some(v),
                     });
                 }
@@ -229,11 +225,11 @@ impl Substituter<'_, '_, '_> {
                 .map(|s| (s, c.loc));
             let init = match c.var.filter(|_| c.init) {
                 Some(v) => {
-                    let i = self.sema.ast.decls.var(v).and_then(|x| x.init).ok_or(SubstFail)?;
+                    let (i, style) = self.init_capture_init(v)?;
                     init_vars.push((v, None));
-                    match self.initializer(i, InitStyle::C)? {
-                        Some(Initializer::Expr(x)) => Some(x),
-                        _ => return self.unimplemented("this init-capture in a template", c.loc),
+                    match self.initializer(i, style)? {
+                        Some(x) => Some((style, x)),
+                        None => return self.unimplemented("this init-capture in a template", c.loc),
                     }
                 }
                 None => None,
@@ -258,6 +254,13 @@ impl Substituter<'_, '_, '_> {
             });
         }
         Ok(init_vars)
+    }
+
+    /// The initializer of pattern init-capture variable `v` with its
+    /// syntax ([expr.prim.lambda.capture]/6: as for a variable).
+    fn init_capture_init(&self, v: kiln_ast::DeclId) -> SubstResult<(ExprId, InitStyle)> {
+        let x = self.sema.ast.decls.var(v).ok_or(SubstFail)?;
+        Ok((x.init.ok_or(SubstFail)?, x.spec.init_style()))
     }
 
     /// The lambda-declarator of pattern call operator `call_op`: the

@@ -11,7 +11,7 @@
 //! The closure's members and their initializers are made at the lambda's
 //! `}` ([`Sema::finish_captures`]).
 
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle, VarSpec};
 use kiln_ast::expr::{ExprDeps, UnaryOp};
 use kiln_ast::ids::{ExprId, LambdaId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaCapture};
@@ -59,10 +59,8 @@ pub(crate) struct InitCapture {
     /// Its index among the lambda's captures.
     pub(crate) index: usize,
     pub(crate) name: Symbol,
-    pub(crate) loc: Loc,
-    pub(crate) ty: QualType,
-    /// The converted initializer.
-    pub(crate) init: ExprId,
+    /// Its variable, with its deduced type and converted initializer.
+    pub(crate) var: DeclId,
 }
 
 impl Sema<'_, '_> {
@@ -678,9 +676,9 @@ impl Sema<'_, '_> {
                 continue;
             };
             let text = self.ast.symbols().as_str(sym).to_string();
-            if let Some(init) = c.init {
+            if let Some((style, init)) = &c.init {
                 // clang skips an init-capture whose initializer is invalid.
-                if self.is_error_expr(init) {
+                if self.initializer_has_error(init) {
                     continue;
                 }
                 // An instantiated init-capture (`var` names the
@@ -704,7 +702,7 @@ impl Sema<'_, '_> {
                 }
                 names.push((sym, true, c.var));
                 let by_ref = c.kind == CaptureKind::ByRef;
-                self.add_init_capture(id, sym, nloc, by_ref, c.ellipsis, init);
+                self.add_init_capture(id, sym, nloc, by_ref, c.ellipsis, *style, init.clone());
                 continue;
             }
             let default = intro.default;
@@ -779,15 +777,33 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The init-capture `name = init` (`&name = init` when `by_ref`) of
-    /// lambda `id` ([expr.prim.lambda.capture]/6): its type is deduced as
-    /// for `auto name = init;` (`auto &name = init;`); the variable is
-    /// declared when the body opens. With `ellipsis`, an init-capture
-    /// pack `...name = init` ([expr.prim.lambda.capture]/17): `init` is
-    /// the pattern, which must name an unexpanded pack, and the variable
-    /// is a pack of type `auto...` (clang `buildLambdaInitCaptureInitialization`
-    /// with an ellipsis), expanded when the enclosing template is
+    /// Whether init-capture initializer `init` holds an invalid
+    /// expression at its top level (the parser's recovery).
+    fn initializer_has_error(&self, init: &Initializer) -> bool {
+        match init {
+            Initializer::Expr(e) => self.is_error_expr(*e),
+            Initializer::Paren(es, ..) => es.iter().any(|&e| self.is_error_expr(e)),
+            Initializer::List(l) => Self::list_exprs(l).iter().any(|&e| self.is_error_expr(e)),
+        }
+    }
+
+    /// The init-capture `name initializer` (`&name initializer` when
+    /// `by_ref`) of lambda `id` ([expr.prim.lambda.capture]/6): its
+    /// variable is declared as if by `auto name initializer;` (`auto
+    /// &name initializer;`), with the same deduction
+    /// ([dcl.type.auto.deduct]: `{e}` deduces from `e`, `= {e, ...}` an
+    /// `std::initializer_list`, `(e)` from `e`, more than one expression
+    /// is ill-formed) and the same initialization: `( ... )` and `{ ... }`
+    /// direct-initialize, `=` copy-initializes ([dcl.init.general]/15-16).
+    /// The variable is published when the introducer ends
+    /// ([`Sema::create_init_capture_vars`]) and declared when the body
+    /// opens. With `ellipsis`, an init-capture pack `...name initializer`
+    /// ([expr.prim.lambda.capture]/17): the initializer is the pattern,
+    /// which must name an unexpanded pack, and the variable is a pack of
+    /// type `auto...` (clang `buildLambdaInitCaptureInitialization` with
+    /// an ellipsis), expanded when the enclosing template is
     /// instantiated.
+    #[allow(clippy::too_many_arguments, reason = "the parts of one written capture")]
     fn add_init_capture(
         &mut self,
         id: LambdaId,
@@ -795,75 +811,91 @@ impl Sema<'_, '_> {
         loc: Loc,
         by_ref: bool,
         ellipsis: Option<Loc>,
-        init: ExprId,
+        style: InitStyle,
+        init: Initializer,
     ) {
         let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
         let declared = if by_ref { self.ast.types.lvalue_ref_to(auto) } else { auto };
+        let ctx = self.ctx;
+        let independent = self.is_placeholder_name(name);
+        let v = self.builder().init_capture_var(ctx, DeclName::ident(name), loc, declared, independent);
+        self.ast.decls.mark_var(v, VarSpec::new().with_init_style(style));
+        let index = self.ast.exprs.lambdas.get(id).captures.len();
+        let kind = if by_ref { CaptureKind::ByRef } else { CaptureKind::ByCopy };
         let ellipsis = ellipsis.filter(|&l| {
-            let packs = self.ast.exprs.get(init).deps().contains(ExprDeps::UNEXPANDED_PACK);
+            let packs = self.initializer_exprs(&init).iter().any(|&e| {
+                self.ast.exprs.get(e).deps().contains(ExprDeps::UNEXPANDED_PACK)
+            });
             if !packs {
                 self.error(DiagId::sema_pack_expansion_without_packs, l);
             }
             packs
         });
-        if let Some(l) = ellipsis {
-            // The pattern stays as written; each element is deduced and
-            // initialized when the pack is expanded.
-            let ty = self.ast.types.pack_expansion(declared, None);
-            let index = self.ast.exprs.lambdas.get(id).captures.len();
-            let c = LambdaCapture {
-                kind: if by_ref { CaptureKind::ByRef } else { CaptureKind::ByCopy },
-                var: None,
-                field: None,
-                loc,
-                ellipsis: l,
-                implicit: false,
-                init: true,
+        let (ty, conv) = if ellipsis.is_some() {
+            // The pattern stays as written, as one expression (a
+            // dependent variable initializer's form); each element is
+            // deduced and initialized when the pack is expanded.
+            let pattern = self.dependent_initializer(&init);
+            (self.ast.types.pack_expansion(declared, None), pattern)
+        } else {
+            let direct = style == InitStyle::List;
+            // Deduced as `auto x <init>`, reported in clang's lambda-capture
+            // wording (`deduce_var_auto` reads the entity).
+            let ty = self
+                .with_init_entity(crate::init::entity::CAPTURE, |s| {
+                    s.deduce_var_auto(v, declared, &init, loc, direct)
+                })
+                .unwrap_or(QualType::ERROR);
+            // A dependent initializer is kept for instantiation, as a
+            // variable's (`dependent_init_form`); clang
+            // `InitializedEntity::InitializeLambdaCapture` otherwise.
+            let conv = match self.dependent_init_form(ty, &init) {
+                Some(e) => e,
+                None => self.with_init_entity(crate::init::entity::CAPTURE, |s| {
+                    s.perform_init(ty, init, loc, direct)
+                }),
             };
-            self.add_capture(id, c, ty);
-            if let Some(s) = self.lambda_scope_mut(id) {
-                s.init_caps.push(InitCapture { index, name, loc, ty, init });
-            }
-            return;
-        }
-        let ty = if let Some(t) = self.deduce_from(declared, init) {
-            t
-        } else {
-            let ety = self.ety(init);
-            let msg = self
-                .diag(DiagId::sema_auto_var_deduction_failure, loc)
-                .arg(self.ast.symbols().as_str(name).to_string())
-                .arg(self.ty_arg(declared))
-                .arg(self.ty_arg(ety));
-            self.emit(msg);
-            QualType::ERROR
+            (ty, conv)
         };
-        // A class that is (a member of) the current instantiation is a
-        // dependent type ([temp.dep.type]/7): its constructors are chosen
-        // at instantiation, as for a variable (`defer_dependent_init`).
-        let dependent_class =
-            self.ast.types.is_dependent(ty) && self.ast.types.as_record(ty).is_some();
-        let conv = if self.is_error_type(ty) || dependent_class {
-            init
-        } else {
-            // clang `InitializedEntity::InitializeLambdaCapture`.
-            self.with_init_entity(crate::init::entity::CAPTURE, |s| {
-                s.perform_init(ty, Initializer::Expr(init), loc, false)
-            })
-        };
-        let index = self.ast.exprs.lambdas.get(id).captures.len();
+        self.ast.decls.set_ty(v, ty);
+        let _ = self.builder().set_var_init(v, conv);
         let c = LambdaCapture {
-            kind: if by_ref { CaptureKind::ByRef } else { CaptureKind::ByCopy },
-            var: None,
+            kind,
+            var: Some(v),
             field: None,
             loc,
-            ellipsis: Loc::INVALID,
+            ellipsis: ellipsis.unwrap_or(Loc::INVALID),
             implicit: false,
             init: true,
         };
         self.add_capture(id, c, ty);
         if let Some(s) = self.lambda_scope_mut(id) {
-            s.init_caps.push(InitCapture { index, name, loc, ty, init: conv });
+            s.init_caps.push(InitCapture { index, name, var: v });
+        }
+    }
+
+    /// The top-level expressions of initializer `init`.
+    fn initializer_exprs(&self, init: &Initializer) -> Vec<ExprId> {
+        match init {
+            Initializer::Expr(e) => vec![*e],
+            Initializer::Paren(es, ..) => es.clone(),
+            Initializer::List(l) => Self::list_exprs(l),
+        }
+    }
+
+    /// `init` kept as written, as one expression: the expression itself,
+    /// a `ParenListExpr` or an `InitListExpr` (what
+    /// `templ/subst` rebuilds an [`Initializer`] from, per the
+    /// variable's init style).
+    fn dependent_initializer(&mut self, init: &Initializer) -> ExprId {
+        match init {
+            Initializer::Expr(e) => *e,
+            Initializer::Paren(es, ..) if es.len() == 1 && !self.is_braced_arg(es[0]) => es[0],
+            Initializer::Paren(es, l, r) => {
+                let es = self.dependent_args(es);
+                self.builder().paren_list(&es, *l, *r)
+            }
+            Initializer::List(l) => self.dependent_init_list(l),
         }
     }
 
@@ -875,21 +907,12 @@ impl Sema<'_, '_> {
     pub(crate) fn create_init_capture_vars(&mut self, id: LambdaId) {
         let caps: Vec<InitCapture> =
             self.lambda_scope_mut(id).map(|s| std::mem::take(&mut s.init_caps)).unwrap_or_default();
-        let ctx = self.ctx;
-        let mut vars = Vec::with_capacity(caps.len());
-        for ic in caps {
-            let independent = self.is_placeholder_name(ic.name);
-            let v = self.builder().init_capture_var(
-                ctx,
-                DeclName::ident(ic.name),
-                ic.loc,
-                ic.ty,
-                independent,
-            );
-            let _ = self.builder().set_var_init(v, ic.init);
-            self.ast.exprs.lambdas.get_mut(id).captures[ic.index].var = Some(v);
-            vars.push((ic.name, v));
-        }
+        let vars: Vec<(Symbol, DeclId)> = caps.iter().map(|ic| (ic.name, ic.var)).collect();
+        debug_assert!(
+            caps.iter().all(|ic| self.ast.exprs.lambdas.get(id).captures[ic.index].var
+                == Some(ic.var)),
+            "init-capture variable recorded on its capture"
+        );
         if let Some(s) = self.lambda_scope_mut(id) {
             s.init_cap_vars = vars;
         }

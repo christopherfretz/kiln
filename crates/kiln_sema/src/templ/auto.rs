@@ -72,6 +72,9 @@ pub enum AutoFail {
     FromInitList,
     /// `decltype(auto) x = {…};`.
     DecltypeAutoList,
+    /// `auto x({1});` (0) or `auto x{{1}};` (1): a direct initializer
+    /// whose only element is braced (reported by `deduce_var_auto`).
+    ParenBraces(usize),
     /// An erroneous initializer (already diagnosed).
     Error,
 }
@@ -115,18 +118,24 @@ impl Sema<'_, '_> {
         if init.iter().flatten().any(|&e| self.is_err_expr(e)) {
             return Err(AutoFail::Error);
         }
+        // The expression count is checked before dependence, as clang's
+        // `deduceVarTypeFromInitializer` does: `auto x(t, t);` is
+        // ill-formed in a template definition (a pack expansion counts as
+        // one expression).
+        if matches!(kind, AutoInit::Expr | AutoInit::Paren | AutoInit::DirectList) {
+            if kind == AutoInit::DirectList && init.is_empty() {
+                return Err(AutoFail::Empty);
+            }
+            if init.len() > 1 {
+                let at = init[1].map_or(Loc::INVALID, |e| self.ast.exprs.get(e).loc());
+                return Err(AutoFail::Multiple(at));
+            }
+        }
         if init.iter().flatten().any(|&e| self.expr_is_type_dependent(e)) {
             return Ok(self.dependent_auto(declared));
         }
         match kind {
             AutoInit::Expr | AutoInit::Paren | AutoInit::DirectList => {
-                if kind == AutoInit::DirectList && init.is_empty() {
-                    return Err(AutoFail::Empty);
-                }
-                if init.len() > 1 {
-                    let at = init[1].map_or(Loc::INVALID, |e| self.ast.exprs.get(e).loc());
-                    return Err(AutoFail::Multiple(at));
-                }
                 let Some(Some(e)) = init.first().copied() else {
                     return Err(AutoFail::FromInitList);
                 };

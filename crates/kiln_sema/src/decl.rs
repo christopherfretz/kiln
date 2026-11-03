@@ -5322,14 +5322,30 @@ impl Sema<'_, '_> {
     /// parameter, or any initializer of a dependent class type: kept for
     /// instantiation; returns whether it was.
     fn defer_dependent_init(&mut self, v: DeclId, ty: QualType, init: &Initializer) -> bool {
+        match self.dependent_init_form(ty, init) {
+            Some(e) => {
+                self.set_dependent_var_init(v, e);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The form kept for instantiation of initializer `init` of an
+    /// object of type `ty` (a variable or an init-capture) when it
+    /// depends on a template parameter as [`Sema::defer_dependent_init`]
+    /// describes; `None` when it is initialized now.
+    pub(crate) fn dependent_init_form(
+        &mut self,
+        ty: QualType,
+        init: &Initializer,
+    ) -> Option<ExprId> {
         if let Initializer::List(l) = init
             && (self.ast.types.is_dependent(ty) || self.init_list_type_dependent(l))
         {
             // Initialized at instantiation ([temp.dep.expr]); clang keeps
             // the list as written with type `void` (and `int[]` unbounded).
-            let e = self.dependent_init_list(l);
-            self.set_dependent_var_init(v, e);
-            return true;
+            return Some(self.dependent_init_list(l));
         }
         // A class that is (a member of) the current instantiation is a
         // dependent type ([temp.dep.type]/7): its constructors are chosen
@@ -5340,8 +5356,7 @@ impl Sema<'_, '_> {
         if let Initializer::Expr(e) = init
             && dependent_class
         {
-            self.set_dependent_var_init(v, *e);
-            return true;
+            return Some(*e);
         }
         // `T x({a, b})`: a braced-init-list argument is kept for
         // instantiation with a dependent `T` too (it has no type of its
@@ -5366,11 +5381,9 @@ impl Sema<'_, '_> {
             // argument keeps its nested lists (`T m({{1, 2}, {3, 4}})`):
             // the placeholder holds only the top-level expressions.
             let es = self.dependent_args(es);
-            let e = self.builder().paren_list(&es, *l, *r);
-            self.set_dependent_var_init(v, e);
-            return true;
+            return Some(self.builder().paren_list(&es, *l, *r));
         }
-        false
+        None
     }
 
     /// Initializes variable `v` of type `ty` from `init`. A variable
@@ -5589,7 +5602,7 @@ impl Sema<'_, '_> {
     /// `auto x = e;` ([dcl.type.auto.deduct]): deduces through the
     /// `deduce_auto` seam (`templ/auto.rs`) and reports a failure as
     /// clang's `DeduceVariableDeclarationType` does.
-    fn deduce_var_auto(
+    pub(crate) fn deduce_var_auto(
         &mut self,
         v: DeclId,
         declared: QualType,
@@ -5626,9 +5639,25 @@ impl Sema<'_, '_> {
             .flatten()
             .copied()
             .find(|&e| self.ast.exprs.get(e).ty() == QualType::OVERLOAD);
-        let fail = match overload {
-            Some(e) => AutoFail::Incompatible(e),
-            None => match self.deduce_auto(declared, &items, kind) {
+        // clang's `err_auto_var_init_paren_braces`: a direct initializer
+        // whose only element is itself braced, `auto x({1});` or
+        // `auto x{{1}};` (a type-dependent one included).
+        let paren_braces = match init {
+            Initializer::Paren(es, ..) if es.len() == 1 => {
+                (self.ast.exprs.get(es[0]).kind() == ExprKind::InitListExpr)
+                    .then_some(0usize)
+            }
+            Initializer::List(l) if direct && l.items.len() == 1 => {
+                let it = &l.items[0];
+                (it.designator.is_empty() && matches!(it.value, crate::init::InitValue::List(_)))
+                    .then_some(1usize)
+            }
+            _ => None,
+        };
+        let fail = match (overload, paren_braces) {
+            (_, Some(nested)) => AutoFail::ParenBraces(nested),
+            (Some(e), None) => AutoFail::Incompatible(e),
+            (None, None) => match self.deduce_auto(declared, &items, kind) {
                 // clang 19's placeholder-typed specialization
                 // (`undeduced_var_spec_use_19`) deduces only itself; any
                 // other variable "deduced" from it is rejected (clang 19
@@ -5669,10 +5698,51 @@ impl Sema<'_, '_> {
                 Err(f) => f,
             },
         };
-        let lbrace = lbrace.unwrap_or(loc);
+        // A parenthesized initializer's errors point at its `(`.
+        let lbrace = match init {
+            Initializer::Paren(_, lp, _) => *lp,
+            _ => lbrace.unwrap_or(loc),
+        };
         let name = self.decl_name(v);
+        // An init-capture ([expr.prim.lambda.capture]/6) is reported as
+        // clang's `err_init_capture_*` (the capture is named, not its type).
+        if self.init_entity == Some(crate::init::entity::CAPTURE) {
+            let msg = match fail {
+                AutoFail::Error => return Some(QualType::ERROR),
+                AutoFail::Incompatible(e) => Some(
+                    self.diag(DiagId::sema_init_capture_deduction_failure, loc)
+                        .arg(name.clone())
+                        .arg(self.ty_arg(self.ast.exprs.get(e).ty())),
+                ),
+                AutoFail::Multiple(at) => Some(
+                    self.diag(DiagId::sema_init_capture_multiple_expressions, at).arg(name.clone()),
+                ),
+                AutoFail::Empty => Some(
+                    self.diag(DiagId::sema_init_capture_no_expression, lbrace).arg(name.clone()),
+                ),
+                AutoFail::FromInitList => Some(
+                    self.diag(DiagId::sema_init_capture_deduction_failure_from_init_list, loc)
+                        .arg(name.clone()),
+                ),
+                AutoFail::ParenBraces(nested) => Some(
+                    self.diag(DiagId::sema_init_capture_paren_braces, lbrace)
+                        .arg(name.clone())
+                        .arg(nested),
+                ),
+                _ => None,
+            };
+            if let Some(msg) = msg {
+                self.emit(msg);
+                return None;
+            }
+        }
         let msg = match fail {
             AutoFail::Error => return Some(QualType::ERROR),
+            AutoFail::ParenBraces(nested) => self
+                .diag(DiagId::sema_auto_var_init_paren_braces, lbrace)
+                .arg(name)
+                .arg(self.ty_arg(declared))
+                .arg(nested),
             AutoFail::Incompatible(e) => self
                 .diag(DiagId::sema_auto_var_deduction_failure, loc)
                 .arg(name)

@@ -40,8 +40,11 @@ pub struct LambdaCaptureSpec {
     pub loc: Loc,
     /// The `...` of a pack capture.
     pub ellipsis: Option<Loc>,
-    /// The initializer of an init-capture.
-    pub init: Option<ExprId>,
+    /// The initializer of an init-capture, with its syntax as for a
+    /// variable's ([`kiln_ast::decl::InitStyle`]): `= e` and `= {...}`
+    /// are [`InitStyle::C`](kiln_ast::decl::InitStyle::C), `(e, ...)` is
+    /// `Call`, `{...}` is `List` ([expr.prim.lambda.capture]/6).
+    pub init: Option<(kiln_ast::decl::InitStyle, crate::init::Initializer)>,
     /// The variable a simple capture names, already resolved (a lambda
     /// rebuilt by template instantiation); `None` looks the name up.
     pub var: Option<DeclId>,
