@@ -885,12 +885,11 @@ impl Sema<'_, '_> {
                 // not the statement itself (`(a == b);`) is checked as
                 // the call it is, at the operator.
                 let call = self.unused_comparison_call(e, loc);
-                match call.and_then(|c| self.unused_call_result(c, loc)) {
-                    Some((i, _, a)) => (id, args) = (i, a),
-                    None => {
-                        id = DiagId::sema_unused_expr;
-                        args.clear();
-                    }
+                if let Some((i, _, a)) = call.and_then(|c| self.unused_call_result(c, loc)) {
+                    (id, args) = (i, a);
+                } else {
+                    id = DiagId::sema_unused_expr;
+                    args.clear();
                 }
             }
         }

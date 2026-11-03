@@ -361,7 +361,7 @@ pub struct Args {
     /// `-stdlib=`.
     pub stdlib: Option<StdLib>,
     /// `-f[no-]experimental-library`: `__has_feature(experimental_library)`
-    /// (kiln_pp, from the raw command line) and the link step's
+    /// (`kiln_pp`, from the raw command line) and the link step's
     /// `-lc++experimental` (passed through to the clang++ link driver).
     pub experimental_library: bool,
     /// `--target=` / `-target`.
@@ -505,6 +505,7 @@ impl Args {
             if let Some(r) = a.constexpr.parse_arg(arg).or_else(|| a.templ.parse_arg(arg)) {
                 a.errors.extend(r.err());
             } else if !a.flag(arg)
+                && !a.stdlib_flag(arg)
                 && !a.complex_flag(arg)
                 && !a.lax_vector_flag(arg)
                 && !a.auto_var_init_flag(arg)
@@ -626,18 +627,8 @@ impl Args {
                 self.dump_record_layouts = true;
             }
             "-fdump-vtable-layouts" => self.dump_vtable_layouts = true,
-            "-fexperimental-library" => self.experimental_library = true,
-            "-fno-experimental-library" => self.experimental_library = false,
             _ => {
-                if let Some(v) =
-                    arg.strip_prefix("-stdlib=").or_else(|| arg.strip_prefix("--stdlib="))
-                {
-                    match v {
-                        "libc++" => self.stdlib = Some(StdLib::LibCxx),
-                        "libstdc++" => self.stdlib = Some(StdLib::LibStdCxx),
-                        _ => self.errors.push(ArgError::InvalidStdlib(arg.to_owned())),
-                    }
-                } else if let Some(v) = arg.strip_prefix("--driver-mode=") {
+                if let Some(v) = arg.strip_prefix("--driver-mode=") {
                     match DriverMode::from_flag(v) {
                         Some(m) => self.mode = m,
                         None => self.errors.push(ArgError::UnsupportedValue(
@@ -672,6 +663,23 @@ impl Args {
                     return false;
                 }
             }
+        }
+        true
+    }
+
+    /// The standard library flags: `-stdlib=` (also `--stdlib=`) and
+    /// `-f[no-]experimental-library`.
+    fn stdlib_flag(&mut self, arg: &str) -> bool {
+        if let Some(v) = arg.strip_prefix("-stdlib=").or_else(|| arg.strip_prefix("--stdlib=")) {
+            match v {
+                "libc++" => self.stdlib = Some(StdLib::LibCxx),
+                "libstdc++" => self.stdlib = Some(StdLib::LibStdCxx),
+                _ => self.errors.push(ArgError::InvalidStdlib(arg.to_owned())),
+            }
+        } else if matches!(arg, "-fexperimental-library" | "-fno-experimental-library") {
+            self.experimental_library = arg == "-fexperimental-library";
+        } else {
+            return false;
         }
         true
     }
