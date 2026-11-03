@@ -3907,8 +3907,10 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
-        let params: Vec<ParamInfo> =
-            d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
+        let params: Vec<ParamInfo> = match d.function_params() {
+            Some(p) => p.to_vec(),
+            None => self.typedef_fn_params(ty, d.name_loc()),
+        };
         let eo = match early_explicit_object {
             Some(r) => r,
             None => self.explicit_object_member(ds, &params, method),
@@ -4176,6 +4178,36 @@ impl Sema<'_, '_> {
             }
         }
         true
+    }
+
+    /// The parameters of a function declared without a function
+    /// declarator (`F f;` with `typedef void F(int)`, or through
+    /// `decltype`, [dcl.fct]/13): one unnamed parameter per parameter
+    /// type of `ty`, at the declarator's name (clang
+    /// `BuildParmVarDeclForTypedef`).
+    fn typedef_fn_params(&self, ty: QualType, loc: Loc) -> Vec<ParamInfo> {
+        let Some(p) = self.sugared_proto(ty) else { return Vec::new() };
+        self.ast
+            .types
+            .params(&p)
+            .iter()
+            .map(|&t| ParamInfo {
+                name: None,
+                ty: t,
+                original_ty: None,
+                loc,
+                attrs: Vec::new(),
+                invalid: false,
+                default_arg: DefaultArg::None,
+                default_loc: Loc::INVALID,
+                range: (loc, loc),
+                type_loc: loc,
+                ref_loc: Loc::INVALID,
+                chunk_loc: Loc::INVALID,
+                decl: None,
+                explicit_object: None,
+            })
+            .collect()
     }
 
     /// Creates the parameter declarations of function `f` from the

@@ -1032,6 +1032,16 @@ Redeclaration and linkage rules:
   `dcl.fct/qualified-function-type-id.cpp`,
   `dcl.fct/qualified-function-instantiation.cpp`,
   `dcl.decl.general/qualified-function-decltype.cpp`.
+- A function declared through a typedef of function type (`typedef int
+  G(int) const; struct S { G g; };`, [dcl.fct]/13) has no parameter
+  declarations of its own; `act_on_function` synthesizes one unnamed
+  parameter per prototype parameter (clang `BuildParmVarDeclForTypedef`),
+  so a later out-of-class definition's parameters map onto them and its
+  body instantiates with them bound. In a class template the member
+  substitutes through the sugared function type (`subst/decls.rs`
+  `function_decl`: no declarator chunk, no trailing return; WP-469), for a
+  plain, cv-qualified, static, nested-class or dependent (`typedef T
+  H(T); H h;`) typedef. Test `temp.inst/member-function-typedef.cpp`.
 
 ### 4.3.1 `decltype` and placeholder types (`deduce.rs`)
 - A decl-specifier `restrict`/`__restrict` (C99 6.7.3p2, clang
