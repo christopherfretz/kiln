@@ -1131,6 +1131,22 @@ impl Module {
         Ok(self.canon_aggregate(ty, elems, |ty, elems| ConstData::Vector { ty, elems }))
     }
 
+    /// The scalable vector constant of type `ty` (`<vscale x N x T>`)
+    /// with every lane `elem` (llvm `ConstantVector::getSplat`): a null
+    /// `elem` folds to `zeroinitializer`, `undef`/`poison` to themselves.
+    pub fn const_splat(&mut self, ty: TypeId, elem: Value) -> IrResult<Value> {
+        let Some((et, _, true)) = self.types.vector_info(ty) else {
+            return Err(IrError::new(IrErrorKind::InvalidType, "splat of a non-scalable vector"));
+        };
+        self.expect_const_type(elem, et, "splat element")?;
+        Ok(match self.aggregate_canon(&[elem]) {
+            Some(0) => self.consts.intern(ConstData::Zero(ty)),
+            Some(1) => self.consts.intern(ConstData::Undef(ty)),
+            Some(2) => self.consts.intern(ConstData::Poison(ty)),
+            _ => self.consts.intern(ConstData::Splat { ty, elem }),
+        })
+    }
+
     /// Constant `getelementptr` expression.
     pub fn const_gep(
         &mut self,

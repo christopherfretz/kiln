@@ -70,6 +70,16 @@ pub enum ConstData {
         /// Elements (constants).
         elems: Box<[Value]>,
     },
+    /// A scalable vector whose every lane is the integer or floating-point
+    /// constant `elem` (`ConstantVector::getSplat` on a scalable type):
+    /// `splat (T v)` from LLVM 20 on, else the `shufflevector
+    /// (insertelement (poison, v, 0), poison, zeroinitializer)` expression.
+    Splat {
+        /// Scalable vector type.
+        ty: TypeId,
+        /// The lane value (a constant).
+        elem: Value,
+    },
     /// `c"..."`, an `[N x i8]` array.
     Bytes {
         /// Array type.
@@ -141,6 +151,7 @@ impl ConstData {
             | ConstData::Array { ty, .. }
             | ConstData::Struct { ty, .. }
             | ConstData::Vector { ty, .. }
+            | ConstData::Splat { ty, .. }
             | ConstData::Bytes { ty, .. }
             | ConstData::Gep { ty, .. }
             | ConstData::Cast { ty, .. }
