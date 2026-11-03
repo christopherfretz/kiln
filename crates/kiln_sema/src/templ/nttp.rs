@@ -92,7 +92,7 @@ impl Sema<'_, '_> {
     /// Whether `ty` is a structural type ([temp.param]/7), as clang's
     /// `Type::isStructuralType`, recomputed for classes so a member of
     /// rvalue reference type counts (the `STRUCTURAL` bit misses it).
-    fn is_structural(&self, ty: QualType) -> bool {
+    pub(crate) fn is_structural(&self, ty: QualType) -> bool {
         self.is_structural_at(ty, 0)
     }
 

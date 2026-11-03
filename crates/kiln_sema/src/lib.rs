@@ -201,6 +201,9 @@ pub struct Sema<'a, 'sm> {
         Loc,
         (Option<kiln_source::symbol::Symbol>, kiln_source::symbol::Symbol),
     >,
+    /// The builtin trait engine's quiet mode, used by the
+    /// [meta.reflection.traits] functions (spec/reflection-traits.md).
+    pub(crate) traits: templ::builtins::TraitState,
     /// C++ exceptions are enabled (`-f[no-]exceptions`; default on).
     pub exceptions: bool,
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
@@ -856,6 +859,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             layout_cache: kiln_abi::LayoutCache::default(),
             pragma_packs: Vec::new(),
             attr_spellings: kiln_source::fx::FxHashMap::default(),
+            traits: templ::builtins::TraitState::default(),
             exceptions: true,
             rtti: true,
             reflection: false,

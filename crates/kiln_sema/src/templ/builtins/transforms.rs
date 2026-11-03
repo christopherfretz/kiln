@@ -10,6 +10,7 @@ use kiln_ast::types::{BuiltinType, Quals, RefQual, TypeFlags, TypeView, UnaryTra
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
+use super::TraitFailure;
 use crate::Sema;
 
 impl Sema<'_, '_> {
@@ -38,8 +39,11 @@ impl Sema<'_, '_> {
         Some(self.ast.types.unary_transform(kind, base, Some(result)))
     }
 
-    /// The transformed type of non-dependent `t`.
-    fn apply_unary_transform(
+    /// The transformed type of non-dependent `t`: the one evaluator behind
+    /// both `__transform(T)` and the [meta.trans] reflection functions
+    /// (spec/reflection-traits.md). `None` after an error, diagnosed or,
+    /// while a reflection trait evaluates quietly, recorded.
+    pub(crate) fn apply_unary_transform(
         &mut self,
         kind: UnaryTransformKind,
         t: QualType,
@@ -109,13 +113,19 @@ impl Sema<'_, '_> {
             }
             K::UnderlyingType => {
                 if self.ast.types.as_enum(t).is_none() {
-                    self.error(DiagId::sema_only_enums_have_underlying, loc);
+                    if !self.transform_quiet(TraitFailure::BadOperand(t)) {
+                        self.error(DiagId::sema_only_enums_have_underlying, loc);
+                    }
                     return None;
                 }
                 // [meta.trans.other]: an enumeration without a fixed
                 // underlying type is incomplete until its closing brace
                 // ([dcl.enum]/6), and its underlying type is not yet
                 // determined (clang `BuiltinEnumUnderlyingType`).
+                if self.traits.quiet.is_some() && !self.require_complete_silent(t, loc) {
+                    self.transform_quiet(TraitFailure::Incomplete(t));
+                    return None;
+                }
                 if !self.require_complete(t, loc) {
                     let ty = self.ty_arg(t);
                     let d = self.diag(DiagId::sema_underlying_type_of_incomplete_enum, loc).arg(ty);
@@ -138,6 +148,28 @@ impl Sema<'_, '_> {
                 crate::conv::rank::enum_data(self, t).and_then(|d| d.int_type)?
             }
         })
+    }
+
+    /// Records `f` while a reflection trait evaluates quietly (true), else
+    /// false and the caller diagnoses.
+    fn transform_quiet(&mut self, f: TraitFailure) -> bool {
+        match &mut self.traits.quiet {
+            Some(slot) => {
+                slot.get_or_insert(f);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `add_const` / `add_volatile` / `add_cv` ([meta.trans.cv]): `t` with
+    /// `add` added at the top level; a reference or function type is
+    /// unchanged. (No `__add_*` builtin exists: libc++ spells these as
+    /// `T const`, which is the same rule.)
+    pub(crate) fn add_quals_transform(&mut self, t: QualType, add: Quals) -> QualType {
+        // `qualify` leaves references and functions alone and puts an
+        // array's qualifiers on its element ([basic.type.qualifier]/3).
+        self.ast.types.qualify(t, add)
     }
 
     /// [defns.referenceable]: an object type, a reference, or a function
@@ -187,11 +219,13 @@ impl Sema<'_, '_> {
             _ => false,
         };
         if !ok {
-            let d = self
-                .diag(DiagId::sema_make_signed_bad_type, loc)
-                .arg(u8::from(!signed))
-                .arg(self.ty_arg(t));
-            self.emit(d);
+            if !self.transform_quiet(TraitFailure::BadOperand(t)) {
+                let d = self
+                    .diag(DiagId::sema_make_signed_bad_type, loc)
+                    .arg(u8::from(!signed))
+                    .arg(self.ty_arg(t));
+                self.emit(d);
+            }
             return None;
         }
         let result = match view {
@@ -214,11 +248,13 @@ impl Sema<'_, '_> {
                             return Some(self.ast.types.qualify(r, quals));
                         }
                         Some(TypeView::Builtin(BuiltinType::Bool)) | None => {
-                            let d = self
-                                .diag(DiagId::sema_make_signed_bad_type, loc)
-                                .arg(u8::from(!signed))
-                                .arg(self.ty_arg(t));
-                            self.emit(d);
+                            if !self.transform_quiet(TraitFailure::BadOperand(t)) {
+                                let d = self
+                                    .diag(DiagId::sema_make_signed_bad_type, loc)
+                                    .arg(u8::from(!signed))
+                                    .arg(self.ty_arg(t));
+                                self.emit(d);
+                            }
                             return None;
                         }
                         _ => {}
