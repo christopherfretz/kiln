@@ -16,6 +16,7 @@ use kiln_diag::DiagId;
 use kiln_source::{Loc, Span};
 
 use crate::Sema;
+use crate::null_compare::NullUse;
 use crate::conv::narrow::float_kind;
 use crate::conv::rank::{int_signed, int_width, is_integral_or_unscoped_enum};
 use crate::conv::soft;
@@ -29,6 +30,11 @@ impl Sema<'_, '_> {
     /// its implicit conversions. Children of an expression take its own
     /// location as their context, as in clang.
     pub(crate) fn check_implicit_conversions(&mut self, root: ExprId, cc: Loc) {
+        // clang `CheckImplicitConversions`: an instantiation checks a
+        // dependent full-expression.
+        if self.ast.exprs.get(root).deps().intersects(ExprDeps::TYPE | ExprDeps::VALUE) {
+            return;
+        }
         let mut work = vec![(root, cc)];
         let mut seen = 0usize;
         while let Some((e, cc)) = work.pop() {
@@ -124,113 +130,31 @@ impl Sema<'_, '_> {
         self.integer_constant_imp_cast(src, to, cc);
     }
 
-    /// clang's `DiagnoseAlwaysNonNullPointer` for the conversion of `e`
-    /// (parentheses and implicit casts stripped) to `bool`: a function, an
-    /// array, or the address of an object, named by a `DeclRefExpr` or
-    /// `MemberExpr`, is never null (`-Wpointer-bool-conversion`; a
-    /// function adds the `&` and, when it is callable with no arguments
-    /// and returns `bool`, the `()` fix-it notes); `this` and the address
-    /// of a reference are null only after undefined behaviour
-    /// (`-Wundefined-bool-conversion`). Not in unevaluated operands, nor
-    /// when `e` or the context `cc` comes from a macro body; a weak
-    /// declaration may be null.
+    /// clang's `DiagnoseAlwaysNonNullPointer` for the conversion `cast`
+    /// of `e` (parentheses and implicit casts stripped) to `bool`
+    /// (`-Wpointer-bool-conversion`, `-Wundefined-bool-conversion`;
+    /// spec/sema.md §5.27). Not in unevaluated operands.
     fn always_non_null_pointer(&mut self, e: ExprId, cc: Loc) {
         if self.unevaluated > 0 {
             return;
         }
-        let at = self.expr_loc(e);
-        if at == self.cond_typo_at {
+        if self.expr_loc(e) == self.cond_typo_at {
             return;
         }
-        if at.is_macro() && (self.in_any_macro_body(at) || self.in_any_macro_body(cc)) {
-            return;
-        }
-        let root = e;
-        let mut e = e;
-        let kind = self.ast.exprs.get(e).kind();
-        if kind == ExprKind::CXXThisExpr {
-            let msg = self.diag(DiagId::sema_this_bool_conversion, at);
-            self.emit_after_typos(root, msg);
-            return;
-        }
-        let addr_of = kind == ExprKind::UnaryOperator;
-        if addr_of {
-            if self.ast.exprs.unary_op(e) != UnaryOp::AddrOf {
-                return;
-            }
-            e = self.ast.exprs.operand(e);
-        }
-        let named = |s: &Self, x: ExprId| {
-            matches!(s.ast.exprs.get(x).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
-                .then(|| s.ast.exprs.decl(x))
-        };
-        if addr_of {
-            // clang `CheckForReference` (a reference-returning call is
-            // left alone: kiln does not model its note).
-            let x = self.strip_impcast(e);
-            if let Some(d) = named(self, x) {
-                if self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_reference(t)) {
-                    let at = self.expr_loc(x);
-                    let msg = self.diag(DiagId::sema_address_of_reference_bool_conversion, at);
-                    self.emit_after_typos(root, msg);
-                    return;
-                }
-            } else if matches!(
-                self.ast.exprs.get(x).kind(),
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
-            ) {
-                return;
-            }
-        }
-        let Some(d) = named(self, e) else {
+        let Some((msg, _)) = self.always_non_null(e, NullUse::Bool { cc }) else {
             return;
         };
-        if self.find_attr(d, kiln_ast::attr::AttrKind::WEAK).is_some() {
-            return;
-        }
-        let Some(t) = self.ast.decls.get(d).ty() else {
-            return;
-        };
-        let t = self.ast.types.canonical(t);
-        let (array, function) = (self.ast.types.is_array(t), self.ast.types.is_function(t));
-        if (addr_of && function) || (!addr_of && !function && !array) {
-            return;
-        }
-        let what = if addr_of {
-            0u32
-        } else if function {
-            1
-        } else {
-            2
-        };
-        let at = self.expr_loc(e);
-        let text = self.expr_text_as_written(e);
-        // clang streams the context `SourceRange(CC)`, not `e`'s range
-        // (it decides the macro-expansion notes, spec/diag.md §3.3).
-        let range = Span::new(cc, self.token_end(cc).unwrap_or(cc));
-        let mut msg =
-            self.diag(DiagId::sema_impcast_pointer_to_bool, at).arg(what).arg(text).range(range);
-        if function {
-            let begin = self.begin_loc(e);
-            msg = msg.with_note(
-                self.diag(DiagId::note_function_warning_silence, at)
-                    .fixit(kiln_diag::FixIt::insert(begin, "&")),
-            );
-            if self.zero_arg_call_returns_bool(d, t) {
-                let end = self.expr_end_loc(e);
-                let after = self.token_end(end).unwrap_or(end);
-                msg = msg.with_note(
-                    self.diag(DiagId::note_function_to_function_call, at)
-                        .fixit(kiln_diag::FixIt::insert(after, "()")),
-                );
-            }
-        }
-        self.emit_after_typos(root, msg);
+        // An instantiation checks its full-expressions again and warns
+        // again.
+        let msg = if self.inst.stack.is_empty() { msg } else { msg.allow_duplicate() };
+        self.emit_after_typos(e, msg);
     }
 
-    /// clang `tryExprAsCall` for function `d` of type `t`, then whether
-    /// the call is `bool`: every parameter has a default argument.
-    fn zero_arg_call_returns_bool(&self, d: DeclId, t: QualType) -> bool {
+    /// clang `tryExprAsCall` for function `d`, then whether the call is
+    /// `bool`: every parameter has a default argument.
+    pub(crate) fn zero_arg_call_returns_bool(&self, d: DeclId) -> bool {
+        let Some(t) = self.ast.decls.get(d).ty() else { return false };
+        let t = self.ast.types.canonical(t);
         let TypeView::Function(p) = self.ast.types.view(t.ty()) else {
             return false;
         };

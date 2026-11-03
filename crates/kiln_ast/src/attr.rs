@@ -108,6 +108,14 @@ impl AttrKind {
     /// GNU `naked` on a function (clang `NakedAttr`): no prologue or
     /// epilogue; the body holds only asm statements (WP-405).
     pub const NAKED: AttrKind = AttrKind(107);
+    /// GNU `nonnull` on a function or a parameter (clang `NonNullAttr`):
+    /// `a` is the `ListId` of `IntegerLiteral`s holding the one-based
+    /// parameter indices it names (as written until the declaration
+    /// checks them); the empty list names every parameter (WP-421).
+    pub const NONNULL: AttrKind = AttrKind(108);
+    /// GNU `returns_nonnull` on a function (clang `ReturnsNonNullAttr`)
+    /// (WP-421).
+    pub const RETURNS_NONNULL: AttrKind = AttrKind(109);
 }
 
 /// Attribute syntax.
@@ -214,6 +222,14 @@ impl AttrArena {
     /// built, before it is attached).
     pub fn set_flags(&mut self, a: AttrId, flags: u8) {
         self.nodes[a.index() as usize].flags |= flags;
+    }
+
+    /// Replaces the argument words of attribute `a` (while it is being
+    /// built, before it is attached).
+    pub fn set_args(&mut self, a: AttrId, x: u32, y: u32) {
+        let n = &mut self.nodes[a.index() as usize];
+        n.a = x;
+        n.b = y;
     }
 
     /// The number of attributes.

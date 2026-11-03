@@ -1724,16 +1724,21 @@ impl Parser<'_, '_> {
         begin: Loc,
         template_loc: Option<Loc>,
     ) -> ExprId {
-        match self.parse_template_id_rest(class, name, nl) {
+        let res = self.parse_template_id_rest(class, name, nl);
+        let r_angle = self.prev_lo();
+        match res {
             Ok(TemplateIdRef::Overload(e)) => {
                 let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
+                self.s.set_template_id_end(e, r_angle);
                 if let Some(q) = qual {
                     self.s.set_template_id_begin(e, begin, nl);
                     self.s.set_template_id_qualifier(e, q.nns);
                     self.s.set_template_kw(e, template_loc);
                 }
                 if !self.at(Punct::LParen) {
-                    return self.s.resolve_single_template_id(e);
+                    let r = self.s.resolve_single_template_id(e);
+                    self.s.set_template_id_end(r, r_angle);
+                    return r;
                 }
                 if qual.is_none() {
                     self.s.act_on_template_id_call_name(e);
@@ -1741,6 +1746,7 @@ impl Parser<'_, '_> {
                 e
             }
             Ok(TemplateIdRef::Value(e)) => {
+                self.s.set_template_id_end(e, r_angle);
                 if let Some(q) = qual {
                     self.s.set_template_id_begin(e, begin, nl);
                     self.s.set_template_id_qualifier(e, q.nns);

@@ -212,7 +212,7 @@ impl Substituter<'_, '_, '_> {
                 self.sema.push_scope(ScopeKind::Control);
                 let r = (|| {
                     let (var, c) = self.condition(l.cond_var, l.cond, loc)?;
-                    let c = self.sema.act_on_condition(c.ok_or(SubstFail)?);
+                    let c = self.sema.act_on_condition_at(c.ok_or(SubstFail)?, loc);
                     self.sema.act_on_start_loop();
                     let body = l.body.map(|b| self.sub_stmt(b));
                     self.sema.act_on_end_loop();
@@ -229,7 +229,7 @@ impl Substituter<'_, '_, '_> {
                 self.sema.act_on_end_loop();
                 let body = body.unwrap_or_else(|| self.sema.act_on_null_stmt(loc));
                 let c = self.expr(l.cond.ok_or(SubstFail)?)?;
-                let c = self.sema.act_on_condition(c);
+                let c = self.sema.act_on_condition_at(c, loc);
                 Ok(self.sema.act_on_do(body, c, loc))
             }
             StmtKind::ForStmt => {
@@ -238,7 +238,7 @@ impl Substituter<'_, '_, '_> {
                 let r = (|| {
                     let init = self.opt_stmt(l.init);
                     let (var, c) = self.condition(l.cond_var, l.cond, loc)?;
-                    let c = c.map(|c| self.sema.act_on_condition(c));
+                    let c = c.map(|c| self.sema.act_on_condition_at(c, loc));
                     let inc = self.opt_expr(l.inc)?;
                     self.sema.act_on_start_loop();
                     let body = l.body.map(|b| self.sub_stmt(b));
@@ -493,7 +493,7 @@ impl Substituter<'_, '_, '_> {
             let (var, c) = self.condition(d.cond_var, d.cond, loc)?;
             let c = c.ok_or(SubstFail)?;
             if kind == IfKind::Constexpr {
-                let c = self.sema.act_on_constexpr_condition(c);
+                let c = self.sema.act_on_constexpr_condition(c, loc);
                 if self.sema.ast.exprs.get(c).kind() != ExprKind::ConstantExpr {
                     // Still value-dependent (an outer level is not yet
                     // substituted): both branches are kept, as written.
@@ -531,7 +531,7 @@ impl Substituter<'_, '_, '_> {
                 };
                 return Ok(self.sema.act_on_if(kind, init, var, Some(c), then, els, loc));
             }
-            let c = self.sema.act_on_condition(c);
+            let c = self.sema.act_on_condition_at(c, loc);
             let then = match d.then {
                 Some(t) => self.sub_stmt(t),
                 None => self.sema.act_on_null_stmt(loc),

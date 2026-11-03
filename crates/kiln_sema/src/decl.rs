@@ -4024,7 +4024,10 @@ impl Sema<'_, '_> {
                 self.ast.decls.set_flags(pd, DeclFlags::INVALID);
             }
             if !p.attrs.is_empty() {
-                let _ = self.builder().attach_attrs(pd, &p.attrs);
+                let mut attrs = p.attrs.clone();
+                let range = Span::new(p.range.0, p.range.1);
+                self.check_param_nonnull_attrs(p.ty, range, &mut attrs);
+                let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
                 // Replayed in the complete-class context through
@@ -9390,6 +9393,8 @@ fn attr_kind_of(
         ("cold", _, true) => AttrKind::COLD,
         ("hot", _, true) => AttrKind::HOT,
         ("naked", _, true) => AttrKind::NAKED,
+        ("nonnull", _, true) => AttrKind::NONNULL,
+        ("returns_nonnull", _, true) => AttrKind::RETURNS_NONNULL,
         // clang `Clang<"optnone">` / `Clang<"minsize">` spellings:
         // `__attribute__((x))` and `[[clang::x]]`, not `[[gnu::x]]`.
         ("optnone", _, _) if gnu_syntax || clang_scope => AttrKind::OPTNONE,

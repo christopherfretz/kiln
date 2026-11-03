@@ -542,6 +542,15 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records `r`, the `>` closing the template-id `e` names (clang's
+    /// `RAngleLoc`, where a template-id's `getEndLoc` is), unless `e`
+    /// already ends at a stored token.
+    pub fn set_template_id_end(&mut self, e: ExprId, r: Loc) {
+        if r != Loc::INVALID && self.ast.exprs.end_loc(e).is_none() {
+            let _ = self.ast.exprs.cold.end_loc.insert(e, r);
+        }
+    }
+
     // -- full-expressions --------------------------------------------------------
 
     /// The end of a full-expression ([intro.execution]/5): resolves the
@@ -2684,6 +2693,7 @@ impl Sema<'_, '_> {
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        self.record_modified_param(e);
         if let Some(x) = self.member_overload(e) {
             if x == e
                 && let Some(ule) = self.member_overload_as_lookup(x)
@@ -3198,6 +3208,7 @@ impl Sema<'_, '_> {
     }
 
     fn assign(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+        self.record_modified_param(l);
         if !self.check_modifiable(l, loc) {
             return self.recover_err(&[l, r], loc);
         }
