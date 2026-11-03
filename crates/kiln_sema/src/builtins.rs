@@ -12,7 +12,7 @@
 use crate::lookup::LookupKind;
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::consts::{PtrBase, Scalar};
-use kiln_ast::decl::{DeclFlags, DeclKind, FnSpec, FnStorage, LinkageLang, builtin};
+use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, LinkageLang, builtin};
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::expr::{SourceLocKind, SourceLocValues};
 use kiln_ast::names::{DeclName, OverloadedOperator};
@@ -537,7 +537,10 @@ impl Sema<'_, '_> {
         let lh = DeclHead::new(tu, DeclName::EMPTY, loc).flags(DeclFlags::IMPLICIT);
         let ls = self.builder().linkage_spec_head(lh, LinkageLang::C);
         let h = DeclHead::new(ls, DeclName::ident(name), loc).flags(DeclFlags::IMPLICIT);
-        let spec = FnSpec::new().with_storage(FnStorage::Extern);
+        let mut spec = FnSpec::new().with_storage(FnStorage::Extern);
+        if has(builtin::attr::CONSTEVAL) {
+            spec = spec.with_constexpr_kind(ConstexprKind::Consteval);
+        }
         let f = self.builder().function(h, DeclKind::Function, ty, spec, None);
         let _ = self.ast.decls.cold.builtin_id.insert(f, id);
         let implicit =
@@ -733,6 +736,7 @@ impl Sema<'_, '_> {
             | builtin::ISLESSGREATER
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
+            builtin::IS_WITHIN_LIFETIME => self.builtin_is_within_lifetime(args, rparen),
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
             builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
@@ -771,7 +775,12 @@ impl Sema<'_, '_> {
         };
         let Some((args, ty)) = r else { return self.recover_err(&kids, loc) };
         let f = self.builtin_fn_to_ptr(callee, b);
-        self.builder().call(f, &args, ty, ValueCategory::PRValue, loc, rparen, ExprFlags::NONE)
+        let call =
+            self.builder().call(f, &args, ty, ValueCategory::PRValue, loc, rparen, ExprFlags::NONE);
+        // A consteval builtin (`__builtin_is_within_lifetime`): an
+        // immediate invocation like any other ([expr.const]/16).
+        let r = self.ignore_parens(callee);
+        self.check_immediate_invocation(call, b, Some(r))
     }
 
     /// clang's `checkArgCount`: exactly `n` arguments, else `too few`
@@ -1458,6 +1467,39 @@ impl Sema<'_, '_> {
                 None
             }
         }
+    }
+
+    /// `__builtin_is_within_lifetime(p)` ([meta.const.eval]/4; clang's
+    /// `BuiltinIsWithinLifetime`): one argument, decayed and converted to
+    /// an rvalue, of object or `void` pointer type (LWG4138: not a
+    /// function pointer), diagnosed at the argument's expression
+    /// location; the call is `bool`. The argument keeps its type.
+    fn builtin_is_within_lifetime(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let a = conv::decay(self, args[0]);
+        let t = self.ety(a);
+        if t == QualType::ERROR {
+            return None;
+        }
+        let pointee = self.ast.types.pointee(t).filter(|_| self.ast.types.is_pointer(t));
+        let bad = match pointee {
+            None => Some(0),
+            Some(p) if self.ast.types.is_function(p) => Some(1),
+            Some(_) => None,
+        };
+        if let Some(which) = bad {
+            let at = self.expr_loc(a);
+            let msg = self.diag(DiagId::sema_builtin_is_within_lifetime_invalid_arg, at).arg(which);
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a], QualType::BOOL))
     }
 
     /// `__builtin_va_start(ap, last)` ([cstdarg.syn]/1, C 7.16.1.4; clang's

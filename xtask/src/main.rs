@@ -209,15 +209,17 @@ fn ci_corpus(what: &str, compiler: Option<std::path::PathBuf>) -> test::CorpusOu
 }
 
 /// Runs `cargo <step>`, echoing its stderr while scanning it, and reruns it
-/// once when it failed with `error[E0463]` ([`test::ci_should_retry`]).
+/// once when it failed with `error[E0463]` ([`test::ci_should_retry`]). The
+/// step is in the live-children table, so a SIGINT/SIGTERM to xtask stops
+/// cargo and its rustc and test processes too ([`util::process::run_step`]).
 fn ci_step(step: &[&str]) -> bool {
     let shown = step.join(" ");
     let mut retried = false;
     loop {
         eprintln!("xtask ci: cargo {shown}");
         let mut cmd = std::process::Command::new(env!("CARGO"));
-        cmd.args(step).stderr(std::process::Stdio::piped());
-        let (status, stderr) = match run_teeing_stderr(&mut cmd) {
+        cmd.args(step);
+        let (status, stderr) = match util::process::run_step(&mut cmd, true) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("xtask ci: could not run cargo {shown}: {e}");
@@ -238,31 +240,4 @@ fn ci_step(step: &[&str]) -> bool {
         eprintln!("xtask ci: failed with {status}");
         return false;
     }
-}
-
-/// Runs `cmd` (stderr piped), copying its stderr to ours as it arrives and
-/// returning it with the exit status.
-fn run_teeing_stderr(
-    cmd: &mut std::process::Command,
-) -> std::io::Result<(std::process::ExitStatus, String)> {
-    use std::io::{BufRead as _, Write as _};
-    let mut child = cmd.spawn()?;
-    let mut captured = Vec::new();
-    if let Some(pipe) = child.stderr.take() {
-        let mut reader = std::io::BufReader::new(pipe);
-        let mut line = Vec::new();
-        let mut out = std::io::stderr();
-        loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    let _ = out.write_all(&line);
-                    captured.extend_from_slice(&line);
-                }
-            }
-        }
-    }
-    let status = child.wait()?;
-    Ok((status, String::from_utf8_lossy(&captured).into_owned()))
 }

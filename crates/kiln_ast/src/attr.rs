@@ -113,6 +113,19 @@ impl AttrKind {
     /// the `omnipotent char` alias class at `-O1`+ (spec/codegen.md
     /// "TBAA"; WP-423).
     pub const MAY_ALIAS: AttrKind = AttrKind(108);
+    /// GNU `nonnull` on a function or a parameter (clang `NonNullAttr`):
+    /// `a` is the `ListId` of `IntegerLiteral`s holding the one-based
+    /// parameter indices it names (as written until the declaration
+    /// checks them); the empty list names every parameter (WP-421).
+    pub const NONNULL: AttrKind = AttrKind(109);
+    /// GNU `returns_nonnull` on a function (clang `ReturnsNonNullAttr`)
+    /// (WP-421).
+    pub const RETURNS_NONNULL: AttrKind = AttrKind(110);
+    /// GNU `init_priority(N)` on a namespace-scope variable of class type
+    /// (clang `InitPriorityAttr`): `a` is the priority, its dynamic
+    /// initializer runs from the `_GLOBAL__I_<N>` constructor of priority
+    /// `N` ([basic.start.dynamic]; spec/codegen.md §7f; WP-189).
+    pub const INIT_PRIORITY: AttrKind = AttrKind(111);
 }
 
 /// Attribute syntax.
@@ -219,6 +232,14 @@ impl AttrArena {
     /// built, before it is attached).
     pub fn set_flags(&mut self, a: AttrId, flags: u8) {
         self.nodes[a.index() as usize].flags |= flags;
+    }
+
+    /// Replaces the argument words of attribute `a` (while it is being
+    /// built, before it is attached).
+    pub fn set_args(&mut self, a: AttrId, x: u32, y: u32) {
+        let n = &mut self.nodes[a.index() as usize];
+        n.a = x;
+        n.b = y;
     }
 
     /// The number of attributes.

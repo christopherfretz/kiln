@@ -409,7 +409,7 @@ impl Sema<'_, '_> {
         let held = if self.inst.stack.is_sfinae() {
             Vec::new()
         } else {
-            self.templ.suppressed_diags.get_mut(&d).map(std::mem::take).unwrap_or_default()
+            self.take_suppressed_diags(d, loc)
         };
         let r = self.finish_overload_ref(d, f, naming, loc, nns, e, false);
         if !held.is_empty() {

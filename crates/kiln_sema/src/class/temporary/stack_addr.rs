@@ -13,7 +13,8 @@
 //! variable or capture. A temporary reached through a variable's
 //! initializer is the `returning reference to local temporary object`
 //! error; one bound directly is diagnosed by
-//! [`Sema::check_dangling_temporary`].
+//! [`Sema::check_dangling_temporary`]. A GNU `&&label` is "returning
+//! address of label, which is local".
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, StorageDuration, UnaryOp};
@@ -48,6 +49,8 @@ enum Local {
     Var(ExprId),
     /// A `MaterializeTemporaryExpr`.
     Temp(ExprId),
+    /// A GNU `&&label` (`AddrLabelExpr`).
+    Label(ExprId),
 }
 
 /// The walk's state: the current path and the locals found.
@@ -143,6 +146,12 @@ impl Sema<'_, '_> {
                     .arg(u8::from(by_ref))
                     .arg(u8::from(is_param))
                     .arg(self.decl_arg(d))
+            }
+            // clang `checkExprLifetime`: "returning address of label,
+            // which is local".
+            Local::Label(e) => {
+                let loc = first.unwrap_or_else(|| self.begin_loc(e));
+                self.diag(DiagId::sema_ret_addr_label, loc)
             }
             // A temporary bound directly is `check_dangling_temporary`'s.
             Local::Temp(_) if first.is_none() => return,
@@ -279,6 +288,7 @@ impl Sema<'_, '_> {
                 self.retained_by_value(f, w, depth + 1);
             }
             ExprKind::LambdaExpr => self.retained_by_closure(e, w, depth),
+            ExprKind::AddrLabelExpr => w.record(Local::Label(e)),
             _ => {}
         }
     }

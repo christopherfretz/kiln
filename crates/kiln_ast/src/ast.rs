@@ -11,7 +11,8 @@ use crate::decl::{
     DeclArena, DeclFlags, DeclKind, DeclMisc, EnumData, NewDecl, Payload, ScopeData,
 };
 use crate::expr::ExprArena;
-use crate::ids::DeclId;
+use crate::expr::ExprKind;
+use crate::ids::{DeclId, ExprId};
 use crate::lists::IdLists;
 use crate::lookup::{LookupResult, LookupTables};
 use crate::mem::{HeapSize, MemReport, MemRow};
@@ -87,6 +88,63 @@ struct InstantiationMeter {
 }
 
 impl Ast {
+    /// The location of the first token of `e` (clang's `getBeginLoc`):
+    /// a node whose own location is an operator or a name after its first
+    /// operand begins where that operand does.
+    pub fn begin_loc(&self, mut e: ExprId) -> kiln_source::Loc {
+        loop {
+            let n = self.exprs.get(e);
+            let first = match n.kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::CXXStdInitializerListExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::BinaryOperator
+                | ExprKind::CompoundAssignOperator
+                | ExprKind::ConditionalOperator
+                | ExprKind::BinaryConditionalOperator
+                | ExprKind::ArraySubscriptExpr
+                | ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXPseudoDestructorExpr
+                | ExprKind::DesignatedInitUpdateExpr
+                | ExprKind::ExtVectorElementExpr
+                | ExprKind::MemberExpr => true,
+                ExprKind::UnaryOperator => self.exprs.unary_op(e).is_postfix(),
+                ExprKind::CXXRewrittenBinaryOperator => {
+                    e = self.exprs.rewritten_semantic(e);
+                    continue;
+                }
+                // clang's `CXXOperatorCallExpr::getSourceRangeImpl`: a
+                // prefix unary operator begins at its token, every other
+                // form at its first operand.
+                ExprKind::CXXOperatorCallExpr => {
+                    use crate::names::OverloadedOperator as O;
+                    let op = self.exprs.operator_call_op(e);
+                    let args = self.exprs.call_args(e);
+                    let first = self.lists.at::<ExprId>(args, 0);
+                    let prefix = self.lists.get(args).len() == 1
+                        && !matches!(op, O::Call | O::Subscript | O::Arrow);
+                    match first {
+                        Some(a) if !prefix => {
+                            e = a;
+                            continue;
+                        }
+                        _ => return n.loc(),
+                    }
+                }
+                _ => false,
+            };
+            let kids = if first { self.exprs.children(e, &self.lists) } else { Vec::new() };
+            match kids.first() {
+                Some(&k) => e = k,
+                None => return self.templates.expr_begin.get(e).copied().unwrap_or(n.loc()),
+            }
+        }
+    }
+
     /// A new AST holding only the `TranslationUnitDecl`.
     pub fn new(symbols: Arc<Interner>, types: TypeContext) -> Ast {
         let mut decls = DeclArena::new();
@@ -161,9 +219,9 @@ impl Ast {
     }
 
     /// The template (a `StringLiteral`) of a `FileScopeAsm` declaration.
-    pub fn file_scope_asm_string(&self, d: DeclId) -> Option<crate::ids::ExprId> {
+    pub fn file_scope_asm_string(&self, d: DeclId) -> Option<ExprId> {
         let n = self.decls.get(d);
-        (n.kind() == DeclKind::FileScopeAsm).then(|| crate::ids::ExprId::new(n.data()))
+        (n.kind() == DeclKind::FileScopeAsm).then(|| ExprId::new(n.data()))
     }
 
     /// The nested-name-specifier written in a `Using` declaration.
@@ -267,11 +325,11 @@ impl Ast {
     /// own full-expression (clang `ParmVarDecl::getDefaultArg`). Its
     /// temporaries are destroyed with the full-expression containing the
     /// call ([intro.execution]/5, [class.temporary]/6.9).
-    pub fn default_arg_expr(&self, e: crate::ids::ExprId) -> Option<crate::ids::ExprId> {
+    pub fn default_arg_expr(&self, e: ExprId) -> Option<ExprId> {
         let p = self.exprs.default_arg_param(e);
         let d = self.decls.param(p)?.default_arg?;
         Some(match self.exprs.get(d).kind() {
-            crate::expr::ExprKind::ExprWithCleanups => self.exprs.operand(d),
+            ExprKind::ExprWithCleanups => self.exprs.operand(d),
             _ => d,
         })
     }
@@ -613,8 +671,8 @@ impl Ast {
     /// with no arguments: default-initialization that performs no
     /// initialization ([dcl.init.general]/7, [class.default.ctor]/3).
     /// Codegen and the Oven leave the object uninitialized.
-    pub fn is_trivial_default_construction(&self, e: crate::ids::ExprId) -> bool {
-        self.exprs.get(e).kind() == crate::expr::ExprKind::CXXConstructExpr
+    pub fn is_trivial_default_construction(&self, e: ExprId) -> bool {
+        self.exprs.get(e).kind() == ExprKind::CXXConstructExpr
             && self.lists.is_empty(self.exprs.construct_args(e))
             && self.decls.function(self.exprs.constructor(e)).is_some_and(|f| f.spec.is_trivial())
     }

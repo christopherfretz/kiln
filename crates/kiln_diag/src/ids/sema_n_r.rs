@@ -43,6 +43,7 @@ sema_non_template_in_template_id = Error (1) "'{0}' does not name a template but
 sema_non_thread_thread = Error (1) "non-thread-local declaration of '{0}' follows thread-local declaration";
 sema_nonconst_member_fn_ptr = Error (0) "cannot create a non-constant pointer to member function";
 sema_nonlocal_sizeless = Error (1) "non-local variable with sizeless type {0}";
+sema_nonnull_expr_compare = Warning [TautologicalPointerCompare] (3) "comparison of nonnull {0:function call|parameter} '{1}' {2:not |}equal to a null pointer is '{2:true|false}' on first encounter";
 sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined out-of-line";
 sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";
 sema_noreturn_non_function = Error (0) "'_Noreturn' can only appear on functions";
@@ -195,6 +196,7 @@ sema_register_storage_class = WarningError [Register] (0) "ISO C++17 does not al
 sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
 sema_reorder_ctor = WarningOff [ReorderCtor] (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";
+sema_ret_addr_label = Warning [ReturnStackAddress] (0) "returning address of label, which is local";
 // WP-204: clang's `checkExprLifetime` for a return ([stmt.return],
 // spec/sema-class.md §5.6).
 sema_ret_stack_addr = Warning [ReturnStackAddress] (3) "{0:address of|reference to} stack memory associated with {1:local variable|parameter} {2} returned";

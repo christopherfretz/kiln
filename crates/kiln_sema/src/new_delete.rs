@@ -624,6 +624,8 @@ impl Sema<'_, '_> {
         let (style, init_expr) = match init {
             NewInit::None => (NewInitStyle::None, None),
             NewInit::Paren(v, open, rparen) => {
+                // Braced arguments keep their nested lists.
+                let v = self.dependent_args(&v);
                 (NewInitStyle::Parens, Some(self.builder().paren_list(&v, open, rparen)))
             }
             NewInit::List(l) => (NewInitStyle::Braces, Some(self.dependent_init_list(&l))),

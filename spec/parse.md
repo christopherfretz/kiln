@@ -257,6 +257,39 @@ clang's `Parser` over `Preprocessor::Lex`.
   the previous token. The missing `;` of a declaration carries the
   insertion fix-it `;` (clang `ExpectAndConsume`)
   (`tests/conformance/dcl.dcl/qualified-name-no-type.cpp`).
+  A qualified name one of whose qualifier components names no scope
+  (`Und::x y;` with `Und` undeclared, `N::Und::x`, `X::type` with `X` a
+  class template) is clang's invalid CXXScopeSpec (WP-430,
+  `not_a_scope_name`): the component's own error ("use of undeclared
+  identifier 'Und'", "no member named 'Und' in namespace 'N'", "use of
+  class template 'X' requires template arguments") and nothing more. In a
+  namespace or class, when a declarator follows the name
+  (`qualified_unknown_type_follows`) it was the type and the declaration
+  goes on with an invalid type (`y` is declared, later uses are quiet);
+  before what `implicit_int_follows` accepts (`Und::f();`, `Und::j;`) it
+  is the declarator-id and the declaration declares nothing (no "a type
+  specifier is required", no "expected unqualified-id"). An incomplete
+  class qualifier (`F::a();`, `F::c d;`) likewise reports only "incomplete
+  type 'F' named in nested name specifier"
+  (`basic.lookup.qual/undeclared-qualifier-declaration.cpp`,
+  `basic.lookup.qual/incomplete-qualifier-declarator-id.cpp`).
+  A member declaration recovers the same way (WP-421): `R::f(v);` and
+  `R::f<int> a;` in a class are "no type named" / "no template named
+  'f' in namespace 'R'", and `R::h(int);` is a qualified declarator-id
+  with no type ("non-friend class member 'h' cannot have a qualified
+  name" plus "a type specifier is required"; kiln reports the two in the
+  opposite order and without the qualifier range). `R::g;` (an access
+  declaration, clang's `ext_access_declaration` plus "using declaration
+  in class refers into 'R', which is not a class") is not implemented
+  and keeps "expected member name or ';'"
+  (`tests/conformance/class.mem/qualified-member-no-type.cpp`).
+  A qualified name followed by `<` that names no template
+  (`Q::f<int> z;` with `Q::f` a variable, `Q::g<int>` undeclared) is
+  "no template named 'f' in namespace 'Q'" (clang
+  `err_no_member_template`), not "no type named"; that error and "no
+  type named 'x' in namespace 'R'" underline the nested-name-specifier
+  (`parse_qualified_type_rest`;
+  `tests/conformance/temp.names/qualified-not-a-template.cpp`).
   An unqualified typename-specifier (`typename T`, `typename Ts...[0]`;
   [temp.res.general]/3) is "expected a qualified name after 'typename'"
   and recovers as clang does, by context (`parse_typename_specifier_in`,
@@ -457,6 +490,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     gives "unknown type name '_Bool'", and `sizeof(_Bool)` gives "use
     of undeclared identifier '_Bool'", as in clang. `_Atomic`,
     `_Alignas` and `_Alignof` stay, since clang accepts them in C++.
+  - `nullptr` is a keyword from C++11 on (clang `KEYCXX11`); under
+    `-std=c++98`/`c++03` it is an identifier, so `int *p = nullptr;` is
+    "use of undeclared identifier 'nullptr'" and `int nullptr;` declares
+    a variable (WP-421, `tests/conformance/lex.key/nullptr-cxx98.cpp`).
+    The other C++11 keywords (`constexpr`, `decltype`, `noexcept`,
+    `static_assert`, `thread_local`, `alignas`, `alignof`, `char16_t`,
+    `char32_t`) stay keywords in every mode, where clang makes them
+    identifiers before C++11 too (a follow-up).
 - **Bracket depth:** `bump` tracks `(`, `[` and `{` nesting, like
   clang's `ParenCount`/`BracketCount`/`BraceCount`.
 - **Expected tokens:**
@@ -1463,10 +1504,28 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   - **Deviation (computed goto):** GNU `goto *e;` is parsed. Its operand
     is checked for an unexpanded pack (`Sema::act_on_indirect_goto`),
     and then the statement is "computed goto is not supported yet" at the
-    `*`. The address-of-label operator `&&l` is not supported either.
-    clang accepts both, and reports "indirect goto in function with no
-    address-of-label expressions" when the function takes no label's
-    address.
+    `*` (after "use of GNU indirect-goto extension", `-Wgnu-label-as-value`,
+    at the same `*`). clang accepts it, and reports "indirect goto in
+    function with no address-of-label expressions" when the function
+    takes no label's address.
+  - **GNU address-of-label `&&l` (WP-424):** parsed in
+    `parse_cast_expr` as clang's `tok::ampamp` case
+    (`Parser::parse_addr_label`): a non-identifier operand is "expected
+    identifier" at it; outside a function body it is "use of
+    address-of-label extension outside of a function body" at the label
+    name, without the extension warning; otherwise "use of GNU
+    address-of-label extension" (`-Wgnu-label-as-value`, in `-Wgnu` and
+    `-pedantic`) at the `&&`, then `Sema::act_on_addr_label` looks the
+    label up or declares it (as a `goto` does: marked used, so an
+    undefined one is "use of undeclared label" at the function's end)
+    and builds an `AddrLabelExpr` of type `void *`. No postfix suffix
+    follows. Template instantiation looks the label up again by name.
+    Returning one is "returning address of label, which is local"
+    (`-Wreturn-stack-address`, spec/sema-class.md §5.6). **Deviation:**
+    code generation and constant evaluation of `&&l` are "not supported
+    yet" (clang emits a `blockaddress`; it is a constant address, so
+    clang also accepts it in a constant expression and in a static
+    initializer). Tests: `tests/conformance/ext.gnu.label.value/`.
 
 ### 6.2 Attributes (`attr.rs`)
 - **Syntax:** `[[ ]]` (with `using ns:`), `alignas(…)`, and GNU
@@ -1650,7 +1709,7 @@ in `kiln_diag` for now; nothing emits them.
   - lambdas; `new`/`delete` of class types (§5.1)
   - `dynamic_cast` semantics, polymorphic `typeid`
   - class and array compound literals, compound literals at namespace
-    scope, the GNU address-of-label operator
+    scope
   - class `T()`, `T{…}` and `T(a, b)` temporaries
   - fold expressions
   - braced-init-list subscripts and functional-cast operands

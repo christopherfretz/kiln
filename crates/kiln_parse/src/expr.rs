@@ -92,7 +92,9 @@ fn binop(p: Punct) -> Option<(u8, Option<BinaryOp>)> {
 pub(crate) enum TraitOperand {
     /// `( type-id )`, with the `)`.
     Type(QualType, Loc),
-    Expr(ExprId),
+    /// A unary-expression; `None` when it failed to parse (an `alignof`
+    /// still warns, as clang).
+    Expr(Option<ExprId>),
 }
 
 /// True for a simple-type-specifier keyword that can begin a functional
@@ -422,6 +424,22 @@ impl Parser<'_, '_> {
 
     // -- unary and cast expressions ----------------------------------------------------
 
+    /// GNU `&& identifier` (labels as values; clang `ParseCastExpression`,
+    /// `tok::ampamp`): "use of GNU address-of-label extension" at the
+    /// `&&`, then the label is looked up or created and marked used.
+    /// No postfix suffix follows. Outside a function body the operand is
+    /// rejected at the identifier (spec/parse.md §6.1).
+    fn parse_addr_label(&mut self, amp: Loc) -> Option<ExprId> {
+        self.bump();
+        let Some(name) = self.ident() else {
+            let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+            self.emit(d);
+            return None;
+        };
+        let nl = self.bump().span.lo;
+        self.s.act_on_addr_label(name, nl, amp)
+    }
+
     /// cast-expression ([expr.cast]) and unary-expression ([expr.unary]).
     pub(crate) fn parse_cast_expr(&mut self) -> PExpr {
         if !self.stack_ok() {
@@ -449,8 +467,7 @@ impl Parser<'_, '_> {
                 return Some(self.s.act_on_unary(op, e, loc));
             }
             if p == Punct::AmpAmp {
-                self.unsupported("the GNU address-of-label operator", loc);
-                return None;
+                return self.parse_addr_label(loc);
             }
             if let Some((open, is_type, ambiguous)) = self.open_paren_template_scope() {
                 if is_type && (!ambiguous || self.ambiguous_paren_is_cast(self.pos())) {
@@ -723,13 +740,14 @@ impl Parser<'_, '_> {
             TraitOperand::Expr(e) => {
                 // [expr.alignof]/1 takes a type-id; `alignof e` is a GNU
                 // extension (clang `ext_alignof_expr`, at the keyword,
-                // before the operand is checked). Not `__alignof`.
+                // before the operand is checked, even an invalid one:
+                // `alignof(F::x)` with `F` incomplete). Not `__alignof`.
                 if let Some(sp) = spelling {
                     let d =
                         self.s.diag(DiagId::sema_alignof_expression, loc).arg(format!("'{sp}'"));
                     self.emit(d);
                 }
-                Some(self.s.act_on_trait_expr(kind, e, loc))
+                Some(self.s.act_on_trait_expr(kind, e?, loc))
             }
         }
     }
@@ -756,7 +774,7 @@ impl Parser<'_, '_> {
                 .with_greater_op(true, |p| p.parse_paren_rest(open))
                 .and_then(|e| self.parse_postfix_suffix(e));
             self.s.exit_unevaluated();
-            return Some(TraitOperand::Expr(e?));
+            return Some(TraitOperand::Expr(e));
         }
         if self.at(Punct::LParen)
             && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
@@ -772,7 +790,7 @@ impl Parser<'_, '_> {
         self.s.enter_unevaluated();
         let e = self.parse_cast_expr();
         self.s.exit_unevaluated();
-        Some(TraitOperand::Expr(e?))
+        Some(TraitOperand::Expr(e))
     }
 
     /// A builtin type trait `__trait ( ... )` (spec/sema-templates.md
@@ -1732,16 +1750,21 @@ impl Parser<'_, '_> {
         begin: Loc,
         template_loc: Option<Loc>,
     ) -> ExprId {
-        match self.parse_template_id_rest(class, name, nl) {
+        let res = self.parse_template_id_rest(class, name, nl);
+        let r_angle = self.prev_lo();
+        match res {
             Ok(TemplateIdRef::Overload(e)) => {
                 let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
+                self.s.set_template_id_end(e, r_angle);
                 if let Some(q) = qual {
                     self.s.set_template_id_begin(e, begin, nl);
                     self.s.set_template_id_qualifier(e, q.nns);
                     self.s.set_template_kw(e, template_loc);
                 }
                 if !self.at(Punct::LParen) {
-                    return self.s.resolve_single_template_id(e);
+                    let r = self.s.resolve_single_template_id(e);
+                    self.s.set_template_id_end(r, r_angle);
+                    return r;
                 }
                 if qual.is_none() {
                     self.s.act_on_template_id_call_name(e);
@@ -1749,6 +1772,7 @@ impl Parser<'_, '_> {
                 e
             }
             Ok(TemplateIdRef::Value(e)) => {
+                self.s.set_template_id_end(e, r_angle);
                 if let Some(q) = qual {
                     self.s.set_template_id_begin(e, begin, nl);
                     self.s.set_template_id_qualifier(e, q.nns);

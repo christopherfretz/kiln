@@ -255,6 +255,16 @@ impl Diag {
         self.notes.extend(own);
     }
 
+    /// Moves the notes located at `from` to `to` (a held-back
+    /// diagnostic's context notes, reported for a later use).
+    pub fn relocate_notes(&mut self, from: Loc, to: Loc) {
+        for n in &mut self.notes {
+            if n.span.lo == from {
+                n.span = Span::empty(to);
+            }
+        }
+    }
+
     /// Whether the diagnostic has notes attached.
     pub fn has_notes(&self) -> bool {
         !self.notes.is_empty()

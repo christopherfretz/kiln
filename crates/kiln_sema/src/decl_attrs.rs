@@ -56,6 +56,9 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::MINSIZE => "minsize",
         AttrKind::NAKED => "naked",
         AttrKind::MAY_ALIAS => "may_alias",
+        AttrKind::INIT_PRIORITY => "init_priority",
+        AttrKind::NONNULL => "nonnull",
+        AttrKind::RETURNS_NONNULL => "returns_nonnull",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
         AttrKind::FORMAT => "format",
         AttrKind::NOTHROW => "nothrow",
@@ -246,9 +249,13 @@ impl Sema<'_, '_> {
     /// wrong.
     pub(crate) fn check_decl_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
         self.check_alignas_subject(d, attrs);
+        self.check_init_priority(d, attrs);
         let kind = self.ast.decls.get(d).kind();
         attrs.retain(|&a| {
             let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::NONNULL {
+                return self.check_nonnull_attr(d, kind, a, node);
+            }
             self.check_decl_attr(d, kind, node)
         });
     }
@@ -329,6 +336,7 @@ impl Sema<'_, '_> {
                 self.check_alloc_attr(d, node);
                 true
             }
+            AttrKind::RETURNS_NONNULL => self.check_returns_nonnull_attr(d, kind, node),
             AttrKind::FORMAT => self.check_format_decl_attr(d, kind, node),
             AttrKind::NOTHROW if node.flags & 1 == 0 => self.check_gnu_nothrow(d, kind, node),
             AttrKind::FLAG_ENUM | AttrKind::ENUM_EXTENSIBILITY if kind != DeclKind::Enum => {

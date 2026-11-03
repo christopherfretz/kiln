@@ -131,7 +131,7 @@ static initialization order, inline variables.
   on 22 in `-std=c++26`. Steps A/B (the `KILN_ORACLE` and `-fclang-compat`
   knobs) landed early (WP-262/263); C–E landed as WP-355 (2026-11-02): `KILN_ORACLE`
   defaults to 22, CI also runs `KILN_ORACLE=19 cargo xtask ci --quick`, and the
-  M4 libc++ baseline is in `docs/status/libcxx.md` (`docs/status/wp-184-oracle-switch.md`); WP-398 took the M4 gate from 11.7% to 95.0% (2448/2661).
+  M4 libc++ baseline is in `docs/status/libcxx.md` (`docs/status/wp-184-oracle-switch.md`); WP-398 took the M4 gate from 11.7% to 95.0% (2448/2661); 99.9% (2632/2661, 2 fail) after WP-416+WP-418, WP-445 owns the 2.
 - Exit: every C++23 row is `done`; every clang-22 C++26 row is `done` or has a
   written reason; `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>`, `<expected>`, `<mdspan>`,
@@ -142,7 +142,9 @@ Run the full libc++ 22 lit suite in `-std=c++26` with kiln as `%{cxx}` against t
 clang-built libc++ runtime. This is also the end-to-end proof of the C++23/26
 library surface (M4's feature table covers the language). Track pass rate in `docs/status/libcxx.md`.
 - Exit: 100% of tests pass or are triaged as `UNSUPPORTED`/`XFAIL` with a
-  written reason that is not "kiln bug".
+  written reason that is not "kiln bug". A `.verify` test that fails only because
+  kiln's diagnostic wording or location differs from clang's is triaged as
+  not-a-kiln-bug and does not block M5 (operator decision, 2026-11-03).
 - Stretch: build libc++ itself with kiln and run the suite against it.
 
 ## M6 — C++26 reflection and the reference workload

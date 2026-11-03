@@ -57,6 +57,10 @@ pub(crate) enum BiFault {
     /// a pointer to no object is not (2,
     /// `note_constexpr_baa_value_insufficient_alignment`).
     Align { kind: u8, v: i64, align: u64 },
+    /// `err_invalid_is_within_lifetime` (WP-418): `is_within_lifetime`
+    /// of a null (`kind` 0), function (1) or one-past-the-end (2)
+    /// pointer.
+    Lifetime { kind: u8 },
     /// WP-416: the alignment `hi:lo` (`signed`) of an align builtin on a
     /// `w`-bit integer is not a positive power of two
     /// (`note_constexpr_invalid_alignment`), or (`big`) exceeds 2^(w-1)
@@ -204,6 +208,39 @@ fn is_narrow_char(ast: &Ast, oven: &Oven, t: OTy) -> bool {
 }
 
 impl Oven {
+    /// `bi::LIFETIME` of the pointer `raw` designating an object of type
+    /// `t` ([`bi::DYN`]: unknown), `ok` its static union designators'
+    /// verdict.
+    fn bi_within_lifetime(&self, raw: u64, ok: bool, t: u32) -> Result<u128, Fault> {
+        let p = Ptr::decode(raw);
+        let kind = match () {
+            () if raw == 0 => Some(0),
+            () if p.is_fn() => Some(1),
+            () if p.past => Some(2),
+            () => None,
+        };
+        if let Some(kind) = kind {
+            return Err(Fault::Bi(BiFault::Lifetime { kind }));
+        }
+        let ty = OTy(if t == bi::DYN { 0 } else { t });
+        let len = if t == bi::DYN { 1 } else { self.types.size(ty).max(1) };
+        let (_, _, a) = self.mem.check(raw, len, false).map_err(|f| Fault::Mem {
+            f,
+            ak: ak::READ,
+            ty,
+            p: raw,
+        })?;
+        if !ok {
+            return Ok(0);
+        }
+        // An object of a union-holding allocation: every union on its
+        // path must have it (or a member holding it) active.
+        let live = t == bi::DYN
+            || a.flags & flags::HAS_UNION == 0
+            || !matches!(self.union_path(raw, ty, ak::READ), Err(Fault::Union { .. }));
+        Ok(u128::from(live))
+    }
+
     /// Evaluates builtin `aux` (`bi` kind | sub << 8) on registers `a`..`c`
     /// and types `t1`/`t2`.
     #[allow(clippy::too_many_arguments, reason = "the instruction's operands")]
@@ -233,6 +270,18 @@ impl Oven {
                 Ok(u128::from(n))
             }
             bi::POPCOUNT => Ok(u128::from((a & mask(sub & 0xFF)).count_ones())),
+            bi::LIFETIME => {
+                // A `void *` argument's designator is its conversion's
+                // tag (`kbc::VOID_TAG`), if any.
+                let tag = (a >> 64) as u32;
+                let t = if t1 == bi::DYN && tag != 0 { tag - 1 } else { t1 };
+                self.bi_within_lifetime(a as u64, b != 0, t)
+            }
+            bi::UNION_LIVE => {
+                let raw = a as u64;
+                let key = Ptr::union_key(raw, u64::from(Ptr::decode(raw).off), OTy(t1));
+                Ok(u128::from(b != 0 && self.mem.may_be_active(key, sub)))
+            }
             bi::LOCK_FREE => {
                 // clang 19 `IntExprEvaluator::VisitBuiltinCallExpr`: a
                 // power-of-two size within the inline width is lock-free

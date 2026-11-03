@@ -198,6 +198,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // Labels and `goto` (WP-160); the label is named by its `LabelStmt`.
     ("LabelStmt", Keep),
     ("GotoStmt", Keep),
+    // GNU `&&label` (WP-424): the label's name.
+    ("AddrLabelExpr", Keep),
     ("IndirectGotoStmt", Unsupported(NOT_M2)),
     // `[[assume]]` (WP-160), `[[likely]]`, `[[unlikely]]` and
     // `[[fallthrough]]` (WP-182) are kept on a statement; another
@@ -241,7 +243,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("ParenListExpr", Unsupported(NOT_M2)),
     ("SourceLocExpr", Unsupported(NOT_M2)),
     ("EmbedExpr", Unsupported(NOT_M2)),
-    ("AddrLabelExpr", Unsupported(NOT_M2)),
     ("CoawaitExpr", Unsupported(NOT_M2)),
     ("CoyieldExpr", Unsupported(NOT_M2)),
     ("RecoveryExpr", Unsupported("clang recovered from an error (RecoveryExpr); fix the test")),
@@ -479,6 +480,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "UnlikelyAttr" | "FallThroughAttr" => &[],
         "LabelStmt" => &["name", "declId"],
         "GotoStmt" => &["targetLabelDeclId"],
+        "AddrLabelExpr" => &["name", "labelDeclId"],
         _ => return None,
     })
 }
@@ -615,6 +617,7 @@ pub const M2_KINDS: &[&str] = &[
     // Labels, `goto`, `[[assume]]` (WP-160).
     "LabelStmt",
     "GotoStmt",
+    "AddrLabelExpr",
     "AttributedStmt",
     "CXXAssumeAttr",
     // Likelihood and fallthrough statement attributes (WP-182).

@@ -418,61 +418,10 @@ impl Sema<'_, '_> {
         Some((op.spelling(), l, r))
     }
 
-    /// The location of the first token of `e` (clang's `getBeginLoc`):
-    /// a node whose own location is an operator or a name after its first
-    /// operand begins where that operand does.
-    pub(crate) fn begin_loc(&self, mut e: ExprId) -> Loc {
-        loop {
-            let n = self.ast.exprs.get(e);
-            let first = match n.kind() {
-                ExprKind::ImplicitCastExpr
-                | ExprKind::ConstantExpr
-                | ExprKind::MaterializeTemporaryExpr
-                | ExprKind::CXXBindTemporaryExpr
-                | ExprKind::CXXStdInitializerListExpr
-                | ExprKind::ExprWithCleanups
-                | ExprKind::BinaryOperator
-                | ExprKind::CompoundAssignOperator
-                | ExprKind::ConditionalOperator
-                | ExprKind::BinaryConditionalOperator
-                | ExprKind::ArraySubscriptExpr
-                | ExprKind::CallExpr
-                | ExprKind::CXXMemberCallExpr
-                | ExprKind::CXXPseudoDestructorExpr
-                | ExprKind::DesignatedInitUpdateExpr
-                | ExprKind::ExtVectorElementExpr
-                | ExprKind::MemberExpr => true,
-                ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
-                ExprKind::CXXRewrittenBinaryOperator => {
-                    e = self.ast.exprs.rewritten_semantic(e);
-                    continue;
-                }
-                // clang's `CXXOperatorCallExpr::getSourceRangeImpl`: a
-                // prefix unary operator begins at its token, every other
-                // form at its first operand.
-                ExprKind::CXXOperatorCallExpr => {
-                    use kiln_ast::names::OverloadedOperator as O;
-                    let op = self.ast.exprs.operator_call_op(e);
-                    let args = self.ast.exprs.call_args(e);
-                    let first = self.ast.lists.at::<ExprId>(args, 0);
-                    let prefix = self.ast.lists.get(args).len() == 1
-                        && !matches!(op, O::Call | O::Subscript | O::Arrow);
-                    match first {
-                        Some(a) if !prefix => {
-                            e = a;
-                            continue;
-                        }
-                        _ => return n.loc(),
-                    }
-                }
-                _ => false,
-            };
-            let kids = if first { self.ast.exprs.children(e, &self.ast.lists) } else { Vec::new() };
-            match kids.first() {
-                Some(&k) => e = k,
-                None => return self.ast.templates.expr_begin.get(e).copied().unwrap_or(n.loc()),
-            }
-        }
+    /// The location of the first token of `e` (clang's `getBeginLoc`;
+    /// [`kiln_ast::Ast::begin_loc`]).
+    pub(crate) fn begin_loc(&self, e: ExprId) -> Loc {
+        self.ast.begin_loc(e)
     }
 
     /// The source range of `e` (clang `getSourceRange`) for a diagnostic:
@@ -542,6 +491,15 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records `r`, the `>` closing the template-id `e` names (clang's
+    /// `RAngleLoc`, where a template-id's `getEndLoc` is), unless `e`
+    /// already ends at a stored token.
+    pub fn set_template_id_end(&mut self, e: ExprId, r: Loc) {
+        if r != Loc::INVALID && self.ast.exprs.end_loc(e).is_none() {
+            let _ = self.ast.exprs.cold.end_loc.insert(e, r);
+        }
+    }
+
     // -- full-expressions --------------------------------------------------------
 
     /// The end of a full-expression ([intro.execution]/5): resolves the
@@ -581,7 +539,15 @@ impl Sema<'_, '_> {
     /// still destroys `D(3)` at its end. A default template argument is
     /// substituted and converted in a context of its own
     /// ([`Sema::default_template_arg`]).
+    ///
+    /// A non-static member named without an object makes it erroneous
+    /// (clang's `ExprError` from `DiagnoseInstanceReference`): no "not a
+    /// constant expression" follows the error.
     pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
+        if self.flush_member_refs() {
+            let loc = self.ast.exprs.get(e).loc();
+            return self.recover_err(&[e], loc);
+        }
         let outer = self.set_aside_outer_immediates(e);
         let pending = if self.has_own_temporaries(e) {
             self.take_constant_outer_cleanups(e)
@@ -2015,6 +1981,7 @@ impl Sema<'_, '_> {
             && !n.has(DeclFlags::INVALID)
             && let Some(t) = n.ty()
             && self.contains_undeduced_auto(t)
+            && !self.undeduced_var_spec_use_19(d)
         {
             let msg = match self.auto_expl_spec_in_own_init(d, loc) {
                 Some(m) => m,
@@ -2707,6 +2674,7 @@ impl Sema<'_, '_> {
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        self.record_modified_param(e);
         if let Some(x) = self.member_overload(e) {
             if x == e
                 && let Some(ule) = self.member_overload_as_lookup(x)
@@ -3231,6 +3199,7 @@ impl Sema<'_, '_> {
     }
 
     fn assign(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
+        self.record_modified_param(l);
         if !self.check_modifiable(l, loc) {
             return self.recover_err(&[l, r], loc);
         }
@@ -3593,7 +3562,10 @@ impl Sema<'_, '_> {
     /// diagnosed. Not in a template instantiation nor from a macro; a
     /// class operand only at clang 22, where an operator without a viable
     /// candidate is checked as a built-in comparison (spec/sema.md §1.1).
-    /// Arrays are `diagnose_array_comparison`'s.
+    /// Arrays are `diagnose_array_comparison`'s. A vector comparison is
+    /// checked after its operands are converted (clang
+    /// `CheckVectorCompareOperands`), except a floating vector (clang's
+    /// `hasFloatingRepresentation`).
     pub(crate) fn diagnose_self_comparison(
         &mut self,
         op: BinaryOp,
@@ -3609,7 +3581,7 @@ impl Sema<'_, '_> {
         if ty.is_array(t)
             || ty.is_floating(t)
             || ty.as_complex(t).is_some()
-            || self.vector_parts(t).is_some()
+            || self.vector_parts(t).is_some_and(|v| ty.is_floating(v.elem))
             || (ty.as_record(t).is_some() && self.clang_compat < 22)
             || self.is_nullptr_type(t)
             || self.is_dependent_type(t)
@@ -3700,7 +3672,12 @@ impl Sema<'_, '_> {
             } else {
                 DiagId::sema_invalid_operands
             };
-            let msg = self.diag(id, loc).arg(self.ty_arg(lt)).arg(self.ty_arg(rt));
+            let msg = self
+                .diag(id, loc)
+                .arg(self.ty_arg(lt))
+                .arg(self.ty_arg(rt))
+                .range(self.expr_range(l))
+                .range(self.expr_range(r));
             self.emit(msg);
             return self.recover_err(&[l2, r2], loc);
         }

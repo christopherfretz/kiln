@@ -40,6 +40,7 @@ impl Sema<'_, '_> {
         self.ensure_template_constraints(tmpl, conv.sugared, 2, loc)?;
         if let Some(s) = self.ast.templates.find_spec(tmpl, conv.canonical) {
             if self.ast.decls.get(s).has(DeclFlags::INVALID) {
+                self.var_spec_depends_on_itself(s, loc);
                 return Err(());
             }
             return Ok(s);
@@ -213,6 +214,33 @@ impl Sema<'_, '_> {
         self.pop_inst_frame();
     }
 
+    /// [dcl.spec.auto.general]/4: implicit specialization `v`, whose
+    /// type is undeduced, is instantiated from a pattern without an
+    /// initializer: one whose initializer is still being parsed names it
+    /// (`template<class T> auto v = v<int>;`, clang
+    /// `err_auto_var_requires_init` with the specialization's
+    /// unqualified name). `v` is invalid; `true` when so diagnosed.
+    pub(crate) fn undeduced_var_spec_without_init(&mut self, v: DeclId) -> bool {
+        let Some(ty) = self.ast.decls.get(v).ty().filter(|&t| self.contains_undeduced_auto(t))
+        else {
+            return false;
+        };
+        let Some((_, info)) = self.ast.spec_info(v) else { return false };
+        if self.ast.decls.get(v).has(DeclFlags::INVALID)
+            || self.ast.decls.get(info.from).has(DeclFlags::INVALID)
+        {
+            return false;
+        }
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        let loc = self.ast.decls.get(v).loc();
+        let msg = self
+            .diag(DiagId::sema_auto_var_requires_init, loc)
+            .arg(self.decl_name(v))
+            .arg(self.ty_arg(ty));
+        self.emit(msg);
+        true
+    }
+
     /// The defining declaration of the pattern of variable template
     /// specialization `v`, if one has been seen.
     pub(crate) fn var_pattern_def(&self, v: DeclId) -> Option<DeclId> {
@@ -298,19 +326,86 @@ impl Sema<'_, '_> {
     /// [dcl.spec.auto.general]/11 (clang 22): variable `v`, whose type is
     /// undeduced and which is the explicit specialization being
     /// initialized, names itself at `loc`. The diagnostic names it as one.
+    /// An implicit specialization (being instantiated) is one whose type
+    /// depends on itself ([`Self::var_spec_depends_on_itself`]).
     pub(crate) fn auto_expl_spec_in_own_init(&self, v: DeclId, loc: Loc) -> Option<Diag> {
         let (_, info) = self.ast.spec_info(v)?;
-        if self.clang_compat < 22 || info.kind != SpecKind::ExplicitSpecialization {
+        if self.clang_compat < 22 {
             return None;
         }
+        let id = match info.kind {
+            SpecKind::ExplicitSpecialization => DiagId::sema_auto_var_expl_spec_in_own_initializer,
+            SpecKind::ImplicitInstantiation => {
+                DiagId::sema_auto_var_template_spec_depends_on_itself
+            }
+            _ => return None,
+        };
         let args = self.ast.types.canonical_args(info.print_args);
         let ty = self.ast.decls.get(v).ty()?;
         let name = self.unscoped_spec_name(v, args);
-        Some(
-            self.diag(DiagId::sema_auto_var_expl_spec_in_own_initializer, loc)
+        Some(self.diag(id, loc).arg(name).arg(self.ty_arg(ty)))
+    }
+
+    /// clang 19: implicit variable template specialization `v`, whose
+    /// type is undeduced, is named in its own initializer's instantiation
+    /// (`template<class T> auto v = v<T>;`) or after it: clang checks
+    /// a placeholder variable's own initializer only while parsing it, so
+    /// the name is an lvalue of the placeholder type itself (`auto`),
+    /// from which `v`'s type is "deduced" as that same placeholder; its
+    /// uses then fail where a real type is needed ("cannot initialize a
+    /// variable of type 'int' with an lvalue of type 'auto'"). clang 22
+    /// diagnoses both ([`Self::check_var_template_own_init`],
+    /// [`Self::var_spec_depends_on_itself`]).
+    pub(crate) fn undeduced_var_spec_use_19(&self, v: DeclId) -> bool {
+        self.clang_compat < 22
+            && self.ast.spec_info(v).is_some_and(|(_, i)| i.kind == SpecKind::ImplicitInstantiation)
+    }
+
+    /// The end of the translation unit: a specialization clang 19 left
+    /// typed by its own placeholder ([`Self::undeduced_var_spec_use_19`])
+    /// that no use rejected is an error here (clang 19 accepts it and
+    /// crashes generating code), with clang 22's wording, at its point of
+    /// instantiation.
+    pub(crate) fn reject_self_typed_var_specs(&mut self) {
+        let list = std::mem::take(&mut self.templ.self_typed_var_specs);
+        if self.diags.error_count() > 0 {
+            return;
+        }
+        for v in list {
+            let Some((_, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { continue };
+            let Some(ty) = self.ast.decls.get(v).ty() else { continue };
+            let args = self.ast.types.canonical_args(info.print_args);
+            let name = self.unscoped_spec_name(v, args);
+            let msg = self
+                .diag(
+                    DiagId::sema_auto_var_template_spec_depends_on_itself,
+                    info.point_of_instantiation,
+                )
                 .arg(name)
-                .arg(self.ty_arg(ty)),
-        )
+                .arg(self.ty_arg(ty));
+            self.emit(msg);
+        }
+    }
+
+    /// [dcl.spec.auto.general]/11 (clang 22 `CheckVarTemplateId`): the
+    /// existing specialization `v`, named at `loc`, is invalid with its
+    /// type undeduced (its initializer failed, or named it): "the type of
+    /// variable template specialization ... depends on itself" at every
+    /// such use. clang 19 is silent.
+    fn var_spec_depends_on_itself(&mut self, v: DeclId, loc: Loc) {
+        // A pattern already diagnosed (clang 22 rejects `v<T>` in `v`'s
+        // own initializer) leaves its specializations' uses silent.
+        let implicit = self.ast.spec_info(v).is_some_and(|(_, i)| {
+            i.kind == SpecKind::ImplicitInstantiation
+                && !self.ast.decls.get(i.from).has(DeclFlags::INVALID)
+        });
+        let undeduced = self.ast.decls.get(v).ty().is_some_and(|t| self.contains_undeduced_auto(t));
+        if implicit
+            && undeduced
+            && let Some(d) = self.auto_expl_spec_in_own_init(v, loc)
+        {
+            self.emit(d);
+        }
     }
 
     /// [dcl.spec.auto.general]/11 (clang 22 `CheckVarTemplateId`): the

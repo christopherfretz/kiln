@@ -92,6 +92,7 @@ impl Sema<'_, '_> {
             AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN => {
                 ControlFlow::Break(self.alloc_attribute(kind, syntax, args, loc))
             }
+            AttrKind::NONNULL => ControlFlow::Break(self.nonnull_attribute(syntax, args, loc)),
             AttrKind::FORMAT => ControlFlow::Break(self.format_attribute(syntax, args, loc)),
             _ => ControlFlow::Continue(()),
         }
@@ -271,6 +272,16 @@ impl Sema<'_, '_> {
     ) -> QualType {
         let mut attrs = ds.attrs.clone();
         self.apply_vector_attrs(base, &mut attrs, ds.is_typedef())
+    }
+
+    /// `base` with the vector attributes among the decl-specifiers of a
+    /// type-id applied (`sizeof(__attribute__((vector_size(16))) int)`,
+    /// a cast, a template argument): clang `processTypeAttrs` handles
+    /// them as type attributes, so `ext_vector_type` is accepted here at
+    /// clang 19 too (there is no declaration to restrict it to a typedef).
+    pub fn apply_type_id_vector_attrs(&mut self, base: QualType, ds: &DeclSpec) -> QualType {
+        let mut attrs = ds.attrs.clone();
+        self.apply_vector_attrs(base, &mut attrs, true)
     }
 
     /// `attrs` without the vector attributes (applied separately by

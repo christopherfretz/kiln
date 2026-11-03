@@ -1,7 +1,7 @@
 //! `decltype` ([dcl.type.decltype]), `decltype(auto)` and deduced return
 //! types ([dcl.spec.auto], [dcl.type.auto.deduct]; spec/sema.md §4.3.1).
 
-use kiln_ast::decl::DeclFlags;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::types::{AutoKeyword, Quals, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -138,6 +138,19 @@ impl Sema<'_, '_> {
     pub fn act_on_decltype(&mut self, e: ExprId, _loc: Loc, _rparen: Loc) -> Option<QualType> {
         let e = self.resolve_single_overload_candidate(e);
         if self.is_err_expr(e) || self.check_overload_use(e) {
+            return None;
+        }
+        // `decltype(C::f)` of a non-static member function: the operand is
+        // a full-expression ([intro.execution]/5) naming the member without
+        // an object ([expr.prim.id.general]/4), diagnosed here so that a
+        // substitution fails in its SFINAE context ([temp.deduct.general]/8).
+        let x = self.ignore_parens(e);
+        if let Some(r) = self.member_refs.get(&x).copied()
+            && r.error
+            && self.kind_of(r.decl) == DeclKind::CXXMethod
+        {
+            self.member_refs.remove(&x);
+            self.error(DiagId::sema_member_call_without_object, self.eloc(x));
             return None;
         }
         self.check_unevaluated_side_effects(e);

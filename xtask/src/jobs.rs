@@ -30,6 +30,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, PoisonError};
 
 /// The jobserver this process inherited, if any (read from `MAKEFLAGS` once).
@@ -51,6 +52,18 @@ pub fn global() -> &'static Client {
     });
     SIGNALS.call_once(|| release_on_signal(client));
     client
+}
+
+/// Whether the SIGINT/SIGTERM thread runs (set once it is started).
+static SIGNALS_CAUGHT: AtomicBool = AtomicBool::new(false);
+
+/// Starts the SIGINT/SIGTERM thread if it is not running yet ([`global`])
+/// and says whether it runs: when it does, a child in a process group of
+/// its own is still stopped by an interrupt of xtask
+/// (`util::process::run_step`).
+pub fn signals_caught() -> bool {
+    global();
+    SIGNALS_CAUGHT.load(Ordering::SeqCst)
 }
 
 /// How long an interrupted xtask waits for its killed children to be reaped
@@ -91,8 +104,9 @@ fn release_on_signal(client: &'static Client) {
             std::process::exit(128 + sig);
         }
     });
-    if let Err(e) = spawned {
-        eprintln!("xtask: warning: cannot start the jobserver signal thread ({e})");
+    match spawned {
+        Ok(_) => SIGNALS_CAUGHT.store(true, Ordering::SeqCst),
+        Err(e) => eprintln!("xtask: warning: cannot start the jobserver signal thread ({e})"),
     }
 }
 

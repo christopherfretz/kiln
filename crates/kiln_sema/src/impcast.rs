@@ -9,7 +9,7 @@
 //! whose value changes (clang's `warn_impcast_integer_precision_constant`);
 //! and `-Wnull-conversion` for GNU `__null` (`gnu_null.rs`).
 
-use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp, ValueCategory};
+use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -19,6 +19,7 @@ use crate::Sema;
 use crate::conv::narrow::float_kind;
 use crate::conv::rank::{int_signed, int_width, is_integral_or_unscoped_enum};
 use crate::conv::soft;
+use crate::null_compare::NullUse;
 
 /// Bound on the nodes looked at in one full-expression.
 const MAX_NODES: usize = 1_000_000;
@@ -121,169 +122,51 @@ impl Sema<'_, '_> {
             }
             self.diagnose_int_in_bool_context(src);
         }
+        // clang `CheckImplicitConversion`: a scalar converted to a vector
+        // (an ext-vector splat) is checked against the element type, and
+        // the diagnostics name the vector.
+        let shown = to;
+        let to = match self.vector_parts(to) {
+            Some(_) if self.vector_parts(from).is_some() => return,
+            Some(v) => v.elem,
+            None => to,
+        };
         let bit_int = matches!(self.ast.types.canonical_view(to), TypeView::BitInt { .. });
         if !bit_int && self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
         }
         if self.ast.types.builtin(from).and_then(|b| float_kind(self, b)).is_some() {
-            self.floating_imp_cast(src, to, cc);
+            self.floating_imp_cast(src, shown, cc);
             return;
         }
-        self.integer_constant_imp_cast(src, to, cc);
+        self.integer_constant_imp_cast(src, to, shown, cc);
     }
 
-    /// clang's `DiagnoseAlwaysNonNullPointer` for the conversion of `e`
-    /// (parentheses and implicit casts stripped) to `bool`: a function, an
-    /// array, or the address of an object, named by a `DeclRefExpr` or
-    /// `MemberExpr`, is never null (`-Wpointer-bool-conversion`; a
-    /// function adds the `&` and, when it is callable with no arguments
-    /// and returns `bool`, the `()` fix-it notes); `this` and the address
-    /// of a reference are null only after undefined behaviour
-    /// (`-Wundefined-bool-conversion`). Not in unevaluated operands, nor
-    /// when `e` or the context `cc` comes from a macro body; a weak
-    /// declaration may be null.
-    /// Whether `x`, the operand of `&` (a `call` or not), is a reference:
-    /// a glvalue call, or a name of a reference variable or member.
-    fn is_reference_operand(&self, x: ExprId, call: bool) -> bool {
-        if call {
-            return self.ast.exprs.get(x).value_category() != ValueCategory::PRValue;
-        }
-        matches!(self.ast.exprs.get(x).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
-            && self
-                .ast
-                .decls
-                .get(self.ast.exprs.decl(x))
-                .ty()
-                .is_some_and(|t| self.ast.types.is_reference(t))
-    }
-
-    /// `msg` with clang's "'f' returns a reference" note when the call
-    /// `x` has a direct callee (`getDirectCallee`: a function, not a
-    /// pointer to one).
-    fn note_reference_return(&self, msg: kiln_diag::Diag, x: ExprId) -> kiln_diag::Diag {
-        let direct = self.callee_decl(x).filter(|&f| {
-            self.ast
-                .decls
-                .get(f)
-                .ty()
-                .is_some_and(|t| self.ast.types.is_function(self.ast.types.canonical(t)))
-        });
-        match direct {
-            Some(f) => msg.with_note(
-                self.diag(DiagId::note_reference_is_return_value, self.ast.decls.get(f).loc())
-                    .arg(format!("'{}'", self.decl_name(f))),
-            ),
-            None => msg,
-        }
-    }
-
+    /// clang's `DiagnoseAlwaysNonNullPointer` for the conversion `cast`
+    /// of `e` (parentheses and implicit casts stripped) to `bool`
+    /// (`-Wpointer-bool-conversion`, `-Wundefined-bool-conversion`;
+    /// spec/sema.md §5.27). Not in unevaluated operands.
     fn always_non_null_pointer(&mut self, e: ExprId, cc: Loc) {
         if self.unevaluated > 0 {
             return;
         }
-        let at = self.expr_loc(e);
-        if at == self.cond_typo_at {
+        if self.expr_loc(e) == self.cond_typo_at {
             return;
         }
-        if at.is_macro() && (self.in_any_macro_body(at) || self.in_any_macro_body(cc)) {
-            return;
-        }
-        let root = e;
-        let mut e = e;
-        let kind = self.ast.exprs.get(e).kind();
-        if kind == ExprKind::CXXThisExpr {
-            let msg = self.diag(DiagId::sema_this_bool_conversion, at);
-            self.emit_after_typos(root, msg);
-            return;
-        }
-        let addr_of = kind == ExprKind::UnaryOperator;
-        if addr_of {
-            if self.ast.exprs.unary_op(e) != UnaryOp::AddrOf {
-                return;
-            }
-            e = self.ast.exprs.operand(e);
-        }
-        let named = |s: &Self, x: ExprId| {
-            matches!(s.ast.exprs.get(x).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
-                .then(|| s.ast.exprs.decl(x))
-        };
-        if addr_of {
-            // clang `CheckForReference`: the address of a reference
-            // variable or member, or of a call returning a reference (a
-            // glvalue call; the note names a direct callee). Ranges: the
-            // operand of `&` and the context token.
-            let x = self.strip_impcast(e);
-            let kind = self.ast.exprs.get(x).kind();
-            let call = matches!(
-                kind,
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
-            );
-            if self.is_reference_operand(x, call) {
-                let at = self.expr_loc(x);
-                let range = Span::new(cc, self.token_end(cc).unwrap_or(cc));
-                let mut msg = self
-                    .diag(DiagId::sema_address_of_reference_bool_conversion, at)
-                    .range(self.expr_range(e))
-                    .range(range);
-                if call {
-                    msg = self.note_reference_return(msg, x);
-                }
-                self.emit_after_typos(root, msg);
-                return;
-            }
-            if call {
-                return;
-            }
-        }
-        let Some(d) = named(self, e) else {
+        let Some((msg, _)) = self.always_non_null(e, NullUse::Bool { cc }) else {
             return;
         };
-        if self.find_attr(d, kiln_ast::attr::AttrKind::WEAK).is_some() {
-            return;
-        }
-        let Some(t) = self.ast.decls.get(d).ty() else {
-            return;
-        };
-        let t = self.ast.types.canonical(t);
-        let (array, function) = (self.ast.types.is_array(t), self.ast.types.is_function(t));
-        if (addr_of && function) || (!addr_of && !function && !array) {
-            return;
-        }
-        let what = if addr_of {
-            0u32
-        } else if function {
-            1
-        } else {
-            2
-        };
-        let at = self.expr_loc(e);
-        let text = self.expr_text_as_written(e);
-        // clang streams the context `SourceRange(CC)`, not `e`'s range
-        // (it decides the macro-expansion notes, spec/diag.md §3.3).
-        let range = Span::new(cc, self.token_end(cc).unwrap_or(cc));
-        let mut msg =
-            self.diag(DiagId::sema_impcast_pointer_to_bool, at).arg(what).arg(text).range(range);
-        if function {
-            let begin = self.begin_loc(e);
-            msg = msg.with_note(
-                self.diag(DiagId::note_function_warning_silence, at)
-                    .fixit(kiln_diag::FixIt::insert(begin, "&")),
-            );
-            if self.zero_arg_call_returns_bool(d, t) {
-                let end = self.expr_end_loc(e);
-                let after = self.token_end(end).unwrap_or(end);
-                msg = msg.with_note(
-                    self.diag(DiagId::note_function_to_function_call, at)
-                        .fixit(kiln_diag::FixIt::insert(after, "()")),
-                );
-            }
-        }
-        self.emit_after_typos(root, msg);
+        // An instantiation checks its full-expressions again and warns
+        // again.
+        let msg = if self.inst.stack.is_empty() { msg } else { msg.allow_duplicate() };
+        self.emit_after_typos(e, msg);
     }
 
-    /// clang `tryExprAsCall` for function `d` of type `t`, then whether
-    /// the call is `bool`: every parameter has a default argument.
-    fn zero_arg_call_returns_bool(&self, d: DeclId, t: QualType) -> bool {
+    /// clang `tryExprAsCall` for function `d`, then whether the call is
+    /// `bool`: every parameter has a default argument.
+    pub(crate) fn zero_arg_call_returns_bool(&self, d: DeclId) -> bool {
+        let Some(t) = self.ast.decls.get(d).ty() else { return false };
+        let t = self.ast.types.canonical(t);
         let TypeView::Function(p) = self.ast.types.view(t.ty()) else {
             return false;
         };
@@ -317,13 +200,13 @@ impl Sema<'_, '_> {
     /// exactly `to`'s width turns negative (`isSameWidthConstantConversion`;
     /// not for a hexadecimal, octal or binary literal). The arms of a
     /// conditional are checked separately. A runtime-behavior diagnostic.
-    fn integer_constant_imp_cast(&mut self, e: ExprId, to: QualType, cc: Loc) {
+    fn integer_constant_imp_cast(&mut self, e: ExprId, to: QualType, shown: QualType, cc: Loc) {
         let n = *self.ast.exprs.get(e);
         if n.kind() == ExprKind::ConditionalOperator {
             for arm in self.ast.exprs.cond_arms(e) {
                 let a = self.strip_impcast(arm);
                 if self.ast.exprs.get(a).ty() != to {
-                    self.integer_constant_imp_cast(a, to, cc);
+                    self.integer_constant_imp_cast(a, to, shown, cc);
                 }
             }
             return;
@@ -370,7 +253,7 @@ impl Sema<'_, '_> {
         let d = self
             .diag(DiagId::sema_constant_conversion, n.loc())
             .arg(self.ty_arg(from))
-            .arg(self.ty_arg(to))
+            .arg(self.ty_arg(shown))
             .arg(v.to_string())
             .arg(converted.to_string())
             .range(range)
@@ -413,7 +296,12 @@ impl Sema<'_, '_> {
         }
         let Some((kind, bits)) = self.float_literal_value(e) else { return };
         let is_bool = self.ast.types.builtin(to) == Some(BuiltinType::Bool);
-        let (w, signed) = if is_bool {
+        let (w, signed) = if let Some(v) = self.vector_parts(to) {
+            // A vector target: clang's `getIntWidth` is the whole
+            // vector's size, so only a fractional part is reported.
+            let bits = crate::target::size_align(&self.ast, to, self.abi()).map_or(64, |s| s.0 * 8);
+            (u32::try_from(bits).unwrap_or(u32::MAX), int_signed(self, v.elem))
+        } else if is_bool {
             (1, false)
         } else {
             (int_width(self, to).unwrap_or(64), int_signed(self, to))
